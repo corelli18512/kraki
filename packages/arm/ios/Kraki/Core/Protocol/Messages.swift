@@ -207,7 +207,65 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         if seq == 0, let cid = payload["clientId"]?.stringValue {
             return "\(sessionId ?? "none"):pending:\(cid)"
         }
+        // A displayed question's open/answered state is part of its rendered
+        // identity (set by ChatViewModel), so lists re-render it on change.
+        if let state = payload[ChatMessage.questionStateKey]?.stringValue {
+            return "\(sessionId ?? "none"):\(seq)#q-\(state)"
+        }
         return "\(sessionId ?? "none"):\(seq)"
+    }
+
+    /// Display-only key: "open" | "answered" | "unanswered" | "closed".
+    static let questionStateKey = "questionState"
+
+    /// `agent_message.payload.question`: the agent asked the human.
+    struct QuestionSpec: Equatable, Sendable {
+        let id: String
+        let text: String
+        let choices: [String]
+    }
+
+    var questionSpec: QuestionSpec? {
+        guard type == "agent_message",
+              let q = payload["question"]?.dictValue,
+              let id = q["id"]?.stringValue else { return nil }
+        let choices = q["choices"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        return QuestionSpec(id: id, text: q["text"]?.stringValue ?? "", choices: choices)
+    }
+
+    /// `user_message.payload.answerTo` / pending input: answers that question.
+    var answerTo: String? { payload["answerTo"]?.stringValue }
+
+    var questionState: String? { payload[ChatMessage.questionStateKey]?.stringValue }
+
+    /// A question bubble's (body text, action slot). While open the question
+    /// and its choices are the interactive action slot. Once closed it is
+    /// static, so it joins the body text (rendered like any message): quoted
+    /// question, plus "Not answered" when nothing answered it.
+    var questionCard: (text: String, action: ChatMessage?)? {
+        guard let spec = questionSpec else { return nil }
+        let lead = content ?? ""
+        if questionState == "open" { return (lead, questionAction) }
+        var parts: [String] = []
+        if !lead.isEmpty { parts.append(lead) }
+        let quoted = spec.text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { "> " + $0 }.joined(separator: "\n")
+        parts.append(quoted)
+        if questionState == "unanswered" { parts.append("*Not answered*") }
+        return (parts.joined(separator: "\n\n"), nil)
+    }
+
+    /// The interactive action slot of an open question.
+    var questionAction: ChatMessage? {
+        guard let spec = questionSpec else { return nil }
+        var payload: [String: AnyCodable] = [
+            "id": AnyCodable(spec.id),
+            "question": AnyCodable(spec.text),
+            ChatMessage.questionStateKey: AnyCodable(questionState ?? "closed"),
+        ]
+        if !spec.choices.isEmpty { payload["choices"] = AnyCodable(spec.choices) }
+        return ChatMessage(type: "question", seq: 0, sessionId: sessionId, deviceId: deviceId,
+                           timestamp: timestamp, payload: payload)
     }
     let type: String
     let seq: Int

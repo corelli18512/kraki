@@ -310,29 +310,14 @@ struct MacBubbleActionSlot: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            if message.cancelled {
-                Text("Question cancelled")
+            // Choices are shortcuts for answering; after the question
+            // closes the answer is the user's own message below, so nothing
+            // is highlighted here.
+            if message.questionState == "unanswered" {
+                Text("Not answered")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color.textMuted)
-            } else if let answer = message.answer {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Answered")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.purple)
-                        localPendingLabel(message)
-                    }
-                    Text(MacLiveMarkdown.attributed(answer))
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.textPrimary)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.purple.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.purple.opacity(0.3)))
-            } else if let choices = message.choices, !choices.isEmpty {
-                localErrorLabel(message)
+            } else if message.questionState == "open", let choices = message.choices, !choices.isEmpty {
                 VStack(spacing: 6) {
                     ForEach(choices, id: \.self) { choice in
                         MacChatActionButton(

@@ -197,31 +197,14 @@ struct BubbleActionSlot: View {
                 }
             }
 
-            if m.cancelled {
-                Text("Question cancelled")
+            // Choices are shortcuts for answering; after the question
+            // closes the answer is the user's own message below, so nothing
+            // is highlighted here.
+            if m.questionState == "unanswered" {
+                Text("Not answered")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color.textMuted)
-            } else if let answer = m.answer {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Answered")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.purple)
-                        localPendingLabel(m)
-                    }
-                    Text(LiveMarkdown.attributed(answer))
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.purple.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.purple.opacity(0.3)))
-            } else if let choices = m.choices, !choices.isEmpty {
-                localErrorLabel(m)
+            } else if m.questionState == "open", let choices = m.choices, !choices.isEmpty {
                 VStack(spacing: 6) {
                     ForEach(choices, id: \.self) { choice in
                         Button {
@@ -338,7 +321,9 @@ final class BubbleActionHostView: UIView {
         case "permission":
             return "permission:\(action.permissionId ?? "unknown")"
         case "question":
-            return "question:\(action.questionId ?? "unknown")"
+            // A state change (open → answered/unanswered) swaps the whole
+            // host: reusing it left the new, shorter content unlaid-out.
+            return "question:\(action.questionId ?? "unknown"):\(action.questionState ?? "")"
         case "tool_start", "tool_complete":
             return "tool:\(action.toolCallId ?? action.headline ?? action.toolName ?? "unknown")"
         case "tool_batch":

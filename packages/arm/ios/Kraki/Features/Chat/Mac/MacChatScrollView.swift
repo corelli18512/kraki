@@ -715,7 +715,7 @@ final class MacChatDocumentView: NSView {
             // A short visible row that the warmer has not reached yet is
             // cheaper to prepare right now (~1–3ms, one per pass) than to show
             // as a grey placeholder for a few frames of a very fast glide.
-            if scrollInteractionActive, preparedContent == nil, intersectsViewport,
+            if preparedContent == nil, intersectsViewport,
                !geometryBarrierReached, configuredCount < maxConfigurations,
                item.visibleCharacterCount <= 1_500 {
                 preparedContent = resolvedContent(for: item)
@@ -3326,6 +3326,17 @@ final class MacChatScrollView: MacSmoothScrollView {
         (latestStartButton.frame, jumpButton.frame, unseenDot.frame)
     }
     func automationTapUp() { latestStartTapped() }
+    /// Clicks a question choice through the same window-point hit test and
+    /// dispatch a real mouse click uses.
+    func automationClickQuestionChoice(_ answer: String) -> Bool {
+        for (_, cell) in chatDocumentView.automationVisibleCells {
+            guard let point = cell.automationChoiceWindowPoint(answer),
+                  let target = chatDocumentView.actionHitTarget(atWindowPoint: point) else { continue }
+            dispatchBubbleAction(target)
+            return true
+        }
+        return false
+    }
     func automationTapDown() { jumpTapped() }
     var automationWindowRange: (top: Int, bottom: Int)? {
         guard diagnosticWindowTop > 0,
@@ -3884,7 +3895,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
                 return cached
             }
             let item: MacChatItem
-            if message.type == "turn_status" || message.type == "interrupted_turn" {
+            if message.type == "turn_status" || message.type == "interrupted_turn" || message.questionSpec != nil {
                 let card = frozenCard(from: message)
                 item = MacChatItem(
                     seq: message.seq,
@@ -4006,6 +4017,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
         hasher.combine(message.steps ?? 0)
         hasher.combine(message.finishedAt ?? "")
         hasher.combine(message.payload["localState"]?.stringValue ?? "")
+        hasher.combine(message.questionState ?? "")
         hasher.combine(message.attachments?.count ?? 0)
         for ref in message.contentRefAttachments {
             hasher.combine(ref.id)
@@ -4058,6 +4070,9 @@ struct MacChatListRepresentable: NSViewRepresentable {
     }
 
     private func frozenCard(from message: ChatMessage) -> MessageStore.SessionCard {
+        if let question = message.questionCard {
+            return MessageStore.SessionCard(text: question.text, action: question.action)
+        }
         let text = message.interruptedDraft ?? ""
         let action: ChatMessage?
         if message.type == "turn_status" {

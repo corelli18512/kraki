@@ -49,6 +49,10 @@ final class ChatViewModel {
         return true
     }
 
+    private var pendingInputsRaw: [ChatMessage] {
+        appState?.commandSender?.pendingInputs(sessionId) ?? []
+    }
+
     /// Synthesised optimistic pending-input messages from the outbox.
     var pendingMessages: [ChatMessage] {
         let pending = appState?.commandSender?.pendingInputs(sessionId) ?? []
@@ -87,7 +91,9 @@ final class ChatViewModel {
         if let memo = currentSpineMemo, memo.revision == revision {
             return memo.messages + pendingMessages(landedIn: memo.messages)
         }
-        let spine = TurnSpineProjection.project(filteredMessages).filter(Self.shouldRender)
+        let spine = TurnSpineProjection.project(
+            Self.annotatingQuestions(filteredMessages, pending: pendingInputsRaw, atHead: windowAtHead)
+        ).filter(Self.shouldRender)
         currentSpineMemo = (revision, spine)
         return spine + pendingMessages(landedIn: spine)
     }
@@ -104,7 +110,9 @@ final class ChatViewModel {
 
     /// Recompute the flat spine snapshot. Called by the view on data changes.
     func refreshMessageCache() {
-        cachedMessages = TurnSpineProjection.project(filteredMessages).filter(Self.shouldRender)
+        cachedMessages = TurnSpineProjection.project(
+            Self.annotatingQuestions(filteredMessages, pending: pendingInputsRaw, atHead: windowAtHead)
+        ).filter(Self.shouldRender)
     }
 
     // MARK: - Live card + trace
@@ -184,15 +192,52 @@ final class ChatViewModel {
             toolName: action.toolName, args: action.args, timestamp: Date())]
     }
 
-    /// The pending question carried by the card's action slot (or none).
+    /// Open questions (oldest first), derived from the spine. The composer
+    /// answers the newest one.
     var questions: [PendingQuestion] {
-        guard let action = card?.action, action.type == "question",
-              action.answer == nil, !action.cancelled,
-              let qid = action.questionId else { return [] }
-        return [PendingQuestion(
-            id: qid, sessionId: sessionId,
-            question: action.question ?? "", choices: action.choices, timestamp: Date())]
+        // Derived from the live window (not the render cache) so any view
+        // model instance — e.g. the composer's — sees the current state.
+        let raw = filteredMessages
+        guard raw.contains(where: { $0.questionSpec != nil }) else { return [] }
+        let annotated = Self.annotatingQuestions(raw, pending: pendingInputsRaw, atHead: windowAtHead)
+        return annotated.compactMap { message in
+            guard message.questionState == "open", let spec = message.questionSpec else { return nil }
+            return PendingQuestion(id: spec.id, sessionId: sessionId, question: spec.text,
+                                   choices: spec.choices.isEmpty ? nil : spec.choices, timestamp: Date())
+        }
     }
+
+    /// Stamp each question's display state from what follows it on the spine:
+    /// - an answer (`answerTo` = its id, persisted or optimistic) → answered;
+    /// - other questions, answers to them, and transient `error` rows are
+    ///   neutral;
+    /// - anything else (a reply, a plain message, idle, terminal status) →
+    ///   unanswered (the agent no longer waits for it);
+    /// - nothing yet: open at the conversation head, otherwise unknown
+    ///   ("closed", rendered neutrally).
+    static func annotatingQuestions(_ raw: [ChatMessage], pending: [ChatMessage],
+                                    atHead: Bool) -> [ChatMessage] {
+        guard raw.contains(where: { $0.questionSpec != nil }) else { return raw }
+        var result = raw
+        for index in raw.indices {
+            guard let spec = raw[index].questionSpec else { continue }
+            var state: String?
+            for later in raw[(index + 1)...] {
+                if later.answerTo == spec.id { state = "answered"; break }
+                if later.questionSpec != nil || later.answerTo != nil || later.type == "error" { continue }
+                state = "unanswered"
+                break
+            }
+            if state == nil {
+                if pending.contains(where: { $0.answerTo == spec.id }) { state = "answered" }
+                else { state = atHead ? "open" : "closed" }
+            }
+            result[index].payload[ChatMessage.questionStateKey] = AnyCodable(state!)
+        }
+        return result
+    }
+
+    private var windowAtHead: Bool { appState?.messageProvider?.atHead(sessionId) ?? true }
 
     // MARK: - Session + device
 

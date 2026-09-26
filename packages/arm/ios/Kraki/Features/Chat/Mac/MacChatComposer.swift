@@ -572,8 +572,7 @@ struct MacChatComposer: View {
             guard appState.commandSender?.answer(
                 sessionId: sessionId,
                 questionId: question.id,
-                answer: answer,
-                wasFreeform: true
+                answer: answer
             ) == true else { NSSound.beep(); return }
             sessionStore.setDraft(sessionId, "")
             didSubmitFromComposer()

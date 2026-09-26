@@ -679,180 +679,155 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertTrue(fx.app.commandSender?.pendingInputs(sid).isEmpty == true)
     }
 
-    // MARK: Questions
+    // MARK: Questions (on the spine)
 
-    private func question(_ id: String, answer: String? = nil) -> ChatMessage {
-        var payload: [String: AnyCodable] = [
-            "id": AnyCodable(id), "question": AnyCodable("选哪个？"),
-            "choices": AnyCodable(["A", "B"]),
-        ]
-        if let answer { payload["answer"] = AnyCodable(answer) }
-        return ChatMessage(type: "question", seq: 0, sessionId: sid, deviceId: dev, timestamp: nil, payload: payload)
-    }
-
-    func testAnsweredQuestionStaysVisibleUntilReplyArrives() throws {
-        let fx = try makeFixture(total: 10)
-        drain(600)
-        try startTurn(fx, seq: 11)
-        let store = fx.app.messageStore
-        store.applyCardAction(sid, question("q1"))
-        fx.vc.syncLiveUpdates(); drain(100)
-        XCTAssertTrue(fx.vc.automationItemIDs.contains("__live_card__"))
-
-        XCTAssertTrue(fx.app.commandSender?.answer(sessionId: sid, questionId: "q1", answer: "A") == true)
-        XCTAssertEqual(store.cards[sid]?.action?.answer, "A", "answer shows immediately")
-        XCTAssertEqual(store.cards[sid]?.action?.payload["localPending"]?.boolValue, true)
-
-        // Tentacle confirms, then retires the settled prompt BEFORE the first
-        // narration delta (card-manager onDelta order).
-        store.applyCardAction(sid, question("q1", answer: "A"))
-        store.applyCardAction(sid, nil)
-        fx.vc.syncLiveUpdates(); drain(50)
-        XCTAssertTrue(fx.vc.automationItemIDs.contains("__live_card__"),
-                      "the live bubble must not disappear between the answer and the reply")
-        store.applyCardMessage(sid, "好的，继续。", reset: false)
-        fx.vc.syncLiveUpdates(); drain(50)
-        XCTAssertNil(store.cards[sid]?.action, "narration supersedes the retained prompt")
-        XCTAssertEqual(store.cards[sid]?.text, "好的，继续。")
-    }
-
-    func testAnsweredQuestionKeepsPreviousNarrationContextUntilReplacement() throws {
-        let fx = try makeFixture(total: 10)
-        drain(600)
-        try startTurn(fx, seq: 11)
-        let store = fx.app.messageStore
-        store.applyCardMessage(sid, "我先确认一下签名方式。", reset: false)
-        store.applyCardAction(sid, question("q9"))
-        fx.vc.syncLiveUpdates(); drain(100)
-        XCTAssertTrue(fx.app.commandSender?.answer(sessionId: sid, questionId: "q9", answer: "A") == true)
-        store.applyCardAction(sid, question("q9", answer: "A"))
-        // Tentacle: settled-tail null, then the replacing reset delta.
-        store.applyCardAction(sid, nil)
-        XCTAssertEqual(store.cards[sid]?.action?.answer, "A",
-                       "the answered question must not be stripped, exposing only the old narration")
-        XCTAssertEqual(store.cards[sid]?.text, "我先确认一下签名方式。")
-        store.applyCardMessage(sid, "好的，用 API Key 签名。", reset: true)
-        XCTAssertNil(store.cards[sid]?.action)
-        XCTAssertEqual(store.cards[sid]?.text, "好的，用 API Key 签名。")
-        // A tool also supersedes a retained prompt.
-        store.applyCardAction(sid, question("q10", answer: "B"))
-        store.applyCardAction(sid, nil)
-        store.applyCardAction(sid, ChatMessage(type: "tool_start", seq: 0, sessionId: sid, deviceId: dev,
-                                               timestamp: nil, payload: ["toolName": AnyCodable("bash")]))
-        XCTAssertEqual(store.cards[sid]?.action?.type, "tool_start")
-    }
-
-    /// Sending, echo and landing must not reload the list: visible cells keep
-    /// their identity (no re-dequeue flash), and bubble backgrounds never run
-    /// an implicit color/shape animation.
-    func testSendEchoAndLandingKeepVisibleCellsInPlace() throws {
-        let fx = try makeFixture(total: 30)
-        drain(1_000)
-        func cellsByID() -> [String: ObjectIdentifier] {
-            var map: [String: ObjectIdentifier] = [:]
-            for cell in fx.cv.visibleCells.compactMap({ $0 as? TKBubbleCell }) {
-                if let id = cell.contentSnapshot?.message.id { map[id] = ObjectIdentifier(cell) }
-            }
-            return map
-        }
-        func assertNoBackgroundAnimations(_ label: String) {
-            for cell in fx.cv.visibleCells.compactMap({ $0 as? TKBubbleCell }) {
-                XCTAssertTrue(cell.bubbleBackgroundAnimationKeysForRegression.isEmpty,
-                              "\(label): bubble background animating \(cell.bubbleBackgroundAnimationKeysForRegression)")
-            }
-        }
-        assertNoBackgroundAnimations("entry")
-        let before = cellsByID()
-        let sender = try XCTUnwrap(fx.app.commandSender)
-        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "新消息"))
-        fx.vc.syncLiveUpdates()
-        let afterSend = cellsByID()
-        for (id, cell) in before where afterSend[id] != nil {
-            XCTAssertEqual(afterSend[id], cell, "send must not re-dequeue existing row \(id)")
-        }
-        assertNoBackgroundAnimations("send")
-        let pending = try XCTUnwrap(sender.pendingInputs(sid).first)
-        let pendingCell = try XCTUnwrap(afterSend[pending.id])
-        let clientId = try XCTUnwrap(pending.payload["clientId"]?.stringValue)
-        let echo = try JSONSerialization.data(withJSONObject: [
-            "type": "user_message", "seq": 31, "sessionId": sid, "deviceId": dev,
-            "timestamp": "2026-09-01T00:00:03.000Z", "payload": ["content": "新消息", "clientId": clientId],
+    /// Tentacle's `ask_user`: an agent_message carrying `question`, lead-in
+    /// prose as its content. The router closes the live card on it.
+    private func ask(_ fx: Fx, seq: Int, id: String, lead: String = "我看了一下，有两个方案。",
+                     choices: [String] = ["A", "B"]) throws {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "type": "agent_message", "seq": seq, "sessionId": sid, "deviceId": dev,
+            "timestamp": "2026-09-01T00:00:03.000Z",
+            "payload": ["content": lead, "question": ["id": id, "text": "选哪个？", "choices": choices]],
         ])
-        fx.app.messageStore.beginCardTurn(sid)
-        fx.app.messageProvider?.ingestTailCandidate(sid, json: echo)
-        sender.clearPending(sid, clientId: clientId)
+        fx.app.messageProvider?.ingestTailCandidate(sid, json: data)
+        fx.app.messageStore.endCardTurn(sid)
         fx.vc.syncLiveUpdates()
-        XCTAssertEqual(cellsByID()["\(sid):31"], pendingCell, "echo must reuse the optimistic bubble's cell")
-        assertNoBackgroundAnimations("echo")
-
-        fx.app.messageStore.applyCardMessage(sid, "回复内容", reset: false)
-        fx.vc.syncLiveUpdates(); drain(100)
-        let liveCell = fx.cv.visibleCells.compactMap { $0 as? TKBubbleCell }
-            .first { $0.contentSnapshot?.isLive == true }
-        try land(fx, seq: 32, text: "回复内容")
-        XCTAssertNotNil(liveCell)
-        XCTAssertEqual(cellsByID()["\(sid):32"], liveCell.map(ObjectIdentifier.init),
-                       "landing must reuse the live bubble's cell")
-        assertNoBackgroundAnimations("landing")
     }
 
-    /// A rendered cell that is reused for another Session's bubble (or re-
-    /// resolved for its trait) must switch color/shape immediately, without the
-    /// shape layer's implicit fade.
-    func testReusedBubbleBackgroundChangesWithoutImplicitAnimation() throws {
-        // Must be a scene-attached window: layers of a scene-less window are
-        // never committed to the render tree and never animate implicitly.
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-        let window = UIWindow(windowScene: scene)
-        window.windowLevel = .alert + 1
-        window.makeKeyAndVisible()
-        windows.append(window)
-        let cell = TKBubbleCell(frame: CGRect(x: 0, y: 100, width: 402, height: 120))
-        window.addSubview(cell)
-        func content(_ session: String, _ text: String) -> TKBubbleContent {
-            TKBubbleContent.make(message: ChatMessage(type: "agent_message", seq: 1, sessionId: session, deviceId: dev,
-                                                      timestamp: nil, payload: ["content": AnyCodable(text)]),
-                                 sessionId: session, agent: "claude")
-        }
-        cell.configure(content("session-a", "第一条"), cellWidth: 402)
-        cell.layoutIfNeeded()
-        CATransaction.flush()
-        drain(400) // rendered and settled
-        let first = cell.bubbleFillForRegression
-        cell.prepareForReuse()
-        cell.configure(content("session-zz-different-hue", "第二条，更长一些的内容，让形状也变化"), cellWidth: 402)
-        cell.frame.size.height = 160
-        cell.layoutIfNeeded()
-        XCTAssertNotEqual(cell.bubbleFillForRegression, first)
-        XCTAssertTrue(cell.bubbleBackgroundAnimationKeysForRegression.isEmpty,
-                      "reused bubble animated: \(cell.bubbleBackgroundAnimationKeysForRegression)")
+    private func ingestSpine(_ fx: Fx, _ object: [String: Any]) throws {
+        fx.app.messageProvider?.ingestTailCandidate(sid, json: try JSONSerialization.data(withJSONObject: object))
+        fx.vc.syncLiveUpdates()
     }
 
-    /// The resolved-state card_action can be coalesced away; the following
-    /// slot clear must still confirm the optimistic answer.
-    func testSlotClearConfirmsOptimisticAnswer() throws {
-        let fx = try makeFixture(total: 4)
-        fx.app.commandSender?.confirmationTimeout = .milliseconds(200)
-        drain(300)
-        try startTurn(fx, seq: 5)
-        let store = fx.app.messageStore
-        store.applyCardAction(sid, question("q3"))
-        XCTAssertTrue(fx.app.commandSender?.answer(sessionId: sid, questionId: "q3", answer: "A") == true)
-        store.applyCardAction(sid, nil)
+    private func questionRow(_ fx: Fx, seq: Int) -> String? {
+        fx.vc.automationItemIDs.first { $0.hasPrefix("\(sid):\(seq)#q-") }
+    }
+
+    func testQuestionIsOneBubbleWithItsLeadInAndIsAnswerable() throws {
+        let fx = try makeFixture(total: 10)
         drain(600)
-        XCTAssertEqual(store.cards[sid]?.action?.answer, "A", "delivered answer must not be reverted")
-        XCTAssertNil(store.cards[sid]?.action?.payload["localError"])
+        try startTurn(fx, seq: 11)
+        fx.app.messageStore.applyCardMessage(sid, "我看了一下，有两个方案。", reset: true)
+        fx.vc.syncLiveUpdates(); drain(80)
+        try ask(fx, seq: 12, id: "q1")
+        drain(200)
+        XCTAssertFalse(fx.vc.automationItemIDs.contains("__live_card__"), "the draft graduated into the question bubble")
+        XCTAssertEqual(questionRow(fx, seq: 12), "\(sid):12#q-open")
+        let vm = ChatViewModel(sessionId: sid, appState: fx.app)
+        vm.refreshMessageCache()
+        XCTAssertEqual(vm.questions.map(\.id), ["q1"])
+        let bubble = try XCTUnwrap(vm.displayMessages.first { $0.seq == 12 })
+        XCTAssertEqual(bubble.content, "我看了一下，有两个方案。")
+        XCTAssertEqual(bubble.questionAction?.choices, ["A", "B"])
     }
 
-    func testAnswerTransportFailureRevertsWithError() throws {
-        let fx = try makeFixture(total: 4) { msg in (msg["type"] as? String) != "answer" }
+    func testPickingAChoiceSendsAUserMessageAndClosesTheQuestion() throws {
+        var sent: [[String: Any]] = []
+        let fx = try makeFixture(total: 10) { msg in sent.append(msg); return true }
+        drain(600)
+        try startTurn(fx, seq: 11)
+        try ask(fx, seq: 12, id: "q1")
+        drain(100)
+        XCTAssertTrue(fx.app.commandSender?.answer(sessionId: sid, questionId: "q1", answer: "A") == true)
+        let input = try XCTUnwrap(sent.last { $0["type"] as? String == "send_input" }?["payload"] as? [String: Any])
+        XCTAssertEqual(input["text"] as? String, "A")
+        XCTAssertEqual(input["answerTo"] as? String, "q1")
+        fx.vc.syncLiveUpdates(); drain(100)
+        XCTAssertEqual(questionRow(fx, seq: 12), "\(sid):12#q-answered", "choices go away at once")
+        XCTAssertTrue(fx.vc.automationItemIDs.contains { $0.contains(":pending:") }, "the answer is the user's own bubble")
+        // Tentacle echoes the answer; the turn continues and concludes.
+        let clientId = try XCTUnwrap(input["clientId"] as? String)
+        fx.app.messageStore.beginCardTurn(sid)
+        try ingestSpine(fx, ["type": "user_message", "seq": 13, "sessionId": sid, "deviceId": dev,
+                             "timestamp": "2026-09-01T00:00:04.000Z",
+                             "payload": ["content": "A", "clientId": clientId, "answerTo": "q1"]])
+        fx.app.commandSender?.clearPending(sid, clientId: clientId)
+        try land(fx, seq: 14, text: Self.zh)
+        drain(200)
+        XCTAssertEqual(questionRow(fx, seq: 12), "\(sid):12#q-answered")
+        XCTAssertTrue(fx.vc.automationItemIDs.contains("\(sid):13"))
+        XCTAssertTrue(fx.vc.automationItemIDs.contains("\(sid):14"))
+        XCTAssertFalse(fx.vc.automationItemIDs.contains { $0.contains(":pending:") })
+    }
+
+    func testAbortWhileAskingLeavesTheQuestionUnanswered() throws {
+        let fx = try makeFixture(total: 10)
+        drain(600)
+        try startTurn(fx, seq: 11)
+        try ask(fx, seq: 12, id: "q1")
+        try ingestSpine(fx, ["type": "idle", "seq": 13, "sessionId": sid, "deviceId": dev,
+                             "timestamp": "2026-09-01T00:00:05.000Z", "payload": ["reason": "aborted"]])
+        drain(200)
+        XCTAssertEqual(questionRow(fx, seq: 12), "\(sid):12#q-unanswered")
+        let vm = ChatViewModel(sessionId: sid, appState: fx.app)
+        vm.refreshMessageCache()
+        XCTAssertTrue(vm.questions.isEmpty, "the composer is no longer in answer mode")
+    }
+
+    /// A closed question is static: it joins the bubble body (quoted), and
+    /// "Not answered" when nothing answered it; only an open one has the
+    /// interactive action slot.
+    func testClosedQuestionRendersInTheBody() {
+        func m(_ state: String) -> ChatMessage {
+            var message = ChatMessage(type: "agent_message", seq: 2, sessionId: sid, deviceId: dev, timestamp: nil,
+                                      payload: ["content": AnyCodable("有两个方案"),
+                                                "question": AnyCodable(["id": "q1", "text": "删旧接口？", "choices": ["删", "留"]])])
+            message.payload[ChatMessage.questionStateKey] = AnyCodable(state)
+            return message
+        }
+        XCTAssertEqual(m("open").questionCard?.text, "有两个方案")
+        XCTAssertEqual(m("open").questionCard?.action?.choices, ["删", "留"])
+        XCTAssertEqual(m("answered").questionCard?.text, "有两个方案\n\n> 删旧接口？")
+        XCTAssertNil(m("answered").questionCard?.action)
+        XCTAssertEqual(m("unanswered").questionCard?.text, "有两个方案\n\n> 删旧接口？\n\n*Not answered*")
+    }
+
+    func testFailedAnswerKeepsTheQuestionAnswerable() throws {
+        let fx = try makeFixture(total: 4) { msg in (msg["type"] as? String) != "send_input" }
         drain(300)
         try startTurn(fx, seq: 5)
-        fx.app.messageStore.applyCardAction(sid, question("q2"))
+        try ask(fx, seq: 6, id: "q2")
         XCTAssertFalse(fx.app.commandSender?.answer(sessionId: sid, questionId: "q2", answer: "B") == true)
-        let action = try XCTUnwrap(fx.app.messageStore.cards[sid]?.action)
-        XCTAssertNil(action.answer, "failed answer must return the question to answerable")
-        XCTAssertNotNil(action.payload["localError"]?.stringValue)
+        fx.vc.syncLiveUpdates(); drain(100)
+        XCTAssertEqual(questionRow(fx, seq: 6), "\(sid):6#q-open")
+    }
+
+    /// Projection keeps a question that an aborted turn's terminal status
+    /// follows (terminal segments normally drop their agent_messages).
+    func testQuestionSurvivesATerminalTurnStatus() {
+        func m(_ type: String, _ seq: Int, _ payload: [String: Any]) -> ChatMessage {
+            ChatMessage(type: type, seq: seq, sessionId: sid, deviceId: dev, timestamp: nil,
+                        payload: payload.mapValues(AnyCodable.init))
+        }
+        let raw = [
+            m("user_message", 1, ["content": "迁移接口"]),
+            m("agent_message", 2, ["content": "有两个方案", "question": ["id": "q1", "text": "删旧接口？"]]),
+            m("agent_message", 3, ["content": "partial"]),
+            m("turn_status", 4, ["draft": "", "action": ["type": "user_abort", "payload": ["abortedAt": "x"]]]),
+            m("idle", 5, [:]),
+        ]
+        let annotated = ChatViewModel.annotatingQuestions(raw, pending: [], atHead: true)
+        let projected = TurnSpineProjection.project(annotated)
+        let q = projected.first { $0.seq == 2 }
+        XCTAssertEqual(q?.questionState, "unanswered")
+        XCTAssertNil(projected.first { $0.seq == 3 }, "the non-question reply is still replaced by the terminal card")
+    }
+
+    func testTwoOpenQuestionsAnswerIndependently() {
+        func m(_ type: String, _ seq: Int, _ payload: [String: Any]) -> ChatMessage {
+            ChatMessage(type: type, seq: seq, sessionId: sid, deviceId: dev, timestamp: nil,
+                        payload: payload.mapValues(AnyCodable.init))
+        }
+        let raw = [
+            m("agent_message", 1, ["content": "", "question": ["id": "q1", "text": "一？"]]),
+            m("agent_message", 2, ["content": "", "question": ["id": "q2", "text": "二？"]]),
+            m("user_message", 3, ["content": "好", "answerTo": "q2"]),
+        ]
+        let annotated = ChatViewModel.annotatingQuestions(raw, pending: [], atHead: true)
+        XCTAssertEqual(annotated[0].questionState, "open")
+        XCTAssertEqual(annotated[1].questionState, "answered")
+        XCTAssertEqual(ChatViewModel.annotatingQuestions(raw, pending: [], atHead: false)[0].questionState, "closed")
     }
 
     // MARK: Navigation controls

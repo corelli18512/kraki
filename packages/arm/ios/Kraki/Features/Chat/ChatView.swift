@@ -287,7 +287,7 @@ struct ChatView: View {
                 MessageInputView(
                     sessionId: sessionId,
                     pendingPermission: viewModel?.permissions.first,
-                    pendingQuestion: viewModel?.questions.first,
+                    pendingQuestion: viewModel?.questions.last,
                     isCompacting: viewModel?.isCompacting == true,
                     hasLiveCard: viewModel?.card != nil,
                     onHeightChange: { newHeight in
@@ -331,6 +331,9 @@ struct ChatView: View {
             questionId: questionId,
             answer: answer
         )
+        // Picking a choice is sending a message: return to the newest edge.
+        NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil,
+                                        userInfo: ["sessionId": sessionId])
     }
 }
 #endif

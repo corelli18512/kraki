@@ -476,6 +476,9 @@ final class AuthManager {
             // Keep routing this process with the local relay id, but leave the
             // production challenge identity in persistent storage untouched.
             pendingRegionDeviceId = deviceId
+            // Process-scoped: route into the app for this local session only
+            // (nothing is persisted, so the next launch is signed out again).
+            appState.hasStoredCredentials = true
         } else {
             storedDeviceId = deviceId
             pendingRegionDeviceId = nil

@@ -32,14 +32,15 @@ enum TurnSpineProjection {
                 terminal = attaching(artifacts, to: terminal)
                 for index in segment.indices {
                     let message = segment[index]
-                    if message.type == "error" || message.type == "agent_message" { continue }
+                    if message.type == "error" { continue }
+                    if message.type == "agent_message", message.questionSpec == nil { continue }
                     projected.append(index == terminalIndex ? terminal : message)
                 }
             } else {
                 var visible = segment.filter { $0.type != "error" }
                 if !artifacts.isEmpty,
                    let outcomeIndex = visible.lastIndex(where: {
-                       $0.type == "agent_message" || $0.type == "system_message"
+                       ($0.type == "agent_message" && $0.questionSpec == nil) || $0.type == "system_message"
                    }) {
                     visible[outcomeIndex] = attaching(artifacts, to: visible[outcomeIndex])
                 }
@@ -131,7 +132,7 @@ enum TurnSpineProjection {
                 } else if crossedIdleBoundary {
                     sawSteerAfterIdleBoundary = true
                 }
-            case "agent_message":
+            case "agent_message" where messages[index].questionSpec == nil:
                 // `idle` is a boundary, not necessarily the immediately prior
                 // record: a persisted steer may arrive between idle and a
                 // recovered/resumed agent reply. The old adjacent-record check
@@ -168,7 +169,8 @@ enum TurnSpineProjection {
         retainSelected()
 
         return messages.enumerated().compactMap { index, message in
-            let isConclusion = message.type == "agent_message"
+            // A question is a turn-internal ask, never a concluding reply.
+            let isConclusion = (message.type == "agent_message" && message.questionSpec == nil)
                 || message.type == "turn_status"
                 || message.type == "interrupted_turn"
             guard isConclusion else { return message }

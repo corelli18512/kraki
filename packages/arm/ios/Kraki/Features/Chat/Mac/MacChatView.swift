@@ -494,7 +494,9 @@ struct MacChatView: View {
                 messageStore: appState.messageStore,
                 attachmentStore: appState.attachmentStore,
                 documentWidth: geometry.size.width,
-                messages: viewModel.displayMessages(spineRevision: windowRevision),
+                // Pending inputs change question state (an optimistic answer).
+                messages: viewModel.displayMessages(
+                    spineRevision: windowRevision &+ viewModel.pendingSignature.hashValue),
                 liveCard: liveCardForList(viewModel),
                 liveTraceSeq: viewModel.lastUserMessage?.seq ?? 0,
                 liveSteps: viewModel.lastUserStepsHint,
@@ -550,7 +552,7 @@ struct MacChatView: View {
                 MacChatComposer(
                     sessionId: sessionId,
                     pendingPermission: viewModel.permissions.first,
-                    pendingQuestion: viewModel.questions.first,
+                    pendingQuestion: viewModel.questions.last,
                     isCompacting: viewModel.isCompacting,
                     hasLiveCard: viewModel.card != nil
                 )
@@ -640,6 +642,9 @@ struct MacChatView: View {
             questionId: questionId,
             answer: answer
         )
+        // Picking a choice is sending a message: return to the newest edge.
+        NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil,
+                                        userInfo: ["sessionId": sessionId])
     }
 }
 

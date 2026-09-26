@@ -1080,6 +1080,7 @@ final class TextKitPureSpineTests: XCTestCase {
             payload: [
                 "id": AnyCodable("short"),
                 "question": AnyCodable("Choose one"),
+                "questionState": AnyCodable("open"),
                 "choices": AnyCodable(["Wait"]),
             ])
         let long = ChatMessage(
@@ -1087,6 +1088,7 @@ final class TextKitPureSpineTests: XCTestCase {
             payload: [
                 "id": AnyCodable("long"),
                 "question": AnyCodable("Choose one"),
+                "questionState": AnyCodable("open"),
                 "choices": AnyCodable([
                     "Wait for the latest bubble before showing content when the authoritative head is still loading"
                 ]),

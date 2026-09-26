@@ -72,16 +72,14 @@ struct QuestionCardView: View {
                     .onSubmit {
                         guard !freeformText.trimmingCharacters(in: .whitespaces).isEmpty else { return }
                         submitAnswer(
-                            freeformText.trimmingCharacters(in: .whitespaces),
-                            wasFreeform: true
+                            freeformText.trimmingCharacters(in: .whitespaces)
                         )
                     }
 
                 Button {
                     guard !freeformText.trimmingCharacters(in: .whitespaces).isEmpty else { return }
                     submitAnswer(
-                        freeformText.trimmingCharacters(in: .whitespaces),
-                        wasFreeform: true
+                        freeformText.trimmingCharacters(in: .whitespaces)
                     )
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
@@ -115,8 +113,7 @@ struct QuestionCardView: View {
         appState.commandSender?.answer(
             sessionId: question.sessionId,
             questionId: question.id,
-            answer: answer,
-            wasFreeform: wasFreeform
+            answer: answer
         )
         isTextFieldFocused = false
         freeformText = ""

@@ -856,7 +856,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// no separate terminal-card chrome, just the live card stopped.
     private func frozenCardMessage(_ index: Int) -> ChatMessage? {
         guard index < items.count, let message = message(items[index]),
-              message.type == "turn_status" || message.type == "interrupted_turn" else { return nil }
+              message.type == "turn_status" || message.type == "interrupted_turn"
+                || message.questionSpec != nil else { return nil }
         return message
     }
 
@@ -864,6 +865,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// draft + the terminal action slot. Matches web's turn_status/interrupted_turn
     /// normalization (legacy interrupted_turn rebuilds user_abort/failed).
     private func frozenCard(from message: ChatMessage) -> MessageStore.SessionCard {
+        if let question = message.questionCard {
+            // A question: the agent's lead-in prose + the question UI.
+            return MessageStore.SessionCard(text: question.text, action: question.action)
+        }
         let text = message.interruptedDraft ?? ""
         let action: ChatMessage?
         if message.type == "turn_status" {
@@ -890,7 +895,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// Build the same content description used by a visible cell and by the
     /// offscreen warm sizer. Frozen terminal messages use the live-card path.
     private func bubbleContent(for message: ChatMessage) -> TKBubbleContent {
-        if message.type == "turn_status" || message.type == "interrupted_turn" {
+        if message.type == "turn_status" || message.type == "interrupted_turn" || message.questionSpec != nil {
             return TKBubbleContent.live(
                 card: frozenCard(from: message),
                 agent: agentName,
