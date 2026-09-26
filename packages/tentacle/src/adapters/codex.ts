@@ -189,6 +189,10 @@ interface CodexSession {
   starting: boolean;
   /** Abort requested before the Codex turn id was known. */
   abortPending: boolean;
+  /** The current turn was stopped by the user. RelayClient owns that terminal
+   *  boundary (turn_status user_abort + idle aborted), so the adapter settles
+   *  its own state silently: no onMessage / onIdle for the aborted turn. */
+  userAborted: boolean;
   /** Recently settled Codex turn ids — late events for them are dropped. */
   settledTurns: string[];
   /** commandExecution item ids started by the current turn. Codex's
@@ -402,6 +406,7 @@ export class CodexAdapter extends AgentAdapter {
       mode: DEFAULT_MODE,
       starting: false,
       abortPending: false,
+      userAborted: false,
       settledTurns: [],
       turnCommandItems: new Set(),
       turnFinalized: true,
@@ -622,6 +627,7 @@ export class CodexAdapter extends AgentAdapter {
   private async startTurn(s: CodexSession, input: QueuedInput): Promise<void> {
     s.starting = true;
     s.turnFinalized = false;
+    s.userAborted = false;
     s.turnCommandItems = new Set();
     s.pendingText = '';
     s.pendingError = undefined;
@@ -676,8 +682,10 @@ export class CodexAdapter extends AgentAdapter {
       if (s.settledTurns.length > 8) s.settledTurns.shift();
     }
     s.activeTurnId = undefined;
-    const ev = this.turnEvent(s);
-    if (ev.turnId) this.onIdle?.(s.sessionId, ev); else this.onIdle?.(s.sessionId);
+    if (!s.userAborted) {
+      const ev = this.turnEvent(s);
+      if (ev.turnId) this.onIdle?.(s.sessionId, ev); else this.onIdle?.(s.sessionId);
+    }
     this.onFlushComplete?.(s.sessionId);
     const next = s.queue.shift();
     if (next) {
@@ -705,6 +713,7 @@ export class CodexAdapter extends AgentAdapter {
     const s = this.sessions.get(sessionId);
     if (!s) return;
     s.queue = [];
+    if (!s.turnFinalized) s.userAborted = true;
     this.dropPendingCards(s, true);
     const commandItems = [...s.turnCommandItems];
     if (s.activeTurnId) await this.interruptActive(s);
@@ -1280,7 +1289,10 @@ export class CodexAdapter extends AgentAdapter {
     }
     s.tools.clear();
 
-    if (status === 'failed') {
+    if (s.userAborted) {
+      // RelayClient already snapshotted the draft into turn_status(user_abort).
+      s.pendingText = '';
+    } else if (status === 'failed') {
       s.pendingText = '';
       this.onError?.(s.sessionId, { message: turnError || s.pendingError || 'Codex turn failed', ...this.turnEvent(s) });
     } else {

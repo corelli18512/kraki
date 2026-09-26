@@ -101,6 +101,14 @@ async function session(mode?: 'safe' | 'discuss' | 'execute' | 'delegate'): Prom
   return sessionId;
 }
 
+async function settled(sid: string): Promise<void> {
+  const end = Date.now() + 4000;
+  while (!h.adapter.isTurnSettled(sid)) {
+    if (Date.now() > end) throw new Error('turn never settled');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 async function turn(sid: string, text: string, turnId: string, delivery?: 'prompt' | 'steer' | 'follow_up') {
   h.adapter.setTurnIdentity(sid, turnId);
   await h.adapter.sendMessage(sid, text, undefined, delivery ? { delivery } : undefined);
@@ -334,15 +342,17 @@ describe('CodexAdapter (fake app-server child process)', () => {
     await turn(sid, 'SLOW', 'rt-1');
     expect(h.adapter.isTurnSettled(sid)).toBe(false);
     await h.adapter.abortSession(sid);
-    await h.idleCount(1);
+    await settled(sid);
     expect(h.sent('turn/interrupt')[0].params).toMatchObject({ threadId: expect.any(String), turnId: expect.any(String) });
-    expect(h.adapter.isTurnSettled(sid)).toBe(true);
+    // RelayClient owns a user abort's terminal boundary: the adapter emits no
+    // idle and no conclusion for the aborted turn (its 'partial' is dropped).
+    expect(h.of('idle')).toHaveLength(0);
     // Wait out the fake's late 'ghost' event from the settled turn.
     await new Promise((r) => setTimeout(r, 80));
     // Next turn works normally and never sees the straggler.
     await turn(sid, 'after', 'rt-2');
-    await h.idleCount(2);
-    expect(h.of('message').map((m) => m.content)).toEqual(['partial', 'echo: after']);
+    await h.idleCount(1);
+    expect(h.of('message').map((m) => m.content)).toEqual(['echo: after']);
     expect(h.events.some((e) => e.content === 'ghost')).toBe(false);
   });
 
@@ -353,7 +363,7 @@ describe('CodexAdapter (fake app-server child process)', () => {
     await h.waitFor((e) => e.type === 'tool_start', 'command start');
     expect(h.of('tool_start')[0]).toMatchObject({ toolName: 'shell', args: { command: 'sleep 120' } });
     await h.adapter.abortSession(sid);
-    await h.idleCount(1);
+    await settled(sid);
     expect(h.sent('thread/backgroundTerminals/list')).toHaveLength(1);
     expect(h.sent('thread/backgroundTerminals/terminate').map((m) => m.params!.processId)).toEqual(['proc-sleep']);
   });
@@ -366,8 +376,9 @@ describe('CodexAdapter (fake app-server child process)', () => {
     await new Promise((r) => setTimeout(r, 30));
     await h.adapter.abortSession(sid);
     await sending;
-    await h.idleCount(1);
+    await settled(sid);
     expect(h.sent('turn/interrupt')).toHaveLength(1);
+    expect(h.of('idle')).toHaveLength(0);
     expect(h.adapter.isTurnSettled(sid)).toBe(true);
   });
 
@@ -400,7 +411,7 @@ describe('CodexAdapter (fake app-server child process)', () => {
     await turn(sid, 'queued one', 'rt-2', 'follow_up');
     expect(h.sent('turn/start')).toHaveLength(1);
     await h.adapter.abortSession(sid);
-    await h.idleCount(1);
+    await settled(sid);
     // abort clears the queue — nothing else runs
     await new Promise((r) => setTimeout(r, 100));
     expect(h.sent('turn/start')).toHaveLength(1);
@@ -409,9 +420,8 @@ describe('CodexAdapter (fake app-server child process)', () => {
     await h.waitFor((e) => e.type === 'delta', 'delta');
     await turn(sid, 'next prompt', 'rt-4', 'prompt');
     await turn(sid, 'x', 'rt-3', 'steer');
-    await h.idleCount(3);
+    await h.idleCount(2);
     expect(h.of('message').map((m) => [m.content, m.turnId])).toEqual([
-      ['partial', 'rt-1'],
       ['steered: x', 'rt-3'],
       ['echo: next prompt', 'rt-4'],
     ]);
