@@ -230,7 +230,7 @@ final class CommandSender {
     }
 
     /// Correction finished: send `text` now. No-op (false) if the user
-    /// already withdrew, deleted or sent this input some other way.
+    /// already deleted it or chose Send Original.
     @discardableResult
     func dispatchStagedInput(sessionId: String, clientId: String, text: String) -> Bool {
         guard isStaged(sessionId: sessionId, clientId: clientId),

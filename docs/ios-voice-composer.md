@@ -28,7 +28,8 @@ Send (grey/active), Stop and dictation Send (fill + symbol replace).
 
 Tap the mic: the keyboard is dismissed and the capsule expands in place into
 two rows — a read-only live transcript (existing draft shown around the new,
-dimmed speech at the caret) above `[Cancel] level time … [Edit] [↑]`.
+dimmed speech at the caret) above `[Cancel] level time … [Edit]`, with the
+send circle beside the capsule.
 
 - **Cancel**: discard the utterance. The draft was never touched while
   recording, so nothing needs restoring.
@@ -58,7 +59,7 @@ dimmed speech at the caret) above `[Cancel] level time … [Edit] [↑]`.
 `originalText`; nothing is sent. `updateStagedInput` streams text in place
 (the list re-measures the row). `dispatchStagedInput` transmits exactly once
 with the same clientId and then follows the normal optimistic path
-(`sending` → echo, or `failed` → Retry/Edit/Delete). `failStagedInput` marks it
+(`sending` → echo, or `failed` → Retry/Delete). `failStagedInput` marks it
 `failed` with the original transcript (Retry sends it): **an unconfirmed
 correction is never sent automatically**.
 

@@ -309,7 +309,7 @@ protocol IOSVoiceComposerHost: AnyObject {
                 }
             } else {
                 // Correction failed or can't be confirmed: keep the original,
-                // let the user choose (Retry = send original, Edit, Delete).
+                // let the user choose (Retry = send original, or Delete).
                 host.failVoiceInput(sessionID: sessionID, clientID: clientID, text: original)
             }
         }

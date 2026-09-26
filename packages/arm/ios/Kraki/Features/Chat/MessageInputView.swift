@@ -4,7 +4,8 @@
 /// One glass capsule: [image / thumbnail] text [ⓧ] [mic] [send | stop].
 /// It grows upward with multi-line text. Tapping the mic expands the same
 /// capsule into two rows — a live transcript above [Cancel] level/time
-/// [Edit] [↑] — and collapses back when dictation ends.
+/// [Edit] (the send circle stays beside the capsule) — and collapses back
+/// when dictation ends.
 ///
 /// Voice ↑ sends at once as an optimistic bubble that is corrected in place
 /// and transmitted when correction completes (see IOSVoiceComposer).
