@@ -50,23 +50,22 @@ const logger = createLogger('claude-adapter');
  * Errors are non-fatal — a missing or malformed file just means we
  * fall back to whatever is already in `process.env`.
  */
-function loadClaudeSettingsEnv(): void {
-  const settingsPath = join(homedir(), '.claude', 'settings.json');
-  if (!existsSync(settingsPath)) return;
+export function loadClaudeSettingsEnv(configDir: string): Record<string, string> {
+  const settingsPath = join(configDir, 'settings.json');
+  const out: Record<string, string> = {};
+  if (!existsSync(settingsPath)) return out;
   try {
     const raw = readFileSync(settingsPath, 'utf8');
     const parsed = JSON.parse(raw) as { env?: Record<string, unknown> };
     const env = parsed.env;
-    if (!env || typeof env !== 'object') return;
-    let injected = 0;
+    if (!env || typeof env !== 'object') return out;
     for (const [key, value] of Object.entries(env)) {
       if (typeof value !== 'string') continue;
       if (process.env[key] !== undefined) continue;
-      process.env[key] = value;
-      injected += 1;
+      out[key] = value;
     }
-    if (injected > 0) {
-      logger.debug({ path: settingsPath, count: injected }, 'Loaded env from Claude settings.json');
+    if (Object.keys(out).length > 0) {
+      logger.debug({ path: settingsPath, count: Object.keys(out).length }, 'Loaded env from Claude settings.json');
     }
   } catch (err) {
     logger.warn(
@@ -74,6 +73,48 @@ function loadClaudeSettingsEnv(): void {
       'Failed to load Claude settings.json env (continuing with process env only)',
     );
   }
+  return out;
+}
+
+/** The user's real Claude Code config root: an explicit CLAUDE_CONFIG_DIR,
+ *  otherwise ~/.claude. Kraki's per-session shadow homes are built FROM this. */
+export function claudeConfigSource(): { dir: string; explicit: boolean } {
+  const explicit = process.env.CLAUDE_CONFIG_DIR?.trim();
+  return explicit ? { dir: explicit, explicit: true } : { dir: join(homedir(), '.claude'), explicit: false };
+}
+
+/**
+ * Claude Code names its macOS Keychain credential item after the config dir:
+ * `Claude Code-credentials` for the default dir, `...-<sha256(dir)[:8]>` once
+ * CLAUDE_CONFIG_DIR is set (verified in Claude Code 2.1.220). Kraki's shadow
+ * CLAUDE_CONFIG_DIR would therefore look up a Keychain item that does not
+ * exist, and subscription (OAuth) logins could never work. The CLI's
+ * CLAUDE_SECURESTORAGE_CONFIG_DIR pins secure storage to the REAL config root
+ * (empty string = the default, unsuffixed item).
+ */
+export function secureStorageEnv(): Record<string, string> {
+  if (process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR !== undefined) return {};
+  const source = claudeConfigSource();
+  return { CLAUDE_SECURESTORAGE_CONFIG_DIR: source.explicit ? source.dir : '' };
+}
+
+/** True when SDK accountInfo proves no credential is configured at all. */
+export function isClaudeLoggedOut(info: unknown): boolean {
+  if (!info || typeof info !== 'object') return false;
+  const a = info as { email?: string; apiKeySource?: string; tokenSource?: string; apiProvider?: string };
+  if (a.apiProvider && a.apiProvider !== 'firstParty') return false; // Bedrock/Vertex/… auth is external
+  return !a.email && !a.apiKeySource && (!a.tokenSource || a.tokenSource === 'none');
+}
+
+/** Map an SDK model alias (`opus`, `opus[1m]`, …) to its ANTHROPIC_* override key. */
+function aliasEnvKey(alias: string): string | undefined {
+  const base = alias.replace(/\[[^\]]*\]$/, '');
+  return ({
+    default: 'ANTHROPIC_MODEL',
+    opus: 'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    sonnet: 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+    haiku: 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  } as Record<string, string>)[base];
 }
 
 // ── Lazy SDK import types ───────────────────────────────
@@ -164,6 +205,13 @@ interface SessionEntry {
    * the provider turn. */
   eventTurnId?: string;
   turnFinalized?: boolean;
+  /** The current turn was stopped by the user. RelayClient owns that terminal
+   *  boundary (turn_status user_abort + idle aborted): the adapter settles the
+   *  turn silently — no conclusion bubble, error or idle for it. */
+  userAborted?: boolean;
+  /** Claude Code reported status=compacting and no end has been seen yet. */
+  compacting?: boolean;
+  reasoningEffort?: string;
 }
 
 // ── Helpers ─────────────────────────────────────────────
@@ -448,7 +496,7 @@ export class ClaudeAdapter extends AgentAdapter {
   private setupShadowHome(sessionId: string): string {
     const home = this.claudeHome(sessionId);
     mkdirSync(home, { recursive: true });
-    const real = join(homedir(), '.claude');
+    const real = claudeConfigSource().dir;
     if (existsSync(real)) {
       for (const entry of readdirSync(real)) {
         if (entry === 'projects') continue; // keep transcript store co-located
@@ -460,7 +508,20 @@ export class ClaudeAdapter extends AgentAdapter {
     return home;
   }
 
-  private persistMeta(sessionId: string, meta: { cwd?: string; sdkSessionId?: string; model?: string }): void {
+  /** Environment for every Claude Code child: the daemon env plus the user's
+   *  Claude settings.json `env` block. Built per call and passed via
+   *  `options.env` instead of mutating process.env, so Claude provider keys
+   *  never leak into the Copilot / Pi / Codex children of the same daemon. */
+  private claudeEnv(extra: Record<string, string> = {}): Record<string, string | undefined> {
+    return { ...process.env, ...loadClaudeSettingsEnv(claudeConfigSource().dir), ...extra };
+  }
+
+  /** Resolve a Kraki-visible model id back to the SDK alias it came from. */
+  private sdkModel(model: string): string {
+    return this.modelAliasMap.get(model) ?? model;
+  }
+
+  private persistMeta(sessionId: string, meta: { cwd?: string; sdkSessionId?: string; model?: string; reasoningEffort?: string }): void {
     try {
       mkdirSync(this.storeDir(sessionId), { recursive: true });
       const prev = this.loadMeta(sessionId) ?? {};
@@ -470,7 +531,7 @@ export class ClaudeAdapter extends AgentAdapter {
     }
   }
 
-  private loadMeta(sessionId: string): { cwd?: string; sdkSessionId?: string; model?: string } | null {
+  private loadMeta(sessionId: string): { cwd?: string; sdkSessionId?: string; model?: string; reasoningEffort?: string } | null {
     const p = this.sidecarPath(sessionId);
     if (!existsSync(p)) return null;
     try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; }
@@ -538,25 +599,6 @@ export class ClaudeAdapter extends AgentAdapter {
   // ── Lifecycle ───────────────────────────────────────
 
   async start(): Promise<void> {
-    // Daemons launched via launchd / systemd do not inherit interactive
-    // shell env, so we honour the same `env` block Claude Code itself
-    // reads from ~/.claude/settings.json before checking auth. Anything
-    // already in process.env wins.
-    loadClaudeSettingsEnv();
-
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    const useBedrock = process.env.CLAUDE_CODE_USE_BEDROCK === '1';
-    const useVertex = process.env.CLAUDE_CODE_USE_VERTEX === '1';
-    const useFoundry = process.env.CLAUDE_CODE_USE_FOUNDRY === '1';
-    const hasAuthToken = !!process.env.ANTHROPIC_AUTH_TOKEN;
-
-    if (!apiKey && !useBedrock && !useVertex && !useFoundry && !hasAuthToken) {
-      throw new Error(
-        'No Anthropic API key found. Set ANTHROPIC_API_KEY environment variable, ' +
-        'or configure a third-party provider (CLAUDE_CODE_USE_BEDROCK=1, CLAUDE_CODE_USE_VERTEX=1, or CLAUDE_CODE_USE_FOUNDRY=1).'
-      );
-    }
-
     // Verify the SDK can be imported
     const sdk = await import('@anthropic-ai/claude-agent-sdk').catch(() => null);
     if (!sdk) {
@@ -565,9 +607,12 @@ export class ClaudeAdapter extends AgentAdapter {
       );
     }
 
-    // Fetch available models via a throwaway query. The SDK requires a
-    // prompt to create a query, but we can call supportedModels() on it
-    // and then immediately abort — no actual API call is made for models.
+    // Authentication is the SDK's business: an API key, ANTHROPIC_AUTH_TOKEN,
+    // a cloud provider, or a Claude subscription login are all valid. One
+    // throwaway control-only query (no model call) lists models and reports
+    // whether ANY credential is configured; Kraki does not guess from env vars.
+    const env = this.claudeEnv(secureStorageEnv());
+    let loggedOut = false;
     try {
       const ac = new AbortController();
       const noop = (async function* () { /* never yields — query blocks waiting for input */ })();
@@ -575,31 +620,31 @@ export class ClaudeAdapter extends AgentAdapter {
         prompt: noop,
         options: {
           abortController: ac,
+          env,
           permissionMode: 'default' as PermissionMode,
           ...(this.claudeExecutablePath && { pathToClaudeCodeExecutable: this.claudeExecutablePath }),
         },
       });
       const models = await q.supportedModels();
+      try {
+        const account = await (q as { accountInfo?: () => Promise<unknown> }).accountInfo?.();
+        loggedOut = isClaudeLoggedOut(account);
+      } catch (err) {
+        logger.debug({ err: (err as Error).message }, 'Claude accountInfo unavailable');
+      }
       ac.abort();
       if (models.length > 0) {
-        // Resolve SDK aliases to actual backend model names via env vars,
+        // Resolve SDK aliases to actual backend model names via env overrides,
         // then deduplicate so the UI shows real models (e.g. "deepseek-v4-pro[1m]")
-        // instead of generic aliases ("opus", "sonnet") that all map to the same backend.
-        const ALIAS_ENV: Record<string, string> = {
-          default: 'ANTHROPIC_MODEL',
-          opus: 'ANTHROPIC_DEFAULT_OPUS_MODEL',
-          sonnet: 'ANTHROPIC_DEFAULT_SONNET_MODEL',
-          haiku: 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-        };
-
+        // instead of generic aliases ("opus", "sonnet") that map to the same backend.
         this.modelAliasMap.clear();
         const seen = new Set<string>();
         const resolved: ModelDetail[] = [];
 
         for (const m of models) {
           const alias = m.value;
-          const envKey = ALIAS_ENV[alias];
-          const displayId = envKey ? (process.env[envKey] || alias) : alias;
+          const envKey = aliasEnvKey(alias);
+          const displayId = envKey ? (env[envKey] || alias) : alias;
 
           if (!seen.has(displayId)) {
             seen.add(displayId);
@@ -620,6 +665,13 @@ export class ClaudeAdapter extends AgentAdapter {
       }
     } catch (err) {
       logger.warn({ err: (err as Error).message }, 'Could not fetch model list from SDK');
+    }
+
+    if (loggedOut) {
+      throw new Error(
+        'Claude Code is not logged in. Run `claude` and use /login (Claude subscription), ' +
+        'or configure ANTHROPIC_API_KEY / a cloud provider, then restart Kraki.',
+      );
     }
 
     logger.info({ models: this.cachedModels.map(m => m.id) }, 'Claude adapter started');
@@ -657,6 +709,7 @@ export class ClaudeAdapter extends AgentAdapter {
       pendingQuestions,
       sessionId,
       model: config.model,
+      reasoningEffort: config.reasoningEffort,
       consumerLoop: Promise.resolve(),
       deferredConfig: config,
       eventTurnId: undefined,
@@ -667,7 +720,7 @@ export class ClaudeAdapter extends AgentAdapter {
 
     // Persist the durable resume bits up-front (cwd is needed to locate the
     // cwd-mangled transcript; the SDK session UUID is filled in at init).
-    this.persistMeta(sessionId, { cwd: config.cwd, model: config.model });
+    this.persistMeta(sessionId, { cwd: config.cwd, model: config.model, reasoningEffort: config.reasoningEffort });
 
     this.onSessionCreated?.({
       sessionId,
@@ -702,12 +755,14 @@ export class ClaudeAdapter extends AgentAdapter {
       pendingQuestions,
       sessionId,
       model: meta?.model,
+      reasoningEffort: meta?.reasoningEffort,
       consumerLoop: Promise.resolve(),
       eventTurnId: undefined,
       deferredConfig: {
         resume: meta?.sdkSessionId ?? sessionId,
         ...(meta?.cwd && { cwd: meta.cwd }),
         ...(meta?.model && { model: meta.model }),
+        ...(meta?.reasoningEffort && { reasoningEffort: meta.reasoningEffort as CreateSessionConfig['reasoningEffort'] }),
         sessionId,
       },
     };
@@ -753,12 +808,13 @@ export class ClaudeAdapter extends AgentAdapter {
         fork: true,
         ...(srcMeta?.cwd && { cwd: srcMeta.cwd }),
         ...(srcMeta?.model && { model: srcMeta.model }),
+        ...(srcMeta?.reasoningEffort && { reasoningEffort: srcMeta.reasoningEffort as CreateSessionConfig['reasoningEffort'] }),
         sessionId: newSessionId,
       },
     };
 
     this.sessions.set(newSessionId, entry);
-    if (srcMeta) this.persistMeta(newSessionId, { cwd: srcMeta.cwd, model: srcMeta.model });
+    if (srcMeta) this.persistMeta(newSessionId, { cwd: srcMeta.cwd, model: srcMeta.model, reasoningEffort: srcMeta.reasoningEffort });
 
     this.onSessionCreated?.({
       sessionId: newSessionId,
@@ -772,7 +828,7 @@ export class ClaudeAdapter extends AgentAdapter {
   async sendMessage(
     sessionId: string,
     text: string,
-    _attachments?: Attachment[],
+    attachments?: Attachment[],
     options?: SendMessageOptions,
   ): Promise<void> {
     const entry = this.sessions.get(sessionId);
@@ -789,6 +845,7 @@ export class ClaudeAdapter extends AgentAdapter {
       entry.pendingText = '';
       entry.pendingError = undefined;
       entry.turnFinalized = false;
+      entry.userAborted = false;
     }
 
     // Prepend mode-switch signal if mode changed since last message
@@ -801,16 +858,37 @@ export class ClaudeAdapter extends AgentAdapter {
     // Lazily start the query on first message — the SDK binary needs a
     // prompt to work with, so we pass the first user message directly
     // instead of using the streaming input channel.
+    const content = this.buildUserContent(sessionId, text, attachments);
     if (!entry.query) {
-      await this.spawnQuery(sessionId, text);
+      await this.spawnQuery(sessionId, content);
       return;
     }
 
     entry.inputChannel.push({
       type: 'user',
-      message: { role: 'user', content: text },
+      message: { role: 'user', content },
       parent_tool_use_id: null,
     } as unknown as SDKUserMessage);
+  }
+
+  /** Text plus user-attached images as Anthropic content blocks. Images may
+   *  arrive inline (base64) or as a content_ref into the AttachmentStore. */
+  private buildUserContent(sessionId: string, text: string, attachments?: Attachment[]): string | Array<Record<string, unknown>> {
+    const images: Array<Record<string, unknown>> = [];
+    for (const att of attachments ?? []) {
+      let data: string | undefined;
+      let mimeType = att.mimeType;
+      if (att.type === 'image') {
+        data = att.data;
+      } else if (att.type === 'content_ref' && this.attachmentStore) {
+        const hit = this.attachmentStore.read(sessionId, att.id);
+        if (hit) { data = hit.bytes.toString('base64'); mimeType = hit.meta.mimeType ?? mimeType; }
+      }
+      if (!data || !/^image\/(png|jpeg|gif|webp)$/.test(mimeType)) continue;
+      images.push({ type: 'image', source: { type: 'base64', media_type: mimeType, data } });
+    }
+    if (images.length === 0) return text;
+    return [...(text ? [{ type: 'text', text }] : []), ...images];
   }
 
   /**
@@ -850,7 +928,7 @@ export class ClaudeAdapter extends AgentAdapter {
     else this.onIdle?.(sessionId);
   }
 
-  private async spawnQuery(sessionId: string, initialPrompt: string): Promise<void> {
+  private async spawnQuery(sessionId: string, initialPrompt: string | Array<Record<string, unknown>>): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
 
@@ -887,9 +965,11 @@ export class ClaudeAdapter extends AgentAdapter {
       abortController: entry.abortController,
       // Relocate Claude's private transcript INTO the Kraki session dir while
       // reusing the real login (symlinked into the per-session shadow home).
-      env: { ...process.env, CLAUDE_CONFIG_DIR: this.setupShadowHome(sessionId) },
+      // Secure storage stays pinned to the real config root so a Keychain-held
+      // subscription login is found (see secureStorageEnv).
+      env: this.claudeEnv({ CLAUDE_CONFIG_DIR: this.setupShadowHome(sessionId), ...secureStorageEnv() }),
       ...(this.claudeExecutablePath && { pathToClaudeCodeExecutable: this.claudeExecutablePath }),
-      ...(config?.model && { model: this.modelAliasMap.get(config.model) ?? config.model }),
+      ...((entry.model ?? config?.model) && { model: this.sdkModel((entry.model ?? config?.model)!) }),
       ...(config?.cwd && { cwd: config.cwd }),
       ...(config?.resume && { resume: config.resume }),
       ...(config?.fork && { forkSession: true }),
@@ -899,8 +979,8 @@ export class ClaudeAdapter extends AgentAdapter {
       ...(mcpServers && { mcpServers }),
       includePartialMessages: true,
       canUseTool: this.makeCanUseToolHandler(sessionId, entry.pendingPermissions, entry.pendingQuestions),
-      ...(config?.reasoningEffort && {
-        effort: config.reasoningEffort as Options['effort'],
+      ...((entry.reasoningEffort ?? config?.reasoningEffort) && {
+        effort: (entry.reasoningEffort ?? config?.reasoningEffort) as Options['effort'],
       }),
     };
 
@@ -910,8 +990,8 @@ export class ClaudeAdapter extends AgentAdapter {
 
     entry.query = q;
     entry.deferredConfig = undefined;
-    entry.consumerLoop = this.consumeMessages(sessionId, q);
-    if (config?.cwd) this.persistMeta(sessionId, { cwd: config.cwd, model: config.model });
+    entry.consumerLoop = this.consumeMessages(sessionId, q, entry.abortController);
+    if (config?.cwd) this.persistMeta(sessionId, { cwd: config.cwd, model: entry.model, reasoningEffort: entry.reasoningEffort });
     logger.debug({ sessionId }, 'SDK query spawned');
   }
 
@@ -1024,6 +1104,15 @@ export class ClaudeAdapter extends AgentAdapter {
   async abortSession(sessionId: string): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (entry) {
+      // Mark BEFORE interrupting: the SDK's result for the interrupted turn may
+      // arrive before interrupt() resolves. RelayClient already snapshotted the
+      // live draft into turn_status(user_abort) and owns the aborted idle, so the
+      // adapter must not also emit a conclusion bubble / error / idle for it.
+      if (entry.query && entry.turnFinalized === false) {
+        entry.userAborted = true;
+        entry.pendingText = '';
+        entry.pendingError = undefined;
+      }
       this.broadcastPendingResolutions(sessionId);
       if (entry.query) {
         try {
@@ -1078,17 +1167,33 @@ export class ClaudeAdapter extends AgentAdapter {
     logger.debug({ sessionId, mode }, 'Session permission mode changed');
   }
 
-  async setSessionModel(sessionId: string, model: string, _reasoningEffort?: string, _contextTier?: string): Promise<void> {
+  async setSessionModel(sessionId: string, model: string, reasoningEffort?: string, _contextTier?: string): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       logger.warn({ sessionId }, 'setSessionModel: session not found');
       return;
     }
     if (entry.query) {
-      await entry.query.setModel(model);
+      await entry.query.setModel(this.sdkModel(model));
+      if (reasoningEffort) {
+        // The settings layer accepts low..xhigh; `max` is start-time only.
+        if (reasoningEffort === 'max') {
+          logger.info({ sessionId }, 'effort "max" applies from the next session start');
+        } else {
+          await entry.query.applyFlagSettings({ effortLevel: reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' });
+        }
+      }
     }
     entry.model = model;
-    logger.info({ sessionId, model }, 'Session model changed');
+    if (reasoningEffort) entry.reasoningEffort = reasoningEffort;
+    // A query that has not started yet reads the deferred config.
+    if (entry.deferredConfig) {
+      entry.deferredConfig.model = model;
+      if (reasoningEffort) entry.deferredConfig.reasoningEffort = reasoningEffort as CreateSessionConfig['reasoningEffort'];
+    }
+    // Survive daemon restart / lazy resume.
+    this.persistMeta(sessionId, { model, ...(reasoningEffort && { reasoningEffort }) });
+    logger.info({ sessionId, model, reasoningEffort }, 'Session model changed');
   }
 
   getSessionUsage(sessionId: string): SessionUsage | null {
@@ -1137,10 +1242,16 @@ export class ClaudeAdapter extends AgentAdapter {
         prompt,
         options: {
           ...(this.claudeExecutablePath && { pathToClaudeCodeExecutable: this.claudeExecutablePath }),
+          env: this.claudeEnv(secureStorageEnv()),
           systemPrompt: ClaudeAdapter.TITLE_SYSTEM_PROMPT,
+          // A pure text side-call: no tools, no MCP, no filesystem settings, no
+          // transcript, and every permission denied. The prompt contains user
+          // text, so it must never be able to act on the machine.
+          tools: [],
+          settingSources: [],
+          canUseTool: async () => ({ behavior: 'deny' as const, message: 'Title generation has no tools' }),
+          model: 'haiku', // cheapest tier; honours ANTHROPIC_DEFAULT_HAIKU_MODEL
           maxTurns: 1,
-          permissionMode: 'bypassPermissions' as PermissionMode,
-          allowDangerouslySkipPermissions: true,
           persistSession: false,
         },
       });
@@ -1169,7 +1280,7 @@ export class ClaudeAdapter extends AgentAdapter {
    * Consume the SDKMessage async generator and map messages to adapter callbacks.
    * Runs for the lifetime of the session query.
    */
-  private async consumeMessages(sessionId: string, q: Query): Promise<void> {
+  private async consumeMessages(sessionId: string, q: Query, abortController?: AbortController): Promise<void> {
     try {
       for await (const msg of q) {
         try {
@@ -1182,7 +1293,9 @@ export class ClaudeAdapter extends AgentAdapter {
       // Query completed normally. A result event is the authoritative turn
       // boundary; only fall back here when the SDK ended without one.
       const entry = this.sessions.get(sessionId);
-      if (!entry?.turnFinalized) {
+      if (entry?.userAborted && !entry.turnFinalized) {
+        entry.turnFinalized = true;
+      } else if (!entry?.turnFinalized) {
         if (entry?.pendingError) this.emitError(sessionId, entry, entry.pendingError.message);
         else this.flushConclusion(sessionId);
         if (entry) {
@@ -1193,7 +1306,10 @@ export class ClaudeAdapter extends AgentAdapter {
         }
       }
     } catch (err) {
-      if ((err as Error).name === 'AbortError') {
+      // stop()/killSession() abort the controller on purpose; the SDK surfaces
+      // that as a plain Error("Operation aborted"), not an AbortError. That is
+      // a clean shutdown, never a session error.
+      if ((err as Error).name === 'AbortError' || abortController?.signal.aborted) {
         logger.debug({ sessionId }, 'Session query aborted');
         return;
       }
@@ -1224,12 +1340,26 @@ export class ClaudeAdapter extends AgentAdapter {
    * Flush buffered assistant prose as the turn's single conclusion bubble
    * (onMessage → permanent spine bubble). Called at turn end.
    */
-  private flushConclusion(sessionId: string): void {
+  private flushConclusion(sessionId: string): boolean {
     const entry = this.sessions.get(sessionId);
-    if (!entry) return;
+    if (!entry) return false;
     const text = (entry.pendingText ?? '').trim();
     entry.pendingText = '';
     if (text) this.emitMessage(sessionId, entry, text);
+    return !!text;
+  }
+
+  private emitCompaction(sessionId: string, event: Omit<import('./base.js').CompactionEvent, 'turnId'>): void {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    if (event.phase === 'start') {
+      if (entry.compacting) return;
+      entry.compacting = true;
+    } else {
+      if (!entry.compacting) return;
+      entry.compacting = false;
+    }
+    this.onCompaction?.(sessionId, { ...event, ...this.lifecycleEvent(entry) });
   }
 
   /**
@@ -1253,6 +1383,23 @@ export class ClaudeAdapter extends AgentAdapter {
           }
           this.cacheModelsFromInit(sysMsg);
           logger.debug({ sessionId, sdkSessionId }, 'SDK session initialized');
+        } else if (sysMsg.subtype === 'status') {
+          // Claude Code's native compaction state (SDKStatusMessage).
+          const st = msg as unknown as { status?: string | null; compact_result?: string; compact_error?: string };
+          if (st.status === 'compacting') {
+            this.emitCompaction(sessionId, { phase: 'start', reason: 'threshold' });
+          } else if (st.compact_result) {
+            this.emitCompaction(sessionId, {
+              phase: 'end',
+              ...(st.compact_result === 'failed' && { aborted: true, errorMessage: st.compact_error ?? 'Compaction failed' }),
+            });
+          }
+        } else if ((sysMsg.subtype as string) === 'compact_boundary') {
+          const meta = (msg as unknown as { compact_metadata?: { trigger?: string } }).compact_metadata;
+          const reason = meta?.trigger === 'manual' ? 'manual' as const : 'threshold' as const;
+          // A boundary without a preceding status still completes a compaction.
+          this.emitCompaction(sessionId, { phase: 'start', reason });
+          this.emitCompaction(sessionId, { phase: 'end', reason });
         } else if (sysMsg.subtype === 'files_persisted') {
           // The SDK finished writing session files to disk — safe to
           // resume watching the session directory for external changes.
@@ -1336,6 +1483,15 @@ export class ClaudeAdapter extends AgentAdapter {
         const resultAny = result as unknown as Record<string, unknown>;
         const entry = this.sessions.get(sessionId);
         if (entry?.turnFinalized) break;
+        if (entry?.compacting) this.emitCompaction(sessionId, { phase: 'end' });
+
+        if (entry?.userAborted) {
+          // RelayClient owns this turn's terminal boundary (see abortSession).
+          entry.pendingText = '';
+          entry.pendingError = undefined;
+          entry.turnFinalized = true;
+          break;
+        }
 
         if (resultAny.is_error) {
           const normalized = normalizeClaudeSDKError(resultAny);
@@ -1348,7 +1504,11 @@ export class ClaudeAdapter extends AgentAdapter {
           else this.onError?.(sessionId, { message: error.message });
         } else {
           if (entry) entry.pendingError = undefined;
-          this.flushConclusion(sessionId);
+          // A turn that ended with tools but no closing prose still needs a
+          // spine anchor for its Steps (protocol SystemMessage 'no_reply').
+          if (!this.flushConclusion(sessionId) && entry) {
+            this.onSystemMessage?.(sessionId, { kind: 'no_reply', ...this.lifecycleEvent(entry) });
+          }
         }
 
         // Update final usage
