@@ -1,20 +1,14 @@
 /**
- * Unit tests for the pi adapter's draft-bubble + finalize_reply turn model.
+ * Unit tests for the pi adapter's draft-bubble turn model.
  *
  *  - ordinary assistant prose (message_end) → NARRATION: streams to the draft
  *    bubble (onMessageDelta) and is mirrored to the TRACE axis (onNarration).
  *  - the LAST narration is the kept draft; the agent's reply IS its prose.
  *  - at agent_settled the adapter applies the SKIP-FINALIZE rule: exactly ONE
  *    narration segment with no tool after it is already a clean trailing reply →
- *    crystallize it directly (onMessage) with NO finalize round. Any other shape
- *    (multi-segment, ends-on-tool, zero narration) injects a finalize round: a
- *    prompt asking the model to call finalize_reply({resummarize, text?}).
- *  - finalize_reply is honored ONLY during the finalize round; resummarize:false
- *    keeps the drafted line, resummarize:true swaps in the streamed text.
- *  - ask_user → question card (extension_ui_request), NOT a TRACE step.
- *
- * We drive the adapter's private handleEvent directly with a fake session so no
- * real pi child is spawned.
+ *    crystallize it directly (onMessage). A turn that ends on a tool has no
+ *    reply: it is relayed as-is (just its Steps) — Kraki never injects an
+ *    extra model round into the user's pi session.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -53,7 +47,7 @@ function makeAdapter(promptWatchdog?: {
     proc,
     cwd: '/tmp',
     model: 'github-copilot/claude-opus-4.8',
-    mode: 'execute',
+    mode: 'auto',
     usage: {},
     lastActivity: Date.now(),
     relayTurnId: undefined as string | undefined,
@@ -70,11 +64,6 @@ function makeAdapter(promptWatchdog?: {
     settledTurn: undefined,
     pendingMaintenanceIdle: false,
     aborting: false,
-    finalizing: false,
-    finalizeAttempt: 0,
-    finalizeResolved: false,
-    finalizeNarration: '',
-    finalizeStreamLen: 0,
   };
   (adapter as unknown as { sessions: Map<string, unknown> }).sessions.set(sid, session);
   const emit = (e: Record<string, unknown>) =>
@@ -154,7 +143,7 @@ describe('pi narration → draft + TRACE', () => {
     expect(session.toolSinceLastNarration).toBe(false);
   });
 
-  it('text_delta streams to the draft bubble (onMessageDelta) when not finalizing', () => {
+  it('text_delta streams to the draft bubble (onMessageDelta)', () => {
     const { adapter, emit } = makeAdapter();
     const onMessageDelta = vi.fn();
     adapter.onMessageDelta = onMessageDelta;
@@ -253,7 +242,7 @@ describe('pi abort', () => {
     expect(session.pendingPerms.size).toBe(0);
   });
 
-  it('suppresses finalize when pi emits agent_end during abort', async () => {
+  it('lets abortSession own the boundary when pi emits agent_end during abort', async () => {
     const { adapter, sid, proc, emit } = makeAdapter();
     const onIdle = vi.fn();
     adapter.onIdle = onIdle;
@@ -619,10 +608,9 @@ describe('pi outbound images (tool result → attachment store)', () => {
     const sid = 's1';
     const proc: StubProc = { alive: true, send: vi.fn(), sendRaw: vi.fn(), request: vi.fn().mockResolvedValue({}) };
     (adapter as unknown as { sessions: Map<string, unknown> }).sessions.set(sid, {
-      proc, cwd: '/tmp', model: 'm', mode: 'execute', usage: {}, lastActivity: Date.now(),
+      proc, cwd: '/tmp', model: 'm', mode: 'auto', usage: {}, lastActivity: Date.now(),
       pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0,
       toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 1, settledTurn: undefined, pendingNarration: '', aborting: false, finalizing: false, finalizeAttempt: 0,
-      finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0,
     });
     const emit = async (e: Record<string, unknown>) =>
       await (adapter as unknown as { handleEvent: (sid: string, e: Record<string, unknown>) => Promise<void> }).handleEvent(sid, e);
@@ -765,7 +753,7 @@ describe('pi outbound images (tool result → attachment store)', () => {
   });
 });
 
-describe('pi skip-finalize rule (one trailing narration → direct reply)', () => {
+describe('pi trailing narration → direct reply', () => {
   it('settles a clean answer at agent_end before maintenance and queues the next turn', async () => {
     const { adapter, proc, session, emit, narrate } = makeAdapter();
     const timeline: string[] = [];
@@ -812,7 +800,7 @@ describe('pi skip-finalize rule (one trailing narration → direct reply)', () =
     ]);
   });
 
-  it('exactly one narration, no tool after → crystallize directly, NO finalize round', () => {
+  it('exactly one narration, no tool after → crystallize directly', () => {
     const { adapter, proc, emit, narrate } = makeAdapter();
     const onMessage = vi.fn();
     const onIdle = vi.fn();
@@ -829,7 +817,7 @@ describe('pi skip-finalize rule (one trailing narration → direct reply)', () =
     // traced as a Step (the duplication bug this fix targets).
     expect(onNarrationTrace).not.toHaveBeenCalled();
     expect(onIdle).toHaveBeenCalledTimes(1);
-    expect(proc.send).not.toHaveBeenCalled(); // no finalize prompt injected
+    expect(proc.send).not.toHaveBeenCalled(); // nothing injected into pi
   });
 
   it('tool THEN one explanation (git → explain) → skip, direct reply, no dup Step', () => {
@@ -852,7 +840,7 @@ describe('pi skip-finalize rule (one trailing narration → direct reply)', () =
 });
 
 describe('pi Steps dedup — trailing narration never traced as its own bubble', () => {
-  it('two narrations, last is trailing → first is a Step, the graduating last is NOT (no finalize round)', () => {
+  it('two narrations, last is trailing → first is a Step, the graduating last is NOT', () => {
     const { adapter, proc, emit, narrate } = makeAdapter();
     const onMessage = vi.fn();
     const onNarrationTrace = vi.fn();
@@ -865,37 +853,38 @@ describe('pi Steps dedup — trailing narration never traced as its own bubble',
     expect(onNarrationTrace).toHaveBeenCalledTimes(1);
     expect(onNarrationTrace).toHaveBeenCalledWith('s1', { content: 'First I will look around.' });
 
-    emit({ type: 'agent_settled' }); // 2 segments, last is trailing → graduate directly, no finalize round
+    emit({ type: 'agent_settled' }); // 2 segments, last is trailing → graduate directly
 
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'Now here is the conclusion.' });
     // The concluding narration graduated into the bubble → still exactly ONE trace step.
     expect(onNarrationTrace).toHaveBeenCalledTimes(1);
-    // No finalize round is injected for a multi-segment turn with a clean trailing reply.
     expect(proc.send).not.toHaveBeenCalledWith('prompt', expect.anything());
   });
 
-  it('genuine finalize fallback (ends on a tool) keeps the keep-last trace discipline', () => {
-    const { adapter, emit, narrate } = makeAdapter();
+  it('ends on a tool: no reply and no extra model call; the narration is a Step', () => {
+    const { adapter, proc, emit, narrate } = makeAdapter();
     const onMessage = vi.fn();
     const onNarrationTrace = vi.fn();
+    const onIdle = vi.fn();
     adapter.onMessage = onMessage;
     adapter.onNarrationTrace = onNarrationTrace;
+    adapter.onIdle = onIdle;
 
-    narrate('First pass thoughts.'); // trailing so far
-    // A real tool follows → the narration is now an intermediate step, traced now.
+    narrate('First pass thoughts.');
     emit({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'ls' }, toolCallId: 't1' });
     emit({ type: 'tool_execution_end', toolName: 'bash', result: 'x', toolCallId: 't1', isError: false });
-    emit({ type: 'agent_settled' }); // ended on a tool, no trailing reply → finalize round
-    emit({ type: 'tool_execution_start', toolName: 'finalize_reply', args: { resummarize: true, text: 'A tidy summary.' }, toolCallId: 'f1' });
+    emit({ type: 'agent_settled' });
 
-    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'A tidy summary.' });
+    expect(onMessage).not.toHaveBeenCalled();
     expect(onNarrationTrace).toHaveBeenCalledTimes(1);
     expect(onNarrationTrace).toHaveBeenCalledWith('s1', { content: 'First pass thoughts.' });
+    expect(onIdle).toHaveBeenCalledTimes(1);
+    expect(proc.request).not.toHaveBeenCalledWith('prompt', expect.anything(), expect.anything());
   });
 });
 
-describe('pi finalize round (only when no trailing reply)', () => {
-  it('multi-segment with a clean trailing reply graduates directly, NO finalize round', () => {
+describe('pi turn conclusion (relayed as-is, no injected rounds)', () => {
+  it('multi-segment with a clean trailing reply graduates directly', () => {
     const { adapter, proc, session, emit, narrate } = makeAdapter();
     const onIdle = vi.fn();
     const onMessage = vi.fn();
@@ -906,64 +895,22 @@ describe('pi finalize round (only when no trailing reply)', () => {
     narrate('Now here is the conclusion.');
     emit({ type: 'agent_settled' });
 
-    expect(session.finalizing).toBe(false);
     expect(onIdle).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'Now here is the conclusion.' });
     expect(proc.send).not.toHaveBeenCalledWith('prompt', expect.anything());
   });
 
-  it('ends on a tool (narration then tool, no trailing reply) → finalize round', () => {
-    const { adapter, proc, session, emit, narrate } = makeAdapter();
-    adapter.onIdle = vi.fn();
-    narrate('Let me run this.');
+  it('zero narration (tool only) → just idle, nothing injected into pi', () => {
+    const { adapter, proc, emit } = makeAdapter();
+    const onIdle = vi.fn(); const onMessage = vi.fn(); const onSystemMessage = vi.fn();
+    adapter.onIdle = onIdle; adapter.onMessage = onMessage; adapter.onSystemMessage = onSystemMessage;
     emit({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'ls' }, toolCallId: 't1' });
     emit({ type: 'tool_execution_end', toolName: 'bash', result: 'x', toolCallId: 't1', isError: false });
     emit({ type: 'agent_settled' });
-    expect(session.finalizing).toBe(true);
-    expect(proc.request).toHaveBeenCalledWith(
-      'prompt',
-      expect.objectContaining({ message: expect.stringContaining('finalize_reply') }),
-      { timeoutMs: null },
-    );
-  });
-
-  it('zero narration (tool only) → finalize round', () => {
-    const { adapter, proc, session, emit } = makeAdapter();
-    adapter.onIdle = vi.fn();
-    emit({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'ls' }, toolCallId: 't1' });
-    emit({ type: 'tool_execution_end', toolName: 'bash', result: 'x', toolCallId: 't1', isError: false });
-    emit({ type: 'agent_settled' });
-    expect(session.finalizing).toBe(true);
-    expect(proc.request).toHaveBeenCalledWith(
-      'prompt',
-      expect.objectContaining({ message: expect.stringContaining('finalize_reply') }),
-      { timeoutMs: null },
-    );
-  });
-
-  it('rejected finalize prompt clears finalizing and idles exactly once', async () => {
-    const { adapter, proc, session, emit, narrate } = makeAdapter();
-    const onIdle = vi.fn();
-    const onMessage = vi.fn();
-    adapter.onIdle = onIdle;
-    adapter.onMessage = onMessage;
-    proc.request.mockImplementation((command: string) =>
-      command === 'prompt'
-        ? Promise.reject(new Error('not accepted'))
-        : Promise.resolve({}),
-    );
-    narrate('draft before tool');
-    emit({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'ls' }, toolCallId: 't1' });
-    emit({ type: 'tool_execution_end', toolName: 'bash', result: 'x', toolCallId: 't1', isError: false });
-    emit({ type: 'agent_settled' });
-    await vi.waitFor(() => expect(session.finalizing).toBe(false));
-    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'draft before tool' });
     expect(onIdle).toHaveBeenCalledTimes(1);
-    const promptCalls = proc.request.mock.calls.filter(call => call[0] === 'prompt').length;
-    emit({ type: 'agent_settled' });
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(proc.request.mock.calls.filter(call => call[0] === 'prompt')).toHaveLength(promptCalls);
-    expect(onIdle).toHaveBeenCalledTimes(1);
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onSystemMessage).not.toHaveBeenCalled(); // RelayClient anchors steps-only turns
+    expect(proc.request).not.toHaveBeenCalledWith('prompt', expect.anything(), expect.anything());
   });
 
   it('backend error stopReason → emits one error and one idle at terminal agent_settled', () => {
@@ -978,7 +925,6 @@ describe('pi finalize round (only when no trailing reply)', () => {
     expect(onError).not.toHaveBeenCalled();
     emit({ type: 'agent_settled' });
     emit({ type: 'agent_settled' });
-    expect(session.finalizing).toBe(false);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenCalledWith('s1', { message: 'quota exceeded' });
     expect(onMessage).not.toHaveBeenCalled();
@@ -1030,7 +976,7 @@ describe('pi finalize round (only when no trailing reply)', () => {
     expect(session.exitObserved).toBe(true);
   });
 
-  it('aborted stopReason → no finalize round, just idle', () => {
+  it('aborted stopReason → just idle', () => {
     const { adapter, proc, session, emit } = makeAdapter();
     const onIdle = vi.fn();
     const onMessage = vi.fn();
@@ -1038,132 +984,11 @@ describe('pi finalize round (only when no trailing reply)', () => {
     adapter.onMessage = onMessage;
     emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'aborted', errorMessage: 'Request was aborted' } });
     emit({ type: 'agent_settled' });
-    expect(session.finalizing).toBe(false);
     expect(onMessage).not.toHaveBeenCalled();
     expect(proc.send).not.toHaveBeenCalledWith('prompt', expect.anything());
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
-  it('suppresses draft narration deltas during the finalize round (draft frozen)', () => {
-    const { adapter, session, emit } = makeAdapter();
-    const onMessageDelta = vi.fn();
-    adapter.onMessageDelta = onMessageDelta;
-    session.finalizing = true;
-    emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'pre-thinking' } });
-    expect(onMessageDelta).not.toHaveBeenCalled();
-  });
-
-  it('finalize-round prose is captured as a fallback (not traced, not a segment)', () => {
-    const { adapter, session, emit } = makeAdapter();
-    const onNarration = vi.fn();
-    adapter.onNarration = onNarration;
-    session.finalizing = true;
-    emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'concluding thoughts' }], stopReason: 'stop' } });
-    expect(onNarration).not.toHaveBeenCalled();
-    expect(session.finalizeNarration).toBe('concluding thoughts');
-    expect(session.narrationSegments).toBe(0);
-  });
-});
-
-describe('pi finalize_reply crystallization', () => {
-  function inFinalize() {
-    const h = makeAdapter();
-    h.session.finalizing = true;
-    h.session.lastNarration = 'drafted closing line';
-    return h;
-  }
-
-  it('resummarize:false → keeps the drafted line as the reply', () => {
-    const { adapter, session, emit } = inFinalize();
-    const onMessage = vi.fn();
-    adapter.onMessage = onMessage;
-    emit({ type: 'tool_execution_start', toolName: 'finalize_reply', args: { resummarize: false }, toolCallId: 't1' });
-    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'drafted closing line' });
-    expect(session.finalizeResolved).toBe(true);
-  });
-
-  it('resummarize:true with text → swaps in the rewritten summary', () => {
-    const { adapter, session, emit } = inFinalize();
-    const onMessage = vi.fn();
-    adapter.onMessage = onMessage;
-    emit({ type: 'tool_execution_start', toolName: 'finalize_reply', args: { resummarize: true, text: 'A short clean summary.' }, toolCallId: 't1' });
-    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'A short clean summary.' });
-    expect(session.finalizeResolved).toBe(true);
-  });
-
-  it('resummarize:true with empty text falls back to the drafted line', () => {
-    const { adapter, emit } = inFinalize();
-    const onMessage = vi.fn();
-    adapter.onMessage = onMessage;
-    emit({ type: 'tool_execution_start', toolName: 'finalize_reply', args: { resummarize: true, text: '   ' }, toolCallId: 't1' });
-    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'drafted closing line' });
-  });
-
-  it('both empty (no draft, resummarize:false) → no_reply notice', () => {
-    const { adapter, session, emit } = inFinalize();
-    session.lastNarration = '';
-    const onMessage = vi.fn();
-    const onSystemMessage = vi.fn();
-    adapter.onMessage = onMessage;
-    adapter.onSystemMessage = onSystemMessage;
-    emit({ type: 'tool_execution_start', toolName: 'finalize_reply', args: { resummarize: false }, toolCallId: 't1' });
-    expect(onMessage).not.toHaveBeenCalled();
-    expect(onSystemMessage).toHaveBeenCalledWith('s1', { kind: 'no_reply' });
-  });
-
-  it('finalize_reply OUTSIDE a finalize round is ignored (spontaneous call)', () => {
-    const { adapter, emit } = makeAdapter(); // finalizing = false
-    const onMessage = vi.fn();
-    adapter.onMessage = onMessage;
-    emit({ type: 'tool_execution_start', toolName: 'finalize_reply', args: { resummarize: true, text: 'sneaky' }, toolCallId: 't1' });
-    expect(onMessage).not.toHaveBeenCalled();
-  });
-
-  it('finalize_reply is not a TRACE step (no onToolStart / onToolComplete)', () => {
-    const { adapter, emit } = inFinalize();
-    const onToolStart = vi.fn();
-    const onToolComplete = vi.fn();
-    adapter.onToolStart = onToolStart;
-    adapter.onToolComplete = onToolComplete;
-    adapter.onMessage = vi.fn();
-    emit({ type: 'tool_execution_start', toolName: 'finalize_reply', args: { resummarize: false }, toolCallId: 't1' });
-    emit({ type: 'tool_execution_end', toolName: 'finalize_reply', result: 'ok', toolCallId: 't1' });
-    expect(onToolStart).not.toHaveBeenCalled();
-    expect(onToolComplete).not.toHaveBeenCalled();
-  });
-
-  it('agent_settled after the finalize round clears finalizing and idles', () => {
-    const { adapter, session, emit } = inFinalize();
-    const onIdle = vi.fn();
-    adapter.onMessage = vi.fn();
-    adapter.onIdle = onIdle;
-    emit({ type: 'tool_execution_start', toolName: 'finalize_reply', args: { resummarize: false }, toolCallId: 't1' });
-    emit({ type: 'agent_settled' });
-    expect(session.finalizing).toBe(false);
-    expect(onIdle).toHaveBeenCalledTimes(1);
-  });
-
-  it('finalize round that ends WITHOUT finalize_reply falls back to its prose', () => {
-    const { adapter, session, emit } = inFinalize();
-    const onMessage = vi.fn();
-    const onIdle = vi.fn();
-    adapter.onMessage = onMessage;
-    adapter.onIdle = onIdle;
-    session.finalizeNarration = 'model wrote this instead';
-    emit({ type: 'agent_settled' });
-    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'model wrote this instead' });
-    expect(session.finalizing).toBe(false);
-    expect(onIdle).toHaveBeenCalledTimes(1);
-  });
-
-  it('finalize round with neither call nor prose falls back to the kept draft', () => {
-    const { adapter, session, emit } = inFinalize();
-    const onMessage = vi.fn();
-    adapter.onMessage = onMessage;
-    adapter.onIdle = vi.fn();
-    emit({ type: 'agent_settled' });
-    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'drafted closing line' });
-  });
 });
 
 describe('pi early maintenance settlement', () => {
@@ -1179,51 +1004,6 @@ describe('pi early maintenance settlement', () => {
     await emit({ type: 'agent_settled' });
     expect(adapter.onMessage).toHaveBeenCalledWith('s1', { content: 'recovered' });
     expect(adapter.onIdle).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('pi finalize_reply.text streams as onFinalizeDelta', () => {
-  const finalizeDelta = (text: string, id = 'f1', contentIndex = 0) => ({
-    type: 'message_update',
-    assistantMessageEvent: {
-      type: 'toolcall_delta',
-      contentIndex,
-      partial: { content: [{ type: 'toolCall', id, name: 'finalize_reply', arguments: { text } }] },
-    },
-  });
-
-  it('forwards only the newly-revealed suffix of the streamed text', () => {
-    const { adapter, emit } = makeAdapter();
-    const onFinalizeDelta = vi.fn();
-    adapter.onFinalizeDelta = onFinalizeDelta;
-    emit(finalizeDelta('✅ 命'));
-    emit(finalizeDelta('✅ 命令执行'));
-    emit(finalizeDelta('✅ 命令执行成功。'));
-    expect(onFinalizeDelta.mock.calls.map((c) => c[1].content)).toEqual(['✅ 命', '令执行', '成功。']);
-  });
-
-  it('ignores toolcall_delta for non-finalize tools (e.g. bash)', () => {
-    const { adapter, emit } = makeAdapter();
-    const onFinalizeDelta = vi.fn();
-    adapter.onFinalizeDelta = onFinalizeDelta;
-    emit({
-      type: 'message_update',
-      assistantMessageEvent: {
-        type: 'toolcall_delta',
-        contentIndex: 0,
-        partial: { content: [{ type: 'toolCall', id: 'b1', name: 'bash', arguments: { command: 'echo hi' } }] },
-      },
-    });
-    expect(onFinalizeDelta).not.toHaveBeenCalled();
-  });
-
-  it('resets the emitted-length when a new finalize call (new id) begins', () => {
-    const { adapter, emit } = makeAdapter();
-    const onFinalizeDelta = vi.fn();
-    adapter.onFinalizeDelta = onFinalizeDelta;
-    emit(finalizeDelta('Hello', 'f1'));
-    emit(finalizeDelta('Hi', 'f2'));
-    expect(onFinalizeDelta.mock.calls.map((c) => c[1].content)).toEqual(['Hello', 'Hi']);
   });
 });
 
@@ -1263,20 +1043,20 @@ describe('pi ask_user → question card', () => {
     expect(session.pendingPerms.get('p1')).toBe('p1');
   });
 
-  it('confirm for a non-write tool in discuss → auto-approved silently (no card)', () => {
+  it('confirm for a read-only tool in safe → auto-approved silently (no card)', () => {
     const { adapter, proc, session, emit } = makeAdapter();
-    session.mode = 'discuss';
+    session.mode = 'safe';
     const onPermissionRequest = vi.fn();
     adapter.onPermissionRequest = onPermissionRequest;
-    emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: 'bash', message: JSON.stringify({ command: 'ls' }) });
+    emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: 'read', message: JSON.stringify({ path: '/repo/a.ts' }) });
     expect(onPermissionRequest).not.toHaveBeenCalled();
     expect(proc.sendRaw).toHaveBeenCalledWith({ type: 'extension_ui_response', id: 'p1', confirmed: true });
     expect(session.pendingPerms.has('p1')).toBe(false);
   });
 
-  it('confirm for a file write in discuss → raises a permission card', () => {
+  it('confirm for a file write in safe → raises a permission card', () => {
     const { adapter, session, emit } = makeAdapter();
-    session.mode = 'discuss';
+    session.mode = 'safe';
     const onPermissionRequest = vi.fn();
     adapter.onPermissionRequest = onPermissionRequest;
     emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: 'write', message: JSON.stringify({ path: '/tmp/a.txt', content: 'x' }) });
@@ -1284,17 +1064,17 @@ describe('pi ask_user → question card', () => {
     expect(session.pendingPerms.get('p1')).toBe('p1');
   });
 
-  it('confirm for a plan.md write in discuss → auto-approved silently (allowlisted)', () => {
+  it('confirm for any tool in auto → auto-approved silently (no card)', () => {
     const { adapter, proc, session, emit } = makeAdapter();
-    session.mode = 'discuss';
+    session.mode = 'auto';
     const onPermissionRequest = vi.fn();
     adapter.onPermissionRequest = onPermissionRequest;
-    emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: 'write', message: JSON.stringify({ path: '/repo/plan.md', content: 'x' }) });
+    emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: 'write', message: JSON.stringify({ path: '/repo/a.ts', content: 'x' }) });
     expect(onPermissionRequest).not.toHaveBeenCalled();
     expect(proc.sendRaw).toHaveBeenCalledWith({ type: 'extension_ui_response', id: 'p1', confirmed: true });
   });
 
-  it('switching to execute auto-approves an existing permission without steering Pi', async () => {
+  it('switching to auto approves an existing permission without steering Pi', async () => {
     const { adapter, proc, session, emit } = makeAdapter();
     session.mode = 'safe';
     const onPermissionRequest = vi.fn();
@@ -1306,7 +1086,7 @@ describe('pi ask_user → question card', () => {
     expect(onPermissionRequest).toHaveBeenCalledTimes(1);
     expect(session.pendingPerms.has('p1')).toBe(true);
 
-    adapter.setSessionMode('s1', 'execute');
+    adapter.setSessionMode('s1', 'auto');
 
     expect(proc.sendRaw).toHaveBeenLastCalledWith({ type: 'extension_ui_response', id: 'p1', confirmed: true });
     expect(session.pendingPerms.has('p1')).toBe(false);
@@ -1445,8 +1225,8 @@ describe('Pi Kraki system prompt', () => {
 });
 
 describe('PI_KRAKI_TOOLS_SOURCE extension shape', () => {
-  it('registers the human-facing + finalize tools', () => {
-    expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "finalize_reply"');
+  it('registers the human-facing tools and no finalize tool', () => {
+    expect(PI_KRAKI_TOOLS_SOURCE).not.toContain('finalize_reply');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "ask_user"');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "show_image"');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "show_html"');
@@ -1468,7 +1248,6 @@ describe('PI_KRAKI_TOOLS_SOURCE extension shape', () => {
   });
 
   it('whitelists the capability tools from the always-on permission gate', () => {
-    expect(PI_KRAKI_TOOLS_SOURCE).toContain('"finalize_reply"');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('"ask_user"');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('"show_html"');
     // The gate is loaded in every mode (no KRAKI_PI_GATE env guard); the adapter
@@ -1542,11 +1321,14 @@ describe('PI_KRAKI_TOOLS_SOURCE extension shape', () => {
         content: [{ type: 'text', text: 'safe' }],
         details: { mode: 'safe' },
       });
-      writeFileSync(metaPath, JSON.stringify({ mode: 'execute' }));
+      writeFileSync(metaPath, JSON.stringify({ mode: 'auto' }));
       await expect(execute()).resolves.toMatchObject({
-        content: [{ type: 'text', text: 'execute' }],
-        details: { mode: 'execute' },
+        content: [{ type: 'text', text: 'auto' }],
+        details: { mode: 'auto' },
       });
+      // A sidecar written before the three-mode rename reads as the new name.
+      writeFileSync(metaPath, JSON.stringify({ mode: 'discuss' }));
+      await expect(execute()).resolves.toMatchObject({ details: { mode: 'auto' } });
     } finally {
       if (previousMetaFile === undefined) delete process.env.KRAKI_META_FILE;
       else process.env.KRAKI_META_FILE = previousMetaFile;

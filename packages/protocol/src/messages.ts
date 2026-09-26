@@ -544,7 +544,7 @@ export interface TurnStatusMessage extends BaseEnvelope {
 export interface SessionModeSetMessage extends BaseEnvelope {
   type: 'session_mode_set';
   payload: {
-    mode: import('./sessions.js').SessionMode;
+    mode: import('./sessions.js').WireSessionMode;
   };
 }
 
@@ -990,7 +990,7 @@ export interface CreateSessionMessage extends BaseEnvelope {
 export interface SetSessionModeMessage extends BaseEnvelope {
   type: 'set_session_mode';
   payload: {
-    mode: import('./sessions.js').SessionMode;
+    mode: import('./sessions.js').WireSessionMode;
   };
 }
 

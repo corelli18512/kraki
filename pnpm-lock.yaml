@@ -226,9 +226,6 @@ importers:
       ora:
         specifier: ^9.3.0
         version: 9.3.0
-      partial-json:
-        specifier: 0.1.7
-        version: 0.1.7
       pino:
         specifier: ^10.3.1
         version: 10.3.1

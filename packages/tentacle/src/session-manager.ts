@@ -7,6 +7,7 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync, appendFileSync, openSync, readSync, closeSync, cpSync, fstatSync } from 'node:fs';
+import { DEFAULT_SESSION_MODE, normalizeSessionMode, toWireSessionMode } from '@kraki/protocol';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getConfigDir } from './config.js';
@@ -110,7 +111,7 @@ export interface SessionContext {
   updatedAt: string;
 }
 
-export type SessionMode = 'safe' | 'discuss' | 'execute' | 'delegate';
+export type SessionMode = import('@kraki/protocol').SessionMode;
 
 export interface SessionMeta {
   id: string;
@@ -417,7 +418,7 @@ export class SessionManager {
       model,
       reasoningEffort,
       state: 'active',
-      mode: 'discuss',
+      mode: DEFAULT_SESSION_MODE,
       currentRunId: runId,
       totalRuns: 1,
       lastSeq: 0,
@@ -565,7 +566,7 @@ export class SessionManager {
       title: sourceMeta.title ? `Fork of ${sourceMeta.title}` : undefined,
       autoTitle: sourceMeta.autoTitle,
       state: 'active',
-      mode: 'discuss',
+      mode: DEFAULT_SESSION_MODE,
       currentRunId: runId,
       totalRuns: 1,
       lastSeq: sourceMeta.lastSeq ?? 0,
@@ -1277,7 +1278,7 @@ export class SessionManager {
     title?: string;
     autoTitle?: string;
     state: 'active' | 'idle';
-    mode: SessionMode;
+    mode: import('@kraki/protocol').WireSessionMode;
     pinned?: boolean;
     lastSeq: number;
     readSeq: number;
@@ -1305,7 +1306,7 @@ export class SessionManager {
         title: meta.title ? toWellFormedText(meta.title) : undefined,
         autoTitle: meta.autoTitle ? toWellFormedText(meta.autoTitle) : undefined,
         state,
-        mode: meta.mode ?? 'discuss',
+        mode: toWireSessionMode(meta.mode),
         pinned: meta.pinned || undefined,
         lastSeq: meta.lastSeq ?? 0,
         readSeq: meta.readSeq ?? 0,
@@ -1565,7 +1566,11 @@ export class SessionManager {
 
   private readMeta(sessionId: string): SessionMeta | null {
     try {
-      return JSON.parse(readFileSync(join(this.sessionDir(sessionId), 'meta.json'), 'utf8'));
+      const meta = JSON.parse(readFileSync(join(this.sessionDir(sessionId), 'meta.json'), 'utf8')) as SessionMeta;
+      // Four-mode era sessions (discuss/execute) read as the current modes.
+      // Rewritten on the next save; nothing else on disk needs migrating.
+      meta.mode = normalizeSessionMode(meta.mode);
+      return meta;
     } catch { return null; }
   }
 

@@ -46,9 +46,23 @@ import { parsePermission } from '../parse-permission.js';
 import { createLogger } from '../logger.js';
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 import { canonicalArtifactToolName } from './tool-name.js';
+import { DEFAULT_SESSION_MODE } from '@kraki/protocol';
+import { KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMode, type ToolKind } from './permission-policy.js';
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 
 const logger = createLogger('copilot-adapter');
+
+/** Copilot permission request kinds → Kraki policy kinds. */
+function copilotToolKind(kind: string): ToolKind {
+  switch (kind) {
+    case 'read': return 'read';
+    case 'url': return 'url';
+    case 'write': return 'write';
+    case 'shell': return 'shell';
+    case 'mcp': return 'mcp';
+    default: return 'other';
+  }
+}
 type CopilotSdkModule = typeof import('@github/copilot-sdk');
 let copilotSdkPromise: Promise<CopilotSdkModule> | null = null;
 
@@ -394,13 +408,11 @@ export class CopilotAdapter extends AgentAdapter {
   /** Per-session auto-approve sets (populated by "Always Allow" clicks) */
   private sessionAllowSets = new Map<string, Set<string>>();
   /** Session permission mode */
-  private sessionModes = new Map<string, 'safe' | 'discuss' | 'execute' | 'delegate'>();
+  private sessionModes = new Map<string, SessionMode>();
   /** Sessions with a pending mode change to prepend on next user message */
   private pendingModeSignals = new Map<string, string>();
   /** Per-session cumulative token usage */
   private sessionUsage = new Map<string, import('@kraki/protocol').SessionUsage>();
-  /** Fallback idle timers — fire onIdle if SDK doesn't emit session.idle after turn_end */
-  private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Track tool start args by toolCallId for correlating with tool_complete */
   private pendingToolArgs = new Map<string, Record<string, unknown>>();
   /**
@@ -430,13 +442,10 @@ export class CopilotAdapter extends AgentAdapter {
   private nativeTitles = new Map<string, string>();
   /** Whether the current turn has produced any output (message or tool call) */
   private turnHasOutput = new Map<string, boolean>();
-  /** Whether the current user-message-to-idle cycle had any output */
-  private cycleHasOutput = new Map<string, boolean>();
   /** Whether an error was already reported for the current turn */
   private turnErrorReported = new Map<string, boolean>();
   /** Whether the current cycle was interrupted by an explicit user-initiated
-   *  abort. Suppresses empty-cycle detection — the user asked for the turn
-   *  to stop, so producing no output is the expected outcome, not a failure. */
+   *  abort — RelayClient then owns its terminal boundary. */
   private cycleUserAborted = new Map<string, boolean>();
   /**
    * Buffered assistant prose for the current turn (draft-bubble model).
@@ -444,13 +453,6 @@ export class CopilotAdapter extends AgentAdapter {
    * follows, or as the single conclusion bubble (onMessage) when the turn ends.
    */
   private pendingNarration = new Map<string, string>();
-  /**
-   * Grace period (ms) after assistant.turn_end before firing a fallback idle.
-   * The Copilot CLI has a known bug where session.idle is sometimes not emitted
-   * after abort-during-tool-execution (github/copilot-sdk#794, #558, #1057).
-   * Measured P99 turn_end→turn_start gap is <5ms; 500ms is a safe margin.
-   */
-  private static readonly IDLE_FALLBACK_MS = 500;
 
   /** Max time to wait for a single session.abort() during adapter.stop().
    *  If exceeded we fall through and let client.stop() kill the SDK process.
@@ -549,7 +551,6 @@ export class CopilotAdapter extends AgentAdapter {
 
   /** End a user-stopped cycle without any conclusion or idle callback. */
   private settleSilently(sessionId: string): void {
-    this.clearIdleTimer(sessionId);
     this.pendingNarration.delete(sessionId);
     const entry = this.sessions.get(sessionId);
     if (entry) entry.turnSettled = true;
@@ -577,33 +578,7 @@ export class CopilotAdapter extends AgentAdapter {
     'encrypted relay. Your tool calls are routed through a permission system that',
     'approves, denies, or prompts the operator depending on the current mode.',
     '',
-    'There are four permission modes. **Sessions start in `discuss` mode by default.**',
-    '',
-    '- **safe**: Every tool call requires explicit operator approval, unless the',
-    '  operator has previously clicked "Always Allow" for that tool kind (shell,',
-    '  write, etc.) in the current session. Explain what you intend to do before',
-    '  each action so the operator can decide.',
-    '- **discuss**: Read operations, shell commands, web fetches, and MCP tools',
-    '  are auto-approved. Write operations require operator approval — the',
-    '  operator sees each write and can approve it, deny it, or switch to',
-    '  execute mode. Exception: writes to a file named `plan.md` (in any',
-    '  directory) are auto-approved.',
-    '- **execute**: All tool calls are auto-approved. Be efficient and execute',
-    '  directly without asking for confirmation. If unsure about intent or',
-    '  approach, ask the operator for clarification before proceeding.',
-    '- **delegate**: All tool calls are auto-approved. Questions you ask via',
-    '  `ask_user` are auto-answered with `"proceed with your best judgment"` —',
-    '  do not re-ask; just make a reasonable call and continue.',
-    '',
-    'The operator may switch modes during the session. When this happens, the',
-    'next user message you receive will be prefixed with a signal in this format:',
-    '',
-    '    [kraki: mode changed to <mode>]',
-    '',
-    'Treat the signal as out-of-band metadata: silently adopt the new mode\'s',
-    'behavior from that point onward, do not acknowledge or comment on the mode',
-    'change, and do not quote the signal back. The text after the signal is the',
-    'real user message.',
+    KRAKI_MODES_PROMPT,
   ].join('\n');
 
   /**
@@ -730,8 +705,6 @@ export class CopilotAdapter extends AgentAdapter {
 
   async stop(): Promise<void> {
     this.stopEvictionSweep();
-    for (const timer of this.idleTimers.values()) clearTimeout(timer);
-    this.idleTimers.clear();
 
     // Abort all active sessions first so the SDK writes a clean `abort` event
     // to events.jsonl for any in-flight tool_use. Without this, killing the
@@ -920,7 +893,6 @@ export class CopilotAdapter extends AgentAdapter {
     }
     this.sessions.delete(sessionId);
     this.lastActivityAt.delete(sessionId);
-    this.clearIdleTimer(sessionId);
     // Note: we intentionally do NOT clear sessionModes / sessionUsage /
     // expectedModels — those represent persistent per-session preferences
     // that should survive the unload/reload cycle.
@@ -1095,7 +1067,6 @@ export class CopilotAdapter extends AgentAdapter {
     if (options?.delivery !== 'steer') {
       // A normal prompt starts a fresh cycle. An immediate interjection remains
       // part of the active cycle and must not reset its output/error tracking.
-      this.cycleHasOutput.set(sessionId, false);
       this.turnErrorReported.set(sessionId, false);
       this.cycleUserAborted.delete(sessionId);
       this.pendingNarration.delete(sessionId);
@@ -1106,7 +1077,7 @@ export class CopilotAdapter extends AgentAdapter {
     const pendingMode = this.pendingModeSignals.get(sessionId);
     if (pendingMode) {
       this.pendingModeSignals.delete(sessionId);
-      text = `[kraki: mode changed to ${pendingMode}]\n\n${text}`;
+      text = `${modeChangeSignal(pendingMode as SessionMode)}\n\n${text}`;
     }
 
     const opts: MessageOptions = {
@@ -1355,10 +1326,10 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   /** Set permission mode for a session */
-  setSessionMode(sessionId: string, mode: 'safe' | 'discuss' | 'execute' | 'delegate'): void {
+  setSessionMode(sessionId: string, mode: SessionMode): void {
     const prev = this.sessionModes.get(sessionId);
     this.sessionModes.set(sessionId, mode);
-    if ((prev ?? 'discuss') !== mode) {
+    if ((prev ?? DEFAULT_SESSION_MODE) !== mode) {
       this.pendingModeSignals.set(sessionId, mode);
     }
     logger.debug({ sessionId, mode }, 'Session permission mode changed');
@@ -1405,7 +1376,6 @@ export class CopilotAdapter extends AgentAdapter {
     this.userRequestedModels.delete(sessionId);
     this.nativeTitles.delete(sessionId);
     this.turnHasOutput.delete(sessionId);
-    this.cycleHasOutput.delete(sessionId);
     this.turnErrorReported.delete(sessionId);
     this.cycleUserAborted.delete(sessionId);
     this.pendingNarration.delete(sessionId);
@@ -1417,16 +1387,9 @@ export class CopilotAdapter extends AgentAdapter {
       }
       this.sessionToolCallIds.delete(sessionId);
     }
-    this.clearIdleTimer(sessionId);
   }
 
-  private clearIdleTimer(sessionId: string): void {
-    const timer = this.idleTimers.get(sessionId);
-    if (timer) {
-      clearTimeout(timer);
-      this.idleTimers.delete(sessionId);
-    }
-  }
+
 
   /**
    * Wait for the SDK to finish writing to events.jsonl after a turn completes,
@@ -1672,12 +1635,6 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   private wireEvents(sessionId: string, session: CopilotSession): void {
-    // Initialize per-cycle state for this session. Without this, resumed/forked
-    // sessions (where sendMessage hasn't been called yet) would have undefined
-    // cycleHasOutput and skip empty-cycle detection.
-    if (!this.cycleHasOutput.has(sessionId)) {
-      this.cycleHasOutput.set(sessionId, false);
-    }
     if (!this.turnErrorReported.has(sessionId)) {
       this.turnErrorReported.set(sessionId, false);
     }
@@ -1690,7 +1647,6 @@ export class CopilotAdapter extends AgentAdapter {
       // Skip empty messages (SDK sends these before tool calls)
       if (event.data.content) {
         this.turnHasOutput.set(sessionId, true);
-        this.cycleHasOutput.set(sessionId, true);
         this.touchSession(sessionId);
         // Draft-bubble model: buffer prose instead of graduating each message
         // to its own permanent bubble. Accumulate consecutive messages so a
@@ -1708,7 +1664,6 @@ export class CopilotAdapter extends AgentAdapter {
       // A tool follows any buffered prose → that prose was narration.
       this.flushNarration(sessionId);
       this.turnHasOutput.set(sessionId, true);
-      this.cycleHasOutput.set(sessionId, true);
       this.touchSession(sessionId);
       if (data.mcpServerName) {
         logger.info({ mcpServer: data.mcpServerName, mcpTool: data.mcpToolName }, `[MCP tool] ${data.mcpServerName}/${data.mcpToolName}`);
@@ -1843,20 +1798,8 @@ export class CopilotAdapter extends AgentAdapter {
     });
 
     session.on('session.idle', () => {
-      this.clearIdleTimer(sessionId);
 
-      // Detect empty cycles — the entire user-message-to-idle cycle had no
-      // output and no error was reported. This catches silent SDK failures
-      // (e.g. CLI bug github/copilot-sdk#794) without false-firing when:
-      //   - the agent intentionally stays silent ("don't say anything")
-      //   - the user explicitly aborted the turn before output (cycleUserAborted)
-      const hasOutput = this.cycleHasOutput.get(sessionId);
-      const hadError = this.turnErrorReported.get(sessionId);
       const wasAborted = this.cycleUserAborted.get(sessionId);
-      if (hasOutput === false && !hadError && !wasAborted) {
-        logger.warn({ sessionId }, 'Empty cycle detected — agent produced no output for entire user message');
-        this.emitError(sessionId, 'Agent produced no output. The session may need to be restarted or the model may be unavailable.');
-      }
       // Clear the abort flag — next sendMessage starts a fresh cycle anyway,
       // but clearing here keeps state tidy if no new sendMessage follows.
       this.cycleUserAborted.delete(sessionId);
@@ -1879,7 +1822,6 @@ export class CopilotAdapter extends AgentAdapter {
     session.on('assistant.turn_start', () => {
       const entry = this.sessions.get(sessionId);
       if (entry) entry.eventTurnId = entry.relayTurnId;
-      this.clearIdleTimer(sessionId);
       this.turnHasOutput.set(sessionId, false);
       // Only reset if no error was reported before this turn started
       // (session.error can fire before turn_start in error recovery paths)
@@ -1943,22 +1885,6 @@ export class CopilotAdapter extends AgentAdapter {
         }
       }
 
-      // Empty-cycle detection moved to session.idle — see handler above.
-      // Per-turn detection over-fires when agent intentionally stays silent
-      // (e.g. user said "don't say anything" after a tool ran in a prior turn).
-
-      // Fallback: schedule idle in case the SDK doesn't emit session.idle
-      // (known CLI bug — github/copilot-sdk#794). Cancelled if turn_start
-      // or session.idle arrives first.
-      this.clearIdleTimer(sessionId);
-      this.idleTimers.set(sessionId, setTimeout(() => {
-        this.idleTimers.delete(sessionId);
-        logger.info({ sessionId }, 'Idle fallback fired (session.idle not received after turn_end)');
-        if (this.cycleUserAborted.get(sessionId)) { this.settleSilently(sessionId); return; }
-        this.flushConclusion(sessionId);
-        this.emitIdle(sessionId);
-        this.signalFlushComplete(sessionId);
-      }, CopilotAdapter.IDLE_FALLBACK_MS));
     });
 
     session.on('session.title_changed', (event) => {
@@ -1997,7 +1923,7 @@ export class CopilotAdapter extends AgentAdapter {
     return (req: PermissionRequest, invocation: { sessionId: string }): Promise<PermissionRequestResult> | PermissionRequestResult => {
       const sessionId = invocation.sessionId;
       const toolKind = req.kind; // e.g. 'shell', 'write', 'read', 'url', 'mcp'
-      const mode = this.sessionModes.get(sessionId) ?? 'discuss';
+      const mode = this.sessionModes.get(sessionId) ?? DEFAULT_SESSION_MODE;
 
       const rawRequest = req as PermissionRequest & Record<string, unknown>;
       if (toolKind === 'shell' && isKrakiSelfManagementCommand(shellCommandFromInput(rawRequest))) {
@@ -2005,29 +1931,9 @@ export class CopilotAdapter extends AgentAdapter {
         return { kind: 'reject', feedback: SELF_MANAGEMENT_DENIAL_REASON };
       }
 
-      // Mode-based auto-approval
-      if (mode === 'execute' || mode === 'delegate') {
+      if (krakiAutoApproves(mode, copilotToolKind(toolKind))) {
         logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
         return { kind: 'approve-once' };
-      }
-      if (mode === 'discuss' && toolKind !== 'write') {
-        logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
-        return { kind: 'approve-once' };
-      }
-      if (mode === 'discuss' && toolKind === 'write') {
-        const r = req as PermissionRequest & Record<string, unknown>;
-        const filePath = ((r.fileName ?? r.path ?? '') as string);
-        // Allow list: files that can be written in Discuss mode
-        const DISCUSS_MODE_WRITE_ALLOW_LIST = ['plan.md'];
-        const allowed = DISCUSS_MODE_WRITE_ALLOW_LIST.some(
-          (f) => filePath.endsWith('/' + f) || filePath === f,
-        );
-        if (allowed) {
-          logger.debug({ sessionId, toolKind, mode, filePath }, 'write auto-approved (discuss mode allow list)');
-          return { kind: 'approve-once' };
-        }
-        // Non-allowed writes fall through to the permission prompt below
-        // so the operator can approve, deny, or switch to execute mode.
       }
       if (this.sessionAllowSets.get(sessionId)?.has(toolKind)) {
         logger.debug({ sessionId, toolKind }, 'permission auto-approved (session allow set)');
@@ -2064,7 +1970,7 @@ export class CopilotAdapter extends AgentAdapter {
   private makeQuestionHandler(pending: Map<string, PendingQuestion>) {
     return (req: UserInputRequest, invocation: { sessionId: string }): Promise<UserInputResponse> | UserInputResponse => {
       const sessionId = invocation.sessionId;
-      const mode = this.sessionModes.get(sessionId) ?? 'discuss';
+      const mode = this.sessionModes.get(sessionId) ?? DEFAULT_SESSION_MODE;
 
       // Delegate mode: auto-answer questions
       if (mode === 'delegate') {

@@ -558,6 +558,29 @@ describe('RelayClient title generation', () => {
     expect(smMock.readCurrentTurnArtifacts).toHaveBeenCalledWith('s1');
   });
 
+  it('anchors a steps-only turn (tools, no reply) with one no_reply system message before idle', () => {
+    const { adapter, sm } = connectClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    (adapter.onToolStart as (sid: string, e: object) => void)('s1', { toolName: 'bash', args: { command: 'ls' }, toolCallId: 't1' });
+    (adapter.onToolComplete as (sid: string, e: object) => void)('s1', { toolName: 'bash', result: 'x', toolCallId: 't1' });
+    (adapter.onIdle as (sid: string) => void)('s1');
+    const types = smMock.appendMessage.mock.calls.map((c) => c[1]);
+    const anchor = smMock.appendMessage.mock.calls.find((c) => c[1] === 'system_message');
+    expect(anchor).toBeDefined();
+    expect(JSON.parse(anchor![2]).payload).toMatchObject({ kind: 'no_reply', steps: 1 });
+    expect(types.indexOf('system_message')).toBeLessThan(types.indexOf('idle'));
+  });
+
+  it('does not anchor a turn that has a reply, or one with no steps', () => {
+    const { adapter, sm } = connectClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    (adapter.onToolStart as (sid: string, e: object) => void)('s1', { toolName: 'bash', args: {}, toolCallId: 't1' });
+    (adapter.onMessage as (sid: string, e: object) => void)('s1', { content: 'done' });
+    (adapter.onIdle as (sid: string) => void)('s1');
+    (adapter.onIdle as (sid: string) => void)('s2'); // no steps at all
+    expect(smMock.appendMessage.mock.calls.some((c) => c[1] === 'system_message')).toBe(false);
+  });
+
   it('skips title generation when manual title is set', () => {
     const { adapter, sm } = connectClient();
     const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
@@ -670,6 +693,18 @@ describe('RelayClient set_session_model', () => {
     return { adapter, sm, client };
   }
 
+  it.each([
+    ['discuss', 'safe'], ['execute', 'auto'], ['auto', 'auto'], ['safe', 'safe'], ['delegate', 'delegate'],
+  ])('set_session_mode %s is applied as %s (legacy names accepted; explicit discuss fails closed)', (wire, mode) => {
+    const { adapter, sm } = buildConnectedClient();
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'set_session_mode', sessionId: 'sess_1', deviceId: 'dev_1', seq: 1,
+      timestamp: new Date().toISOString(), payload: { mode: wire },
+    })));
+    expect(adapter.setSessionMode).toHaveBeenCalledWith('sess_1', mode);
+    expect(sm.setMode).toHaveBeenCalledWith('sess_1', mode);
+  });
+
   it('calls adapter.setSessionModel and sessionManager.setModel on set_session_model', async () => {
     const { adapter, sm } = buildConnectedClient();
     const ws = sockets[0];
@@ -758,7 +793,7 @@ describe('RelayClient set_session_model', () => {
     };
     const sm = {
       ...createSessionManager(),
-      getMeta: vi.fn(() => ({ id: 'sess_pi', agent: 'pi', state: 'disconnected', model: 'old', mode: 'execute' })),
+      getMeta: vi.fn(() => ({ id: 'sess_pi', agent: 'pi', state: 'disconnected', model: 'old', mode: 'auto' })),
       resumeSession: vi.fn(() => ({ runId: 'run_002', context: { summary: '', keyFiles: [], lastUserMessage: '', updatedAt: '' } })),
       setModel: vi.fn(),
       markDisconnected: vi.fn(),
@@ -806,7 +841,7 @@ describe('RelayClient set_session_model', () => {
     };
     const sm = {
       ...createSessionManager(),
-      getMeta: vi.fn(() => ({ id: 'sess_d', state: 'disconnected', model: 'old', mode: 'execute', usage: { contextTokens: 100 } })),
+      getMeta: vi.fn(() => ({ id: 'sess_d', state: 'disconnected', model: 'old', mode: 'auto', usage: { contextTokens: 100 } })),
       resumeSession: vi.fn(() => ({ runId: 'run_002', context: { summary: '', keyFiles: [], lastUserMessage: '', updatedAt: '' } })),
       setModel: vi.fn(),
       markDisconnected: vi.fn(),
@@ -2081,7 +2116,7 @@ describe('RelayClient pending-question digest', () => {
       ...createSessionManager(),
       getMeta: vi.fn(() => ({ id: 'sess_1', state: 'active' })),
       getSessionList: vi.fn(() => [{
-        id: 'sess_1', agent: 'pi', state: 'active', mode: 'execute',
+        id: 'sess_1', agent: 'pi', state: 'active', mode: 'auto',
         lastSeq: 1, readSeq: 0, messageCount: 1, createdAt: '2024-01-01T00:00:00Z',
       }]),
     };

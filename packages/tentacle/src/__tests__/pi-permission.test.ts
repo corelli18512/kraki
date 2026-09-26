@@ -3,7 +3,7 @@
  *
  * The permission-gate extension asks `ctx.ui.confirm(toolName, JSON.stringify(input))`
  * before every non-capability tool; the adapter applies `shouldAutoApprove`
- * (copilot-aligned) to decide silent-approve vs card, and turns a gated call into
+ * (Kraki's shared policy) to decide silent-approve vs card, and turns a gated call into
  * a Kraki permission card via parsePiPermission. These tests pin the policy and
  * the tool-name → ToolArgs mapping.
  */
@@ -11,31 +11,27 @@
 import { describe, it, expect } from 'vitest';
 import { parsePiPermission, shouldAutoApprove } from '../adapters/pi.js';
 
-describe('shouldAutoApprove — copilot-aligned policy', () => {
-  it('execute / delegate auto-approve every tool', () => {
-    for (const mode of ['execute', 'delegate'] as const) {
+describe('shouldAutoApprove — Kraki shared policy', () => {
+  it('auto / delegate approve every tool', () => {
+    for (const mode of ['auto', 'delegate'] as const) {
       expect(shouldAutoApprove(mode, 'bash', { command: 'rm -rf /' })).toBe(true);
       expect(shouldAutoApprove(mode, 'write', { path: '/etc/passwd' })).toBe(true);
+      expect(shouldAutoApprove(mode, 'some_extension_tool', {})).toBe(true);
     }
   });
 
-  it('discuss auto-approves reads/shell but gates non-allowlisted file writes', () => {
-    expect(shouldAutoApprove('discuss', 'bash', { command: 'ls' })).toBe(true);
-    expect(shouldAutoApprove('discuss', 'read', { path: '/x' })).toBe(true);
-    expect(shouldAutoApprove('discuss', 'write', { path: '/tmp/a.txt' })).toBe(false);
-    expect(shouldAutoApprove('discuss', 'edit', { file_path: '/tmp/a.ts' })).toBe(false);
-  });
-
-  it('discuss allowlists plan.md writes', () => {
-    expect(shouldAutoApprove('discuss', 'write', { path: '/repo/plan.md' })).toBe(true);
-    expect(shouldAutoApprove('discuss', 'write', { path: 'plan.md' })).toBe(true);
-    expect(shouldAutoApprove('discuss', 'write', { path: '/repo/notplan.md' })).toBe(false);
-  });
-
-  it('safe gates every tool (including reads)', () => {
+  it('safe lets reads and searches run but gates side effects', () => {
+    for (const tool of ['read', 'grep', 'find', 'ls']) expect(shouldAutoApprove('safe', tool, {})).toBe(true);
     expect(shouldAutoApprove('safe', 'bash', { command: 'ls' })).toBe(false);
-    expect(shouldAutoApprove('safe', 'read', { path: '/x' })).toBe(false);
     expect(shouldAutoApprove('safe', 'write', { path: '/repo/plan.md' })).toBe(false);
+    expect(shouldAutoApprove('safe', 'edit', { file_path: '/tmp/a.ts' })).toBe(false);
+    expect(shouldAutoApprove('safe', 'some_extension_tool', {})).toBe(false);
+  });
+
+  it('legacy mode names never silently tighten or loosen', () => {
+    // discuss / execute from before the rename mean auto.
+    expect(shouldAutoApprove('discuss' as never, 'write', {})).toBe(true);
+    expect(shouldAutoApprove('execute' as never, 'bash', {})).toBe(true);
   });
 });
 

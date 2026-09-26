@@ -741,24 +741,6 @@ describe('CopilotAdapter', () => {
       expect(spy).not.toHaveBeenCalled();
     });
 
-    it('fires onError for empty cycle (no output until idle)', async () => {
-      const spy = vi.fn();
-      adapter.onError = spy;
-      await adapter.start();
-      const { sessionId } = await adapter.createSession({});
-      // Simulate user sending a message that produces nothing through to idle
-      await adapter.sendMessage(sessionId, 'hi');
-      mockSessions[0]._emit('assistant.turn_start', { data: { turnId: '1' } });
-      mockSessions[0]._emit('assistant.turn_end', {
-        data: { reason: 'complete' },
-      });
-      mockSessions[0]._emit('session.idle', {});
-      expect(spy).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ message: expect.stringContaining('no output') }),
-      );
-    });
-
     it('does not fire onError for empty turn when previous turn in same cycle had output', async () => {
       const spy = vi.fn();
       adapter.onError = spy;
@@ -776,30 +758,6 @@ describe('CopilotAdapter', () => {
       mockSessions[0]._emit('session.idle', {});
       // No error — the cycle had output (the tool ran)
       expect(spy).not.toHaveBeenCalled();
-    });
-
-    it('detects empty cycle in second user message even after first cycle errored', async () => {
-      const spy = vi.fn();
-      adapter.onError = spy;
-      await adapter.start();
-      const { sessionId } = await adapter.createSession({});
-
-      // Cycle 1: user message → session.error fires
-      await adapter.sendMessage(sessionId, 'first');
-      mockSessions[0]._emit('session.error', {
-        data: { errorType: 'rate_limit', message: 'Rate limited' },
-      });
-      mockSessions[0]._emit('session.idle', {});
-      spy.mockClear();
-
-      // Cycle 2: user message → session goes idle with no output (silent fail)
-      await adapter.sendMessage(sessionId, 'second');
-      mockSessions[0]._emit('session.idle', {});
-      // Should fire empty-cycle error — not suppressed by previous cycle's error flag
-      expect(spy).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ message: expect.stringContaining('no output') }),
-      );
     });
 
     it('does NOT fire empty-cycle error when user aborted the turn before output', async () => {
@@ -820,54 +778,6 @@ describe('CopilotAdapter', () => {
       mockSessions[0]._emit('session.idle', {});
 
       expect(spy).not.toHaveBeenCalled();
-    });
-
-    it('still fires empty-cycle error on the NEXT cycle after an abort', async () => {
-      // The abort flag must be cleared after the abort-triggered idle fires,
-      // so a subsequent legitimately-empty cycle still gets flagged.
-      const spy = vi.fn();
-      adapter.onError = spy;
-      await adapter.start();
-      const { sessionId } = await adapter.createSession({});
-
-      // Cycle 1: user sends + aborts immediately. No error fires.
-      await adapter.sendMessage(sessionId, 'first');
-      await adapter.abortSession(sessionId);
-      mockSessions[0]._emit('session.idle', {});
-      expect(spy).not.toHaveBeenCalled();
-
-      // Cycle 2: user sends a normal message, session silently produces nothing.
-      // This IS a real failure case and should still fire.
-      await adapter.sendMessage(sessionId, 'second');
-      mockSessions[0]._emit('session.idle', {});
-      expect(spy).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ message: expect.stringContaining('no output') }),
-      );
-    });
-
-    it('abort flag does not leak across sessions', async () => {
-      const spy = vi.fn();
-      adapter.onError = spy;
-      await adapter.start();
-      const { sessionId: sidA } = await adapter.createSession({});
-      const { sessionId: sidB } = await adapter.createSession({});
-      // mockSessions[0] = sidA, mockSessions[1] = sidB
-
-      // Abort session A.
-      await adapter.sendMessage(sidA, 'A');
-      await adapter.abortSession(sidA);
-      mockSessions[0]._emit('session.idle', {});
-      expect(spy).not.toHaveBeenCalled();
-
-      // Session B sends a message, gets silently empty. Should still fire — B
-      // was never aborted.
-      await adapter.sendMessage(sidB, 'B');
-      mockSessions[1]._emit('session.idle', {});
-      expect(spy).toHaveBeenCalledWith(
-        sidB,
-        expect.objectContaining({ message: expect.stringContaining('no output') }),
-      );
     });
 
     it('does not throw when callbacks are null', async () => {
@@ -1089,7 +999,7 @@ describe('CopilotAdapter', () => {
 
       const handler = capturedSessionConfigs[0].onPermissionRequest;
       const resultPromise = handler(
-        { kind: 'read', fileName: 'package.json' },
+        { kind: 'write', fileName: 'package.json' },
         { sessionId: 'mock-sess-1' },
       );
 
@@ -1282,6 +1192,12 @@ describe('CopilotAdapter', () => {
       handler = capturedSessionConfigs[0].onPermissionRequest;
     });
 
+    it('safe mode lets reads and fetches run without a card', async () => {
+      expect(handler({ kind: 'read', fileName: 'src/index.ts' }, { sessionId: 'mock-sess-1' })).toEqual({ kind: 'approve-once' });
+      expect(handler({ kind: 'url', url: 'https://example.com' }, { sessionId: 'mock-sess-1' })).toEqual({ kind: 'approve-once' });
+      expect(permSpy).not.toHaveBeenCalled();
+    });
+
     it('parses shell permission', async () => {
       handler({ kind: 'shell', command: 'npm test' }, { sessionId: 'mock-sess-1' });
       const data = permSpy.mock.calls[0][1];
@@ -1309,27 +1225,6 @@ describe('CopilotAdapter', () => {
       const data = permSpy.mock.calls[0][1];
       expect(data.toolArgs.toolName).toBe('write_file');
       expect(data.description).toBe('Write: /tmp/foo.txt');
-    });
-
-    it('parses read permission', async () => {
-      handler(
-        { kind: 'read', fileName: 'src/index.ts', intention: 'read_file' },
-        { sessionId: 'mock-sess-1' },
-      );
-      const data = permSpy.mock.calls[0][1];
-      expect(data.toolArgs.toolName).toBe('read_file');
-      expect(data.toolArgs.args).toEqual({ path: 'src/index.ts' });
-    });
-
-    it('parses url permission', async () => {
-      handler(
-        { kind: 'url', url: 'https://example.com' },
-        { sessionId: 'mock-sess-1' },
-      );
-      const data = permSpy.mock.calls[0][1];
-      expect(data.toolArgs.toolName).toBe('fetch_url');
-      expect(data.toolArgs.args).toEqual({ url: 'https://example.com' });
-      expect(data.description).toBe('Fetch: https://example.com');
     });
 
     it('parses mcp permission', async () => {
@@ -1390,45 +1285,6 @@ describe('CopilotAdapter', () => {
       expect(data.toolArgs.args).toEqual({ path: "/tmp/alt.txt", content: "" });
     });
 
-    it('parses read with path fallback', async () => {
-      handler(
-        { kind: 'read', path: 'alt.ts' },
-        { sessionId: 'mock-sess-1' },
-      );
-      const data = permSpy.mock.calls[0][1];
-      expect(data.toolArgs.args).toEqual({ path: 'alt.ts' });
-    });
-
-    it('parses read with no path at all', async () => {
-      handler(
-        { kind: 'read' },
-        { sessionId: 'mock-sess-1' },
-      );
-      const data = permSpy.mock.calls[0][1];
-      expect(data.toolArgs.toolName).toBe('read_file');
-      expect(data.toolArgs.args).toEqual({ path: '' });
-      expect(data.description).toBe('Read: ');
-    });
-
-    it('parses read without intention', async () => {
-      handler(
-        { kind: 'read', fileName: 'test.ts' },
-        { sessionId: 'mock-sess-1' },
-      );
-      const data = permSpy.mock.calls[0][1];
-      expect(data.toolArgs.toolName).toBe('read_file');
-      expect(data.description).toBe('Read: test.ts');
-    });
-
-    it('parses url with intention', async () => {
-      handler(
-        { kind: 'url', url: 'https://api.com', intention: 'fetch_url' },
-        { sessionId: 'mock-sess-1' },
-      );
-      const data = permSpy.mock.calls[0][1];
-      expect(data.toolArgs.toolName).toBe('fetch_url');
-    });
-
     it('parses mcp with missing fields', async () => {
       handler(
         { kind: 'mcp' },
@@ -1457,16 +1313,6 @@ describe('CopilotAdapter', () => {
       const data = permSpy.mock.calls[0][1];
       expect(data.toolArgs.toolName).toBe('write_file');
       expect(data.toolArgs.args).toEqual({ path: '', content: '' });
-    });
-
-    it('parses url with empty url', async () => {
-      handler(
-        { kind: 'url' },
-        { sessionId: 'mock-sess-1' },
-      );
-      const data = permSpy.mock.calls[0][1];
-      expect(data.toolArgs.toolName).toBe('fetch_url');
-      expect(data.description).toBe('Fetch: ');
     });
 
     it('parses request with no kind', async () => {

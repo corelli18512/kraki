@@ -179,7 +179,7 @@ run('Pi 0.87 live RPC compatibility', () => {
   });
 
   it('runs read/write/edit/bash and maps usage from real RPC', async () => {
-    await create(); adapter.setSessionMode(sid, 'execute');
+    await create(); adapter.setSessionMode(sid, 'auto');
     steps.push({ tool: 'write', args: { path: 'scratch.txt', content: 'before' } }, { tool: 'edit', args: { path: 'scratch.txt', oldText: 'before', newText: 'after' } }, { tool: 'read', args: { path: 'scratch.txt' } }, { tool: 'bash', args: { command: 'printf AUDIT_SHELL' } }, { text: 'TOOLS_OK' });
     await turn(); expect(readFileSync(join(root, 'scratch.txt'), 'utf8')).toBe('after');
     expect(callbacks.onToolComplete.mock.calls.map(c => c[1].toolName)).toEqual(['write', 'edit', 'read', 'bash']);
@@ -188,8 +188,8 @@ run('Pi 0.87 live RPC compatibility', () => {
     expect(adapter.getSessionUsage(sid)?.totalCost).toBeGreaterThan(0);
   });
 
-  it.each(['approve', 'deny'] as const)('gates a discuss-mode write with %s', async decision => {
-    await create(); steps.push({ tool: 'write', args: { path: 'approval.txt', content: 'approved' } }, { text: 'PERMISSION_DONE' });
+  it.each(['approve', 'deny'] as const)('gates a safe-mode write with %s', async decision => {
+    await create(); adapter.setSessionMode(sid, 'safe'); steps.push({ tool: 'write', args: { path: 'approval.txt', content: 'approved' } }, { text: 'PERMISSION_DONE' });
     await adapter.sendMessage(sid, 'permission audit');
     await wait(() => expect(callbacks.onPermissionRequest).toHaveBeenCalledTimes(1));
     expect(existsSync(join(root, 'approval.txt'))).toBe(false); expect(callbacks.onIdle).not.toHaveBeenCalled();
@@ -201,12 +201,12 @@ run('Pi 0.87 live RPC compatibility', () => {
 
   it('changes permission mode without respawning and exposes kraki_get_mode', async () => {
     await create(); const original = proc(); adapter.setSessionMode(sid, 'safe');
-    steps.push({ tool: 'read', args: { path: 'mode.txt' } }, { tool: 'kraki_get_mode', args: { query: 'current' } }, { text: 'MODE_OK' });
+    steps.push({ tool: 'bash', args: { command: 'cat mode.txt' } }, { tool: 'kraki_get_mode', args: { query: 'current' } }, { text: 'MODE_OK' });
     writeFileSync(join(root, 'mode.txt'), 'test'); await adapter.sendMessage(sid, 'mode audit');
     await wait(() => expect(callbacks.onPermissionRequest).toHaveBeenCalledTimes(1));
-    adapter.setSessionMode(sid, 'execute');
+    adapter.setSessionMode(sid, 'auto');
     await wait(() => expect(callbacks.onIdle).toHaveBeenCalledTimes(1));
-    expect(proc()).toBe(original); expect(toolResult('kraki_get_mode').content[0].text).toBe('execute');
+    expect(proc()).toBe(original); expect(toolResult('kraki_get_mode').content[0].text).toBe('auto');
   });
 
   it.each([false, true])('round-trips ask_user (choices=%s)', async choices => {
@@ -280,7 +280,7 @@ run('Pi 0.87 live RPC compatibility', () => {
   });
 
   it('aborts a running bash process and prevents its deferred file write', async () => {
-    await create(); adapter.setSessionMode(sid, 'execute');
+    await create(); adapter.setSessionMode(sid, 'auto');
     steps.push({ tool: 'bash', args: { command: 'sleep 1; printf unwanted > late-write.txt' } });
     await adapter.sendMessage(sid, 'abort bash');
     await wait(() => expect(callbacks.onToolStart).toHaveBeenCalledTimes(1));
@@ -301,7 +301,7 @@ run('Pi 0.87 live RPC compatibility', () => {
   });
 
   it('queues a steer during a tool call without a duplicate idle', async () => {
-    await create(); adapter.setSessionMode(sid, 'execute'); steps.push({ tool: 'bash', args: { command: 'sleep 0.3; printf TOOL_DONE' } }, { text: 'STEERED' });
+    await create(); adapter.setSessionMode(sid, 'auto'); steps.push({ tool: 'bash', args: { command: 'sleep 0.3; printf TOOL_DONE' } }, { text: 'STEERED' });
     await adapter.sendMessage(sid, 'start tool'); await wait(() => expect(callbacks.onToolStart).toHaveBeenCalledTimes(1));
     await adapter.sendMessage(sid, 'STEER_MARKER', undefined, { delivery: 'steer' });
     await wait(() => expect(callbacks.onIdle).toHaveBeenCalledTimes(1));

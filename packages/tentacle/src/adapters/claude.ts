@@ -30,6 +30,8 @@ import { join } from 'node:path';
 import { getConfigDir } from '../config.js';
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 import { canonicalArtifactToolName } from './tool-name.js';
+import { DEFAULT_SESSION_MODE } from '@kraki/protocol';
+import { KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMode, type ToolKind } from './permission-policy.js';
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 
 const logger = createLogger('claude-adapter');
@@ -283,13 +285,16 @@ function preferClaudeError(
  * Map Claude SDK tool names to Kraki tool kinds (for permission tracking).
  * Returns the general category for "Always Allow" grouping.
  */
-function toolNameToKind(toolName: string): string {
+export function toolNameToKind(toolName: string): ToolKind {
   switch (toolName) {
     case 'Bash':
+    case 'BashOutput':
+    case 'KillShell':
       return 'shell';
     case 'Write':
     case 'Edit':
     case 'MultiEdit':
+    case 'NotebookEdit':
       return 'write';
     case 'Read':
     case 'Glob':
@@ -299,9 +304,13 @@ function toolNameToKind(toolName: string): string {
     case 'WebSearch':
     case 'WebFetch':
       return 'url';
+    case 'TodoWrite':
+    case 'Task':
+    case 'Agent':
+    case 'ExitPlanMode':
+      return 'meta';
     default:
-      if (toolName.startsWith('mcp__')) return 'mcp';
-      return toolName.toLowerCase();
+      return toolName.startsWith('mcp__') ? 'mcp' : 'other';
   }
 }
 
@@ -434,7 +443,7 @@ export class ClaudeAdapter extends AgentAdapter {
   /** Per-session auto-approve sets (populated by "Always Allow" clicks) */
   private sessionAllowSets = new Map<string, Set<string>>();
   /** Session permission mode */
-  private sessionModes = new Map<string, 'safe' | 'discuss' | 'execute' | 'delegate'>();
+  private sessionModes = new Map<string, SessionMode>();
   /** Sessions with a pending mode change to prepend on next user message */
   private pendingModeSignals = new Map<string, string>();
   /** Per-session cumulative token usage */
@@ -558,33 +567,7 @@ export class ClaudeAdapter extends AgentAdapter {
     'encrypted relay. Your tool calls are routed through a permission system that',
     'approves, denies, or prompts the operator depending on the current mode.',
     '',
-    'There are four permission modes. **Sessions start in `discuss` mode by default.**',
-    '',
-    '- **safe**: Every tool call requires explicit operator approval, unless the',
-    '  operator has previously clicked "Always Allow" for that tool kind (shell,',
-    '  write, etc.) in the current session. Explain what you intend to do before',
-    '  each action so the operator can decide.',
-    '- **discuss**: Read operations, shell commands, web fetches, and MCP tools',
-    '  are auto-approved. Write operations require operator approval — the',
-    '  operator sees each write and can approve it, deny it, or switch to',
-    '  execute mode. Exception: writes to a file named `plan.md` (in any',
-    '  directory) are auto-approved.',
-    '- **execute**: All tool calls are auto-approved. Be efficient and execute',
-    '  directly without asking for confirmation. If unsure about intent or',
-    '  approach, ask the operator for clarification before proceeding.',
-    '- **delegate**: All tool calls are auto-approved. Questions you ask via',
-    '  `ask_user` are auto-answered with `"proceed with your best judgment"` —',
-    '  do not re-ask; just make a reasonable call and continue.',
-    '',
-    'The operator may switch modes during the session. When this happens, the',
-    'next user message you receive will be prefixed with a signal in this format:',
-    '',
-    '    [kraki: mode changed to <mode>]',
-    '',
-    'Treat the signal as out-of-band metadata: silently adopt the new mode\'s',
-    'behavior from that point onward, do not acknowledge or comment on the mode',
-    'change, and do not quote the signal back. The text after the signal is the',
-    'real user message.',
+    KRAKI_MODES_PROMPT,
   ].join('\n');
 
   /** Appended when the Kraki MCP server is wired in. */
@@ -872,7 +855,7 @@ export class ClaudeAdapter extends AgentAdapter {
     const pendingMode = this.pendingModeSignals.get(sessionId);
     if (pendingMode) {
       this.pendingModeSignals.delete(sessionId);
-      text = `[kraki: mode changed to ${pendingMode}]\n\n${text}`;
+      text = `${modeChangeSignal(pendingMode as SessionMode)}\n\n${text}`;
     }
 
     // Lazily start the query on first message — the SDK binary needs a
@@ -999,6 +982,20 @@ export class ClaudeAdapter extends AgentAdapter {
       ...(mcpServers && { mcpServers }),
       includePartialMessages: true,
       canUseTool: this.makeCanUseToolHandler(sessionId, entry.pendingPermissions, entry.pendingQuestions),
+      // Kraki's mode is the authority on asking. In `safe`, a local Claude
+      // ALLOW rule (settings / "always allow" clicked in the terminal) must not
+      // let a side-effecting tool skip the operator; forcing `ask` routes it to
+      // canUseTool. Local DENY rules are left to Claude Code and still apply.
+      hooks: {
+        PreToolUse: [{
+          hooks: [async (hookInput: unknown) => {
+            const toolName = (hookInput as { tool_name?: string }).tool_name ?? '';
+            const mode = this.sessionModes.get(sessionId) ?? DEFAULT_SESSION_MODE;
+            if (toolName === 'AskUserQuestion' || krakiAutoApproves(mode, toolNameToKind(toolName))) return {};
+            return { hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision: 'ask' as const } };
+          }],
+        }],
+      },
       ...((entry.reasoningEffort ?? config?.reasoningEffort) && {
         effort: (entry.reasoningEffort ?? config?.reasoningEffort) as Options['effort'],
       }),
@@ -1169,10 +1166,10 @@ export class ClaudeAdapter extends AgentAdapter {
     return this.cachedModels;
   }
 
-  setSessionMode(sessionId: string, mode: 'safe' | 'discuss' | 'execute' | 'delegate'): void {
+  setSessionMode(sessionId: string, mode: SessionMode): void {
     const prev = this.sessionModes.get(sessionId);
     this.sessionModes.set(sessionId, mode);
-    if ((prev ?? 'discuss') !== mode) {
+    if ((prev ?? DEFAULT_SESSION_MODE) !== mode) {
       this.pendingModeSignals.set(sessionId, mode);
     }
 
@@ -1499,11 +1496,8 @@ export class ClaudeAdapter extends AgentAdapter {
           else this.onError?.(sessionId, { message: error.message });
         } else {
           if (entry) entry.pendingError = undefined;
-          // A turn that ended with tools but no closing prose still needs a
-          // spine anchor for its Steps (protocol SystemMessage 'no_reply').
-          if (!this.flushConclusion(sessionId) && entry) {
-            this.onSystemMessage?.(sessionId, { kind: 'no_reply', ...this.lifecycleEvent(entry) });
-          }
+          // A tool-only turn is anchored centrally by RelayClient.
+          this.flushConclusion(sessionId);
         }
 
         // Update final usage
@@ -1689,30 +1683,11 @@ export class ClaudeAdapter extends AgentAdapter {
       }
 
       const toolKind = toolNameToKind(toolName);
-      const mode = this.sessionModes.get(sessionId) ?? 'discuss';
+      const mode = this.sessionModes.get(sessionId) ?? DEFAULT_SESSION_MODE;
 
-      // Mode-based auto-approval
-      if (mode === 'execute' || mode === 'delegate') {
+      if (krakiAutoApproves(mode, toolKind)) {
         logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
         return { behavior: 'allow', updatedInput: input };
-      }
-
-      // Discuss mode: auto-approve reads, shell, url, mcp. Writes need approval (except plan.md).
-      if (mode === 'discuss') {
-        if (toolKind !== 'write') {
-          logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
-          return { behavior: 'allow', updatedInput: input };
-        }
-        // Write in discuss mode — check allow list
-        const filePath = ((input.file_path ?? input.path ?? '') as string);
-        const DISCUSS_MODE_WRITE_ALLOW_LIST = ['plan.md'];
-        const allowed = DISCUSS_MODE_WRITE_ALLOW_LIST.some(
-          (f) => filePath.endsWith('/' + f) || filePath === f,
-        );
-        if (allowed) {
-          return { behavior: 'allow', updatedInput: input };
-        }
-        // Non-allowed writes fall through to the permission prompt below
       }
 
       // Check session-scoped always-allow sets
@@ -1753,7 +1728,7 @@ export class ClaudeAdapter extends AgentAdapter {
     input: Record<string, unknown>,
     pendingQuestions: Map<string, PendingQuestion>,
   ): Promise<PermissionResult> {
-    const mode = this.sessionModes.get(sessionId) ?? 'discuss';
+    const mode = this.sessionModes.get(sessionId) ?? DEFAULT_SESSION_MODE;
 
     // Delegate mode: auto-answer questions
     if (mode === 'delegate') {

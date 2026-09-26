@@ -95,7 +95,7 @@ async function started(env: Record<string, string> = {}, store?: AttachmentStore
   return h;
 }
 
-async function session(mode?: 'safe' | 'discuss' | 'execute' | 'delegate'): Promise<string> {
+async function session(mode?: 'safe' | 'auto' | 'delegate'): Promise<string> {
   const { sessionId } = await h.adapter.createSession({ cwd: '/repo', model: 'gpt-6-astra', reasoningEffort: 'high' });
   if (mode) h.adapter.setSessionMode(sessionId, mode);
   return sessionId;
@@ -116,14 +116,11 @@ async function turn(sid: string, text: string, turnId: string, delivery?: 'promp
 
 describe('pure helpers', () => {
   it('permission policy mirrors Kraki modes', () => {
-    expect(codexShouldAutoApprove('execute', 'write', ['/a'])).toBe(true);
-    expect(codexShouldAutoApprove('delegate', 'shell', [])).toBe(true);
-    expect(codexShouldAutoApprove('discuss', 'shell', [])).toBe(true);
-    expect(codexShouldAutoApprove('discuss', 'write', ['/r/src/a.ts'])).toBe(false);
-    expect(codexShouldAutoApprove('discuss', 'write', ['/r/plan.md'])).toBe(true);
-    expect(codexShouldAutoApprove('discuss', 'write', ['/r/plan.md', '/r/x.ts'])).toBe(false);
-    expect(codexShouldAutoApprove('discuss', 'write', [])).toBe(false);
-    expect(codexShouldAutoApprove('safe', 'shell', [])).toBe(false);
+    expect(codexShouldAutoApprove('auto', 'write')).toBe(true);
+    expect(codexShouldAutoApprove('auto', 'shell')).toBe(true);
+    expect(codexShouldAutoApprove('delegate', 'shell')).toBe(true);
+    expect(codexShouldAutoApprove('safe', 'shell')).toBe(false);
+    expect(codexShouldAutoApprove('safe', 'write')).toBe(false);
   });
 
   it('unwraps Codex login-shell wrappers only when exact', () => {
@@ -183,9 +180,9 @@ describe('CodexAdapter (fake app-server child process)', () => {
     expect(h.adapter.isTurnSettled(sid)).toBe(true);
   });
 
-  it('discuss mode auto-approves shell and graduates prose before a tool to narration', async () => {
+  it('auto mode approves shell and graduates prose before a tool to narration', async () => {
     await started();
-    const sid = await session('discuss');
+    const sid = await session('auto');
     await turn(sid, 'SHELL', 'rt-1');
     await h.idleCount(1);
     expect(h.of('permission')).toHaveLength(0);
@@ -222,7 +219,7 @@ describe('CodexAdapter (fake app-server child process)', () => {
     expect(h.of('permission')).toHaveLength(1);
     expect(h.of('message')[1].content).toBe('shell decision: accept');
 
-    h.adapter.setSessionMode(sid, 'discuss');
+    h.adapter.setSessionMode(sid, 'auto');
     h.adapter.setSessionMode(sid, 'safe');
     await turn(sid, 'SHELL third', 'rt-3');
     await h.waitFor(() => h.of('permission').length === 2, 'second permission');
@@ -230,25 +227,25 @@ describe('CodexAdapter (fake app-server child process)', () => {
 
   it('blocks tentacle self-management commands even in execute mode', async () => {
     await started();
-    const sid = await session('execute');
+    const sid = await session('auto');
     await turn(sid, 'SHELL KRAKISTOP', 'rt-1');
     await h.idleCount(1);
     expect(h.of('permission')).toHaveLength(0);
     expect(h.of('message')[0].content).toBe('shell decision: decline');
   });
 
-  it('discuss mode gates file edits except plan.md', async () => {
+  it('safe mode gates file edits; auto lets them through', async () => {
     await started();
-    const sid = await session('discuss');
+    const sid = await session('safe');
     await turn(sid, 'WRITE', 'rt-1');
     const perm = await h.waitFor((e) => e.type === 'permission', 'permission');
     expect(perm).toMatchObject({ toolArgs: { toolName: 'write_file', args: { path: '/repo/src/app.ts' } } });
     expect(String(perm.description)).toContain('/repo/src/app.ts');
-    expect(h.of('tool_start')[0]).toMatchObject({ toolName: 'edit', args: { path: '/repo/src/app.ts' } });
     await h.adapter.respondToPermission(sid, perm.id as string, 'approve');
     await h.idleCount(1);
     expect(h.of('message')[0].content).toBe('write decision: accept');
 
+    h.adapter.setSessionMode(sid, 'auto');
     await turn(sid, 'WRITE PLAN', 'rt-2');
     await h.idleCount(2);
     expect(h.of('permission')).toHaveLength(1);
@@ -257,7 +254,7 @@ describe('CodexAdapter (fake app-server child process)', () => {
 
   it('ask_user dynamic tool becomes a question card and returns the answer', async () => {
     await started();
-    const sid = await session('execute');
+    const sid = await session('auto');
     await turn(sid, 'ASK', 'rt-1');
     const q = await h.waitFor((e) => e.type === 'question', 'question');
     expect(q).toMatchObject({ question: 'Which DB?', choices: ['sqlite', 'postgres'], turnId: 'rt-1' });
@@ -282,20 +279,20 @@ describe('CodexAdapter (fake app-server child process)', () => {
   it('kraki_get_mode reports the live mode and mode changes are signalled once', async () => {
     await started();
     const sid = await session();
-    h.adapter.setSessionMode(sid, 'execute');
+    h.adapter.setSessionMode(sid, 'safe');
     await turn(sid, 'MODE', 'rt-1');
     await h.idleCount(1);
-    expect(h.of('message')[0].content).toBe('mode: execute');
+    expect(h.of('message')[0].content).toBe('mode: safe');
     await turn(sid, 'plain', 'rt-2');
     await h.idleCount(2);
     const texts = h.sent('turn/start').map((m) => (m.params!.input as Array<{ text: string }>)[0].text);
-    expect(texts[0]).toBe('[kraki: mode changed to execute]\n\nMODE');
+    expect(texts[0]).toBe('[kraki: mode changed to safe]\n\nMODE');
     expect(texts[1]).toBe('plain');
   });
 
   it('native request_user_input questions are asked one card at a time', async () => {
     await started();
-    const sid = await session('execute');
+    const sid = await session('auto');
     await turn(sid, 'NATIVEQ', 'rt-1');
     const q1 = await h.waitFor((e) => e.type === 'question', 'q1');
     expect(q1).toMatchObject({ question: 'Language?', choices: ['TS', 'Rust'] });
@@ -311,7 +308,7 @@ describe('CodexAdapter (fake app-server child process)', () => {
   it('show_image stores the image and broadcasts its bytes', async () => {
     const store = new AttachmentStore(join(dir, 'sessions'));
     await started({}, store);
-    const sid = await session('execute');
+    const sid = await session('auto');
     const png = join(dir, 'chart.png');
     writeFileSync(png, PNG_1PX);
     await turn(sid, `IMAGE:${png}`, 'rt-1');
@@ -359,7 +356,7 @@ describe('CodexAdapter (fake app-server child process)', () => {
 
   it('abort terminates commands the aborted turn left running, but not earlier ones', async () => {
     await started();
-    const sid = await session('execute');
+    const sid = await session('auto');
     await turn(sid, 'SLOW BGCMD', 'rt-1');
     await h.waitFor((e) => e.type === 'tool_start', 'command start');
     expect(h.of('tool_start')[0]).toMatchObject({ toolName: 'shell', args: { command: 'sleep 120' } });

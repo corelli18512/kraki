@@ -63,18 +63,6 @@ describe('MultiAgentAdapter.wireCallbacks forwards sub-adapter callbacks', () =>
     expect(seen).toHaveBeenCalledWith('s1', { content: 'a traced step' });
   });
 
-  it('forwards onFinalizeDelta (regression — same missing-wiring class as onNarration)', () => {
-    const multi = new MultiAgentAdapter({ agentIds: ['pi'] });
-    const stub = makeStubAdapter();
-    (multi as unknown as { wireCallbacks(id: string, a: AgentAdapter): void }).wireCallbacks('pi', stub);
-
-    const seen = vi.fn();
-    multi.onFinalizeDelta = seen;
-    stub.onFinalizeDelta?.('s1', { content: '✅ done' });
-
-    expect(seen).toHaveBeenCalledWith('s1', { content: '✅ done' });
-  });
-
   it('forwards the relay turn identity on idle', () => {
     const multi = new MultiAgentAdapter({ agentIds: ['pi'] });
     const stub = makeStubAdapter();

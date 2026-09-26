@@ -4,8 +4,52 @@
 
 export type SessionState = 'active' | 'idle' | 'compacting';
 
-/** Permission mode that controls how the agent's tool usage and questions are handled. */
-export type SessionMode = 'safe' | 'discuss' | 'execute' | 'delegate';
+/**
+ * Permission mode — Kraki is the single authority on whether the operator is
+ * asked before an agent acts (identical across Claude, Codex, Copilot, Pi).
+ *  - safe:     ask before file changes, shell commands and other side effects;
+ *              reads and searches run freely.
+ *  - auto:     never ask (default).
+ *  - delegate: never ask, and the agent's own questions are auto-answered.
+ * The user's local agent DENY rules always still apply.
+ */
+export type SessionMode = 'safe' | 'auto' | 'delegate';
+
+/** Names from the four-mode era (safe/discuss/execute/delegate). Accepted
+ *  everywhere; `discuss` and `execute` both mean `auto`. */
+export type LegacySessionMode = 'discuss' | 'execute';
+
+/** Anything that may arrive on the wire during the rename transition. */
+export type WireSessionMode = SessionMode | LegacySessionMode;
+
+export const DEFAULT_SESSION_MODE: SessionMode = 'auto';
+
+/**
+ * Transition switch. While true, emitters put the LEGACY name `execute` on the
+ * wire for `auto` so clients and tentacles from before the rename (which map an
+ * unknown value to `safe` or reject it) keep working in any combination.
+ * Flip to false in the release after every client understands `auto`.
+ */
+export const EMIT_LEGACY_MODE_NAMES = true;
+
+/** Map any wire/persisted value to a current mode. Unknown → default. */
+export function normalizeSessionMode(mode: unknown): SessionMode {
+  switch (mode) {
+    case 'safe': return 'safe';
+    case 'delegate': return 'delegate';
+    case 'auto':
+    case 'execute':
+    case 'discuss':
+      return 'auto';
+    default:
+      return DEFAULT_SESSION_MODE;
+  }
+}
+
+/** The value to put on the wire for a mode (see EMIT_LEGACY_MODE_NAMES). */
+export function toWireSessionMode(mode: SessionMode): WireSessionMode {
+  return EMIT_LEGACY_MODE_NAMES && mode === 'auto' ? 'execute' : mode;
+}
 
 /** Cumulative token usage for a session. */
 export interface SessionUsage {
@@ -62,7 +106,8 @@ export interface SessionDigest {
   state: SessionState;
   /** Orthogonal runtime maintenance. Does not make an idle conversation busy. */
   runtimeStatus?: SessionRuntimeStatusDigest;
-  mode: SessionMode;
+  /** Wire name — may be a legacy name during the rename transition. */
+  mode: WireSessionMode;
   lastSeq: number;
   readSeq: number;
   messageCount: number;

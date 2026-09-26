@@ -273,16 +273,15 @@ describe('ClaudeAdapter — turn lifecycle', () => {
     expect(claude.onSessionEnded).not.toHaveBeenCalled();
   });
 
-  it('a tool-only turn with no closing prose emits a no_reply anchor', async () => {
+  it('a tool-only turn with no closing prose just idles (RelayClient anchors it)', async () => {
     await createClaude(); claude.onMessage = vi.fn(); claude.onSystemMessage = vi.fn(); claude.onIdle = vi.fn();
     cc().sessions.get('s')!.query = {};
     claude.setTurnIdentity('s', 'rt-1');
     await claude.sendMessage('s', 'touch a file');
-    cc().handleSDKMessage('s', { type: 'user', message: { content: [] } });
     cc().handleSDKMessage('s', { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'touch x' } }] } });
     cc().handleSDKMessage('s', { type: 'result', is_error: false });
     expect(claude.onMessage).not.toHaveBeenCalled();
-    expect(claude.onSystemMessage).toHaveBeenCalledWith('s', { kind: 'no_reply', turnId: 'rt-1' });
+    expect(claude.onSystemMessage).not.toHaveBeenCalled();
     expect(claude.onIdle).toHaveBeenCalledTimes(1);
   });
 });
@@ -298,6 +297,46 @@ describe('ClaudeAdapter — permissions', () => {
     await nextTick();
     await claude.respondToPermission('s', permId, 'approve');
     await expect(decision).resolves.toEqual({ behavior: 'allow', updatedInput: input });
+  });
+});
+
+describe('ClaudeAdapter — Kraki modes over local Claude rules', () => {
+  async function hookFor(mode: 'safe' | 'auto' | 'delegate') {
+    await createClaude(); claude.setSessionMode('s', mode); await claude.sendMessage('s', 'first');
+    const hook = sdk.query.mock.calls[0][0].options.hooks.PreToolUse[0].hooks[0];
+    return (tool: string) => hook({ tool_name: tool, tool_input: {} });
+  }
+
+  it('safe forces an ask for side effects so local ALLOW rules cannot skip Kraki', async () => {
+    const hook = await hookFor('safe');
+    for (const tool of ['Bash', 'Edit', 'Write', 'mcp__x__y', 'SomethingNew']) {
+      await expect(hook(tool)).resolves.toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask' } });
+    }
+  });
+
+  it('safe leaves reads and bookkeeping to run; auto never interferes', async () => {
+    const safe = await hookFor('safe');
+    for (const tool of ['Read', 'Grep', 'Glob', 'WebFetch', 'TodoWrite', 'AskUserQuestion']) await expect(safe(tool)).resolves.toEqual({});
+    sdk.query.mockClear();
+    const auto = await hookFor('auto');
+    await expect(auto('Bash')).resolves.toEqual({});
+  });
+
+  it('never returns allow (local DENY rules keep precedence)', async () => {
+    const hook = await hookFor('safe');
+    const out = JSON.stringify(await hook('Bash')) + JSON.stringify(await hook('Read'));
+    expect(out).not.toContain('"allow"');
+  });
+
+  it('canUseTool in safe lets a read through and gates an edit', async () => {
+    await createClaude(); claude.setSessionMode('s', 'safe'); await claude.sendMessage('s', 'first');
+    const canUseTool = sdk.query.mock.calls[0][0].options.canUseTool;
+    claude.onPermissionRequest = vi.fn();
+    const signal = new AbortController().signal;
+    await expect(canUseTool('Read', { file_path: '/x' }, { signal, toolUseID: 't' })).resolves.toMatchObject({ behavior: 'allow' });
+    void canUseTool('Edit', { file_path: '/x' }, { signal, toolUseID: 't2' });
+    await nextTick();
+    expect(claude.onPermissionRequest).toHaveBeenCalledTimes(1);
   });
 });
 

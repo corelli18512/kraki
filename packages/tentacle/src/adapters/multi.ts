@@ -333,7 +333,7 @@ export class MultiAgentAdapter extends AgentAdapter {
     return all;
   }
 
-  setSessionMode(sessionId: string, mode: 'safe' | 'discuss' | 'execute' | 'delegate'): void {
+  setSessionMode(sessionId: string, mode: import('@kraki/protocol').SessionMode): void {
     this.getSessionAdapter(sessionId).setSessionMode(sessionId, mode);
   }
 
@@ -418,7 +418,6 @@ export class MultiAgentAdapter extends AgentAdapter {
     };
     adapter.onMessage = (sid, e) => this.onMessage?.(sid, e);
     adapter.onMessageDelta = (sid, e) => this.onMessageDelta?.(sid, e);
-    adapter.onFinalizeDelta = (sid, e) => this.onFinalizeDelta?.(sid, e);
     adapter.onNarration = (sid, e) => this.onNarration?.(sid, e);
     adapter.onNarrationTrace = (sid, e) => this.onNarrationTrace?.(sid, e);
     adapter.onPermissionRequest = (sid, e) => this.onPermissionRequest?.(sid, e);

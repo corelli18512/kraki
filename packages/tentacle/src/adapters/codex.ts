@@ -48,31 +48,25 @@ import {
   SELF_MANAGEMENT_DENIAL_REASON,
 } from '../self-management-guard.js';
 import { showImageHandler, showImageTool } from '../mcp/tools/show-image.js';
+import { DEFAULT_SESSION_MODE } from '@kraki/protocol';
+import { DELEGATE_ANSWER, KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMode } from './permission-policy.js';
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 import { tmpdir } from 'node:os';
 
 const logger = createLogger('codex-adapter');
 
-type Mode = 'safe' | 'discuss' | 'execute' | 'delegate';
-const DEFAULT_MODE: Mode = 'discuss';
-const DISCUSS_MODE_WRITE_ALLOW_LIST = ['plan.md'];
+type Mode = SessionMode;
+const DEFAULT_MODE: Mode = DEFAULT_SESSION_MODE;
 const KRAKI_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
-const DELEGATE_ANSWER = 'proceed with your best judgment';
 /** Tools hosted by this adapter and exposed to Codex via `dynamicTools`. */
 const KRAKI_DYNAMIC_TOOLS = new Set(['ask_user', 'show_image', 'kraki_get_mode']);
 
 // ── Pure helpers (exported for tests) ─────────────────────
 
-/** Kraki's copilot-aligned policy: execute/delegate → allow all; discuss →
- *  allow all but non-allow-listed writes; safe → gate everything. */
-export function codexShouldAutoApprove(mode: Mode, kind: 'shell' | 'write', paths: string[]): boolean {
-  if (mode === 'execute' || mode === 'delegate') return true;
-  if (mode === 'discuss') {
-    if (kind !== 'write') return true;
-    return paths.length > 0 && paths.every((p) =>
-      DISCUSS_MODE_WRITE_ALLOW_LIST.some((f) => p === f || p.endsWith('/' + f)));
-  }
-  return false;
+/** Codex only asks the client for commands and file changes (reads run under
+ *  its own safe-command list), so both are side effects for Kraki's policy. */
+export function codexShouldAutoApprove(mode: Mode, kind: 'shell' | 'write'): boolean {
+  return krakiAutoApproves(mode, kind);
 }
 
 /** Map Codex model/list entries to Kraki ModelDetail. */
@@ -252,17 +246,9 @@ export class CodexAdapter extends AgentAdapter {
     'permission system, which approves, denies, or prompts the operator',
     'depending on the current mode.',
     '',
-    'Permission modes (sessions start in `discuss`):',
-    '- safe: every command and file change needs explicit operator approval.',
-    '- discuss: commands run freely; file changes need approval (except plan.md).',
-    '- execute: everything is auto-approved. Work efficiently.',
-    '- delegate: everything is auto-approved and `ask_user` questions are',
-    '  auto-answered with "proceed with your best judgment" — do not re-ask.',
-    '',
-    'When the operator switches modes, the next user message starts with',
-    '`[kraki: mode changed to <mode>]`. Silently adopt the new mode; do not',
-    'acknowledge or quote the signal. Call `kraki_get_mode` to check the live',
-    'mode before irreversible or destructive actions.',
+    KRAKI_MODES_PROMPT,
+    'Call `kraki_get_mode` to check the live mode before irreversible or',
+    'destructive actions.',
     '',
     'Kraki tools:',
     '- `ask_user`: ask the operator a question and block until they answer. Use it',
@@ -461,7 +447,7 @@ export class CodexAdapter extends AgentAdapter {
       {
         type: 'function',
         name: 'kraki_get_mode',
-        description: 'Return the current Kraki permission mode (safe|discuss|execute|delegate). Call before irreversible actions.',
+        description: 'Return the current Kraki permission mode (safe|auto|delegate). Call before irreversible actions.',
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       },
     ];
@@ -570,7 +556,7 @@ export class CodexAdapter extends AgentAdapter {
   private buildInput(s: CodexSession, text: string, attachments?: Attachment[]): unknown[] {
     const input: unknown[] = [];
     if (s.modeSignal) {
-      text = `[kraki: mode changed to ${s.modeSignal}]\n\n${text}`;
+      text = `${modeChangeSignal(s.modeSignal)}\n\n${text}`;
       s.modeSignal = undefined;
     }
     if (text) input.push({ type: 'text', text, text_elements: [] });
@@ -1052,7 +1038,7 @@ export class CodexAdapter extends AgentAdapter {
     paths: string[],
     card: { toolArgs: ToolArgs; description: string },
   ): void {
-    if (codexShouldAutoApprove(s.mode, pending.toolKind, paths) || s.allowKinds.has(pending.toolKind)) {
+    if (codexShouldAutoApprove(s.mode, pending.toolKind) || s.allowKinds.has(pending.toolKind)) {
       this.answerPermission(pending, true);
       return;
     }

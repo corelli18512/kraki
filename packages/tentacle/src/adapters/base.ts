@@ -145,13 +145,6 @@ export abstract class AgentAdapter {
   onSessionCreated: ((event: SessionCreatedEvent) => void) | null = null;
   onMessage: ((sessionId: string, event: MessageEvent) => void) | null = null;
   onMessageDelta: ((sessionId: string, event: MessageDeltaEvent) => void) | null = null;
-  /** Streaming chunk of a FINALIZE resummarize (finalize_reply.text) — the
-   *  agent's rewritten closing message, streamed at the end of the turn so the
-   *  draft bubble morphs seamlessly into the final reply. Distinct from
-   *  onMessageDelta (ongoing working narration): this replaces the frozen draft
-   *  in place. Adapters that don't stream a resummarize leave this null and
-   *  crystallize the whole finalize text via onMessage instead. */
-  onFinalizeDelta: ((sessionId: string, event: MessageDeltaEvent) => void) | null = null;
   /** Called at message_end with the FINALIZED assistant narration prose (private
    *  reasoning). The streaming delta (onMessageDelta) is ephemeral/live-only;
    *  this finalized text is persisted to the TRACE axis (trace.jsonl) as an
@@ -273,7 +266,7 @@ export abstract class AgentAdapter {
   async listModelDetails(): Promise<ModelDetail[]> { return []; }
 
   /** Set permission mode for a session. Override in concrete adapters. */
-  setSessionMode(_sessionId: string, _mode: 'safe' | 'discuss' | 'execute' | 'delegate'): void { /* no-op by default */ }
+  setSessionMode(_sessionId: string, _mode: import('@kraki/protocol').SessionMode): void { /* no-op by default */ }
 
   /** Generate a title for `sessionId` with THAT session's own agent and model
    *  (see adapters/title.ts). Must be a tool-less side-call that never touches
