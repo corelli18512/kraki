@@ -1848,13 +1848,31 @@ final class MacTransientOverlayScrollerController {
 /// AppKit production chat list mirroring the iOS flat-spine list behavior.
 /// Adds a short AppKit animation to discrete mouse-wheel ticks while leaving
 /// precise trackpad deltas on the native scrolling path.
-final class MacSmoothWheelController {
+/// Browser-style smoothing for notched mouse wheels (no vendor smoothing).
+///
+/// One frame-driven animation per gesture: every notch only moves the
+/// *target*; the offset approaches it exponentially each display frame, so
+/// velocity stays continuous across notches (the old per-notch 90ms easeOut
+/// restarted from zero velocity and moved in visible pulses). External offset
+/// changes during the glide (anchor compensation when older history is
+/// prepended) shift the target by the same amount.
+final class MacSmoothWheelController: NSObject {
     private weak var scrollView: NSScrollView?
     private var targetY: CGFloat?
-    private var completionWorkItem: DispatchWorkItem?
-    private var generation = 0
+    private var lastAppliedY: CGFloat?
+    private var lastFrameTime: CFTimeInterval = 0
+    private var displayLink: CADisplayLink?
+    private var fallbackTimer: Timer?
     var onActivityChanged: ((Bool) -> Void)?
     var onTargetChanged: ((CGFloat) -> Void)?
+
+    /// Critically damped spring toward the target: position AND velocity are
+    /// continuous, so a steadily spun wheel glides at an even speed. ω=24
+    /// settles a single notch in ~200ms (browser-like).
+    static let springOmega: CGFloat = 24
+    private var velocity: CGFloat = 0
+
+    var isActive: Bool { targetY != nil }
 
     func handle(_ event: NSEvent, in scrollView: NSScrollView) -> Bool {
         guard !event.hasPreciseScrollingDeltas,
@@ -1868,12 +1886,37 @@ final class MacSmoothWheelController {
             reset()
             self.scrollView = scrollView
         }
-        let currentY = targetY ?? scrollView.contentView.bounds.origin.y
-        // AppKit's default verticalLineScroll is commonly only 10pt. That is
-        // appropriate when AppKit applies a full native wheel sequence, but it
-        // feels abnormally slow when each discrete notch is routed through our
-        // animator. Use roughly three native lines per notch, with a 36pt floor.
+        let currentY = scrollView.contentView.bounds.origin.y
+        let base = targetY ?? currentY
+        // AppKit's default verticalLineScroll is commonly only 10pt; use about
+        // three native lines per notch with a 36pt floor.
         let lineDistance = max(scrollView.verticalLineScroll * 3, 36)
+        let (minimumY, maximumY) = Self.limits(scrollView)
+        let nextY = min(maximumY, max(minimumY, base - event.scrollingDeltaY * lineDistance))
+        guard abs(nextY - base) > 0.01 else { return true }
+
+        let starting = targetY == nil
+        targetY = nextY
+        onTargetChanged?(nextY)
+        if starting {
+            velocity = 0
+            lastAppliedY = currentY
+            lastFrameTime = CACurrentMediaTime()
+            onActivityChanged?(true)
+            startFrames(on: scrollView)
+        }
+        return true
+    }
+
+    func reset() {
+        let wasActive = targetY != nil
+        stopFrames()
+        targetY = nil
+        lastAppliedY = nil
+        if wasActive { onActivityChanged?(false) }
+    }
+
+    private static func limits(_ scrollView: NSScrollView) -> (CGFloat, CGFloat) {
         let minimumY = -scrollView.contentInsets.top
         let maximumY = max(
             minimumY,
@@ -1881,44 +1924,69 @@ final class MacSmoothWheelController {
                 - scrollView.contentView.bounds.height
                 + scrollView.contentInsets.bottom
         )
-        let nextY = min(
-            maximumY,
-            max(minimumY, currentY - event.scrollingDeltaY * lineDistance)
-        )
-        guard abs(nextY - currentY) > 0.01 else { return true }
-
-        targetY = nextY
-        onTargetChanged?(nextY)
-        completionWorkItem?.cancel()
-        generation += 1
-        onActivityChanged?(true)
-        let currentGeneration = generation
-        let target = NSPoint(x: scrollView.contentView.bounds.origin.x, y: nextY)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.09
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            scrollView.contentView.animator().bounds.origin = target
-        }
-        let completion = DispatchWorkItem { [weak self, weak scrollView] in
-            guard let self,
-                  let scrollView,
-                  currentGeneration == self.generation else { return }
-            self.targetY = nil
-            self.onTargetChanged?(scrollView.contentView.bounds.minY)
-            self.onActivityChanged?(false)
-        }
-        completionWorkItem = completion
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10, execute: completion)
-        return true
+        return (minimumY, maximumY)
     }
 
-    func reset() {
-        let wasActive = targetY != nil
-        completionWorkItem?.cancel()
-        completionWorkItem = nil
-        targetY = nil
-        generation += 1
-        if wasActive { onActivityChanged?(false) }
+    private func startFrames(on scrollView: NSScrollView) {
+        stopFrames()
+        if scrollView.window?.screen != nil {
+            let link = scrollView.displayLink(target: self, selector: #selector(frameTick))
+            link.add(to: .main, forMode: .common)
+            displayLink = link
+        } else {
+            let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
+                self?.frameTick()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            fallbackTimer = timer
+        }
+    }
+
+    private func stopFrames() {
+        displayLink?.invalidate()
+        displayLink = nil
+        fallbackTimer?.invalidate()
+        fallbackTimer = nil
+    }
+
+    @objc private func frameTick() {
+        guard let scrollView, var target = targetY else {
+            reset()
+            return
+        }
+        let now = CACurrentMediaTime()
+        let dt = min(0.05, max(0, now - lastFrameTime))
+        lastFrameTime = now
+        var current = scrollView.contentView.bounds.origin.y
+        // Someone else moved the viewport (prepend anchor compensation):
+        // carry the remaining glide along with the content.
+        if let lastAppliedY, abs(current - lastAppliedY) > 0.5 {
+            target += current - lastAppliedY
+        }
+        let (minimumY, maximumY) = Self.limits(scrollView)
+        target = min(maximumY, max(minimumY, target))
+        targetY = target
+        // Semi-implicit Euler in ≤4ms substeps (stable for any frame rate).
+        var left = CGFloat(dt)
+        let omega = Self.springOmega
+        while left > 0 {
+            let h = min(left, 0.004)
+            let accel = omega * omega * (target - current) - 2 * omega * velocity
+            velocity += accel * h
+            current += velocity * h
+            left -= h
+        }
+        if abs(target - current) < 0.5, abs(velocity) < 20 {
+            current = target
+            velocity = 0
+        }
+        scrollView.contentView.bounds.origin = NSPoint(x: scrollView.contentView.bounds.origin.x, y: current)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        lastAppliedY = scrollView.contentView.bounds.origin.y
+        if current == target, velocity == 0 {
+            onTargetChanged?(current)
+            reset()
+        }
     }
 }
 
@@ -3013,6 +3081,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        cancelScrollAnimation()
         geometryAnchorLock = nil
         hasUserScrolled = true
         let hasScrollDelta = abs(event.scrollingDeltaY) > 0.01
@@ -3366,6 +3435,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         completion: (() -> Void)? = nil
     ) {
         cancelScrollAnimation()
+        resetSmoothWheelAnimation()
         scrollAnimation = (CACurrentMediaTime(), duration, contentView.bounds.minY, target, completion)
         let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.advanceScrollAnimation() }

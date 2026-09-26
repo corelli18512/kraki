@@ -117,9 +117,68 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
                 revisions.insert(live.cell.renderRevision)
             }
         }
-        XCTAssertGreaterThan(revisions.count, 20, "the visible live bubble keeps streaming while the user scrolls")
+        // The old code paused the live bubble for the whole scroll (exactly 1
+        // revision). The rate itself depends on machine load (~90 idle, 14–29
+        // with another process saturating CPU/GPU), so only require "live".
+        XCTAssertGreaterThan(revisions.count, 2, "the visible live bubble keeps streaming while the user scrolls")
         XCTAssertEqual(st.jumps, 0, "live growth must not move the text being read")
         XCTAssertEqual(st.placeholderFrames, 0)
+    }
+
+    /// A notched mouse wheel (MX Vertical, no vendor smoothing) spun steadily
+    /// must scroll like a browser: continuous per-frame motion, not a pulse
+    /// per notch.
+    func testDiscreteWheelScrollsContinuously() throws {
+        let fx = try makeFixture(total: 200)
+        drain(1_200)
+        var deltas: [CGFloat] = []
+        func notch() {
+            let cg = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: 1, wheel2: 0, wheel3: 0)!
+            let event = NSEvent(cgEvent: cg)!
+            deltas.append(event.scrollingDeltaY)
+            fx.sv.scrollWheel(with: event)
+        }
+        // Content motion as the reader sees it: displacement of an on-screen
+        // bubble (immune to offset compensation when history is prepended).
+        var tracked: Int?
+        var lastScreenY: CGFloat?
+        func sample() -> CGFloat {
+            let now = cells(fx).filter { !$0.placeholder }
+            if let seq = tracked, let cell = now.first(where: { $0.seq == seq }), let last = lastScreenY {
+                lastScreenY = cell.screenY
+                return abs(cell.screenY - last)
+            }
+            let mid = fx.sv.contentView.bounds.height / 2
+            let pick = now.min { abs($0.screenY + $0.h / 2 - mid) < abs($1.screenY + $1.h / 2 - mid) }
+            tracked = pick?.seq
+            let moved = (pick != nil && lastScreenY != nil) ? CGFloat.nan : 0
+            lastScreenY = pick?.screenY
+            return moved
+        }
+        _ = sample()
+        var steps: [CGFloat] = []
+        let frame = 34 // two 60Hz display frames (immune to ±1 vsync jitter)
+        var t = 0
+        while t < 1_700 {
+            // ~20 notches/s, delivered between samples.
+            drain(17); if t < 1_200, t % 51 == 0 { notch() }
+            drain(frame - 17)
+            steps.append(sample())
+            t += frame
+        }
+        let valid = steps.filter { !$0.isNaN }
+        let steady = Array(steps[9..<33]).filter { !$0.isNaN } // 0.3–1.1s
+        let mean = steady.reduce(0, +) / CGFloat(max(steady.count, 1))
+        let sd = sqrt(steady.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / CGFloat(max(steady.count, 1)))
+        let stalls = steady.filter { $0 < 0.25 }.count
+        let settled = valid.suffix(3).allSatisfy { $0 < 0.25 }
+        print("UXGATE wheel steps=" + steps.prefix(40).map { String(format: "%.0f", $0) }.joined(separator: ","))
+        print(String(format: "UXGATE wheel mean=%.1fpt/frame cv=%.2f stalls=%d max=%.1f settled=%@",
+                     mean, sd / max(mean, 0.01), stalls, steady.max() ?? 0, settled ? "Y" : "N"))
+        XCTAssertGreaterThan(mean, 6, "the wheel scrolls")
+        XCTAssertLessThan(sd / mean, 0.35, "steady spinning moves at an even speed (no per-notch pulse)")
+        XCTAssertEqual(stalls, 0, "motion never stops between notches")
+        XCTAssertTrue(settled, "comes to rest shortly after the last notch")
     }
 
     // MARK: Sending
