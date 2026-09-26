@@ -1120,7 +1120,7 @@ describe('CopilotAdapter', () => {
       expect(call[0]).toBe('mock-sess-1');
       expect(call[1].question).toBe('Which framework?');
       expect(call[1].choices).toEqual(['React', 'Vue']);
-      expect(call[1].allowFreeform).toBe(true);
+      expect(call[1]).not.toHaveProperty('allowFreeform');
 
       const qId = call[1].id;
       await adapter.respondToQuestion('mock-sess-1', qId, 'React', false);
@@ -1129,17 +1129,6 @@ describe('CopilotAdapter', () => {
       expect(result).toEqual({ answer: 'React', wasFreeform: false });
     });
 
-    it('defaults allowFreeform to true when not set', async () => {
-      const qSpy = vi.fn();
-      adapter.onQuestionRequest = qSpy;
-      await adapter.start();
-      await adapter.createSession({});
-
-      const handler = capturedSessionConfigs[0].onUserInputRequest;
-      handler({ question: 'Name?' }, { sessionId: 'mock-sess-1' });
-
-      expect(qSpy.mock.calls[0][1].allowFreeform).toBe(true);
-    });
   });
 
   // ── Kill session ────────────────────────────────────
@@ -1754,23 +1743,24 @@ describe('CopilotAdapter', () => {
 
       const data = qSpy.mock.calls[0][1];
       expect(data.choices).toBeUndefined();
-      expect(data.allowFreeform).toBe(true);
     });
 
-    it('handles question with allowFreeform explicitly false', async () => {
+    it('accepts a free-text answer even when the SDK disallows free-form', async () => {
       const qSpy = vi.fn();
       adapter.onQuestionRequest = qSpy;
       await adapter.start();
       await adapter.createSession({});
 
       const handler = capturedSessionConfigs[0].onUserInputRequest;
-      handler(
+      const resultPromise = handler(
         { question: 'Pick one:', choices: ['A', 'B'], allowFreeform: false },
         { sessionId: 'mock-sess-1' },
       );
 
       const data = qSpy.mock.calls[0][1];
-      expect(data.allowFreeform).toBe(false);
+      expect(data).not.toHaveProperty('allowFreeform');
+      await adapter.respondToQuestion('mock-sess-1', data.id, 'neither, use C', true);
+      expect(await resultPromise).toEqual({ answer: 'neither, use C', wasFreeform: true });
     });
 
     it('handles question with empty question string', async () => {

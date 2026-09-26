@@ -807,30 +807,21 @@ private final class MacChatScenarioHarness {
             }
             return true
 
-        case "answer":
-            guard let sessionID,
-                  let payload = message["payload"] as? [String: Any],
-                  let questionID = payload["questionId"] as? String,
-                  let answer = payload["answer"] as? String else { return true }
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .milliseconds(180))
-                self?.resolveQuestion(sessionID: sessionID, questionID: questionID, answer: answer)
-            }
-            return true
-
         case "send_input":
             guard let sessionID,
                   let payload = message["payload"] as? [String: Any],
                   let text = payload["text"] as? String else { return true }
             let clientID = payload["clientId"] as? String
             let delivery = payload["delivery"] as? String
+            let answerTo = payload["answerTo"] as? String
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(280))
                 self?.echoUserInput(
                     sessionID: sessionID,
                     text: text,
                     clientID: clientID,
-                    delivery: delivery
+                    delivery: delivery,
+                    answerTo: answerTo
                 )
             }
             return true
@@ -884,31 +875,12 @@ private final class MacChatScenarioHarness {
         appendEvent("permission · \(decision)")
     }
 
-    private func resolveQuestion(sessionID: String, questionID: String, answer: String) {
-        guard var state = currentStates[sessionID],
-              var card = state.card,
-              var action = card.action,
-              action.type == "question",
-              action.questionId == questionID else { return }
-        action.payload["answer"] = AnyCodable(answer)
-        card.action = action
-        state.card = card
-        currentStates[sessionID] = state
-        appState.messageStore.setCardAction(sessionID, action)
-        appState.sessionStore.setPreview(
-            sessionID,
-            text: answer,
-            type: "question",
-            timestamp: ISO8601.now()
-        )
-        appendEvent("question · answered")
-    }
-
     private func echoUserInput(
         sessionID: String,
         text: String,
         clientID: String?,
-        delivery: String?
+        delivery: String?,
+        answerTo: String? = nil
     ) {
         guard var state = currentStates[sessionID] else { return }
         let seq = max(
@@ -918,6 +890,7 @@ private final class MacChatScenarioHarness {
         var payload: [String: AnyCodable] = ["content": AnyCodable(text)]
         if let clientID { payload["clientId"] = AnyCodable(clientID) }
         if let delivery { payload["delivery"] = AnyCodable(delivery) }
+        if let answerTo { payload["answerTo"] = AnyCodable(answerTo) }
         let message = ChatMessage(
             type: "user_message",
             seq: seq,
@@ -1644,6 +1617,22 @@ private extension MacChatScenarioHarness {
             ]
         )
 
+        // Questions ride the spine: an agent_message with `question`, drawn
+        // as body text + choice capsules while open; answering is sending a
+        // message carrying `answerTo`.
+        func question(
+            _ sessionID: String,
+            _ seq: Int,
+            lead: String,
+            id: String,
+            text: String,
+            choices: [String]
+        ) -> ChatMessage {
+            var spec: [String: Any] = ["id": id, "text": text]
+            if !choices.isEmpty { spec["choices"] = choices }
+            return message(sessionID, seq, "agent_message", ["content": lead, "question": spec])
+        }
+
         let questionID = "question-choices"
         add(
             questionID,
@@ -1652,16 +1641,12 @@ private extension MacChatScenarioHarness {
             summary: "Short choices exercise the production rendered-frame hit routing at every UI zoom.",
             phases: [phase(
                 "Awaiting choice",
-                messages: [message(questionID, 1, "user_message", ["content": "Ask me which approach to use."])],
-                card: .init(
-                    text: "I found two reasonable paths.",
-                    action: action(questionID, "question", [
-                        "id": "question-choice-basic",
-                        "question": "Which implementation should I use?",
-                        "choices": ["Keep the cached CoreText renderer", "Replace it with a TextKit cell"],
-                        "allowFreeform": true,
-                    ])
-                ),
+                messages: [
+                    message(questionID, 1, "user_message", ["content": "Ask me which approach to use."]),
+                    question(questionID, 2, lead: "I found two reasonable paths.", id: "question-choice-basic",
+                             text: "Which implementation should I use?",
+                             choices: ["Keep the cached CoreText renderer", "Replace it with a TextKit cell"]),
+                ],
                 preview: preview("Which implementation should I use?", "question")
             )]
         )
@@ -1674,20 +1659,17 @@ private extension MacChatScenarioHarness {
             summary: "Wrapped multi-line choice rows expose clipping, hover, and hit-frame drift.",
             phases: [phase(
                 "Long wrapped choices",
-                messages: [message(longQuestionID, 1, "user_message", ["content": "Ask a detailed architectural question."])],
-                card: .init(
-                    text: "Before continuing, I need an explicit boundary decision.",
-                    action: action(longQuestionID, "question", [
-                        "id": "question-choice-long",
-                        "question": "How should reconnect restore an in-progress card after a rapid Session switch?",
-                        "choices": [
-                            "Restore the **authoritative subscription snapshot** atomically, preserving the current draft and action slot.",
-                            "Keep the stale local card until a later `agent_message_delta` happens to replace it.",
-                            "Clear the card and show no streaming state until the final persisted response arrives.",
-                        ],
-                        "allowFreeform": true,
-                    ])
-                ),
+                messages: [
+                    message(longQuestionID, 1, "user_message", ["content": "Ask a detailed architectural question."]),
+                    question(longQuestionID, 2, lead: "Before continuing, I need an explicit boundary decision.",
+                             id: "question-choice-long",
+                             text: "How should reconnect restore an in-progress card after a rapid Session switch?",
+                             choices: [
+                                "Restore the **authoritative subscription snapshot** atomically, preserving the current draft and action slot.",
+                                "Keep the stale local card until a later `agent_message_delta` happens to replace it.",
+                                "Clear the card and show no streaming state until the final persisted response arrives.",
+                             ]),
+                ],
                 preview: preview("How should reconnect restore the card?", "question")
             )]
         )
@@ -1697,62 +1679,50 @@ private extension MacChatScenarioHarness {
             freeQuestionID,
             category: "Question",
             title: "21 · Question · Free-form Composer",
-            summary: "No choices: the real Composer changes intent to answerQuestion and submits through CommandSender.",
+            summary: "No choices: the real Composer answers the open question and submits through CommandSender.",
             phases: [phase(
                 "Awaiting free-form answer",
-                messages: [message(freeQuestionID, 1, "user_message", ["content": "Ask for a custom value."])],
-                card: .init(
-                    text: "Please type the exact value in the Composer.",
-                    action: action(freeQuestionID, "question", [
-                        "id": "question-freeform",
-                        "question": "What debounce interval should this scenario use?",
-                        "choices": [String](),
-                        "allowFreeform": true,
-                    ])
-                ),
+                messages: [
+                    message(freeQuestionID, 1, "user_message", ["content": "Ask for a custom value."]),
+                    question(freeQuestionID, 2, lead: "Please type the exact value in the Composer.",
+                             id: "question-freeform", text: "What debounce interval should this scenario use?",
+                             choices: []),
+                ],
                 preview: preview("What debounce interval should this use?", "question")
             )]
         )
 
-        let questionStateID = "question-resolved-cancelled"
-        let questionStateMessages = [message(questionStateID, 1, "user_message", ["content": "Show resolved question states."])]
+        let questionStateID = "question-states"
+        let asked = [
+            message(questionStateID, 1, "user_message", ["content": "Show question states."]),
+            question(questionStateID, 2, lead: "The schema has two versions.", id: "question-state",
+                     text: "Continue with the migration?", choices: ["Continue", "Stop"]),
+        ]
         add(
             questionStateID,
             category: "Question",
-            title: "22 · Question · Answered and cancelled",
-            summary: "Cycles through pending, answered, and cancelled action-slot branches.",
+            title: "22 · Question · Answered and aborted",
+            summary: "Open → answered (choices go, the answer is a user message) → aborted (User aborted inside the question bubble).",
             phases: [
-                phase(
-                    "Pending",
-                    messages: questionStateMessages,
-                    card: .init(text: "Waiting for your selection.", action: action(questionStateID, "question", [
-                        "id": "question-state",
-                        "question": "Continue with the migration?",
-                        "choices": ["Continue", "Stop"],
-                    ])),
-                    preview: preview("Continue with the migration?", "question")
-                ),
+                phase("Open", messages: asked, preview: preview("Continue with the migration?", "question")),
                 phase(
                     "Answered",
-                    messages: questionStateMessages,
-                    card: .init(text: "Selection received.", action: action(questionStateID, "question", [
-                        "id": "question-state",
-                        "question": "Continue with the migration?",
-                        "choices": ["Continue", "Stop"],
-                        "answer": "Continue",
-                    ])),
-                    preview: preview("Continue", "question")
+                    messages: asked + [
+                        message(questionStateID, 3, "user_message", ["content": "Continue", "answerTo": "question-state"]),
+                        message(questionStateID, 4, "agent_message", ["content": "Migrating now."]),
+                        message(questionStateID, 5, "idle"),
+                    ],
+                    preview: preview("Migrating now.", "agent")
                 ),
                 phase(
-                    "Cancelled",
-                    messages: questionStateMessages,
-                    card: .init(text: "The producer cancelled this prompt.", action: action(questionStateID, "question", [
-                        "id": "question-state",
-                        "question": "Continue with the migration?",
-                        "choices": ["Continue", "Stop"],
-                        "cancelled": true,
-                    ])),
-                    preview: preview("Question cancelled", "question")
+                    "Aborted",
+                    messages: asked + [
+                        message(questionStateID, 3, "turn_status", [
+                            "draft": "", "action": ["type": "user_abort", "payload": [String: Any]()],
+                        ]),
+                        message(questionStateID, 4, "idle"),
+                    ],
+                    preview: preview("Continue with the migration?", "agent")
                 ),
             ]
         )
@@ -2156,11 +2126,11 @@ private extension MacChatScenarioHarness {
 
         let lifecycleID = "transition-full-lifecycle"
         let lifecycleUser = [message(lifecycleID, 1, "user_message", ["content": "Run the complete production lifecycle."])]
-        let lifecycleQuestion = action(lifecycleID, "question", [
-            "id": "lifecycle-question",
-            "question": "Should I include the reconnect regression?",
-            "choices": ["Yes, include it", "No, keep this focused"],
-        ])
+        let lifecycleAsked = lifecycleUser + [
+            question(lifecycleID, 2, lead: "One behavior remains ambiguous.", id: "lifecycle-question",
+                     text: "Should I include the reconnect regression?",
+                     choices: ["Yes, include it", "No, keep this focused"]),
+        ]
         add(
             lifecycleID,
             category: "Transitions & reconnect",
@@ -2172,10 +2142,12 @@ private extension MacChatScenarioHarness {
                 phase("Tool running", messages: lifecycleUser, card: .init(text: "I’m reading the relevant source first.", action: action(lifecycleID, "tool_start", ["toolName": "read", "headline": "Read MessageStore.swift", "toolCallId": "lifecycle-read"])), preview: preview("Read MessageStore.swift", "agent_message")),
                 phase("Permission requested", messages: lifecycleUser, card: .init(text: "The edit requires approval.", action: action(lifecycleID, "permission", ["id": "lifecycle-permission", "toolName": "write_file", "description": "MacChatScenarioTestView.swift"])), preview: preview("Permission required", "permission")),
                 phase("Permission resolved", messages: lifecycleUser, card: .init(text: "Approval received; continuing.", action: action(lifecycleID, "permission", ["id": "lifecycle-permission", "toolName": "write_file", "description": "MacChatScenarioTestView.swift", "decision": "approve"])), preview: preview("Approval received", "permission")),
-                phase("Question requested", messages: lifecycleUser, card: .init(text: "One behavior remains ambiguous.", action: lifecycleQuestion), preview: preview("Should I include reconnect?", "question")),
-                phase("Question answered", messages: lifecycleUser, card: .init(text: "I’ll include reconnect coverage.", action: action(lifecycleID, "question", ["id": "lifecycle-question", "question": "Should I include the reconnect regression?", "choices": ["Yes, include it", "No, keep this focused"], "answer": "Yes, include it"])), preview: preview("Yes, include it", "question")),
-                phase("Final persisted conclusion", messages: [
-                    lifecycleUser[0],
+                phase("Question asked", messages: lifecycleAsked, preview: preview("Should I include reconnect?", "question")),
+                phase("Question answered", messages: lifecycleAsked + [
+                    message(lifecycleID, 3, "user_message", ["content": "Yes, include it", "answerTo": "lifecycle-question"]),
+                ], card: .init(text: "I’ll include reconnect coverage.", action: nil), state: .active, preview: preview("Yes, include it", "user_message")),
+                phase("Final persisted conclusion", messages: lifecycleAsked + [
+                    message(lifecycleID, 3, "user_message", ["content": "Yes, include it", "answerTo": "lifecycle-question"]),
                     message(lifecycleID, 9, "agent_message", ["content": "The full lifecycle completed without replacing the live Bubble with a second transient card.", "steps": 5]),
                     message(lifecycleID, 10, "idle"),
                 ], state: .idle, preview: preview("The full lifecycle completed", "agent_message")),
@@ -2227,7 +2199,7 @@ private extension MacChatScenarioHarness {
                     "Live subscription snapshot",
                     messages: [message(id, 1, "user_message", ["content": "Open \(title) while another Session is streaming."])],
                     card: .init(text: text, action: actionMessage),
-                    preview: preview(text, actionMessage.type == "question" ? "question" : "agent_message")
+                    preview: preview(text, "agent_message")
                 )]
             )
         }
@@ -2242,8 +2214,8 @@ private extension MacChatScenarioHarness {
             id: "switch-live-b",
             title: "42 · Switch · Live B same Tentacle",
             deviceID: Self.onlineDeviceA,
-            text: "Session B asks a question on the same Tentacle.",
-            actionMessage: action("switch-live-b", "question", ["id": "switch-b-question", "question": "Did same-Tentacle replacement keep the correct card?", "choices": ["Yes", "No"]])
+            text: "Session B needs approval on the same Tentacle.",
+            actionMessage: action("switch-live-b", "permission", ["id": "switch-b-permission", "toolName": "write_file", "description": "Did same-Tentacle replacement keep the correct card?"])
         )
         switchScenario(
             id: "switch-live-c",

@@ -63,10 +63,14 @@ enum TurnSpineProjection {
         _ terminal: ChatMessage,
         fallbackFrom prefix: ArraySlice<ChatMessage>
     ) -> ChatMessage {
+        // The turn's last output. A question is output too: the turn ended
+        // while asking, and the question bubble carries the outcome itself
+        // (`ChatViewModel.presentingQuestions`) — never an older reply.
         guard let fallback = prefix.reversed().first(where: {
-            guard $0.type == "agent_message", $0.questionSpec == nil else { return false }
-            return !($0.content ?? "").isEmpty || !($0.attachments ?? []).isEmpty
-        }) else { return terminal }
+            guard $0.type == "agent_message" else { return false }
+            return $0.questionSpec != nil
+                || !($0.content ?? "").isEmpty || !($0.attachments ?? []).isEmpty
+        }), fallback.questionSpec == nil else { return terminal }
 
         let ownDraft = terminal.interruptedDraft ?? ""
         let ownAttachments = terminal.payload["attachments"]?.arrayValue ?? []

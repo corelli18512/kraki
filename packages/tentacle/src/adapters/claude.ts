@@ -1628,7 +1628,6 @@ export class ClaudeAdapter extends AgentAdapter {
           id: qId,
           question: (input.question as string) ?? 'The agent has a question',
           choices: undefined,
-          allowFreeform: true,
         });
         pendingQuestions.set(qId, { resolve, questionId: qId, questions: qs, qIndex: 0, collected: {} });
         return;
@@ -1669,7 +1668,6 @@ export class ClaudeAdapter extends AgentAdapter {
       id: qId,
       question: q?.question ?? 'The agent has a question',
       choices,
-      allowFreeform: true,
     });
 
     pendingQuestions.set(qId, { resolve, questionId: qId, questions, qIndex: index, collected });

@@ -714,7 +714,10 @@ final class MacChatDocumentView: NSView {
             var preparedContent = cachedContent(for: item)
             // A short visible row that the warmer has not reached yet is
             // cheaper to prepare right now (~1–3ms, one per pass) than to show
-            // as a grey placeholder for a few frames of a very fast glide.
+            // as a grey placeholder for a few frames — during a very fast
+            // glide, and equally at rest when a visible row takes a new
+            // identity (an echo replacing its pending input, a question
+            // closing), where the placeholder reads as a flash.
             if preparedContent == nil, intersectsViewport,
                !geometryBarrierReached, configuredCount < maxConfigurations,
                item.visibleCharacterCount <= 1_500 {
@@ -3895,8 +3898,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
                 return cached
             }
             let item: MacChatItem
-            if message.type == "turn_status" || message.type == "interrupted_turn" || message.questionSpec != nil {
-                let card = frozenCard(from: message)
+            if let card = message.frozenCard {
                 item = MacChatItem(
                     seq: message.seq,
                     key: "frozen:\(message.id)",
@@ -4017,7 +4019,6 @@ struct MacChatListRepresentable: NSViewRepresentable {
         hasher.combine(message.steps ?? 0)
         hasher.combine(message.finishedAt ?? "")
         hasher.combine(message.payload["localState"]?.stringValue ?? "")
-        hasher.combine(message.questionState ?? "")
         hasher.combine(message.attachments?.count ?? 0)
         for ref in message.contentRefAttachments {
             hasher.combine(ref.id)
@@ -4043,7 +4044,6 @@ struct MacChatListRepresentable: NSViewRepresentable {
             hasher.combine(action.headline ?? "")
             hasher.combine(action.permissionId ?? "")
             hasher.combine(action.questionId ?? "")
-            hasher.combine(action.answer ?? "")
             hasher.combine(action.payload["decision"]?.stringValue ?? "")
             hasher.combine(action.payload["success"]?.boolValue ?? false)
             hasher.combine(action.payload["localPending"]?.boolValue ?? false)
@@ -4067,39 +4067,6 @@ struct MacChatListRepresentable: NSViewRepresentable {
 
     private func utf8Length(_ text: String?) -> Int {
         text?.utf8.count ?? 0
-    }
-
-    private func frozenCard(from message: ChatMessage) -> MessageStore.SessionCard {
-        if let question = message.questionCard {
-            return MessageStore.SessionCard(text: question.text, action: question.action)
-        }
-        let text = message.interruptedDraft ?? ""
-        let action: ChatMessage?
-        if message.type == "turn_status" {
-            if let terminal = message.terminalAction, let type = terminal["type"]?.stringValue {
-                action = ChatMessage(
-                    type: type,
-                    seq: 0,
-                    sessionId: message.sessionId,
-                    deviceId: message.deviceId,
-                    timestamp: message.timestamp,
-                    payload: terminal["payload"]?.dictValue ?? [:]
-                )
-            } else {
-                action = nil
-            }
-        } else {
-            let processLost = message.payload["reason"]?.stringValue == "process_lost"
-            action = ChatMessage(
-                type: processLost ? "failed" : "user_abort",
-                seq: 0,
-                sessionId: message.sessionId,
-                deviceId: message.deviceId,
-                timestamp: message.timestamp,
-                payload: processLost ? ["message": AnyCodable("Agent process was lost")] : [:]
-            )
-        }
-        return MessageStore.SessionCard(text: text, action: action)
     }
 }
 #endif

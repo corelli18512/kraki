@@ -224,23 +224,6 @@ final class TextKitPureSpineTests: XCTestCase {
         }
     }
 
-    func testQuestionRecoveryFlagsDecodeFromPayload() {
-        let question = ChatMessage(
-            type: "question",
-            seq: 0,
-            sessionId: "textkit-test-question",
-            deviceId: "device",
-            timestamp: nil,
-            payload: [
-                "id": AnyCodable("q1"),
-                "cancelled": AnyCodable(true),
-                "allowFreeform": AnyCodable(false),
-            ]
-        )
-        XCTAssertTrue(question.cancelled)
-        XCTAssertFalse(question.allowFreeform)
-    }
-
     func testChatEntryWaitsForAuthoritativeHeadWithoutBlockingEmptySession() {
         XCTAssertTrue(ChatEntryLoading.isWaitingForLatest(
             expectedLastSeq: 250,
@@ -305,28 +288,6 @@ final class TextKitPureSpineTests: XCTestCase {
         ))
     }
 
-    func testPendingQuestionIgnoresAllowFreeformAndRequiresNoResolution() {
-        let pending = ChatMessage(
-            type: "question", seq: 0, sessionId: "s", deviceId: "d", timestamp: nil,
-            payload: [
-                "id": AnyCodable("q1"),
-                "question": AnyCodable("Choose one"),
-                "choices": AnyCodable(["A", "B"]),
-                "allowFreeform": AnyCodable(false),
-            ])
-        XCTAssertEqual(pending.questionId, "q1")
-        XCTAssertEqual(pending.choices, ["A", "B"])
-        XCTAssertNil(pending.answer)
-        XCTAssertFalse(pending.cancelled)
-
-        var answered = pending
-        answered.payload["answer"] = AnyCodable("typed in composer")
-        XCTAssertEqual(answered.answer, "typed in composer")
-
-        var cancelled = pending
-        cancelled.payload["cancelled"] = AnyCodable(true)
-        XCTAssertTrue(cancelled.cancelled)
-    }
 
     func testRichMarkdownNormalizesHeadingsListsAndTables() {
         let source = """
@@ -1011,7 +972,6 @@ final class TextKitPureSpineTests: XCTestCase {
             type: "question", seq: 0, sessionId: "s", deviceId: "d", timestamp: nil,
             payload: [
                 "id": AnyCodable("question-geometry"),
-                "question": AnyCodable("Choose a response that must remain wrapped inside the action area."),
                 "choices": AnyCodable(["A long choice that also wraps inside the button frame"]),
             ]
         )
@@ -1079,43 +1039,15 @@ final class TextKitPureSpineTests: XCTestCase {
             type: "question", seq: 0, sessionId: "s", deviceId: "d", timestamp: nil,
             payload: [
                 "id": AnyCodable("short"),
-                "question": AnyCodable("Choose one"),
-                "questionState": AnyCodable("open"),
                 "choices": AnyCodable(["Wait"]),
             ])
         let long = ChatMessage(
             type: "question", seq: 0, sessionId: "s", deviceId: "d", timestamp: nil,
             payload: [
                 "id": AnyCodable("long"),
-                "question": AnyCodable("Choose one"),
-                "questionState": AnyCodable("open"),
                 "choices": AnyCodable([
                     "Wait for the latest bubble before showing content when the authoritative head is still loading"
                 ]),
-            ])
-        let width: CGFloat = 280
-        XCTAssertGreaterThan(
-            TKActionMeasure.height(action: long, width: width),
-            TKActionMeasure.height(action: short, width: width) + 10
-        )
-    }
-
-    func testLongQuestionTextExpandsActionHeightInsteadOfTruncating() {
-        let short = ChatMessage(
-            type: "question", seq: 0, sessionId: "s", deviceId: "d", timestamp: nil,
-            payload: [
-                "id": AnyCodable("short-question"),
-                "question": AnyCodable("Choose one"),
-                "choices": AnyCodable(["Wait"]),
-            ])
-        let long = ChatMessage(
-            type: "question", seq: 0, sessionId: "s", deviceId: "d", timestamp: nil,
-            payload: [
-                "id": AnyCodable("long-question"),
-                "question": AnyCodable(
-                    "This is a deliberately long pending question that must wrap across multiple lines inside the bubble before the answer choices begin, rather than being clipped at the bottom of the live card."
-                ),
-                "choices": AnyCodable(["Wait"]),
             ])
         let width: CGFloat = 280
         XCTAssertGreaterThan(

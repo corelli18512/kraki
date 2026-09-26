@@ -543,7 +543,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
             fx.app.messageStore.endCardTurn(sid)
             drain(500)
             let open = fx.doc.automationVisibleCells.last { $0.key.contains("#q-open") }
-            XCTAssertEqual(open?.cell.content?.action?.questionState, "open")
+            XCTAssertEqual(open?.cell.content?.action?.type, "question", "an open question shows its choices")
             XCTAssertNotNil(open?.cell.content?.body, "lead-in prose and question share one bubble")
             _ = fx.app.commandSender?.answer(sessionId: sid, questionId: "q1", answer: "删掉")
             NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
@@ -558,7 +558,8 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         }
         let input = try XCTUnwrap(sent.last { $0["type"] as? String == "send_input" }?["payload"] as? [String: Any])
         XCTAssertEqual(input["answerTo"] as? String, "q1")
-        XCTAssertTrue(fx.doc.itemKeys.contains { $0.hasSuffix(":22#q-answered") })
+        XCTAssertTrue(fx.doc.itemKeys.contains { $0.hasSuffix("\(sid):22") }, "answered: settled identity, no choices")
+        XCTAssertFalse(fx.doc.itemKeys.contains { $0.contains("#q-open") })
         XCTAssertTrue(fx.doc.itemKeys.contains("\(sid):23"))
         let r = analyze(shots, maxStep: 10_000, viewportHeight: fx.sv.contentView.bounds.height)
         print("UXGATE question-flow \(r)")

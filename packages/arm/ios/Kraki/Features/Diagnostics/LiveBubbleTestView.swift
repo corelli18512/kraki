@@ -29,8 +29,7 @@ struct LiveBubbleTestView: View {
                     userBubble("把 ChatView 的滚动 hitch 修一下")
                     BubbleActionSlot(action: card.action ?? ChatMessage(type: "tool_start", seq: 0, sessionId: nil, deviceId: nil, timestamp: nil, payload: [:]),
                         sessionMode: .discuss,
-                        onResolvePermission: { _, _, decision in resolvePermission(decision) },
-                        onAnswerQuestion: { _, answer in answerQuestion(answer) })
+                        onResolvePermission: { _, _, decision in resolvePermission(decision) })
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .background(Color.surfaceTertiary.opacity(0.6))
                         .cornerRadius(16)
@@ -50,7 +49,6 @@ struct LiveBubbleTestView: View {
             case "tool": card = .init(text: "", action: action("tool_start", ["toolName": AnyCodable("bash"), "headline": AnyCodable("$ grep -n height cache ChatPerfListView.swift")]))
             case "batch": card = .init(text: "", action: action("tool_batch", ["running": AnyCodable(3)]))
             case "perm": card = .init(text: "准备改 height cache，需要你确认写入。", action: action("permission", ["id": AnyCodable("p1"), "toolName": AnyCodable("write_file"), "description": AnyCodable("ChatPerfListView.swift")]))
-            case "question": card = .init(text: "", action: action("question", ["id": AnyCodable("q1"), "question": AnyCodable("要我顺便把 px 窗口上限退回 count cap 吗？"), "choices": AnyCodable(["好，一起改", "先不用"])]))
             case "steps": DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showSteps = true }
             default: break
             }
@@ -74,7 +72,6 @@ struct LiveBubbleTestView: View {
                 ctl("Tool") { card = .init(text: "", action: action("tool_start", ["toolName": AnyCodable("bash"), "headline": AnyCodable("$ grep -n height cache ChatPerfListView.swift")])) }
                 ctl("Batch") { card = .init(text: "", action: action("tool_batch", ["running": AnyCodable(3)])) }
                 ctl("Perm") { card = .init(text: "准备改 height cache，需要你确认写入。", action: action("permission", ["id": AnyCodable("p1"), "toolName": AnyCodable("write_file"), "description": AnyCodable("ChatPerfListView.swift")])) }
-                ctl("Question") { card = .init(text: "", action: action("question", ["id": AnyCodable("q1"), "question": AnyCodable("要我顺便把 px 窗口上限退回 count cap 吗？"), "choices": AnyCodable(["好，一起改", "先不用"])])) }
                 ctl("Done") { card = .init(text: "修好了 ✅ 去掉 height cache 投机预热，131ms 原子测量就没了。", action: nil) }
                 ctl(running ? "…" : "▶︎ Sim") { simulate() }.disabled(running)
             }
@@ -100,12 +97,6 @@ struct LiveBubbleTestView: View {
         var p = a.payload; p["decision"] = AnyCodable(decision)
         card.action = action("permission", p)
     }
-    private func answerQuestion(_ answer: String) {
-        guard let a = card.action, a.type == "question" else { return }
-        var p = a.payload; p["answer"] = AnyCodable(answer)
-        card.action = action("question", p)
-    }
-
     private func simulate() {
         guard !running else { return }
         running = true

@@ -13,6 +13,39 @@ import UIKit
 /// `LiveAgentBubbleView.actionSection`. The cell hosts it as a subview so the
 /// streaming card and a completed bubble are literally the same cell; there is
 /// no separate "live card" component.
+/// Metrics shared by the action views below and the bubble's natural-width
+/// measurement (`TKBubbleContent`), so a short card hugs exactly its content.
+enum BubbleActionMetrics {
+    static let outcomeIconSize: CGFloat = 13
+    static let outcomeSpacing: CGFloat = 8
+    static let outcomeLabelFont = UIFont.systemFont(ofSize: 13, weight: .medium)
+    static let outcomeDetailFont = UIFont.systemFont(ofSize: 12)
+    static func outcomeSymbol(failed: Bool) -> String { failed ? "xmark.octagon.fill" : "stop.circle.fill" }
+    static func outcomeLabel(failed: Bool) -> String { failed ? "Turn failed" : "User aborted" }
+
+    static let choiceFont = UIFont.systemFont(ofSize: 14, weight: .medium)
+    static let choicePaddingH: CGFloat = 14
+
+    /// Natural width of the "User aborted" / "Turn failed" row.
+    static func outcomeWidth(failed: Bool, detail: String?) -> CGFloat {
+        let symbol = UIImage(systemName: outcomeSymbol(failed: failed),
+                             withConfiguration: UIImage.SymbolConfiguration(font: .systemFont(ofSize: outcomeIconSize)))
+        var width = ceil(symbol?.size.width ?? outcomeIconSize) + outcomeSpacing
+            + textWidth(outcomeLabel(failed: failed), outcomeLabelFont)
+        if let detail, !detail.isEmpty { width += outcomeSpacing + textWidth(detail, outcomeDetailFont) }
+        return width
+    }
+
+    /// Natural width of the widest choice capsule.
+    static func choicesWidth(_ choices: [String]) -> CGFloat {
+        choices.map { textWidth($0, choiceFont) + choicePaddingH * 2 }.max() ?? 0
+    }
+
+    static func textWidth(_ text: String, _ font: UIFont) -> CGFloat {
+        ceil((text as NSString).size(withAttributes: [.font: font]).width)
+    }
+}
+
 struct BubbleActionSlot: View {
     let action: ChatMessage
     var sessionMode: SessionMode = .discuss
@@ -44,19 +77,22 @@ struct BubbleActionSlot: View {
     }
 
     private func terminalOutcome(_ m: ChatMessage, failed: Bool) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: failed ? "xmark.octagon.fill" : "stop.circle.fill")
-                .font(.system(size: 13))
+        HStack(spacing: BubbleActionMetrics.outcomeSpacing) {
+            Image(systemName: BubbleActionMetrics.outcomeSymbol(failed: failed))
+                .font(.system(size: BubbleActionMetrics.outcomeIconSize))
                 .foregroundStyle(failed ? Color.red : Color.textMuted)
-            Text(failed ? "Turn failed" : "User aborted")
-                .font(.system(size: 13, weight: .medium))
+            Text(BubbleActionMetrics.outcomeLabel(failed: failed))
+                .font(Font(BubbleActionMetrics.outcomeLabelFont))
                 .foregroundStyle(failed ? Color.red : Color.textSecondary)
             if let msg = m.payload["message"]?.stringValue, !msg.isEmpty {
-                Text(msg).font(.system(size: 12)).foregroundStyle(Color.textMuted)
+                Text(msg).font(Font(BubbleActionMetrics.outcomeDetailFont)).foregroundStyle(Color.textMuted)
                     .lineLimit(1).truncationMode(.middle)
             }
-            Spacer(minLength: 0)
         }
+        // Leading-aligned without a trailing Spacer: in an HStack a Spacer
+        // also takes the 8pt spacing, which the natural-width measurement
+        // (`outcomeWidth`) would not know about.
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func toolChip(_ m: ChatMessage, running: Bool) -> some View {
@@ -181,28 +217,19 @@ struct BubbleActionSlot: View {
 
     private func questionInput(_ m: ChatMessage) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            // A spine question keeps its text in the bubble body; only legacy
-            // live-card questions (no derived state) carry it here.
-            if m.questionState == nil, let question = m.question, !question.isEmpty {
-                Text(LiveMarkdown.attributed(question))
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            // Choices are shortcuts that send their text as the answer.
-            if m.questionState != "answered", m.questionState != "unanswered",
-               let choices = m.choices, !choices.isEmpty {
+            // An open question's choices: shortcuts that send their text as
+            // the answer. (The question itself is the bubble's body text.)
+            if let choices = m.choices, !choices.isEmpty {
                 ForEach(choices, id: \.self) { choice in
                     Button {
                         submitQuestionChoice(m, answer: choice)
                     } label: {
                         Text(LiveMarkdown.attributed(choice))
-                            .font(.system(size: 14, weight: .medium))
+                            .font(Font(BubbleActionMetrics.choiceFont))
                             .foregroundStyle(Color.textPrimary)
                             .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
-                            .padding(.horizontal, 14)
+                            .padding(.horizontal, BubbleActionMetrics.choicePaddingH)
                             .padding(.vertical, 7)
                             .background(Color.surfacePrimary.opacity(0.75), in: Capsule())
                             .overlay(Capsule().strokeBorder(Color.borderPrimary))
@@ -313,9 +340,7 @@ final class BubbleActionHostView: UIView {
         case "permission":
             return "permission:\(action.permissionId ?? "unknown")"
         case "question":
-            // A state change (open → answered/unanswered) swaps the whole
-            // host: reusing it left the new, shorter content unlaid-out.
-            return "question:\(action.questionId ?? "unknown"):\(action.questionState ?? "")"
+            return "question:\(action.questionId ?? "unknown")"
         case "tool_start", "tool_complete":
             return "tool:\(action.toolCallId ?? action.headline ?? action.toolName ?? "unknown")"
         case "tool_batch":

@@ -144,11 +144,11 @@ struct BubbleCatalogTestView: View {
 
     private var questionCases: [BubbleCatalogCase] {
         [
-            live("question-choices", "Question · pending choices", text: "I need one decision.", action: question("q-choices", prompt: "Which target should I use?", choices: ["Simulator", "Physical device", "Both **targets**"])),
-            live("question-freeform", "Question · composer answer", text: "Waiting for a typed answer in the normal composer.", action: question("q-freeform", prompt: "What should the release note say?", choices: nil), note: "No editor inside the card by design; production composer owns freeform answers."),
-            live("question-answered", "Question · answered", text: "Decision received.", action: question("q-answered", prompt: "Which target should I use?", choices: ["Simulator", "Device"], answer: "Both **targets**"), frozen: true),
-            live("question-cancelled", "Question · cancelled", text: "The question is no longer pending.", action: question("q-cancelled", prompt: "Continue deployment?", choices: ["Yes", "No"], cancelled: true), frozen: true),
-            live("question-long", "Question · long wrapping", text: "A longer decision is needed.", action: question("q-long", prompt: "Choose the behavior that should be used when the authoritative session head is newer than the locally materialized window and the device reconnects while the page is opening.", choices: ["Wait for the latest bubble before showing content", "Show cached content immediately and jump later"])),
+            question("question-choices", "Question · open with choices", lead: "I need one decision.", prompt: "Which target should I use?", choices: ["Simulator", "Physical device", "Both **targets**"], .init(state: .open)),
+            question("question-freeform", "Question · open, composer answer", lead: "Waiting for a typed answer in the normal composer.", prompt: "What should the release note say?", choices: [], .init(state: .open), note: "No editor inside the bubble by design; the composer owns free-form answers."),
+            question("question-answered", "Question · answered", lead: "I need one decision.", prompt: "Which target should I use?", choices: ["Simulator", "Device"], .init(state: .answered), note: "Reads exactly as when open, minus the choices; the answer is the next user bubble."),
+            question("question-aborted", "Question · aborted while asked", lead: "I need one decision.", prompt: "Continue deployment?", choices: ["Yes", "No"], .init(state: .unanswered, outcome: TerminalOutcome(type: "user_abort", message: nil))),
+            question("question-long", "Question · long wrapping", lead: "A longer decision is needed.", prompt: "Choose the behavior that should be used when the authoritative session head is newer than the locally materialized window and the device reconnects while the page is opening.", choices: ["Wait for the latest bubble before showing content", "Show cached content immediately and jump later"], .init(state: .open)),
         ]
     }
 
@@ -211,15 +211,17 @@ struct BubbleCatalogTestView: View {
         return action("permission", id: id, payload: payload)
     }
 
-    private func question(_ id: String, prompt: String, choices: [String]?,
-                          answer: String? = nil, cancelled: Bool = false) -> ChatMessage {
-        var payload: [String: AnyCodable] = [
-            "id": AnyCodable(id), "questionId": AnyCodable(id),
-            "question": AnyCodable(prompt), "cancelled": AnyCodable(cancelled),
-        ]
-        if let choices { payload["choices"] = AnyCodable(choices) }
-        if let answer { payload["answer"] = AnyCodable(answer) }
-        return action("question", id: id, payload: payload)
+    /// A spine question drawn exactly as the chat list draws it.
+    private func question(_ key: String, _ title: String, lead: String, prompt: String, choices: [String],
+                          _ presentation: QuestionPresentation, note: String? = nil) -> BubbleCatalogCase {
+        var spec: [String: Any] = ["id": key, "text": prompt]
+        if !choices.isEmpty { spec["choices"] = choices }
+        var message = ChatMessage(type: "agent_message", seq: stableSeq(key), sessionId: sessionId, deviceId: nil,
+                                  timestamp: "2026-07-15T00:00:00Z",
+                                  payload: ["content": AnyCodable(lead), "question": AnyCodable(spec)])
+        message.questionPresentation = presentation
+        let card = message.frozenCard ?? .init()
+        return live(key, title, text: card.text, action: card.action, frozen: true, note: note)
     }
 
     private func stableSeq(_ value: String) -> Int {

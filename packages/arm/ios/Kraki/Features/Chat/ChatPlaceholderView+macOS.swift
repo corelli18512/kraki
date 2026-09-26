@@ -202,7 +202,6 @@ struct ChatPlaceholderView: View {
         case "user_message": return "USER"
         case "tool_start", "tool_complete", "tool_error": return "TOOL"
         case "permission_request", "permission_response": return "PERM"
-        case "question", "answer": return "Q&A"
         case "agent_text", "agent_message": return "AGENT"
         default: return msg.type.uppercased()
         }
@@ -213,7 +212,6 @@ struct ChatPlaceholderView: View {
         case "user_message": return Color.krakiPrimary
         case "tool_start", "tool_complete", "tool_error": return Color(hex: 0xFBBF24)
         case "permission_request", "permission_response": return Color(hex: 0xF4836E)
-        case "question", "answer": return Color(hex: 0x22D3EE)
         default: return Color.textMuted
         }
     }
@@ -222,8 +220,7 @@ struct ChatPlaceholderView: View {
         if let content = msg.content, !content.isEmpty { return content }
         if let headline = msg.headline, !headline.isEmpty { return headline }
         if let tool = msg.toolName { return "[\(tool)]" }
-        if let q = msg.question { return q }
-        if let a = msg.answer { return a }
+        if let question = msg.questionSpec { return question.text }
         return "(\(msg.type))"
     }
 }

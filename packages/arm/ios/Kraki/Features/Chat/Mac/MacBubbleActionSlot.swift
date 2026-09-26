@@ -1,5 +1,40 @@
 #if os(macOS)
+import AppKit
 import SwiftUI
+
+/// Metrics shared by the action views below and the bubble's natural-width
+/// measurement (`MacChatBubbleContentBuilder`), so a short card hugs exactly
+/// its content.
+enum MacBubbleActionMetrics {
+    static let outcomeIconSize: CGFloat = 13
+    static let outcomeSpacing: CGFloat = 8
+    static let outcomeLabelFont = NSFont.systemFont(ofSize: 13, weight: .medium)
+    static let outcomeDetailFont = NSFont.systemFont(ofSize: 12)
+    static func outcomeSymbol(failed: Bool) -> String { failed ? "xmark.octagon.fill" : "stop.circle.fill" }
+    static func outcomeLabel(failed: Bool) -> String { failed ? "Turn failed" : "User aborted" }
+
+    static let choiceFont = NSFont.systemFont(ofSize: 13, weight: .medium)
+    static let choicePaddingH: CGFloat = 14
+
+    /// Natural width of the "User aborted" / "Turn failed" row.
+    static func outcomeWidth(failed: Bool, detail: String?) -> CGFloat {
+        let symbol = NSImage(systemSymbolName: outcomeSymbol(failed: failed), accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: outcomeIconSize, weight: .regular))
+        var width = ceil(symbol?.size.width ?? outcomeIconSize) + outcomeSpacing
+            + textWidth(outcomeLabel(failed: failed), outcomeLabelFont)
+        if let detail, !detail.isEmpty { width += outcomeSpacing + textWidth(detail, outcomeDetailFont) }
+        return width
+    }
+
+    /// Natural width of the widest choice capsule.
+    static func choicesWidth(_ choices: [String]) -> CGFloat {
+        choices.map { textWidth($0, choiceFont) + choicePaddingH * 2 }.max() ?? 0
+    }
+
+    static func textWidth(_ text: String, _ font: NSFont) -> CGFloat {
+        text.isEmpty ? 0 : ceil(MacCTText.width(text, font: font))
+    }
+}
 
 struct MacQuestionChoiceFrame: Equatable {
     let answer: String
@@ -83,22 +118,25 @@ struct MacBubbleActionSlot: View {
     }
 
     private func terminalOutcome(_ message: ChatMessage, failed: Bool) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: failed ? "xmark.octagon.fill" : "stop.circle.fill")
-                .font(.system(size: 13))
+        HStack(spacing: MacBubbleActionMetrics.outcomeSpacing) {
+            Image(systemName: MacBubbleActionMetrics.outcomeSymbol(failed: failed))
+                .font(.system(size: MacBubbleActionMetrics.outcomeIconSize))
                 .foregroundStyle(failed ? Color.red : Color.textMuted)
-            Text(failed ? "Turn failed" : "User aborted")
-                .font(.system(size: 13, weight: .medium))
+            Text(MacBubbleActionMetrics.outcomeLabel(failed: failed))
+                .font(Font(MacBubbleActionMetrics.outcomeLabelFont))
                 .foregroundStyle(failed ? Color.red : Color.textSecondary)
             if let text = message.payload["message"]?.stringValue, !text.isEmpty {
                 Text(text)
-                    .font(.system(size: 12))
+                    .font(Font(MacBubbleActionMetrics.outcomeDetailFont))
                     .foregroundStyle(Color.textMuted)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            Spacer(minLength: 0)
         }
+        // Leading-aligned without a trailing Spacer: in an HStack a Spacer
+        // also takes the 8pt spacing, which the natural-width measurement
+        // (`outcomeWidth`) would not know about.
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func toolChip(_ message: ChatMessage, running: Bool) -> some View {
@@ -294,18 +332,9 @@ struct MacBubbleActionSlot: View {
 
     private func questionInput(_ message: ChatMessage) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            // A spine question keeps its text in the bubble body; only legacy
-            // live-card questions (no derived state) carry it here.
-            if message.questionState == nil, let question = message.question, !question.isEmpty {
-                Text(MacLiveMarkdown.attributed(question))
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            // Choices are shortcuts that send their text as the answer.
-            if message.questionState != "answered", message.questionState != "unanswered",
-               let choices = message.choices, !choices.isEmpty {
+            // An open question's choices: shortcuts that send their text as
+            // the answer. (The question itself is the bubble's body text.)
+            if let choices = message.choices, !choices.isEmpty {
                 ForEach(choices, id: \.self) { choice in
                     MacChatActionButton(
                         action: {
@@ -319,10 +348,10 @@ struct MacBubbleActionSlot: View {
                         capsule: true
                     ) {
                         Text(MacLiveMarkdown.attributed(choice))
-                            .font(.system(size: 13, weight: .medium))
+                            .font(Font(MacBubbleActionMetrics.choiceFont))
                             .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
-                            .padding(.horizontal, 14)
+                            .padding(.horizontal, MacBubbleActionMetrics.choicePaddingH)
                             .padding(.vertical, 6)
                     }
                     .accessibilityLabel("Answer: \(choice)")

@@ -700,8 +700,10 @@ final class ChatUXRegressionTests: XCTestCase {
         fx.vc.syncLiveUpdates()
     }
 
+    /// The list row of the question at `seq` (its id carries the drawing
+    /// variant: `#q-open`, `#q-user_abort`, or nothing once settled).
     private func questionRow(_ fx: Fx, seq: Int) -> String? {
-        fx.vc.automationItemIDs.first { $0.hasPrefix("\(sid):\(seq)#q-") }
+        fx.vc.automationItemIDs.first { $0 == "\(sid):\(seq)" || $0.hasPrefix("\(sid):\(seq)#q-") }
     }
 
     func testQuestionIsOneBubbleWithItsLeadInAndIsAnswerable() throws {
@@ -719,7 +721,7 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(vm.questions.map(\.id), ["q1"])
         let bubble = try XCTUnwrap(vm.displayMessages.first { $0.seq == 12 })
         XCTAssertEqual(bubble.content, "我看了一下，有两个方案。")
-        XCTAssertEqual(bubble.questionAction?.choices, ["A", "B"])
+        XCTAssertEqual(bubble.frozenCard?.action?.choices, ["A", "B"])
     }
 
     func testPickingAChoiceSendsAUserMessageAndClosesTheQuestion() throws {
@@ -734,7 +736,7 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(input["text"] as? String, "A")
         XCTAssertEqual(input["answerTo"] as? String, "q1")
         fx.vc.syncLiveUpdates(); drain(100)
-        XCTAssertEqual(questionRow(fx, seq: 12), "\(sid):12#q-answered", "choices go away at once")
+        XCTAssertEqual(questionRow(fx, seq: 12), "\(sid):12", "choices go away at once")
         XCTAssertTrue(fx.vc.automationItemIDs.contains { $0.contains(":pending:") }, "the answer is the user's own bubble")
         // Tentacle echoes the answer; the turn continues and concludes.
         let clientId = try XCTUnwrap(input["clientId"] as? String)
@@ -745,41 +747,70 @@ final class ChatUXRegressionTests: XCTestCase {
         fx.app.commandSender?.clearPending(sid, clientId: clientId)
         try land(fx, seq: 14, text: Self.zh)
         drain(200)
-        XCTAssertEqual(questionRow(fx, seq: 12), "\(sid):12#q-answered")
+        XCTAssertEqual(questionRow(fx, seq: 12), "\(sid):12")
         XCTAssertTrue(fx.vc.automationItemIDs.contains("\(sid):13"))
         XCTAssertTrue(fx.vc.automationItemIDs.contains("\(sid):14"))
         XCTAssertFalse(fx.vc.automationItemIDs.contains { $0.contains(":pending:") })
     }
 
-    func testAbortWhileAskingLeavesTheQuestionUnanswered() throws {
+    /// Tentacle's abort while asking: turn_status(user_abort, no draft), idle.
+    /// The list shows one bubble — the question with "User aborted" inside.
+    func testAbortWhileAskingShowsUserAbortedInsideTheQuestion() throws {
         let fx = try makeFixture(total: 10)
         drain(600)
         try startTurn(fx, seq: 11)
         try ask(fx, seq: 12, id: "q1")
-        try ingestSpine(fx, ["type": "idle", "seq": 13, "sessionId": sid, "deviceId": dev,
-                             "timestamp": "2026-09-01T00:00:05.000Z", "payload": ["reason": "aborted"]])
+        drain(100)
+        XCTAssertEqual(fx.vc.automationItemIDs.last, "\(sid):12#q-open")
+        try ingestSpine(fx, ["type": "turn_status", "seq": 13, "sessionId": sid, "deviceId": dev,
+                             "timestamp": "2026-09-01T00:00:05.000Z",
+                             "payload": ["draft": "", "action": ["type": "user_abort", "payload": [String: Any]()]]])
+        try ingestSpine(fx, ["type": "idle", "seq": 14, "sessionId": sid, "deviceId": dev,
+                             "timestamp": "2026-09-01T00:00:05.000Z", "payload": [String: Any]()])
         drain(200)
-        XCTAssertEqual(questionRow(fx, seq: 12), "\(sid):12#q-unanswered")
+        XCTAssertEqual(questionRow(fx, seq: 12), "\(sid):12#q-user_abort")
+        XCTAssertFalse(fx.vc.automationItemIDs.contains { $0.hasPrefix("\(sid):13") }, "no separate User aborted bubble")
+        let ids = fx.vc.automationItemIDs
+        XCTAssertEqual(ids.last, "\(sid):12#q-user_abort", "the question stays the last bubble")
         let vm = ChatViewModel(sessionId: sid, appState: fx.app)
         vm.refreshMessageCache()
+        XCTAssertEqual(vm.displayMessages.first { $0.seq == 12 }?.frozenCard?.action?.type, "user_abort")
         XCTAssertTrue(vm.questions.isEmpty, "the composer is no longer in answer mode")
     }
 
     /// The question text is body text (bold), identical before and after it
     /// is answered; only an open question adds the choice slot.
     func testQuestionTextIsTheSameOpenAndClosed() {
-        func m(_ state: String) -> ChatMessage {
+        func m(_ state: QuestionPresentation.State) -> ChatMessage {
             var message = ChatMessage(type: "agent_message", seq: 2, sessionId: sid, deviceId: dev, timestamp: nil,
                                       payload: ["content": AnyCodable("有两个方案"),
                                                 "question": AnyCodable(["id": "q1", "text": "删旧接口？", "choices": ["删", "留"]])])
-            message.payload[ChatMessage.questionStateKey] = AnyCodable(state)
+            message.questionPresentation = QuestionPresentation(state: state)
             return message
         }
-        XCTAssertEqual(m("open").questionCard?.text, "有两个方案\n\n**删旧接口？**")
-        XCTAssertEqual(m("answered").questionCard?.text, m("open").questionCard?.text)
-        XCTAssertEqual(m("open").questionCard?.action?.choices, ["删", "留"])
-        XCTAssertNil(m("answered").questionCard?.action)
-        XCTAssertEqual(m("unanswered").questionCard?.text, m("open").questionCard?.text)
+        XCTAssertEqual(m(.open).frozenCard?.text, "有两个方案\n\n**删旧接口？**")
+        XCTAssertEqual(m(.answered).frozenCard?.text, m(.open).frozenCard?.text)
+        XCTAssertEqual(m(.open).frozenCard?.action?.choices, ["删", "留"])
+        XCTAssertNil(m(.answered).frozenCard?.action)
+        XCTAssertEqual(m(.unanswered).frozenCard?.text, m(.open).frozenCard?.text)
+        XCTAssertEqual(m(.answered).id, m(.unanswered).id, "states that draw the same keep one identity")
+        XCTAssertNotEqual(m(.open).id, m(.answered).id)
+    }
+
+    /// Choices narrower than the question do not widen the bubble, so it is
+    /// the same width open and answered (the choices simply go away).
+    func testOpenAndAnsweredQuestionBubblesAreTheSameWidth() {
+        func width(_ state: QuestionPresentation.State) -> CGFloat {
+            var message = ChatMessage(type: "agent_message", seq: 2, sessionId: sid, deviceId: dev, timestamp: nil,
+                                      payload: ["content": AnyCodable("I will ask you a question."),
+                                                "question": AnyCodable(["id": "q1", "text": "Which color do you prefer?",
+                                                                        "choices": ["Red", "Blue"]])])
+            message.questionPresentation = QuestionPresentation(state: state)
+            let content = TKBubbleContent.live(card: message.frozenCard!, agent: "pi", sessionId: sid,
+                                               steps: 0, isFrozen: true)
+            return content.bubbleWidth(cellWidth: 402)
+        }
+        XCTAssertEqual(width(.open), width(.answered), accuracy: 0.5)
     }
 
     func testFailedAnswerKeepsTheQuestionAnswerable() throws {
@@ -806,12 +837,12 @@ final class ChatUXRegressionTests: XCTestCase {
             m("turn_status", 4, ["draft": "", "action": ["type": "user_abort", "payload": ["abortedAt": "x"]]]),
             m("idle", 5, [:]),
         ]
-        let annotated = ChatViewModel.annotatingQuestions(raw, pending: [], atHead: true)
-        let projected = TurnSpineProjection.project(annotated).filter(ChatViewModel.shouldRender)
+        let presented = ChatViewModel.presentingQuestions(raw, pending: [], atHead: true)
+        let projected = TurnSpineProjection.project(presented).filter(ChatViewModel.shouldRender)
         let q = projected.first { $0.seq == 2 }
-        XCTAssertEqual(q?.questionState, "unanswered")
+        XCTAssertEqual(q?.questionPresentation?.state, .unanswered)
         XCTAssertNotNil(projected.first { $0.seq == 4 }, "a terminal card with its own draft still renders")
-        XCTAssertNil(q?.questionCard?.action, "outcome stays on the terminal card that has a draft")
+        XCTAssertNil(q?.frozenCard?.action, "outcome stays on the terminal card that has a draft")
     }
 
     /// Aborted while asking with nothing streamed after the question: the
@@ -828,13 +859,32 @@ final class ChatUXRegressionTests: XCTestCase {
             m("turn_status", 3, ["draft": "", "action": ["type": "user_abort", "payload": ["abortedAt": "x"]]]),
             m("idle", 4, [:]),
         ]
-        let projected = TurnSpineProjection.project(ChatViewModel.annotatingQuestions(raw, pending: [], atHead: true))
+        let projected = TurnSpineProjection.project(ChatViewModel.presentingQuestions(raw, pending: [], atHead: true))
             .filter(ChatViewModel.shouldRender)
         XCTAssertNil(projected.first { $0.seq == 3 }, "no separate User aborted bubble")
-        let card = projected.first { $0.seq == 2 }?.questionCard
+        let card = projected.first { $0.seq == 2 }?.frozenCard
         XCTAssertEqual(card?.action?.type, "user_abort")
         XCTAssertEqual(card?.text, "有两个方案\n\n**删旧接口？**")
-        XCTAssertNil(projected.first { $0.seq == 3 }, "the non-question reply is still replaced by the terminal card")
+    }
+
+    /// The fallback draft of a draft-less terminal status is the turn's last
+    /// output; when that is the question, no older reply is pulled in.
+    func testAbortAfterQuestionNeverBorrowsAnOlderReply() {
+        func m(_ type: String, _ seq: Int, _ payload: [String: Any]) -> ChatMessage {
+            ChatMessage(type: type, seq: seq, sessionId: sid, deviceId: dev, timestamp: nil,
+                        payload: payload.mapValues(AnyCodable.init))
+        }
+        let raw = [
+            m("agent_message", 1, ["content": "上一轮的回复"]),
+            m("user_message", 2, ["content": "继续"]),
+            m("agent_message", 3, ["content": "", "question": ["id": "q1", "text": "删？"]]),
+            m("turn_status", 4, ["draft": "", "action": ["type": "user_abort", "payload": [String: Any]()]]),
+            m("idle", 5, [:]),
+        ]
+        let projected = TurnSpineProjection.project(ChatViewModel.presentingQuestions(raw, pending: [], atHead: true))
+            .filter(ChatViewModel.shouldRender)
+        XCTAssertEqual(projected.map(\.seq), [2, 3], "no separate bubble, the older reply is not repeated")
+        XCTAssertEqual(projected.last?.frozenCard?.action?.type, "user_abort")
     }
 
     /// An abort card without a draft still fits "User aborted" on one line.
@@ -858,10 +908,11 @@ final class ChatUXRegressionTests: XCTestCase {
             m("agent_message", 2, ["content": "", "question": ["id": "q2", "text": "二？"]]),
             m("user_message", 3, ["content": "好", "answerTo": "q2"]),
         ]
-        let annotated = ChatViewModel.annotatingQuestions(raw, pending: [], atHead: true)
-        XCTAssertEqual(annotated[0].questionState, "open")
-        XCTAssertEqual(annotated[1].questionState, "answered")
-        XCTAssertEqual(ChatViewModel.annotatingQuestions(raw, pending: [], atHead: false)[0].questionState, "closed")
+        let presented = ChatViewModel.presentingQuestions(raw, pending: [], atHead: true)
+        XCTAssertEqual(presented[0].questionPresentation?.state, .open)
+        XCTAssertEqual(presented[1].questionPresentation?.state, .answered)
+        XCTAssertEqual(ChatViewModel.presentingQuestions(raw, pending: [], atHead: false)[0].questionPresentation?.state,
+                       .undetermined)
     }
 
     // MARK: Navigation controls

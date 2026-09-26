@@ -97,7 +97,7 @@ class MockAdapter {
     this.onPermissionRequest?.(sid, { id, toolArgs: { toolName, args: {} }, description: desc });
   }
   simulateQuestion(sid: string, id: string, question: string, choices?: string[]) {
-    this.onQuestionRequest?.(sid, { id, question, choices, allowFreeform: true });
+    this.onQuestionRequest?.(sid, { id, question, choices });
   }
   simulateError(sid: string, message: string) { this.onError?.(sid, { message }); }
 }
@@ -228,7 +228,7 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
 
   // ── 4. Question flow ─────────────────────────────────
 
-  it("4. tentacle sends question → app answers via unicast → adapter receives", async () => {
+  it("4. question lands on the spine → app answers with send_input.answerTo → adapter receives", async () => {
     const app = await connectApp(env.port);
     await connectTentacle();
 
@@ -237,14 +237,20 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     await subscribeApp(app, sessionId);
 
     adapter.simulateQuestion(sessionId, "q_1", "Which DB?", ["Postgres", "SQLite"]);
-    const q = await app.waitFor("card_action");
-    expect((q.payload as { action: { type: string } }).action.type).toBe("question");
-    expect((q.payload as { action: { payload: { choices: string[] } } }).action.payload.choices).toEqual(["Postgres", "SQLite"]);
+    const asked = await app.waitFor("agent_message");
+    expect((asked.payload as { question: unknown }).question).toEqual({
+      id: "q_1", text: "Which DB?", choices: ["Postgres", "SQLite"],
+    });
 
+    // Answering is sending a message; a choice is only a shortcut for its text.
     const tentacleId = relay.getAuthInfo()!.deviceId;
     app.sendUnicast(tentacleId, {
-      type: "answer", sessionId, payload: { questionId: "q_1", answer: "SQLite" },
+      type: "send_input", sessionId, payload: { text: "SQLite", answerTo: "q_1", clientId: "c_1" },
     }, km.getCompactPublicKey());
+    const echoed = await app.waitFor("user_message");
+    expect((echoed.payload as { content: string; answerTo?: string })).toMatchObject({
+      content: "SQLite", answerTo: "q_1",
+    });
     await waitMs(200);
 
     expect(adapter.lastQuestionResponse).toEqual({

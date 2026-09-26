@@ -479,10 +479,8 @@ final class CommandSender {
 
     // MARK: - Permissions
 
-    // Permission / question resolve buttons send the command and rely on
-    // tentacle's resolved event to refresh the corresponding live card.
-    // Round-trip is ~100-300ms; future work could layer in optimistic UI via
-    // the pending_input pattern (see the storage-refactor discussion).
+    // Permission buttons resolve optimistically (`resolvePrompt`); Tentacle's
+    // resolved card confirms the decision.
     @discardableResult
     func approve(sessionId: String, permissionId: String) -> Bool {
         resolvePrompt(sessionId: sessionId, promptId: permissionId, decision: "approve") {
@@ -510,15 +508,14 @@ final class CommandSender {
         }
     }
 
-    /// Optimistic prompt resolution: show the answer/decision at once (the
-    /// bubble stays, its choices become read-only so a second tap cannot send
+    /// Optimistic permission resolution: show the decision at once (the
+    /// bubble stays, its buttons become read-only so a second tap cannot send
     /// again), then either Tentacle's resolved card confirms it, or a transport
     /// failure / missing confirmation reverts it with an explanation.
-    private func resolvePrompt(sessionId: String, promptId: String,
-                               answer: String? = nil, decision: String? = nil,
+    private func resolvePrompt(sessionId: String, promptId: String, decision: String,
                                transmit: () -> Bool) -> Bool {
         guard let store = appState?.messageStore else { return transmit() }
-        store.applyLocalResolution(sessionId, promptId: promptId, answer: answer, decision: decision)
+        store.applyLocalResolution(sessionId, promptId: promptId, decision: decision)
         guard transmit() else {
             store.revertLocalResolution(sessionId, promptId: promptId,
                                         message: "Couldn't send. Try again.")

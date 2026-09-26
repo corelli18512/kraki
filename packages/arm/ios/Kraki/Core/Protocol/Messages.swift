@@ -207,19 +207,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         if seq == 0, let cid = payload["clientId"]?.stringValue {
             return "\(sessionId ?? "none"):pending:\(cid)"
         }
-        // A displayed question's open/answered state is part of its rendered
-        // identity (set by ChatViewModel), so lists re-render it on change.
-        if let state = payload[ChatMessage.questionStateKey]?.stringValue {
-            return "\(sessionId ?? "none"):\(seq)#q-\(state)"
-        }
-        return "\(sessionId ?? "none"):\(seq)"
+        return "\(sessionId ?? "none"):\(seq)\(questionPresentation?.identitySuffix ?? "")"
     }
-
-    /// Display-only key: "open" | "answered" | "unanswered" | "closed".
-    static let questionStateKey = "questionState"
-    /// Display-only: the terminal outcome (user_abort / failed) that closed a
-    /// question with nothing streamed after it; shown inside the question.
-    static let closingActionKey = "closingAction"
 
     /// `agent_message.payload.question`: the agent asked the human.
     struct QuestionSpec: Equatable, Sendable {
@@ -239,46 +228,75 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     /// `user_message.payload.answerTo` / pending input: answers that question.
     var answerTo: String? { payload["answerTo"]?.stringValue }
 
-    var questionState: String? { payload[ChatMessage.questionStateKey]?.stringValue }
-
-    /// A question bubble's (body text, action slot). The lead-in prose and the
-    /// question (bold) are always body text, identical before and after it is
-    /// answered. Only an open question adds the action slot: its choices as
-    /// shortcuts. (An abort shows as the regular "User aborted" card after it.)
-    var questionCard: (text: String, action: ChatMessage?)? {
-        guard let spec = questionSpec else { return nil }
-        var parts: [String] = []
-        if let lead = content, !lead.isEmpty { parts.append(lead) }
-        let bold = spec.text.split(separator: "\n", omittingEmptySubsequences: true)
-            .map { "**\($0.trimmingCharacters(in: .whitespaces))**" }.joined(separator: "\n")
-        if !bold.isEmpty { parts.append(bold) }
-        var action = questionState == "open" ? questionAction : nil
-        if action == nil, let closing = payload[ChatMessage.closingActionKey]?.dictValue,
-           let type = closing["type"]?.stringValue {
-            action = ChatMessage(type: type, seq: 0, sessionId: sessionId, deviceId: deviceId,
-                                 timestamp: timestamp, payload: closing["payload"]?.dictValue ?? [:])
+    /// The terminal outcome of a `turn_status` (or legacy `interrupted_turn`,
+    /// rebuilt from its reason). Nil for other messages and for a
+    /// `turn_status` without an action.
+    var terminalOutcome: TerminalOutcome? {
+        switch type {
+        case "turn_status":
+            guard let action = terminalAction, let kind = action["type"]?.stringValue else { return nil }
+            return TerminalOutcome(type: kind, message: action["payload"]?.dictValue?["message"]?.stringValue)
+        case "interrupted_turn":
+            return payload["reason"]?.stringValue == "process_lost"
+                ? TerminalOutcome(type: "failed", message: "Agent process was lost")
+                : TerminalOutcome(type: "user_abort", message: nil)
+        default:
+            return nil
         }
-        return (parts.joined(separator: "\n\n"), action)
     }
 
-    /// The interactive action slot of an open question.
-    var questionAction: ChatMessage? {
-        guard let spec = questionSpec else { return nil }
-        var payload: [String: AnyCodable] = [
-            "id": AnyCodable(spec.id),
-            "question": AnyCodable(spec.text),
-            ChatMessage.questionStateKey: AnyCodable(questionState ?? "closed"),
-        ]
-        if !spec.choices.isEmpty { payload["choices"] = AnyCodable(spec.choices) }
-        return ChatMessage(type: "question", seq: 0, sessionId: sessionId, deviceId: deviceId,
-                           timestamp: timestamp, payload: payload)
+    /// Body text + action slot of a spine row drawn as a frozen card (the
+    /// same view as the live card), on iOS and Mac alike:
+    /// - a terminal status: its draft + the outcome ("User aborted");
+    /// - a question: the lead-in prose and the **bold** question (identical
+    ///   in every state), plus the choices while it is open, or the outcome
+    ///   of the turn that ended while it was asked.
+    /// Nil for every other row.
+    var frozenCard: MessageStore.SessionCard? {
+        if let spec = questionSpec {
+            var parts: [String] = []
+            if let lead = content, !lead.isEmpty { parts.append(lead) }
+            let bold = spec.text.split(separator: "\n", omittingEmptySubsequences: true)
+                .map { "**\($0.trimmingCharacters(in: .whitespaces))**" }.joined(separator: "\n")
+            if !bold.isEmpty { parts.append(bold) }
+            let action: ChatMessage?
+            if questionPresentation?.state == .open {
+                action = actionMessage("question", [
+                    "id": AnyCodable(spec.id),
+                    "choices": AnyCodable(spec.choices),
+                ])
+            } else {
+                action = questionPresentation?.outcome.map(outcomeAction)
+            }
+            return MessageStore.SessionCard(text: parts.joined(separator: "\n\n"), action: action)
+        }
+        guard type == "turn_status" || type == "interrupted_turn" else { return nil }
+        return MessageStore.SessionCard(text: interruptedDraft ?? "", action: terminalOutcome.map(outcomeAction))
     }
+
+    private func outcomeAction(_ outcome: TerminalOutcome) -> ChatMessage {
+        actionMessage(outcome.type, outcome.message.map { ["message": AnyCodable($0)] } ?? [:])
+    }
+
+    private func actionMessage(_ type: String, _ payload: [String: AnyCodable]) -> ChatMessage {
+        ChatMessage(type: type, seq: 0, sessionId: sessionId, deviceId: deviceId,
+                    timestamp: timestamp, payload: payload)
+    }
+
     let type: String
     let seq: Int
     let sessionId: String?
     let deviceId: String?
     let timestamp: String?
     var payload: [String: AnyCodable]
+    /// Client-only presentation of a question bubble, derived from what
+    /// follows it on the spine (`ChatViewModel.presentingQuestions`). Never
+    /// decoded, encoded or persisted.
+    var questionPresentation: QuestionPresentation? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case type, seq, sessionId, deviceId, timestamp, payload
+    }
 
     // MARK: Convenience Accessors
 
@@ -296,16 +314,13 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var result: String? { payload["result"]?.stringValue }
     var permissionId: String? { payload["id"]?.stringValue ?? payload["permissionId"]?.stringValue }
     var questionId: String? { payload["id"]?.stringValue ?? payload["questionId"]?.stringValue }
-    var question: String? { payload["question"]?.stringValue }
     var description_: String? { payload["description"]?.stringValue }
     var toolDescription: String? { description_ }
     var requestId: String? { payload["requestId"]?.stringValue }
     var errorMessage: String? { payload["message"]?.stringValue }
     var reason: String? { payload["reason"]?.stringValue }
     var resolution: String? { payload["resolution"]?.stringValue }
-    var answer: String? { payload["answer"]?.stringValue }
     var cancelled: Bool { payload["cancelled"]?.boolValue ?? false }
-    var allowFreeform: Bool { payload["allowFreeform"]?.boolValue ?? true }
     /// TRACE step count stamped on a concluding bubble (agent_message /
     /// system_message) by the tentacle. `> 0` ⇒ the turn has pullable steps.
     var steps: Int? { payload["steps"]?.intValue }
@@ -405,10 +420,9 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var isRenderable: Bool {
         switch type {
         case "user_message", "agent_message", "interrupted_turn", "pending_input", "send_input",
-             "permission", "question", "tool_start", "tool_complete",
+             "permission", "tool_start", "tool_complete",
              "idle", "active", "error", "session_created", "session_ended",
-             "session_deleted", "kill_session", "answer",
-             "permission_resolved", "question_resolved":
+             "session_deleted", "kill_session", "permission_resolved":
             return true
         default:
             return false
@@ -433,6 +447,39 @@ struct PendingPermission: Identifiable, Equatable, Sendable {
 
     /// Tool kind for Always Allow grouping.
     var toolKind: String? { toolName }
+}
+
+/// How a question bubble reads, given what follows it on the spine.
+struct QuestionPresentation: Equatable, Sendable {
+    enum State: Equatable, Sendable {
+        /// At the conversation head with nothing after it: answerable.
+        case open
+        case answered
+        /// Something other than its answer followed (the agent moved on).
+        case unanswered
+        /// Last in a window that is not at the head: unknown, drawn neutrally.
+        case undetermined
+    }
+    var state: State
+    /// The turn ended (user_abort / failed) while this question was asked and
+    /// nothing streamed after it: the outcome is drawn inside the question
+    /// bubble, as an aborted turn draws it under its draft.
+    var outcome: TerminalOutcome? = nil
+
+    /// Both chat lists cache a row's height and prepared content by its id,
+    /// so a row whose drawing changes gets a new identity (as a pending input
+    /// does when its echo lands). Only states that draw differently differ.
+    var identitySuffix: String {
+        if state == .open { return "#q-open" }
+        if let outcome { return "#q-\(outcome.type)" }
+        return ""
+    }
+}
+
+/// `user_abort` | `failed`, with the failure message if any.
+struct TerminalOutcome: Equatable, Sendable {
+    let type: String
+    let message: String?
 }
 
 struct PendingQuestion: Identifiable, Equatable, Sendable {
@@ -470,13 +517,24 @@ struct UserMessagePayload: Codable, Sendable {
     var attachments: [ImageAttachment]?
     var clientId: String?
     var delivery: String?
+    /// Id of the question this message answers.
+    var answerTo: String?
 }
 
 struct AgentMessagePayload: Codable, Sendable {
+    /// For a question: the lead-in prose before it.
     let content: String
     var attachments: [ImageAttachment]?
     /// TRACE step count stamped on this concluding bubble by the tentacle.
     var steps: Int?
+    /// The agent is asking the human (answered by a message with `answerTo`).
+    var question: Question?
+
+    struct Question: Codable, Sendable {
+        let id: String
+        let text: String
+        var choices: [String]?
+    }
 }
 
 struct AgentMessageDeltaPayload: Codable, Sendable {
@@ -493,16 +551,6 @@ struct PermissionPayload: Codable, Sendable {
     /// Set when this request occupies a RESOLVED card slot.
     var decision: String?
     /// Trace/history-only terminal state.
-    var cancelled: Bool?
-}
-
-struct QuestionPayload: Codable, Sendable {
-    let id: String
-    let question: String
-    var choices: [String]?
-    var allowFreeform: Bool?
-    /// Set when this request occupies a RESOLVED card slot.
-    var answer: String?
     var cancelled: Bool?
 }
 
@@ -613,12 +661,6 @@ struct PermissionResolvedPayload: Codable, Sendable {
     var reason: String?
 }
 
-struct QuestionResolvedPayload: Codable, Sendable {
-    let questionId: String
-    let answer: String
-    var cancelled: Bool?
-}
-
 // MARK: - Producer Message
 
 /// Inbound messages from tentacle → app (decrypted inner payload).
@@ -636,7 +678,6 @@ enum ProducerMessage: Sendable {
 
     // Interaction
     case permission(PermissionPayload)
-    case question(QuestionPayload)
 
     // Tools
     case toolStart(ToolStartPayload)
@@ -662,7 +703,6 @@ enum ProducerMessage: Sendable {
 
     // Resolutions
     case permissionResolved(PermissionResolvedPayload)
-    case questionResolved(QuestionResolvedPayload)
 
     /// The wire-format type string for this message.
     var typeString: String {
@@ -674,7 +714,6 @@ enum ProducerMessage: Sendable {
         case .agentMessage:         return "agent_message"
         case .agentMessageDelta:    return "agent_message_delta"
         case .permission:           return "permission"
-        case .question:             return "question"
         case .toolStart:            return "tool_start"
         case .toolComplete:         return "tool_complete"
         case .idle:                 return "idle"
@@ -690,7 +729,6 @@ enum ProducerMessage: Sendable {
         case .sessionReplayBatch:   return "session_replay_batch"
         case .sessionList:          return "session_list"
         case .permissionResolved:   return "permission_resolved"
-        case .questionResolved:     return "question_resolved"
         }
     }
 }
@@ -729,8 +767,6 @@ extension ProducerMessage: Codable {
             return .agentMessageDelta(try container.decode(AgentMessageDeltaPayload.self, forKey: .payload))
         case "permission":
             return .permission(try container.decode(PermissionPayload.self, forKey: .payload))
-        case "question":
-            return .question(try container.decode(QuestionPayload.self, forKey: .payload))
         case "tool_start":
             return .toolStart(try container.decode(ToolStartPayload.self, forKey: .payload))
         case "tool_complete":
@@ -761,8 +797,6 @@ extension ProducerMessage: Codable {
             return .sessionList(try container.decode(SessionListPayload.self, forKey: .payload))
         case "permission_resolved":
             return .permissionResolved(try container.decode(PermissionResolvedPayload.self, forKey: .payload))
-        case "question_resolved":
-            return .questionResolved(try container.decode(QuestionResolvedPayload.self, forKey: .payload))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type, in: container,
@@ -781,7 +815,6 @@ extension ProducerMessage: Codable {
         case .agentMessage(let p):         try container.encode(p, forKey: .payload)
         case .agentMessageDelta(let p):    try container.encode(p, forKey: .payload)
         case .permission(let p):           try container.encode(p, forKey: .payload)
-        case .question(let p):             try container.encode(p, forKey: .payload)
         case .toolStart(let p):            try container.encode(p, forKey: .payload)
         case .toolComplete(let p):         try container.encode(p, forKey: .payload)
         case .idle(let p):                 try container.encode(p, forKey: .payload)
@@ -797,7 +830,6 @@ extension ProducerMessage: Codable {
         case .sessionReplayBatch(let p):   try container.encode(p, forKey: .payload)
         case .sessionList(let p):          try container.encode(p, forKey: .payload)
         case .permissionResolved(let p):   try container.encode(p, forKey: .payload)
-        case .questionResolved(let p):     try container.encode(p, forKey: .payload)
         }
     }
 }
@@ -852,6 +884,8 @@ struct ProducerEnvelope: Codable, Sendable {
 struct SendInputPayload: Codable, Sendable {
     let text: String
     var attachments: [ImageAttachment]?
+    /// Id of the question this input answers.
+    var answerTo: String?
 }
 
 struct ApprovePayload: Codable, Sendable {
@@ -865,13 +899,6 @@ struct DenyPayload: Codable, Sendable {
 struct AlwaysAllowPayload: Codable, Sendable {
     let permissionId: String
     var toolKind: String?
-}
-
-struct AnswerPayload: Codable, Sendable {
-    let questionId: String
-    let answer: String
-    var attachments: [ImageAttachment]?
-    var wasFreeform: Bool?
 }
 
 struct CreateSessionPayload: Codable, Sendable {
@@ -931,9 +958,6 @@ enum ConsumerMessage: Sendable {
     case deny(DenyPayload)
     case alwaysAllow(AlwaysAllowPayload)
 
-    // Questions
-    case answer(AnswerPayload)
-
     // Session control
     case killSession
     case abortSession
@@ -965,7 +989,6 @@ enum ConsumerMessage: Sendable {
         case .approve:               return "approve"
         case .deny:                  return "deny"
         case .alwaysAllow:           return "always_allow"
-        case .answer:                return "answer"
         case .killSession:           return "kill_session"
         case .abortSession:          return "abort_session"
         case .createSession:         return "create_session"
@@ -1009,8 +1032,6 @@ extension ConsumerMessage: Codable {
             return .deny(try container.decode(DenyPayload.self, forKey: .payload))
         case "always_allow":
             return .alwaysAllow(try container.decode(AlwaysAllowPayload.self, forKey: .payload))
-        case "answer":
-            return .answer(try container.decode(AnswerPayload.self, forKey: .payload))
         case "kill_session":
             return .killSession
         case "abort_session":
@@ -1049,7 +1070,6 @@ extension ConsumerMessage: Codable {
         case .approve(let p):              try container.encode(p, forKey: .payload)
         case .deny(let p):                 try container.encode(p, forKey: .payload)
         case .alwaysAllow(let p):          try container.encode(p, forKey: .payload)
-        case .answer(let p):               try container.encode(p, forKey: .payload)
         case .killSession:                 try container.encode([String: String](), forKey: .payload)
         case .abortSession:                try container.encode([String: String](), forKey: .payload)
         case .createSession(let p):        try container.encode(p, forKey: .payload)
@@ -1427,10 +1447,6 @@ enum ConsumerMessageBuilder {
         var payload: [String: Any] = ["permissionId": permissionId]
         if let toolKind { payload["toolKind"] = toolKind }
         return envelope(type: "always_allow", sessionId: sessionId, deviceId: deviceId, payload: payload)
-    }
-
-    static func answer(sessionId: String, deviceId: String, questionId: String, answer: String) -> [String: Any] {
-        envelope(type: "answer", sessionId: sessionId, deviceId: deviceId, payload: ["questionId": questionId, "answer": answer])
     }
 
     static func killSession(sessionId: String, deviceId: String) -> [String: Any] {

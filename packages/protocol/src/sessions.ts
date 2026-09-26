@@ -40,7 +40,7 @@ export interface SessionPreviewDigest {
   /** Truncated plain-text preview (max ~80 chars, markdown stripped). */
   text: string;
   /** Message type that produced the preview. */
-  type: 'agent' | 'user' | 'error' | 'permission' | 'question' | 'answer';
+  type: 'agent' | 'user' | 'error' | 'permission' | 'question';
   /** ISO 8601 timestamp of the source message. Used for sidebar sort order. */
   timestamp: string;
 }

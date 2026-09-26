@@ -843,8 +843,9 @@ final class MessageStore {
     /// clears it when the concluding bubble lands. Never written to DB.
     struct SessionCard: Equatable {
         var text: String = ""
-        /// One of tool_start / tool_complete / tool_batch / permission /
-        /// question, carried verbatim as a `ChatMessage` (type + payload).
+        /// One of tool_start / tool_complete / tool_batch / permission (live),
+        /// or a frozen row's question choices / terminal outcome
+        /// (`ChatMessage.frozenCard`), as a `ChatMessage` (type + payload).
         var action: ChatMessage?
     }
     var cards: [String: SessionCard] = [:]
@@ -914,20 +915,20 @@ final class MessageStore {
         guard !closedCardTurns.contains(sessionId) else { return }
         var card = cards[sessionId] ?? SessionCard()
         if action == nil, let current = card.action, Self.isResolvedPrompt(current) {
-            // Tentacle retires a resolved prompt the instant narration resumes
-            // and sends the empty slot just BEFORE the first delta (which is
-            // usually a reset that replaces the pre-question narration).
-            // Applying it on its own either deletes the whole live bubble (no
-            // draft) or strips the question and briefly exposes only the
-            // previous segment's narration. Keep the answered prompt until the
+            // Tentacle retires a resolved permission the instant narration
+            // resumes and sends the empty slot just BEFORE the first delta
+            // (usually a reset that replaces the earlier narration). Applying
+            // it on its own either deletes the whole live bubble (no draft) or
+            // strips the prompt and briefly exposes only the previous
+            // segment's narration. Keep the resolved prompt until the
             // replacing narration arrives; a tool action or the turn end also
             // supersedes it.
             var retained = current
             retained.payload["retained"] = AnyCodable(true)
             // Tentacle only retires a prompt it has resolved, so the clear is
             // itself confirmation. (Its resolved-state card_action may have been
-            // coalesced away in transit; without this a delivered answer would
-            // later be reverted as "not confirmed".)
+            // coalesced away in transit; without this a delivered decision
+            // would later be reverted as "not confirmed".)
             retained.payload.removeValue(forKey: "localPending")
             card.action = retained
             cards[sessionId] = card
@@ -945,46 +946,33 @@ final class MessageStore {
 
     // MARK: Optimistic prompt resolution
 
+    /// The card's only prompt is a permission (questions live on the spine).
     static func promptID(_ action: ChatMessage) -> String? {
-        switch action.type {
-        case "question": return action.questionId
-        case "permission": return action.permissionId
-        default: return nil
-        }
+        action.type == "permission" ? action.permissionId : nil
     }
 
     static func isResolvedPrompt(_ action: ChatMessage) -> Bool {
-        switch action.type {
-        case "question": return action.answer != nil || action.cancelled
-        case "permission": return action.payload["decision"]?.stringValue != nil
-        default: return false
-        }
+        action.type == "permission" && action.payload["decision"]?.stringValue != nil
     }
 
-    /// Show the user's answer/decision immediately (confirmed shape, marked
+    /// Show the user's decision immediately (confirmed shape, marked
     /// `localPending`). Tentacle's resolved card replaces it; failure reverts.
-    func applyLocalResolution(_ sessionId: String, promptId: String,
-                              answer: String? = nil, decision: String? = nil) {
+    func applyLocalResolution(_ sessionId: String, promptId: String, decision: String) {
         guard var card = cards[sessionId], var action = card.action,
               Self.promptID(action) == promptId else { return }
-        if let answer {
-            action.payload["answer"] = AnyCodable(answer)
-            action.payload.removeValue(forKey: "cancelled")
-        }
-        if let decision { action.payload["decision"] = AnyCodable(decision) }
+        action.payload["decision"] = AnyCodable(decision)
         action.payload["localPending"] = AnyCodable(true)
         action.payload.removeValue(forKey: "localError")
         card.action = action
         cards[sessionId] = card
     }
 
-    /// Undo an unconfirmed local answer/decision and explain why, keeping the
+    /// Undo an unconfirmed local decision and explain why, keeping the
     /// prompt answerable.
     func revertLocalResolution(_ sessionId: String, promptId: String, message: String) {
         guard var card = cards[sessionId], var action = card.action,
               Self.promptID(action) == promptId,
               action.payload["localPending"]?.boolValue == true else { return }
-        action.payload.removeValue(forKey: "answer")
         action.payload.removeValue(forKey: "decision")
         action.payload.removeValue(forKey: "localPending")
         action.payload["localError"] = AnyCodable(message)
@@ -1001,11 +989,9 @@ final class MessageStore {
     /// ACK. Unlike incremental delta/action handlers this is an authoritative
     /// reconnect/page-entry snapshot, so it may reopen the card gate when the
     /// digest says a turn is live and the snapshot actually carries draft or
-    /// action state. A durable pending question is the exception: Tentacle
-    /// intentionally rehydrates it after the agent has gone idle/disconnected,
-    /// and its authoritative question action must remain answerable. Empty
-    /// idle/ended snapshots still keep the concluded-turn gate closed and can
-    /// never resurrect a stale bubble.
+    /// action state. Empty idle/ended snapshots keep the concluded-turn gate
+    /// closed and can never resurrect a stale bubble. (An open question is on
+    /// the spine, not in the card, so it needs no exception here.)
     func replaceCardFromSubscription(
         _ sessionId: String,
         draft: String,
@@ -1015,13 +1001,7 @@ final class MessageStore {
         cards.removeValue(forKey: sessionId)
         let hasLiveCard = !draft.isEmpty || action != nil
         let liveState = state == .active || state == .compacting
-        // Pending questions are durable human-blocking state. They survive a
-        // Tentacle/Pi restart, whose session digest can legitimately be idle
-        // or disconnected while the question remains answerable. Do not apply
-        // this exception to ordinary drafts/tool cards: those still require a
-        // live digest so stale snapshots cannot resurrect a concluded turn.
-        let durableQuestion = action?.type == "question"
-        guard (liveState || durableQuestion) && hasLiveCard else {
+        guard liveState && hasLiveCard else {
             if !liveState { closedCardTurns.insert(sessionId) }
             return
         }

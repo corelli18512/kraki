@@ -92,7 +92,7 @@ final class ChatViewModel {
             return memo.messages + pendingMessages(landedIn: memo.messages)
         }
         let spine = TurnSpineProjection.project(
-            Self.annotatingQuestions(filteredMessages, pending: pendingInputsRaw, atHead: windowAtHead)
+            Self.presentingQuestions(filteredMessages, pending: pendingInputsRaw, atHead: windowAtHead)
         ).filter(Self.shouldRender)
         currentSpineMemo = (revision, spine)
         return spine + pendingMessages(landedIn: spine)
@@ -111,7 +111,7 @@ final class ChatViewModel {
     /// Recompute the flat spine snapshot. Called by the view on data changes.
     func refreshMessageCache() {
         cachedMessages = TurnSpineProjection.project(
-            Self.annotatingQuestions(filteredMessages, pending: pendingInputsRaw, atHead: windowAtHead)
+            Self.presentingQuestions(filteredMessages, pending: pendingInputsRaw, atHead: windowAtHead)
         ).filter(Self.shouldRender)
     }
 
@@ -192,69 +192,61 @@ final class ChatViewModel {
             toolName: action.toolName, args: action.args, timestamp: Date())]
     }
 
+    @ObservationIgnored private var questionsMemo: (key: String, value: [PendingQuestion])?
+
     /// Open questions (oldest first), derived from the spine. The composer
-    /// answers the newest one.
+    /// answers the newest one. Derived from the live window (not the render
+    /// cache) so any view model instance — e.g. the composer's — sees the
+    /// current state; memoized per window/outbox state.
     var questions: [PendingQuestion] {
-        // Derived from the live window (not the render cache) so any view
-        // model instance — e.g. the composer's — sees the current state.
         let raw = filteredMessages
         guard raw.contains(where: { $0.questionSpec != nil }) else { return [] }
-        let annotated = Self.annotatingQuestions(raw, pending: pendingInputsRaw, atHead: windowAtHead)
-        return annotated.compactMap { message in
-            guard message.questionState == "open", let spec = message.questionSpec else { return nil }
+        let pending = pendingInputsRaw
+        let key = "\(raw.count)|\(raw.first?.seq ?? 0)|\(raw.last?.seq ?? 0)|\(windowAtHead)|"
+            + pending.compactMap(\.answerTo).joined(separator: ",")
+        if let memo = questionsMemo, memo.key == key { return memo.value }
+        let value = Self.presentingQuestions(raw, pending: pending, atHead: windowAtHead).compactMap { message -> PendingQuestion? in
+            guard message.questionPresentation?.state == .open, let spec = message.questionSpec else { return nil }
             return PendingQuestion(id: spec.id, sessionId: sessionId, question: spec.text,
                                    choices: spec.choices.isEmpty ? nil : spec.choices, timestamp: Date())
         }
+        questionsMemo = (key, value)
+        return value
     }
 
-    /// Stamp each question's display state from what follows it on the spine:
-    /// - an answer (`answerTo` = its id, persisted or optimistic) → answered;
+    /// Present each question from what follows it on the spine:
+    /// - its answer (`answerTo` = its id, persisted or optimistic) → answered;
     /// - other questions, answers to them, and transient `error` rows are
     ///   neutral;
     /// - anything else (a reply, a plain message, idle, terminal status) →
-    ///   unanswered (the agent no longer waits for it);
-    /// - nothing yet: open at the conversation head, otherwise unknown
-    ///   ("closed", rendered neutrally).
-    static func annotatingQuestions(_ raw: [ChatMessage], pending: [ChatMessage],
+    ///   unanswered (the agent no longer waits for it). When that is the
+    ///   draft-less terminal status of the turn, its outcome ("User aborted")
+    ///   is drawn inside the question bubble — the question is that turn's
+    ///   last output, like the draft of an ordinary aborted turn — and the
+    ///   empty status row itself is not rendered (`shouldRender`);
+    /// - nothing yet: open at the conversation head, otherwise undetermined.
+    static func presentingQuestions(_ raw: [ChatMessage], pending: [ChatMessage],
                                     atHead: Bool) -> [ChatMessage] {
         guard raw.contains(where: { $0.questionSpec != nil }) else { return raw }
         var result = raw
         for index in raw.indices {
             guard let spec = raw[index].questionSpec else { continue }
-            var state: String?
-            for laterIndex in raw.indices where laterIndex > index {
-                let later = raw[laterIndex]
-                if later.answerTo == spec.id { state = "answered"; break }
+            var presentation: QuestionPresentation?
+            for later in raw[(index + 1)...] {
+                if later.answerTo == spec.id { presentation = .init(state: .answered); break }
                 if later.questionSpec != nil || later.answerTo != nil || later.type == "error" { continue }
-                state = "unanswered"
-                if later.type == "turn_status" || later.type == "interrupted_turn",
-                   (later.interruptedDraft ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    // Aborted/failed while asking, with nothing streamed after
-                    // the question: the outcome ("User aborted") belongs inside
-                    // the question bubble, exactly like a normal aborted turn.
-                    // The draft-less terminal row itself is not rendered.
-                    result[index].payload[ChatMessage.closingActionKey] = AnyCodable(Self.terminalAction(of: later))
-                }
+                let draftless = (later.interruptedDraft ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                presentation = .init(state: .unanswered, outcome: draftless ? later.terminalOutcome : nil)
                 break
             }
-            if state == nil {
-                if pending.contains(where: { $0.answerTo == spec.id }) { state = "answered" }
-                else { state = atHead ? "open" : "closed" }
+            if presentation == nil {
+                presentation = pending.contains(where: { $0.answerTo == spec.id })
+                    ? .init(state: .answered)
+                    : .init(state: atHead ? .open : .undetermined)
             }
-            result[index].payload[ChatMessage.questionStateKey] = AnyCodable(state!)
+            result[index].questionPresentation = presentation
         }
         return result
-    }
-
-    /// `{type, payload}` of a terminal status (legacy interrupted_turn rebuilt).
-    static func terminalAction(of message: ChatMessage) -> [String: Any] {
-        if message.type == "turn_status", let action = message.terminalAction,
-           let type = action["type"]?.stringValue {
-            return ["type": type, "payload": (action["payload"]?.dictValue ?? [:]).compactMapValues(\.value)]
-        }
-        let lost = message.payload["reason"]?.stringValue == "process_lost"
-        return lost ? ["type": "failed", "payload": ["message": "Agent process was lost"]]
-                    : ["type": "user_abort", "payload": [:] as [String: Any]]
     }
 
     private var windowAtHead: Bool { appState?.messageProvider?.atHead(sessionId) ?? true }

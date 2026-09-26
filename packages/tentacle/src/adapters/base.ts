@@ -42,8 +42,8 @@ export interface PermissionRequestEvent extends TurnLifecycleEvent {
 export interface QuestionRequestEvent extends TurnLifecycleEvent {
   id: string;
   question: string;
+  /** Shortcuts only: the human may always answer in free text. */
   choices?: string[];
-  allowFreeform: boolean;
 }
 
 export interface ToolStartEvent extends TurnLifecycleEvent {

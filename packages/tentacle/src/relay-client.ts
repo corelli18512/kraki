@@ -2877,7 +2877,7 @@ export class RelayClient {
     // replay alone — WITHOUT first pulling the transient trace.
     if (
       msg.type === 'tool_start' || msg.type === 'agent_narration' ||
-      msg.type === 'permission' || msg.type === 'question' || msg.type === 'error'
+      msg.type === 'permission' || msg.type === 'error'
     ) {
       this.turnStepCounts.set(msg.sessionId, (this.turnStepCounts.get(msg.sessionId) ?? 0) + 1);
     }

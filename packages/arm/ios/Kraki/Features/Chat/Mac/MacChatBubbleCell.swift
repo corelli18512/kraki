@@ -1092,8 +1092,8 @@ final class MacChatBubbleCell: NSView {
               let action = content?.action else { return nil }
         switch capture {
         case .question(let questionId):
+            // A question action exists only while the question is open.
             guard action.type == "question",
-                  action.questionState == "open",
                   action.questionId == questionId,
                   let frame = questionChoiceFrames.last(where: { $0.rect.contains(point) }) else {
                 return nil
@@ -1135,8 +1135,7 @@ final class MacChatBubbleCell: NSView {
         guard let action = content?.action else { return nil }
         switch action.type {
         case "question":
-            guard action.questionState == "open",
-                  !(action.choices?.isEmpty ?? true),
+            guard !(action.choices?.isEmpty ?? true),
                   let questionId = action.questionId else { return nil }
             return .question(questionId)
         case "permission":
