@@ -1406,10 +1406,13 @@ export class SessionManager {
           }
           case 'system_message': {
             const content = payload.content;
-            const label = typeof content === 'string' && content
-              ? content
-              : (payload.kind === 'no_reply' ? 'No reply' : 'System notice');
-            return { text: stripMarkdownForPreview(label), type: 'agent', timestamp: entry.ts };
+            if (typeof content === 'string' && content) {
+              return { text: stripMarkdownForPreview(content), type: 'agent', timestamp: entry.ts };
+            }
+            // A steps-only turn has no text of its own: fall through to the
+            // user's prompt rather than inventing a "No reply" preview.
+            if (payload.kind === 'no_reply') break;
+            return { text: 'System notice', type: 'agent', timestamp: entry.ts };
           }
           // error / idle / active / session_created / session_ended / tool_* /
           // agent_narration / question / answer / permission / *_resolved /
