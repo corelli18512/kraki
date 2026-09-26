@@ -353,7 +353,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertEqual(fx.doc.automationVisibleCells.last?.cell.content?.pendingClientId != nil, true)
     }
 
-    func testFailedInputOffersRetryEditDelete() throws {
+    func testFailedInputOffersRetryAndDelete() throws {
         let fx = try makeFixture(total: 20)
         fx.app.commandSender?.confirmationTimeout = .milliseconds(300)
         drain(1_000)
@@ -371,13 +371,35 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         drain(100)
         XCTAssertEqual(pending()?.deliveryStatusForRegression, "Sending", "retry re-sends")
         drain(800)
-        fx.doc.onPendingAction?(clientId, .edit)
+        fx.doc.onPendingAction?(clientId, .delete)
         drain(200)
-        XCTAssertNil(pending(), "edit removes the failed bubble")
-        XCTAssertEqual(fx.app.sessionStore.drafts[sid], "这条会发送失败", "edit returns the text to the composer")
+        XCTAssertNil(pending(), "delete removes the failed bubble")
+        XCTAssertNil(fx.app.sessionStore.drafts[sid], "a sent message never returns to the composer")
     }
 
     // MARK: Navigation
+
+    func testJumpControlsSitAboveSendAndUpRestsInDownSlot() throws {
+        let fx = try makeFixture(total: 120)
+        drain(1_200)
+        let size = MacChatScrollView.jumpControlSize
+        XCTAssertEqual(size, MacComposerMetrics.control, "↓/↑ match the send circle")
+        let atBottom = fx.sv.automationControlFrames
+        XCTAssertFalse(fx.sv.automationControlsVisible.down)
+        XCTAssertEqual(fx.sv.bounds.height - atBottom.down.maxY, MacComposerMetrics.jumpControlBottom, accuracy: 0.5,
+                       "↓ sits 9 pt above the send circle")
+        XCTAssertEqual(atBottom.up.minY, atBottom.down.minY, accuracy: 0.5, "↑ rests in ↓'s slot at the bottom")
+        for _ in 0..<12 { _ = fx.sv.automationPreciseScrollPacket(deltaY: 40); drain(8) }
+        drain(1_200)
+        XCTAssertTrue(fx.sv.automationControlsVisible.down)
+        let raised = fx.sv.automationControlFrames
+        XCTAssertEqual(raised.down.minY - raised.up.maxY, MacComposerMetrics.controlGap, accuracy: 0.5,
+                       "↓ appearing pushes ↑ up")
+        fx.sv.automationTapDown()
+        drain(1_500)
+        XCTAssertFalse(fx.sv.automationControlsVisible.down)
+        XCTAssertEqual(fx.sv.automationControlFrames.up.minY, atBottom.down.minY, accuracy: 0.5, "↑ drops back")
+    }
 
     func testUpStepsBackThroughReplyStartsAndDownShowsUnseenDot() throws {
         let fx = try makeFixture(total: 120)

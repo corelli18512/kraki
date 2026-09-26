@@ -31,7 +31,8 @@ struct MacChatBubbleContent {
     var bodyTextWidth: CGFloat { bubbleWidth - MacChatBubbleLayout.msgPadH * 2 }
 }
 
-enum MacPendingAction { case retry, edit, delete }
+/// A sent message is never edited: an undelivered one is retried or deleted.
+enum MacPendingAction { case retry, delete }
 
 enum MacChatBubbleLayout {
     static let outerH: CGFloat = 12

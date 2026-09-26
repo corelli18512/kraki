@@ -1221,6 +1221,8 @@ final class MacChatBubbleCell: NSView {
         super.prepareForReuse()
         deliveryStatusRevealWork?.cancel()
         deliveryStatus.isHidden = true
+        if dimmedMessageID != nil { pendingContentViews.forEach { $0.alphaValue = 1 } }
+        dimmedMessageID = nil
         onPendingAction = nil
         content = nil
         bubbleSeq = 0
@@ -1635,7 +1637,10 @@ final class MacChatBubbleCell: NSView {
         }
 
         if !deliveryStatus.isHidden {
-            deliveryStatus.frame = NSRect(x: x - 26, y: y + max(bubbleHeight, 1) - 22, width: 22, height: 22)
+            // Beside the message's last block (the image when present).
+            let anchor = imageHeight > 0 ? imageHost.frame
+                : NSRect(x: x, y: y, width: bubbleWidth, height: max(bubbleHeight, 1))
+            deliveryStatus.frame = NSRect(x: anchor.minX - 26, y: anchor.maxY - 22, width: 22, height: 22)
         }
 
         if !stepsButton.isHidden {
@@ -1823,7 +1828,7 @@ final class MacChatBubbleCell: NSView {
     #endif
 
     private func pendingActionItems() -> [NSMenuItem] {
-        [("Retry", MacPendingAction.retry), ("Edit", .edit), ("Delete", .delete)].map { title, action in
+        [("Retry", MacPendingAction.retry), ("Delete", .delete)].map { title, action in
             let item = NSMenuItem(title: title, action: #selector(pendingMenuAction(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = action
@@ -1846,9 +1851,43 @@ final class MacChatBubbleCell: NSView {
 
     /// Beside an optimistic bubble: "sending" appears only after a short
     /// delay so fast confirmations never flash an icon; "failed" is a red
-    /// mark whose click offers Retry / Edit / Delete.
+    /// mark whose click offers Retry / Delete. Sent but not delivered dims the
+    /// whole message (text bubble and image) after the same delay.
+    private var pendingContentViews: [NSView] {
+        [bubbleBG, bodyView, coreTextBodyView, imageHost, artifactCardsView] + tableViews
+    }
+    private var dimmedMessageID: String?
+
+    private func applyPendingDim(_ content: MacChatBubbleContent) {
+        // Most rows are never pending: touch no view properties for them.
+        guard content.pendingDeliveryState != nil || dimmedMessageID != nil else { return }
+        if content.pendingDeliveryState == "sending" {
+            let id = content.pendingClientId ?? "\(content.sessionId):\(content.seq)"
+            guard dimmedMessageID != id else { return }
+            dimmedMessageID = id
+            pendingContentViews.forEach { $0.alphaValue = 1 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                guard let self, self.dimmedMessageID == id else { return }
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.25
+                    self.pendingContentViews.forEach { $0.animator().alphaValue = 0.6 }
+                }
+            }
+        } else {
+            let wasDimmed = dimmedMessageID != nil
+            dimmedMessageID = nil
+            if wasDimmed {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.15
+                    self.pendingContentViews.forEach { $0.animator().alphaValue = 1 }
+                }
+            }
+        }
+    }
+
     private func configureDeliveryStatus(_ content: MacChatBubbleContent) {
         deliveryStatusRevealWork?.cancel()
+        applyPendingDim(content)
         guard let state = content.pendingDeliveryState else {
             deliveryStatus.isHidden = true
             return
@@ -1861,7 +1900,7 @@ final class MacChatBubbleCell: NSView {
             deliveryStatus.contentTintColor = .systemRed
             deliveryStatus.isEnabled = true
             deliveryStatus.alphaValue = 1
-            deliveryStatus.setAccessibilityLabel("Not delivered. Click to retry, edit or delete")
+            deliveryStatus.setAccessibilityLabel("Not delivered. Click to retry or delete")
             deliveryStatus.toolTip = "Not delivered"
         } else {
             deliveryStatus.image = NSImage(systemSymbolName: "clock",

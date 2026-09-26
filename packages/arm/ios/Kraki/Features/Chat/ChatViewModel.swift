@@ -67,7 +67,9 @@ final class ChatViewModel {
     /// so outbox changes (new send, failed, retried) always re-render.
     var pendingSignature: String {
         (appState?.commandSender?.pendingInputs(sessionId) ?? [])
-            .map { "\($0.id)#\($0.payload["localState"]?.stringValue ?? "")" }
+            // Text is part of the signature: a correcting voice bubble's
+            // content streams in place.
+            .map { "\($0.id)#\($0.payload["localState"]?.stringValue ?? "")#\($0.content?.hashValue ?? 0)" }
             .joined(separator: ",")
     }
 

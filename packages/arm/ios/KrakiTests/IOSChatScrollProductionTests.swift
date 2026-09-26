@@ -44,8 +44,11 @@ final class IOSChatScrollProductionTests: XCTestCase {
         XCTAssertNotNil(bottomButton.image(for: .normal), "jump-to-latest helper must render an icon")
 
         let materials = findVisualEffectViews(in: viewController.view)
-        let startMaterial = try XCTUnwrap(materials.first { $0.frame.equalTo(startButton.frame) })
-        let bottomMaterial = try XCTUnwrap(materials.first { $0.frame.equalTo(bottomButton.frame) })
+        let startMaterial = try XCTUnwrap(materials.first { $0.accessibilityIdentifier == "jump-start-material" })
+        let bottomMaterial = try XCTUnwrap(materials.first { $0.accessibilityIdentifier == "jump-latest-material" })
+        XCTAssertTrue(startMaterial.frame.equalTo(startButton.frame))
+        XCTAssertEqual(startButton.frame.maxY, bottomButton.frame.maxY, accuracy: 0.5,
+                       "at the tail ↑ rests in ↓'s slot")
         XCTAssertFalse(startMaterial.isHidden, "visible helper must reveal its material background")
         XCTAssertGreaterThan(startMaterial.alpha, 0.99)
         XCTAssertTrue(bottomMaterial.isHidden, "hidden helper must not leave an empty material pill")

@@ -2168,6 +2168,42 @@ final class MacChatScrollView: MacSmoothScrollView {
     private let latestMessageTopPadding: CGFloat = MacChatHeaderMetrics.listTopInset
     /// Round navigation controls (pointer target; iOS uses 44pt for touch).
     static let jumpControlSize: CGFloat = 36
+    /// ↓ sits directly above the composer's send circle (same size and
+    /// column), at a fixed height: a growing composer never pushes it up.
+    private var jumpFrame: NSRect {
+        let size = Self.jumpControlSize
+        let bottom = bottomContentInset > 0 ? MacComposerMetrics.jumpControlBottom : 16
+        return NSRect(x: bounds.width - 16 - size, y: bounds.height - bottom - size, width: size, height: size)
+    }
+    /// ↑ rests in ↓'s slot while ↓ is hidden and is pushed up when ↓ shows.
+    private var latestStartRaised = false
+    private var latestStartMoveGeneration = 0
+    private var latestStartFrame: NSRect {
+        let jump = jumpFrame
+        let lift = latestStartRaised ? Self.jumpControlSize + MacComposerMetrics.controlGap : 0
+        return jump.offsetBy(dx: 0, dy: -lift)
+    }
+    private func placeLatestStart(raised: Bool, animated: Bool) {
+        guard latestStartRaised != raised else { return }
+        latestStartRaised = raised
+        let target = latestStartFrame
+        guard animated, window != nil, jumpButtonVisibilityTargets[ObjectIdentifier(latestStartButton)] == true else {
+            latestStartMaterial.frame = target
+            latestStartButton.frame = target
+            return
+        }
+        latestStartMoveGeneration += 1
+        let generation = latestStartMoveGeneration
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.3
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+            latestStartMaterial.animator().frame = target
+            latestStartButton.animator().frame = target
+        } completionHandler: { [weak self] in
+            guard let self, self.latestStartMoveGeneration == generation else { return }
+            self.latestStartMoveGeneration = 0
+        }
+    }
     static let unseenDotSize: CGFloat = 11
     private let unseenDot = NSView()
 
@@ -2619,6 +2655,7 @@ final class MacChatScrollView: MacSmoothScrollView {
             return
         }
         if scrollSettlePending { return }
+        DispatchQueue.main.async { [weak self] in self?.updateJumpButtonVisibility(animated: true) }
         thumbViewportGeneration += 1
         thumbViewportUpdateScheduled = false
         commitWarmedHeightsPreservingViewport(restartWarmup: true)
@@ -2730,23 +2767,14 @@ final class MacChatScrollView: MacSmoothScrollView {
             scrollPolicy.pinToTail(observedOffset: bottom)
         }
         _ = chatDocumentView.updateVisibleCells(in: contentView.bounds)
-        let size = Self.jumpControlSize
-        let jumpFrame = NSRect(
-            x: bounds.width - 16 - size,
-            y: bounds.height - bottomContentInset - 16 - size,
-            width: size,
-            height: size
-        )
-        let latestStartFrame = NSRect(
-            x: jumpFrame.minX,
-            y: jumpFrame.minY - 10 - size,
-            width: size,
-            height: size
-        )
+        let jumpFrame = self.jumpFrame
         jumpMaterial.frame = jumpFrame
         jumpButton.frame = jumpFrame
-        latestStartMaterial.frame = latestStartFrame
-        latestStartButton.frame = latestStartFrame
+        if latestStartMoveGeneration == 0 {
+            let latestStartFrame = self.latestStartFrame
+            latestStartMaterial.frame = latestStartFrame
+            latestStartButton.frame = latestStartFrame
+        }
         let dot = Self.unseenDotSize
         unseenDot.frame = NSRect(x: jumpFrame.maxX - dot + 2, y: jumpFrame.minY - 2, width: dot, height: dot)
         var ring = NSColor.windowBackgroundColor.cgColor
@@ -3377,16 +3405,21 @@ final class MacChatScrollView: MacSmoothScrollView {
         !hasUnloadedNewer && distanceToBottom <= 8
     }
 
+    /// The ↑/↓ controls keep their pre-motion state while the list moves
+    /// (wheel/trackpad, momentum, a jump glide or its history load) and are
+    /// re-evaluated once it settles.
     private func updateJumpButtonVisibility(animated: Bool) {
         guard !isDeallocating else { return }
         if isAtConversationBottom, unseenReplies > 0 { unseenReplies = 0 }
-        let navigating = scrollPolicy.navigationActive || navigationLoadInFlight || isProgrammaticScrollActive
+        let moving = scrollPolicy.navigationActive || navigationLoadInFlight || isProgrammaticScrollActive
+            || isScrollInteractionActive
         let hasContent = !chatDocumentView.itemKeys.isEmpty
-        let showTail = !navigating && hasContent && !isAtConversationBottom
-        let showUp = !navigating && hasContent
-            && (previousReplyTarget() != nil || !diagnosticAtOldest)
+        guard !moving || !hasContent || jumpButtonVisibilityTargets.isEmpty else { syncUnseenDot(); return }
+        let showTail = hasContent && !isAtConversationBottom
+        let showUp = hasContent && (previousReplyTarget() != nil || !diagnosticAtOldest)
         setJumpButtonVisibility(jumpButton, material: jumpMaterial, shouldShow: showTail, animated: animated)
         setJumpButtonVisibility(latestStartButton, material: latestStartMaterial, shouldShow: showUp, animated: animated)
+        placeLatestStart(raised: showTail, animated: animated)
         syncUnseenDot()
     }
 
@@ -3535,6 +3568,7 @@ final class MacChatScrollView: MacSmoothScrollView {
             let completion = animation.completion
             cancelScrollAnimation()
             completion?()
+            updateJumpButtonVisibility(animated: true)
         }
     }
 }

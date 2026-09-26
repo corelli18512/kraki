@@ -631,10 +631,6 @@ struct MacChatView: View {
             _ = sender.retryPending(sessionId: sessionId, clientId: clientId)
         case .delete:
             _ = sender.discardPending(sessionId: sessionId, clientId: clientId)
-        case .edit:
-            guard let text = sender.discardPending(sessionId: sessionId, clientId: clientId) else { return }
-            let draft = appState.sessionStore.drafts[sessionId] ?? ""
-            appState.sessionStore.setDraft(sessionId, draft.isEmpty ? text : draft + "\n" + text)
         }
     }
 

@@ -1493,7 +1493,7 @@ final class TextKitPureSpineTests: XCTestCase {
                 composerVisible: true,
                 compacting: false
             ),
-            54
+            60
         )
         XCTAssertEqual(
             ChatBottomObstruction.height(
@@ -1509,7 +1509,7 @@ final class TextKitPureSpineTests: XCTestCase {
                 composerVisible: true,
                 compacting: true
             ),
-            102
+            108
         )
     }
 

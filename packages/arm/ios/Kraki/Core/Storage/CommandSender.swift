@@ -50,6 +50,9 @@ final class CommandSender {
         /// after the app was terminated before confirmation. Retry is safe:
         /// Tentacle deduplicates inputs by clientId.
         case failed
+        /// A sent voice message whose transcript is still being corrected.
+        /// Local only: nothing has been handed to transport yet.
+        case correcting
     }
 
     /// Wire payload of each optimistic input, kept for idempotent retry.
@@ -104,59 +107,15 @@ final class CommandSender {
         attachments: [ImageAttachment]? = nil,
         delivery: InputDelivery = .prompt
     ) -> Bool {
-        guard let appState else { return false }
+        guard appState != nil else { return false }
 
         // Generate a correlation id. Tentacle echoes this back inside
         // the resulting `user_message.payload.clientId`, letting us
         // resolve the right pending placeholder even with multiple
         // in-flight sends, reconnects, or multi-device scenarios.
         let clientId = UUID().uuidString
-
-        // Optimistic: stash a pending placeholder in our in-memory
-        // outbox. Render layer (ChatViewModel) reads this and appends
-        // it to the turn list at render time; it never touches
-        // MessageStore. When tentacle echoes `user_message` back
-        // (MessageRouter clears the matching clientId from the
-        // outbox), the placeholder disappears and the real bubble —
-        // produced by the normal store + grouper pipeline — takes
-        // its place.
-        //
-        // Attachments are stashed on the pending payload so the
-        // pending bubble can render the image grid immediately. The
-        // `attachments` accessor on ChatMessage reads from
-        // `payload.attachments`, so we encode them in the same shape
-        // the server's user_message uses — array of [type, mimeType,
-        // data] dicts.
-        var pendingPayload: [String: AnyCodable] = [
-            "content": AnyCodable(text),
-            "clientId": AnyCodable(clientId),
-        ]
-        if delivery == .steer { pendingPayload["delivery"] = AnyCodable(delivery.rawValue) }
-        if let attachments, !attachments.isEmpty {
-            let encodedAttachments = attachments.map { att -> [String: String] in
-                ["type": att.type, "mimeType": att.mimeType, "data": att.data]
-            }
-            pendingPayload["attachments"] = AnyCodable(encodedAttachments)
-        }
-        pendingPayload["localState"] = AnyCodable(PendingState.sending.rawValue)
-        pendingPayload["localOrder"] = AnyCodable(nextLocalOrder)
-        nextLocalOrder += 1
-        let pending = ChatMessage(
-            type: "pending_input",
-            seq: 0,
-            sessionId: sessionId,
-            deviceId: appState.deviceId,
-            timestamp: ISO8601.now(),
-            payload: pendingPayload
-        )
-        var payload: [String: Any] = ["text": text, "clientId": clientId]
-        if delivery == .steer { payload["delivery"] = delivery.rawValue }
-        if let attachments, !attachments.isEmpty {
-            let encoded = attachments.map { att -> [String: String] in
-                ["type": att.type, "mimeType": att.mimeType, "data": att.data]
-            }
-            payload["attachments"] = encoded
-        }
+        let (pending, payload) = makePendingInput(sessionId: sessionId, clientId: clientId, text: text,
+                                                  attachments: attachments, delivery: delivery, state: .sending)
         guard send(["type": "send_input", "payload": payload], sessionId: sessionId) else {
             return false
         }
@@ -167,6 +126,146 @@ final class CommandSender {
         armConfirmationTimeout(sessionId: sessionId, clientId: clientId)
         persistOutbox()
         return true
+    }
+
+    /// Optimistic: a pending placeholder lives in the in-memory outbox. The
+    /// render layer (ChatViewModel) appends it to the turn list; it never
+    /// touches MessageStore. When Tentacle echoes `user_message` back
+    /// (MessageRouter clears the matching clientId), the placeholder
+    /// disappears and the real bubble takes its place. Attachments are kept
+    /// on the pending payload (same shape as the server's user_message) so
+    /// the bubble can render the image immediately.
+    private func makePendingInput(
+        sessionId: String, clientId: String, text: String,
+        attachments: [ImageAttachment]?, delivery: InputDelivery, state: PendingState
+    ) -> (ChatMessage, [String: Any]) {
+        var pendingPayload: [String: AnyCodable] = [
+            "content": AnyCodable(text),
+            "clientId": AnyCodable(clientId),
+        ]
+        var payload: [String: Any] = ["text": text, "clientId": clientId]
+        if delivery == .steer {
+            pendingPayload["delivery"] = AnyCodable(delivery.rawValue)
+            payload["delivery"] = delivery.rawValue
+        }
+        if let attachments, !attachments.isEmpty {
+            let encoded = attachments.map { att -> [String: String] in
+                ["type": att.type, "mimeType": att.mimeType, "data": att.data]
+            }
+            pendingPayload["attachments"] = AnyCodable(encoded)
+            payload["attachments"] = encoded
+        }
+        pendingPayload["localState"] = AnyCodable(state.rawValue)
+        pendingPayload["localOrder"] = AnyCodable(nextLocalOrder)
+        nextLocalOrder += 1
+        let pending = ChatMessage(
+            type: "pending_input",
+            seq: 0,
+            sessionId: sessionId,
+            deviceId: appState?.deviceId,
+            timestamp: ISO8601.now(),
+            payload: pendingPayload
+        )
+        return (pending, payload)
+    }
+
+    // MARK: - Staged (voice) input
+    //
+    // A voice message the user already sent appears at once as a bubble, but
+    // is only handed to transport after speech correction completes, so the
+    // agent always receives the corrected text. Until then it is `correcting`
+    // and nothing has left the device. If the app dies meanwhile it is
+    // restored as `failed` with the original transcript (Retry sends it).
+
+    /// Show a not-yet-sent bubble. `text` is the transcript so far.
+    @discardableResult
+    func stageInput(
+        sessionId: String,
+        text: String,
+        attachments: [ImageAttachment]? = nil,
+        delivery: InputDelivery = .prompt
+    ) -> String? {
+        guard appState != nil else { return nil }
+        let clientId = UUID().uuidString
+        var (pending, payload) = makePendingInput(sessionId: sessionId, clientId: clientId, text: text,
+                                                  attachments: attachments, delivery: delivery, state: .correcting)
+        pending.payload["originalText"] = AnyCodable(text)
+        var bucket = outbox[sessionId] ?? [:]
+        bucket[clientId] = pending
+        outbox[sessionId] = bucket
+        payload["text"] = text
+        outboundPayloads[clientId] = payload
+        persistOutbox()
+        return clientId
+    }
+
+    func isStaged(sessionId: String, clientId: String) -> Bool {
+        outbox[sessionId]?[clientId]?.payload["localState"]?.stringValue == PendingState.correcting.rawValue
+    }
+
+    /// The uncorrected transcript of a staged/failed voice input, if any.
+    func originalText(sessionId: String, clientId: String) -> String? {
+        outbox[sessionId]?[clientId]?.payload["originalText"]?.stringValue
+    }
+
+    /// Stream correction progress into a staged bubble. `original` updates
+    /// the fallback transcript while more raw speech is still arriving.
+    /// `uncorrected` (UTF-16 range in `text`) is the part of the transcript
+    /// the correction has not reached yet; it renders light, the rest solid.
+    func updateStagedInput(sessionId: String, clientId: String, text: String, original: String? = nil,
+                           uncorrected: NSRange? = nil) {
+        guard isStaged(sessionId: sessionId, clientId: clientId),
+              var bucket = outbox[sessionId], var message = bucket[clientId] else { return }
+        let fade: [Int]? = uncorrected.flatMap { $0.length > 0 ? [$0.location, $0.length] : nil }
+        let oldFade = message.payload["uncorrected"]?.value as? [Int]
+        guard message.content != text || fade != oldFade
+                || (original != nil && original != originalText(sessionId: sessionId, clientId: clientId))
+        else { return }
+        message.payload["content"] = AnyCodable(text)
+        if let fade { message.payload["uncorrected"] = AnyCodable(fade) }
+        else { message.payload.removeValue(forKey: "uncorrected") }
+        if let original { message.payload["originalText"] = AnyCodable(original) }
+        bucket[clientId] = message
+        outbox[sessionId] = bucket
+    }
+
+    /// Correction finished: send `text` now. No-op (false) if the user
+    /// already deleted it or chose Send Original.
+    @discardableResult
+    func dispatchStagedInput(sessionId: String, clientId: String, text: String) -> Bool {
+        guard isStaged(sessionId: sessionId, clientId: clientId),
+              var bucket = outbox[sessionId], var message = bucket[clientId] else { return false }
+        message.payload["content"] = AnyCodable(text)
+        message.payload.removeValue(forKey: "uncorrected")
+        bucket[clientId] = message
+        outbox[sessionId] = bucket
+        var payload = outboundPayloads[clientId] ?? ["clientId": clientId]
+        payload["text"] = text
+        outboundPayloads[clientId] = payload
+        guard send(["type": "send_input", "payload": payload], sessionId: sessionId) else {
+            setPendingState(sessionId, clientId: clientId, .failed)
+            return false
+        }
+        setPendingState(sessionId, clientId: clientId, .sending)
+        armConfirmationTimeout(sessionId: sessionId, clientId: clientId)
+        persistOutbox()
+        return true
+    }
+
+    /// Correction could not be confirmed: never send automatically. The bubble
+    /// shows `text` (the original transcript) as not delivered; Retry sends it.
+    func failStagedInput(sessionId: String, clientId: String, text: String) {
+        guard isStaged(sessionId: sessionId, clientId: clientId),
+              var bucket = outbox[sessionId], var message = bucket[clientId] else { return }
+        message.payload["content"] = AnyCodable(text)
+        message.payload["originalText"] = AnyCodable(text)
+        message.payload.removeValue(forKey: "uncorrected")
+        bucket[clientId] = message
+        outbox[sessionId] = bucket
+        var payload = outboundPayloads[clientId] ?? ["clientId": clientId]
+        payload["text"] = text
+        outboundPayloads[clientId] = payload
+        setPendingState(sessionId, clientId: clientId, .failed)
     }
 
     // MARK: - Delivery state
@@ -234,8 +333,7 @@ final class CommandSender {
         return true
     }
 
-    /// Remove an unconfirmed input. Returns its text so the caller can offer
-    /// it back for editing.
+    /// Remove an unconfirmed input (Delete). Returns its text.
     @discardableResult
     func discardPending(sessionId: String, clientId: String) -> String? {
         let text = outbox[sessionId]?[clientId]?.content
@@ -317,7 +415,9 @@ final class CommandSender {
                     clientId: clientId,
                     timestamp: message.timestamp,
                     order: message.payload["localOrder"]?.intValue ?? 0,
-                    text: message.content ?? "",
+                    // A still-correcting voice input restores as failed with
+                    // its original transcript, never a half-corrected one.
+                    text: message.payload["originalText"]?.stringValue ?? message.content ?? "",
                     delivery: message.payload["delivery"]?.stringValue,
                     attachments: persistedAttachments
                 ))

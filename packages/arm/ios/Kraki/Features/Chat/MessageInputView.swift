@@ -1,26 +1,15 @@
 #if os(iOS)
-/// MessageInputView — Floating bottom input, iMessage-style.
+/// MessageInputView — Floating bottom input.
 ///
-/// No enclosing bar. Three pill-shaped components sit side by side
-/// above the home indicator, each with its own glass/material chrome:
-///   ① Optional pending action row (permission buttons / question choices)
-///   ② A single unified input row:
-///       [image attach] [voice/keyboard toggle + text field
-///        (or hold-to-talk pill)] [send button with mode swipe]
+/// One glass capsule: [image / thumbnail] text [ⓧ] [mic] [send | stop].
+/// It grows upward with multi-line text. Tapping the mic expands the same
+/// capsule into two rows — a live transcript above [Cancel] level/time
+/// [Edit] (the send circle stays beside the capsule) — and collapses back
+/// when dictation ends.
 ///
-/// In voice mode, the input box's INNER content morphs into a
-/// press-and-hold "Hold to Talk" prompt — the box's outer chrome
-/// (voice/keyboard toggle, mode-color strip, send icon, glass
-/// background) stays exactly the same so the size doesn't shift.
-/// The voice toggle still flips back to keyboard mode. The send
-/// icon dims (no draft text yet) but is still tap-able once
-/// transcription fills the draft.
-///
-/// The send/stop button doubles as the mode selector: dragging it
-/// horizontally reveals an adjacent mode color through the liquid-glass
-/// capsule (max one block of travel, momentum-friendly). The fully
-/// expanded segmented control lives in the session settings sheet
-/// (SessionInfoSheet) for explicit mode changes.
+/// Voice ↑ sends at once as an optimistic bubble that is corrected in place
+/// and transmitted when correction completes (see IOSVoiceComposer).
+/// Session mode is chosen in the chat header, not on the composer.
 
 import SwiftUI
 import PhotosUI
@@ -38,6 +27,28 @@ enum MessageComposerPolicy {
         if hasQuestion { return .answerQuestion }
         return isBusy ? .steer : .prompt
     }
+}
+
+enum IOSComposerMetrics {
+    /// One-line capsule height (buttons keep >= 44pt touch targets).
+    static let height: CGFloat = 48
+    /// Primary (send / stop) circle — same as the chat's jump controls.
+    static let control: CGFloat = 44
+    /// Gap between the capsule and the primary button, and between stacked
+    /// round controls (matches the jump controls' spacing).
+    static let controlGap: CGFloat = 8
+    /// Gap between the send circle and the ↓/↑ control above it (8 pt + 1 pt
+    /// to balance the bordered glass controls against the solid circle).
+    static let stackGap: CGFloat = 9
+    /// Dictation box: its top lines up with the top of the round control
+    /// stacked above the send circle (send is centred on the one-line row).
+    static let recordingMinHeight: CGFloat = (height - control) / 2 + control + stackGap + control
+    /// Stop: a deep red that stays calm in Dark Mode.
+    static let stopRed = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.62, green: 0.17, blue: 0.17, alpha: 1)
+            : UIColor(red: 0.78, green: 0.16, blue: 0.16, alpha: 1)
+    })
 }
 
 struct MessageInputView: View {
@@ -61,92 +72,12 @@ struct MessageInputView: View {
     @State private var submitFailureTask: Task<Void, Never>?
     @State private var awaitingActive = false
     @State private var abortPending = false
-    @State private var voiceDraftPrefix = ""
+    @State private var textSelection: TextSelection?
+    @State private var selectionText = ""
+    @State private var programmaticVoiceFocus = false
     @FocusState private var isFocused: Bool
 
-    // Mode swipe — the send icon doubles as the mode selector.
-    // Swiping it horizontally cycles SessionMode (looping). The input
-    // box's glass tint blends between adjacent mode colors live during
-    // the swipe; on release a tap = send, a flick or 40% drag = mode
-    // commit. Visual swipe travel is clamped to ±`modeStepWidth`.
-    //
-    // `rawDragX` is the live horizontal drag translation (clamped).
-    // `dragStartMode` snapshots the mode at gesture start so tint
-    // math is stable across the drag.
-    @State private var rawDragX: CGFloat = 0
-    @State private var dragStartMode: SessionMode? = nil
-    @State private var measuredInputBoxWidth: CGFloat = 0
-
-    // Mode-change toast (liquid-glass capsule above the send icon).
-    // Only triggered by an actual user-initiated commit (via the
-    // swipe), not by sync from the server or initial load.
-    @State private var showModeToast = false
-    @State private var modeToastMode: SessionMode = .discuss
-    @State private var modeToastTask: Task<Void, Never>? = nil
-
-    private static let allModes: [SessionMode] = [.safe, .discuss, .execute, .delegate]
-    private static let inputBoxHeight: CGFloat = 42
-    private static let commitDistanceFraction: CGFloat = 0.4
-    private static let momentumVelocity: CGFloat = 500   // pt/s
-
-    /// Width of one "step" — clamped to the measured input box width
-    /// so a full-distance swipe can fully replace the visible mode
-    /// color with the adjacent one. Falls back to a sane default
-    /// while the box hasn't been measured yet.
-    private var modeStepWidth: CGFloat {
-        max(80, measuredInputBoxWidth)
-    }
-
-    private var currentSessionMode: SessionMode {
-        appState.sessionStore.sessionModes[sessionId]
-            ?? session?.mode
-            ?? .discuss
-    }
-
-    /// The mode whose color tint is centered. We snapshot the start
-    /// mode at gesture start so tint math stays stable across the drag
-    /// (in-drag commits would otherwise re-anchor the interpolation).
-    private var tintBaseMode: SessionMode {
-        dragStartMode ?? currentSessionMode
-    }
-
-    /// Live tint color for the input box: blends linearly between the
-    /// base mode's color and the adjacent mode's color based on the
-    /// drag progress (rawDragX / modeStepWidth, clamped to ±1). At
-    /// rest this is just the current mode's color.
-    private var inputBoxModeTint: Color {
-        let modes = Self.allModes
-        let count = modes.count
-        let baseIdx = modes.firstIndex(of: tintBaseMode) ?? 1
-        let progress = max(-1, min(1, rawDragX / modeStepWidth))
-        if progress == 0 { return Color.modeColor(modes[baseIdx]) }
-        // Drag RIGHT (positive dx) → previous mode tint enters.
-        let neighborIdx: Int = progress > 0
-            ? ((baseIdx - 1) % count + count) % count
-            : ((baseIdx + 1) % count + count) % count
-        return Self.blendColors(
-            Color.modeColor(modes[baseIdx]),
-            Color.modeColor(modes[neighborIdx]),
-            t: abs(progress)
-        )
-    }
-
-    private static func blendColors(_ a: Color, _ b: Color, t: CGFloat) -> Color {
-        let ua = UIColor(a)
-        let ub = UIColor(b)
-        var (r1, g1, b1, a1): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
-        var (r2, g2, b2, a2): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
-        ua.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
-        ub.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
-        let tt = max(0, min(1, t))
-        return Color(
-            red: Double(r1 + (r2 - r1) * tt),
-            green: Double(g1 + (g2 - g1) * tt),
-            blue: Double(b1 + (b2 - b1) * tt),
-            opacity: Double(a1 + (a2 - a1) * tt)
-        )
-    }
-
+    private static let inputBoxHeight: CGFloat = IOSComposerMetrics.height
     private var sessionStore: SessionStore { appState.sessionStore }
     private var session: SessionInfo? { sessionStore.sessions[sessionId] }
     private var sessionActive: Bool {
@@ -166,12 +97,21 @@ struct MessageInputView: View {
     private var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var hasImage: Bool { imageData != nil }
     private var voiceController: KrakiVoiceInputController { appState.voiceInputController }
-    private var voiceOwnsComposer: Bool {
-        voiceController.isBusy && voiceController.activeSessionID == sessionId
+    private var voice: IOSVoiceComposer { appState.iosVoiceComposer }
+    private var isRecordingHere: Bool { voice.isRecording(in: sessionId) }
+    /// A sent voice message of this session is still being corrected. Typed
+    /// sends wait for it so messages reach the agent in order.
+    private var voiceSendPending: Bool {
+        guard voice.sessionID == sessionId, let phase = voice.operation?.phase else { return false }
+        if case .staged = phase { return true }
+        return false
     }
     private var canSend: Bool {
-        !voiceOwnsComposer && (isStructuredResponse ? hasText : (hasText || hasImage))
+        !isRecordingHere && !voiceSendPending && (isStructuredResponse ? hasText : (hasText || hasImage))
     }
+    /// Agent running and nothing typed: the primary button stops the turn.
+    /// As soon as there is something to send it becomes Send (steer).
+    private var showsStop: Bool { canShowAbort && !hasText && !hasImage }
     private var canShowAbort: Bool { sessionActive || isCompacting || hasLiveCard }
 
     /// True when we can actually deliver a message right now —
@@ -211,13 +151,14 @@ struct MessageInputView: View {
     private var canStartVoice: Bool {
         VoiceComposerAccessPolicy.canStart(
             capabilityAvailable: appState.voiceCapability != nil,
+            // A correction still flowing into this draft may be superseded.
             voiceControllerBusy: voiceController.isBusy
+                && !(voice.sessionID == sessionId && voice.operation?.phase == .toDraft)
         )
     }
 
     private var isVoiceFailure: Bool {
-        if case .failed = voiceController.state { return true }
-        return false
+        voiceController.hasFailure(for: sessionId)
     }
 
     var body: some View {
@@ -227,13 +168,6 @@ struct MessageInputView: View {
             } action: { height in
                 guard height > 0 else { return }
                 onHeightChange(height)
-            }
-            .overlay(alignment: .topTrailing) {
-                // Mode-change toast — floats above the send icon
-                // with a small gap (~10pt) above the input row.
-                modeToast
-                    .offset(x: -23, y: -32)
-                    .allowsHitTesting(false)
             }
             .overlay(alignment: .top) {
                 // Offline / reconnecting hint pill. Sits a few points
@@ -245,15 +179,24 @@ struct MessageInputView: View {
                     .allowsHitTesting(false)
             }
             .task(id: sessionId) {
-                if let activeVoiceSession = voiceController.activeSessionID,
-                   activeVoiceSession != sessionId {
-                    voiceController.cancel()
-                }
+                if let owner = voice.sessionID, owner != sessionId { voice.depart(sessionID: owner) }
+                textSelection = nil
             }
-            .onDisappear {
-                if voiceController.activeSessionID == sessionId {
-                    voiceController.cancel()
-                }
+            .onDisappear { voice.depart(sessionID: sessionId) }
+            .onChange(of: voice.editorRequest) { _, _ in
+                guard voice.editorSessionID == sessionId, sessionStore.activeSessionId == sessionId else { return }
+                applyVoiceSelection()
+                programmaticVoiceFocus = true
+                isFocused = true
+            }
+            .onChange(of: voice.selectionRequest) { _, _ in applyVoiceSelection() }
+            .onChange(of: voice.dispatchSignal) { _, _ in
+                // A staged voice prompt was just transmitted.
+                if voice.dispatchedSessionID == sessionId { awaitingActive = true }
+            }
+            .onChange(of: isFocused) { _, focused in
+                if focused && !programmaticVoiceFocus { voice.takeOver(sessionID: sessionId) }
+                programmaticVoiceFocus = false
             }
             .onChange(of: session?.state) { _, newState in
                 // A normal prompt's local latch ends at the first authoritative
@@ -311,172 +254,208 @@ struct MessageInputView: View {
 
     // MARK: - Unified Input Row
 
+    /// One glass capsule holds everything: [image] text [ⓧ] [mic] [send/stop].
+    /// Dictation expands it in place into two rows (transcript + controls).
+    /// Capsule + the primary button beside it. The button matches the chat's
+    /// jump controls above it (44 pt circle, same trailing column, 8 pt gaps)
+    /// and stays on the last line as the capsule grows.
     private var inputRow: some View {
-        HStack(spacing: 8) {
-            imageAttachButton
+        HStack(alignment: .bottom, spacing: IOSComposerMetrics.controlGap) {
             inputBox
-            if canShowAbort { abortButton }
+            primaryButton
+                .padding(.bottom, (Self.inputBoxHeight - IOSComposerMetrics.control) / 2)
         }
-        .animation(.easeInOut(duration: 0.2), value: voiceOwnsComposer)
     }
 
-    /// The input box. Voice/keyboard toggle on the LEFT, content in
-    /// the middle (text field in text mode, hold-to-talk pill in voice
-    /// mode), and the send icon on the RIGHT. The whole box has a
-    /// liquid-glass capsule background tinted by the current session
-    /// mode color (blends live during swipe on the send icon).
-    ///
-    /// Voice/keyboard toggle on the LEFT, content in the middle
-    /// (text field in text mode, hold-to-talk prompt in voice mode),
-    /// send icon on the RIGHT. The chrome (glass + mode-color strip)
-    /// and outer dimensions are identical in both modes — only the
-    /// middle content swaps. This way pressing the mic just morphs
-    /// the input box's content without resizing or losing the swipe
-    /// strip / voice toggle / send icon.
+    private static let boxShape = RoundedRectangle(cornerRadius: IOSComposerMetrics.height / 2, style: .continuous)
+
+    /// Shared by the composer expand/collapse and the chat list's inset.
+    static let expandAnimation = Animation.spring(response: 0.34, dampingFraction: 0.9)
+
+    /// The same box throughout: dictation inserts the transcript row above
+    /// and swaps the bottom row in place, so the box grows upward smoothly.
     private var inputBox: some View {
-        Group {
-            if voiceOwnsComposer {
-                voiceInputSurface
-            } else {
-                HStack(alignment: .center, spacing: 0) {
-                    if canShowVoiceToggle { voiceToggleButton }
-                    textFieldForMode
-                    sendIconButton
+        VStack(alignment: .leading, spacing: 0) {
+            if isRecordingHere {
+                recordingHeader
+                    .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 12)),
+                                            removal: .opacity))
+            }
+            ZStack {
+                if isRecordingHere {
+                    recordingControls.transition(.opacity)
+                } else {
+                    restingBox.transition(.opacity)
                 }
             }
         }
         .frame(maxWidth: .infinity)
-        // `minHeight` (not fixed `height`) so the TextField's
-        // `.lineLimit(1...3)` can actually expand vertically when the
-        // user types past one line. Center alignment vertically
-        // centers the placeholder / single-line text alongside the
-        // mic and send icons; when text grows past 1 line, the
-        // HStack grows symmetrically — close enough to iMessage that
-        // the icons appear to stay attached to the box.
         .frame(minHeight: Self.inputBoxHeight)
         .background { inputBoxGlassBackground }
-        .contentShape(Capsule())
-        .simultaneousGesture(inputBoxModeSwipeGesture)
-        .animation(.easeInOut(duration: 0.22), value: currentSessionMode)
+        .contentShape(Self.boxShape)
+        .animation(Self.expandAnimation, value: isRecordingHere)
+    }
+
+    private var restingBox: some View {
+        HStack(alignment: .bottom, spacing: 0) {
+            imageSlot
+            HStack(alignment: .center, spacing: 0) {
+                textFieldForMode
+                if hasText || hasImage { clearButton }
+            }
+            .frame(maxWidth: .infinity, minHeight: Self.inputBoxHeight)
+            // The TextField only hit-tests its glyph rect: any other tap in
+            // the text area (padding, edges) focuses it as well.
+            .background {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { if !isFocused { isFocused = true } }
+            }
+            if canShowVoiceToggle { micButton }
+        }
+        .padding(.trailing, 2)
+    }
+
+    // MARK: - Dictation (two rows)
+
+    private var recordingHeader: some View {
+        recordingHeaderContent
+            .frame(maxWidth: .infinity,
+                   minHeight: IOSComposerMetrics.recordingMinHeight - Self.inputBoxHeight,
+                   alignment: .topLeading)
+    }
+
+    private var recordingHeaderContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let imageData, let uiImage = UIImage(data: imageData) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 40, height: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .padding(.leading, 14)
+                    .padding(.top, 10)
+            }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    liveTranscript
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                        .padding(.bottom, 4)
+                        .id("transcript")
+                }
+                .frame(maxHeight: 132)
+                .fixedSize(horizontal: false, vertical: true)
+                .onChange(of: voice.rawText) { _, _ in proxy.scrollTo("transcript", anchor: .bottom) }
+            }
+        }
+    }
+
+    private var recordingControls: some View {
+            HStack(spacing: 6) {
+                Button { withAnimation(Self.expandAnimation) { voice.cancel() } } label: {
+                    Label("Cancel", systemImage: "xmark")
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 12)
+                        .frame(height: 36)
+                        .background(Color.secondary.opacity(0.12), in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary)
+                .accessibilityIdentifier("voice-cancel")
+                .accessibilityHint("Discards what you just said")
+                VoiceLevelBars(levels: voiceController.levels)
+                    .padding(.leading, 6)
+                if let start = voice.recordingStartedAt {
+                    TimelineView(.periodic(from: start, by: 1)) { context in
+                        Text(Self.elapsed(from: start, to: context.date))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 4)
+                Button { withAnimation(Self.expandAnimation) { voice.finishToDraft() } } label: {
+                    Label("Edit", systemImage: "text.cursor")
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 12)
+                        .frame(height: 36)
+                        .background(Color.krakiPrimary.opacity(0.12), in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.krakiPrimary)
+                .accessibilityIdentifier("voice-to-text")
+                .accessibilityHint("Stops listening and puts the text in the field to edit")
+            }
+            .padding(.leading, 8)
+            .padding(.trailing, 6)
+            .frame(height: Self.inputBoxHeight)
+    }
+
+    /// Existing draft text in the primary color, the live utterance dimmed
+    /// (not editable yet) at the caret.
+    private var liveTranscript: some View {
+        let parts = voice.preview
+        let hasSpeech = !parts.spoken.isEmpty
+        return Group {
+            if parts.prefix.isEmpty && parts.suffix.isEmpty && !hasSpeech {
+                HStack(spacing: 7) {
+                    Circle().fill(.red).frame(width: 7, height: 7)
+                    Text(voiceListeningStatus).foregroundStyle(.secondary)
+                }
+            } else {
+                Text(parts.prefix) + Text(parts.spoken).foregroundColor(.secondary) + Text(parts.suffix)
+            }
+        }
+        .font(.body)
+        .accessibilityIdentifier("voice-transcript")
+    }
+
+    private var voiceListeningStatus: String {
+        switch voiceController.state {
+        case .requestingPermission: return "Allow microphone access…"
+        case .recording: return "Listening…"
+        default: return "Starting…"
+        }
+    }
+
+    private static func elapsed(from start: Date, to now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(start)))
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 
     @ViewBuilder
     private var inputBoxGlassBackground: some View {
-        let shape = Capsule()
-        ZStack(alignment: .bottom) {
-            // Plain iOS 26 liquid glass capsule — no full-box tint;
-            // the mode color lives only in the thin strip below.
-            if #available(iOS 26.0, *) {
-                Color.clear.glassEffect(.regular, in: shape)
-            } else {
-                shape.fill(.ultraThinMaterial)
-            }
-
-            // Thin mode-color strip pinned to the bottom edge of the
-            // capsule. Renders 3 horizontal blocks (prev / base /
-            // next mode) wider than the box; offset by `rawDragX` so
-            // it slides with the finger, peeking the adjacent
-            // colors in from the swipe direction. Clipped to the
-            // capsule so the colors hug the bottom curvature.
-            swipeBottomStrip
-                .clipShape(shape)
-                .allowsHitTesting(false)
+        // Plain liquid glass. Session mode lives in the chat header.
+        if #available(iOS 26.0, *) {
+            Color.clear.glassEffect(.regular, in: Self.boxShape)
+        } else {
+            Self.boxShape.fill(.ultraThinMaterial)
         }
     }
 
-    private var swipeBottomStrip: some View {
-        GeometryReader { proxy in
-            let modes = Self.allModes
-            let count = modes.count
-            let baseIdx = modes.firstIndex(of: tintBaseMode) ?? 1
-            let prevIdx = ((baseIdx - 1) % count + count) % count
-            let nextIdx = ((baseIdx + 1) % count + count) % count
-            let w = proxy.size.width
-            let stripHeight: CGFloat = 1.5
-            let opacity: Double = 0.95
-            HStack(spacing: 0) {
-                Color.modeColor(modes[prevIdx]).opacity(opacity)
-                    .frame(width: w, height: stripHeight)
-                Color.modeColor(modes[baseIdx]).opacity(opacity)
-                    .frame(width: w, height: stripHeight)
-                Color.modeColor(modes[nextIdx]).opacity(opacity)
-                    .frame(width: w, height: stripHeight)
-            }
-            // The 3-block strip is anchored so the BASE block fully
-            // covers the visible window at rest (`rawDragX == 0`).
-            // `rawDragX` then slides the strip with the finger up to
-            // ±w, peeking the adjacent block fully into view.
-            .offset(x: -w + rawDragX)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .onAppear { measuredInputBoxWidth = w }
-            .onChange(of: w) { _, newW in measuredInputBoxWidth = newW }
-        }
-    }
+    // MARK: - Microphone
 
-    /// Horizontal swipe gesture that cycles SessionMode, attached to
-    /// the WHOLE input box (not just the send icon) so the user can
-    /// swipe anywhere on the box. Uses `simultaneousGesture` so taps
-    /// on the inner TextField, voice toggle, and send icon still
-    /// reach their own gesture handlers. `minimumDistance: 10`
-    /// prevents an incidental finger jiggle from triggering a swipe.
-    /// The horizontal-vs-vertical guard runs only at the FIRST motion
-    /// event so once we've committed to a horizontal swipe, vertical
-    /// drift doesn't cancel it.
-    private var inputBoxModeSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 10)
-            .onChanged { value in
-                guard !voiceOwnsComposer else { return }
-                if dragStartMode == nil {
-                    // Lock in: only start a swipe if the first
-                    // motion is more horizontal than vertical.
-                    let dx = value.translation.width
-                    let dy = value.translation.height
-                    guard abs(dx) > abs(dy) else { return }
+    private var micButton: some View {
+        Button(action: startVoice) {
+            ZStack {
+                LucideIcon(.mic, size: 22, strokeWidth: 2.1, color: .secondary)
+                    .opacity(voice.isFinishing(in: sessionId) ? 0 : 1)
+                if voice.isFinishing(in: sessionId) {
+                    ProgressView().controlSize(.small).accessibilityLabel("Finishing transcription")
                 }
-                handleModeSwipeChanged(value.translation.width)
             }
-            .onEnded { value in
-                guard dragStartMode != nil else { return }
-                handleModeSwipeEnded(value.velocity.width)
-            }
-    }
-
-    // MARK: - Voice Toggle (lives inside the input box, leading edge)
-
-    private var voiceToggleButton: some View {
-        Button(action: handleVoiceButton) {
-            LucideIcon(.mic, size: 21, strokeWidth: 2.2, color: .secondary)
-                .frame(width: 40, height: Self.inputBoxHeight)
-                .contentShape(Rectangle())
+            .frame(width: 44, height: Self.inputBoxHeight)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!canStartVoice)
-        .opacity(canStartVoice ? 1 : 0.4)
-        .padding(.leading, 6)
-        .accessibilityLabel("Start voice input")
-        .accessibilityHint("Transcribes speech into the current draft")
-    }
-
-    private var voiceInputSurface: some View {
-        IOSVoiceComposerSurface(
-            pieces: voiceTranscriptPieces,
-            state: voiceController.state,
-            statusText: voiceStatusText,
-            onFinish: { voiceController.finish() },
-            onCancel: cancelVoiceInput
-        )
-        .frame(minHeight: Self.inputBoxHeight)
-    }
-
-    private var voiceTranscriptPieces: [(text: String, opacity: Double)] {
-        VoiceComposerPresentation.transcriptPieces(
-            prefix: voiceDraftPrefix,
-            state: voiceController.state,
-            rawText: voiceController.rawText,
-            correctionSource: voiceController.correctionSource,
-            correctionText: voiceController.correctionText,
-            correctionSourceOffset: voiceController.correctionSourceOffset
-        )
+        .opacity(canStartVoice || voice.isFinishing(in: sessionId) ? 1 : 0.4)
+        .accessibilityIdentifier("chat-voice-microphone")
+        .accessibilityLabel("Dictate")
+        .accessibilityHint("Starts listening. Then send, edit the text, or cancel.")
     }
 
     @ViewBuilder
@@ -488,7 +467,6 @@ struct MessageInputView: View {
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button("Dismiss") {
-                voiceDraftPrefix = ""
                 voiceController.clearFailure()
             }
             .buttonStyle(.plain)
@@ -508,60 +486,127 @@ struct MessageInputView: View {
         )
     }
 
-    private func cancelVoiceInput() {
-        voiceController.cancel()
-        voiceDraftPrefix = ""
-        isFocused = true
-    }
-
-    private func handleVoiceButton() {
-        if voiceController.activeSessionID == sessionId {
-            if voiceController.isRecording { voiceController.finish() }
-            return
-        }
+    private func startVoice() {
         guard canStartVoice, let session else { return }
+        let range = selectedRange
         voiceController.clearFailure()
-        let existingDraft = text
-        voiceDraftPrefix = existingDraft
+        let context = VoiceSessionContextBuilder.build(session: session,
+            recentMessages: appState.messageStore.recentFromDB(sessionId, limit: 20))
+        withAnimation(Self.expandAnimation) {
+            voice.begin(sessionID: sessionId, selection: range, context: context)
+        }
         isFocused = false
-        let voiceContext = VoiceSessionContextBuilder.build(
-            session: session,
-            recentMessages: appState.messageStore.recentFromDB(sessionId, limit: 20)
-        )
-        Task { @MainActor in
-            await voiceController.begin(
-                sessionID: sessionId,
-                context: voiceContext,
-                onFinal: { final in
-                    guard appState.sessionStore.sessions[sessionId] != nil else { return }
-                    appState.sessionStore.setDraft(
-                        sessionId,
-                        VoiceDraftMerger.merge(existing: existingDraft, final: final)
-                    )
-                    voiceDraftPrefix = ""
-                    isFocused = true
-                }
-            )
+    }
+
+    /// ↑ while dictating. Prompts and steers go out as a bubble that is
+    /// corrected in place and transmitted when correction completes. A
+    /// structured reply (answer / deny reason) is reviewed in the field first.
+    private func sendVoice() {
+        guard isRecordingHere else { return }
+        switch submissionIntent {
+        case .answerQuestion, .denyPermission:
+            withAnimation(Self.expandAnimation) { voice.finishToDraft() }
+        case .prompt, .steer:
+            let delivery: CommandSender.InputDelivery = submissionIntent == .steer ? .steer : .prompt
+            let staged = withAnimation(Self.expandAnimation) {
+                voice.send(attachments: imageAttachments, delivery: delivery)
+            }
+            guard staged else {
+                showSubmitFailure()
+                return
+            }
+            clearImage()
+            didSubmitFromComposer()
         }
     }
 
-    // MARK: - Send Icon (trailing edge of input box)
-    //
-    // The arrow always submits the composer's contextual action. Session-level
-    // abort lives in the navigation bar, so active turns no longer replace the
-    // send affordance or disable the text field.
+    private var selectedRange: NSRange? {
+        guard selectionText == text, let textSelection, case let .selection(range) = textSelection.indices else { return nil }
+        return IOSVoiceComposer.selectionRange(range, in: text)
+    }
+    private func applyVoiceSelection() {
+        guard voice.editorSessionID == sessionId || voice.sessionID == sessionId,
+              let requested = voice.selectionRequest,
+              let range = Range(IOSVoiceComposer.safeRange(requested, in: text), in: text) else { return }
+        selectionText = text
+        textSelection = TextSelection(range: range)
+    }
+    private var selectionBinding: Binding<TextSelection?> {
+        Binding(get: { selectedRange != nil ? textSelection : nil }, set: { newSelection in
+            let old = textSelection
+            selectionText = text
+            textSelection = newSelection
+            if isFocused && old != newSelection && selectedRange != voice.selectionRequest {
+                voice.takeOver(sessionID: sessionId)
+            }
+        })
+    }
 
-    private var sendIconButton: some View {
-        Button(action: handleModeSubmit) {
-            sendIconGlyph
-                .frame(width: 34, height: Self.inputBoxHeight)
-                .contentShape(Rectangle())
+    // MARK: - Primary button (trailing edge of input box)
+    //
+    // Send, or Stop while the agent runs and nothing is typed. Typing turns a
+    // Stop into Send (steer) in place; clearing the field turns it back.
+
+    private enum PrimaryRole: Equatable { case send, stop, voiceSend }
+    private var primaryRole: PrimaryRole {
+        if isRecordingHere { return .voiceSend }
+        return showsStop ? .stop : .send
+    }
+    private var primaryFill: Color {
+        switch primaryRole {
+        case .stop: return IOSComposerMetrics.stopRed
+        case .voiceSend: return Color.krakiPrimary
+        case .send: return canSend ? Color.krakiPrimary : Color(.systemGray4)
+        }
+    }
+
+    /// Steering interjects into the running turn: same navy, a curved arrow.
+    private func primaryGlyph(_ role: PrimaryRole) -> String {
+        if role == .stop { return "stop.fill" }
+        return submissionIntent == .steer ? "arrow.turn.right.up" : "arrow.up"
+    }
+
+    /// One circle for every role: its fill and glyph morph (Send ↔ Stop,
+    /// grey ↔ active, dictation Send) instead of swapping views.
+    private var primaryButton: some View {
+        let role = primaryRole
+        return Button {
+            switch role {
+            case .voiceSend: sendVoice()
+            case .stop: requestAbort()
+            case .send: handleModeSubmit()
+            }
+        } label: {
+            // Animation is scoped to the fill and glyph style only: a
+            // button-wide implicit animation also animates the chat's layout
+            // on every update while a reply streams (costly on macOS).
+            let glyph = primaryGlyph(role)
+            let fill = primaryFill
+            let morph = Animation.easeInOut(duration: 0.22)
+            ZStack {
+                Circle().animation(morph) { $0.foregroundStyle(fill) }
+                ForEach(["arrow.up", "arrow.turn.right.up", "stop.fill"], id: \.self) { name in
+                    Image(systemName: name)
+                        .font(.system(size: name == "stop.fill" ? 14 : 18, weight: .bold))
+                        .foregroundStyle(.white)
+                        .animation(morph) {
+                            $0.opacity(name == glyph && !(role == .stop && abortPending) ? 1 : 0)
+                                .scaleEffect(name == glyph ? 1 : 0.6)
+                        }
+                }
+                if role == .stop && abortPending {
+                    ProgressView().controlSize(.small).tint(.white)
+                }
+            }
+            .frame(width: IOSComposerMetrics.control, height: IOSComposerMetrics.control)
+            .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(sendAccessibilityLabel)
-        .accessibilityHint(sendAccessibilityHint)
-        .opacity(sendButtonOpacity)
-        .padding(.trailing, 6)
+        .disabled(role == .stop ? (abortPending || !isDeviceReachable) : false)
+        .opacity(role == .stop ? (isDeviceReachable ? 1 : 0.5) : (role == .send && canSend && !isDeviceReachable ? 0.6 : 1))
+        .accessibilityIdentifier(role == .voiceSend ? "voice-send" : role == .stop ? "chat-stop" : "chat-send")
+        .accessibilityLabel(role == .stop ? "Stop agent" : sendAccessibilityLabel)
+        .accessibilityHint(role == .stop ? "Aborts the current agent turn" : sendAccessibilityHint)
     }
 
     private var sendAccessibilityLabel: String {
@@ -582,41 +627,6 @@ struct MessageInputView: View {
         }
     }
 
-    private var sendButtonOpacity: Double {
-        if !canSend { return 0.4 }
-        if !isDeviceReachable { return 0.5 }
-        return 1
-    }
-
-    private var sendIconGlyph: some View {
-        Image(systemName: "arrow.right")
-            .font(.system(size: 16, weight: .bold))
-            .foregroundStyle(Color.modeColor(currentSessionMode))
-            .animation(.easeInOut(duration: 0.22), value: currentSessionMode)
-    }
-
-    private var abortButton: some View {
-        Button(action: requestAbort) {
-            Group {
-                if abortPending {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.red)
-                }
-            }
-            .frame(width: Self.inputBoxHeight, height: Self.inputBoxHeight)
-            .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .background(.ultraThinMaterial, in: Circle())
-        .disabled(abortPending || !isDeviceReachable)
-        .opacity(isDeviceReachable ? 1 : 0.5)
-        .accessibilityLabel("Stop agent")
-        .accessibilityHint("Aborts the current agent turn")
-    }
-
     private func requestAbort() {
         guard canShowAbort, !abortPending, isDeviceReachable else { return }
         if appState.commandSender?.abortSession(sessionId: sessionId) == true {
@@ -624,40 +634,76 @@ struct MessageInputView: View {
         }
     }
 
-    // MARK: - Image Attach
+    // MARK: - Image Attach (single image)
+    //
+    // The attach icon itself becomes the thumbnail once an image is chosen:
+    // tap to replace it, the small × removes it.
 
     @ViewBuilder
-    private var imageAttachButton: some View {
-        PhotosPicker(
-            selection: $selectedPhoto,
-            matching: .images,
-            photoLibrary: .shared()
-        ) {
+    private var imageSlot: some View {
+        Group {
             if let imageData, let uiImage = UIImage(data: imageData) {
                 ZStack(alignment: .topTrailing) {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(height: Self.inputBoxHeight)
-                        .frame(maxWidth: 64)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-
+                    PhotosPicker(selection: $selectedPhoto, matching: .images, photoLibrary: .shared()) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 32, height: 32)
+                            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            .frame(width: 44, height: Self.inputBoxHeight)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("Replace image")
                     Button { clearImage() } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary, .ultraThinMaterial)
+                            .font(.system(size: 15))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, Color.black.opacity(0.6))
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
                     }
-                    .offset(x: 4, y: -4)
+                    .buttonStyle(.plain)
+                    .offset(x: -1, y: 3)
+                    .accessibilityLabel("Remove image")
                 }
             } else {
-                LucideIcon(.imagePlus, size: 22, strokeWidth: 2.25, color: .secondary)
-                    .frame(width: Self.inputBoxHeight, height: Self.inputBoxHeight)
-                    .modifier(GlassCircleModifier())
-                    .contentShape(Rectangle())
+                PhotosPicker(selection: $selectedPhoto, matching: .images, photoLibrary: .shared()) {
+                    LucideIcon(.imagePlus, size: 22, strokeWidth: 2.1, color: .secondary)
+                        .frame(width: 44, height: Self.inputBoxHeight)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Attach image")
             }
         }
-        .disabled(!isIdle || voiceOwnsComposer)
-        .opacity(isIdle && !voiceOwnsComposer ? 1 : 0.4)
+        .padding(.leading, 4)
+        .disabled(!isIdle)
+        .opacity(isIdle ? 1 : 0.4)
+    }
+
+    private var imageAttachments: [ImageAttachment]? {
+        guard let imageData else { return nil }
+        return [ImageAttachment(type: "image", mimeType: imageMimeType, data: imageData.base64EncodedString())]
+    }
+
+    // MARK: - Clear
+
+    private var clearButton: some View {
+        Button(action: clearDraft) {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 17))
+                .foregroundStyle(Color(.tertiaryLabel))
+                .frame(width: 30, height: 40)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("chat-clear")
+        .accessibilityLabel("Clear message")
+    }
+
+    private func clearDraft() {
+        voice.takeOver(sessionID: sessionId)
+        sessionStore.setDraft(sessionId, "")
+        clearImage()
     }
 
     // MARK: - Mode-Aware Text Field
@@ -675,6 +721,17 @@ struct MessageInputView: View {
         return TextField(placeholder, text: Binding(
             get: { text },
             set: { newValue in
+                // UIKit echoes programmatic text during focus/selection updates.
+                // An equal echo is not a user edit and must not bump the draft's
+                // revision (otherwise it fences our own pending final).
+                guard newValue != text else { return }
+                voice.takeOver(sessionID: sessionId)
+                // Selection callbacks can precede this text callback. Retain a
+                // pending caret only once it is valid in the new snapshot.
+                if let textSelection, case let .selection(range) = textSelection.indices,
+                   IOSVoiceComposer.selectionRange(range, in: newValue) != nil {
+                    selectionText = newValue
+                }
                 // Intercept newline insertions and treat them as a
                 // submit. With `axis: .vertical`, the soft keyboard's
                 // return key inserts `\n` into the text by default
@@ -691,21 +748,19 @@ struct MessageInputView: View {
                     sessionStore.setDraft(sessionId, newValue)
                 }
             }
-        ), axis: .vertical)
-        // Caps the input box at ~2.5 visible lines. SwiftUI's lineLimit
-        // is integer-only, so we use a max of 3 wrapped lines and rely
-        // on the keyboard-return → send interception above to keep the
-        // average case to 1–2 lines of organic content.
-        .lineLimit(1...3)
+        ), selection: selectionBinding, axis: .vertical)
+        // Grows up to 5 lines, then scrolls inside the field.
+        .lineLimit(1...5)
         .textFieldStyle(.plain)
-        .font(.system(size: 16))
-        // Leading inset clears the capsule's rounded end now that the
-        // voice toggle is gone; trailing stays tight against the send
-        // icon which provides its own breathing room.
-        .padding(.leading, 18)
-        .padding(.trailing, 6)
-        .padding(.vertical, 6)
+        // System body (17pt default) and follows the user's Dynamic Type size.
+        .font(.body)
+        // The image slot clears the leading curve; 12pt vertical insets give
+        // one line of body text the 48pt capsule height.
+        .padding(.leading, 2)
+        .padding(.trailing, 4)
+        .padding(.vertical, 12)
         .focused($isFocused)
+        .accessibilityIdentifier("chat-composer-text")
         .submitLabel(.send)
         .onSubmit { handleModeSubmit() }
     }
@@ -752,6 +807,9 @@ struct MessageInputView: View {
     // MARK: - Mode Submit Handlers
 
     private func handleModeSubmit() {
+        guard !isRecordingHere else { return }
+        // A correction still flowing into this draft stops at what is visible.
+        if voice.sessionID == sessionId, voice.operation?.phase == .toDraft { voice.retireKeepingDraft() }
         switch submissionIntent {
         case .denyPermission:
             handlePermissionDenyWithReason()
@@ -813,124 +871,6 @@ struct MessageInputView: View {
         }
     }
 
-    // MARK: - Send action
-
-    private func handleModeSwipeChanged(_ dx: CGFloat) {
-        if dragStartMode == nil { dragStartMode = currentSessionMode }
-        // Rubber-band beyond ±modeStepWidth so the strip can over-
-        // travel slightly with momentum (then snap back via spring),
-        // but the "useful" range still tops out at one full step.
-        let limit = modeStepWidth
-        if abs(dx) <= limit {
-            rawDragX = dx
-        } else {
-            let excess = abs(dx) - limit
-            let rubber = excess / (1 + excess / 80) * 0.4
-            rawDragX = (dx > 0 ? 1 : -1) * (limit + rubber)
-        }
-    }
-
-    private func handleModeSwipeEnded(_ velocity: CGFloat) {
-        let modes = Self.allModes
-        let count = modes.count
-        let baseMode = dragStartMode ?? currentSessionMode
-        let baseIdx = modes.firstIndex(of: baseMode) ?? 1
-
-        let dx = rawDragX
-        let distanceCommit = abs(dx) >= Self.commitDistanceFraction * modeStepWidth
-        // Momentum commit: a fast flick in the same direction as the
-        // drag wins even if the finger only moved a short distance.
-        let velocityCommit = abs(velocity) >= Self.momentumVelocity
-            && dx != 0
-            && (velocity > 0) == (dx > 0)
-        let shouldCommit = distanceCommit || velocityCommit
-
-        // Resolve commit direction & visual target offset.
-        //   Drag RIGHT (dx > 0) → previous mode peeked in from left
-        //   → commit step −1, strip ends at +stepWidth (prev block
-        //   fully covers the window).
-        //   Drag LEFT  (dx < 0) → next mode → step +1, strip ends at
-        //   −stepWidth.
-        let commitStep: Int = shouldCommit ? (dx > 0 ? -1 : 1) : 0
-        let targetOffset: CGFloat = commitStep == 0
-            ? 0
-            : -CGFloat(commitStep) * modeStepWidth
-
-        // Fire commit + haptic at release start (not after the spring
-        // settles) so the send arrow color begins its own cross-fade
-        // animation immediately as the strip springs into place. The
-        // strip itself stays anchored to `dragStartMode` for the
-        // duration of the spring (so its visual content is stable),
-        // and the silent rebase in the completion handler swaps it
-        // over to the new mode at offset 0 — by which time the
-        // currentSessionMode color matches the visible block, so the
-        // swap is invisible.
-        if commitStep != 0 {
-            let targetIdx = ((baseIdx + commitStep) % count + count) % count
-            let newMode = modes[targetIdx]
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            appState.commandSender?.setSessionMode(sessionId: sessionId, mode: newMode)
-            presentModeToast(newMode)
-        }
-
-        // Physical spring driven by the gesture's exit velocity:
-        // .interpolatingSpring with non-zero `initialVelocity` carries
-        // the swipe momentum into the rest position, so a hard fling
-        // overshoots+settles and a soft drop just eases home. The
-        // velocity is normalized by the remaining distance so units
-        // make sense to the spring.
-        let remaining = targetOffset - rawDragX
-        let normalizedVelocity = remaining == 0 ? 0 : Double(velocity / remaining)
-        let physicsSpring: Animation = .interpolatingSpring(
-            mass: 1,
-            stiffness: 180,
-            damping: 22,
-            initialVelocity: normalizedVelocity
-        )
-
-        withAnimation(physicsSpring) {
-            rawDragX = targetOffset
-        } completion: {
-            // Silent rebase: strip rebuilds with the new
-            // currentSessionMode at the center, rawDragX = 0 leaves
-            // it visually identical (same color is already centered).
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) {
-                dragStartMode = nil
-                rawDragX = 0
-            }
-        }
-    }
-
-    // MARK: - Mode-Change Toast
-
-    private func presentModeToast(_ mode: SessionMode) {
-        modeToastMode = mode
-        modeToastTask?.cancel()
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
-            showModeToast = true
-        }
-        modeToastTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(1300))
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.25)) {
-                showModeToast = false
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var modeToast: some View {
-        if showModeToast {
-            ModeChangeToast(mode: modeToastMode)
-                .transition(.asymmetric(
-                    insertion: .scale(scale: 0.85, anchor: .bottom).combined(with: .opacity),
-                    removal: .opacity.combined(with: .scale(scale: 0.92, anchor: .bottom))
-                ))
-        }
-    }
-
     @ViewBuilder
     private var unreachableHintPill: some View {
         if let hint = unreachableHint {
@@ -958,11 +898,7 @@ struct MessageInputView: View {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let sendText = trimmed.isEmpty ? "[image]" : trimmed
 
-        var attachments: [ImageAttachment]?
-        if let imageData {
-            let base64 = imageData.base64EncodedString()
-            attachments = [ImageAttachment(type: "image", mimeType: imageMimeType, data: base64)]
-        }
+        let attachments = imageAttachments
 
         let delivery: CommandSender.InputDelivery = submissionIntent == .steer ? .steer : .prompt
         guard appState.commandSender?.sendInput(
@@ -1067,56 +1003,39 @@ private struct GlassChoiceButtonModifier: ViewModifier {
     }
 }
 
-// MARK: - Mode-Change Toast
+/// Live input level meter for dictation. Raw peaks from the microphone are
+/// small (speech is mostly 0.02–0.3) and linear, so they are mapped through
+/// decibels onto the bar height, then smoothed: fast attack, slower release,
+/// and a centre-weighted envelope so the meter reads as a voice, not noise.
+struct VoiceLevelBars: View {
+    let levels: [Float]
+    private static let barCount = 8
+    private static let floorDB: Float = -48
+    private static let ceilDB: Float = -6
 
-/// Tiny liquid-glass capsule that pops above the send button when the
-/// user commits a mode change via the swipe. Shows a mode-colored dot
-/// next to the mode name so the user gets a clear visual confirmation
-/// of the new mode without having to read the strip color.
-private struct ModeChangeToast: View {
-    let mode: SessionMode
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(Color.modeColor(mode))
-                .frame(width: 7, height: 7)
-            // Sizing trick: render the longest mode name invisibly
-            // to fix the label width, then overlay the actual mode
-            // name on top. This way the toast doesn't reflow when
-            // names of different lengths swap in rapid succession.
-            Text(Self.widestModeName)
-                .font(Self.labelFont)
-                .hidden()
-                .overlay {
-                    Text(mode.rawValue.capitalized)
-                        .font(Self.labelFont)
-                        .foregroundStyle(Color.modeColor(mode).opacity(0.85))
-                        .contentTransition(.opacity)
-                }
-        }
-        // Slightly longer easeInOut + softer curve for a smoother
-        // crossfade between mode labels and dot colors during rapid
-        // swipes.
-        .animation(.easeInOut(duration: 0.35), value: mode)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background {
-            if #available(iOS 26.0, *) {
-                Color.clear.glassEffect(.regular, in: Capsule())
-            } else {
-                Capsule().fill(.ultraThinMaterial)
-            }
-        }
-        .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
+    static func loudness(_ peak: Float) -> CGFloat {
+        guard peak > 0 else { return 0 }
+        let db = 20 * log10(peak)
+        return CGFloat(max(0, min(1, (db - floorDB) / (ceilDB - floorDB))))
     }
 
-    private static let labelFont: Font = .system(size: 13, weight: .medium)
-
-    /// Longest of the four mode names, used to pin the label width.
-    private static let widestModeName: String = {
-        ["Safe", "Discuss", "Execute", "Delegate"].max(by: { $0.count < $1.count }) ?? "Delegate"
-    }()
+    var body: some View {
+        let recent = Array(levels.suffix(Self.barCount))
+        let padded = Array(repeating: Float(0), count: max(0, Self.barCount - recent.count)) + recent
+        HStack(spacing: 2.5) {
+            ForEach(0..<Self.barCount, id: \.self) { i in
+                let value = Self.loudness(padded[i])
+                // Centre bars a bit taller than the edges.
+                let weight = 0.6 + 0.4 * (1 - abs(CGFloat(i) - CGFloat(Self.barCount - 1) / 2) / (CGFloat(Self.barCount - 1) / 2))
+                Capsule()
+                    .fill(Color.krakiPrimary.opacity(0.45 + 0.5 * Double(value)))
+                    .frame(width: 3, height: 4 + value * weight * 20)
+            }
+        }
+        .frame(height: 26)
+        .animation(.spring(response: 0.16, dampingFraction: 0.72), value: levels)
+        .accessibilityHidden(true)
+    }
 }
 
 

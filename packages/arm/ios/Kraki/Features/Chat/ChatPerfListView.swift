@@ -265,6 +265,20 @@ private final class RealCellSizer {
         }
     }
 
+    /// Re-measure a row whose content changed under a stable id (an
+    /// optimistic voice bubble streaming its correction). True if it moved.
+    @discardableResult
+    func remeasure(_ t: ChatMessage, width: CGFloat, allowShrink: Bool = true) -> Bool {
+        guard width > 0 else { return false }
+        resetIfWidthChanged(width)
+        let old = cache[t.id]
+        var new = measure(t, width: width)
+        if !allowShrink, let old { new = max(old, new) }
+        cache[t.id] = new
+        estimateCache.removeValue(forKey: t.id)
+        return old != new
+    }
+
     /// The real self-size: configure the offscreen cell exactly like the
     /// live one and ask UIKit for its fitting height.
     private func measure(_ t: ChatMessage, width: CGFloat) -> CGFloat {
@@ -596,6 +610,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private var jumpButtonBlur: UIVisualEffectView?
     private var latestMessageStartButtonBlur: UIVisualEffectView?
     private var jumpButtonBottomConstraint: NSLayoutConstraint?
+    /// ↑ rests in ↓'s slot while ↓ is hidden and is pushed up when ↓ appears.
+    private var latestStartBottomConstraint: NSLayoutConstraint?
     private var jumpButtonVisibilityTargets: [ObjectIdentifier: Bool] = [:]
     private var jumpButtonVisibilityGenerations: [ObjectIdentifier: Int] = [:]
     /// Reading line for navigation landings: status bar (≈62) + chat header
@@ -603,6 +619,16 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private static let latestMessageTopPadding: CGFloat = 124
     /// Round navigation controls: iOS minimum comfortable tap target.
     private static let jumpControlSize: CGFloat = 44
+    /// The ↓ control sits above the composer's 44 pt send circle, which stays
+    /// on the composer's bottom row. Its position is fixed to the ONE-LINE
+    /// composer (48 pt capsule + 6 pt padding each side = 60 pt), so a growing
+    /// composer (multi-line text, dictation) never pushes it up. The circle
+    /// top is 8 pt below that line; 1 extra pt balances the bordered glass
+    /// controls against the solid send circle.
+    private static let oneLineComposerHeight: CGFloat = 60
+    private static func jumpBottomGap(_ composerInset: CGFloat) -> CGFloat {
+        composerInset <= 0 ? 16 : oneLineComposerHeight + (IOSComposerMetrics.stackGap - 8)
+    }
     private let unseenBadge = UIView()
     /// The chat header (back / title / more) is part of the page, drawn by
     /// SessionDetailView over the top glass band, not a system navigation
@@ -1177,13 +1203,14 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         jumpButton.isHidden = true
         jumpButton.accessibilityLabel = "Jump to latest"
 
+        blur.accessibilityIdentifier = "jump-latest-material"
         view.addSubview(blur)
         view.addSubview(jumpButton)
         jumpButtonBlur = blur
 
         let bottom = jumpButton.bottomAnchor.constraint(
             equalTo: view.safeAreaLayoutGuide.bottomAnchor,
-            constant: -(bottomContentInset + 16)
+            constant: -Self.jumpBottomGap(bottomContentInset)
         )
         jumpButtonBottomConstraint = bottom
         NSLayoutConstraint.activate([
@@ -1197,6 +1224,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             blur.bottomAnchor.constraint(equalTo: jumpButton.bottomAnchor),
         ])
 
+        let latestStart = latestMessageStartButton.bottomAnchor.constraint(equalTo: jumpButton.bottomAnchor)
+        latestStartBottomConstraint = latestStart
         let startBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
         startBlur.translatesAutoresizingMaskIntoConstraints = false
         startBlur.isUserInteractionEnabled = false
@@ -1222,6 +1251,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         latestMessageStartButton.isHidden = true
         latestMessageStartButton.accessibilityLabel = "Jump to previous reply start"
 
+        startBlur.accessibilityIdentifier = "jump-start-material"
         view.addSubview(startBlur)
         view.addSubview(latestMessageStartButton)
         latestMessageStartButtonBlur = startBlur
@@ -1246,7 +1276,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
         NSLayoutConstraint.activate([
             latestMessageStartButton.trailingAnchor.constraint(equalTo: jumpButton.trailingAnchor),
-            latestMessageStartButton.bottomAnchor.constraint(equalTo: jumpButton.topAnchor, constant: -8),
+            latestStart,
             latestMessageStartButton.widthAnchor.constraint(equalToConstant: Self.jumpControlSize),
             latestMessageStartButton.heightAnchor.constraint(equalTo: jumpButton.heightAnchor),
             startBlur.leadingAnchor.constraint(equalTo: latestMessageStartButton.leadingAnchor),
@@ -1340,18 +1370,44 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         }
     }
 
+    /// The ↑/↓ controls keep the state they had before the list started
+    /// moving (finger drag, momentum, a jump glide or its history load) and
+    /// are re-evaluated once it settles, so they never flicker mid-scroll.
+    private var jumpControlsFrozen: Bool {
+        collectionView.isDragging || collectionView.isDecelerating || scrollingToTop
+            || scrollPolicy.navigationActive || navigationLoadInFlight
+    }
+
     private func updateJumpButtonVisibility() {
         guard collectionView != nil else { return }
         if isAtConversationBottom, unseenArrivals > 0 {
             unseenArrivals = 0
             refreshJumpButtonTitle()
         }
-        let navigating = scrollPolicy.navigationActive || navigationLoadInFlight
-        let showTail = !navigating && !isAtConversationBottom
-        let showUp = !navigating && (previousReplyTarget() != nil || (!atOldest && hasLoadedWindow))
+        guard !jumpControlsFrozen else { return }
+        let showTail = !isAtConversationBottom
+        let showUp = previousReplyTarget() != nil || (!atOldest && hasLoadedWindow)
+        let slotChanged = jumpButtonVisibilityTargets[ObjectIdentifier(jumpButton)] != showTail
         setJumpButtonVisibility(jumpButton, material: jumpButtonBlur, shouldShow: showTail)
         setJumpButtonVisibility(latestMessageStartButton, material: latestMessageStartButtonBlur,
                                 shouldShow: showUp)
+        if slotChanged { placeLatestStartButton(aboveTail: showTail) }
+    }
+
+    /// ↑ sits in ↓'s slot when ↓ is hidden; ↓ appearing pushes it up (and it
+    /// drops back down when ↓ leaves), with a gentle spring.
+    private func placeLatestStartButton(aboveTail: Bool) {
+        let constant = aboveTail ? -(Self.jumpControlSize + 8) : 0
+        guard let constraint = latestStartBottomConstraint, constraint.constant != constant else { return }
+        constraint.constant = constant
+        guard view.window != nil,
+              jumpButtonVisibilityTargets[ObjectIdentifier(latestMessageStartButton)] == true else {
+            view.layoutIfNeeded(); return
+        }
+        UIView.animate(withDuration: 0.38, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.view.layoutIfNeeded()
+        }
     }
 
     private func setJumpButtonVisibility(
@@ -1522,6 +1578,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         return (latestMessageStartButton.bounds.size, jumpButton.bounds.size)
     }
     var automationUnseenDotVisible: Bool { !unseenBadge.isHidden }
+    var automationJumpControlFrames: (up: CGRect, down: CGRect) {
+        view.layoutIfNeeded()
+        return (latestMessageStartButton.frame, jumpButton.frame)
+    }
     #endif
 
     /// Re-anchor at the chat's true newest end, then pin the viewport to the
@@ -1630,6 +1690,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         chatPerfLog.log("[bottom] glide-end win=[\(vm.windowTopSeq),\(vm.windowBottomSeq)] off=\(Int(collectionView.contentOffset.y))")
         settleEdges()
         updateOverlay()
+        updateJumpButtonVisibility()
         updateJumpButtonVisibility()
     }
 
@@ -2120,14 +2181,26 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // Preserve semantic follow state while still tolerating tiny geometry
         // drift. Explicit older-history intent wins over the 24pt tolerance.
         let shouldFollow = shouldFollowLiveTail
+        let delta = abs(value - bottomContentInset)
         bottomContentInset = value
-        collectionView.contentInset.bottom = value
-        collectionView.verticalScrollIndicatorInsets.bottom = value
-        jumpButtonBottomConstraint?.constant = -(value + 16)
-        collectionView.layoutIfNeeded()
-        scrollPolicy.setFollowingTail(shouldFollow)
-        if shouldFollow {
-            pinToBottom(reason: "composer-inset")
+        let apply = {
+            self.collectionView.contentInset.bottom = value
+            self.collectionView.verticalScrollIndicatorInsets.bottom = value
+            self.jumpButtonBottomConstraint?.constant = -Self.jumpBottomGap(value)
+            self.view.layoutIfNeeded()
+            self.scrollPolicy.setFollowingTail(shouldFollow)
+            if shouldFollow {
+                self.pinToBottom(reason: "composer-inset")
+            }
+        }
+        // A large change (dictation expanding/collapsing the composer) moves
+        // with the composer's own spring instead of jumping ahead of it.
+        if delta > 30, view.window != nil {
+            UIView.animate(withDuration: 0.34, delay: 0, usingSpringWithDamping: 0.9,
+                           initialSpringVelocity: 0, options: [.allowUserInteraction, .beginFromCurrentState],
+                           animations: apply)
+        } else {
+            apply()
         }
         updateJumpButtonVisibility()
     }
@@ -2328,13 +2401,15 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         guard let sender = appState.commandSender else { return }
         switch action {
         case .retry:
-            sender.retryPending(sessionId: sessionId, clientId: clientId)
+            if sender.isStaged(sessionId: sessionId, clientId: clientId) {
+                // "Send original": don't wait for the voice correction.
+                sender.dispatchStagedInput(sessionId: sessionId, clientId: clientId,
+                                           text: sender.originalText(sessionId: sessionId, clientId: clientId) ?? "")
+            } else {
+                sender.retryPending(sessionId: sessionId, clientId: clientId)
+            }
         case .delete:
             sender.discardPending(sessionId: sessionId, clientId: clientId)
-        case .edit:
-            guard let text = sender.discardPending(sessionId: sessionId, clientId: clientId) else { return }
-            let draft = appState.sessionStore.drafts[sessionId] ?? ""
-            appState.sessionStore.setDraft(sessionId, draft.isEmpty ? text : draft + "\n" + text)
         }
         syncLiveUpdates()
     }
@@ -2393,15 +2468,30 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     private func reconfigureVisiblePendingRows() {
-        for indexPath in collectionView.indexPathsForVisibleItems {
-            guard indexPath.item < items.count,
-                  items[indexPath.item].contains(":pending:"),
-                  let message = message(items[indexPath.item]),
-                  let cell = collectionView.cellForItem(at: indexPath) as? TKBubbleCell else { continue }
+        let width = collectionView.bounds.width
+        sizer.prepare(width: width)
+        var heightChanged = false
+        for (index, id) in items.enumerated() where id.contains(":pending:") {
+            guard let message = message(id) else { continue }
+            // Correcting voice text changes in place. The bubble keeps its
+            // size while it is corrected (it may grow, never shrink/jump).
+            let correcting = message.payload["localState"]?.stringValue == "correcting"
+            if sizer.remeasure(message, width: width, allowShrink: !correcting) { heightChanged = true }
+            let indexPath = IndexPath(item: index, section: 0)
+            guard let cell = collectionView.cellForItem(at: indexPath) as? TKBubbleCell else { continue }
             cell.configure(TKBubbleContent.make(message: message, sessionId: sessionId, agent: agentName),
-                           cellWidth: collectionView.bounds.width)
+                           cellWidth: width)
             cell.setNeedsLayout()
         }
+        guard heightChanged else { return }
+        let wasAtBottom = shouldFollowLiveTail
+        UIView.performWithoutAnimation {
+            let context = UICollectionViewFlowLayoutInvalidationContext()
+            context.invalidateFlowLayoutDelegateMetrics = true
+            collectionView.collectionViewLayout.invalidateLayout(with: context)
+            collectionView.layoutIfNeeded()
+        }
+        if wasAtBottom { pinToBottom(reason: "pending-resize", animated: false) }
     }
 
     // MARK: Streaming render pacing
@@ -2716,6 +2806,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             setVisibleBodiesInteractive(true)
             scrollPolicy.endUserInteraction()
             settleEdges()
+            // `isDragging` can still read true inside this callback.
+            DispatchQueue.main.async { [weak self] in self?.updateJumpButtonVisibility() }
         }
     }
 
@@ -2726,6 +2818,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         prefetchOlderIfNeeded()
         maybeFlushNewer(reason: "settle")
         prefetchNewerIfNeeded()
+        updateJumpButtonVisibility()
     }
 
     #if DEBUG
@@ -2864,6 +2957,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     // settle both edges at rest.
     func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
         endBottomGlide()
+        updateJumpButtonVisibility()
     }
 
     // Status-bar tap → scroll-to-top. Suppress pagination for its duration so
@@ -2886,6 +2980,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
         scrollingToTop = false
         scrollPolicy.endUserInteraction()
+        updateJumpButtonVisibility()
         KLog.chat("📜 [scroll] to-top session=\(sessionId.prefix(12))")
         // The animation has parked at the top of the loaded content; reveal any
         // pending/buffered older page (jump-free, at rest) then top up.

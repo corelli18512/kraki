@@ -54,7 +54,8 @@ enum ChatBottomObstruction {
         composerVisible: Bool,
         compacting: Bool
     ) -> CGFloat {
-        let composerFloor: CGFloat = composerVisible ? 54 : 0
+        // 48pt capsule + 6pt top/bottom composer padding.
+        let composerFloor: CGFloat = composerVisible ? 60 : 0
         let compactionFloor: CGFloat = compacting ? 40 : 0
         let spacing: CGFloat = composerVisible && compacting ? 8 : 0
         return max(measuredComposerHeight, composerFloor + compactionFloor + spacing)

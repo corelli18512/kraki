@@ -461,6 +461,217 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertTrue(vm.pendingMessages.isEmpty, "landed clientId must suppress its optimistic twin")
     }
 
+    // MARK: Voice: sent bubble corrected in place
+
+    private func pendingCell(_ fx: Fx) -> TKBubbleCell? {
+        fx.cv.layoutIfNeeded()
+        return fx.cv.visibleCells.compactMap { $0 as? TKBubbleCell }
+            .first { $0.contentSnapshot?.message.type == "pending_input" }
+    }
+
+    func testStagedVoiceBubbleCorrectsInPlaceThenSendsCorrectedTextOnce() throws {
+        var sent: [[String: Any]] = []
+        let fx = try makeFixture(total: 10) { msg in sent.append(msg); return true }
+        drain(600)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: "把登录页的报错改成中文"))
+        XCTAssertTrue(sent.isEmpty, "a correcting voice message has not been transmitted")
+        XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .correcting)
+        fx.vc.syncLiveUpdates(); drain(150)
+        XCTAssertEqual(pendingCell(fx)?.deliveryStatusForRegression, "Correcting transcript before sending")
+        let before = try XCTUnwrap(rows(fx.cv).first { $0.id.contains(":pending:") })
+
+        // Correction streams in and grows the bubble; its row must stay exact.
+        let long = String(repeating: "把登录页的错误提示改成中文，并检查注册流程里邮箱校验的边界情况。", count: 4)
+        sender.updateStagedInput(sessionId: sid, clientId: clientId, text: long)
+        fx.vc.syncLiveUpdates(); drain(150)
+        let after = try XCTUnwrap(rows(fx.cv).first { $0.id.contains(":pending:") })
+        XCTAssertGreaterThan(after.h, before.h + 20)
+        XCTAssertEqual(after.h, after.exact, accuracy: 1, "streamed correction keeps an exact row height")
+        XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1, "a growing bubble stays in view")
+        // While correcting, the bubble keeps its size: it never shrinks back.
+        sender.updateStagedInput(sessionId: sid, clientId: clientId, text: "短")
+        fx.vc.syncLiveUpdates(); drain(150)
+        let shorter = try XCTUnwrap(rows(fx.cv).first { $0.id.contains(":pending:") })
+        XCTAssertEqual(shorter.h, after.h, accuracy: 0.5, "a correcting bubble does not jump smaller")
+
+        XCTAssertTrue(sender.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "改好了。"))
+        XCTAssertFalse(sender.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "again"))
+        XCTAssertEqual(sent.count, 1)
+        let payload = try XCTUnwrap(sent.first?["payload"] as? [String: Any])
+        XCTAssertEqual(payload["text"] as? String, "改好了。")
+        XCTAssertEqual(payload["clientId"] as? String, clientId)
+        XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .sending)
+    }
+
+    func testStagedVoiceFailureRetriesOriginalAndDeleteWins() throws {
+        var texts: [String] = []
+        let fx = try makeFixture(total: 4) { msg in
+            texts.append((msg["payload"] as? [String: Any])?["text"] as? String ?? ""); return true
+        }
+        drain(300)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: "raw words"))
+        sender.updateStagedInput(sessionId: sid, clientId: clientId, text: "half corr", original: "raw words")
+        sender.failStagedInput(sessionId: sid, clientId: clientId, text: "raw words")
+        XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .failed)
+        XCTAssertTrue(texts.isEmpty, "an unconfirmed correction is never sent automatically")
+        XCTAssertTrue(sender.retryPending(sessionId: sid, clientId: clientId))
+        XCTAssertEqual(texts, ["raw words"], "Retry sends the original transcript")
+
+        let other = try XCTUnwrap(sender.stageInput(sessionId: sid, text: "said this"))
+        sender.updateStagedInput(sessionId: sid, clientId: other, text: "said thi", original: "said this")
+        sender.discardPending(sessionId: sid, clientId: other)   // Delete while correcting
+        XCTAssertFalse(sender.dispatchStagedInput(sessionId: sid, clientId: other, text: "late"),
+                       "a deleted voice message is never sent by a late correction")
+        XCTAssertEqual(texts.count, 1)
+    }
+
+    func testStagedVoiceSurvivesRelaunchAsRetryableOriginal() throws {
+        let fx = try makeFixture(total: 2)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("outbox-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let first = CommandSender(appState: fx.app, outboxURL: url)
+        let clientId = try XCTUnwrap(first.stageInput(sessionId: sid, text: "original"))
+        first.updateStagedInput(sessionId: sid, clientId: clientId, text: "corrected partial", original: "original")
+        _ = first.sendInput(sessionId: sid, text: "other")   // persists the whole outbox
+        drain(300)
+        let restored = CommandSender(appState: fx.app, outboxURL: url)
+        let voice = try XCTUnwrap(restored.pendingInputs(sid).first { $0.payload["clientId"]?.stringValue == clientId })
+        XCTAssertEqual(restored.pendingState(voice), .failed)
+        XCTAssertEqual(voice.content, "original")
+    }
+
+    // MARK: Delivery dim (text + image) and status placement
+
+    private func pngAttachment() -> ImageAttachment {
+        let data = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 30)).pngData { ctx in
+            UIColor.systemBlue.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 40, height: 30))
+        }
+        return ImageAttachment(type: "image", mimeType: "image/png", data: data.base64EncodedString())
+    }
+
+    private func cell(_ fx: Fx, clientId: String) -> TKBubbleCell? {
+        fx.cv.layoutIfNeeded()
+        return fx.cv.visibleCells.compactMap { $0 as? TKBubbleCell }
+            .first { $0.contentSnapshot?.message.payload["clientId"]?.stringValue == clientId }
+    }
+
+    func testSendingMessageDimsTextAndImageTogetherWithoutFlashUntilDelivered() throws {
+        let fx = try makeFixture(total: 6)
+        drain(400)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "看一下这个报错", attachments: [pngAttachment()]))
+        let clientId = try XCTUnwrap(sender.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
+        fx.vc.syncLiveUpdates(); drain(150)
+        let early = try XCTUnwrap(cell(fx, clientId: clientId)?.pendingDimForRegression)
+        XCTAssertEqual(early.text, 1, accuracy: 0.05, "a fast confirmation must not flash a dim")
+        drain(1_200)
+        let pendingCell = try XCTUnwrap(cell(fx, clientId: clientId))
+        XCTAssertEqual(pendingCell.pendingDimForRegression.text, 0.6, accuracy: 0.05)
+        XCTAssertEqual(pendingCell.pendingDimForRegression.image, 0.6, accuracy: 0.05, "the image is part of the sending message")
+        XCTAssertEqual(pendingCell.deliveryStatusForRegression, "Sending")
+
+        let echo = try JSONSerialization.data(withJSONObject: [
+            "type": "user_message", "seq": 7, "sessionId": sid, "deviceId": dev,
+            "timestamp": "2026-09-01T00:00:03.000Z", "payload": ["content": "看一下这个报错", "clientId": clientId],
+        ])
+        fx.app.messageProvider?.ingestTailCandidate(sid, json: echo)
+        sender.clearPending(sid, clientId: clientId)
+        fx.vc.syncLiveUpdates(); drain(500)
+        let delivered = try XCTUnwrap(cell(fx, clientId: clientId))
+        XCTAssertNil(delivered.deliveryStatusForRegression)
+        XCTAssertEqual(delivered.pendingDimForRegression.text, 1, accuracy: 0.05)
+        XCTAssertEqual(delivered.pendingDimForRegression.image, 1, accuracy: 0.05)
+    }
+
+    func testCorrectingVoiceShowsUncorrectedLightAndCorrectedSolidWithoutDimming() throws {
+        let fx = try makeFixture(total: 6)
+        drain(400)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: "把登入页改成中文", attachments: [pngAttachment()]))
+        sender.updateStagedInput(sessionId: sid, clientId: clientId, text: "把登录页改成中文",
+                                 uncorrected: NSRange(location: 4, length: 4))
+        fx.vc.syncLiveUpdates(); drain(150)
+        let correcting = try XCTUnwrap(cell(fx, clientId: clientId))
+        XCTAssertEqual(correcting.deliveryStatusForRegression, "Correcting transcript before sending")
+        XCTAssertEqual(correcting.pendingDimForRegression.text, 1, accuracy: 0.05, "correcting is not a whole-message dim")
+        XCTAssertEqual(correcting.pendingDimForRegression.image, 1, accuracy: 0.05)
+        let body = try XCTUnwrap(correcting.contentSnapshot?.body)
+        func alpha(at index: Int) -> CGFloat {
+            (body.attribute(.foregroundColor, at: index, effectiveRange: nil) as? UIColor)?.cgColor.alpha ?? 1
+        }
+        XCTAssertEqual(alpha(at: 1), 1, accuracy: 0.01, "corrected words are solid")
+        XCTAssertEqual(alpha(at: 5), 0.5, accuracy: 0.01, "words not yet corrected are light")
+
+        XCTAssertTrue(sender.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "把登录页改成中文。"))
+        fx.vc.syncLiveUpdates(); drain(150)
+        let sent = try XCTUnwrap(cell(fx, clientId: clientId)?.contentSnapshot?.body)
+        XCTAssertEqual((sent.attribute(.foregroundColor, at: 5, effectiveRange: nil) as? UIColor)?.cgColor.alpha ?? 1, 1,
+                       accuracy: 0.01, "fully solid once corrected")
+    }
+
+    func testImageOnlyMessageStatusSitsBesideTheImage() throws {
+        let fx = try makeFixture(total: 6)
+        fx.app.commandSender?.confirmationTimeout = .milliseconds(200)
+        drain(400)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "[image]", attachments: [pngAttachment()]))
+        let clientId = try XCTUnwrap(sender.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
+        drain(700)
+        fx.vc.syncLiveUpdates(); drain(200)
+        let failed = try XCTUnwrap(cell(fx, clientId: clientId))
+        XCTAssertEqual(failed.deliveryStatusForRegression, "Not delivered. Tap to retry")
+        XCTAssertTrue(failed.bubbleHiddenForRegression, "image-only: no text bubble")
+        let image = failed.imageFrameForRegression, status = failed.deliveryStatusFrameForRegression
+        XCTAssertGreaterThan(image.height, 0)
+        XCTAssertGreaterThanOrEqual(status.minY, image.minY, "status is not above the image")
+        XCTAssertLessThanOrEqual(status.maxY, image.maxY + 0.5)
+        XCTAssertLessThanOrEqual(status.maxX, image.minX, "status sits beside the image")
+        XCTAssertEqual(failed.pendingDimForRegression.image, 1, accuracy: 0.05, "failed is shown normally with its !")
+    }
+
+    // MARK: Jump controls
+
+    func testUpControlRestsInDownSlotAndIsPushedUpOnlyAfterMotionSettles() throws {
+        let fx = try makeFixture(total: 80)
+        drain(900)
+        XCTAssertEqual(fx.vc.automationControlsVisible.down, false, "at the newest edge")
+        guard fx.vc.automationControlsVisible.up else { throw XCTSkip("no earlier reply to jump to") }
+        let rest = fx.vc.automationJumpControlFrames
+        XCTAssertEqual(rest.up.maxY, rest.down.maxY, accuracy: 0.5, "↑ sits in ↓'s slot while ↓ is hidden")
+
+        fx.vc.automationTapUp()
+        drain(30)
+        XCTAssertEqual(fx.vc.automationControlsVisible.down, false, "controls keep their state mid-glide")
+        XCTAssertEqual(fx.vc.automationControlsVisible.up, true)
+        XCTAssertEqual(fx.vc.automationJumpControlFrames.up.maxY, rest.up.maxY, accuracy: 0.5)
+
+        drain(1_800)
+        XCTAssertEqual(fx.vc.automationControlsVisible.down, true, "re-evaluated once the glide settles")
+        let moved = fx.vc.automationJumpControlFrames
+        XCTAssertEqual(moved.down.minY - moved.up.maxY, 8, accuracy: 0.5, "↓ appearing pushes ↑ up")
+
+        fx.vc.automationTapDown()
+        drain(1_800)
+        XCTAssertEqual(fx.vc.automationControlsVisible.down, false)
+        XCTAssertEqual(fx.vc.automationJumpControlFrames.up.maxY, moved.down.maxY, accuracy: 0.5, "↑ drops back down")
+    }
+
+    func testDictationBoxMinimumReachesTheControlAboveSend() {
+        // box bottom → send circle (centred on the one-line row) → 9 pt → 44 pt control
+        XCTAssertEqual(IOSComposerMetrics.recordingMinHeight, 2 + 44 + 9 + 44)
+    }
+
+    func testVoiceLevelMeterMapsSpeechPeaksAcrossTheBarRange() {
+        XCTAssertEqual(VoiceLevelBars.loudness(0), 0)
+        XCTAssertEqual(VoiceLevelBars.loudness(0.002), 0, "room noise stays flat")
+        let quiet = VoiceLevelBars.loudness(0.03), normal = VoiceLevelBars.loudness(0.15), loud = VoiceLevelBars.loudness(0.6)
+        XCTAssertGreaterThan(quiet, 0.3, "ordinary speech peaks visibly move the bars")
+        XCTAssertGreaterThan(normal, quiet + 0.2)
+        XCTAssertEqual(loud, 1, accuracy: 0.01)
+    }
+
     func testSendFailureKeepsNothingOptimistic() throws {
         let fx = try makeFixture(total: 4) { _ in false }
         drain(300)
@@ -658,9 +869,10 @@ final class ChatUXRegressionTests: XCTestCase {
             XCTAssertEqual(type, "agent_message", "↑ targets AI replies only")
             XCTAssertLessThan(target, previousIndex, "each ↑ steps further back")
             previousIndex = target
+            let before = fx.vc.automationControlsVisible
             fx.vc.automationTapUp()
-            XCTAssertFalse(fx.vc.automationControlsVisible.up || fx.vc.automationControlsVisible.down,
-                           "controls hide during the glide")
+            XCTAssertTrue(fx.vc.automationControlsVisible == before,
+                          "controls keep their pre-glide state during the glide")
             drain(1_500)
             let frame = try XCTUnwrap(fx.cv.layoutAttributesForItem(at: IndexPath(item: target, section: 0))?.frame)
             XCTAssertEqual(frame.minY - fx.cv.contentOffset.y, 124, accuracy: 2, "lands at the reply start")
