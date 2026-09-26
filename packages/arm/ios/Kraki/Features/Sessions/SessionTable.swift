@@ -19,16 +19,12 @@ import Observation
 struct SessionTable: UIViewControllerRepresentable {
     let appState: AppState
     let deviceFilter: String?  // nil = all devices
-    let revealSessionId: String?
-    let scrollToTopSignal: Int
     let onCellTapped: (String) -> Void
 
     func makeUIViewController(context: Context) -> SessionTableController {
         let vc = SessionTableController()
         vc.appState = appState
         vc.deviceFilter = deviceFilter
-        vc.revealSessionId = revealSessionId
-        vc.scrollToTopSignal = scrollToTopSignal
         vc.onCellTapped = onCellTapped
         return vc
     }
@@ -36,8 +32,6 @@ struct SessionTable: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: SessionTableController, context: Context) {
         vc.appState = appState
         vc.deviceFilter = deviceFilter
-        vc.revealSessionId = revealSessionId
-        vc.scrollToTopSignal = scrollToTopSignal
         vc.onCellTapped = onCellTapped
         KLog.d("📂 [snapshot] SessionTable.updateUIViewController → applySnapshot")
         vc.applySnapshot(animated: true)
@@ -49,8 +43,6 @@ struct SessionTable: UIViewControllerRepresentable {
 final class SessionTableController: UIViewController, UITableViewDelegate {
     weak var appState: AppState?
     var deviceFilter: String?
-    var revealSessionId: String?
-    var scrollToTopSignal: Int = 0
     var onCellTapped: ((String) -> Void)?
 
     private var tableView: UITableView!
@@ -79,7 +71,6 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     /// re-evaluations) but neither the row set nor any cell content
     /// has actually changed.
     private var lastAppliedIds: [String] = []
-    private var lastAppliedScrollToTopSignal: Int = 0
     /// Diffable applies are asynchronous. Relay preview updates can arrive
     /// faster than UIKit finishes animating a reorder, so never overlap two
     /// snapshots; retain only the latest request and apply it after the active
@@ -244,10 +235,8 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         // moved. Skipping the no-op `dataSource.apply` here saves
         // both diff work and an avoidable layout pass — without
         // changing what the user sees.
-        let shouldReveal = revealSessionId.flatMap { ids.firstIndex(of: $0) } != nil
-        let shouldScrollToTop = scrollToTopSignal != lastAppliedScrollToTopSignal
-        if didApplyInitialSnapshot && changedIds.isEmpty && ids == lastAppliedIds
-            && !shouldReveal && !shouldScrollToTop {
+        // A new Session never scrolls the list: the user is already inside it.
+        if didApplyInitialSnapshot && changedIds.isEmpty && ids == lastAppliedIds {
             return
         }
 
@@ -271,35 +260,8 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
             }
         }
         lastAppliedIds = ids
-        lastAppliedScrollToTopSignal = scrollToTopSignal
         didApplyInitialSnapshot = true
 
-        if let revealSessionId,
-           let row = ids.firstIndex(of: revealSessionId) {
-            DispatchQueue.main.async { [weak self] in
-                guard let self,
-                      self.revealSessionId == revealSessionId,
-                      self.dataSource.itemIdentifier(for: IndexPath(row: row, section: 0)) == revealSessionId else { return }
-                self.tableView.scrollToRow(
-                    at: IndexPath(row: row, section: 0),
-                    at: .top,
-                    animated: true
-                )
-                self.appState?.sessionStore.sessionListRevealId = nil
-                KLog.chat("📂 [session-list] revealed new iOS session at top id=\(revealSessionId.prefix(12))")
-            }
-        } else if shouldScrollToTop, let firstId = ids.first,
-                  let row = ids.firstIndex(of: firstId) {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.scrollToTopSignal == scrollToTopSignal else { return }
-                self.tableView.scrollToRow(
-                    at: IndexPath(row: row, section: 0),
-                    at: .top,
-                    animated: true
-                )
-                KLog.chat("📂 [session-list] scrolled to top for pending iOS session")
-            }
-        }
         KLog.chat("📂 [session-list] applySnapshot rows=\(ids.count) reconfigured=\(changedIds.count) initial=\(wasInitialSnapshot) inWindow=\(view.window != nil)")
     }
 

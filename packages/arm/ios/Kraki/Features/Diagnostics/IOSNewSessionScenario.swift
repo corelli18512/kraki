@@ -39,6 +39,10 @@ enum IOSNewSessionScenario {
             app.deviceStore.devices[deviceID] = DeviceSummary(
                 id: deviceID, name: "Scenario Mac", role: .tentacle, kind: .desktop,
                 publicKey: nil, encryptionKey: nil, online: true, lastSeen: nil, createdAt: nil)
+            // The New Session sheet needs an agent + model to enable Create.
+            app.deviceStore.setDeviceAgents(deviceID, agents: [
+                AgentCapabilities(type: "code", id: "pi", models: ["scenario-model"], modelDetails: nil),
+            ])
             // A few existing Sessions so the list has realistic rows.
             for index in 0..<6 {
                 let id = "existing-\(index)"
@@ -83,7 +87,7 @@ enum IOSNewSessionScenario {
         weak var app: AppState?
         private var seqs: [String: Int] = [:]
         private(set) var subscribedSessions: Set<String> = []
-        var createDelayMs = 700
+        var createDelayMs = Int(ProcessInfo.processInfo.environment["KRAKI_SCENARIO_CREATE_DELAY_MS"] ?? "") ?? 700
 
         init(app: AppState) { self.app = app }
 

@@ -322,15 +322,6 @@ struct SessionsSidebarView: View {
                 }
                 .padding(.vertical, 4)
             }
-            .onChange(of: appState.sessionStore.sessionListScrollToTopSignal) { _, _ in
-                DispatchQueue.main.async {
-                    guard let first = filteredSessionIDs.first else { return }
-                    withAnimation(.easeOut(duration: 0.22)) {
-                        proxy.scrollTo(first, anchor: .top)
-                    }
-                    KLog.chat("📂 [session-list] scrolled to top for pending session")
-                }
-            }
             .onChange(of: appState.sessionStore.sessionListRevealId) { _, _ in
                 revealRequestedSession(using: proxy)
             }
@@ -352,11 +343,14 @@ struct SessionsSidebarView: View {
               filteredSessionIDs.contains(target) else { return }
         DispatchQueue.main.async {
             guard appState.sessionStore.sessionListRevealId == target else { return }
+            // nil anchor = the minimum scroll that makes the row fully
+            // visible: no movement when it already is, and pinned Sessions
+            // above it stay in view instead of the list jumping to the top.
             withAnimation(.easeOut(duration: 0.22)) {
-                proxy.scrollTo(target, anchor: .top)
+                proxy.scrollTo(target, anchor: nil)
             }
             appState.sessionStore.sessionListRevealId = nil
-            KLog.chat("📂 [session-list] revealed new session at top id=\(target.prefix(12))")
+            KLog.chat("📂 [session-list] revealed new session id=\(target.prefix(12))")
         }
     }
 

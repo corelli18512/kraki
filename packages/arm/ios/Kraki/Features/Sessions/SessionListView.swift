@@ -188,9 +188,7 @@ struct SessionListView: View {
         // scroll-reachable.
         SessionTable(
             appState: appState,
-            deviceFilter: selectedDeviceFilter,
-            revealSessionId: sessionStore.sessionListRevealId,
-            scrollToTopSignal: sessionStore.sessionListScrollToTopSignal
+            deviceFilter: selectedDeviceFilter
         ) { sessionId in
             navigationPath.append(SessionNavID(id: sessionId))
         }
