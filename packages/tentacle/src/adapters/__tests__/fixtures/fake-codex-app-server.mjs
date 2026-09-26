@@ -68,6 +68,14 @@ async function handle({ id, method, params }) {
     }
     case 'thread/unsubscribe':
       return send({ id, result: {} });
+    case 'thread/backgroundTerminals/list':
+      return send({ id, result: { nextCursor: null, data: (threads.get(params.threadId)?.terminals ?? []) } });
+    case 'thread/backgroundTerminals/terminate': {
+      const t = threads.get(params.threadId);
+      const before = t?.terminals?.length ?? 0;
+      if (t?.terminals) t.terminals = t.terminals.filter((x) => x.processId !== params.processId);
+      return send({ id, result: { terminated: (t?.terminals?.length ?? 0) < before } });
+    }
     case 'turn/interrupt': {
       const t = threads.get(params.threadId);
       send({ id, result: {} });
@@ -128,6 +136,16 @@ async function runTurn(threadId, t, turnId, input) {
   }
 
   if (text.includes('SLOW') || text.includes('DELAYSTART')) {
+    if (text.includes('BGCMD')) {
+      // A command still running when the turn is interrupted, plus a server
+      // an EARLIER turn left running on purpose.
+      const cmd = item('commandExecution', { command: "/bin/zsh -lc 'sleep 120'", cwd: '/tmp', status: 'inProgress', commandActions: [], aggregatedOutput: null, exitCode: null });
+      started(cmd);
+      t.terminals = [
+        { itemId: 'item-from-earlier-turn', processId: 'proc-dev-server', command: 'npm run dev', cwd: '/tmp', osPid: 1, cpuPercent: null, rssKb: null },
+        { itemId: cmd.id, processId: 'proc-sleep', command: 'sleep 120', cwd: '/tmp', osPid: 2, cpuPercent: null, rssKb: null },
+      ];
+    }
     await new Promise((resolve) => { t.interrupt = resolve; });
     await say('partial');
     finish('interrupted');

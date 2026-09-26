@@ -103,6 +103,27 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
 
+/** Codex runs every command through a login shell (`/bin/zsh -lc '<cmd>'`).
+ *  Show the inner command on cards and step headlines, like Codex's own UI.
+ *  Only exact single-argument wrappers are unwrapped; anything else is kept. */
+export function unwrapShellCommand(command: string): string {
+  const m = /^(?:\/(?:usr\/)?bin\/)?(?:ba|z)?sh\s+-l?c\s+([\s\S]+)$/.exec(command.trim());
+  if (!m) return command;
+  const arg = m[1].trim();
+  if (arg.length >= 2 && arg.startsWith("'") && arg.endsWith("'")) {
+    const body = arg.slice(1, -1);
+    // Only '\'' escapes are legal inside a POSIX single-quoted word.
+    if (body.replace(/'\\''/g, '').includes("'")) return command;
+    return body.replace(/'\\''/g, "'");
+  }
+  if (arg.length >= 2 && arg.startsWith('"') && arg.endsWith('"')) {
+    const body = arg.slice(1, -1);
+    if (/(^|[^\\])"/.test(body)) return command;
+    return body.replace(/\\(["\\$`])/g, '$1');
+  }
+  return command;
+}
+
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -170,6 +191,10 @@ interface CodexSession {
   abortPending: boolean;
   /** Recently settled Codex turn ids — late events for them are dropped. */
   settledTurns: string[];
+  /** commandExecution item ids started by the current turn. Codex's
+   *  turn/interrupt leaves running commands alive (verified 0.157.1), so
+   *  abort terminates exactly these via thread/backgroundTerminals. */
+  turnCommandItems: Set<string>;
   relayTurnId?: string;
   eventTurnId?: string;
   turnFinalized: boolean;
@@ -378,6 +403,7 @@ export class CodexAdapter extends AgentAdapter {
       starting: false,
       abortPending: false,
       settledTurns: [],
+      turnCommandItems: new Set(),
       turnFinalized: true,
       pendingText: '',
       tools: new Map(),
@@ -596,6 +622,7 @@ export class CodexAdapter extends AgentAdapter {
   private async startTurn(s: CodexSession, input: QueuedInput): Promise<void> {
     s.starting = true;
     s.turnFinalized = false;
+    s.turnCommandItems = new Set();
     s.pendingText = '';
     s.pendingError = undefined;
     s.eventTurnId = input.relayTurnId;
@@ -679,11 +706,33 @@ export class CodexAdapter extends AgentAdapter {
     if (!s) return;
     s.queue = [];
     this.dropPendingCards(s, true);
+    const commandItems = [...s.turnCommandItems];
     if (s.activeTurnId) await this.interruptActive(s);
     // turn/start still in flight: interrupt as soon as the turn id is known.
     else if (s.starting) s.abortPending = true;
+    if (commandItems.length > 0) await this.terminateTurnCommands(s, new Set(commandItems));
     // turn/completed(interrupted) finalizes; if the turn is already gone, do it now.
     if (!s.activeTurnId && !s.starting && !s.turnFinalized) this.finalizeTurn(s);
+  }
+
+  /** Stop means stop: kill commands this turn started that Codex left running.
+   *  Background terminals from EARLIER turns (e.g. a dev server the user asked
+   *  for) are deliberately left alone. Best effort — never blocks the abort. */
+  private async terminateTurnCommands(s: CodexSession, itemIds: Set<string>): Promise<void> {
+    const rpc = this.rpc;
+    if (!rpc?.alive || !s.threadId) return;
+    try {
+      const listed = await rpc.request<{ data?: Array<{ itemId?: string; processId?: string }> }>(
+        'thread/backgroundTerminals/list', { threadId: s.threadId }, 5_000);
+      const targets = (listed?.data ?? []).filter((t) => t.itemId && t.processId && itemIds.has(t.itemId));
+      await Promise.all(targets.map((t) => rpc.request('thread/backgroundTerminals/terminate',
+        { threadId: s.threadId, processId: t.processId }, 5_000).catch((err) => {
+        logger.debug({ sessionId: s.sessionId, err: errMessage(err) }, 'codex terminate command failed');
+      })));
+      if (targets.length > 0) logger.info({ sessionId: s.sessionId, count: targets.length }, 'codex: terminated commands left running by aborted turn');
+    } catch (err) {
+      logger.debug({ sessionId: s.sessionId, err: errMessage(err) }, 'codex backgroundTerminals/list failed');
+    }
   }
 
   async killSession(sessionId: string): Promise<void> {
@@ -864,8 +913,9 @@ export class CodexAdapter extends AgentAdapter {
     switch (req.method) {
       case 'item/commandExecution/requestApproval': {
         if (!s) return rpc.respond(req.id, { decision: 'decline' });
-        const command = str(params.command);
-        if (isKrakiSelfManagementCommand(command)) {
+        const rawCommand = str(params.command);
+        const command = unwrapShellCommand(rawCommand);
+        if (isKrakiSelfManagementCommand(command) || isKrakiSelfManagementCommand(rawCommand)) {
           // Codex's decline carries no reason text; the model sees the command
           // was declined. Log the Kraki reason for operators.
           logger.warn({ sessionId: s.sessionId, reason: SELF_MANAGEMENT_DENIAL_REASON }, 'blocked tentacle self-management command');
@@ -1142,7 +1192,8 @@ export class CodexAdapter extends AgentAdapter {
         this.flushNarration(s);
         break;
       case 'commandExecution':
-        start('shell', { command: str(item.command), cwd: str(item.cwd) });
+        s.turnCommandItems.add(id);
+        start('shell', { command: unwrapShellCommand(str(item.command)), cwd: str(item.cwd) });
         break;
       case 'fileChange': {
         const paths = fileChangePaths(item);

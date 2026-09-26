@@ -11,7 +11,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'no
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CodexAdapter, codexShouldAutoApprove, mapCodexModels } from '../codex.js';
+import { CodexAdapter, codexShouldAutoApprove, mapCodexModels, unwrapShellCommand } from '../codex.js';
 import { AttachmentStore } from '../../attachment-store.js';
 
 const FAKE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-codex-app-server.mjs');
@@ -116,6 +116,16 @@ describe('pure helpers', () => {
     expect(codexShouldAutoApprove('discuss', 'write', ['/r/plan.md', '/r/x.ts'])).toBe(false);
     expect(codexShouldAutoApprove('discuss', 'write', [])).toBe(false);
     expect(codexShouldAutoApprove('safe', 'shell', [])).toBe(false);
+  });
+
+  it('unwraps Codex login-shell wrappers only when exact', () => {
+    expect(unwrapShellCommand("/bin/zsh -lc 'python3 test_stats.py'")).toBe('python3 test_stats.py');
+    expect(unwrapShellCommand(`/bin/zsh -lc "sed -n '1,240p' stats.py && ls"`)).toBe("sed -n '1,240p' stats.py && ls");
+    expect(unwrapShellCommand("bash -lc 'echo '\\''hi'\\'''")).toBe("echo 'hi'");
+    expect(unwrapShellCommand('/bin/bash -c "echo \\"x\\""')).toBe('echo "x"');
+    // Not a single quoted argument → untouched.
+    expect(unwrapShellCommand("/bin/zsh -lc 'a' 'b'")).toBe("/bin/zsh -lc 'a' 'b'");
+    expect(unwrapShellCommand('rm -rf build')).toBe('rm -rf build');
   });
 
   it('maps models, dropping hidden models and non-Kraki efforts', () => {
@@ -334,6 +344,18 @@ describe('CodexAdapter (fake app-server child process)', () => {
     await h.idleCount(2);
     expect(h.of('message').map((m) => m.content)).toEqual(['partial', 'echo: after']);
     expect(h.events.some((e) => e.content === 'ghost')).toBe(false);
+  });
+
+  it('abort terminates commands the aborted turn left running, but not earlier ones', async () => {
+    await started();
+    const sid = await session('execute');
+    await turn(sid, 'SLOW BGCMD', 'rt-1');
+    await h.waitFor((e) => e.type === 'tool_start', 'command start');
+    expect(h.of('tool_start')[0]).toMatchObject({ toolName: 'shell', args: { command: 'sleep 120' } });
+    await h.adapter.abortSession(sid);
+    await h.idleCount(1);
+    expect(h.sent('thread/backgroundTerminals/list')).toHaveLength(1);
+    expect(h.sent('thread/backgroundTerminals/terminate').map((m) => m.params!.processId)).toEqual(['proc-sleep']);
   });
 
   it('abort issued while turn/start is still in flight interrupts once the turn id is known', async () => {
