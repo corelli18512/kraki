@@ -240,6 +240,9 @@ struct MacChatView: View {
         let window = appState.messageStore.messages[sessionId] ?? []
         let state = appState.messageStore.windows[sessionId]
         var hash = state?.bottomSeq ?? 0
+        // The authoritative head (session_list) decides whether the window is
+        // at the head — and so whether a trailing question is open.
+        hash = hash &* 31 &+ (appState.sessionStore.sessions[sessionId]?.lastSeq ?? 0)
         hash = hash &* 31 &+ (state?.topSeq ?? 0)
         hash = hash &* 31 &+ window.count
         hash = hash &* 31 &+ (window.first?.seq ?? 0)
