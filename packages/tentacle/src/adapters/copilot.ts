@@ -547,6 +547,15 @@ export class CopilotAdapter extends AgentAdapter {
     this.onError?.(sessionId, { message, ...this.lifecycleEvent(sessionId) });
   }
 
+  /** End a user-stopped cycle without any conclusion or idle callback. */
+  private settleSilently(sessionId: string): void {
+    this.clearIdleTimer(sessionId);
+    this.pendingNarration.delete(sessionId);
+    const entry = this.sessions.get(sessionId);
+    if (entry) entry.turnSettled = true;
+    this.signalFlushComplete(sessionId);
+  }
+
   private emitIdle(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
     if (entry) entry.turnSettled = true;
@@ -1290,6 +1299,7 @@ export class CopilotAdapter extends AgentAdapter {
       // (depending on SDK timing) and a false empty-cycle error would
       // beat us.
       this.cycleUserAborted.set(sessionId, true);
+      this.pendingNarration.delete(sessionId);
       this.broadcastPendingResolutions(sessionId);
       await entry.session.abort();
       logger.debug({ sessionId }, 'session aborted');
@@ -1851,6 +1861,14 @@ export class CopilotAdapter extends AgentAdapter {
       // but clearing here keeps state tidy if no new sendMessage follows.
       this.cycleUserAborted.delete(sessionId);
 
+      if (wasAborted) {
+        // RelayClient owns a user stop's terminal boundary (turn_status
+        // user_abort + idle aborted). Settle silently: the half-written draft
+        // is not a reply, and an idle here would land before the abort status.
+        this.settleSilently(sessionId);
+        return;
+      }
+
       // Flush any buffered prose as the turn's single conclusion bubble
       // before going idle (draft-bubble model).
       this.flushConclusion(sessionId);
@@ -1885,34 +1903,15 @@ export class CopilotAdapter extends AgentAdapter {
       }
     });
 
-    // session.tools_updated is ephemeral and not in the typed event union,
-    // so we use the generic catch-all handler form.
+    // Which model Copilot actually runs is Copilot's decision (`auto`, plan
+    // limits, fallbacks). Kraki relays; it never aborts a turn over it.
     session.on((event) => {
       if (event.type !== 'session.tools_updated') return;
-      const data = event.data as unknown as Record<string, unknown>;
-      const actualModel = data?.model as string | undefined;
-      if (!actualModel) return;
-
-      const expected = this.expectedModels.get(sessionId);
-      if (!expected || actualModel === expected) return;
-
-      const requested = this.userRequestedModels.get(sessionId) ?? expected;
-      logger.warn({ sessionId, requested, actualModel }, 'Model mismatch detected — aborting to prevent history pollution');
-
-      // Abort the in-flight turn and disconnect before any polluted events are produced
-      const entry = this.sessions.get(sessionId);
-      if (entry) {
-        entry.session.abort().catch(() => {});
-        entry.session.disconnect().catch(() => {});
+      const actualModel = (event.data as unknown as Record<string, unknown>)?.model as string | undefined;
+      const requested = this.userRequestedModels.get(sessionId);
+      if (actualModel && requested && actualModel !== requested) {
+        logger.info({ sessionId, requested, actualModel }, 'Copilot is running a different model than requested');
       }
-
-      this.emitError(sessionId, `${requested} is currently unavailable. Session paused — send a message to retry.`);
-      // Discard any buffered prose — the turn is being torn down, not concluded.
-      this.pendingNarration.delete(sessionId);
-      this.emitIdle(sessionId);
-      if (entry) this.sessions.delete(sessionId);
-      this.signalFlushComplete(sessionId);
-      this.cleanupSessionPermissions(sessionId);
     });
 
     session.on('session.info', (event) => {
@@ -1955,6 +1954,7 @@ export class CopilotAdapter extends AgentAdapter {
       this.idleTimers.set(sessionId, setTimeout(() => {
         this.idleTimers.delete(sessionId);
         logger.info({ sessionId }, 'Idle fallback fired (session.idle not received after turn_end)');
+        if (this.cycleUserAborted.get(sessionId)) { this.settleSilently(sessionId); return; }
         this.flushConclusion(sessionId);
         this.emitIdle(sessionId);
         this.signalFlushComplete(sessionId);

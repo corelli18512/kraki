@@ -522,11 +522,8 @@ export class ClaudeAdapter extends AgentAdapter {
    *  never leak into the Copilot / Pi / Codex children of the same daemon. */
   private claudeEnv(extra: Record<string, string> = {}): Record<string, string | undefined> {
     return {
-      // Background tasks let Claude Code start turns of its own (task
-      // notifications) and keep processes alive past a user stop — both break
-      // Kraki's one-prompt-one-terminal turn model and stay invisible to a
-      // remote operator. A user's explicit setting still wins.
-      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
+      // Kraki relays the user's own Claude Code configuration as-is; it does not
+      // switch agent features on or off (e.g. background tasks).
       ...process.env,
       ...loadClaudeSettingsEnv(claudeConfigSource().dir),
       ...extra,

@@ -167,7 +167,8 @@ describe('CodexAdapter (fake app-server child process)', () => {
     const sid = await session();
     expect(h.of('created')[0]).toMatchObject({ sessionId: sid, agent: 'codex', model: 'gpt-6-astra' });
     const start = h.sent('thread/start')[0].params!;
-    expect(start).toMatchObject({ cwd: '/repo', model: 'gpt-6-astra', approvalPolicy: 'untrusted', sandbox: 'danger-full-access' });
+    expect(start).toMatchObject({ cwd: '/repo', model: 'gpt-6-astra', approvalPolicy: 'untrusted' });
+    expect(start.sandbox).toBeUndefined(); // the user's own sandbox config applies
     expect((start.dynamicTools as Array<{ name: string }>).map((t) => t.name)).toEqual(['ask_user', 'show_image', 'kraki_get_mode']);
     expect(String(start.developerInstructions)).toContain('Kraki');
 

@@ -227,12 +227,9 @@ describe('ClaudeAdapter — turn lifecycle', () => {
     expect(claude.onIdle).toHaveBeenLastCalledWith('s', { turnId: 'rt-2' });
   });
 
-  it('Claude children run with background tasks disabled unless the user opts in', async () => {
+  it('does not toggle Claude Code features (background tasks stay the user\'s choice)', async () => {
     await createClaude(); await claude.sendMessage('s', 'first');
-    expect(sdk.query.mock.calls[0][0].options.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('1');
-    process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '0';
-    await claude.createSession({ sessionId: 's2', cwd: root }); await claude.sendMessage('s2', 'x');
-    expect(sdk.query.mock.calls.at(-1)![0].options.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('0');
+    expect(sdk.query.mock.calls[0][0].options.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBeUndefined();
   });
 
   it('a stopped turn whose result arrives after the next prompt does not end that prompt', async () => {

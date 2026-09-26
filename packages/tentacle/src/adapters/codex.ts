@@ -20,8 +20,8 @@
  *                       ← client-hosted dynamic tools (item/tool/call)
  *   turn boundary       ← turn/completed (completed | interrupted | failed)
  *
- * Permission model: every thread runs with `approvalPolicy: "untrusted"` +
- * `sandbox: "danger-full-access"` so Codex asks the CLIENT before any
+ * Permission model: every thread runs with `approvalPolicy: "untrusted"` (the
+ * user's own sandbox setting is left untouched) so Codex asks the CLIENT before any
  * non-trivially-safe command or file change, and the ADAPTER applies Kraki's
  * four-mode policy (same as the Pi/Copilot adapters) — auto-approving silently
  * or raising a Kraki card. Kraki's mode is the single source of truth, and the
@@ -428,8 +428,10 @@ export class CodexAdapter extends AgentAdapter {
     return {
       ...(s.cwd && { cwd: s.cwd }),
       ...(s.model && { model: s.model }),
+      // Only the approval route is set (so approvals reach the Kraki client).
+      // The sandbox is the user's own ~/.codex/config.toml setting — Kraki
+      // never widens or narrows it.
       approvalPolicy: 'untrusted',
-      sandbox: 'danger-full-access',
       developerInstructions: CodexAdapter.DEVELOPER_INSTRUCTIONS,
     };
   }

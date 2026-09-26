@@ -908,24 +908,40 @@ describe('CopilotAdapter', () => {
       });
     });
 
-    it('disconnects and errors on model mismatch in tools_updated', async () => {
+    it('relays Copilot\'s own model choice (auto / fallback) without aborting', async () => {
       const errorSpy = vi.fn();
       const idleSpy = vi.fn();
       adapter.onError = errorSpy;
       adapter.onIdle = idleSpy;
       await adapter.start();
-      await adapter.createSession({ model: 'claude-opus-4.6' });
-      mockSessions[0]._emit('session.tools_updated', {
-        data: { model: 'goldeneye' },
-      });
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ message: expect.stringContaining('unavailable') }),
-      );
-      expect(idleSpy).toHaveBeenCalled();
-      // Session should be removed from adapter — next getSession would throw
-      expect(mockSessions[0].abort).toHaveBeenCalled();
-      expect(mockSessions[0].disconnect).toHaveBeenCalled();
+      await adapter.createSession({ model: 'auto' });
+      mockSessions[0]._emit('session.tools_updated', { data: { model: 'claude-haiku-4.5' } });
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(idleSpy).not.toHaveBeenCalled();
+      expect(mockSessions[0].abort).not.toHaveBeenCalled();
+      expect(mockSessions[0].disconnect).not.toHaveBeenCalled();
+    });
+
+    it('a user stop settles silently: no conclusion bubble and no idle before the relay abort status', async () => {
+      const idleSpy = vi.fn(); const msgSpy = vi.fn(); const errSpy = vi.fn();
+      adapter.onIdle = idleSpy; adapter.onMessage = msgSpy; adapter.onError = errSpy;
+      await adapter.start();
+      const { sessionId } = await adapter.createSession({ model: 'auto' });
+      await adapter.sendMessage(sessionId, 'long task');
+      mockSessions[0]._emit('assistant.turn_start', { data: {} });
+      mockSessions[0]._emit('assistant.message', { data: { content: 'Running the command now' } });
+      mockSessions[0].abort.mockImplementation(async () => { mockSessions[0]._emit('session.idle', { data: {} }); });
+      await adapter.abortSession(sessionId);
+      expect(idleSpy).not.toHaveBeenCalled();
+      expect(msgSpy).not.toHaveBeenCalled();
+      expect(errSpy).not.toHaveBeenCalled();
+      expect(adapter.isTurnSettled(sessionId)).toBe(true);
+      // The next cycle is normal again.
+      await adapter.sendMessage(sessionId, 'next');
+      mockSessions[0]._emit('assistant.message', { data: { content: 'ok' } });
+      mockSessions[0]._emit('session.idle', { data: {} });
+      expect(msgSpy).toHaveBeenCalledTimes(1);
+      expect(idleSpy).toHaveBeenCalledTimes(1);
     });
 
     it('does not disconnect when tools_updated matches expected model', async () => {
@@ -951,21 +967,6 @@ describe('CopilotAdapter', () => {
       });
       expect(errorSpy).not.toHaveBeenCalled();
       expect(mockSessions[0].abort).not.toHaveBeenCalled();
-    });
-
-    it('uses original user-requested model in error message after fallback', async () => {
-      const errorSpy = vi.fn();
-      adapter.onError = errorSpy;
-      adapter.onIdle = vi.fn();
-      await adapter.start();
-      await adapter.createSession({ model: 'claude-opus-4.6-1m' });
-      mockSessions[0]._emit('session.tools_updated', {
-        data: { model: 'goldeneye' },
-      });
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ message: expect.stringContaining('claude-opus-4.6-1m') }),
-      );
     });
 
     it('does not duplicate session.error reports within the same turn', async () => {
