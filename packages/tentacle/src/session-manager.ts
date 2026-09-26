@@ -1365,9 +1365,11 @@ export class SessionManager {
 
         switch (inner.type) {
           case 'agent_message': {
+            // A question reads as an agent line here; whether it is still
+            // awaiting an answer is live state (enrichSessionList overlays it).
             const question = payload.question as { text?: unknown } | undefined;
             if (question && typeof question.text === 'string' && question.text) {
-              return { text: stripMarkdownForPreview(question.text), type: 'question', timestamp: entry.ts };
+              return { text: stripMarkdownForPreview(question.text), type: 'agent', timestamp: entry.ts };
             }
             const content = payload.content;
             if (typeof content === 'string' && content) {
