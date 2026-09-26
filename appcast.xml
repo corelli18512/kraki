@@ -6,6 +6,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.35</title>
+            <pubDate>Sat, 26 Sep 2026 07:31:04 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.35</sparkle:fullReleaseNotesLink>
+            <sparkle:version>37</sparkle:version>
+            <sparkle:shortVersionString>0.2.35</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* iOS chat experience overhaul: streaming, scroll stability, send states, navigation, header by @corelli18512 in https://github.com/corelli18512/kraki/pull/298
+* iOS chat: steps button top-left, round jump controls, Messages-like top fade by @corelli18512 in https://github.com/corelli18512/kraki/pull/299
+* macOS Chat: iOS parity, smooth scrolling, stress-tested history loading by @corelli18512 in https://github.com/corelli18512/kraki/pull/300
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.34...mac-v0.2.35
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.35/Kraki.app.zip" length="8336577" type="application/octet-stream" sparkle:edSignature="9MMb07bEtKLRpDBVo9AoN1B7hze3erz4WzdNQHQqCF8vjeFmcwLFjavROCKKnECzIh5hlg6E+v4AZCmVbvl5Aw=="/>
+        </item>
+        <item>
             <title>0.2.34</title>
             <pubDate>Thu, 24 Sep 2026 14:38:07 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -39,26 +57,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.33/Kraki.app.zip" length="8217492" type="application/octet-stream" sparkle:edSignature="1oNCMBTzWH+M23dFOqdQGzbLPM48neJq13joa7Ak/ZK+0qCKM9y//PYyGKI/l9Gh8c15A5d6YztepRqOE3jZCQ=="/>
         </item>
-        <item>
-            <title>0.2.32</title>
-            <pubDate>Sun, 30 Aug 2026 13:25:31 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.32</sparkle:fullReleaseNotesLink>
-            <sparkle:version>34</sparkle:version>
-            <sparkle:shortVersionString>0.2.32</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* refactor(chat): share native scroll policy by @corelli18512 in https://github.com/corelli18512/kraki/pull/287
-* chore(mac): bump version to 0.2.32 by @corelli18512 in https://github.com/corelli18512/kraki/pull/288
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.31.21...mac-v0.2.32
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.32/Kraki.app.zip" length="8210770" type="application/octet-stream" sparkle:edSignature="Y0sXHpTt6RdR44wdMEbB/eqCGoETYrVcvamp8uazFu9i+PS4gQ32hdEgU6ry2bVf3tBakRSAcYAQOBctlP6XDg=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: aLMG6Sr4agK/pbyjWtl5h1cbdEtqQ1dbXHJZlV8tRzvDTunVdRlQm5YiQ2QiFY75W2gXem39KttakrxZ4XOFBg==
-length: 4055
+edSignature: 4UtZbYaMK0DdheYAO5VOWCf+fpnzZF1Vyl/gHxCdorVbgvWNefq3xapSjOzxUMrbR7qgVmC/iYue/DI0rppgDg==
+length: 4289
 -->
