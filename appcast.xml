@@ -6,6 +6,22 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.37</title>
+            <pubDate>Sat, 26 Sep 2026 14:11:23 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.37</sparkle:fullReleaseNotesLink>
+            <sparkle:version>39</sparkle:version>
+            <sparkle:shortVersionString>0.2.37</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* Questions on the conversation spine (protocol 0.22, CLI 0.32.0, iOS/Mac) — breaking by @corelli18512 in https://github.com/corelli18512/kraki/pull/302
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.36...mac-v0.2.37
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.37/Kraki.app.zip" length="8344195" type="application/octet-stream" sparkle:edSignature="0dFVL+b0m0c9Z0Qrggv3/GnClBrDSHAZBr/bULYpNsuLP0ssUtlXV6cnDYy7Udq67KTVznWIFSJ4Y2vIthKiCA=="/>
+        </item>
+        <item>
             <title>0.2.36</title>
             <pubDate>Sat, 26 Sep 2026 12:06:23 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -39,25 +55,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.35/Kraki.app.zip" length="8336577" type="application/octet-stream" sparkle:edSignature="9MMb07bEtKLRpDBVo9AoN1B7hze3erz4WzdNQHQqCF8vjeFmcwLFjavROCKKnECzIh5hlg6E+v4AZCmVbvl5Aw=="/>
         </item>
-        <item>
-            <title>0.2.34</title>
-            <pubDate>Thu, 24 Sep 2026 14:38:07 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.34</sparkle:fullReleaseNotesLink>
-            <sparkle:version>36</sparkle:version>
-            <sparkle:shortVersionString>0.2.34</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(mac): preserve voice drafts and handle unavailable microphones (0.2.34) by @corelli18512 in https://github.com/corelli18512/kraki/pull/297
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.31.24...mac-v0.2.34
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.34/Kraki.app.zip" length="8226856" type="application/octet-stream" sparkle:edSignature="jDq/LVNeB1K0ld2Nq1lYbB49OtIlVBgp6vjMdeztFmzPP/ceyi33F7Y8CMTGBQVgTbcQRgK4IPNh9aq8/rvLBw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: JfxAEWXb0UUUaiim9RQAciDA/4IM2+0EzYlsiObFtsM9+97+oNfPpKKgheXLqSv2I2XtTHCiunQTVy0SFJTSCw==
-length: 4113
+edSignature: bjyXHuigIGZa8ry2dcnH4+uwuHs2G2PR8JNtSYFJpvInhxINal9voB7nZaEL6D1iqyL0HI1dDaZltoHy0Nu1Cw==
+length: 4126
 -->
