@@ -5,6 +5,7 @@
  * when Codex is missing or unauthenticated. Uses throwaway temp dirs for the
  * Kraki sessions store and the working directory.
  *
+ * Defaults to gpt-6-luna / low effort (override CODEX_TEST_MODEL / CODEX_TEST_EFFORT).
  * Run: CODEX_BIN=$(which codex) pnpm --filter @kraki/tentacle test:integration -- codex
  */
 
@@ -21,6 +22,10 @@ function resolveCodex(): string | undefined {
 }
 
 const codexBin = resolveCodex();
+// Keep live runs cheap: small model + low effort unless overridden.
+const MODEL = process.env.CODEX_TEST_MODEL ?? 'gpt-6-luna';
+const EFFORT = (process.env.CODEX_TEST_EFFORT ?? 'low') as 'low';
+const cfg = () => ({ cwd: root, model: MODEL, reasoningEffort: EFFORT });
 const root = mkdtempSync(join(tmpdir(), 'kraki-codex-live-'));
 const adapter = codexBin ? new CodexAdapter({ cliPath: codexBin, sessionsDir: join(root, 'sessions') }) : null;
 let ready = false;
@@ -55,7 +60,7 @@ describe('CodexAdapter (live codex app-server)', () => {
     if (!ready) return ctx.skip();
     const messages: string[] = [];
     adapter!.onMessage = (_s, e) => messages.push(e.content);
-    const { sessionId } = await adapter!.createSession({ cwd: root });
+    const { sessionId } = await adapter!.createSession(cfg());
     adapter!.setSessionMode(sessionId, 'execute');
     const idle = waitIdle(adapter!, sessionId);
     await adapter!.sendMessage(sessionId, 'Reply with exactly the text KRAKI_CODEX_OK and nothing else. Do not run any tools.');
@@ -66,7 +71,7 @@ describe('CodexAdapter (live codex app-server)', () => {
   it('safe mode raises a permission card for a file write; deny keeps the file absent', async (ctx) => {
     if (!ready) return ctx.skip();
     const perms: string[] = [];
-    const { sessionId } = await adapter!.createSession({ cwd: root });
+    const { sessionId } = await adapter!.createSession(cfg());
     adapter!.setSessionMode(sessionId, 'safe');
     adapter!.onPermissionRequest = (sid, e) => {
       perms.push(e.description);
@@ -82,7 +87,7 @@ describe('CodexAdapter (live codex app-server)', () => {
   it('ask_user dynamic tool round-trips an answer', async (ctx) => {
     if (!ready) return ctx.skip();
     const messages: string[] = [];
-    const { sessionId } = await adapter!.createSession({ cwd: root });
+    const { sessionId } = await adapter!.createSession(cfg());
     adapter!.setSessionMode(sessionId, 'execute');
     adapter!.onMessage = (_s, e) => messages.push(e.content);
     adapter!.onQuestionRequest = (sid, e) => { void adapter!.respondToQuestion(sid, e.id, 'purple', true); };
