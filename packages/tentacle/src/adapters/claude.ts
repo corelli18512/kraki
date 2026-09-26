@@ -140,6 +140,9 @@ type PermissionResult = import('@anthropic-ai/claude-agent-sdk').PermissionResul
 interface PendingPermission {
   resolve: (result: PermissionResult) => void;
   toolKind: string;
+  /** The tool call's original input. `updatedInput` REPLACES the tool's
+   *  arguments, so an approval must hand the original input back. */
+  input: Record<string, unknown>;
 }
 
 /** One AskUserQuestion entry from the SDK's `questions` array. */
@@ -209,6 +212,10 @@ interface SessionEntry {
    *  boundary (turn_status user_abort + idle aborted): the adapter settles the
    *  turn silently — no conclusion bubble, error or idle for it. */
   userAborted?: boolean;
+  /** Results still owed by user-stopped turns whose SDK result had not
+   *  arrived when the next prompt was sent. The SDK processes input in order,
+   *  so the next N results (and prose before them) belong to those turns. */
+  staleResults?: number;
   /** Claude Code reported status=compacting and no end has been seen yet. */
   compacting?: boolean;
   reasoningEffort?: string;
@@ -513,7 +520,16 @@ export class ClaudeAdapter extends AgentAdapter {
    *  `options.env` instead of mutating process.env, so Claude provider keys
    *  never leak into the Copilot / Pi / Codex children of the same daemon. */
   private claudeEnv(extra: Record<string, string> = {}): Record<string, string | undefined> {
-    return { ...process.env, ...loadClaudeSettingsEnv(claudeConfigSource().dir), ...extra };
+    return {
+      // Background tasks let Claude Code start turns of its own (task
+      // notifications) and keep processes alive past a user stop — both break
+      // Kraki's one-prompt-one-terminal turn model and stay invisible to a
+      // remote operator. A user's explicit setting still wins.
+      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
+      ...process.env,
+      ...loadClaudeSettingsEnv(claudeConfigSource().dir),
+      ...extra,
+    };
   }
 
   /** Resolve a Kraki-visible model id back to the SDK alias it came from. */
@@ -842,10 +858,16 @@ export class ClaudeAdapter extends AgentAdapter {
     // authoritative result belongs to a new logical turn and must re-arm the
     // terminal callback guard before it enters the SDK input channel.
     if (options?.delivery !== 'steer' || entry.turnFinalized) {
+      if (entry.userAborted && !entry.turnFinalized) entry.staleResults = (entry.staleResults ?? 0) + 1;
       entry.pendingText = '';
       entry.pendingError = undefined;
       entry.turnFinalized = false;
       entry.userAborted = false;
+      // A new logical turn owns every event from here on. The SDK does not
+      // echo prompts back, and only tool turns produce SDK 'user' messages,
+      // so waiting for one left text-only turns tagged with the PREVIOUS
+      // turn's id — RelayClient then dropped their reply and idle as late.
+      entry.eventTurnId = entry.relayTurnId;
     }
 
     // Prepend mode-switch signal if mode changed since last message
@@ -1022,7 +1044,7 @@ export class ClaudeAdapter extends AgentAdapter {
       // Auto-approve other pending permissions of the same tool kind
       for (const [otherId, otherPending] of entry.pendingPermissions) {
         if (otherId !== permissionId && otherPending.toolKind === pending.toolKind) {
-          otherPending.resolve({ behavior: 'allow', updatedInput: {} });
+          otherPending.resolve({ behavior: 'allow', updatedInput: otherPending.input });
           entry.pendingPermissions.delete(otherId);
           this.onPermissionAutoResolved?.(sessionId, otherId, 'approved');
         }
@@ -1030,7 +1052,7 @@ export class ClaudeAdapter extends AgentAdapter {
     }
 
     if (decision === 'approve' || decision === 'always_allow') {
-      pending.resolve({ behavior: 'allow', updatedInput: {} });
+      pending.resolve({ behavior: 'allow', updatedInput: pending.input });
     } else {
       pending.resolve({ behavior: 'deny', message: 'Denied by user' });
     }
@@ -1482,6 +1504,13 @@ export class ClaudeAdapter extends AgentAdapter {
         const result = msg as SDKResultMessage;
         const resultAny = result as unknown as Record<string, unknown>;
         const entry = this.sessions.get(sessionId);
+        if (entry?.staleResults) {
+          // Late result of a stopped turn: it must not settle the new turn.
+          entry.staleResults -= 1;
+          entry.pendingText = '';
+          entry.pendingError = undefined;
+          break;
+        }
         if (entry?.turnFinalized) break;
         if (entry?.compacting) this.emitCompaction(sessionId, { phase: 'end' });
 
@@ -1737,15 +1766,16 @@ export class ClaudeAdapter extends AgentAdapter {
         toolName,
       }, 'permission requested');
 
+      // Register BEFORE announcing: a response may arrive synchronously.
+      const decision = new Promise<PermissionResult>((resolve) => {
+        pendingPermissions.set(permId, { resolve, toolKind, input });
+      });
       this.onPermissionRequest?.(sessionId, {
         ...this.lifecycleEvent(this.sessions.get(sessionId)),
         id: permId,
         ...parsed,
       });
-
-      return new Promise<PermissionResult>((resolve) => {
-        pendingPermissions.set(permId, { resolve, toolKind });
-      });
+      return decision;
     };
   }
 

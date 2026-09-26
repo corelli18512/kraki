@@ -211,6 +211,46 @@ describe('ClaudeAdapter — turn lifecycle', () => {
     expect(claude.onIdle).toHaveBeenCalledWith('s', { turnId: 'rt-2' });
   });
 
+  it('a text-only turn after a tool turn carries ITS OWN turn id (live Claude regression)', async () => {
+    await createClaude(); claude.onMessage = vi.fn(); claude.onIdle = vi.fn();
+    cc().sessions.get('s')!.query = {};
+    claude.setTurnIdentity('s', 'rt-1'); await claude.sendMessage('s', 'edit a file');
+    cc().handleSDKMessage('s', { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/x' } }] } });
+    cc().handleSDKMessage('s', { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } });
+    cc().handleSDKMessage('s', { type: 'assistant', message: { content: [{ type: 'text', text: 'edited' }] } });
+    cc().handleSDKMessage('s', { type: 'result', is_error: false });
+    // Next turn has no tools, so the SDK sends no 'user' message at all.
+    claude.setTurnIdentity('s', 'rt-2'); await claude.sendMessage('s', 'what colour?');
+    cc().handleSDKMessage('s', { type: 'assistant', message: { content: [{ type: 'text', text: 'Red.' }] } });
+    cc().handleSDKMessage('s', { type: 'result', is_error: false });
+    expect(claude.onMessage).toHaveBeenLastCalledWith('s', { content: 'Red.', turnId: 'rt-2' });
+    expect(claude.onIdle).toHaveBeenLastCalledWith('s', { turnId: 'rt-2' });
+  });
+
+  it('Claude children run with background tasks disabled unless the user opts in', async () => {
+    await createClaude(); await claude.sendMessage('s', 'first');
+    expect(sdk.query.mock.calls[0][0].options.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('1');
+    process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '0';
+    await claude.createSession({ sessionId: 's2', cwd: root }); await claude.sendMessage('s2', 'x');
+    expect(sdk.query.mock.calls.at(-1)![0].options.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('0');
+  });
+
+  it('a stopped turn whose result arrives after the next prompt does not end that prompt', async () => {
+    await createClaude(); claude.onMessage = vi.fn(); claude.onIdle = vi.fn();
+    cc().sessions.get('s')!.query = { interrupt: vi.fn(async () => {}) };
+    claude.setTurnIdentity('s', 'rt-1'); await claude.sendMessage('s', 'long');
+    await claude.abortSession('s');                // result not delivered yet
+    claude.setTurnIdentity('s', 'rt-2'); await claude.sendMessage('s', 'quick');
+    cc().handleSDKMessage('s', { type: 'result', is_error: true, subtype: 'error_during_execution' }); // late, rt-1's
+    expect(claude.onIdle).not.toHaveBeenCalled();
+    expect(claude.isTurnSettled('s')).toBe(false);
+    cc().handleSDKMessage('s', { type: 'assistant', message: { content: [{ type: 'text', text: 'quick answer' }] } });
+    cc().handleSDKMessage('s', { type: 'result', is_error: false });
+    expect(claude.onMessage).toHaveBeenCalledWith('s', { content: 'quick answer', turnId: 'rt-2' });
+    expect(claude.onIdle).toHaveBeenCalledTimes(1);
+    expect(claude.onIdle).toHaveBeenCalledWith('s', { turnId: 'rt-2' });
+  });
+
   it('stopping an idle session does not arm the stop flag', async () => {
     await createClaude(); claude.onIdle = vi.fn();
     cc().sessions.get('s')!.query = { interrupt: vi.fn() };
@@ -247,6 +287,20 @@ describe('ClaudeAdapter — turn lifecycle', () => {
     expect(claude.onMessage).not.toHaveBeenCalled();
     expect(claude.onSystemMessage).toHaveBeenCalledWith('s', { kind: 'no_reply', turnId: 'rt-1' });
     expect(claude.onIdle).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ClaudeAdapter — permissions', () => {
+  it('an operator approval returns the ORIGINAL tool input (updatedInput replaces args)', async () => {
+    await createClaude(); claude.setSessionMode('s', 'safe'); await claude.sendMessage('s', 'first');
+    const canUseTool = sdk.query.mock.calls[0][0].options.canUseTool;
+    let permId = '';
+    claude.onPermissionRequest = (_s, e) => { permId = e.id; };
+    const input = { file_path: '/repo/a.ts', old_string: 'old', new_string: 'new' };
+    const decision = canUseTool('Edit', input, { signal: new AbortController().signal, toolUseID: 't1' });
+    await nextTick();
+    await claude.respondToPermission('s', permId, 'approve');
+    await expect(decision).resolves.toEqual({ behavior: 'allow', updatedInput: input });
   });
 });
 
