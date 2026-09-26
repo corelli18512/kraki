@@ -724,6 +724,26 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(bubble.frozenCard?.action?.choices, ["A", "B"])
     }
 
+    /// Opening a session whose head only becomes known after its window was
+    /// drawn (a cold open: database first, session_list later) must still show
+    /// the trailing question as open with the same store revision.
+    func testQuestionOpensWhenTheHeadBecomesKnownAfterTheWindow() throws {
+        let fx = try makeFixture(total: 10)
+        drain(600)
+        try startTurn(fx, seq: 11)
+        try ask(fx, seq: 12, id: "q1")
+        drain(200)
+        let vm = ChatViewModel(sessionId: sid, appState: fx.app)
+        // The Tentacle reports a newer head than the loaded window: not at head.
+        fx.app.messageProvider?.observeLiveMessageSeq(sid, seq: 40, kind: "test")
+        let before = vm.displayMessages(spineRevision: 7).first { $0.seq == 12 }
+        XCTAssertNil(before?.frozenCard?.action, "undetermined away from the head")
+        // The window catches up to the head without a new store revision.
+        fx.app.messageProvider?.setTentacleInfo(sessionId: sid, lastSeq: 12, deviceId: dev)
+        let after = vm.displayMessages(spineRevision: 7).first { $0.seq == 12 }
+        XCTAssertEqual(after?.frozenCard?.action?.choices, ["A", "B"], "open once the head is known")
+    }
+
     func testPickingAChoiceSendsAUserMessageAndClosesTheQuestion() throws {
         var sent: [[String: Any]] = []
         let fx = try makeFixture(total: 10) { msg in sent.append(msg); return true }
