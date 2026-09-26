@@ -2896,10 +2896,12 @@ describe('RelayClient pending-question digest', () => {
     (adapter.sendMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('replacement prompt failed'));
     askQ('q1');
     ws.emit('message', Buffer.from(JSON.stringify({
-      type: 'answer', sessionId: 'sess_1', deviceId: 'app-x', seq: 504,
-      timestamp: new Date().toISOString(), payload: { questionId: 'q1', answer: 'keep me pending' },
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 504,
+      timestamp: new Date().toISOString(), payload: { text: 'keep me pending', answerTo: 'q1' },
     })));
     await vi.runAllTimersAsync();
+    // The answer did reach the recovery path (it failed there).
+    expect(adapter.sendMessage).toHaveBeenCalledWith('sess_1', expect.stringContaining('keep me pending'), undefined);
     expect(sm.savePendingHumanAction).toHaveBeenCalledWith('sess_1', expect.objectContaining({ questionId: 'q1' }));
     expect(sm.clearPendingHumanAction).not.toHaveBeenCalledWith('sess_1');
   });
