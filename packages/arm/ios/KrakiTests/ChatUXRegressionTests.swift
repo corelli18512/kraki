@@ -779,7 +779,7 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(m("answered").questionCard?.text, m("open").questionCard?.text)
         XCTAssertEqual(m("open").questionCard?.action?.choices, ["删", "留"])
         XCTAssertNil(m("answered").questionCard?.action)
-        XCTAssertEqual(m("unanswered").questionCard?.text, "有两个方案\n\n**删旧接口？**\n\n*Not answered*")
+        XCTAssertEqual(m("unanswered").questionCard?.text, m("open").questionCard?.text)
     }
 
     func testFailedAnswerKeepsTheQuestionAnswerable() throws {
@@ -807,10 +807,24 @@ final class ChatUXRegressionTests: XCTestCase {
             m("idle", 5, [:]),
         ]
         let annotated = ChatViewModel.annotatingQuestions(raw, pending: [], atHead: true)
-        let projected = TurnSpineProjection.project(annotated)
+        let projected = TurnSpineProjection.project(annotated).filter(ChatViewModel.shouldRender)
         let q = projected.first { $0.seq == 2 }
         XCTAssertEqual(q?.questionState, "unanswered")
+        let aborted = projected.first { $0.seq == 4 }
+        XCTAssertNotNil(aborted, "the abort shows as the regular User aborted card")
+        XCTAssertNotEqual(aborted?.interruptedDraft, "有两个方案", "the question's lead-in is not copied into it")
         XCTAssertNil(projected.first { $0.seq == 3 }, "the non-question reply is still replaced by the terminal card")
+    }
+
+    /// An abort card without a draft still fits "User aborted" on one line.
+    func testUserAbortedCardFitsOnOneLine() throws {
+        let action = ChatMessage(type: "user_abort", seq: 0, sessionId: sid, deviceId: dev, timestamp: nil,
+                                 payload: ["abortedAt": AnyCodable("x")])
+        let content = TKBubbleContent.live(card: MessageStore.SessionCard(text: "", action: action),
+                                           agent: "claude", sessionId: sid, steps: 0, isFrozen: true)
+        let width = content.bodyTextWidth(cellWidth: 402)
+        let height = TKActionMeasure.height(action: action, width: width)
+        XCTAssertLessThan(height, 30, "one line (was wrapped into two)")
     }
 
     func testTwoOpenQuestionsAnswerIndependently() {

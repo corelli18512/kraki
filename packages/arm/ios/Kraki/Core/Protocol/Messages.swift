@@ -217,6 +217,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
 
     /// Display-only key: "open" | "answered" | "unanswered" | "closed".
     static let questionStateKey = "questionState"
+    /// Display-only: a terminal status that closed an open question.
+    static let closesQuestionKey = "closesQuestion"
 
     /// `agent_message.payload.question`: the agent asked the human.
     struct QuestionSpec: Equatable, Sendable {
@@ -241,7 +243,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     /// A question bubble's (body text, action slot). The lead-in prose and the
     /// question (bold) are always body text, identical before and after it is
     /// answered. Only an open question adds the action slot: its choices as
-    /// shortcuts. An unanswered one ends with "Not answered".
+    /// shortcuts. (An abort shows as the regular "User aborted" card after it.)
     var questionCard: (text: String, action: ChatMessage?)? {
         guard let spec = questionSpec else { return nil }
         var parts: [String] = []
@@ -249,7 +251,6 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         let bold = spec.text.split(separator: "\n", omittingEmptySubsequences: true)
             .map { "**\($0.trimmingCharacters(in: .whitespaces))**" }.joined(separator: "\n")
         if !bold.isEmpty { parts.append(bold) }
-        if questionState == "unanswered" { parts.append("*Not answered*") }
         let action = questionState == "open" ? questionAction : nil
         return (parts.joined(separator: "\n\n"), action)
     }

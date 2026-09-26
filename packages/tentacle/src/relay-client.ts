@@ -1550,7 +1550,9 @@ export class RelayClient {
           const snapshot = this.card.state(sessionId);
           this.adapter.abortSession(sessionId)
             .then(() => {
-              if (snapshot.draft || snapshot.action) {
+              // An open question is visible state too: record the abort so
+              // the conversation shows "User aborted" after it.
+              if (snapshot.draft || snapshot.action || this.openQuestions.has(sessionId)) {
                 this.finishTurnWithStatus(sessionId, {
                   type: 'user_abort',
                   payload: { abortedAt: new Date().toISOString() },

@@ -2953,8 +2953,11 @@ describe('RelayClient pending-question digest', () => {
     await Promise.resolve();
     await Promise.resolve();
     const types = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1]);
-    // Something non-question follows the question → it reads as not answered.
-    expect(types.lastIndexOf('idle')).toBeGreaterThan(types.indexOf('agent_message'));
+    // The abort is recorded after the question (rendered as "User aborted").
+    expect(types.indexOf('turn_status')).toBeGreaterThan(types.indexOf('agent_message'));
+    const status = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.find((c) => c[1] === 'turn_status');
+    expect(JSON.parse(status![2]).payload).toMatchObject({ draft: '', action: { type: 'user_abort' } });
+    expect(types.lastIndexOf('idle')).toBeGreaterThan(types.indexOf('turn_status'));
     expect(sm.clearPendingHumanAction).toHaveBeenCalledWith('sess_1');
     expect((sm.appendTrace as ReturnType<typeof vi.fn>).mock.calls.some((c) => c[1] === 'question')).toBe(false);
     // A late answer to it is an ordinary message, not recorded as an answer.

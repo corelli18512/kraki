@@ -45,6 +45,7 @@ final class ChatViewModel {
             // content. Its failure/abort status belongs to turn/session state;
             // rendering it would create an empty bubble with only footer/Steps.
             return !(message.interruptedDraft ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || message.payload[ChatMessage.closesQuestionKey]?.boolValue == true
         }
         return true
     }
@@ -222,10 +223,16 @@ final class ChatViewModel {
         for index in raw.indices {
             guard let spec = raw[index].questionSpec else { continue }
             var state: String?
-            for later in raw[(index + 1)...] {
+            for laterIndex in raw.indices where laterIndex > index {
+                let later = raw[laterIndex]
                 if later.answerTo == spec.id { state = "answered"; break }
                 if later.questionSpec != nil || later.answerTo != nil || later.type == "error" { continue }
                 state = "unanswered"
+                if later.type == "turn_status" || later.type == "interrupted_turn" {
+                    // Aborted/failed while asking: show that terminal card
+                    // ("User aborted") even though it carries no draft.
+                    result[laterIndex].payload[ChatMessage.closesQuestionKey] = AnyCodable(true)
+                }
                 break
             }
             if state == nil {

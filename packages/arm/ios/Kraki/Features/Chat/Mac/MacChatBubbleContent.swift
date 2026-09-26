@@ -230,7 +230,8 @@ enum MacChatBubbleContentBuilder {
         case "failed", "user_abort":
             let label = action.type == "failed" ? "Turn failed" : "User aborted"
             let detail = action.payload["message"]?.stringValue ?? ""
-            return textWidth("\(label)  \(detail)", font: .systemFont(ofSize: 13)) + 24
+            // icon (≈16) + spacing 8 + medium-weight label
+            return textWidth("\(label)  \(detail)", font: .systemFont(ofSize: 13, weight: .medium)) + 24 + 28
         default:
             return 0
         }

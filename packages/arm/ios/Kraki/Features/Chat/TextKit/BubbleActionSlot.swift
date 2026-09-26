@@ -211,10 +211,6 @@ struct BubbleActionSlot: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Answer: \(choice)")
                 }
-                Text("Or type your answer below")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.textMuted)
-                    .padding(.top, 2)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

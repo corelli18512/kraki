@@ -69,9 +69,9 @@ final class QuestionE2EUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Answer: Red"].waitForExistence(timeout: 40))
         // The driver script aborts the turn now.
         try "ready".write(toFile: "/tmp/kraki-e2e-abort-go", atomically: true, encoding: .utf8)
-        let notAnswered = text(app, "Not answered").waitForExistence(timeout: 30)
+        let notAnswered = text(app, "User aborted").waitForExistence(timeout: 30)
         shot("a1-after-abort")
-        XCTAssertTrue(notAnswered, "aborted question reads not answered")
+        XCTAssertTrue(notAnswered, "abort shows the regular User aborted card")
         XCTAssertFalse(app.buttons["Answer: Red"].exists)
         sleep(1)
         shot("a1-not-answered")

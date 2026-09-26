@@ -64,7 +64,7 @@ enum TurnSpineProjection {
         fallbackFrom prefix: ArraySlice<ChatMessage>
     ) -> ChatMessage {
         guard let fallback = prefix.reversed().first(where: {
-            guard $0.type == "agent_message" else { return false }
+            guard $0.type == "agent_message", $0.questionSpec == nil else { return false }
             return !($0.content ?? "").isEmpty || !($0.attachments ?? []).isEmpty
         }) else { return terminal }
 
