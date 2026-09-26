@@ -1002,7 +1002,7 @@ final class TKBubbleContent {
         self.liveRevision = liveBody?.revision ?? 0
     }
 
-    /// Optimistic input delivery state ("sending" | "failed"), nil otherwise.
+    /// Optimistic input delivery state ("sending" | "failed" | "correcting"), nil otherwise.
     var pendingDeliveryState: String? {
         guard message.type == "pending_input" else { return nil }
         return message.payload["localState"]?.stringValue ?? "sending"
@@ -1304,6 +1304,7 @@ final class TKBubbleContent {
         hasher.combine(message.attachments?.count ?? 0)
         hasher.combine(message.steps ?? 0)
         hasher.combine(message.payload["localState"]?.stringValue ?? "")
+        hasher.combine(message.payload["uncorrected"]?.description ?? "")
         for ref in message.contentRefAttachments {
             hasher.combine(ref.id)
             hasher.combine(ref.mimeType)
@@ -1334,7 +1335,10 @@ final class TKBubbleContent {
         let body: NSAttributedString?
         switch kind {
         case .user:
-            body = rawBody.map { TKMarkdown.recolored($0, color: .white) }
+            body = rawBody.map { rendered in
+                let solid = TKMarkdown.recolored(rendered, color: .white)
+                return Self.lighteningUncorrected(solid, message: message) ?? solid
+            }
         case .error:
             body = TKMarkdown.recolored(
                 rawBody ?? NSAttributedString(string: message.result ?? "Error"),
@@ -1348,6 +1352,27 @@ final class TKBubbleContent {
             body: body, images: decodeImages(message.attachments),
             imageRefs: refs.filter { $0.mimeType.hasPrefix("image/") },
             htmlArtifacts: refs.filter { $0.mimeType == "text/html" })
+    }
+
+    /// A voice message being corrected: the part the correction has not
+    /// reached yet is light; corrected text is solid (like the old composer).
+    private static func lighteningUncorrected(_ body: NSAttributedString, message: ChatMessage) -> NSAttributedString? {
+        guard message.payload["localState"]?.stringValue == "correcting",
+              let fade = message.payload["uncorrected"]?.arrayValue?.compactMap(\.intValue), fade.count == 2,
+              let source = message.content else { return nil }
+        let sourceRange = NSRange(location: fade[0], length: fade[1])
+        guard NSMaxRange(sourceRange) <= (source as NSString).length else { return nil }
+        let faded = (source as NSString).substring(with: sourceRange)
+        let rendered = body.string as NSString
+        // Plain transcripts render 1:1; otherwise locate the same tail text.
+        let target = rendered.length >= NSMaxRange(sourceRange)
+            && rendered.substring(with: sourceRange) == faded
+            ? sourceRange
+            : rendered.range(of: faded, options: .backwards)
+        guard target.location != NSNotFound, target.length > 0 else { return nil }
+        let result = NSMutableAttributedString(attributedString: body)
+        result.addAttribute(.foregroundColor, value: UIColor.white.withAlphaComponent(0.5), range: target)
+        return result
     }
 
     private static func uniqueRefs(_ refs: [ContentRef]) -> [ContentRef] {
@@ -1770,7 +1795,9 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     var sessionMode: SessionMode = .discuss
     var onActionHeightChange: (() -> Void)?
     var onShowTable: ((TKTableLayout) -> Void)?
-    enum PendingAction { case retry, edit, delete }
+    /// A message the user sent is never edited afterwards: an unsent or
+    /// undelivered one can only be sent (again) or deleted.
+    enum PendingAction { case retry, delete }
     /// Retry / edit / delete an unconfirmed optimistic input (by clientId).
     var onPendingAction: ((String, PendingAction) -> Void)?
     private let deliveryStatus = UIButton(type: .system)
@@ -1795,6 +1822,13 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     }
     var deliveryStatusForRegression: String? {
         deliveryStatus.isHidden ? nil : deliveryStatus.accessibilityLabel
+    }
+    var deliveryStatusFrameForRegression: CGRect { deliveryStatus.frame }
+    /// Target opacity of the text bubble and image (the "not delivered yet" dim).
+    /// On-screen opacity of the text bubble and the image.
+    var pendingDimForRegression: (text: CGFloat, image: CGFloat) {
+        (CGFloat(renderClipView.layer.presentation()?.opacity ?? Float(renderClipView.alpha)),
+         CGFloat(imageHost.layer.presentation()?.opacity ?? Float(imageHost.alpha)))
     }
     #endif
 
@@ -2029,6 +2063,15 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         onPendingAction = nil
         deliveryStatus.layer.removeAllAnimations()
         deliveryStatus.isHidden = true
+        deliveryStatus.menu = nil
+        deliveryStatus.showsMenuAsPrimaryAction = false
+        deliveryStatusKey = nil
+        dimmedMessageID = nil
+        pendingDimWork?.cancel(); pendingDimWork = nil
+        renderClipView.layer.removeAllAnimations()
+        imageHost.layer.removeAllAnimations()
+        renderClipView.alpha = 1
+        imageHost.alpha = 1
         bubbleBG.fillColor = .clear
         bubbleBG.frame = .zero
     }
@@ -2042,9 +2085,65 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         onPendingAction?(clientID, .retry)
     }
 
+    private static let pendingAlpha: CGFloat = 0.6
+    /// Identity + state the status indicator was last set up for. Pending rows
+    /// are reconfigured on every outbox change; an unchanged status must not
+    /// restart its delayed fade (which would flicker).
+    private var deliveryStatusKey: String?
+    /// Message whose text bubble and image are dimmed as "not delivered yet".
+    private var dimmedMessageID: String?
+    private var pendingDimWork: DispatchWorkItem?
+
+    /// Sent but not delivered yet: the whole message — text bubble and its
+    /// image — dims after the same short delay as the clock, so a fast
+    /// confirmation never flashes. A correcting voice message is not dimmed:
+    /// its uncorrected words are light and corrected words solid instead.
+    /// Delivered and failed messages are shown normally (failed has its "!").
+    private func applyPendingDim(_ content: TKBubbleContent) {
+        let state = content.pendingDeliveryState
+        let targets: [UIView] = [renderClipView, imageHost]
+        if state == "sending" {
+            let id = content.message.id
+            guard dimmedMessageID != id else { return }
+            dimmedMessageID = id
+            targets.forEach { $0.layer.removeAllAnimations() }
+            pendingDimWork?.cancel()
+            targets.forEach { $0.alpha = 1 }
+            // A real timer: a delayed UIView animation is skipped when the
+            // cell is configured before it is in a window.
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.dimmedMessageID == id else { return }
+                UIView.animate(withDuration: 0.25, delay: 0, options: [.allowUserInteraction]) {
+                    targets.forEach { $0.alpha = Self.pendingAlpha }
+                }
+            }
+            pendingDimWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+        } else {
+            let wasDimmed = dimmedMessageID != nil
+            dimmedMessageID = nil
+            pendingDimWork?.cancel(); pendingDimWork = nil
+            targets.forEach { $0.layer.removeAllAnimations() }
+            if wasDimmed {
+                UIView.animate(withDuration: 0.15, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
+                    targets.forEach { $0.alpha = 1 }
+                }
+            } else {
+                targets.forEach { $0.alpha = 1 }
+            }
+        }
+    }
+
     /// Delivery indicator beside an optimistic bubble. "Sending" appears only
     /// after a short delay so fast confirmations never flash an icon.
     private func configureDeliveryStatus(_ content: TKBubbleContent) {
+        applyPendingDim(content)
+        let key = "\(content.message.id)#\(content.pendingDeliveryState ?? "")"
+        guard key != deliveryStatusKey else { return }
+        deliveryStatusKey = key
+        deliveryStatus.menu = nil
+        deliveryStatus.showsMenuAsPrimaryAction = false
+        deliveryStatus.imageView?.removeAllSymbolEffects()
         guard let state = content.pendingDeliveryState else {
             deliveryStatus.layer.removeAllAnimations()
             deliveryStatus.isHidden = true
@@ -2053,6 +2152,19 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         let symbol = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
         deliveryStatus.isHidden = false
         deliveryStatus.layer.removeAllAnimations()
+        if state == "correcting" {
+            deliveryStatus.setImage(UIImage(systemName: "waveform", withConfiguration: symbol), for: .normal)
+            deliveryStatus.tintColor = .secondaryLabel
+            deliveryStatus.isUserInteractionEnabled = true
+            deliveryStatus.alpha = 1
+            deliveryStatus.accessibilityLabel = "Correcting transcript before sending"
+            deliveryStatus.imageView?.addSymbolEffect(.variableColor.iterative, options: .repeating)
+            if let clientID = pendingClientID {
+                deliveryStatus.menu = UIMenu(children: correctingActions(clientID))
+                deliveryStatus.showsMenuAsPrimaryAction = true
+            }
+            return
+        }
         if state == "failed" {
             deliveryStatus.setImage(UIImage(systemName: "exclamationmark.circle.fill", withConfiguration: symbol), for: .normal)
             deliveryStatus.tintColor = .systemRed
@@ -2065,8 +2177,11 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             deliveryStatus.isUserInteractionEnabled = false
             deliveryStatus.accessibilityLabel = "Sending"
             deliveryStatus.alpha = 0
-            UIView.animate(withDuration: 0.25, delay: 0.8, options: [.allowUserInteraction]) { [weak self] in
-                self?.deliveryStatus.alpha = 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                guard let self, self.deliveryStatusKey == key else { return }
+                UIView.animate(withDuration: 0.25, delay: 0, options: [.allowUserInteraction]) {
+                    self.deliveryStatus.alpha = 1
+                }
             }
         }
     }
@@ -2271,18 +2386,31 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
                 self?.openSteps()
             })
         }
+        if content.pendingDeliveryState == "correcting", let clientID = pendingClientID {
+            actions.append(contentsOf: correctingActions(clientID))
+        }
         if content.pendingDeliveryState == "failed", let clientID = pendingClientID {
             actions.insert(UIAction(title: "Retry", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
                 self?.onPendingAction?(clientID, .retry)
             }, at: 0)
-            actions.append(UIAction(title: "Edit", image: UIImage(systemName: "pencil")) { [weak self] _ in
-                self?.onPendingAction?(clientID, .edit)
-            })
             actions.append(UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
                 self?.onPendingAction?(clientID, .delete)
             })
         }
         return actions
+    }
+
+    /// Voice input still being corrected: don't wait (send the original
+    /// transcript), or drop it.
+    private func correctingActions(_ clientID: String) -> [UIAction] {
+        [
+            UIAction(title: "Send Original", image: UIImage(systemName: "paperplane")) { [weak self] _ in
+                self?.onPendingAction?(clientID, .retry)
+            },
+            UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+                self?.onPendingAction?(clientID, .delete)
+            },
+        ]
     }
 
     func contextMenuInteraction(
@@ -2379,7 +2507,12 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         }
 
         if !deliveryStatus.isHidden {
-            deliveryStatus.frame = CGRect(x: x - 28, y: y + max(bubbleHeight, 1) - 24, width: 24, height: 24)
+            // The status belongs to the whole message: beside its last block
+            // (the image when there is one, so an image-only message has it
+            // next to the image rather than above it).
+            let anchor = imageHeight > 0 ? imageHost.frame
+                : CGRect(x: x, y: y, width: bubbleWidth, height: max(bubbleHeight, 1))
+            deliveryStatus.frame = CGRect(x: anchor.minX - 28, y: anchor.maxY - 24, width: 24, height: 24)
         }
         let buttonSize = moreButton.sizeThatFits(CGSize(width: 80, height: 30))
         // Steps "···" rides the bubble's top-LEADING edge.

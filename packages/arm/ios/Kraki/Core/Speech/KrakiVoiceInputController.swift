@@ -145,6 +145,14 @@ enum VoiceComposerAccessPolicy {
     }
 }
 
+/// Opt-in terminal information for hold-to-text; existing onFinal clients keep
+/// their original draft-only behavior. A recovered/raw-only result must not send.
+struct VoiceInputCompletion {
+    let text: String
+    let rawText: String
+    let completed: Bool
+}
+
 @Observable
 final class KrakiVoiceInputController {
     enum State: Equatable {
@@ -191,6 +199,9 @@ final class KrakiVoiceInputController {
     private var context: VoiceSessionContext?
     private var recordingStartedHandler: (() -> Void)?
     private var finalHandler: ((String) -> Void)?
+    private var completionHandler: ((VoiceInputCompletion) -> Void)?
+    private var rawHandler: ((String) -> Void)?
+    private var correctionHandler: ((String) -> Void)?
     private var preserveDraftOnDeparture = false
     private var failedSessionID: String?
     private var leaseTimeoutTask: Task<Void, Never>?
@@ -289,10 +300,17 @@ final class KrakiVoiceInputController {
         prepare()
     }
 
+    /// Main-actor isolated: in Swift 5 mode a nonisolated `async` method runs on
+    /// the global executor, which raced main-thread release/cancel/transport
+    /// events and could leave the audio session active after a quick release.
+    @MainActor
     func begin(
         sessionID: String,
         context: VoiceSessionContext,
         onRecordingStarted: (() -> Void)? = nil,
+        onRaw: ((String) -> Void)? = nil,
+        onCorrection: ((String) -> Void)? = nil,
+        onCompletion: ((VoiceInputCompletion) -> Void)? = nil,
         onFinal: @escaping (String) -> Void
     ) async {
         switch state {
@@ -311,6 +329,9 @@ final class KrakiVoiceInputController {
         self.context = context
         recordingStartedHandler = onRecordingStarted
         finalHandler = onFinal
+        rawHandler = onRaw
+        correctionHandler = onCorrection
+        completionHandler = onCompletion
 
         guard let host, host.voiceCapability != nil else {
             failRecording(VoiceInputError.unavailable, closeTransport: false)
@@ -360,13 +381,18 @@ final class KrakiVoiceInputController {
             failRecording(VoiceInputError.microphoneUnavailable, closeTransport: false)
             return
         }
-        guard audioPolicy.activate(), recordingGeneration == currentRecording else {
-            if recordingGeneration == currentRecording {
-                failRecording(
-                    VoiceInputError.gateway("The microphone audio session couldn't be started."),
-                    closeTransport: false
-                )
-            }
+        let activated = audioPolicy.activate()
+        guard recordingGeneration == currentRecording else {
+            // Released/cancelled meanwhile: never leave a record session active
+            // (it interrupts or ducks other audio) unless a newer recording owns it.
+            if activated, !isBusy { audioPolicy.deactivate() }
+            return
+        }
+        guard activated else {
+            failRecording(
+                VoiceInputError.gateway("The microphone audio session couldn't be started."),
+                closeTransport: false
+            )
             return
         }
 
@@ -407,7 +433,9 @@ final class KrakiVoiceInputController {
             // Lease rollover may already hold speech from the prior segment.
             let recoveredText = rawText
             let handler = finalHandler
+            let completion = completionHandler
             cancel()
+            completion?(VoiceInputCompletion(text: recoveredText, rawText: recoveredText, completed: false))
             if !recoveredText.isEmpty { handler?(recoveredText) }
         case .idle, .failed:
             break
@@ -527,9 +555,15 @@ final class KrakiVoiceInputController {
         case .gatewayReady:
             break
         case .level(let value):
-            level = value
+            #if os(iOS)
+            // Fast attack, slower release: words read as bumps, not flicker.
+            let smoothed = max(value, (levels.last ?? 0) * 0.72)
+            #else
+            let smoothed = value
+            #endif
+            level = smoothed
             levels.removeFirst()
-            levels.append(value)
+            levels.append(smoothed)
         case .partial(let text):
             applyPartial(text)
         case .correctionDelta(let text):
@@ -539,8 +573,24 @@ final class KrakiVoiceInputController {
             let finalText = preserveDraftOnDeparture && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? rawText : resolvedFinalText(text, gatewayRawText: gatewayRawText)
             let handler = finalHandler
+            let completion = completionHandler
+            let completeRaw = gatewayRawText.map { resolvedFinalText($0, gatewayRawText: $0) } ?? rawText
+            let validFinal = !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            // The gateway can silently fall back to raw on corrector failure.
+            // Its current contract supplies rawText only for successful changed
+            // correction. For unchanged correction, require a complete matching
+            // stream, not merely a first/partial delta. Unknown finals stay draft.
+            // The gateway returns the corrector's output trimmed, while deltas
+            // carry the untrimmed stream; compare trimmed forms.
+            let streamedFinal = (pendingCorrectionText ?? correctionText)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let correctionConfirmed = gatewayRawText?.isEmpty == false
+                || (!streamedFinal.isEmpty
+                    && streamedFinal == finalText.trimmingCharacters(in: .whitespacesAndNewlines))
+            let completed = validFinal && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && correctionConfirmed
             recordingCleanup(clearHandlers: true)
             state = .idle
+            completion?(VoiceInputCompletion(text: validFinal ? finalText : completeRaw, rawText: completeRaw, completed: completed))
             if !finalText.isEmpty { handler?(finalText) }
         case .failed(let reason):
             handleConnectionFailure(reason)
@@ -561,10 +611,13 @@ final class KrakiVoiceInputController {
             // preserve all received ASR instead, and retire the callback once.
             let recoveredText = preserveDraftOnDeparture ? rawText : ""
             let handler = finalHandler
+            let completion = completionHandler
+            let raw = rawText
             let owner = activeSessionID
             recordingCleanup(clearHandlers: true)
             failedSessionID = owner
             state = .failed(message)
+            completion?(VoiceInputCompletion(text: raw, rawText: raw, completed: false))
             if !recoveredText.isEmpty { handler?(recoveredText) }
         }
         if warmConnectionDesired { scheduleReconnect(immediate: requiresFreshLease) }
@@ -590,9 +643,11 @@ final class KrakiVoiceInputController {
         case .finishing:
             let recoveredText = rawText
             let handler = finalHandler
+            let completion = completionHandler
             closeConnection(keepLease: false)
             recordingCleanup(clearHandlers: true)
             state = .idle
+            completion?(VoiceInputCompletion(text: recoveredText, rawText: recoveredText, completed: false))
             if !recoveredText.isEmpty { handler?(recoveredText) }
             if warmConnectionDesired { scheduleReconnect(immediate: true) }
             return true
@@ -763,6 +818,7 @@ final class KrakiVoiceInputController {
             existing: rolloverRawPrefix,
             final: currentConnectionText
         )
+        rawHandler?(rawText)
     }
 
     private static func sharedPrefixLength(_ lhs: String, _ rhs: String) -> Int {
@@ -792,6 +848,7 @@ final class KrakiVoiceInputController {
         guard let text = pendingCorrectionText else { return }
         pendingCorrectionText = nil
         correctionText = text
+        correctionHandler?(text)
         correctionSourceOffset = max(
             correctionSourceOffset,
             Self.alignedRawPrefixLength(corrected: text, raw: correctionSource)
@@ -840,9 +897,12 @@ final class KrakiVoiceInputController {
         KLog.d("🎙️ [voice] stage=failed reason=\(error.localizedDescription)")
         if closeTransport { closeConnection(keepLease: true) }
         let owner = activeSessionID
+        let completion = completionHandler
+        let raw = rawText
         recordingCleanup(clearHandlers: true)
         failedSessionID = owner
         state = .failed(error.localizedDescription)
+        completion?(VoiceInputCompletion(text: raw, rawText: raw, completed: false))
     }
 
     private func recordingCleanup(clearHandlers: Bool) {
@@ -859,6 +919,9 @@ final class KrakiVoiceInputController {
         if clearHandlers {
             recordingStartedHandler = nil
             finalHandler = nil
+            completionHandler = nil
+            rawHandler = nil
+            correctionHandler = nil
         }
         metricStart = nil
     }

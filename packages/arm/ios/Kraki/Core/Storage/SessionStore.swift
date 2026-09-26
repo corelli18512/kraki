@@ -173,6 +173,8 @@ final class SessionStore {
     var sessionUsage: [String: SessionUsage] = [:]
     var sessionPreviews: [String: SessionPreview] = [:]
     var drafts: [String: String] = [:]
+    /// Fences async voice updates, including edit-then-restore-to-the-same-text.
+    private(set) var draftRevisions: [String: UInt64] = [:]
     var navigateToSession: String?
     /// Set with `navigateToSession` when the target replaces a still-visible
     /// pending placeholder (create/fork/import resolved). The navigation layer
@@ -1004,6 +1006,7 @@ final class SessionStore {
     }
 
     func setDraft(_ id: String, _ text: String) {
+        draftRevisions[id, default: 0] &+= 1
         if text.isEmpty {
             drafts.removeValue(forKey: id)
         } else {
@@ -1023,6 +1026,7 @@ final class SessionStore {
         sessionUsage.removeAll()
         sessionPreviews.removeAll()
         drafts.removeAll()
+        draftRevisions.removeAll()
         navigateToSession = nil
         navigationReplacesPlaceholder = false
         sessionListRevealId = nil

@@ -41,6 +41,9 @@ final class AppState {
     /// handshake. Nil means the microphone affordance stays hidden.
     var voiceCapability: VoiceCapability?
     @ObservationIgnored private(set) var voiceInputController: KrakiVoiceInputController
+    #if os(iOS)
+    @ObservationIgnored lazy var iosVoiceComposer = IOSVoiceComposer(host: self)
+    #endif
 
     /// The durable outbox lives next to the message database, so each app
     /// flavor (Release / Dev / isolated KRAKI_DATA_DIR test instances) has its
@@ -116,13 +119,13 @@ final class AppState {
     /// It uses the real stores/provider/command/subscription objects but omits
     /// Keychain access, auth and WebSocket setup, so production UI can run
     /// unchanged against a static temporary database without side effects.
-    init(testDatabase: MessageDatabase, loadPersistedState: Bool = false) {
+    init(testDatabase: MessageDatabase, loadPersistedState: Bool = false, voiceController: KrakiVoiceInputController? = nil) {
         self.sessionStore = SessionStore(persistenceEnabled: loadPersistedState)
         self.deviceStore = DeviceStore(persistenceEnabled: loadPersistedState)
         self.messageDatabase = testDatabase
         self.messageStore = MessageStore(db: testDatabase)
-        self.voiceInputController = KrakiVoiceInputController()
-        self.voiceInputController.bind(host: self)
+        self.voiceInputController = voiceController ?? KrakiVoiceInputController()
+        if voiceController == nil { self.voiceInputController.bind(host: self) }
         self.attachmentStore = AttachmentStore { _, _ in }
         self.commandSender = CommandSender(appState: self)
         self.messageProvider = MessageProvider(appState: self)
@@ -500,6 +503,9 @@ final class AppState {
         githubClientId = nil
         relayVersion = nil
         voiceCapability = nil
+        #if os(iOS)
+        iosVoiceComposer.discard()
+        #endif
         voiceInputController.suspendWarmConnection()
         #if os(iOS)
         pushManager?.syncApplicationBadge(unreadSessionIDs: [])
@@ -546,11 +552,20 @@ final class AppState {
     /// flush needed for messages. We still flush the SessionStore /
     /// DeviceStore JSON snapshots so debounced writes don't get lost.
     func handleInactive() {
+        #if os(iOS)
+        if let owner = iosVoiceComposer.sessionID { iosVoiceComposer.depart(sessionID: owner) }
+        #endif
         updateReadVisibility(appForeground: false, conversationVisible: false)
     }
 
     func handleBackground() {
         updateReadVisibility(appForeground: false, conversationVisible: false)
+        #if os(iOS)
+        // iOS may suspend immediately and the voice socket is closed below:
+        // keep everything heard (a draft, or a not-sent voice bubble with its
+        // original transcript) rather than rely on a background callback.
+        iosVoiceComposer.retireKeepingDraft()
+        #endif
         voiceInputController.suspendWarmConnection()
         sessionStore.flushCache()
         deviceStore.flushCache()

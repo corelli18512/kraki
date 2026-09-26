@@ -48,6 +48,15 @@ schemes:
       config: Debug
       targets:
         - KrakiUITests
+  KrakiVoiceHold:
+    build:
+      targets:
+        Kraki: all
+        KrakiVoiceUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - KrakiVoiceUITests
   KrakiMac:
     build:
       targets:
@@ -177,6 +186,20 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.ios.uitests
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: Kraki
+    dependencies:
+      - target: Kraki
+
+  KrakiVoiceUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: KrakiVoiceUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.ios.voice-uitests
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: true
         TEST_TARGET_NAME: Kraki

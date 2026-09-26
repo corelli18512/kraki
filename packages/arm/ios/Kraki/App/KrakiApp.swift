@@ -12,6 +12,9 @@ struct KrakiApp: App {
     private let clientAlignmentPreviewEnabled: Bool
     private let visibleScrollScenarioEnabled: Bool
     private let newSessionScenarioEnabled: Bool
+    #if DEBUG
+    private let voiceHoldScenarioEnabled: Bool
+    #endif
 
     init() {
         #if DEBUG
@@ -23,7 +26,11 @@ struct KrakiApp: App {
         self.alignmentPreviewEnabled = alignmentPreviewEnabled
         self.clientAlignmentPreviewEnabled = clientAlignmentPreviewEnabled
         self.visibleScrollScenarioEnabled = visibleScrollScenarioEnabled
-        _appState = State(initialValue: newSessionScenarioEnabled
+        let voiceHoldScenarioEnabled = ProcessInfo.processInfo.environment["KRAKI_IOS_VOICE_HOLD_SCENARIO"] == "1"
+        self.voiceHoldScenarioEnabled = voiceHoldScenarioEnabled
+        _appState = State(initialValue: voiceHoldScenarioEnabled
+            ? IOSVoiceHoldScenarioFixture.makeAppState()
+            : newSessionScenarioEnabled
             ? IOSNewSessionScenario.makeAppState()
             : visibleScrollScenarioEnabled
             ? IOSChatScrollScenarioFixture.makeAppState()
@@ -42,11 +49,23 @@ struct KrakiApp: App {
         UIScrollView.appearance().showsHorizontalScrollIndicator = false
     }
 
+    private var effectiveColorScheme: ColorScheme? {
+        #if DEBUG
+        if voiceHoldScenarioEnabled, ProcessInfo.processInfo.environment["KRAKI_VOICE_TEST_DARK"] == "1" { return .dark }
+        #endif
+        return selectedScheme.colorScheme
+    }
+
     var body: some Scene {
         WindowGroup {
             Group {
                 #if DEBUG
-                if newSessionScenarioEnabled {
+                if voiceHoldScenarioEnabled {
+                    IOSVoiceHoldScenarioView()
+                        .onChange(of: scenePhase) {
+                            if scenePhase != .active { appState.handleInactive() }
+                        }
+                } else if newSessionScenarioEnabled {
                     IOSNewSessionScenarioView()
                 } else if visibleScrollScenarioEnabled {
                     IOSChatScrollScenarioView()
@@ -105,7 +124,7 @@ struct KrakiApp: App {
                 #endif
             }
             .environment(appState)
-            .preferredColorScheme(selectedScheme.colorScheme)
+            .preferredColorScheme(effectiveColorScheme)
         }
     }
 }
