@@ -45,7 +45,6 @@ final class ChatViewModel {
             // content. Its failure/abort status belongs to turn/session state;
             // rendering it would create an empty bubble with only footer/Steps.
             return !(message.interruptedDraft ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || message.payload[ChatMessage.closesQuestionKey]?.boolValue == true
         }
         return true
     }
@@ -228,10 +227,13 @@ final class ChatViewModel {
                 if later.answerTo == spec.id { state = "answered"; break }
                 if later.questionSpec != nil || later.answerTo != nil || later.type == "error" { continue }
                 state = "unanswered"
-                if later.type == "turn_status" || later.type == "interrupted_turn" {
-                    // Aborted/failed while asking: show that terminal card
-                    // ("User aborted") even though it carries no draft.
-                    result[laterIndex].payload[ChatMessage.closesQuestionKey] = AnyCodable(true)
+                if later.type == "turn_status" || later.type == "interrupted_turn",
+                   (later.interruptedDraft ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    // Aborted/failed while asking, with nothing streamed after
+                    // the question: the outcome ("User aborted") belongs inside
+                    // the question bubble, exactly like a normal aborted turn.
+                    // The draft-less terminal row itself is not rendered.
+                    result[index].payload[ChatMessage.closingActionKey] = AnyCodable(Self.terminalAction(of: later))
                 }
                 break
             }
@@ -242,6 +244,17 @@ final class ChatViewModel {
             result[index].payload[ChatMessage.questionStateKey] = AnyCodable(state!)
         }
         return result
+    }
+
+    /// `{type, payload}` of a terminal status (legacy interrupted_turn rebuilt).
+    static func terminalAction(of message: ChatMessage) -> [String: Any] {
+        if message.type == "turn_status", let action = message.terminalAction,
+           let type = action["type"]?.stringValue {
+            return ["type": type, "payload": (action["payload"]?.dictValue ?? [:]).compactMapValues(\.value)]
+        }
+        let lost = message.payload["reason"]?.stringValue == "process_lost"
+        return lost ? ["type": "failed", "payload": ["message": "Agent process was lost"]]
+                    : ["type": "user_abort", "payload": [:] as [String: Any]]
     }
 
     private var windowAtHead: Bool { appState?.messageProvider?.atHead(sessionId) ?? true }

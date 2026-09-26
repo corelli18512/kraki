@@ -293,7 +293,12 @@ final class BubbleActionHostView: UIView {
             let host = UIHostingController(rootView: slot)
             host.view.backgroundColor = .clear
             host.view.clipsToBounds = true
-            host.view.translatesAutoresizingMaskIntoConstraints = false
+            // Frame-based like the rest of the cell. Opting this view into
+            // Auto Layout pulled its (constraint-less) container into the
+            // engine, which later resolved the container to 0×0: an action
+            // added to an on-screen cell (a question closing into "User
+            // aborted") laid out once, then vanished.
+            host.view.translatesAutoresizingMaskIntoConstraints = true
             host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             host.view.frame = bounds
             addSubview(host.view)

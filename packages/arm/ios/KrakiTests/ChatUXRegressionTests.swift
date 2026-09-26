@@ -810,9 +810,30 @@ final class ChatUXRegressionTests: XCTestCase {
         let projected = TurnSpineProjection.project(annotated).filter(ChatViewModel.shouldRender)
         let q = projected.first { $0.seq == 2 }
         XCTAssertEqual(q?.questionState, "unanswered")
-        let aborted = projected.first { $0.seq == 4 }
-        XCTAssertNotNil(aborted, "the abort shows as the regular User aborted card")
-        XCTAssertNotEqual(aborted?.interruptedDraft, "有两个方案", "the question's lead-in is not copied into it")
+        XCTAssertNotNil(projected.first { $0.seq == 4 }, "a terminal card with its own draft still renders")
+        XCTAssertNil(q?.questionCard?.action, "outcome stays on the terminal card that has a draft")
+    }
+
+    /// Aborted while asking with nothing streamed after the question: the
+    /// "User aborted" outcome sits inside the question bubble (as in a normal
+    /// aborted turn) — no separate bubble.
+    func testAbortWhileAskingShowsOutcomeInsideTheQuestionBubble() {
+        func m(_ type: String, _ seq: Int, _ payload: [String: Any]) -> ChatMessage {
+            ChatMessage(type: type, seq: seq, sessionId: sid, deviceId: dev, timestamp: nil,
+                        payload: payload.mapValues(AnyCodable.init))
+        }
+        let raw = [
+            m("user_message", 1, ["content": "迁移接口"]),
+            m("agent_message", 2, ["content": "有两个方案", "question": ["id": "q1", "text": "删旧接口？", "choices": ["删"]]]),
+            m("turn_status", 3, ["draft": "", "action": ["type": "user_abort", "payload": ["abortedAt": "x"]]]),
+            m("idle", 4, [:]),
+        ]
+        let projected = TurnSpineProjection.project(ChatViewModel.annotatingQuestions(raw, pending: [], atHead: true))
+            .filter(ChatViewModel.shouldRender)
+        XCTAssertNil(projected.first { $0.seq == 3 }, "no separate User aborted bubble")
+        let card = projected.first { $0.seq == 2 }?.questionCard
+        XCTAssertEqual(card?.action?.type, "user_abort")
+        XCTAssertEqual(card?.text, "有两个方案\n\n**删旧接口？**")
         XCTAssertNil(projected.first { $0.seq == 3 }, "the non-question reply is still replaced by the terminal card")
     }
 

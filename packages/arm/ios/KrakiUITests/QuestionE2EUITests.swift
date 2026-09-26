@@ -71,7 +71,9 @@ final class QuestionE2EUITests: XCTestCase {
         try "ready".write(toFile: "/tmp/kraki-e2e-abort-go", atomically: true, encoding: .utf8)
         let notAnswered = text(app, "User aborted").waitForExistence(timeout: 30)
         shot("a1-after-abort")
-        XCTAssertTrue(notAnswered, "abort shows the regular User aborted card")
+        XCTAssertTrue(notAnswered, "abort shows User aborted")
+        let bubbles = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "User aborted")).count
+        XCTAssertEqual(bubbles, 1)
         XCTAssertFalse(app.buttons["Answer: Red"].exists)
         sleep(1)
         shot("a1-not-answered")

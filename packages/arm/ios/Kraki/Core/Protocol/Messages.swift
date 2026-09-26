@@ -217,8 +217,9 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
 
     /// Display-only key: "open" | "answered" | "unanswered" | "closed".
     static let questionStateKey = "questionState"
-    /// Display-only: a terminal status that closed an open question.
-    static let closesQuestionKey = "closesQuestion"
+    /// Display-only: the terminal outcome (user_abort / failed) that closed a
+    /// question with nothing streamed after it; shown inside the question.
+    static let closingActionKey = "closingAction"
 
     /// `agent_message.payload.question`: the agent asked the human.
     struct QuestionSpec: Equatable, Sendable {
@@ -251,7 +252,12 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         let bold = spec.text.split(separator: "\n", omittingEmptySubsequences: true)
             .map { "**\($0.trimmingCharacters(in: .whitespaces))**" }.joined(separator: "\n")
         if !bold.isEmpty { parts.append(bold) }
-        let action = questionState == "open" ? questionAction : nil
+        var action = questionState == "open" ? questionAction : nil
+        if action == nil, let closing = payload[ChatMessage.closingActionKey]?.dictValue,
+           let type = closing["type"]?.stringValue {
+            action = ChatMessage(type: type, seq: 0, sessionId: sessionId, deviceId: deviceId,
+                                 timestamp: timestamp, payload: closing["payload"]?.dictValue ?? [:])
+        }
         return (parts.joined(separator: "\n\n"), action)
     }
 
