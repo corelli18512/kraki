@@ -1470,7 +1470,7 @@ enum ConsumerMessageBuilder {
     }
 
     static func setSessionMode(sessionId: String, deviceId: String, mode: SessionMode) -> [String: Any] {
-        envelope(type: "set_session_mode", sessionId: sessionId, deviceId: deviceId, payload: ["mode": mode.rawValue])
+        envelope(type: "set_session_mode", sessionId: sessionId, deviceId: deviceId, payload: ["mode": mode.wireName])
     }
 
     static func setSessionModel(sessionId: String, deviceId: String, model: String, reasoningEffort: ReasoningEffort? = nil) -> [String: Any] {

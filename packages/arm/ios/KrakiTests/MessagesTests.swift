@@ -343,7 +343,7 @@ final class MessageProviderHeadTests: XCTestCase {
             model: "gpt-test",
             title: "Test Session",
             state: .idle,
-            mode: .discuss,
+            mode: .auto,
             lastSeq: 10,
             readSeq: 10,
             messageCount: 10,
@@ -385,7 +385,7 @@ final class MessageProviderHeadTests: XCTestCase {
             agent: "pi",
             title: "Test Session",
             state: .idle,
-            mode: .discuss,
+            mode: .auto,
             lastSeq: 10,
             readSeq: 10,
             messageCount: 10,
@@ -642,10 +642,13 @@ final class ConsumerMessageBuilderTests: XCTestCase {
     }
 
     func testBuildSetSessionMode() {
-        let msg = ConsumerMessageBuilder.setSessionMode(sessionId: "sess-1", deviceId: "dev-1", mode: .execute)
+        // Transition release: Auto goes on the wire under its legacy name.
+        let msg = ConsumerMessageBuilder.setSessionMode(sessionId: "sess-1", deviceId: "dev-1", mode: .auto)
         assertEnvelope(msg, type: "set_session_mode")
         let payload = msg["payload"] as? [String: Any]
         XCTAssertEqual(payload?["mode"] as? String, "execute")
+        let safe = ConsumerMessageBuilder.setSessionMode(sessionId: "sess-1", deviceId: "dev-1", mode: .safe)
+        XCTAssertEqual((safe["payload"] as? [String: Any])?["mode"] as? String, "safe")
     }
 
     func testBuildMarkRead() {

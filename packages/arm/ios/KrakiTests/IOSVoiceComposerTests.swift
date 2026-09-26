@@ -91,7 +91,7 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
     var last: Staged? { order.last.flatMap { staged[$0] } }
     init() {
         for id in ["a", "b"] {
-            sessionStore.sessions[id] = SessionInfo(id: id, deviceId: "device", deviceName: "Test", agent: "pi", state: .idle, mode: .discuss, lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: Date(), pinned: false)
+            sessionStore.sessions[id] = SessionInfo(id: id, deviceId: "device", deviceName: "Test", agent: "pi", state: .idle, mode: .auto, lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: Date(), pinned: false)
         }
         sessionStore.activeSessionId = "a"
     }

@@ -79,8 +79,7 @@ extension Color {
     static func modeColor(_ mode: SessionMode) -> Color {
         switch mode {
         case .safe:     return Color(red: 0x34/255, green: 0xD3/255, blue: 0x99/255)
-        case .discuss:  return Color(red: 0x22/255, green: 0xD3/255, blue: 0xEE/255)
-        case .execute:  return Color(red: 0xFB/255, green: 0xBF/255, blue: 0x24/255)
+        case .auto:  return Color(red: 0xFB/255, green: 0xBF/255, blue: 0x24/255)
         case .delegate: return Color(red: 0xF4/255, green: 0x83/255, blue: 0x6E/255)
         }
     }

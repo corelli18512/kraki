@@ -165,7 +165,7 @@ final class KrakiVoiceInputTests: XCTestCase {
         for id in ["session-1", "session-2"] {
             store.sessions[id] = SessionInfo(
                 id: id, deviceId: "device-1", deviceName: "Test", agent: "pi",
-                state: .idle, mode: .discuss, lastSeq: 0, readSeq: 0,
+                state: .idle, mode: .auto, lastSeq: 0, readSeq: 0,
                 messageCount: 0, createdAt: Date(), pinned: false
             )
         }
@@ -1026,7 +1026,7 @@ final class KrakiVoiceInputTests: XCTestCase {
             title: "Northstar Studio",
             autoTitle: nil,
             state: .idle,
-            mode: .execute,
+            mode: .auto,
             lastSeq: 1,
             readSeq: 1,
             messageCount: 1,

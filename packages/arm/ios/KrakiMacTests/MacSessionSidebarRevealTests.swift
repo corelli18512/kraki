@@ -29,13 +29,13 @@ final class MacSessionSidebarRevealTests: XCTestCase {
         for i in 0..<pinned {
             app.sessionStore.upsertSession(SessionInfo(
                 id: "pinned-\(i)", deviceId: "dev", deviceName: "Mac", agent: "pi", model: "m",
-                title: "Pinned \(i)", state: .idle, mode: .discuss, lastSeq: 1, readSeq: 1, messageCount: 1,
+                title: "Pinned \(i)", state: .idle, mode: .auto, lastSeq: 1, readSeq: 1, messageCount: 1,
                 createdAt: Date().addingTimeInterval(Double(-60 * (i + 1))), pinned: true))
         }
         for i in 0..<5 {
             app.sessionStore.upsertSession(SessionInfo(
                 id: "old-\(i)", deviceId: "dev", deviceName: "Mac", agent: "pi", model: "m",
-                title: "Old \(i)", state: .idle, mode: .discuss, lastSeq: 1, readSeq: 1, messageCount: 1,
+                title: "Old \(i)", state: .idle, mode: .auto, lastSeq: 1, readSeq: 1, messageCount: 1,
                 createdAt: Date().addingTimeInterval(Double(-86_400 - 60 * i)), pinned: false))
         }
         var selected: String?
@@ -54,7 +54,7 @@ final class MacSessionSidebarRevealTests: XCTestCase {
     private func createNewSession(_ app: AppState) {
         app.sessionStore.upsertSession(SessionInfo(
             id: "new", deviceId: "dev", deviceName: "Mac", agent: "pi", model: "m",
-            title: "Brand new", state: .idle, mode: .discuss, lastSeq: 0, readSeq: 0, messageCount: 0,
+            title: "Brand new", state: .idle, mode: .auto, lastSeq: 0, readSeq: 0, messageCount: 0,
             createdAt: Date(), pinned: false))
         app.sessionStore.sessionListRevealId = "new"
         drain(900)

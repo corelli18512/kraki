@@ -79,7 +79,7 @@ struct MacBubbleActionSlot: View {
     /// unconstrained natural width. Supplying the bubble's content width makes
     /// multiline questions wrap during both measurement and rendering.
     var layoutWidth: CGFloat?
-    var sessionMode: SessionMode = .discuss
+    var sessionMode: SessionMode = .auto
     var onResolvePermission: (String, String?, String) -> Void = { _, _, _ in }
     var onAnswerQuestion: (String, String) -> Void = { _, _ in }
     var onQuestionChoiceFramesChanged: ([MacQuestionChoiceFrame]) -> Void = { _ in }
@@ -189,7 +189,6 @@ struct MacBubbleActionSlot: View {
     }
 
     private func permissionInput(_ message: ChatMessage) -> some View {
-        let writeInDiscuss = Self.switchesToExecute(mode: sessionMode, toolName: message.toolName)
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "lock.fill")
@@ -198,7 +197,7 @@ struct MacBubbleActionSlot: View {
                     .padding(.top, 1)
                 VStack(alignment: .leading, spacing: 3) {
                     if message.payload["decision"]?.stringValue == nil {
-                        Text(writeInDiscuss ? "Write Approval — Discuss Mode" : "Permission Required")
+                        Text("Approval needed — Safe mode")
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(.orange)
                     }
@@ -242,25 +241,14 @@ struct MacBubbleActionSlot: View {
                         fill: .green,
                         border: .clear
                     )
-                    if writeInDiscuss {
-                        permissionButton(
-                            "Switch to Execute",
-                            message,
-                            decision: "execute",
-                            foreground: .orange,
-                            fill: .orange.opacity(0.12),
-                            border: .orange.opacity(0.35)
-                        )
-                    } else {
-                        permissionButton(
-                            "Allow in Session",
-                            message,
-                            decision: "always_allow",
-                            foreground: .green,
-                            fill: .green.opacity(0.12),
-                            border: .green.opacity(0.35)
-                        )
-                    }
+                    permissionButton(
+                        "Allow in Session",
+                        message,
+                        decision: "always_allow",
+                        foreground: .green,
+                        fill: .green.opacity(0.12),
+                        border: .green.opacity(0.35)
+                    )
                     permissionButton(
                         "Deny",
                         message,
@@ -292,7 +280,7 @@ struct MacBubbleActionSlot: View {
             foreground: foreground,
             fill: fill,
             border: border,
-            accent: decision == "deny" ? .red : (decision == "execute" ? .orange : .green)
+            accent: decision == "deny" ? .red : .green
         ) {
             Text(label)
                 .font(.system(size: 12, weight: .semibold))
@@ -372,10 +360,6 @@ struct MacBubbleActionSlot: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    static func switchesToExecute(mode: SessionMode, toolName: String?) -> Bool {
-        guard mode == .discuss, let toolName else { return false }
-        return ["write", "write_file", "create", "create_file", "edit", "edit_file"].contains(toolName)
-    }
 }
 
 /// Native-feeling action surface for buttons embedded in a Mac chat bubble.

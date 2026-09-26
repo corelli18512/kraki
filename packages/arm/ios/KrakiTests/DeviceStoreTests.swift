@@ -144,7 +144,7 @@ final class DeviceStoreTests: XCTestCase {
         let sessions: [String: SessionInfo] = [
             "sess-1": SessionInfo(
                 id: "sess-1", deviceId: "dev-1", deviceName: "MB",
-                agent: "claude", state: .active, mode: .execute,
+                agent: "claude", state: .active, mode: .auto,
                 lastSeq: 0, readSeq: 0, messageCount: 0,
                 createdAt: Date(), pinned: false
             )

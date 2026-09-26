@@ -17,10 +17,10 @@ struct ModePickerView: View {
     @State private var collapseTask: Task<Void, Never>?
 
     private var currentMode: SessionMode {
-        appState.sessionStore.sessionModes[sessionId] ?? .discuss
+        appState.sessionStore.sessionModes[sessionId] ?? .auto
     }
 
-    private static let allModes: [SessionMode] = [.safe, .discuss, .execute, .delegate]
+    private static let allModes: [SessionMode] = SessionMode.allCases
 
     var body: some View {
         ZStack(alignment: .leading) {

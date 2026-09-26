@@ -53,7 +53,7 @@ enum IOSChatScrollScenarioFixture {
                 model: "isolated-scroll-policy",
                 title: "Visible Scroll Policy Gate",
                 state: .idle,
-                mode: .discuss,
+                mode: .auto,
                 lastSeq: totalMessages,
                 readSeq: totalMessages,
                 messageCount: totalMessages,

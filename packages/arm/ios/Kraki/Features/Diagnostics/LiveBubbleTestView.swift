@@ -28,7 +28,7 @@ struct LiveBubbleTestView: View {
                     // A little static spine context above the live bubble.
                     userBubble("把 ChatView 的滚动 hitch 修一下")
                     BubbleActionSlot(action: card.action ?? ChatMessage(type: "tool_start", seq: 0, sessionId: nil, deviceId: nil, timestamp: nil, payload: [:]),
-                        sessionMode: .discuss,
+                        sessionMode: .auto,
                         onResolvePermission: { _, _, decision in resolvePermission(decision) })
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .background(Color.surfaceTertiary.opacity(0.6))

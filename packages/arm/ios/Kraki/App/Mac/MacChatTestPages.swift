@@ -1145,7 +1145,7 @@ private extension MacChatScenarioHarness {
             title: String,
             summary: String,
             deviceID: String = Self.onlineDeviceA,
-            mode: SessionMode = .discuss,
+            mode: SessionMode = .auto,
             pinned: Bool = false,
             phases: [MacChatScenarioPhase],
             traces: [Int: [ChatMessage]] = [:]
@@ -1550,9 +1550,9 @@ private extension MacChatScenarioHarness {
         add(
             permissionWriteID,
             category: "Permission",
-            title: "16 · Permission · Discuss write",
-            summary: "Discuss-mode write request: Approve, Execute, and Deny use the real action callbacks.",
-            mode: .discuss,
+            title: "16 · Permission · Safe-mode write",
+            summary: "Safe-mode write request: Approve, Allow in Session, and Deny use the real action callbacks.",
+            mode: .auto,
             phases: [phase(
                 "Awaiting write approval",
                 messages: [message(permissionWriteID, 1, "user_message", ["content": "Update the implementation."])],

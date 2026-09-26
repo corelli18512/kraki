@@ -308,7 +308,7 @@ struct HeaderModePicker: View {
         #endif
     }
     static let idleCollapse: Duration = .seconds(3)
-    private static let modes: [SessionMode] = [.safe, .discuss, .execute, .delegate]
+    private static let modes: [SessionMode] = SessionMode.allCases
 
     let sessionId: String
     @Binding var expanded: Bool
@@ -317,7 +317,7 @@ struct HeaderModePicker: View {
     /// this view) always reach the one live countdown.
     @State private var idle = IdleCountdown()
 
-    private var current: SessionMode { appState.sessionStore.sessionModes[sessionId] ?? .discuss }
+    private var current: SessionMode { appState.sessionStore.sessionModes[sessionId] ?? .auto }
 
     var body: some View {
         if expanded {

@@ -305,13 +305,6 @@ struct ChatView: View {
         switch decision {
         case "approve":
             appState.commandSender?.approve(sessionId: sessionId, permissionId: permissionId)
-        case "execute":
-            // In discuss mode a write permission's middle action means
-            // "switch this session to Execute", matching PermissionCardView.
-            // Send the mode first so subsequent writes in the same agent turn
-            // are auto-approved, then release the currently-blocked write.
-            appState.commandSender?.setSessionMode(sessionId: sessionId, mode: .execute)
-            appState.commandSender?.approve(sessionId: sessionId, permissionId: permissionId)
         case "always_allow":
             appState.commandSender?.alwaysAllow(
                 sessionId: sessionId,

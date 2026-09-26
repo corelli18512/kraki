@@ -87,6 +87,10 @@ enum MacChatBubbleContentBuilder {
             action: nil,
             documentWidth: documentWidth
         )
+        // A steps-only turn (system_message kind `no_reply`, no text or media)
+        // renders as just its Steps affordance — no bubble, no invented text.
+        let stepsOnly = kind == .system && message.systemKind == "no_reply"
+            && body == nil && images.isEmpty && contentRefs.isEmpty
         var content = MacChatBubbleContent(
             seq: message.seq,
             sessionId: sessionId,
@@ -98,7 +102,7 @@ enum MacChatBubbleContentBuilder {
             action: nil,
             isLive: false,
             canShowSteps: (kind == .agent || kind == .system) && (message.steps ?? 0) > 0,
-            bubbleColor: palette(for: kind, hueSeed: sessionId.isEmpty ? agent : sessionId),
+            bubbleColor: stepsOnly ? .clear : palette(for: kind, hueSeed: sessionId.isEmpty ? agent : sessionId),
             cornerRadii: cornerRadii(for: kind),
             bubbleWidth: width,
             attachmentWidth: attachmentWidth
@@ -219,7 +223,7 @@ enum MacChatBubbleContentBuilder {
             let argsWidth = action.args?.values.compactMap(\.stringValue).map {
                 textWidth($0, font: .monospacedSystemFont(ofSize: 11, weight: .regular))
             }.max() ?? 0
-            // Three equal Web-aligned buttons, including “Switch to Execute”.
+            // Three equal Web-aligned buttons: Approve / Allow in Session / Deny.
             return max(380, max(descriptionWidth, argsWidth))
         case "question":
             // An open question's choices; the question itself is body text,

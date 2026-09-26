@@ -208,21 +208,23 @@ final class TabBarNavigationUITests: XCTestCase {
         row(0).tap(); settle()
         let collapsed = app.buttons["chat.mode.collapsed"]
         XCTAssertTrue(collapsed.waitForExistence(timeout: 3))
-        XCTAssertTrue(collapsed.label.contains("Discuss"))
+        XCTAssertTrue(collapsed.label.contains("Auto"))
         collapsed.tap()
-        let execute = app.buttons["Execute"]
-        XCTAssertTrue(execute.waitForExistence(timeout: 2), "expanded picker shows all modes")
-        execute.tap()
+        let auto = app.buttons["Auto"]
+        XCTAssertTrue(auto.waitForExistence(timeout: 2), "expanded picker shows all modes")
+        XCTAssertFalse(app.buttons["Discuss"].exists)
+        XCTAssertFalse(app.buttons["Execute"].exists)
+        auto.tap()
         var lastTap: Date
         XCTAssertTrue(app.buttons["Safe"].exists, "choosing a mode does not close the picker")
         app.buttons["Safe"].tap()
         XCTAssertTrue(app.buttons["Delegate"].exists, "still open while being used")
         lastTap = Date()   // before tap(): tap() itself waits for app idle afterwards
-        app.buttons["Execute"].tap()
+        app.buttons["Auto"].tap()
         XCTAssertTrue(collapsed.waitForExistence(timeout: 6), "closes by itself when idle")
         let idle = Date().timeIntervalSince(lastTap)
         XCTAssertGreaterThanOrEqual(idle, 2.6, "must stay open ~3s after the last interaction (closed after \(idle)s)")
-        XCTAssertTrue(collapsed.label.contains("Execute"), "collapsed capsule shows the chosen mode")
+        XCTAssertTrue(collapsed.label.contains("Auto"), "collapsed capsule shows the chosen mode")
         expect(false, "chat with mode picker")
     }
 }

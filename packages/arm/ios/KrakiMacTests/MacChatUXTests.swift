@@ -86,7 +86,7 @@ class MacChatUXTestCase: XCTestCase {
         states.append(app)
         app.sessionStore.sessions[sid] = SessionInfo(
             id: sid, deviceId: dev, deviceName: "gate", agent: "claude", model: "m", title: "gate",
-            state: .idle, mode: .discuss, lastSeq: total, readSeq: total, messageCount: total,
+            state: .idle, mode: .auto, lastSeq: total, readSeq: total, messageCount: total,
             createdAt: Date(), pinned: false)
         app.deviceStore.devices[dev] = DeviceSummary(
             id: dev, name: "gate", role: .tentacle, kind: .desktop, publicKey: nil,
