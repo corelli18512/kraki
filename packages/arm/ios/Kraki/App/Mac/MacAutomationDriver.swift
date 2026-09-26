@@ -561,14 +561,18 @@ final class MacAutomationDriver {
         case "answer":
             guard let appState,
                   let sessionId = params["sessionId"] as? String,
-                  let action = appState.messageStore.cards[sessionId]?.action,
-                  let questionId = action.questionId else {
+                  let questionId = ChatViewModel(sessionId: sessionId, appState: appState).questions.last?.id else {
                 send(error: "invalid_state", message: "No pending question for this session", id: id, on: connection); return
             }
             let answer = params["text"] as? String ?? ""
-            let wasFreeform = params["wasFreeform"] as? Bool ?? true
-            appState.commandSender?.answer(sessionId: sessionId, questionId: questionId, answer: answer, wasFreeform: wasFreeform)
+            appState.commandSender?.answer(sessionId: sessionId, questionId: questionId, answer: answer)
             send(result: ["accepted": true, "questionId": questionId], id: id, on: connection)
+        case "clickQuestionChoice":
+            guard let scrollView = findChatScrollView(),
+                  let choice = params["choice"] as? String else {
+                send(error: "invalid_state", message: "No chat", id: id, on: connection); return
+            }
+            send(result: ["clicked": scrollView.automationClickQuestionChoice(choice)], id: id, on: connection)
         case "codeContrastRegression":
             send(result: codeContrastRegression(), id: id, on: connection)
         case "tableWheelRegression":

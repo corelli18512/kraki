@@ -270,10 +270,6 @@ struct MacChatView: View {
             hash = hash &* 31 &+ (action.headline?.hashValue ?? 0)
             hash = hash &* 31 &+ (action.permissionId?.hashValue ?? 0)
             hash = hash &* 31 &+ (action.payload["decision"]?.stringValue?.hashValue ?? 0)
-            hash = hash &* 31 &+ (action.questionId?.hashValue ?? 0)
-            hash = hash &* 31 &+ (action.question?.hashValue ?? 0)
-            hash = hash &* 31 &+ (action.answer?.hashValue ?? 0)
-            hash = hash &* 31 &+ (action.choices?.joined(separator: "\u{1F}").hashValue ?? 0)
             hash = hash &* 31 &+ (action.cancelled ? 1 : 0)
             hash = hash &* 31 &+ (action.payload["localPending"]?.boolValue == true ? 1 : 0)
             hash = hash &* 31 &+ (action.payload["localError"]?.stringValue?.hashValue ?? 0)
@@ -359,9 +355,8 @@ struct MacChatView: View {
                       let decision = note.userInfo?["decision"] as? String else { return }
                 resolveLivePermission(permissionId, toolName: action.toolName, decision)
             case "answer":
-                guard let action = viewModel.card?.action,
-                      let questionId = action.questionId else { return }
-                answerLiveQuestion(questionId, note.userInfo?["text"] as? String ?? "")
+                guard let questionId = viewModel.questions.last?.id else { return }
+                answerQuestion(questionId, note.userInfo?["text"] as? String ?? "")
             case "steps":
                 let requestedSeq = note.userInfo?["seq"] as? Int
                 let fallbackSeq = viewModel.cachedMessages.last(where: { $0.steps ?? 0 > 0 })?.seq
@@ -523,7 +518,7 @@ struct MacChatView: View {
                     viewModel.requestSteps(forBubbleSeq: seq)
                 },
                 onResolvePermission: resolveLivePermission,
-                onAnswerQuestion: answerLiveQuestion,
+                onAnswerQuestion: answerQuestion,
                 onPendingAction: handlePendingAction,
                 onOpenImage: onOpenImage,
                 onOpenHTMLArtifact: onOpenHTMLArtifact
@@ -550,7 +545,7 @@ struct MacChatView: View {
                 MacChatComposer(
                     sessionId: sessionId,
                     pendingPermission: viewModel.permissions.first,
-                    pendingQuestion: viewModel.questions.first,
+                    pendingQuestion: viewModel.questions.last,
                     isCompacting: viewModel.isCompacting,
                     hasLiveCard: viewModel.card != nil
                 )
@@ -634,12 +629,15 @@ struct MacChatView: View {
         }
     }
 
-    private func answerLiveQuestion(_ questionId: String, _ answer: String) {
+    private func answerQuestion(_ questionId: String, _ answer: String) {
         appState.commandSender?.answer(
             sessionId: sessionId,
             questionId: questionId,
             answer: answer
         )
+        // Picking a choice is sending a message: return to the newest edge.
+        NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil,
+                                        userInfo: ["sessionId": sessionId])
     }
 }
 

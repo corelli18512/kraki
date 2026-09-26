@@ -164,6 +164,15 @@ class MacChatUXTestCase: XCTestCase {
         fx.app.messageProvider?.ingestTailCandidate(sid, json: data)
     }
 
+    /// Tentacle's ask_user: a spine agent_message carrying `question` (id q1).
+    func askQuestion(_ fx: Fx, seq: Int, choices: [String]) throws {
+        try ingest(fx, ["type": "agent_message", "seq": seq, "sessionId": sid, "deviceId": dev,
+                        "timestamp": "2026-09-01T00:00:03.000Z",
+                        "payload": ["content": "", "question": ["id": "q1", "text": "要不要顺便把旧接口也删掉？",
+                                                                "choices": choices]]])
+        fx.app.messageStore.endCardTurn(sid)
+    }
+
     func startTurn(_ fx: Fx, seq: Int, text: String = "继续") throws {
         fx.app.messageStore.beginCardTurn(sid)
         try ingest(fx, ["type": "user_message", "seq": seq, "sessionId": sid, "deviceId": dev,
@@ -642,11 +651,7 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
             render(fx, "\(dir)/\(tag)-pending.png")
             // 3. answered question awaiting confirmation
             try startTurn(fx, seq: 43)
-            var q = ChatMessage(type: "question", seq: 0, sessionId: sid, deviceId: dev, timestamp: "2026-09-01T00:00:03.000Z", payload: [:])
-            q.payload["questionId"] = AnyCodable("q1")
-            q.payload["question"] = AnyCodable("要不要顺便把旧接口也删掉？")
-            q.payload["choices"] = AnyCodable(["删掉", "先保留"])
-            fx.app.messageStore.applyCardAction(sid, q)
+            try askQuestion(fx, seq: 44, choices: ["删掉", "先保留"])
             drain(600)
             _ = fx.app.commandSender?.answer(sessionId: sid, questionId: "q1", answer: "删掉")
             drain(900)
@@ -659,11 +664,7 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
         let fx = try makeFixture(total: 30)
         drain(1_000)
         try startTurn(fx, seq: 31)
-        var q = ChatMessage(type: "question", seq: 0, sessionId: sid, deviceId: dev, timestamp: "2026-09-01T00:00:03.000Z", payload: [:])
-        q.payload["questionId"] = AnyCodable("q1")
-        q.payload["question"] = AnyCodable("要不要顺便把旧接口也删掉？")
-        q.payload["choices"] = AnyCodable(["删掉", "先保留", "我自己来决定这个问题，先别动"])
-        fx.app.messageStore.applyCardAction(sid, q)
+        try askQuestion(fx, seq: 32, choices: ["删掉", "先保留", "我自己来决定这个问题，先别动"])
         for t in 0..<8 { drain(60); print(String(format: "UXPROBE q t=%d dist=%.0f hidden=%.0f down=%@", t*60, distanceToBottom(fx), hiddenBelowComposer(fx), fx.sv.automationControlsVisible.down ? "Y" : "N")) }
         _ = fx.app.commandSender?.answer(sessionId: sid, questionId: "q1", answer: "删掉")
         for t in 0..<12 { drain(60); print(String(format: "UXPROBE a t=%d dist=%.0f hidden=%.0f down=%@ live=%@", t*60, distanceToBottom(fx), hiddenBelowComposer(fx), fx.sv.automationControlsVisible.down ? "Y" : "N", cells(fx).last.map { String(format: "h=%.0f cfg=%.0f", $0.h, $0.configured) } ?? "-")) }

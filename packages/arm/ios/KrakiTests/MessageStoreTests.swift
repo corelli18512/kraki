@@ -83,15 +83,15 @@ final class MessageStoreTests: XCTestCase {
     }
 
     func testRuntimeEndClearsOnlyCompaction() {
-        let question = ChatMessage(type: "question", seq: 0, sessionId: nil, deviceId: nil,
-                                   timestamp: nil, payload: ["id": AnyCodable("q1"), "question": AnyCodable("Proceed?")])
-        store.setCardAction("sess-1", question)
+        let permission = ChatMessage(type: "permission", seq: 0, sessionId: nil, deviceId: nil,
+                                     timestamp: nil, payload: ["id": AnyCodable("p1"), "toolName": AnyCodable("bash")])
+        store.setCardAction("sess-1", permission)
         store.setCompacting("sess-1", reason: .overflow)
 
         store.clearRuntimeStatus("sess-1")
 
         XCTAssertEqual(store.runtimeStatus("sess-1"), .idle)
-        XCTAssertEqual(store.cards["sess-1"]?.action?.type, "question")
+        XCTAssertEqual(store.cards["sess-1"]?.action?.type, "permission")
     }
 
     func testOrdinaryActivityClearsStaleCompaction() {
@@ -114,15 +114,15 @@ final class MessageStoreTests: XCTestCase {
         store.setCardAction(sid, ChatMessage(
             type: "tool_start", seq: 0, sessionId: sid, deviceId: nil, timestamp: nil,
             payload: ["toolName": AnyCodable("old")]))
-        let question = ChatMessage(
-            type: "question", seq: 0, sessionId: sid, deviceId: nil, timestamp: nil,
-            payload: ["id": AnyCodable("q1"), "question": AnyCodable("Continue?")])
+        let permission = ChatMessage(
+            type: "permission", seq: 0, sessionId: sid, deviceId: nil, timestamp: nil,
+            payload: ["id": AnyCodable("p1"), "toolName": AnyCodable("bash")])
 
         store.replaceCardFromSubscription(
-            sid, draft: "authoritative", action: question, state: .active)
+            sid, draft: "authoritative", action: permission, state: .active)
 
         XCTAssertEqual(store.cards[sid]?.text, "authoritative")
-        XCTAssertEqual(store.cards[sid]?.action?.type, "question")
+        XCTAssertEqual(store.cards[sid]?.action?.type, "permission")
     }
 
     func testIdleSubscriptionSnapshotClosesGateAndCannotReviveCard() {
@@ -134,32 +134,6 @@ final class MessageStoreTests: XCTestCase {
 
         store.applyCardMessage(sid, "late", reset: true)
         XCTAssertNil(store.cards[sid])
-    }
-
-    func testIdleSubscriptionSnapshotRestoresDurableQuestionCard() {
-        let sid = "idle-question-subscription-card"
-        let question = ChatMessage(
-            type: "question", seq: 0, sessionId: sid, deviceId: nil, timestamp: nil,
-            payload: [
-                "id": AnyCodable("q-rehydrated"),
-                "question": AnyCodable("Deploy now?"),
-                "choices": AnyCodable(["Yes", "No"]),
-            ])
-
-        store.endCardTurn(sid)
-        store.replaceCardFromSubscription(
-            sid, draft: "The deployment is ready.", action: question, state: .idle)
-
-        XCTAssertEqual(store.cards[sid]?.text, "The deployment is ready.")
-        XCTAssertEqual(store.cards[sid]?.action?.type, "question")
-        XCTAssertEqual(store.cards[sid]?.action?.question, "Deploy now?")
-
-        store.applyCardMessage(sid, " Ready for approval.", reset: false)
-        XCTAssertEqual(
-            store.cards[sid]?.text,
-            "The deployment is ready. Ready for approval."
-        )
-        XCTAssertEqual(store.cards[sid]?.action?.question, "Deploy now?")
     }
 
     func testIdleSubscriptionSnapshotDoesNotRestoreOrdinaryToolCard() {

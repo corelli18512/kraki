@@ -2416,17 +2416,21 @@ struct MacChatView: View {
                 "toolName": AnyCodable("write_file"),
                 "description": AnyCodable("Write the final ChatView implementation to Kraki/Features/Chat/Mac."),
             ])
-        let questionAction = ChatMessage(
-            type: "question", seq: 0, sessionId: sessionId, deviceId: nil,
+        var openQuestion = ChatMessage(
+            type: "agent_message", seq: 0, sessionId: sessionId, deviceId: nil,
             timestamp: nil, payload: [
-                "id": AnyCodable("question-demo"),
-                "question": AnyCodable("Which visual behavior should be validated before delivery?"),
-                "choices": AnyCodable([
-                    "Open history and preserve the visible anchor while paging",
-                    "Send a prompt, steer the active turn, then abort it",
-                    "Resolve permission and question cards inside the live bubble",
-                ]),
+                "content": AnyCodable("Before delivery:"),
+                "question": AnyCodable([
+                    "id": "question-demo",
+                    "text": "Which visual behavior should be validated before delivery?",
+                    "choices": [
+                        "Open history and preserve the visible anchor while paging",
+                        "Send a prompt, steer the active turn, then abort it",
+                        "Resolve a permission inside the live bubble",
+                    ],
+                ] as [String: Any]),
             ])
+        openQuestion.questionPresentation = QuestionPresentation(state: .open)
         let failedAction = ChatMessage(
             type: "failed", seq: 0, sessionId: sessionId, deviceId: nil,
             timestamp: nil, payload: ["message": AnyCodable("Agent process was lost")])
@@ -2467,7 +2471,7 @@ struct MacChatView: View {
             ))
             for (key, card, traceSeq) in [
                 ("permission", MessageStore.SessionCard(text: "", action: permissionAction), 8),
-                ("question", MessageStore.SessionCard(text: "", action: questionAction), 9),
+                ("question", openQuestion.frozenCard ?? .init(), 9),
                 ("failed", MessageStore.SessionCard(text: "Finalizing the turn…", action: failedAction), 10),
             ] {
                 let content = MacChatBubbleContentBuilder.live(

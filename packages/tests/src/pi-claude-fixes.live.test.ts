@@ -174,23 +174,24 @@ describe("claude: AskUserQuestion answer reaches the model", () => {
         "Do not guess. After I answer, reply with EXACTLY the text I gave you and nothing else.",
       );
 
-      // The adapter surfaces the question over the wire.
-      const q = await app.waitFor("question", 60_000);
-      const questionId = (q.payload as Record<string, unknown>).id as string;
-      expect(questionId).toBeTruthy();
+      // The question lands on the spine: an agent_message carrying `question`.
+      let questionId = "";
+      while (!questionId) {
+        const m = await app.waitFor("agent_message", 60_000);
+        questionId = ((m.payload as { question?: { id: string } }).question?.id) ?? "";
+      }
 
-      // Answer it freeform, exactly like the web arm: choice-click sends
-      // wasFreeform=false, typed text sends wasFreeform=true.
+      // Answering is sending a message that names the question (free text is
+      // always allowed; a choice is only a shortcut for its text).
       sendToTentacle(app, {
-        type: "answer",
+        type: "send_input",
         sessionId: sid,
-        payload: { questionId, answer: `My secret fruit is ${MARKER}`, wasFreeform: true },
+        payload: { text: `My secret fruit is ${MARKER}`, answerTo: questionId },
       });
 
-      // Relay-client emits question_resolved only after respondToQuestion is
-      // actually invoked — proves the answer routed app -> head -> tentacle.
-      const resolved = await app.waitFor("question_resolved", 15_000);
-      expect((resolved.payload as Record<string, unknown>).questionId).toBe(questionId);
+      // Tentacle echoes it as the user's message, marked as the answer.
+      const echoed = await app.waitFor("user_message", 15_000);
+      expect((echoed.payload as Record<string, unknown>).answerTo).toBe(questionId);
 
       // With the fix, Claude receives the answer (keyed by question text) and
       // can echo the marker. With the old bug it saw "no answer" and cannot.

@@ -524,6 +524,51 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertGreaterThanOrEqual(screenY, MacChatHeaderMetrics.height + 8, "first message clears the header")
     }
 
+    // MARK: Questions (on the spine)
+
+    func testQuestionFlowAnswersWithoutFlicker() throws {
+        var sent: [[String: Any]] = []
+        let fx = try makeFixture(total: 20, outbound: { sent.append($0); return true })
+        drain(1_000)
+        try startTurn(fx, seq: 21)
+        fx.app.messageStore.applyCardMessage(sid, "我看了一下，有两个方案。", reset: true)
+        drain(300)
+        packetInputTotal = -fx.sv.debugWheelAppliedTotal
+        var clientId = ""
+        let shots = recordFrames(fx) {
+            try? ingest(fx, ["type": "agent_message", "seq": 22, "sessionId": sid, "deviceId": dev,
+                             "timestamp": "2026-09-01T00:00:03.000Z",
+                             "payload": ["content": "我看了一下，有两个方案。",
+                                         "question": ["id": "q1", "text": "删旧接口吗？", "choices": ["删掉", "保留"]]]])
+            fx.app.messageStore.endCardTurn(sid)
+            drain(500)
+            let open = fx.doc.automationVisibleCells.last { $0.key.contains("#q-open") }
+            XCTAssertEqual(open?.cell.content?.action?.type, "question", "an open question shows its choices")
+            XCTAssertNotNil(open?.cell.content?.body, "lead-in prose and question share one bubble")
+            _ = fx.app.commandSender?.answer(sessionId: sid, questionId: "q1", answer: "删掉")
+            NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
+            drain(500)
+            clientId = (sent.last?["payload"] as? [String: Any])?["clientId"] as? String ?? ""
+            fx.app.messageStore.beginCardTurn(sid)
+            try? ingest(fx, ["type": "user_message", "seq": 23, "sessionId": sid, "deviceId": dev,
+                             "timestamp": "2026-09-01T00:00:04.000Z",
+                             "payload": ["content": "删掉", "clientId": clientId, "answerTo": "q1"]])
+            fx.app.commandSender?.clearPending(sid, clientId: clientId)
+            drain(500)
+        }
+        let input = try XCTUnwrap(sent.last { $0["type"] as? String == "send_input" }?["payload"] as? [String: Any])
+        XCTAssertEqual(input["answerTo"] as? String, "q1")
+        XCTAssertTrue(fx.doc.itemKeys.contains { $0.hasSuffix("\(sid):22") }, "answered: settled identity, no choices")
+        XCTAssertFalse(fx.doc.itemKeys.contains { $0.contains("#q-open") })
+        XCTAssertTrue(fx.doc.itemKeys.contains("\(sid):23"))
+        let r = analyze(shots, maxStep: 10_000, viewportHeight: fx.sv.contentView.bounds.height)
+        print("UXGATE question-flow \(r)")
+        r.log.forEach { print("UXGATE question-flow log \($0)") }
+        XCTAssertEqual(r.placeholderFrames, 0, "question state changes never show a placeholder")
+        XCTAssertEqual(r.blanks, 0)
+        XCTAssertLessThanOrEqual(hiddenBelowComposer(fx), 1, "the answer is visible at the bottom")
+    }
+
     // MARK: Bubble chrome
 
     func testTableOnlyReplyIsNotASliver() {

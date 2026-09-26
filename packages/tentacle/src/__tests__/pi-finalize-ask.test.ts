@@ -1237,7 +1237,6 @@ describe('pi ask_user → question card', () => {
       id: 'q1',
       question: 'Pick a color',
       choices: ['red', 'blue'],
-      allowFreeform: false,
     });
     expect(session.pendingQuestions.get('q1')).toBe('q1');
   });
@@ -1251,7 +1250,6 @@ describe('pi ask_user → question card', () => {
       id: 'q2',
       question: 'Your name?',
       choices: undefined,
-      allowFreeform: true,
     });
   });
 

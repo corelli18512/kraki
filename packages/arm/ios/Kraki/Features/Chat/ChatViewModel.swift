@@ -49,6 +49,10 @@ final class ChatViewModel {
         return true
     }
 
+    private var pendingInputsRaw: [ChatMessage] {
+        appState?.commandSender?.pendingInputs(sessionId) ?? []
+    }
+
     /// Synthesised optimistic pending-input messages from the outbox.
     var pendingMessages: [ChatMessage] {
         let pending = appState?.commandSender?.pendingInputs(sessionId) ?? []
@@ -76,7 +80,7 @@ final class ChatViewModel {
     /// Confirmed spine bubbles plus optimistic pending input.
     var displayMessages: [ChatMessage] { cachedMessages + pendingMessages }
 
-    @ObservationIgnored private var currentSpineMemo: (revision: Int, messages: [ChatMessage])?
+    @ObservationIgnored private var currentSpineMemo: (revision: Int, answering: [String], messages: [ChatMessage])?
 
     /// Spine + pending for the *current* store revision, computed during the
     /// render that observes the change. `cachedMessages` is refreshed from
@@ -84,11 +88,17 @@ final class ChatViewModel {
     /// cleared + answer persisted in one runloop turn) otherwise renders one
     /// frame with neither the live bubble nor the answer.
     func displayMessages(spineRevision revision: Int) -> [ChatMessage] {
-        if let memo = currentSpineMemo, memo.revision == revision {
+        // An optimistic answer (pending input with `answerTo`) closes its
+        // question before the store changes, so it is part of the memo key.
+        let pending = pendingInputsRaw
+        let answering = pending.compactMap(\.answerTo)
+        if let memo = currentSpineMemo, memo.revision == revision, memo.answering == answering {
             return memo.messages + pendingMessages(landedIn: memo.messages)
         }
-        let spine = TurnSpineProjection.project(filteredMessages).filter(Self.shouldRender)
-        currentSpineMemo = (revision, spine)
+        let spine = TurnSpineProjection.project(
+            Self.presentingQuestions(filteredMessages, pending: pending, atHead: windowAtHead)
+        ).filter(Self.shouldRender)
+        currentSpineMemo = (revision, answering, spine)
         return spine + pendingMessages(landedIn: spine)
     }
 
@@ -104,7 +114,9 @@ final class ChatViewModel {
 
     /// Recompute the flat spine snapshot. Called by the view on data changes.
     func refreshMessageCache() {
-        cachedMessages = TurnSpineProjection.project(filteredMessages).filter(Self.shouldRender)
+        cachedMessages = TurnSpineProjection.project(
+            Self.presentingQuestions(filteredMessages, pending: pendingInputsRaw, atHead: windowAtHead)
+        ).filter(Self.shouldRender)
     }
 
     // MARK: - Live card + trace
@@ -184,15 +196,64 @@ final class ChatViewModel {
             toolName: action.toolName, args: action.args, timestamp: Date())]
     }
 
-    /// The pending question carried by the card's action slot (or none).
+    @ObservationIgnored private var questionsMemo: (key: String, value: [PendingQuestion])?
+
+    /// Open questions (oldest first), derived from the spine. The composer
+    /// answers the newest one. Derived from the live window (not the render
+    /// cache) so any view model instance — e.g. the composer's — sees the
+    /// current state; memoized per window/outbox state.
     var questions: [PendingQuestion] {
-        guard let action = card?.action, action.type == "question",
-              action.answer == nil, !action.cancelled,
-              let qid = action.questionId else { return [] }
-        return [PendingQuestion(
-            id: qid, sessionId: sessionId,
-            question: action.question ?? "", choices: action.choices, timestamp: Date())]
+        let raw = filteredMessages
+        guard raw.contains(where: { $0.questionSpec != nil }) else { return [] }
+        let pending = pendingInputsRaw
+        let key = "\(raw.count)|\(raw.first?.seq ?? 0)|\(raw.last?.seq ?? 0)|\(windowAtHead)|"
+            + pending.compactMap(\.answerTo).joined(separator: ",")
+        if let memo = questionsMemo, memo.key == key { return memo.value }
+        let value = Self.presentingQuestions(raw, pending: pending, atHead: windowAtHead).compactMap { message -> PendingQuestion? in
+            guard message.questionPresentation?.state == .open, let spec = message.questionSpec else { return nil }
+            return PendingQuestion(id: spec.id, sessionId: sessionId, question: spec.text,
+                                   choices: spec.choices.isEmpty ? nil : spec.choices, timestamp: Date())
+        }
+        questionsMemo = (key, value)
+        return value
     }
+
+    /// Present each question from what follows it on the spine:
+    /// - its answer (`answerTo` = its id, persisted or optimistic) → answered;
+    /// - other questions, answers to them, and transient `error` rows are
+    ///   neutral;
+    /// - anything else (a reply, a plain message, idle, terminal status) →
+    ///   unanswered (the agent no longer waits for it). When that is the
+    ///   draft-less terminal status of the turn, its outcome ("User aborted")
+    ///   is drawn inside the question bubble — the question is that turn's
+    ///   last output, like the draft of an ordinary aborted turn — and the
+    ///   empty status row itself is not rendered (`shouldRender`);
+    /// - nothing yet: open at the conversation head, otherwise undetermined.
+    static func presentingQuestions(_ raw: [ChatMessage], pending: [ChatMessage],
+                                    atHead: Bool) -> [ChatMessage] {
+        guard raw.contains(where: { $0.questionSpec != nil }) else { return raw }
+        var result = raw
+        for index in raw.indices {
+            guard let spec = raw[index].questionSpec else { continue }
+            var presentation: QuestionPresentation?
+            for later in raw[(index + 1)...] {
+                if later.answerTo == spec.id { presentation = .init(state: .answered); break }
+                if later.questionSpec != nil || later.answerTo != nil || later.type == "error" { continue }
+                let draftless = (later.interruptedDraft ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                presentation = .init(state: .unanswered, outcome: draftless ? later.terminalOutcome : nil)
+                break
+            }
+            if presentation == nil {
+                presentation = pending.contains(where: { $0.answerTo == spec.id })
+                    ? .init(state: .answered)
+                    : .init(state: atHead ? .open : .undetermined)
+            }
+            result[index].questionPresentation = presentation
+        }
+        return result
+    }
+
+    private var windowAtHead: Bool { appState?.messageProvider?.atHead(sessionId) ?? true }
 
     // MARK: - Session + device
 

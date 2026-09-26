@@ -164,10 +164,6 @@ struct StepsSheetView: View {
             Label(message.content ?? "Permission request", systemImage: "lock")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-        case "question":
-            Label(message.question ?? message.content ?? "Question", systemImage: "questionmark.circle")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
         default:
             if let content = message.content, !content.isEmpty {
                 Text(content)
@@ -195,9 +191,6 @@ enum StepsLiveSync {
         case "permission":
             let state = action.cancelled ? "cancelled" : action.payload["decision"]?.stringValue ?? "pending"
             return "permission:\(action.permissionId ?? "unknown"):\(state)"
-        case "question":
-            let state = action.cancelled ? "cancelled" : action.answer.map { "answered:\($0)" } ?? "pending"
-            return "question:\(action.questionId ?? "unknown"):\(state)"
         case "user_abort":
             return "user_abort:\(action.payload["abortedAt"]?.stringValue ?? "")"
         case "failed":
@@ -219,7 +212,6 @@ enum StepsLiveSync {
                 step.payload["success"]?.boolValue.map(String.init) ?? "",
                 step.cancelled ? "cancelled" : "",
                 step.payload["decision"]?.stringValue ?? "",
-                step.answer ?? "",
             ].joined(separator: "|")
         }.joined(separator: "\u{1F}")
     }

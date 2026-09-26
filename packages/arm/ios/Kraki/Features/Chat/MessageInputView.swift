@@ -837,8 +837,7 @@ struct MessageInputView: View {
         guard appState.commandSender?.answer(
             sessionId: sessionId,
             questionId: q.id,
-            answer: answer,
-            wasFreeform: true
+            answer: answer
         ) == true else {
             // Keep the typed answer so the user can retry.
             showSubmitFailure()

@@ -178,10 +178,6 @@ struct MacStepsView: View {
             Label(message.content ?? "Permission request", systemImage: "lock")
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
-        case "question":
-            Label(message.question ?? message.content ?? "Question", systemImage: "questionmark.circle")
-                .font(.system(size: 15))
-                .foregroundStyle(.secondary)
         default:
             if let content = message.content, !content.isEmpty {
                 Text(content)
@@ -206,9 +202,6 @@ private enum StepsLiveSyncMac {
         case "permission":
             let state = action.cancelled ? "cancelled" : action.payload["decision"]?.stringValue ?? "pending"
             return "permission:\(action.permissionId ?? "unknown"):\(state)"
-        case "question":
-            let state = action.cancelled ? "cancelled" : action.answer.map { "answered:\($0)" } ?? "pending"
-            return "question:\(action.questionId ?? "unknown"):\(state)"
         case "user_abort":
             return "user_abort:\(action.payload["abortedAt"]?.stringValue ?? "")"
         case "failed":
@@ -230,7 +223,6 @@ private enum StepsLiveSyncMac {
                 step.payload["success"]?.boolValue.map(String.init) ?? "",
                 step.cancelled ? "cancelled" : "",
                 step.payload["decision"]?.stringValue ?? "",
-                step.answer ?? "",
             ].joined(separator: "|")
         }.joined(separator: "\u{1F}")
     }

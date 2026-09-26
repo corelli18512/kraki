@@ -2081,7 +2081,6 @@ export class CopilotAdapter extends AgentAdapter {
         id: qId,
         question: req.question ?? '',
         choices: req.choices ?? undefined,
-        allowFreeform: req.allowFreeform !== false,
       });
 
       return new Promise<UserInputResponse>((resolve) => {

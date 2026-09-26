@@ -1057,6 +1057,17 @@ final class MacChatBubbleCell: NSView {
         actionCaptureContext(atWindowPoint: point)?.capture
     }
 
+    #if DEBUG
+    /// Window point at the center of an open question's choice (for driving
+    /// the real hit-test path in automation).
+    func automationChoiceWindowPoint(_ answer: String) -> NSPoint? {
+        guard !actionHost.isHidden,
+              let frame = questionChoiceFrames.last(where: { $0.answer == answer }) else { return nil }
+        let y = actionHost.isFlipped ? frame.rect.midY : actionHost.bounds.height - frame.rect.midY
+        return actionHost.convert(NSPoint(x: frame.rect.midX, y: y), to: nil)
+    }
+    #endif
+
     func actionCaptureContext(
         atWindowPoint point: NSPoint
     ) -> MacBubbleActionCaptureContext? {
@@ -1081,9 +1092,8 @@ final class MacChatBubbleCell: NSView {
               let action = content?.action else { return nil }
         switch capture {
         case .question(let questionId):
+            // A question action exists only while the question is open.
             guard action.type == "question",
-                  !action.cancelled,
-                  action.answer == nil,
                   action.questionId == questionId,
                   let frame = questionChoiceFrames.last(where: { $0.rect.contains(point) }) else {
                 return nil
@@ -1125,9 +1135,7 @@ final class MacChatBubbleCell: NSView {
         guard let action = content?.action else { return nil }
         switch action.type {
         case "question":
-            guard !action.cancelled,
-                  action.answer == nil,
-                  !(action.choices?.isEmpty ?? true),
+            guard !(action.choices?.isEmpty ?? true),
                   let questionId = action.questionId else { return nil }
             return .question(questionId)
         case "permission":

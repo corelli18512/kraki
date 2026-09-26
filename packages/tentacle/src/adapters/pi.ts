@@ -1448,7 +1448,6 @@ export class PiAdapter extends AgentAdapter {
             id: qid,
             question: String(e.title ?? 'The agent has a question'),
             choices,
-            allowFreeform: e.method === 'input',
           });
           break;
         }

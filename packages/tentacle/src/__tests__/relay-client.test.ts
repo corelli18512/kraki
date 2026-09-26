@@ -2097,9 +2097,10 @@ describe('RelayClient pending-question digest', () => {
     let seq = 100;
     const askQ = (id: string) => (adapter.onQuestionRequest as (sid: string, e: Record<string, unknown>) => void)('sess_1', { id, question: `Q ${id}`, choices: ['a', 'b'] });
     const askP = (id: string, desc = `P ${id}`) => (adapter.onPermissionRequest as (sid: string, e: Record<string, unknown>) => void)('sess_1', { id, description: desc, toolArgs: { toolName: 'shell' } });
-    const answerQ = (id: string) => ws.emit('message', Buffer.from(JSON.stringify({
-      type: 'answer', sessionId: 'sess_1', deviceId: 'app-x', seq: ++seq,
-      timestamp: new Date().toISOString(), payload: { questionId: id, answer: 'a' },
+    const answerQ = (id: string | undefined, text = 'a') => ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: ++seq,
+      timestamp: new Date().toISOString(),
+      payload: { text, clientId: `c-${seq}`, ...(id ? { answerTo: id } : {}) },
     })));
     // Re-trigger a session_list unicast via device_joined (fresh app id + relaySeq
     // each call to bypass inbound dedup) and read the digest out of the envelope blob.
@@ -2895,10 +2896,12 @@ describe('RelayClient pending-question digest', () => {
     (adapter.sendMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('replacement prompt failed'));
     askQ('q1');
     ws.emit('message', Buffer.from(JSON.stringify({
-      type: 'answer', sessionId: 'sess_1', deviceId: 'app-x', seq: 504,
-      timestamp: new Date().toISOString(), payload: { questionId: 'q1', answer: 'keep me pending' },
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 504,
+      timestamp: new Date().toISOString(), payload: { text: 'keep me pending', answerTo: 'q1' },
     })));
     await vi.runAllTimersAsync();
+    // The answer did reach the recovery path (it failed there).
+    expect(adapter.sendMessage).toHaveBeenCalledWith('sess_1', expect.stringContaining('keep me pending'), undefined);
     expect(sm.savePendingHumanAction).toHaveBeenCalledWith('sess_1', expect.objectContaining({ questionId: 'q1' }));
     expect(sm.clearPendingHumanAction).not.toHaveBeenCalledWith('sess_1');
   });
@@ -2942,29 +2945,64 @@ describe('RelayClient pending-question digest', () => {
     expect((sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.some((call) => call[1] === 'turn_status')).toBe(false);
   });
 
-  it('persists the full visible card as turn_status on explicit abort and cancels its question step', async () => {
-    const { adapter, askQ, ws, sm } = buildClient();
+  it('aborting while a question is open stops routing answers and closes it on the spine', async () => {
+    const { adapter, askQ, answerQ, ws, sm } = buildClient();
     askQ('q1');
-    ws.sent.length = 0;
     ws.emit('message', Buffer.from(JSON.stringify({
       type: 'abort_session', sessionId: 'sess_1', deviceId: 'app-x', seq: 502,
       timestamp: new Date().toISOString(), payload: {},
     })));
     await Promise.resolve();
     await Promise.resolve();
-    const statusCall = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
-      .find((call) => call[1] === 'turn_status');
-    expect(statusCall).toBeDefined();
-    const status = JSON.parse(statusCall![2]) as { payload: Record<string, unknown> };
-    expect(status.payload).toMatchObject({
-      action: { type: 'user_abort' },
-    });
-    expect(statusCall![3]).toBe(false);
-    const cancelledQuestion = (sm.appendTrace as ReturnType<typeof vi.fn>).mock.calls
-      .map((call) => JSON.parse(call[2]) as { type: string; payload: Record<string, unknown> })
-      .find((entry) => entry.type === 'question' && entry.payload.id === 'q1' && entry.payload.cancelled === true);
-    expect(cancelledQuestion).toBeDefined();
+    const types = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1]);
+    // The abort is recorded after the question (rendered as "User aborted").
+    expect(types.indexOf('turn_status')).toBeGreaterThan(types.indexOf('agent_message'));
+    const status = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.find((c) => c[1] === 'turn_status');
+    expect(JSON.parse(status![2]).payload).toMatchObject({ draft: '', action: { type: 'user_abort' } });
+    expect(types.lastIndexOf('idle')).toBeGreaterThan(types.indexOf('turn_status'));
     expect(sm.clearPendingHumanAction).toHaveBeenCalledWith('sess_1');
+    expect((sm.appendTrace as ReturnType<typeof vi.fn>).mock.calls.some((c) => c[1] === 'question')).toBe(false);
+    // A late answer to it is an ordinary message, not recorded as an answer.
+    answerQ('q1', 'late');
+    await Promise.resolve();
+    const late = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => JSON.parse(c[2]) as { type: string; payload: Record<string, unknown> })
+      .find((m) => m.type === 'user_message' && m.payload.content === 'late');
+    expect(late).toBeDefined();
+    expect(late!.payload.answerTo).toBeUndefined();
+    expect(adapter.respondToQuestion).not.toHaveBeenCalled();
+  });
+
+  it('answers carry answerTo on the spine; a choice is a pick, anything else free text', async () => {
+    const { adapter, askQ, answerQ, sm } = buildClient();
+    askQ('q1');
+    answerQ('q1', 'b');
+    await Promise.resolve();
+    await Promise.resolve();
+    askQ('q2');
+    answerQ('q2', 'something else');
+    await Promise.resolve();
+    await Promise.resolve();
+    const answers = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => JSON.parse(c[2]) as { type: string; payload: Record<string, unknown> })
+      .filter((m) => m.type === 'user_message');
+    expect(answers.map((m) => m.payload.answerTo)).toEqual(['q1', 'q2']);
+    expect(answers.every((m) => m.payload.delivery === undefined)).toBe(true);
+    const calls = (adapter.respondToQuestion as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.map((c) => [c[1], c[2].text, c[3]])).toEqual([['q1', 'b', false], ['q2', 'something else', true]]);
+  });
+
+  it('a composer message without answerTo answers the sole open question', async () => {
+    const { adapter, askQ, answerQ, sm } = buildClient();
+    askQ('q1');
+    answerQ(undefined, 'a');
+    await Promise.resolve();
+    await Promise.resolve();
+    const user = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => JSON.parse(c[2]) as { type: string; payload: Record<string, unknown> })
+      .find((m) => m.type === 'user_message');
+    expect(user?.payload.answerTo).toBe('q1');
+    expect(adapter.respondToQuestion).toHaveBeenCalledTimes(1);
   });
 
   it('writes current-turn artifacts on explicit abort idle', async () => {
@@ -3158,9 +3196,18 @@ describe('RelayClient pending-question digest', () => {
     expect(snapshots).toEqual([]);
   });
 
-  it('returns the active card in the subscription ACK snapshot', () => {
-    const { askQ, client, ws } = buildClient();
+  it('lands a question on the spine with its lead-in prose and clears the live draft', () => {
+    const { adapter, askQ, client, ws, sm } = buildClient();
+    (adapter.onMessageDelta as (sid: string, e: Record<string, unknown>) => void)('sess_1', { content: 'I checked two options.' });
     askQ('q1');
+    const call = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .find((c) => c[1] === 'agent_message' && (JSON.parse(c[2]) as { payload: { question?: unknown } }).payload.question);
+    expect(call).toBeDefined();
+    expect(JSON.parse(call![2]).payload).toMatchObject({
+      content: 'I checked two options.',
+      question: { id: 'q1', text: 'Q q1', choices: ['a', 'b'] },
+    });
+    expect(call![3]).toBe(true); // attention boundary
     ws.sent.length = 0;
     ws.emit('message', Buffer.from(JSON.stringify({
       type: 'device_joined', relaySeq: 9001,
@@ -3171,11 +3218,9 @@ describe('RelayClient pending-question digest', () => {
     });
     const ack = decodePulseSends(ws.sent).find((m) => m.type === 'session_subscription_set');
     expect(ack).toBeDefined();
-    expect(ack.payload).toMatchObject({
-      accepted: true,
-      sessionId: 'sess_1',
-      snapshot: { card: { action: { type: 'question', payload: { id: 'q1' } } } },
-    });
+    expect(ack?.payload?.snapshot?.card?.draft ?? '').toBe('');
+    // The card no longer carries the question (it is on the spine).
+    expect(ack?.payload?.snapshot?.card?.action ?? null).toBeNull();
   });
 
   it('does not push a card snapshot for sessions with no active card', () => {

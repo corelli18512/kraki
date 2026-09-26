@@ -23,7 +23,7 @@ let pixel: string;
 interface RequestBody { model: string; tools?: unknown[]; messages: Array<{ role: string; content?: unknown }> }
 interface WireMessage { role: string; toolName?: string; content: Array<{ type: string; text?: string }>; isError?: boolean }
 interface WireEvent { type: string; message?: WireMessage; willRetry?: boolean; assistantMessageEvent?: { type: string; partial?: unknown } }
-interface CallbackEvent { id: string; content: string; toolName: string; success: boolean; phase: string; turnId: string; allowFreeform: boolean; attachments: Array<{ mimeType: string }> }
+interface CallbackEvent { id: string; content: string; toolName: string; success: boolean; phase: string; turnId: string; choices?: string[]; attachments: Array<{ mimeType: string }> }
 type Callback = (id: string, event: CallbackEvent) => void;
 interface RpcState { model: { id: string }; thinkingLevel: string; sessionFile: string; isStreaming: boolean; pendingMessageCount: number; summary?: string }
 interface AuditProcess { request: (type: string, payload?: Record<string, unknown>) => Promise<RpcState>; kill: () => void; onEvent: ((e: WireEvent) => void) | null }
@@ -213,7 +213,7 @@ run('Pi 0.87 live RPC compatibility', () => {
     await create(); steps.push({ tool: 'ask_user', args: { question: 'Choose?', ...(choices && { choices: ['A', 'B'] }) } }, { text: 'ANSWERED' });
     await adapter.sendMessage(sid, 'question audit');
     await wait(() => expect(callbacks.onQuestionRequest).toHaveBeenCalledTimes(1));
-    const q = callbacks.onQuestionRequest.mock.calls[0][1]; expect(q.allowFreeform).toBe(!choices);
+    const q = callbacks.onQuestionRequest.mock.calls[0][1]; expect(q.choices).toEqual(choices ? ['A', 'B'] : undefined);
     expect(await adapter.respondToQuestion(sid, q.id, choices ? 'B' : 'freeform', !choices)).toBe('accepted');
     await wait(() => expect(callbacks.onIdle).toHaveBeenCalledTimes(1));
     expect(toolResult('ask_user').content[0].text).toBe(choices ? 'B' : 'freeform');

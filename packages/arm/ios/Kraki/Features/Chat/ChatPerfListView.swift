@@ -555,7 +555,6 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         hasher.combine(vm.card?.action?.id ?? "")
         hasher.combine(vm.card?.action?.type ?? "")
         hasher.combine(vm.card?.action?.payload["decision"]?.stringValue ?? "")
-        hasher.combine(vm.card?.action?.answer ?? "")
         hasher.combine(vm.card?.action?.payload["localPending"]?.boolValue ?? false)
         hasher.combine(vm.card?.action?.payload["localError"]?.stringValue ?? "")
         hasher.combine(vm.card?.action?.payload["retained"]?.boolValue ?? false)
@@ -849,50 +848,23 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private var hasLiveCardItem: Bool { items.last == Self.liveCardID }
     private func isLiveCard(_ index: Int) -> Bool { index < items.count && items[index] == Self.liveCardID }
 
-    /// A frozen terminal card (`turn_status` / `interrupted_turn`) reuses the
-    /// SAME SwiftUI `LiveAgentBubbleView` as the streaming card — frozen
-    /// read-only with the action slot set to the terminal outcome
-    /// (`user_abort` | `failed`). Mirrors web `MessageBubble` (#162/#164/#168):
-    /// no separate terminal-card chrome, just the live card stopped.
-    private func frozenCardMessage(_ index: Int) -> ChatMessage? {
+    /// A frozen card (`turn_status` / `interrupted_turn`, or a question)
+    /// reuses the SAME bubble as the streaming card — frozen read-only with
+    /// the action slot set to the terminal outcome or the question's choices
+    /// (`ChatMessage.frozenCard`). Mirrors web `MessageBubble`
+    /// (#162/#164/#168): no separate chrome, just the live card stopped.
+    private func frozenRow(_ index: Int) -> (message: ChatMessage, card: MessageStore.SessionCard)? {
         guard index < items.count, let message = message(items[index]),
-              message.type == "turn_status" || message.type == "interrupted_turn" else { return nil }
-        return message
-    }
-
-    /// Rebuild a `SessionCard` from a persisted terminal message: the streaming
-    /// draft + the terminal action slot. Matches web's turn_status/interrupted_turn
-    /// normalization (legacy interrupted_turn rebuilds user_abort/failed).
-    private func frozenCard(from message: ChatMessage) -> MessageStore.SessionCard {
-        let text = message.interruptedDraft ?? ""
-        let action: ChatMessage?
-        if message.type == "turn_status" {
-            if let terminal = message.terminalAction, let type = terminal["type"]?.stringValue {
-                action = ChatMessage(type: type, seq: 0, sessionId: message.sessionId,
-                                     deviceId: message.deviceId, timestamp: message.timestamp,
-                                     payload: terminal["payload"]?.dictValue ?? [:])
-            } else { action = nil }
-        } else {
-            // Legacy interrupted_turn: rebuild the action from the reason.
-            let reason = message.payload["reason"]?.stringValue ?? "user_aborted"
-            let isProcessLost = reason == "process_lost"
-            action = ChatMessage(
-                type: isProcessLost ? "failed" : "user_abort", seq: 0,
-                sessionId: message.sessionId, deviceId: message.deviceId,
-                timestamp: message.timestamp,
-                payload: isProcessLost
-                    ? ["message": AnyCodable("Agent process was lost")]
-                    : [:])
-        }
-        return MessageStore.SessionCard(text: text, action: action)
+              let card = message.frozenCard else { return nil }
+        return (message, card)
     }
 
     /// Build the same content description used by a visible cell and by the
     /// offscreen warm sizer. Frozen terminal messages use the live-card path.
     private func bubbleContent(for message: ChatMessage) -> TKBubbleContent {
-        if message.type == "turn_status" || message.type == "interrupted_turn" {
+        if let card = message.frozenCard {
             return TKBubbleContent.live(
-                card: frozenCard(from: message),
+                card: card,
                 agent: agentName,
                 sessionId: sessionId,
                 steps: message.steps ?? 0,
@@ -941,9 +913,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             guard let cell = collectionView.cellForItem(at: indexPath) as? TKBubbleCell,
                   cell.hasProvisionalCodeHighlight else { continue }
             let finalContent: TKBubbleContent?
-            if let message = frozenCardMessage(indexPath.item) {
+            if let (message, card) = frozenRow(indexPath.item) {
                 finalContent = TKBubbleContent.live(
-                    card: frozenCard(from: message),
+                    card: card,
                     agent: agentName,
                     sessionId: sessionId,
                     steps: message.steps ?? 0,
@@ -1015,10 +987,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             let content = liveContent(card)
             cell.configure(content, cellWidth: collectionView.bounds.width)
             cell.onOpenSteps = { [weak self] _ in self?.presentLiveSteps() }
-        } else if let message = frozenCardMessage(indexPath.item) {
-            // Frozen terminal card (turn_status / interrupted_turn): the SAME
-            // bubble as streaming, frozen with a real timestamp + terminal action.
-            let card = frozenCard(from: message)
+        } else if let (message, card) = frozenRow(indexPath.item) {
+            // Frozen card: the SAME bubble as streaming, frozen with a real
+            // timestamp + terminal outcome / question choices.
             let content = TKBubbleContent.live(card: card, agent: agentName,
                                                 sessionId: sessionId,
                                                 steps: message.steps ?? 0,

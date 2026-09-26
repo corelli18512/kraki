@@ -146,17 +146,12 @@ describe('SessionManager', () => {
     it('round-trips and clears a pending question sidecar', () => {
       const { sessionId } = sm.createSession('pi');
       const pending = {
-        version: 1 as const,
+        version: 2 as const,
         kind: 'question' as const,
         questionId: 'q1',
         question: 'Which backend?',
         choices: ['A', 'B'],
-        allowFreeform: true,
-        draft: 'I inspected the project.',
-        action: {
-          type: 'question' as const,
-          payload: { id: 'q1', question: 'Which backend?', choices: ['A', 'B'], allowFreeform: true },
-        },
+        questionSeq: 7,
         createdAt: new Date().toISOString(),
       };
 

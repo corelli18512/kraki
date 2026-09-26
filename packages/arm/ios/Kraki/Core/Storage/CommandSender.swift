@@ -105,7 +105,8 @@ final class CommandSender {
         sessionId: String,
         text: String,
         attachments: [ImageAttachment]? = nil,
-        delivery: InputDelivery = .prompt
+        delivery: InputDelivery = .prompt,
+        answerTo: String? = nil
     ) -> Bool {
         guard appState != nil else { return false }
 
@@ -115,7 +116,8 @@ final class CommandSender {
         // in-flight sends, reconnects, or multi-device scenarios.
         let clientId = UUID().uuidString
         let (pending, payload) = makePendingInput(sessionId: sessionId, clientId: clientId, text: text,
-                                                  attachments: attachments, delivery: delivery, state: .sending)
+                                                  attachments: attachments, delivery: delivery,
+                                                  answerTo: answerTo, state: .sending)
         guard send(["type": "send_input", "payload": payload], sessionId: sessionId) else {
             return false
         }
@@ -137,14 +139,19 @@ final class CommandSender {
     /// the bubble can render the image immediately.
     private func makePendingInput(
         sessionId: String, clientId: String, text: String,
-        attachments: [ImageAttachment]?, delivery: InputDelivery, state: PendingState
+        attachments: [ImageAttachment]?, delivery: InputDelivery, answerTo: String? = nil,
+        state: PendingState
     ) -> (ChatMessage, [String: Any]) {
         var pendingPayload: [String: AnyCodable] = [
             "content": AnyCodable(text),
             "clientId": AnyCodable(clientId),
         ]
         var payload: [String: Any] = ["text": text, "clientId": clientId]
-        if delivery == .steer {
+        // An answer is its own message, never a steer of the running turn.
+        if let answerTo {
+            pendingPayload["answerTo"] = AnyCodable(answerTo)
+            payload["answerTo"] = answerTo
+        } else if delivery == .steer {
             pendingPayload["delivery"] = AnyCodable(delivery.rawValue)
             payload["delivery"] = delivery.rawValue
         }
@@ -187,6 +194,7 @@ final class CommandSender {
     ) -> String? {
         guard appState != nil else { return nil }
         let clientId = UUID().uuidString
+        // (A voice answer is reviewed in the field and sent via `answer`.)
         var (pending, payload) = makePendingInput(sessionId: sessionId, clientId: clientId, text: text,
                                                   attachments: attachments, delivery: delivery, state: .correcting)
         pending.payload["originalText"] = AnyCodable(text)
@@ -397,6 +405,7 @@ final class CommandSender {
         let text: String
         let delivery: String?
         let attachments: [[String: String]]?
+        var answerTo: String? = nil
     }
 
     private func persistOutbox() {
@@ -419,7 +428,8 @@ final class CommandSender {
                     // its original transcript, never a half-corrected one.
                     text: message.payload["originalText"]?.stringValue ?? message.content ?? "",
                     delivery: message.payload["delivery"]?.stringValue,
-                    attachments: persistedAttachments
+                    attachments: persistedAttachments,
+                    answerTo: message.answerTo
                 ))
             }
         }
@@ -451,6 +461,7 @@ final class CommandSender {
                 "localOrder": AnyCodable(item.order),
             ]
             if let delivery = item.delivery { payload["delivery"] = AnyCodable(delivery) }
+            if let answerTo = item.answerTo { payload["answerTo"] = AnyCodable(answerTo) }
             if let attachments = item.attachments { payload["attachments"] = AnyCodable(attachments) }
             var bucket = outbox[item.sessionId] ?? [:]
             bucket[item.clientId] = ChatMessage(
@@ -459,6 +470,7 @@ final class CommandSender {
             outbox[item.sessionId] = bucket
             var wire: [String: Any] = ["text": item.text, "clientId": item.clientId]
             if let delivery = item.delivery { wire["delivery"] = delivery }
+            if let answerTo = item.answerTo { wire["answerTo"] = answerTo }
             if let attachments = item.attachments { wire["attachments"] = attachments }
             outboundPayloads[item.clientId] = wire
             nextLocalOrder = max(nextLocalOrder, item.order + 1)
@@ -467,10 +479,8 @@ final class CommandSender {
 
     // MARK: - Permissions
 
-    // Permission / question resolve buttons send the command and rely on
-    // tentacle's resolved event to refresh the corresponding live card.
-    // Round-trip is ~100-300ms; future work could layer in optimistic UI via
-    // the pending_input pattern (see the storage-refactor discussion).
+    // Permission buttons resolve optimistically (`resolvePrompt`); Tentacle's
+    // resolved card confirms the decision.
     @discardableResult
     func approve(sessionId: String, permissionId: String) -> Bool {
         resolvePrompt(sessionId: sessionId, promptId: permissionId, decision: "approve") {
@@ -498,15 +508,14 @@ final class CommandSender {
         }
     }
 
-    /// Optimistic prompt resolution: show the answer/decision at once (the
-    /// bubble stays, its choices become read-only so a second tap cannot send
+    /// Optimistic permission resolution: show the decision at once (the
+    /// bubble stays, its buttons become read-only so a second tap cannot send
     /// again), then either Tentacle's resolved card confirms it, or a transport
     /// failure / missing confirmation reverts it with an explanation.
-    private func resolvePrompt(sessionId: String, promptId: String,
-                               answer: String? = nil, decision: String? = nil,
+    private func resolvePrompt(sessionId: String, promptId: String, decision: String,
                                transmit: () -> Bool) -> Bool {
         guard let store = appState?.messageStore else { return transmit() }
-        store.applyLocalResolution(sessionId, promptId: promptId, answer: answer, decision: decision)
+        store.applyLocalResolution(sessionId, promptId: promptId, decision: decision)
         guard transmit() else {
             store.revertLocalResolution(sessionId, promptId: promptId,
                                         message: "Couldn't send. Try again.")
@@ -529,18 +538,13 @@ final class CommandSender {
 
     // MARK: - Questions
 
+    /// Answering is sending a message: a choice is just a shortcut for its
+    /// text. The answer lands as a user message (optimistic, retryable,
+    /// durable outbox) carrying `answerTo`.
     @discardableResult
-    func answer(sessionId: String, questionId: String, answer: String, wasFreeform: Bool = false) -> Bool {
-        resolvePrompt(sessionId: sessionId, promptId: questionId, answer: answer) {
-            self.send([
-                "type": "answer",
-                "payload": [
-                    "questionId": questionId,
-                    "answer": answer,
-                    "wasFreeform": wasFreeform,
-                ] as [String: Any],
-            ], sessionId: sessionId)
-        }
+    func answer(sessionId: String, questionId: String, answer: String,
+                attachments: [ImageAttachment]? = nil) -> Bool {
+        sendInput(sessionId: sessionId, text: answer, attachments: attachments, answerTo: questionId)
     }
 
     // MARK: - Session Control

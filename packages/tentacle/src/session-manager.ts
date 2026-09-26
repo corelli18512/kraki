@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, rename
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getConfigDir } from './config.js';
-import type { CardActionState, ContentRef } from '@kraki/protocol';
+import type { ContentRef } from '@kraki/protocol';
 
 const PREVIEW_MAX = 80;
 const PREVIEW_SCAN_CHUNK_BYTES = 32 * 1024;
@@ -156,16 +156,17 @@ export interface RunRecord {
   endReason?: string;
 }
 
-/** Durable human-blocking state kept outside the model transcript. */
+/** Durable human-blocking state kept outside the model transcript. The
+ *  question itself is on the spine (an `agent_message` carrying `question`);
+ *  this record only lets Tentacle route an answer after a restart. */
 export interface PendingHumanAction {
-  version: 1;
+  version: 2;
   kind: 'question';
   questionId: string;
   question: string;
   choices?: string[];
-  allowFreeform?: boolean;
-  draft: string;
-  action: CardActionState;
+  /** Spine seq of the question message. */
+  questionSeq?: number;
   createdAt: string;
 }
 
@@ -792,7 +793,7 @@ export class SessionManager {
     if (!existsSync(path)) return null;
     try {
       const value = JSON.parse(readFileSync(path, 'utf8')) as PendingHumanAction;
-      if (value?.version !== 1 || value.kind !== 'question' || !value.questionId) return null;
+      if (value?.version !== 2 || value.kind !== 'question' || !value.questionId) return null;
       return value;
     } catch {
       return null;
@@ -1364,6 +1365,12 @@ export class SessionManager {
 
         switch (inner.type) {
           case 'agent_message': {
+            // A question reads as an agent line here; whether it is still
+            // awaiting an answer is live state (enrichSessionList overlays it).
+            const question = payload.question as { text?: unknown } | undefined;
+            if (question && typeof question.text === 'string' && question.text) {
+              return { text: stripMarkdownForPreview(question.text), type: 'agent', timestamp: entry.ts };
+            }
             const content = payload.content;
             if (typeof content === 'string' && content) {
               return { text: stripMarkdownForPreview(content), type: 'agent', timestamp: entry.ts };

@@ -4,8 +4,8 @@ import type { CardActionState } from '@kraki/protocol';
 type RunningTool = Extract<CardActionState, { type: 'tool_start' }>;
 /** A finished tool step. */
 type CompletedTool = Extract<CardActionState, { type: 'tool_complete' }>;
-/** A prompt step (permission or question). */
-type PromptAction = Extract<CardActionState, { type: 'permission' | 'question' }>;
+/** A prompt step (a permission request). Questions are spine messages. */
+type PromptAction = Extract<CardActionState, { type: 'permission' }>;
 type TerminalAction = Extract<CardActionState, { type: 'user_abort' | 'failed' }>;
 
 /** Stable per-tool key: the tool call id, falling back to its headline when the
@@ -35,10 +35,10 @@ interface CardState {
    *  after a narration finalizes so the following prose (the next narration
    *  segment, or a finalize resummarize) REPLACES rather than appends. */
   resetNext: boolean;
-  /** The SINGLE action slot. tool / tool_batch / permission / question all write
-   *  here with equal footing (last-write-wins by time); there is no precedence. A
-   *  resolved permission/question stays here (with decision/answer set) until a
-   *  newer action replaces it or the card clears. */
+  /** The SINGLE action slot. tool / tool_batch / permission all write here with
+   *  equal footing (last-write-wins by time); there is no precedence. A resolved
+   *  permission stays here (with its decision set) until a newer action replaces
+   *  it or the card clears. */
   action: CardActionState | null;
   /** Tools currently in flight (started, not yet completed), keyed by id and kept
    *  in insertion order. The agent runs tools in PARALLEL, so this can hold
@@ -49,10 +49,8 @@ interface CardState {
   lastActionKey: string;
 }
 
-/** How a permission/question was resolved (threaded through from the arm). */
-export type PromptResolution =
-  | { decision: 'approve' | 'deny' | 'always_allow' }
-  | { answer: string };
+/** How a permission was resolved (threaded through from the arm). */
+export type PromptResolution = { decision: 'approve' | 'deny' | 'always_allow' };
 
 /**
  * Owns the per-session status card + draft bubble the tentacle broadcasts to
@@ -64,11 +62,13 @@ export type PromptResolution =
  *    (NOT inside the pinned card). Incremental deltas with a `reset` boundary;
  *    keep-last (each new segment resets). Graduates to a permanent
  *    `agent_message` bubble at turn end (arms clear the draft on that bubble).
- *  - **action** (`card_action`): a SINGLE slot shared by tool / permission /
- *    question on equal footing — last-write-wins by time, no precedence. This is
- *    the ONLY thing the pinned status card renders. A resolved permission/
- *    question keeps showing (read-only) until a newer action replaces it or the
- *    card clears.
+ *  - **action** (`card_action`): a SINGLE slot shared by tool / permission on
+ *    equal footing — last-write-wins by time, no precedence. This is the ONLY
+ *    thing the pinned status card renders. A resolved permission keeps showing
+ *    (read-only) until a newer action replaces it or the card clears.
+ *
+ * Questions are not card state: they land on the spine as an `agent_message`
+ * carrying `question` (see RelayClient.onQuestionRequest).
  *
  * Arms render both verbatim and perform ZERO precedence logic. The finalized
  * narration + tool steps still ride the TRACE axis (`trace.jsonl`) for the lazy
@@ -88,20 +88,16 @@ export class CardManager {
     return c;
   }
 
-  /** True while the slot holds a still-PENDING (unresolved) permission/question —
+  /** True while the slot holds a still-PENDING (unresolved) permission —
    *  a blocking human affordance that background tool activity must NOT clobber.
    *  A resolved prompt is fair game to be superseded by later tool activity. */
   private slotBlocksTool(c: CardState): boolean {
     const a = c.action;
-    return (
-      (a?.type === 'permission' && !a.payload.decision) ||
-      (a?.type === 'question' && a.payload.answer === undefined)
-    );
+    return a?.type === 'permission' && !a.payload.decision;
   }
 
   /** A slot tail that must be RETIRED the instant narration resumes: a COMPLETED
-   *  tool (nothing still running) OR a RESOLVED prompt (a decided permission /
-   *  answered question). Its presence in the slot means "the latest thing that
+   *  tool (nothing still running) OR a RESOLVED prompt (a decided permission). Its presence in the slot means "the latest thing that
    *  happened was this action, and nothing has narrated since" — so a fresh
    *  narration segment supersedes it. A still-running tool or an UNRESOLVED
    *  prompt is genuinely live and is never retired here. */
@@ -109,8 +105,7 @@ export class CardManager {
     const a = c.action;
     return (
       ((a?.type === 'tool_start' || a?.type === 'tool_complete') && c.runningTools.size === 0) ||
-      (a?.type === 'permission' && !!a.payload.decision) ||
-      (a?.type === 'question' && a.payload.answer !== undefined)
+      (a?.type === 'permission' && !!a.payload.decision)
     );
   }
 
@@ -121,7 +116,6 @@ export class CardManager {
     }
     if (a.type === 'tool_batch') return `batch:${a.payload.running}`;
     if (a.type === 'permission') return `permission:${a.payload.id}:${a.payload.cancelled ? 'cancelled' : a.payload.decision ?? ''}`;
-    if (a.type === 'question') return `question:${a.payload.id}:${a.payload.cancelled ? 'cancelled' : a.payload.answer !== undefined ? 'answered' : 'pending'}`;
     if (a.type === 'user_abort') return `user_abort:${a.payload.abortedAt}`;
     return `failed:${a.payload.failedAt}:${a.payload.code ?? ''}:${a.payload.message}`;
   }
@@ -213,7 +207,7 @@ export class CardManager {
    *  COMPLETED tool (or a resolved prompt) is stale — drop it now so the card
    *  vanishes together with the reply instead of lingering until the later
    *  `onIdle`/`clear`. A still-in-flight tool (parallel work) or an unresolved
-   *  permission/question is left in place (the human/agent still needs it). */
+   *  permission is left in place (the human/agent still needs it). */
   onBubble(sessionId: string): void {
     const c = this.get(sessionId);
     c.draftText = '';
@@ -258,21 +252,15 @@ export class CardManager {
     this.syncAction(sessionId, c);
   }
 
-  /** Resolve a permission or question. If it still occupies the slot, update it
-   *  IN PLACE to a resolved (read-only) state showing the decision/answer and
-   *  keep it displayed — no fallback to any prior tool. An auto-resolve without
-   *  a resolution marks questions cancelled instead of making the user's
-   *  pending decision disappear. */
+  /** Resolve a permission. If it still occupies the slot, update it IN PLACE to
+   *  a resolved (read-only) state showing the decision and keep it displayed —
+   *  no fallback to any prior tool. Without a resolution the slot clears. */
   resolvePrompt(sessionId: string, id: string, resolution?: PromptResolution): void {
     const c = this.cards.get(sessionId);
     const a = c?.action;
-    if (!c || !a || (a.type !== 'permission' && a.type !== 'question') || a.payload.id !== id) return;
-    if (a.type === 'permission' && resolution && 'decision' in resolution) {
+    if (!c || !a || a.type !== 'permission' || a.payload.id !== id) return;
+    if (resolution) {
       c.action = { ...a, payload: { ...a.payload, decision: resolution.decision } };
-    } else if (a.type === 'question' && resolution && 'answer' in resolution) {
-      c.action = { ...a, payload: { ...a.payload, answer: resolution.answer, cancelled: undefined } };
-    } else if (a.type === 'question') {
-      c.action = { ...a, payload: { ...a.payload, cancelled: true } };
     } else {
       c.action = null;
     }

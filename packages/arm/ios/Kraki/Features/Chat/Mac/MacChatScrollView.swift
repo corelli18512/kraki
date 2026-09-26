@@ -434,6 +434,7 @@ final class MacChatDocumentView: NSView {
                 heightCache[key] = CGFloat(cached.doubleValue)
             }
         }
+        primeNewShortIdentities(oldKeys: oldKeys)
         // A live card keeps one logical identity while its text revision changes.
         // Carry the currently displayed height into the new signature so a token
         // update never collapses the bubble back to its capped estimate while the
@@ -1326,6 +1327,43 @@ final class MacChatDocumentView: NSView {
 
     private func cachedContent(for item: MacChatItem) -> MacChatBubbleContent? {
         contentCache[cacheKey(item)]
+    }
+
+    /// At rest, a few short rows that appear with a new identity (a sent
+    /// message, a question that drops its choices once answered, an echo
+    /// replacing its pending input) get their content and exact height now,
+    /// before any layout sees them — as on iOS. Otherwise the first pass lays
+    /// them out at an estimate, and every row below a row whose height then
+    /// changes waits one turn as a placeholder (seen when answering: the
+    /// question shrinks and the answer bubble below it flashed grey). The same
+    /// work `stage` does off-main for older pages, ~1–3ms per row.
+    private func primeNewShortIdentities(oldKeys: [String]) {
+        guard !scrollInteractionActive, documentWidth > 1 else { return }
+        let old = Set(oldKeys)
+        let fresh = contents.lazy.filter {
+            !old.contains($0.key) && $0.key != "__live__" && $0.visibleCharacterCount <= 1_500
+        }
+        var primed = 0
+        for item in fresh.reversed() {
+            let key = cacheKey(item)
+            guard heightCache[key] == nil else { continue }
+            guard primed < 4 else { break }
+            let content = resolvedContent(for: item)
+            // Action slots (tool / permission / open question) are measured by
+            // their hosted view once configured.
+            guard content.action == nil else { continue }
+            let artifact = content.body.flatMap {
+                MacCoreTextLayoutArtifact.cached(
+                    attributed: $0,
+                    width: content.bodyTextWidth,
+                    key: "\(item.key)|\(item.signature)|\(Int(documentWidth.rounded()))|\(sessionMode.rawValue)"
+                )
+            }
+            let exact = MacChatBubbleCell.height(for: content, bodyHeight: artifact?.height ?? 0)
+            heightCache[key] = exact
+            Self.exactHeightCache.setObject(NSNumber(value: Double(exact)), forKey: key as NSString, cost: 16)
+            primed += 1
+        }
     }
 
     private func resolvedContent(for item: MacChatItem) -> MacChatBubbleContent {
@@ -3326,6 +3364,17 @@ final class MacChatScrollView: MacSmoothScrollView {
         (latestStartButton.frame, jumpButton.frame, unseenDot.frame)
     }
     func automationTapUp() { latestStartTapped() }
+    /// Clicks a question choice through the same window-point hit test and
+    /// dispatch a real mouse click uses.
+    func automationClickQuestionChoice(_ answer: String) -> Bool {
+        for (_, cell) in chatDocumentView.automationVisibleCells {
+            guard let point = cell.automationChoiceWindowPoint(answer),
+                  let target = chatDocumentView.actionHitTarget(atWindowPoint: point) else { continue }
+            dispatchBubbleAction(target)
+            return true
+        }
+        return false
+    }
     func automationTapDown() { jumpTapped() }
     var automationWindowRange: (top: Int, bottom: Int)? {
         guard diagnosticWindowTop > 0,
@@ -3884,8 +3933,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
                 return cached
             }
             let item: MacChatItem
-            if message.type == "turn_status" || message.type == "interrupted_turn" {
-                let card = frozenCard(from: message)
+            if let card = message.frozenCard {
                 item = MacChatItem(
                     seq: message.seq,
                     key: "frozen:\(message.id)",
@@ -4031,7 +4079,6 @@ struct MacChatListRepresentable: NSViewRepresentable {
             hasher.combine(action.headline ?? "")
             hasher.combine(action.permissionId ?? "")
             hasher.combine(action.questionId ?? "")
-            hasher.combine(action.answer ?? "")
             hasher.combine(action.payload["decision"]?.stringValue ?? "")
             hasher.combine(action.payload["success"]?.boolValue ?? false)
             hasher.combine(action.payload["localPending"]?.boolValue ?? false)
@@ -4055,36 +4102,6 @@ struct MacChatListRepresentable: NSViewRepresentable {
 
     private func utf8Length(_ text: String?) -> Int {
         text?.utf8.count ?? 0
-    }
-
-    private func frozenCard(from message: ChatMessage) -> MessageStore.SessionCard {
-        let text = message.interruptedDraft ?? ""
-        let action: ChatMessage?
-        if message.type == "turn_status" {
-            if let terminal = message.terminalAction, let type = terminal["type"]?.stringValue {
-                action = ChatMessage(
-                    type: type,
-                    seq: 0,
-                    sessionId: message.sessionId,
-                    deviceId: message.deviceId,
-                    timestamp: message.timestamp,
-                    payload: terminal["payload"]?.dictValue ?? [:]
-                )
-            } else {
-                action = nil
-            }
-        } else {
-            let processLost = message.payload["reason"]?.stringValue == "process_lost"
-            action = ChatMessage(
-                type: processLost ? "failed" : "user_abort",
-                seq: 0,
-                sessionId: message.sessionId,
-                deviceId: message.deviceId,
-                timestamp: message.timestamp,
-                payload: processLost ? ["message": AnyCodable("Agent process was lost")] : [:]
-            )
-        }
-        return MessageStore.SessionCard(text: text, action: action)
     }
 }
 #endif

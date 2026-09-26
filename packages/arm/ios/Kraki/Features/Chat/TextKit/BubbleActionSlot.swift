@@ -13,6 +13,39 @@ import UIKit
 /// `LiveAgentBubbleView.actionSection`. The cell hosts it as a subview so the
 /// streaming card and a completed bubble are literally the same cell; there is
 /// no separate "live card" component.
+/// Metrics shared by the action views below and the bubble's natural-width
+/// measurement (`TKBubbleContent`), so a short card hugs exactly its content.
+enum BubbleActionMetrics {
+    static let outcomeIconSize: CGFloat = 13
+    static let outcomeSpacing: CGFloat = 8
+    static let outcomeLabelFont = UIFont.systemFont(ofSize: 13, weight: .medium)
+    static let outcomeDetailFont = UIFont.systemFont(ofSize: 12)
+    static func outcomeSymbol(failed: Bool) -> String { failed ? "xmark.octagon.fill" : "stop.circle.fill" }
+    static func outcomeLabel(failed: Bool) -> String { failed ? "Turn failed" : "User aborted" }
+
+    static let choiceFont = UIFont.systemFont(ofSize: 14, weight: .medium)
+    static let choicePaddingH: CGFloat = 14
+
+    /// Natural width of the "User aborted" / "Turn failed" row.
+    static func outcomeWidth(failed: Bool, detail: String?) -> CGFloat {
+        let symbol = UIImage(systemName: outcomeSymbol(failed: failed),
+                             withConfiguration: UIImage.SymbolConfiguration(font: .systemFont(ofSize: outcomeIconSize)))
+        var width = ceil(symbol?.size.width ?? outcomeIconSize) + outcomeSpacing
+            + textWidth(outcomeLabel(failed: failed), outcomeLabelFont)
+        if let detail, !detail.isEmpty { width += outcomeSpacing + textWidth(detail, outcomeDetailFont) }
+        return width
+    }
+
+    /// Natural width of the widest choice capsule.
+    static func choicesWidth(_ choices: [String]) -> CGFloat {
+        choices.map { textWidth($0, choiceFont) + choicePaddingH * 2 }.max() ?? 0
+    }
+
+    static func textWidth(_ text: String, _ font: UIFont) -> CGFloat {
+        ceil((text as NSString).size(withAttributes: [.font: font]).width)
+    }
+}
+
 struct BubbleActionSlot: View {
     let action: ChatMessage
     var sessionMode: SessionMode = .discuss
@@ -44,19 +77,22 @@ struct BubbleActionSlot: View {
     }
 
     private func terminalOutcome(_ m: ChatMessage, failed: Bool) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: failed ? "xmark.octagon.fill" : "stop.circle.fill")
-                .font(.system(size: 13))
+        HStack(spacing: BubbleActionMetrics.outcomeSpacing) {
+            Image(systemName: BubbleActionMetrics.outcomeSymbol(failed: failed))
+                .font(.system(size: BubbleActionMetrics.outcomeIconSize))
                 .foregroundStyle(failed ? Color.red : Color.textMuted)
-            Text(failed ? "Turn failed" : "User aborted")
-                .font(.system(size: 13, weight: .medium))
+            Text(BubbleActionMetrics.outcomeLabel(failed: failed))
+                .font(Font(BubbleActionMetrics.outcomeLabelFont))
                 .foregroundStyle(failed ? Color.red : Color.textSecondary)
             if let msg = m.payload["message"]?.stringValue, !msg.isEmpty {
-                Text(msg).font(.system(size: 12)).foregroundStyle(Color.textMuted)
+                Text(msg).font(Font(BubbleActionMetrics.outcomeDetailFont)).foregroundStyle(Color.textMuted)
                     .lineLimit(1).truncationMode(.middle)
             }
-            Spacer(minLength: 0)
         }
+        // Leading-aligned without a trailing Spacer: in an HStack a Spacer
+        // also takes the 8pt spacing, which the natural-width measurement
+        // (`outcomeWidth`) would not know about.
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func toolChip(_ m: ChatMessage, running: Bool) -> some View {
@@ -180,70 +216,31 @@ struct BubbleActionSlot: View {
     }
 
     private func questionInput(_ m: ChatMessage) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let question = m.question, !question.isEmpty {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "questionmark.circle")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.purple)
-                    Text(LiveMarkdown.attributed(question))
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.textPrimary)
-                        // Keep multiline question text in the action host's
-                        // intrinsic height so the bottom of the bubble cannot
-                        // clip the final lines.
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-
-            if m.cancelled {
-                Text("Question cancelled")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.textMuted)
-            } else if let answer = m.answer {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Answered")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.purple)
-                        localPendingLabel(m)
+        VStack(alignment: .leading, spacing: 6) {
+            // An open question's choices: shortcuts that send their text as
+            // the answer. (The question itself is the bubble's body text.)
+            if let choices = m.choices, !choices.isEmpty {
+                ForEach(choices, id: \.self) { choice in
+                    Button {
+                        submitQuestionChoice(m, answer: choice)
+                    } label: {
+                        Text(LiveMarkdown.attributed(choice))
+                            .font(Font(BubbleActionMetrics.choiceFont))
+                            .foregroundStyle(Color.textPrimary)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, BubbleActionMetrics.choicePaddingH)
+                            .padding(.vertical, 7)
+                            .background(Color.surfacePrimary.opacity(0.75), in: Capsule())
+                            .overlay(Capsule().strokeBorder(Color.borderPrimary))
+                            .contentShape(Capsule())
                     }
-                    Text(LiveMarkdown.attributed(answer))
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.purple.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.purple.opacity(0.3)))
-            } else if let choices = m.choices, !choices.isEmpty {
-                localErrorLabel(m)
-                VStack(spacing: 6) {
-                    ForEach(choices, id: \.self) { choice in
-                        Button {
-                            submitQuestionChoice(m, answer: choice)
-                        } label: {
-                            Text(LiveMarkdown.attributed(choice))
-                                .font(.system(size: 13))
-                                .foregroundStyle(Color.textPrimary)
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 9)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.surfacePrimary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
-                                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.borderPrimary))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Answer: \(choice)")
-                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Answer: \(choice)")
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// "Sending…" while an optimistic answer/decision awaits Tentacle.
@@ -323,7 +320,12 @@ final class BubbleActionHostView: UIView {
             let host = UIHostingController(rootView: slot)
             host.view.backgroundColor = .clear
             host.view.clipsToBounds = true
-            host.view.translatesAutoresizingMaskIntoConstraints = false
+            // Frame-based like the rest of the cell. Opting this view into
+            // Auto Layout pulled its (constraint-less) container into the
+            // engine, which later resolved the container to 0×0: an action
+            // added to an on-screen cell (a question closing into "User
+            // aborted") laid out once, then vanished.
+            host.view.translatesAutoresizingMaskIntoConstraints = true
             host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             host.view.frame = bounds
             addSubview(host.view)

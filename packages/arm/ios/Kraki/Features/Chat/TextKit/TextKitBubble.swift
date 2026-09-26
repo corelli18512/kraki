@@ -1137,15 +1137,13 @@ final class TKBubbleContent {
             }.max() ?? 0
             return max(380, max(descriptionWidth, argsWidth))
         case "question":
-            let questionWidth = textWidth(action.question ?? "", font: .systemFont(ofSize: 14)) + 24
-            let choicesWidth = action.choices?.map {
-                textWidth($0, font: .systemFont(ofSize: 13)) + 24
-            }.max() ?? 0
-            return max(280, max(questionWidth, choicesWidth))
+            // An open question's choices; the question itself is body text,
+            // so the bubble is as wide open as once answered unless a choice
+            // is wider.
+            return BubbleActionMetrics.choicesWidth(action.choices ?? [])
         case "failed", "user_abort":
-            let label = action.type == "failed" ? "Turn failed" : "User aborted"
-            let detail = action.payload["message"]?.stringValue ?? ""
-            return textWidth("\(label)  \(detail)", font: .systemFont(ofSize: 13)) + 24
+            return BubbleActionMetrics.outcomeWidth(failed: action.type == "failed",
+                                                    detail: action.payload["message"]?.stringValue)
         default:
             return 0
         }

@@ -64,13 +64,11 @@ final class ChatMessageTests: XCTestCase {
                 "toolCallId": AnyCodable("tc-1"),
                 "result": AnyCodable("ok"),
                 "id": AnyCodable("perm-1"),
-                "question": AnyCodable("yes?"),
                 "description": AnyCodable("Run shell"),
                 "requestId": AnyCodable("req-1"),
                 "message": AnyCodable("error!"),
                 "reason": AnyCodable("timeout"),
                 "resolution": AnyCodable("approved"),
-                "answer": AnyCodable("yes"),
                 "pinned": AnyCodable(true),
                 "mode": AnyCodable("safe"),
                 "model": AnyCodable("claude"),
@@ -84,14 +82,12 @@ final class ChatMessageTests: XCTestCase {
         XCTAssertEqual(msg.result, "ok")
         XCTAssertEqual(msg.permissionId, "perm-1")
         XCTAssertEqual(msg.questionId, "perm-1") // shares "id" key
-        XCTAssertEqual(msg.question, "yes?")
         XCTAssertEqual(msg.description_, "Run shell")
         XCTAssertEqual(msg.toolDescription, "Run shell")
         XCTAssertEqual(msg.requestId, "req-1")
         XCTAssertEqual(msg.errorMessage, "error!")
         XCTAssertEqual(msg.reason, "timeout")
         XCTAssertEqual(msg.resolution, "approved")
-        XCTAssertEqual(msg.answer, "yes")
         XCTAssertEqual(msg.pinned, true)
         XCTAssertEqual(msg.mode, "safe")
         XCTAssertEqual(msg.model, "claude")
@@ -102,17 +98,18 @@ final class ChatMessageTests: XCTestCase {
     func testChatMessageIsRenderable() {
         let renderableTypes = [
             "user_message", "agent_message", "pending_input", "send_input",
-            "permission", "question", "tool_start", "tool_complete",
+            "permission", "tool_start", "tool_complete",
             "idle", "active", "error", "session_created", "session_ended",
-            "session_deleted", "kill_session", "answer",
-            "permission_resolved", "question_resolved",
+            "session_deleted", "kill_session", "permission_resolved",
         ]
         for type in renderableTypes {
             let msg = ChatMessage(type: type, seq: 1, sessionId: nil, deviceId: nil, timestamp: nil, payload: [:])
             XCTAssertTrue(msg.isRenderable, "\(type) should be renderable")
         }
 
-        let nonRenderable = ["agent_message_delta", "session_mode_set", "device_greeting", "unknown"]
+        // Questions ride agent_message / user_message; the old types are gone.
+        let nonRenderable = ["agent_message_delta", "session_mode_set", "device_greeting", "unknown",
+                             "question", "answer", "question_resolved"]
         for type in nonRenderable {
             let msg = ChatMessage(type: type, seq: 1, sessionId: nil, deviceId: nil, timestamp: nil, payload: [:])
             XCTAssertFalse(msg.isRenderable, "\(type) should not be renderable")
@@ -451,15 +448,23 @@ final class ProducerMessageDecoderTests: XCTestCase {
         XCTAssertEqual(msg?.toolName, "shell")
     }
 
-    func testDecodeQuestion() {
-        let data = makeEnvelopeJSON(type: "question", payload: [
-            "id": "q-1",
-            "question": "Continue?",
-            "choices": ["yes", "no"],
+    func testDecodeSpineQuestion() {
+        let data = makeEnvelopeJSON(type: "agent_message", payload: [
+            "content": "Two options.",
+            "question": ["id": "q-1", "text": "Continue?", "choices": ["yes", "no"]],
         ])
         let msg = ProducerMessageDecoder.decode(data)
-        XCTAssertEqual(msg?.type, "question")
-        XCTAssertEqual(msg?.question, "Continue?")
+        XCTAssertEqual(msg?.questionSpec, ChatMessage.QuestionSpec(id: "q-1", text: "Continue?", choices: ["yes", "no"]))
+        XCTAssertNil(msg?.questionPresentation, "presentation is client-derived, never decoded")
+    }
+
+    func testQuestionPresentationIsNeverEncoded() throws {
+        var msg = ChatMessage(type: "agent_message", seq: 3, sessionId: "s", deviceId: nil, timestamp: nil,
+                              payload: ["question": AnyCodable(["id": "q", "text": "?"])])
+        msg.questionPresentation = QuestionPresentation(state: .open)
+        let json = String(data: try JSONEncoder().encode(msg), encoding: .utf8) ?? ""
+        XCTAssertFalse(json.contains("open"), json)
+        XCTAssertNil(try JSONDecoder().decode(ChatMessage.self, from: Data(json.utf8)).questionPresentation)
     }
 
     func testDecodeToolStart() {
@@ -616,14 +621,6 @@ final class ConsumerMessageBuilderTests: XCTestCase {
         let payload = msg["payload"] as? [String: Any]
         XCTAssertEqual(payload?["permissionId"] as? String, "perm-1")
         XCTAssertEqual(payload?["toolKind"] as? String, "shell")
-    }
-
-    func testBuildAnswer() {
-        let msg = ConsumerMessageBuilder.answer(sessionId: "sess-1", deviceId: "dev-1", questionId: "q-1", answer: "yes")
-        assertEnvelope(msg, type: "answer")
-        let payload = msg["payload"] as? [String: Any]
-        XCTAssertEqual(payload?["questionId"] as? String, "q-1")
-        XCTAssertEqual(payload?["answer"] as? String, "yes")
     }
 
     func testBuildKillSession() {

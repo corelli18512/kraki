@@ -177,8 +177,8 @@ export class RelayClient {
    *  the tentacle folds them into the server-owned status card (see
    *  {@link CardManager}) and mirrors the raw step to `trace.jsonl` for the
    *  lazy "Steps" history (pulled per-turn via `request_turn_trace`). Permission
-   *  and question prompts likewise no longer persist to the spine — they surface
-   *  only as the card's action slot and vanish on resolve. */
+   *  prompts likewise surface only as the card's action slot. Questions are
+   *  spine messages (`agent_message` carrying `question`). */
   private static readonly TRACE_TYPES = new Set([
     'tool_start',
     'tool_complete',
@@ -699,18 +699,15 @@ export class RelayClient {
   /** Pending permissions used for stable sidebar attention previews. */
   private openPermissions = new Map<string, Map<string, { text: string; openedAt: string }>>();
 
-  /** Open ask_user question ids per session. A session with a non-empty set is
-   *  "pending" — its current turn is blocked waiting on human input. Populated
-   *  on onQuestionRequest, drained on answer / auto-resolve, cleared when the
-   *  turn ends (idle/abort/kill/respawn). Used to override the session_list
-   *  digest `preview` with a live `question` entry so reloading arms can render
-   *  the pending status (and the question text) for sessions they haven't opened
-   *  yet — the question no longer persists to the spine, so the file-based
-   *  preview can't surface it. Insertion order is preserved so the newest open
-   *  question wins the preview slot. */
+  /** Open ask_user questions per session — the adapter is blocked waiting on
+   *  the human. The question itself is on the spine; this map routes answers
+   *  (`send_input.answerTo`) to the adapter and drives the session_list
+   *  attention preview. Populated on onQuestionRequest, drained on answer /
+   *  auto-resolve, cleared when the turn ends. Insertion order is preserved so
+   *  the newest open question wins the preview slot. */
   private openQuestions = new Map<string, Map<string, PendingHumanAction>>();
 
-  /** Record a newly-opened question and persist the full recoverable card. */
+  /** Record a newly-opened question and persist it for answer routing after a restart. */
   private addOpenQuestion(sessionId: string, pending: PendingHumanAction): void {
     let map = this.openQuestions.get(sessionId);
     if (!map) {
@@ -765,7 +762,7 @@ export class RelayClient {
     return latest;
   }
 
-  /** Rehydrate durable pending cards before session-list/card snapshots. */
+  /** Rehydrate open questions (answer routing) before session-list snapshots. */
   private restorePendingHumanActions(): void {
     for (const meta of this.sessionManager.getSessionList()) {
       const pending = this.sessionManager.getPendingHumanAction(meta.id);
@@ -776,20 +773,20 @@ export class RelayClient {
         this.openQuestions.set(meta.id, map);
       }
       map.set(pending.questionId, pending);
-      this.card.restore(meta.id, { draft: pending.draft, action: pending.action });
     }
   }
 
   /** Deliver through the original live request when possible. If the daemon/Pi
-   *  process was reconstructed, continue transparently with a recovery prompt;
-   *  the arm sees the same pending card throughout. */
+   *  process was reconstructed, continue transparently with a recovery prompt.
+   *  The answer itself is already on the spine (`user_message.answerTo`). */
   private async deliverQuestionAnswer(
     sessionId: string,
     pending: PendingHumanAction,
     answer: { text: string; attachments?: import('@kraki/protocol').Attachment[] },
-    wasFreeform: boolean,
     turnId?: string,
   ): Promise<void> {
+    // Choices are shortcuts: an answer equal to one of them is a pick.
+    const wasFreeform = !(pending.choices ?? []).includes(answer.text);
     await this.ensureSessionResumed(sessionId);
     const result = await this.adapter.respondToQuestion(sessionId, pending.questionId, answer, wasFreeform);
     if (result !== 'accepted') {
@@ -810,14 +807,7 @@ export class RelayClient {
     }
 
     this.removeOpenQuestion(sessionId, pending.questionId);
-    this.card.resolvePrompt(sessionId, pending.questionId, { answer: answer.text || 'Answered with image' });
     this.broadcastSessionList();
-    this.recordTrace({ type: 'question', sessionId, payload: { id: pending.questionId, question: pending.question, answer: answer.text || 'Answered with image' } });
-    this.send({
-      type: 'question_resolved',
-      sessionId,
-      payload: { questionId: pending.questionId, answer: answer.text || 'Answered with image' },
-    });
   }
 
   /** Build a ContentRef for the args JSON if the serialized size exceeds the
@@ -897,16 +887,6 @@ export class RelayClient {
     if (snapshot.previousAction?.type === 'permission' && !snapshot.previousAction.payload.decision) {
       this.recordTrace({
         type: 'permission',
-        sessionId,
-        payload: { ...snapshot.previousAction.payload, cancelled: true },
-      });
-    } else if (
-      snapshot.previousAction?.type === 'question' &&
-      snapshot.previousAction.payload.answer === undefined &&
-      !snapshot.previousAction.payload.cancelled
-    ) {
-      this.recordTrace({
-        type: 'question',
         sessionId,
         payload: { ...snapshot.previousAction.payload, cancelled: true },
       });
@@ -1349,6 +1329,14 @@ export class RelayClient {
 
           const inputEntry = reservation.entry;
           const effectiveDelivery = reservation.effectiveDelivery;
+          // An answer targets an open question explicitly (`answerTo`); a
+          // composer message without it answers the sole open question. An
+          // `answerTo` for a question that is no longer open is delivered as
+          // an ordinary message (not recorded as an answer).
+          const requestedAnswerTo = msg.payload.answerTo as string | undefined;
+          const answering = requestedAnswerTo
+            ? this.openQuestions.get(sessionId)?.get(requestedAnswerTo) ?? null
+            : this.soleOpenQuestion(sessionId);
           let persistedSeq = inputEntry?.userSeq;
           if (!reservation.recovery) {
             const userMessage = {
@@ -1358,7 +1346,8 @@ export class RelayClient {
                 content: msg.payload.text,
                 ...(msg.payload.attachments?.length && { attachments: msg.payload.attachments }),
                 ...(msg.payload.clientId && { clientId: msg.payload.clientId }),
-                ...(effectiveDelivery === 'steer' && { delivery: 'steer' as const }),
+                ...(effectiveDelivery === 'steer' && !answering && { delivery: 'steer' as const }),
+                ...(answering && { answerTo: answering.questionId }),
               },
             };
             this.send(userMessage);
@@ -1379,13 +1368,12 @@ export class RelayClient {
             contentHash: inputEntry?.contentHash,
           });
 
-          const pendingAtArrival = this.soleOpenQuestion(sessionId);
-          if (pendingAtArrival) {
+          if (answering) {
             this.updateInputLedger(sessionId, clientId, 'dispatching');
-            const delivery = this.deliverQuestionAnswer(sessionId, pendingAtArrival, {
+            const delivery = this.deliverQuestionAnswer(sessionId, answering, {
               text: msg.payload.text === '[image]' ? '' : msg.payload.text,
               attachments: msg.payload.attachments,
-            }, true, reservation.turnId);
+            }, reservation.turnId);
             void delivery.then(() => {
               this.updateInputLedger(sessionId, clientId, 'delivered');
             }).catch((err) => {
@@ -1395,9 +1383,9 @@ export class RelayClient {
             });
             break;
           }
-          if ((this.openQuestions.get(sessionId)?.size ?? 0) > 1) {
+          if (!requestedAnswerTo && (this.openQuestions.get(sessionId)?.size ?? 0) > 1) {
             this.updateInputLedger(sessionId, clientId, 'rejected');
-            this.send({ type: 'error', sessionId, payload: { message: 'Multiple questions are pending. Answer the intended question card directly.' } });
+            this.send({ type: 'error', sessionId, payload: { message: 'Multiple questions are pending. Answer the intended question directly.' } });
             break;
           }
 
@@ -1554,21 +1542,6 @@ export class RelayClient {
               this.send({ type: 'error', sessionId, payload: { message: `Failed to set always-allow: ${(err as Error).message}` } });
             });
           break;
-        case 'answer': {
-          const pending = this.openQuestions.get(sessionId)?.get(msg.payload.questionId);
-          if (!pending) {
-            this.send({ type: 'error', sessionId, payload: { message: 'That question is no longer pending.' } });
-            break;
-          }
-          void this.deliverQuestionAnswer(sessionId, pending, {
-            text: msg.payload.answer,
-            attachments: msg.payload.attachments,
-          }, msg.payload.wasFreeform ?? false).catch((err) => {
-            logger.error({ err, sessionId }, 'respondToQuestion failed');
-            this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver answer: ${(err as Error).message}` } });
-          });
-          break;
-        }
         case 'kill_session':
           this.adapter.killSession(sessionId)
             .catch((err) => logger.error({ err, sessionId }, 'killSession failed'));
@@ -1577,7 +1550,9 @@ export class RelayClient {
           const snapshot = this.card.state(sessionId);
           this.adapter.abortSession(sessionId)
             .then(() => {
-              if (snapshot.draft || snapshot.action) {
+              // An open question is visible state too: record the abort so
+              // the conversation shows "User aborted" after it.
+              if (snapshot.draft || snapshot.action || this.openQuestions.has(sessionId)) {
                 this.finishTurnWithStatus(sessionId, {
                   type: 'user_abort',
                   payload: { abortedAt: new Date().toISOString() },
@@ -2154,37 +2129,42 @@ export class RelayClient {
       this.recordTrace({ type: 'permission', sessionId, payload: { id: permissionId, description: '', toolName: '', args: {}, decision: 'approve' } });
     };
 
-    // Auto-resolved (e.g. cancelled/aborted) — no answer, clear the slot.
+    // Withdrawn by the agent (timeout/cancel): stop routing answers to it. On
+    // the spine the question closes as unanswered once anything else follows.
     this.adapter.onQuestionAutoResolved = (sessionId, questionId) => {
       this.removeOpenQuestion(sessionId, questionId);
-      this.card.resolvePrompt(sessionId, questionId);
       this.broadcastSessionList();
-      this.recordTrace({ type: 'question', sessionId, payload: { id: questionId, question: '', cancelled: true } });
     };
 
+    // The question lands on the spine as an agent_message: its content is the
+    // live draft (the agent's lead-in), taken atomically so the explanation and
+    // the question can never be shown apart. It does not conclude the turn.
     this.adapter.onQuestionRequest = (sessionId, event) => {
       if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
-      const action = {
-        type: 'question' as const,
+      const lead = this.card.state(sessionId).draft;
+      this.card.onBubble(sessionId);
+      const message = {
+        type: 'agent_message' as const,
+        sessionId,
         payload: {
-          id: event.id,
-          question: event.question,
-          ...(event.choices ? { choices: event.choices } : {}),
-          allowFreeform: event.allowFreeform,
+          content: lead,
+          question: {
+            id: event.id,
+            text: event.question,
+            ...(event.choices?.length ? { choices: event.choices } : {}),
+          },
         },
       };
-      this.card.onPrompt(sessionId, action);
-      this.recordTrace({ type: 'question', sessionId, payload: action.payload });
-      const snapshot = this.card.state(sessionId);
+      // A question waiting on the human is an attention boundary (badge).
+      this.send(message, true);
+      const questionSeq = (message as typeof message & { seq?: number }).seq;
       this.addOpenQuestion(sessionId, {
-        version: 1,
+        version: 2,
         kind: 'question',
         questionId: event.id,
         question: event.question,
-        ...(event.choices ? { choices: event.choices } : {}),
-        allowFreeform: event.allowFreeform,
-        draft: snapshot.draft,
-        action,
+        ...(event.choices?.length ? { choices: event.choices } : {}),
+        ...(questionSeq ? { questionSeq } : {}),
         createdAt: new Date().toISOString(),
       });
       this.broadcastSessionList();
@@ -2897,7 +2877,7 @@ export class RelayClient {
     // replay alone — WITHOUT first pulling the transient trace.
     if (
       msg.type === 'tool_start' || msg.type === 'agent_narration' ||
-      msg.type === 'permission' || msg.type === 'question' || msg.type === 'error'
+      msg.type === 'permission' || msg.type === 'error'
     ) {
       this.turnStepCounts.set(msg.sessionId, (this.turnStepCounts.get(msg.sessionId) ?? 0) + 1);
     }
@@ -3174,8 +3154,8 @@ export class RelayClient {
     }
 
     if (msg.type === 'agent_message' && msg.sessionId) {
-      const content = (msg.payload as { content?: string } | undefined)?.content;
-      if (content) this.lastAgentContent.set(msg.sessionId, content);
+      const p = msg.payload as { content?: string; question?: unknown } | undefined;
+      if (p?.content && !p.question) this.lastAgentContent.set(msg.sessionId, p.content);
     }
 
     // Push is a separate Head-bound operation and must happen even when there
@@ -3367,18 +3347,18 @@ export class RelayClient {
     let previewType: string | undefined;
     let previewSummary: string | undefined;
     if (msg.type === 'card_action') {
-      // Permission/question actions warrant an offline push — a human must act
-      // on them. Tool/tool_batch actions are ambient progress (no push). Skip
-      // already-resolved prompts (decision/answer set): the push is for the
-      // initial ask only, not the resolved read-only echo.
+      // A permission warrants an offline push — a human must act on it.
+      // Tool/tool_batch actions are ambient progress (no push). Skip resolved
+      // prompts: the push is for the initial ask only.
       const action = (msg.payload as { action?: CardActionState | null } | undefined)?.action;
       if (action?.type === 'permission' && action.payload.decision === undefined) {
         previewType = 'permission';
         previewSummary = action.payload.description || action.payload.toolName;
-      } else if (action?.type === 'question' && action.payload.answer === undefined) {
-        previewType = 'question';
-        previewSummary = action.payload.question;
       }
+    } else if (msg.type === 'agent_message'
+      && (msg.payload as { question?: unknown } | undefined)?.question) {
+      previewType = 'question';
+      previewSummary = (msg.payload as { question: { text: string } }).question.text;
     } else if (msg.type === 'idle') {
       previewType = 'idle';
       previewSummary = this.lastAgentContent.get(msg.sessionId as string);

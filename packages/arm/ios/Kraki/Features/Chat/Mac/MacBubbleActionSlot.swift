@@ -1,5 +1,40 @@
 #if os(macOS)
+import AppKit
 import SwiftUI
+
+/// Metrics shared by the action views below and the bubble's natural-width
+/// measurement (`MacChatBubbleContentBuilder`), so a short card hugs exactly
+/// its content.
+enum MacBubbleActionMetrics {
+    static let outcomeIconSize: CGFloat = 13
+    static let outcomeSpacing: CGFloat = 8
+    static let outcomeLabelFont = NSFont.systemFont(ofSize: 13, weight: .medium)
+    static let outcomeDetailFont = NSFont.systemFont(ofSize: 12)
+    static func outcomeSymbol(failed: Bool) -> String { failed ? "xmark.octagon.fill" : "stop.circle.fill" }
+    static func outcomeLabel(failed: Bool) -> String { failed ? "Turn failed" : "User aborted" }
+
+    static let choiceFont = NSFont.systemFont(ofSize: 13, weight: .medium)
+    static let choicePaddingH: CGFloat = 14
+
+    /// Natural width of the "User aborted" / "Turn failed" row.
+    static func outcomeWidth(failed: Bool, detail: String?) -> CGFloat {
+        let symbol = NSImage(systemSymbolName: outcomeSymbol(failed: failed), accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: outcomeIconSize, weight: .regular))
+        var width = ceil(symbol?.size.width ?? outcomeIconSize) + outcomeSpacing
+            + textWidth(outcomeLabel(failed: failed), outcomeLabelFont)
+        if let detail, !detail.isEmpty { width += outcomeSpacing + textWidth(detail, outcomeDetailFont) }
+        return width
+    }
+
+    /// Natural width of the widest choice capsule.
+    static func choicesWidth(_ choices: [String]) -> CGFloat {
+        choices.map { textWidth($0, choiceFont) + choicePaddingH * 2 }.max() ?? 0
+    }
+
+    static func textWidth(_ text: String, _ font: NSFont) -> CGFloat {
+        text.isEmpty ? 0 : ceil(MacCTText.width(text, font: font))
+    }
+}
 
 struct MacQuestionChoiceFrame: Equatable {
     let answer: String
@@ -83,22 +118,25 @@ struct MacBubbleActionSlot: View {
     }
 
     private func terminalOutcome(_ message: ChatMessage, failed: Bool) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: failed ? "xmark.octagon.fill" : "stop.circle.fill")
-                .font(.system(size: 13))
+        HStack(spacing: MacBubbleActionMetrics.outcomeSpacing) {
+            Image(systemName: MacBubbleActionMetrics.outcomeSymbol(failed: failed))
+                .font(.system(size: MacBubbleActionMetrics.outcomeIconSize))
                 .foregroundStyle(failed ? Color.red : Color.textMuted)
-            Text(failed ? "Turn failed" : "User aborted")
-                .font(.system(size: 13, weight: .medium))
+            Text(MacBubbleActionMetrics.outcomeLabel(failed: failed))
+                .font(Font(MacBubbleActionMetrics.outcomeLabelFont))
                 .foregroundStyle(failed ? Color.red : Color.textSecondary)
             if let text = message.payload["message"]?.stringValue, !text.isEmpty {
                 Text(text)
-                    .font(.system(size: 12))
+                    .font(Font(MacBubbleActionMetrics.outcomeDetailFont))
                     .foregroundStyle(Color.textMuted)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            Spacer(minLength: 0)
         }
+        // Leading-aligned without a trailing Spacer: in an HStack a Spacer
+        // also takes the 8pt spacing, which the natural-width measurement
+        // (`outcomeWidth`) would not know about.
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func toolChip(_ message: ChatMessage, running: Bool) -> some View {
@@ -293,84 +331,45 @@ struct MacBubbleActionSlot: View {
     }
 
     private func questionInput(_ message: ChatMessage) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let question = message.question, !question.isEmpty {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "questionmark.circle")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.purple)
-                    Text(MacLiveMarkdown.attributed(question))
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.textPrimary)
-                        // The question sits above the choice stack inside a
-                        // self-sized AppKit hosting view. Keep its full
-                        // multiline height in the action measurement so the
-                        // bottom of the bubble cannot clip the last lines.
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            if message.cancelled {
-                Text("Question cancelled")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.textMuted)
-            } else if let answer = message.answer {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Answered")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.purple)
-                        localPendingLabel(message)
+        VStack(alignment: .leading, spacing: 6) {
+            // An open question's choices: shortcuts that send their text as
+            // the answer. (The question itself is the bubble's body text.)
+            if let choices = message.choices, !choices.isEmpty {
+                ForEach(choices, id: \.self) { choice in
+                    MacChatActionButton(
+                        action: {
+                            guard let questionId = message.questionId else { return }
+                            onAnswerQuestion(questionId, choice)
+                        },
+                        foreground: Color.textPrimary,
+                        fill: Color.surfacePrimary.opacity(0.75),
+                        border: Color.borderPrimary,
+                        accent: .accentColor,
+                        capsule: true
+                    ) {
+                        Text(MacLiveMarkdown.attributed(choice))
+                            .font(Font(MacBubbleActionMetrics.choiceFont))
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, MacBubbleActionMetrics.choicePaddingH)
+                            .padding(.vertical, 6)
                     }
-                    Text(MacLiveMarkdown.attributed(answer))
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.textPrimary)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.purple.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.purple.opacity(0.3)))
-            } else if let choices = message.choices, !choices.isEmpty {
-                localErrorLabel(message)
-                VStack(spacing: 6) {
-                    ForEach(choices, id: \.self) { choice in
-                        MacChatActionButton(
-                            action: {
-                                guard let questionId = message.questionId else { return }
-                                onAnswerQuestion(questionId, choice)
-                            },
-                            foreground: Color.textPrimary,
-                            fill: Color.surfacePrimary.opacity(0.6),
-                            border: Color.borderPrimary,
-                            accent: .purple
-                        ) {
-                            Text(MacLiveMarkdown.attributed(choice))
-                                .font(.system(size: 13))
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 9)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .accessibilityLabel("Answer: \(choice)")
-                        .background {
-                            GeometryReader { proxy in
-                                Color.clear.preference(
-                                    key: MacQuestionChoiceFramePreferenceKey.self,
-                                    value: [MacQuestionChoiceFrame(
-                                        answer: choice,
-                                        rect: proxy.frame(
-                                            in: .named(Self.actionCoordinateSpace)
-                                        )
-                                    )]
-                                )
-                            }
+                    .accessibilityLabel("Answer: \(choice)")
+                    .background {
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: MacQuestionChoiceFramePreferenceKey.self,
+                                value: [MacQuestionChoiceFrame(
+                                    answer: choice,
+                                    rect: proxy.frame(in: .named(Self.actionCoordinateSpace))
+                                )]
+                            )
                         }
                     }
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     static func switchesToExecute(mode: SessionMode, toolName: String?) -> Bool {
@@ -389,6 +388,7 @@ private struct MacChatActionButton<Label: View>: View {
     let fill: Color
     let border: Color
     let accent: Color
+    var capsule = false
     let label: () -> Label
     @State private var isHovered = false
 
@@ -398,6 +398,7 @@ private struct MacChatActionButton<Label: View>: View {
         fill: Color,
         border: Color,
         accent: Color,
+        capsule: Bool = false,
         @ViewBuilder label: @escaping () -> Label
     ) {
         self.action = action
@@ -405,6 +406,7 @@ private struct MacChatActionButton<Label: View>: View {
         self.fill = fill
         self.border = border
         self.accent = accent
+        self.capsule = capsule
         self.label = label
     }
 
@@ -417,6 +419,7 @@ private struct MacChatActionButton<Label: View>: View {
             fill: fill,
             border: border,
             accent: accent,
+            capsule: capsule,
             isHovered: isHovered
         ))
         .onHover { isHovered = $0 }
@@ -428,13 +431,14 @@ private struct MacChatActionButtonStyle: ButtonStyle {
     let fill: Color
     let border: Color
     let accent: Color
+    var capsule = false
     let isHovered: Bool
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let shape = RoundedRectangle(cornerRadius: capsule ? 999 : 8, style: .continuous)
+        return configuration.label
             .foregroundStyle(foreground)
             .background {
-                let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
                 shape.fill(fill)
                     .overlay(
                         shape.fill(Color.white.opacity(isHovered ? 0.07 : 0))
@@ -449,7 +453,7 @@ private struct MacChatActionButtonStyle: ButtonStyle {
                         )
                     )
             }
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(shape)
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .shadow(
                 color: isHovered ? accent.opacity(0.18) : .clear,
