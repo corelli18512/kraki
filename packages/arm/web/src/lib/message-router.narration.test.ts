@@ -78,24 +78,21 @@ describe('handleDataMessage card messages', () => {
       sessionId: 's1',
       payload: {
         action: {
-          type: 'question',
-          payload: {
-            id: 'q1',
-            question: 'Proceed?',
-          },
+          type: 'tool_start',
+          payload: { toolName: 'bash', headline: 'ls', toolCallId: 't1' },
         },
       },
     } as unknown as InnerMessage, {
       cmdState: new CommandState(),
     });
-    expect(useStore.getState().cards.get('s1')?.action?.type).toBe('question');
+    expect(useStore.getState().cards.get('s1')?.action?.type).toBe('tool_start');
   });
 
   it('keeps compaction on the runtime axis without changing conversation state or IndexedDB', async () => {
     seedSession('runtime-s1');
     useStore.getState().setCardAction('runtime-s1', {
-      type: 'question',
-      payload: { id: 'q1', question: 'Proceed?' },
+      type: 'tool_start',
+      payload: { toolName: 'bash', headline: 'ls', toolCallId: 't1' },
     });
 
     handleDataMessage({
@@ -106,7 +103,7 @@ describe('handleDataMessage card messages', () => {
 
     expect(useStore.getState().sessions.get('runtime-s1')?.state).toBe('active');
     expect(useStore.getState().runtimeStatuses.get('runtime-s1')).toEqual({ status: 'compacting', reason: 'threshold' });
-    expect(useStore.getState().cards.get('runtime-s1')?.action?.type).toBe('question');
+    expect(useStore.getState().cards.get('runtime-s1')?.action?.type).toBe('tool_start');
 
     handleDataMessage({
       type: 'compacting', deviceId: 'dev-tentacle', seq: 9,
@@ -116,7 +113,7 @@ describe('handleDataMessage card messages', () => {
 
     expect(useStore.getState().sessions.get('runtime-s1')?.state).toBe('active');
     expect(useStore.getState().runtimeStatuses.has('runtime-s1')).toBe(false);
-    expect(useStore.getState().cards.get('runtime-s1')?.action?.type).toBe('question');
+    expect(useStore.getState().cards.get('runtime-s1')?.action?.type).toBe('tool_start');
     await new Promise((r) => setTimeout(r, 5));
     expect(putMessage).not.toHaveBeenCalled();
   });

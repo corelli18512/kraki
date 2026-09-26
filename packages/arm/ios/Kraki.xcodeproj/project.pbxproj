@@ -178,6 +178,7 @@
 		A9998526CF744DB0A952EE90 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF54424FDF29034ACFC16B5A /* SettingsView.swift */; };
 		AC00BC8720774E96C977047D /* MacChatScrollView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F69BA2DA3E65AD7981E3F51 /* MacChatScrollView.swift */; };
 		AC24682A92524CE758701DD7 /* ChatPlaceholderView+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5626ED6495E1877F3D9A7F74 /* ChatPlaceholderView+macOS.swift */; };
+		AD9F79BAADA10A360A04AC36 /* DesignReferenceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29EA90BF55E0CBD5E9301D5A /* DesignReferenceUITests.swift */; };
 		ADFE4925FD96D710B7599863 /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83C975C5AAEF1EF5B8FBC6DA /* WebSocketClient.swift */; };
 		AED2EEE52613B3E5D0C8A542 /* MacAutomationDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5906FEF75EAE0DB111F19BD /* MacAutomationDriver.swift */; };
 		AF7953ABEEC72701AE83C546 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447FC84D6CEC57ADB1D93CA5 /* AppDelegate.swift */; };
@@ -343,6 +344,7 @@
 		2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiLogger.swift; sourceTree = "<group>"; };
 		27B142EE244DC79E4A704032 /* KrakiVoiceInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiVoiceInputTests.swift; sourceTree = "<group>"; };
 		28D15C4DAE8AB0534C9C6226 /* MacBubbleTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBubbleTestView.swift; sourceTree = "<group>"; };
+		29EA90BF55E0CBD5E9301D5A /* DesignReferenceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignReferenceUITests.swift; sourceTree = "<group>"; };
 		2ABD91DDEFD532C3C383BBDE /* CommandSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandSender.swift; sourceTree = "<group>"; };
 		2C0AE2F0350124712EAE0E17 /* PreferencesManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesManager.swift; sourceTree = "<group>"; };
 		2CF1D3D6CED61870261C4724 /* BubbleCatalogTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BubbleCatalogTestView.swift; sourceTree = "<group>"; };
@@ -859,6 +861,7 @@
 		E29D608922476083B8502B59 /* KrakiUITests */ = {
 			isa = PBXGroup;
 			children = (
+				29EA90BF55E0CBD5E9301D5A /* DesignReferenceUITests.swift */,
 				20350221F5A369C6D4F3440F /* NewSessionJourneyUITests.swift */,
 				D672B49ADE8CFF2012CD83AC /* QuestionE2EUITests.swift */,
 				F6612B64B8037EF4E603EB59 /* TabBarNavigationUITests.swift */,
@@ -1349,6 +1352,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AD9F79BAADA10A360A04AC36 /* DesignReferenceUITests.swift in Sources */,
 				6B74B16DDD9D6292517C76DC /* NewSessionJourneyUITests.swift in Sources */,
 				CA515D7F42DE4040A5A21C2E /* QuestionE2EUITests.swift in Sources */,
 				D7E3CD08B7DCB2E17937B051 /* TabBarNavigationUITests.swift in Sources */,

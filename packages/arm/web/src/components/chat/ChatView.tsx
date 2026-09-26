@@ -1,233 +1,301 @@
-import { memo, useRef, useMemo, useCallback, useEffect } from 'react';
-import { useParams } from 'react-router';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronUp, ChevronsDown } from 'lucide-react';
+import type { Attachment, ContentRef } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
-import { MessageBubble } from './MessageBubble';
-import { LiveAgentBubble } from './LiveAgentBubble';
-import { MessageInput } from './MessageInput';
-import { useScrollController } from '../../hooks/useScrollController';
+import { useOutbox, outbox } from '../../lib/chat/outbox';
+import { openQuestions, payloadOf, rowKey, seqOf, spineRows } from '../../lib/chat/spine';
 import { messageProvider } from '../../lib/message-provider';
-import { getSessionStatus, cardActionKey } from '../../lib/session-status';
-import type { ContentRef } from '@kraki/protocol';
+import { wsClient } from '../../lib/ws-client';
 import type { ChatMessage } from '../../types/store';
-import { projectSpineMessages } from '../../lib/turn-projection';
+import { Bubble, LIVE_KEY, rowSide, type BubbleContext, type ChatRow } from './Bubble';
+import { Composer, composerIntent, type ComposerHandle, type ComposerIntent } from './Composer';
+import type { PermissionDecision } from './ActionSlot';
+import { StepsModal } from './StepsModal';
+import { ChatScroller, type ChatScrollerHandle } from './ChatScroller';
+import './chat.css';
 
-const EMPTY_MESSAGES: ChatMessage[] = [];
+const EMPTY: ChatMessage[] = [];
+/** Older pages are requested this many seqs at a time. */
+const OLDER_PAGE = 60;
+/** Rows rendered on entry; revealing older rows grows it by a page. */
+const WINDOW_START = 60;
+const WINDOW_PAGE = 40;
 
-/** Extract seq from a message, returning 0 for non-sequenced messages. */
-function getSeq(m: ChatMessage): number {
-  return 'seq' in m ? (m as { seq?: number }).seq ?? 0 : 0;
-}
-
-function htmlArtifacts(message: ChatMessage): ContentRef[] {
-  const attachments = (message.payload as { attachments?: unknown[] }).attachments ?? [];
-  return attachments.filter((attachment): attachment is ContentRef =>
-    !!attachment && typeof attachment === 'object'
-    && (attachment as ContentRef).type === 'content_ref'
-    && (attachment as ContentRef).mimeType === 'text/html',
-  );
-}
-
-export const ChatView = memo(function ChatView({ onOpenArtifact }: { onOpenArtifact?: (artifact: ContentRef) => void }) {
-  const { sessionId } = useParams<{ sessionId: string }>();
-  const messages = useStore((s) => sessionId ? s.messages.get(sessionId) : undefined) ?? EMPTY_MESSAGES;
-  const session = useStore((s) => (sessionId ? s.sessions.get(sessionId) : undefined));
-  const card = useStore((s) => sessionId ? s.cards.get(sessionId) : undefined);
-  const sessionPreview = useStore((s) => sessionId ? s.sessionPreviews.get(sessionId) : undefined);
-  const storeUnread = useStore((s) => sessionId ? (s.unreadCount.get(sessionId) ?? 0) : 0);
-
-  // Scoped selectors — only re-render when THIS session's data changes
-  const deviceId = session?.deviceId;
-  const isDeviceOnline = useStore(
-    useCallback((s) => deviceId ? s.devices.get(deviceId)?.online ?? false : false, [deviceId]),
-  );
-  const runtimeStatus = useStore((s) => s.runtimeStatuses.get(sessionId));
-
-  // ── SPINE ─────────────────────────────────────────────
-  // Persistent, replayed bubbles rendered directly in seq order. Excludes the
-  // transient TRACE/activity axis (tool_start/tool_complete/agent_narration/
-  // active), which is shown only from the Steps popover.
-  const spine = useMemo(() => projectSpineMessages(messages), [messages]);
-  const turnArtifactsByBubbleSeq = useMemo(() => {
-    const artifacts = new Map<number, ContentRef[]>();
-    for (const msg of spine) {
-      if (msg.type !== 'agent_message' && msg.type !== 'turn_status' && msg.type !== 'interrupted_turn' && msg.type !== 'system_message') continue;
-      const refs = htmlArtifacts(msg);
-      if (refs.length > 0) artifacts.set(getSeq(msg), refs);
-    }
-    return artifacts;
-  }, [spine]);
-
-  // Derived human-facing status decides card visibility.
-  const cardAction = card?.action;
-  // What the live bubble's lower ACTION section shows — driven purely by what
-  // is in the slot, NOT by a generic "working" status:
-  //   • a running tool / concurrent batch (in-flight work), or
-  //   • a COMPLETED tool / RESOLVED prompt that is the most recent activity — the
-  //     tentacle retires it from the slot the instant narration resumes, so its
-  //     presence means "the latest thing that happened was this action", or
-  //   • an unresolved permission / question (a blocking human affordance).
-  // A decided permission / answered question therefore keeps the bubble pinned
-  // (showing its read-only outcome) only until the agent narrates again.
-  const actionLive =
-    cardAction?.type === 'tool_start' ||
-    cardAction?.type === 'tool_complete' ||
-    (cardAction?.type === 'tool_batch' && cardAction.payload.running > 0) ||
-    cardAction?.type === 'permission' ||
-    cardAction?.type === 'question';
-  const livePending =
-    (cardAction?.type === 'question' && cardAction.payload.answer === undefined && !cardAction.payload.cancelled) ||
-    (cardAction?.type === 'permission' && !cardAction.payload.decision)
-      ? 1
-      : 0;
-  const status = useMemo(
-    () => session ? getSessionStatus(session, livePending, sessionPreview?.type) : 'idle',
-    [session, livePending, sessionPreview?.type],
-  );
-  // The whole in-progress turn renders as ONE live agent bubble (LiveAgentBubble):
-  // its top part streams the draft narration, its darker bottom part carries the
-  // live status (Working…/Waiting) + a Steps entry + the CURRENT live action.
-  // It shows while the session is non-idle AND there is something live to show —
-  // streaming draft text OR a live action. The moment the concluding
-  // agent_message lands on the spine (the draft clears) and no action is live,
-  // this bubble drops and the concluded spine bubble takes over in place, so
-  // there is no card↔bubble morph and no lingering "answered" card.
-  const draft = card?.text ?? '';
-  // Compacting is page/session chrome, not a card owner. It must not make an
-  // empty card eligible or create a live bubble by itself. Existing real card
-  // content/actions may continue rendering independently while compacting.
-  const cardEligible = status === 'working' || status === 'pending';
-  const showLive = cardEligible && !!card && (draft.length > 0 || actionLive);
-
-  // First seq for prepend tracking (passed to scroll controller)
-  const firstSeq = useMemo(() => {
-    const seqs = spine.map(getSeq).filter(s => s > 0);
-    return seqs.length > 0 ? seqs[0] : 0;
-  }, [spine]);
-
-  // `idle` here is the message-level marker (last spine entry is an idle
-  // event), used by the scroll controller for the working→idle reposition. It
-  // is distinct from the derived `status`.
-  const sessionIdle = spine.length > 0 && spine[spine.length - 1].type === 'idle';
-
-  // Index (into spine) of the element to scroll to when entering an unread
-  // session. Priority: last user message (if idle) > last concluded agent
-  // bubble. A pending ask_user question now lives in the live bubble at the
-  // bottom (auto-followed by the scroll controller), so it needs no spine
-  // scroll target.
-  const scrollTargetIdx = useMemo(() => {
-    if (sessionIdle) {
-      for (let i = spine.length - 1; i >= 0; i--) {
-        const msg = spine[i];
-        if (msg.type === 'user_message' || msg.type === 'send_input') return i;
-      }
-    }
-    for (let i = spine.length - 1; i >= 0; i--) {
-      if (spine[i].type === 'agent_message' || spine[i].type === 'interrupted_turn' || spine[i].type === 'turn_status') return i;
-    }
-    return -1;
-  }, [spine, sessionIdle]);
-
-  // The scroll controller tracks content growth. Include the live draft bubble
-  // and card action so new narration deltas / tool steps drive auto-follow just
-  // like spine bubbles.
-  const scrollList = useMemo(
-    () => (card && showLive ? [...spine, { _draft: draft, _act: cardActionKey(card.action) } as unknown as ChatMessage] : spine),
-    [showLive, spine, card, draft],
-  );
-
-  // ── Scroll controller (all scroll logic lives here) ───
-
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  const { showScrollBtn, unreadCount, scrollToBottom, handleScroll, hasOlderMessages } = useScrollController(
-    scrollRef,
-    scrollList,
-    card?.text,
-    sessionId,
-    sessionIdle,
-    storeUnread,
-    firstSeq,
-  );
-
-  // ── Render ────────────────────────────────────────────
-
-  if (!sessionId || !session) {
-    return (
-      <div className="flex flex-1 items-center justify-center">
-        <div className="text-center">
-          <img src="/logo.png" alt="Kraki" className="mx-auto h-40 w-40 object-contain animate-logo-reveal" />
-          <p className="mt-4 text-sm text-text-muted animate-fade-up">Select a session to view</p>
-        </div>
-      </div>
-    );
+function lowestSeq(messages: ChatMessage[]): number {
+  let low = 0;
+  for (const m of messages) {
+    const s = seqOf(m);
+    if (Number.isInteger(s) && s > 0 && (low === 0 || s < low)) low = s;
   }
+  return low;
+}
+
+function highestSeq(messages: ChatMessage[]): number {
+  let high = 0;
+  for (const m of messages) {
+    const s = seqOf(m);
+    if (Number.isInteger(s) && s > high) high = s;
+  }
+  return high;
+}
+
+export interface ChatViewProps {
+  sessionId: string;
+  /** Space the floating header occupies over the list. */
+  topInset: number;
+  onOpenArtifact?: (artifact: ContentRef) => void;
+}
+
+export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArtifact }: ChatViewProps) {
+  const messages = useStore((s) => s.messages.get(sessionId)) ?? EMPTY;
+  const session = useStore((s) => s.sessions.get(sessionId));
+  const card = useStore((s) => s.cards.get(sessionId));
+  const mode = useStore((s) => s.sessionModes.get(sessionId) ?? 'discuss');
+  const runtime = useStore((s) => s.runtimeStatuses.get(sessionId));
+  const connected = useStore((s) => s.status === 'connected');
+  const deviceOnline = useStore((s) => (session ? s.devices.get(session.deviceId)?.online === true : false));
+  const loading = useStore((s) => s.loadingSessions.has(sessionId));
+  const allPending = useOutbox((s) => s.entries);
+  const pending = useMemo(
+    () => allPending.filter((e) => e.sessionId === sessionId).sort((a, b) => a.order - b.order),
+    [allPending, sessionId],
+  );
+
+  // ── Rows ──
+  const lastSeq = session?.lastSeq;
+  const maxSeq = highestSeq(messages);
+  const atHead = lastSeq === undefined || lastSeq <= 0 ? maxSeq > 0 : maxSeq >= lastSeq;
+  const pendingAnswerTo = useMemo(() => pending.flatMap((e) => (e.answerTo ? [e.answerTo] : [])), [pending]);
+  const answerKey = pendingAnswerTo.join(',');
+  const spine = useMemo(
+    () => spineRows(messages, pendingAnswerTo, atHead),
+    [messages, answerKey, atHead],
+  );
+  const questions = useMemo(
+    () => openQuestions(messages, pendingAnswerTo, atHead),
+    [messages, answerKey, atHead],
+  );
+
+  const sessionActive = session?.state === 'active' || session?.state === 'compacting' || runtime?.status === 'compacting';
+  const action = card?.action ?? null;
+  const actionLive = action?.type === 'tool_start' || action?.type === 'tool_complete'
+    || (action?.type === 'tool_batch' && action.payload.running > 0) || action?.type === 'permission';
+  const permissionOpen = action?.type === 'permission' && !action.payload.decision;
+  // While a turn runs, its live bubble stays from the first word or action
+  // until a spine bubble concludes the segment (a reply, a question, a
+  // terminal status) — not only while the card happens to have content.
+  const showLive = !!card && !card.closed && (sessionActive || permissionOpen)
+    && (card.text.length > 0 || actionLive || sessionActive);
+
+  // Row objects are reused while their record is unchanged, so memoized
+  // bubbles only re-render when their own content changes.
+  const rowCache = useRef(new Map<string, ChatRow>());
+  const rows = useMemo<ChatRow[]>(() => {
+    const cache = rowCache.current;
+    const nextCache = new Map<string, ChatRow>();
+    const out: ChatRow[] = spine.map((item) => {
+      const key = rowKey(item);
+      const cached = cache.get(key);
+      const row: ChatRow = cached && cached.kind === 'spine' && cached.item.message === item.message
+        && cached.item.question?.state === item.question?.state ? cached : { kind: 'spine', key, item };
+      nextCache.set(key, row);
+      return row;
+    });
+    rowCache.current = nextCache;
+    const landed = new Set(spine.map((i) => payloadOf(i.message).clientId).filter(Boolean));
+    for (const entry of pending) {
+      if (landed.has(entry.clientId)) continue;
+      out.push({ kind: 'pending', key: `pending:${entry.clientId}`, entry });
+    }
+    if (showLive && card) out.push({ kind: 'live', key: LIVE_KEY, card });
+    return out;
+  }, [spine, pending, showLive, card]);
+
+  // ── List state ──
+  const listRef = useRef<ChatScrollerHandle>(null);
+  const [atBottom, setAtBottom] = useState(true);
+  const atBottomRef = useRef(true);
+  const [unseen, setUnseen] = useState(false);
+  const [composerHeight, setComposerHeight] = useState(72);
+  const [upTarget, setUpTarget] = useState<string | null>(null);
+  const composerRef = useRef<ComposerHandle>(null);
+  const composerBox = useRef<HTMLDivElement>(null);
+  const [windowSize, setWindowSize] = useState(WINDOW_START);
+  const visibleRows = useMemo(() => rows.slice(Math.max(0, rows.length - windowSize)), [rows, windowSize]);
+  const hiddenAbove = rows.length - visibleRows.length;
+
+  // New session: fresh index space, open at the bottom.
+  useEffect(() => {
+    setWindowSize(WINDOW_START);
+    setUnseen(false);
+    setAtBottom(true);
+    atBottomRef.current = true;
+  }, [sessionId]);
+
+  // A reply that lands while the reader is away marks ↓ with a dot.
+  const lastAgentKey = useMemo(() => {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (rows[i].kind === 'spine' && rowSide(rows[i]) === 'agent') return rows[i].key;
+    }
+    return undefined;
+  }, [rows]);
+  const seenAgentKey = useRef(lastAgentKey);
+  useEffect(() => {
+    if (lastAgentKey && lastAgentKey !== seenAgentKey.current && !atBottomRef.current) setUnseen(true);
+    seenAgentKey.current = lastAgentKey;
+  }, [lastAgentKey]);
+
+  useEffect(() => {
+    const el = composerBox.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setComposerHeight(el.getBoundingClientRect().height));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const scrollToBottom = useCallback((smooth: boolean) => {
+    listRef.current?.scrollToBottom(smooth);
+    setUnseen(false);
+  }, []);
+
+  // Sending (a message, an answer, a choice) returns to the newest edge.
+  const afterSubmit = useCallback(() => {
+    requestAnimationFrame(() => scrollToBottom(true));
+  }, [scrollToBottom]);
+
+  // ── Older pages ──
+  const lowSeq = lowestSeq(messages);
+  const hasOlder = lowSeq > 1;
+  const loadOlder = useCallback(() => {
+    if (hiddenAbove > 0) {
+      setWindowSize((n) => n + WINDOW_PAGE);
+      return;
+    }
+    if (!hasOlder || messageProvider.isLoading(sessionId)) return;
+    const toSeq = lowSeq - 1;
+    setWindowSize((n) => n + WINDOW_PAGE);
+    void messageProvider.fetchRange(sessionId, Math.max(1, toSeq - OLDER_PAGE + 1), toSeq);
+  }, [hiddenAbove, hasOlder, lowSeq, sessionId]);
+
+  // ── ↑: the start of the nearest reply whose top is above the view ──
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const measureUp = useCallback(() => {
+    const above = listRef.current?.rowsAbove() ?? [];
+    const byKey = new Map(rowsRef.current.map((r) => [r.key, r]));
+    let target: string | null = null;
+    for (const key of above) {
+      const row = byKey.get(key);
+      if (row && rowSide(row) === 'agent') target = key;
+    }
+    setUpTarget(target);
+  }, []);
+  useEffect(() => { measureUp(); }, [visibleRows, measureUp]);
+
+  const showUp = rows.length > 0 && (upTarget !== null || hiddenAbove > 0 || hasOlder);
+  const goUp = () => {
+    if (upTarget) listRef.current?.scrollToRow(upTarget, true);
+    else {
+      loadOlder();
+      const first = visibleRows[0]?.key;
+      if (first) listRef.current?.scrollToRow(first, true);
+    }
+  };
+
+  // ── Actions ──
+  const onSend = useCallback((text: string, attachments: Attachment[] | undefined, intent: ComposerIntent) => {
+    const answerTo = intent === 'answerQuestion' ? questions.at(-1)?.id : undefined;
+    wsClient.sendInput(sessionId, text, { attachments, delivery: intent === 'steer' ? 'steer' : 'prompt', answerTo });
+    afterSubmit();
+  }, [sessionId, questions, afterSubmit]);
+
+  const [stepsFor, setStepsFor] = useState<{ seq: number | null } | null>(null);
+
+  const ctx = useMemo<BubbleContext>(() => ({
+    sessionId,
+    hueSeed: sessionId,
+    sessionMode: mode,
+    onAnswer: (questionId, choice) => {
+      wsClient.sendInput(sessionId, choice, { answerTo: questionId });
+      afterSubmit();
+    },
+    onPermission: (permissionId, toolName, decision: PermissionDecision) => {
+      wsClient.resolvePermission(sessionId, permissionId, toolName, decision);
+    },
+    onOpenSteps: (seq) => setStepsFor({ seq }),
+    onRetry: (clientId) => outbox.retry(clientId),
+    onDelete: (clientId) => { outbox.discard(clientId); },
+    onOpenArtifact,
+  }), [sessionId, mode, afterSubmit, onOpenArtifact]);
+
+  const intent = composerIntent(sessionActive, questions.length > 0);
+  const canAbort = sessionActive || showLive;
+  const reachable = connected && deviceOnline;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="relative flex-1">
-        <div
-          ref={scrollRef}
-          onScroll={handleScroll}
-          data-chat-scroll
-          className="absolute inset-0 overflow-y-auto px-3 py-4 sm:px-6"
-        >
-          <div className="mx-auto max-w-3xl space-y-3">
-            {hasOlderMessages && (
-              <div className="flex justify-center py-3">
-                <div className="h-5 w-5 animate-spin rounded-full border-2 border-kraki-500 border-t-transparent" />
-              </div>
-            )}
-            {spine.map((msg, idx) => (
-              <div key={`b-${getSeq(msg) || idx}-${msg.type}`} {...(idx === scrollTargetIdx ? { 'data-scroll-target': '' } : {})}>
-                <MessageBubble
-                  message={msg}
-                  agent={session.agent}
-                  sessionId={sessionId}
-                  turnArtifacts={turnArtifactsByBubbleSeq.get(getSeq(msg))}
-                  onOpenArtifact={onOpenArtifact}
-                />
-              </div>
-            ))}
-            {showLive && card && (
-              <LiveAgentBubble
-                sessionId={sessionId}
-                agent={session.agent}
-                card={card}
-              />
-            )}
-          </div>
-        </div>
-
-        {showScrollBtn && (
-          <button
-            onClick={scrollToBottom}
-            className="absolute right-4 bottom-4 flex items-center gap-1.5 rounded-full bg-surface-secondary px-3 py-1.5 shadow-lg border border-border-primary text-xs font-medium text-text-primary transition-all hover:bg-surface-tertiary active:scale-95"
-          >
-            {unreadCount > 0 && (
-              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-kraki-500 px-1 text-[9px] font-bold text-white">
-                {unreadCount}
-              </span>
-            )}
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-            </svg>
-          </button>
-        )}
-      </div>
-
-      {runtimeStatus?.status === 'compacting' && (
-        <div
-          className="border-t border-border-primary bg-surface-secondary/70 px-3 py-2 sm:px-6"
-          data-session-runtime-status="compacting"
-          role="status"
-        >
-          <div className="mx-auto flex max-w-3xl items-center gap-2 text-xs text-text-secondary">
-            <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-cyan-500" />
-            <span>Compacting context…</span>
-          </div>
+    <div className="kchat" data-session={sessionId}>
+      <ChatScroller
+        key={sessionId}
+        ref={listRef}
+        rows={visibleRows}
+        renderRow={(row: ChatRow) => <Bubble row={row} ctx={ctx} />}
+        topInset={topInset + 8}
+        bottomInset={composerHeight + 8}
+        header={(hiddenAbove > 0 || hasOlder) ? <div className="ktop-loader"><span className="kspinner" /></div> : null}
+        onAtBottomChange={(bottom) => {
+          atBottomRef.current = bottom;
+          setAtBottom(bottom);
+          if (bottom) {
+            setUnseen(false);
+            // Back at the newest edge: let the rendered window shrink again
+            // (history stays in memory; it is revealed again on the way up).
+            setTimeout(() => { if (atBottomRef.current) setWindowSize(WINDOW_START); }, 600);
+          }
+        }}
+        onNearTop={loadOlder}
+        onScroll={measureUp}
+      />
+      {rows.length === 0 && (
+        <div className="kchat-empty" style={{ paddingTop: topInset }}>
+          {loading ? <span className="kspinner" /> : <p>Send a message to start.</p>}
         </div>
       )}
-      {isDeviceOnline && <MessageInput sessionId={sessionId} />}
+
+      <div className="kjump" style={{ bottom: composerHeight + 8 }}>
+        <button
+          type="button"
+          className={`kround ${showUp ? 'is-visible' : ''} ${atBottom ? '' : 'is-raised'}`}
+          aria-label="Previous reply"
+          tabIndex={showUp ? 0 : -1}
+          onClick={goUp}
+        ><ChevronUp aria-hidden /></button>
+        <button
+          type="button"
+          className={`kround ${!atBottom && rows.length > 0 ? 'is-visible' : ''}`}
+          aria-label="Jump to latest"
+          tabIndex={!atBottom ? 0 : -1}
+          onClick={() => scrollToBottom(true)}
+        >
+          <ChevronsDown aria-hidden />
+          {unseen && <span className="kround-dot" aria-label="New reply" />}
+        </button>
+      </div>
+
+      <div className="kcomposer-dock" ref={composerBox}>
+        <Composer
+          ref={composerRef}
+          sessionId={sessionId}
+          intent={intent}
+          canAbort={canAbort}
+          reachable={reachable}
+          onSend={onSend}
+          onAbort={() => wsClient.abortSession(sessionId)}
+        />
+      </div>
+
+      {stepsFor && (
+        <StepsModal sessionId={sessionId} bubbleSeq={stepsFor.seq} onClose={() => setStepsFor(null)} />
+      )}
     </div>
   );
 });

@@ -1,118 +1,177 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router';
-import { BotMessageSquare, MonitorCloud, UserCog, Settings } from 'lucide-react';
-import { SessionList } from '../sessions/SessionList';
-import { DeviceList } from '../sessions/DeviceList';
+import { useMemo, useState } from 'react';
+import { useNavigate, useParams } from 'react-router';
+import { BotMessageSquare, Download, MonitorCloud, Plus, Search, Settings, UserCog, X } from 'lucide-react';
+import { useStore } from '../../hooks/useStore';
+import { useNarrow } from '../../hooks/useNarrow';
+import { SessionRow } from '../sessions/SessionRow';
+import { NewSessionDialog } from '../sessions/NewSessionDialog';
+import { ImportSessionDialog } from '../sessions/ImportSessionDialog';
 import { DeviceGrid } from '../devices/DeviceGrid';
 import { SettingsPanel } from './SettingsPanel';
 import { ProfileBar } from './ProfileBar';
-import { useStore } from '../../hooks/useStore';
+import './sidebar.css';
+
+function Brand() {
+  return (
+    <span className="ksb-brand">
+      <span className="ksb-wordmark">KRAKI</span>
+      <span className="ksb-preview">Preview</span>
+    </span>
+  );
+}
+
+function useSortedSessions(query: string) {
+  const sessions = useStore((s) => s.sessions);
+  const pinned = useStore((s) => s.pinnedSessions);
+  const previews = useStore((s) => s.sessionPreviews);
+  return useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return [...sessions.values()]
+      .filter((s) => {
+        if (!q) return true;
+        const hay = `${s.title ?? ''} ${s.autoTitle ?? ''} ${s.deviceName ?? ''} ${previews.get(s.id)?.text ?? ''}`.toLowerCase();
+        return hay.includes(q);
+      })
+      .sort((a, b) => {
+        const pa = pinned.has(a.id) ? 0 : 1;
+        const pb = pinned.has(b.id) ? 0 : 1;
+        if (pa !== pb) return pa - pb;
+        const ta = previews.get(a.id)?.timestamp ?? '';
+        const tb = previews.get(b.id)?.timestamp ?? '';
+        if (ta !== tb) return tb.localeCompare(ta);
+        return a.id.localeCompare(b.id);
+      });
+  }, [sessions, pinned, previews, query]);
+}
+
+function EmptySessions({ onNew, onImport }: { onNew: () => void; onImport: () => void }) {
+  const hasTentacle = useStore((s) => [...s.devices.values()].some((d) => d.role === 'tentacle' && d.online));
+  return (
+    <div className="ksb-empty">
+      <BotMessageSquare className="ksb-empty-icon" strokeWidth={1.5} />
+      <p className="ksb-empty-title">No sessions yet</p>
+      <p className="ksb-empty-hint">{hasTentacle ? 'Start an agent on your connected device.' : 'Connect a device with the Kraki CLI to get started.'}</p>
+      {hasTentacle ? (
+        <div className="ksb-empty-actions">
+          <button type="button" className="ksb-button is-primary" onClick={onNew}>New Session</button>
+          <button type="button" className="ksb-button" onClick={onImport}><Download /> Import</button>
+        </div>
+      ) : <code className="ksb-code">npx @kraki/tentacle</code>}
+    </div>
+  );
+}
 
 export function Sidebar() {
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [mobileTab, setMobileTab] = useState<'agents' | 'devices' | 'settings'>('agents');
+  const narrow = useNarrow();
+  const { sessionId } = useParams<{ sessionId: string }>();
+  const pinned = useStore((s) => s.pinnedSessions);
   const status = useStore((s) => s.status);
-  const reconnectAttempts = useStore((s) => s.reconnectAttempts);
-  const isReconnecting = (status === 'disconnected' || status === 'connecting') && reconnectAttempts > 0;
+  const reconnecting = useStore((s) => (s.status === 'disconnected' || s.status === 'connecting') && s.reconnectAttempts > 0);
+  const [query, setQuery] = useState('');
+  const [newOpen, setNewOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [plusMenu, setPlusMenu] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [tab, setTab] = useState<'sessions' | 'devices' | 'settings'>('sessions');
+  const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
   const navigate = useNavigate();
+  const sorted = useSortedSessions(query);
+  const total = useStore((s) => s.sessions.size);
 
-  return (
+  const list = total === 0
+    ? <EmptySessions onNew={() => setNewOpen(true)} onImport={() => setImportOpen(true)} />
+    : (
+      <div className="ksb-list" role="list">
+        {sorted.map((session) => (
+          <SessionRow
+            key={session.id}
+            session={session}
+            selected={session.id === sessionId}
+            pinned={pinned.has(session.id)}
+            narrow={narrow}
+            openSwipeId={openSwipeId}
+            setOpenSwipeId={setOpenSwipeId}
+          />
+        ))}
+        {sorted.length === 0 && <p className="ksb-noresults">No sessions match “{query}”.</p>}
+      </div>
+    );
+
+  const dialogs = (
     <>
-      <div className="flex h-full flex-col">
-        {/* Brand header */}
-        <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border-primary px-4">
-          <img src="/logo.png" alt="Kraki" className="h-6 w-6 object-contain" />
-          <span className="font-['JetBrains_Mono'] text-[15px] font-extrabold tracking-[0.15em] text-text-primary pt-[2px]">
-            <span style={{ color: '#00c9a7' }}>K</span>
-            <span style={{ color: '#00b4d8' }}>R</span>
-            <span style={{ color: '#ea6046' }}>A</span>
-            <span style={{ color: '#0891b2' }}>K</span>
-            <span style={{ color: '#ea6046' }}>I</span>
-          </span>
-          <span className="rounded-full bg-kraki-500/15 px-2 py-0.5 text-[10px] font-semibold text-kraki-600 dark:text-kraki-400">Preview</span>
-          {isReconnecting && (
-            <div className="flex items-center gap-1.5" title={`Reconnecting (attempt ${reconnectAttempts})`}>
-              <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-amber-500 border-t-transparent" />
-            </div>
-          )}
-          {/* Desktop only: settings icon */}
-          <button
-            onClick={() => setSettingsOpen(true)}
-            title="Settings"
-            aria-label="Settings"
-            className="group ml-auto hidden rounded-md p-1.5 text-text-muted transition-all hover:bg-surface-tertiary hover:text-text-primary active:scale-90 md:block"
-          >
-            <Settings
-              className="h-4 w-4 transition-transform duration-300 group-hover:rotate-90"
-              strokeWidth={1.5}
-            />
-          </button>
-        </div>
+      <NewSessionDialog open={newOpen} onClose={() => setNewOpen(false)} />
+      <ImportSessionDialog open={importOpen} onClose={() => setImportOpen(false)} />
+    </>
+  );
 
-        {/* Scrollable content */}
-        <div className="min-h-0 flex-1 flex flex-col">
-          {/* Desktop: always show agents */}
-          <div className="hidden min-h-0 flex-1 overflow-y-auto md:block">
-            <DeviceList />
-            <SessionList />
-          </div>
-          {/* Mobile: tab content */}
-          <div className="min-h-0 flex-1 flex flex-col md:hidden">
-            {mobileTab === 'agents' ? (
-              <div className="min-h-0 flex-1 overflow-y-auto">
-                <SessionList />
-              </div>
-            ) : mobileTab === 'devices' ? (
-              <DeviceGrid />
-            ) : (
-              <div className="min-h-0 flex-1 overflow-y-auto p-4">
-                <div className="-mx-4 -mt-4 mb-4">
-                  <ProfileBar />
-                </div>
-                <SettingsPanel open={true} onClose={() => setMobileTab('agents')} inline />
+  if (!narrow) {
+    return (
+      <div className="ksb is-wide">
+        <div className="ksb-top">
+          <label className="ksb-search">
+            <Search aria-hidden />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" aria-label="Search sessions" />
+            {query && <button type="button" aria-label="Clear search" onClick={() => setQuery('')}><X /></button>}
+          </label>
+          <div className="ksb-plus-wrap">
+            <button type="button" className="ksb-icon" aria-label="New session" aria-haspopup="menu" onClick={() => setPlusMenu((v) => !v)}><Plus /></button>
+            {plusMenu && (
+              <div className="ksb-plus-menu" role="menu" onMouseLeave={() => setPlusMenu(false)}>
+                <button type="button" role="menuitem" onClick={() => { setPlusMenu(false); setNewOpen(true); }}><Plus /> New Session</button>
+                <button type="button" role="menuitem" onClick={() => { setPlusMenu(false); setImportOpen(true); }}><Download /> Import Session…</button>
               </div>
             )}
           </div>
         </div>
-
-        {/* Profile bar — desktop only */}
-        <div className="hidden md:block">
-          <ProfileBar />
+        {reconnecting && <div className="ksb-status"><span className="kspinner ksb-spin" /> Reconnecting…</div>}
+        {status === 'connecting' && !reconnecting && total === 0 && <div className="ksb-status"><span className="kspinner ksb-spin" /> Connecting…</div>}
+        <div className="ksb-scroll">{list}</div>
+        <div className="ksb-footer">
+          <ProfileBar compact />
+          <button type="button" className="ksb-icon" aria-label="Devices" title="Devices" onClick={() => navigate('/devices')}><MonitorCloud /></button>
+          <button type="button" className="ksb-icon" aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}><Settings /></button>
         </div>
-
-        {/* Mobile bottom tab bar */}
-        <nav className="flex shrink-0 border-t border-border-primary pb-[env(safe-area-inset-bottom)] md:hidden">
-          <button
-            onClick={() => setMobileTab('agents')}
-            className={`flex flex-1 flex-col items-center gap-0.5 py-2 ${
-              mobileTab === 'agents' ? 'text-kraki-500' : 'text-text-muted'
-            }`}
-          >
-            <BotMessageSquare className="h-5 w-5" strokeWidth={1.5} />
-            <span className="text-[10px] font-medium">Sessions</span>
-          </button>
-          <button
-            onClick={() => setMobileTab('devices')}
-            className={`flex flex-1 flex-col items-center gap-0.5 py-2 ${
-              mobileTab === 'devices' ? 'text-kraki-500' : 'text-text-muted'
-            }`}
-          >
-            <MonitorCloud className="h-5 w-5" strokeWidth={1.5} />
-            <span className="text-[10px] font-medium">Devices</span>
-          </button>
-          <button
-            onClick={() => setMobileTab('settings')}
-            className={`flex flex-1 flex-col items-center gap-0.5 py-2 ${
-              mobileTab === 'settings' ? 'text-kraki-500' : 'text-text-muted'
-            }`}
-          >
-            <UserCog className="h-5 w-5" strokeWidth={1.5} />
-            <span className="text-[10px] font-medium">Settings</span>
-          </button>
-        </nav>
+        <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        {dialogs}
       </div>
-      {/* Desktop settings panel (slide-over) */}
-      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} className="hidden md:block" />
-    </>
+    );
+  }
+
+  return (
+    <div className="ksb is-narrow">
+      {tab === 'sessions' && (
+        <>
+          <div className="ksb-hero">
+            <Brand />
+            {reconnecting && <span className="kspinner ksb-spin" aria-label="Reconnecting" />}
+          </div>
+          <div className="ksb-scroll">{list}<div className="ksb-tabbar-space" /></div>
+        </>
+      )}
+      {tab === 'devices' && <div className="ksb-scroll ksb-pane"><DeviceGrid /><div className="ksb-tabbar-space" /></div>}
+      {tab === 'settings' && (
+        <div className="ksb-scroll ksb-pane">
+          <ProfileBar />
+          <div className="p-4"><SettingsPanel open onClose={() => setTab('sessions')} inline /></div>
+          <div className="ksb-tabbar-space" />
+        </div>
+      )}
+      <nav className="ksb-tabbar" aria-label="Sections">
+        <div className="ksb-tabs">
+          {([
+            ['sessions', 'Sessions', BotMessageSquare],
+            ['devices', 'Devices', MonitorCloud],
+            ['settings', 'Settings', UserCog],
+          ] as const).map(([id, label, Icon]) => (
+            <button key={id} type="button" className={`ksb-tab ${tab === id ? 'is-active' : ''}`} aria-current={tab === id ? 'page' : undefined} onClick={() => setTab(id)}>
+              <Icon strokeWidth={1.8} />
+              <span>{label}</span>
+            </button>
+          ))}
+        </div>
+        <button type="button" className="ksb-fab" aria-label="New session" onClick={() => setNewOpen(true)}><Plus /></button>
+      </nav>
+      {dialogs}
+    </div>
   );
 }

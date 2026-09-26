@@ -542,31 +542,24 @@ describe('KrakiWSClient', () => {
       expect(action?.type === 'permission' ? action.payload.id : undefined).toBe('perm-abc');
     });
 
-    it('routes question card action and stores it', async () => {
+    it('routes a question as a spine agent_message (never card state)', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
+      useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'dev-1', deviceName: 'Mac', agent: 'pi', state: 'active', messageCount: 1 });
 
       receiveInner({
-        type: 'card_action',
+        type: 'agent_message',
         deviceId: 'dev-1',
         seq: 4,
         timestamp: new Date().toISOString(),
         sessionId: 'sess-1',
-        payload: {
-          action: {
-            type: 'question',
-            payload: {
-              id: 'q-abc',
-              question: 'Which framework?',
-              choices: ['React', 'Vue'],
-            },
-          },
-        },
+        payload: { content: 'Two options.', question: { id: 'q-abc', text: 'Which framework?', choices: ['React', 'Vue'] } },
       });
 
-      const action = useStore.getState().cards.get('sess-1')?.action;
-      expect(action?.type).toBe('question');
-      expect(action?.type === 'question' ? action.payload.choices : undefined).toEqual(['React', 'Vue']);
+      const last = useStore.getState().messages.get('sess-1')?.at(-1) as { type: string; payload: { question?: { id: string } } } | undefined;
+      expect(last?.type).toBe('agent_message');
+      expect(last?.payload.question?.id).toBe('q-abc');
+      expect(useStore.getState().cards.get('sess-1')?.action ?? null).toBeNull();
     });
 
     it('routes idle message and updates session state', async () => {
@@ -615,7 +608,7 @@ describe('KrakiWSClient', () => {
 
     it('sendInput carries active-turn steer delivery', async () => {
       const client = await setupClient();
-      client.sendInput('sess-1', 'Change direction', undefined, 'steer');
+      client.sendInput('sess-1', 'Change direction', { delivery: 'steer' });
 
       const sent = await waitForDecodedSend(lastWsInstance);
       expect(sent).toMatchObject({
@@ -628,7 +621,7 @@ describe('KrakiWSClient', () => {
     it('approve sends correct message', async () => {
       const client = await setupClient();
 
-      client.approve('perm-1', 'sess-1');
+      client.resolvePermission('sess-1', 'perm-1', 'shell', 'approve');
 
       const sent = await waitForDecodedSend(lastWsInstance);
       expect(sent.type).toBe('approve');
@@ -638,7 +631,7 @@ describe('KrakiWSClient', () => {
     it('deny sends correct message', async () => {
       const client = await setupClient();
 
-      client.deny('perm-1', 'sess-1');
+      client.resolvePermission('sess-1', 'perm-1', 'shell', 'deny');
 
       const sent = await waitForDecodedSend(lastWsInstance);
       expect(sent.type).toBe('deny');
@@ -647,21 +640,21 @@ describe('KrakiWSClient', () => {
     it('alwaysAllow sends correct message', async () => {
       const client = await setupClient();
 
-      client.alwaysAllow('perm-1', 'sess-1');
+      client.resolvePermission('sess-1', 'perm-1', 'shell', 'always_allow');
 
       const sent = await waitForDecodedSend(lastWsInstance);
       expect(sent.type).toBe('always_allow');
     });
 
-    it('answer sends correct message', async () => {
+    it('an answer is a message carrying answerTo', async () => {
       const client = await setupClient();
 
-      client.answer('q-1', 'sess-1', 'A');
+      client.sendInput('sess-1', 'A', { answerTo: 'q-1' });
 
       const sent = await waitForDecodedSend(lastWsInstance);
-      expect(sent.type).toBe('answer');
-      expect(sent.payload.questionId).toBe('q-1');
-      expect(sent.payload.answer).toBe('A');
+      expect(sent.type).toBe('send_input');
+      expect(sent.payload).toMatchObject({ text: 'A', answerTo: 'q-1' });
+      expect(sent.payload.delivery).toBeUndefined();
     });
 
     it('manual unread suppresses automatic read until an explicit read', async () => {
@@ -1104,10 +1097,11 @@ describe('KrakiWSClient', () => {
       expect(payload.requestId).toBeTruthy();
       expect(payload.targetDeviceId).toBe('dev-tent');
       expect(payload.model).toBe('gpt-4.1');
-      expect(payload.prompt).toBe('Hello');
+      // The first prompt is sent as a message once the session exists.
+      expect(payload.prompt).toBeUndefined();
     });
 
-    it('inserts initial prompt as user message on session_created with matching requestId', async () => {
+    it('sends the initial prompt as a message once session_created arrives', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
 
@@ -1127,10 +1121,9 @@ describe('KrakiWSClient', () => {
         payload: { agent: 'copilot', model: 'gpt-4.1', requestId },
       });
 
-      const messages = useStore.getState().messages.get('new-sess-1') ?? [];
-      const userMsg = messages.find((m: Record<string, unknown>) => m.type === 'user_message');
-      expect(userMsg).toBeTruthy();
-      expect((userMsg as unknown as { payload: { content: string } }).payload.content).toBe('Fix the bug');
+      await new Promise((r) => setTimeout(r, 20));
+      const { outbox } = await import('./chat/outbox');
+      expect(outbox.forSession('new-sess-1').map((e) => e.text)).toEqual(['Fix the bug']);
     });
 
     it('does not insert prompt for session_created without matching requestId', async () => {

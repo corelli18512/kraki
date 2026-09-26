@@ -10,25 +10,20 @@ function session(over: Partial<SessionSummary> = {}): SessionSummary {
   } as SessionSummary;
 }
 
-function cardMap(entries: Array<{ sessionId: string; kind: 'question' | 'permission' }>): Map<string, SessionCard> {
+function cardMap(entries: Array<{ sessionId: string; decided?: boolean }>): Map<string, SessionCard> {
   const m = new Map<string, SessionCard>();
   for (const e of entries) {
     m.set(e.sessionId, {
       text: '',
-      action: e.kind === 'question'
-        ? { type: 'question', payload: { id: `q-${e.sessionId}`, question: 'q' } }
-        : { type: 'permission', payload: { id: `p-${e.sessionId}`, toolName: 'shell', args: {}, description: 'Run shell' } },
+      action: { type: 'permission', payload: { id: `p-${e.sessionId}`, toolName: 'shell', args: {}, description: 'Run shell', ...(e.decided && { decision: 'approve' }) } } as SessionCard['action'],
     });
   }
   return m;
 }
 
 describe('countPendingQuestions', () => {
-  it('counts only questions for the given session', () => {
-    const m = cardMap([
-      { sessionId: 's1', kind: 'question' },
-      { sessionId: 's2', kind: 'permission' },
-    ]);
+  it('counts an unresolved permission of the given session (questions are on the spine)', () => {
+    const m = cardMap([{ sessionId: 's1' }, { sessionId: 's2', decided: true }]);
     expect(countPendingQuestions('s1', m)).toBe(1);
     expect(countPendingQuestions('s2', m)).toBe(0);
     expect(countPendingQuestions('s3', m)).toBe(0);

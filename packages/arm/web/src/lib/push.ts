@@ -62,7 +62,7 @@ export async function subscribeToPush(vapidPublicKey: string): Promise<string | 
     // Subscribe
     const subscription = await registration.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: vapidKeyBytes,
+      applicationServerKey: vapidKeyBytes as Uint8Array<ArrayBuffer>,
     });
 
     const token = JSON.stringify(subscription.toJSON());

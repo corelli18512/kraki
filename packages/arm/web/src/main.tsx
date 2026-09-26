@@ -6,6 +6,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { SessionPage } from './pages/SessionPage';
 import { DevicesPage } from './pages/DevicesPage';
 import { useTheme } from './hooks/useTheme';
+import { trackVisualViewport } from './lib/visual-viewport';
 import './index.css';
 
 // Self-service channel switch: ?channel=beta or ?channel=stable
@@ -20,6 +21,8 @@ import './index.css';
     window.location.replace(window.location.pathname + (clean ? `?${clean}` : ''));
   }
 })();
+
+trackVisualViewport();
 
 function Root() {
   useTheme();

@@ -74,7 +74,7 @@ async function setup(page: Page, server: MockRelayServer): Promise<WebSocket> {
     },
   });
 
-  await expect(page.locator('button[title="Import local session"]').first()).toBeVisible({ timeout: 8000 });
+  await expect(page.getByRole('button', { name: 'New session' }).first()).toBeVisible({ timeout: 8000 });
   return ws;
 }
 
@@ -86,7 +86,9 @@ async function setup(page: Page, server: MockRelayServer): Promise<WebSocket> {
  * short delay to simulate the tentacle responding.
  */
 async function openImportAndLoad(page: Page, ws: WebSocket, server: MockRelayServer): Promise<void> {
-  await page.locator('button[title="Import local session"]').first().click();
+  // Import lives in the sidebar's + menu (as on the Mac).
+  await page.getByRole('button', { name: 'New session' }).first().click();
+  await page.getByRole('menuitem', { name: /Import Session/ }).click();
   await expect(page.getByRole('dialog')).toBeVisible({ timeout: 3000 });
 
   // Push sessions from server (simulates tentacle response)
@@ -106,16 +108,11 @@ test.describe('Import Session Feature', () => {
   test('shows import button, opens dialog with loading, renders tree', async ({ page }) => {
     const ws = await setup(page, server);
 
-    // Screenshot 1: session list with import button visible
-    await page.screenshot({ path: 'e2e-1-session-list.png' });
-
-    // Open dialog — shows loading
-    await page.locator('button[title="Import local session"]').first().click();
+    // Open dialog (sidebar + menu) — shows loading
+    await page.getByRole('button', { name: 'New session' }).first().click();
+    await page.getByRole('menuitem', { name: /Import Session/ }).click();
     await expect(page.getByRole('dialog')).toBeVisible({ timeout: 3000 });
     await expect(page.getByRole('dialog').getByText('Scanning local sessions')).toBeVisible({ timeout: 2000 });
-
-    // Screenshot 2: loading state
-    await page.screenshot({ path: 'e2e-2-import-loading.png' });
 
     // Push sessions from server
     server.sendMessage(ws, {
@@ -128,16 +125,10 @@ test.describe('Import Session Feature', () => {
     await expect(dialog.getByText('kraki')).toBeVisible();
     await expect(dialog.getByText('6 local sessions')).toBeVisible();
 
-    // Screenshot 3: tree view with folder groups
-    await page.screenshot({ path: 'e2e-3-import-tree.png' });
-
     // Expand hermit folder
     await dialog.getByText('hermit').first().click();
     await expect(dialog.getByText('Set Up Playwright E2E Tests')).toBeVisible({ timeout: 3000 });
     await expect(dialog.getByText('Fix auth token refresh')).toBeVisible();
-
-    // Screenshot 4: expanded folder with sessions
-    await page.screenshot({ path: 'e2e-4-expanded-folder.png' });
   });
 
   test('search filters sessions across folders', async ({ page }) => {
@@ -147,9 +138,6 @@ test.describe('Import Session Feature', () => {
     // Type search
     await page.getByPlaceholder('Search sessions…').fill('kraki');
     await expect(page.getByRole('dialog').getByText('2 of 6')).toBeVisible({ timeout: 3000 });
-
-    // Screenshot 5: filtered results
-    await page.screenshot({ path: 'e2e-5-search-filtered.png' });
   });
 
   test('import session: spinner then success', async ({ page }) => {
@@ -161,9 +149,6 @@ test.describe('Import Session Feature', () => {
     await expect(page.getByRole('dialog').getByText('Set Up Playwright E2E Tests')).toBeVisible({ timeout: 3000 });
     await page.getByRole('dialog').locator('button[title="Import session"]').first().click();
 
-    // Screenshot 6: spinner on import button
-    await page.screenshot({ path: 'e2e-6-import-spinner.png' });
-
     // Simulate session_created from tentacle (broadcast, no encryption)
     server.sendMessage(ws, {
       type: 'session_created',
@@ -174,14 +159,8 @@ test.describe('Import Session Feature', () => {
     // Wait for session to appear in store → checkmark replaces spinner
     await page.waitForTimeout(600);
 
-    // Screenshot 7: checkmark on imported session
-    await page.screenshot({ path: 'e2e-7-import-success.png' });
-
     // Close dialog
     await page.keyboard.press('Escape');
     await page.waitForTimeout(300);
-
-    // Screenshot 8: imported session visible in sidebar
-    await page.screenshot({ path: 'e2e-8-imported-in-list.png' });
   });
 });

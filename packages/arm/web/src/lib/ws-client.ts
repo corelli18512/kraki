@@ -1,4 +1,5 @@
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
+import { outbox } from './chat/outbox';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
 import { KrakiTransport, type MessageHandler } from './transport';
@@ -54,6 +55,10 @@ export class KrakiWSClient {
   }
 
   constructor(url?: string) {
+    outbox.configure({
+      send: (msg) => this.transmit(msg),
+      isDeliveryPathUp: (sessionId) => this.isDeliveryPathUp(sessionId),
+    });
     const keyStore = createAppKeyStore();
     this.encryption = new EncryptionHandler(keyStore);
     this.subscription = new SessionSubscriptionController({
@@ -289,13 +294,30 @@ export class KrakiWSClient {
     });
   }
 
+  /** Send a message (optimistic bubble, delivery states — see `outbox`).
+   *  Answering a question is sending a message with `answerTo`. */
   sendInput(
     sessionId: string,
     text: string,
-    attachments?: import('@kraki/protocol').Attachment[],
-    delivery?: 'prompt' | 'steer',
-  ) {
-    commands.sendInput(sessionId, text, (msg) => this.sendEncrypted(msg), attachments, delivery);
+    opts: { attachments?: import('@kraki/protocol').Attachment[]; delivery?: 'prompt' | 'steer'; answerTo?: string } = {},
+  ): string {
+    const clientId = outbox.send(sessionId, text, opts);
+    getStore().setSessionPreview(sessionId, { text: text.slice(0, 80), type: 'user', timestamp: new Date().toISOString() });
+    return clientId;
+  }
+
+  /** Hand a consumer message to transport; resolves false if it could not be
+   *  encrypted/routed. */
+  private transmit(msg: Record<string, unknown>): Promise<boolean> {
+    return new Promise((resolve) => this.sendEncrypted(msg, (seq) => resolve(seq !== null)));
+  }
+
+  /** Relay connected and the session's device online (outbox timing). */
+  private isDeliveryPathUp(sessionId: string): boolean {
+    const store = getStore();
+    if (store.status !== 'connected') return false;
+    const deviceId = store.sessions.get(sessionId)?.deviceId;
+    return !!deviceId && store.devices.get(deviceId)?.online === true;
   }
 
   /**
@@ -317,61 +339,49 @@ export class KrakiWSClient {
     this.attachmentPulls.request(sessionId, ref);
   }
 
-  approve(permissionId: string, sessionId: string) {
-    this.optimisticPermission(permissionId, sessionId, () =>
-      commands.approve(permissionId, sessionId, (msg) => this.sendEncrypted(msg, (seq) =>
-        this.registerRollback(seq, sessionId))),
-    );
-  }
-
-  deny(permissionId: string, sessionId: string) {
-    this.optimisticPermission(permissionId, sessionId, () =>
-      commands.deny(permissionId, sessionId, (msg) => this.sendEncrypted(msg, (seq) =>
-        this.registerRollback(seq, sessionId))),
-    );
-  }
-
-  alwaysAllow(permissionId: string, sessionId: string, toolKind?: string) {
-    this.optimisticPermission(permissionId, sessionId, () =>
-      commands.alwaysAllow(permissionId, sessionId, (msg) => this.sendEncrypted(msg, (seq) =>
-        this.registerRollback(seq, sessionId)), toolKind),
-    );
-  }
-
-  answer(questionId: string, sessionId: string, answerText: string, wasFreeform = false) {
-    commands.answer(questionId, sessionId, answerText, (msg) => this.sendEncrypted(msg, (seq) =>
-      this.registerRollback(seq, sessionId)), wasFreeform);
-  }
-
-  /** Snapshot the permission before an optimistic resolve, so a failed pulse
-   *  send (no ack within the timeout) can roll the UI back and show an error. */
-  private optimisticPermission(permissionId: string, sessionId: string, apply: () => void) {
+  /** Resolve the live permission: the decision shows at once (read-only,
+   *  "Sending…"); Tentacle's resolved card replaces it. Without confirmation
+   *  while the delivery path is up it reverts with an explanation. "execute"
+   *  switches a discuss session to Execute, then approves (as on iOS/Mac). */
+  resolvePermission(sessionId: string, permissionId: string, toolName: string | undefined,
+                    decision: 'approve' | 'always_allow' | 'deny' | 'execute') {
     const store = getStore();
-    const snapshot = store.pendingPermissions?.get?.(permissionId);
-    this.rollbackSnapshots.set(sessionId + '/' + permissionId, () => {
-      // Restore the permission card as unresolved + surface an error.
-      if (snapshot) store.addPermission?.(snapshot);
-      store.setLastError?.('Action could not be delivered — tap to retry.');
-    });
-    apply();
-  }
-
-  private rollbackSnapshots = new Map<string, () => void>();
-
-  /** Register the most-recent optimistic action's rollback under its pulse seq.
-   *  On ack (resolvePulseAcked) the timer is cleared; on timeout it fires. */
-  private registerRollback(seq: bigint | null, _sessionId: string) {
-    if (seq === null) {
-      // Not pulse-routed (legacy path or no target) — clear any pending snapshot.
-      this.rollbackSnapshots.clear();
-      return;
+    const current = store.cards.get(sessionId)?.action;
+    if (current?.type === 'permission' && current.payload.id === permissionId) {
+      const shown = decision === 'execute' ? 'approve' : decision;
+      store.setCardAction(sessionId, {
+        ...current,
+        payload: { ...current.payload, decision: shown, localPending: true, localError: undefined } as unknown as typeof current.payload,
+      });
     }
-    const entries = [...this.rollbackSnapshots.values()];
-    this.rollbackSnapshots.clear();
-    this.cmdState.trackPulseSend(seq, () => {
-      for (const rb of entries) rb();
-    });
+    const send = (msg: Record<string, unknown>) => this.sendEncrypted(msg);
+    if (decision === 'execute') {
+      commands.setSessionMode(sessionId, 'execute', send, this.cmdState);
+      commands.approve(permissionId, sessionId, send);
+    } else if (decision === 'approve') {
+      commands.approve(permissionId, sessionId, send);
+    } else if (decision === 'deny') {
+      commands.deny(permissionId, sessionId, send);
+    } else {
+      commands.alwaysAllow(permissionId, sessionId, send, toolName);
+    }
+    const started = Date.now();
+    const check = () => {
+      const action = getStore().cards.get(sessionId)?.action;
+      const stillLocal = action?.type === 'permission' && action.payload.id === permissionId
+        && (action.payload as { localPending?: boolean }).localPending;
+      if (!stillLocal) return;
+      if (Date.now() - started < 20_000 || !this.isDeliveryPathUp(sessionId)) { setTimeout(check, 2_000); return; }
+      const { decision: _d, localPending: _l, ...rest } = action.payload as Record<string, unknown>;
+      getStore().setCardAction(sessionId, {
+        ...action,
+        payload: { ...rest, localError: 'Not confirmed by the agent. Try again.' } as unknown as typeof action.payload,
+      });
+    };
+    setTimeout(check, 2_000);
   }
+
+
 
   killSession(sessionId: string) {
     commands.killSession(sessionId, (msg) => this.sendEncrypted(msg));
@@ -542,7 +552,7 @@ export class KrakiWSClient {
       // question/permission can never leave a stale `type:'question'` preview
       // pinning the sidebar on a phantom "waiting" badge (persisted to
       // localStorage, so it survived reloads too).
-      const tsRecord = ts as Record<string, unknown>;
+      const tsRecord = ts as unknown as Record<string, unknown>;
       const preview = tsRecord.preview as { text: string; type: string; timestamp: string } | undefined;
       if (preview?.text) {
         store.setSessionPreview(ts.id, { text: preview.text, type: preview.type, timestamp: preview.timestamp });
@@ -640,7 +650,7 @@ export class KrakiWSClient {
 
     // If no session has a preview, we can't determine recency — load all.
     const hasPreviewTimestamps = sessions.some(ts => {
-      const p = (ts as Record<string, unknown>).preview as { timestamp?: string } | undefined;
+      const p = (ts as unknown as Record<string, unknown>).preview as { timestamp?: string } | undefined;
       return !!p?.timestamp;
     });
 
@@ -661,7 +671,7 @@ export class KrakiWSClient {
 
     for (const ts of sessions) {
       if (ts.lastSeq <= 0) continue;
-      const tsRecord = ts as Record<string, unknown>;
+      const tsRecord = ts as unknown as Record<string, unknown>;
       const preview = tsRecord.preview as { timestamp?: string } | undefined;
       const previewTs = preview?.timestamp ? new Date(preview.timestamp).getTime() : 0;
 
@@ -755,7 +765,7 @@ export class KrakiWSClient {
 
   private handleMessage(msg: Message) {
     // Handle ping/pong keepalive — not in typed Message union
-    const rawType = (msg as Record<string, unknown>).type;
+    const rawType = (msg as unknown as Record<string, unknown>).type;
     if (rawType === 'pong') return;
     if (rawType === 'ping') {
       // Reply with pong so the relay's stale-connection detector (30s no-pong
@@ -777,7 +787,7 @@ export class KrakiWSClient {
           this.pulse.onFrame(env.pulse as string);
           return;
         }
-        this.encryption.handleEncrypted(msg as RelayEnvelope, this.encryptionCallbacks());
+        this.encryption.handleEncrypted(msg as unknown as Parameters<EncryptionHandler['handleEncrypted']>[0], this.encryptionCallbacks());
         return;
       }
 
@@ -804,7 +814,7 @@ export class KrakiWSClient {
         break;
 
       case 'auth_error':
-        processAuthError(msg as AuthErrorMessage, this.transport.storedDeviceId, {
+        processAuthError(msg as Parameters<typeof processAuthError>[0], this.transport.storedDeviceId, {
           clearStoredDeviceId: () => { this.transport.storedDeviceId = undefined; },
           setStoredDeviceId: (id: string) => { this.transport.storedDeviceId = id; },
           disconnect: () => this.disconnect(),
@@ -884,8 +894,8 @@ export class KrakiWSClient {
       }
 
       // local_sessions_list can arrive as plaintext (mock/e2e) or decrypted (production)
-      case 'local_sessions_list': {
-        const payload = (msg as { payload: { sessions: unknown[]; requestId?: string } }).payload;
+      case 'local_sessions_list' as Message['type']: {
+        const payload = (msg as unknown as { payload: { sessions: unknown[]; requestId?: string } }).payload;
         if (payload?.sessions) {
           getStore().setLocalSessions(payload.sessions as import('@kraki/protocol').LocalSession[]);
           getStore().setLocalSessionsLoading(false);
@@ -898,7 +908,7 @@ export class KrakiWSClient {
         // in production but as plaintext from mock relay in E2E tests.
         // Route them to the message router so both paths work.
         if ('sessionId' in msg || 'payload' in msg) {
-          this.dispatchInner(msg as InnerMessage);
+          this.dispatchInner(msg as unknown as InnerMessage);
         }
         break;
     }

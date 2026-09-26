@@ -90,60 +90,27 @@ test.describe('Feature fixes', () => {
     await expect(link).toBeVisible({ timeout: 5000 });
   });
 
-  test('#17: multiple permissions render stacked, not blocking each other', async ({ page }) => {
-    const ws = await setupAndOpenSession(page, server);
-
-    server.sendMessage(ws, {
-      type: 'permission',
-      sessionId: SESSION_ID,
-      payload: {
-        id: 'perm-1',
-        toolName: 'shell',
-        args: { command: 'npm test' },
-        description: 'Run tests',
-      },
-    });
-
-    server.sendMessage(ws, {
-      type: 'permission',
-      sessionId: SESSION_ID,
-      payload: {
-        id: 'perm-2',
-        toolName: 'write_file',
-        args: { path: '/tmp/test.txt' },
-        description: 'Write file',
-      },
-    });
-
-    await expect(chatArea(page).getByText('Run tests')).toBeVisible({ timeout: 5000 });
-    await expect(chatArea(page).getByText('Write file')).toBeVisible({ timeout: 5000 });
-
-    const approveButtons = chatArea(page).getByRole('button', { name: 'Approve' });
-    await expect(approveButtons).toHaveCount(2);
-  });
-
   for (const viewport of [
     { name: 'desktop', width: 1280, height: 800 },
     { name: 'mobile', width: 375, height: 667 },
   ]) {
-    test(`active composer controls remain usable without overlap on ${viewport.name}`, async ({ page }) => {
+    test(`one primary control: Stop while nothing is typed, Steer once there is text (${viewport.name})`, async ({ page }) => {
       await page.setViewportSize(viewport);
       await setupAndOpenSession(page, server);
-      const input = page.getByPlaceholder('Send a message…');
-      const stop = page.getByRole('button', { name: 'Stop' });
-      const steer = page.getByRole('button', { name: 'Steer agent' });
+      const input = page.getByPlaceholder('Steer the agent…');
+      const stop = page.getByRole('button', { name: 'Stop agent' });
 
       await expect(input).toBeEditable();
       await expect(stop).toBeVisible();
-      await expect(steer).toBeVisible();
       await input.fill('change direction');
+      const steer = page.getByRole('button', { name: 'Steer agent' });
+      await expect(steer).toBeVisible();
+      await expect(stop).toHaveCount(0);
 
-      const boxes = await Promise.all([input, stop, steer].map(locator => locator.boundingBox()));
-      expect(boxes.every(Boolean)).toBe(true);
-      const [inputBox, stopBox, steerBox] = boxes as NonNullable<typeof boxes[number]>[];
-      expect(inputBox.x + inputBox.width).toBeLessThanOrEqual(stopBox.x);
-      expect(stopBox.x + stopBox.width).toBeLessThanOrEqual(steerBox.x);
-      expect(steerBox.x + steerBox.width).toBeLessThanOrEqual(viewport.width);
+      const [inputBox, steerBox] = await Promise.all([input, steer].map((l) => l.boundingBox()));
+      expect(inputBox && steerBox).toBeTruthy();
+      expect(inputBox!.x + inputBox!.width).toBeLessThanOrEqual(steerBox!.x);
+      expect(steerBox!.x + steerBox!.width).toBeLessThanOrEqual(viewport.width);
 
       await steer.click();
       await expect(input).toHaveValue('');

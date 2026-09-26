@@ -8,6 +8,7 @@ import { ingestChunk } from './attachments';
 import type { SessionPreview } from '../types/store';
 import { traceEvent } from './trace';
 import { allowAutoRead, suppressAutoRead } from './read-visibility';
+import { outbox } from './chat/outbox';
 
 const logger = createLogger('msg-router');
 
@@ -109,6 +110,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   // session record to exist yet.
   if (msg.type === 'agent_message_delta') {
     const cardMsg = msg as AgentMessageDelta;
+    if (!cardMsg.sessionId) return;
     store.applyCardMessage(
       cardMsg.sessionId,
       cardMsg.payload.content,
@@ -118,7 +120,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   }
   if (msg.type === 'card_action') {
     const cardAction = msg as CardAction;
-    store.setCardAction(cardAction.sessionId, cardAction.payload.action);
+    if (cardAction.sessionId) store.setCardAction(cardAction.sessionId, cardAction.payload.action);
     return;
   }
 
@@ -162,7 +164,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         id: sid,
         deviceId: msg.deviceId,
         deviceName: device?.name ?? msg.deviceId,
-        agent: msg.payload.agent,
+        agent: msg.payload.agent as import('@kraki/protocol').AgentId,
         model: msg.payload.model,
         state: 'active',
         messageCount: 0,
@@ -184,18 +186,12 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       }
       const reqId = msg.payload.requestId;
       const wasOurRequest = reqId ? ctx.cmdState.pendingCreateRequests.delete(reqId) : false;
-      // Show initial prompt as user message if we sent one via create_session
+      // The first prompt of a session we created goes out as an ordinary
+      // message now that the session exists (as on iOS/Mac).
       const pendingPrompt = reqId ? ctx.cmdState.pendingPrompts.get(reqId) : undefined;
       if (pendingPrompt) {
         ctx.cmdState.pendingPrompts.delete(reqId!);
-        store.appendMessage(sid, {
-          type: 'user_message',
-          sessionId: sid,
-          deviceId: '',
-          seq: 0,
-          timestamp: msg.timestamp,
-          payload: { content: pendingPrompt },
-        } as ProducerMessage);
+        import('./ws-client').then(({ wsClient }) => wsClient.sendInput(sid, pendingPrompt)).catch(() => {});
       }
       // Auto-navigate to the new session if we created it
       if (wasOurRequest) {
@@ -206,7 +202,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
     case 'session_ended': {
       const ended = store.sessions.get(sid);
-      if (ended) store.upsertSession({ ...ended, state: 'ended' });
+      if (ended) store.upsertSession({ ...ended, state: 'ended' as unknown as import('@kraki/protocol').SessionState });
       store.appendMessage(sid, msg);
       break;
     }
@@ -380,6 +376,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
 
     case 'session_deleted': {
       store.removeSession(sid);
+      outbox.clearSession(sid);
       break;
     }
 
@@ -396,10 +393,10 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       const clientId = typeof payload.clientId === 'string' ? payload.clientId : undefined;
       const serverContent = typeof payload.content === 'string' ? payload.content : undefined;
       traceEvent({ comp: 'arm', evt: 'APP-USER-MESSAGE-ECHO', sessionId: sid, clientId, contentLen: serverContent?.length });
-      const resolved = store.resolvePendingInput(sid, msg.seq, clientId, serverContent);
-      if (!resolved) {
-        store.appendMessage(sid, msg);
-      }
+      // The echo is the real bubble; the optimistic outbox entry leaves in
+      // the same tick (matched by clientId, or by text for older Tentacles).
+      store.appendMessage(sid, msg);
+      outbox.confirm(sid, clientId, serverContent);
       if (serverContent !== undefined) {
         updatePreview(sid, { text: truncPreview(serverContent), type: 'user', timestamp: msg.timestamp }, false);
       }

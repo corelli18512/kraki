@@ -4,6 +4,7 @@ import { wsClient } from '../../lib/ws-client';
 import { sessionTime } from '../../lib/format';
 import type { LocalSession } from '@kraki/protocol';
 import { Download, Search, ChevronRight, ChevronDown, Loader2, Check, Plus, FolderGit2, Folder, Home, Monitor } from 'lucide-react';
+import { useEscape } from '../../hooks/useEscape';
 
 interface Props {
   open: boolean;
@@ -222,6 +223,7 @@ function SessionRow({ session, importing, onImport, search }: {
 const LAST_IMPORT_DEVICE_KEY = 'kraki:last-import-device';
 
 export function ImportSessionDialog({ open, onClose }: Props) {
+  useEscape(open, onClose);
   const localSessions = useStore(s => s.localSessions);
   const loading = useStore(s => s.localSessionsLoading);
   const devices = useStore(s => s.devices);

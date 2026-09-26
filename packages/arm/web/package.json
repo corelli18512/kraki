@@ -1,11 +1,11 @@
 {
   "name": "@kraki/arm-web",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Kraki web receiver — view and control your agents from any browser",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "tsc --noEmit -p . && vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "mock": "node --import tsx src/mock/mock-server.ts",
@@ -13,7 +13,8 @@
     "test:watch": "NODE_ENV=test vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
-    "test:e2e:headed": "playwright test --headed"
+    "test:e2e:headed": "playwright test --headed",
+    "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
     "@coinfra/pulse": "^0.5.0",

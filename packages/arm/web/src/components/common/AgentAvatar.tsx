@@ -5,7 +5,7 @@ import type { SessionState } from '@kraki/protocol';
 interface AgentAvatarProps {
   agent: string;
   sessionId?: string;
-  size?: 'sm' | 'md';
+  size?: 'sm' | 'md' | 'row' | 'lg';
   status?: SessionState;
   badge?: 'question' | 'permission';
   pinned?: boolean;
@@ -14,6 +14,10 @@ interface AgentAvatarProps {
 const sizeMap = {
   sm: { container: 'h-7 w-7 rounded-md', icon: 'h-4 w-4' },
   md: { container: 'h-9 w-9 rounded-lg', icon: 'h-5 w-5' },
+  /** Mac sidebar row. */
+  row: { container: 'h-9 w-9 rounded-[9px]', icon: 'h-5 w-5' },
+  /** iPhone session list. */
+  lg: { container: 'h-11 w-11 rounded-[11px]', icon: 'h-6 w-6' },
 };
 
 function CopilotIcon({ className }: { className?: string }) {

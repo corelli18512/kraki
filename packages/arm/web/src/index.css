@@ -1,21 +1,21 @@
 @import 'tailwindcss';
-@import 'highlight.js/styles/github-dark.min.css';
+@import 'highlight.js/styles/github-dark-dimmed.min.css';
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  /* Primary — Coral */
-  --color-kraki-50: #fef3f1;
-  --color-kraki-100: #fde5e0;
-  --color-kraki-200: #fccec6;
-  --color-kraki-300: #f9ad9f;
-  --color-kraki-400: #f4836e;
-  --color-kraki-500: #ea6046;
-  --color-kraki-600: #d74428;
-  --color-kraki-700: #b5361e;
-  --color-kraki-800: #96301d;
-  --color-kraki-900: #7d2d1e;
-  --color-kraki-950: #44130b;
+  /* Primary — Kraki navy (the native apps' brand palette, from the logo) */
+  --color-kraki-50: #ebf3fb;
+  --color-kraki-100: #d2e4f6;
+  --color-kraki-200: #a5c9ed;
+  --color-kraki-300: #5ea0d7;
+  --color-kraki-400: #2f80c0;
+  --color-kraki-500: #0b5b9c;
+  --color-kraki-600: #094a80;
+  --color-kraki-700: #073a65;
+  --color-kraki-800: #052847;
+  --color-kraki-900: #031a30;
+  --color-kraki-950: #010e1e;
 
   /* Secondary — Ocean teal */
   --color-ocean-50: #ecfeff;
@@ -99,7 +99,10 @@ body {
 .app-viewport {
   box-sizing: border-box;
   width: 100%;
-  height: 100dvh;
+  /* The layout viewport (dvh) unless the visual one is smaller (the iOS
+   * Safari keyboard, which does not resize the layout). */
+  height: min(100dvh, var(--kraki-vvh, 100dvh));
+  transform: translateY(var(--kraki-vvt, 0px));
   padding-top: var(--kraki-safe-area-top);
   padding-left: var(--kraki-safe-area-left);
   padding-right: var(--kraki-safe-area-right);

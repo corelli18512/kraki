@@ -1,8 +1,53 @@
-import Markdown from 'react-markdown';
-import rehypeHighlight from 'rehype-highlight';
-import remarkGfm from 'remark-gfm';
+import type { ContentRef } from '@kraki/protocol';
+import { Lock, TriangleAlert } from 'lucide-react';
 import type { ChatMessage } from '../../types/store';
-import { MessageBubble } from './MessageBubble';
+import { Markdown, StreamingMarkdown } from './Markdown';
+import { ToolActivity } from './ToolActivity';
+
+const pull = (sid: string, ref: ContentRef): void => {
+  void import('../../lib/ws-client').then(({ wsClient }) => wsClient.requestAttachment(sid, ref));
+};
+
+/** One non-prose step: a tool chip, a permission record or an error. */
+function StepRow({ msg, sessionId, forceExpanded, cancelled }: { msg: ChatMessage; sessionId: string; forceExpanded?: boolean; cancelled?: boolean }) {
+  const p = msg.payload as Record<string, unknown>;
+  if (msg.type === 'tool_start' || msg.type === 'tool_complete') {
+    return (
+      <ToolActivity
+        type={msg.type === 'tool_start' ? 'start' : 'complete'}
+        toolName={String(p.toolName ?? 'tool')}
+        headline={String(p.headline ?? '')}
+        argsRef={p.argsRef as ContentRef | undefined}
+        resultRef={p.resultRef as ContentRef | undefined}
+        sessionId={sessionId}
+        requestPull={pull}
+        success={p.success as boolean | undefined}
+        termination={p.termination as never}
+        cancelled={cancelled}
+        forceExpanded={forceExpanded}
+      />
+    );
+  }
+  if (msg.type === 'permission') {
+    const decision = p.decision as string | undefined;
+    return (
+      <div className="kstep-note">
+        <Lock className="kstep-icon" aria-hidden />
+        <span>{String(p.description || p.toolName || 'Permission')}</span>
+        {decision && <span className={decision === 'deny' ? 'kstep-bad' : 'kstep-good'}>{decision === 'deny' ? 'Denied' : decision === 'always_allow' ? 'Always allowed' : 'Approved'}</span>}
+      </div>
+    );
+  }
+  if (msg.type === 'error') {
+    return (
+      <div className="kstep-note kstep-bad">
+        <TriangleAlert className="kstep-icon" aria-hidden />
+        <span>{String(p.message ?? 'Error')}</span>
+      </div>
+    );
+  }
+  return null;
+}
 
 interface StepsListProps {
   /** Interleaved trace steps in recorded order (tool_start/tool_complete +
@@ -25,7 +70,7 @@ interface StepsListProps {
  * draft. Shared by the live in-progress LiveAgentBubble and the
  * right-click "Open steps" history popover on concluded agent_message bubbles.
  */
-export function StepsList({ messages, agent, sessionId, streamingText, allExpanded, aborted }: StepsListProps) {
+export function StepsList({ messages, agent: _agent, sessionId, streamingText, allExpanded, aborted }: StepsListProps) {
   // Merge tool_start → tool_complete by toolCallId (protocol contract): once a
   // tool has completed, drop its earlier tool_start chip so a finished tool
   // renders as a single "done" chip instead of a duplicate "Running…" + "done"
@@ -39,9 +84,6 @@ export function StepsList({ messages, agent, sessionId, streamingText, allExpand
     } else if (msg.type === 'permission') {
       const p = msg.payload as { id?: string; decision?: string; cancelled?: boolean };
       if (p.id && (p.decision || p.cancelled)) resolvedPromptIds.add(`permission:${p.id}`);
-    } else if (msg.type === 'question') {
-      const p = msg.payload as { id?: string; answer?: string; cancelled?: boolean };
-      if (p.id && (p.answer !== undefined || p.cancelled)) resolvedPromptIds.add(`question:${p.id}`);
     }
   }
   const visible = messages.filter((msg) => {
@@ -49,9 +91,9 @@ export function StepsList({ messages, agent, sessionId, streamingText, allExpand
       const id = (msg.payload as { toolCallId?: string }).toolCallId;
       return !(id && completedToolIds.has(id));
     }
-    if (msg.type === 'permission' || msg.type === 'question') {
-      const p = msg.payload as { id?: string; decision?: string; answer?: string; cancelled?: boolean };
-      const resolved = !!p.decision || p.answer !== undefined || !!p.cancelled;
+    if (msg.type === 'permission') {
+      const p = msg.payload as { id?: string; decision?: string; cancelled?: boolean };
+      const resolved = !!p.decision || !!p.cancelled;
       return resolved || !p.id || !resolvedPromptIds.has(`${msg.type}:${p.id}`);
     }
     return true;
@@ -66,31 +108,23 @@ export function StepsList({ messages, agent, sessionId, streamingText, allExpand
           : `step-${idx}`;
         if (msg.type === 'agent_message' || msg.type === 'agent_narration') {
           return (
-            <div key={key} className="markdown-content text-sm leading-relaxed text-text-secondary">
-              <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                {(msg.payload as { content: string }).content}
-              </Markdown>
+            <div key={key} className="kstep-prose">
+              <Markdown text={(msg.payload as { content: string }).content} />
             </div>
           );
         }
         return (
-          <MessageBubble
+          <StepRow
             key={key}
-            message={msg}
-            agent={agent}
-            sessionId={sessionId}
+            msg={msg}
+            sessionId={sessionId ?? ''}
             forceExpanded={allExpanded || undefined}
             cancelled={aborted && msg.type === 'tool_start'}
           />
         );
       })}
       {streamingText && (
-        <div className="markdown-content text-sm leading-relaxed text-text-secondary">
-          <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-            {streamingText}
-          </Markdown>
-          <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse bg-text-muted" />
-        </div>
+        <div className="kstep-prose"><StreamingMarkdown text={streamingText} /></div>
       )}
     </div>
   );

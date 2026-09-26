@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from 'react';
-import { ListTree, X } from 'lucide-react';
+import { useEffect, useMemo } from 'react';
+import { X } from 'lucide-react';
 import type { ChatMessage } from '../../types/store';
 import { useStore } from '../../hooks/useStore';
 import { messageProvider } from '../../lib/message-provider';
@@ -7,7 +7,7 @@ import { StepsList } from './StepsList';
 
 const isTrace = (t: string) =>
   t === 'tool_start' || t === 'tool_complete' || t === 'agent_narration' ||
-  t === 'permission' || t === 'question' || t === 'error';
+  t === 'permission' || t === 'error';
 const isTurnStart = (message: ChatMessage) =>
   message.type === 'user_message' && message.payload.delivery !== 'steer';
 
@@ -78,97 +78,47 @@ export function useTurnSteps(
   return { steps, targetSeq };
 }
 
-interface StepsButtonProps {
-  sessionId: string;
-  agent?: string;
-  /** Concluded turn: the concluding agent_message bubble seq. Omit for `live`. */
-  bubbleSeq?: number;
-  /** Live/in-progress turn: resolve the target to the current turn's leading
-   *  user_message and re-pull on every open so the running steps stay fresh. */
-  live?: boolean;
-  /** Replay-visible step count from the bubble's `payload.steps` (stamped by the
-   *  tentacle). When `> 0` the button shows even before the (transient) trace is
-   *  pulled into the store — the click then lazily pulls it. Lets Steps survive a
-   *  page reload / history load, where the store holds no trace entries yet. */
-  stepHint?: number;
-}
-
 /**
- * TRACE-axis "Steps" affordance shared by (a) a concluded agent_message bubble
- * and (b) the live in-progress LiveAgentBubble. A subtle button that lazily pulls the
- * turn's trace via `request_turn_trace` (keyed by the turn's user_message seq,
- * which the tentacle resolves for both finished and running turns) and shows the
- * interleaved narration + tool chips in a full-screen modal.
+ * The turn's Steps (narration + tool chips), opened from a bubble's "···".
+ * `bubbleSeq` is the concluding bubble's seq, or null for the live turn. The
+ * trace is pulled lazily (`request_turn_trace`); a live turn re-pulls on open.
  */
-export function StepsButton({ sessionId, agent, bubbleSeq, live, stepHint }: StepsButtonProps) {
-  const [open, setOpen] = useState(false);
-  const { steps, targetSeq } = useTurnSteps(sessionId, live, bubbleSeq);
+export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
+  sessionId: string;
+  bubbleSeq: number | null;
+  agent?: string;
+  onClose: () => void;
+}) {
+  const live = bubbleSeq === null;
+  const { steps, targetSeq } = useTurnSteps(sessionId, live, bubbleSeq ?? undefined);
 
-  const handleOpen = useCallback(() => {
-    if (targetSeq >= 0) {
-      // Live turns grow, so force a fresh pull on each open; concluded turns are
-      // deduped by the provider.
-      if (live) messageProvider.invalidateTurnTrace(sessionId, targetSeq);
-      messageProvider.requestTurnTrace(sessionId, targetSeq);
-    }
-    setOpen(true);
+  useEffect(() => {
+    if (targetSeq < 0) return;
+    if (live) messageProvider.invalidateTurnTrace(sessionId, targetSeq);
+    messageProvider.requestTurnTrace(sessionId, targetSeq);
   }, [sessionId, targetSeq, live]);
 
-  // Show the affordance when EITHER the store already has this turn's trace
-  // steps (live turns, or a turn pulled earlier) OR the bubble's replay hint
-  // says it has steps (`stepHint > 0`) — the latter survives a reload where the
-  // transient trace isn't in the store yet; the click lazily pulls it. Hide only
-  // when we're confident the turn has no steps (e.g. an opening bubble before any
-  // tool ran), rather than showing a dead button that opens an empty modal.
-  if (steps.length === 0 && (stepHint ?? 0) <= 0) return null;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   return (
-    <>
-      <button
-        onClick={handleOpen}
-        className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-secondary"
-        aria-label="Open steps"
-      >
-        <ListTree className="h-3 w-3" />
-        Steps
-      </button>
-
-      {open && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-          onClick={() => setOpen(false)}
-          onKeyDown={(e) => e.key === 'Escape' && setOpen(false)}
-          role="dialog"
-          aria-modal="true"
-          tabIndex={-1}
-        >
-          <div
-            className="mx-4 flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border-primary bg-surface-primary shadow-2xl sm:max-w-3xl lg:max-w-6xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-border-primary px-5 py-3">
-              <h3 className="text-sm font-semibold text-text-primary">Steps</h3>
-              <button
-                onClick={() => setOpen(false)}
-                className="rounded-md p-1 text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-primary"
-                aria-label="Close steps"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="min-w-0 overflow-y-auto px-5 py-4">
-              {steps.length > 0 ? (
-                <StepsList messages={steps} agent={agent} sessionId={sessionId} />
-              ) : (
-                <p className="flex items-center gap-2 text-xs text-text-muted">
-                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-text-muted/40 border-t-text-muted/90" />
-                  Loading steps…
-                </p>
-              )}
-            </div>
-          </div>
+    <div className="ksheet-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label="Steps">
+      <div className="ksheet" onClick={(e) => e.stopPropagation()}>
+        <div className="ksheet-head">
+          <h3>Steps</h3>
+          <button type="button" onClick={onClose} className="ksheet-close" aria-label="Close steps"><X aria-hidden /></button>
         </div>
-      )}
-    </>
+        <div className="ksheet-body">
+          {steps.length > 0 ? (
+            <StepsList messages={steps} agent={agent} sessionId={sessionId} />
+          ) : (
+            <p className="ksheet-loading"><span className="kspinner" /> Loading steps…</p>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
