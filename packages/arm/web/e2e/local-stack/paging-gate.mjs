@@ -40,5 +40,7 @@ await page.getByRole('button', { name: 'Jump to latest' }).click();
 await page.waitForTimeout(1500);
 const dist = await page.evaluate(() => { const s = document.querySelector('.kchat-list'); return Math.round(s.scrollHeight - s.scrollTop - s.clientHeight); });
 console.log('after ↓ distance', dist);
+await page.waitForTimeout(1500);
+console.log('rendered rows after returning', await page.locator('[data-scroll-key]').count(), 'distance', await page.evaluate(() => { const s = document.querySelector('.kchat-list'); return Math.round(s.scrollHeight - s.scrollTop - s.clientHeight); }));
 console.log('errors', JSON.stringify(errors.slice(0, 5)));
 await browser.close();

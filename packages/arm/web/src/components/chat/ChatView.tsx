@@ -245,7 +245,12 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
         onAtBottomChange={(bottom) => {
           atBottomRef.current = bottom;
           setAtBottom(bottom);
-          if (bottom) setUnseen(false);
+          if (bottom) {
+            setUnseen(false);
+            // Back at the newest edge: let the rendered window shrink again
+            // (history stays in memory; it is revealed again on the way up).
+            setTimeout(() => { if (atBottomRef.current) setWindowSize(WINDOW_START); }, 600);
+          }
         }}
         onNearTop={loadOlder}
         onScroll={measureUp}
