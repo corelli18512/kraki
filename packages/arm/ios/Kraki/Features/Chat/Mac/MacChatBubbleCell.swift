@@ -502,18 +502,10 @@ final class MacCoreTextBodyView: NSView {
                 outline.lineWidth = 0.5
                 outline.stroke()
                 if let label = block.label {
-                    (label as NSString).draw(
-                        at: NSPoint(x: frame.minX + 12, y: frame.minY + 5),
-                        withAttributes: [
-                            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .semibold),
-                            .foregroundColor: NSColor(
-                                srgbRed: 0xA1/255,
-                                green: 0xA1/255,
-                                blue: 0xAA/255,
-                                alpha: 1
-                            ),
-                        ]
-                    )
+                    MacCTText.draw(label, attributes: [
+                        .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .semibold),
+                        .foregroundColor: NSColor(srgbRed: 0xA1/255, green: 0xA1/255, blue: 0xAA/255, alpha: 1),
+                    ], at: NSPoint(x: frame.minX + 12, y: frame.minY + 5))
                 }
             }
         }

@@ -95,6 +95,18 @@ final class MacChatDocumentView: NSView {
     }
     #endif
 
+    /// Seqs the reader sees plus one viewport of margin on each side: the
+    /// message window must not trim them.
+    func retainedSeqRange(around viewport: NSRect) -> ClosedRange<Int>? {
+        let expanded = viewport.insetBy(dx: 0, dy: -viewport.height)
+        let seqs = desiredIndexes(for: expanded, runway: 0)
+            .filter { $0 < contents.count && contents[$0].key != "__live__" }
+            .map { contents[$0].seq }
+            .filter { $0 > 0 }
+        guard let low = seqs.min(), let high = seqs.max() else { return nil }
+        return low...high
+    }
+
     /// Document frames of AI replies, oldest first.
     var replyFrames: [(key: String, frame: NSRect)] {
         contents.indices.compactMap { index in
@@ -699,7 +711,15 @@ final class MacChatDocumentView: NSView {
                 installPlaceholderCellIfNeeded(at: index, item: item)
                 continue
             }
-            let preparedContent = cachedContent(for: item)
+            var preparedContent = cachedContent(for: item)
+            // A short visible row that the warmer has not reached yet is
+            // cheaper to prepare right now (~1–3ms, one per pass) than to show
+            // as a grey placeholder for a few frames of a very fast glide.
+            if scrollInteractionActive, preparedContent == nil, intersectsViewport,
+               !geometryBarrierReached, configuredCount < maxConfigurations,
+               item.visibleCharacterCount <= 1_500 {
+                preparedContent = resolvedContent(for: item)
+            }
             // Active scrolling may install content prepared ahead of time, one
             // visible cell per invocation. Only a true content-cache miss falls
             // back to a placeholder. Exact height is still committed later.
@@ -1873,6 +1893,10 @@ final class MacSmoothWheelController: NSObject {
     private var velocity: CGFloat = 0
 
     var isActive: Bool { targetY != nil }
+    #if DEBUG
+    /// Pure user scroll applied by the glide (excludes external compensation).
+    var debugAppliedTotal: CGFloat = 0
+    #endif
 
     func handle(_ event: NSEvent, in scrollView: NSScrollView) -> Bool {
         guard !event.hasPreciseScrollingDeltas,
@@ -1927,19 +1951,34 @@ final class MacSmoothWheelController: NSObject {
         return (minimumY, maximumY)
     }
 
+    private var frameCount = 0
+
     private func startFrames(on scrollView: NSScrollView) {
         stopFrames()
+        frameCount = 0
         if scrollView.window?.screen != nil {
             let link = scrollView.displayLink(target: self, selector: #selector(frameTick))
             link.add(to: .main, forMode: .common)
             displayLink = link
-        } else {
-            let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
-                self?.frameTick()
+            // A display link never fires while the display sleeps / is locked
+            // or detached; fall back to a timer rather than freezing the glide.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self, weak link] in
+                guard let self, let link, self.displayLink === link, self.frameCount == 0 else { return }
+                link.invalidate()
+                self.displayLink = nil
+                self.startTimer()
             }
-            RunLoop.main.add(timer, forMode: .common)
-            fallbackTimer = timer
+        } else {
+            startTimer()
         }
+    }
+
+    private func startTimer() {
+        let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
+            self?.frameTick()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        fallbackTimer = timer
     }
 
     private func stopFrames() {
@@ -1950,6 +1989,7 @@ final class MacSmoothWheelController: NSObject {
     }
 
     @objc private func frameTick() {
+        frameCount += 1
         guard let scrollView, var target = targetY else {
             reset()
             return
@@ -1980,7 +2020,12 @@ final class MacSmoothWheelController: NSObject {
             current = target
             velocity = 0
         }
+        let before = scrollView.contentView.bounds.origin.y
+        (scrollView as? MacSmoothScrollView)?.smoothWheelWillMove()
         scrollView.contentView.bounds.origin = NSPoint(x: scrollView.contentView.bounds.origin.x, y: current)
+        #if DEBUG
+        debugAppliedTotal += scrollView.contentView.bounds.origin.y - before
+        #endif
         scrollView.reflectScrolledClipView(scrollView.contentView)
         lastAppliedY = scrollView.contentView.bounds.origin.y
         if current == target, velocity == 0 {
@@ -2015,9 +2060,17 @@ class MacSmoothScrollView: NSScrollView {
         didSet { smoothWheelController.onTargetChanged = onSmoothWheelTargetChanged }
     }
 
+    /// Called before each smooth-wheel glide frame moves the viewport.
+    func smoothWheelWillMove() {}
+
     func configureTransientOverlayScroller() {
         transientScrollerController.attach(to: self)
     }
+
+    #if DEBUG
+    var debugWheelAppliedTotal: CGFloat { smoothWheelController.debugAppliedTotal }
+    var debugWheelGlideActive: Bool { smoothWheelController.isActive }
+    #endif
 
     func resetSmoothWheelAnimation() {
         smoothWheelController.reset()
@@ -3080,6 +3133,14 @@ final class MacChatScrollView: MacSmoothScrollView {
         return (before, contentView.bounds.minY)
     }
 
+    /// The glide keeps moving after the last wheel event; a reading-anchor
+    /// lock captured earlier would pull the viewport back to that stale
+    /// position on the next snapshot (seen as a ~30pt jump during history
+    /// loading).
+    override func smoothWheelWillMove() {
+        geometryAnchorLock = nil
+    }
+
     override func scrollWheel(with event: NSEvent) {
         cancelScrollAnimation()
         geometryAnchorLock = nil
@@ -3458,6 +3519,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         let maximumY = max(minimumY, chatDocumentView.frame.height - contentView.bounds.height)
         let target = min(maximumY, max(minimumY, animation.target()))
         let y = animation.from + (target - animation.from) * CGFloat(eased)
+        geometryAnchorLock = nil
         contentView.bounds.origin = NSPoint(x: contentView.bounds.origin.x, y: y)
         reflectScrolledClipView(contentView)
         if progress >= 1 {
@@ -3508,6 +3570,10 @@ struct MacChatListRepresentable: NSViewRepresentable {
         messageStore.heightForSeq = { [weak documentView = scrollView.chatDocumentView] sid, seq in
             guard sid == sessionId else { return 0 }
             return documentView?.measuredHeight(forSeq: seq) ?? 0
+        }
+        messageStore.retainedSeqRange = { [weak scrollView] sid in
+            guard sid == sessionId, let scrollView else { return nil }
+            return scrollView.chatDocumentView.retainedSeqRange(around: scrollView.contentView.bounds)
         }
         MacChatPerf.log("make session=\(sessionId.prefix(12)) pxWindow=4800")
         scrollView.onRequestLatestTail = onRequestLatestTail
@@ -3577,6 +3643,10 @@ struct MacChatListRepresentable: NSViewRepresentable {
         messageStore.heightForSeq = { [weak documentView = scrollView.chatDocumentView] sid, seq in
             guard sid == sessionId else { return 0 }
             return documentView?.measuredHeight(forSeq: seq) ?? 0
+        }
+        messageStore.retainedSeqRange = { [weak scrollView] sid in
+            guard sid == sessionId, let scrollView else { return nil }
+            return scrollView.chatDocumentView.retainedSeqRange(around: scrollView.contentView.bounds)
         }
         scrollView.onRequestLatestTail = onRequestLatestTail
         scrollView.onRenderedHeightsSettled = { [weak scrollView] in

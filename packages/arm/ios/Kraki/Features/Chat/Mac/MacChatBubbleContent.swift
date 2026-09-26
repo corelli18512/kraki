@@ -197,7 +197,7 @@ enum MacChatBubbleContentBuilder {
         guard let action else { return 0 }
         func textWidth(_ text: String, font: NSFont) -> CGFloat {
             guard !text.isEmpty else { return 0 }
-            return ceil((text as NSString).size(withAttributes: [.font: font]).width)
+            return MacCTText.width(text, font: font)
         }
         switch action.type {
         case "tool_batch":

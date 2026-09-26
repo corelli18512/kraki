@@ -41,6 +41,12 @@ class MacChatUXTestCase: XCTestCase {
         return ("agent_message", pool[(seq / 2) % pool.count])
     }
 
+    static func message(_ seq: Int, long: Bool) -> (type: String, text: String) {
+        var b = body(seq)
+        if long, b.type == "agent_message" { b.text = longAnswer(1_500 + (seq * 37) % 2_500) }
+        return b
+    }
+
     static func longAnswer(_ minimum: Int) -> String {
         var text = ""
         while text.count < minimum {
@@ -62,17 +68,20 @@ class MacChatUXTestCase: XCTestCase {
     func makeFixture(
         total: Int,
         size: NSSize = NSSize(width: 900, height: 760),
+        longReplies: Bool = false,
+        dbFrom: Int = 1,
         outbound: (([String: Any]) -> Bool)? = nil
     ) throws -> Fx {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("mac-ux-gate-\(UUID().uuidString)")
         roots.append(root)
         let db = try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite"))
         let msgs = (1...max(total, 1)).prefix(total).map { seq -> ChatMessage in
-            let b = Self.body(seq)
+            let b = Self.message(seq, long: longReplies)
             return ChatMessage(type: b.type, seq: seq, sessionId: sid, deviceId: dev,
                                timestamp: "2026-09-01T00:00:00.000Z", payload: ["content": AnyCodable(b.text)])
         }
-        if !msgs.isEmpty { try db.insert(sid, Array(msgs)) }
+        let stored = msgs.filter { $0.seq >= dbFrom }
+        if !stored.isEmpty { try db.insert(sid, Array(stored)) }
         let app = AppState(testDatabase: db)
         states.append(app)
         app.sessionStore.sessions[sid] = SessionInfo(
@@ -235,6 +244,150 @@ class MacChatUXTestCase: XCTestCase {
         }
         st.pagesLoaded = max(0, startTop - (fx.app.messageStore.windows[sid]?.topSeq ?? 0))
         return st
+    }
+
+    func wheel(_ fx: Fx, lines: Int32) {
+        let cg = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0)!
+        fx.sv.scrollWheel(with: NSEvent(cgEvent: cg)!)
+    }
+
+    // MARK: Frame-accurate flicker recorder
+
+    struct FrameShot {
+        let t: CFTimeInterval
+        let offset: CGFloat
+        let rows: [String: (y: CGFloat, h: CGFloat)] // real, shown cells (screen space)
+        let placeholders: Int
+        var placeholderInfo = ""
+        let uncovered: CGFloat // viewport height not covered by real cells or the older spinner
+        let input: CGFloat     // cumulative pure user scroll (offset units)
+    }
+
+    /// Pure user scroll applied by precise packets (wheel glides are read
+    /// from the controller).
+    var packetInputTotal: CGFloat = 0
+
+    @discardableResult
+    func packet(_ fx: Fx, _ dy: CGFloat) -> (before: CGFloat, after: CGFloat) {
+        let r = fx.sv.automationPreciseScrollPacket(deltaY: dy)
+        packetInputTotal += r.after - r.before
+        return r
+    }
+
+    struct FlickerReport: CustomStringConvertible {
+        var frames = 0, tears = 0, jumps = 0, flashes = 0, blanks = 0, placeholderFrames = 0
+        var shifts = 0, worstShift: CGFloat = 0, hitches = 0
+        var worstTear: CGFloat = 0, worstJump: CGFloat = 0, worstBlank: CGFloat = 0
+        var log: [String] = []
+        var clean: Bool { tears == 0 && shifts == 0 && flashes == 0 && blanks == 0 && placeholderFrames == 0 }
+        var description: String {
+            String(format: "frames=%d SHIFT=%d(%.0fpt) tears=%d(%.0fpt) flashes=%d blanks=%d(%.0fpt) placeholders=%d | bigSteps=%d(%.0fpt)",
+                   frames, shifts, worstShift, tears, worstTear, flashes, blanks, worstBlank, placeholderFrames, jumps, worstJump)
+        }
+    }
+
+    /// Records the committed layout after every Core Animation commit
+    /// (run-loop observer ordered after CA's) while `body` runs.
+    func recordFrames(_ fx: Fx, _ body: () -> Void) -> [FrameShot] {
+        var shots: [FrameShot] = []
+        let observer = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault,
+            CFRunLoopActivity.beforeWaiting.rawValue, true, 2_000_100) { _, _ in
+            MainActor.assumeIsolated { shots.append(self.shot(fx)) }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        body()
+        CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes)
+        return shots
+    }
+
+    func shot(_ fx: Fx) -> FrameShot {
+        let viewport = fx.sv.contentView.bounds
+        var rows: [String: (y: CGFloat, h: CGFloat)] = [:]
+        var placeholders = 0
+        var phInfo = ""
+        var covered: [(CGFloat, CGFloat)] = []
+        for (key, cell) in fx.doc.automationVisibleCells where !cell.isHidden {
+            let f = cell.frame
+            guard f.intersects(viewport) else { continue }
+            if cell.isPlaceholderFlag {
+                placeholders += 1
+                phInfo += String(format: "%@@%.0f(h%.0f) ", key.replacingOccurrences(of: "mac-ux-gate:", with: ""), f.minY - viewport.minY, f.height)
+                continue
+            }
+            rows[key] = (f.minY - viewport.minY, f.height)
+            covered.append((max(f.minY, viewport.minY), min(f.maxY, viewport.maxY)))
+        }
+        // Legitimately empty: above the first row (older spinner / top), below the last row.
+        if let first = fx.doc.itemKeys.first, let top = fx.doc.frame(forKey: first) {
+            covered.append((viewport.minY, max(viewport.minY, min(top.minY, viewport.maxY))))
+        }
+        if let last = fx.doc.itemKeys.last, let bottom = fx.doc.frame(forKey: last), bottom.maxY < viewport.maxY {
+            covered.append((max(viewport.minY, bottom.maxY), viewport.maxY))
+        }
+        covered.sort { $0.0 < $1.0 }
+        var gap: CGFloat = 0, cursor = viewport.minY
+        for (a, b) in covered {
+            if a > cursor { gap = max(gap, a - cursor) }
+            cursor = max(cursor, b)
+        }
+        if cursor < viewport.maxY { gap = max(gap, viewport.maxY - cursor) }
+        var shot = FrameShot(t: CACurrentMediaTime(), offset: viewport.minY, rows: rows,
+                         placeholders: placeholders, uncovered: gap,
+                         input: packetInputTotal + fx.sv.debugWheelAppliedTotal)
+        shot.placeholderInfo = phInfo + (fx.sv.debugWheelGlideActive ? "[glide]" : "")
+        return shot
+    }
+
+    /// `maxStep`: largest plausible whole-content move per frame for the input.
+    func analyze(_ shots: [FrameShot], maxStep: CGFloat, viewportHeight: CGFloat) -> FlickerReport {
+        var r = FlickerReport()
+        r.frames = shots.count
+        var previousMove: CGFloat?
+        for i in shots.indices {
+            let b = shots[i]
+            if b.placeholders > 0 {
+                r.placeholderFrames += 1
+                if r.log.count < 16 { r.log.append(String(format: "#%d placeholder offset %.0f %@", i, b.offset, b.placeholderInfo)) }
+            }
+            if b.uncovered > 24 {
+                r.blanks += 1; r.worstBlank = max(r.worstBlank, b.uncovered)
+                if r.log.count < 16 { r.log.append(String(format: "#%d blank %.0fpt", i, b.uncovered)) }
+            }
+            guard i > 0 else { continue }
+            let a = shots[i - 1]
+            let common = a.rows.keys.filter { b.rows[$0] != nil }
+            let moves = common.map { b.rows[$0]!.y - a.rows[$0]!.y }
+            if let lo = moves.min(), let hi = moves.max(), hi - lo > 1 {
+                r.tears += 1; r.worstTear = max(r.worstTear, hi - lo)
+                if r.log.count < 16 { r.log.append(String(format: "#%d tear %.0fpt (rows move differently)", i, hi - lo)) }
+            }
+            if let move = moves.sorted().dropFirst(moves.count / 2).first {
+                // Content must move exactly opposite to the user's own scroll.
+                let expected = -(b.input - a.input)
+                if abs(move - expected) > 1.5 {
+                    r.shifts += 1; r.worstShift = max(r.worstShift, abs(move - expected))
+                    if r.log.count < 16 { r.log.append(String(format: "#%d SHIFT content %.0f vs user %.0f (offset %.0f->%.0f rows %d->%d)", i, move, expected, a.offset, b.offset, a.rows.count, b.rows.count)) }
+                }
+                if abs(move) > maxStep {
+                    r.jumps += 1; r.worstJump = max(r.worstJump, abs(move))
+                    if r.log.count < 16 { r.log.append(String(format: "#%d jump %.0fpt (prev %.0f) offset %.0f->%.0f rows %d->%d", i, move, previousMove ?? 0, a.offset, b.offset, a.rows.count, b.rows.count)) }
+                }
+                previousMove = move
+            }
+            // A row fully on screen that vanishes without the viewport having
+            // moved past it, and comes back within a few frames = flash.
+            let expectedMove = -(b.input - a.input)
+            for (key, row) in a.rows where b.rows[key] == nil {
+                let y = row.y + expectedMove
+                let stillOnScreen = y >= 0 && y + row.h <= viewportHeight
+                if stillOnScreen {
+                    r.flashes += 1
+                    if r.log.count < 16 { r.log.append("#\(i) VANISH \(key) while it should still be on screen") }
+                }
+            }
+
+        }
+        return r
     }
 
     func dumpCost(_ tag: String) {
@@ -540,4 +693,151 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
             print(String(format: "UXPROBE resize#%d ->%d placeholderFrames=%d estimatedFrames=%d anchorSeq=%d moved=%.0f hitch=%.0fms >33=%d", i, width, phFrames, estFrames, anchor?.seq ?? -1, (after?.screenY ?? 0) - (anchor?.screenY ?? 0), hb.worst, hb.over(33)))
         }
     }
+
+    func testProbeAggressiveHistoryFlicker() throws {
+        var results: [String] = []
+        func run(_ name: String, total: Int = 400, long: Bool = false, stream: Bool = false,
+                 maxStep: CGFloat, _ drive: (Fx, () -> Void) -> Void) throws {
+            let fx = try makeFixture(total: total, size: NSSize(width: 900, height: 760), longReplies: long)
+            drain(1_500)
+            var streamed = 0
+            let chars = Array(Self.longAnswer(6_000))
+            if stream { try startTurn(fx, seq: total + 1) }
+            let tick = {
+                guard stream, streamed < chars.count else { return }
+                fx.app.messageStore.applyCardMessage(self.sid, String(chars[streamed..<min(streamed + 15, chars.count)]), reset: false)
+                streamed += 15
+            }
+            let top0 = fx.app.messageStore.windows[sid]?.topSeq ?? 0
+            packetInputTotal = 0
+            let wheel0 = fx.sv.debugWheelAppliedTotal
+            packetInputTotal -= wheel0
+            let shots = recordFrames(fx) { drive(fx, tick); drain(1_200) }
+            let r = analyze(shots, maxStep: maxStep, viewportHeight: fx.sv.contentView.bounds.height)
+            let paged = top0 - (fx.app.messageStore.windows[sid]?.topSeq ?? 0)
+            results.append("\(name): \(r) paged=\(paged)")
+            print("UXFLICK \(name): \(r) paged=\(paged)")
+            r.log.forEach { print("UXFLICK    \($0)") }
+            windows.forEach { $0.orderOut(nil) }
+            windows.removeAll()
+        }
+        // 1. Wheel spun as hard as possible: 8 lines/event every 12ms for 3s.
+        try run("wheel-max", maxStep: 700) { fx, tick in
+            for _ in 0..<250 { wheel(fx, lines: 8); tick(); drain(12) }
+        }
+        // 2. Wheel hard with reversals mid-load.
+        try run("wheel-reverse", maxStep: 700) { fx, tick in
+            for round in 0..<6 {
+                let up: Int32 = round % 3 == 2 ? -6 : 8
+                for _ in 0..<40 { wheel(fx, lines: up); tick(); drain(12) }
+            }
+        }
+        // 3. Trackpad-like momentum: 220px packets every 8ms, continuous.
+        try run("momentum-max", maxStep: 260) { fx, tick in
+            for _ in 0..<350 { packet(fx, 220); tick(); drain(8) }
+        }
+        // 4. Momentum into the top edge with overscroll (rubber band) while loading.
+        try run("overscroll-top", maxStep: 700) { fx, tick in
+            for step in 0..<400 {
+                let r = packet(fx, 180)
+                if r.after <= -fx.sv.contentInsets.top + 0.5, step % 3 == 0 {
+                    // Elastic overscroll above the first row, as AppKit does at the edge.
+                    packetInputTotal += -60 - fx.sv.contentView.bounds.origin.y
+                    fx.sv.contentView.bounds.origin.y = -60
+                    fx.sv.reflectScrolledClipView(fx.sv.contentView)
+                }
+                tick(); drain(8)
+            }
+        }
+        // 5. Very long replies (heavy preparation) + max wheel.
+        try run("wheel-max-long", long: true, maxStep: 700) { fx, tick in
+            for _ in 0..<250 { wheel(fx, lines: 8); tick(); drain(12) }
+        }
+        // 6. Momentum + streaming at the bottom.
+        try run("momentum-stream", stream: true, maxStep: 260) { fx, tick in
+            for _ in 0..<350 { packet(fx, 220); tick(); drain(8) }
+        }
+        // Many pages: gestures separated by short lifts, with local and
+        // network-like page latency, and a streaming reply below.
+        for delay in [0, 180, 450] as [UInt64] {
+            MessageProviderDebug.olderPageDelayMs = delay
+            defer { MessageProviderDebug.olderPageDelayMs = 0 }
+            try run("wheel-bursts-\(delay)ms", maxStep: 700) { fx, tick in
+                for _ in 0..<14 {
+                    for _ in 0..<30 { wheel(fx, lines: 6); tick(); drain(12) }
+                    for _ in 0..<(delay == 450 ? 3 : 20) { tick(); drain(12) } // brief / normal lift
+                }
+            }
+            try run("momentum-bursts-\(delay)ms", stream: true, maxStep: 460) { fx, tick in
+                for burst in 0..<14 {
+                    for _ in 0..<45 { packet(fx, 160); tick(); drain(8) }
+                    for _ in 0..<(burst % 2 == 0 ? 4 : 40) { tick(); drain(8) }
+                }
+            }
+            try run("reverse-at-edge-\(delay)ms", long: true, maxStep: 700) { fx, tick in
+                for _ in 0..<10 {
+                    for _ in 0..<35 { packet(fx, 200); tick(); drain(8) }
+                    // bounce back down right as the page lands, then up again
+                    for _ in 0..<8 { packet(fx, -120); tick(); drain(8) }
+                    for _ in 0..<30 { tick(); drain(8) }
+                }
+            }
+        }
+        print("UXFLICK SUMMARY\n" + results.joined(separator: "\n"))
+    }
+
+    /// Older history not cached locally: pages come from "Tentacle" (this
+    /// test) as turn-aligned batches of up to `pageSize` after `delayMs`.
+    func testProbeRelayHistoryFlicker() throws {
+        for (pageSize, delayMs, long) in [(100, 250, false), (100, 250, true), (40, 120, false), (100, 600, true)] {
+            var requests: [Int] = []
+            let total = 600
+            var fxRef: Fx?
+            let fx = try makeFixture(total: total, longReplies: long, dbFrom: total - 59, outbound: { msg in
+                guard msg["type"] as? String == "request_session_messages",
+                      let payload = msg["payload"] as? [String: Any],
+                      let before = payload["beforeSeq"] as? Int else { return true }
+                requests.append(before)
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) {
+                    guard let fx = fxRef else { return }
+                    let from = max(1, before - pageSize)
+                    let page = (from..<before).map { seq -> ChatMessage in
+                        let b = Self.message(seq, long: long)
+                        return ChatMessage(type: b.type, seq: seq, sessionId: self.sid, deviceId: self.dev,
+                                           timestamp: "2026-09-01T00:00:00.000Z", payload: ["content": AnyCodable(b.text)])
+                    }
+                    fx.app.messageProvider?.handleBatch(sessionId: self.sid, messages: page, lastSeq: before - 1,
+                                                        totalLastSeq: before - 1, containsHead: false)
+                }
+                return true
+            })
+            fxRef = fx
+            drain(1_500)
+            packetInputTotal = -fx.sv.debugWheelAppliedTotal
+            let top0 = fx.app.messageStore.windows[sid]?.topSeq ?? 0
+            var trims: [String] = []
+            let shots = recordFrames(fx) {
+                for burst in 0..<16 {
+                    if burst % 2 == 0 {
+                        for _ in 0..<40 { wheel(fx, lines: 6); drain(12) }
+                    } else {
+                        for _ in 0..<60 { packet(fx, 150); drain(8) }
+                    }
+                    drain(burst % 3 == 0 ? 80 : 650)
+                    let w = fx.app.messageStore.windows[sid]
+                    trims.append("[\(w?.topSeq ?? 0),\(w?.bottomSeq ?? 0)]")
+                }
+                drain(1_200)
+            }
+            let r = analyze(shots, maxStep: 700, viewportHeight: fx.sv.contentView.bounds.height)
+            let tag = "relay-page\(pageSize)-\(delayMs)ms\(long ? "-long" : "")"
+            print("UXFLICK \(tag): \(r) requests=\(requests.count) paged=\(top0 - (fx.app.messageStore.windows[sid]?.topSeq ?? 0))")
+            print("UXFLICK    windows " + trims.joined(separator: " "))
+            r.log.forEach { print("UXFLICK    \($0)") }
+            windows.forEach { $0.orderOut(nil) }
+            windows.removeAll()
+            fxRef = nil
+        }
+    }
+
 }

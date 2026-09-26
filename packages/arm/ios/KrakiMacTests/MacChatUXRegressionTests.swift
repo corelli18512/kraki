@@ -181,6 +181,69 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertTrue(settled, "comes to rest shortly after the last notch")
     }
 
+    /// Snapshots (new messages, history pages) landing while a wheel glide is
+    /// still moving must not pull the viewport back to a stale reading anchor.
+    func testWheelGlideIsNotPulledBackBySnapshots() throws {
+        let fx = try makeFixture(total: 120)
+        drain(1_200)
+        for _ in 0..<25 { packet(fx, 40); drain(8) }
+        drain(900)
+        packetInputTotal = -fx.sv.debugWheelAppliedTotal
+        var seq = 121
+        let shots = recordFrames(fx) {
+            for round in 0..<8 {
+                wheel(fx, lines: round % 2 == 0 ? 3 : -3)
+                // Messages keep arriving below while the glide runs.
+                for _ in 0..<8 {
+                    drain(25)
+                    try? ingest(fx, ["type": seq % 2 == 1 ? "user_message" : "agent_message", "seq": seq,
+                                     "sessionId": sid, "deviceId": dev, "timestamp": "2026-09-01T00:00:05.000Z",
+                                     "payload": ["content": "后台到达 \(seq)"]])
+                    seq += 1
+                }
+                drain(150)
+            }
+        }
+        let r = analyze(shots, maxStep: 700, viewportHeight: fx.sv.contentView.bounds.height)
+        print("UXGATE glide-vs-snapshots \(r)")
+        r.log.forEach { print("UXGATE   \($0)") }
+        XCTAssertEqual(r.shifts, 0, "content moved without user input (snapped back to a stale anchor)")
+        XCTAssertEqual(r.tears, 0)
+        XCTAssertEqual(r.flashes, 0)
+    }
+
+    /// Reading near the top of the loaded window while new rows arrive at
+    /// the bottom: the pixel-budget trim must not remove the rows on screen.
+    func testNewMessagesDoNotTrimRowsBeingRead() throws {
+        let fx = try makeFixture(total: 200)
+        drain(1_200)
+        // One gesture up to the top of the loaded window (one page may load);
+        // the window still ends at the newest row, so arrivals append.
+        for _ in 0..<80 { packet(fx, 40); drain(8) }
+        drain(900)
+        if fx.sv.contentView.bounds.minY > 120 { packet(fx, fx.sv.contentView.bounds.minY - 80); drain(900) }
+        XCTAssertEqual(fx.app.messageStore.windows[sid]?.bottomSeq, 200, "precondition: window reaches the tail")
+        packetInputTotal = -fx.sv.debugWheelAppliedTotal
+        let before = fx.app.messageStore.messages[sid]?.count ?? 0
+        var seq = 201
+        let shots = recordFrames(fx) {
+            for _ in 0..<30 {
+                try? ingest(fx, ["type": seq % 2 == 1 ? "user_message" : "agent_message", "seq": seq,
+                                 "sessionId": sid, "deviceId": dev, "timestamp": "2026-09-01T00:00:05.000Z",
+                                 "payload": ["content": Self.zh]])
+                seq += 1
+                drain(60)
+            }
+            drain(500)
+        }
+        let r = analyze(shots, maxStep: 700, viewportHeight: fx.sv.contentView.bounds.height)
+        print("UXGATE trim-while-reading offset=\(Int(fx.sv.contentView.bounds.minY)) window=\(before)->\(fx.app.messageStore.messages[sid]?.count ?? 0) \(r)")
+        r.log.forEach { print("UXGATE   \($0)") }
+        XCTAssertEqual(r.shifts, 0, "rows being read moved: the window trimmed them")
+        XCTAssertEqual(r.flashes, 0)
+        XCTAssertEqual(r.blanks, 0)
+    }
+
     // MARK: Sending
 
     func testComposerSubmitReturnsToNewestEdge() throws {
@@ -297,6 +360,42 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertNil(released, "released without re-entering deinit")
     }
 
+    /// Table layout runs on the content preparation queue while the main
+    /// thread draws code-block labels. Both used AppKit string drawing, whose
+    /// shared typesetter is not thread-safe (abort inside
+    /// CTLineCreateWithAttributedString seen while history pages loaded).
+    func testConcurrentTableLayoutAndCodeDrawingDoNotCrash() throws {
+        let code = MacMarkdown.attributed("```swift\nlet a = 1\nlet b = 2\n```\n\n" + Self.table,
+                                          cacheKey: "stress-\(UUID())")
+        let artifact = try XCTUnwrap(MacCoreTextLayoutArtifact.cached(attributed: code, width: 520, key: "stress-\(UUID())"))
+        let view = MacCoreTextBodyView(frame: NSRect(x: 0, y: 0, width: 520, height: artifact.height))
+        view.configure(artifact)
+        let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        let stop = ManagedAtomicFlag()
+        let group = DispatchGroup()
+        for worker in 0..<3 {
+            DispatchQueue.global(qos: .userInitiated).async(group: group) {
+                var i = 0
+                while !stop.value {
+                    let rows = (0..<6).map { r in ["指标\(worker)-\(i)-\(r)", "覆盖设备 iOS、Android 以及更多平台 \(r)", "\(i * r)ms"] }
+                    _ = MacTableLayout(rows: rows, alignments: [.leading, .leading, .trailing])
+                    i += 1
+                }
+            }
+        }
+        let end = Date().addingTimeInterval(2.5)
+        var draws = 0
+        while Date() < end {
+            view.needsDisplay = true
+            view.cacheDisplay(in: view.bounds, to: rep)
+            draws += 1
+        }
+        stop.value = true
+        group.wait()
+        print("UXGATE concurrent-text draws=\(draws)")
+        XCTAssertGreaterThan(draws, 50)
+    }
+
     // MARK: Bubble chrome
 
     func testTableOnlyReplyIsNotASliver() {
@@ -327,5 +426,14 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertFalse(steps.isHidden)
         XCTAssertLessThan(steps.frame.minX, 40, "steps ··· rides the top-leading edge")
         XCTAssertLessThanOrEqual(steps.frame.minY, MacChatBubbleLayout.outerV)
+    }
+}
+
+final class ManagedAtomicFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flag = false
+    var value: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return flag }
+        set { lock.lock(); flag = newValue; lock.unlock() }
     }
 }
