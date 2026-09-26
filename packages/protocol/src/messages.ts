@@ -228,14 +228,15 @@ export interface AgentMessage extends BaseEnvelope {
      *  Absent on pre-0.18 sessions (backfilled by scripts/backfill-trace.mjs). */
     steps?: number;
     /** Present when the agent asks the human (`ask_user`). `content` is the
-     *  agent's lead-in prose (may be empty). Pending until a `user_message`
-     *  with `answerTo === question.id` or a later turn boundary
-     *  (`idle` / `turn_status` / `interrupted_turn`) lands on the spine. */
+     *  agent's lead-in prose (may be empty). The human can always answer in
+     *  free text; `choices` are only shortcuts that send their text as the
+     *  answer. Still open while no other spine message follows it (answered by
+     *  the `user_message` with `answerTo === question.id`; any other following
+     *  message means it was not answered). */
     question?: {
       id: string;
       text: string;
       choices?: string[];
-      allowFreeform?: boolean;
     };
   };
 }

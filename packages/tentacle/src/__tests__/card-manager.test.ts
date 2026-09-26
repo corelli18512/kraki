@@ -4,7 +4,7 @@ import type { CardActionState } from '@kraki/protocol';
 
 type RunningTool = Extract<CardActionState, { type: 'tool_start' }>;
 type CompletedTool = Extract<CardActionState, { type: 'tool_complete' }>;
-type PromptAction = Extract<CardActionState, { type: 'permission' | 'question' }>;
+type PromptAction = Extract<CardActionState, { type: 'permission' }>;
 
 // ── Action factories: build the reused message-shaped card slots ──
 const tool = (toolCallId: string, headline: string): RunningTool => ({
@@ -14,10 +14,6 @@ const tool = (toolCallId: string, headline: string): RunningTool => ({
 const toolDone = (toolCallId: string, headline: string, success = true): CompletedTool => ({
   type: 'tool_complete',
   payload: { toolName: 'bash', headline, toolCallId, success },
-});
-const question = (id: string, q: string): PromptAction => ({
-  type: 'question',
-  payload: { id, question: q },
 });
 const permission = (id: string, description = 'x', toolName = 'bash'): PromptAction => ({
   type: 'permission',
@@ -133,7 +129,7 @@ describe('CardManager draft bubble', () => {
 
   it('onBubble keeps the slot when an UNRESOLVED prompt occupies it', () => {
     const { card, sent } = setup();
-    card.onPrompt('s1', question('q1', 'a?'));
+    card.onPrompt('s1', permission('q1'));
     sent.length = 0;
     card.onBubble('s1');
     expect(actions(sent)).toHaveLength(0);
@@ -198,17 +194,6 @@ describe('CardManager action part', () => {
     expect(actions(sent)).toEqual([null]);
   });
 
-  it('retires an ANSWERED question from the slot when narration resumes', () => {
-    const { card, sent } = setup();
-    card.onPrompt('s1', question('q1', 'a?'));
-    card.resolvePrompt('s1', 'q1', { answer: '面条' });
-    sent.length = 0;
-    // Once the agent narrates again the answered question is settled → slot clears.
-    card.onDelta('s1', 'thanks, continuing');
-    expect(actions(sent)).toEqual([null]);
-    expect((card.snapshot('s1')[1].payload as { action: unknown }).action).toBeNull();
-  });
-
   it('retires a DECIDED permission from the slot on onNarrationFinal', () => {
     const { card, sent } = setup();
     card.onPrompt('s1', permission('p1'));
@@ -220,13 +205,13 @@ describe('CardManager action part', () => {
 
   it('does NOT retire an UNRESOLVED prompt when narration streams in parallel', () => {
     const { card, sent } = setup();
-    card.onPrompt('s1', question('q1', 'a?'));
+    card.onPrompt('s1', permission('q1'));
     sent.length = 0;
-    // A pending (unanswered) question stays put even as the agent narrates.
+    // A pending (undecided) permission stays put even as the agent narrates.
     card.onDelta('s1', 'while you decide, here is context');
     expect(actions(sent)).toEqual([]);
     expect((card.snapshot('s1')[1].payload as { action: unknown }).action)
-      .toMatchObject({ type: 'question', payload: { id: 'q1' } });
+      .toMatchObject({ type: 'permission', payload: { id: 'q1' } });
   });
 
   it('a later prompt takes over the slot from a running tool (last-write-wins)', () => {
@@ -263,15 +248,6 @@ describe('CardManager action part', () => {
     expect(actions(sent).at(-1)).toMatchObject({ type: 'tool_complete', payload: { toolCallId: 'tc3', success: true } });
   });
 
-  it('resolving a question updates it IN PLACE to show the answer (no fallback)', () => {
-    const { card, sent } = setup();
-    card.onToolStart('s1', tool('tc1', 't'));
-    card.onPrompt('s1', question('q1', 'a?'));
-    card.resolvePrompt('s1', 'q1', { answer: '面条' });
-    const a = actions(sent);
-    expect(a[a.length - 1]).toMatchObject({ type: 'question', payload: { id: 'q1', answer: '面条' } });
-  });
-
   it('resolving a permission updates it IN PLACE with the decision (no fallback to tool)', () => {
     const { card, sent } = setup();
     card.onToolStart('s1', tool('tc1', 't'));
@@ -281,17 +257,16 @@ describe('CardManager action part', () => {
     expect(a[a.length - 1]).toMatchObject({ type: 'permission', payload: { id: 'p1', decision: 'approve' } });
   });
 
-  it('resolving without a resolution freezes a question as cancelled', () => {
+  it('resolving without a resolution clears a permission from the slot', () => {
     const { card, sent } = setup();
-    card.onPrompt('s1', question('q1', 'a?'));
-    card.resolvePrompt('s1', 'q1');
-    const a = actions(sent);
-    expect(a[a.length - 1]).toMatchObject({ type: 'question', payload: { id: 'q1', cancelled: true } });
+    card.onPrompt('s1', permission('p1'));
+    card.resolvePrompt('s1', 'p1');
+    expect(actions(sent).at(-1)).toBeNull();
   });
 
   it('an UNRESOLVED prompt blocks a subsequent tool from taking the slot', () => {
     const { card, sent } = setup();
-    card.onPrompt('s1', question('q1', 'a?'));
+    card.onPrompt('s1', permission('q1'));
     sent.length = 0;
     card.onToolStart('s1', tool('tc1', 't'));
     // Tool is suppressed while the human hasn't answered — slot still holds q1.
@@ -356,7 +331,7 @@ describe('CardManager.activeSessions', () => {
 
   it('lists sessions with an active action (prompt or tool)', () => {
     const { card } = setup();
-    card.onPrompt('s1', question('q1', 'q?'));
+    card.onPrompt('s1', permission('q1'));
     card.onToolStart('s2', tool('tc1', 't'));
     expect(card.activeSessions().sort()).toEqual(['s1', 's2']);
   });
