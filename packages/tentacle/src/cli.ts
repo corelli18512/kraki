@@ -536,11 +536,14 @@ async function cmdSetupHeadless(args: string[]): Promise<void> {
     case 'claude':
       agents = ['claude'];
       break;
+    case 'codex':
+      agents = ['codex'];
+      break;
     case 'both':
       agents = ['copilot', 'claude'];
       break;
     default:
-      return fail('bad_agent', `--agent must be one of: copilot, claude, both, auto (got "${agentArg}")`);
+      return fail('bad_agent', `--agent must be one of: copilot, claude, codex, both, auto (got "${agentArg}")`);
   }
 
   // Persist an Anthropic key into ~/.claude/settings.json so the daemon

@@ -117,6 +117,15 @@ export async function detectAvailableAgents(): Promise<AgentId[]> {
     logger.debug('pi not available');
   }
 
+  // codex: `codex` CLI on PATH (package @openai/codex). Login is verified at
+  // adapter start (account/read) so an unauthenticated install is skipped.
+  if (cliExists('codex')) {
+    agents.push('codex');
+    logger.info('Detected Codex: codex CLI OK');
+  } else {
+    logger.debug('codex not available');
+  }
+
   return agents;
 }
 
@@ -182,6 +191,13 @@ export class MultiAgentAdapter extends AgentAdapter {
           // pi has no MCP; it only needs the attachment store to externalize
           // image bytes from its show_image tool (krakiMcp is not applicable).
           adapter = new PiAdapter({ cliPath: piPath, attachmentStore: this.opts.attachmentStore });
+        } else if (id === 'codex') {
+          const { CodexAdapter } = await import('./codex.js');
+          const codexPath = resolveCliPath('codex');
+          if (!codexPath) { logger.warn('codex CLI path unresolved, skipping'); continue; }
+          // Kraki tools (ask_user / show_image / kraki_get_mode) are hosted by the
+          // adapter as Codex dynamic tools, so krakiMcp is not needed.
+          adapter = new CodexAdapter({ cliPath: codexPath, attachmentStore: this.opts.attachmentStore });
         } else {
           logger.warn({ id }, 'Unknown agent ID, skipping');
           continue;

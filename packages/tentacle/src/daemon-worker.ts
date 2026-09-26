@@ -175,7 +175,7 @@ export async function startWorker(): Promise<WorkerResult> {
   // 3c. Create multi-agent adapter. When config pins an explicit agent
   // allow-list we honour it; otherwise the adapter auto-detects every
   // installed agent at startup (legacy behaviour).
-  const pinnedAgents = config.agents?.filter((a): a is AgentId => a === 'copilot' || a === 'claude');
+  const pinnedAgents = config.agents?.filter((a): a is AgentId => a === 'copilot' || a === 'claude' || a === 'codex');
   const adapter = new MultiAgentAdapter({
     attachmentStore,
     ...(pinnedAgents && pinnedAgents.length > 0 && { agentIds: pinnedAgents }),
