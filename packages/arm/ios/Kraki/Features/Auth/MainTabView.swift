@@ -143,7 +143,7 @@ struct MainTabView: View {
     @available(iOS 26.0, *)
     @ViewBuilder
     private var modernTabView: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: tabSelection) {
             Tab(value: 0) {
                 sessionsContent
             } label: {
@@ -185,17 +185,26 @@ struct MainTabView: View {
                 Label("New Session", systemImage: "plus")
             }
         }
-        .onChange(of: selectedTab) { oldValue, newValue in
-            if newValue == 3 {
-                showNewSession = true
-                // Snap selection back synchronously so we don't flash
-                // the empty Color.clear content of the +tab. The
-                // previous DispatchQueue.async approach left a one-
-                // runloop window where SwiftUI rendered the +tab's
-                // empty body before resetting selection.
-                selectedTab = oldValue
-            }
+        .background {
+            TabActionInterceptor(actionTitle: "New Session") { showNewSession = true }
+                .frame(width: 0, height: 0)
         }
+    }
+
+    /// The "+" tab is an action, never a destination. `TabActionInterceptor`
+    /// stops UIKit from selecting it (see there for why that matters); this
+    /// binding is the SwiftUI-side fallback so selection never becomes 3.
+    private var tabSelection: Binding<Int> {
+        Binding(
+            get: { selectedTab },
+            set: { newValue in
+                if newValue == 3 {
+                    showNewSession = true
+                } else {
+                    selectedTab = newValue
+                }
+            }
+        )
     }
 
     // MARK: - Pre-iOS 26 fallback
