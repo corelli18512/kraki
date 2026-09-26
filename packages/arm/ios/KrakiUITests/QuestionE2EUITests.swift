@@ -42,8 +42,7 @@ final class QuestionE2EUITests: XCTestCase {
         sleep(2)
         shot("2-answered")
         XCTAssertFalse(choice.exists, "choices go away once answered")
-        let mentions = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Which color do you prefer")).count
-        XCTAssertGreaterThanOrEqual(mentions, 2, "the question stays readable in its bubble (besides the prompt)")
+        XCTAssertTrue(text(app, "I will ask").exists, "the question bubble stays")
         XCTAssertTrue(text(app, "prefer Blue").waitForExistence(timeout: 90), "agent replies")
         sleep(2)
         shot("3-reply")

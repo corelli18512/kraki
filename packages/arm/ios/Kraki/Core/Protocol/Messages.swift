@@ -238,21 +238,20 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
 
     var questionState: String? { payload[ChatMessage.questionStateKey]?.stringValue }
 
-    /// A question bubble's (body text, action slot). While open the question
-    /// and its choices are the interactive action slot. Once closed it is
-    /// static, so it joins the body text (rendered like any message): quoted
-    /// question, plus "Not answered" when nothing answered it.
+    /// A question bubble's (body text, action slot). The lead-in prose and the
+    /// question (bold) are always body text, identical before and after it is
+    /// answered. Only an open question adds the action slot: its choices as
+    /// shortcuts. An unanswered one ends with "Not answered".
     var questionCard: (text: String, action: ChatMessage?)? {
         guard let spec = questionSpec else { return nil }
-        let lead = content ?? ""
-        if questionState == "open" { return (lead, questionAction) }
         var parts: [String] = []
-        if !lead.isEmpty { parts.append(lead) }
-        let quoted = spec.text.split(separator: "\n", omittingEmptySubsequences: false)
-            .map { "> " + $0 }.joined(separator: "\n")
-        parts.append(quoted)
+        if let lead = content, !lead.isEmpty { parts.append(lead) }
+        let bold = spec.text.split(separator: "\n", omittingEmptySubsequences: true)
+            .map { "**\($0.trimmingCharacters(in: .whitespaces))**" }.joined(separator: "\n")
+        if !bold.isEmpty { parts.append(bold) }
         if questionState == "unanswered" { parts.append("*Not answered*") }
-        return (parts.joined(separator: "\n\n"), nil)
+        let action = questionState == "open" ? questionAction : nil
+        return (parts.joined(separator: "\n\n"), action)
     }
 
     /// The interactive action slot of an open question.

@@ -765,10 +765,9 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertTrue(vm.questions.isEmpty, "the composer is no longer in answer mode")
     }
 
-    /// A closed question is static: it joins the bubble body (quoted), and
-    /// "Not answered" when nothing answered it; only an open one has the
-    /// interactive action slot.
-    func testClosedQuestionRendersInTheBody() {
+    /// The question text is body text (bold), identical before and after it
+    /// is answered; only an open question adds the choice slot.
+    func testQuestionTextIsTheSameOpenAndClosed() {
         func m(_ state: String) -> ChatMessage {
             var message = ChatMessage(type: "agent_message", seq: 2, sessionId: sid, deviceId: dev, timestamp: nil,
                                       payload: ["content": AnyCodable("有两个方案"),
@@ -776,11 +775,11 @@ final class ChatUXRegressionTests: XCTestCase {
             message.payload[ChatMessage.questionStateKey] = AnyCodable(state)
             return message
         }
-        XCTAssertEqual(m("open").questionCard?.text, "有两个方案")
+        XCTAssertEqual(m("open").questionCard?.text, "有两个方案\n\n**删旧接口？**")
+        XCTAssertEqual(m("answered").questionCard?.text, m("open").questionCard?.text)
         XCTAssertEqual(m("open").questionCard?.action?.choices, ["删", "留"])
-        XCTAssertEqual(m("answered").questionCard?.text, "有两个方案\n\n> 删旧接口？")
         XCTAssertNil(m("answered").questionCard?.action)
-        XCTAssertEqual(m("unanswered").questionCard?.text, "有两个方案\n\n> 删旧接口？\n\n*Not answered*")
+        XCTAssertEqual(m("unanswered").questionCard?.text, "有两个方案\n\n**删旧接口？**\n\n*Not answered*")
     }
 
     func testFailedAnswerKeepsTheQuestionAnswerable() throws {

@@ -180,53 +180,44 @@ struct BubbleActionSlot: View {
     }
 
     private func questionInput(_ m: ChatMessage) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let question = m.question, !question.isEmpty {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "questionmark.circle")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.purple)
-                    Text(LiveMarkdown.attributed(question))
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.textPrimary)
-                        // Keep multiline question text in the action host's
-                        // intrinsic height so the bottom of the bubble cannot
-                        // clip the final lines.
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+        VStack(alignment: .leading, spacing: 6) {
+            // A spine question keeps its text in the bubble body; only legacy
+            // live-card questions (no derived state) carry it here.
+            if m.questionState == nil, let question = m.question, !question.isEmpty {
+                Text(LiveMarkdown.attributed(question))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            // Choices are shortcuts for answering; after the question
-            // closes the answer is the user's own message below, so nothing
-            // is highlighted here.
-            if m.questionState == "unanswered" {
-                Text("Not answered")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.textMuted)
-            } else if m.questionState == "open", let choices = m.choices, !choices.isEmpty {
-                VStack(spacing: 6) {
-                    ForEach(choices, id: \.self) { choice in
-                        Button {
-                            submitQuestionChoice(m, answer: choice)
-                        } label: {
-                            Text(LiveMarkdown.attributed(choice))
-                                .font(.system(size: 13))
-                                .foregroundStyle(Color.textPrimary)
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 9)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.surfacePrimary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
-                                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.borderPrimary))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Answer: \(choice)")
+            // Choices are shortcuts that send their text as the answer.
+            if m.questionState != "answered", m.questionState != "unanswered",
+               let choices = m.choices, !choices.isEmpty {
+                ForEach(choices, id: \.self) { choice in
+                    Button {
+                        submitQuestionChoice(m, answer: choice)
+                    } label: {
+                        Text(LiveMarkdown.attributed(choice))
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Color.textPrimary)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(Color.surfacePrimary.opacity(0.75), in: Capsule())
+                            .overlay(Capsule().strokeBorder(Color.borderPrimary))
+                            .contentShape(Capsule())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Answer: \(choice)")
                 }
+                Text("Or type your answer below")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.textMuted)
+                    .padding(.top, 2)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// "Sending…" while an optimistic answer/decision awaits Tentacle.

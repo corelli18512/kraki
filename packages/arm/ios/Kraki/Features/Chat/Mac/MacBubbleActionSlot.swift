@@ -293,69 +293,58 @@ struct MacBubbleActionSlot: View {
     }
 
     private func questionInput(_ message: ChatMessage) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let question = message.question, !question.isEmpty {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "questionmark.circle")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.purple)
-                    Text(MacLiveMarkdown.attributed(question))
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.textPrimary)
-                        // The question sits above the choice stack inside a
-                        // self-sized AppKit hosting view. Keep its full
-                        // multiline height in the action measurement so the
-                        // bottom of the bubble cannot clip the last lines.
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+        VStack(alignment: .leading, spacing: 6) {
+            // A spine question keeps its text in the bubble body; only legacy
+            // live-card questions (no derived state) carry it here.
+            if message.questionState == nil, let question = message.question, !question.isEmpty {
+                Text(MacLiveMarkdown.attributed(question))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            // Choices are shortcuts for answering; after the question
-            // closes the answer is the user's own message below, so nothing
-            // is highlighted here.
-            if message.questionState == "unanswered" {
-                Text("Not answered")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.textMuted)
-            } else if message.questionState == "open", let choices = message.choices, !choices.isEmpty {
-                VStack(spacing: 6) {
-                    ForEach(choices, id: \.self) { choice in
-                        MacChatActionButton(
-                            action: {
-                                guard let questionId = message.questionId else { return }
-                                onAnswerQuestion(questionId, choice)
-                            },
-                            foreground: Color.textPrimary,
-                            fill: Color.surfacePrimary.opacity(0.6),
-                            border: Color.borderPrimary,
-                            accent: .purple
-                        ) {
-                            Text(MacLiveMarkdown.attributed(choice))
-                                .font(.system(size: 13))
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 9)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .accessibilityLabel("Answer: \(choice)")
-                        .background {
-                            GeometryReader { proxy in
-                                Color.clear.preference(
-                                    key: MacQuestionChoiceFramePreferenceKey.self,
-                                    value: [MacQuestionChoiceFrame(
-                                        answer: choice,
-                                        rect: proxy.frame(
-                                            in: .named(Self.actionCoordinateSpace)
-                                        )
-                                    )]
-                                )
-                            }
+            // Choices are shortcuts that send their text as the answer.
+            if message.questionState != "answered", message.questionState != "unanswered",
+               let choices = message.choices, !choices.isEmpty {
+                ForEach(choices, id: \.self) { choice in
+                    MacChatActionButton(
+                        action: {
+                            guard let questionId = message.questionId else { return }
+                            onAnswerQuestion(questionId, choice)
+                        },
+                        foreground: Color.textPrimary,
+                        fill: Color.surfacePrimary.opacity(0.75),
+                        border: Color.borderPrimary,
+                        accent: .accentColor,
+                        capsule: true
+                    ) {
+                        Text(MacLiveMarkdown.attributed(choice))
+                            .font(.system(size: 13, weight: .medium))
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
+                    }
+                    .accessibilityLabel("Answer: \(choice)")
+                    .background {
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: MacQuestionChoiceFramePreferenceKey.self,
+                                value: [MacQuestionChoiceFrame(
+                                    answer: choice,
+                                    rect: proxy.frame(in: .named(Self.actionCoordinateSpace))
+                                )]
+                            )
                         }
                     }
                 }
+                Text("Or type your answer below")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.textMuted)
+                    .padding(.top, 2)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     static func switchesToExecute(mode: SessionMode, toolName: String?) -> Bool {
@@ -374,6 +363,7 @@ private struct MacChatActionButton<Label: View>: View {
     let fill: Color
     let border: Color
     let accent: Color
+    var capsule = false
     let label: () -> Label
     @State private var isHovered = false
 
@@ -383,6 +373,7 @@ private struct MacChatActionButton<Label: View>: View {
         fill: Color,
         border: Color,
         accent: Color,
+        capsule: Bool = false,
         @ViewBuilder label: @escaping () -> Label
     ) {
         self.action = action
@@ -390,6 +381,7 @@ private struct MacChatActionButton<Label: View>: View {
         self.fill = fill
         self.border = border
         self.accent = accent
+        self.capsule = capsule
         self.label = label
     }
 
@@ -402,6 +394,7 @@ private struct MacChatActionButton<Label: View>: View {
             fill: fill,
             border: border,
             accent: accent,
+            capsule: capsule,
             isHovered: isHovered
         ))
         .onHover { isHovered = $0 }
@@ -413,13 +406,14 @@ private struct MacChatActionButtonStyle: ButtonStyle {
     let fill: Color
     let border: Color
     let accent: Color
+    var capsule = false
     let isHovered: Bool
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let shape = RoundedRectangle(cornerRadius: capsule ? 999 : 8, style: .continuous)
+        return configuration.label
             .foregroundStyle(foreground)
             .background {
-                let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
                 shape.fill(fill)
                     .overlay(
                         shape.fill(Color.white.opacity(isHovered ? 0.07 : 0))
@@ -434,7 +428,7 @@ private struct MacChatActionButtonStyle: ButtonStyle {
                         )
                     )
             }
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(shape)
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .shadow(
                 color: isHovered ? accent.opacity(0.18) : .clear,
