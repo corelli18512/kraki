@@ -244,6 +244,66 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertEqual(r.blanks, 0)
     }
 
+    /// Aggressive scrolling combined with history loading: max-speed wheel,
+    /// momentum bursts with network-latency pages, and Tentacle 100-row pages.
+    /// Every committed frame: content moves exactly with the user's scroll,
+    /// no row vanishes, no blank area, no placeholder.
+    func testAggressiveScrollingWithHistoryLoadingStaysClean() throws {
+        func check(_ name: String, _ fx: Fx, _ drive: () -> Void) {
+            drain(1_500)
+            packetInputTotal = -fx.sv.debugWheelAppliedTotal
+            let shots = recordFrames(fx) { drive(); drain(1_000) }
+            let r = analyze(shots, maxStep: 10_000, viewportHeight: fx.sv.contentView.bounds.height)
+            print("UXGATE aggressive \(name) \(r)")
+            r.log.prefix(6).forEach { print("UXGATE   \($0)") }
+            XCTAssertTrue(r.clean, "\(name): \(r)")
+            windows.forEach { $0.orderOut(nil) }
+            windows.removeAll()
+        }
+        let wheelFx = try makeFixture(total: 400)
+        check("wheel-max", wheelFx) {
+            for _ in 0..<200 { wheel(wheelFx, lines: 8); drain(12) }
+        }
+        MessageProviderDebug.olderPageDelayMs = 180
+        defer { MessageProviderDebug.olderPageDelayMs = 0 }
+        let momentumFx = try makeFixture(total: 400)
+        check("momentum-bursts", momentumFx) {
+            for burst in 0..<8 {
+                for _ in 0..<45 { packet(momentumFx, 160); drain(8) }
+                for _ in 0..<(burst % 2 == 0 ? 4 : 40) { drain(8) }
+            }
+        }
+        MessageProviderDebug.olderPageDelayMs = 0
+        var relayFx: Fx?
+        let fx = try makeFixture(total: 400, dbFrom: 341, outbound: { msg in
+            guard msg["type"] as? String == "request_session_messages",
+                  let before = (msg["payload"] as? [String: Any])?["beforeSeq"] as? Int else { return true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(250)) {
+                guard let fx = relayFx else { return }
+                let page = (max(1, before - 100)..<before).map { seq -> ChatMessage in
+                    let b = Self.message(seq, long: false)
+                    return ChatMessage(type: b.type, seq: seq, sessionId: self.sid, deviceId: self.dev,
+                                       timestamp: "2026-09-01T00:00:00.000Z", payload: ["content": AnyCodable(b.text)])
+                }
+                fx.app.messageProvider?.handleBatch(sessionId: self.sid, messages: page, lastSeq: before - 1,
+                                                    totalLastSeq: before - 1, containsHead: false)
+            }
+            return true
+        })
+        relayFx = fx
+        check("relay-pages", fx) {
+            for burst in 0..<10 {
+                if burst % 2 == 0 {
+                    for _ in 0..<40 { wheel(fx, lines: 6); drain(12) }
+                } else {
+                    for _ in 0..<60 { packet(fx, 150); drain(8) }
+                }
+                drain(burst % 3 == 0 ? 80 : 650)
+            }
+        }
+        relayFx = nil
+    }
+
     // MARK: Sending
 
     func testComposerSubmitReturnsToNewestEdge() throws {

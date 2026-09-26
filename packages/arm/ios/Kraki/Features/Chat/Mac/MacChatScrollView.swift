@@ -742,7 +742,13 @@ final class MacChatDocumentView: NSView {
                     && visibleSignatures[index] != nil
                     && !(item.key == "__live__" && preparedContent != nil)
                 if !deferReconfiguration {
-                    if configuredCount >= maxConfigurations {
+                    // Installing already-prepared content costs ~0.3ms; a fast
+                    // glide can bring several rows in per frame, so prepared
+                    // rows share a 6ms budget instead of the one-per-pass cap
+                    // (which showed them as placeholders for a frame or two).
+                    let preparedWithinBudget = preparedContent != nil
+                        && (CACurrentMediaTime() - started) * 1_000 < 6
+                    if configuredCount >= maxConfigurations, !preparedWithinBudget {
                         hasPendingVisibleContent = true
                         installPlaceholderCellIfNeeded(at: index, item: item)
                         if intersectsViewport { geometryBarrierReached = true }

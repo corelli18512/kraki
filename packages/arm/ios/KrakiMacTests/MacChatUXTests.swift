@@ -335,6 +335,10 @@ class MacChatUXTestCase: XCTestCase {
                          placeholders: placeholders, uncovered: gap,
                          input: packetInputTotal + fx.sv.debugWheelAppliedTotal)
         shot.placeholderInfo = phInfo + (fx.sv.debugWheelGlideActive ? "[glide]" : "")
+        if placeholders > 0 {
+            let d = diag(fx)
+            shot.placeholderInfo += " items=\(d["itemCount"] ?? 0) prepared=\(d["preparedContentCount"] ?? 0) exact=\(d["exactHeightCount"] ?? 0) pending=\(d["pendingHeightCount"] ?? 0) warmActive=\(d["windowWarmActive"] ?? "") w=\(Int(fx.doc.frame.width))"
+        }
         return shot
     }
 
@@ -742,9 +746,11 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
                 let r = packet(fx, 180)
                 if r.after <= -fx.sv.contentInsets.top + 0.5, step % 3 == 0 {
                     // Elastic overscroll above the first row, as AppKit does at the edge.
-                    packetInputTotal += -60 - fx.sv.contentView.bounds.origin.y
+                    let before = fx.sv.contentView.bounds.origin.y
                     fx.sv.contentView.bounds.origin.y = -60
                     fx.sv.reflectScrolledClipView(fx.sv.contentView)
+                    // Count only what the clip view actually allowed.
+                    packetInputTotal += fx.sv.contentView.bounds.origin.y - before
                 }
                 tick(); drain(8)
             }
