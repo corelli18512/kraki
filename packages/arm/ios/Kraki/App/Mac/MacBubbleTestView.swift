@@ -639,6 +639,60 @@ private extension NSFont {
     var tkItalic: NSFont { withTraits(.italic) }
 }
 
+/// Text measurement/drawing through CoreText only. AppKit string drawing
+/// (`NSString.size/boundingRect/draw(withAttributes:)`) shares a typesetter
+/// that is not safe to use concurrently: table layout runs on the content
+/// preparation queue while the main thread draws, and the collision aborted
+/// inside CTLineCreateWithAttributedString. CoreText objects are per call.
+enum MacCTText {
+    static func width(_ text: String, font: NSFont) -> CGFloat {
+        guard !text.isEmpty else { return 0 }
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: text, attributes: [.font: font]))
+        return ceil(CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)))
+    }
+
+    static func height(_ text: String, font: NSFont, width: CGFloat) -> CGFloat {
+        guard !text.isEmpty else { return ceil(font.ascender - font.descender + font.leading) }
+        let framesetter = CTFramesetterCreateWithAttributedString(
+            NSAttributedString(string: text, attributes: [.font: font]))
+        let size = CTFramesetterSuggestFrameSizeWithConstraints(
+            framesetter, CFRange(location: 0, length: 0), nil,
+            CGSize(width: max(1, width), height: .greatestFiniteMagnitude), nil)
+        return ceil(size.height)
+    }
+
+    /// Wrapped draw in a flipped view, laid out exactly as `height` measures.
+    static func drawWrapped(_ text: String, attributes: [NSAttributedString.Key: Any], in rect: NSRect) {
+        guard !text.isEmpty, rect.width > 0, let context = NSGraphicsContext.current?.cgContext else { return }
+        let framesetter = CTFramesetterCreateWithAttributedString(
+            NSAttributedString(string: text, attributes: attributes))
+        let path = CGPath(rect: CGRect(x: 0, y: 0, width: rect.width, height: max(rect.height, 1) + 2), transform: nil)
+        let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: 0), path, nil)
+        context.saveGState()
+        context.textMatrix = .identity
+        context.translateBy(x: rect.minX, y: rect.minY + max(rect.height, 1) + 2)
+        context.scaleBy(x: 1, y: -1)
+        CTFrameDraw(frame, context)
+        context.restoreGState()
+    }
+
+    /// Single-line draw in a flipped view; `point` is the top-left.
+    static func draw(_ text: String, attributes: [NSAttributedString.Key: Any], at point: NSPoint) {
+        guard !text.isEmpty, let context = NSGraphicsContext.current?.cgContext else { return }
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
+        var ascent: CGFloat = 0
+        _ = CTLineGetTypographicBounds(line, &ascent, nil, nil)
+        context.saveGState()
+        context.textMatrix = .identity
+        context.translateBy(x: point.x, y: point.y + ascent)
+        context.scaleBy(x: 1, y: -1)
+        context.textPosition = .zero
+        CTLineDraw(line, context)
+        context.restoreGState()
+    }
+}
+
 final class MacTableLayout {
     let rows: [[String]]
     let alignments: [TableAlignment]
@@ -650,6 +704,14 @@ final class MacTableLayout {
     let bubbleRowsHeight: CGFloat
     let bubbleViewportHeight: CGFloat
     let hiddenRowCount: Int
+
+    /// Identity of the table's visible content (for view reuse).
+    private(set) lazy var contentKey: String = {
+        var hasher = Hasher()
+        for row in rows { hasher.combine(row) }
+        hasher.combine(alignments.map { "\($0)" })
+        return "\(rows.count)x\(rows.first?.count ?? 0):\(hasher.finalize())"
+    }()
 
     static let showMoreHeight: CGFloat = 40
     static let cellPadH: CGFloat = 10
@@ -666,7 +728,7 @@ final class MacTableLayout {
             let font = rowIndex == 0 ? Self.headerFont : Self.bodyFont
             for column in 0..<columnCount {
                 let value = column < row.count ? row[column] : ""
-                let measured = ceil((value as NSString).size(withAttributes: [.font: font]).width)
+                let measured = MacCTText.width(value, font: font)
                 widths[column] = max(widths[column], min(220, measured + Self.cellPadH * 2))
             }
         }
@@ -682,12 +744,8 @@ final class MacTableLayout {
             for column in 0..<columnCount {
                 let value = column < row.count ? row[column] : ""
                 let available = max(1, widths[column] - Self.cellPadH * 2)
-                let rect = (value as NSString).boundingRect(
-                    with: NSSize(width: available, height: .greatestFiniteMagnitude),
-                    options: [.usesLineFragmentOrigin, .usesFontLeading],
-                    attributes: [.font: font]
-                )
-                rowHeight = max(rowHeight, ceil(rect.height) + Self.cellPadV * 2)
+                let height = MacCTText.height(value, font: font, width: available)
+                rowHeight = max(rowHeight, height + Self.cellPadV * 2)
             }
             heights.append(rowHeight)
             y += rowHeight
@@ -787,19 +845,19 @@ private final class MacTableCanvasView: NSView {
                 case .center: paragraph.alignment = .center
                 case .trailing: paragraph.alignment = .right
                 }
-                (value as NSString).draw(
-                    with: NSRect(
-                        x: x + MacTableLayout.cellPadH,
-                        y: y + MacTableLayout.cellPadV,
-                        width: width - MacTableLayout.cellPadH * 2,
-                        height: height - MacTableLayout.cellPadV * 2
-                    ),
-                    options: [.usesLineFragmentOrigin, .usesFontLeading],
+                MacCTText.drawWrapped(
+                    value,
                     attributes: [
                         .font: tableLayout.font(for: row),
                         .foregroundColor: NSColor.labelColor,
                         .paragraphStyle: paragraph,
-                    ]
+                    ],
+                    in: NSRect(
+                        x: x + MacTableLayout.cellPadH,
+                        y: y + MacTableLayout.cellPadV,
+                        width: width - MacTableLayout.cellPadH * 2,
+                        height: height - MacTableLayout.cellPadV * 2
+                    )
                 )
                 x += width
                 if column < tableLayout.columnWidths.count - 1 {
@@ -831,7 +889,14 @@ final class MacTableScrollView: NSScrollView {
     private let showMoreButton = NSButton()
     private let overflowHint = NSImageView()
 
+    #if DEBUG
+    static var debugInstanceCount = 0
+    #endif
+
     init(layout: MacTableLayout, fullTable: Bool = false) {
+        #if DEBUG
+        Self.debugInstanceCount += 1
+        #endif
         tableLayout = layout
         self.fullTable = fullTable
         canvas = MacTableCanvasView(layout: layout, fullTable: fullTable)
@@ -889,7 +954,8 @@ final class MacTableScrollView: NSScrollView {
         }
         overflowHint.frame = NSRect(x: bounds.width - 24, y: max(6, (bounds.height - 20) / 2),
                                     width: 20, height: 20)
-        hasHorizontalScroller = tableLayout.contentSize.width > contentSize.width + 1
+        let needsScroller = tableLayout.contentSize.width > contentSize.width + 1
+        if hasHorizontalScroller != needsScroller { hasHorizontalScroller = needsScroller }
         updateOverflowHint()
     }
 
@@ -1442,8 +1508,7 @@ final class MacBubbleTextView: NSTextView {
                         .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .semibold),
                         .foregroundColor: NSColor(srgbRed: 0xA1/255, green: 0xA1/255, blue: 0xAA/255, alpha: 1),
                     ]
-                    (label as NSString).draw(at: NSPoint(x: frame.minX + 12, y: frame.minY + 5),
-                                             withAttributes: attrs)
+                    MacCTText.draw(label, attributes: attrs, at: NSPoint(x: frame.minX + 12, y: frame.minY + 5))
                 }
             }
         }

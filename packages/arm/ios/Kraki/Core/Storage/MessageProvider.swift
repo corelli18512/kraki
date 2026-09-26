@@ -567,6 +567,8 @@ final class MessageProvider {
            let rawDelay = environment["KRAKI_MAC_CHAT_PAGE_DELAY_MS"],
            let delayMs = UInt64(rawDelay), delayMs > 0 {
             try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+        } else if MessageProviderDebug.olderPageDelayMs > 0 {
+            try? await Task.sleep(nanoseconds: MessageProviderDebug.olderPageDelayMs * 1_000_000)
         }
         #endif
 
@@ -1140,3 +1142,10 @@ final class MessageProvider {
         appState?.sessionStore.setLoading(sessionId, false)
     }
 }
+
+#if DEBUG
+/// Unit tests: simulated round-trip for older pages (network-like load).
+enum MessageProviderDebug {
+    nonisolated(unsafe) static var olderPageDelayMs: UInt64 = 0
+}
+#endif

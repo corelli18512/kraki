@@ -41,9 +41,13 @@ struct ChatScrollPolicy: Equatable {
     private(set) var interactionActive = false
     private(set) var interactionGeneration = 0
 
-    /// macOS's validated pagination contract: at most one older request per
-    /// continuous interaction. Newer recovery remains available after explicit
-    /// newer intent, matching the existing native Mac behavior.
+    /// Continuous older paging: each request consumes the allowance, and only
+    /// further *user* movement toward older history re-arms it. Keeping on
+    /// scrolling (wheel, drag, momentum) therefore keeps loading history, while
+    /// programmatic anchor compensation after a prepend never chains pages on
+    /// its own. (Previously one page per gesture: a steadily spun mouse wheel,
+    /// which has no gesture boundaries, stalled at the loaded top.)
+    /// `olderPageConsumed` is diagnostic only.
     private(set) var olderPageArmed = false
     private(set) var olderPageConsumed = false
     private(set) var suppressesNewerPagingAfterOlder = false
@@ -207,7 +211,7 @@ struct ChatScrollPolicy: Equatable {
         )
     }
 
-    /// Consumes the single older-page allowance for this continuous gesture.
+    /// Consumes the older-page allowance armed by the latest older movement.
     /// Platform-specific buffering/attachment guards should be checked before
     /// calling this method; common direction, edge, loading, and navigation
     /// rules are enforced here.
@@ -223,7 +227,6 @@ struct ChatScrollPolicy: Equatable {
               !externallySuppressed,
               scrollingTowardOlder,
               olderPageArmed,
-              !olderPageConsumed,
               hasOlder,
               !isLoading,
               distanceToOlderEdge <= olderPrefetchDistance(viewportLength: viewportLength)
@@ -326,7 +329,7 @@ struct ChatScrollPolicy: Equatable {
         switch newDirection {
         case .older:
             followingTail = false
-            if armOlderPaging, !olderPageConsumed {
+            if armOlderPaging {
                 olderPageArmed = true
             }
         case .newer:

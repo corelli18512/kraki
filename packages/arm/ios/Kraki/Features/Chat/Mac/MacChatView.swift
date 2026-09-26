@@ -2,145 +2,167 @@
 import SwiftUI
 
 /// macOS chat surface kept structurally in sync with iOS `ChatView` and
-/// `SessionDetailView`: the list extends under top/bottom chrome, a 112pt glass
-/// band carries the session title, and the floating composer owns its own glass.
-private struct MacChatTopDarkFade: View {
+/// `SessionDetailView`: the list extends under a floating glass header (title
+/// capsule + mode capsule) and the floating composer owns its own glass.
+enum MacChatHeaderMetrics {
+    static let controlHeight: CGFloat = 32
+    static let topPadding: CGFloat = 8
+    static var height: CGFloat { topPadding + controlHeight }
+    /// First message rests this far below the list top (under the header).
+    static var listTopInset: CGFloat { height + 14 }
+}
+
+/// Messages-style top edge: a long, eased fade whose strongest point is still
+/// translucent, tinted neutral black (dark) / white (light).
+private struct MacChatTopEdgeFade: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
-        Canvas { context, size in
-            guard size.width > 0, size.height > 0 else { return }
-            let sideFade = min(72, size.width * 0.16)
-            let steps = max(1, Int(ceil(size.width / 2)))
-            let stripeWidth = size.width / CGFloat(steps)
-
-            for index in 0..<steps {
-                let x = CGFloat(index) * stripeWidth
-                let centerX = x + stripeWidth * 0.5
-                let left = min(1, centerX / sideFade)
-                let right = min(1, (size.width - centerX) / sideFade)
-                let horizontal = smoothstep(min(left, right))
-                guard horizontal > 0.001 else { continue }
-
-                let rect = CGRect(x: x, y: 0, width: stripeWidth + 0.5, height: size.height)
-                context.fill(
-                    Path(rect),
-                    with: .linearGradient(
-                        Gradient(stops: [
-                            .init(color: Color.black.opacity(0.44 * horizontal), location: 0),
-                            .init(color: Color.black.opacity(0.36 * horizontal), location: 0.30),
-                            .init(color: Color.black.opacity(0.18 * horizontal), location: 0.72),
-                            .init(color: .clear, location: 1),
-                        ]),
-                        startPoint: CGPoint(x: rect.midX, y: rect.minY),
-                        endPoint: CGPoint(x: rect.midX, y: rect.maxY)
-                    )
-                )
-            }
+        let dark = colorScheme == .dark
+        ZStack {
+            Rectangle().fill(.ultraThinMaterial).opacity(0.85)
+            (dark ? Color.black : Color.white).opacity(dark ? 0.55 : 0.5)
         }
+        .mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(0.9), location: 0.0),
+                    .init(color: .black.opacity(0.78), location: 0.3),
+                    .init(color: .black.opacity(0.5), location: 0.55),
+                    .init(color: .black.opacity(0.22), location: 0.78),
+                    .init(color: .clear, location: 1.0),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
+}
 
-    private func smoothstep(_ value: CGFloat) -> Double {
-        let x = max(0, min(1, value))
-        return Double(x * x * (3 - 2 * x))
+private struct MacGlassCapsule: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            content.background {
+                Capsule().fill(.ultraThinMaterial)
+                    .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+            }
+        }
     }
 }
 
+/// Session mode control (same behavior as the iOS header): a glass capsule
+/// showing the current mode; clicking expands it into a segmented control in
+/// which only the selected mode is drawn (a sliding thumb in the mode color,
+/// no track). It closes after 3s without interaction; hovering pauses the
+/// countdown and every change restarts it.
 private struct MacChatModePicker: View {
     private static let allModes: [SessionMode] = [.safe, .discuss, .execute, .delegate]
+    static var startsExpanded: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["KRAKI_HEADER_MODE_EXPANDED"] == "1"
+        #else
+        false
+        #endif
+    }
 
     let currentMode: SessionMode
     @Binding var expanded: Bool
     let onSelect: (SessionMode) -> Void
     @State private var collapseTask: Task<Void, Never>?
+    @State private var hovering = false
+    @Namespace private var thumb
 
     var body: some View {
         Group {
             if expanded {
                 expandedPicker
-                    .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .trailing)))
+                    .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .trailing)))
             } else {
-                collapsedSegment
-                    .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .trailing)))
+                collapsedCapsule
+                    .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .trailing)))
             }
         }
-        .frame(height: 29)
-        .animation(.easeInOut(duration: 0.22), value: expanded)
+        .frame(height: MacChatHeaderMetrics.controlHeight)
+        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: expanded)
     }
 
-    private var collapsedSegment: some View {
+    private var collapsedCapsule: some View {
         Button {
-            withAnimation { expanded = true }
+            expanded = true
             scheduleCollapse()
         } label: {
-            modeSegment(currentMode, selected: true)
+            HStack(spacing: 6) {
+                Circle().fill(Color.modeColor(currentMode)).frame(width: 7, height: 7)
+                Text(currentMode.rawValue.capitalized)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(Color.textTitle)
+            }
+            .padding(.horizontal, 13)
+            .frame(height: MacChatHeaderMetrics.controlHeight)
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .fixedSize()
+        .modifier(MacGlassCapsule())
         .accessibilityIdentifier("mac.chat.mode.collapsed")
-        .accessibilityLabel("Session mode, \(currentMode.rawValue). Expand mode picker")
+        .accessibilityLabel("Session mode, \(currentMode.rawValue.capitalized)")
+        .accessibilityHint("Shows the session modes")
     }
 
     private var expandedPicker: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
             ForEach(Self.allModes, id: \.self) { mode in
+                let selected = mode == currentMode
                 Button {
-                    onSelect(mode)
-                    collapseTask?.cancel()
-                    collapseTask = Task {
-                        try? await Task.sleep(for: .milliseconds(500))
-                        guard !Task.isCancelled else { return }
-                        await MainActor.run { withAnimation { expanded = false } }
-                    }
+                    if !selected { onSelect(mode) }
+                    scheduleCollapse()
                 } label: {
-                    modeSegment(mode, selected: mode == currentMode)
+                    Text(mode.rawValue.capitalized)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(selected ? Color.white : Color.textSecondary)
+                        .padding(.horizontal, 13)
+                        .frame(height: MacChatHeaderMetrics.controlHeight - 6)
+                        .background {
+                            if selected {
+                                Capsule()
+                                    .fill(Color.modeColor(mode))
+                                    .matchedGeometryEffect(id: "thumb", in: thumb)
+                            }
+                        }
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("mac.chat.mode.\(mode.rawValue)")
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
-        .padding(2)
-        .background { glassBackground(RoundedRectangle(cornerRadius: 9, style: .continuous)) }
+        .padding(3)
+        .frame(height: MacChatHeaderMetrics.controlHeight)
+        .fixedSize()
+        .modifier(MacGlassCapsule())
+        .animation(.spring(response: 0.3, dampingFraction: 0.82), value: currentMode)
+        .onHover { inside in
+            hovering = inside
+            if inside { collapseTask?.cancel() } else { scheduleCollapse() }
+        }
+        .onAppear { scheduleCollapse() }
+        .onDisappear { collapseTask?.cancel() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Session mode picker")
     }
 
-    private func modeSegment(_ mode: SessionMode, selected: Bool) -> some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(Color.modeColor(mode))
-                .frame(width: 6, height: 6)
-            Text(mode.rawValue.capitalized)
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(selected ? Color.white : Color.textSecondary)
-        }
-        .padding(.horizontal, 9)
-        .frame(height: 25)
-        .background {
-            if selected {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Color.modeColor(mode).opacity(0.82))
-            }
-        }
-        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-    }
-
-    @ViewBuilder
-    private func glassBackground<S: Shape>(_ shape: S) -> some View {
-        if #available(macOS 26.0, *) {
-            Color.clear.glassEffect(.regular, in: shape)
-        } else {
-            shape
-                .fill(.ultraThinMaterial)
-                .overlay(shape.stroke(Color.white.opacity(0.12), lineWidth: 0.5))
-        }
-    }
-
     private func scheduleCollapse() {
+        guard !Self.startsExpanded else { return }
         collapseTask?.cancel()
-        collapseTask = Task {
+        guard !hovering else { return }
+        collapseTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled else { return }
-            await MainActor.run { withAnimation { expanded = false } }
+            guard !Task.isCancelled, !hovering else { return }
+            expanded = false
         }
     }
 }
@@ -156,7 +178,7 @@ struct MacChatView: View {
     @State private var hasMaterializedLatest = false
     @State private var stepsTarget: StepsTarget?
     @State private var showInfo = false
-    @State private var modePickerExpanded = false
+    @State private var modePickerExpanded = MacChatModePicker.startsExpanded
 
     init(
         sessionId: String,
@@ -212,6 +234,21 @@ struct MacChatView: View {
         return 62
     }
 
+    /// Persisted window identity only (not the live card), so the spine
+    /// projection is recomputed when messages change, not on every token.
+    private var windowRevision: Int {
+        let window = appState.messageStore.messages[sessionId] ?? []
+        let state = appState.messageStore.windows[sessionId]
+        var hash = state?.bottomSeq ?? 0
+        hash = hash &* 31 &+ (state?.topSeq ?? 0)
+        hash = hash &* 31 &+ window.count
+        hash = hash &* 31 &+ (window.first?.seq ?? 0)
+        hash = hash &* 31 &+ (window.last?.seq ?? 0)
+        hash = hash &* 31 &+ (window.last?.type.hashValue ?? 0)
+        hash = hash &* 31 &+ (window.last?.content?.hashValue ?? 0)
+        return hash
+    }
+
     private var spineRevision: Int {
         // Read the observable store DIRECTLY. Going through
         // MessageProvider.currentWindow() hides the dependency behind a
@@ -238,10 +275,13 @@ struct MacChatView: View {
             hash = hash &* 31 &+ (action.answer?.hashValue ?? 0)
             hash = hash &* 31 &+ (action.choices?.joined(separator: "\u{1F}").hashValue ?? 0)
             hash = hash &* 31 &+ (action.cancelled ? 1 : 0)
+            hash = hash &* 31 &+ (action.payload["localPending"]?.boolValue == true ? 1 : 0)
+            hash = hash &* 31 &+ (action.payload["localError"]?.stringValue?.hashValue ?? 0)
             hash = hash &* 31 &+ (action.payload["success"]?.boolValue == true ? 1 : 0)
             hash = hash &* 31 &+ (action.payload["running"]?.intValue ?? 0)
         }
         hash = hash &* 31 &+ (appState.commandSender?.outbox[sessionId]?.count ?? 0)
+        hash = hash &* 31 &+ viewModel.pendingSignature.hashValue
         return hash
     }
 
@@ -365,8 +405,8 @@ struct MacChatView: View {
 
     private var chatEdgeFades: some View {
         VStack(spacing: 0) {
-            MacChatTopDarkFade()
-                .frame(height: 68)
+            MacChatTopEdgeFade()
+                .frame(height: MacChatHeaderMetrics.height + 56)
             Spacer(minLength: 0)
             Rectangle()
                 .fill(.bar)
@@ -390,18 +430,32 @@ struct MacChatView: View {
         .accessibilityHidden(true)
     }
 
+    /// Title capsule (hugs its text; click opens Session info) centered in
+    /// the pane, mode capsule at the trailing edge. Expanding the mode picker
+    /// hides the title so the segments never overlap it.
     private var chatTopControls: some View {
         ZStack {
-            if let session {
-                Text(session.displayTitle)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.textTitle)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: 460)
-                    .padding(.horizontal, 130)
-                    .opacity(modePickerExpanded ? 0 : 1)
-                    .animation(.easeInOut(duration: 0.18), value: modePickerExpanded)
+            if let session, !modePickerExpanded {
+                Button {
+                    showInfo = true
+                } label: {
+                    Text(session.displayTitle)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.textTitle)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .padding(.horizontal, 15)
+                        .frame(height: MacChatHeaderMetrics.controlHeight)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .modifier(MacGlassCapsule())
+                .frame(maxWidth: 460)
+                .padding(.horizontal, 150)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityHint("Shows session info")
+                .accessibilityIdentifier("mac.chat.title")
+                .transition(.opacity)
             }
 
             HStack {
@@ -413,24 +467,12 @@ struct MacChatView: View {
                         appState.commandSender?.setSessionMode(sessionId: sessionId, mode: mode)
                     }
                 )
-
-                Button {
-                    NotificationCenter.default.post(name: .macOpenSessionInfo, object: nil)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color.textSecondary)
-                        .frame(width: 29, height: 29)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .background { glassControlBackground(Circle()) }
-                .accessibilityLabel("More")
             }
         }
-        .frame(height: 34)
-        .padding(.top, 4)
-        .padding(.horizontal, 12)
+        .frame(height: MacChatHeaderMetrics.controlHeight)
+        .padding(.top, MacChatHeaderMetrics.topPadding)
+        .padding(.horizontal, 14)
+        .animation(.easeInOut(duration: 0.18), value: modePickerExpanded)
     }
 
     @ViewBuilder
@@ -452,7 +494,7 @@ struct MacChatView: View {
                 messageStore: appState.messageStore,
                 attachmentStore: appState.attachmentStore,
                 documentWidth: geometry.size.width,
-                messages: viewModel.displayMessages,
+                messages: viewModel.displayMessages(spineRevision: windowRevision),
                 liveCard: liveCardForList(viewModel),
                 liveTraceSeq: viewModel.lastUserMessage?.seq ?? 0,
                 liveSteps: viewModel.lastUserStepsHint,
@@ -482,6 +524,7 @@ struct MacChatView: View {
                 },
                 onResolvePermission: resolveLivePermission,
                 onAnswerQuestion: answerLiveQuestion,
+                onPendingAction: handlePendingAction,
                 onOpenImage: onOpenImage,
                 onOpenHTMLArtifact: onOpenHTMLArtifact
             )
@@ -580,6 +623,21 @@ struct MacChatView: View {
         }
     }
 
+    /// Failed optimistic input: retry, pull back into the composer, or drop.
+    private func handlePendingAction(_ clientId: String, _ action: MacPendingAction) {
+        guard let sender = appState.commandSender else { return }
+        switch action {
+        case .retry:
+            _ = sender.retryPending(sessionId: sessionId, clientId: clientId)
+        case .delete:
+            _ = sender.discardPending(sessionId: sessionId, clientId: clientId)
+        case .edit:
+            guard let text = sender.discardPending(sessionId: sessionId, clientId: clientId) else { return }
+            let draft = appState.sessionStore.drafts[sessionId] ?? ""
+            appState.sessionStore.setDraft(sessionId, draft.isEmpty ? text : draft + "\n" + text)
+        }
+    }
+
     private func answerLiveQuestion(_ questionId: String, _ answer: String) {
         appState.commandSender?.answer(
             sessionId: sessionId,
@@ -658,7 +716,7 @@ private struct MacSessionInfoSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    modeSection
+                    // Mode lives in the chat header (single entry point, as on iOS).
                     sessionSection
                     if let usage { usageSection(usage) }
                     if let device { deviceSection(device) }
@@ -688,22 +746,6 @@ private struct MacSessionInfoSheet: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This will permanently delete this session and all its messages.")
-        }
-    }
-
-    private var modeSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Mode")
-            Picker("Mode", selection: Binding(
-                get: { currentMode },
-                set: { appState.commandSender?.setSessionMode(sessionId: session.id, mode: $0) }
-            )) {
-                ForEach([SessionMode.safe, .discuss, .execute, .delegate], id: \.self) { mode in
-                    Text(mode.rawValue.capitalized).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .tint(Color.modeColor(currentMode))
         }
     }
 

@@ -122,6 +122,16 @@ final class MessageStore {
     /// `heightForSeq` is set. ~14 screens; keeps both paging edges far apart so
     /// applies stay incremental. `.infinity` (default) disables the px cap.
     var maxWindowPx: CGFloat = .infinity
+    /// Rows the presenting view must keep (what the reader sees plus a margin).
+    /// Pixel-budget trimming assumes the far edge is off-screen; it is not when
+    /// the reader sits near the top of the window while new rows append (or
+    /// near the bottom while an older page prepends). Nil = no constraint.
+    var retainedSeqRange: ((String) -> ClosedRange<Int>?)?
+
+    private func mayTrim(_ sessionId: String, _ seq: Int) -> Bool {
+        guard let range = retainedSeqRange?(sessionId) else { return true }
+        return !range.contains(seq)
+    }
     /// Minimum row overlap retained whenever the px cap trims a window. macOS
     /// keeps its compact 15-row initial tail; iOS preserves the existing
     /// one-row sliding behavior. Tests can override this policy explicitly.
@@ -309,7 +319,8 @@ final class MessageStore {
             )
             var removed = 0
             func windowPx() -> CGFloat { window.reduce(0) { $0 + h(sessionId, $1.seq) } }
-            while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx {
+            while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx,
+                  mayTrim(sessionId, window.last!.seq) {
                 window.removeLast()
                 updated.bottomSeq = window.last!.seq
                 removed += 1
@@ -361,7 +372,8 @@ final class MessageStore {
                 max(0, beforeCount - minimumPixelManagedWindowCount)
             )
             var removed = 0
-            while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx {
+            while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx,
+                  mayTrim(sessionId, window.first!.seq) {
                 window.removeFirst()
                 updated.topSeq = window.first!.seq
                 removed += 1
@@ -498,7 +510,8 @@ final class MessageStore {
                     max(0, originalWindowCount - minimumPixelManagedWindowCount)
                 )
                 var removed = 0
-                while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx {
+                while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx,
+                      mayTrim(sessionId, window.first!.seq) {
                     window.removeFirst()
                     updated.topSeq = window.first!.seq
                     removed += 1
@@ -511,7 +524,8 @@ final class MessageStore {
                     max(0, originalWindowCount - minimumPixelManagedWindowCount)
                 )
                 var removed = 0
-                while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx {
+                while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx,
+                      mayTrim(sessionId, window.last!.seq) {
                     window.removeLast()
                     updated.bottomSeq = window.last!.seq
                     removed += 1
@@ -562,7 +576,8 @@ final class MessageStore {
 
         var removeCount = 0
         let maxRemove = max(0, window.count - minimumPixelManagedWindowCount)
-        while removeCount < maxRemove, renderedHeight > maxWindowPx {
+        while removeCount < maxRemove, renderedHeight > maxWindowPx,
+              mayTrim(sessionId, window[removeCount].seq) {
             renderedHeight -= heightForSeq(sessionId, window[removeCount].seq)
             removeCount += 1
         }

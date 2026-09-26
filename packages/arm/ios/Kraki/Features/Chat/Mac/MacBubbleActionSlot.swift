@@ -125,6 +125,31 @@ struct MacBubbleActionSlot: View {
         }
     }
 
+    /// "Sending…" while an optimistic answer/decision awaits Tentacle.
+    @ViewBuilder
+    private func localPendingLabel(_ message: ChatMessage) -> some View {
+        if message.payload["localPending"]?.boolValue == true {
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini)
+                Text("Sending…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.textSecondary)
+            }
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    /// Shown after a failed answer/decision was reverted to actionable.
+    @ViewBuilder
+    private func localErrorLabel(_ message: ChatMessage) -> some View {
+        if let error = message.payload["localError"]?.stringValue {
+            Label(error, systemImage: "exclamationmark.circle.fill")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private func permissionInput(_ message: ChatMessage) -> some View {
         let writeInDiscuss = Self.switchesToExecute(mode: sessionMode, toolName: message.toolName)
         return VStack(alignment: .leading, spacing: 10) {
@@ -157,11 +182,15 @@ struct MacBubbleActionSlot: View {
                     }
                     if let decision = message.payload["decision"]?.stringValue {
                         let denied = decision == "deny"
-                        Text("\(denied ? "✗" : "✓") \(decision == "always_allow" ? "Always allowed" : denied ? "Denied" : "Approved")")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(denied ? .red : .green)
-                            .padding(.top, 2)
+                        HStack(spacing: 6) {
+                            Text("\(denied ? "✗" : "✓") \(decision == "always_allow" ? "Always allowed" : denied ? "Denied" : "Approved")")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(denied ? .red : .green)
+                            localPendingLabel(message)
+                        }
+                        .padding(.top, 2)
                     }
+                    localErrorLabel(message)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -287,9 +316,12 @@ struct MacBubbleActionSlot: View {
                     .foregroundStyle(Color.textMuted)
             } else if let answer = message.answer {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("Answered")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.purple)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Answered")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.purple)
+                        localPendingLabel(message)
+                    }
                     Text(MacLiveMarkdown.attributed(answer))
                         .font(.system(size: 13))
                         .foregroundStyle(Color.textPrimary)
@@ -300,6 +332,7 @@ struct MacBubbleActionSlot: View {
                 .background(Color.purple.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.purple.opacity(0.3)))
             } else if let choices = message.choices, !choices.isEmpty {
+                localErrorLabel(message)
                 VStack(spacing: 6) {
                     ForEach(choices, id: \.self) { choice in
                         MacChatActionButton(

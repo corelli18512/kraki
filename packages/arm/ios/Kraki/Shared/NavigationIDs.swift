@@ -13,3 +13,10 @@ struct SessionNavID: Hashable {
 struct DeviceNavID: Hashable {
     let id: String
 }
+
+extension Notification.Name {
+    /// Posted after a Chat composer (iOS or macOS) successfully submits a
+    /// prompt, steer, typed answer or deny reason: the conversation returns to
+    /// its newest edge. userInfo["sessionId"]: String.
+    static let krakiComposerSubmitted = Notification.Name("chat.kraki.composerSubmitted")
+}

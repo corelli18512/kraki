@@ -1120,10 +1120,4 @@ private struct ModeChangeToast: View {
 }
 
 
-extension Notification.Name {
-    /// Posted after the composer successfully submits a prompt, steer, typed
-    /// answer or deny reason. userInfo["sessionId"]: String.
-    static let krakiComposerSubmitted = Notification.Name("chat.kraki.composerSubmitted")
-}
-
 #endif

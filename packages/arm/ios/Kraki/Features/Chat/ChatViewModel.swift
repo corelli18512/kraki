@@ -74,6 +74,32 @@ final class ChatViewModel {
     /// Confirmed spine bubbles plus optimistic pending input.
     var displayMessages: [ChatMessage] { cachedMessages + pendingMessages }
 
+    @ObservationIgnored private var currentSpineMemo: (revision: Int, messages: [ChatMessage])?
+
+    /// Spine + pending for the *current* store revision, computed during the
+    /// render that observes the change. `cachedMessages` is refreshed from
+    /// `onChange`, which runs after that render: a turn landing (live card
+    /// cleared + answer persisted in one runloop turn) otherwise renders one
+    /// frame with neither the live bubble nor the answer.
+    func displayMessages(spineRevision revision: Int) -> [ChatMessage] {
+        if let memo = currentSpineMemo, memo.revision == revision {
+            return memo.messages + pendingMessages(landedIn: memo.messages)
+        }
+        let spine = TurnSpineProjection.project(filteredMessages).filter(Self.shouldRender)
+        currentSpineMemo = (revision, spine)
+        return spine + pendingMessages(landedIn: spine)
+    }
+
+    private func pendingMessages(landedIn spine: [ChatMessage]) -> [ChatMessage] {
+        let pending = appState?.commandSender?.pendingInputs(sessionId) ?? []
+        guard !pending.isEmpty else { return [] }
+        let landed = Set(spine.compactMap { $0.payload["clientId"]?.stringValue })
+        return pending.filter { message in
+            guard let clientId = message.payload["clientId"]?.stringValue else { return true }
+            return !landed.contains(clientId)
+        }
+    }
+
     /// Recompute the flat spine snapshot. Called by the view on data changes.
     func refreshMessageCache() {
         cachedMessages = TurnSpineProjection.project(filteredMessages).filter(Self.shouldRender)

@@ -91,47 +91,30 @@ final class ChatScrollPolicyTests: XCTestCase {
         XCTAssertTrue(policy.shouldFollowTail(distanceToBottom: 20))
     }
 
-    func testOlderPageIsConsumedOncePerContinuousInteraction() {
+    func testOlderPagingContinuesWithFurtherOlderMovement() {
         var policy = ChatScrollPolicy()
         policy.beginUserInteraction(offset: 500, distanceToBottom: 500)
         policy.recordUserIntent(.older, offset: 500, distanceToBottom: 500)
 
         XCTAssertTrue(policy.shouldRequestOlderPage(
-            distanceToOlderEdge: 100,
-            viewportLength: 700,
-            hasOlder: true,
-            isLoading: false
-        ))
-        XCTAssertTrue(policy.olderPageConsumed)
+            distanceToOlderEdge: 100, viewportLength: 700, hasOlder: true, isLoading: false))
         XCTAssertFalse(policy.olderPageArmed)
+        // No new user movement: the request is not repeated (no self-chaining).
         XCTAssertFalse(policy.shouldRequestOlderPage(
-            distanceToOlderEdge: 0,
-            viewportLength: 700,
-            hasOlder: true,
-            isLoading: false
-        ))
-
-        // An overlapping re-grab is still the same interaction.
-        policy.beginUserInteraction(offset: 450, distanceToBottom: 550)
-        policy.recordUserIntent(.older, offset: 450, distanceToBottom: 550)
+            distanceToOlderEdge: 0, viewportLength: 700, hasOlder: true, isLoading: false))
+        // Programmatic compensation after the prepend moves toward newer: no re-arm.
+        policy.observeUserOffset(1_400, distanceToBottom: 500)
+        XCTAssertFalse(policy.shouldRequestOlderPage(
+            distanceToOlderEdge: 900, viewportLength: 700, hasOlder: true, isLoading: false))
+        // The same continuous gesture keeps moving toward older: next page.
+        policy.observeUserOffset(1_300, distanceToBottom: 600)
         XCTAssertEqual(policy.interactionGeneration, 1)
-        XCTAssertFalse(policy.shouldRequestOlderPage(
-            distanceToOlderEdge: 0,
-            viewportLength: 700,
-            hasOlder: true,
-            isLoading: false
-        ))
-
-        policy.endUserInteraction()
-        policy.beginUserInteraction(offset: 450, distanceToBottom: 550)
-        policy.recordUserIntent(.older, offset: 450, distanceToBottom: 550)
-        XCTAssertEqual(policy.interactionGeneration, 2)
         XCTAssertTrue(policy.shouldRequestOlderPage(
-            distanceToOlderEdge: 0,
-            viewportLength: 700,
-            hasOlder: true,
-            isLoading: false
-        ))
+            distanceToOlderEdge: 800, viewportLength: 700, hasOlder: true, isLoading: false))
+        // Wheel intent at the top edge (offset cannot move) also re-arms.
+        policy.recordUserIntent(.older, offset: 0, distanceToBottom: 900)
+        XCTAssertTrue(policy.shouldRequestOlderPage(
+            distanceToOlderEdge: 0, viewportLength: 700, hasOlder: true, isLoading: false))
     }
 
     func testOlderPageRequiresDirectionAvailabilityAndPrefetchBand() {
