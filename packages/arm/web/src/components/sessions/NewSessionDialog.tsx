@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import type { ReasoningEffort, ContextTier } from '@kraki/protocol';
+import { useEscape } from '../../hooks/useEscape';
 
 interface Props {
   open: boolean;
@@ -53,6 +54,7 @@ function saveContextTierPref(modelId: string, tier: ContextTier) {
 }
 
 export function NewSessionDialog({ open, onClose }: Props) {
+  useEscape(open, onClose);
   const devices = useStore((s) => s.devices);
   const deviceAgents = useStore((s) => s.deviceAgents);
 
@@ -200,9 +202,9 @@ export function NewSessionDialog({ open, onClose }: Props) {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose} onKeyDown={(e) => e.key === 'Escape' && onClose()} role="dialog" aria-modal="true" tabIndex={-1}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 backdrop-blur-sm md:items-center" onClick={onClose} onKeyDown={(e) => e.key === 'Escape' && onClose()} role="dialog" aria-modal="true" tabIndex={-1}>
       <div
-        className="mx-4 w-full max-w-md rounded-xl border border-border-primary bg-surface-primary p-6 shadow-2xl"
+        className="w-full max-w-md rounded-t-2xl border border-border-primary bg-surface-primary p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl md:mx-4 md:rounded-2xl md:pb-6"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-5 flex items-center justify-between">

@@ -54,12 +54,12 @@ if (typeof window !== 'undefined') {
   };
 }
 
-export function traceEvent(fields: Omit<TraceEvent, 't' | 'wallMs'>): void {
+export function traceEvent(fields: { comp: string; evt: string; [k: string]: unknown }): void {
   if (!enabled) return;
   const e: TraceEvent = {
+    ...fields,
     t: performance.now(),
     wallMs: Date.now(),
-    ...fields,
   };
   buffer.push(e);
   if (buffer.length > MAX_EVENTS) buffer.splice(0, buffer.length - MAX_EVENTS);

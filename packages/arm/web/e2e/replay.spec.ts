@@ -169,35 +169,6 @@ test.describe('Replay and chat history', () => {
     await expect(chat.getByText('Live message')).toBeVisible({ timeout: 5000 });
   });
 
-  test('tool_start and tool_complete merge correctly during replay', async ({ page }) => {
-    const ws = await setupAndOpenSession(page, server);
-
-    server.sendMessage(ws, {
-      type: 'tool_start',
-      sessionId: SESSION_ID,
-      payload: {
-        toolCallId: 'tc-1',
-        toolName: 'bash',
-        args: { command: 'ls -la' },
-      },
-    });
-
-    server.sendMessage(ws, {
-      type: 'tool_complete',
-      sessionId: SESSION_ID,
-      payload: {
-        toolCallId: 'tc-1',
-        toolName: 'bash',
-        args: { command: 'ls -la' },
-        result: 'file1.txt\nfile2.txt',
-      },
-    });
-
-    // The merged tool should appear in the chat — look for either the tool name or completion indicator
-    const chat = chatArea(page);
-    await expect(chat.getByText('bash').or(chat.getByText('ls -la'))).toBeVisible({ timeout: 5000 });
-  });
-
   test('off-spine turn trace is injected and rendered (three-axis TRACE pull)', async ({ page }) => {
     const ws = await setupAndOpenSession(page, server);
 
@@ -207,13 +178,13 @@ test.describe('Replay and chat history', () => {
     // base so we can address the concluding bubble in the trace reply.
     server.resetSeq(200);
     server.sendMessage(ws, { type: 'user_message', sessionId: SESSION_ID, payload: { content: 'run the build' } });
-    server.sendMessage(ws, { type: 'agent_message', sessionId: SESSION_ID, payload: { content: 'Build finished' } });
+    server.sendMessage(ws, { type: 'agent_message', sessionId: SESSION_ID, payload: { content: 'Build finished', steps: 2 } });
     const bubbleSeq = 201; // the agent_message's seq
     server.sendMessage(ws, { type: 'idle', sessionId: SESSION_ID, payload: { reason: 'completed' } });
 
     const chat = chatArea(page);
     await expect(chat.getByText('Build finished')).toBeVisible({ timeout: 5000 });
-    // No ThinkingBox yet — the turn has no in-memory steps.
+    // The reply alone is on the spine.
     await expect(chat.getByText('compile.sh')).toHaveCount(0);
 
     // Tentacle answers the ARM's `request_turn_trace` with the turn's tool
@@ -233,7 +204,9 @@ test.describe('Replay and chat history', () => {
       },
     });
 
-    // The injected trace now surfaces as a ThinkingBox summary on the turn.
-    await expect(chat.getByText('compile.sh')).toBeVisible({ timeout: 5000 });
+    // Steps stay off the spine: they show in the bubble's Steps sheet.
+    await expect(chat.getByText('compile.sh')).toHaveCount(0);
+    await chat.getByRole('button', { name: 'Show steps' }).first().click();
+    await expect(page.getByRole('dialog', { name: 'Steps' }).getByText('compile.sh')).toBeVisible({ timeout: 5000 });
   });
 });

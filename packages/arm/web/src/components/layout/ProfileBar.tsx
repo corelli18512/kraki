@@ -16,7 +16,7 @@ function SignOutIcon({ className }: { className?: string }) {
   );
 }
 
-export function ProfileBar() {
+export function ProfileBar({ compact = false }: { compact?: boolean } = {}) {
   const user = useStore((s) => s.user);
   const [imgError, setImgError] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -39,12 +39,12 @@ export function ProfileBar() {
 
   return (
     <>
-      <div className="flex shrink-0 items-center gap-3 border-t border-border-primary px-4 py-2.5">
+      <div className={compact ? 'flex min-w-0 shrink items-center gap-2 px-1.5 py-1' : 'flex shrink-0 items-center gap-3 border-t border-border-primary px-4 py-2.5'}>
         {isGitHub && !imgError ? (
           <img
             src={githubAvatarUrl(user.login)}
             alt={user.login}
-            className="h-7 w-7 rounded-full"
+            className={compact ? 'h-6 w-6 rounded-full' : 'h-7 w-7 rounded-full'}
             onError={() => setImgError(true)}
           />
         ) : (
@@ -53,8 +53,8 @@ export function ProfileBar() {
           </div>
         )}
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-text-primary">{user.login}</p>
-          {user.email && (
+          <p className={`truncate font-medium text-text-primary ${compact ? 'text-xs' : 'text-sm'}`}>{user.login}</p>
+          {user.email && !compact && (
             <p className="truncate text-xs text-text-muted">{user.email}</p>
           )}
         </div>

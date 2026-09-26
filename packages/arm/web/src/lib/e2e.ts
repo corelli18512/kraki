@@ -94,7 +94,7 @@ function uint8ToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function base64ToUint8(b64: string): Uint8Array {
+function base64ToUint8(b64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
@@ -135,10 +135,10 @@ export class BrowserAppKeyStore implements AppKeyStore {
     const db = await openDB();
 
     // Migrate legacy key: old code stored a single key as 'device-key'
-    const legacyKey = await idbGet(db, 'device-key');
+    const legacyKey = await idbGet<CryptoKeyPair>(db, 'device-key');
 
     // Load or generate signing key pair
-    const storedSign = await idbGet(db, SIGN_KEY_ID);
+    const storedSign = await idbGet<CryptoKeyPair>(db, SIGN_KEY_ID);
     if (storedSign) {
       this.signKeyPair = storedSign;
     } else if (legacyKey) {
@@ -155,7 +155,7 @@ export class BrowserAppKeyStore implements AppKeyStore {
     }
 
     // Load or generate encryption key pair
-    const storedEncrypt = await idbGet(db, ENCRYPT_KEY_ID);
+    const storedEncrypt = await idbGet<CryptoKeyPair>(db, ENCRYPT_KEY_ID);
     if (storedEncrypt) {
       this.encryptKeyPair = storedEncrypt;
     } else {

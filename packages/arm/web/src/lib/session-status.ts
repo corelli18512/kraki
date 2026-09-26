@@ -6,15 +6,13 @@ import type { SessionCard } from '../types/store';
  *
  * - `idle`    — no turn running; the composer starts a new run.
  * - `working` — a turn is running (thinking / tools) with no open question.
- * - `pending` — a turn is running but BLOCKED on ≥1 open `ask_user` question;
- *               the human's answer is what unblocks it.
+ * - `pending` — BLOCKED on the human: an open question (on the spine) or an
+ *               unresolved permission (the live card).
  * - `ended`   — session closed.
  *
- * Derived on the client from the session's wire state plus the live card action.
- * For sessions not yet opened after a reload, the tentacle surfaces an open
- * `ask_user` question by overriding the digest `preview` with a `question`
- * entry — so `previewType === 'question'` seeds the pending status until the
- * live card arrives.
+ * Derived on the client from the session's wire state plus live attention.
+ * The Tentacle surfaces an open question in the session_list digest `preview`
+ * (`previewType === 'question'`), so it is known before the session is opened.
  */
 export type SessionStatus = 'idle' | 'working' | 'compacting' | 'pending' | 'ended';
 
@@ -31,8 +29,6 @@ export function cardActionKey(a: CardActionState | null): string {
       return `batch:${a.payload.running}`;
     case 'permission':
       return `perm:${a.payload.id}:${a.payload.decision ?? 'pending'}`;
-    case 'question':
-      return `q:${a.payload.id}:${a.payload.cancelled ? 'cancelled' : a.payload.answer === undefined ? 'pending' : 'answered'}`;
     case 'user_abort':
       return `user_abort:${a.payload.abortedAt}`;
     case 'failed':
@@ -40,13 +36,13 @@ export function cardActionKey(a: CardActionState | null): string {
   }
 }
 
-/** Count an open (unanswered) question for a session from the card map. */
+/** An unresolved permission in the session's live card (1) or none (0). */
 export function countPendingQuestions(
   sessionId: string,
   cards: Map<string, SessionCard>,
 ): number {
   const action = cards.get(sessionId)?.action;
-  return action?.type === 'question' && action.payload.answer === undefined && !action.payload.cancelled ? 1 : 0;
+  return action?.type === 'permission' && !action.payload.decision ? 1 : 0;
 }
 
 export function getSessionStatus(

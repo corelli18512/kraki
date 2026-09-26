@@ -65,13 +65,9 @@ const mockPermissionAction = {
   },
 };
 
-const mockQuestionAction = {
-  type: 'question' as const,
-  payload: {
-    id: 'q-1',
-    question: 'Which DB?',
-    choices: ['sqlite', 'postgres'],
-  },
+const mockToolAction = {
+  type: 'tool_start' as const,
+  payload: { toolName: 'bash', headline: 'ls', toolCallId: 't1' },
 };
 
 // --- Tests ---
@@ -281,154 +277,6 @@ describe('useStore', () => {
     });
   });
 
-  describe('pending input resolution', () => {
-    const makePending = (clientId: string, text: string, sessionId = 'sess-1') => ({
-      type: 'pending_input' as const,
-      id: clientId,
-      clientId,
-      sessionId,
-      text,
-      timestamp: new Date().toISOString(),
-    });
-
-    it('resolves by clientId and replaces pending with user_message', () => {
-      useStore.getState().appendMessage('sess-1', makePending('cid-1', 'hello'));
-      const ok = useStore.getState().resolvePendingInput('sess-1', 5, 'cid-1', 'hello');
-      expect(ok).toBe(true);
-      const msgs = useStore.getState().messages.get('sess-1');
-      expect(msgs).toHaveLength(1);
-      const resolved = msgs![0] as { type: string; seq: number; payload: { content: string } };
-      expect(resolved.type).toBe('user_message');
-      expect(resolved.seq).toBe(5);
-      expect(resolved.payload.content).toBe('hello');
-    });
-
-    it('uses serverContent when provided (overrides pending text)', () => {
-      useStore.getState().appendMessage('sess-1', makePending('cid-1', 'local'));
-      useStore.getState().resolvePendingInput('sess-1', 5, 'cid-1', 'authoritative');
-      const msgs = useStore.getState().messages.get('sess-1');
-      expect((msgs![0] as { payload: { content: string } }).payload.content).toBe('authoritative');
-    });
-
-    it('falls back to pending text when serverContent is undefined', () => {
-      useStore.getState().appendMessage('sess-1', makePending('cid-1', 'local-only'));
-      useStore.getState().resolvePendingInput('sess-1', 5, 'cid-1', undefined);
-      const msgs = useStore.getState().messages.get('sess-1');
-      expect((msgs![0] as { payload: { content: string } }).payload.content).toBe('local-only');
-    });
-
-    it('returns false and does nothing when clientId does not match any pending', () => {
-      useStore.getState().appendMessage('sess-1', makePending('cid-1', 'hello'));
-      const ok = useStore.getState().resolvePendingInput('sess-1', 5, 'cid-other', 'hello');
-      expect(ok).toBe(false);
-      const msgs = useStore.getState().messages.get('sess-1');
-      expect(msgs).toHaveLength(1);
-      expect(msgs![0].type).toBe('pending_input');
-    });
-
-    it('returns false when session has no messages', () => {
-      const ok = useStore.getState().resolvePendingInput('sess-empty', 1, 'cid-1', 'x');
-      expect(ok).toBe(false);
-    });
-
-    it('rapid-send: two pendings with distinct clientIds are resolved independently', () => {
-      useStore.getState().appendMessage('sess-1', makePending('cid-a', 'first message'));
-      useStore.getState().appendMessage('sess-1', makePending('cid-b', 'second message'));
-
-      // Server acks the first send
-      useStore.getState().resolvePendingInput('sess-1', 1, 'cid-a', 'first message');
-      let msgs = useStore.getState().messages.get('sess-1')!;
-      expect(msgs).toHaveLength(2);
-      expect(msgs[0].type).toBe('user_message');
-      expect((msgs[0] as { payload: { content: string } }).payload.content).toBe('first message');
-      expect(msgs[1].type).toBe('pending_input');
-
-      // Server acks the second send
-      useStore.getState().resolvePendingInput('sess-1', 2, 'cid-b', 'second message');
-      msgs = useStore.getState().messages.get('sess-1')!;
-      expect(msgs).toHaveLength(2);
-      expect(msgs.every((m) => m.type === 'user_message')).toBe(true);
-      expect((msgs[0] as { payload: { content: string } }).payload.content).toBe('first message');
-      expect((msgs[1] as { payload: { content: string } }).payload.content).toBe('second message');
-    });
-
-    it('rapid-send acks arriving out of order (cid-b first, then cid-a) still attribute content correctly', () => {
-      useStore.getState().appendMessage('sess-1', makePending('cid-a', 'first message'));
-      useStore.getState().appendMessage('sess-1', makePending('cid-b', 'second message'));
-
-      // Out-of-order: server acks the second one first with seq=2
-      useStore.getState().resolvePendingInput('sess-1', 2, 'cid-b', 'second message');
-      // Then the first with seq=1
-      useStore.getState().resolvePendingInput('sess-1', 1, 'cid-a', 'first message');
-
-      const msgs = useStore.getState().messages.get('sess-1')!;
-      expect(msgs).toHaveLength(2);
-      // List is sorted by seq → seq=1 comes first
-      expect((msgs[0] as { seq: number }).seq).toBe(1);
-      expect((msgs[0] as { payload: { content: string } }).payload.content).toBe('first message');
-      expect((msgs[1] as { seq: number }).seq).toBe(2);
-      expect((msgs[1] as { payload: { content: string } }).payload.content).toBe('second message');
-    });
-
-    it('legacy fallback: no clientId but matching content resolves the right pending', () => {
-      useStore.getState().appendMessage('sess-1', makePending('cid-a', 'oldest'));
-      useStore.getState().appendMessage('sess-1', makePending('cid-b', 'newer'));
-      // Old tentacle echoed the user_message without clientId but
-      // preserved the content. We resolve by content match.
-      const ok = useStore.getState().resolvePendingInput('sess-1', 1, undefined, 'newer');
-      expect(ok).toBe(true);
-      const msgs = useStore.getState().messages.get('sess-1')!;
-      expect(msgs).toHaveLength(2);
-      // Order: resolved user_message (seq=1) first, the remaining pending (cid-a) at tail.
-      expect(msgs[0].type).toBe('user_message');
-      expect((msgs[0] as { payload: { content: string } }).payload.content).toBe('newer');
-      expect(msgs[1].type).toBe('pending_input');
-      expect((msgs[1] as { clientId: string }).clientId).toBe('cid-a');
-    });
-
-    it('no clientId and no content match: returns false (caller will append)', () => {
-      useStore.getState().appendMessage('sess-1', makePending('cid-a', 'mine'));
-      const ok = useStore.getState().resolvePendingInput('sess-1', 1, undefined, 'from someone else');
-      expect(ok).toBe(false);
-      const msgs = useStore.getState().messages.get('sess-1')!;
-      expect(msgs).toHaveLength(1);
-      expect(msgs[0].type).toBe('pending_input');
-    });
-
-    it('no clientId and no serverContent: returns false (caller will append)', () => {
-      useStore.getState().appendMessage('sess-1', makePending('cid-a', 'mine'));
-      const ok = useStore.getState().resolvePendingInput('sess-1', 1, undefined, undefined);
-      expect(ok).toBe(false);
-      const msgs = useStore.getState().messages.get('sess-1')!;
-      expect(msgs).toHaveLength(1);
-      expect(msgs[0].type).toBe('pending_input');
-    });
-
-    it('sorts list by seq after resolve (handles transient events that landed mid-flight)', () => {
-      // Pending added first, then a tool event with a real seq came in,
-      // then the user_message ack arrives.
-      useStore.getState().appendMessage('sess-1', makePending('cid-1', 'hello'));
-      const toolEvent = {
-        type: 'tool_start' as const,
-        sessionId: 'sess-1',
-        deviceId: '',
-        seq: 7,
-        timestamp: new Date().toISOString(),
-        payload: { id: 'tool-1', name: 'shell', args: {} },
-      } as unknown as ChatMessage;
-      useStore.getState().appendMessage('sess-1', toolEvent);
-      useStore.getState().resolvePendingInput('sess-1', 5, 'cid-1', 'hello');
-
-      const msgs = useStore.getState().messages.get('sess-1')!;
-      expect(msgs).toHaveLength(2);
-      // user_message (seq=5) sorted before tool_start (seq=7)
-      expect((msgs[0] as { type: string; seq: number }).type).toBe('user_message');
-      expect((msgs[0] as { seq: number }).seq).toBe(5);
-      expect((msgs[1] as { type: string; seq: number }).type).toBe('tool_start');
-      expect((msgs[1] as { seq: number }).seq).toBe(7);
-    });
-  });
-
   describe('server-owned cards', () => {
     it('applyCardMessage accumulates content', () => {
       useStore.getState().applyCardMessage('sess-1', 'Hello ');
@@ -451,8 +299,8 @@ describe('useStore', () => {
     });
 
     it('setCardAction creates a card if needed', () => {
-      useStore.getState().setCardAction('sess-new', mockQuestionAction);
-      expect(useStore.getState().cards.get('sess-new')).toEqual({ text: '', action: mockQuestionAction });
+      useStore.getState().setCardAction('sess-new', mockToolAction);
+      expect(useStore.getState().cards.get('sess-new')).toEqual({ text: '', action: mockToolAction });
     });
 
     it('clearCard removes a card', () => {
@@ -468,22 +316,18 @@ describe('useStore', () => {
 
     it('runtime status is independent from the card and cleared with session removal', () => {
       useStore.getState().setSessions([mockSession]);
-      useStore.getState().setCardAction('sess-1', mockQuestionAction);
+      useStore.getState().setCardAction('sess-1', mockToolAction);
       useStore.getState().setRuntimeStatus('sess-1', { status: 'compacting', reason: 'overflow' });
       expect(useStore.getState().runtimeStatuses.get('sess-1')).toEqual({
         status: 'compacting', reason: 'overflow',
       });
-      expect(useStore.getState().cards.get('sess-1')?.action).toEqual(mockQuestionAction);
+      expect(useStore.getState().cards.get('sess-1')?.action).toEqual(mockToolAction);
 
       useStore.getState().removeSession('sess-1');
       expect(useStore.getState().runtimeStatuses.has('sess-1')).toBe(false);
       expect(useStore.getState().cards.has('sess-1')).toBe(false);
     });
 
-    it('stores question choices in card action', () => {
-      useStore.getState().setCardAction('sess-1', mockQuestionAction);
-      expect(useStore.getState().cards.get('sess-1')?.action).toEqual(mockQuestionAction);
-    });
   });
 
   describe('reset', () => {
@@ -537,5 +381,21 @@ describe('useStore', () => {
       expect(useStore.getState().sessionModes.has('sess-1')).toBe(false);
       expect(useStore.getState().sessionModes.get('sess-2')).toBe('execute');
     });
+  });
+});
+
+describe('live card: resolved permission', () => {
+  const permission = { type: 'permission' as const, payload: { id: 'p1', toolName: 'bash', args: {}, description: 'Run bash', decision: 'approve' as const } };
+  it('a cleared slot keeps the resolved permission until narration resumes', () => {
+    useStore.getState().setCardAction('s', permission as never);
+    useStore.getState().setCardAction('s', null);
+    expect(useStore.getState().cards.get('s')?.action?.type).toBe('permission');
+    useStore.getState().applyCardMessage('s', 'continuing', true);
+    expect(useStore.getState().cards.get('s')?.action).toBeNull();
+  });
+  it('an undecided permission clears normally', () => {
+    useStore.getState().setCardAction('s2', { ...permission, payload: { ...permission.payload, decision: undefined } } as never);
+    useStore.getState().setCardAction('s2', null);
+    expect(useStore.getState().cards.get('s2')?.action).toBeNull();
   });
 });

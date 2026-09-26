@@ -123,7 +123,7 @@ export function App() {
   return (
     <div className="app-viewport flex overflow-hidden bg-surface-primary">
       <ErrorBanner />
-      <aside className="hidden w-72 shrink-0 flex-col border-r border-border-primary md:flex lg:w-80" aria-hidden={showBlockingOverlay}>
+      <aside className="hidden w-[288px] shrink-0 flex-col border-r border-border-primary md:flex" aria-hidden={showBlockingOverlay}>
         <Sidebar />
       </aside>
       <aside className={`w-full shrink-0 flex-col md:hidden ${inSubPage ? 'hidden' : 'flex'}`} aria-hidden={showBlockingOverlay}>

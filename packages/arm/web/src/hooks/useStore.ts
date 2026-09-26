@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { Store, ChatMessage, ConnectionStatus, PendingInputMessage, SessionCard, WebSessionSummary } from '../types/store';
+import type { Store, ChatMessage, ConnectionStatus, SessionCard, WebSessionSummary } from '../types/store';
 import type { DeviceSummary } from '@kraki/protocol';
 import { loadStoredDevice, getUrlParams } from '../lib/transport';
 
@@ -179,8 +179,7 @@ export const useStore = create<Store>()(persist((set) => ({
     // and ALL pending_input messages have seq=0, so writing them would collide-
     // and-overwrite each other on rapid send. After resolve, the resulting
     // user_message has a real seq and goes through updateSessionMessages.
-    const isTransient = message.type === 'pending_input'
-      || message.type === 'tool_start'
+    const isTransient = message.type === 'tool_start'
       || message.type === 'tool_complete'
       || message.type === 'agent_narration'
       || message.type === 'active'
@@ -199,19 +198,18 @@ export const useStore = create<Store>()(persist((set) => ({
       // sent it — its VISIBILITY is gated on liveness in ChatView (a resolved
       // action no longer pins the card), so no local mutation of server state.
       let nextCards = state.cards;
-      if (message.type === 'agent_message') {
+      if (message.type === 'agent_message' || message.type === 'turn_status' || message.type === 'interrupted_turn'
+        || message.type === 'system_message' || message.type === 'idle') {
         const card = state.cards.get(sessionId);
-        if (card && card.text) {
+        if (card && !card.closed) {
           nextCards = new Map(state.cards);
-          nextCards.set(sessionId, { text: '', action: card.action });
+          nextCards.set(sessionId, { text: '', action: card.action, closed: true });
         }
       }
       // Dedup by [type, seq] for server-broadcast messages. The relay
       // can re-broadcast on reconnect (or in edge cases like a
       // user_message echoed twice when the resolve path also fired),
       // and silently duplicating bubbles is the visible failure mode.
-      // pending_input has seq=0 by convention — never dedup against
-      // it; pendings are keyed by `clientId` in `resolvePendingInput`.
       const hasRealSeq = 'seq' in message && typeof message.seq === 'number' && message.seq > 0;
       if (hasRealSeq) {
         const dupIdx = existing.findIndex(
@@ -230,76 +228,21 @@ export const useStore = create<Store>()(persist((set) => ({
     });
   },
 
-  resolvePendingInput: (sessionId, seq, clientId, serverContent) => {
-    let resolved = false;
-    set((state) => {
-      const msgs = state.messages.get(sessionId);
-      if (!msgs) return state;
-      // Identify the right pending:
-      //   1. With clientId: exact match by clientId (new clients ↔ new tentacle).
-      //   2. Without clientId, with serverContent: match the first
-      //      pending whose local text equals the server's content. This
-      //      handles "new client → old tentacle" (which strips the
-      //      clientId but echoes the same text) without inappropriately
-      //      claiming user_messages broadcast by other devices.
-      //   3. Without either: no resolve. Caller will appendMessage.
-      let idx = -1;
-      if (clientId) {
-        idx = msgs.findIndex((m) => m.type === 'pending_input' && m.clientId === clientId);
-      } else if (serverContent !== undefined) {
-        idx = msgs.findIndex((m) => m.type === 'pending_input' && m.text === serverContent);
-      }
-      if (idx < 0) return state;
-
-      const pending = msgs[idx] as PendingInputMessage;
-      const next = [...msgs];
-      next[idx] = {
-        type: 'user_message' as const,
-        sessionId: pending.sessionId,
-        deviceId: '',
-        seq,
-        timestamp: pending.timestamp,
-        payload: {
-          content: serverContent ?? pending.text,
-          ...(pending.attachments?.length && { attachments: pending.attachments }),
-        },
-      };
-      // Re-sort: pending_input (seq=0) always lives at the tail — it
-      // is logically "in-flight, not yet assigned a real seq" and
-      // should appear AFTER any resolved messages, regardless of their
-      // numeric seq. Among resolved messages, sort by server seq so
-      // that a user_message arriving after a transient event (e.g. a
-      // tool_start that was inserted between the optimistic pending
-      // and the server's ack) slots into the correct position.
-      next.sort((a, b) => {
-        const pendA = a.type === 'pending_input';
-        const pendB = b.type === 'pending_input';
-        if (pendA && !pendB) return 1;
-        if (!pendA && pendB) return -1;
-        const sa = 'seq' in a ? (a as { seq?: number }).seq ?? 0 : 0;
-        const sb = 'seq' in b ? (b as { seq?: number }).seq ?? 0 : 0;
-        return sa - sb;
-      });
-
-      const map = new Map(state.messages);
-      map.set(sessionId, next);
-      import('../lib/message-db').then(db => db.updateSessionMessages(sessionId, next)).catch((e) => { console.error('[Kraki:idb]', e); });
-      resolved = true;
-      return { messages: map };
-    });
-    return resolved;
-  },
-
   applyCardMessage: (sessionId, content, reset) =>
     set((state) => {
       const next = new Map(state.cards);
       const existing = next.get(sessionId) ?? { text: '', action: null };
+      // Narration resumed: a retained resolved permission is superseded, as
+      // Tentacle intended when it cleared the slot.
+      const retained = (existing.action?.payload as { retained?: boolean } | undefined)?.retained === true;
       next.set(sessionId, {
         // Draft bubble: a reset starts a fresh segment (keep-last); otherwise
         // the streaming delta appends. The action slot is untouched — it lives
         // in parallel (tool activity while the draft streams).
         text: reset ? content : existing.text + content,
-        action: existing.action,
+        action: retained && content ? null : existing.action,
+        // New words reopen a concluded card (the next segment of the turn).
+        closed: existing.closed && !content,
       });
       return { cards: next };
     }),
@@ -308,7 +251,18 @@ export const useStore = create<Store>()(persist((set) => ({
     set((state) => {
       const next = new Map(state.cards);
       const existing = next.get(sessionId) ?? { text: '', action: null };
-      next.set(sessionId, { text: existing.text, action });
+      const current = existing.action;
+      if (action === null && current?.type === 'permission' && current.payload.decision) {
+        // Tentacle retires a resolved permission just before the next delta.
+        // Applied alone it empties the live bubble for a few frames (a
+        // flash); keep the read-only outcome until narration or a new action
+        // replaces it (iOS/Mac `MessageStore.setCardAction`). The clear is
+        // itself confirmation that the decision arrived.
+        const { localPending: _pending, ...rest } = current.payload as Record<string, unknown>;
+        next.set(sessionId, { text: existing.text, action: { ...current, payload: { ...rest, retained: true } } as unknown as typeof current });
+        return { cards: next };
+      }
+      next.set(sessionId, { text: existing.closed ? '' : existing.text, action, closed: existing.closed && !action });
       return { cards: next };
     }),
 
@@ -485,12 +439,23 @@ export const useStore = create<Store>()(persist((set) => ({
         const seq = 'seq' in message ? (message as { seq?: number }).seq : undefined;
         return typeof seq !== 'number' || !incomingSeqs.has(seq);
       });
-      const merged = [...incoming, ...retained];
+      // A range batch usually re-delivers rows we already hold (the tail
+      // reconcile after every idle). Keep the existing object when the record
+      // is unchanged so views memoized on it do not all re-render.
+      const bySeq = new Map<number, ChatMessage>();
+      for (const message of existing) {
+        const seq = (message as { seq?: number }).seq;
+        if (typeof seq === 'number') bySeq.set(seq, message);
+      }
+      const reused = incoming.map((message) => {
+        const prior = bySeq.get((message as { seq: number }).seq);
+        return prior && prior.type === message.type
+          && JSON.stringify(prior.payload) === JSON.stringify(message.payload) ? prior : message;
+      });
+      // Nothing new: keep the same array (no re-render at all).
+      if (reused.every((m) => bySeq.get((m as { seq: number }).seq) === m)) return state;
+      const merged = [...reused, ...retained];
       merged.sort((a, b) => {
-        const pendingA = a.type === 'pending_input';
-        const pendingB = b.type === 'pending_input';
-        if (pendingA && !pendingB) return 1;
-        if (!pendingA && pendingB) return -1;
         const seqA = 'seq' in a ? (a as { seq?: number }).seq ?? 0 : 0;
         const seqB = 'seq' in b ? (b as { seq?: number }).seq ?? 0 : 0;
         return seqA - seqB;
@@ -527,7 +492,7 @@ export const useStore = create<Store>()(persist((set) => ({
       const replaceErrors = entries.some((entry) => entry.type === 'error');
       const isTrace = (t: string) =>
         t === 'tool_start' || t === 'tool_complete' || t === 'agent_narration' ||
-        t === 'permission' || t === 'question' || (replaceErrors && t === 'error');
+        t === 'permission' || (replaceErrors && t === 'error');
 
       // The target bubble is either the concluding agent_message (a concluded
       // turn — steps go BEFORE it) or the leading user_message of an in-progress
@@ -545,7 +510,8 @@ export const useStore = create<Store>()(persist((set) => ({
       } else {
         let turnStartIdx = -1;
         for (let i = bubbleIdx - 1; i >= 0; i--) {
-          if (existing[i].type === 'user_message' && existing[i].payload.delivery !== 'steer') {
+          const candidate = existing[i];
+          if (candidate.type === 'user_message' && (candidate.payload as { delivery?: string }).delivery !== 'steer') {
             turnStartIdx = i;
             break;
           }
@@ -654,3 +620,9 @@ export const useStore = create<Store>()(persist((set) => ({
     // messages are stored in IndexedDB, not localStorage
   }),
 }));
+
+// Local diagnostics (dev server / local stack only): inspect state from the
+// browser console or a Playwright probe.
+if (typeof window !== 'undefined' && (import.meta.env.DEV || window.location.hostname === 'localhost')) {
+  (window as unknown as { __krakiStore: typeof useStore }).__krakiStore = useStore;
+}

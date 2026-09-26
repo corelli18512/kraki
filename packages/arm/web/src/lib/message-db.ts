@@ -120,11 +120,7 @@ function sweepTransientRows(): Promise<{ before: number; deleted: number }> {
   return new Promise((resolve) => {
     const req = indexedDB.open(DB_NAME);
     req.onsuccess = () => {
-      const database = req.result as unknown as {
-        objectStoreNames: DOMStringList;
-        transaction: (store: string, mode: string) => { objectStore: (s: string) => { openCursor: () => IDBRequest<IDBCursorWithValue | null> } };
-        close: () => void;
-      };
+      const database = req.result;
       if (!database.objectStoreNames.contains(STORE_NAME)) {
         database.close();
         resolve({ before: 0, deleted: 0 });

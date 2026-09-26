@@ -1,13 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { useStore } from '../hooks/useStore';
 import { DashboardPage } from '../pages/DashboardPage';
 import { SessionPage } from '../pages/SessionPage';
-import { MessageInput } from '../components/chat/MessageInput';
+import { Composer, composerIntent } from '../components/chat/Composer';
 
-// Mock wsClient for MessageInput
 vi.mock('../lib/ws-client', () => ({
   wsClient: {
     sendInput: vi.fn(),
@@ -19,6 +18,7 @@ vi.mock('../lib/ws-client', () => ({
     markRead: vi.fn(),
     createSession: vi.fn(),
     setSessionMode: vi.fn(),
+    resolvePermission: vi.fn(),
   },
 }));
 
@@ -99,351 +99,92 @@ describe('DashboardPage', () => {
 // ============================================================
 
 describe('SessionPage', () => {
-  it('shows not found for unknown session', () => {
+  function withSession(state: 'idle' | 'active' = 'idle', online = true) {
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd1', deviceName: 'MacBook', agent: 'pi', model: 'm', state, messageCount: 1, title: 'Fix the cache' },
+    ]);
+    useStore.getState().setDevices([{ id: 'd1', name: 'MacBook', role: 'tentacle', online }]);
+    useStore.getState().setStatus('connected');
+  }
+
+  it('shows not found for an unknown session', () => {
     renderWithRoute('/session/unknown-id', <SessionPage />);
     expect(screen.getByText('Session not found')).toBeInTheDocument();
   });
 
-  it('renders session header', () => {
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: 'MacBook', agent: 'copilot', model: 'gpt-4o', messageCount: 5 },
-    ]);
+  it('header: title and the session mode capsule', () => {
+    withSession();
     renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.getByText('Copilot')).toBeInTheDocument();
-    expect(screen.getByText('MacBook')).toBeInTheDocument();
+    expect(screen.getByText('Fix the cache')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Discuss/ })).toBeInTheDocument();
   });
 
-  it('shows message input for active session', () => {
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: '', agent: 'copilot', messageCount: 5 },
-    ]);
-    useStore.getState().setDevices([
-      { id: 'd1', name: 'Mac', role: 'tentacle', online: true },
-    ]);
+  it('the mode capsule switches the session mode', async () => {
+    withSession();
     renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.getByPlaceholderText('Send a message…')).toBeInTheDocument();
-  });
-
-  it('shows agent label in header', () => {
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: '', agent: 'copilot', messageCount: 1 },
-    ]);
-    renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.getByText('Copilot')).toBeInTheDocument();
-  });
-
-  it('has back button that navigates home', async () => {
-    const user = userEvent.setup();
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'copilot', messageCount: 0 },
-    ]);
-    renderWithRoute('/session/s1', <SessionPage />);
-    // Find the back button (← svg)
-    const backBtn = screen.getAllByRole('button').find((btn) =>
-      btn.querySelector('svg path[d*="15 19"]'),
-    );
-    expect(backBtn).toBeTruthy();
-    if (backBtn) await user.click(backBtn);
-  });
-
-  it('clicking back on not-found also navigates', async () => {
-    const user = userEvent.setup();
-    renderWithRoute('/session/unknown', <SessionPage />);
-    const backLink = screen.getByText('← Back to sessions');
-    await user.click(backLink);
-  });
-
-  it('renders session without model', () => {
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: '', agent: 'copilot', messageCount: 0 },
-    ]);
-    renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.getByText('Copilot')).toBeInTheDocument();
-  });
-
-  it('renders session without device name', () => {
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: '', agent: 'claude', model: 'claude-4', messageCount: 3 },
-    ]);
-    renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.getByText('Claude')).toBeInTheDocument();
-    expect(screen.getByText('claude-4')).toBeInTheDocument();
-  });
-
-  it('shows message input for active session state', () => {
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: '', agent: 'copilot', messageCount: 0 },
-    ]);
-    useStore.getState().setDevices([
-      { id: 'd1', name: 'Mac', role: 'tentacle', online: true },
-    ]);
-    renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.getByPlaceholderText('Send a message…')).toBeInTheDocument();
-  });
-
-  it('hides kill session button for offline session', () => {
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: '', agent: 'copilot', messageCount: 0 },
-    ]);
-    renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.queryByTitle('End session')).not.toBeInTheDocument();
-  });
-
-  it('shows device status for offline session', () => {
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'copilot', messageCount: 0 },
-    ]);
-    renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.getByText('Mac')).toBeInTheDocument();
-  });
-
-  it('hides message input for offline session', () => {
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: '', agent: 'copilot', messageCount: 0 },
-    ]);
-    renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.queryByPlaceholderText('Send a message…')).not.toBeInTheDocument();
-  });
-
-  it('does not show offline badge for online session', () => {
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: '', agent: 'copilot', messageCount: 0 },
-    ]);
-    useStore.getState().setDevices([
-      { id: 'd1', name: 'Mac', role: 'tentacle', online: true },
-    ]);
-    renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.queryByText('offline')).not.toBeInTheDocument();
-  });
-
-  it('shows mode selector for online session', () => {
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: '', agent: 'copilot', messageCount: 0 },
-    ]);
-    useStore.getState().setDevices([
-      { id: 'd1', name: 'Mac', role: 'tentacle', online: true },
-    ]);
-    renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.getAllByText('Safe').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Discuss').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Execute').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Delegate')).toBeInTheDocument();
-  });
-
-  it('hides mode selector for offline session', () => {
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: '', agent: 'copilot', messageCount: 0 },
-    ]);
-    renderWithRoute('/session/s1', <SessionPage />);
-    expect(screen.queryByText('Safe')).not.toBeInTheDocument();
-    expect(screen.queryByText('Execute')).not.toBeInTheDocument();
-  });
-
-  it('clicking mode button switches mode', async () => {
-    const user = userEvent.setup();
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: '', agent: 'copilot', messageCount: 0 },
-    ]);
-    useStore.getState().setDevices([
-      { id: 'd1', name: 'Mac', role: 'tentacle', online: true },
-    ]);
-    renderWithRoute('/session/s1', <SessionPage />);
-    await user.click(screen.getByText('Execute'));
+    await userEvent.click(screen.getByRole('button', { name: /Discuss/ }));
+    await userEvent.click(screen.getByRole('menuitemradio', { name: /Execute/ }));
     expect(wsClient.setSessionMode).toHaveBeenCalledWith('s1', 'execute');
+  });
+
+  it('an offline device shows a banner and messages still queue', () => {
+    withSession('idle', false);
+    renderWithRoute('/session/s1', <SessionPage />);
+    expect(screen.getByText(/offline/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Send a message…')).toBeInTheDocument();
   });
 });
 
-// ============================================================
-// MessageInput
-// ============================================================
+describe('Composer', () => {
+  const baseProps = { sessionId: 's1', canAbort: false, reachable: true, onSend: vi.fn(), onAbort: vi.fn() };
 
-describe('MessageInput', () => {
-  it('renders input field', () => {
-    render(
-      <MemoryRouter>
-        <MessageInput sessionId="sess-1" />
-      </MemoryRouter>,
-    );
+  it('intent: an open question makes it the answer field; a running turn steers', () => {
+    expect(composerIntent(false, true)).toBe('answerQuestion');
+    expect(composerIntent(true, false)).toBe('steer');
+    expect(composerIntent(false, false)).toBe('prompt');
+  });
+
+  it('placeholders follow the intent', () => {
+    const { rerender } = render(<Composer {...baseProps} intent="prompt" />);
     expect(screen.getByPlaceholderText('Send a message…')).toBeInTheDocument();
+    rerender(<Composer {...baseProps} intent="answerQuestion" />);
+    expect(screen.getByPlaceholderText('Type your answer…')).toBeInTheDocument();
+    rerender(<Composer {...baseProps} intent="steer" />);
+    expect(screen.getByPlaceholderText('Steer the agent…')).toBeInTheDocument();
   });
 
-  it('auto-focuses the composer on desktop devices', async () => {
-    render(
-      <MemoryRouter>
-        <MessageInput sessionId="sess-1" />
-      </MemoryRouter>,
-    );
-
-    const input = screen.getByPlaceholderText('Send a message…');
-    await waitFor(() => expect(input).toHaveFocus());
+  it('sends on click and clears the draft', async () => {
+    const onSend = vi.fn();
+    render(<Composer {...baseProps} onSend={onSend} intent="prompt" />);
+    await userEvent.type(screen.getByRole('textbox'), 'Hello');
+    await userEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(onSend).toHaveBeenCalledWith('Hello', undefined, 'prompt');
+    expect(useStore.getState().drafts.get('s1')).toBeUndefined();
   });
 
-  it('does not auto-focus the composer on coarse-pointer devices', () => {
-    const originalMatchMedia = window.matchMedia;
-    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
-      matches: query === '(pointer: coarse)' ? true : query === '(prefers-color-scheme: dark)',
-      media: query,
-      onchange: null,
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    }));
-
-    try {
-      render(
-        <MemoryRouter>
-          <MessageInput sessionId="sess-1" />
-        </MemoryRouter>,
-      );
-
-      expect(screen.getByPlaceholderText('Send a message…')).not.toHaveFocus();
-    } finally {
-      window.matchMedia = originalMatchMedia;
-    }
+  it('Enter sends on a keyboard device; Shift+Enter is a newline; blank never sends', async () => {
+    const onSend = vi.fn();
+    render(<Composer {...baseProps} onSend={onSend} intent="prompt" />);
+    const field = screen.getByRole('textbox');
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(onSend).not.toHaveBeenCalled();
+    await userEvent.type(field, 'a{Shift>}{Enter}{/Shift}b');
+    expect(onSend).not.toHaveBeenCalled();
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(onSend).toHaveBeenCalledWith('a\nb', undefined, 'prompt');
   });
 
-  it('uses mobile-safe input sizing to avoid iOS zoom', () => {
-    render(
-      <MemoryRouter>
-        <MessageInput sessionId="sess-1" />
-      </MemoryRouter>,
-    );
-
-    expect(screen.getByPlaceholderText('Send a message…').className).toContain('text-base');
+  it('with nothing typed a running turn shows Stop; typing turns it into Steer', async () => {
+    const onAbort = vi.fn();
+    render(<Composer {...baseProps} canAbort onAbort={onAbort} intent="steer" />);
+    await userEvent.click(screen.getByRole('button', { name: 'Stop agent' }));
+    expect(onAbort).toHaveBeenCalledTimes(1);
+    await userEvent.type(screen.getByRole('textbox'), 'go left');
+    expect(screen.getByRole('button', { name: 'Steer agent' })).toBeInTheDocument();
   });
 
-  it('sends message on button click', async () => {
-    const user = userEvent.setup();
-    render(
-      <MemoryRouter>
-        <MessageInput sessionId="sess-1" />
-      </MemoryRouter>,
-    );
-    const input = screen.getByPlaceholderText('Send a message…');
-    await user.type(input, 'Hello there');
-    await user.click(screen.getByLabelText('Send message'));
-    expect(wsClient.sendInput).toHaveBeenCalledWith('sess-1', 'Hello there', undefined);
-  });
-
-  it('sends message on Enter key', async () => {
-    const user = userEvent.setup();
-    render(
-      <MemoryRouter>
-        <MessageInput sessionId="sess-1" />
-      </MemoryRouter>,
-    );
-    const input = screen.getByPlaceholderText('Send a message…');
-    await user.type(input, 'Hello{Enter}');
-    expect(wsClient.sendInput).toHaveBeenCalledWith('sess-1', 'Hello', undefined);
-  });
-
-  it('does not send on Shift+Enter (newline)', async () => {
-    const user = userEvent.setup();
-    render(
-      <MemoryRouter>
-        <MessageInput sessionId="sess-1" />
-      </MemoryRouter>,
-    );
-    const input = screen.getByPlaceholderText('Send a message…');
-    await user.type(input, 'Line 1{Shift>}{Enter}{/Shift}Line 2');
-    expect(wsClient.sendInput).not.toHaveBeenCalled();
-  });
-
-  it('clears input after sending', async () => {
-    const user = userEvent.setup();
-    render(
-      <MemoryRouter>
-        <MessageInput sessionId="sess-1" />
-      </MemoryRouter>,
-    );
-    const input = screen.getByPlaceholderText('Send a message…') as HTMLTextAreaElement;
-    await user.type(input, 'Hello{Enter}');
-    expect(input.value).toBe('');
-  });
-
-  it('does not send empty message', async () => {
-    const user = userEvent.setup();
-    render(
-      <MemoryRouter>
-        <MessageInput sessionId="sess-1" />
-      </MemoryRouter>,
-    );
-    await user.click(screen.getByLabelText('Send message'));
-    expect(wsClient.sendInput).not.toHaveBeenCalled();
-  });
-
-  it('does not send whitespace-only message', async () => {
-    const user = userEvent.setup();
-    render(
-      <MemoryRouter>
-        <MessageInput sessionId="sess-1" />
-      </MemoryRouter>,
-    );
-    const input = screen.getByPlaceholderText('Send a message…');
-    await user.type(input, '   {Enter}');
-    expect(wsClient.sendInput).not.toHaveBeenCalled();
-  });
-
-  it('send button is disabled when input is empty', () => {
-    render(
-      <MemoryRouter>
-        <MessageInput sessionId="sess-1" />
-      </MemoryRouter>,
-    );
-    expect(screen.getByLabelText('Send message')).toBeDisabled();
-  });
-
-  it.each(['threshold', 'manual'] as const)('keeps idle composer non-blocking during %s maintenance', async (reason) => {
-    const user = userEvent.setup();
-    useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'd1', deviceName: 'Test', agent: 'pi', state: 'idle', messageCount: 0 });
-    useStore.getState().setRuntimeStatus('sess-1', { status: 'compacting', reason });
-    render(
-      <MemoryRouter>
-        <MessageInput sessionId="sess-1" />
-      </MemoryRouter>,
-    );
-
-    expect(screen.queryByLabelText('Stop')).not.toBeInTheDocument();
-    await user.type(screen.getByPlaceholderText('Send a message…'), 'new turn{Enter}');
-    expect(wsClient.sendInput).toHaveBeenCalledWith('sess-1', 'new turn', undefined);
-    expect(screen.getByLabelText('Stop')).toBeInTheDocument();
-  });
-
-  it('keeps overflow compaction blocking as the current run', async () => {
-    const user = userEvent.setup();
-    useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'd1', deviceName: 'Test', agent: 'pi', state: 'idle', messageCount: 0 });
-    useStore.getState().setRuntimeStatus('sess-1', { status: 'compacting', reason: 'overflow' });
-    render(
-      <MemoryRouter>
-        <MessageInput sessionId="sess-1" />
-      </MemoryRouter>,
-    );
-
-    await user.type(screen.getByPlaceholderText('Send a message…'), 'recovery guidance{Enter}');
-    expect(wsClient.sendInput).toHaveBeenCalledWith('sess-1', 'recovery guidance', undefined, 'steer');
-    expect(screen.getByLabelText('Stop')).toBeInTheDocument();
-  });
-
-  it('keeps send and stop as separate controls while the session is active', async () => {
-    const user = userEvent.setup();
-    useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'd1', deviceName: 'Test', agent: 'copilot', state: 'active', messageCount: 0 });
-    render(
-      <MemoryRouter>
-        <MessageInput sessionId="sess-1" />
-      </MemoryRouter>,
-    );
-
-    const input = screen.getByPlaceholderText('Send a message…');
-    await user.type(input, 'change direction{Enter}');
-    expect(wsClient.sendInput).toHaveBeenCalledWith(
-      'sess-1', 'change direction', undefined, 'steer',
-    );
-
-    const stopBtn = screen.getByLabelText('Stop');
-    expect(screen.getByLabelText('Steer agent')).toBeInTheDocument();
-    await user.click(stopBtn);
-    expect(wsClient.abortSession).toHaveBeenCalledWith('sess-1');
+  it('Stop is disabled while the device is unreachable', () => {
+    render(<Composer {...baseProps} canAbort reachable={false} intent="steer" />);
+    expect(screen.getByRole('button', { name: 'Stop agent' })).toBeDisabled();
   });
 });

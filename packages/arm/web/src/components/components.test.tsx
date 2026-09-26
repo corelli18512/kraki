@@ -4,9 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router';
 import { useStore } from '../hooks/useStore';
 import { Sidebar } from '../components/layout/Sidebar';
-import { SessionList } from '../components/sessions/SessionList';
-import { SessionCard } from '../components/sessions/SessionCard';
-import { DeviceList } from '../components/sessions/DeviceList';
+import { SessionRow } from '../components/sessions/SessionRow';
 import { NewSessionDialog } from '../components/sessions/NewSessionDialog';
 import type { ChatMessage } from '../types/store';
 import { EmptyState } from '../components/common/EmptyState';
@@ -34,10 +32,16 @@ beforeEach(() => {
 // ============================================================
 
 describe('Sidebar', () => {
-  it('renders the kraki logo and title', () => {
+  it('wide: search and new session; lists sessions', () => {
+    useStore.getState().setSessions([
+      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 1, title: 'Alpha' },
+      { id: 's2', deviceId: 'd1', deviceName: 'Mac', agent: 'pi', state: 'idle', messageCount: 1, title: 'Beta' },
+    ]);
     renderWithRouter(<Sidebar />);
-    expect(screen.getAllByText('K').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByAltText('Kraki').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByLabelText('Search sessions')).toBeInTheDocument();
+    expect(screen.getByLabelText('New session')).toBeInTheDocument();
+    expect(screen.getByText('Alpha')).toBeInTheDocument();
+    expect(screen.getByText('Beta')).toBeInTheDocument();
   });
 });
 
@@ -60,166 +64,64 @@ describe('ProfileBar', () => {
 // SessionList
 // ============================================================
 
-describe('SessionList', () => {
-  it('renders empty state when no sessions', () => {
-    renderWithRouter(<SessionList />);
-    expect(screen.getByText('No sessions yet')).toBeInTheDocument();
-  });
-
-  it('renders session cards when sessions exist', () => {
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'copilot', messageCount: 5 },
-      { id: 's2', deviceId: 'd2', deviceName: 'Server', agent: 'claude', messageCount: 2 },
-    ]);
-    renderWithRouter(<SessionList />);
-    expect(screen.getByText('Copilot')).toBeInTheDocument();
-    expect(screen.getByText('Claude')).toBeInTheDocument();
-  });
-
-  it('sorts sessions by timestamp then alphabetically', () => {
-    useStore.getState().setSessions([
-      { id: 's1', deviceId: 'd1', deviceName: '', agent: 'codex', messageCount: 0 },
-      { id: 's2', deviceId: 'd2', deviceName: '', agent: 'copilot', messageCount: 0 },
-      { id: 's3', deviceId: 'd3', deviceName: '', agent: 'claude', messageCount: 0 },
-    ]);
-    renderWithRouter(<SessionList />);
-    // Find the agent labels in order (they appear as text within session cards)
-    const labels = screen.getAllByText(/^(Codex|Copilot|Claude)$/);
-    // No timestamps, so fallback to alphabetical by ID: s1, s2, s3
-    expect(labels[0].textContent).toBe('Codex');
-    expect(labels[1].textContent).toBe('Copilot');
-    expect(labels[2].textContent).toBe('Claude');
-  });
-});
-
-// ============================================================
-// SessionCard
-// ============================================================
-
-describe('SessionCard', () => {
+describe('SessionRow', () => {
   const session = {
-    id: 's1', deviceId: 'd1', deviceName: 'MacBook', agent: 'copilot',
-    model: 'gpt-4o', messageCount: 5,
+    id: 's1', deviceId: 'd1', deviceName: 'MacBook', agent: 'pi' as const,
+    model: 'gpt-5', state: 'idle' as const, messageCount: 5, title: 'Cache work',
   };
+  const row = (props: Partial<React.ComponentProps<typeof SessionRow>> = {}) =>
+    renderWithRouter(<SessionRow session={session} selected={false} pinned={false} narrow={false} {...props} />);
 
-  it('renders agent info', () => {
-    renderWithRouter(<SessionCard session={session} />);
-    expect(screen.getByText('Copilot')).toBeInTheDocument();
-    expect(screen.getByText('gpt-4o')).toBeInTheDocument();
-  });
-
-  it('renders device name', () => {
-    renderWithRouter(<SessionCard session={session} />);
+  it('title, device, model and the latest preview', () => {
+    useStore.getState().setDevices([{ id: 'd1', name: 'MacBook', role: 'tentacle', online: true }]);
+    useStore.getState().setSessionPreview('s1', { text: 'Done:\n  all  green', type: 'agent', timestamp: new Date().toISOString() });
+    row();
+    expect(screen.getByText('Cache work')).toBeInTheDocument();
     expect(screen.getByText('MacBook')).toBeInTheDocument();
+    expect(screen.getByText('gpt-5')).toBeInTheDocument();
+    expect(screen.getByText('Done: all green')).toBeInTheDocument();
+    expect(screen.getByLabelText('Last message from agent')).toBeInTheDocument();
   });
 
-  it('renders offline badge when device is offline', () => {
-    // No device set = offline by default
-    renderWithRouter(<SessionCard session={session} />);
+  it('a waiting question and an offline device read as such', () => {
+    useStore.getState().setDevices([{ id: 'd1', name: 'MacBook', role: 'tentacle', online: true }]);
+    useStore.getState().setSessionPreview('s1', { text: 'Deploy?', type: 'question', timestamp: '' });
+    const { unmount } = row();
+    expect(screen.getByLabelText('Waiting for an answer')).toBeInTheDocument();
+    unmount();
+    useStore.getState().setDevices([{ id: 'd1', name: 'MacBook', role: 'tentacle', online: false }]);
+    row();
     expect(screen.getByText('offline')).toBeInTheDocument();
+    expect(screen.getByLabelText('Offline')).toBeInTheDocument();
   });
 
-  it('shows unread indicator', () => {
-    useStore.getState().setSessions([session]);
-    useStore.getState().incrementUnread(session.id);
-    const { container } = renderWithRouter(<SessionCard session={session} />);
-    // Unread indicator is a small dot with bg-kraki-500
-    expect(container.querySelector('.bg-kraki-500.rounded-full')).toBeInTheDocument();
-  });
-
-  it('navigates on click', async () => {
-    const user = userEvent.setup();
-    renderWithRouter(<SessionCard session={session} />);
-    const buttons = screen.getAllByRole('button');
-    await user.click(buttons[0]); // main card button
-    // Can't easily verify navigation in unit test, but click shouldn't throw
-  });
-
-  it('shows message preview from last message', () => {
-    useStore.getState().setSessions([session]);
-    useStore.getState().setSessionPreview('s1', {
-      text: 'Here is the analysis result',
-      type: 'agent',
-      timestamp: new Date().toISOString(),
-    });
-    renderWithRouter(<SessionCard session={session} />);
-    expect(screen.getByText('Here is the analysis result')).toBeInTheDocument();
-  });
-
-  it('shows error message as preview', () => {
-    useStore.getState().setSessions([session]);
-    useStore.getState().setSessionPreview('s1', {
-      text: 'Something went wrong',
-      type: 'error',
-      timestamp: new Date().toISOString(),
-    });
-    renderWithRouter(<SessionCard session={session} />);
-    expect(screen.getByText('Something went wrong')).toBeInTheDocument();
-  });
-
-  it('applies active style when route matches', () => {
-    renderWithRouter(<SessionCard session={session} />, { route: '/session/s1' });
-    // Main card button contains the agent label text
-    const cardButton = screen.getByText('Copilot').closest('button')!;
-    expect(cardButton.className).toContain('kraki-500');
-  });
-
-  it('applies inactive style when route does not match', () => {
-    renderWithRouter(<SessionCard session={session} />, { route: '/' });
-    const cardButton = screen.getByText('Copilot').closest('button')!;
-    expect(cardButton.className).toContain('hover:bg-surface-secondary');
-  });
-
-  it('renders without model', () => {
-    const noModel = { ...session, model: undefined };
-    renderWithRouter(<SessionCard session={noModel} />);
-    expect(screen.getByText('Copilot')).toBeInTheDocument();
-    expect(screen.queryByText('gpt-4o')).not.toBeInTheDocument();
-  });
-
-  it('renders without device name', () => {
-    const noDevice = { ...session, deviceName: '' };
-    renderWithRouter(<SessionCard session={noDevice} />);
-    expect(screen.getByText('Copilot')).toBeInTheDocument();
+  it('unread dot unless selected; a draft previews as the draft', () => {
+    useStore.getState().setSessions([{ ...session, lastSeq: 9, readSeq: 3 }]);
+    useStore.getState().setDraft('s1', 'half typed');
+    const { unmount } = row();
+    expect(screen.getByLabelText('Unread')).toBeInTheDocument();
+    expect(screen.getByText('half typed')).toBeInTheDocument();
+    unmount();
+    row({ selected: true });
+    expect(screen.queryByLabelText('Unread')).toBeNull();
   });
 });
 
-// ============================================================
-// DeviceList
-// ============================================================
-
-describe('DeviceList', () => {
-  it('renders nothing when no tentacles', () => {
-    const { container } = renderWithRouter(<DeviceList />);
-    expect(container.firstChild).toBeNull();
-  });
-
-  it('renders tentacle devices', () => {
-    useStore.getState().setDevices([
-      { id: 'd1', name: 'MacBook Pro', role: 'tentacle', kind: 'desktop', online: true },
-      { id: 'd2', name: 'CI Server', role: 'tentacle', kind: 'server', online: true },
+describe('Sidebar sorting and search', () => {
+  it('pinned first, then newest preview; search filters', async () => {
+    const base = { deviceId: 'd1', deviceName: 'Mac', agent: 'pi' as const, state: 'idle' as const, messageCount: 1 };
+    useStore.getState().setSessions([
+      { ...base, id: 'a', title: 'Old' }, { ...base, id: 'b', title: 'New' }, { ...base, id: 'c', title: 'Pinned' },
     ]);
-    renderWithRouter(<DeviceList />);
-    expect(screen.getByText('MacBook Pro')).toBeInTheDocument();
-    expect(screen.getByText('CI Server')).toBeInTheDocument();
-  });
-
-  it('does not render app devices', () => {
-    useStore.getState().setDevices([
-      { id: 'd1', name: 'Web Browser', role: 'app', kind: 'web', online: true },
-    ]);
-    const { container } = renderWithRouter(<DeviceList />);
-    expect(container.firstChild).toBeNull();
-  });
-
-  it('shows only online tentacles', () => {
-    useStore.getState().setDevices([
-      { id: 'd1', name: 'Online Mac', role: 'tentacle', online: true },
-      { id: 'd2', name: 'Offline Server', role: 'tentacle', online: false },
-    ]);
-    renderWithRouter(<DeviceList />);
-    expect(screen.getByText('Online Mac')).toBeInTheDocument();
-    expect(screen.queryByText('Offline Server')).not.toBeInTheDocument();
+    useStore.getState().setSessionPreview('a', { text: 'x', type: 'agent', timestamp: '2026-01-01T00:00:00Z' });
+    useStore.getState().setSessionPreview('b', { text: 'y', type: 'agent', timestamp: '2026-02-01T00:00:00Z' });
+    useStore.getState().setPinnedSessions(new Set(['c']));
+    renderWithRouter(<Sidebar />);
+    const titles = screen.getAllByRole('button').map((b) => b.textContent ?? '').filter((t) => /Old|New|Pinned/.test(t));
+    expect(titles.map((t) => t.match(/Old|New|Pinned/)?.[0])).toEqual(['Pinned', 'New', 'Old']);
+    await userEvent.type(screen.getByLabelText('Search sessions'), 'old');
+    expect(screen.queryByText('New')).toBeNull();
+    expect(screen.getByText('Old')).toBeInTheDocument();
   });
 });
 

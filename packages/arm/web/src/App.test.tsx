@@ -41,11 +41,10 @@ describe('App', () => {
     expect(container.firstChild).toBeTruthy();
   });
 
-  it('renders header with kraki branding', () => {
+  it('renders the session sidebar', () => {
     useStore.getState().setStatus('connected');
-    const { getAllByText, getAllByAltText } = renderApp();
-    expect(getAllByText('K').length).toBeGreaterThanOrEqual(1);
-    expect(getAllByAltText('Kraki').length).toBeGreaterThanOrEqual(1);
+    const { getAllByLabelText } = renderApp();
+    expect(getAllByLabelText('New session').length).toBeGreaterThanOrEqual(1);
   });
 
   it('shows a blocking relay overlay when disconnected on first connect', () => {

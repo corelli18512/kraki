@@ -16,22 +16,7 @@ export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'er
 
 // --- Chat messages ---
 
-export interface PendingInputMessage {
-  type: 'pending_input';
-  id: string;
-  /** Client-generated correlation id (UUID). Echoed back inside the
-   *  resulting `user_message` broadcast so this placeholder can be
-   *  resolved unambiguously. `id` and `clientId` are typically the
-   *  same value; `clientId` is kept as a separate field for clarity
-   *  and to survive future changes to how `id` is generated. */
-  clientId: string;
-  sessionId: string;
-  text: string;
-  timestamp: string;
-  attachments?: import('@kraki/protocol').Attachment[];
-}
-
-export type ChatMessage = ProducerMessage | ConsumerMessage | PendingInputMessage;
+export type ChatMessage = ProducerMessage | ConsumerMessage;
 
 // --- Server-owned status card ---
 
@@ -40,9 +25,14 @@ export interface SessionCard {
    *  Rendered as a clean in-flow spine bubble (NOT the pinned working card) and
    *  cleared when the turn's permanent `agent_message` bubble lands. */
   text: string;
-  /** The single action slot (tool / permission / question). The ONLY thing the
-   *  pinned status card renders. */
+  /** The single action slot (tool / tool batch / permission) of the live
+   *  bubble. Questions are spine messages, never card state. */
   action: CardActionState | null;
+  /** A spine bubble concluded the live segment (a reply, a question, a
+   *  terminal status, idle). The live bubble stays hidden until the next
+   *  delta/action reopens it — between segments it would otherwise flash
+   *  away for a few frames whenever Tentacle clears the slot. */
+  closed?: boolean;
 }
 
 export interface SessionRuntimeStatus {
@@ -149,17 +139,6 @@ export interface AppActions {
   removeDevice: (deviceId: string) => void;
   setDeviceOnline: (deviceId: string, online: boolean) => void;
   appendMessage: (sessionId: string, message: ChatMessage) => void;
-  /** Replace a pending_input with the matching `user_message` broadcast.
-   *  When `clientId` is provided, the pending with that exact id is
-   *  resolved; otherwise the first pending (legacy fallback for clients
-   *  or replays without clientId) is resolved. `serverContent` overrides
-   *  the pending's local text if present. */
-  resolvePendingInput: (
-    sessionId: string,
-    seq: number,
-    clientId?: string,
-    serverContent?: string,
-  ) => boolean;
   applyCardMessage: (sessionId: string, content: string, reset?: boolean) => void;
   setCardAction: (sessionId: string, action: CardActionState | null) => void;
   setRuntimeStatus: (sessionId: string, status: SessionRuntimeStatus | null) => void;

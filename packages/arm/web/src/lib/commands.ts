@@ -58,56 +58,6 @@ export class CommandState {
   }
 }
 
-/** Generate a UUID v4. Prefers `crypto.randomUUID()` (only available
- *  in secure contexts), falls back to a `crypto.getRandomValues`-based
- *  RFC 4122 implementation when the app is served over HTTP (corporate
- *  intranet, local IP dev server, etc). Used for opaque correlation
- *  ids — not cryptographic-strength identifiers. */
-function generateClientId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  // RFC 4122 v4 from 16 random bytes.
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex: string[] = [];
-  for (let i = 0; i < 16; i++) hex.push(bytes[i].toString(16).padStart(2, '0'));
-  return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10, 16).join('')}`;
-}
-
-import { traceEvent } from './trace';
-
-export function sendInput(
-  sessionId: string,
-  text: string,
-  send: (msg: Record<string, unknown>) => void,
-  attachments?: import('@kraki/protocol').Attachment[],
-  delivery?: 'prompt' | 'steer',
-): void {
-  const store = getStore();
-  const timestamp = new Date().toISOString();
-  const clientId = generateClientId();
-  traceEvent({ comp: 'arm', evt: 'USER-SEND-INPUT', sessionId, clientId, textLen: text.length, hasAttachments: !!attachments?.length, delivery: delivery ?? 'prompt' });
-  store.appendMessage(sessionId, {
-    type: 'pending_input',
-    id: clientId,
-    clientId,
-    sessionId,
-    text,
-    timestamp,
-    attachments,
-  });
-  // Update preview optimistically so session card reflects the sent message immediately
-  store.setSessionPreview(sessionId, { text: text.slice(0, 80), type: 'user', timestamp });
-  send({
-    type: 'send_input',
-    sessionId,
-    payload: { text, clientId, ...(attachments?.length && { attachments }), ...(delivery === 'steer' && { delivery }) },
-  });
-}
-
 export function approve(
   permissionId: string,
   sessionId: string,
@@ -143,24 +93,6 @@ export function alwaysAllow(
     sessionId,
     payload: { permissionId, toolKind },
   });
-}
-
-export function answer(
-  questionId: string,
-  sessionId: string,
-  answerText: string,
-  send: (msg: Record<string, unknown>) => void,
-  wasFreeform = false,
-): void {
-  send({
-    type: 'answer',
-    sessionId,
-    payload: { questionId, answer: answerText, wasFreeform },
-  });
-  // The sidebar preview is owned by the session_list digest; an answer is a
-  // turn-internal mechanic (like a tool call), not a turn boundary, so it must
-  // not be written to the preview store. The digest's attention override
-  // clears the question preview authoritatively on resolve.
 }
 
 export function killSession(
@@ -241,7 +173,8 @@ export function createSession(
       model: opts.model,
       ...(opts.reasoningEffort && { reasoningEffort: opts.reasoningEffort }),
       ...(opts.contextTier && { contextTier: opts.contextTier }),
-      prompt: opts.prompt,
+      // The first prompt is sent as an ordinary message once the session
+      // exists (session_created), so it gets a bubble with delivery states.
       cwd: opts.cwd,
     },
   });
