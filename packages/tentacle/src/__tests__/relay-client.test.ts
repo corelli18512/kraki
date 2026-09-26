@@ -521,7 +521,7 @@ describe('RelayClient title generation', () => {
   it('triggers title generation on first idle', async () => {
     const { adapter, sm } = connectClient();
     const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
-    smMock.getMeta.mockReturnValue({ id: 's1', state: 'idle' });
+    smMock.getMeta.mockReturnValue({ id: 's1', state: 'idle', agent: 'pi', model: 'deepseek/deepseek-flash', reasoningEffort: 'high' });
     smMock.getMessagesAfterSeq.mockReturnValue([
       { seq: 1, type: 'user_message', payload: JSON.stringify({ type: 'user_message', payload: { content: 'fix the login bug' } }), ts: '' },
     ]);
@@ -532,9 +532,13 @@ describe('RelayClient title generation', () => {
     onIdle('s1');
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(adapter.generateTitle).toHaveBeenCalledWith(
-      expect.objectContaining({ lastUserMessage: 'fix the login bug' }),
-    );
+    // Titled by the session's own agent + model, never a fixed adapter.
+    expect(adapter.generateTitle).toHaveBeenCalledWith('s1', expect.objectContaining({
+      lastUserMessage: 'fix the login bug',
+      agent: 'pi',
+      model: 'deepseek/deepseek-flash',
+      reasoningEffort: 'high',
+    }));
   });
 
   it('persists current-turn artifacts on a normal adapter idle', () => {

@@ -34,6 +34,8 @@ import type { ModelDetail, SessionUsage, ReasoningEffort, ToolArgs } from '@krak
 import { createLogger } from '../logger.js';
 import { getKrakiHome, getConfigDir } from '../config.js';
 import { PI_KRAKI_TOOLS_SOURCE } from './pi-kraki-tools.js';
+import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
+import { tmpdir } from 'node:os';
 import { fitToMaxDimension } from '../image-resize.js';
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 
@@ -1874,6 +1876,40 @@ export class PiAdapter extends AgentAdapter {
         logger.warn({ err: (err as Error).message, sessionId, thinking }, 'pi thinking level change failed');
       }
     }
+  }
+
+  /** Title side-call: one-shot `pi --print` on the session's own provider and
+   *  model, with tools, extensions, skills, prompt templates, context files and
+   *  thinking all off and no session file. It never touches the session's pi
+   *  process or transcript, so it is safe while a turn is running. */
+  async generateTitle(sessionId: string, context: TitleContext): Promise<string | null> {
+    const model = context.model
+      ?? this.sessions.get(sessionId)?.model
+      ?? this.loadMeta(sessionId)?.model
+      ?? this.getDefaultModel();
+    const [provider, modelId] = this.resolveModelId(model);
+    const args = [
+      '--print', '--no-session', '--no-tools', '--no-extensions', '--no-skills',
+      '--no-prompt-templates', '--no-context-files', '--thinking', 'off',
+      '--provider', provider, '--model', modelId,
+      '--system-prompt', TITLE_SYSTEM_PROMPT,
+      buildTitlePrompt(context),
+    ];
+    return new Promise<string | null>((resolve) => {
+      let out = '';
+      let err = '';
+      let done = false;
+      const finish = (value: string | null) => { if (!done) { done = true; clearTimeout(timer); resolve(value); } };
+      const child = spawn(this.cliPath, args, { cwd: tmpdir(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+      const timer = setTimeout(() => { child.kill(); logger.warn({ sessionId }, 'pi title generation timed out'); finish(null); }, 45_000);
+      child.stdout.on('data', (d) => { out += d.toString(); });
+      child.stderr.on('data', (d) => { err += d.toString(); });
+      child.on('error', (e) => { logger.warn({ sessionId, err: e.message }, 'pi title spawn failed'); finish(null); });
+      child.on('exit', (code) => {
+        if (code !== 0) logger.warn({ sessionId, code, stderr: err.slice(-300) }, 'pi title generation failed');
+        finish(code === 0 ? cleanTitle(out) : null);
+      });
+    });
   }
 
   async listSessions(): Promise<SessionInfo[]> {

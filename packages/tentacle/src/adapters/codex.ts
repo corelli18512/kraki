@@ -48,6 +48,8 @@ import {
   SELF_MANAGEMENT_DENIAL_REASON,
 } from '../self-management-guard.js';
 import { showImageHandler, showImageTool } from '../mcp/tools/show-image.js';
+import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
+import { tmpdir } from 'node:os';
 
 const logger = createLogger('codex-adapter');
 
@@ -238,6 +240,8 @@ export class CodexAdapter extends AgentAdapter {
   private sessions = new Map<string, CodexSession>();
   private threadToSession = new Map<string, string>();
   private models: ModelDetail[] = [];
+  /** Ephemeral title threads awaiting their final agent message. */
+  private titleThreads = new Map<string, { text: string; done: (text: string | null) => void }>();
   private stopping = false;
   private readonly opts: CodexAdapterOptions;
 
@@ -803,6 +807,53 @@ export class CodexAdapter extends AgentAdapter {
     if (s) s.usage = { ...usage };
   }
 
+  /** Title side-call: an ephemeral thread (never persisted, never mapped to a
+   *  Kraki session) on the session's own model at its lowest reasoning effort.
+   *  Codex's system prompt is replaced, no Kraki tools are offered, and any
+   *  command / file change / tool request it makes is declined because the
+   *  thread belongs to no session (see handleServerRequest). */
+  async generateTitle(sessionId: string, context: TitleContext): Promise<string | null> {
+    const model = context.model ?? this.sessions.get(sessionId)?.model ?? this.loadSidecar(sessionId)?.model;
+    const efforts = this.models.find((m) => m.id === model)?.supportedReasoningEfforts;
+    const effort = efforts?.[0];
+    let threadId: string | undefined;
+    try {
+      const rpc = await this.ensureServer();
+      const res = await rpc.request<{ thread: { id: string } }>('thread/start', {
+        cwd: tmpdir(),
+        ...(model && { model }),
+        ephemeral: true,
+        approvalPolicy: 'untrusted',
+        sandbox: 'read-only',
+        baseInstructions: TITLE_SYSTEM_PROMPT,
+      });
+      threadId = res.thread.id;
+      const id = threadId;
+      const result = new Promise<string | null>((resolve) => {
+        const timer = setTimeout(() => { this.titleThreads.delete(id); resolve(null); }, 45_000);
+        this.titleThreads.set(id, {
+          text: '',
+          done: (text) => { clearTimeout(timer); this.titleThreads.delete(id); resolve(text); },
+        });
+      });
+      await rpc.request('turn/start', {
+        threadId,
+        input: [{ type: 'text', text: buildTitlePrompt(context), text_elements: [] }],
+        ...(model && { model }),
+        ...(effort && { effort }),
+      });
+      return cleanTitle(await result);
+    } catch (err) {
+      if (threadId) this.titleThreads.delete(threadId);
+      logger.warn({ sessionId, err: errMessage(err) }, 'codex title generation failed');
+      return null;
+    } finally {
+      if (threadId && this.rpc?.alive) {
+        this.rpc.request('thread/unsubscribe', { threadId }, 5_000).catch(() => {});
+      }
+    }
+  }
+
   // ── Permissions & questions (Kraki → Codex) ──────────
 
   async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision): Promise<void> {
@@ -1092,6 +1143,16 @@ export class CodexAdapter extends AgentAdapter {
 
   private handleNotification(n: RpcNotification): void {
     const params = (n.params ?? {}) as Record<string, unknown>;
+    const title = this.titleThreads.get(str(params.threadId));
+    if (title) {
+      const item = params.item as { type?: string; text?: string } | undefined;
+      if (n.method === 'item/completed' && item?.type === 'agentMessage') title.text = str(item.text);
+      if (n.method === 'turn/completed') {
+        const status = str((params.turn as { status?: unknown } | undefined)?.status);
+        title.done(status === 'completed' ? title.text : null);
+      }
+      return;
+    }
     const s = this.sessionForParams(params);
     if (!s) return;
 

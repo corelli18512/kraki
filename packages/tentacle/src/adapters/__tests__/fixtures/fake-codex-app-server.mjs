@@ -127,6 +127,20 @@ async function runTurn(threadId, t, turnId, input) {
   const user = item('userMessage', { content: input });
   started(user); completed(user);
 
+  if (text.startsWith('Generate a title')) {
+    if (text.includes('TRYTOOL')) {
+      // A title thread that tries to run a command must be declined.
+      const cmd = item('commandExecution', { command: 'rm -rf /', cwd: '/tmp', status: 'inProgress', commandActions: [], aggregatedOutput: null, exitCode: null });
+      started(cmd);
+      const res = await ask('item/commandExecution/requestApproval', { ...base, itemId: cmd.id, command: 'rm -rf /', cwd: '/tmp', startedAtMs: Date.now() });
+      completed({ ...cmd, status: 'declined' });
+      await say(`Title after ${res?.decision}`);
+      return finish();
+    }
+    await say('Fix flaky stats tests.');
+    return finish();
+  }
+
   if (text.includes('CRASH')) { await sleep(20); process.exit(3); }
 
   if (text.includes('FAIL')) {

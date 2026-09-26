@@ -349,10 +349,17 @@ export class MultiAgentAdapter extends AgentAdapter {
     this.getSessionAdapter(sessionId).setSessionUsage(sessionId, usage);
   }
 
-  async generateTitle(context: Parameters<AgentAdapter['generateTitle']>[0]): Promise<string | null> {
-    // Use the first available adapter for title generation
-    const adapter = this.adapters.values().next().value;
-    return adapter ? adapter.generateTitle(context) : null;
+  async generateTitle(sessionId: string, context: import('./title.js').TitleContext): Promise<string | null> {
+    // A session is titled by ITS OWN agent, on its own account and model —
+    // never by whichever adapter happens to be registered first. If that
+    // agent is not running, there is no title rather than a cross-agent call.
+    const agentId = (context.agent as AgentId | undefined) ?? this.sessionAgent.get(sessionId);
+    const adapter = agentId ? this.adapters.get(agentId) : undefined;
+    if (!adapter) {
+      logger.debug({ sessionId, agentId }, 'title: session agent unavailable, skipping');
+      return null;
+    }
+    return adapter.generateTitle(sessionId, context);
   }
 
   override registerSessionAgent(sessionId: string, agentId: string): void {

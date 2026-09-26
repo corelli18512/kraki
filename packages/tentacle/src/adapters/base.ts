@@ -275,8 +275,10 @@ export abstract class AgentAdapter {
   /** Set permission mode for a session. Override in concrete adapters. */
   setSessionMode(_sessionId: string, _mode: 'safe' | 'discuss' | 'execute' | 'delegate'): void { /* no-op by default */ }
 
-  /** Generate a title for a session via LLM. Override in concrete adapters. */
-  async generateTitle(_context: { firstUserMessage: string; lastUserMessage?: string; recentMessages?: string[]; currentTitle?: string }): Promise<string | null> { return null; }
+  /** Generate a title for `sessionId` with THAT session's own agent and model
+   *  (see adapters/title.ts). Must be a tool-less side-call that never touches
+   *  the session's transcript. Return null when unavailable. */
+  async generateTitle(_sessionId: string, _context: import('./title.js').TitleContext): Promise<string | null> { return null; }
 
   /** Change model (and optionally reasoning effort / context tier) for a session. Override in concrete adapters. */
   async setSessionModel(_sessionId: string, _model: string, _reasoningEffort?: string, _contextTier?: string): Promise<void> { /* no-op by default */ }

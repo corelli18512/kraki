@@ -305,14 +305,25 @@ describe('ClaudeAdapter — permissions', () => {
 });
 
 describe('ClaudeAdapter — title side-call', () => {
+  it('prefers the model RelayClient reports for the session', async () => {
+    sdk.query.mockImplementation(() => ({
+      [Symbol.asyncIterator]: async function* () { yield { type: 'result', result: 'Title' }; },
+    }));
+    await createClaude();
+    await claude.generateTitle('s', { firstUserMessage: 'x', model: 'opus' });
+    expect(sdk.query.mock.calls[0][0].options.model).toBe('opus');
+  });
+
   it('runs with no tools, no settings, denied permissions and no transcript', async () => {
     sdk.query.mockImplementation(() => ({
       [Symbol.asyncIterator]: async function* () { yield { type: 'result', result: 'Fix flaky stats tests' }; },
     }));
-    const title = await claude.generateTitle({ firstUserMessage: 'please fix the stats tests' });
+    await createClaude(); // session on sonnet
+    const title = await claude.generateTitle('s', { firstUserMessage: 'please fix the stats tests' });
     expect(title).toBe('Fix flaky stats tests');
     const opts = sdk.query.mock.calls[0][0].options;
-    expect(opts).toMatchObject({ tools: [], settingSources: [], persistSession: false, maxTurns: 1, model: 'haiku' });
+    // The session's own model, not a fixed cheap one.
+    expect(opts).toMatchObject({ tools: [], settingSources: [], persistSession: false, maxTurns: 1, model: 'sonnet' });
     expect(opts.permissionMode).not.toBe('bypassPermissions');
     expect(opts.allowDangerouslySkipPermissions).toBeUndefined();
     await expect(opts.canUseTool('Bash', {}, {})).resolves.toMatchObject({ behavior: 'deny' });

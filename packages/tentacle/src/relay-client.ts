@@ -3535,11 +3535,15 @@ export class RelayClient {
       return;
     }
 
-    this.adapter.generateTitle({
+    this.adapter.generateTitle(sessionId, {
       firstUserMessage: recentMessages[recentMessages.length - 1] ?? lastUserMessage,
       lastUserMessage,
       recentMessages,
       currentTitle,
+      // Same agent + same model as the session: the only guaranteed-available pair.
+      agent: meta.agent,
+      model: meta.model,
+      reasoningEffort: meta.reasoningEffort,
     })
       .then((title) => {
         if (title) {

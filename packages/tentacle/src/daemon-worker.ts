@@ -172,10 +172,14 @@ export async function startWorker(): Promise<WorkerResult> {
     mcpServer = null;
   }
 
+  // Every AgentId the MultiAgentAdapter can start. Pinning `pi` was silently
+  // dropped by an older hand-written list.
+  const KNOWN_AGENT_IDS = ['copilot', 'claude', 'pi', 'codex'] as const satisfies readonly AgentId[];
+
   // 3c. Create multi-agent adapter. When config pins an explicit agent
   // allow-list we honour it; otherwise the adapter auto-detects every
   // installed agent at startup (legacy behaviour).
-  const pinnedAgents = config.agents?.filter((a): a is AgentId => a === 'copilot' || a === 'claude' || a === 'codex');
+  const pinnedAgents = config.agents?.filter((a): a is AgentId => (KNOWN_AGENT_IDS as readonly string[]).includes(a));
   const adapter = new MultiAgentAdapter({
     attachmentStore,
     ...(pinnedAgents && pinnedAgents.length > 0 && { agentIds: pinnedAgents }),

@@ -46,6 +46,7 @@ import { parsePermission } from '../parse-permission.js';
 import { createLogger } from '../logger.js';
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 import { canonicalArtifactToolName } from './tool-name.js';
+import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 
 const logger = createLogger('copilot-adapter');
 type CopilotSdkModule = typeof import('@github/copilot-sdk');
@@ -425,6 +426,8 @@ export class CopilotAdapter extends AgentAdapter {
   private expectedModels = new Map<string, string>();
   /** User's originally requested model — never updated on involuntary fallbacks */
   private userRequestedModels = new Map<string, string>();
+  /** Latest title Copilot generated itself (session.title_changed). */
+  private nativeTitles = new Map<string, string>();
   /** Whether the current turn has produced any output (message or tool call) */
   private turnHasOutput = new Map<string, boolean>();
   /** Whether the current user-message-to-idle cycle had any output */
@@ -1390,6 +1393,7 @@ export class CopilotAdapter extends AgentAdapter {
     this.sessionUsage.delete(sessionId);
     this.expectedModels.delete(sessionId);
     this.userRequestedModels.delete(sessionId);
+    this.nativeTitles.delete(sessionId);
     this.turnHasOutput.delete(sessionId);
     this.cycleHasOutput.delete(sessionId);
     this.turnErrorReported.delete(sessionId);
@@ -1961,6 +1965,7 @@ export class CopilotAdapter extends AgentAdapter {
       const data = event.data as unknown as Record<string, unknown>;
       const title = data?.title as string | undefined;
       if (title) {
+        this.nativeTitles.set(sessionId, title);
         this.onTitleChanged?.(sessionId, title);
       }
     });
@@ -2103,70 +2108,40 @@ export class CopilotAdapter extends AgentAdapter {
 
   // ── Title generation via throwaway session ────────
 
-  private static readonly TITLE_SYSTEM_PROMPT = [
-    'You generate concise titles for coding sessions.',
-    'The title should reflect what the user is CURRENTLY working on, not the full history.',
-    'If the topic changed, use the most recent topic.',
-    '',
-    'Rules:',
-    '- 4-10 words, under 50 characters',
-    '- Describe the current task concisely',
-    '- No quotes, no punctuation at the end, no prefixes',
-    '- Just the title text, nothing else',
-  ].join('\n');
 
-  async generateTitle(context: { firstUserMessage: string; lastUserMessage?: string; recentMessages?: string[]; currentTitle?: string }): Promise<string | null> {
+  async generateTitle(sessionId: string, context: TitleContext): Promise<string | null> {
+    // Copilot titles its own sessions (session.title_changed) as part of the
+    // turn it already paid for. Prefer that: a side-call spends one more
+    // premium/chat request, which matters on the Free plan's 200/month.
+    const native = this.nativeTitles.get(sessionId);
+    if (native) return cleanTitle(native);
     if (!this.client) return null;
 
-    // Build prompt focused on recent context
-    let prompt: string;
-    if (context.recentMessages && context.recentMessages.length > 1) {
-      const recent = context.recentMessages.map((m, i) => `${i + 1}. ${m.slice(0, 200)}`).join('\n');
-      prompt = `Generate a title based on the most recent user messages (most recent first):\n\n${recent}`;
-      if (context.currentTitle) {
-        prompt += `\n\nCurrent title for reference: "${context.currentTitle}"`;
-      }
-      prompt += '\n\nTitle should reflect the CURRENT topic.';
-    } else {
-      prompt = `Generate a title for: "${(context.lastUserMessage ?? context.firstUserMessage).slice(0, 500)}"`;
-      if (context.currentTitle) {
-        prompt += `\n\nCurrent title for reference: "${context.currentTitle}"`;
-      }
-    }
-
+    // Same model as the session (auto on plans without model choice).
+    const model = context.model ?? this.userRequestedModels.get(sessionId) ?? this.expectedModels.get(sessionId);
     let session: CopilotSession | null = null;
     try {
-      logger.debug('Creating throwaway session for title generation');
       session = await this.client.createSession({
         configDirectory: getCopilotConfigDir(),
-        systemMessage: { mode: 'replace' as const, content: CopilotAdapter.TITLE_SYSTEM_PROMPT },
-        streaming: true,
-        onPermissionRequest: () => ({ kind: 'approve-once' as const }),
+        ...(model && { model }),
+        systemMessage: { mode: 'replace' as const, content: TITLE_SYSTEM_PROMPT },
+        // A pure text side-call: the prompt is user text, so no tool may run.
+        availableTools: [],
+        onPermissionRequest: () => ({ kind: 'reject' as const }),
         onUserInputRequest: () => ({ answer: '', wasFreeform: true }),
-      });
-      logger.debug({ throwawayId: session.sessionId }, 'Throwaway session created, sending prompt');
-
-      const response = await session.sendAndWait({ prompt }, 15_000);
-      let title = (response?.data?.content ?? '').trim();
-      // Clean up: strip quotes, trailing punctuation, "Title:" prefix
-      title = title.replace(/^["']|["']$/g, '').replace(/^(Title|Session):\s*/i, '').replace(/[.!]$/, '').trim();
-      logger.debug({ throwawayId: session.sessionId, title: title.slice(0, 80) }, 'Throwaway session responded');
-
-      // Take only the first line if multi-line
-      title = title.split('\n')[0].trim();
-
-      if (!title || title.length > 80) return null;
-      return title;
+      } as Parameters<CopilotClientType['createSession']>[0]);
+      const response = await session.sendAndWait({ prompt: buildTitlePrompt(context) }, 30_000);
+      return cleanTitle(response?.data?.content);
     } catch (err) {
-      logger.warn({ err }, 'Title generation failed');
+      logger.warn({ err: (err as Error).message, sessionId }, 'Title generation failed');
       return null;
     } finally {
       if (session) {
         const throwawayId = session.sessionId;
-        logger.debug({ throwawayId }, 'Cleaning up throwaway session');
         await session.disconnect().catch(() => {});
         await this.client?.deleteSession(throwawayId).catch(() => {});
       }
     }
   }
+
 }

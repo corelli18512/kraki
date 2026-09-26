@@ -30,6 +30,7 @@ import { join } from 'node:path';
 import { getConfigDir } from '../config.js';
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 import { canonicalArtifactToolName } from './tool-name.js';
+import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 
 const logger = createLogger('claude-adapter');
 
@@ -1228,70 +1229,38 @@ export class ClaudeAdapter extends AgentAdapter {
 
   // ── Title generation via throwaway query ──────────
 
-  private static readonly TITLE_SYSTEM_PROMPT = [
-    'You generate concise titles for coding sessions.',
-    'The title should reflect what the user is CURRENTLY working on, not the full history.',
-    'If the topic changed, use the most recent topic.',
-    '',
-    'Rules:',
-    '- 4-10 words, under 50 characters',
-    '- Describe the current task concisely',
-    '- No quotes, no punctuation at the end, no prefixes',
-    '- Just the title text, nothing else',
-  ].join('\n');
+  // ── Title generation (tool-less side-call) ──────────
 
-  async generateTitle(context: { firstUserMessage: string; lastUserMessage?: string; recentMessages?: string[]; currentTitle?: string }): Promise<string | null> {
+  async generateTitle(sessionId: string, context: TitleContext): Promise<string | null> {
+    // The session's own model: whatever the user runs this session on is, by
+    // construction, reachable with this account/provider.
+    const model = context.model ?? this.sessions.get(sessionId)?.model ?? this.loadMeta(sessionId)?.model;
     try {
       const { query: queryFn } = await import('@anthropic-ai/claude-agent-sdk');
-
-      let prompt: string;
-      if (context.recentMessages && context.recentMessages.length > 1) {
-        const recent = context.recentMessages.map((m, i) => `${i + 1}. ${m.slice(0, 200)}`).join('\n');
-        prompt = `Generate a title based on the most recent user messages (most recent first):\n\n${recent}`;
-        if (context.currentTitle) {
-          prompt += `\n\nCurrent title for reference: "${context.currentTitle}"`;
-        }
-        prompt += '\n\nTitle should reflect the CURRENT topic.';
-      } else {
-        prompt = `Generate a title for: "${(context.lastUserMessage ?? context.firstUserMessage).slice(0, 500)}"`;
-        if (context.currentTitle) {
-          prompt += `\n\nCurrent title for reference: "${context.currentTitle}"`;
-        }
-      }
-
-      let title = '';
+      let raw = '';
       const q = queryFn({
-        prompt,
+        prompt: buildTitlePrompt(context),
         options: {
           ...(this.claudeExecutablePath && { pathToClaudeCodeExecutable: this.claudeExecutablePath }),
           env: this.claudeEnv(secureStorageEnv()),
-          systemPrompt: ClaudeAdapter.TITLE_SYSTEM_PROMPT,
+          systemPrompt: TITLE_SYSTEM_PROMPT,
+          ...(model && { model: this.sdkModel(model) }),
           // A pure text side-call: no tools, no MCP, no filesystem settings, no
           // transcript, and every permission denied. The prompt contains user
           // text, so it must never be able to act on the machine.
           tools: [],
           settingSources: [],
           canUseTool: async () => ({ behavior: 'deny' as const, message: 'Title generation has no tools' }),
-          model: 'haiku', // cheapest tier; honours ANTHROPIC_DEFAULT_HAIKU_MODEL
           maxTurns: 1,
           persistSession: false,
         },
       });
-
       for await (const msg of q) {
-        if (msg.type === 'result') {
-          const resultMsg = msg as SDKResultMessage;
-          title = (resultMsg as unknown as { result?: string }).result ?? '';
-        }
+        if (msg.type === 'result') raw = (msg as unknown as { result?: string }).result ?? '';
       }
-
-      title = title.replace(/^["']|["']$/g, '').replace(/^(Title|Session):\s*/i, '').replace(/[.!]$/, '').trim();
-      title = title.split('\n')[0].trim();
-
-      if (!title || title.length > 80) return null;
-      return title;
+      return cleanTitle(raw);
     } catch (err) {
-      logger.warn({ err }, 'Title generation failed');
+      logger.warn({ err: (err as Error).message, sessionId }, 'Title generation failed');
       return null;
     }
   }
