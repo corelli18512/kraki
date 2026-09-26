@@ -80,7 +80,7 @@ final class ChatViewModel {
     /// Confirmed spine bubbles plus optimistic pending input.
     var displayMessages: [ChatMessage] { cachedMessages + pendingMessages }
 
-    @ObservationIgnored private var currentSpineMemo: (revision: Int, messages: [ChatMessage])?
+    @ObservationIgnored private var currentSpineMemo: (revision: Int, answering: [String], messages: [ChatMessage])?
 
     /// Spine + pending for the *current* store revision, computed during the
     /// render that observes the change. `cachedMessages` is refreshed from
@@ -88,13 +88,17 @@ final class ChatViewModel {
     /// cleared + answer persisted in one runloop turn) otherwise renders one
     /// frame with neither the live bubble nor the answer.
     func displayMessages(spineRevision revision: Int) -> [ChatMessage] {
-        if let memo = currentSpineMemo, memo.revision == revision {
+        // An optimistic answer (pending input with `answerTo`) closes its
+        // question before the store changes, so it is part of the memo key.
+        let pending = pendingInputsRaw
+        let answering = pending.compactMap(\.answerTo)
+        if let memo = currentSpineMemo, memo.revision == revision, memo.answering == answering {
             return memo.messages + pendingMessages(landedIn: memo.messages)
         }
         let spine = TurnSpineProjection.project(
-            Self.presentingQuestions(filteredMessages, pending: pendingInputsRaw, atHead: windowAtHead)
+            Self.presentingQuestions(filteredMessages, pending: pending, atHead: windowAtHead)
         ).filter(Self.shouldRender)
-        currentSpineMemo = (revision, spine)
+        currentSpineMemo = (revision, answering, spine)
         return spine + pendingMessages(landedIn: spine)
     }
 

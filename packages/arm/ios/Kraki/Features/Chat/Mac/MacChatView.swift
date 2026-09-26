@@ -489,9 +489,7 @@ struct MacChatView: View {
                 messageStore: appState.messageStore,
                 attachmentStore: appState.attachmentStore,
                 documentWidth: geometry.size.width,
-                // Pending inputs change question state (an optimistic answer).
-                messages: viewModel.displayMessages(
-                    spineRevision: windowRevision &+ viewModel.pendingSignature.hashValue),
+                messages: viewModel.displayMessages(spineRevision: windowRevision),
                 liveCard: liveCardForList(viewModel),
                 liveTraceSeq: viewModel.lastUserMessage?.seq ?? 0,
                 liveSteps: viewModel.lastUserStepsHint,
