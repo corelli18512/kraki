@@ -764,7 +764,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // cache (estimatedItemSize=.zero disables self-sizing). Frames
         // are pure arithmetic over cached heights, so a 100-row apply
         // doesn't re-measure cells — the whole point of the height cache.
-        let layout = UICollectionViewFlowLayout()
+        let layout = ChatFlowLayout()
         layout.scrollDirection = .vertical
         layout.minimumLineSpacing = 0
         layout.minimumInteritemSpacing = 0
@@ -1017,8 +1017,16 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
                         layout collectionViewLayout: UICollectionViewLayout,
                         sizeForItemAt indexPath: IndexPath) -> CGSize {
         let w = collectionView.bounds.width
-        if isLiveCard(indexPath.item), let card = vm.card {
-            return CGSize(width: w, height: liveContent(card).cellHeight(cellWidth: w))
+        if isLiveCard(indexPath.item) {
+            if let card = vm.card {
+                let height = liveContent(card).cellHeight(cellWidth: w)
+                lastLiveCardHeight = height
+                return CGSize(width: w, height: height)
+            }
+            // The card was just cleared but the row is still in the model
+            // (the answer replaces it in the next update): keep its geometry
+            // rather than collapsing it, which clamped the scroll offset.
+            if let lastLiveCardHeight { return CGSize(width: w, height: lastLiveCardHeight) }
         }
         guard indexPath.item < items.count, let message = message(items[indexPath.item]) else {
             return CGSize(width: w, height: 44)
@@ -1638,10 +1646,22 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     ///     target; re-basing the offset under it makes it lurch ~|delta|px to
     ///     that stale target. We halt the momentum in place so it re-bases.
     /// When fully at rest, the plain offset write is already jump-free.
-    private func applyFrontShift(_ delta: CGFloat) {
-        guard delta != 0 else { return }
+    /// Last laid-out live card height (see sizeForItemAt).
+    private var lastLiveCardHeight: CGFloat?
+
+    /// True while this controller writes contentOffset to keep content
+    /// anchored; such writes must not be read as user scroll direction.
+    private var applyingProgrammaticShift = false
+
+    private func applyFrontShift(_ delta: CGFloat, gestureDelta: CGFloat? = nil) {
+        let gestureDelta = gestureDelta ?? delta
+        guard delta != 0 || gestureDelta != 0 else { return }
         let dragging = collectionView.isDragging || collectionView.isTracking
+        applyingProgrammaticShift = true
         collectionView.contentOffset.y += delta
+        applyingProgrammaticShift = false
+        // Re-base the direction baseline: compensation is not user movement.
+        scrollPolicy.rememberOffset(collectionView.contentOffset.y)
         if dragging {
             // Finger is down: next touch-move would recompute the offset as
             // (touchDownOffset − translation) and erase our write. Push the
@@ -1649,9 +1669,11 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             // our shift — the gesture is never cut, the drag stays live.
             // (offset = touchDownOffset − translation ⇒ to raise offset by
             // delta we lower translation by delta.)
+            // The gesture baseline must absorb the whole content shift, including
+            // any part UIKit already applied to the offset during the batch.
             let pan = collectionView.panGestureRecognizer
             var t = pan.translation(in: collectionView)
-            t.y -= delta
+            t.y -= gestureDelta
             pan.setTranslation(t, in: collectionView)
         }
     }
@@ -2342,6 +2364,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             appliedHeightIDs.insert(id)
         }
 
+        // The tail swap is applied model-first: the replaced rows are
+        // reconfigured explicitly below, and the OLD model is not layout-safe
+        // here (a just-cleared live card has no content to size).
         items = new
         UIView.performWithoutAnimation {
             let context = UICollectionViewFlowLayoutInvalidationContext()
@@ -2501,11 +2526,17 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             frontDelta += showOlderSpinner ? spinnerRowHeight : -spinnerRowHeight
         }
 
-        items = newIds
         paginationSnapshotDeferred = false
-        let newCount = items.count
+        let newCount = newIds.count
 
         UIView.performWithoutAnimation {
+            // Settle pending layout (e.g. the scroll step that triggered this
+            // flush) against the OLD model, and swap the model only inside the
+            // batch: UIKit lays out once before applying updates, and doing that
+            // with the new model put the inserted rows' content into cells of
+            // the old index paths (a bubble showing another message, wrong
+            // height) during continuous scrolling.
+            collectionView.layoutIfNeeded()
             // Fold the spinner header/footer size change into the SAME layout pass
             // as the item edits, so there's no intermediate frame where the row is
             // gone/added but the offset hasn't caught up.
@@ -2516,7 +2547,18 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
                 ctx.invalidateFlowLayoutDelegateMetrics = true
                 collectionView.collectionViewLayout.invalidateLayout(with: ctx)
             }
+            let offsetBeforeBatch = collectionView.contentOffset.y
+            // Tell UIKit where the batch must land. Otherwise FlowLayout picks
+            // its own target offset mid-update (seen: +357pt), builds cells for
+            // that viewport, then remaps them by the insertion delta, leaving a
+            // cell showing another row's content (wrong bubble, wrong height).
+            let chatLayout = collectionView.collectionViewLayout as? ChatFlowLayout
+            if abs(frontDelta) > 0.5 {
+                chatLayout?.pendingUpdateOffsetY = offsetBeforeBatch + frontDelta
+            }
+            defer { chatLayout?.pendingUpdateOffsetY = nil }
             collectionView.performBatchUpdates {
+                self.items = newIds
                 if dF > 0 {
                     collectionView.deleteItems(at: (0..<dF).map { IndexPath(item: $0, section: 0) })
                 }
@@ -2533,7 +2575,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             // Re-pin the viewport against the now-updated content size and reset
             // any in-flight drag/bounce so it doesn't snap back. No layoutIfNeeded:
             // the shift is precomputed from the sizer, never read post-layout.
-            applyFrontShift(frontDelta)
+            // Normally UIKit already landed on the target above; this only
+            // corrects any remaining difference (absolute, never additive).
+            let uikitDrift = collectionView.contentOffset.y - offsetBeforeBatch
+            applyFrontShift(frontDelta - uikitDrift, gestureDelta: frontDelta)
         }
 
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
@@ -2608,12 +2653,17 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        if scrollView.isDragging || scrollView.isTracking {
+        // Finger drag AND its momentum are the user's scroll (momentum toward
+        // older keeps loading history); our own anchor compensation is not.
+        var userDriven = scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating
+        #if DEBUG
+        userDriven = userDriven || automationUserScrollActive
+        #endif
+        if userDriven, !applyingProgrammaticShift {
             noteUserScrollOffset(scrollView.contentOffset.y)
         }
-        // The shared policy carries macOS's one-older-page-per-continuous-
-        // interaction contract. UIKit still owns fetch buffering, exact-height
-        // barriers, and anchored batch application.
+        // UIKit owns fetch buffering, exact-height barriers, and anchored
+        // batch application; the shared policy decides when to page.
         driveEdges()
     }
 
@@ -2626,6 +2676,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         guard !suppressPagingForBottom else { return }
         if !atOldest {
             prefetchOlderIfNeeded()
+            resumePageMeasurementAtOlderEdgeIfWaiting()
             maybeFlushOlder(reason: "scroll")
         }
         if !atNewest {
@@ -2681,6 +2732,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// Focus-free integration probe equivalent of the first real drag packet.
     /// It changes only the production follow-state latch; pagination, sizing,
     /// batch updates, and anchor correction still run through their normal paths.
+    /// Unit tests: treat offset changes as a user drag (isDragging is not settable).
+    var automationUserScrollActive = false
+    var automationPolicy: ChatScrollPolicy { scrollPolicy }
+
     func automationMarkUserScrolledAway() {
         scrollPolicy.beginUserInteraction(
             offset: collectionView?.contentOffset.y ?? 0,
@@ -3165,6 +3220,17 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         }
     }
 
+    /// Page measurement is paused during a gesture so it never competes with
+    /// scroll frames. When the reader is already at the loaded top waiting for
+    /// the next page, keep measuring it (budgeted per frame) so continuous
+    /// scrolling keeps revealing history instead of stalling until lift-off.
+    private func resumePageMeasurementAtOlderEdgeIfWaiting() {
+        guard measuringOlderPage, pager.pendingCount > 0 else { return }
+        let distanceToOlderEdge = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
+        guard distanceToOlderEdge < collectionView.bounds.height else { return }
+        pager.resume()
+    }
+
     /// Top up the buffer while approaching the top, until it can clear the band.
     private func prefetchOlderIfNeeded() {
         guard viewIfLoaded?.window != nil,
@@ -3207,6 +3273,63 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         flushOlder(reason: reason)
     }
 
+    /// Arbitrary (non-edge) model change applied as one batch update that keeps
+    /// the row being read at the same screen position. The landing offset is
+    /// computed before the batch from the same heights `sizeForItemAt` uses
+    /// and handed to the layout, so UIKit builds cells for the final viewport.
+    private func applyAnchoredDiff(old: [String], new: [String]) -> Bool {
+        guard collectionView.window != nil, !old.isEmpty, !new.isEmpty else { return false }
+        let newSet = Set(new)
+        let visible = collectionView.indexPathsForVisibleItems.sorted()
+        guard let anchorPath = visible.first(where: {
+                  $0.item < old.count && old[$0.item] != Self.liveCardID && newSet.contains(old[$0.item])
+              }),
+              let anchorFrame = collectionView.layoutAttributesForItem(at: anchorPath)?.frame,
+              let newAnchorIndex = new.firstIndex(of: old[anchorPath.item]) else { return false }
+        let width = collectionView.bounds.width
+        sizer.prepare(width: width)
+        func height(_ id: String) -> CGFloat {
+            if id == Self.liveCardID, let card = vm.card { return liveContent(card).cellHeight(cellWidth: width) }
+            guard let message = message(id) else { return 44 }
+            return sizer.cached(message.id) ?? sizer.height(for: message, width: width)
+        }
+        let showOlderSpinner = !atOldest
+        let newHeader: CGFloat = showOlderSpinner ? spinnerRowHeight : 0
+        let newAnchorY = newHeader + new[..<newAnchorIndex].reduce(CGFloat(0)) { $0 + height($1) }
+        let delta = newAnchorY - anchorFrame.minY
+        let diff = new.difference(from: old)
+        var removals: [IndexPath] = [], insertions: [IndexPath] = []
+        for change in diff {
+            switch change {
+            case .remove(let offset, _, _): removals.append(IndexPath(item: offset, section: 0))
+            case .insert(let offset, _, _): insertions.append(IndexPath(item: offset, section: 0))
+            }
+        }
+        let offsetBefore = collectionView.contentOffset.y
+        let chatLayout = collectionView.collectionViewLayout as? ChatFlowLayout
+        UIView.performWithoutAnimation {
+            collectionView.layoutIfNeeded()
+            if loadingOlder != showOlderSpinner {
+                loadingOlder = showOlderSpinner
+                let ctx = UICollectionViewFlowLayoutInvalidationContext()
+                ctx.invalidateFlowLayoutDelegateMetrics = true
+                collectionView.collectionViewLayout.invalidateLayout(with: ctx)
+            }
+            chatLayout?.pendingUpdateOffsetY = offsetBefore + delta
+            collectionView.performBatchUpdates {
+                self.items = new
+                self.paginationSnapshotDeferred = false
+                collectionView.deleteItems(at: removals)
+                collectionView.insertItems(at: insertions)
+            }
+            chatLayout?.pendingUpdateOffsetY = nil
+            let drift = collectionView.contentOffset.y - offsetBefore
+            applyFrontShift(delta - drift, gestureDelta: delta)
+        }
+        warmWindow()
+        return true
+    }
+
     /// Reveal the buffered older turns into `items` in one anchored batch update
     /// (deferred to rest by `applyWhenStable`, like the test page). The exact
     /// edge edits come from `reconcileEdges` so the boundary-merge case is
@@ -3230,7 +3353,11 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         let survNew = Array(new[e.insertFront ..< (new.count - e.insertBack)])
         guard survOld == survNew else {
             let mm = firstMismatch(survOld, survNew)
-            chatPerfLog.log("[flush \(reason)] midInvalid mismatch=\(mm.idx) → reload")
+            chatPerfLog.log("[flush \(reason)] midInvalid mismatch=\(mm.idx) → anchored diff")
+            // Typical cause: the window trimmed its newest rows while the live
+            // card stays last, so the deletion is not at an edge. A plain
+            // reload here lost the reading position (a whole page jump).
+            if applyAnchoredDiff(old: old, new: new) { return }
             loadingOlder = !atOldest
             items = new
             paginationSnapshotDeferred = false
@@ -3333,4 +3460,17 @@ struct ChatPerfListView: UIViewControllerRepresentable {
         vc.syncLiveUpdates()
     }
 }
+
+/// FlowLayout whose batch updates land on an explicitly requested offset.
+final class ChatFlowLayout: UICollectionViewFlowLayout {
+    var pendingUpdateOffsetY: CGFloat?
+
+    override func targetContentOffset(forProposedContentOffset proposedContentOffset: CGPoint) -> CGPoint {
+        if let y = pendingUpdateOffsetY {
+            return CGPoint(x: proposedContentOffset.x, y: y)
+        }
+        return super.targetContentOffset(forProposedContentOffset: proposedContentOffset)
+    }
+}
+
 #endif

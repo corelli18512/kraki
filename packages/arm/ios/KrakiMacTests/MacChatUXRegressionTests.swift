@@ -217,8 +217,11 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
     func testNewMessagesDoNotTrimRowsBeingRead() throws {
         let fx = try makeFixture(total: 200)
         drain(1_200)
-        // One gesture up to the top of the loaded window (one page may load);
-        // the window still ends at the newest row, so arrivals append.
+        // Park near the top of the loaded window while older pages are held
+        // back (they would otherwise keep loading and slide the window), so
+        // the window still ends at the newest row and arrivals append.
+        MessageProviderDebug.olderPageDelayMs = 60_000
+        defer { MessageProviderDebug.olderPageDelayMs = 0 }
         for _ in 0..<80 { packet(fx, 40); drain(8) }
         drain(900)
         if fx.sv.contentView.bounds.minY > 120 { packet(fx, fx.sv.contentView.bounds.minY - 80); drain(900) }
@@ -302,6 +305,36 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
             }
         }
         relayFx = nil
+    }
+
+    /// A mouse wheel has no gesture boundaries: spinning it without pause must
+    /// keep loading history (no stall at the loaded top), with clean frames.
+    func testContinuousWheelKeepsLoadingHistoryWithoutFlicker() throws {
+        for delay in [0, 250] as [UInt64] {
+            MessageProviderDebug.olderPageDelayMs = delay
+            defer { MessageProviderDebug.olderPageDelayMs = 0 }
+            let fx = try makeFixture(total: 500)
+            drain(1_500)
+            packetInputTotal = -fx.sv.debugWheelAppliedTotal
+            let top0 = fx.app.messageStore.windows[sid]?.topSeq ?? 0
+            var tops: [Int] = []
+            let shots = recordFrames(fx) {
+                for i in 0..<400 {       // ~5s of uninterrupted spinning
+                    wheel(fx, lines: 5)
+                    drain(12)
+                    if i % 40 == 0 { tops.append(fx.app.messageStore.windows[sid]?.topSeq ?? 0) }
+                }
+                drain(800)
+            }
+            let r = analyze(shots, maxStep: 10_000, viewportHeight: fx.sv.contentView.bounds.height)
+            let paged = top0 - (fx.app.messageStore.windows[sid]?.topSeq ?? 0)
+            print("UXGATE continuous-wheel delay=\(delay) paged=\(paged) tops=\(tops) \(r)")
+            r.log.prefix(6).forEach { print("UXGATE   \($0)") }
+            XCTAssertGreaterThanOrEqual(paged, 80, "continuous spinning keeps paging (delay \(delay))")
+            XCTAssertTrue(r.clean, "delay \(delay): \(r)")
+            windows.forEach { $0.orderOut(nil) }
+            windows.removeAll()
+        }
     }
 
     // MARK: Sending

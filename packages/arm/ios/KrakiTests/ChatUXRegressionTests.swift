@@ -309,6 +309,66 @@ final class ChatUXRegressionTests: XCTestCase {
 
     // MARK: Scrolling
 
+    /// Continuous, aggressive upward scrolling straight through several older
+    /// pages (with and without page latency, with a live answer streaming
+    /// below): history keeps loading, and every step the rows on screen move
+    /// exactly with the finger, none vanish, none use an estimated height.
+    func testContinuousUpwardScrollKeepsLoadingWithoutFlicker() throws {
+        for (latencyMs, stream) in [(0, false), (200, false), (0, true)] {
+            let fx = try makeFixture(total: 400)
+            drain(1_500)
+            if stream { try startTurn(fx, seq: 401) }
+            let answer = Array(Self.longAnswer(5_000))
+            var streamed = 0
+            let top0 = fx.app.messageStore.windows[sid]?.topSeq ?? 0
+            fx.vc.scrollViewWillBeginDragging(fx.cv)
+            fx.vc.automationUserScrollActive = true
+            defer { fx.vc.automationUserScrollActive = false }
+            var shifts = 0, vanished = 0, estimated = 0, worst: CGFloat = 0, log: [String] = []
+            for step in 0..<420 {
+                if stream, streamed < answer.count, step % 3 == 0 {
+                    fx.app.messageStore.applyCardMessage(sid, String(answer[streamed..<min(streamed + 30, answer.count)]), reset: false)
+                    streamed += 30
+                    fx.vc.syncLiveUpdates()
+                }
+                let before = rows(fx.cv)
+                let minY = -fx.cv.adjustedContentInset.top
+                let target = max(minY, fx.cv.contentOffset.y - 70)
+                let applied = fx.cv.contentOffset.y - target
+                fx.cv.contentOffset.y = target
+                fx.vc.scrollViewDidScroll(fx.cv)
+                drain(latencyMs > 0 && step % 25 == 0 ? latencyMs : 16)
+                let after = rows(fx.cv)
+                let height = fx.cv.bounds.height
+                for row in before {
+                    let expected = row.y + applied
+                    if let now = after.first(where: { $0.id == row.id }) {
+                        if abs(now.y - expected) > 1.5 {
+                            shifts += 1; worst = max(worst, abs(now.y - expected))
+                            if log.count < 6 { log.append(String(format: "step %d %@ moved %.0f vs finger %.0f", step, row.id, now.y - row.y, applied)) }
+                        }
+                    } else if expected >= 0, expected + row.h <= height, !row.id.contains("live") {
+                        vanished += 1
+                        if log.count < 6 { log.append("step \(step) \(row.id) vanished") }
+                    }
+                }
+                let bad = after.filter { abs($0.h - $0.exact) > 1 }
+                estimated += bad.count
+            }
+            fx.vc.automationUserScrollActive = false
+            fx.vc.scrollViewDidEndDragging(fx.cv, willDecelerate: false)
+            drain(1_200)
+            let paged = top0 - (fx.app.messageStore.windows[sid]?.topSeq ?? 0)
+            print("UXGATE ios-continuous latency=\(latencyMs) stream=\(stream) paged=\(paged) shifts=\(shifts)(\(Int(worst))pt) vanished=\(vanished) estimated=\(estimated)")
+            log.forEach { print("UXGATE   \($0)") }
+            XCTAssertGreaterThanOrEqual(paged, 60, "continuous upward scrolling keeps loading history")
+            XCTAssertEqual(shifts, 0, "rows must move exactly with the finger")
+            XCTAssertEqual(vanished, 0)
+            XCTAssertEqual(estimated, 0)
+            windows.forEach { $0.isHidden = true }
+        }
+    }
+
     func testFlingNeverExposesEstimatedHeightsOrJumpsAtRest() throws {
         let fx = try makeFixture(total: 200)
         drain(1_500)
