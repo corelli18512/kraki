@@ -403,7 +403,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
             let frame = try XCTUnwrap(fx.doc.frame(forKey: key))
             let screenY = frame.minY - fx.sv.contentView.bounds.minY
             if fx.sv.contentView.bounds.minY > 1 {
-                XCTAssertEqual(screenY, 72, accuracy: 2, "lands at the reply start")
+                XCTAssertEqual(screenY, MacChatHeaderMetrics.listTopInset, accuracy: 2, "lands at the reply start")
                 landings += 1
             }
         }
@@ -487,6 +487,19 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         group.wait()
         print("UXGATE concurrent-text draws=\(draws)")
         XCTAssertGreaterThan(draws, 50)
+    }
+
+    /// At the top of a conversation the first message rests below the
+    /// floating header (title / mode capsules) instead of under it.
+    func testFirstMessageRestsBelowHeader() throws {
+        let fx = try makeFixture(total: 6)
+        drain(1_000)
+        for _ in 0..<40 { packet(fx, 80); drain(8) }
+        drain(900)
+        let first = try XCTUnwrap(fx.doc.frame(forKey: fx.doc.itemKeys.first ?? ""))
+        let screenY = first.minY - fx.sv.contentView.bounds.minY
+        print("UXGATE first-message screenY=\(screenY)")
+        XCTAssertGreaterThanOrEqual(screenY, MacChatHeaderMetrics.height + 8, "first message clears the header")
     }
 
     // MARK: Bubble chrome

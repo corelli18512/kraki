@@ -2106,7 +2106,9 @@ final class MacChatScrollView: MacSmoothScrollView {
     private var entryBottomLocked: Bool { scrollPolicy.entryBottomLocked }
     private var allowsEdgePaging: Bool { scrollPolicy.allowsEdgePaging }
     private var bottomContentInset: CGFloat = 0
-    private let topContentInset: CGFloat = 0
+    /// The list extends under the floating header; the first message rests
+    /// below it instead of colliding with the title.
+    private let topContentInset: CGFloat = MacChatHeaderMetrics.listTopInset
     private var loadingOlder = false
     private var loadingNewer = false
     private var hasUnloadedNewer = false
@@ -2162,7 +2164,8 @@ final class MacChatScrollView: MacSmoothScrollView {
     private let latestStartButton = NSButton()
     private var jumpButtonVisibilityTargets: [ObjectIdentifier: Bool] = [:]
     private var jumpButtonVisibilityGenerations: [ObjectIdentifier: Int] = [:]
-    private let latestMessageTopPadding: CGFloat = 72
+    /// ↑ lands a reply start where the first message rests at the top.
+    private let latestMessageTopPadding: CGFloat = MacChatHeaderMetrics.listTopInset
     /// Round navigation controls (pointer target; iOS uses 44pt for touch).
     static let jumpControlSize: CGFloat = 36
     static let unseenDotSize: CGFloat = 11

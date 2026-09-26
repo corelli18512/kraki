@@ -607,7 +607,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// The chat header (back / title / more) is part of the page, drawn by
     /// SessionDetailView over the top glass band, not a system navigation
     /// bar; reserve its height plus breathing room under it.
-    private static let topContentPadding: CGFloat = ChatHeaderMetrics.height + 8
+    private static let topContentPadding: CGFloat = ChatHeaderMetrics.height + 16
 
     /// Flip to `true` for the spinner-free local-seamless experiment.
     /// `false` = the robust, production-style experience: show a loading

@@ -846,4 +846,28 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
         }
     }
 
+
+    func testRenderHeader() throws {
+        let dir = "/tmp/kraki-mac-ux-shots/header"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        for dark in [false, true] {
+            for expanded in [false, true] {
+                setenv("KRAKI_HEADER_MODE_EXPANDED", expanded ? "1" : "0", 1)
+                let fx = try makeFixture(total: 8, size: NSSize(width: 900, height: 560))
+                fx.window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                drain(1_000)
+                for _ in 0..<40 { packet(fx, 80); drain(8) }   // to the very top
+                drain(900)
+                render(fx, "\(dir)/\(dark ? "dark" : "light")-top\(expanded ? "-expanded" : "").png")
+                if !expanded {
+                    for _ in 0..<6 { packet(fx, -120); drain(8) } // content under the header
+                    drain(700)
+                    render(fx, "\(dir)/\(dark ? "dark" : "light")-scrolled.png")
+                }
+                windows.forEach { $0.orderOut(nil) }
+                windows.removeAll()
+            }
+        }
+        setenv("KRAKI_HEADER_MODE_EXPANDED", "0", 1)
+    }
 }
