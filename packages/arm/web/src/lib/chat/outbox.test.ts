@@ -78,3 +78,14 @@ describe('outbox', () => {
     expect(outbox.forSession('s')).toEqual([]);
   });
 });
+
+describe('outbox and sign-out', () => {
+  it('store reset (sign-out) forgets unsent messages', async () => {
+    const { useStore } = await import('../../hooks/useStore');
+    outbox.configure({ send: async () => true, isDeliveryPathUp: () => true });
+    outbox.send('s', 'secret');
+    useStore.getState().reset();
+    expect(useOutbox.getState().entries).toEqual([]);
+    expect(localStorage.getItem('kraki-outbox-v1')).toBeNull();
+  });
+});

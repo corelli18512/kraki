@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Store, ChatMessage, ConnectionStatus, SessionCard, WebSessionSummary } from '../types/store';
 import type { DeviceSummary } from '@kraki/protocol';
 import { loadStoredDevice, getUrlParams } from '../lib/transport';
+import { outbox } from '../lib/chat/outbox';
 
 // --- Custom Map/Set JSON serialization ---
 
@@ -571,7 +572,8 @@ export const useStore = create<Store>()(persist((set) => ({
     // cards are in-memory only — restored via request_card when a session opens.
   }),
 
-  reset: () => set({
+  // Sign-out / credential wipe: unsent messages belong to the old account.
+  reset: () => (outbox.reset(), set({
     ...initialState,
     sessions: new Map(),
     devices: new Map(),
@@ -596,7 +598,7 @@ export const useStore = create<Store>()(persist((set) => ({
     loadingSessions: new Set(),
     reconnectAttempts: 0,
     nextReconnectDelayMs: null,
-  }),
+  })),
 }), {
   name: 'kraki-store',
   storage: createJSONStorage(() => localStorage, {
