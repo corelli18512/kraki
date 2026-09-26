@@ -209,6 +209,8 @@ export interface UserMessage extends BaseEnvelope {
      *  part of the current logical agent turn, so trace and artifact consumers
      *  must not treat it as a new turn boundary. */
     delivery?: 'prompt' | 'steer';
+    /** Set when this message answers a question (`agent_message.payload.question.id`). */
+    answerTo?: string;
   };
 }
 
@@ -225,6 +227,16 @@ export interface AgentMessage extends BaseEnvelope {
      *  being present in the client's store. `> 0` ⇒ the turn has steps to pull.
      *  Absent on pre-0.18 sessions (backfilled by scripts/backfill-trace.mjs). */
     steps?: number;
+    /** Present when the agent asks the human (`ask_user`). `content` is the
+     *  agent's lead-in prose (may be empty). Pending until a `user_message`
+     *  with `answerTo === question.id` or a later turn boundary
+     *  (`idle` / `turn_status` / `interrupted_turn`) lands on the spine. */
+    question?: {
+      id: string;
+      text: string;
+      choices?: string[];
+      allowFreeform?: boolean;
+    };
   };
 }
 
@@ -261,27 +273,11 @@ export interface PermissionRequest extends BaseEnvelope {
     description: string;
     /** Only set when this request occupies a RESOLVED card slot (read-only
      *  view showing the outcome). Never present on a live/pending request —
-     *  permission/question no longer broadcast standalone, so their payload's
-     *  sole live home is the {@link CardActionState} slot. Absent on old-session
+     *  a permission is not broadcast standalone, so its payload's sole live
+     *  home is the {@link CardActionState} slot. Absent on old-session
      *  spine records. */
     decision?: 'approve' | 'deny' | 'always_allow';
     /** Trace/history-only terminal state when the turn ended before a decision. */
-    cancelled?: boolean;
-  };
-}
-
-export interface QuestionRequest extends BaseEnvelope {
-  type: 'question';
-  payload: {
-    id: string;
-    question: string;
-    choices?: string[];
-    /** Whether the human may type a freeform answer in addition to `choices`. */
-    allowFreeform?: boolean;
-    /** Only set when this request occupies a RESOLVED card slot — see
-     *  {@link PermissionRequest} `decision`. */
-    answer?: string;
-    /** A cancelled question remains visible but is never actionable. */
     cancelled?: boolean;
   };
 }
@@ -385,7 +381,7 @@ export interface AgentNarrationMessage extends BaseEnvelope {
  * shapes, each variant REUSES the existing message's `type` + `payload`
  * verbatim (minus the envelope): a running tool is a {@link ToolStartMessage},
  * a finished tool a {@link ToolCompleteMessage}, an open prompt a
- * {@link PermissionRequest}/{@link QuestionRequest}. The slot's discriminant is
+ * {@link PermissionRequest}. The slot's discriminant is
  * therefore the message's own `type`; clients render it with the SAME code they
  * use for the live/trace step. A resolved prompt stays in the slot with its
  * payload's `decision`/`answer` set. `tool_batch` is the sole synthetic variant
@@ -404,7 +400,6 @@ export type CardActionState =
       };
     }
   | Pick<PermissionRequest, 'type' | 'payload'>
-  | Pick<QuestionRequest, 'type' | 'payload'>
   | {
       type: 'user_abort';
       payload: {
@@ -704,8 +699,7 @@ export type TraceEntry =
   | ToolStartMessage
   | ToolCompleteMessage
   | AgentNarrationMessage
-  | PermissionRequest
-  | QuestionRequest;
+  | PermissionRequest;
 
 /**
  * app → tentacle: pull the tool trace for one turn from `trace.jsonl`.
@@ -825,16 +819,6 @@ export interface PermissionResolvedMessage extends BaseEnvelope {
   );
 }
 
-/** Broadcast by tentacle when a question is answered (so all apps can clear the card). */
-export interface QuestionResolvedMessage extends BaseEnvelope {
-  type: 'question_resolved';
-  payload: {
-    questionId: string;
-    answer: string;
-    cancelled?: boolean;
-  };
-}
-
 /** Broadcast by tentacle when a session's pin state changes. */
 export interface SessionPinnedMessage extends BaseEnvelope {
   type: 'session_pinned';
@@ -895,7 +879,6 @@ export type ProducerMessage =
   | AgentMessage
   | AgentMessageDelta
   | PermissionRequest
-  | QuestionRequest
   | ToolStartMessage
   | ToolCompleteMessage
   | AgentNarrationMessage
@@ -920,7 +903,6 @@ export type ProducerMessage =
   | SessionSubscriptionSetMessage
   | SessionListMessage
   | PermissionResolvedMessage
-  | QuestionResolvedMessage
   | LocalSessionsListMessage
   | AttachmentDataMessage;
 
@@ -944,6 +926,8 @@ export interface SendInputMessage extends BaseEnvelope {
      *  `steer` interjects into the current active turn; omitted/`prompt`
      *  preserves the normal idle-session prompt behavior. */
     delivery?: 'prompt' | 'steer';
+    /** Answer the pending question with this id (replaces the `answer` command). */
+    answerTo?: string;
   };
 }
 
@@ -967,20 +951,6 @@ export interface AlwaysAllowMessage extends BaseEnvelope {
     permissionId: string;
     /** Tool kind to add to the allow list (e.g. 'shell', 'write') */
     toolKind?: string;
-  };
-}
-
-export interface AnswerMessage extends BaseEnvelope {
-  type: 'answer';
-  payload: {
-    questionId: string;
-    answer: string;
-    attachments?: Attachment[];
-    /** True when the answer was typed freely rather than picked from a
-     *  provided choice. Adapters (e.g. copilot) use this to decide whether the
-     *  answer maps to a listed option or is custom text. Optional for backward
-     *  compatibility; treated as `false` when absent. */
-    wasFreeform?: boolean;
   };
 }
 
@@ -1153,7 +1123,6 @@ export type ConsumerMessage =
   | ApproveMessage
   | DenyMessage
   | AlwaysAllowMessage
-  | AnswerMessage
   | KillSessionMessage
   | AbortSessionMessage
   | CreateSessionMessage
