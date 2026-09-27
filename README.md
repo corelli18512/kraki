@@ -93,6 +93,7 @@ For the full security model, see [`docs/security.md`](./docs/security.md).
 - `packages/protocol` - shared message and envelope types
 - `packages/crypto` - encryption primitives and blob helpers
 - `packages/head` - thin relay server
+- [`packages/monitor`](packages/monitor/README.md) - independent client diagnostic log REST collector (not the relay)
 - `packages/tentacle` - CLI bridge next to the agent
 - `packages/arm/web` - web receiver / PWA
 - `packages/tests` - integration tests

@@ -45,7 +45,6 @@ import type { AuthBackend } from './auth-backend.js';
 import { LocalAuthBackend } from './local-auth-backend.js';
 import { RemoteAuthBackend } from './remote-auth-backend.js';
 import { AccountApi } from './account-api.js';
-import { DiagApi, DIAG_PREFIX } from './diag-api.js';
 
 // --- CLI flags / subcommands ---
 const rawArgs = process.argv.slice(2);
@@ -500,20 +499,16 @@ const head = new HeadServer(storage!, {
   voiceBrokerUrl: VOICE_BROKER_URL,
 });
 
-// Explicit opt-in. This API owns its own signed-device auth; AccountApi's
-// service Bearer key must never be handed to a native client.
-const diagApi = new DiagApi({
-  directory: process.env.KRAKI_DIAG_DIR || undefined,
-  getDevice: id => storage!.getDevice(id),
-});
 const startedAt = Date.now();
 
 const httpServer = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
-  // Before AccountApi's broad /api/ service-key gate; also works on edge heads.
-  if (url.pathname.startsWith(DIAG_PREFIX)) {
-    await diagApi.handleRequest(req, res);
+  // Diagnostics belong to @kraki/monitor on a separate upstream. A missing
+  // proxy rule must not silently return Head's generic 200 health response.
+  if (url.pathname.startsWith('/api/diag/v1/')) {
+    res.writeHead(404, { 'Cache-Control': 'no-store' });
+    res.end();
     return;
   }
 
@@ -636,7 +631,6 @@ httpServer.listen(PORT, () => {
 
 async function shutdown() {
   logger.info('Shutting down...');
-  diagApi.close();
   head.close();
   storage?.close();
   logger.close();

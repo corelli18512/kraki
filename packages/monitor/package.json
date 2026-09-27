@@ -1,0 +1,23 @@
+{
+  "name": "@kraki/monitor",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Independent REST collector for bounded client diagnostic metadata; not the Head relay",
+  "type": "module",
+  "engines": { "node": ">=24.0.0" },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/cli.js",
+    "dev": "tsx watch src/cli.ts",
+    "test": "pnpm build && vitest run",
+    "test:built": "pnpm build && vitest run src/__tests__/collector.test.ts -t built",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

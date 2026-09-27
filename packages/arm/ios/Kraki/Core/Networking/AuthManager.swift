@@ -571,7 +571,7 @@ final class AuthManager {
             // A local relay failure says nothing about production credentials.
             // Keep them untouched and let the dev socket retry normally.
             appState.lastError = reason ?? "Local development relay authentication failed. Reconnecting…"
-            appState.wsClient?.resetBackoffAndReconnect()
+            appState.wsClient?.recover(reason: "auth_retry")
         } else if recoverableCLIOutage {
             // The GitHub token has already been loaded and remains process-local.
             // Account-service outages are recoverable: retain local Sessions and
@@ -579,7 +579,7 @@ final class AuthManager {
             // or stale Keychain challenge auth.
             KLog.d("⏳ CLI auth backend unavailable — keeping token, reconnecting")
             appState.lastError = reason ?? "Authentication service temporarily unavailable. Reconnecting…"
-            appState.wsClient?.resetBackoffAndReconnect()
+            appState.wsClient?.recover(reason: "auth_retry")
         } else if storedDeviceId != nil {
             // Only destroy the persisted pairing on a DETERMINISTIC failure —
             // a code that proves this device's credentials are actually
@@ -607,7 +607,7 @@ final class AuthManager {
                 // challenge attempt succeeds once the backend recovers.
                 KLog.d("⏳ Transient auth error (code=\(code ?? "nil")) — keeping credentials, reconnecting")
                 appState.lastError = reason ?? "Authentication temporarily unavailable. Reconnecting…"
-                appState.wsClient?.resetBackoffAndReconnect()
+                appState.wsClient?.recover(reason: "auth_retry")
             }
         } else {
             appState.onAuthFailed(

@@ -9,8 +9,7 @@ import { DiagApi, diagSigningText } from '../diag-api.js';
 
 const key = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const publicKey = key.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
-const device = { id: 'device-1', userId: 'account-1', name: 'Not logged', role: 'app', kind: 'ios', publicKey,
-  encryptionKey: null, lastSeen: '', createdAt: '' };
+const device = { id: 'device-1', userId: 'account-1', role: 'app', publicKey };
 const resources: Array<{ dir: string; api: DiagApi; server: Server }> = [];
 afterEach(async () => {
   for (const { dir, api, server } of resources.splice(0)) {
@@ -84,6 +83,18 @@ describe('off-band diagnostics', () => {
       expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, events: [event] })))).status).toBe(400);
     }
     expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, token: 'secret' })))).status).toBe(400);
+  });
+  it('accepts metadata-only transport recovery reason and generation', async () => {
+    const f = await fixture();
+    const event = { ev: 'ws.state', seq: 1, t: Date.now(), m: 10, d: { source: 'pulse_progress_timeout', count: 3 } };
+    expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, events: [event] })))).status).toBe(204);
+  });
+  it('accepts the client unconfirmed outbox state without arbitrary phase strings', async () => {
+    const f = await fixture();
+    const event = { ev: 'outbox.state', seq: 1, t: Date.now(), m: 10, d: { clientId: randomUUID(), phase: 'unconfirmed' } };
+    expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, events: [event] })))).status).toBe(204);
+    event.d.phase = 'unreviewed-phase';
+    expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, events: [event] })))).status).toBe(400);
   });
   it('caps wire/decompressed size and rejects malformed gzip', async () => {
     const f = await fixture();

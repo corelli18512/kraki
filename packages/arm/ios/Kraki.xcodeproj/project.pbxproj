@@ -93,6 +93,7 @@
 		449210BD9A5213261366CA6F /* HeightMeasurementScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D84628110444A258D3500CF /* HeightMeasurementScheduler.swift */; };
 		4550B0DBED564B557D6AF038 /* CryptoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A28F5834F1C3C7CC175B7C5C /* CryptoManager.swift */; };
 		45E3892DFF16FF95AE291B87 /* DeviceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A429810ED3F81077317149B3 /* DeviceStoreTests.swift */; };
+		46AEB1D619ECB0277B3D042F /* EventMonitorForwarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49118B9C5B861B64143ACD87 /* EventMonitorForwarding.swift */; };
 		47FFECFD698CF0DE786EA64C /* MacChatBubbleCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D720ACC636683293D505371 /* MacChatBubbleCell.swift */; };
 		48898113E756024CD42E3B7F /* KrakiDiag.swift in Sources */ = {isa = PBXBuildFile; fileRef = D345DB389B2A4F5A8E198058 /* KrakiDiag.swift */; };
 		4A82C1BB1E8E000A1D469831 /* TabBarHider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FC184CE4CAFDEF1914453D4 /* TabBarHider.swift */; };
@@ -187,6 +188,7 @@
 		A3E3134F469688FDE3F6808E /* ChatScrollPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD1EB63914A8EE30FA1D18F5 /* ChatScrollPolicy.swift */; };
 		A5D83F4EAEE78022F37C596A /* MessageRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 654A17BD8AED96C7CD6AA7A5 /* MessageRouter.swift */; };
 		A69E09D819C14CBA937D83D4 /* MacHTMLArtifactPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60FFF5CE3173503A2C9A577C /* MacHTMLArtifactPanel.swift */; };
+		A6B46931BCA6C909B23C8B9F /* EventMonitorForwarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49118B9C5B861B64143ACD87 /* EventMonitorForwarding.swift */; };
 		A97C02EF361069D7F5305B77 /* TentacleCLIManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D219A1249EBFCAA247533E07 /* TentacleCLIManager.swift */; };
 		A9998526CF744DB0A952EE90 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF54424FDF29034ACFC16B5A /* SettingsView.swift */; };
 		AC00BC8720774E96C977047D /* MacChatScrollView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F69BA2DA3E65AD7981E3F51 /* MacChatScrollView.swift */; };
@@ -386,6 +388,7 @@
 		427C7B2406F858D980E5DFBB /* AgentAvatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentAvatar.swift; sourceTree = "<group>"; };
 		447FBAB1A2FAA65AD4B03988 /* LogsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsWindow.swift; sourceTree = "<group>"; };
 		447FC84D6CEC57ADB1D93CA5 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		49118B9C5B861B64143ACD87 /* EventMonitorForwarding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventMonitorForwarding.swift; sourceTree = "<group>"; };
 		4D17C06CC0E96BDAA7779524 /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
 		5179D3E57BD2FCF3F327E11C /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
 		522C9C637955C4ACB888C9C5 /* ChatHeightEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatHeightEstimator.swift; sourceTree = "<group>"; };
@@ -841,6 +844,7 @@
 			children = (
 				427C7B2406F858D980E5DFBB /* AgentAvatar.swift */,
 				0E80769CD696851C28434036 /* AppColorScheme.swift */,
+				49118B9C5B861B64143ACD87 /* EventMonitorForwarding.swift */,
 				9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */,
 				2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */,
 				ACA594C1B063D6133CF3BC50 /* KrakiPlatform.swift */,
@@ -1301,6 +1305,7 @@
 				B9904E6233735C93F73DEC6F /* DiagRunLoop.swift in Sources */,
 				F31C758A34766D63EDB6AAF6 /* DiagSettingsSection.swift in Sources */,
 				D087D8336F9F7A82D73AB4DD /* EncryptionHandler.swift in Sources */,
+				46AEB1D619ECB0277B3D042F /* EventMonitorForwarding.swift in Sources */,
 				E584D9C40B57680AF34DE750 /* FlatBubbleTestView.swift in Sources */,
 				2EB7589D7EBECE7995E65571 /* GeneralPane.swift in Sources */,
 				0D0FBFD6156B748621A453EE /* HeightMeasurementScheduler.swift in Sources */,
@@ -1445,6 +1450,7 @@
 				4BD2A0DCBADF5436E42767AA /* DiagRunLoop.swift in Sources */,
 				613A478009D713D6D8D81F36 /* DiagSettingsSection.swift in Sources */,
 				8BC5CECD42EA24EE4D580AC6 /* EncryptionHandler.swift in Sources */,
+				A6B46931BCA6C909B23C8B9F /* EventMonitorForwarding.swift in Sources */,
 				331E5FA13A1DB2C8327BB977 /* GeneralPane.swift in Sources */,
 				449210BD9A5213261366CA6F /* HeightMeasurementScheduler.swift in Sources */,
 				8C74A12E6D7EA7794FCB3FAA /* Helpers.swift in Sources */,

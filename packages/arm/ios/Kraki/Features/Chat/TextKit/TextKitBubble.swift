@@ -2087,7 +2087,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     }
 
     @objc private func deliveryStatusTapped() {
-        guard content?.pendingDeliveryState == "failed", let clientID = pendingClientID else { return }
+        guard ["failed", "unconfirmed"].contains(content?.pendingDeliveryState ?? ""), let clientID = pendingClientID else { return }
         onPendingAction?(clientID, .retry)
     }
 
@@ -2171,7 +2171,13 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             }
             return
         }
-        if state == "failed" {
+        if state == "unconfirmed" {
+            deliveryStatus.setImage(UIImage(systemName: "questionmark.circle", withConfiguration: symbol), for: .normal)
+            deliveryStatus.tintColor = .systemOrange
+            deliveryStatus.isUserInteractionEnabled = true
+            deliveryStatus.alpha = 1
+            deliveryStatus.accessibilityLabel = "Awaiting confirmation. Tap to retry"
+        } else if state == "failed" {
             deliveryStatus.setImage(UIImage(systemName: "exclamationmark.circle.fill", withConfiguration: symbol), for: .normal)
             deliveryStatus.tintColor = .systemRed
             deliveryStatus.isUserInteractionEnabled = true
@@ -2399,7 +2405,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         if content.pendingDeliveryState == "correcting", let clientID = pendingClientID {
             actions.append(contentsOf: correctingActions(clientID))
         }
-        if content.pendingDeliveryState == "failed", let clientID = pendingClientID {
+        if ["failed", "unconfirmed"].contains(content.pendingDeliveryState ?? ""), let clientID = pendingClientID {
             actions.insert(UIAction(title: "Retry", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
                 self?.onPendingAction?(clientID, .retry)
             }, at: 0)

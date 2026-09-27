@@ -8,7 +8,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { gunzip as gunzipCallback } from 'node:zlib';
-import type { StoredDevice } from './storage.js';
+import type { DiagnosticDevice } from './device-keys.js';
 
 const gunzip = promisify(gunzipCallback);
 export const DIAG_PREFIX = '/api/diag/v1/';
@@ -25,7 +25,7 @@ type Validator = (value: unknown) => boolean;
 const fields: Record<string, Validator> = {
   clientId: uuid, questionId: id, answerTo: id, ix: uuid,
   origin: choice('ios_choice', 'mac_choice', 'mac_monitor', 'mac_button', 'composer', 'unknown'),
-  phase: choice('active', 'inactive', 'background', 'authenticated', 'logout', 'created', 'restored', 'retry', 'cleared', 'sending', 'failed', 'correcting', 'down', 'up'),
+  phase: choice('active', 'inactive', 'background', 'authenticated', 'logout', 'created', 'restored', 'retry', 'cleared', 'sending', 'unconfirmed', 'failed', 'correcting', 'down', 'up'),
   state: choice('connected', 'connecting', 'disconnected'),
   source: v => typeof v === 'string' && /^[\w+./:-]{1,160}$/.test(v), // compiler #fileID, not a path or text
   stack: v => typeof v === 'string' && /^(0x[\da-f]+)(,0x[\da-f]+){0,15}$/i.test(v),
@@ -38,7 +38,7 @@ const fields: Record<string, Validator> = {
 const schemas: Record<string, string[]> = {
   'app.launch': [],
   'app.phase': ['phase', 'pending'],
-  'ws.state': ['state', 'attempt'],
+  'ws.state': ['state', 'attempt', 'source', 'count'],
   'ui.answer': ['questionId', 'origin', 'ix', 'clickCount', 'eventNumber', 'attempt'],
   'ui.mouse': ['questionId', 'phase', 'eventNumber', 'clickCount'],
   'cmd.answer': ['questionId', 'textLength', 'pending', 'duplicate', 'source', 'stack', 'ix'],
@@ -92,7 +92,7 @@ class HttpFailure extends Error { constructor(readonly status: number) { super(S
 export interface DiagApiOptions {
   /** Unset means disabled, including auth and all filesystem work. Must be a dedicated private directory. */
   directory?: string;
-  getDevice: (deviceId: string) => StoredDevice | undefined;
+  getDevice: (deviceId: string) => DiagnosticDevice | undefined;
   now?: () => number;
   dailyBytes?: number;
   /** Runtime kill switch (may be changed without touching normal relay traffic). */
@@ -182,7 +182,7 @@ export class DiagApi {
     return true;
   }
 
-  private authenticate(req: IncomingMessage, path: string, body: Buffer): StoredDevice {
+  private authenticate(req: IncomingMessage, path: string, body: Buffer): DiagnosticDevice {
     const deviceId = req.headers['x-kraki-device'];
     const timestamp = req.headers['x-kraki-time'];
     const requestId = req.headers['x-kraki-request'];
@@ -221,7 +221,7 @@ export class DiagApi {
     });
   }
 
-  private async store(device: StoredDevice, batchId: string, body: Buffer): Promise<void> {
+  private async store(device: DiagnosticDevice, batchId: string, body: Buffer): Promise<void> {
     // Server-derived opaque path components: no client path or account name.
     const owner = createHash('sha256').update(`${device.userId}\n${device.id}`).digest('hex');
     const directory = join(this.options.directory!, owner);

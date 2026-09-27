@@ -428,7 +428,7 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(order, ["第一条", "第二条", "第三条"])
     }
 
-    func testPendingDeliveryStateFailsRetriesAndDeduplicates() throws {
+    func testPendingDeliveryStateRemainsUnconfirmedRetriesAndDeduplicates() throws {
         var sends = 0
         let fx = try makeFixture(total: 10) { _ in sends += 1; return true }
         fx.app.commandSender?.confirmationTimeout = .milliseconds(200)
@@ -438,14 +438,14 @@ final class ChatUXRegressionTests: XCTestCase {
         let pending = try XCTUnwrap(sender.pendingInputs(sid).first)
         XCTAssertEqual(sender.pendingState(pending), .sending)
         drain(600)
-        XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .failed,
-                       "unconfirmed input must surface as failed, not hang forever")
+        XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .unconfirmed,
+                       "missing echo cannot prove delivery failure")
         fx.vc.syncLiveUpdates()
         drain(100)
         let failedCell = fx.cv.visibleCells.compactMap { $0 as? TKBubbleCell }
             .first { $0.contentSnapshot?.message.type == "pending_input" }
-        XCTAssertEqual(failedCell?.deliveryStatusForRegression, "Not delivered. Tap to retry",
-                       "the visible bubble must show the failed state")
+        XCTAssertEqual(failedCell?.deliveryStatusForRegression, "Awaiting confirmation. Tap to retry",
+                       "the visible bubble must state uncertainty, not false failure")
         let clientId = try XCTUnwrap(pending.payload["clientId"]?.stringValue)
         XCTAssertTrue(sender.retryPending(sessionId: sid, clientId: clientId))
         XCTAssertEqual(sends, 2, "retry resends with the same clientId")
@@ -560,6 +560,24 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(voice.content, "original")
     }
 
+    func testSentOutboxRestoresUnconfirmedAndOrderedClearDoesNotResurrect() throws {
+        let fx = try makeFixture(total: 2)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("outbox-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let first = CommandSender(appState: fx.app, outboxURL: url)
+        XCTAssertTrue(first.sendInput(sessionId: sid, text: "synthetic"))
+        let id = try XCTUnwrap(first.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
+        drain(300)
+        let restored = CommandSender(appState: fx.app, outboxURL: url)
+        XCTAssertEqual(restored.pendingState(try XCTUnwrap(restored.pendingInputs(sid).first)), .unconfirmed)
+        for _ in 0..<20 { _ = first.sendInput(sessionId: sid, text: "synthetic") }
+        first.clearAllPending(sid)
+        drain(500)
+        XCTAssertTrue(CommandSender(appState: fx.app, outboxURL: url).pendingInputs(sid).isEmpty)
+        restored.clearPending(sid, clientId: id) // late authoritative echo
+        XCTAssertTrue(restored.pendingInputs(sid).isEmpty)
+    }
+
     // MARK: Delivery dim (text + image) and status placement
 
     private func pngAttachment() -> ImageAttachment {
@@ -639,14 +657,14 @@ final class ChatUXRegressionTests: XCTestCase {
         drain(700)
         fx.vc.syncLiveUpdates(); drain(200)
         let failed = try XCTUnwrap(cell(fx, clientId: clientId))
-        XCTAssertEqual(failed.deliveryStatusForRegression, "Not delivered. Tap to retry")
+        XCTAssertEqual(failed.deliveryStatusForRegression, "Awaiting confirmation. Tap to retry")
         XCTAssertTrue(failed.bubbleHiddenForRegression, "image-only: no text bubble")
         let image = failed.imageFrameForRegression, status = failed.deliveryStatusFrameForRegression
         XCTAssertGreaterThan(image.height, 0)
         XCTAssertGreaterThanOrEqual(status.minY, image.minY, "status is not above the image")
         XCTAssertLessThanOrEqual(status.maxY, image.maxY + 0.5)
         XCTAssertLessThanOrEqual(status.maxX, image.minX, "status sits beside the image")
-        XCTAssertEqual(failed.pendingDimForRegression.image, 1, accuracy: 0.05, "failed is shown normally with its !")
+        XCTAssertEqual(failed.pendingDimForRegression.image, 1, accuracy: 0.05, "unconfirmed is shown normally with its status")
     }
 
     // MARK: Jump controls

@@ -1822,7 +1822,7 @@ final class MacChatBubbleCell: NSView {
             steps.target = self
             menu.addItem(steps)
         }
-        if ["failed", "correcting"].contains(content.pendingDeliveryState ?? "") {
+        if ["failed", "correcting", "unconfirmed"].contains(content.pendingDeliveryState ?? "") {
             if !menu.items.isEmpty { menu.addItem(.separator()) }
             pendingActionItems().forEach { menu.addItem($0) }
         }
@@ -1858,7 +1858,7 @@ final class MacChatBubbleCell: NSView {
     }
 
     @objc private func deliveryStatusClicked(_ sender: NSButton) {
-        guard ["failed", "correcting"].contains(content?.pendingDeliveryState ?? "") else { return }
+        guard ["failed", "correcting", "unconfirmed"].contains(content?.pendingDeliveryState ?? "") else { return }
         let menu = NSMenu()
         pendingActionItems().forEach { menu.addItem($0) }
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY + 4), in: sender)
@@ -1916,6 +1916,14 @@ final class MacChatBubbleCell: NSView {
             deliveryStatus.alphaValue = 1
             deliveryStatus.setAccessibilityLabel("Correcting voice input. Click for options")
             deliveryStatus.toolTip = "Correcting voice input"
+        } else if state == "unconfirmed" {
+            deliveryStatus.image = NSImage(systemSymbolName: "questionmark.circle",
+                accessibilityDescription: "Awaiting confirmation")?.withSymbolConfiguration(symbol)
+            deliveryStatus.contentTintColor = .systemOrange
+            deliveryStatus.isEnabled = true
+            deliveryStatus.alphaValue = 1
+            deliveryStatus.setAccessibilityLabel("Awaiting confirmation. Click to retry or delete")
+            deliveryStatus.toolTip = "Delivery not confirmed yet. Retry uses the same message ID."
         } else if state == "failed" {
             deliveryStatus.image = NSImage(systemSymbolName: "exclamationmark.circle.fill",
                                            accessibilityDescription: "Not delivered")?.withSymbolConfiguration(symbol)

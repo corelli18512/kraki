@@ -5,8 +5,8 @@
 ///   stream 1 = inbound bulk history/TRACE/attachment responses
 ///
 /// Each stream owns an independent epoch, seq/ack space, outbox and receive
-/// cursor. This prevents a large history or attachment response from blocking
-/// subscription ACKs, card actions, deltas, aborts, or other live traffic.
+/// cursor. This separates logical ordering/replay, not byte-level HOL: a large
+/// WebSocket message can still delay complete-message delivery on either stream.
 
 import Foundation
 import Pulse
@@ -32,12 +32,23 @@ final class PulseManager {
     #if DEBUG
     var liveOutboxSizeForTesting: Int { live.outboxSize }
     var connectionScopedCountForTesting: Int { connectionScopedLiveSeqs.count }
+    var clockForTesting: Int?
+    var tickActiveForTesting: Bool { tickTimer != nil && authenticated }
+    func tickForTesting() { tick(epoch: generation) }
     #endif
 
     private var tickTimer: Timer?
+    private var authenticated = false
+    private var generation = 0
     private static let tickInterval: TimeInterval = 5.0
+    /// COMPLETE logical messages and native WS ping/pong have different clocks.
+    /// Allow bounded slow-message progress; pongs cannot mask a stuck stream forever.
+    static let logicalProgressTimeoutMs = 120_000
     private var nowMs: Int {
-        Int((CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970) * 1000)
+        #if DEBUG
+        if let clockForTesting { return clockForTesting }
+        #endif
+        return Int((CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970) * 1000)
     }
 
     init(host: PulseHost) {
@@ -49,14 +60,14 @@ final class PulseManager {
         let base = UUID().uuidString
         let live = Endpoint(
             epoch: "\(base):live",
-            params: PulseParams(heartbeatIntervalMs: 15_000),
+            params: PulseParams(heartbeatIntervalMs: 15_000, deadAfterMs: Self.logicalProgressTimeoutMs),
             restore: nil,
             durable: nil,
             streamId: Self.liveStream
         )
         let bulk = Endpoint(
             epoch: "\(base):bulk",
-            params: PulseParams(heartbeatIntervalMs: 15_000),
+            params: PulseParams(heartbeatIntervalMs: 15_000, deadAfterMs: Self.logicalProgressTimeoutMs),
             restore: nil,
             durable: nil,
             streamId: Self.bulkStream
@@ -68,6 +79,8 @@ final class PulseManager {
     /// Retire every queued command and cursor; the next login must advertise a
     /// fresh epoch and must never resend ciphertext addressed by the old user.
     func resetForIdentityChange() {
+        authenticated = false
+        generation += 1
         cancelTick()
         targetByStream.removeAll()
         connectionScopedLiveSeqs.removeAll()
@@ -119,6 +132,7 @@ final class PulseManager {
 
     /// Decode the v1/v2 wire header once and dispatch to the owning stream.
     func onFrame(_ b64: String) {
+        guard authenticated else { return }
         guard let data = Data(base64Encoded: b64) else { return }
         handle(streams.onBytes([UInt8](data), nowMs))
     }
@@ -126,12 +140,21 @@ final class PulseManager {
     // MARK: - Connection lifecycle
 
     func onConnected() {
+        guard !authenticated else { return }
+        authenticated = true
+        generation += 1
         handle(streams.onConnected(nowMs))
         scheduleTick()
     }
 
     func onDisconnected() {
-        _ = streams.onDisconnected(nowMs)
+        if authenticated {
+            authenticated = false
+            generation += 1
+            _ = streams.onDisconnected(nowMs)
+        }
+        // Even an attempt that never authenticated must retire scoped commands
+        // queued during that attempt. Don't rearm endpoint reconnect deadlines.
         if !connectionScopedLiveSeqs.isEmpty {
             let scoped = connectionScopedLiveSeqs
             let purged = live.purge(
@@ -148,13 +171,20 @@ final class PulseManager {
 
     private func scheduleTick() {
         cancelTick()
+        guard authenticated else { return }
+        let epoch = generation
         tickTimer = Timer.scheduledTimer(
             withTimeInterval: Self.tickInterval, repeats: false
         ) { [weak self] _ in
-            guard let self else { return }
-            self.handle(self.streams.onTick(self.nowMs))
-            self.scheduleTick()
+            self?.tick(epoch: epoch)
         }
+    }
+
+    private func tick(epoch: Int) {
+        guard authenticated, generation == epoch else { return }
+        handle(streams.onTick(nowMs))
+        guard authenticated, generation == epoch else { return }
+        scheduleTick()
     }
 
     private func cancelTick() {
@@ -165,7 +195,9 @@ final class PulseManager {
     // MARK: - Effects
 
     private func handle(_ effects: [Effect]) {
+        let epoch = generation
         for effect in effects {
+            guard generation == epoch else { return }
             switch effect {
             case .transmit(let bytes):
                 let b64 = Data(bytes).base64EncodedString()
@@ -182,9 +214,13 @@ final class PulseManager {
             case .resetInbound(let fromSeq, let epoch):
                 host?.onResetInbound(fromSeq: fromSeq, epoch: epoch)
             case .open:
-                host?.requestConnect()
+                // WS owns physical retries. Never let stream deadlines replace auth.
+                break
             case .close:
-                host?.requestDisconnect()
+                guard authenticated else { return }
+                onDisconnected()
+                host?.requestPulseRecovery()
+                return // one physical recovery; discard remaining old effects
             case .purged(let droppedSeqs, _):
                 // Arm sends only on live. Keep target retention consistent if a
                 // future GC/coalescing policy drops an unacked command.
@@ -222,4 +258,9 @@ protocol PulseHost: AnyObject {
     func onResetInbound(fromSeq: UInt64, epoch: String)
     func requestConnect()
     func requestDisconnect()
+    func requestPulseRecovery()
+}
+
+extension PulseHost {
+    func requestPulseRecovery() { requestDisconnect() }
 }

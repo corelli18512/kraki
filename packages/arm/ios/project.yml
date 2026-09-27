@@ -269,6 +269,7 @@ targets:
       - path: Kraki/Shared/AgentAvatar.swift
       - path: Kraki/Shared/Helpers.swift
       - path: Kraki/Shared/KrakiLogger.swift
+      - path: Kraki/Shared/EventMonitorForwarding.swift
       - path: Kraki/Shared/LucideIcon.swift
       - path: Kraki/Shared/NavigationIDs.swift
       - path: Kraki/Shared/ToolStatusIcon.swift

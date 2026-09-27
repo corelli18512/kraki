@@ -555,7 +555,7 @@ final class AppState {
         #endif
         voiceInputController.resumeWarmConnection()
         guard hasCompletedInitialConnect else { return }
-        guard forceReconnect || connectionStatus != .connected else { return }
+        if !forceReconnect, let wsClient, wsClient.state != .disconnected { return }
         wsClient?.resetBackoffAndReconnect()
     }
 
@@ -967,6 +967,7 @@ extension AppState: PulseHost {
 
     func requestConnect() { wsClient?.connect() }
     func requestDisconnect() { wsClient?.disconnect() }
+    func requestPulseRecovery() { wsClient?.recover(reason: "pulse_progress_timeout") }
 }
 
 // MARK: - Types

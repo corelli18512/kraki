@@ -5,6 +5,9 @@ struct DiagSettingsSection: View {
     @AppStorage("kraki.diag.enabled") private var enabled = true
     @AppStorage("kraki.diag.lastSuccess") private var lastSuccess = 0.0
     @AppStorage("kraki.diag.pendingBytes") private var pendingBytes = 0
+    @AppStorage("kraki.diag.pendingBatches") private var pendingBatches = 0
+    @AppStorage("kraki.diag.oldestBatch") private var oldestBatch = 0.0
+    @AppStorage("kraki.diag.uploadState") private var uploadState = "waiting"
     @State private var marked = false
     var body: some View {
         Section("诊断日志 · 中间测试版") {
@@ -15,6 +18,13 @@ struct DiagSettingsSection: View {
                 Text("尚未上传，前台非计费网络下自动重试").font(.caption).foregroundStyle(.secondary)
             }
             LabeledContent("等待发送", value: ByteCountFormatter.string(fromByteCount: Int64(pendingBytes), countStyle: .file))
+            LabeledContent("待发送批次", value: String(pendingBatches))
+            if oldestBatch > 0 {
+                LabeledContent("最早待发送批次", value: Date(timeIntervalSince1970: oldestBatch).formatted(date: .abbreviated, time: .standard))
+            }
+            LabeledContent("上传状态", value: uploadState)
+            Text("仅前台、非计费网络且未开启低电量模式时上传；切换应用或持续操作可能推迟发送。")
+                .font(.caption).foregroundStyle(.secondary)
             Button(marked ? "已标记" : "标记：刚才出现卡顿或显示异常") {
                 KrakiDiag.record(.marker)
                 marked = true

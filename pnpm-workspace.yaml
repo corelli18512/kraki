@@ -2,6 +2,7 @@ packages:
   - packages/protocol
   - packages/crypto
   - packages/head
+  - packages/monitor
   - packages/tentacle
   - packages/arm/*
   - packages/tests

@@ -64,8 +64,23 @@ enum ISO8601 {
         return formatter
     }()
 
+    private enum Parsed { case value(Date?) }
+    private static let parseLock = NSLock()
+    private static var parsed: [String: Parsed] = [:]
+
     static func parse(_ string: String) -> Date? {
-        withFractional.date(from: string) ?? withoutFractional.date(from: string)
+        // Match iOS's bounded memo: reconnect snapshots repeatedly parse the
+        // same hundreds of timestamps. Keep formatter work outside the lock.
+        parseLock.lock()
+        let hit = parsed[string]
+        parseLock.unlock()
+        if case .value(let date) = hit { return date }
+        let date = withFractional.date(from: string) ?? withoutFractional.date(from: string)
+        parseLock.lock()
+        if parsed.count >= 4096 { parsed.removeAll(keepingCapacity: true) }
+        parsed[string] = .value(date)
+        parseLock.unlock()
+        return date
     }
 
     static func now() -> String { withFractional.string(from: Date()) }

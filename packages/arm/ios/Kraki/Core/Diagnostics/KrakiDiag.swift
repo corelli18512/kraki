@@ -121,6 +121,7 @@ final class DiagClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private var nextUpload = Date.distantPast
     private var nextConfig = Date.distantPast
     private var failures = 0
+    private var configFailures = 0
     private var dailyDay = ""
     private var dailyBytes = 0
     private lazy var session: URLSession = {
@@ -153,7 +154,7 @@ final class DiagClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
             guard self.timer == nil else { return }
             if !self.localEnabled { self.clearStoredRealms() }
             let timer = DispatchSource.makeTimerSource(queue: self.queue)
-            timer.schedule(deadline: .now() + 15, repeating: 15, leeway: .seconds(3))
+            timer.schedule(deadline: .now() + 5, repeating: 5, leeway: .seconds(1))
             timer.setEventHandler { [weak self] in self?.tick() }
             self.timer = timer; timer.resume()
         }
@@ -171,6 +172,7 @@ final class DiagClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
             if self.realm != nil && self.realm != realm {
                 self.task?.cancel(); self.task = nil; self.generation += 1
                 self.spool?.clear(); _ = self.recorder.drain()
+                self.defaults.removeObject(forKey: "kraki.diag.lastSuccess")
             }
             self.generation += 1; self.task?.cancel(); self.task = nil
             self.recorder.setEnabled(self.localEnabled)
@@ -188,7 +190,7 @@ final class DiagClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
             self.spool = try? DiagSpool(directory: root.appendingPathComponent(realm, isDirectory: true))
             if !self.localEnabled { self.spool?.clear() }
             self.nextConfig = Date().addingTimeInterval(5)
-            self.nextUpload = Date().addingTimeInterval(60)
+            self.nextUpload = Date().addingTimeInterval(15)
             self.dailyDay = self.defaults.string(forKey: "kraki.diag.day") ?? ""
             self.dailyBytes = self.defaults.integer(forKey: "kraki.diag.bytes")
         }
@@ -205,6 +207,7 @@ final class DiagClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
                 self.spool?.clear(); _ = self.recorder.drain()
                 // Also covers turning off before authentication in a new process.
                 self.clearStoredRealms()
+                self.publishQueueHealth()
             } else { self.nextConfig = .distantPast }
         }
     }
@@ -223,6 +226,8 @@ final class DiagClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
             self.spool?.clear(); self.spool = nil
             self.credentials = nil; self.realm = nil; self.remoteEnabled = false
             _ = self.recorder.drain()
+            self.defaults.removeObject(forKey: "kraki.diag.lastSuccess")
+            self.publishQueueHealth()
         }
     }
     func setForeground(_ value: Bool) {
@@ -249,20 +254,35 @@ final class DiagClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
 
     private func tick() {
         guard localEnabled else { return }
+        if spool == nil, let realm {
+            spool = try? DiagSpool(directory: root.appendingPathComponent(realm, isDirectory: true))
+        }
         flush()
         guard foreground, task == nil, credentials != nil else { return }
         // Don't compete with thermal/power recovery. Resume via the next tick.
         guard ProcessInfo.processInfo.thermalState == .nominal || ProcessInfo.processInfo.thermalState == .fair,
               !ProcessInfo.processInfo.isLowPowerModeEnabled else { return }
         if Date() >= nextConfig { sendConfig(); return }
-        guard remoteEnabled, Date() >= nextUpload, let segment = spool?.segments.first else { return }
+        guard remoteEnabled, Date() >= nextUpload, let spool else { return }
+        do { try spool.compact() }
+        catch {
+            // Complete any crash-safe merge before considering another upload.
+            self.spool = try? DiagSpool(directory: spool.directory)
+            nextUpload = Date().addingTimeInterval(30)
+            defaults.set("local_io", forKey: "kraki.diag.uploadState")
+            return
+        }
+        publishQueueHealth()
+        guard let segment = spool.segments.first else { return }
         let today = String(ISO8601DateFormatter().string(from: Date()).prefix(10))
         if dailyDay != today { dailyDay = today; dailyBytes = 0 }
         guard dailyBytes + segment.bytes <= 20 * 1024 * 1024 else { return }
         guard let bytes = try? Data(contentsOf: segment.url), bytes.count <= 16 * 1024,
               let id = segment.url.deletingPathExtension().lastPathComponent.split(separator: "_").last else {
-            spool?.remove(segment.url); return
+            spool.remove(segment.url); return
         }
+        do { try spool.markAttempted(segment.url) }
+        catch { defaults.set("local_io", forKey: "kraki.diag.uploadState"); return }
         // Count attempted uploads, not just successful bytes, across relaunches.
         dailyBytes += bytes.count
         defaults.set(dailyDay, forKey: "kraki.diag.day")
@@ -281,16 +301,27 @@ final class DiagClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
                 self.remoteEnabled = false; self.recorder.setEnabled(false); self.spool?.clear()
                 self.nextConfig = Date().addingTimeInterval(900)
             }
-            self.nextUpload = Date().addingTimeInterval(min(3600, 60 * pow(2, Double(self.failures))) + Double.random(in: 0...10))
+            self.defaults.set(status == 204 ? "ok" : "http_\(status)", forKey: "kraki.diag.uploadState")
+            self.publishQueueHealth()
+            // Bounded catch-up, at most one request per 5s worker tick (<30/min
+            // including config). Errors retain exponential backoff/identical bytes.
+            let delay = status == 204 ? 5.0 : min(3600, 60 * pow(2, Double(self.failures))) + Double.random(in: 0...10)
+            self.nextUpload = Date().addingTimeInterval(delay)
         }
     }
     private func flush() {
         guard localEnabled, let spool else { return } // keep bounded pre-auth records in memory
         let drained = recorder.drain()
         if drained.dropped > 0 { recorder.record(.health, [.dropped: .number(Double(drained.dropped))]) }
-        guard !drained.events.isEmpty else { return }
-        persist(drained.events, to: spool)
-        defaults.set(spool.bytes, forKey: "kraki.diag.pendingBytes")
+        if !drained.events.isEmpty { persist(drained.events, to: spool) }
+        publishQueueHealth()
+    }
+    private func publishQueueHealth() {
+        let values: [(String, Int)] = [("kraki.diag.pendingBytes", spool?.bytes ?? 0),
+                                      ("kraki.diag.pendingBatches", spool?.segments.count ?? 0)]
+        for (key, value) in values where defaults.integer(forKey: key) != value { defaults.set(value, forKey: key) }
+        let oldest = spool?.segments.first?.url.lastPathComponent.split(separator: "_").first.flatMap { Double($0) }.map { $0 / 1000 } ?? 0
+        if defaults.double(forKey: "kraki.diag.oldestBatch") != oldest { defaults.set(oldest, forKey: "kraki.diag.oldestBatch") }
     }
     private func persist(_ events: [DiagEvent], to spool: DiagSpool) {
         let id = UUID().uuidString
@@ -317,6 +348,8 @@ final class DiagClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         send(path: "config", body: Data(), id: UUID().uuidString) { status, data in
             let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             if status == 200, json?["schema"] as? Int == 1, let enabled = json?["enabled"] as? Bool {
+                self.configFailures = 0
+                self.defaults.set(enabled ? "ready" : "remote_disabled", forKey: "kraki.diag.uploadState")
                 self.remoteEnabled = enabled
                 self.recorder.setEnabled(self.localEnabled && enabled)
                 if !enabled { self.spool?.clear() }
@@ -324,7 +357,13 @@ final class DiagClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
                 self.remoteEnabled = false
                 self.recorder.setEnabled(false)
                 self.spool?.clear()
+                self.defaults.set("config_\(status)", forKey: "kraki.diag.uploadState")
+            } else {
+                self.configFailures = min(5, self.configFailures + 1)
+                self.nextConfig = Date().addingTimeInterval(min(300, 15 * pow(2, Double(self.configFailures))) + Double.random(in: 0...5))
+                self.defaults.set("config_\(status)", forKey: "kraki.diag.uploadState")
             }
+            self.publishQueueHealth()
         }
     }
     private func send(path: String, body: Data, id: String, completion: @escaping (Int, Data) -> Void) {
@@ -334,7 +373,10 @@ final class DiagClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         let timestamp = String(Int64(Date().timeIntervalSince1970 * 1000))
         let digest = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
         let message = ["kraki-diag-v1", method, path, credentials.device, timestamp, id, digest].joined(separator: "\n")
-        guard let signature = try? credentials.sign(message) else { return }
+        guard let signature = try? credentials.sign(message) else {
+            completion(0, Data()) // bounded retry; don't silently wait 15 minutes
+            return
+        }
         var req = URLRequest(url: credentials.base.appendingPathComponent(String(path.dropFirst())))
         req.httpMethod = method
         req.setValue(credentials.device, forHTTPHeaderField: "X-Kraki-Device")
@@ -360,7 +402,9 @@ final class DiagClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     #if KRAKI_DIAG_TESTING
     // No test hooks are compiled into the diagnostic app itself.
     func testTick() { queue.sync { nextConfig = credentials != nil && !remoteEnabled ? .distantPast : nextConfig; nextUpload = .distantPast; tick() } }
-    func testSnapshot() -> (count: Int, task: Bool, remote: Bool) { queue.sync { (spool?.segments.count ?? 0, task != nil, remoteEnabled) } }
+    func testSnapshot() -> (count: Int, task: Bool, remote: Bool, configDelay: Double, uploadDelay: Double) {
+        queue.sync { (spool?.segments.count ?? 0, task != nil, remoteEnabled, nextConfig.timeIntervalSinceNow, nextUpload.timeIntervalSinceNow) }
+    }
     func testStop() { queue.sync { timer?.cancel(); task?.cancel(); session.invalidateAndCancel() } }
     #endif
     // A redirect must not disclose signed credentials to another origin.
