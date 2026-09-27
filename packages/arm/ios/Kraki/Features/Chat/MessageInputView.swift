@@ -586,13 +586,14 @@ struct MessageInputView: View {
             // on every update while a reply streams (costly on macOS).
             let glyph = primaryGlyph(role)
             let fill = primaryFill
+            let active = role != .send || canSend
             let morph = Animation.easeInOut(duration: 0.22)
             ZStack {
-                Circle().animation(morph) { $0.foregroundStyle(fill) }
+                PrimaryGlassCircle(tint: active ? fill : nil, fallback: fill)
                 ForEach(["arrow.up", "arrow.turn.right.up", "stop.fill"], id: \.self) { name in
                     Image(systemName: name)
                         .font(.system(size: name == "stop.fill" ? 14 : 18, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(active ? Color.white : Color.secondary)
                         .animation(morph) {
                             $0.opacity(name == glyph && !(role == .stop && abortPending) ? 1 : 0)
                                 .scaleEffect(name == glyph ? 1 : 0.6)
@@ -1002,6 +1003,25 @@ private struct GlassChoiceButtonModifier: ViewModifier {
             content
                 .buttonStyle(.bordered)
                 .tint(tint)
+        }
+    }
+}
+
+/// The send / stop / steer circle: Liquid Glass (regular, as the composer
+/// capsule) tinted by its role; untinted when there is nothing to send.
+/// Pre-26 keeps a solid fill. The tint animates on its own (scoped: never a
+/// button-wide implicit animation, which animated chat layout while
+/// streaming).
+struct PrimaryGlassCircle: View {
+    let tint: Color?
+    let fallback: Color
+    var body: some View {
+        if #available(iOS 26.0, *) {
+            Circle().fill(.clear)
+                .glassEffect(tint.map { Glass.regular.tint($0).interactive() } ?? Glass.regular.interactive(), in: Circle())
+                .animation(.easeInOut(duration: 0.22), value: tint)
+        } else {
+            Circle().animation(.easeInOut(duration: 0.22)) { $0.foregroundStyle(fallback) }
         }
     }
 }

@@ -361,13 +361,14 @@ struct MacChatComposer: View {
         let fill: Color = role == .stop ? MacComposerMetrics.stopRed
             : canSend ? Color.krakiPrimary : Color(nsColor: .quaternaryLabelColor)
         let morph = Animation.easeInOut(duration: 0.22)
+        let active = role == .stop || canSend
         return Button(action: role == .stop ? requestAbort : handleModeSubmit) {
             ZStack {
-                Circle().animation(morph) { $0.foregroundStyle(fill) }
+                MacPrimaryGlassCircle(tint: active ? fill : nil, fallback: fill)
                 ForEach(["arrow.up", "arrow.turn.right.up", "stop.fill"], id: \.self) { name in
                     Image(systemName: name)
                         .font(.system(size: name == "stop.fill" ? 11 : 15, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(active ? Color.white : Color.secondary)
                         .animation(morph) {
                             $0.opacity(name == glyph && !(role == .stop && abortPending) ? 1 : 0)
                                 .scaleEffect(name == glyph ? 1 : 0.6)
@@ -1829,4 +1830,21 @@ enum MacComposerPasteFocusRegression {
     }
 }
 #endif
+/// Send / stop / steer circle: regular Liquid Glass tinted by role (as the
+/// composer capsule); untinted when there is nothing to send. Tint animation
+/// is scoped to this view (see the primary button note).
+private struct MacPrimaryGlassCircle: View {
+    let tint: Color?
+    let fallback: Color
+    var body: some View {
+        if #available(macOS 26.0, *) {
+            Circle().fill(.clear)
+                .glassEffect(tint.map { Glass.regular.tint($0) } ?? Glass.regular, in: Circle())
+                .animation(.easeInOut(duration: 0.22), value: tint)
+        } else {
+            Circle().animation(.easeInOut(duration: 0.22)) { $0.foregroundStyle(fallback) }
+        }
+    }
+}
+
 #endif

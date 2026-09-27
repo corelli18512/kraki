@@ -1137,13 +1137,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         }
     }
 
-    /// The ↑/↓ controls float over the conversation: the most transparent
-    /// Liquid Glass (clear) so the text behind stays readable. Glass must not
+    /// The ↑/↓ controls use the same regular Liquid Glass as the composer
+    /// capsule (they only show away from the conversation bottom). Glass must not
     /// be clipped with masksToBounds, stroked, or faded through alpha — each
     /// makes it fall back to an opaque fill. It is shaped with a capsule
     /// corner configuration and shown/hidden by setting its effect.
     private static var jumpControlEffect: UIVisualEffect {
-        if #available(iOS 26.0, *) { return UIGlassEffect(style: .clear) }
+        if #available(iOS 26.0, *) { return UIGlassEffect(style: .regular) }
         return UIBlurEffect(style: .systemUltraThinMaterial)
     }
 

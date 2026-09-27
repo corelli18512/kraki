@@ -2206,8 +2206,8 @@ final class MacChatScrollView: MacSmoothScrollView {
     private let latestMessageTopPadding: CGFloat = MacChatHeaderMetrics.listTopInset
     /// Round navigation controls (pointer target; iOS uses 44pt for touch).
     static let jumpControlSize: CGFloat = 36
-    /// The ↑/↓ controls float over the conversation: the most transparent
-    /// Liquid Glass (clear), so the text behind stays readable.
+    /// The ↑/↓ controls use the same regular Liquid Glass as the composer
+    /// capsule (they only show away from the conversation bottom).
     static func isGlass(_ view: NSView) -> Bool {
         if #available(macOS 26.0, *) { return view is NSGlassEffectView }
         return false
@@ -2216,7 +2216,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     static func makeJumpControlMaterial() -> NSView {
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
-            glass.style = .clear
+            glass.style = .regular
             glass.cornerRadius = jumpControlSize / 2
             return glass
         }
