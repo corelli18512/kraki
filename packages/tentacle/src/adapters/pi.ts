@@ -346,6 +346,9 @@ interface PiSession {
   relayTurnId?: string;
   /** Identity captured when the provider run started. */
   eventTurnId?: string;
+  /** Fresh prompt ownership before agent_start. Only preflight maintenance may
+   *  use this identity; late provider callbacks must keep eventTurnId. */
+  promptPreflight?: { turnId?: string };
   /** Set before the process-exit callback publishes idle, so an in-flight
    *  prompt rejection cannot publish the same terminal idle a second time. */
   exitObserved: boolean;
@@ -594,7 +597,8 @@ export class PiAdapter extends AgentAdapter {
   private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
   private readonly promptWatchdog: PromptWatchdogOptions;
   private sessions = new Map<string, PiSession>();
-  private compactingSessions = new Set<string>();
+  /** Keep the start owner until maintenance ends, even across a queued turn. */
+  private compactingSessions = new Map<string, { turnId?: string }>();
   private evictTimer: ReturnType<typeof setInterval> | null = null;
   /** Lazily-materialized path to the always-loaded Kraki tools extension. */
   private toolsExtPath: string | null = null;
@@ -827,12 +831,17 @@ export class PiAdapter extends AgentAdapter {
   ): void {
     if (active) {
       if (this.compactingSessions.has(sessionId)) return;
-      this.compactingSessions.add(sessionId);
-      this.onCompaction?.(sessionId, { phase: 'start', ...event, ...this.lifecycleEvent(this.sessions.get(sessionId)) });
+      const s = this.sessions.get(sessionId);
+      // Pi may compact BEFORE agent_start (e.g. after a smaller-model switch).
+      // eventTurnId still belongs to the previous run in that interval.
+      const owner = s?.promptPreflight ?? this.lifecycleEvent(s);
+      this.compactingSessions.set(sessionId, owner);
+      this.onCompaction?.(sessionId, { phase: 'start', ...event, ...owner });
       return;
     }
+    const owner = this.compactingSessions.get(sessionId);
     if (!this.compactingSessions.delete(sessionId)) return;
-    this.onCompaction?.(sessionId, { phase: 'end', ...event, ...this.lifecycleEvent(this.sessions.get(sessionId)) });
+    this.onCompaction?.(sessionId, { phase: 'end', ...event, ...owner });
   }
 
   private normalizeCompactionReason(value: unknown): import('./base.js').CompactionReason | undefined {
@@ -904,6 +913,20 @@ export class PiAdapter extends AgentAdapter {
     s.pendingMaintenanceIdle = false;
     s.pendingNarration = '';
     s.aborting = false;
+  }
+
+  /** A fresh prompt can produce maintenance events before its provider run.
+   *  Snapshot its owner without relabeling late events from the previous run.
+   *  Queued/handled/rejected commands retire the scope at ACK; agent_start may
+   *  retire it earlier. A late ACK must not clear a newer submission's scope. */
+  private async withPromptPreflight(s: PiSession, submit: () => Promise<unknown>): Promise<void> {
+    const preflight = s.relayTurnId ? { turnId: s.relayTurnId } : {};
+    s.promptPreflight = preflight;
+    try {
+      await submit();
+    } finally {
+      if (s.promptPreflight === preflight) s.promptPreflight = undefined;
+    }
   }
 
   /** Wait for the ORIGINAL prompt's preflight ACK without ever resending it.
@@ -1016,6 +1039,7 @@ export class PiAdapter extends AgentAdapter {
         const s = this.sessions.get(sessionId);
         if (s) {
           s.eventTurnId = s.relayTurnId;
+          s.promptPreflight = undefined;
           s.pendingMaintenanceIdle = false;
         }
         // Streaming proves any preceding compaction is over even if its end
@@ -1430,7 +1454,7 @@ export class PiAdapter extends AgentAdapter {
       // so it cannot inherit the previous turn's narration/finalization state.
       if (s.settledTurn === s.logicalTurn) {
         this.resetTurnTracking(s);
-        await s.proc.request('prompt', promptPayload, { timeoutMs: null });
+        await this.withPromptPreflight(s, () => s.proc.request('prompt', promptPayload, { timeoutMs: null }));
       } else {
         // While active, Pi queues the interjection before the next LLM call and
         // it remains part of the current logical turn.
@@ -1445,7 +1469,7 @@ export class PiAdapter extends AgentAdapter {
       // Queue this canonical new turn with Pi's official follow-up behavior: it
       // ACKs immediately, survives compaction, and starts after maintenance.
       this.resetTurnTracking(s);
-      await s.proc.request('prompt', { ...promptPayload, streamingBehavior: 'followUp' }, { timeoutMs: null });
+      await this.withPromptPreflight(s, () => s.proc.request('prompt', { ...promptPayload, streamingBehavior: 'followUp' }, { timeoutMs: null }));
       return;
     }
 
@@ -1456,7 +1480,7 @@ export class PiAdapter extends AgentAdapter {
     // state-aware watchdog preserves the original request and never translates a
     // slow ACK into a false error/idle or duplicate prompt.
     try {
-      await this.awaitPromptAcceptance(sessionId, s, promptPayload);
+      await this.withPromptPreflight(s, () => this.awaitPromptAcceptance(sessionId, s, promptPayload));
     } catch (err) {
       const message = (err as Error).message;
       // pi can get into a state where the adapter has emitted idle (agent_end
@@ -1482,7 +1506,7 @@ export class PiAdapter extends AgentAdapter {
         }
         // The explicit rejection proves the first prompt was NOT accepted. Only
         // this path may retry, after authoritative abort + idle reconciliation.
-        await this.awaitPromptAcceptance(sessionId, s, promptPayload);
+        await this.withPromptPreflight(s, () => this.awaitPromptAcceptance(sessionId, s, promptPayload));
         return;
       }
       logger.warn({ sessionId, err: message }, 'pi prompt request failed');

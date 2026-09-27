@@ -107,7 +107,7 @@ run('Pi 0.87 live RPC compatibility', () => {
     const port = (server.address() as AddressInfo).port;
     writeFileSync(join(agent, 'models.json'), JSON.stringify({ providers: { audit: {
       baseUrl: `http://127.0.0.1:${port}/v1`, api: 'openai-completions', apiKey: 'not-a-secret-test-key',
-      models: ['model-a', 'model-b', 'org/model-c'].map(id => ({ id, reasoning: true, input: ['text', 'image'], contextWindow: 100000, maxTokens: 4096, thinkingLevelMap: { xhigh: 'xhigh', max: 'max' }, cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } })),
+      models: ['model-a', 'model-b', 'org/model-c', 'model-small'].map(id => ({ id, reasoning: true, input: ['text', 'image'], contextWindow: id === 'model-small' ? 20000 : 100000, maxTokens: 4096, thinkingLevelMap: { xhigh: 'xhigh', max: 'max' }, cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } })),
     } } }));
     writeFileSync(join(agent, 'settings.json'), JSON.stringify({ defaultProvider: 'audit', defaultModel: 'model-a', compaction: { enabled: true, reserveTokens: 1024, keepRecentTokens: 32 }, retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 }, enableInstallTelemetry: false }));
     adapter = new PiAdapter({ cliPath: cli!, attachmentStore: new AttachmentStore(join(kraki, 'sessions')) });
@@ -249,18 +249,23 @@ run('Pi 0.87 live RPC compatibility', () => {
     expect(callbacks.onAttachmentBytes).not.toHaveBeenCalled();
   });
 
-  it('finalizes an ends-on-tool turn without losing the final reply', async () => {
-    await create(); steps.push({ tool: 'kraki_get_mode', args: { query: 'current' } }, { text: '' }, { tool: 'finalize_reply', args: { resummarize: true, text: 'FINALIZED' } }, { text: '' });
-    await turn(); expect(lastReply()).toBe('FINALIZED'); expect(callbacks.onIdle).toHaveBeenCalledTimes(1);
-    expect(callbacks.onToolStart.mock.calls.map(c => c[1].toolName)).not.toContain('finalize_reply');
+  it('relays an ends-on-tool turn as steps without injecting a finalize request', async () => {
+    await create(); steps.push({ tool: 'kraki_get_mode', args: { query: 'current' } }, { text: '' });
+    await turn();
+    expect(callbacks.onMessage).not.toHaveBeenCalled();
+    expect(callbacks.onIdle).toHaveBeenCalledTimes(1);
+    expect(callbacks.onToolComplete.mock.calls.map(c => c[1].toolName)).toEqual(['kraki_get_mode']);
+    expect(requests).toHaveLength(2); // Tool request + Pi's own continuation, no Kraki-injected round.
   });
 
-  it('streams finalize_reply argument text with Pi 0.87 delta-only records', async () => {
-    await create(); steps.push({ tool: 'kraki_get_mode', args: { query: 'current' } }, { text: '' }, { tool: 'finalize_reply', args: { resummarize: true, text: 'FINAL_STREAMED_TEXT' } }, { text: '' });
-    await turn(); expect(lastReply()).toBe('FINAL_STREAMED_TEXT');
+  it('streams the natural closing reply after tools with Pi 0.87 delta-only records', async () => {
+    await create(); steps.push({ tool: 'kraki_get_mode', args: { query: 'current' } }, { text: 'NATURAL_CLOSING_REPLY' });
+    await turn(); expect(lastReply()).toBe('NATURAL_CLOSING_REPLY'); expect(callbacks.onIdle).toHaveBeenCalledTimes(1);
     expect(wire.some(e => e.assistantMessageEvent?.type === 'toolcall_delta')).toBe(true);
     expect(wire.filter(e => e.type === 'message_update').every(e => !e.assistantMessageEvent.partial)).toBe(true);
-    expect(callbacks.onFinalizeDelta.mock.calls.map(c => c[1].content).join('')).toBe('FINAL_STREAMED_TEXT');
+    expect(callbacks.onMessageDelta.mock.calls.map(c => c[1].content).join('')).toBe('NATURAL_CLOSING_REPLY');
+    expect(callbacks.onFinalizeDelta).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(2);
   });
 
   it('aborts an active stream and accepts the next prompt', async () => {
@@ -291,7 +296,8 @@ run('Pi 0.87 live RPC compatibility', () => {
   });
 
   it('aborts a pending permission without executing the denied write', async () => {
-    await create(); steps.push({ tool: 'write', args: { path: 'never-written.txt', content: 'no' } });
+    await create(); adapter.setSessionMode(sid, 'safe');
+    steps.push({ tool: 'write', args: { path: 'never-written.txt', content: 'no' } });
     await adapter.sendMessage(sid, 'pending approval');
     await wait(() => expect(callbacks.onPermissionRequest).toHaveBeenCalledTimes(1));
     await adapter.abortSession(sid);
@@ -376,6 +382,40 @@ run('Pi 0.87 live RPC compatibility', () => {
     expect(callbacks.onCompaction.mock.calls.map(c => c[1].phase)).toEqual(['start', 'end']);
     expect(callbacks.onMessage).not.toHaveBeenCalled();
     steps.push({ text: 'AFTER_COMPACT' }); await turn(); expect(lastReply()).toBe('AFTER_COMPACT');
+  });
+
+  it('tags preflight compaction with the new turn after a warm switch to a smaller model', async () => {
+    await create(); await seedHistory();
+    adapter.setTurnIdentity(sid, 'before-switch');
+    steps.push({ text: 'OLD_MODEL_REPLY', input: 30000 });
+    await turn('history fits the original model');
+    expect(callbacks.onCompaction).not.toHaveBeenCalled();
+    const originalProcess = proc();
+    await adapter.setSessionModel(sid, 'audit/model-small');
+    expect(proc()).toBe(originalProcess);
+    adapter.setTurnIdentity(sid, 'after-switch');
+    const wireStart = wire.length;
+    let release!: () => void;
+    summaryGate = new Promise<void>(r => { release = r; });
+    steps.push({ text: 'AFTER_PREFLIGHT_COMPACTION' });
+    const sending = adapter.sendMessage(sid, 'new work after switching');
+    try {
+      await wait(() => expect(wire.slice(wireStart).some(e => e.type === 'compaction_start')).toBe(true));
+      // The provider run has NOT started yet: this is the incident's ordering,
+      // not ordinary in-run or post-answer compaction.
+      expect(wire.slice(wireStart).some(e => e.type === 'agent_start')).toBe(false);
+      expect(callbacks.onCompaction.mock.calls[0]?.[1]).toMatchObject({ phase: 'start', turnId: 'after-switch' });
+      release(); summaryGate = undefined;
+      await sending;
+      await wait(() => expect(lastReply()).toBe('AFTER_PREFLIGHT_COMPACTION'));
+      expect(callbacks.onCompaction.mock.calls.map(c => [c[1].phase, c[1].turnId]))
+        .toEqual([['start', 'after-switch'], ['end', 'after-switch']]);
+      expect(callbacks.onIdle.mock.calls.at(-1)?.[1].turnId).toBe('after-switch');
+      expect(callbacks.onError).not.toHaveBeenCalled();
+    } finally {
+      release(); summaryGate = undefined;
+      await sending;
+    }
   });
 
   it('queues a new turn during background compaction and preserves turn identities', async () => {
