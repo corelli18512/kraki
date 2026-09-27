@@ -164,6 +164,22 @@ final class DeviceStore {
     /// Look up an agent slice by id within a device. Returns nil if
     /// the device doesn't currently advertise that agent — callers
     /// should fall back to the first slice or handle the empty case.
+    /// Why a device does or doesn't offer agents right now. Lets the UI tell
+    /// "still connecting" apart from "connected, but no coding agent is
+    /// installed" instead of spinning on an empty picker forever.
+    enum AgentAvailability: Equatable {
+        case ready
+        case connecting
+        case offline
+        case noAgents
+    }
+
+    func agentAvailability(for deviceId: String) -> AgentAvailability {
+        if !agents(for: deviceId).isEmpty { return .ready }
+        guard let device = devices[deviceId], device.online else { return .offline }
+        return pendingGreetingIds.contains(deviceId) ? .connecting : .noAgents
+    }
+
     func agent(_ agentId: AgentId, on deviceId: String) -> AgentCapabilities? {
         agents(for: deviceId).first { $0.id == agentId }
     }

@@ -137,7 +137,7 @@ struct MacEntryGateView: View {
                     .tracking(4.2)
                     .foregroundStyle(Color.textTitle)
 
-                Text("Connect this Mac to your relay")
+                Text("Your coding agents, on every device")
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(Color.textSecondary)
                     .multilineTextAlignment(.center)

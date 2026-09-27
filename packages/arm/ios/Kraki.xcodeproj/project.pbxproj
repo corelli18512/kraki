@@ -88,6 +88,7 @@
 		40A33A5867D20686790F9258 /* MacStepsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07D6E0A7CA95492AFFEAA610 /* MacStepsView.swift */; };
 		418D62DFD69B58881D3390EA /* LucideIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 924794751B4507709362A1AE /* LucideIcon.swift */; };
 		41CD9A1A40C53FE761E997D5 /* KeychainManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DF2FADB7D9A46A1299A30E2 /* KeychainManager.swift */; };
+		424639E4743ECEAC40710698 /* NoAgentsGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = F054D38D8C25B25EDF5F20F9 /* NoAgentsGuide.swift */; };
 		4301D37FC0E42C745BB47E4D /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A625A24B0C13AF8010778069 /* Theme.swift */; };
 		43833240798127A0E69CEDAD /* MacChatTestPages.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7EEFA1D37EABA740112779F /* MacChatTestPages.swift */; };
 		449210BD9A5213261366CA6F /* HeightMeasurementScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D84628110444A258D3500CF /* HeightMeasurementScheduler.swift */; };
@@ -204,6 +205,7 @@
 		B7C46A0BC08656D1F5C64D5E /* DeviceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04BA085D5DB073C1C3E8D700 /* DeviceStore.swift */; };
 		B84F034425AB3197961B56D9 /* WindowZoom.swift in Sources */ = {isa = PBXBuildFile; fileRef = F98488549005B2CCE060B76B /* WindowZoom.swift */; };
 		B8FF9EBBBEB7C81BA045175F /* ThemePlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBACFBCC6FD0563946CD080A /* ThemePlatform.swift */; };
+		B9148817156EDEF96AC47409 /* NoAgentsGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = F054D38D8C25B25EDF5F20F9 /* NoAgentsGuide.swift */; };
 		B92E7E829FC61E56473A4C80 /* AccountPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E5D28B402A345F0D22B851 /* AccountPane.swift */; };
 		B9799F37E9395C9A357E3A19 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = CDED8D6D15950EF64A1F92C5 /* GRDB */; };
 		B9904E6233735C93F73DEC6F /* DiagRunLoop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6812354F72EF32686A7E98C6 /* DiagRunLoop.swift */; };
@@ -497,6 +499,7 @@
 		E805046685AE086D68B890D4 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
 		EA32D66EC88B6BEDF4675518 /* Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Commands.swift; sourceTree = "<group>"; };
 		EF54424FDF29034ACFC16B5A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		F054D38D8C25B25EDF5F20F9 /* NoAgentsGuide.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoAgentsGuide.swift; sourceTree = "<group>"; };
 		F163484AD442AE1D67F4E8A7 /* ToolChipHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolChipHeader.swift; sourceTree = "<group>"; };
 		F1BC3B39CCEB12DE1DD65808 /* Messages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Messages.swift; sourceTree = "<group>"; };
 		F1E5D28B402A345F0D22B851 /* AccountPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountPane.swift; sourceTree = "<group>"; };
@@ -625,6 +628,7 @@
 				0C23602EA58067E4AE252F62 /* ImportSessionSheet.swift */,
 				DD29591F2C7F6E0D0AFAE855 /* NewSessionSheet.swift */,
 				788DB31948E59B27C4328EFE /* NewSessionSheet+macOS.swift */,
+				F054D38D8C25B25EDF5F20F9 /* NoAgentsGuide.swift */,
 				F98323AAD3C8D23F7A63AAC9 /* SessionCardView.swift */,
 				5179D3E57BD2FCF3F327E11C /* SessionDetailView.swift */,
 				427AD031BE9C726645DEA33E /* SessionInfoSheet.swift */,
@@ -1376,6 +1380,7 @@
 				063EA307ED63C7867624C342 /* NavigationIDs.swift in Sources */,
 				0A1071BB986ABE85A5D11E47 /* NewSessionSheet+macOS.swift in Sources */,
 				EBB7E4C62FE6047767653940 /* NewSessionSheet.swift in Sources */,
+				B9148817156EDEF96AC47409 /* NoAgentsGuide.swift in Sources */,
 				4C5EC2D159BE6C807F1FC854 /* NotificationsPane.swift in Sources */,
 				F134E18404408B23FA5A7B57 /* PKCE.swift in Sources */,
 				0D94E4000C0462E3581D4126 /* PairingSheet+macOS.swift in Sources */,
@@ -1504,6 +1509,7 @@
 				6F355E1177288E02FB77EFDD /* Messages.swift in Sources */,
 				5095126837B9D8AF7B714EF9 /* NavigationIDs.swift in Sources */,
 				1392B71F4BA89CD3DE1C9E93 /* NewSessionSheet+macOS.swift in Sources */,
+				424639E4743ECEAC40710698 /* NoAgentsGuide.swift in Sources */,
 				A30457395FCEECC9CE6E8C53 /* NotificationsPane.swift in Sources */,
 				23B61F1BCE6CD4B7ABCFDA79 /* PKCE.swift in Sources */,
 				F5B867504AFC26C37BE4E2DB /* PairingSheet+macOS.swift in Sources */,

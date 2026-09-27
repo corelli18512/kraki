@@ -480,6 +480,11 @@ struct MacApp: App {
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .windowResizability(.contentMinSize)
         .defaultLaunchBehavior(.presented)
+        // Kraki reopens its own window and last session on every launch, so
+        // macOS state restoration adds nothing — and restoring windows at
+        // login re-entered SwiftUI's scene updates until the main thread's
+        // stack overflowed (crash seen on a clean Mac after a reboot).
+        .restorationBehavior(.disabled)
         .commands {
             MacCommands(appState: appState, tentacleCLI: tentacleCLI)
         }
@@ -490,6 +495,7 @@ struct MacApp: App {
                 .environment(tentacleCLI)
                 .frame(width: 540, height: 420)
         }
+        .restorationBehavior(.disabled)
 
         Window("Logs", id: "logs") {
             LogsWindow()
@@ -498,6 +504,7 @@ struct MacApp: App {
         }
         .keyboardShortcut("l", modifiers: .command)
         .defaultPosition(.center)
+        .restorationBehavior(.disabled)
 
         #if DEBUG
         Window("Chat Scenario Test Page", id: "chat-scenarios") {
@@ -510,6 +517,7 @@ struct MacApp: App {
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1480, height: 920)
+        .restorationBehavior(.disabled)
         #endif
 
         MenuBarExtra {

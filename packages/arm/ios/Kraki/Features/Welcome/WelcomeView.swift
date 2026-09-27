@@ -262,20 +262,59 @@ struct WelcomeView: View {
         }
     }
 
+    /// This Mac's own tentacle device id, once its daemon is running.
+    private var localDeviceId: String? {
+        guard case .running = tentacleCLI.daemonState else { return nil }
+        return tentacleCLI.configInfo?.deviceId
+    }
+
+    @ViewBuilder
     private var noSessionsCard: some View {
-        WelcomeCard(
-            icon: "qrcode",
-            iconColor: Color.krakiPrimary,
-            title: "Pair a device",
-            subtitle: "Show this pairing code to your phone or another Mac to join your relay."
-        ) {
-            Button {
-                Task { await requestPairing() }
-            } label: {
-                Label("Generate pairing code", systemImage: "qrcode")
+        if let local = localDeviceId,
+           appState.deviceStore.agentAvailability(for: local) == .noAgents {
+            WelcomeCard(
+                icon: "puzzlepiece.extension.fill",
+                iconColor: Color(hex: 0xFBBF24),
+                title: "Install a coding agent",
+                subtitle: "Kraki is connected. To start a session, this Mac needs a coding agent."
+            ) {
+                NoAgentsGuide(
+                    deviceName: "this Mac",
+                    isThisMac: true,
+                    checkAgain: { await recheckLocalAgents(local) }
+                )
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Color.krakiPrimary)
+        } else {
+            WelcomeCard(
+                icon: "sparkles",
+                iconColor: Color.krakiPrimary,
+                title: "Start your first session",
+                subtitle: "Pick a coding agent and a model, then chat with it here. Pair your phone to follow along and approve actions from anywhere."
+            ) {
+                HStack {
+                    Button {
+                        NotificationCenter.default.post(name: .macOpenNewSession, object: nil)
+                    } label: {
+                        Label("New Session", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.krakiPrimary)
+
+                    Button {
+                        Task { await requestPairing() }
+                    } label: {
+                        Label("Pair a Phone", systemImage: "qrcode")
+                    }
+                }
+            }
+        }
+    }
+
+    private func recheckLocalAgents(_ deviceId: String) async {
+        await tentacleCLI.restartDaemon()
+        for _ in 0..<40 {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if appState.deviceStore.agentAvailability(for: deviceId) == .ready { return }
         }
     }
 
