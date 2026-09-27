@@ -919,7 +919,7 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertEqual(factory.sessions[0].starts.count, 1)
     }
 
-    func testDeadStoredLeaseWhileSpeakingRollsToFreshLease() async {
+    func testDeadStoredLeaseWhileSpeakingFailsVisiblyAndFetchesFreshLease() async {
         let host = FakeVoiceHost()
         let factory = FakeVoiceFactory()
         let store = storedLease(lease())
@@ -929,14 +929,45 @@ final class KrakiVoiceInputTests: XCTestCase {
         )
         controller.prepare()
         await controller.begin(sessionID: "session-1", context: context()) { _ in }
-        factory.sessions[0].emit(.failed("denied: lease_revoked"))
-        await settle { host.requestedResources.count == 1 }
-        XCTAssertEqual(controller.state, .obtainingLease)
-        XCTAssertNil(store.load())
-        controller.receiveLease(lease(jti: "lease-2"))
-        factory.sessions[1].emit(.connectionAuthorized)
-        await Task.yield()
         XCTAssertEqual(controller.state, .recording)
+        // Rejected before authorization: the buffered audio is lost, so the
+        // recording must not silently continue without its beginning.
+        factory.sessions[0].emit(.failed("denied: lease_revoked"))
+        await Task.yield()
+        XCTAssertTrue(controller.hasFailure(for: "session-1"))
+        XCTAssertNil(store.load())
+        let deadline = Date().addingTimeInterval(5)
+        while host.requestedResources.isEmpty, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(host.requestedResources, ["voice/doubao"])
+    }
+
+    func testIdentityChangeDuringKeptLeaseRecordingEndsItCleanly() async {
+        let host = FakeVoiceHost()
+        host.voiceTransportReady = false
+        let factory = FakeVoiceFactory()
+        let controller = KrakiVoiceInputController(
+            host: host, sessionFactory: factory,
+            audioPolicy: FakeVoiceAudioPolicy(), leaseStore: storedLease(lease())
+        )
+        controller.prepare()
+        var completions: [VoiceInputCompletion] = []
+        await controller.begin(
+            sessionID: "session-1", context: context(),
+            onCompletion: { completions.append($0) }
+        ) { _ in }
+        factory.sessions[0].emit(.partial("hello"))
+        await Task.yield()
+        // Head connects and reports another account.
+        host.voiceTransportReady = true
+        host.voiceUserID = "user-2"
+        controller.prepare()
+        XCTAssertFalse(controller.isBusy)
+        XCTAssertTrue(controller.hasFailure(for: "session-1"))
+        XCTAssertEqual(completions.first?.rawText, "hello")
+        XCTAssertEqual(factory.sessions[0].closeCount, 1)
+        XCTAssertEqual(host.requestedResources, ["voice/doubao"])
     }
 
     func testRenewalBeforeExpiryWaitsForIdleAndNeverShowsAuthorizing() async {

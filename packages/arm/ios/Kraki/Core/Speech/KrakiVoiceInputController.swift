@@ -334,6 +334,7 @@ final class KrakiVoiceInputController {
         if let host, host.voiceTransportReady, lease != nil || session != nil,
            hostIdentity == nil || hostIdentity != leaseIdentity {
             nextLease = nil
+            abandonRecordingForIdentityChange()
             closeConnection(keepLease: false)
         }
 
@@ -355,6 +356,26 @@ final class KrakiVoiceInputController {
         if lease != nil { closeConnection(keepLease: false) }
         KLog.d("🎙️ [voice] stage=warm-lease-request")
         requestLease(renewal: false)
+    }
+
+    /// A recording started on a kept lease cannot continue once Head reports
+    /// another account, device or broker (or voice switched off): end it,
+    /// keeping whatever was already transcribed.
+    private func abandonRecordingForIdentityChange() {
+        guard isBusy else { return }
+        KLog.d("🎙️ [voice] stage=identity-changed busy=1")
+        let recoveredText = rawText
+        let handler = finalHandler
+        let completion = completionHandler
+        let owner = activeSessionID
+        recordingCleanup(clearHandlers: true)
+        failedSessionID = owner
+        state = .failed(
+            VoiceInputError.gateway("Voice input was reset for this account. Please try again.")
+                .localizedDescription
+        )
+        completion?(VoiceInputCompletion(text: recoveredText, rawText: recoveredText, completed: false))
+        if !recoveredText.isEmpty { handler?(recoveredText) }
     }
 
     /// Returns false when Head is not reachable yet (Head auth calls prepare).
@@ -760,9 +781,9 @@ final class KrakiVoiceInputController {
         let leaseDayChanged = reason.localizedCaseInsensitiveContains("wrong_day")
         let leaseRejected = Self.isLeaseRejection(reason) || leaseDayChanged
         if quotaExhausted, recoverFromExhaustedLease() { return }
-        // A lease kept from an earlier launch turned out to be dead while the
-        // user was already speaking: keep the recording, fetch a new lease.
-        if leaseRejected, !isConnectionWarm, state == .recording, recoverFromExhaustedLease() { return }
+        // A kept lease rejected while buffered speech was waiting for
+        // authorization: that audio is gone with the socket, so fail visibly
+        // (below) rather than continue with the beginning silently missing.
 
         let requiresFreshLease = quotaExhausted || leaseRejected
         closeConnection(keepLease: !requiresFreshLease)

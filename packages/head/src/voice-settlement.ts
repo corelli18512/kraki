@@ -61,6 +61,9 @@ export function handleVoiceSettlement(
     if (result.status === 'expired') return { status: 409, body: { error: 'lease_expired' } };
     if (result.status === 'revoked') return { status: 409, body: { error: 'lease_revoked' } };
     if (result.status === 'quota_exhausted') return { status: 409, body: { error: 'quota_exhausted' } };
+    if (result.status === 'grants_required') {
+      return { status: 409, body: { error: 'broker_upgrade_required' } };
+    }
     return {
       status: 200,
       body: {

@@ -273,6 +273,80 @@ describe('Storage voice_leases', () => {
     expect(storage.voiceSecondsAccountedToday('u1', t + 20)).toBe(20);
   });
 
+  it('review: a grant just before the overrun limit stays reserved (no double spend)', () => {
+    storage.upsertUser('u1', 'a');
+    const t = T('2026-06-15T10:00:00Z');
+    record('a', 'd1', t, 3600);
+    record('b', 'd2', t, 3600);
+    activate('a', t + 1, 120);
+    const boundary = t + 3600 + VOICE_EXPIRY_OVERRUN_SEC;
+    expect(report('a', 60, boundary - 1, 'checkpoint', 120).quotaSeconds).toBe(120);
+    // Past the boundary A still holds its last grant: B must not get it too.
+    expect(storage.activateVoiceLease({ jti: 'b', activationId: 'act-b', activatedAtUnixSec: boundary + 1, dailyCapSec: 120, grants: true }).status)
+      .toBe('expired');
+    record('b2', 'd2', boundary + 1, 3600);
+    expect(activate('b2', boundary + 2, 120)).toEqual({ status: 'quota_exhausted', reportedAudioSeconds: 0 });
+  });
+
+  it('review: a stale checkpoint after close neither reopens nor re-reserves', () => {
+    storage.upsertUser('u1', 'a');
+    const t = T('2026-06-15T10:00:00Z');
+    record('a', 'd1', t);
+    activate('a', t + 1);
+    report('a', 15, t + 20, 'checkpoint');
+    report('a', 15, t + 30, 'client_closed');
+    expect(storage.voiceSecondsAccountedToday('u1', t + 31)).toBe(15);
+    const late = report('a', 0, t + 32, 'checkpoint');
+    expect(late.quotaSeconds).toBe(15);
+    expect(storage.getVoiceLease('a')?.closedAt).not.toBeNull();
+    expect(storage.voiceSecondsAccountedToday('u1', t + 33)).toBe(15);
+  });
+
+  it('review: late usage from a replaced activation is charged exactly once', () => {
+    storage.upsertUser('u1', 'a');
+    const t = T('2026-06-15T10:00:00Z');
+    record('a', 'd1', t);
+    activate('a', t + 1);
+    report('a', 15, t + 16);
+    // Reconnect on another broker process: the new owner resumes from 15.
+    expect(storage.activateVoiceLease({ jti: 'a', activationId: 'act-a2', activatedAtUnixSec: t + 20, dailyCapSec: 7200, grants: true }))
+      .toMatchObject({ status: 'replaced', reportedAudioSeconds: 15 });
+    // The old one had accepted 14 s more before it noticed.
+    expect(report('a', 29, t + 21, 'client_closed').status).toBe('conflict');
+    expect(report('a', 29, t + 22, 'client_closed').status).toBe('conflict');
+    storage.settleVoiceLease({ jti: 'a', activationId: 'act-a2', audioSeconds: 20, reason: 'client_closed', settledAtUnixSec: t + 40, dailyCapSec: 7200, grants: true });
+    expect(storage.voiceSecondsAccountedToday('u1', t + 41)).toBe(34);
+  });
+
+  it('review: a broker without grants cannot activate a day-scale lease', () => {
+    storage.upsertUser('u1', 'a');
+    const t = T('2026-06-15T10:00:00Z');
+    record('big', 'd1', t);
+    expect(storage.activateVoiceLease({ jti: 'big', activationId: 'x', activatedAtUnixSec: t, dailyCapSec: 7200 }))
+      .toEqual({ status: 'grants_required', reportedAudioSeconds: 0 });
+  });
+
+  it('review: migration keeps reserving a lease whose successor never connected', () => {
+    const dir = mkTmpLeaseDir();
+    const dbPath = join(dir, 'v11-pending.db');
+    const now = Math.floor(Date.now() / 1000);
+    const v11 = new Storage(dbPath);
+    v11.upsertUser('u1', 'a');
+    v11.recordVoiceLease({ jti: 'live', userId: 'u1', deviceId: 'd', resource: 'voice/doubao', quotaSeconds: 300, issuedAtUnixSec: now - 100, expiresAtUnixSec: now + 86_000 });
+    v11.activateVoiceLease({ jti: 'live', activationId: 'act-live', activatedAtUnixSec: now - 90 });
+    v11.recordVoiceLease({ jti: 'pending', userId: 'u1', deviceId: 'd', resource: 'voice/doubao', quotaSeconds: 300, issuedAtUnixSec: now - 10, expiresAtUnixSec: now + 86_000 });
+    v11.rawDb.exec(`UPDATE voice_leases SET closed_at = NULL, allowed_seconds = NULL; DROP TABLE voice_usage_daily; DROP TABLE voice_activations; PRAGMA user_version = 11;`);
+    v11.close();
+    const migrated = new Storage(dbPath);
+    try {
+      expect(migrated.getVoiceLease('live')?.closedAt).toBeNull();
+      expect(migrated.voiceSecondsAccountedToday('u1', now)).toBe(300);
+    } finally {
+      migrated.close();
+      rm(dir);
+    }
+  });
+
   it('legacy brokers (no grants) get all that is left today at activation', () => {
     storage.upsertUser('u1', 'a');
     const t = T('2026-06-15T10:00:00Z');
@@ -311,6 +385,7 @@ describe('Storage voice_leases', () => {
     v11.rawDb.exec(`
       UPDATE voice_leases SET closed_at = NULL, allowed_seconds = NULL;
       DROP TABLE voice_usage_daily;
+      DROP TABLE voice_activations;
       PRAGMA user_version = 11;
     `);
     v11.close();
