@@ -16,6 +16,7 @@ struct SessionPreviewStatusGlyph: View {
     private var color: Color {
         switch kind {
         case .delivery(.failed): return .red
+        case .delivery(.unconfirmed): return .orange
         case .delivery(.queued): return .textMuted
         default: return .krakiPrimary
         }
