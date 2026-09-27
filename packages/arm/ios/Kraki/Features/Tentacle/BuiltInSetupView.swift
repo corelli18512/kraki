@@ -132,8 +132,9 @@ struct BuiltInSetupView: View {
         switch runner.phase {
         case .idle, .failed:
             StepCard(
-                title: "Set up this Mac",
-                detail: "Sign in with GitHub to connect this Mac to your Kraki relay. Your coding agents here become available on your phone and other devices."
+                step: "Step 1 of 2",
+                title: "Sign in",
+                detail: "Sign in with GitHub. The coding agents on this Mac become available here, on your phone and on your other computers."
             ) {
                 VStack(spacing: 10) {
                     Button {
@@ -157,6 +158,7 @@ struct BuiltInSetupView: View {
             ProgressView("Contacting GitHub…").controlSize(.small)
         case .waitingForGitHub(let code, _):
             StepCard(
+                step: "Step 1 of 2",
                 title: "Enter this code on GitHub",
                 detail: "The code is copied and GitHub is open in your browser. Paste it there and approve Kraki."
             ) {
@@ -218,6 +220,7 @@ struct BuiltInSetupView: View {
 
     private var fullDiskAccess: some View {
         StepCard(
+            step: "Step 2 of 2",
             title: "Allow Full Disk Access",
             detail: "Your agents read and edit files across your projects. Give Kraki Full Disk Access once, and macOS won't interrupt them with permission prompts again."
         ) {
@@ -245,6 +248,7 @@ struct BuiltInSetupView: View {
 }
 
 private struct StepCard<Actions: View>: View {
+    var step: String? = nil
     let title: String
     let detail: String
     @ViewBuilder let actions: () -> Actions
@@ -252,6 +256,12 @@ private struct StepCard<Actions: View>: View {
     var body: some View {
         VStack(spacing: 14) {
             VStack(spacing: 7) {
+                if let step {
+                    Text(step.uppercased())
+                        .font(.system(size: 10, weight: .semibold))
+                        .tracking(0.8)
+                        .foregroundStyle(Color.krakiPrimary)
+                }
                 Text(title)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Color.textPrimary)

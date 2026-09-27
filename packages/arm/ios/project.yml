@@ -289,6 +289,7 @@ targets:
       # macOS chat surface will be rewritten against the pure-spine model.
       - path: Kraki/Features/Sessions/SessionsSidebarView+macOS.swift
       - path: Kraki/Features/Sessions/NewSessionSheet+macOS.swift
+      - path: Kraki/Features/Sessions/NoAgentsGuide.swift
       - path: Kraki/Features/Sessions/SessionCardView.swift
       - path: Kraki/Features/Sessions/ActivityRow.swift
       - path: Kraki/Features/Auth/ConnectionStatusChip.swift

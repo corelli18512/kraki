@@ -690,12 +690,11 @@ jobs:
           # Opening it from Downloads instead would run it translocated, and a
           # background service registered from there breaks at the next reboot.
           APP="$RUNNER_TEMP/KrakiMac.xcarchive/Products/Applications/Kraki.app"
-          SRC="$RUNNER_TEMP/dmg-src"
-          rm -rf "$SRC" && mkdir -p "$SRC"
-          ditto "$APP" "$SRC/Kraki.app"
-          ln -s /Applications "$SRC/Applications"
           DMG="$RUNNER_TEMP/Kraki.dmg"
-          hdiutil create -volname "Kraki" -srcfolder "$SRC" -fs HFS+ -format UDZO -ov "$DMG"
+          python3 -m venv "$RUNNER_TEMP/dmgbuild-venv"
+          "$RUNNER_TEMP/dmgbuild-venv/bin/pip" install --quiet "dmgbuild==1.6.7"
+          export PATH="$RUNNER_TEMP/dmgbuild-venv/bin:$PATH"
+          scripts/mac/build-dmg.sh "$APP" "$DMG"
           codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$DMG"
           if [ "$NOTARIZE" = "1" ]; then
             xcrun notarytool submit "$DMG" \

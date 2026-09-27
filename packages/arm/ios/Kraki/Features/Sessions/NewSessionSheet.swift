@@ -210,10 +210,18 @@ struct NewSessionSheet: View {
             Divider().padding(.leading, 16)
 
             if agentsList.isEmpty {
-                HStack {
-                    Text("Agent").foregroundStyle(Color.primary)
-                    Spacer()
-                    Text("Waiting…").foregroundStyle(.tertiary)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Agent").foregroundStyle(Color.primary)
+                        Spacer()
+                        Text(agentStatusText).foregroundStyle(.tertiary)
+                    }
+                    if deviceStore.agentAvailability(for: selectedDeviceId) == .noAgents {
+                        Text("Install Claude Code, Codex, GitHub Copilot CLI or pi on that computer and sign in, then restart Kraki there.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
@@ -235,6 +243,14 @@ struct NewSessionSheet: View {
             .padding(.vertical, 14)
         }
         .modifier(GlassCardModifier())
+    }
+
+    private var agentStatusText: String {
+        switch deviceStore.agentAvailability(for: selectedDeviceId) {
+        case .ready, .connecting: return "Connecting…"
+        case .offline: return "Device offline"
+        case .noAgents: return "None installed"
+        }
     }
 
     private func rowButton(label: String, value: String, action: @escaping () -> Void) -> some View {

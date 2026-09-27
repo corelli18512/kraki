@@ -169,7 +169,7 @@ struct TentaclePane: View {
             }
         case .running(let pid):
             HStack {
-                Label("Running (pid \(pid))", systemImage: "circle.fill")
+                Label("Running (pid \(String(pid)))", systemImage: "circle.fill")
                     .foregroundStyle(Color(hex: 0x34D399))
                 Spacer()
                 Button("Stop") { Task { await tentacleCLI.stopDaemon() } }
