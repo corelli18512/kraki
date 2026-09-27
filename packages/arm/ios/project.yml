@@ -66,6 +66,9 @@ schemes:
       config: Debug
       targets:
         - KrakiTests
+      environmentVariables:
+        KRAKI_TEST_ISOLATION: "1"
+        KRAKI_RUN_PERF_TESTS: "$(KRAKI_RUN_PERF_TESTS)"
   KrakiUITests:
     build:
       targets:
@@ -100,9 +103,9 @@ schemes:
       targets:
         - KrakiMacTests
       environmentVariables:
-        # Host app stays on the offline scenario page: no CLI login, no Relay,
-        # no Tentacle daemon polling; data lives in a throwaway directory.
-        KRAKI_MAC_CHAT_SCENARIO_PAGE: "1"
+        # Empty isolated host; tests create their own offline windows/databases.
+        KRAKI_TEST_ISOLATION: "1"
+        KRAKI_RUN_PERF_TESTS: "$(KRAKI_RUN_PERF_TESTS)"
         KRAKI_DATA_DIR: /tmp/kraki-mac-tests-data
 
 targets:

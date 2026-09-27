@@ -304,7 +304,9 @@ struct MacApp: App {
             || environment["KRAKI_MAC_CHAT_PERF_PAGE"] == "1"
             || environment["KRAKI_MAC_CHAT_SCENARIO_PAGE"] == "1"
         let state: AppState
-        if isolatedChatTest {
+        if NativeTestRuntime.isRunningTests {
+            state = AppState.makeUnitTestHost()
+        } else if isolatedChatTest {
             // These pages must never construct the production graph first:
             // AppState() initializes the real device identity and Keychain
             // before the page can opt out of networking. Open only the
@@ -359,7 +361,9 @@ struct MacApp: App {
         Window("Kraki", id: "main") {
             Group {
                 #if DEBUG
-                if ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_SCENARIO_PAGE"] == "1" {
+                if NativeTestRuntime.isRunningTests {
+                    Color.clear
+                } else if ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_SCENARIO_PAGE"] == "1" {
                     MacChatScenarioTestView()
                 } else if ProcessInfo.processInfo.environment["KRAKI_MAC_CHAT_PERF_PAGE"] == "1" {
                     MacChatPerfTestView()
@@ -460,6 +464,7 @@ struct MacApp: App {
                 }
                 .task {
                     #if DEBUG
+                    guard !NativeTestRuntime.isRunningTests else { return }
                     MacAutomationDriver.shared.start(appState: appState)
                     #endif
                     let environment = ProcessInfo.processInfo.environment

@@ -85,11 +85,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Validate repository
-        run: pnpm validate
-
-      - name: Build web app
-        run: pnpm --filter @kraki/arm-web build
+      - name: Build and test web scope
+        run: |
+          pnpm --filter @kraki/arm-web... build
+          pnpm --filter @kraki/arm-web test
 
       - name: Configure SSH
         env:
@@ -159,11 +158,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Validate repository
-        run: pnpm validate
-
-      - name: Build web app
-        run: pnpm --filter @kraki/arm-web build
+      - name: Build and test web scope
+        run: |
+          pnpm --filter @kraki/arm-web... build
+          pnpm --filter @kraki/arm-web test
 
       - name: Configure SSH
         env:

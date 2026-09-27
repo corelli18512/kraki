@@ -106,9 +106,12 @@ git clone https://github.com/corelli18512/kraki.git
 cd kraki
 pnpm install
 
-# Validate the repo
+# Full TypeScript regression (not necessary after every edit)
 pnpm validate
 ```
+
+Prefer focused checks for the changed component. See [test scope and device safety](./docs/testing.md)
+for isolated native tests and explicitly opt-in performance/hardware acceptance.
 
 ### Run the pieces individually
 

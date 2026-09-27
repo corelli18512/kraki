@@ -129,6 +129,39 @@ private final class SuspendedVoiceAudioPolicy: VoiceInputAudioPolicy {
 
 @MainActor
 final class KrakiVoiceInputTests: XCTestCase {
+    func testRoutineTestHostCannotRequestLiveMicrophone() async {
+        XCTAssertTrue(NativeTestRuntime.isRunningTests)
+        XCTAssertFalse(NativeTestRuntime.allowsLiveAudio)
+        let policy = LiveVoiceInputAudioPolicy()
+        XCTAssertEqual(policy.permission, .denied)
+        XCTAssertFalse(policy.hasInputDevice)
+        let granted = await policy.requestPermission()
+        XCTAssertFalse(granted)
+        XCTAssertFalse(policy.activate())
+        policy.deactivate()
+    }
+
+    func testDefaultUIFixtureVoiceDoesNotRequestLeaseOrRecord() async {
+        let host = FakeVoiceHost()
+        let controller = KrakiVoiceInputController.isolatedForTesting()
+        controller.bind(host: host)
+        controller.prepare()
+        XCTAssertTrue(host.requestedResources.isEmpty)
+        await controller.begin(sessionID: "session-1", context: context()) { _ in
+            XCTFail("An isolated UI fixture must not record")
+        }
+        XCTAssertTrue(controller.hasFailure(for: "session-1"))
+        XCTAssertFalse(controller.isConnectionWarm)
+        XCTAssertTrue(host.requestedResources.isEmpty)
+    }
+
+    func testUnitTestHostHasNoProductionNetworkGraph() {
+        let app = AppState.makeUnitTestHost()
+        XCTAssertNil(app.wsClient)
+        XCTAssertNil(app.authManager)
+        XCTAssertTrue(app.sessionStore.sessions.isEmpty)
+    }
+
     private func lease(
         expiryOffset: Int = 600,
         jti: String = "lease-1",
