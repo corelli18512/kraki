@@ -422,10 +422,12 @@ function cmdStatus(jsonOutput = false): void {
   console.log(chalk.bold(`${chalk.hex('#ea6046')('◈')} Kraki Status`));
   console.log('');
 
+  const managedBy = loadManagedBy();
+  const owner = managedBy ? ', managed by Kraki for Mac' : '';
   if (status.running) {
-    console.log(`  Status:  ${chalk.green('running')} (PID ${status.pid})`);
+    console.log(`  Status:  ${chalk.green('running')} (PID ${status.pid}${owner})`);
   } else {
-    console.log(`  Status:  ${chalk.yellow('stopped')}`);
+    console.log(`  Status:  ${chalk.yellow('stopped')}${owner}`);
   }
 
   if (config) {

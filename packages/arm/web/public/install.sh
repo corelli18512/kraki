@@ -160,8 +160,7 @@ ensure_path_configured() {
   case ":$PATH:" in
     *":${INSTALL_DIR}:"*) ;;
     *)
-      echo "  ⚠  Add to PATH:  export PATH=\"\$PATH:${INSTALL_DIR}\""
-      # Try to add to shell profile automatically
+      # Add to the shell profile automatically; only ask the user when that fails.
       SHELL_NAME=$(basename "${SHELL:-/bin/sh}")
       PROFILE=""
       case "$SHELL_NAME" in
@@ -175,8 +174,10 @@ ensure_path_configured() {
       if [ -n "$PROFILE" ] && [ -f "$PROFILE" ]; then
         if ! grep -q "${INSTALL_DIR}" "$PROFILE" 2>/dev/null; then
           printf '\nexport PATH="%s:$PATH"\n' "$INSTALL_DIR" >> "$PROFILE"
-          echo "  Added to ${PROFILE} (restart your shell or run: source ${PROFILE})"
         fi
+        echo "  Added ${INSTALL_DIR} to PATH in ${PROFILE}. Open a new Terminal window to use kraki."
+      else
+        echo "  ⚠  Add to PATH:  export PATH=\"\$PATH:${INSTALL_DIR}\""
       fi
       ;;
   esac
