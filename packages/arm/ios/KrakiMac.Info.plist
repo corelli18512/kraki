@@ -32,25 +32,30 @@
 	<string>public.app-category.developer-tools</string>
 	<key>LSUIElement</key>
 	<false/>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Kraki uses the microphone to transcribe voice input into the current Session draft.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>NSHumanReadableCopyright</key>
 	<string>(c) 2026 Kraki</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Kraki uses the microphone to transcribe voice input into the current Session draft.</string>
 	<key>SUAllowsAutomaticUpdates</key>
-	<true/>
-	<key>SURequireSignedFeed</key>
-	<true/>
-	<key>SUVerifyUpdateBeforeExtraction</key>
 	<true/>
 	<key>SUAutomaticallyUpdate</key>
 	<false/>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/corelli18512/kraki/mac-updates/appcast.xml</string>
+	<string>http://192.168.64.1:8765/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>A4kuMcvwBiRpyam3qYJpXd5rncSLIk1Aflgyl7vD1jQ=</string>
+	<string>acuNHB0nr1lgRKmPDDJqfGjwisJjMslyZqAIGdmmNME=</string>
+	<key>SURequireSignedFeed</key>
+	<true/>
 	<key>SUScheduledCheckInterval</key>
 	<real>86400</real>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 </dict>
 </plist>

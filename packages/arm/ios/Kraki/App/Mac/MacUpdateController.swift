@@ -11,7 +11,7 @@ import Sparkle
 @MainActor
 final class MacUpdateController: NSObject, SPUUpdaterDelegate {
     static let productionBundleIdentifier = "chat.kraki.mac"
-    static let productionFeedURL = "https://raw.githubusercontent.com/corelli18512/kraki/mac-updates/appcast.xml"
+    static let productionFeedURL = "http://192.168.64.1:8765/appcast.xml"
 
     private(set) lazy var controller: SPUStandardUpdaterController = {
         SPUStandardUpdaterController(
