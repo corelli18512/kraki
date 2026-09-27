@@ -218,7 +218,9 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
                 isCompacting: {
                     if case .compacting = appState.messageStore.runtimeStatus(session.id) { return true }
                     return false
-                }()
+                }(),
+                pendingInputs: appState.commandSender?.pendingInputs(session.id) ?? [],
+                isDeliveryOnline: appState.isFullyOnline
             )
             nextFingerprints[session.id] = fp
             if sessionFingerprints[session.id] != fp {
@@ -269,12 +271,14 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     /// renders. If two snapshots produce the same fingerprint, the
     /// cell content can't have visibly changed and there's no need
     /// to reconfigure.
-    private static func fingerprint(
+    static func fingerprint(
         for session: SessionInfo,
         store: SessionStore,
         device: DeviceSummary?,
         isAwaitingGreeting: Bool,
-        isCompacting: Bool
+        isCompacting: Bool,
+        pendingInputs: [ChatMessage] = [],
+        isDeliveryOnline: Bool = true
     ) -> Int {
         var hasher = Hasher()
         let projection = SessionCardProjection.make(
@@ -282,7 +286,9 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
             device: device,
             preview: store.sessionPreviews[session.id],
             draft: store.drafts[session.id],
-            isCompacting: isCompacting
+            isCompacting: isCompacting,
+            pendingInputs: pendingInputs,
+            isDeliveryOnline: isDeliveryOnline
         )
         hasher.combine(session.id)
         hasher.combine(session.pinned)

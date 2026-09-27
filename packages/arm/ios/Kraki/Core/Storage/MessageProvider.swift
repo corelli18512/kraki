@@ -712,6 +712,7 @@ final class MessageProvider {
 
         if !messages.isEmpty {
             appState.messageStore.ingestBatch(sessionId, messages)
+            appState.commandSender?.confirmPendingInputs(sessionId, messages: messages)
             KLog.d("📥 [2/history←DB ingestBatch] session=\(sessionId.prefix(12)) batchSize=\(messages.count) windowSize=\(appState.messageStore.currentWindow(sessionId).count)")
         }
 
@@ -837,6 +838,9 @@ final class MessageProvider {
         // belonged in the store anyway and would just clog the buffer.
         let persistent = messages.filter(MessageStore.isPersistent)
         guard !persistent.isEmpty else { return }
+        // Confirmation is independent of gap buffering/dedup. A server replay
+        // with the matching clientId proves acceptance even if already cached.
+        appState?.commandSender?.confirmPendingInputs(sessionId, messages: persistent)
 
         var buf = pendingTail[sessionId] ?? PendingTailBuffer()
         let didOverflow = buf.insertAll(persistent)

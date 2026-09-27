@@ -259,6 +259,18 @@ final class MessageDatabase {
 
     // MARK: - Read
 
+    /// Startup-only outbox reconciliation. No history scan on the list's render
+    /// path: only restored pending inputs need this check against the disk cache.
+    func hasConfirmedInput(_ sessionId: String, clientId: String) -> Bool {
+        (try? dbPool.read { db in
+            try Bool.fetchOne(db, sql: """
+                SELECT EXISTS(SELECT 1 FROM messages
+                WHERE session_id = ? AND type = 'user_message' AND seq > 0
+                  AND json_extract(CAST(payload AS TEXT), '$.payload.clientId') = ?)
+                """, arguments: [sessionId, clientId]) ?? false
+        }) ?? false
+    }
+
     /// Messages in the inclusive seq range `[from, to]`, sorted
     /// ascending. Returns the empty array if nothing matches.
     func messages(_ sessionId: String, from: Int, to: Int) -> [ChatMessage] {
