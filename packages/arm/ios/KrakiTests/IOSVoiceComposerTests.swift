@@ -1,7 +1,10 @@
-#if os(iOS)
 import XCTest
 import VoiceInputCore
+#if os(iOS)
 @testable import Kraki
+#else
+@testable import Kraki_Dev
+#endif
 
 private final class VoiceAudio: VoiceInputAudioPolicy {
     var permission: VoiceMicrophonePermission = .granted
@@ -490,4 +493,3 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
         XCTAssertEqual(insert("", "keep").0, "keep")
     }
 }
-#endif

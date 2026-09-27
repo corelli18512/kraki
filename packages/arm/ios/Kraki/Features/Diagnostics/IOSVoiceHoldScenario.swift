@@ -1,4 +1,4 @@
-#if os(iOS) && DEBUG
+#if DEBUG
 import SwiftUI
 import VoiceInputCore
 
@@ -45,6 +45,8 @@ import VoiceInputCore
     var starts = 0
     var aborts = 0
     var lastAnswerTo = ""
+    @ObservationIgnored private var latestEvent: ((VoiceInputEvent) -> Void)?
+    func emitLevel(_ level: Float) { latestEvent?(.level(level)) }
     @ObservationIgnored lazy var voice = KrakiVoiceInputController(host: self, sessionFactory: self, audioPolicy: ScenarioAudio())
     func requestVoiceLease(resource: String) -> Bool {
         Task { @MainActor [weak self] in
@@ -56,6 +58,7 @@ import VoiceInputCore
         return true
     }
     func makeSession(configuration: VoiceInputConfiguration, onEvent: @escaping (VoiceInputEvent) -> Void, onMetric: @escaping (VoiceInputMetric) -> Void) -> VoiceInputSessionProtocol {
+        latestEvent = onEvent
         let session = ScenarioSession(onEvent: onEvent, onStart: { [weak self] in self?.starts += 1 })
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(40))
@@ -84,6 +87,10 @@ import VoiceInputCore
                 try? await Task.sleep(for: .milliseconds(100))
                 guard let self, self.generation == id else { return }
                 self.onEvent(.partial("请把这个功能接入 Kraki 保留原来的输入框"))
+                // Deterministic peaks for the shared native level meter.
+                for level: Float in [0.01, 0.03, 0.08, 0.2, 0.12, 0.06, 0.025, 0.01] {
+                    self.onEvent(.level(level))
+                }
             }
         }
         func stopCapture() {
@@ -102,6 +109,7 @@ import VoiceInputCore
     }
 }
 
+#if os(iOS)
 struct IOSVoiceHoldScenarioView: View {
     @Environment(AppState.self) private var app
     @Environment(\.colorScheme) private var colorScheme
@@ -169,4 +177,5 @@ struct IOSVoiceHoldScenarioView: View {
         }
     }
 }
+#endif
 #endif

@@ -60,10 +60,10 @@ struct MacChatComposer: View {
     @State private var imageAttachError: String?
     @State private var awaitingActive = false
     @State private var abortPending = false
-    @State private var voiceStartTask: Task<Void, Never>?
     @State private var composerFocusRequest = 0
     @State private var isFocused = false
     @State private var nativeEditorHasText = false
+    @State private var selection: NSRange?
 
     init(
         sessionId: String,
@@ -111,11 +111,16 @@ struct MacChatComposer: View {
     }
     private var hasImage: Bool { imageData != nil }
     private var voiceController: KrakiVoiceInputController { appState.voiceInputController }
-    private var voiceOwnsComposer: Bool {
-        voiceController.isBusy && voiceController.activeSessionID == sessionId
+    private var voiceComposer: IOSVoiceComposer { appState.iosVoiceComposer }
+    private var voiceOwnsComposer: Bool { voiceComposer.isRecording(in: sessionId) }
+    private var voiceSendPending: Bool {
+        guard voiceComposer.sessionID == sessionId, let phase = voiceComposer.operation?.phase,
+              case .staged = phase else { return false }
+        return true
     }
     private var canSend: Bool {
-        !voiceOwnsComposer && (isStructuredResponse ? hasText : (hasText || hasImage))
+        if voiceOwnsComposer { return true }
+        return !voiceSendPending && (isStructuredResponse ? hasText : (hasText || hasImage))
     }
     private var canShowVoice: Bool {
         VoiceComposerAccessPolicy.isVisible(
@@ -134,7 +139,7 @@ struct MacChatComposer: View {
     }
 
     /// Agent running and nothing typed: the primary control stops the turn.
-    private var showsStop: Bool { canShowAbort && !hasText && !hasImage }
+    private var showsStop: Bool { !voiceOwnsComposer && canShowAbort && !hasText && !hasImage }
 
     private var isDeviceReachable: Bool {
         guard let deviceId = session?.deviceId,
@@ -170,7 +175,7 @@ struct MacChatComposer: View {
             .task(id: sessionId) {
                 if let activeVoiceSession = voiceController.activeSessionID,
                    activeVoiceSession != sessionId {
-                    voiceController.finishForSessionDeparture(activeVoiceSession)
+                    voiceComposer.depart(sessionID: activeVoiceSession)
                 }
                 // Session selection should land ready to type, but never steal
                 // focus from another application during a background restart or
@@ -189,15 +194,24 @@ struct MacChatComposer: View {
                 }
             }
             .onDisappear {
-                voiceStartTask?.cancel()
-                voiceStartTask = nil
-                voiceController.finishForSessionDeparture(sessionId)
+                voiceComposer.depart(sessionID: sessionId)
             }
             .onChange(of: voiceOwnsComposer) { wasOwned, ownsComposer in
                 guard wasOwned, !ownsComposer else { return }
                 if NSApp.isActive, NSApp.keyWindow?.isKeyWindow == true {
                     isFocused = true
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .krakiVoiceEditRequested)) { note in
+                guard note.userInfo?["sessionId"] as? String == sessionId,
+                      let clientID = note.userInfo?["clientId"] as? String else { return }
+                editStagedVoice(clientID)
+            }
+            .onChange(of: voiceComposer.dispatchSignal) { _, _ in
+                if voiceComposer.dispatchedSessionID == sessionId { awaitingActive = true }
+            }
+            .onChange(of: voiceComposer.editorRequest) { _, _ in
+                if voiceComposer.editorSessionID == sessionId { requestComposerFocus() }
             }
             .background {
                 MacComposerVoiceKeyProbe(
@@ -206,7 +220,7 @@ struct MacChatComposer: View {
                     onToggle: handleVoiceButton,
                     onCancel: {
                         if voiceController.activeSessionID == sessionId {
-                            voiceController.cancel()
+                            voiceComposer.cancel()
                             if NSApp.isActive, NSApp.keyWindow?.isKeyWindow == true {
                                 isFocused = true
                             }
@@ -260,11 +274,15 @@ struct MacChatComposer: View {
     private var inputBox: some View {
         Group {
             if voiceOwnsComposer {
-                MacComposerVoiceSurface(
-                    controller: voiceController,
-                    draftPrefix: text,
-                    onFinish: { voiceController.finish() }
-                )
+                HStack(spacing: 0) {
+                    imageSlot
+                    MacComposerVoiceSurface(
+                        controller: voiceController,
+                        preview: voiceComposer.preview,
+                        onFinish: { voiceComposer.finishToDraft() },
+                        onCancel: { voiceComposer.cancel() }
+                    )
+                }
             } else {
                 HStack(alignment: .center, spacing: 0) {
                     imageSlot
@@ -314,7 +332,11 @@ struct MacChatComposer: View {
             MacComposerScrollableTextInput(
                 text: Binding(
                     get: { text },
-                    set: { sessionStore.setDraft(sessionId, $0) }
+                    set: {
+                        guard $0 != text else { return }
+                        voiceComposer.takeOver(sessionID: sessionId)
+                        sessionStore.setDraft(sessionId, $0)
+                    }
                 ),
                 focused: Binding(
                     get: { isFocused },
@@ -323,8 +345,11 @@ struct MacChatComposer: View {
                 nativeEditorHasText: $nativeEditorHasText,
                 enabled: !voiceOwnsComposer,
                 focusRequest: composerFocusRequest,
+                selectionRequest: voiceComposer.editorSessionID == sessionId ? voiceComposer.selectionRequest : nil,
                 onRequestFocus: requestComposerFocus,
-                onSubmit: handleModeSubmit
+                onSubmit: handleModeSubmit,
+                onSelection: { selection = $0 },
+                onTakeOver: { voiceComposer.takeOver(sessionID: sessionId) }
             )
             .padding(.leading, 0)
             .padding(.trailing, 4)
@@ -348,6 +373,7 @@ struct MacChatComposer: View {
 
     private var primaryGlyph: String {
         if primaryRole == .stop { return "stop.fill" }
+        if voiceOwnsComposer && pendingPermission != nil { return "checkmark" }
         return submissionIntent == .steer ? "arrow.turn.right.up" : "arrow.up"
     }
 
@@ -365,7 +391,7 @@ struct MacChatComposer: View {
         return Button(action: role == .stop ? requestAbort : handleModeSubmit) {
             ZStack {
                 MacPrimaryGlassCircle(tint: active ? fill : nil, fallback: fill)
-                ForEach(["arrow.up", "arrow.turn.right.up", "stop.fill"], id: \.self) { name in
+                ForEach(["arrow.up", "arrow.turn.right.up", "stop.fill", "checkmark"], id: \.self) { name in
                     Image(systemName: name)
                         .font(.system(size: name == "stop.fill" ? 11 : 15, weight: .bold))
                         .foregroundStyle(active ? Color.white : Color.secondary)
@@ -384,7 +410,8 @@ struct MacChatComposer: View {
         .buttonStyle(.plain)
         .disabled(role == .stop ? (abortPending || !isDeviceReachable) : !canSend)
         .opacity(role == .stop ? (isDeviceReachable ? 1 : 0.5) : (canSend && !isDeviceReachable ? 0.6 : 1))
-        .accessibilityLabel(role == .stop ? "Stop agent" : sendAccessibilityLabel)
+        .accessibilityLabel(voiceOwnsComposer ? (pendingPermission != nil ? "Edit voice text" : (pendingQuestion != nil ? "Submit voice answer" : "Send voice message")) : (role == .stop ? "Stop agent" : sendAccessibilityLabel))
+        .accessibilityIdentifier(voiceOwnsComposer ? "voice-send" : "chat-primary")
         .accessibilityHint(role == .stop ? "Aborts the current agent turn" : sendAccessibilityHint)
     }
 
@@ -424,16 +451,21 @@ struct MacChatComposer: View {
 
     private var inlineVoiceButton: some View {
         Button(action: handleVoiceButton) {
-            Image(systemName: "mic")
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 32, height: Self.inputBoxHeight)
-                .contentShape(Rectangle())
+            ZStack {
+                Image(systemName: "mic")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .opacity(voiceComposer.isFinishing(in: sessionId) ? 0 : 1)
+                if voiceComposer.isFinishing(in: sessionId) { ProgressView().controlSize(.small) }
+            }
+            .frame(width: 32, height: Self.inputBoxHeight)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!canStartVoice)
-        .opacity(canStartVoice ? 1 : 0.4)
+        .opacity(canStartVoice || voiceComposer.isFinishing(in: sessionId) ? 1 : 0.4)
         .accessibilityLabel("Start voice input")
+        .accessibilityIdentifier("chat-voice-microphone")
         .accessibilityHint("Click or press Option-Space to dictate into this draft")
     }
 
@@ -469,8 +501,8 @@ struct MacChatComposer: View {
     }
 
     private func handleVoiceButton() {
-        if voiceController.activeSessionID == sessionId {
-            if voiceController.isRecording { voiceController.finish() }
+        if voiceOwnsComposer {
+            voiceComposer.finishToDraft()
             return
         }
         guard canStartVoice, let session else { return }
@@ -481,16 +513,7 @@ struct MacChatComposer: View {
             session: session,
             recentMessages: appState.messageStore.recentFromDB(sessionId, limit: 20)
         )
-        let commitDraft = sessionStore.voiceDraftCommitHandler(for: sessionId)
-        voiceStartTask = Task { @MainActor in
-            // Disappearance can precede this task's first actor turn.
-            guard !Task.isCancelled, sessionStore.activeSessionId == sessionId else { return }
-            await voiceController.begin(
-                sessionID: sessionId,
-                context: voiceContext,
-                onFinal: commitDraft
-            )
-        }
+        voiceComposer.begin(sessionID: sessionId, selection: selection, context: voiceContext)
     }
 
     private static func playVoiceStartCue() {
@@ -554,7 +577,44 @@ struct MacChatComposer: View {
         }
     }
 
+    private func editStagedVoice(_ clientID: String) {
+        guard let sender = appState.commandSender,
+              sender.isStaged(sessionId: sessionId, clientId: clientID),
+              let message = sender.pendingInputs(sessionId).first(where: { $0.payload["clientId"]?.stringValue == clientID }) else { return }
+        let attachments = message.attachments ?? []
+        // Never discard an image if the single-image composer already has
+        // another one, or cannot decode it. Keep the complete staged bubble.
+        guard attachments.count <= 1, attachments.isEmpty || imageData == nil else { NSSound.beep(); return }
+        if let attachment = attachments.first {
+            guard let data = Data(base64Encoded: attachment.data), let image = NSImage(data: data) else { NSSound.beep(); return }
+            imageData = data
+            previewImage = image
+            imageMimeType = attachment.mimeType
+        }
+        let original = sender.originalText(sessionId: sessionId, clientId: clientID) ?? ""
+        sender.discardPending(sessionId: sessionId, clientId: clientID)
+        sessionStore.setDraft(sessionId, VoiceDraftMerger.merge(existing: text, final: original))
+        requestComposerFocus()
+    }
+
     private func handleModeSubmit() {
+        if voiceOwnsComposer {
+            // Free-form answers use main's answerTo-aware staged outbox;
+            // only permission denial still requires review in the editor.
+            if pendingPermission != nil { voiceComposer.finishToDraft(); return }
+            let attachments = imageData.map {
+                [ImageAttachment(type: "image", mimeType: imageMimeType, data: $0.base64EncodedString())]
+            }
+            if voiceComposer.send(attachments: attachments, delivery: submissionIntent == .steer ? .steer : .prompt,
+                                  answerTo: pendingQuestion?.id) {
+                clearImage()
+                didSubmitFromComposer()
+                requestComposerFocus()
+            }
+            return
+        }
+        guard !voiceSendPending else { return }
+        voiceComposer.takeOver(sessionID: sessionId)
         switch submissionIntent {
         case .denyPermission:
             guard hasText, let permission = pendingPermission else { return }
@@ -573,9 +633,13 @@ struct MacChatComposer: View {
             guard appState.commandSender?.answer(
                 sessionId: sessionId,
                 questionId: question.id,
-                answer: answer
+                answer: answer,
+                attachments: imageData.map {
+                    [ImageAttachment(type: "image", mimeType: imageMimeType, data: $0.base64EncodedString())]
+                }
             ) == true else { NSSound.beep(); return }
             sessionStore.setDraft(sessionId, "")
+            clearImage()
             didSubmitFromComposer()
         case .prompt, .steer:
             handleSend()
@@ -748,8 +812,15 @@ struct MacChatComposer: View {
 private final class MacComposerTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onPasteCompleted: (() -> Void)?
+    var onTakeOver: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onTakeOver?()
+        super.mouseDown(with: event)
+    }
 
     override func keyDown(with event: NSEvent) {
+        onTakeOver?()
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if (event.keyCode == 36 || event.keyCode == 76),
            !flags.contains(.shift),
@@ -779,8 +850,11 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
     @Binding var nativeEditorHasText: Bool
     let enabled: Bool
     let focusRequest: Int
+    var selectionRequest: NSRange? = nil
     let onRequestFocus: () -> Void
     let onSubmit: () -> Void
+    let onSelection: (NSRange) -> Void
+    let onTakeOver: () -> Void
 
     private static let font = NSFont.systemFont(ofSize: 15)
     private static let lineHeight = ceil(NSLayoutManager().defaultLineHeight(for: font))
@@ -793,6 +867,7 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
         var isApplying = false
         var wasComposing = false
         var appliedFocusRequest = -1
+        var appliedSelectionRequest: NSRange?
 
         init(_ parent: MacComposerScrollableTextInput) {
             self.parent = parent
@@ -816,6 +891,12 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
             } else {
                 apply()
             }
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard !isApplying, let textView = notification.object as? MacComposerTextView,
+                  textView.window?.firstResponder === textView else { return }
+            parent.onSelection(textView.selectedRange())
         }
 
         func textDidChange(_ notification: Notification) {
@@ -927,6 +1008,7 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
 
         let textView = MacComposerTextView(frame: .zero)
         textView.delegate = context.coordinator
+        textView.onTakeOver = onTakeOver
         textView.onSubmit = onSubmit
         textView.onPasteCompleted = { [weak coordinator = context.coordinator] in
             coordinator?.restoreFocusAfterPaste()
@@ -956,6 +1038,7 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? MacComposerTextView else { return }
+        textView.onTakeOver = onTakeOver
         textView.onSubmit = onSubmit
         textView.onPasteCompleted = { [weak coordinator = context.coordinator] in
             coordinator?.restoreFocusAfterPaste()
@@ -968,6 +1051,17 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
             textView.string = text
             textView.setSelectedRange(NSRange(location: min(selection.location, textView.string.utf16.count), length: 0))
             context.coordinator.isApplying = false
+        }
+        if let selectionRequest, context.coordinator.appliedSelectionRequest != selectionRequest,
+           !textView.hasMarkedText() {
+            context.coordinator.isApplying = true
+            let range = IOSVoiceComposer.safeRange(selectionRequest, in: textView.string)
+            textView.setSelectedRange(range)
+            context.coordinator.appliedSelectionRequest = selectionRequest
+            context.coordinator.isApplying = false
+            // Keep continuation's insertion range in sync without treating a
+            // programmatic selection as the user taking over correction.
+            DispatchQueue.main.async { onSelection(range) }
         }
         context.coordinator.reportVisualTextPresence(of: textView, deferred: true)
         let layoutText = textView.hasMarkedText() ? textView.string : text
@@ -1036,45 +1130,104 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
 
 // MARK: - Inline VoiceType transcript surface
 
-private struct MacComposerVoiceSurface: View {
-    let controller: KrakiVoiceInputController
-    let draftPrefix: String
-    let onFinish: () -> Void
+/// A quiet transcript-only backdrop driven by real microphone peaks, never
+/// a canned idle animation. Faded ends keep the adjacent image and action
+/// slots clear. Background geometry cannot resize or intercept the controls.
+struct MacVoiceBackgroundWaveform: View {
+    let levels: [Float]
+
+    static func heightFractions(levels: [Float], count: Int) -> [CGFloat] {
+        guard count > 0 else { return [] }
+        let recent = Array(levels.suffix(8))
+        let samples = Array(repeating: Float(0), count: max(0, 8 - recent.count)) + recent
+        return (0..<count).map { index in
+            let position = CGFloat(index) / CGFloat(max(1, count - 1)) * CGFloat(samples.count - 1)
+            let left = Int(position)
+            let right = min(left + 1, samples.count - 1)
+            let mix = position - CGFloat(left)
+            let amplitude = VoiceLevelBars.loudness(samples[left]) * (1 - mix)
+                + VoiceLevelBars.loudness(samples[right]) * mix
+            return 0.06 + amplitude * 0.78
+        }
+    }
 
     var body: some View {
-        HStack(spacing: 12) {
+        GeometryReader { geometry in
+            let count = max(8, min(160, Int(geometry.size.width / 8)))
+            let heights = Self.heightFractions(levels: levels, count: count)
+            HStack(spacing: 0) {
+                ForEach(heights.indices, id: \.self) { index in
+                    Capsule()
+                        .fill(Color.krakiPrimary.opacity(0.10))
+                        .frame(width: 3, height: max(2, geometry.size.height * heights[index]))
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .animation(.spring(response: 0.18, dampingFraction: 0.8), value: levels)
+        }
+    }
+}
+
+private struct MacComposerVoiceSurface: View {
+    let controller: KrakiVoiceInputController
+    let preview: (prefix: String, spoken: String, suffix: String)
+    let onFinish: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
             MacComposerScrollableVoiceTranscript(pieces: displayedPieces, revision: revision)
                 .frame(maxWidth: .infinity)
                 .frame(height: MacComposerVoiceTranscriptView.lineHeight * 2)
-            Button(action: onFinish) {
-                VoiceComposerStatusModule(state: controller.state)
-                    .frame(width: 38, height: 32)
-                    .contentShape(Rectangle())
+                .background {
+                    MacVoiceBackgroundWaveform(levels: controller.levels)
+                        .mask {
+                            LinearGradient(stops: [
+                                .init(color: .clear, location: 0),
+                                .init(color: .white, location: 0.12),
+                                .init(color: .white, location: 0.88),
+                                .init(color: .clear, location: 1)
+                            ], startPoint: .leading, endPoint: .trailing)
+                        }
+                        .clipped()
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            Button(action: onCancel) {
+                Label("Cancel", systemImage: "xmark")
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 70, height: 30)
+                    .background(.primary.opacity(0.05), in: Capsule())
+                    .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(!controller.isRecording)
-            .accessibilityLabel(controller.isRecording ? "Stop voice input" : "Correcting voice input")
-            .accessibilityHint(controller.isRecording ? "Stops recording and starts transcription correction" : "")
+            .accessibilityLabel("Cancel voice input")
+            .accessibilityIdentifier("voice-cancel")
+            Button(action: onFinish) {
+                Label("Edit", systemImage: "character.cursor.ibeam")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.krakiPrimary)
+                    .frame(width: 62, height: 30)
+                    .background(Color.krakiPrimary.opacity(0.10), in: Capsule())
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Edit voice text")
+            .accessibilityIdentifier("voice-to-text")
         }
-        .padding(.leading, 18)
-        .padding(.trailing, 12)
+        .padding(.leading, 4)
+        .padding(.trailing, 5)
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
     }
 
     private var revision: String {
-        "\(draftPrefix)-\(controller.state)-\(controller.rawText)-\(controller.correctionText)-\(controller.correctionSourceOffset)"
+        "\(preview.prefix)-\(preview.spoken)-\(preview.suffix)-\(controller.state)"
     }
 
     private var displayedPieces: [(text: String, opacity: Double)] {
-        VoiceComposerPresentation.transcriptPieces(
-            prefix: draftPrefix,
-            state: controller.state,
-            rawText: controller.rawText,
-            correctionSource: controller.correctionSource,
-            correctionText: controller.correctionText,
-            correctionSourceOffset: controller.correctionSourceOffset
-        )
+        [(preview.prefix, 1), (preview.spoken, 0.5), (preview.suffix, 1)]
     }
 }
 
@@ -1195,6 +1348,13 @@ final class MacComposerVoiceTranscriptView: NSView {
         needsDisplay = true
     }
 
+    /// Short speech is vertically centered in the fixed two-line viewport.
+    /// Long speech keeps its complete document height and native tail scroll.
+    var textDrawingRect: CGRect {
+        let inset = max(0, (bounds.height - contentHeight) / 2)
+        return bounds.insetBy(dx: 0, dy: inset)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext,
               let framesetter,
@@ -1206,7 +1366,7 @@ final class MacComposerVoiceTranscriptView: NSView {
         context.textMatrix = .identity
         context.translateBy(x: 0, y: bounds.height)
         context.scaleBy(x: 1, y: -1)
-        let path = CGPath(rect: bounds, transform: nil)
+        let path = CGPath(rect: textDrawingRect, transform: nil)
         let frame = CTFramesetterCreateFrame(
             framesetter,
             visibleRange,
@@ -1691,7 +1851,9 @@ enum MacComposerPasteFocusRegression {
                 state.focused = true
                 state.focusRequest += 1
             },
-            onSubmit: {}
+            onSubmit: {},
+            onSelection: { _ in },
+            onTakeOver: {}
         )
         let coordinator = MacComposerScrollableTextInput.Coordinator(input)
         let window = NSWindow(

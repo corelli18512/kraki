@@ -1,9 +1,10 @@
 # iPhone composer and tap-to-dictate
 
 Design reference: `ReleaseArtifacts/Kraki/ios-composer-layout/V5-FLOW.html`.
-iPhone only. macOS keeps its own composer and the controller's `onFinal`
-draft behavior. Session mode is chosen in the chat header; the composer has
-no mode strip or swipe.
+The layout below describes iPhone. macOS keeps its compact native composer,
+but now shares the `IOSVoiceComposer` transaction (historical name) for
+recording / draft editing / optimistic bubble correction. Session mode is
+chosen in the chat header; the composer has no mode strip or swipe.
 
 ## Layout
 
@@ -71,7 +72,7 @@ flash on fast confirmation); delivered fades back, failed is shown normally with
 the message's last block (the image when present).
 
 A sent message is never edited. While correcting, the waveform status
-offers *Send Original* (don't wait) and *Delete*; a failed bubble offers
+offers *Send Original* (don't wait), *Edit* and *Delete*; a failed bubble offers
 *Retry* and *Delete*. A user action wins; the late correction then no-ops. A correcting input persisted across process death is
 restored as `failed` with its original transcript.
 
@@ -108,6 +109,52 @@ scenario. `KrakiTests/IOSVoiceComposerTests.swift` (transactions, races,
 controller safety) and the voice section of `ChatUXRegressionTests.swift`
 (real outbox + list: correcting bubble, exact row height, exactly-once send,
 failure → original, relaunch). `KrakiVoiceUITests` drives the real composer.
+
+## macOS parity
+
+`MacChatComposer` uses the same AppState-owned transaction, rather than waiting
+for `onFinal` to fill a draft. While recording the primary control sends voice
+including free-form answers through main PR #317's `answerTo` path. Only
+permission denial returns to the editor for review. Recording Send never
+aborts the agent. Cancel and Edit remain inside the single-row capsule.
+Send immediately frees the editor and stages a bubble; typed follow-ups can be
+composed but cannot overtake the correcting message. The mic shows progress.
+
+Mac bubbles show a waveform menu and light uncorrected text; render signatures
+include the uncorrected range, even when a correction does not change letters.
+Send Original uses the latest raw transcript, including trailing recognition.
+Edit restores original text and image bytes/MIME in the mounted composer before
+removing the bubble; if its image conflicts with an existing attachment, or is
+invalid, the bubble stays intact. Delete/Send Original/Edit fence late results.
+Native caret/selection restoration follows the utterance; real typing or caret
+interaction takes over from a late draft correction. Session departure preserves
+the original owner. Mac does not adopt iOS's app-inactive recording policy.
+
+Mac flattens iPhone's recording surface into one row: disabled image icon or
+existing thumbnail on the left, read-only transcript in the middle, labeled
+Cancel and Edit on the right. No mic icon is shown while recording. The
+separate primary circle remains Send. A low-opacity waveform fills only the
+middle transcript area, excluding the image slot and Cancel/Edit controls.
+Both horizontal edges fade to transparent over 12% of its width. Interpolated
+microphone levels drive its spring animation (using iPhone's shared dB loudness
+mapping, not a canned animation). The background does not participate in
+layout or hit testing. Short transcripts
+are vertically centered in the two-line viewport; longer ones retain native
+tail scrolling. iPhone retains its two-row layout, compact meter and timer.
+
+The release branch includes main through `6e59671` (PR #317, #320 and #321). iOS's already-fixed
+free-form answer behavior is preserved, not reimplemented. A Mac native test
+checks question ID on both the correcting bubble and the final transport
+payload, with no steer flag even when the agent is active.
+
+`KrakiMacTests` also runs all 28 shared transaction tests. Its ten
+`MacVoiceComposerTests` use the production chat in an isolated native window,
+real mouse events and native bubble menus, with synthetic speech/captured
+transport. They cover recording send, steer, cancel, edit/caret, latest-original
+send/delete, image restoration, ordered follow-ups, disabled recording
+thumbnails, free-form voice answers, and real level-event updates without
+moving the centered text or intercepting controls. Screenshots are not a
+physical microphone or live-network acceptance test.
 
 ## Physical acceptance before publication
 

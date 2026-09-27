@@ -621,6 +621,14 @@ struct MacChatView: View {
         switch action {
         case .retry:
             _ = sender.retryPending(sessionId: sessionId, clientId: clientId)
+        case .sendOriginal:
+            _ = sender.dispatchStagedInput(sessionId: sessionId, clientId: clientId,
+                                           text: sender.originalText(sessionId: sessionId, clientId: clientId) ?? "")
+        case .edit:
+            // The mounted composer owns attachments; it must accept the whole
+            // message before removing the optimistic bubble.
+            NotificationCenter.default.post(name: .krakiVoiceEditRequested, object: nil,
+                                            userInfo: ["sessionId": sessionId, "clientId": clientId])
         case .delete:
             _ = sender.discardPending(sessionId: sessionId, clientId: clientId)
         }

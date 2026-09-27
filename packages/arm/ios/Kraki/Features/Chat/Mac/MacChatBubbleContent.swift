@@ -32,7 +32,7 @@ struct MacChatBubbleContent {
 }
 
 /// A sent message is never edited: an undelivered one is retried or deleted.
-enum MacPendingAction { case retry, delete }
+enum MacPendingAction { case retry, delete, sendOriginal, edit }
 
 enum MacChatBubbleLayout {
     static let outerH: CGFloat = 12
@@ -69,7 +69,7 @@ enum MacChatBubbleContentBuilder {
         let body: NSAttributedString?
         switch kind {
         case .user:
-            body = rawBody.map { recolored($0, color: .white) }
+            body = rawBody.map { lighteningUncorrected(recolored($0, color: .white), message: message) }
         case .error:
             body = recolored(rawBody ?? NSAttributedString(string: message.result ?? "Error"), color: .systemRed)
         case .agent, .system:
@@ -112,6 +112,22 @@ enum MacChatBubbleContentBuilder {
             content.pendingClientId = message.payload["clientId"]?.stringValue
         }
         return content
+    }
+
+    private static func lighteningUncorrected(_ body: NSAttributedString, message: ChatMessage) -> NSAttributedString {
+        guard message.payload["localState"]?.stringValue == "correcting",
+              let fade = message.payload["uncorrected"]?.arrayValue?.compactMap(\.intValue), fade.count == 2,
+              let source = message.content, fade[0] >= 0, fade[1] > 0,
+              fade[0] <= source.utf16.count, fade[1] <= source.utf16.count - fade[0] else { return body }
+        let range = NSRange(location: fade[0], length: fade[1])
+        let tail = (source as NSString).substring(with: range)
+        let rendered = body.string as NSString
+        let target = NSMaxRange(range) <= rendered.length && rendered.substring(with: range) == tail
+            ? range : rendered.range(of: tail, options: .backwards)
+        guard target.location != NSNotFound, target.length > 0 else { return body }
+        let result = NSMutableAttributedString(attributedString: body)
+        result.addAttribute(.foregroundColor, value: NSColor.white.withAlphaComponent(0.5), range: target)
+        return result
     }
 
     /// Streaming and frozen terminal turns use the same bubble path as iOS.
