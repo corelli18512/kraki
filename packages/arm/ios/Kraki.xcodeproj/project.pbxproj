@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AAA100000000000000000003 /* Mac voice tests */ = {isa = PBXBuildFile; fileRef = AAA100000000000000000004; };
+		AAA100000000000000000001 /* Shared voice tests */ = {isa = PBXBuildFile; fileRef = 931E212514D39039C91B350D; };
+		AAA100000000000000000002 /* Mac voice fixture */ = {isa = PBXBuildFile; fileRef = CF4923A90FCE08A9677B9EFA; };
 		000021788275B9A715E2E204 /* MenuBarExtraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 735BA6282777D61A4335E5F5 /* MenuBarExtraView.swift */; };
 		00D9A1D724388C88656314A9 /* Highlightr in Frameworks */ = {isa = PBXBuildFile; productRef = 58A77F08B0D342014F734926 /* Highlightr */; };
 		011C11527B518D1977DB2289 /* CommandSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ABD91DDEFD532C3C383BBDE /* CommandSender.swift */; };
@@ -331,6 +334,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		AAA100000000000000000004 /* MacVoiceComposerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacVoiceComposerTests.swift; sourceTree = "<group>"; };
 		00A9A346933E404A3656AD63 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
 		019837F19EFDB3EAE1431A18 /* IOSChatScrollProductionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSChatScrollProductionTests.swift; sourceTree = "<group>"; };
 		01A6162027FE71CB62BA4255 /* DeviceListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceListView.swift; sourceTree = "<group>"; };
@@ -942,6 +946,7 @@
 			isa = PBXGroup;
 			children = (
 				C78E9D20D8646B35FBEBB79E /* MacChatUXRegressionTests.swift */,
+				AAA100000000000000000004 /* MacVoiceComposerTests.swift */,
 				5C6438C6608D2C3B47BA0AE2 /* MacChatUXTests.swift */,
 				B60DD3157710F226FB5EF0DC /* MacSessionSidebarRevealTests.swift */,
 			);
@@ -1229,6 +1234,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				231D593C8DB79D41E54AE803 /* MacChatUXRegressionTests.swift in Sources */,
+				AAA100000000000000000001 /* Shared voice tests */,
+				AAA100000000000000000003 /* Mac voice tests */,
 				0B0FC6D115637A972DEF0E3C /* MacChatUXTests.swift in Sources */,
 				3C4A11273BA4926B1804BD90 /* MacSessionSidebarRevealTests.swift in Sources */,
 				329CD52FB10EFC078920E6E5 /* NativeSessionPreviewGlyphTests.swift in Sources */,
@@ -1442,6 +1449,7 @@
 				449210BD9A5213261366CA6F /* HeightMeasurementScheduler.swift in Sources */,
 				8C74A12E6D7EA7794FCB3FAA /* Helpers.swift in Sources */,
 				F8289CBF9D6D730BE4F5A0A8 /* IOSVoiceComposer.swift in Sources */,
+				AAA100000000000000000002 /* Mac voice fixture */,
 				C3DD6301585CDBA8DB9E1FA4 /* KeychainManager.swift in Sources */,
 				48898113E756024CD42E3B7F /* KrakiDiag.swift in Sources */,
 				5F0B02123ED43B73877167F5 /* KrakiLogger.swift in Sources */,

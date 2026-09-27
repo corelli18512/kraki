@@ -1,4 +1,4 @@
-#if os(iOS) && DEBUG
+#if DEBUG
 import SwiftUI
 import VoiceInputCore
 
@@ -102,6 +102,7 @@ import VoiceInputCore
     }
 }
 
+#if os(iOS)
 struct IOSVoiceHoldScenarioView: View {
     @Environment(AppState.self) private var app
     @Environment(\.colorScheme) private var colorScheme
@@ -169,4 +170,5 @@ struct IOSVoiceHoldScenarioView: View {
         }
     }
 }
+#endif
 #endif

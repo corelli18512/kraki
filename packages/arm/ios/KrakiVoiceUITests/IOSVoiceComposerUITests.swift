@@ -62,6 +62,7 @@ final class IOSVoiceComposerUITests: XCTestCase {
         awaitState("staged=0", timeout: 10)
         awaitState("sent=1")
         XCTAssertEqual(app.staticTexts["voice-test-sent"].label, corrected, "the agent receives the corrected text")
+        screenshot("correction-complete-transport-captured")
         sleep(1)
         awaitState("sent=1")
     }

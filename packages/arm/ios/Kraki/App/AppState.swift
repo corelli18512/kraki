@@ -41,9 +41,7 @@ final class AppState {
     /// handshake. Nil means the microphone affordance stays hidden.
     var voiceCapability: VoiceCapability?
     @ObservationIgnored private(set) var voiceInputController: KrakiVoiceInputController
-    #if os(iOS)
     @ObservationIgnored lazy var iosVoiceComposer = IOSVoiceComposer(host: self)
-    #endif
 
     /// The durable outbox lives next to the message database, so each app
     /// flavor (Release / Dev / isolated KRAKI_DATA_DIR test instances) has its
@@ -527,9 +525,7 @@ final class AppState {
         githubClientId = nil
         relayVersion = nil
         voiceCapability = nil
-        #if os(iOS)
         iosVoiceComposer.discard()
-        #endif
         voiceInputController.forgetLease()
         #if os(iOS)
         pushManager?.syncApplicationBadge(unreadSessionIDs: [])

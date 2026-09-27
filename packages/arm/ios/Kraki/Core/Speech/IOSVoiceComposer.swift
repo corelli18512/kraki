@@ -1,4 +1,4 @@
-#if os(iOS)
+#if os(iOS) || os(macOS)
 import Foundation
 import Observation
 
@@ -15,7 +15,8 @@ protocol IOSVoiceComposerHost: AnyObject {
     func discardVoiceInput(sessionID: String, clientID: String)
 }
 
-/// Tap-to-dictate transaction, owned by AppState (independent of any SwiftUI
+/// Shared iOS/macOS tap-to-dictate transaction (historical iOS name),
+/// owned by AppState (independent of any SwiftUI
 /// composer's lifetime).
 ///
 /// - Recording: the composer shows a read-only preview; the draft is untouched,

@@ -4097,6 +4097,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
         hasher.combine(message.steps ?? 0)
         hasher.combine(message.finishedAt ?? "")
         hasher.combine(message.payload["localState"]?.stringValue ?? "")
+        hasher.combine(message.payload["uncorrected"]?.arrayValue?.compactMap(\.intValue) ?? [])
         hasher.combine(message.attachments?.count ?? 0)
         for ref in message.contentRefAttachments {
             hasher.combine(ref.id)

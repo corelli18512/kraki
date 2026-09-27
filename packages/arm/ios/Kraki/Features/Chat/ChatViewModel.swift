@@ -79,7 +79,7 @@ final class ChatViewModel {
         (appState?.commandSender?.pendingInputs(sessionId) ?? [])
             // Text is part of the signature: a correcting voice bubble's
             // content streams in place.
-            .map { "\($0.id)#\($0.payload["localState"]?.stringValue ?? "")#\($0.content?.hashValue ?? 0)" }
+            .map { "\($0.id)#\($0.payload["localState"]?.stringValue ?? "")#\($0.content?.hashValue ?? 0)#\($0.payload["uncorrected"]?.arrayValue?.compactMap(\.intValue) ?? [])" }
             .joined(separator: ",")
     }
 

@@ -19,4 +19,5 @@ extension Notification.Name {
     /// prompt, steer, typed answer or deny reason: the conversation returns to
     /// its newest edge. userInfo["sessionId"]: String.
     static let krakiComposerSubmitted = Notification.Name("chat.kraki.composerSubmitted")
+    static let krakiVoiceEditRequested = Notification.Name("chat.kraki.voiceEditRequested")
 }

@@ -1822,7 +1822,7 @@ final class MacChatBubbleCell: NSView {
             steps.target = self
             menu.addItem(steps)
         }
-        if content.pendingDeliveryState == "failed" {
+        if ["failed", "correcting"].contains(content.pendingDeliveryState ?? "") {
             if !menu.items.isEmpty { menu.addItem(.separator()) }
             pendingActionItems().forEach { menu.addItem($0) }
         }
@@ -1840,7 +1840,10 @@ final class MacChatBubbleCell: NSView {
     #endif
 
     private func pendingActionItems() -> [NSMenuItem] {
-        [("Retry", MacPendingAction.retry), ("Delete", .delete)].map { title, action in
+        let actions: [(String, MacPendingAction)] = content?.pendingDeliveryState == "correcting"
+            ? [("Send Original", .sendOriginal), ("Edit", .edit), ("Delete", .delete)]
+            : [("Retry", .retry), ("Delete", .delete)]
+        return actions.map { title, action in
             let item = NSMenuItem(title: title, action: #selector(pendingMenuAction(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = action
@@ -1855,7 +1858,7 @@ final class MacChatBubbleCell: NSView {
     }
 
     @objc private func deliveryStatusClicked(_ sender: NSButton) {
-        guard content?.pendingDeliveryState == "failed" else { return }
+        guard ["failed", "correcting"].contains(content?.pendingDeliveryState ?? "") else { return }
         let menu = NSMenu()
         pendingActionItems().forEach { menu.addItem($0) }
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY + 4), in: sender)
@@ -1906,7 +1909,14 @@ final class MacChatBubbleCell: NSView {
         }
         deliveryStatus.isHidden = false
         let symbol = NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
-        if state == "failed" {
+        if state == "correcting" {
+            deliveryStatus.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Correcting voice input")?.withSymbolConfiguration(symbol)
+            deliveryStatus.contentTintColor = .secondaryLabelColor
+            deliveryStatus.isEnabled = true
+            deliveryStatus.alphaValue = 1
+            deliveryStatus.setAccessibilityLabel("Correcting voice input. Click for options")
+            deliveryStatus.toolTip = "Correcting voice input"
+        } else if state == "failed" {
             deliveryStatus.image = NSImage(systemSymbolName: "exclamationmark.circle.fill",
                                            accessibilityDescription: "Not delivered")?.withSymbolConfiguration(symbol)
             deliveryStatus.contentTintColor = .systemRed
