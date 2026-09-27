@@ -1,6 +1,6 @@
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
-import { HEAD_PULSE_TARGET } from '@kraki/protocol';
+import { HEAD_PULSE_TARGET, normalizeSessionMode, type SessionMode } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
 import { KrakiTransport, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
@@ -162,7 +162,7 @@ export class KrakiWSClient {
       state: digest.state,
       messageCount: digest.messageCount,
     });
-    store.setSessionMode(digest.id, digest.mode);
+    store.setSessionMode(digest.id, normalizeSessionMode(digest.mode));
     if (digest.preview) store.setSessionPreview(digest.id, digest.preview);
     if (digest.usage) store.setSessionUsage(digest.id, digest.usage);
     store.clearCard(digest.id);
@@ -341,24 +341,20 @@ export class KrakiWSClient {
 
   /** Resolve the live permission: the decision shows at once (read-only,
    *  "Sending…"); Tentacle's resolved card replaces it. Without confirmation
-   *  while the delivery path is up it reverts with an explanation. "execute"
-   *  switches a discuss session to Execute, then approves (as on iOS/Mac). */
+   *  while the delivery path is up it reverts with an explanation. */
   resolvePermission(sessionId: string, permissionId: string, toolName: string | undefined,
-                    decision: 'approve' | 'always_allow' | 'deny' | 'execute') {
+                    decision: 'approve' | 'always_allow' | 'deny') {
     const store = getStore();
     const current = store.cards.get(sessionId)?.action;
     if (current?.type === 'permission' && current.payload.id === permissionId) {
-      const shown = decision === 'execute' ? 'approve' : decision;
+      const shown = decision;
       store.setCardAction(sessionId, {
         ...current,
         payload: { ...current.payload, decision: shown, localPending: true, localError: undefined } as unknown as typeof current.payload,
       });
     }
     const send = (msg: Record<string, unknown>) => this.sendEncrypted(msg);
-    if (decision === 'execute') {
-      commands.setSessionMode(sessionId, 'execute', send, this.cmdState);
-      commands.approve(permissionId, sessionId, send);
-    } else if (decision === 'approve') {
+    if (decision === 'approve') {
       commands.approve(permissionId, sessionId, send);
     } else if (decision === 'deny') {
       commands.deny(permissionId, sessionId, send);
@@ -391,7 +387,7 @@ export class KrakiWSClient {
     commands.abortSession(sessionId, (msg) => this.sendEncrypted(msg));
   }
 
-  setSessionMode(sessionId: string, mode: 'safe' | 'discuss' | 'execute' | 'delegate') {
+  setSessionMode(sessionId: string, mode: SessionMode) {
     commands.setSessionMode(sessionId, mode, (msg) => this.sendEncrypted(msg), this.cmdState);
   }
 
@@ -541,7 +537,7 @@ export class KrakiWSClient {
       });
 
       if (ts.mode) {
-        store.setSessionMode(ts.id, ts.mode as 'safe' | 'discuss' | 'execute' | 'delegate');
+        store.setSessionMode(ts.id, normalizeSessionMode(ts.mode));
       }
 
       // Apply sidebar preview from tentacle (Tier 0: instant sidebar).

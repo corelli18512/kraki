@@ -133,8 +133,8 @@ struct BubbleCatalogTestView: View {
 
     private var permissionCases: [BubbleCatalogCase] {
         [
-            live("perm-discuss-write", "Permission · pending write/discuss", text: "I need to update the file.", action: permission("perm-write", tool: "edit", description: "Edit Sources/App.swift"), sessionMode: .discuss),
-            live("perm-execute-write", "Permission · pending write/execute", text: "I need to update the file.", action: permission("perm-execute", tool: "edit", description: "Edit Sources/App.swift"), sessionMode: .execute),
+            live("perm-discuss-write", "Permission · pending write/discuss", text: "I need to update the file.", action: permission("perm-write", tool: "edit", description: "Edit Sources/App.swift"), sessionMode: .auto),
+            live("perm-execute-write", "Permission · pending write/execute", text: "I need to update the file.", action: permission("perm-execute", tool: "edit", description: "Edit Sources/App.swift"), sessionMode: .auto),
             live("perm-read", "Permission · pending read", text: "This command needs approval.", action: permission("perm-read", tool: "bash", description: "$ cat ~/.config/private")),
             live("perm-approved", "Permission · approved", text: "Permission was resolved.", action: permission("perm-approved", tool: "bash", description: "$ pwd", decision: "approve"), frozen: true),
             live("perm-always", "Permission · always allowed", text: "Permission was resolved.", action: permission("perm-always", tool: "bash", description: "$ pwd", decision: "always_allow"), frozen: true),
@@ -186,7 +186,7 @@ struct BubbleCatalogTestView: View {
     }
 
     private func live(_ key: String, _ title: String, text: String, action: ChatMessage?,
-                      sessionMode: SessionMode = .discuss, frozen: Bool = false,
+                      sessionMode: SessionMode = .auto, frozen: Bool = false,
                       note: String? = nil) -> BubbleCatalogCase {
         let card = MessageStore.SessionCard(text: text, action: action)
         let content = TKBubbleContent.live(card: card, agent: "pi", sessionId: sessionId,
@@ -237,7 +237,7 @@ private struct BubbleCatalogCase: Identifiable {
     let badge: String
     var note: String?
     let content: TKBubbleContent
-    var sessionMode: SessionMode = .discuss
+    var sessionMode: SessionMode = .auto
 }
 
 private struct BubbleCatalogCell: UIViewRepresentable {

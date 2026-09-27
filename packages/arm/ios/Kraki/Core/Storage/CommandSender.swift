@@ -570,7 +570,7 @@ final class CommandSender {
         // Track for echo suppression
         pendingModeChanges[sessionId, default: 0] += 1
 
-        send(["type": "set_session_mode", "payload": ["mode": mode.rawValue]], sessionId: sessionId)
+        send(["type": "set_session_mode", "payload": ["mode": mode.wireName]], sessionId: sessionId)
         appState.sessionStore.setMode(sessionId, mode)
 
         // Auto-resolve pending permissions based on the new mode.
@@ -582,22 +582,9 @@ final class CommandSender {
         let pending = pendingPermissions(in: sessionId)
 
         switch mode {
-        case .execute, .delegate:
+        case .auto, .delegate:
             for perm in pending {
                 send(["type": "approve", "payload": ["permissionId": perm.id]], sessionId: sessionId)
-            }
-        case .discuss:
-            for perm in pending {
-                let isWrite = perm.toolName == "write" || perm.toolName == "write_file"
-                    || perm.toolName == "create" || perm.toolName == "edit"
-                let filePath = perm.args?["path"]?.stringValue ?? ""
-                let isPlanMd = filePath.hasSuffix("/plan.md") || filePath == "plan.md"
-
-                if !isWrite || isPlanMd {
-                    send(["type": "approve", "payload": ["permissionId": perm.id]], sessionId: sessionId)
-                } else {
-                    send(["type": "deny", "payload": ["permissionId": perm.id]], sessionId: sessionId)
-                }
             }
         case .safe:
             break // No auto-resolution in safe mode

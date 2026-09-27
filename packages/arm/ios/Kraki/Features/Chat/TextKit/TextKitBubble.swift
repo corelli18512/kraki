@@ -1252,7 +1252,15 @@ final class TKBubbleContent {
         return height
     }
 
+    /// A steps-only turn (system_message kind `no_reply`, no text or media):
+    /// rendered as just its Steps affordance — no bubble, no invented text.
+    var isStepsOnly: Bool {
+        kind == .system && message.systemKind == "no_reply"
+            && body == nil && images.isEmpty && imageRefs.isEmpty && htmlArtifacts.isEmpty
+    }
+
     func bubbleColor(dark: Bool) -> UIColor {
+        if isStepsOnly { return .clear }
         let hue = stringToHue(hueSeed) / 360
         switch kind {
         case .agent:
@@ -1790,7 +1798,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     var onOpenImage: ((IOSImagePreviewSelection) -> Void)?
     var onOpenHTMLArtifact: ((ContentRef) -> Void)?
     var attachmentStore: AttachmentStore?
-    var sessionMode: SessionMode = .discuss
+    var sessionMode: SessionMode = .auto
     var onActionHeightChange: (() -> Void)?
     var onShowTable: ((TKTableLayout) -> Void)?
     /// A message the user sent is never edited afterwards: an unsent or

@@ -214,10 +214,24 @@ final class ProtocolEnumTests: XCTestCase {
     }
 
     func testSessionModeRawValues() {
+        XCTAssertEqual(SessionMode.allCases, [.safe, .auto, .delegate])
         XCTAssertEqual(SessionMode.safe.rawValue, "safe")
-        XCTAssertEqual(SessionMode.discuss.rawValue, "discuss")
-        XCTAssertEqual(SessionMode.execute.rawValue, "execute")
+        XCTAssertEqual(SessionMode.auto.rawValue, "auto")
         XCTAssertEqual(SessionMode.delegate.rawValue, "delegate")
+        XCTAssertEqual(SessionMode.default, .auto)
+    }
+
+    func testSessionModeAcceptsLegacyNamesAndEmitsWireNames() throws {
+        XCTAssertEqual(SessionMode(rawValue: "discuss"), .auto)
+        XCTAssertEqual(SessionMode(rawValue: "execute"), .auto)
+        XCTAssertNil(SessionMode(rawValue: "unknown"))
+        XCTAssertEqual(SessionMode.auto.wireName, "execute")
+        XCTAssertEqual(SessionMode.safe.wireName, "safe")
+        // Codable: legacy decodes, encode uses the wire name, unknown → default.
+        let decoded = try JSONDecoder().decode([SessionMode].self, from: Data(#"["discuss","execute","safe","delegate","bogus"]"#.utf8))
+        XCTAssertEqual(decoded, [.auto, .auto, .safe, .delegate, .auto])
+        let encoded = String(data: try JSONEncoder().encode([SessionMode.auto]), encoding: .utf8)
+        XCTAssertEqual(encoded, #"["execute"]"#)
     }
 
     func testDeviceRoleRawValues() {
@@ -280,7 +294,7 @@ final class ProtocolStructTests: XCTestCase {
             autoTitle: "Auto Title",
             state: .active,
             runtimeStatus: SessionRuntimeStatusDigest(status: "compacting", reason: "threshold"),
-            mode: .execute,
+            mode: .auto,
             lastSeq: 10,
             readSeq: 5,
             messageCount: 8,
@@ -298,7 +312,7 @@ final class ProtocolStructTests: XCTestCase {
         XCTAssertEqual(decoded.autoTitle, "Auto Title")
         XCTAssertEqual(decoded.state, .active)
         XCTAssertEqual(decoded.runtimeStatus, SessionRuntimeStatusDigest(status: "compacting", reason: "threshold"))
-        XCTAssertEqual(decoded.mode, .execute)
+        XCTAssertEqual(decoded.mode, .auto)
         XCTAssertEqual(decoded.lastSeq, 10)
         XCTAssertEqual(decoded.readSeq, 5)
         XCTAssertEqual(decoded.messageCount, 8)

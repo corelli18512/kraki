@@ -60,7 +60,7 @@ private struct MacGlassCapsule: ViewModifier {
 /// no track). It closes after 3s without interaction; hovering pauses the
 /// countdown and every change restarts it.
 private struct MacChatModePicker: View {
-    private static let allModes: [SessionMode] = [.safe, .discuss, .execute, .delegate]
+    private static let allModes: [SessionMode] = SessionMode.allCases
     static var startsExpanded: Bool {
         #if DEBUG
         ProcessInfo.processInfo.environment["KRAKI_HEADER_MODE_EXPANDED"] == "1"
@@ -220,7 +220,7 @@ struct MacChatView: View {
         )
     }
     private var currentMode: SessionMode {
-        appState.sessionStore.sessionModes[sessionId] ?? session?.mode ?? .discuss
+        appState.sessionStore.sessionModes[sessionId] ?? session?.mode ?? .auto
     }
     private var composerVisible: Bool {
         isDeviceOnline || viewModel.isCompacting
@@ -601,9 +601,6 @@ struct MacChatView: View {
     private func resolveLivePermission(_ permissionId: String, toolName: String?, _ decision: String) {
         switch decision {
         case "approve":
-            appState.commandSender?.approve(sessionId: sessionId, permissionId: permissionId)
-        case "execute":
-            appState.commandSender?.setSessionMode(sessionId: sessionId, mode: .execute)
             appState.commandSender?.approve(sessionId: sessionId, permissionId: permissionId)
         case "always_allow":
             appState.commandSender?.alwaysAllow(

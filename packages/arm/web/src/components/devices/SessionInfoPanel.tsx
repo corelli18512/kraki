@@ -21,7 +21,7 @@ interface Props {
 
 export function SessionInfoPanel({ session, usage, models, modelDetails, onClose }: Props) {
   const navigate = useNavigate();
-  const mode = useStore((s) => s.sessionModes.get(session.id) ?? 'discuss');
+  const mode = useStore((s) => s.sessionModes.get(session.id) ?? 'auto');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [pendingModel, setPendingModel] = useState<string | null>(null);

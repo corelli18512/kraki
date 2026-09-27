@@ -434,7 +434,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             content: content,
             renderKey: "image-preview-regression",
             documentWidth: width,
-            sessionMode: .discuss,
+            sessionMode: .auto,
             onTapSteps: { _ in },
             onResolvePermission: { _, _, _ in },
             onAnswerQuestion: { _, _ in },
@@ -468,7 +468,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             content: pureImageContent,
             renderKey: "image-preview-pure-regression",
             documentWidth: width,
-            sessionMode: .discuss,
+            sessionMode: .auto,
             onTapSteps: { _ in },
             onResolvePermission: { _, _, _ in },
             onAnswerQuestion: { _, _ in },
@@ -657,7 +657,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             content: normalContent,
             renderKey: "html-artifact-regression",
             documentWidth: width,
-            sessionMode: .discuss,
+            sessionMode: .auto,
             onTapSteps: { _ in },
             onResolvePermission: { _, _, _ in },
             onAnswerQuestion: { _, _ in },
@@ -676,7 +676,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             content: plainContent,
             renderKey: "html-artifact-regression-plain",
             documentWidth: width,
-            sessionMode: .discuss,
+            sessionMode: .auto,
             onTapSteps: { _ in },
             onResolvePermission: { _, _, _ in },
             onAnswerQuestion: { _, _ in },
@@ -990,7 +990,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         scrollView.chatDocumentView.apply(
             contents: items,
             documentWidth: width,
-            sessionMode: .discuss
+            sessionMode: .auto
         )
         scrollView.contentView.frame = scrollView.bounds
         scrollView.layoutSubtreeIfNeeded()
@@ -1045,7 +1045,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             scrollView.chatDocumentView.apply(
                 contents: revisionItems,
                 documentWidth: width,
-                sessionMode: .discuss
+                sessionMode: .auto
             )
             let minimumY = -scrollView.contentInsets.top
             let maximumY = max(
@@ -1149,7 +1149,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         scrollView.chatDocumentView.apply(
             contents: [item],
             documentWidth: width,
-            sessionMode: .discuss
+            sessionMode: .auto
         )
         scrollView.layoutSubtreeIfNeeded()
         _ = scrollView.chatDocumentView.updateVisibleCells(
@@ -1230,7 +1230,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
                 content: content,
                 renderKey: "question-hit-regression",
                 documentWidth: 640,
-                sessionMode: .discuss,
+                sessionMode: .auto,
                 onTapSteps: { _ in },
                 onResolvePermission: { _, _, _ in },
                 onAnswerQuestion: { _, value in onAnswer(value) },
@@ -1462,7 +1462,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
                 content: permissionContent,
                 renderKey: "permission-hit-regression",
                 documentWidth: 640,
-                sessionMode: .discuss,
+                sessionMode: .auto,
                 onTapSteps: { _ in },
                 onResolvePermission: { _, _, _ in },
                 onAnswerQuestion: { _, _ in },
@@ -1623,7 +1623,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
                 agent: "pi",
                 title: "Unread regression",
                 state: .idle,
-                mode: .discuss,
+                mode: .auto,
                 lastSeq: lastSeq,
                 readSeq: readSeq,
                 messageCount: lastSeq,
@@ -1772,7 +1772,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             content: content,
             renderKey: key,
             documentWidth: width,
-            sessionMode: .discuss,
+            sessionMode: .auto,
             onTapSteps: { _ in },
             onResolvePermission: { _, _, _ in },
             onAnswerQuestion: { _, _ in },
@@ -2034,7 +2034,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
                 id: sessionId, deviceId: deviceId, deviceName: "Mac",
                 agent: agent, model: "claude-sonnet-4",
                 title: "E2E Self-Test",
-                state: .idle, mode: .discuss,
+                state: .idle, mode: .auto,
                 lastSeq: 8, readSeq: 8, messageCount: 8,
                 createdAt: Date(), pinned: false)
             appState.sessionStore.sessions[sessionId] = session
@@ -2209,26 +2209,26 @@ let vm = ChatViewModel(sessionId: id, appState: appState)
         }
 
         let samples: [Sample] = {
-            let idle = makeState(id: "Idle prompt", state: .idle, mode: .discuss,
+            let idle = makeState(id: "Idle prompt", state: .idle, mode: .auto,
                                  online: true, connection: .connected, draft: "Draft prompt")
-            let active = makeState(id: "Active steer", state: .active, mode: .execute,
+            let active = makeState(id: "Active steer", state: .active, mode: .auto,
                                    online: true, connection: .connected, draft: "Steer the current turn")
-            let permission = makeState(id: "Permission reason", state: .active, mode: .discuss,
+            let permission = makeState(id: "Permission reason", state: .active, mode: .auto,
                                        online: true, connection: .connected, draft: "Not safe to modify this file")
             let question = makeState(id: "Question answer", state: .active, mode: .safe,
                                      online: true, connection: .connected, draft: "Preserve the visible anchor")
             let image = makeState(id: "Image attachment", state: .idle, mode: .delegate,
                                   online: true, connection: .connected, draft: "Describe this image")
-            let offline = makeState(id: "Device offline", state: .idle, mode: .discuss,
+            let offline = makeState(id: "Device offline", state: .idle, mode: .auto,
                                     online: false, connection: .connected, draft: "Compose while offline")
-            let reconnecting = makeState(id: "Relay reconnecting", state: .idle, mode: .discuss,
+            let reconnecting = makeState(id: "Relay reconnecting", state: .idle, mode: .auto,
                                          online: true, connection: .connecting, draft: "Queued draft")
-            let compacting = makeState(id: "Compacting", state: .compacting, mode: .execute,
+            let compacting = makeState(id: "Compacting", state: .compacting, mode: .auto,
                                        online: true, connection: .connected, draft: "Steer after compaction")
             let scrollable = makeState(
                 id: "Scrollable multiline",
                 state: .idle,
-                mode: .discuss,
+                mode: .auto,
                 online: true,
                 connection: .connected,
                 draft: (1...8).map { "SCROLLABLE-DRAFT line \($0) with enough text to wrap inside the Composer." }.joined(separator: "\n")
@@ -2487,7 +2487,7 @@ struct MacChatView: View {
             }
 
             let sv = MacChatScrollView(frame: NSRect(x: 0, y: 0, width: documentWidth, height: 1000))
-            sv.chatDocumentView.apply(contents: contents, documentWidth: documentWidth, sessionMode: .discuss)
+            sv.chatDocumentView.apply(contents: contents, documentWidth: documentWidth, sessionMode: .auto)
             sv.chatDocumentView.onTapSteps = { _ in }
             sv.chatDocumentView.onResolvePermission = { _, _, _ in }
             sv.chatDocumentView.onAnswerQuestion = { _, _ in }

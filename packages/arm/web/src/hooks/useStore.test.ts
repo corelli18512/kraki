@@ -340,7 +340,7 @@ describe('useStore', () => {
       useStore.getState().appendMessage('sess-1', mockMessage);
       useStore.getState().applyCardMessage('sess-1', 'content');
       useStore.getState().setCardAction('sess-1', mockPermissionAction);
-      useStore.getState().setSessionMode('sess-1', 'execute');
+      useStore.getState().setSessionMode('sess-1', 'safe');
 
       // Reset
       useStore.getState().reset();
@@ -358,28 +358,28 @@ describe('useStore', () => {
   });
 
   describe('session modes', () => {
-    it('defaults to empty map (ask is implicit)', () => {
+    it('defaults to empty map (auto is implicit)', () => {
       expect(useStore.getState().sessionModes.size).toBe(0);
     });
 
-    it('setSessionMode stores auto mode', () => {
-      useStore.getState().setSessionMode('sess-1', 'execute');
-      expect(useStore.getState().sessionModes.get('sess-1')).toBe('execute');
+    it('setSessionMode stores a non-default mode', () => {
+      useStore.getState().setSessionMode('sess-1', 'safe');
+      expect(useStore.getState().sessionModes.get('sess-1')).toBe('safe');
     });
 
-    it('setSessionMode removes entry when set to plan (default)', () => {
-      useStore.getState().setSessionMode('sess-1', 'execute');
+    it('setSessionMode removes entry when set to auto (default)', () => {
+      useStore.getState().setSessionMode('sess-1', 'delegate');
       expect(useStore.getState().sessionModes.has('sess-1')).toBe(true);
-      useStore.getState().setSessionMode('sess-1', 'discuss');
+      useStore.getState().setSessionMode('sess-1', 'auto');
       expect(useStore.getState().sessionModes.has('sess-1')).toBe(false);
     });
 
     it('setSessionMode preserves other sessions', () => {
-      useStore.getState().setSessionMode('sess-1', 'execute');
-      useStore.getState().setSessionMode('sess-2', 'execute');
-      useStore.getState().setSessionMode('sess-1', 'discuss');
+      useStore.getState().setSessionMode('sess-1', 'safe');
+      useStore.getState().setSessionMode('sess-2', 'safe');
+      useStore.getState().setSessionMode('sess-1', 'auto');
       expect(useStore.getState().sessionModes.has('sess-1')).toBe(false);
-      expect(useStore.getState().sessionModes.get('sess-2')).toBe('execute');
+      expect(useStore.getState().sessionModes.get('sess-2')).toBe('safe');
     });
   });
 });

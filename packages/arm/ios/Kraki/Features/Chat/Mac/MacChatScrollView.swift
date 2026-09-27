@@ -166,7 +166,7 @@ final class MacChatDocumentView: NSView {
     private var warmupDelayWorkItem: DispatchWorkItem?
     private var lastPerfLogTime: CFTimeInterval = 0
     private var totalCellAllocations = 0
-    private var sessionMode: SessionMode = .discuss
+    private var sessionMode: SessionMode = .auto
     private var documentWidth: CGFloat = 0
     private var minimumContentHeight: CGFloat = 0
     private let minimumBottomBreathingRoom: CGFloat = 24

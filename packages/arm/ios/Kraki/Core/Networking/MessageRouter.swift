@@ -68,7 +68,7 @@ extension SessionDigest {
             autoTitle: json["autoTitle"] as? String,
             state: SessionState(rawValue: json["state"] as? String ?? "idle") ?? .idle,
             runtimeStatus: runtimeStatus,
-            mode: SessionMode(rawValue: json["mode"] as? String ?? "discuss") ?? .discuss,
+            mode: SessionMode(rawValue: json["mode"] as? String ?? "") ?? .default,
             lastSeq: json["lastSeq"] as? Int ?? 0,
             readSeq: json["readSeq"] as? Int ?? 0,
             messageCount: json["messageCount"] as? Int ?? 0,
@@ -443,9 +443,13 @@ final class MessageRouter {
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             appState.messageStore.clearRuntimeStatusIfCompacting(sessionId)
             appState.messageStore.endCardTurn(sessionId)
-            let label = (payload?["content"] as? String)
-                ?? ((payload?["kind"] as? String) == "no_reply" ? "No reply" : "System notice")
-            updatePreview(sessionId, text: label, type: "agent", timestamp: timestamp)
+            // A steps-only turn (kind no_reply) has no text of its own: keep
+            // the previous preview rather than inventing a "No reply" line.
+            if let content = payload?["content"] as? String {
+                updatePreview(sessionId, text: content, type: "agent", timestamp: timestamp)
+            } else if (payload?["kind"] as? String) != "no_reply" {
+                updatePreview(sessionId, text: "System notice", type: "agent", timestamp: timestamp)
+            }
 
         case "agent_message_delta":
             // Draft bubble (card). Keep-last: replace on `reset`, else append.

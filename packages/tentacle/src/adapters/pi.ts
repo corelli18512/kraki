@@ -7,9 +7,9 @@
  *    child. True isolation — one crash never touches another. Memory is
  *    bounded by killing idle children; pi re-resumes from its jsonl on the
  *    next message (lazy resume).
- *  - **permission = tool gating**: discuss → read-only tool set; execute /
- *    delegate → full tools; safe → read-only (writes blocked). No per-call
- *    UI round-trip — mode is a spawn-time tool restriction.
+ *  - **permission**: the Kraki tools extension gates every tool call through
+ *    the adapter, which applies Kraki's shared policy (permission-policy.ts)
+ *    for the live mode — no respawn on a mode change.
  *  - native fork/tree via pi's `fork` / `get_tree` RPC commands.
  */
 
@@ -17,7 +17,6 @@ import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams, execSync } from 'node:child_process';
 import { readPiJsonLines } from './pi-jsonl.js';
 import { readPiModelScope, scopePiModels } from './pi-model-scope.js';
-import { PiFinalizeStream, type AssistantStreamEvent } from './pi-finalize-stream.js';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -34,10 +33,20 @@ import type { ModelDetail, SessionUsage, ReasoningEffort, ToolArgs } from '@krak
 import { createLogger } from '../logger.js';
 import { getKrakiHome, getConfigDir } from '../config.js';
 import { PI_KRAKI_TOOLS_SOURCE } from './pi-kraki-tools.js';
+import { DEFAULT_SESSION_MODE, normalizeSessionMode } from '@kraki/protocol';
+import { KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMode, type ToolKind } from './permission-policy.js';
+import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
+import { tmpdir } from 'node:os';
 import { fitToMaxDimension } from '../image-resize.js';
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 
 const logger = createLogger('pi-adapter');
+
+/** The subset of pi's `message_update.assistantMessageEvent` the adapter reads. */
+interface AssistantStreamEvent {
+  type: string;
+  delta?: string;
+}
 const rpcLogger = createLogger('pi-rpc');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,7 +91,7 @@ export interface PiRpcOptions {
    *  top rung, above xhigh, not an alias for it. */
   thinking?: string;
   /** Path to a pi extension loaded via `--extension`. Kraki always loads its
-   *  tools extension (finalize_reply / ask_user + permission gate). */
+   *  tools extension (ask_user / show_image + permission gate). */
   extensionPath?: string;
   /** Extra environment for the child. Kraki sets `KRAKI_META_FILE` here so the
    *  extension's kraki_get_mode can read the live permission mode. */
@@ -121,7 +130,7 @@ class PiRpcProcess {
     // the precise jsonl instead. The absolute path also survives a cwd change.
     if (this.opts.sessionFile) args.push('--session', this.opts.sessionFile);
     if (this.opts.appendSystemPrompt) args.push('--append-system-prompt', this.opts.appendSystemPrompt);
-    // Kraki tools extension (finalize_reply / ask_user / show_image /
+    // Kraki tools extension (ask_user / show_image / show_html /
     // kraki_get_mode + permission gate), always loaded. rpc mode has no built-in
     // tool-approval round-trip, so the gate's ctx.ui.confirm surfaces as an
     // extension_ui_request the adapter maps to a Kraki permission card (or
@@ -237,39 +246,40 @@ class PiRpcProcess {
 //  Section 2 — adapter: pools one PiRpcProcess per Kraki session
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Mode = 'safe' | 'discuss' | 'execute' | 'delegate';
-const MUTATING_DEFAULT_MODE: Mode = 'discuss';
+type Mode = SessionMode;
+const MUTATING_DEFAULT_MODE: Mode = DEFAULT_SESSION_MODE;
 
-/** Files that may be written without approval in discuss mode (mirrors the
- *  copilot adapter's DISCUSS_MODE_WRITE_ALLOW_LIST). */
-const DISCUSS_MODE_WRITE_ALLOW_LIST = ['plan.md'];
-
-/** Coarse tool "kind" for the permission policy — only "write" is special
- *  (writes gate in discuss); everything else (shell/read/find/custom) is
- *  treated the same, matching copilot's kind-based gating. */
-function isWriteTool(toolName: string): boolean {
-  return toolName === 'write' || toolName === 'edit';
+/** pi tool names → Kraki policy kinds. pi's built-ins are read/bash/edit/write
+ *  plus grep/find/ls; anything from a user extension is treated as a side
+ *  effect unless it is plainly read-only. */
+export function piToolKind(toolName: string): ToolKind {
+  switch (toolName) {
+    case 'read':
+    case 'grep':
+    case 'find':
+    case 'ls':
+    case 'view_image':
+    case 'memory_search':
+      return 'read';
+    case 'edit':
+    case 'write':
+      return 'write';
+    case 'bash':
+      return 'shell';
+    default:
+      return 'other';
+  }
 }
 
-/** copilot-aligned permission policy (copilot.ts makePermissionHandler):
- *  execute/delegate → auto-approve all; discuss → auto-approve everything
- *  EXCEPT non-allowlisted file writes; safe → gate every tool. Returns true
- *  when the call should run silently (no card). */
-export function shouldAutoApprove(mode: Mode, toolName: string, input: Record<string, unknown>): boolean {
-  if (mode === 'execute' || mode === 'delegate') return true;
-  if (mode === 'discuss') {
-    if (!isWriteTool(toolName)) return true;
-    const path = typeof input.path === 'string' ? input.path
-      : typeof input.file_path === 'string' ? (input.file_path as string) : '';
-    return DISCUSS_MODE_WRITE_ALLOW_LIST.some((f) => path.endsWith('/' + f) || path === f);
-  }
-  // safe → everything gates
-  return false;
+/** Kraki's shared permission policy for a pi tool call. Returns true when the
+ *  call should run silently (no card). */
+export function shouldAutoApprove(mode: Mode, toolName: string, _input: Record<string, unknown> = {}): boolean {
+  return krakiAutoApproves(mode, piToolKind(toolName));
 }
 
 function toolsForMode(_mode: Mode): string[] | undefined {
   // Full tool set in every mode (undefined = pi default set). Mutating calls in
-  // discuss/safe are gated per-call by the permission-gate extension instead of
+  // safe are gated per-call by the permission-gate extension instead of
   // being stripped, so pi can still write/bash after the user approves.
   return undefined;
 }
@@ -347,20 +357,18 @@ interface PiSession {
    *  pendingPerms — cleared on answer / kill / respawn. */
   pendingQuestions: Map<string, string>;
   /** Number of narration segments (non-empty assistant prose at message_end)
-   *  produced since the current user message. Drives the skip-finalize rule:
-   *  a turn with exactly ONE narration segment and no tool after it is already a
-   *  clean trailing reply, so no finalize round is needed. */
+   *  produced since the current user message. */
   narrationSegments: number;
   /** True once a real tool ran AFTER the most recent narration segment (reset to
    *  false whenever a narration finalizes). If the turn ends on a tool, the last
-   *  narration isn't a trailing reply → finalize. */
+   *  narration isn't a trailing reply — the turn is just its Steps. */
   toolSinceLastNarration: boolean;
   /** The most recent narration segment's finalized prose — the kept "draft" text
-   *  (keep-last). Seeds the finalize prompt and is the fallback reply. */
+   *  (keep-last); becomes the reply when no tool follows it. */
   lastNarration: string;
   /** stopReason of the most recent assistant message_end this turn ('stop' |
    *  'error' | 'aborted' | 'toolUse' | …). 'error'/'aborted' mean the run did
-   *  NOT produce a real answer → no finalize round, just idle. */
+   *  NOT produce a real answer → just idle. */
   lastStopReason: string | undefined;
   /** Backend error held until agent_end says whether Pi will retry. */
   pendingError: string | undefined;
@@ -374,8 +382,7 @@ interface PiSession {
   pendingMaintenanceIdle: boolean;
   /** The most recent narration segment whose TRACE mirror is still DEFERRED —
    *  not yet emitted as an `agent_narration` step because it might still
-   *  graduate verbatim into the concluding bubble (skip-finalize / finalize
-   *  keep-last / fallback). It is FLUSHED to the trace (a confirmed intermediate
+   *  graduate verbatim into the concluding bubble. It is FLUSHED to the trace (a confirmed intermediate
    *  step) when superseded by a newer narration or by a following tool, and
    *  DISCARDED (never traced) when it becomes the bubble — so the trailing reply
    *  never shows twice (last Step + bubble). Empty when nothing is pending. */
@@ -387,27 +394,8 @@ interface PiSession {
    *  later as a ghost turn. */
   promptAcceptanceAbort?: AbortController;
   /** True from sending an abort RPC until pi acknowledges that the agent is idle.
-   *  Prevents the aborted agent_end from injecting a new finalize prompt. */
+   *  Lets abortSession own the aborted turn's terminal boundary. */
   aborting: boolean;
-  /** True while the injected finalize round is in flight (between sending the
-   *  finalize prompt and the following agent_end). During it, ordinary narration
-   *  is suppressed so the draft stays frozen at `lastNarration`. */
-  finalizing: boolean;
-  /** Monotonic identity for finalize prompt attempts. A late rejection from an
-   *  older request must not clear a newer finalize round. */
-  finalizeAttempt: number;
-  /** True once finalize_reply was called in the finalize round (so agent_end
-   *  doesn't fall back to a generated reply). */
-  finalizeResolved: boolean;
-  /** Fallback prose captured during the finalize round (the model's message_end
-   *  text) in case it ends the round without calling finalize_reply. */
-  finalizeNarration: string;
-  /** Live-streaming state for a finalize_reply.text (resummarize): the tool-call
-   *  id currently streaming and how many chars of its `text` arg we've emitted as
-   *  onFinalizeDelta deltas, so the resummarize streams into the draft bubble. */
-  finalizeStreamId?: string;
-  finalizeStreamLen: number;
-  finalizeStream?: PiFinalizeStream;
 }
 
 // ── Dynamic model discovery via `pi --list-models` ────────────────
@@ -538,26 +526,8 @@ export const KRAKI_SYSTEM_PROMPT =
   'already see), call the show_image tool with the file path. When the human asks you to ' +
   'inspect, open, review, generate, or update a local HTML report, call show_html before ' +
   'concluding so it remains accessible in the producing message; a shell command that ' +
-  'opens the system browser is not a substitute. ' +
-  'Do NOT call finalize_reply on your own — Kraki will ask you to when it needs you to ' +
-  'conclude a turn.';
+  'opens the system browser is not a substitute.\n\n' + KRAKI_MODES_PROMPT;
 
-/** Injected at the end of a turn whose intermediate narration was dropped, so
- *  the model settles a clean final reply. Seeded with the kept draft line. */
-function finalizePrompt(draft: string): string {
-  const quoted = draft.trim()
-    ? `Your current draft closing line is:\n\n"""${draft.trim()}"""\n\n`
-    : 'You have no drafted closing line yet.\n\n';
-  return (
-    '[Kraki] Your turn is ending. Settle the final message shown to the human by ' +
-    'calling finalize_reply exactly once. ' +
-    quoted +
-    'If that line is already a good, self-contained final answer, call ' +
-    'finalize_reply({ resummarize: false }). Otherwise call finalize_reply({ ' +
-    'resummarize: true, text: "<a short, self-contained, plain-text final ' +
-    'message>" }). Do not run any other tool or add prose — just call finalize_reply.'
-  );
-}
 
 interface PromptWatchdogOptions {
   ackGraceMs: number;
@@ -709,7 +679,10 @@ export class PiAdapter extends AgentAdapter {
     for (const p of [this.sidecarPath(sessionId), this.legacySidecarPath(sessionId)]) {
       if (!existsSync(p)) continue;
       try {
-        return JSON.parse(readFileSync(p, 'utf8'));
+        const meta = JSON.parse(readFileSync(p, 'utf8'));
+        // Sidecars written before the three-mode rename (discuss/execute).
+        if (meta && typeof meta === 'object' && 'mode' in meta) meta.mode = normalizeSessionMode(meta.mode);
+        return meta;
       } catch {
         /* try next */
       }
@@ -781,7 +754,7 @@ export class PiAdapter extends AgentAdapter {
       extensionPath: this.ensureToolsExtension(),
       env,
     });
-    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), relayTurnId: undefined, eventTurnId: undefined, exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 0, settledTurn: 0, pendingMaintenanceIdle: false, pendingNarration: '', aborting: false, finalizing: false, finalizeAttempt: 0, finalizeResolved: false, finalizeNarration: '', finalizeStreamLen: 0 };
+    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), relayTurnId: undefined, eventTurnId: undefined, exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 0, settledTurn: 0, pendingMaintenanceIdle: false, pendingNarration: '', aborting: false };
     proc.onEvent = (e) => this.handleEvent(sessionId, e);
     proc.onExit = () => this.handleProcessExit(sessionId, sess);
     proc.start();
@@ -898,18 +871,6 @@ export class PiAdapter extends AgentAdapter {
     // recovery. Only a completed answer may settle before agent_settled.
     if (willRetry || s.aborting || s.settledTurn === s.logicalTurn || s.lastStopReason !== 'stop') return;
 
-    if (s.finalizing) {
-      if (!s.finalizeResolved) {
-        const fallback = s.finalizeNarration.trim() || s.lastNarration.trim();
-        s.pendingNarration = '';
-        if (fallback) this.emitMessage(sessionId, s, fallback);
-        else this.onSystemMessage?.(sessionId, { kind: 'no_reply', ...this.lifecycleEvent(s) });
-      }
-      s.finalizing = false;
-      this.emitIdleOnce(sessionId, s);
-      return;
-    }
-
     const reply = s.lastNarration.trim();
     if (s.toolSinceLastNarration || !reply) return;
 
@@ -941,14 +902,8 @@ export class PiAdapter extends AgentAdapter {
     s.lastStopReason = undefined;
     s.pendingError = undefined;
     s.pendingMaintenanceIdle = false;
-    s.finalizeStream?.clear();
     s.pendingNarration = '';
     s.aborting = false;
-    s.finalizing = false;
-    s.finalizeResolved = false;
-    s.finalizeNarration = '';
-    s.finalizeStreamId = undefined;
-    s.finalizeStreamLen = 0;
   }
 
   /** Wait for the ORIGINAL prompt's preflight ACK without ever resending it.
@@ -1068,12 +1023,6 @@ export class PiAdapter extends AgentAdapter {
         this.setCompacting(sessionId, false);
         break;
       }
-      case 'message_start': {
-        if ((e.message as { role?: string } | undefined)?.role === 'assistant') {
-          this.sessions.get(sessionId)?.finalizeStream?.clear();
-        }
-        break;
-      }
       case 'message_update': {
         // Real model/tool activity also proves a stale compaction indicator is
         // no longer current. Clear only the adapter-owned compaction lifecycle;
@@ -1082,28 +1031,7 @@ export class PiAdapter extends AgentAdapter {
         const s = this.sessions.get(sessionId);
         const am = (e as { assistantMessageEvent?: AssistantStreamEvent }).assistantMessageEvent;
         if (am?.type === 'text_delta' && typeof am.delta === 'string') {
-          // During the injected finalize round the draft bubble must stay FROZEN
-          // at the kept closing line (lastNarration) — any pre-thinking prose the
-          // model emits before calling finalize_reply is suppressed so the draft
-          // doesn't churn. Outside the finalize round, narration streams normally.
-          if (!s?.finalizing) this.onMessageDelta?.(sessionId, { content: am.delta, ...this.lifecycleEvent(s) });
-          break;
-        }
-        // Pi 0.87 sends delta-only RPC records, unlike SDK partial snapshots.
-        // Reconstruct finalize arguments per block and reconcile toolcall_end.
-        if (s && am && ['toolcall_start', 'toolcall_delta', 'toolcall_end'].includes(am.type)) {
-          const update = (s.finalizeStream ??= new PiFinalizeStream()).update(am);
-          if (update) {
-            if (s.finalizeStreamId !== update.id) {
-              s.finalizeStreamId = update.id;
-              s.finalizeStreamLen = 0;
-            }
-            if (update.text.length > s.finalizeStreamLen) {
-              const suffix = update.text.slice(s.finalizeStreamLen);
-              s.finalizeStreamLen = update.text.length;
-              this.onFinalizeDelta?.(sessionId, { content: suffix, ...this.lifecycleEvent(s) });
-            }
-          }
+          this.onMessageDelta?.(sessionId, { content: am.delta, ...this.lifecycleEvent(s) });
         }
         break;
       }
@@ -1129,12 +1057,7 @@ export class PiAdapter extends AgentAdapter {
             .join('')
             .trim();
           if (m.stopReason !== 'error' && prose) {
-            if (s?.finalizing) {
-              // In the finalize round: keep the model's prose ONLY as a fallback
-              // reply (used if it ends the round without calling finalize_reply).
-              // Do NOT trace it or reset the draft — the draft is frozen.
-              s.finalizeNarration = prose;
-            } else if (s) {
+            if (s) {
               // Ordinary NARRATION: streams live to the draft bubble (see
               // message_update). RECONCILE the live draft NOW on every segment
               // (onNarration → card.onNarrationFinal) so the throttled draft is
@@ -1144,7 +1067,7 @@ export class PiAdapter extends AgentAdapter {
               // hold it as `pendingNarration` and only trace it once it is
               // confirmed intermediate (a newer narration or a tool follows) —
               // never the trailing reply. Flush the PREVIOUS pending here (a new
-              // segment supersedes it). Tracked for the skip-finalize rule.
+              // segment supersedes it). Tracked to decide the reply at agent_end.
               this.onNarration?.(sessionId, { content: prose, ...this.lifecycleEvent(s) });
               this.flushPendingNarration(sessionId, s);
               s.pendingNarration = prose;
@@ -1160,42 +1083,11 @@ export class PiAdapter extends AgentAdapter {
       case 'tool_execution_start': {
         this.setCompacting(sessionId, false);
         const toolName = String(e.toolName ?? 'tool');
-        if (toolName === 'finalize_reply') {
-          // The turn-conclusion tool — never a TRACE step. Only meaningful during
-          // the injected finalize round; crystallize the settled final reply here.
-          const s = this.sessions.get(sessionId);
-          if (s?.finalizing) {
-            const args = (e.args as { resummarize?: unknown; text?: unknown }) ?? {};
-            const resummarize = args.resummarize === true;
-            const text = typeof args.text === 'string' ? args.text.trim() : '';
-            s.finalizeResolved = true;
-            const useResummarized = resummarize && text.length > 0;
-            const reply = useResummarized ? text : s.lastNarration.trim();
-            if (useResummarized) {
-              // The reply is a fresh summary distinct from the drafted narration,
-              // so that last narration IS a genuine step — flush it to the trace.
-              this.flushPendingNarration(sessionId, s);
-            } else {
-              // keep-last: the pending narration graduates verbatim into the
-              // bubble — DISCARD it so it isn't ALSO traced as the last Step.
-              s.pendingNarration = '';
-            }
-            if (reply) {
-              // For resummarize the streamed text already replaced the draft; for
-              // keep (resummarize:false) the draft is still the frozen narration.
-              // onMessage clears the draft and lands the permanent bubble in place.
-              this.emitMessage(sessionId, s, reply);
-            } else {
-              this.onSystemMessage?.(sessionId, { kind: 'no_reply', ...this.lifecycleEvent(s) });
-            }
-          }
-          break;
-        }
         // ask_user surfaces via extension_ui_request (→ question card), not as a
         // TRACE step — swallow its tool_* so it doesn't leak into the trace.
         if (toolName === 'ask_user') break;
-        // A real tool ran — mark that the current narration (if any) is no longer
-        // the trailing reply, so the skip-finalize rule requires a finalize round.
+        // A real tool ran — the current narration (if any) is no longer the
+        // trailing reply.
         // The pending narration is now confirmed intermediate (a tool follows it),
         // so FLUSH it to the trace BEFORE the tool step to keep chronological order.
         const s = this.sessions.get(sessionId);
@@ -1213,8 +1105,8 @@ export class PiAdapter extends AgentAdapter {
       }
       case 'tool_execution_end': {
         const toolName = String(e.toolName ?? 'tool');
-        // finalize_reply / ask_user are human-interaction tools, not TRACE.
-        if (toolName === 'finalize_reply' || toolName === 'ask_user') break;
+        // ask_user is a human-interaction tool, not TRACE.
+        if (toolName === 'ask_user') break;
         // pi tool results are `{ content: [TextContent|ImageContent], details }`.
         // Extract text for the trace and externalize any image blocks (e.g. from
         // the show_image tool) into the attachment store so their bytes reach
@@ -1327,39 +1219,7 @@ export class PiAdapter extends AgentAdapter {
         if (s.settledTurn === s.logicalTurn) break;
         if (s.aborting) {
           // abortSession owns the terminal idle(reason=aborted) notification.
-          // Pi emits agent_end before acknowledging the abort RPC; do not turn
-          // that aborted run into a fresh finalize prompt.
           s.pendingNarration = '';
-          s.finalizing = false;
-          s.finalizeResolved = false;
-          s.finalizeNarration = '';
-          s.finalizeStreamId = undefined;
-          s.finalizeStreamLen = 0;
-          break;
-        }
-        if (s.finalizing) {
-          // The injected finalize round just ended. If the model called
-          // finalize_reply, the reply was already crystallized. Otherwise fall
-          // back to its finalize-round prose, then the kept draft, then a notice.
-          if (!s.finalizeResolved) {
-            // Prefer the finalize-round's own prose; if the model produced none,
-            // fall back to the kept draft. When the fallback is the finalize
-            // prose (distinct from the draft), the pending narration is a genuine
-            // step → flush it; when it IS the kept draft, that draft graduates
-            // into the bubble → discard so it isn't ALSO traced.
-            const finalizeProse = s.finalizeNarration.trim();
-            if (finalizeProse) {
-              this.flushPendingNarration(sessionId, s);
-              this.emitMessage(sessionId, s, finalizeProse);
-            } else {
-              s.pendingNarration = '';
-              const draft = s.lastNarration.trim();
-              if (draft) this.emitMessage(sessionId, s, draft);
-              else this.onSystemMessage?.(sessionId, { kind: 'no_reply', ...this.lifecycleEvent(s) });
-            }
-          }
-          s.finalizing = false;
-          this.emitIdleOnce(sessionId, s);
           break;
         }
         // Resolve a provisional backend failure only at this authoritative run
@@ -1373,59 +1233,20 @@ export class PiAdapter extends AgentAdapter {
           this.emitIdleOnce(sessionId, s);
           break;
         }
-        // The run produced a natural closing answer: the last narration was not
-        // followed by a tool, so it IS the model's final reply — graduate it
-        // directly into the chat, regardless of how many narration segments
-        // preceded it (earlier ones are already captured as trace steps). This
-        // replaces the old "exactly one segment" rule, which forced a finalize
-        // round on every multi-step turn. Measured across recent sessions that
-        // finalize round rewrote the draft only ~15% of the time (almost always
-        // compression, never salvage) while re-running the model with the full
-        // context + thinking budget on every turn — tens of seconds of latency
-        // for a near-no-op.
+        // A natural closing answer: the last narration was not followed by a
+        // tool, so it IS the model's final reply — graduate it verbatim (and
+        // discard its deferred trace so it isn't ALSO the last Step).
         if (!s.toolSinceLastNarration && s.lastNarration.trim()) {
-          // The trailing narration graduates verbatim into the bubble — discard
-          // the deferred trace so it isn't ALSO shown as the last Step.
           s.pendingNarration = '';
           this.emitMessage(sessionId, s, s.lastNarration.trim());
           this.emitIdleOnce(sessionId, s);
           break;
         }
-        if (s.proc.alive) {
-          s.finalizing = true;
-          const finalizeAttempt = ++s.finalizeAttempt;
-          s.finalizeResolved = false;
-          s.finalizeNarration = '';
-          s.finalizeStreamId = undefined;
-          s.finalizeStreamLen = 0;
-          logger.debug({ sessionId, segments: s.narrationSegments }, 'injecting finalize round');
-          void s.proc.request(
-            'prompt',
-            { message: finalizePrompt(s.lastNarration) },
-            { timeoutMs: null },
-          ).catch((err: unknown) => {
-            // Ignore a stale rejection after this finalize round ended or a newer
-            // attempt took ownership of the session.
-            if (!s.finalizing || s.finalizeAttempt !== finalizeAttempt || s.exitObserved) return;
-            s.finalizing = false;
-            s.finalizeResolved = false;
-            s.finalizeNarration = '';
-            s.finalizeStreamId = undefined;
-            s.finalizeStreamLen = 0;
-            s.pendingNarration = '';
-            const fallback = s.lastNarration.trim();
-            if (fallback) this.emitMessage(sessionId, s, fallback);
-            else this.onSystemMessage?.(sessionId, { kind: 'no_reply', ...this.lifecycleEvent(s) });
-            logger.warn({ sessionId, err: (err as Error).message }, 'pi finalize prompt rejected');
-            this.emitIdleOnce(sessionId, s);
-          });
-          break;
-        }
-        // Process gone before we could finalize — best-effort crystallize the
-        // kept draft, which graduates into the bubble → discard its deferred trace.
-        s.pendingNarration = '';
-        const fallback = s.lastNarration.trim();
-        if (fallback) this.emitMessage(sessionId, s, fallback);
+        // The run ended on a tool call with no closing prose. Kraki relays that
+        // as-is: the turn is its Steps, with no extra model call and nothing
+        // injected into the user's pi session. (A closing summary, if wanted,
+        // belongs in the user's own pi configuration.)
+        this.flushPendingNarration(sessionId, s);
         this.emitIdleOnce(sessionId, s);
         break;
       }
@@ -1596,7 +1417,7 @@ export class PiAdapter extends AgentAdapter {
     const pendingMode = this.pendingModeSignals.get(sessionId);
     if (pendingMode) {
       this.pendingModeSignals.delete(sessionId);
-      text = `[kraki: mode changed to ${pendingMode}]\n\n${text}`;
+      text = `${modeChangeSignal(pendingMode as SessionMode)}\n\n${text}`;
     }
     const images = (attachments ?? [])
       .filter((a): a is import('@kraki/protocol').ImageAttachment => a.type === 'image')
@@ -1628,8 +1449,7 @@ export class PiAdapter extends AgentAdapter {
       return;
     }
 
-    // A normal prompt opens a fresh logical turn: reset the finalize/skip
-    // tracking so the skip-finalize rule and finalize round apply per user prompt.
+    // A normal prompt opens a fresh logical turn: reset per-turn reply tracking.
     this.resetTurnTracking(s);
     // Submit exactly once. Pi only ACKs after prompt preflight, which may spend
     // minutes compacting even though the frame was delivered successfully. The
@@ -1814,7 +1634,7 @@ export class PiAdapter extends AgentAdapter {
     // already waiting on the human. Use the existing UI response rather than a
     // Pi steer: steer creates an independent agent lifecycle whose agent_end can
     // incorrectly settle the real user turn.
-    if (mode === 'execute' || mode === 'delegate') {
+    if (mode === 'auto' || mode === 'delegate') {
       for (const permissionId of s.pendingPerms.keys()) {
         s.proc.sendRaw({ type: 'extension_ui_response', id: permissionId, confirmed: true });
         s.pendingPerms.delete(permissionId);
@@ -1874,6 +1694,40 @@ export class PiAdapter extends AgentAdapter {
         logger.warn({ err: (err as Error).message, sessionId, thinking }, 'pi thinking level change failed');
       }
     }
+  }
+
+  /** Title side-call: one-shot `pi --print` on the session's own provider and
+   *  model, with tools, extensions, skills, prompt templates, context files and
+   *  thinking all off and no session file. It never touches the session's pi
+   *  process or transcript, so it is safe while a turn is running. */
+  async generateTitle(sessionId: string, context: TitleContext): Promise<string | null> {
+    const model = context.model
+      ?? this.sessions.get(sessionId)?.model
+      ?? this.loadMeta(sessionId)?.model
+      ?? this.getDefaultModel();
+    const [provider, modelId] = this.resolveModelId(model);
+    const args = [
+      '--print', '--no-session', '--no-tools', '--no-extensions', '--no-skills',
+      '--no-prompt-templates', '--no-context-files', '--thinking', 'off',
+      '--provider', provider, '--model', modelId,
+      '--system-prompt', TITLE_SYSTEM_PROMPT,
+      buildTitlePrompt(context),
+    ];
+    return new Promise<string | null>((resolve) => {
+      let out = '';
+      let err = '';
+      let done = false;
+      const finish = (value: string | null) => { if (!done) { done = true; clearTimeout(timer); resolve(value); } };
+      const child = spawn(this.cliPath, args, { cwd: tmpdir(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+      const timer = setTimeout(() => { child.kill(); logger.warn({ sessionId }, 'pi title generation timed out'); finish(null); }, 45_000);
+      child.stdout.on('data', (d) => { out += d.toString(); });
+      child.stderr.on('data', (d) => { err += d.toString(); });
+      child.on('error', (e) => { logger.warn({ sessionId, err: e.message }, 'pi title spawn failed'); finish(null); });
+      child.on('exit', (code) => {
+        if (code !== 0) logger.warn({ sessionId, code, stderr: err.slice(-300) }, 'pi title generation failed');
+        finish(code === 0 ? cleanTitle(out) : null);
+      });
+    });
   }
 
   async listSessions(): Promise<SessionInfo[]> {
@@ -1987,7 +1841,6 @@ export class PiAdapter extends AgentAdapter {
         && s.pendingQuestions.size === 0
         && s.pendingPerms.size === 0
         && !s.aborting
-        && !s.finalizing
         && now - s.lastActivity > IDLE_TTL_MS
       ) {
         logger.info({ id }, 'Evicting idle pi session');

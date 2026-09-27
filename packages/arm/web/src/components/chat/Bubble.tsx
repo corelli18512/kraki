@@ -51,6 +51,16 @@ export const Bubble = memo(function Bubble({ row, ctx }: { row: ChatRow; ctx: Bu
   const side = rowSide(row);
   if (side === 'user') return <UserRow row={row} ctx={ctx} />;
   if (side === 'system') {
+    // A steps-only turn (the agent ended on tool calls without closing prose,
+    // system_message kind no_reply): just its Steps control, no invented text.
+    if (row.kind === 'spine' && payloadOf(row.item.message).kind === 'no_reply' && !contentOf(row.item.message)) {
+      const seq = seqOf(row.item.message);
+      return (
+        <div className="krow krow-agent" data-testid="steps-only-turn">
+          <button type="button" className="ksteps" aria-label="Show steps" onClick={() => ctx.onOpenSteps?.(seq)}>···</button>
+        </div>
+      );
+    }
     const text = row.kind === 'spine' ? contentOf(row.item.message) || 'System notice' : '';
     return (
       <div className="krow krow-agent">

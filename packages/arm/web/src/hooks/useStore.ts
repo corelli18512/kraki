@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { DEFAULT_SESSION_MODE, normalizeSessionMode } from '@kraki/protocol';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Store, ChatMessage, ConnectionStatus, SessionCard, WebSessionSummary } from '../types/store';
 import type { DeviceSummary } from '@kraki/protocol';
@@ -57,7 +58,7 @@ const initialState = {
   drafts: new Map<string, string>(),
   navigateToSession: null,
   activeSessionId: null,
-  sessionModes: new Map<string, 'safe' | 'discuss' | 'execute' | 'delegate'>(),
+  sessionModes: new Map<string, import('@kraki/protocol').SessionMode>(),
   githubClientId: null,
   vapidPublicKey: null,
   relayVersion: null,
@@ -351,10 +352,11 @@ export const useStore = create<Store>()(persist((set) => ({
   setSessionMode: (sessionId, mode) =>
     set((state) => {
       const next = new Map(state.sessionModes);
-      if (mode === 'discuss') {
-        next.delete(sessionId); // discuss is default, no need to store
+      const normalized = normalizeSessionMode(mode);
+      if (normalized === DEFAULT_SESSION_MODE) {
+        next.delete(sessionId); // the default is implied, no need to store
       } else {
-        next.set(sessionId, mode);
+        next.set(sessionId, normalized);
       }
       return { sessionModes: next };
     }),

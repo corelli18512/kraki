@@ -140,7 +140,7 @@ struct IOSClientAlignmentPreview: View {
                 model: model,
                 title: title,
                 state: state,
-                mode: .discuss,
+                mode: .auto,
                 lastSeq: lastSeq,
                 readSeq: readSeq,
                 messageCount: lastSeq,

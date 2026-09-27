@@ -466,7 +466,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
                     MacChatBubbleContentBuilder.make(message: message, sessionId: self.sid, agent: "claude", documentWidth: 420)
                 }
             }
-            scrollView.chatDocumentView.apply(contents: items, documentWidth: 420, sessionMode: .discuss)
+            scrollView.chatDocumentView.apply(contents: items, documentWidth: 420, sessionMode: .auto)
             scrollView.contentView.bounds.origin.y = 600
             scrollView.reflectScrolledClipView(scrollView.contentView)
             window.contentView = nil

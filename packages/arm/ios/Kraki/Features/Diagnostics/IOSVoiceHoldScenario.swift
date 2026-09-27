@@ -14,7 +14,7 @@ import VoiceInputCore
         app.deviceId = "voice-test-app"
         app.user = UserInfo(id: "voice-test-user", login: "Isolated test")
         for id in ["voice-a", "voice-b"] {
-            app.sessionStore.sessions[id] = SessionInfo(id: id, deviceId: "voice-test-device", deviceName: "Isolated Simulator", agent: "pi", title: id == "voice-a" ? "Voice Hold C" : "Other conversation", state: .idle, mode: .discuss, lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: Date(), pinned: false)
+            app.sessionStore.sessions[id] = SessionInfo(id: id, deviceId: "voice-test-device", deviceName: "Isolated Simulator", agent: "pi", title: id == "voice-a" ? "Voice Hold C" : "Other conversation", state: .idle, mode: .auto, lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: Date(), pinned: false)
         }
         app.deviceStore.devices["voice-test-device"] = DeviceSummary(id: "voice-test-device", name: "Isolated Simulator", role: .tentacle, kind: .desktop, online: true)
         app.sessionStore.activeSessionId = "voice-a"

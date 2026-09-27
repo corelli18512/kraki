@@ -117,6 +117,15 @@ export async function detectAvailableAgents(): Promise<AgentId[]> {
     logger.debug('pi not available');
   }
 
+  // codex: `codex` CLI on PATH (package @openai/codex). Login is verified at
+  // adapter start (account/read) so an unauthenticated install is skipped.
+  if (cliExists('codex')) {
+    agents.push('codex');
+    logger.info('Detected Codex: codex CLI OK');
+  } else {
+    logger.debug('codex not available');
+  }
+
   return agents;
 }
 
@@ -182,6 +191,13 @@ export class MultiAgentAdapter extends AgentAdapter {
           // pi has no MCP; it only needs the attachment store to externalize
           // image bytes from its show_image tool (krakiMcp is not applicable).
           adapter = new PiAdapter({ cliPath: piPath, attachmentStore: this.opts.attachmentStore });
+        } else if (id === 'codex') {
+          const { CodexAdapter } = await import('./codex.js');
+          const codexPath = resolveCliPath('codex');
+          if (!codexPath) { logger.warn('codex CLI path unresolved, skipping'); continue; }
+          // Kraki tools (ask_user / show_image / kraki_get_mode) are hosted by the
+          // adapter as Codex dynamic tools, so krakiMcp is not needed.
+          adapter = new CodexAdapter({ cliPath: codexPath, attachmentStore: this.opts.attachmentStore });
         } else {
           logger.warn({ id }, 'Unknown agent ID, skipping');
           continue;
@@ -317,7 +333,7 @@ export class MultiAgentAdapter extends AgentAdapter {
     return all;
   }
 
-  setSessionMode(sessionId: string, mode: 'safe' | 'discuss' | 'execute' | 'delegate'): void {
+  setSessionMode(sessionId: string, mode: import('@kraki/protocol').SessionMode): void {
     this.getSessionAdapter(sessionId).setSessionMode(sessionId, mode);
   }
 
@@ -333,10 +349,17 @@ export class MultiAgentAdapter extends AgentAdapter {
     this.getSessionAdapter(sessionId).setSessionUsage(sessionId, usage);
   }
 
-  async generateTitle(context: Parameters<AgentAdapter['generateTitle']>[0]): Promise<string | null> {
-    // Use the first available adapter for title generation
-    const adapter = this.adapters.values().next().value;
-    return adapter ? adapter.generateTitle(context) : null;
+  async generateTitle(sessionId: string, context: import('./title.js').TitleContext): Promise<string | null> {
+    // A session is titled by ITS OWN agent, on its own account and model —
+    // never by whichever adapter happens to be registered first. If that
+    // agent is not running, there is no title rather than a cross-agent call.
+    const agentId = (context.agent as AgentId | undefined) ?? this.sessionAgent.get(sessionId);
+    const adapter = agentId ? this.adapters.get(agentId) : undefined;
+    if (!adapter) {
+      logger.debug({ sessionId, agentId }, 'title: session agent unavailable, skipping');
+      return null;
+    }
+    return adapter.generateTitle(sessionId, context);
   }
 
   override registerSessionAgent(sessionId: string, agentId: string): void {
@@ -395,7 +418,6 @@ export class MultiAgentAdapter extends AgentAdapter {
     };
     adapter.onMessage = (sid, e) => this.onMessage?.(sid, e);
     adapter.onMessageDelta = (sid, e) => this.onMessageDelta?.(sid, e);
-    adapter.onFinalizeDelta = (sid, e) => this.onFinalizeDelta?.(sid, e);
     adapter.onNarration = (sid, e) => this.onNarration?.(sid, e);
     adapter.onNarrationTrace = (sid, e) => this.onNarrationTrace?.(sid, e);
     adapter.onPermissionRequest = (sid, e) => this.onPermissionRequest?.(sid, e);

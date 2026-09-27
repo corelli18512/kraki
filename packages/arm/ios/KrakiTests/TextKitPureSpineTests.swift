@@ -372,7 +372,7 @@ final class TextKitPureSpineTests: XCTestCase {
         let session = SessionInfo(
             id: "card-projection", deviceId: "device", deviceName: "Macbook",
             agent: "pi", model: "gpt-5.6-sol", title: "Shared Card",
-            state: .idle, mode: .discuss, lastSeq: 91, readSeq: 12,
+            state: .idle, mode: .auto, lastSeq: 91, readSeq: 12,
             messageCount: 91, createdAt: Date(timeIntervalSince1970: 1_700_000_000),
             pinned: true
         )
@@ -1056,15 +1056,6 @@ final class TextKitPureSpineTests: XCTestCase {
         )
     }
 
-    func testDiscussWritePermissionUsesExecuteAction() {
-        XCTAssertTrue(BubbleActionSlot.switchesToExecute(mode: .discuss, toolName: "write_file"))
-        XCTAssertTrue(BubbleActionSlot.switchesToExecute(mode: .discuss, toolName: "create_file"))
-        XCTAssertTrue(BubbleActionSlot.switchesToExecute(mode: .discuss, toolName: "edit_file"))
-        XCTAssertTrue(BubbleActionSlot.switchesToExecute(mode: .discuss, toolName: "edit"))
-        XCTAssertFalse(BubbleActionSlot.switchesToExecute(mode: .discuss, toolName: "bash"))
-        XCTAssertFalse(BubbleActionSlot.switchesToExecute(mode: .safe, toolName: "write_file"))
-        XCTAssertFalse(BubbleActionSlot.switchesToExecute(mode: .execute, toolName: "write_file"))
-    }
 
     func testTurnProjectionFoldsErrorsReplyAndTerminalIntoOneAgentBubble() {
         let sid = "projection-terminal"

@@ -48,7 +48,7 @@ enum BubbleActionMetrics {
 
 struct BubbleActionSlot: View {
     let action: ChatMessage
-    var sessionMode: SessionMode = .discuss
+    var sessionMode: SessionMode = .auto
     var onResolvePermission: (String, String?, String) -> Void = { _, _, _ in }
     var onAnswerQuestion: (String, String) -> Void = { _, _ in }
 
@@ -114,7 +114,6 @@ struct BubbleActionSlot: View {
     }
 
     private func permissionInput(_ message: ChatMessage) -> some View {
-        let writeInDiscuss = Self.switchesToExecute(mode: sessionMode, toolName: message.toolName)
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "lock.fill")
@@ -123,7 +122,7 @@ struct BubbleActionSlot: View {
                     .padding(.top, 1)
                 VStack(alignment: .leading, spacing: 3) {
                     if message.payload["decision"]?.stringValue == nil {
-                        Text(writeInDiscuss ? "Write Approval — Discuss Mode" : "Permission Required")
+                        Text("Approval needed — Safe mode")
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(.orange)
                     }
@@ -160,11 +159,7 @@ struct BubbleActionSlot: View {
             if message.payload["decision"]?.stringValue == nil {
                 HStack(spacing: 8) {
                     permissionButton("Approve", message, decision: "approve", foreground: .white, fill: .green, border: .clear)
-                    if writeInDiscuss {
-                        permissionButton("Switch to Execute", message, decision: "execute", foreground: .orange, fill: .orange.opacity(0.12), border: .orange.opacity(0.35))
-                    } else {
-                        permissionButton("Allow in Session", message, decision: "always_allow", foreground: .green, fill: .green.opacity(0.12), border: .green.opacity(0.35))
-                    }
+                    permissionButton("Allow in Session", message, decision: "always_allow", foreground: .green, fill: .green.opacity(0.12), border: .green.opacity(0.35))
                     permissionButton("Deny", message, decision: "deny", foreground: .red, fill: .red.opacity(0.10), border: .red.opacity(0.35))
                 }
                 .frame(maxWidth: .infinity)
@@ -272,10 +267,6 @@ struct BubbleActionSlot: View {
         onAnswerQuestion(questionId, answer)
     }
 
-    static func switchesToExecute(mode: SessionMode, toolName: String?) -> Bool {
-        guard mode == .discuss, let toolName else { return false }
-        return ["write", "write_file", "create", "create_file", "edit", "edit_file"].contains(toolName)
-    }
 }
 
 /// UIKit wrapper that hosts `BubbleActionSlot` as a subview of `TKBubbleCell`.
@@ -409,7 +400,7 @@ enum TKActionMeasure {
         assert(Thread.isMainThread)
         let host = shared ?? BubbleActionHostView(frame: .zero)
         shared = host
-        host.configure(action: action, sessionMode: .discuss)
+        host.configure(action: action, sessionMode: .auto)
         return host.measuredHeight(forWidth: width)
     }
 }

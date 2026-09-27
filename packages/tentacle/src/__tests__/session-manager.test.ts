@@ -943,7 +943,7 @@ describe('SessionManager', () => {
       expect(entry!.preview!.text).toBe('Halfway through…');
     });
 
-    it('preview shows a system_message (no-reply) outcome', () => {
+    it('a steps-only turn (no_reply) keeps the user prompt as the preview', () => {
       const { sessionId } = sm.createSession('copilot');
       sm.appendMessage(sessionId, 'user_message', JSON.stringify({
         type: 'user_message', sessionId, payload: { content: 'Hello?' },
@@ -953,8 +953,8 @@ describe('SessionManager', () => {
       }));
 
       const entry = sm.getSessionList().find(s => s.id === sessionId);
-      expect(entry!.preview!.type).toBe('agent');
-      expect(entry!.preview!.text).toBe('No reply');
+      expect(entry!.preview!.type).toBe('user');
+      expect(entry!.preview!.text).toBe('Hello?');
     });
   });
 

@@ -116,15 +116,16 @@ describe('SessionPage', () => {
     withSession();
     renderWithRoute('/session/s1', <SessionPage />);
     expect(screen.getByText('Fix the cache')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Discuss/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Auto/ })).toBeInTheDocument();
   });
 
   it('the mode capsule switches the session mode', async () => {
     withSession();
     renderWithRoute('/session/s1', <SessionPage />);
-    await userEvent.click(screen.getByRole('button', { name: /Discuss/ }));
-    await userEvent.click(screen.getByRole('menuitemradio', { name: /Execute/ }));
-    expect(wsClient.setSessionMode).toHaveBeenCalledWith('s1', 'execute');
+    await userEvent.click(screen.getByRole('button', { name: /Auto/ }));
+    expect(screen.queryByRole('menuitemradio', { name: /Discuss|Execute/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('menuitemradio', { name: /Safe/ }));
+    expect(wsClient.setSessionMode).toHaveBeenCalledWith('s1', 'safe');
   });
 
   it('an offline device shows a banner and messages still queue', () => {

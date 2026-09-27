@@ -955,7 +955,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// in-place tail updates (which re-point an existing visible cell at a new
     /// row identity instead of reloading the list).
     private func configureCell(_ cell: TKBubbleCell, at indexPath: IndexPath) {
-        cell.sessionMode = vm.session?.mode ?? .discuss
+        cell.sessionMode = vm.session?.mode ?? .auto
         cell.attachmentStore = appState.attachmentStore
         cell.onResolvePermission = onResolvePermission
         cell.onAnswerQuestion = onAnswerQuestion

@@ -41,7 +41,7 @@ export function SessionPage() {
   const deviceModelDetails = deviceAgent?.modelDetails;
 
   const isPending = useStore((s) => sessionId ? s.pendingSessions.has(sessionId) : false);
-  const sessionMode = useStore((s) => (sessionId ? s.sessionModes.get(sessionId) : undefined) ?? 'discuss') as SessionMode;
+  const sessionMode = useStore((s) => (sessionId ? s.sessionModes.get(sessionId) : undefined) ?? 'auto') as SessionMode;
   const narrow = useNarrow();
 
   // Navigate home when session is deleted (removed from store while viewing)

@@ -7,6 +7,7 @@
  */
 
 import { WebSocket } from 'ws';
+import { normalizeSessionMode, toWireSessionMode } from '@kraki/protocol';
 import { appendFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -193,6 +194,9 @@ export class RelayClient {
    *  "Steps" affordance from replay alone. In-memory: a tentacle restart
    *  mid-turn just resets the count (the trace.jsonl data is unaffected). */
   private turnStepCounts = new Map<string, number>();
+  /** Sessions whose current turn already has a spine outcome (reply, system
+   *  notice or terminal status). Reset with the step counter per user turn. */
+  private turnHasOutcome = new Set<string>();
   private legacyReplayWarned = new Set<string>();
   /** Prefer challenge auth when the relay already knows this device */
   private preferChallengeAuth = true;
@@ -505,6 +509,7 @@ export class RelayClient {
       });
     } else {
       this.clearOpenQuestions(sessionId);
+      this.anchorStepsOnlyTurn(sessionId);
     }
     this.resolveTurnIdle(sessionId);
     this.sessionManager.markIdle(sessionId);
@@ -521,6 +526,17 @@ export class RelayClient {
     // (broadcastSessionList otherwise only fires on question/permission events).
     this.broadcastSessionList();
     this.maybeGenerateTitle(sessionId);
+  }
+
+  /** A turn that ended on tool calls with no closing prose is relayed as-is:
+   *  it has Steps but no reply. Give those Steps a spine anchor (protocol
+   *  SystemMessage kind `no_reply`, which clients render as a steps-only
+   *  section) — for every agent alike, instead of each adapter improvising. */
+  private anchorStepsOnlyTurn(sessionId: string): void {
+    if (this.turnHasOutcome.has(sessionId)) return;
+    if ((this.turnStepCounts.get(sessionId) ?? 0) === 0) return;
+    this.card.onBubble(sessionId);
+    this.send({ type: 'system_message', sessionId, payload: { kind: 'no_reply' } });
   }
 
   /** Persist the durable user-visible outputs of a genuine completed turn on
@@ -1619,13 +1635,18 @@ export class RelayClient {
           break;
         }
         case 'set_session_mode': {
-          const mode = msg.payload.mode;
+          // Clients of any vintage may send legacy names. An explicit choice
+          // of 'discuss' comes from a pre-rename client whose UI will keep
+          // showing Discuss (it ignores its own echo), so fail closed: honour
+          // it as safe rather than silently widening to auto. Persisted
+          // four-mode sessions still migrate discuss → auto on read.
+          const mode = msg.payload.mode === 'discuss' ? 'safe' : normalizeSessionMode(msg.payload.mode);
           this.adapter.setSessionMode(sessionId, mode);
           this.sessionManager.setMode(sessionId, mode);
           this.send({
             type: 'session_mode_set',
             sessionId,
-            payload: { mode },
+            payload: { mode: toWireSessionMode(mode) },
           });
           break;
         }
@@ -2073,14 +2094,6 @@ export class RelayClient {
       if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
       // Streaming narration/progress prose → the draft bubble (coalesced in
       // send()). Rendered as a clean in-flow spine bubble, kept-last per segment.
-      this.card.onDelta(sessionId, event.content);
-    };
-
-    // Streaming finalize_reply.text (resummarize) → the draft bubble, replacing
-    // the frozen final narration in place so it morphs seamlessly into the final
-    // reply. Finalizes into the agent_message spine bubble at idle.
-    this.adapter.onFinalizeDelta = (sessionId, event) => {
-      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
       this.card.onDelta(sessionId, event.content);
     };
 
@@ -3128,7 +3141,9 @@ export class RelayClient {
     if (sessionId) {
       if (type === 'user_message' && (enriched.payload as { delivery?: string } | undefined)?.delivery !== 'steer') {
         this.turnStepCounts.set(sessionId, 0);
+        this.turnHasOutcome.delete(sessionId);
       } else if (type === 'agent_message' || type === 'system_message' || type === 'interrupted_turn' || type === 'turn_status') {
+        this.turnHasOutcome.add(sessionId);
         const p = enriched.payload as Record<string, unknown> | undefined;
         if (p && typeof p === 'object') p.steps = this.turnStepCounts.get(sessionId) ?? 0;
       }
@@ -3535,11 +3550,15 @@ export class RelayClient {
       return;
     }
 
-    this.adapter.generateTitle({
+    this.adapter.generateTitle(sessionId, {
       firstUserMessage: recentMessages[recentMessages.length - 1] ?? lastUserMessage,
       lastUserMessage,
       recentMessages,
       currentTitle,
+      // Same agent + same model as the session: the only guaranteed-available pair.
+      agent: meta.agent,
+      model: meta.model,
+      reasoningEffort: meta.reasoningEffort,
     })
       .then((title) => {
         if (title) {

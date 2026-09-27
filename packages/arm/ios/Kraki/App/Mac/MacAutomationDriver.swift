@@ -547,8 +547,8 @@ final class MacAutomationDriver {
             switch decision {
             case "approve":
                 appState.commandSender?.approve(sessionId: sessionId, permissionId: permissionId)
-            case "execute":
-                appState.commandSender?.setSessionMode(sessionId: sessionId, mode: .execute)
+            case "auto":
+                appState.commandSender?.setSessionMode(sessionId: sessionId, mode: .auto)
                 appState.commandSender?.approve(sessionId: sessionId, permissionId: permissionId)
             case "always_allow":
                 appState.commandSender?.alwaysAllow(sessionId: sessionId, permissionId: permissionId, toolKind: action.toolName)
@@ -749,7 +749,7 @@ final class MacAutomationDriver {
                 content: content,
                 renderKey: "bubble-action-order:\(text.count)",
                 documentWidth: 640,
-                sessionMode: .execute,
+                sessionMode: .auto,
                 onTapSteps: { _ in },
                 onResolvePermission: { _, _, _ in },
                 onAnswerQuestion: { _, _ in },
@@ -820,7 +820,7 @@ final class MacAutomationDriver {
                 title: "Disconnect regression",
                 autoTitle: nil,
                 state: .idle,
-                mode: .discuss,
+                mode: .auto,
                 lastSeq: 99,
                 readSeq: 0,
                 messageCount: 1,

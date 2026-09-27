@@ -161,11 +161,57 @@ enum SessionState: String, Codable, Sendable {
     case compacting
 }
 
-enum SessionMode: String, Codable, Sendable {
+/// Permission mode — Kraki alone decides whether the operator is asked.
+///  - safe: ask before file changes, shell and external tools; reads run freely.
+///  - auto: never ask (default).
+///  - delegate: never ask; the agent's questions are auto-answered.
+///
+/// `discuss` / `execute` are names from the four-mode era: both parse as
+/// `.auto`, so every existing `SessionMode(rawValue:)` call site accepts them.
+enum SessionMode: RawRepresentable, Codable, Sendable, CaseIterable, Hashable {
     case safe
-    case discuss
-    case execute
+    case auto
     case delegate
+
+    static let `default`: SessionMode = .auto
+
+    /// Transition release: put the legacy name on the wire for `.auto` so
+    /// tentacles and clients from before the rename (which fall back to
+    /// `safe` on an unknown value) keep working. Flip in the next release.
+    static let emitsLegacyWireNames = true
+
+    init?(rawValue: String) {
+        switch rawValue {
+        case "safe": self = .safe
+        case "auto", "execute", "discuss": self = .auto
+        case "delegate": self = .delegate
+        default: return nil
+        }
+    }
+
+    /// Canonical name (UI labels, logic).
+    var rawValue: String {
+        switch self {
+        case .safe: return "safe"
+        case .auto: return "auto"
+        case .delegate: return "delegate"
+        }
+    }
+
+    /// Name to send to Tentacle / persist (see `emitsLegacyWireNames`).
+    var wireName: String {
+        Self.emitsLegacyWireNames && self == .auto ? "execute" : rawValue
+    }
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = SessionMode(rawValue: raw) ?? .default
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(wireName)
+    }
 }
 
 // MARK: - Device Enums

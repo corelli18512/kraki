@@ -9,20 +9,22 @@ beforeEach(() => {
 });
 
 describe('setSessionMode', () => {
-  it('sends set_session_mode message', () => {
+  it('sends auto under its legacy wire name during the transition release', () => {
     const send = vi.fn();
-    commands.setSessionMode('sess-1', 'execute', send);
+    commands.setSessionMode('sess-1', 'auto', send);
     expect(send).toHaveBeenCalledWith({
       type: 'set_session_mode',
       sessionId: 'sess-1',
       payload: { mode: 'execute' },
     });
+    commands.setSessionMode('sess-1', 'safe', send);
+    expect(send).toHaveBeenLastCalledWith(expect.objectContaining({ payload: { mode: 'safe' } }));
   });
 
   it('updates store session mode', () => {
     const send = vi.fn();
-    commands.setSessionMode('sess-1', 'execute', send);
-    expect(useStore.getState().sessionModes.get('sess-1')).toBe('execute');
+    commands.setSessionMode('sess-1', 'safe', send);
+    expect(useStore.getState().sessionModes.get('sess-1')).toBe('safe');
   });
 
 });
@@ -45,18 +47,18 @@ describe('handleDataMessage session_mode_set', () => {
     });
   };
 
-  it('restores auto mode from replayed message', () => {
+  it('restores safe mode from a replayed message', () => {
     seedSession('sess-1');
-    handleDataMessage(makeModeSetMsg('sess-1', 'execute') as InnerMessage, {
+    handleDataMessage(makeModeSetMsg('sess-1', 'safe') as InnerMessage, {
       cmdState,
     });
-    expect(useStore.getState().sessionModes.get('sess-1')).toBe('execute');
+    expect(useStore.getState().sessionModes.get('sess-1')).toBe('safe');
   });
 
-  it('restores discuss mode (clears entry)', () => {
+  it.each(['execute', 'discuss', 'auto'])('reads %s as auto (clears the entry)', (wire) => {
     seedSession('sess-1');
-    useStore.getState().setSessionMode('sess-1', 'execute');
-    handleDataMessage(makeModeSetMsg('sess-1', 'discuss') as InnerMessage, {
+    useStore.getState().setSessionMode('sess-1', 'safe');
+    handleDataMessage(makeModeSetMsg('sess-1', wire) as InnerMessage, {
       cmdState,
     });
     expect(useStore.getState().sessionModes.has('sess-1')).toBe(false);
@@ -64,9 +66,9 @@ describe('handleDataMessage session_mode_set', () => {
 
   it('works for live (non-replay) messages', () => {
     seedSession('sess-2');
-    handleDataMessage(makeModeSetMsg('sess-2', 'execute') as InnerMessage, {
+    handleDataMessage(makeModeSetMsg('sess-2', 'delegate') as InnerMessage, {
       cmdState,
     });
-    expect(useStore.getState().sessionModes.get('sess-2')).toBe('execute');
+    expect(useStore.getState().sessionModes.get('sess-2')).toBe('delegate');
   });
 });

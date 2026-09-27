@@ -175,7 +175,7 @@ enum IOSChatAlignmentPreviewFixture {
                 model: "1yuan-gpt/gpt-5.6-sol",
                 title: "iOS Chat Alignment",
                 state: .active,
-                mode: .discuss,
+                mode: .auto,
                 lastSeq: 5,
                 readSeq: 5,
                 messageCount: 5,

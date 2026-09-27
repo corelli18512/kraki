@@ -29,7 +29,7 @@ final class SessionStoreTests: XCTestCase {
         title: String? = nil,
         autoTitle: String? = nil,
         state: SessionState = .active,
-        mode: SessionMode = .execute,
+        mode: SessionMode = .auto,
         lastSeq: Int = 10,
         readSeq: Int = 5,
         messageCount: Int = 8,
@@ -59,10 +59,10 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(session?.model, "claude-3")
         XCTAssertEqual(session?.reasoningEffort, .high)
         XCTAssertEqual(session?.state, .active)
-        XCTAssertEqual(session?.mode, .execute)
+        XCTAssertEqual(session?.mode, .auto)
         XCTAssertEqual(session?.deviceId, "dev-1")
         XCTAssertEqual(session?.deviceName, "MacBook")
-        XCTAssertEqual(store.sessionModes["sess-1"], .execute)
+        XCTAssertEqual(store.sessionModes["sess-1"], .auto)
     }
 
     func testUpsertSessionUpdatesExisting() {
@@ -113,7 +113,7 @@ final class SessionStoreTests: XCTestCase {
         let added = makeDigest(
             id: "added",
             state: .active,
-            mode: .execute,
+            mode: .auto,
             lastSeq: 3,
             readSeq: 3,
             pinned: nil
@@ -768,7 +768,7 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertFalse(requestId.isEmpty)
         app.sessionStore.upsertSession(SessionInfo(
             id: "created", deviceId: "dev", deviceName: "Mac", agent: "pi", model: "m", title: nil,
-            state: .idle, mode: .discuss, lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: Date(), pinned: false))
+            state: .idle, mode: .auto, lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: Date(), pinned: false))
         app.commandSender?.resolveCreateRequest(requestId, sessionId: "created")
         XCTAssertNil(app.sessionStore.sessionListRevealId)
     }

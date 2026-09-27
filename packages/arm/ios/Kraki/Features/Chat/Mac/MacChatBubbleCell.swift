@@ -925,7 +925,7 @@ final class MacChatBubbleCell: NSView {
     var documentWidthVar: CGFloat = 0
 
     private(set) var content: MacChatBubbleContent?
-    private var sessionMode: SessionMode = .discuss
+    private var sessionMode: SessionMode = .auto
     private var onTapSteps: ((MacChatBubbleCell) -> Void)?
     private var onResolvePermission: ((String, String?, String) -> Void)?
     private var onAnswerQuestion: ((String, String) -> Void)?
