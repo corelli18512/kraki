@@ -12,7 +12,7 @@ export interface VoiceSettlementResponse {
 }
 
 export interface VoiceSettlementOptions {
-  /** Per-user daily voice cap; activation re-budgets each lease against it. */
+  /** Per-user daily voice cap; activations and usage reports are granted against it. */
   dailyCapSec?: number;
 }
 
@@ -35,6 +35,8 @@ export function handleVoiceSettlement(
     activationId?: unknown;
     audioSeconds?: unknown;
     reason?: unknown;
+    /** The broker renews allowances through usage-report replies. */
+    grants?: unknown;
   };
   try {
     input = JSON.parse(request.body) as typeof input;
@@ -53,10 +55,10 @@ export function handleVoiceSettlement(
       jti: input.jti,
       activationId: input.activationId,
       dailyCapSec: options.dailyCapSec,
+      grants: input.grants === true,
     });
     if (result.status === 'not_found') return { status: 404, body: { error: 'not_found' } };
     if (result.status === 'expired') return { status: 409, body: { error: 'lease_expired' } };
-    if (result.status === 'wrong_day') return { status: 409, body: { error: 'lease_wrong_day' } };
     if (result.status === 'revoked') return { status: 409, body: { error: 'lease_revoked' } };
     if (result.status === 'quota_exhausted') return { status: 409, body: { error: 'quota_exhausted' } };
     return {
@@ -80,6 +82,8 @@ export function handleVoiceSettlement(
     activationId: input.activationId,
     audioSeconds: input.audioSeconds,
     reason: typeof input.reason === 'string' ? input.reason : undefined,
+    dailyCapSec: options.dailyCapSec,
+    grants: input.grants === true,
   });
   if (result.status === 'not_found') {
     return { status: 404, body: { error: 'not_found' } };
@@ -97,6 +101,7 @@ export function handleVoiceSettlement(
       usedSeconds: result.usedSeconds,
       reportedAudioSeconds: result.reportedAudioSeconds,
       settlementStatus: result.status,
+      ...(result.quotaSeconds !== undefined ? { quotaSeconds: result.quotaSeconds } : {}),
     },
   };
 }

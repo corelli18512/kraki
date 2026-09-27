@@ -97,9 +97,8 @@ if (args.includes('--help') || args.includes('-h')) {
                                    (default: $HOME/.kraki-head).
     VOICE_DAILY_QUOTA_SEC          Max seconds of voice input per user per UTC day
                                    (default: 7200 = 2h). The only voice limit.
-    VOICE_LEASE_TTL_SEC            Warm-connection authorization lifetime, always
-                                   capped at the next UTC midnight
-                                   (default: 600 = 10 min).
+    VOICE_LEASE_TTL_SEC            Lifetime of a device's voice credential
+                                   (default: 86400 = 24h). Not a usage limit.
     VOICE_SETTLEMENT_KEY           Shared secret for broker usage settlement.
                                    Required when voice leases are enabled.
     VOICE_BROKER_URL               Public WSS URL of this region's voice broker
@@ -454,7 +453,7 @@ if (IS_CONNECTED_MODE) {
 
 // --- Voice lease issuance (optional) ---
 const VOICE_LEASE_DIR = process.env.VOICE_LEASE_DIR || defaultVoiceLeaseDir();
-const VOICE_LEASE_TTL_SEC = Math.max(60, parseInt(process.env.VOICE_LEASE_TTL_SEC || '600', 10) || 600);
+const VOICE_LEASE_TTL_SEC = Math.max(600, parseInt(process.env.VOICE_LEASE_TTL_SEC || '86400', 10) || 86400);
 const VOICE_DAILY_QUOTA_SEC = Math.max(1, parseInt(process.env.VOICE_DAILY_QUOTA_SEC || '7200', 10) || 7200);
 const VOICE_SETTLEMENT_KEY = process.env.VOICE_SETTLEMENT_KEY?.trim() || '';
 

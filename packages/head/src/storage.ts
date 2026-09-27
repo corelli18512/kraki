@@ -98,8 +98,21 @@ export interface StoredRegion {
 
 const SCHEMA_VERSION = 12;
 
-/** Seconds an issued-but-not-yet-connected lease holds its reservation. */
-export const VOICE_PENDING_LEASE_RESERVE_SEC = 120;
+/**
+ * Audio a live broker connection may run ahead of its last usage report.
+ * The broker reports every 15 s while recording and each reply extends the
+ * allowance, so a recording never waits on Head; the chunk only bounds what a
+ * connection holds in reserve (and what it may use if Head is unreachable).
+ */
+export const VOICE_GRANT_CHUNK_SEC = 60;
+
+/**
+ * Past its expiry a lease still gets grants for the recording in progress
+ * (the broker never cuts one off at expiry) for at most this long.
+ */
+export const VOICE_EXPIRY_OVERRUN_SEC = 900;
+
+const utcDay = (unixSec: number) => new Date(unixSec * 1000).toISOString().slice(0, 10);
 
 /**
  * Broker usage reasons emitted while the warm socket stays open (periodic
@@ -356,10 +369,10 @@ export class Storage {
     }
 
     if (currentVersion < 12) {
-      // Daily accounting = actual audio + a reservation only for sockets that
-      // are really open. `allowed_seconds` is the cumulative ceiling granted at
-      // activation (bounded by the remaining daily budget); `closed_at` is set
-      // when the broker reports the socket's final usage.
+      // Usage-time daily accounting. A lease is a long-lived credential; the
+      // budget is granted incrementally (`allowed_seconds`, a cumulative
+      // ceiling) and every reported second is charged to the UTC day it was
+      // reported on, so a recording crossing midnight splits naturally.
       const columns = new Set(
         (this.db.prepare('PRAGMA table_info(voice_leases)').all() as Array<{ name: string }>)
           .map((column) => column.name)
@@ -370,9 +383,21 @@ export class Storage {
       if (!columns.has('closed_at')) {
         this.db.exec('ALTER TABLE voice_leases ADD COLUMN closed_at TEXT');
       }
-      // Before this version close reports were not recorded. A client holds
-      // one lease per device, so every lease older than the device's newest
-      // one has been abandoned: stop it reserving quota.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS voice_usage_daily (
+          user_id  TEXT NOT NULL,
+          day      TEXT NOT NULL,
+          seconds  REAL NOT NULL DEFAULT 0,
+          PRIMARY KEY (user_id, day)
+        );
+        INSERT OR IGNORE INTO voice_usage_daily (user_id, day, seconds)
+          SELECT user_id, substr(issued_at, 1, 10),
+                 SUM(MAX(COALESCE(reported_audio_seconds, 0), COALESCE(used_seconds, 0)))
+          FROM voice_leases GROUP BY user_id, substr(issued_at, 1, 10);
+      `);
+      // Close reports were not recorded before. A client holds one lease per
+      // device, so any lease older than the device's newest one is abandoned.
+      // (A later checkpoint from a still-open socket reopens it.)
       this.db.exec(`
         UPDATE voice_leases
         SET closed_at = COALESCE(settled_at, activated_at, issued_at)
@@ -761,50 +786,32 @@ export class Storage {
   }
 
   /**
-   * Voice seconds charged against a user's daily cap (UTC day of issuance).
-   *
-   *   charge = actual audio (rounded up)
-   *          + remaining allowance, only while the lease can still record:
-   *            its broker socket is open, or it was issued moments ago and
-   *            the client is still connecting.
-   *
-   * Idle, closed or abandoned leases therefore cost only what was spoken.
-   * Open sockets keep their reservation so concurrent devices can never
-   * jointly exceed the cap. `excludeJti` removes one lease entirely (used
-   * when re-budgeting that lease at activation).
+   * Voice seconds charged against a user's daily cap for the UTC day of
+   * `nowUnixSec`: audio reported today, plus the not-yet-used part of the
+   * allowance held by live connections (at most one grant chunk each), so
+   * concurrent devices can never jointly exceed the cap. `excludeJti` leaves
+   * one lease's reservation out (used when re-granting that lease).
    */
   voiceSecondsAccountedToday(userId: string, nowUnixSec: number, excludeJti = ''): number {
-    const day = new Date(nowUnixSec * 1000).toISOString().slice(0, 10);
-    const row = this.db.prepare(`
-      SELECT COALESCE(SUM(
-        COALESCE(used_seconds, 0) + CASE
-          WHEN revoked_at IS NULL
-            AND unixepoch(expires_at) + 60 > ?
-            AND (
-              (activated_at IS NOT NULL AND closed_at IS NULL)
-              OR (activated_at IS NULL AND unixepoch(issued_at) + ? > ?)
-            )
-          THEN MAX(0, COALESCE(allowed_seconds, quota_seconds) - COALESCE(reported_audio_seconds, 0))
-          ELSE 0
-        END
-      ), 0) AS total
+    const used = this.db.prepare(`
+      SELECT seconds FROM voice_usage_daily WHERE user_id = ? AND day = ?
+    `).get(userId, utcDay(nowUnixSec)) as { seconds: number } | undefined;
+    const reserved = this.db.prepare(`
+      SELECT COALESCE(SUM(MAX(0,
+        COALESCE(allowed_seconds, quota_seconds) - COALESCE(reported_audio_seconds, 0)
+      )), 0) AS total
       FROM voice_leases
-      WHERE user_id = ? AND substr(issued_at, 1, 10) = ? AND jti != ?
-    `).get(
-      nowUnixSec,
-      VOICE_PENDING_LEASE_RESERVE_SEC,
-      nowUnixSec,
-      userId,
-      day,
-      excludeJti,
-    ) as { total: number };
-    return Math.ceil(Number(row.total) || 0);
+      WHERE user_id = ? AND jti != ?
+        AND activated_at IS NOT NULL AND closed_at IS NULL AND revoked_at IS NULL
+        AND unixepoch(expires_at) + ? > ?
+    `).get(userId, excludeJti, VOICE_EXPIRY_OVERRUN_SEC, nowUnixSec) as { total: number };
+    return Math.ceil((Number(used?.seconds) || 0) + (Number(reserved.total) || 0));
   }
 
   /**
    * A device only ever holds one lease: when it asks for a new one, its
-   * earlier leases that never connected are abandoned. Revoke them so their
-   * pending reservation is released and they can never be activated later.
+   * earlier leases that never connected are abandoned. Revoke them so they can
+   * never be activated later.
    */
   revokePendingVoiceLeases(userId: string, deviceId: string, resource: string, nowUnixSec: number): number {
     return this.db.prepare(`
@@ -815,42 +822,57 @@ export class Storage {
   }
 
   /**
-   * Activate a warm lease connection before the broker accepts recordings.
-   * The same activation id is an idempotent retry. A different activation id
-   * replaces the previous owner (last-writer-wins reconnect) and makes stale
-   * checkpoints fail closed. The exact cumulative usage is returned so a new
-   * broker connection can resume quota accounting without rounding drift.
+   * Cumulative allowance for a lease that has reported `reported` seconds:
+   * `reported` plus what today's budget leaves (optionally at most one chunk),
+   * never above the signed per-lease ceiling.
+   */
+  private voiceAllowance(
+    lease: { jti: string; user_id: string; quota_seconds: number },
+    reported: number,
+    nowUnixSec: number,
+    dailyCapSec: number,
+    chunkSec: number,
+  ): number {
+    const accounted = this.voiceSecondsAccountedToday(lease.user_id, nowUnixSec, lease.jti);
+    const budgetLeft = Math.max(0, dailyCapSec - accounted);
+    return Math.min(lease.quota_seconds, reported + Math.min(chunkSec, budgetLeft));
+  }
+
+  /**
+   * Activate a lease connection before the broker accepts recordings. The
+   * same activation id is an idempotent retry; a different one replaces the
+   * previous owner (last-writer-wins reconnect) and makes stale checkpoints
+   * fail closed. Returns the exact cumulative usage (to resume) and, with a
+   * daily cap, the cumulative allowance the broker must enforce: one grant
+   * chunk for brokers that renew grants on usage reports, otherwise all that
+   * today's budget leaves.
    */
   activateVoiceLease(input: {
     jti: string;
     activationId: string;
     activatedAtUnixSec?: number;
-    /** Per-user daily cap. When set, the lease's usable allowance is
-     *  re-budgeted against everything else the user has used or reserved. */
     dailyCapSec?: number;
+    /** The broker renews the allowance through usage reports. */
+    grants?: boolean;
   }): {
-    status: 'activated' | 'unchanged' | 'replaced' | 'expired' | 'wrong_day' | 'revoked'
+    status: 'activated' | 'unchanged' | 'replaced' | 'expired' | 'revoked'
       | 'quota_exhausted' | 'not_found';
     reportedAudioSeconds?: number;
-    /** Cumulative seconds this lease may reach; the broker enforces it. */
     quotaSeconds?: number;
   } {
     const nowUnixSec = input.activatedAtUnixSec ?? Math.floor(Date.now() / 1000);
-    const activationDay = new Date(nowUnixSec * 1000).toISOString().slice(0, 10);
     const lease = this.db.prepare(`
-      SELECT user_id, quota_seconds, allowed_seconds, used_seconds,
-             activation_id, activated_at, issued_at,
+      SELECT jti, user_id, quota_seconds, allowed_seconds, activation_id, activated_at,
              unixepoch(expires_at) AS expires_at_unix, revoked_at,
              COALESCE(reported_audio_seconds, 0) AS reported_audio_seconds
       FROM voice_leases WHERE jti = ?
     `).get(input.jti) as {
+      jti: string;
       user_id: string;
       quota_seconds: number;
       allowed_seconds: number | null;
-      used_seconds: number | null;
       activation_id: string | null;
       activated_at: string | null;
-      issued_at: string;
       expires_at_unix: number;
       revoked_at: string | null;
       reported_audio_seconds: number;
@@ -858,7 +880,6 @@ export class Storage {
     if (!lease) return { status: 'not_found' };
     if (lease.revoked_at !== null) return { status: 'revoked' };
     if (lease.expires_at_unix <= nowUnixSec) return { status: 'expired' };
-    if (lease.issued_at.slice(0, 10) !== activationDay) return { status: 'wrong_day' };
 
     const reportedAudioSeconds = Number(lease.reported_audio_seconds) || 0;
     if (lease.activated_at !== null && lease.activation_id === input.activationId) {
@@ -871,13 +892,13 @@ export class Storage {
 
     let allowedSeconds = lease.quota_seconds;
     if (input.dailyCapSec !== undefined) {
-      const others = this.voiceSecondsAccountedToday(lease.user_id, nowUnixSec, input.jti);
-      const ownUsed = lease.used_seconds ?? Math.ceil(reportedAudioSeconds);
-      const budgetLeft = Math.max(0, input.dailyCapSec - others - ownUsed);
-      allowedSeconds = Math.min(lease.quota_seconds, reportedAudioSeconds + budgetLeft);
+      allowedSeconds = this.voiceAllowance(
+        lease, reportedAudioSeconds, nowUnixSec, input.dailyCapSec,
+        input.grants ? VOICE_GRANT_CHUNK_SEC : Number.POSITIVE_INFINITY,
+      );
       if (allowedSeconds - reportedAudioSeconds < 1) {
         if (lease.activated_at === null) {
-          // Never connected and now unusable: drop its pending reservation.
+          // Never connected and now unusable: nobody should activate it later.
           this.db.prepare(`
             UPDATE voice_leases SET revoked_at = ? WHERE jti = ? AND activated_at IS NULL
           `).run(new Date(nowUnixSec * 1000).toISOString(), input.jti);
@@ -886,13 +907,11 @@ export class Storage {
       }
     }
 
-    const activatedAt = new Date(nowUnixSec * 1000).toISOString();
     this.db.prepare(`
       UPDATE voice_leases
       SET activation_id = ?, activated_at = ?, allowed_seconds = ?, closed_at = NULL
-      WHERE jti = ? AND revoked_at IS NULL
-        AND unixepoch(expires_at) > ? AND substr(issued_at, 1, 10) = ?
-    `).run(input.activationId, activatedAt, allowedSeconds, input.jti, nowUnixSec, activationDay);
+      WHERE jti = ? AND revoked_at IS NULL AND unixepoch(expires_at) > ?
+    `).run(input.activationId, new Date(nowUnixSec * 1000).toISOString(), allowedSeconds, input.jti, nowUnixSec);
     return {
       status: lease.activated_at === null ? 'activated' : 'replaced',
       reportedAudioSeconds,
@@ -901,10 +920,15 @@ export class Storage {
   }
 
   /**
-   * Store a monotonic cumulative usage checkpoint for one warm lease. Equal
-   * values are idempotent; lower out-of-order retries are stale but harmless;
-   * higher values advance both the exact cumulative value and rounded audit
-   * seconds. Checkpoints from a replaced activation are rejected.
+   * Store a monotonic cumulative usage checkpoint for one lease connection
+   * and charge the increase to the UTC day it is reported on. Equal values
+   * are idempotent; lower out-of-order retries are stale but harmless;
+   * checkpoints from a replaced activation are rejected. The broker's final
+   * report for a closing socket releases its reservation.
+   *
+   * With `grants`, a report from a live connection also renews its allowance
+   * (returned as `quotaSeconds`): one chunk ahead while today's budget lasts,
+   * nothing more once the lease is revoked or long past expiry.
    */
   settleVoiceLease(input: {
     jti: string;
@@ -912,76 +936,86 @@ export class Storage {
     audioSeconds: number;
     reason?: string;
     settledAtUnixSec?: number;
+    dailyCapSec?: number;
+    grants?: boolean;
   }): {
     status: 'updated' | 'unchanged' | 'stale' | 'conflict' | 'not_found' | 'not_activated';
     usedSeconds?: number;
     reportedAudioSeconds?: number;
+    quotaSeconds?: number;
   } {
     const lease = this.db.prepare(`
-      SELECT quota_seconds, used_seconds, activation_id, activated_at, closed_at,
+      SELECT jti, user_id, quota_seconds, allowed_seconds, used_seconds, activation_id,
+             activated_at, closed_at, revoked_at, unixepoch(expires_at) AS expires_at_unix,
              COALESCE(reported_audio_seconds, 0) AS reported_audio_seconds
       FROM voice_leases WHERE jti = ?
     `).get(input.jti) as {
+      jti: string;
+      user_id: string;
       quota_seconds: number;
+      allowed_seconds: number | null;
       used_seconds: number | null;
       activation_id: string | null;
       activated_at: string | null;
       closed_at: string | null;
+      revoked_at: string | null;
+      expires_at_unix: number;
       reported_audio_seconds: number;
     } | undefined;
     if (!lease) return { status: 'not_found' };
     if (lease.activated_at === null) return { status: 'not_activated' };
     if (lease.activation_id !== input.activationId) return { status: 'conflict' };
 
-    const settledAtUnixSec = input.settledAtUnixSec ?? Math.floor(Date.now() / 1000);
-    // The broker's final report for a closing socket releases the lease's
-    // reservation. Only a new activation (reconnect) reopens it.
+    const nowUnixSec = input.settledAtUnixSec ?? Math.floor(Date.now() / 1000);
+    const nowIso = new Date(nowUnixSec * 1000).toISOString();
     const closing = !VOICE_OPEN_USAGE_REASONS.has(input.reason ?? '');
-    if (closing && lease.closed_at === null) {
-      this.db.prepare(`
-        UPDATE voice_leases SET closed_at = ?
-        WHERE jti = ? AND activation_id = ? AND closed_at IS NULL
-      `).run(new Date(settledAtUnixSec * 1000).toISOString(), input.jti, input.activationId);
-    }
-
-    const reportedAudioSeconds = Math.min(
-      lease.quota_seconds,
-      Math.max(0, input.audioSeconds)
-    );
     const currentReported = Number(lease.reported_audio_seconds) || 0;
-    const currentUsed = lease.used_seconds ?? Math.ceil(currentReported);
-    if (reportedAudioSeconds < currentReported) {
-      return {
-        status: 'stale',
-        usedSeconds: currentUsed,
-        reportedAudioSeconds: currentReported,
-      };
-    }
-    if (reportedAudioSeconds === currentReported) {
-      return {
-        status: 'unchanged',
-        usedSeconds: currentUsed,
-        reportedAudioSeconds: currentReported,
-      };
+    const reported = Math.min(lease.quota_seconds, Math.max(0, input.audioSeconds));
+    let status: 'updated' | 'unchanged' | 'stale' = 'unchanged';
+    let latestReported = currentReported;
+
+    this.db.transaction(() => {
+      if (reported > currentReported) {
+        status = 'updated';
+        latestReported = reported;
+        this.db.prepare(`
+          UPDATE voice_leases
+          SET reported_audio_seconds = ?, used_seconds = ?, settled_at = ?, settlement_reason = ?
+          WHERE jti = ? AND activation_id = ?
+        `).run(reported, Math.ceil(reported), nowIso, input.reason?.slice(0, 64) ?? null,
+          input.jti, input.activationId);
+        this.db.prepare(`
+          INSERT INTO voice_usage_daily (user_id, day, seconds) VALUES (?, ?, ?)
+          ON CONFLICT (user_id, day) DO UPDATE SET seconds = seconds + excluded.seconds
+        `).run(lease.user_id, utcDay(nowUnixSec), reported - currentReported);
+      } else if (reported < currentReported) {
+        status = 'stale';
+      }
+      if (closing && lease.closed_at === null) {
+        this.db.prepare('UPDATE voice_leases SET closed_at = ? WHERE jti = ?').run(nowIso, input.jti);
+      } else if (!closing && lease.closed_at !== null) {
+        // A live socket is still reporting (e.g. after the v12 migration).
+        this.db.prepare('UPDATE voice_leases SET closed_at = NULL WHERE jti = ?').run(input.jti);
+      }
+    })();
+
+    let quotaSeconds: number | undefined;
+    if (input.grants && !closing && input.dailyCapSec !== undefined) {
+      const live = lease.revoked_at === null
+        && nowUnixSec < lease.expires_at_unix + VOICE_EXPIRY_OVERRUN_SEC;
+      quotaSeconds = live
+        ? this.voiceAllowance(lease, latestReported, nowUnixSec, input.dailyCapSec, VOICE_GRANT_CHUNK_SEC)
+        : latestReported;
+      this.db.prepare('UPDATE voice_leases SET allowed_seconds = ? WHERE jti = ?')
+        .run(quotaSeconds, input.jti);
     }
 
-    const usedSeconds = Math.ceil(reportedAudioSeconds);
-    const settledAt = new Date(settledAtUnixSec * 1000).toISOString();
-    this.db.prepare(`
-      UPDATE voice_leases
-      SET reported_audio_seconds = ?, used_seconds = ?, settled_at = ?, settlement_reason = ?
-      WHERE jti = ? AND activation_id = ?
-        AND COALESCE(reported_audio_seconds, 0) < ?
-    `).run(
-      reportedAudioSeconds,
-      usedSeconds,
-      settledAt,
-      input.reason?.slice(0, 64) ?? null,
-      input.jti,
-      input.activationId,
-      reportedAudioSeconds,
-    );
-    return { status: 'updated', usedSeconds, reportedAudioSeconds };
+    return {
+      status,
+      usedSeconds: Math.max(lease.used_seconds ?? 0, Math.ceil(latestReported)),
+      reportedAudioSeconds: latestReported,
+      ...(quotaSeconds !== undefined ? { quotaSeconds } : {}),
+    };
   }
 
   /** Fetch a single lease by jti (audit / debug). Returns undefined if unknown. */

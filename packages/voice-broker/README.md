@@ -93,13 +93,17 @@ during long recordings and after each final transcript, and a final report when
 the socket closes.
 
 Head has exactly one limit, `VOICE_DAILY_QUOTA_SEC` (seconds of audio per user
-per UTC day). It charges actual audio, plus the unused remainder only for leases
-whose socket is open (or that were issued moments ago and are still connecting),
-so idle, closed and abandoned warm leases cost nothing. On every activation Head
-re-budgets the lease against the user's other usage and reservations and
-returns `quotaSeconds`; the authorizer enforces `min(signed quota, quotaSeconds)`,
-so concurrent devices can never exceed the daily cap together. Leases never
-outlive the UTC day they are charged to. Lower/out-of-order checkpoints are harmless;
+per UTC day). A lease is a device credential (default 24 h), not an allowance:
+the budget is granted incrementally. Activation grants 60 s; every usage report
+(each 15 s while recording) replies with a renewed cumulative `quotaSeconds`
+one chunk ahead while the day's budget lasts, which the gateway applies
+(`@coinfra/voice` ≥ the release with `UsageGrant`). Audio is charged to the UTC
+day it is reported on, so a recording across midnight is neither interrupted
+nor charged to one day only; lease expiry never cuts a recording in progress.
+Idle connections reserve at most one chunk, so concurrent devices never exceed
+the cap together. If Head is unreachable a connection can use at most its
+current chunk. Deploy this broker before a Head that signs day-scale leases.
+Lower/out-of-order checkpoints are harmless;
 checkpoints from replaced owners are rejected. Authorized sockets use standard
 WebSocket ping/pong with a 25-second ping cadence and 10-second pong timeout;
 there is no application-level keepalive frame. Each Head request has a bounded
