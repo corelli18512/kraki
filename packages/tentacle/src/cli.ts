@@ -739,7 +739,7 @@ async function cmdPermissions(args: string[]): Promise<void> {
 
 async function cmdDoctor(): Promise<void> {
   const {
-    checkGhAuth, checkCopilotCli, checkClaudeCli, checkAnthropicCreds, probeFda, getKrakiAppBundlePath,
+    checkGhAuth, checkCopilotCli, checkClaudeCli, checkCodexCli, checkAnthropicCreds, probeFda, getKrakiAppBundlePath,
     getDaemonTccIdentity,
   } = await import('./checks.js');
   const { loadDaemonPid, loadDaemonIdentity } = await import('./config.js');
@@ -755,6 +755,7 @@ async function cmdDoctor(): Promise<void> {
   const ghAuth = checkGhAuth();
   const copilot = checkCopilotCli();
   const claude = checkClaudeCli();
+  const codex = checkCodexCli();
   const anthropic = checkAnthropicCreds();
   // doctor is a READ-ONLY status query (called frequently by the toolbar).
   // We do NOT mutate Launch Services here — only report current TCC identity
@@ -802,6 +803,7 @@ async function cmdDoctor(): Promise<void> {
     copilotVersion: copilot.version ?? null,
     // Structured multi-agent view.
     agents: {
+      codex: { cli: codex.found, version: codex.version ?? null },
       copilot: {
         cli: copilot.found,
         version: copilot.version ?? null,

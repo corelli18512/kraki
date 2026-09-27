@@ -81,12 +81,16 @@ export class CodexRpcProcess {
 
   start(): void {
     if (this.child) return;
-    const child = spawn(this.opts.command, this.opts.args ?? ['app-server'], {
+    // npm's Windows shim needs cmd.exe. Quote its absolute path ourselves:
+    // spawn({ shell: true }) concatenates it unquoted, so user/profile paths
+    // containing spaces would otherwise fail before the RPC handshake.
+    const shell = process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(this.opts.command);
+    const command = shell ? `"${this.opts.command}"` : this.opts.command;
+    const child = spawn(command, this.opts.args ?? ['app-server'], {
       cwd: this.opts.cwd,
       env: this.opts.env ?? process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
-      // .cmd shims on Windows need a shell to resolve.
-      shell: process.platform === 'win32' && /\.cmd$/i.test(this.opts.command),
+      shell,
     });
     this.child = child;
 

@@ -3070,7 +3070,10 @@ export class RelayClient {
   // instead of Partial<ProducerMessage> so TypeScript enforces correct payload
   // shape per message type (e.g. user_message must have payload.content).
   private send(msg: Partial<ProducerMessage>, createsUnread = false): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    // Durable outcomes must reach the local spine even while the relay is
+    // offline. Reconnect replay pulls from that spine; there is no event queue
+    // to recover a reply discarded here. Only live-only deltas may be dropped.
+    if (msg.type === 'agent_message_delta' && (!this.ws || this.ws.readyState !== WebSocket.OPEN)) return;
 
     // Coalesce streaming card text deltas to amortize per-recipient RSA cost.
     // Skip the buffer when we're already inside a flush (the recursive send

@@ -160,6 +160,15 @@ export function checkClaudeCli(): CliCheckResult {
   }
 }
 
+export function checkCodexCli(): CliCheckResult {
+  try {
+    const output = execSync('codex --version', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10_000 }).trim();
+    return { found: true, version: output.split('\n')[0].replace(/^codex-cli\s+/, '') };
+  } catch {
+    return { found: false };
+  }
+}
+
 // ── Anthropic credentials ───────────────────────────────
 //
 // The Claude adapter resolves credentials from process.env merged with

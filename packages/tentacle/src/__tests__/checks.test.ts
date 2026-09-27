@@ -43,7 +43,7 @@ import { execSync, execFileSync } from 'node:child_process';
 import { input } from '@inquirer/prompts';
 import { existsSync, realpathSync, promises as fsp } from 'node:fs';
 import { platform, homedir } from 'node:os';
-import { checkGhCli, checkGhAuth, checkCopilotCli, withRetry, ensureWindowsSystemPath, probeFda, pollFda, getKrakiAppBundlePath, getProcessBundleIdentity, getDaemonTccIdentity, registerKrakiAppBundle, openTccPane, TCC_SERVICES, probeTccStatus, ensureTccBundleRegistered, unregisterAppBundlePath } from '../checks.js';
+import { checkGhCli, checkGhAuth, checkCopilotCli, checkCodexCli, withRetry, ensureWindowsSystemPath, probeFda, pollFda, getKrakiAppBundlePath, getProcessBundleIdentity, getDaemonTccIdentity, registerKrakiAppBundle, openTccPane, TCC_SERVICES, probeTccStatus, ensureTccBundleRegistered, unregisterAppBundlePath } from '../checks.js';
 
 const mockExecSync = execSync as unknown as ReturnType<typeof vi.fn>;
 const mockExecFileSync = execFileSync as unknown as ReturnType<typeof vi.fn>;
@@ -141,6 +141,19 @@ describe('checkCopilotCli()', () => {
     mockExecSync.mockImplementation(() => { throw new Error('not found'); });
     const result = checkCopilotCli();
     expect(result).toEqual({ found: false });
+  });
+});
+
+describe('checkCodexCli()', () => {
+  it('detects and parses the Windows CLI version without logging in', () => {
+    mockExecSync.mockReturnValue('codex-cli 0.157.1\r\n');
+    expect(checkCodexCli()).toEqual({ found: true, version: '0.157.1' });
+    expect(mockExecSync).toHaveBeenCalledWith('codex --version', expect.objectContaining({ timeout: 10_000 }));
+  });
+
+  it('handles a missing or unresponsive CLI without breaking setup', () => {
+    mockExecSync.mockImplementation(() => { throw new Error('not found or timeout'); });
+    expect(checkCodexCli()).toEqual({ found: false });
   });
 });
 

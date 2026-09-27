@@ -231,6 +231,15 @@ jobs:
       - name: Build tentacle SEA
         run: pnpm --filter @kraki/tentacle run build:binary:local
 
+      - name: Test Windows installer release selection
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/e2e/windows-installer.test.ps1
+
+      - name: Test Windows Codex command shims with spaces
+        if: runner.os == 'Windows'
+        run: node scripts/e2e/windows-codex-shim.mjs
+
       - name: Exercise background daemon lifecycle
         shell: bash
         run: |

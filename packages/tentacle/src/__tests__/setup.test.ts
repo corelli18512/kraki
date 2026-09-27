@@ -82,11 +82,13 @@ const mockCheckGhAuth = vi.fn().mockReturnValue({ authenticated: true, username:
 // Default agent detection: only Copilot installed → runAgentStep leaves auto-detect.
 const mockCheckCopilotCli = vi.fn().mockReturnValue({ found: true, version: '1.0' });
 const mockCheckClaudeCli = vi.fn().mockReturnValue({ found: false });
+const mockCheckCodexCli = vi.fn().mockReturnValue({ found: false });
 const mockCheckAnthropicCreds = vi.fn().mockReturnValue({ configured: false, source: null });
 vi.mock("../checks.js", () => ({
   checkGhAuth: (...args: unknown[]) => mockCheckGhAuth(...args),
   checkCopilotCli: (...args: unknown[]) => mockCheckCopilotCli(...args),
   checkClaudeCli: (...args: unknown[]) => mockCheckClaudeCli(...args),
+  checkCodexCli: (...args: unknown[]) => mockCheckCodexCli(...args),
   checkAnthropicCreds: (...args: unknown[]) => mockCheckAnthropicCreds(...args),
   saveAnthropicKey: vi.fn(),
   withRetry: (...args: unknown[]) => mockWithRetry(...args),
@@ -109,6 +111,9 @@ let originalFetch: typeof globalThis.fetch;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockCheckCopilotCli.mockReturnValue({ found: true, version: '1.0' });
+  mockCheckClaudeCli.mockReturnValue({ found: false });
+  mockCheckCodexCli.mockReturnValue({ found: false });
   vi.spyOn(console, "log").mockImplementation(() => {});
   originalFetch = globalThis.fetch;
   // Remove KRAKI_RELAY_URL so login-first flow is used by default
@@ -123,6 +128,18 @@ afterEach(() => {
 });
 
 describe("runSetup — login-first flow (official relay)", () => {
+  it('detects Codex in the official login-first wizard too', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('network error')) as typeof fetch;
+    mockCheckCopilotCli.mockReturnValue({ found: false });
+    mockCheckCodexCli.mockReturnValue({ found: true, version: '0.157.1' });
+    mockInput.mockResolvedValueOnce('codex-pc');
+    const result = await runSetup();
+    expect(mockCheckCodexCli).toHaveBeenCalled();
+    expect(result.authMethod).toBe('github_token');
+    expect(result.agents).toBeUndefined();
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Using Codex'));
+  });
+
   it("authenticates → resolves region → verifies relay → device name → saves", async () => {
     // Mock fetch for /api/login/resolve
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
@@ -174,6 +191,38 @@ describe("runSetup — login-first flow (official relay)", () => {
 });
 
 describe("runSetup — direct flow (KRAKI_RELAY_URL set)", () => {
+  it('detects Codex-only installs without requiring Copilot', async () => {
+    process.env.KRAKI_RELAY_URL = 'ws://localhost:4791';
+    mockRelayMethods = ['open'];
+    mockCheckCopilotCli.mockReturnValue({ found: false });
+    mockCheckCodexCli.mockReturnValue({ found: true, version: '0.157.1' });
+    mockInput.mockResolvedValueOnce('ws://localhost:4791').mockResolvedValueOnce('codex-pc');
+    const result = await runSetup();
+    expect(mockCheckCodexCli).toHaveBeenCalled();
+    expect(mockCheckbox).not.toHaveBeenCalled();
+    expect(result.agents).toBeUndefined(); // auto-detect, including future installs
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Using Codex'));
+    mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
+  });
+
+  it('offers Codex alongside Copilot and persists the selection', async () => {
+    process.env.KRAKI_RELAY_URL = 'ws://localhost:4791';
+    mockRelayMethods = ['open'];
+    mockCheckCodexCli.mockReturnValue({ found: true, version: '0.157.1' });
+    mockCheckbox.mockResolvedValueOnce(['codex']);
+    mockInput.mockResolvedValueOnce('ws://localhost:4791').mockResolvedValueOnce('codex-pc');
+    const result = await runSetup();
+    expect(mockCheckbox).toHaveBeenCalledWith(expect.objectContaining({
+      choices: [
+        { name: 'Copilot', value: 'copilot', checked: true },
+        { name: 'Codex', value: 'codex', checked: true },
+      ],
+    }));
+    expect(result.agents).toEqual(['codex']);
+    expect(mockSaveConfig).toHaveBeenCalledWith(result);
+    mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
+  });
+
   it("uses custom relay URL with apikey auth", async () => {
     process.env.KRAKI_RELAY_URL = "ws://my-vps:4000";
     mockRelayMethods = ['apikey', 'open'];
