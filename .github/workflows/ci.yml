@@ -125,6 +125,9 @@ jobs:
           key: ${{ runner.os }}-spm-${{ hashFiles('packages/arm/ios/Kraki.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: ${{ runner.os }}-spm-
 
+      - name: Test diagnostics recorder and off-band uploader (isolated)
+        run: bash scripts/diag/run-native-tests.sh
+
       - name: Test native voice audio safety
         run: swift test --package-path packages/arm/ios/Vendor/VoiceInputCore
 

@@ -1325,6 +1325,10 @@ final class MacChatBubbleCell: NSView {
         onOpenHTMLArtifact: @escaping (ContentRef) -> Void,
         onHeightInvalidated: @escaping () -> Void
     ) {
+        #if KRAKI_DIAG
+        let diagWork = KrakiDiag.beginWork()
+        defer { KrakiDiag.endWork(diagWork, source: "mac.cell_configure", seq: content.seq) }
+        #endif
         self.content = content
         renderRevision = renderKey
         isPlaceholderFlag = false

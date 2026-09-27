@@ -450,14 +450,15 @@ jobs:
             -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           security list-keychain -d user -s "$KEYCHAIN_PATH"
 
-      - name: Archive KrakiMac (Release, Developer ID)
+      - name: Archive KrakiMac (Developer ID; diagnostics only on explicit -diag tag)
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          BUILD_CONFIGURATION: ${{ endsWith(needs.prepare.outputs.release_tag, '-diag') && 'DiagnosticsDelivery' || 'Release' }}
         run: |
           set -euo pipefail
           cd packages/arm/ios
           xcodebuild -project Kraki.xcodeproj -scheme KrakiMac \
-            -configuration Release \
+            -configuration "$BUILD_CONFIGURATION" \
             -destination 'generic/platform=macOS' \
             -archivePath "$RUNNER_TEMP/KrakiMac.xcarchive" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
@@ -473,6 +474,11 @@ jobs:
           set -euo pipefail
           APP="$RUNNER_TEMP/KrakiMac.xcarchive/Products/Applications/Kraki.app"
           test -f "$APP/Contents/MacOS/Kraki"
+          if [ '${{ endsWith(needs.prepare.outputs.release_tag, '-diag') }}' = 'true' ]; then
+            bash scripts/diag/verify-diagnostic-delivery.sh "$APP"
+          else
+            bash scripts/diag/verify-no-diag.sh "$APP"
+          fi
           codesign --verify --strict --verbose=2 "$APP"
 
       - name: Re-sign Sparkle helper tools for Developer ID
@@ -577,6 +583,14 @@ jobs:
           # Sparkle updates use a zip containing the notarized app bundle.
           ditto -c -k --sequesterRsrc --keepParent "$APP" "$RUNNER_TEMP/Kraki.app.zip"
           ls -lh "$RUNNER_TEMP/kraki-mac-gui-universal.app.tar.gz" "$RUNNER_TEMP/Kraki.app.zip"
+
+      - name: Preserve matching dSYMs for diagnostics
+        uses: actions/upload-artifact@v7
+        with:
+          name: mac-symbols-${{ needs.prepare.outputs.release_sha }}
+          path: ${{ runner.temp }}/KrakiMac.xcarchive/dSYMs
+          retention-days: 90
+          if-no-files-found: error
 
       - name: Upload Sparkle update archive
         uses: actions/upload-artifact@v7

@@ -11,6 +11,9 @@ struct GeneralPane: View {
 
     var body: some View {
         Form {
+            #if KRAKI_DIAG
+            DiagSettingsSection()
+            #endif
             Section("Appearance") {
                 Picker("Theme", selection: $colorScheme) {
                     Text("System").tag(AppColorScheme.system)

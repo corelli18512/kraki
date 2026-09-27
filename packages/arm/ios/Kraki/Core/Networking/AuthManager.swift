@@ -57,7 +57,11 @@ final class AuthManager {
     /// The macOS Debug app uses its own suite so its device identity and relay
     /// redirects cannot mutate the stable Prod app.
     private static var sharedDefaults: UserDefaults {
-        #if os(macOS)
+        #if KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY && os(iOS)
+        return UserDefaults(suiteName: "group.chat.kraki.ios.diag") ?? .standard
+        #elseif KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY
+        return .standard
+        #elseif os(macOS)
         #if DEBUG
         return UserDefaults(suiteName: "chat.kraki.mac.dev") ?? .standard
         #else
@@ -504,6 +508,18 @@ final class AuthManager {
 
         appState.voiceCapability = voiceCapability
         KLog.d("🎙️ Voice capability: \(voiceCapability == nil ? "unavailable" : "available")")
+
+        #if KRAKI_DIAG
+        // Off-band signature capability, not a token or a new Pulse message.
+        // Key access/signing occurs only on the diagnostics utility queue.
+        let diagKeychain = keychain
+        let diagCrypto = crypto
+        KrakiDiag.configure(relay: appState.relayURL, device: deviceId) { message in
+            let pair = try diagKeychain.getOrCreateSigningKey()
+            return try diagCrypto.signChallenge(message, privateKey: pair.privateKey)
+        }
+        KrakiDiag.phase("authenticated")
+        #endif
 
         // Notify AppState (populates stores, triggers queue drain, etc.)
         appState.onAuthenticated(

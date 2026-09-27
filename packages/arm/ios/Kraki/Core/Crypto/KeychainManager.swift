@@ -66,7 +66,9 @@ public enum KeychainError: Error, CustomStringConvertible {
 public final class KeychainManager {
 
     private static let signingKeyTag: String = {
-        #if os(macOS)
+        #if KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY
+        return "\(Bundle.main.bundleIdentifier ?? "chat.kraki.diag").signing-key"
+        #elseif os(macOS)
         #if DEBUG
         return "chat.kraki.mac.dev.signing-key"
         #else
@@ -77,7 +79,9 @@ public final class KeychainManager {
         #endif
     }()
     private static let encryptionKeyTag: String = {
-        #if os(macOS)
+        #if KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY
+        return "\(Bundle.main.bundleIdentifier ?? "chat.kraki.diag").encryption-key"
+        #elseif os(macOS)
         #if DEBUG
         return "chat.kraki.mac.dev.encryption-key"
         #else

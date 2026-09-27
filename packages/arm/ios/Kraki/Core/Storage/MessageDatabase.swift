@@ -30,7 +30,9 @@ enum KrakiDataPaths {
             ?? fm.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? fm.temporaryDirectory
         let directoryName: String
-        #if DEBUG && os(macOS)
+        #if KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY
+        directoryName = "Kraki Diag"
+        #elseif DEBUG && os(macOS)
         directoryName = "Kraki Dev"
         #else
         directoryName = "Kraki"
@@ -50,7 +52,9 @@ enum KrakiDataPaths {
         #endif
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
         let cacheName: String
-        #if DEBUG && os(macOS)
+        #if KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY
+        cacheName = "kraki-diag-attachments"
+        #elseif DEBUG && os(macOS)
         cacheName = "kraki-dev-attachments"
         #else
         cacheName = "kraki-attachments"

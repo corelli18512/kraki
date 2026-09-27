@@ -90,8 +90,10 @@
 		4550B0DBED564B557D6AF038 /* CryptoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A28F5834F1C3C7CC175B7C5C /* CryptoManager.swift */; };
 		45E3892DFF16FF95AE291B87 /* DeviceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A429810ED3F81077317149B3 /* DeviceStoreTests.swift */; };
 		47FFECFD698CF0DE786EA64C /* MacChatBubbleCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D720ACC636683293D505371 /* MacChatBubbleCell.swift */; };
+		48898113E756024CD42E3B7F /* KrakiDiag.swift in Sources */ = {isa = PBXBuildFile; fileRef = D345DB389B2A4F5A8E198058 /* KrakiDiag.swift */; };
 		4A82C1BB1E8E000A1D469831 /* TabBarHider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FC184CE4CAFDEF1914453D4 /* TabBarHider.swift */; };
 		4BCD8832B17517464C140526 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 69B9A691EAC2476B0D3210AC /* Assets.xcassets */; };
+		4BD2A0DCBADF5436E42767AA /* DiagRunLoop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6812354F72EF32686A7E98C6 /* DiagRunLoop.swift */; };
 		4BD6FA3628CFB971ABDA5DA8 /* DevicesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F1C34007991B7E9D900DBF /* DevicesPane.swift */; };
 		4C10C6ECF451DA2AA2A5AED0 /* AttachmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77E056700BA106FD1E130382 /* AttachmentStore.swift */; };
 		4C5EC2D159BE6C807F1FC854 /* NotificationsPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21B22C573B738579E0AE6A1A /* NotificationsPane.swift */; };
@@ -119,6 +121,7 @@
 		5F0B02123ED43B73877167F5 /* KrakiLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */; };
 		5F47265290B467B5BCA075C3 /* LogsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447FBAB1A2FAA65AD4B03988 /* LogsWindow.swift */; };
 		60226FAD058DC1FCB64B3A31 /* ActivityRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E85D17DFC304688DBB3F729 /* ActivityRow.swift */; };
+		613A478009D713D6D8D81F36 /* DiagSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7209F58C4D298C8764042569 /* DiagSettingsSection.swift */; };
 		61DE330DBE66144398A6F8D4 /* MacBubbleTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D15C4DAE8AB0534C9C6226 /* MacBubbleTestView.swift */; };
 		638AB6D714A37B797A1AD183 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D17C06CC0E96BDAA7779524 /* SessionListView.swift */; };
 		63E651E7838FC6F14D2F059E /* MacBubbleActionSlot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B40607F268A8BCEBF58C6D7 /* MacBubbleActionSlot.swift */; };
@@ -132,6 +135,7 @@
 		70666EBE60A847EF864AF2C1 /* CryptoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B5C9B91D8E0CF8C6D63E91D /* CryptoTests.swift */; };
 		7072CE0B000723DAD5D771C6 /* TentaclePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4A34822755FED065BFDA075 /* TentaclePane.swift */; };
 		71AB0F5DFBF3366EAC49D05D /* ChatLoadingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63003A2D28B352ABAB064761 /* ChatLoadingState.swift */; };
+		740A60CC9415FB46D2D73787 /* KrakiDiag.swift in Sources */ = {isa = PBXBuildFile; fileRef = D345DB389B2A4F5A8E198058 /* KrakiDiag.swift */; };
 		759AE50B2E38D95776D64D57 /* LoginView+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 877AB77036AB504E9C76156D /* LoginView+macOS.swift */; };
 		770252CC17F7BF25C1A114C1 /* MacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE814884FDD9A0A46CCCCB69 /* MacApp.swift */; };
 		7999D41402AD34E2D934AA0E /* AccountPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E5D28B402A345F0D22B851 /* AccountPane.swift */; };
@@ -196,6 +200,7 @@
 		B8FF9EBBBEB7C81BA045175F /* ThemePlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBACFBCC6FD0563946CD080A /* ThemePlatform.swift */; };
 		B92E7E829FC61E56473A4C80 /* AccountPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E5D28B402A345F0D22B851 /* AccountPane.swift */; };
 		B9799F37E9395C9A357E3A19 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = CDED8D6D15950EF64A1F92C5 /* GRDB */; };
+		B9904E6233735C93F73DEC6F /* DiagRunLoop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6812354F72EF32686A7E98C6 /* DiagRunLoop.swift */; };
 		BA8AEC01018AFDFB59AC286A /* AboutPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35F1A1C981D696BC1EB1A0FE /* AboutPane.swift */; };
 		BB4E8AC4610B86313CD0CA6F /* ChatUXRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22F8C22AC09EBB3DFB038F97 /* ChatUXRegressionTests.swift */; };
 		BC462CF6898FC87ADB1A1AE9 /* MessageBodyParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32B6A816B6624FE9CCD472F5 /* MessageBodyParser.swift */; };
@@ -212,6 +217,7 @@
 		C6C8EC4BB9D1B7EC88565DD8 /* MacChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8AD64AEE5A57AF1667249A7 /* MacChatView.swift */; };
 		C8872C5D0D4A932E48C4CB36 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76E84B41258D35243F545BDB /* AppState.swift */; };
 		C88BC90C389AC1CC49D1B8F8 /* LoginView+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 877AB77036AB504E9C76156D /* LoginView+macOS.swift */; };
+		C90E77716E24E622BAB738CF /* DiagRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6E168D723AE41346C13EB32 /* DiagRecorder.swift */; };
 		CA515D7F42DE4040A5A21C2E /* QuestionE2EUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D672B49ADE8CFF2012CD83AC /* QuestionE2EUITests.swift */; };
 		CB2D37D2D7F4BB782B250DDF /* MessageInputView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 102ABECDD210B084B5B19319 /* MessageInputView.swift */; };
 		CB5335A6F0129A9A21088A72 /* LocalSessionSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13466FFA7CC929AF90E4097E /* LocalSessionSummary.swift */; };
@@ -236,6 +242,7 @@
 		DE13B9CBD5E65011E5CF4D46 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5B791C3F6BA99245733A941 /* PairingView.swift */; };
 		DEF3457C9DDC84533AE6636B /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 179780D06C1EF0B6ED5E0C38 /* WelcomeView.swift */; };
 		DFA7C9DEE69AE83C1C88F2AE /* MacChatMockSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92398F20B425BB1B9F83DB93 /* MacChatMockSnapshot.swift */; };
+		E28B775963A2EDAC7D4F166E /* DiagRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6E168D723AE41346C13EB32 /* DiagRecorder.swift */; };
 		E3C3A5804AF1AF52E8D8BBE8 /* AboutPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35F1A1C981D696BC1EB1A0FE /* AboutPane.swift */; };
 		E578C3D28FE88D4B38B71B55 /* MacStepsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07D6E0A7CA95492AFFEAA610 /* MacStepsView.swift */; };
 		E584D9C40B57680AF34DE750 /* FlatBubbleTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5DA5D4B10C2EF6EA184D1E3 /* FlatBubbleTestView.swift */; };
@@ -249,6 +256,7 @@
 		EF182DDCEE43C64585164D92 /* VoiceInputCore in Frameworks */ = {isa = PBXBuildFile; productRef = C18741B12304BDBDCC5AF55E /* VoiceInputCore */; };
 		F030B7B0198D76CB4CAD4366 /* PreferencesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C0AE2F0350124712EAE0E17 /* PreferencesManager.swift */; };
 		F134E18404408B23FA5A7B57 /* PKCE.swift in Sources */ = {isa = PBXBuildFile; fileRef = B25E8CC25E0F72D13A5394C5 /* PKCE.swift */; };
+		F31C758A34766D63EDB6AAF6 /* DiagSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7209F58C4D298C8764042569 /* DiagSettingsSection.swift */; };
 		F5B867504AFC26C37BE4E2DB /* PairingSheet+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = F85975C0842C3E6C99D031CE /* PairingSheet+macOS.swift */; };
 		F5E796FF4FDE931F18A3680A /* PushManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C97B0E319E0F6D893D83C12A /* PushManager.swift */; };
 		F6582FAA807D4A92471EBCA8 /* PendingTailBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABE0847F43FAEAA37799CEE2 /* PendingTailBuffer.swift */; };
@@ -386,6 +394,7 @@
 		64BDD6DDB8BD5DCDD324CDA5 /* HelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpersTests.swift; sourceTree = "<group>"; };
 		654A17BD8AED96C7CD6AA7A5 /* MessageRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageRouter.swift; sourceTree = "<group>"; };
 		6685F600391FC66B987E12ED /* Kraki.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Kraki.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6812354F72EF32686A7E98C6 /* DiagRunLoop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagRunLoop.swift; sourceTree = "<group>"; };
 		6813B385E0446BBC371C8AD3 /* MacAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAppDelegate.swift; sourceTree = "<group>"; };
 		69B9A691EAC2476B0D3210AC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6A71A19399881C78EF628F94 /* KrakiMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KrakiMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -398,6 +407,7 @@
 		6FC184CE4CAFDEF1914453D4 /* TabBarHider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarHider.swift; sourceTree = "<group>"; };
 		714C9952404A97A090FC011F /* KrakiNotification.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = KrakiNotification.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		716CF510D83856B445C94DA7 /* MacBubbleImageGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBubbleImageGrid.swift; sourceTree = "<group>"; };
+		7209F58C4D298C8764042569 /* DiagSettingsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagSettingsSection.swift; sourceTree = "<group>"; };
 		735BA6282777D61A4335E5F5 /* MenuBarExtraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarExtraView.swift; sourceTree = "<group>"; };
 		76E84B41258D35243F545BDB /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		77E056700BA106FD1E130382 /* AttachmentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentStore.swift; sourceTree = "<group>"; };
@@ -418,6 +428,7 @@
 		96154D6C2A9CDBEB4E0EE2F7 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		9656866F24E385A14F14E699 /* NavigationIDs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationIDs.swift; sourceTree = "<group>"; };
 		97C99EF2A08DFF67F9951044 /* PendingTailBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingTailBufferTests.swift; sourceTree = "<group>"; };
+		9BC0634BC9C0F5245E97C899 /* Kraki.Diagnostics.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Kraki.Diagnostics.entitlements; sourceTree = "<group>"; };
 		9DA0F259C4438B894B5E0D5E /* KrakiMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KrakiMac.entitlements; sourceTree = "<group>"; };
 		9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Helpers.swift; sourceTree = "<group>"; };
 		9E85D17DFC304688DBB3F729 /* ActivityRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityRow.swift; sourceTree = "<group>"; };
@@ -428,7 +439,9 @@
 		A4037D4173EC6CC310DB2771 /* IOSClientAlignmentPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSClientAlignmentPreview.swift; sourceTree = "<group>"; };
 		A429810ED3F81077317149B3 /* DeviceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceStoreTests.swift; sourceTree = "<group>"; };
 		A625A24B0C13AF8010778069 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		A6E168D723AE41346C13EB32 /* DiagRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagRecorder.swift; sourceTree = "<group>"; };
 		A7BD9521683CD2FAA84C6AF6 /* Kraki.Release.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Kraki.Release.entitlements; sourceTree = "<group>"; };
+		AA8F39B83EB04DE6DBA8346B /* KrakiNotification.Diagnostics.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KrakiNotification.Diagnostics.entitlements; sourceTree = "<group>"; };
 		ABE0847F43FAEAA37799CEE2 /* PendingTailBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingTailBuffer.swift; sourceTree = "<group>"; };
 		ACA594C1B063D6133CF3BC50 /* KrakiPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiPlatform.swift; sourceTree = "<group>"; };
 		AF830792579504E8F32DFC4F /* SessionTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTable.swift; sourceTree = "<group>"; };
@@ -456,6 +469,7 @@
 		CD6C23118C2C309C39C2A515 /* MacUpdateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacUpdateController.swift; sourceTree = "<group>"; };
 		CF4923A90FCE08A9677B9EFA /* IOSVoiceHoldScenario.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSVoiceHoldScenario.swift; sourceTree = "<group>"; };
 		D219A1249EBFCAA247533E07 /* TentacleCLIManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TentacleCLIManager.swift; sourceTree = "<group>"; };
+		D345DB389B2A4F5A8E198058 /* KrakiDiag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiDiag.swift; sourceTree = "<group>"; };
 		D4764BEF479FF106EBE37D34 /* BubbleActionSlot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BubbleActionSlot.swift; sourceTree = "<group>"; };
 		D5B791C3F6BA99245733A941 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
 		D5BAEA7249F10D6067F0886F /* LiveBubbleTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveBubbleTestView.swift; sourceTree = "<group>"; };
@@ -544,6 +558,17 @@
 			path = Mac;
 			sourceTree = "<group>";
 		};
+		1B99FC281E3259A017CEB63B /* Diagnostics */ = {
+			isa = PBXGroup;
+			children = (
+				A6E168D723AE41346C13EB32 /* DiagRecorder.swift */,
+				6812354F72EF32686A7E98C6 /* DiagRunLoop.swift */,
+				7209F58C4D298C8764042569 /* DiagSettingsSection.swift */,
+				D345DB389B2A4F5A8E198058 /* KrakiDiag.swift */,
+			);
+			path = Diagnostics;
+			sourceTree = "<group>";
+		};
 		21B303F9ACDE747E9D85A960 /* Actions */ = {
 			isa = PBXGroup;
 			children = (
@@ -629,6 +654,7 @@
 			isa = PBXGroup;
 			children = (
 				C5625A030D347921B9A09978 /* Crypto */,
+				1B99FC281E3259A017CEB63B /* Diagnostics */,
 				CB954FE3BAC152352AA7B1B4 /* Markdown */,
 				3B982724391014C9760A98AF /* Networking */,
 				D03B70DEBA7767E6EB904159 /* Protocol */,
@@ -698,6 +724,7 @@
 			isa = PBXGroup;
 			children = (
 				0513473F4DCAC021C97802E4 /* Info.plist */,
+				AA8F39B83EB04DE6DBA8346B /* KrakiNotification.Diagnostics.entitlements */,
 				5437A18846D42371499BC0F6 /* KrakiNotification.entitlements */,
 				11B2053230A2F15EC2518979 /* NotificationService.swift */,
 			);
@@ -780,6 +807,7 @@
 		BBDA8D94155FA58FEEB63630 /* Kraki */ = {
 			isa = PBXGroup;
 			children = (
+				9BC0634BC9C0F5245E97C899 /* Kraki.Diagnostics.entitlements */,
 				3C568CFF12F4C661F328D4DA /* Kraki.entitlements */,
 				A7BD9521683CD2FAA84C6AF6 /* Kraki.Release.entitlements */,
 				9DA0F259C4438B894B5E0D5E /* KrakiMac.entitlements */,
@@ -1244,6 +1272,9 @@
 				07009971363AD7EBB365BAF8 /* DeviceListView.swift in Sources */,
 				50081F6ED81CAC7430B9230F /* DeviceStore.swift in Sources */,
 				1FA04773E415B708A7C36B46 /* DevicesPane.swift in Sources */,
+				E28B775963A2EDAC7D4F166E /* DiagRecorder.swift in Sources */,
+				B9904E6233735C93F73DEC6F /* DiagRunLoop.swift in Sources */,
+				F31C758A34766D63EDB6AAF6 /* DiagSettingsSection.swift in Sources */,
 				D087D8336F9F7A82D73AB4DD /* EncryptionHandler.swift in Sources */,
 				E584D9C40B57680AF34DE750 /* FlatBubbleTestView.swift in Sources */,
 				2EB7589D7EBECE7995E65571 /* GeneralPane.swift in Sources */,
@@ -1259,6 +1290,7 @@
 				1E3AB82960FD440D2F9425CD /* ImportSessionSheet.swift in Sources */,
 				41CD9A1A40C53FE761E997D5 /* KeychainManager.swift in Sources */,
 				39CA771DFACE01A22668BCC5 /* KrakiApp.swift in Sources */,
+				740A60CC9415FB46D2D73787 /* KrakiDiag.swift in Sources */,
 				D55885ACB978C03AC2DAE4E5 /* KrakiLogger.swift in Sources */,
 				FFC61A378DD2C7BDA3FB7656 /* KrakiPlatform.swift in Sources */,
 				7DC00DF43DEE954E5D78EEA1 /* KrakiVoiceInputController.swift in Sources */,
@@ -1381,12 +1413,16 @@
 				4550B0DBED564B557D6AF038 /* CryptoManager.swift in Sources */,
 				B7C46A0BC08656D1F5C64D5E /* DeviceStore.swift in Sources */,
 				4BD6FA3628CFB971ABDA5DA8 /* DevicesPane.swift in Sources */,
+				C90E77716E24E622BAB738CF /* DiagRecorder.swift in Sources */,
+				4BD2A0DCBADF5436E42767AA /* DiagRunLoop.swift in Sources */,
+				613A478009D713D6D8D81F36 /* DiagSettingsSection.swift in Sources */,
 				8BC5CECD42EA24EE4D580AC6 /* EncryptionHandler.swift in Sources */,
 				331E5FA13A1DB2C8327BB977 /* GeneralPane.swift in Sources */,
 				449210BD9A5213261366CA6F /* HeightMeasurementScheduler.swift in Sources */,
 				8C74A12E6D7EA7794FCB3FAA /* Helpers.swift in Sources */,
 				F8289CBF9D6D730BE4F5A0A8 /* IOSVoiceComposer.swift in Sources */,
 				C3DD6301585CDBA8DB9E1FA4 /* KeychainManager.swift in Sources */,
+				48898113E756024CD42E3B7F /* KrakiDiag.swift in Sources */,
 				5F0B02123ED43B73877167F5 /* KrakiLogger.swift in Sources */,
 				8DD4AE2E5880121FF778CCD3 /* KrakiPlatform.swift in Sources */,
 				D0DA7BC914F4D443E2F89695 /* KrakiVoiceInputController.swift in Sources */,
@@ -1538,6 +1574,28 @@
 			};
 			name = Debug;
 		};
+		07F6F7F9931715E532217BA1 /* DiagnosticsDelivery */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = KrakiNotification/KrakiNotification.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3A83X5JZ3S;
+				INFOPLIST_FILE = KrakiNotification/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.notification;
+				PROVISIONING_PROFILE_SPECIFIER = "Kraki Notification App Store CI";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = DiagnosticsDelivery;
+		};
 		086251E41EDDB7A5A2C6127F /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1611,6 +1669,117 @@
 			};
 			name = Debug;
 		};
+		1741D881954016375D64D452 /* Diagnostics */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kraki.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Kraki";
+			};
+			name = Diagnostics;
+		};
+		2E89EEB7A21FF1617F25138D /* Diagnostics */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) KRAKI_DIAG";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Diagnostics;
+		};
+		37343E3E95849A9D7EF8B1B0 /* DiagnosticsDelivery */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Kraki;
+			};
+			name = DiagnosticsDelivery;
+		};
+		3F607642BDDB6B915A32D081 /* Diagnostics */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = KrakiNotification/KrakiNotification.Diagnostics.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3A83X5JZ3S;
+				INFOPLIST_FILE = KrakiNotification/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.diag.notification;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Diagnostics;
+		};
 		40AC92ADD0148726CC4D7F4D /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1627,6 +1796,40 @@
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kraki Dev.app/Contents/MacOS/Kraki Dev";
 			};
 			name = Release;
+		};
+		48C568B86B9817EE27613D5C /* Diagnostics */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "chat.kraki.ios.voice-uitests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Kraki;
+			};
+			name = Diagnostics;
+		};
+		58C7BDB39DB1FF53EEAEE17E /* DiagnosticsDelivery */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kraki Dev.app/Contents/MacOS/Kraki Dev";
+			};
+			name = DiagnosticsDelivery;
 		};
 		5AF8DB6760F6D003A7EE1175 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -1707,6 +1910,146 @@
 				SWIFT_VERSION = 5.9;
 			};
 			name = Debug;
+		};
+		6F0E36DA3EBB956A8296F428 /* DiagnosticsDelivery */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Kraki/Kraki.Release.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3A83X5JZ3S;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Kraki uses the camera to scan QR codes for device pairing.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kraki uses the microphone for press-to-talk voice messages.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Kraki transcribes your voice on-device so you can dictate messages.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = (
+					"remote-notification",
+				);
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios;
+				PROVISIONING_PROFILE_SPECIFIER = "Kraki App Store CI";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = DiagnosticsDelivery;
+		};
+		75B35F772EC926BAFD9AE92E /* DiagnosticsDelivery */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) KRAKI_DIAG KRAKI_DIAG_EXISTING_IDENTITY";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+			};
+			name = DiagnosticsDelivery;
+		};
+		77FD424B1F75AB54FEA75248 /* Diagnostics */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kraki Dev.app/Contents/MacOS/Kraki Dev";
+			};
+			name = Diagnostics;
+		};
+		7E81DDECFA9A0CBCF60BB50C /* Diagnostics */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = DevAppIcon;
+				CODE_SIGN_ENTITLEMENTS = Kraki/Kraki.Diagnostics.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3A83X5JZ3S;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Kraki Diag";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Kraki uses the camera to scan QR codes for device pairing.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kraki uses the microphone for press-to-talk voice messages.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Kraki transcribes your voice on-device so you can dictate messages.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = (
+					"remote-notification",
+				);
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.diag;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Diagnostics;
 		};
 		950FCD9913A83592108B7749 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -1799,7 +2142,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 41;
+				CURRENT_PROJECT_VERSION = 42;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -1809,7 +2152,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.39;
+				MARKETING_VERSION = 0.2.40;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.dev;
 				PRODUCT_NAME = "Kraki Dev";
 				SDKROOT = macosx;
@@ -1871,6 +2214,64 @@
 			};
 			name = Release;
 		};
+		BECAE09A216B7D84FB5390BB /* DiagnosticsDelivery */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kraki.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Kraki";
+			};
+			name = DiagnosticsDelivery;
+		};
+		C8F888A0A19F1F3B4CF960F8 /* Diagnostics */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Kraki;
+			};
+			name = Diagnostics;
+		};
+		CB2838261B7BCBD7FCB025BE /* Diagnostics */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = DevAppIcon;
+				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 42;
+				DEVELOPMENT_TEAM = 3A83X5JZ3S;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = KrakiMac.Diagnostics.Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.2.40;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.diag;
+				PRODUCT_NAME = "Kraki Diag";
+				SDKROOT = macosx;
+				SWIFT_OBJC_INTERFACE_HEADER_NAME = "";
+			};
+			name = Diagnostics;
+		};
 		CC185B8BFA523B3F2C9BFF07 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1878,7 +2279,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 41;
+				CURRENT_PROJECT_VERSION = 42;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -1888,13 +2289,38 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.39;
+				MARKETING_VERSION = 0.2.40;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac;
 				PRODUCT_NAME = Kraki;
 				SDKROOT = macosx;
 				SWIFT_OBJC_INTERFACE_HEADER_NAME = "";
 			};
 			name = Release;
+		};
+		CE84FE1CE02C761711A74312 /* DiagnosticsDelivery */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 42;
+				DEVELOPMENT_TEAM = 3A83X5JZ3S;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = KrakiMac.Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Kraki;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.2.40;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac;
+				PRODUCT_NAME = Kraki;
+				SDKROOT = macosx;
+				SWIFT_OBJC_INTERFACE_HEADER_NAME = "";
+			};
+			name = DiagnosticsDelivery;
 		};
 		EE295603EE4D4077ED0BA16C /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -1913,6 +2339,23 @@
 			};
 			name = Release;
 		};
+		FE89A2ABB60EEC3D30265A2A /* DiagnosticsDelivery */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "chat.kraki.ios.voice-uitests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Kraki;
+			};
+			name = DiagnosticsDelivery;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1920,6 +2363,8 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				11ED6C0BC7B02FB57B18116A /* Debug */,
+				77FD424B1F75AB54FEA75248 /* Diagnostics */,
+				58C7BDB39DB1FF53EEAEE17E /* DiagnosticsDelivery */,
 				40AC92ADD0148726CC4D7F4D /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -1929,6 +2374,8 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A4BE29614D491BD977CBE5DF /* Debug */,
+				1741D881954016375D64D452 /* Diagnostics */,
+				BECAE09A216B7D84FB5390BB /* DiagnosticsDelivery */,
 				024DD3818783B0EEB6A93A6F /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -1938,6 +2385,8 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				5AF8DB6760F6D003A7EE1175 /* Debug */,
+				48C568B86B9817EE27613D5C /* Diagnostics */,
+				FE89A2ABB60EEC3D30265A2A /* DiagnosticsDelivery */,
 				9EE26E72706FABD9F0804472 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -1947,6 +2396,8 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				950FCD9913A83592108B7749 /* Debug */,
+				C8F888A0A19F1F3B4CF960F8 /* Diagnostics */,
+				37343E3E95849A9D7EF8B1B0 /* DiagnosticsDelivery */,
 				EE295603EE4D4077ED0BA16C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -1956,6 +2407,8 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				B07D7401975D984741444A1D /* Debug */,
+				7E81DDECFA9A0CBCF60BB50C /* Diagnostics */,
+				6F0E36DA3EBB956A8296F428 /* DiagnosticsDelivery */,
 				9F285059C2FC3AB278D77A58 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -1965,6 +2418,8 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				AF7348CB57E9FDC9F8038CD9 /* Debug */,
+				CB2838261B7BCBD7FCB025BE /* Diagnostics */,
+				CE84FE1CE02C761711A74312 /* DiagnosticsDelivery */,
 				CC185B8BFA523B3F2C9BFF07 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -1974,6 +2429,8 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				6DD72626986B7832F33E7AB2 /* Debug */,
+				2E89EEB7A21FF1617F25138D /* Diagnostics */,
+				75B35F772EC926BAFD9AE92E /* DiagnosticsDelivery */,
 				086251E41EDDB7A5A2C6127F /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -1983,6 +2440,8 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				02801BDF92158FABD08054C3 /* Debug */,
+				3F607642BDDB6B915A32D081 /* Diagnostics */,
+				07F6F7F9931715E532217BA1 /* DiagnosticsDelivery */,
 				B36AE59C73D59310EFDE0E10 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;

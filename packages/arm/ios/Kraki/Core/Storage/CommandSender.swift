@@ -90,7 +90,16 @@ final class CommandSender {
         msg["deviceId"] = appState.deviceId ?? ""
         msg["seq"] = 0
         msg["timestamp"] = ISO8601.now()
-        return appState.sendEncryptedMessage(msg, connectionScoped: connectionScoped)
+        let accepted = appState.sendEncryptedMessage(msg, connectionScoped: connectionScoped)
+        #if KRAKI_DIAG
+        if payload["type"] as? String == "send_input", let wire = payload["payload"] as? [String: Any],
+           let clientId = wire["clientId"] as? String {
+            var fields: [DiagField: DiagValue] = [.clientId: .id(clientId), .accepted: .bool(accepted), .stack: .tag(KrakiDiag.stack)]
+            if let answerTo = wire["answerTo"] as? String { fields[.answerTo] = .id(answerTo) }
+            KrakiDiag.record(.handoff, session: sessionId, fields)
+        }
+        #endif
+        return accepted
     }
 
     enum InputDelivery: String {
@@ -115,12 +124,25 @@ final class CommandSender {
         // resolve the right pending placeholder even with multiple
         // in-flight sends, reconnects, or multi-device scenarios.
         let clientId = UUID().uuidString
+        #if KRAKI_DIAG
+        var diagFields: [DiagField: DiagValue] = [.clientId: .id(clientId), .textLength: .int(text.utf8.count),
+                                                  .attachments: .int(attachments?.count ?? 0), .source: .tag("CommandSender.sendInput") ]
+        if let answerTo { diagFields[.answerTo] = .id(answerTo) }
+        if let ix = KrakiDiag.interaction { diagFields[.ix] = .id(ix) }
+        KrakiDiag.record(.input, session: sessionId, diagFields)
+        var diagAccepted = false
+        defer { KrakiDiag.record(.result, session: sessionId, [.clientId: .id(clientId), .accepted: .bool(diagAccepted)]) }
+        #endif
         let (pending, payload) = makePendingInput(sessionId: sessionId, clientId: clientId, text: text,
                                                   attachments: attachments, delivery: delivery,
                                                   answerTo: answerTo, state: .sending)
         guard send(["type": "send_input", "payload": payload], sessionId: sessionId) else {
             return false
         }
+        #if KRAKI_DIAG
+        diagAccepted = true
+        KrakiDiag.record(.outbox, session: sessionId, [.clientId: .id(clientId), .phase: .tag("created")])
+        #endif
         var bucket = outbox[sessionId] ?? [:]
         bucket[clientId] = pending
         outbox[sessionId] = bucket
@@ -194,6 +216,11 @@ final class CommandSender {
     ) -> String? {
         guard appState != nil else { return nil }
         let clientId = UUID().uuidString
+        #if KRAKI_DIAG
+        KrakiDiag.record(.input, session: sessionId,
+            [.clientId: .id(clientId), .textLength: .int(text.utf8.count), .attachments: .int(attachments?.count ?? 0),
+             .source: .tag("CommandSender.stageInput")])
+        #endif
         // (A voice answer is reviewed in the field and sent via `answer`.)
         var (pending, payload) = makePendingInput(sessionId: sessionId, clientId: clientId, text: text,
                                                   attachments: attachments, delivery: delivery, state: .correcting)
@@ -285,6 +312,9 @@ final class CommandSender {
     private func setPendingState(_ sessionId: String, clientId: String, _ state: PendingState) {
         guard var bucket = outbox[sessionId], var message = bucket[clientId] else { return }
         guard message.payload["localState"]?.stringValue != state.rawValue else { return }
+        #if KRAKI_DIAG
+        KrakiDiag.record(.outbox, session: sessionId, [.clientId: .id(clientId), .phase: .tag(state.rawValue)])
+        #endif
         message.payload["localState"] = AnyCodable(state.rawValue)
         bucket[clientId] = message
         outbox[sessionId] = bucket
@@ -325,6 +355,9 @@ final class CommandSender {
     /// Tentacle side). Returns false if it could not be handed to transport.
     @discardableResult
     func retryPending(sessionId: String, clientId: String) -> Bool {
+        #if KRAKI_DIAG
+        KrakiDiag.record(.outbox, session: sessionId, [.clientId: .id(clientId), .phase: .tag("retry")])
+        #endif
         guard let message = outbox[sessionId]?[clientId] else { return false }
         var payload = outboundPayloads[clientId] ?? ["text": message.content ?? "", "clientId": clientId]
         if payload["text"] == nil { payload["text"] = message.content ?? "" }
@@ -374,6 +407,9 @@ final class CommandSender {
     func clearPending(_ sessionId: String, clientId: String) {
         guard var bucket = outbox[sessionId] else { return }
         guard bucket.removeValue(forKey: clientId) != nil else { return }
+        #if KRAKI_DIAG
+        KrakiDiag.record(.outbox, session: sessionId, [.clientId: .id(clientId), .phase: .tag("cleared")])
+        #endif
         if bucket.isEmpty {
             outbox.removeValue(forKey: sessionId)
         } else {
@@ -454,6 +490,11 @@ final class CommandSender {
               let data = try? Data(contentsOf: outboxURL),
               let stored = try? JSONDecoder().decode([StoredPending].self, from: data) else { return }
         for item in stored {
+            #if KRAKI_DIAG
+            var diagFields: [DiagField: DiagValue] = [.clientId: .id(item.clientId), .phase: .tag("restored")]
+            if let answerTo = item.answerTo { diagFields[.answerTo] = .id(answerTo) }
+            KrakiDiag.record(.outbox, session: item.sessionId, diagFields)
+            #endif
             var payload: [String: AnyCodable] = [
                 "content": AnyCodable(item.text),
                 "clientId": AnyCodable(item.clientId),
@@ -544,7 +585,12 @@ final class CommandSender {
     @discardableResult
     func answer(sessionId: String, questionId: String, answer: String,
                 attachments: [ImageAttachment]? = nil) -> Bool {
-        sendInput(sessionId: sessionId, text: answer, attachments: attachments, answerTo: questionId)
+        #if KRAKI_DIAG
+        KrakiDiag.answer(session: sessionId, question: questionId, length: answer.utf8.count,
+                         pending: outbox[sessionId]?.values.filter { $0.answerTo == questionId }.count ?? 0,
+                         source: "CommandSender.answer")
+        #endif
+        return sendInput(sessionId: sessionId, text: answer, attachments: attachments, answerTo: questionId)
     }
 
     // MARK: - Session Control

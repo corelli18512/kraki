@@ -2263,6 +2263,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     func syncLiveUpdates() {
+        #if KRAKI_DIAG
+        let diagWork = KrakiDiag.beginWork()
+        defer { KrakiDiag.endWork(diagWork, source: "ios.list_sync", session: sessionId) }
+        #endif
         let cardSig = liveCardSignature
         let cardChanged = cardSig != lastLiveCardSignature
         let pendingSig = vm.pendingSignature
