@@ -6,10 +6,25 @@ import AppKit
 /// driven through the production MacChatView in a real window.
 @MainActor
 final class MacChatUXRegressionTests: MacChatUXTestCase {
+    func testRoutineMacHostCannotRequestLiveMicrophone() async {
+        XCTAssertTrue(NativeTestRuntime.isRunningTests)
+        XCTAssertFalse(NativeTestRuntime.allowsLiveAudio)
+        let policy = LiveVoiceInputAudioPolicy()
+        XCTAssertEqual(policy.permission, .denied)
+        XCTAssertFalse(policy.hasInputDevice)
+        let granted = await policy.requestPermission()
+        XCTAssertFalse(granted)
+        XCTAssertFalse(policy.activate())
+        policy.deactivate()
+        let app = AppState.makeUnitTestHost()
+        XCTAssertNil(app.wsClient)
+        XCTAssertNil(app.authManager)
+    }
 
     // MARK: Streaming
 
     func testStreamingTailStaysVisibleUnclippedAndSmooth() throws {
+        try requireNativePerformanceTests()
         let fx = try makeFixture(total: 40)
         drain(1_200)
         try startTurn(fx, seq: 41)
@@ -36,6 +51,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
     /// Streaming re-parses the body on every token; table views must be
     /// reused by content, not rebuilt (display-independent cost metric).
     func testStreamingReusesTableViews() throws {
+        try requireNativePerformanceTests()
         let fx = try makeFixture(total: 10)
         drain(800)
         try startTurn(fx, seq: 11)
@@ -85,6 +101,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
     // MARK: Scrolling
 
     func testHistoryFlingNeverJumpsOrShowsPlaceholders() throws {
+        try requireNativePerformanceTests()
         let fx = try makeFixture(total: 300)
         drain(1_500)
         let st = scrollAndTrack(fx, packets: 600, px: 40, intervalMs: 8, burst: 40, pauseMs: 800)
@@ -98,6 +115,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
     }
 
     func testStreamingContinuesWhileScrollingWithoutJumps() throws {
+        try requireNativePerformanceTests()
         let fx = try makeFixture(total: 30)
         drain(1_000)
         try startTurn(fx, seq: 31)
@@ -129,6 +147,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
     /// must scroll like a browser: continuous per-frame motion, not a pulse
     /// per notch.
     func testDiscreteWheelScrollsContinuously() throws {
+        try requireNativePerformanceTests()
         let fx = try makeFixture(total: 200)
         drain(1_200)
         var deltas: [CGFloat] = []
@@ -184,6 +203,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
     /// Snapshots (new messages, history pages) landing while a wheel glide is
     /// still moving must not pull the viewport back to a stale reading anchor.
     func testWheelGlideIsNotPulledBackBySnapshots() throws {
+        try requireNativePerformanceTests()
         let fx = try makeFixture(total: 120)
         drain(1_200)
         for _ in 0..<25 { packet(fx, 40); drain(8) }
@@ -252,6 +272,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
     /// Every committed frame: content moves exactly with the user's scroll,
     /// no row vanishes, no blank area, no placeholder.
     func testAggressiveScrollingWithHistoryLoadingStaysClean() throws {
+        try requireNativePerformanceTests()
         func check(_ name: String, _ fx: Fx, _ drive: () -> Void) {
             drain(1_500)
             packetInputTotal = -fx.sv.debugWheelAppliedTotal
@@ -310,6 +331,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
     /// A mouse wheel has no gesture boundaries: spinning it without pause must
     /// keep loading history (no stall at the loaded top), with clean frames.
     func testContinuousWheelKeepsLoadingHistoryWithoutFlicker() throws {
+        try requireNativePerformanceTests()
         for delay in [0, 250] as [UInt64] {
             MessageProviderDebug.olderPageDelayMs = delay
             defer { MessageProviderDebug.olderPageDelayMs = 0 }

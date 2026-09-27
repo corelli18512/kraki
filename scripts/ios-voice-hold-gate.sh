@@ -14,7 +14,7 @@ root, work, device = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 devices = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '-j']))['devices']
 assert any(d['udid'] == device and 'iPhone' in d.get('deviceTypeIdentifier', d['name']) for group in devices.values() for d in group), 'Use an available iPhone Simulator (not a physical device)'
 spec = (root / 'project.yml').read_text().replace('name: Kraki\n', 'name: KrakiVoiceHoldIsolated\n', 1).replace('chat.kraki.ios', 'chat.kraki.design.hold-c')
-spec = spec.replace('      targets:\n        - KrakiTests', '      environmentVariables:\n        KRAKI_IOS_CHAT_ALIGNMENT_PREVIEW: "1"\n      targets:\n        - KrakiTests', 1)
+# The shared Kraki unit-test scheme already launches an isolated host.
 (work / 'project.yml').write_text(spec)
 for name in ['Kraki', 'KrakiNotification']:
     (work / 'project' / name).symlink_to(root / name, target_is_directory=True)

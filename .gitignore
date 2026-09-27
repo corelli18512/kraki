@@ -15,6 +15,7 @@ dist/
 coverage/
 .tmp/
 scripts/test*
+!scripts/test-native.sh
 ROADMAP.md
 KRAKI_FILE_BY_FILE_REVIEW.md
 AGENTS.md

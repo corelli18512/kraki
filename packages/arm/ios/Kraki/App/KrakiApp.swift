@@ -36,7 +36,7 @@ struct KrakiApp: App {
             ? IOSChatScrollScenarioFixture.makeAppState()
             : alignmentPreviewEnabled || clientAlignmentPreviewEnabled
                 ? IOSChatAlignmentPreviewFixture.makeAppState()
-                : AppState())
+                : NativeTestRuntime.isRunningTests ? AppState.makeUnitTestHost() : AppState())
         #else
         self.alignmentPreviewEnabled = false
         self.clientAlignmentPreviewEnabled = false
@@ -73,6 +73,8 @@ struct KrakiApp: App {
                     IOSChatAlignmentPreview()
                 } else if clientAlignmentPreviewEnabled {
                     IOSClientAlignmentPreview()
+                } else if NativeTestRuntime.isRunningTests {
+                    Color.clear
                 } else {
                     RootView(launchCoordinator: launchCoordinator)
                         .onAppear {

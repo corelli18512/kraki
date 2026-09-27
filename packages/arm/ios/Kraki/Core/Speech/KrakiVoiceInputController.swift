@@ -110,10 +110,60 @@ protocol VoiceInputAudioPolicy {
     func deactivate()
 }
 
+#if DEBUG
+/// Test hosts must not prompt for OS permission or touch real audio by default.
+/// Ordinary Debug app launches are unaffected. Hardware acceptance is a separate,
+/// explicit opt-in, never enabled by a unit-test scheme or CI.
+enum NativeTestRuntime {
+    static var isRunningTests: Bool {
+        let env = ProcessInfo.processInfo.environment
+        return env["KRAKI_TEST_ISOLATION"] == "1"
+            || env["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }
+
+    static var allowsLiveAudio: Bool {
+        !isRunningTests || ProcessInfo.processInfo.environment["KRAKI_ALLOW_TEST_MICROPHONE"] == "1"
+    }
+}
+
+private struct IsolatedVoiceAudioPolicy: VoiceInputAudioPolicy {
+    var permission: VoiceMicrophonePermission { .denied }
+    var hasInputDevice: Bool { false }
+    func requestPermission() async -> Bool { false }
+    func activate() -> Bool { false }
+    func deactivate() {}
+}
+
+private struct IsolatedVoiceSessionFactory: VoiceInputSessionFactory {
+    func makeSession(
+        configuration: VoiceInputConfiguration,
+        onEvent: @escaping (VoiceInputEvent) -> Void,
+        onMetric: @escaping (VoiceInputMetric) -> Void
+    ) -> VoiceInputSessionProtocol { IsolatedVoiceSession() }
+}
+
+private final class IsolatedVoiceSession: VoiceInputSessionProtocol {
+    let correctionEnabled = false
+    let pcmDumpPath: String? = nil
+    func startCapture(context: [String: VoiceInputJSONValue], vocabulary: [String]) {}
+    func stopCapture() {}
+    func close() {}
+}
+#endif
+
 struct LiveVoiceInputAudioPolicy: VoiceInputAudioPolicy {
-    var hasInputDevice: Bool { VoiceAudioInputAvailability.isAvailable }
+    var hasInputDevice: Bool {
+        #if DEBUG
+        guard NativeTestRuntime.allowsLiveAudio else { return false }
+        #endif
+        return VoiceAudioInputAvailability.isAvailable
+    }
 
     var permission: VoiceMicrophonePermission {
+        #if DEBUG
+        guard NativeTestRuntime.allowsLiveAudio else { return .denied }
+        #endif
         #if os(macOS)
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: return .granted
@@ -149,6 +199,9 @@ struct LiveVoiceInputAudioPolicy: VoiceInputAudioPolicy {
     }
 
     func activate() -> Bool {
+        #if DEBUG
+        guard NativeTestRuntime.allowsLiveAudio else { return false }
+        #endif
         #if os(iOS)
         do {
             let audio = AVAudioSession.sharedInstance()
@@ -165,6 +218,9 @@ struct LiveVoiceInputAudioPolicy: VoiceInputAudioPolicy {
     }
 
     func deactivate() {
+        #if DEBUG
+        guard NativeTestRuntime.allowsLiveAudio else { return }
+        #endif
         #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         #endif
@@ -298,6 +354,17 @@ final class KrakiVoiceInputController {
         self.audioPolicy = audioPolicy ?? LiveVoiceInputAudioPolicy()
         self.leaseStore = leaseStore ?? InMemoryVoiceLeaseStore()
     }
+
+    #if DEBUG
+    /// UI fixtures get neither a real microphone nor a warm broker WebSocket.
+    /// Voice-specific tests inject their own deterministic factory/audio policy.
+    static func isolatedForTesting() -> KrakiVoiceInputController {
+        KrakiVoiceInputController(
+            sessionFactory: IsolatedVoiceSessionFactory(),
+            audioPolicy: IsolatedVoiceAudioPolicy()
+        )
+    }
+    #endif
 
     func bind(host: KrakiVoiceInputHost) {
         self.host = host

@@ -30,16 +30,15 @@ starts only missing-height work, but also settles ready buffers. A rejected hidd
 measurement owns no barrier; disappearance/re-anchor cancels both queued jobs and ownership flags.
 A post-layout retry runs outside UIKit layout/batch re-entry. All regression probes are DEBUG-only.
 
-Run the focused gate on an available iOS Simulator:
+The long `testProductionScrollGate` is a **manual performance/stress diagnostic**,
+not a routine CI or release gate. The smaller functional tests in this class stay
+enabled by default. See [test scope and device safety](testing.md).
+
+Explicitly run the focused stress gate on a dedicated iOS Simulator:
 
 ```bash
-xcodebuild \
-  -project packages/arm/ios/Kraki.xcodeproj \
-  -scheme Kraki \
-  -destination 'platform=iOS Simulator,id=<SIMULATOR_UDID>' \
-  -derivedDataPath /tmp/kraki-ios-scroll-gate-derived \
-  CODE_SIGNING_ALLOWED=NO \
-  test -only-testing:KrakiTests/IOSChatScrollProductionTests
+KRAKI_TEST_SIMULATOR=<SIMULATOR_UDID> bash scripts/test-native.sh ios --perf \
+  -only-testing:KrakiTests/IOSChatScrollProductionTests/testProductionScrollGate
 ```
 
 The fixture uses a temporary SQLite database and a test-only app graph. It does not
