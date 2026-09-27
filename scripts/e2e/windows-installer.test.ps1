@@ -8,6 +8,12 @@ if (-not $PSBoundParameters.ContainsKey('Installer')) {
     }
     Write-Output 'PASS: root and published installers are identical'
 }
+# PowerShell 5.1 reads BOM-less files in the system ANSI code page. A UTF-8
+# checkmark can decode to a smart quote under Windows-1252 and break parsing.
+if (@([System.IO.File]::ReadAllBytes((Resolve-Path $Installer)) | Where-Object { $_ -gt 127 }).Count) {
+    throw 'The downloaded installer must be ASCII-safe on PowerShell 5.1'
+}
+Write-Output 'PASS: installer is ASCII-safe on PowerShell 5.1'
 $tokens = $null; $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $Installer), [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }

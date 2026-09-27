@@ -13,7 +13,7 @@
 
 | Defect | Reproduction | Fix |
 | --- | --- | --- |
-| Installer selects a Mac-only release | `/releases/latest` returned `mac-v0.2.40-diag`, without a Windows CLI asset. The script constructed an invalid download URL. | Select a non-draft, non-prerelease release that contains the Windows asset; paginate and fail clearly if none exists. Keep root/public scripts identical. |
+| Installer selects a Mac-only release | `/releases/latest` returned `mac-v0.2.40-diag`, without a Windows CLI asset. The script constructed an invalid download URL. | Select a non-draft, non-prerelease release that contains the Windows asset; paginate and fail clearly if none exists. Keep root/public scripts identical and ASCII-safe: English Windows PowerShell 5.1 CI also caught the old UTF-8 checkmark decoding to a quote and breaking parsing. |
 | npm daemon loses the Windows PATH | Spreading `process.env` preserved `Path`, but `cleanEnv.PATH` was undefined. Adding a second `PATH` passed only `.bin` to the child. Runtime could not discover Codex. | Merge case-insensitive path keys into one `PATH` before spawning. |
 | Codex's POSIX npm shim selected on Windows | `where codex` lists the extensionless shell script before `codex.cmd`. Spawning that first entry independently reproduced `ENOENT`. | Preserve executable PATH order but skip non-Windows-launchable entries. |
 | Wizard/doctor omit Codex | Published wizard only offered Copilot/Claude; self-hosted SEA setup required Copilot. | Shared Codex-aware discovery in both setup routes and Codex CLI/version in doctor. |
@@ -58,7 +58,7 @@ The correct published `v0.33.1` Windows binary also downloaded successfully on W
 
 - Full workspace `pnpm validate` with isolated `HOME` and **unset** inherited `KRAKI_HOME` (one pre-existing test intentionally asserts the default `.kraki` location).
 - Real Codex adapter integration suite: four tests passed (additional local native-protocol coverage, not a substitute for Windows E2E).
-- `powershell -NoProfile -File scripts/e2e/windows-installer.test.ps1`: published-copy parity, Mac/prerelease skipping, pagination, missing-asset failure; no network or installer execution in this test.
+- `powershell -NoProfile -File scripts/e2e/windows-installer.test.ps1`: published-copy parity, PowerShell 5.1 ASCII safety, Mac/prerelease skipping, pagination, missing-asset failure; no network or installer execution in this test.
 - After building tentacle, `node scripts/e2e/windows-codex-shim.mjs`: real `.cmd` and `.bat` launches in a spaced Windows path using a local JSON-RPC fixture; no Codex login/model invocation.
 - Added unit regressions for Windows PATH preservation, executable selection, Codex discovery/setup, and durable final reply + idle with absent/closed sockets.
 - Windows installer/shim checks are part of the existing Windows CI binary-daemon job. Native clients are unchanged.

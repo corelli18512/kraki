@@ -7,7 +7,7 @@ $asset = "kraki-cli-windows-x64.exe"
 $binaryName = "kraki.exe"
 
 Write-Host ""
-Write-Host "  🦑 Kraki Installer" -ForegroundColor Cyan
+Write-Host "  Kraki Installer" -ForegroundColor Cyan
 Write-Host ""
 
 # This repository also publishes Mac-only releases. GitHub's /latest may
@@ -49,7 +49,7 @@ if ($userPath -notlike "*$installDir*") {
 }
 
 Write-Host ""
-Write-Host "  ✓ Kraki $version installed" -ForegroundColor Green
+Write-Host "  [OK] Kraki $version installed" -ForegroundColor Green
 Write-Host ""
 
 # Auto-run
