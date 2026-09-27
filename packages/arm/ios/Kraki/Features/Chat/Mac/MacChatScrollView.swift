@@ -2206,14 +2206,25 @@ final class MacChatScrollView: MacSmoothScrollView {
     private let latestMessageTopPadding: CGFloat = MacChatHeaderMetrics.listTopInset
     /// Round navigation controls (pointer target; iOS uses 44pt for touch).
     static let jumpControlSize: CGFloat = 36
-    /// The ↑/↓ controls float over the conversation and must not hide the
-    /// text behind them: no material, just a faint wash plus the tinted
-    /// hairline border.
+    /// The ↑/↓ controls float over the conversation: the most transparent
+    /// Liquid Glass (clear), so the text behind stays readable.
+    static func isGlass(_ view: NSView) -> Bool {
+        if #available(macOS 26.0, *) { return view is NSGlassEffectView }
+        return false
+    }
+
     static func makeJumpControlMaterial() -> NSView {
-        let view = NSView()
-        view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.22).cgColor
-        return view
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.style = .clear
+            glass.cornerRadius = jumpControlSize / 2
+            return glass
+        }
+        let material = NSVisualEffectView()
+        material.material = .hudWindow
+        material.blendingMode = .withinWindow
+        material.state = .active
+        return material
     }
     /// ↓ sits directly above the composer's send circle (same size and
     /// column), at a fixed height: a growing composer never pushes it up.
@@ -2356,10 +2367,14 @@ final class MacChatScrollView: MacSmoothScrollView {
         }
 
         for material in [jumpMaterial, latestStartMaterial] {
-            material.wantsLayer = true
-            material.layer?.cornerRadius = Self.jumpControlSize / 2
-            material.layer?.masksToBounds = true
-            material.layer?.borderWidth = 0.5
+            // Glass shapes itself (cornerRadius); clipping or stroking its
+            // layer makes it render as an opaque fill.
+            if !Self.isGlass(material) {
+                material.wantsLayer = true
+                material.layer?.cornerRadius = Self.jumpControlSize / 2
+                material.layer?.masksToBounds = true
+                material.layer?.borderWidth = 0.5
+            }
             material.isHidden = true
             addSubview(material)
         }
@@ -2837,13 +2852,9 @@ final class MacChatScrollView: MacSmoothScrollView {
         let dot = Self.unseenDotSize
         unseenDot.frame = NSRect(x: jumpFrame.maxX - dot + 2, y: jumpFrame.minY - 2, width: dot, height: dot)
         var ring = NSColor.windowBackgroundColor.cgColor
-        var wash = ring
         effectiveAppearance.performAsCurrentDrawingAppearance {
             ring = NSColor.windowBackgroundColor.cgColor
-            wash = NSColor.windowBackgroundColor.withAlphaComponent(0.22).cgColor
         }
-        jumpMaterial.layer?.backgroundColor = wash
-        latestStartMaterial.layer?.backgroundColor = wash
         unseenDot.layer?.borderColor = ring
     }
 
@@ -3516,7 +3527,8 @@ final class MacChatScrollView: MacSmoothScrollView {
         }
         let changes = {
             button.alphaValue = shouldShow ? 1 : 0
-            material.alphaValue = shouldShow ? 1 : 0
+            // Glass stays fully opaque-in-alpha; it appears via isHidden.
+            if !Self.isGlass(material) { material.alphaValue = shouldShow ? 1 : 0 }
         }
         let completion = { [weak self, weak button, weak material] in
             guard let self, let button, let material,

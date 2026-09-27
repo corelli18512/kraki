@@ -95,6 +95,21 @@ final class NewSessionJourneyUITests: XCTestCase {
         settle(1.5)
         app.swipeDown(velocity: .slow)
         settle(1.5)
+        // Bring a user bubble (right-aligned, blue) right behind the controls.
+        let jump = app.buttons["Jump to latest"].firstMatch
+        let bubbles = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH '帮我看一下第'"))
+        for _ in 0..<8 {
+            let target = jump.frame.midY - 30
+            guard let bubble = bubbles.allElementsBoundByIndex.min(by: {
+                abs($0.frame.midY - target) < abs($1.frame.midY - target) }) else { break }
+            let delta = bubble.frame.midY - target
+            if abs(delta) < 6 { break }
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5))
+            start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -delta)),
+                        withVelocity: .slow, thenHoldForDuration: 0.4)
+            settle(1)
+        }
+        settle(1)
         let a = XCTAttachment(screenshot: app.screenshot()); a.name = "jump-controls-over-text"; a.lifetime = .keepAlways; add(a)
         XCTAssertTrue(app.buttons["Jump to latest"].firstMatch.exists)
     }

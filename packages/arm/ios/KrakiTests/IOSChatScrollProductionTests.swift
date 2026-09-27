@@ -51,8 +51,9 @@ final class IOSChatScrollProductionTests: XCTestCase {
                        "at the tail ↑ rests in ↓'s slot")
         XCTAssertFalse(startMaterial.isHidden, "visible helper must reveal its material background")
         XCTAssertGreaterThan(startMaterial.alpha, 0.99)
+        if #available(iOS 26.0, *) { XCTAssertTrue(startMaterial.effect is UIGlassEffect, "visible helper is Liquid Glass") }
         XCTAssertTrue(bottomMaterial.isHidden, "hidden helper must not leave an empty material pill")
-        XCTAssertLessThan(bottomMaterial.alpha, 0.01)
+        if #available(iOS 26.0, *) {} else { XCTAssertLessThan(bottomMaterial.alpha, 0.01) }
 
         startButton.sendActions(for: .touchUpInside)
         drainMainRunLoop(milliseconds: 900)

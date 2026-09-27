@@ -1137,17 +1137,31 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         }
     }
 
-    /// The ↑/↓ controls float over the conversation and must not hide the
-    /// text behind them: no blur/glass (both render as an opaque disc here),
-    /// just a faint wash under the chevron plus the tinted hairline border.
-    private static func makeJumpControlBackground() -> UIVisualEffectView {
-        let view = UIVisualEffectView(effect: nil)
-        view.contentView.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.22)
+    /// The ↑/↓ controls float over the conversation: the most transparent
+    /// Liquid Glass (clear) so the text behind stays readable. Glass must not
+    /// be clipped with masksToBounds, stroked, or faded through alpha — each
+    /// makes it fall back to an opaque fill. It is shaped with a capsule
+    /// corner configuration and shown/hidden by setting its effect.
+    private static var jumpControlEffect: UIVisualEffect {
+        if #available(iOS 26.0, *) { return UIGlassEffect(style: .clear) }
+        return UIBlurEffect(style: .systemUltraThinMaterial)
+    }
+
+    private static func makeJumpControlBackground(tint: UIColor) -> UIVisualEffectView {
+        let view = UIVisualEffectView(effect: jumpControlEffect)
+        if #available(iOS 26.0, *) {
+            view.cornerConfiguration = .capsule()
+        } else {
+            view.layer.cornerRadius = jumpControlSize / 2
+            view.layer.masksToBounds = true
+            view.layer.borderWidth = 0.5
+            view.layer.borderColor = tint.withAlphaComponent(0.25).cgColor
+        }
         return view
     }
 
     private static func prepareHiddenJumpMaterial(_ view: UIVisualEffectView) {
-        view.alpha = 0
+        if #available(iOS 26.0, *) {} else { view.alpha = 0 }
         view.isHidden = true
     }
 
@@ -1155,13 +1169,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         let tint = agentTint()
         let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
 
-        let blur = Self.makeJumpControlBackground()
+        let blur = Self.makeJumpControlBackground(tint: tint)
         blur.translatesAutoresizingMaskIntoConstraints = false
         blur.isUserInteractionEnabled = false
-        blur.layer.cornerRadius = Self.jumpControlSize / 2
-        blur.layer.masksToBounds = true
-        blur.layer.borderWidth = 0.5
-        blur.layer.borderColor = tint.withAlphaComponent(0.25).cgColor
         Self.prepareHiddenJumpMaterial(blur)
 
         jumpButton.translatesAutoresizingMaskIntoConstraints = false
@@ -1210,13 +1220,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
         let latestStart = latestMessageStartButton.bottomAnchor.constraint(equalTo: jumpButton.bottomAnchor)
         latestStartBottomConstraint = latestStart
-        let startBlur = Self.makeJumpControlBackground()
+        let startBlur = Self.makeJumpControlBackground(tint: tint)
         startBlur.translatesAutoresizingMaskIntoConstraints = false
         startBlur.isUserInteractionEnabled = false
-        startBlur.layer.cornerRadius = Self.jumpControlSize / 2
-        startBlur.layer.masksToBounds = true
-        startBlur.layer.borderWidth = 0.5
-        startBlur.layer.borderColor = tint.withAlphaComponent(0.25).cgColor
         Self.prepareHiddenJumpMaterial(startBlur)
 
         latestMessageStartButton.translatesAutoresizingMaskIntoConstraints = false
@@ -1413,7 +1419,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             withDuration: ChatScrollPolicy.navigationControlAnimationDurationSeconds
         ) { [weak button, weak material] in
             button?.alpha = shouldShow ? 1 : 0
-            material?.alpha = shouldShow ? 1 : 0
+            // Glass keeps its effect and full alpha (a faded glass view
+            // renders opaque); it only appears/disappears via isHidden.
+            if #available(iOS 26.0, *) {} else { material?.alpha = shouldShow ? 1 : 0 }
         } completion: { [weak self, weak button, weak material] finished in
             guard let self, let button,
                   finished,
