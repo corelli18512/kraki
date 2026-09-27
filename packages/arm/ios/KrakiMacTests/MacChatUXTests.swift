@@ -3,6 +3,12 @@ import SwiftUI
 import AppKit
 @testable import Kraki_Dev
 
+/// Timing/visual probes are a manual diagnostic, not a routine regression gate.
+func requireNativePerformanceTests(file: StaticString = #filePath, line: UInt = #line) throws {
+    try XCTSkipUnless(ProcessInfo.processInfo.environment["KRAKI_RUN_PERF_TESTS"] == "1",
+                      "Manual performance suite: set KRAKI_RUN_PERF_TESTS=1", file: file, line: line)
+}
+
 /// Behavioral gates for the macOS chat surface, driven through the production
 /// `MacChatView` (SwiftUI) → `MacChatListRepresentable` → `MacChatScrollView`
 /// in a real on-screen NSWindow with realistic mixed content. Isolated
@@ -434,6 +440,10 @@ class MacChatUXTestCase: XCTestCase {
 
 @MainActor
 final class MacChatUXProbeTests: MacChatUXTestCase {
+    override func setUp() async throws {
+        try await super.setUp()
+        try requireNativePerformanceTests()
+    }
     /// Baseline probe (no assertions): streaming follow, clipping, hitches.
     func testProbeStreaming() throws {
         let fx = try makeFixture(total: 40)

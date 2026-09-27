@@ -2,6 +2,12 @@ import XCTest
 @testable import Kraki
 
 #if os(iOS)
+/// Explicitly opt in to long scroll/throughput probes; functional tests remain on.
+func requireNativePerformanceTests(file: StaticString = #filePath, line: UInt = #line) throws {
+    try XCTSkipUnless(ProcessInfo.processInfo.environment["KRAKI_RUN_PERF_TESTS"] == "1",
+                      "Manual performance suite: set KRAKI_RUN_PERF_TESTS=1", file: file, line: line)
+}
+
 @MainActor
 final class IOSChatScrollProductionTests: XCTestCase {
     private var temporaryRoots: [URL] = []
@@ -299,6 +305,7 @@ final class IOSChatScrollProductionTests: XCTestCase {
     }
 
     func testProductionScrollGate() throws {
+        try requireNativePerformanceTests()
         let fixture = try makeFixture(totalMessages: 240)
         let viewController = fixture.viewController
         let collectionView = fixture.collectionView

@@ -117,6 +117,18 @@ final class AppState {
     }
 
     #if DEBUG
+    /// The XCTest host itself must not initialize the user's database, Keychain,
+    /// network graph or audio before the individual test fixtures are created.
+    static func makeUnitTestHost() -> AppState {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-unit-host-\(UUID().uuidString)", isDirectory: true)
+        do {
+            return AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite")))
+        } catch {
+            fatalError("Failed to create isolated unit-test host: \(error)")
+        }
+    }
+
     /// Fully isolated app graph for native Chat snapshot/alignment harnesses.
     /// It uses the real stores/provider/command/subscription objects but omits
     /// Keychain access, auth and WebSocket setup, so production UI can run
@@ -126,7 +138,7 @@ final class AppState {
         self.deviceStore = DeviceStore(persistenceEnabled: loadPersistedState)
         self.messageDatabase = testDatabase
         self.messageStore = MessageStore(db: testDatabase)
-        self.voiceInputController = voiceController ?? KrakiVoiceInputController()
+        self.voiceInputController = voiceController ?? KrakiVoiceInputController.isolatedForTesting()
         if voiceController == nil { self.voiceInputController.bind(host: self) }
         self.attachmentStore = AttachmentStore { _, _ in }
         self.commandSender = CommandSender(appState: self)

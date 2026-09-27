@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  # Full routine regression on demand; perf/device tests stay opt-in locally.
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -17,7 +19,55 @@ concurrency:
 
 jobs:
   validate:
+    # Stable required check, also used by release.yml. Never hide a failed job.
     name: Validate
+    needs: [scope, test-typescript, test-ios, build-mac-gui, binary-daemon-launch, macos-daemon-launch]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check selected results
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['RESULTS'])
+          assert results['scope']['result'] == 'success', results
+          scope = results['scope']['outputs']
+          groups = {'test-typescript': 'typescript', 'test-ios': 'native',
+                    'build-mac-gui': 'native', 'binary-daemon-launch': 'binary',
+                    'macos-daemon-launch': 'binary'}
+          for job, group in groups.items():
+              expected = 'success' if scope[group] == 'true' else 'skipped'
+              assert results[job]['result'] == expected, (job, results[job]['result'], expected)
+          PY
+
+  scope:
+    name: Select test scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      typescript: ${{ steps.scope.outputs.typescript }}
+      native: ${{ steps.scope.outputs.native }}
+      binary: ${{ steps.scope.outputs.binary }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Test change routing
+        run: node --test scripts/ci/test-scope.test.mjs
+      - name: Select affected checks
+        id: scope
+        run: node scripts/ci/test-scope.mjs
+
+  test-typescript:
+    name: TypeScript regression
+    needs: scope
+    if: needs.scope.outputs.typescript == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -43,6 +93,8 @@ jobs:
 
   test-ios:
     name: Test iOS (Kraki)
+    needs: scope
+    if: needs.scope.outputs.native == 'true'
     runs-on: macos-26
     timeout-minutes: 45
 
@@ -106,6 +158,8 @@ jobs:
 
   build-mac-gui:
     name: Build macOS GUI (KrakiMac)
+    needs: scope
+    if: needs.scope.outputs.native == 'true'
     runs-on: macos-26
     timeout-minutes: 45
 
@@ -144,6 +198,8 @@ jobs:
 
   binary-daemon-launch:
     name: Binary Daemon Launch (${{ matrix.label }})
+    needs: scope
+    if: needs.scope.outputs.binary == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     strategy:
@@ -197,6 +253,8 @@ jobs:
 
   macos-daemon-launch:
     name: macOS Daemon Launch
+    needs: scope
+    if: needs.scope.outputs.binary == 'true'
     runs-on: macos-14
     timeout-minutes: 25
 

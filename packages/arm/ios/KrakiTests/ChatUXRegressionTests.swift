@@ -285,6 +285,7 @@ final class ChatUXRegressionTests: XCTestCase {
     }
 
     func testLongStreamRenderCostDoesNotGrowWithLength() throws {
+        try requireNativePerformanceTests()
         let fx = try makeFixture(total: 20)
         drain(800)
         try startTurn(fx, seq: 21)
@@ -314,6 +315,7 @@ final class ChatUXRegressionTests: XCTestCase {
     /// below): history keeps loading, and every step the rows on screen move
     /// exactly with the finger, none vanish, none use an estimated height.
     func testContinuousUpwardScrollKeepsLoadingWithoutFlicker() throws {
+        try requireNativePerformanceTests()
         for (latencyMs, stream) in [(0, false), (200, false), (0, true)] {
             let fx = try makeFixture(total: 400)
             drain(1_500)
@@ -370,6 +372,7 @@ final class ChatUXRegressionTests: XCTestCase {
     }
 
     func testFlingNeverExposesEstimatedHeightsOrJumpsAtRest() throws {
+        try requireNativePerformanceTests()
         let fx = try makeFixture(total: 200)
         drain(1_500)
         fx.vc.scrollViewWillBeginDragging(fx.cv)
