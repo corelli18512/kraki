@@ -152,6 +152,8 @@ jobs:
             PKG_NAME="@kraki/head"
           elif [[ "$TAG" == mac-v* ]]; then
             TAG_VERSION="${TAG#mac-v}"
+            # -diag selects DiagnosticsDelivery; CFBundle versions stay numeric.
+            TAG_VERSION="${TAG_VERSION%-diag}"
             PKG_VERSION=$(awk '
               /^targets:/ { in_targets=1; next }
               in_targets && /^  KrakiMac:/ { in_mac=1; next }
