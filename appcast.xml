@@ -6,6 +6,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.40</title>
+            <pubDate>Sun, 27 Sep 2026 07:53:21 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.40-diag</sparkle:fullReleaseNotesLink>
+            <sparkle:version>42</sparkle:version>
+            <sparkle:shortVersionString>0.2.40</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* fix(voice): one daily voice limit, incremental grants, instant voice after cold start by @corelli18512 in https://github.com/corelli18512/kraki/pull/313
+* chore(head): release 0.18.0 by @corelli18512 in https://github.com/corelli18512/kraki/pull/314
+* feat: client diagnostics delivery and independent REST collector by @corelli18512 in https://github.com/corelli18512/kraki/pull/315
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.39...mac-v0.2.40-diag
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.40-diag/Kraki.app.zip" length="8492635" type="application/octet-stream" sparkle:edSignature="ognAwIEs6QH3GW4epTI/8B/dg9lk8ZXhTjf9yg4P37nmcXdUnGWQ+mMqRW/o+YexfkXnIgZtt/sPCNhyU19nCg=="/>
+        </item>
+        <item>
             <title>0.2.39</title>
             <pubDate>Sun, 27 Sep 2026 05:28:09 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -37,25 +55,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.38/Kraki.app.zip" length="8342099" type="application/octet-stream" sparkle:edSignature="SuA5eEHQFcQy33GW/57i3lejWUB6qTGdW8Ho93M+Lj0fHaXFeCrr+EqT8ypctSIzV4Ul1z8JYT/+g7ohfC72DQ=="/>
         </item>
-        <item>
-            <title>0.2.37</title>
-            <pubDate>Sat, 26 Sep 2026 14:11:23 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.37</sparkle:fullReleaseNotesLink>
-            <sparkle:version>39</sparkle:version>
-            <sparkle:shortVersionString>0.2.37</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* Questions on the conversation spine (protocol 0.22, CLI 0.32.0, iOS/Mac) — breaking by @corelli18512 in https://github.com/corelli18512/kraki/pull/302
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.36...mac-v0.2.37
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.37/Kraki.app.zip" length="8344195" type="application/octet-stream" sparkle:edSignature="0dFVL+b0m0c9Z0Qrggv3/GnClBrDSHAZBr/bULYpNsuLP0ssUtlXV6cnDYy7Udq67KTVznWIFSJ4Y2vIthKiCA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: xacCxQE9TU4GJj0V1hAjRNE72KPIgeoXARNIBYo+mwDPdsWn6OV1T02GnU6ZaYK306ZGz9nLUcnxkM77ewXHBw==
-length: 3759
+edSignature: Fc52uOuE6IEMw+BKRmeVookjJwfsdCpd4c6BgOdvlvQ0DUFKTB0GuqC5CYBasWMeJcB31ZHSgIttsORBEnqMCQ==
+length: 4005
 -->
