@@ -401,11 +401,12 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertNil(fx.app.sessionStore.drafts[sid], "a sent message never returns to the composer")
     }
 
-    func testRejectedLocalHandoffStillShowsFailure() throws {
+    func testRejectedStagedHandoffStillShowsFailure() throws {
         let fx = try makeFixture(total: 20)
         fx.app.testOutboundMessageHandler = { _, _, _ in false }
         drain(1_000)
-        XCTAssertEqual(fx.app.commandSender?.sendInput(sessionId: sid, text: "local handoff rejected"), false)
+        let clientId = try XCTUnwrap(fx.app.commandSender?.stageInput(sessionId: sid, text: "local handoff rejected"))
+        XCTAssertEqual(fx.app.commandSender?.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "local handoff rejected"), false)
         drain(300)
         let cell = try XCTUnwrap(fx.doc.automationVisibleCells.last { $0.cell.content?.pendingClientId != nil }?.cell)
         XCTAssertEqual(cell.content?.pendingDeliveryState, "failed")
