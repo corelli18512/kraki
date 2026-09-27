@@ -58,6 +58,30 @@ jobs:
         with:
           fetch-depth: 0
 
+      # One-off publication runner only; never merged into main. Source remains
+      # the reviewed main-ancestor commit, not this workflow-only branch.
+      # GITHUB_TOKEN tag pushes do not recursively trigger the normal tag workflow.
+      - name: Create the reviewed diagnostic tag without a duplicate release run
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'publish'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SOURCE: f32e21bad6ef8dc85da6812d14a5c742b6848999
+          RELEASE_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          test "$RELEASE_TAG" = mac-v0.2.44-diag
+          git fetch origin main
+          git merge-base --is-ancestor "$RELEASE_SOURCE" origin/main
+          status=$(gh api "repos/${{ github.repository }}/commits/$RELEASE_SOURCE/check-runs" \
+            --jq '[.check_runs[] | select(.name == "Validate")] | sort_by(.started_at) | last | .conclusion')
+          test "$status" = success
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$RELEASE_SOURCE"
+          else
+            git tag "$RELEASE_TAG" "$RELEASE_SOURCE"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+
       - name: Resolve target ref
         id: meta
         env:
@@ -694,6 +718,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "${{ needs.prepare.outputs.release_tag }}" \
             --generate-notes \
+            --latest=false \
             release-assets/*
 
   # ─── Publish Sparkle appcast ───────────────────────────
