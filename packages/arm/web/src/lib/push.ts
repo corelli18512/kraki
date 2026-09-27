@@ -11,6 +11,9 @@ const logger = createLogger('push');
 
 /** Check if push notifications are supported in this browser. */
 export function isPushSupported(): boolean {
+  // The desktop shell has no push service; it keeps the connection and shows
+  // native notifications instead (lib/desktop.ts).
+  if (window.krakiDesktop) return false;
   return 'serviceWorker' in navigator
     && 'PushManager' in window
     && 'Notification' in window;

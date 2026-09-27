@@ -7,6 +7,7 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { useStore } from './hooks/useStore';
 import { useSessionShortcuts } from './hooks/useSessionShortcuts';
 import { wsClient } from './lib/ws-client';
+import { desktop } from './lib/desktop';
 
 const MAX_AUTO_RECONNECT_ATTEMPTS = 5;
 
@@ -98,7 +99,11 @@ export function App() {
     let total = 0;
     for (const count of unreadCount.values()) total += count;
     document.title = total > 0 ? `(${total}) ${BASE_TITLE}` : BASE_TITLE;
+    desktop?.setBadge(total);
   }, [unreadCount]);
+
+  // Clicking a desktop notification opens its session.
+  useEffect(() => desktop?.onOpenSession((sid) => navigate(`/session/${sid}`)), [navigate]);
 
   useEffect(() => {
     if (navigateToSession) {
