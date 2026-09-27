@@ -68,8 +68,16 @@
       <CommandLineArguments>
       </CommandLineArguments>
       <EnvironmentVariables>
-         <EnvironmentVariable key = "KRAKI_TEST_ISOLATION" value = "1" isEnabled = "YES"/>
-         <EnvironmentVariable key = "KRAKI_RUN_PERF_TESTS" value = "$(KRAKI_RUN_PERF_TESTS)" isEnabled = "YES"/>
+         <EnvironmentVariable
+            key = "KRAKI_RUN_PERF_TESTS"
+            value = "$(KRAKI_RUN_PERF_TESTS)"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "KRAKI_TEST_ISOLATION"
+            value = "1"
+            isEnabled = "YES">
+         </EnvironmentVariable>
       </EnvironmentVariables>
    </TestAction>
    <LaunchAction
