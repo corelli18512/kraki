@@ -113,4 +113,13 @@ final class NewSessionJourneyUITests: XCTestCase {
         let a = XCTAttachment(screenshot: app.screenshot()); a.name = "jump-controls-over-text"; a.lifetime = .keepAlways; add(a)
         XCTAssertTrue(app.buttons["Jump to latest"].firstMatch.exists)
     }
+
+    func testNoJumpControlsAtBottom() {
+        launch()
+        app.staticTexts["Existing session 2"].firstMatch.tap()
+        settle(2)
+        let a = XCTAttachment(screenshot: app.screenshot()); a.name = "bottom-no-controls"; a.lifetime = .keepAlways; add(a)
+        XCTAssertFalse(app.buttons["Jump to latest"].firstMatch.isHittable)
+        XCTAssertFalse(app.buttons["Jump to previous reply start"].firstMatch.isHittable)
+    }
 }

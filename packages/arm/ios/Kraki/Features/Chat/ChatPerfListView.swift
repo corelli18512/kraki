@@ -1375,7 +1375,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         }
         guard !jumpControlsFrozen else { return }
         let showTail = !isAtConversationBottom
-        let showUp = previousReplyTarget() != nil || (!atOldest && hasLoadedWindow)
+        // At the conversation bottom neither control shows: they would sit
+        // on the newest (often short, right-aligned) message.
+        let showUp = !isAtConversationBottom
+            && (previousReplyTarget() != nil || (!atOldest && hasLoadedWindow))
         let slotChanged = jumpButtonVisibilityTargets[ObjectIdentifier(jumpButton)] != showTail
         setJumpButtonVisibility(jumpButton, material: jumpButtonBlur, shouldShow: showTail)
         setJumpButtonVisibility(latestMessageStartButton, material: latestMessageStartButtonBlur,

@@ -3501,7 +3501,9 @@ final class MacChatScrollView: MacSmoothScrollView {
         let hasContent = !chatDocumentView.itemKeys.isEmpty
         guard !moving || !hasContent || jumpButtonVisibilityTargets.isEmpty else { syncUnseenDot(); return }
         let showTail = hasContent && !isAtConversationBottom
-        let showUp = hasContent && (previousReplyTarget() != nil || !diagnosticAtOldest)
+        // At the conversation bottom neither control shows (see iOS).
+        let showUp = hasContent && !isAtConversationBottom
+            && (previousReplyTarget() != nil || !diagnosticAtOldest)
         setJumpButtonVisibility(jumpButton, material: jumpMaterial, shouldShow: showTail, animated: animated)
         setJumpButtonVisibility(latestStartButton, material: latestStartMaterial, shouldShow: showUp, animated: animated)
         placeLatestStart(raised: showTail, animated: animated)

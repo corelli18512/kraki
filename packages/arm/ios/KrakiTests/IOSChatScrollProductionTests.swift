@@ -36,7 +36,7 @@ final class IOSChatScrollProductionTests: XCTestCase {
         let bottomButton = try XCTUnwrap(
             buttons.first { $0.accessibilityLabel == "Jump to latest" }
         )
-        XCTAssertFalse(startButton.isHidden, "long latest message should expose its start control at the tail")
+        XCTAssertTrue(startButton.isHidden, "no controls at the conversation bottom")
         XCTAssertTrue(bottomButton.isHidden, "latest-tail control is unnecessary while already at the tail")
         XCTAssertNotNil(startButton.image(for: .normal), "latest-message-start helper must render an icon")
         // The tail button is hidden at entry, but its image must already be
@@ -49,9 +49,8 @@ final class IOSChatScrollProductionTests: XCTestCase {
         XCTAssertTrue(startMaterial.frame.equalTo(startButton.frame))
         XCTAssertEqual(startButton.frame.maxY, bottomButton.frame.maxY, accuracy: 0.5,
                        "at the tail ↑ rests in ↓'s slot")
-        XCTAssertFalse(startMaterial.isHidden, "visible helper must reveal its material background")
-        XCTAssertGreaterThan(startMaterial.alpha, 0.99)
-        if #available(iOS 26.0, *) { XCTAssertTrue(startMaterial.effect is UIGlassEffect, "visible helper is Liquid Glass") }
+        if #available(iOS 26.0, *) { XCTAssertTrue(startMaterial.effect is UIGlassEffect, "helper is Liquid Glass") }
+        XCTAssertTrue(startMaterial.isHidden, "hidden helper leaves no glass at the bottom")
         XCTAssertTrue(bottomMaterial.isHidden, "hidden helper must not leave an empty material pill")
         if #available(iOS 26.0, *) {} else { XCTAssertLessThan(bottomMaterial.alpha, 0.01) }
 
