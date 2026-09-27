@@ -142,12 +142,12 @@ layout or hit testing. Short transcripts
 are vertically centered in the two-line viewport; longer ones retain native
 tail scrolling. iPhone retains its two-row layout, compact meter and timer.
 
-The branch is based on main `4e3d9dd` (includes PR #317). iOS's already-fixed
+The release branch includes main through `6e59671` (PR #317, #320 and #321). iOS's already-fixed
 free-form answer behavior is preserved, not reimplemented. A Mac native test
 checks question ID on both the correcting bubble and the final transport
 payload, with no steer flag even when the agent is active.
 
-`KrakiMacTests` also runs all 28 shared transaction tests. Its nine
+`KrakiMacTests` also runs all 28 shared transaction tests. Its ten
 `MacVoiceComposerTests` use the production chat in an isolated native window,
 real mouse events and native bubble menus, with synthetic speech/captured
 transport. They cover recording send, steer, cancel, edit/caret, latest-original
