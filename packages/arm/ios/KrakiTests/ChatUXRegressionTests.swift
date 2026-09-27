@@ -504,6 +504,21 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .sending)
     }
 
+    func testStagedVoiceAnswerDispatchesWithAnswerTo() throws {
+        var sent: [[String: Any]] = []
+        let fx = try makeFixture(total: 4) { msg in sent.append(msg); return true }
+        drain(300)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: "选二", answerTo: "q-7"))
+        XCTAssertTrue(sent.isEmpty)
+        XCTAssertEqual(sender.pendingInputs(sid).first?.payload["answerTo"]?.stringValue, "q-7")
+        XCTAssertTrue(sender.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "选第二个。"))
+        let payload = try XCTUnwrap(sent.first?["payload"] as? [String: Any])
+        XCTAssertEqual(payload["answerTo"] as? String, "q-7")
+        XCTAssertEqual(payload["text"] as? String, "选第二个。")
+        XCTAssertNil(payload["delivery"], "an answer is never a steer")
+    }
+
     func testStagedVoiceFailureRetriesOriginalAndDeleteWins() throws {
         var texts: [String] = []
         let fx = try makeFixture(total: 4) { msg in
@@ -633,29 +648,30 @@ final class ChatUXRegressionTests: XCTestCase {
 
     // MARK: Jump controls
 
-    func testUpControlRestsInDownSlotAndIsPushedUpOnlyAfterMotionSettles() throws {
+    func testNoControlsAtBottomAndBothAppearOnlyAfterMotionSettles() throws {
         let fx = try makeFixture(total: 80)
         drain(900)
         XCTAssertEqual(fx.vc.automationControlsVisible.down, false, "at the newest edge")
-        guard fx.vc.automationControlsVisible.up else { throw XCTSkip("no earlier reply to jump to") }
+        XCTAssertEqual(fx.vc.automationControlsVisible.up, false, "nothing covers the newest message at the bottom")
+        guard fx.vc.automationUpTargetItem != nil else { throw XCTSkip("no earlier reply to jump to") }
         let rest = fx.vc.automationJumpControlFrames
-        XCTAssertEqual(rest.up.maxY, rest.down.maxY, accuracy: 0.5, "↑ sits in ↓'s slot while ↓ is hidden")
 
         fx.vc.automationTapUp()
         drain(30)
         XCTAssertEqual(fx.vc.automationControlsVisible.down, false, "controls keep their state mid-glide")
-        XCTAssertEqual(fx.vc.automationControlsVisible.up, true)
-        XCTAssertEqual(fx.vc.automationJumpControlFrames.up.maxY, rest.up.maxY, accuracy: 0.5)
+        XCTAssertEqual(fx.vc.automationControlsVisible.up, false)
 
         drain(1_800)
         XCTAssertEqual(fx.vc.automationControlsVisible.down, true, "re-evaluated once the glide settles")
+        XCTAssertEqual(fx.vc.automationControlsVisible.up, true)
         let moved = fx.vc.automationJumpControlFrames
         XCTAssertEqual(moved.down.minY - moved.up.maxY, 8, accuracy: 0.5, "↓ appearing pushes ↑ up")
 
         fx.vc.automationTapDown()
         drain(1_800)
         XCTAssertEqual(fx.vc.automationControlsVisible.down, false)
-        XCTAssertEqual(fx.vc.automationJumpControlFrames.up.maxY, moved.down.maxY, accuracy: 0.5, "↑ drops back down")
+        XCTAssertEqual(fx.vc.automationControlsVisible.up, false, "both hide again at the bottom")
+        XCTAssertEqual(fx.vc.automationJumpControlFrames.down.maxY, rest.down.maxY, accuracy: 0.5)
     }
 
     func testDictationBoxMinimumReachesTheControlAboveSend() {

@@ -8,7 +8,7 @@ protocol IOSVoiceComposerHost: AnyObject {
     var sessionStore: SessionStore { get }
     var voiceInputController: KrakiVoiceInputController { get }
     func stageVoiceInput(sessionID: String, text: String, attachments: [ImageAttachment]?,
-                         delivery: CommandSender.InputDelivery) -> String?
+                         delivery: CommandSender.InputDelivery, answerTo: String?) -> String?
     func updateVoiceInput(sessionID: String, clientID: String, text: String, original: String, uncorrected: NSRange?)
     func dispatchVoiceInput(sessionID: String, clientID: String, text: String) -> Bool
     func failVoiceInput(sessionID: String, clientID: String, text: String)
@@ -192,11 +192,13 @@ protocol IOSVoiceComposerHost: AnyObject {
 
     /// ↑ — send the whole message; it is transmitted after correction.
     @discardableResult
-    func send(attachments: [ImageAttachment]?, delivery: CommandSender.InputDelivery) -> Bool {
+    func send(attachments: [ImageAttachment]?, delivery: CommandSender.InputDelivery,
+              answerTo: String? = nil) -> Bool {
         guard var op = operation, op.phase == .recording, let host else { return false }
         let text = Self.insert(op.raw, into: op.base, range: op.range).0
         guard let clientID = host.stageVoiceInput(sessionID: op.sessionID, text: text.isEmpty ? "…" : text,
-                                                  attachments: attachments, delivery: delivery) else { return false }
+                                                  attachments: attachments, delivery: delivery,
+                                                  answerTo: answerTo) else { return false }
         if text.isEmpty {
             host.updateVoiceInput(sessionID: op.sessionID, clientID: clientID, text: "…", original: "", uncorrected: nil)
         } else {
@@ -392,8 +394,9 @@ protocol IOSVoiceComposerHost: AnyObject {
 
 extension AppState: IOSVoiceComposerHost {
     func stageVoiceInput(sessionID: String, text: String, attachments: [ImageAttachment]?,
-                         delivery: CommandSender.InputDelivery) -> String? {
-        commandSender?.stageInput(sessionId: sessionID, text: text, attachments: attachments, delivery: delivery)
+                         delivery: CommandSender.InputDelivery, answerTo: String?) -> String? {
+        commandSender?.stageInput(sessionId: sessionID, text: text, attachments: attachments,
+                                  delivery: delivery, answerTo: answerTo)
     }
     func updateVoiceInput(sessionID: String, clientID: String, text: String, original: String, uncorrected: NSRange?) {
         commandSender?.updateStagedInput(sessionId: sessionID, clientId: clientID, text: text, original: original,

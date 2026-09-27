@@ -2196,9 +2196,9 @@ final class MacChatScrollView: MacSmoothScrollView {
         cancelled: Bool
     )?
 
-    private let jumpMaterial = NSVisualEffectView()
+    private let jumpMaterial = MacChatScrollView.makeJumpControlMaterial()
     private let jumpButton = NSButton()
-    private let latestStartMaterial = NSVisualEffectView()
+    private let latestStartMaterial = MacChatScrollView.makeJumpControlMaterial()
     private let latestStartButton = NSButton()
     private var jumpButtonVisibilityTargets: [ObjectIdentifier: Bool] = [:]
     private var jumpButtonVisibilityGenerations: [ObjectIdentifier: Int] = [:]
@@ -2206,6 +2206,26 @@ final class MacChatScrollView: MacSmoothScrollView {
     private let latestMessageTopPadding: CGFloat = MacChatHeaderMetrics.listTopInset
     /// Round navigation controls (pointer target; iOS uses 44pt for touch).
     static let jumpControlSize: CGFloat = 36
+    /// The ↑/↓ controls use the same regular Liquid Glass as the composer
+    /// capsule (they only show away from the conversation bottom).
+    static func isGlass(_ view: NSView) -> Bool {
+        if #available(macOS 26.0, *) { return view is NSGlassEffectView }
+        return false
+    }
+
+    static func makeJumpControlMaterial() -> NSView {
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.style = .regular
+            glass.cornerRadius = jumpControlSize / 2
+            return glass
+        }
+        let material = NSVisualEffectView()
+        material.material = .hudWindow
+        material.blendingMode = .withinWindow
+        material.state = .active
+        return material
+    }
     /// ↓ sits directly above the composer's send circle (same size and
     /// column), at a fixed height: a growing composer never pushes it up.
     private var jumpFrame: NSRect {
@@ -2347,13 +2367,14 @@ final class MacChatScrollView: MacSmoothScrollView {
         }
 
         for material in [jumpMaterial, latestStartMaterial] {
-            material.material = .popover
-            material.blendingMode = .withinWindow
-            material.state = .active
-            material.wantsLayer = true
-            material.layer?.cornerRadius = Self.jumpControlSize / 2
-            material.layer?.masksToBounds = true
-            material.layer?.borderWidth = 0.5
+            // Glass shapes itself (cornerRadius); clipping or stroking its
+            // layer makes it render as an opaque fill.
+            if !Self.isGlass(material) {
+                material.wantsLayer = true
+                material.layer?.cornerRadius = Self.jumpControlSize / 2
+                material.layer?.masksToBounds = true
+                material.layer?.borderWidth = 0.5
+            }
             material.isHidden = true
             addSubview(material)
         }
@@ -3480,7 +3501,9 @@ final class MacChatScrollView: MacSmoothScrollView {
         let hasContent = !chatDocumentView.itemKeys.isEmpty
         guard !moving || !hasContent || jumpButtonVisibilityTargets.isEmpty else { syncUnseenDot(); return }
         let showTail = hasContent && !isAtConversationBottom
-        let showUp = hasContent && (previousReplyTarget() != nil || !diagnosticAtOldest)
+        // At the conversation bottom neither control shows (see iOS).
+        let showUp = hasContent && !isAtConversationBottom
+            && (previousReplyTarget() != nil || !diagnosticAtOldest)
         setJumpButtonVisibility(jumpButton, material: jumpMaterial, shouldShow: showTail, animated: animated)
         setJumpButtonVisibility(latestStartButton, material: latestStartMaterial, shouldShow: showUp, animated: animated)
         placeLatestStart(raised: showTail, animated: animated)
@@ -3489,7 +3512,7 @@ final class MacChatScrollView: MacSmoothScrollView {
 
     private func setJumpButtonVisibility(
         _ button: NSButton,
-        material: NSVisualEffectView,
+        material: NSView,
         shouldShow: Bool,
         animated: Bool
     ) {
@@ -3506,7 +3529,8 @@ final class MacChatScrollView: MacSmoothScrollView {
         }
         let changes = {
             button.alphaValue = shouldShow ? 1 : 0
-            material.alphaValue = shouldShow ? 1 : 0
+            // Glass stays fully opaque-in-alpha; it appears via isHidden.
+            if !Self.isGlass(material) { material.alphaValue = shouldShow ? 1 : 0 }
         }
         let completion = { [weak self, weak button, weak material] in
             guard let self, let button, let material,

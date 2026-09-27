@@ -1137,19 +1137,42 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         }
     }
 
+    /// The ↑/↓ controls use the same regular Liquid Glass as the composer
+    /// capsule (they only show away from the conversation bottom). Glass must not
+    /// be clipped with masksToBounds, stroked, or faded through alpha — each
+    /// makes it fall back to an opaque fill. It is shaped with a capsule
+    /// corner configuration and shown/hidden by setting its effect.
+    private static var jumpControlEffect: UIVisualEffect {
+        if #available(iOS 26.0, *) { return UIGlassEffect(style: .regular) }
+        return UIBlurEffect(style: .systemUltraThinMaterial)
+    }
+
+    private static func makeJumpControlBackground(tint: UIColor) -> UIVisualEffectView {
+        let view = UIVisualEffectView(effect: jumpControlEffect)
+        if #available(iOS 26.0, *) {
+            view.cornerConfiguration = .capsule()
+        } else {
+            view.layer.cornerRadius = jumpControlSize / 2
+            view.layer.masksToBounds = true
+            view.layer.borderWidth = 0.5
+            view.layer.borderColor = tint.withAlphaComponent(0.25).cgColor
+        }
+        return view
+    }
+
+    private static func prepareHiddenJumpMaterial(_ view: UIVisualEffectView) {
+        if #available(iOS 26.0, *) {} else { view.alpha = 0 }
+        view.isHidden = true
+    }
+
     private func setupJumpButton() {
         let tint = agentTint()
         let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
 
-        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+        let blur = Self.makeJumpControlBackground(tint: tint)
         blur.translatesAutoresizingMaskIntoConstraints = false
         blur.isUserInteractionEnabled = false
-        blur.layer.cornerRadius = Self.jumpControlSize / 2
-        blur.layer.masksToBounds = true
-        blur.layer.borderWidth = 0.5
-        blur.layer.borderColor = tint.withAlphaComponent(0.25).cgColor
-        blur.alpha = 0
-        blur.isHidden = true
+        Self.prepareHiddenJumpMaterial(blur)
 
         jumpButton.translatesAutoresizingMaskIntoConstraints = false
         // Keep the material view OUTSIDE the UIButton. UIKit may reorder a
@@ -1197,15 +1220,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
         let latestStart = latestMessageStartButton.bottomAnchor.constraint(equalTo: jumpButton.bottomAnchor)
         latestStartBottomConstraint = latestStart
-        let startBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+        let startBlur = Self.makeJumpControlBackground(tint: tint)
         startBlur.translatesAutoresizingMaskIntoConstraints = false
         startBlur.isUserInteractionEnabled = false
-        startBlur.layer.cornerRadius = Self.jumpControlSize / 2
-        startBlur.layer.masksToBounds = true
-        startBlur.layer.borderWidth = 0.5
-        startBlur.layer.borderColor = tint.withAlphaComponent(0.25).cgColor
-        startBlur.alpha = 0
-        startBlur.isHidden = true
+        Self.prepareHiddenJumpMaterial(startBlur)
 
         latestMessageStartButton.translatesAutoresizingMaskIntoConstraints = false
         latestMessageStartButton.setImage(
@@ -1357,7 +1375,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         }
         guard !jumpControlsFrozen else { return }
         let showTail = !isAtConversationBottom
-        let showUp = previousReplyTarget() != nil || (!atOldest && hasLoadedWindow)
+        // At the conversation bottom neither control shows: they would sit
+        // on the newest (often short, right-aligned) message.
+        let showUp = !isAtConversationBottom
+            && (previousReplyTarget() != nil || (!atOldest && hasLoadedWindow))
         let slotChanged = jumpButtonVisibilityTargets[ObjectIdentifier(jumpButton)] != showTail
         setJumpButtonVisibility(jumpButton, material: jumpButtonBlur, shouldShow: showTail)
         setJumpButtonVisibility(latestMessageStartButton, material: latestMessageStartButtonBlur,
@@ -1401,7 +1422,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             withDuration: ChatScrollPolicy.navigationControlAnimationDurationSeconds
         ) { [weak button, weak material] in
             button?.alpha = shouldShow ? 1 : 0
-            material?.alpha = shouldShow ? 1 : 0
+            // Glass keeps its effect and full alpha (a faded glass view
+            // renders opaque); it only appears/disappears via isHidden.
+            if #available(iOS 26.0, *) {} else { material?.alpha = shouldShow ? 1 : 0 }
         } completion: { [weak self, weak button, weak material] finished in
             guard let self, let button,
                   finished,

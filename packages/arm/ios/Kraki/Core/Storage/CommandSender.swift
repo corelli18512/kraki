@@ -212,7 +212,8 @@ final class CommandSender {
         sessionId: String,
         text: String,
         attachments: [ImageAttachment]? = nil,
-        delivery: InputDelivery = .prompt
+        delivery: InputDelivery = .prompt,
+        answerTo: String? = nil
     ) -> String? {
         guard appState != nil else { return nil }
         let clientId = UUID().uuidString
@@ -221,9 +222,11 @@ final class CommandSender {
             [.clientId: .id(clientId), .textLength: .int(text.utf8.count), .attachments: .int(attachments?.count ?? 0),
              .source: .tag("CommandSender.stageInput")])
         #endif
-        // (A voice answer is reviewed in the field and sent via `answer`.)
+        // A voice answer is staged like any message; `answerTo` rides along
+        // so it is dispatched (after correction) as the question's answer.
         var (pending, payload) = makePendingInput(sessionId: sessionId, clientId: clientId, text: text,
-                                                  attachments: attachments, delivery: delivery, state: .correcting)
+                                                  attachments: attachments, delivery: delivery,
+                                                  answerTo: answerTo, state: .correcting)
         pending.payload["originalText"] = AnyCodable(text)
         var bucket = outbox[sessionId] ?? [:]
         bucket[clientId] = pending

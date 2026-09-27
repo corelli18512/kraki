@@ -388,7 +388,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertFalse(fx.sv.automationControlsVisible.down)
         XCTAssertEqual(fx.sv.bounds.height - atBottom.down.maxY, MacComposerMetrics.jumpControlBottom, accuracy: 0.5,
                        "↓ sits 9 pt above the send circle")
-        XCTAssertEqual(atBottom.up.minY, atBottom.down.minY, accuracy: 0.5, "↑ rests in ↓'s slot at the bottom")
+        XCTAssertFalse(fx.sv.automationControlsVisible.up, "no controls at the conversation bottom")
         for _ in 0..<12 { _ = fx.sv.automationPreciseScrollPacket(deltaY: 40); drain(8) }
         drain(1_200)
         XCTAssertTrue(fx.sv.automationControlsVisible.down)
@@ -398,7 +398,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         fx.sv.automationTapDown()
         drain(1_500)
         XCTAssertFalse(fx.sv.automationControlsVisible.down)
-        XCTAssertEqual(fx.sv.automationControlFrames.up.minY, atBottom.down.minY, accuracy: 0.5, "↑ drops back")
+        XCTAssertFalse(fx.sv.automationControlsVisible.up, "both hide again at the bottom")
     }
 
     func testUpStepsBackThroughReplyStartsAndDownShowsUnseenDot() throws {

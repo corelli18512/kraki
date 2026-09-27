@@ -189,4 +189,25 @@ final class IOSVoiceComposerUITests: XCTestCase {
         screenshot("dark-bubble-correcting")
         awaitState("sent=1", timeout: 10)
     }
+
+    func testVoiceAnswerToAQuestionCorrectsInTheBubbleLikeAMessage() {
+        launch(finalMs: 7000)
+        app.buttons["Ask"].tap()
+        let answerPlaceholder = app.descendants(matching: .any).matching(NSPredicate(format: "placeholderValue == 'Type your answer…'")).firstMatch
+        XCTAssertTrue(answerPlaceholder.waitForExistence(timeout: 5), "composer is answering the question")
+        mic.tap()
+        awaitTranscript()
+        app.buttons["voice-send"].tap()
+        awaitState("rec=0", timeout: 2)
+        awaitState("staged=1", timeout: 2)
+        awaitState("sent=0")
+        XCTAssertFalse(fieldValue.contains("Kraki"), "composer cleared at once, like a normal send")
+        XCTAssertTrue(bubble(containing: "请把这个功能").waitForExistence(timeout: 2), "the answer is a correcting bubble")
+        screenshot("answer-bubble-correcting")
+        awaitState("sent=1", timeout: 10)
+        XCTAssertEqual(app.staticTexts["voice-test-sent"].label, corrected)
+        XCTAssertTrue(app.staticTexts["voice-test-answer"].label.hasPrefix("answerTo=q-"), "sent as the question's answer")
+        sleep(1)
+        screenshot("answer-sent")
+    }
 }
