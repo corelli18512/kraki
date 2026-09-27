@@ -780,10 +780,11 @@ final class KrakiVoiceInputController {
         let quotaExhausted = reason.localizedCaseInsensitiveContains("quota_exhausted")
         let leaseDayChanged = reason.localizedCaseInsensitiveContains("wrong_day")
         let leaseRejected = Self.isLeaseRejection(reason) || leaseDayChanged
-        if quotaExhausted, recoverFromExhaustedLease() { return }
-        // A kept lease rejected while buffered speech was waiting for
-        // authorization: that audio is gone with the socket, so fail visibly
-        // (below) rather than continue with the beginning silently missing.
+        // Rolling over keeps an authorized recording going. Before
+        // authorization, buffered speech is gone with the socket: fail
+        // visibly (below) rather than continue with its beginning missing.
+        let bufferedSpeechLost = !isConnectionWarm && state == .recording
+        if quotaExhausted, !bufferedSpeechLost, recoverFromExhaustedLease() { return }
 
         let requiresFreshLease = quotaExhausted || leaseRejected
         closeConnection(keepLease: !requiresFreshLease)

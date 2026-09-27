@@ -302,20 +302,42 @@ describe('Storage voice_leases', () => {
     expect(storage.voiceSecondsAccountedToday('u1', t + 33)).toBe(15);
   });
 
-  it('review: late usage from a replaced activation is charged exactly once', () => {
+  it('review: a replaced activation cannot charge or obtain grants (no double count on takeover)', () => {
     storage.upsertUser('u1', 'a');
     const t = T('2026-06-15T10:00:00Z');
     record('a', 'd1', t);
     activate('a', t + 1);
     report('a', 15, t + 16);
-    // Reconnect on another broker process: the new owner resumes from 15.
     expect(storage.activateVoiceLease({ jti: 'a', activationId: 'act-a2', activatedAtUnixSec: t + 20, dailyCapSec: 7200, grants: true }))
       .toMatchObject({ status: 'replaced', reportedAudioSeconds: 15 });
-    // The old one had accepted 14 s more before it noticed.
-    expect(report('a', 29, t + 21, 'client_closed').status).toBe('conflict');
-    expect(report('a', 29, t + 22, 'client_closed').status).toBe('conflict');
-    storage.settleVoiceLease({ jti: 'a', activationId: 'act-a2', audioSeconds: 20, reason: 'client_closed', settledAtUnixSec: t + 40, dailyCapSec: 7200, grants: true });
+    // The old owner's in-flight checkpoint is rejected…
+    expect(report('a', 29, t + 21).status).toBe('conflict');
+    // …because the new owner reports the transferred audio itself.
+    storage.settleVoiceLease({ jti: 'a', activationId: 'act-a2', audioSeconds: 34, reason: 'client_closed', settledAtUnixSec: t + 40, dailyCapSec: 7200, grants: true });
     expect(storage.voiceSecondsAccountedToday('u1', t + 41)).toBe(34);
+  });
+
+  it('review: migration orders leases activated in the same second', () => {
+    const dir = mkTmpLeaseDir();
+    const dbPath = join(dir, 'v11-same-second.db');
+    const now = Math.floor(Date.now() / 1000);
+    const v11 = new Storage(dbPath);
+    v11.upsertUser('u1', 'a');
+    for (const jti of ['x', 'y']) {
+      v11.recordVoiceLease({ jti, userId: 'u1', deviceId: 'd', resource: 'voice/doubao', quotaSeconds: 300, issuedAtUnixSec: now - 50, expiresAtUnixSec: now + 86_000 });
+      v11.activateVoiceLease({ jti, activationId: `act-${jti}`, activatedAtUnixSec: now - 40 });
+    }
+    v11.rawDb.exec(`UPDATE voice_leases SET closed_at = NULL, allowed_seconds = NULL; DROP TABLE voice_usage_daily; PRAGMA user_version = 11;`);
+    v11.close();
+    const migrated = new Storage(dbPath);
+    try {
+      const open = ['x', 'y'].filter((jti) => migrated.getVoiceLease(jti)?.closedAt === null);
+      expect(open).toEqual(['y']);
+      expect(migrated.voiceSecondsAccountedToday('u1', now)).toBe(300);
+    } finally {
+      migrated.close();
+      rm(dir);
+    }
   });
 
   it('review: a broker without grants cannot activate a day-scale lease', () => {
@@ -335,7 +357,7 @@ describe('Storage voice_leases', () => {
     v11.recordVoiceLease({ jti: 'live', userId: 'u1', deviceId: 'd', resource: 'voice/doubao', quotaSeconds: 300, issuedAtUnixSec: now - 100, expiresAtUnixSec: now + 86_000 });
     v11.activateVoiceLease({ jti: 'live', activationId: 'act-live', activatedAtUnixSec: now - 90 });
     v11.recordVoiceLease({ jti: 'pending', userId: 'u1', deviceId: 'd', resource: 'voice/doubao', quotaSeconds: 300, issuedAtUnixSec: now - 10, expiresAtUnixSec: now + 86_000 });
-    v11.rawDb.exec(`UPDATE voice_leases SET closed_at = NULL, allowed_seconds = NULL; DROP TABLE voice_usage_daily; DROP TABLE voice_activations; PRAGMA user_version = 11;`);
+    v11.rawDb.exec(`UPDATE voice_leases SET closed_at = NULL, allowed_seconds = NULL; DROP TABLE voice_usage_daily; PRAGMA user_version = 11;`);
     v11.close();
     const migrated = new Storage(dbPath);
     try {
@@ -385,7 +407,6 @@ describe('Storage voice_leases', () => {
     v11.rawDb.exec(`
       UPDATE voice_leases SET closed_at = NULL, allowed_seconds = NULL;
       DROP TABLE voice_usage_daily;
-      DROP TABLE voice_activations;
       PRAGMA user_version = 11;
     `);
     v11.close();

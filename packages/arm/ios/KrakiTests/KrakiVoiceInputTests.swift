@@ -943,6 +943,21 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertEqual(host.requestedResources, ["voice/doubao"])
     }
 
+    func testQuotaExhaustedBeforeAuthorizationFailsInsteadOfDroppingSpeech() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let controller = KrakiVoiceInputController(
+            host: host, sessionFactory: factory,
+            audioPolicy: FakeVoiceAudioPolicy(), leaseStore: storedLease(lease())
+        )
+        controller.prepare()
+        await controller.begin(sessionID: "session-1", context: context()) { _ in }
+        factory.sessions[0].emit(.failed("denied: quota_exhausted"))
+        await Task.yield()
+        XCTAssertTrue(controller.hasFailure(for: "session-1"))
+        XCTAssertEqual(factory.sessions.count, 1)
+    }
+
     func testIdentityChangeDuringKeptLeaseRecordingEndsItCleanly() async {
         let host = FakeVoiceHost()
         host.voiceTransportReady = false

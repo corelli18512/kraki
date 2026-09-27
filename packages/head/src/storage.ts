@@ -401,13 +401,6 @@ export class Storage {
           SELECT user_id, substr(issued_at, 1, 10),
                  SUM(MAX(COALESCE(reported_audio_seconds, 0), COALESCE(used_seconds, 0)))
           FROM voice_leases GROUP BY user_id, substr(issued_at, 1, 10);
-        -- Last cumulative value per broker activation, so a replaced
-        -- activation's late reports are still charged exactly once.
-        CREATE TABLE IF NOT EXISTS voice_activations (
-          activation_id  TEXT PRIMARY KEY,
-          jti            TEXT NOT NULL,
-          last_reported  REAL NOT NULL DEFAULT 0
-        );
       `);
       // Close reports were not recorded before. Clients only request a new
       // lease after closing the old socket, so a lease whose device later
@@ -422,8 +415,8 @@ export class Storage {
             AND newer.device_id = voice_leases.device_id
             AND newer.resource = voice_leases.resource
             AND newer.activated_at IS NOT NULL
-            AND newer.activated_at >= voice_leases.activated_at
-            AND newer.jti != voice_leases.jti
+            AND (newer.activated_at, newer.issued_at, newer.jti)
+              > (voice_leases.activated_at, voice_leases.issued_at, voice_leases.jti)
         )
       `);
     }
@@ -934,21 +927,15 @@ export class Storage {
       }
     }
 
-    this.db.transaction(() => {
-      if (lease.activation_id !== null) {
-        // The replaced activation's late reports are charged against where
-        // the lease stood when it was replaced.
-        this.db.prepare(`
-          INSERT INTO voice_activations (activation_id, jti, last_reported) VALUES (?, ?, ?)
-          ON CONFLICT (activation_id) DO UPDATE SET last_reported = MAX(last_reported, excluded.last_reported)
-        `).run(lease.activation_id, input.jti, reportedAudioSeconds);
-      }
-      this.db.prepare(`
-        UPDATE voice_leases
-        SET activation_id = ?, activated_at = ?, allowed_seconds = ?, closed_at = NULL
-        WHERE jti = ? AND revoked_at IS NULL AND unixepoch(expires_at) > ?
-      `).run(input.activationId, new Date(nowUnixSec * 1000).toISOString(), allowedSeconds, input.jti, nowUnixSec);
-    })();
+    // Last-writer-wins: the broker transfers a replaced same-process owner's
+    // unreported audio to the new owner (reported as connection_takeover).
+    // Assumes one broker process per lease; across processes a replaced
+    // socket could use at most its last grant chunk unaccounted.
+    this.db.prepare(`
+      UPDATE voice_leases
+      SET activation_id = ?, activated_at = ?, allowed_seconds = ?, closed_at = NULL
+      WHERE jti = ? AND revoked_at IS NULL AND unixepoch(expires_at) > ?
+    `).run(input.activationId, new Date(nowUnixSec * 1000).toISOString(), allowedSeconds, input.jti, nowUnixSec);
     return {
       status: lease.activated_at === null ? 'activated' : 'replaced',
       reportedAudioSeconds,
@@ -1003,25 +990,7 @@ export class Storage {
     if (lease.activated_at === null) return { status: 'not_activated' };
     const nowUnixSec = input.settledAtUnixSec ?? Math.floor(Date.now() / 1000);
     const nowIso = new Date(nowUnixSec * 1000).toISOString();
-    if (lease.activation_id !== input.activationId) {
-      // A replaced connection (e.g. on another broker process) may still
-      // report audio it accepted before it noticed. Charge that once; it gets
-      // no more allowance.
-      const previous = this.db.prepare(`
-        SELECT last_reported FROM voice_activations WHERE activation_id = ? AND jti = ?
-      `).get(input.activationId, input.jti) as { last_reported: number } | undefined;
-      if (previous) {
-        const reportedByPrevious = Math.min(lease.quota_seconds, Math.max(0, input.audioSeconds));
-        if (reportedByPrevious > previous.last_reported) {
-          this.db.transaction(() => {
-            this.db.prepare('UPDATE voice_activations SET last_reported = ? WHERE activation_id = ?')
-              .run(reportedByPrevious, input.activationId);
-            this.chargeVoiceUsage(lease.user_id, nowUnixSec, reportedByPrevious - previous.last_reported);
-          })();
-        }
-      }
-      return { status: 'conflict' };
-    }
+    if (lease.activation_id !== input.activationId) return { status: 'conflict' };
 
     const closing = !VOICE_OPEN_USAGE_REASONS.has(input.reason ?? '');
     const currentReported = Number(lease.reported_audio_seconds) || 0;
