@@ -226,6 +226,35 @@ import AppKit
         XCTAssertEqual(sent, [corrected])
     }
 
+    func testBackgroundWaveformTracksLevelsAndDoesNotMoveCenteredText() throws {
+        try press("chat-voice-microphone")
+        let transcript = try XCTUnwrap(views(window.contentView!).compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
+        let initialFrame = transcript.convert(transcript.bounds, to: window.contentView)
+        XCTAssertGreaterThan(transcript.textDrawingRect.minY, 0, "short text must not sit at the top of its viewport")
+        XCTAssertEqual(transcript.textDrawingRect.midY, transcript.bounds.midY, accuracy: 0.5)
+        let driver = IOSVoiceHoldScenarioFixture.driver
+        for _ in 0..<40 { driver.emitLevel(0) }
+        drain(300)
+        try capture("10-waveform-quiet")
+        let quiet = MacVoiceBackgroundWaveform.heightFractions(levels: app.voiceInputController.levels, count: 80)
+        for level: Float in [0.015, 0.03, 0.07, 0.24, 0.19, 0.1, 0.035, 0.02] { driver.emitLevel(level) }
+        drain(300)
+        try capture("11-waveform-speaking")
+        let speaking = MacVoiceBackgroundWaveform.heightFractions(levels: app.voiceInputController.levels, count: 80)
+        XCTAssertEqual(quiet.count, 80)
+        XCTAssertGreaterThan(speaking.max() ?? 0, (quiet.max() ?? 0) + 0.4)
+        XCTAssertEqual(transcript.convert(transcript.bounds, to: window.contentView), initialFrame,
+                       "background audio animation must not change text layout")
+        // Multi-line speech still uses the full native scroll document.
+        app.voiceInputController.debugApplyPartial(String(repeating: "这是一段较长的语音，需要保留最新的文字。", count: 12))
+        drain(150)
+        XCTAssertGreaterThan(transcript.contentHeight, MacComposerVoiceTranscriptView.lineHeight * 2)
+        XCTAssertEqual(transcript.textDrawingRect.minY, 0, accuracy: 0.5)
+        try capture("12-waveform-long-transcript")
+        try press("voice-cancel") // backdrop must not intercept any controls
+        XCTAssertFalse(app.iosVoiceComposer.isRecording)
+    }
+
     func testRecordingDuringAgentTurnSendsSteerInsteadOfAbort() throws {
         app.sessionStore.sessions[sid]?.state = .active
         drain(200)

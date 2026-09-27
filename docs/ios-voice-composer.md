@@ -131,23 +131,27 @@ interaction takes over from a late draft correction. Session departure preserves
 the original owner. Mac does not adopt iOS's app-inactive recording policy.
 
 Mac flattens iPhone's recording surface into one row: disabled image icon or
-existing thumbnail on the left, read-only transcript in the middle, then the
-shared `VoiceLevelBars` waveform, labeled Cancel and Edit on the right. No mic
-icon is shown while recording. The separate primary circle remains Send.
-iPhone retains two recording rows and a time indicator; both use the same
-meter and dim the live spoken preview.
+existing thumbnail on the left, read-only transcript in the middle, labeled
+Cancel and Edit on the right. No mic icon is shown while recording. The
+separate primary circle remains Send. A low-opacity waveform spans the entire
+capsule behind all controls; interpolated microphone levels drive its spring
+animation (using iPhone's shared dB loudness mapping, not a canned animation).
+The background does not participate in layout or hit testing. Short transcripts
+are vertically centered in the two-line viewport; longer ones retain native
+tail scrolling. iPhone retains its two-row layout, compact meter and timer.
 
 The branch is based on main `4e3d9dd` (includes PR #317). iOS's already-fixed
 free-form answer behavior is preserved, not reimplemented. A Mac native test
 checks question ID on both the correcting bubble and the final transport
 payload, with no steer flag even when the agent is active.
 
-`KrakiMacTests` also runs all 28 shared transaction tests. Its eight
+`KrakiMacTests` also runs all 28 shared transaction tests. Its nine
 `MacVoiceComposerTests` use the production chat in an isolated native window,
 real mouse events and native bubble menus, with synthetic speech/captured
 transport. They cover recording send, steer, cancel, edit/caret, latest-original
 send/delete, image restoration, ordered follow-ups, disabled recording
-thumbnails, and free-form voice answers. Screenshots are not a
+thumbnails, free-form voice answers, and real level-event updates without
+moving the centered text or intercepting controls. Screenshots are not a
 physical microphone or live-network acceptance test.
 
 ## Physical acceptance before publication

@@ -45,6 +45,8 @@ import VoiceInputCore
     var starts = 0
     var aborts = 0
     var lastAnswerTo = ""
+    @ObservationIgnored private var latestEvent: ((VoiceInputEvent) -> Void)?
+    func emitLevel(_ level: Float) { latestEvent?(.level(level)) }
     @ObservationIgnored lazy var voice = KrakiVoiceInputController(host: self, sessionFactory: self, audioPolicy: ScenarioAudio())
     func requestVoiceLease(resource: String) -> Bool {
         Task { @MainActor [weak self] in
@@ -56,6 +58,7 @@ import VoiceInputCore
         return true
     }
     func makeSession(configuration: VoiceInputConfiguration, onEvent: @escaping (VoiceInputEvent) -> Void, onMetric: @escaping (VoiceInputMetric) -> Void) -> VoiceInputSessionProtocol {
+        latestEvent = onEvent
         let session = ScenarioSession(onEvent: onEvent, onStart: { [weak self] in self?.starts += 1 })
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(40))

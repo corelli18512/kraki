@@ -295,6 +295,14 @@ struct MacChatComposer: View {
         }
         .frame(maxWidth: .infinity)
         .frame(minHeight: Self.inputBoxHeight)
+        .background {
+            if voiceOwnsComposer {
+                MacVoiceBackgroundWaveform(levels: voiceController.levels)
+                    .clipShape(RoundedRectangle(cornerRadius: Self.inputBoxHeight / 2, style: .continuous))
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .background { inputBoxGlassBackground }
         .contentShape(RoundedRectangle(cornerRadius: Self.inputBoxHeight / 2, style: .continuous))
     }
@@ -1126,6 +1134,45 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
 
 // MARK: - Inline VoiceType transcript surface
 
+/// A quiet, full-width backdrop driven by real microphone peaks, never a
+/// canned idle animation. Background-only geometry cannot resize the capsule
+/// or intercept the transcript/Cancel/Edit controls.
+struct MacVoiceBackgroundWaveform: View {
+    let levels: [Float]
+
+    static func heightFractions(levels: [Float], count: Int) -> [CGFloat] {
+        guard count > 0 else { return [] }
+        let recent = Array(levels.suffix(8))
+        let samples = Array(repeating: Float(0), count: max(0, 8 - recent.count)) + recent
+        return (0..<count).map { index in
+            let position = CGFloat(index) / CGFloat(max(1, count - 1)) * CGFloat(samples.count - 1)
+            let left = Int(position)
+            let right = min(left + 1, samples.count - 1)
+            let mix = position - CGFloat(left)
+            let amplitude = VoiceLevelBars.loudness(samples[left]) * (1 - mix)
+                + VoiceLevelBars.loudness(samples[right]) * mix
+            return 0.06 + amplitude * 0.78
+        }
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let count = max(8, min(160, Int(geometry.size.width / 8)))
+            let heights = Self.heightFractions(levels: levels, count: count)
+            HStack(spacing: 0) {
+                ForEach(heights.indices, id: \.self) { index in
+                    Capsule()
+                        .fill(Color.krakiPrimary.opacity(0.10))
+                        .frame(width: 3, height: max(2, geometry.size.height * heights[index]))
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .animation(.spring(response: 0.18, dampingFraction: 0.8), value: levels)
+        }
+    }
+}
+
 private struct MacComposerVoiceSurface: View {
     let controller: KrakiVoiceInputController
     let preview: (prefix: String, spoken: String, suffix: String)
@@ -1137,8 +1184,6 @@ private struct MacComposerVoiceSurface: View {
             MacComposerScrollableVoiceTranscript(pieces: displayedPieces, revision: revision)
                 .frame(maxWidth: .infinity)
                 .frame(height: MacComposerVoiceTranscriptView.lineHeight * 2)
-            VoiceLevelBars(levels: controller.levels)
-                .fixedSize()
             Button(action: onCancel) {
                 Label("Cancel", systemImage: "xmark")
                     .font(.system(size: 12, weight: .medium))
@@ -1293,6 +1338,13 @@ final class MacComposerVoiceTranscriptView: NSView {
         needsDisplay = true
     }
 
+    /// Short speech is vertically centered in the fixed two-line viewport.
+    /// Long speech keeps its complete document height and native tail scroll.
+    var textDrawingRect: CGRect {
+        let inset = max(0, (bounds.height - contentHeight) / 2)
+        return bounds.insetBy(dx: 0, dy: inset)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext,
               let framesetter,
@@ -1304,7 +1356,7 @@ final class MacComposerVoiceTranscriptView: NSView {
         context.textMatrix = .identity
         context.translateBy(x: 0, y: bounds.height)
         context.scaleBy(x: 1, y: -1)
-        let path = CGPath(rect: bounds, transform: nil)
+        let path = CGPath(rect: textDrawingRect, transform: nil)
         let frame = CTFramesetterCreateFrame(
             framesetter,
             visibleRange,
