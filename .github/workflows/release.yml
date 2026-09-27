@@ -28,6 +28,11 @@ on:
         options:
           - tentacle
           - mac
+      notarize:
+        description: Notarize a mac dry-run build (for clean-machine testing; never published)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -418,7 +423,7 @@ jobs:
           ((github.event.inputs.mode == 'dry-run' && github.event.inputs.target == 'mac') ||
            startsWith(github.event.inputs.tag, 'mac-v')))
     runs-on: macos-26
-    timeout-minutes: 50
+    timeout-minutes: 75
 
     steps:
       - name: Check out repository
@@ -452,6 +457,41 @@ jobs:
             -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           security list-keychain -d user -s "$KEYCHAIN_PATH"
 
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Build built-in tentacle (universal, version-locked to this commit)
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          # Kraki for Mac ships the tentacle from the same commit. Every
+          # tentacle release therefore needs a matching Mac release.
+          pnpm install --frozen-lockfile --filter @kraki/tentacle...
+          pnpm --filter @kraki/tentacle run build:binary:local
+          node packages/tentacle/scripts/build-sea-darwin-cross.mjs
+          bash scripts/mac/build-tentacle-helper.sh \
+            --binary packages/tentacle/dist/sea/kraki-cli-macos-arm64 \
+            --binary packages/tentacle/dist/sea/kraki-cli-macos-x64 \
+            --out "$RUNNER_TEMP/tentacle-helper" \
+            --sign "$APPLE_SIGNING_IDENTITY"
+          HELPER="$RUNNER_TEMP/tentacle-helper/Kraki Tentacle.app"
+          test "$(lipo -archs "$HELPER/Contents/MacOS/kraki")" = "x86_64 arm64"
+          "$HELPER/Contents/MacOS/kraki" --version
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            arch -x86_64 "$HELPER/Contents/MacOS/kraki" --version
+          else
+            echo "Rosetta unavailable; x86_64 slice verified by lipo only"
+          fi
+          node packages/tentacle/scripts/smoke-test-binary.mjs "$HELPER/Contents/MacOS/kraki"
+
       - name: Archive KrakiMac (Developer ID; diagnostics only on explicit -diag tag)
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -469,6 +509,8 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             ARCHS="arm64 x86_64" \
             ONLY_ACTIVE_ARCH=NO \
+            KRAKI_TENTACLE_HELPER="$RUNNER_TEMP/tentacle-helper/Kraki Tentacle.app" \
+            KRAKI_REQUIRE_TENTACLE=1 \
             archive | tail -40
 
       - name: Verify signature
@@ -519,6 +561,7 @@ jobs:
             "$SPARKLE/XPCServices/Downloader.xpc" \
             "$SPARKLE/XPCServices/Installer.xpc" \
             "$APP/Contents/Frameworks/Sparkle.framework" \
+            "$APP/Contents/Library/Helpers/Kraki Tentacle.app" \
             "$APP"; do
             codesign -dv --verbose=4 "$item" 2>&1 | tee "$RUNNER_TEMP/$(basename "$item").codesign.txt"
             grep -q 'Authority=Developer ID Application:' "$RUNNER_TEMP/$(basename "$item").codesign.txt"
@@ -527,7 +570,7 @@ jobs:
           done
 
       - name: Notarize and staple
-        if: needs.prepare.outputs.publish_mode == 'publish'
+        if: needs.prepare.outputs.publish_mode == 'publish' || github.event.inputs.notarize == 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -613,7 +656,15 @@ jobs:
           grep -qw arm64 <<< "$ARCHS"
           grep -qw x86_64 <<< "$ARCHS"
           codesign --verify --strict --verbose=2 "$APP"
-          if [ "${{ needs.prepare.outputs.publish_mode }}" = "publish" ]; then
+          # Built-in tentacle: universal helper, launch agent, version lock.
+          HELPER="$APP/Contents/Library/Helpers/Kraki Tentacle.app"
+          test "$(lipo -archs "$HELPER/Contents/MacOS/kraki")" = "x86_64 arm64"
+          plutil -lint "$APP/Contents/Library/LaunchAgents/chat.kraki.mac.tentacle.plist"
+          SHIPPED=$(/usr/libexec/PlistBuddy -c "Print :KrakiTentacleVersion" "$APP/Contents/Info.plist")
+          EXPECTED=$(node -p "require('./packages/tentacle/package.json').version")
+          test "$SHIPPED" = "$EXPECTED"
+          test "$("$HELPER/Contents/MacOS/kraki" --version)" = "$EXPECTED"
+          if [ "${{ needs.prepare.outputs.publish_mode }}" = "publish" ] || [ "${{ github.event.inputs.notarize }}" = "true" ]; then
             xcrun stapler validate "$APP"
             spctl -a -vvv --type exec "$APP"
           fi
@@ -623,6 +674,44 @@ jobs:
         with:
           name: build-kraki-mac-gui-universal-app
           path: ${{ runner.temp }}/kraki-mac-gui-universal.app.tar.gz
+          if-no-files-found: error
+
+      - name: Build disk image
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARIZE: ${{ (needs.prepare.outputs.publish_mode == 'publish' || github.event.inputs.notarize == 'true') && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          # The DMG is the download for new users: it opens on Kraki next to an
+          # Applications alias, so the app is dragged into place in Finder.
+          # Opening it from Downloads instead would run it translocated, and a
+          # background service registered from there breaks at the next reboot.
+          APP="$RUNNER_TEMP/KrakiMac.xcarchive/Products/Applications/Kraki.app"
+          SRC="$RUNNER_TEMP/dmg-src"
+          rm -rf "$SRC" && mkdir -p "$SRC"
+          ditto "$APP" "$SRC/Kraki.app"
+          ln -s /Applications "$SRC/Applications"
+          DMG="$RUNNER_TEMP/Kraki.dmg"
+          hdiutil create -volname "Kraki" -srcfolder "$SRC" -fs HFS+ -format UDZO -ov "$DMG"
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$DMG"
+          if [ "$NOTARIZE" = "1" ]; then
+            xcrun notarytool submit "$DMG" \
+              --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" --wait
+            xcrun stapler staple "$DMG"
+            xcrun stapler validate "$DMG"
+            spctl -a -vvv -t open --context context:primary-signature "$DMG"
+          fi
+          ls -lh "$DMG"
+
+      - name: Upload disk image artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-kraki-mac-dmg
+          path: ${{ runner.temp }}/Kraki.dmg
           if-no-files-found: error
 
   # ─── Publish ────────────────────────────────────────────
