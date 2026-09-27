@@ -65,6 +65,17 @@ vi.mock('../daemon.js', () => ({
   startDaemon: (...args: unknown[]) => mockStartDaemon(...args),
   runDaemonReleaseSmoke: (...args: unknown[]) => mockRunDaemonReleaseSmoke(...args),
   stopDaemon: (...args: unknown[]) => mockStopDaemon(...args),
+  getCliLaunchdJobState: () => mockGetCliLaunchdJobState(),
+}));
+
+const mockGetCliLaunchdJobState = vi.fn();
+const mockLoadManagedBy = vi.fn();
+const mockKickstart = vi.fn();
+const mockIsManagedLoaded = vi.fn();
+vi.mock('../managed.js', () => ({
+  loadManagedBy: () => mockLoadManagedBy(),
+  kickstartManagedDaemon: (...args: unknown[]) => mockKickstart(...args),
+  isManagedDaemonLoaded: (...args: unknown[]) => mockIsManagedLoaded(...args),
 }));
 
 vi.mock('../daemon-worker.js', () => ({
@@ -163,6 +174,8 @@ beforeEach(() => {
   mockGetKrakiHome.mockReturnValue('/tmp/fake-kraki');
   mockLoadChannelKey.mockReset();
   mockStartWorker.mockReset();
+  mockLoadManagedBy.mockReturnValue(null);
+  mockGetCliLaunchdJobState.mockReturnValue({ label: 'cloud.corelli.kraki', plistExists: false, loaded: false });
 });
 
 afterEach(() => {
@@ -388,10 +401,69 @@ describe('CLI status', () => {
     await runCli(['status', '--json']);
     const json = JSON.parse(stdoutOutput.join('').trim());
     expect(json.ok).toBe(true);
-    expect(json.daemon).toEqual({ running: true, pid: 42 });
+    expect(json.daemon).toMatchObject({ running: true, pid: 42, owner: null, managedLabel: null });
     expect(json.config.exists).toBe(true);
     expect(json.config.relay).toBe('wss://relay.test');
     expect(json.config.agents).toEqual(['claude']);
+  });
+});
+
+// ── Ownership by Kraki for Mac ──────────────────────────
+
+describe('CLI when the daemon is managed by Kraki for Mac', () => {
+  const marker = { by: 'kraki-mac', label: 'chat.kraki.mac.tentacle', appPath: '/Applications/Kraki.app', updatedAt: '' };
+  const config = {
+    relay: 'wss://relay.test',
+    authMethod: 'github_token',
+    device: { name: 'laptop', id: 'dev_1' },
+  };
+
+  beforeEach(() => {
+    mockLoadManagedBy.mockReturnValue(marker);
+    mockLoadConfig.mockReturnValue(config);
+  });
+
+  it('start never installs a second launchd job', async () => {
+    mockIsDaemonRunning.mockReturnValue(false);
+    mockGetDaemonStatus.mockReturnValue({ running: false, pid: null });
+    await runCli(['start']);
+    expect(mockStartDaemon).not.toHaveBeenCalled();
+    expect(consoleOutput.join('\n')).toContain('managed by Kraki for Mac');
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+  });
+
+  it('stop refuses instead of signalling a KeepAlive job', async () => {
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 77 });
+    await runCli(['stop']);
+    expect(mockStopDaemon).not.toHaveBeenCalled();
+    expect(consoleOutput.join('\n')).toContain('Login Items');
+    process.exitCode = 0;
+  });
+
+  it('restart kickstarts the Mac app job in place', async () => {
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 77 });
+    mockIsManagedLoaded.mockReturnValue(true);
+    mockKickstart.mockReturnValue(true);
+    await runCli(['restart']);
+    expect(mockKickstart).toHaveBeenCalledWith('chat.kraki.mac.tentacle');
+    expect(mockStopDaemon).not.toHaveBeenCalled();
+    expect(mockStartDaemon).not.toHaveBeenCalled();
+  });
+
+  it('update defers to the Mac app', async () => {
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 77 });
+    await runCli(['update']);
+    expect(consoleOutput.join('\n')).toContain('Check for Updates');
+    process.exitCode = 0;
+  });
+
+  it('status --json reports the Mac app as owner', async () => {
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 77 });
+    await runCli(['status', '--json']);
+    const json = JSON.parse(stdoutOutput.join('').trim());
+    expect(json.daemon).toMatchObject({ owner: 'kraki-mac', managedLabel: 'chat.kraki.mac.tentacle' });
   });
 });
 

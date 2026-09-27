@@ -86,8 +86,8 @@ function installToPath(): void {
   }
 }
 
-const OFFICIAL_RELAY = 'wss://relay.kraki.chat';
-const OFFICIAL_API = 'https://relay.kraki.chat';
+export const OFFICIAL_RELAY = 'wss://relay.kraki.chat';
+export const OFFICIAL_API = 'https://relay.kraki.chat';
 
 function getBrand(s: string) { return chalk.hex('#ea6046')(s); }
 const icon = '◈';
@@ -168,7 +168,7 @@ function link(text: string, url: string): string {
 /**
  * Test if the relay is reachable by opening a WebSocket and waiting for connection.
  */
-interface RelayInfo {
+export interface RelayInfo {
   methods: string[];
   pairing: boolean;
   githubClientId?: string;
@@ -177,7 +177,7 @@ interface RelayInfo {
 /**
  * Connect to the relay, query auth_info, and return server capabilities.
  */
-function queryRelayInfo(url: string, timeoutMs = 5000): Promise<RelayInfo> {
+export function queryRelayInfo(url: string, timeoutMs = 5000): Promise<RelayInfo> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       ws.close();
