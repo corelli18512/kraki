@@ -84,6 +84,10 @@ import VoiceInputCore
                 try? await Task.sleep(for: .milliseconds(100))
                 guard let self, self.generation == id else { return }
                 self.onEvent(.partial("请把这个功能接入 Kraki 保留原来的输入框"))
+                // Deterministic peaks for the shared native level meter.
+                for level: Float in [0.01, 0.03, 0.08, 0.2, 0.12, 0.06, 0.025, 0.01] {
+                    self.onEvent(.level(level))
+                }
             }
         }
         func stopCapture() {

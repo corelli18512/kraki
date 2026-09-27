@@ -114,8 +114,9 @@ failure → original, relaunch). `KrakiVoiceUITests` drives the real composer.
 
 `MacChatComposer` uses the same AppState-owned transaction, rather than waiting
 for `onFinal` to fill a draft. While recording the primary control sends voice
-(or returns structured question/permission replies to the editor for review),
-never aborts the agent. Cancel and Edit remain inside the single-row capsule.
+including free-form answers through main PR #317's `answerTo` path. Only
+permission denial returns to the editor for review. Recording Send never
+aborts the agent. Cancel and Edit remain inside the single-row capsule.
 Send immediately frees the editor and stages a bubble; typed follow-ups can be
 composed but cannot overtake the correcting message. The mic shows progress.
 
@@ -129,15 +130,24 @@ Native caret/selection restoration follows the utterance; real typing or caret
 interaction takes over from a late draft correction. Session departure preserves
 the original owner. Mac does not adopt iOS's app-inactive recording policy.
 
-Layout differences retained: iPhone has two recording rows, labeled Cancel/Edit
-and a level/time indicator; Mac has one wide row, icon controls and the existing
-microphone status module. Behavior is aligned, not pixel-identical styling.
+Mac flattens iPhone's recording surface into one row: disabled image icon or
+existing thumbnail on the left, read-only transcript in the middle, then the
+shared `VoiceLevelBars` waveform, labeled Cancel and Edit on the right. No mic
+icon is shown while recording. The separate primary circle remains Send.
+iPhone retains two recording rows and a time indicator; both use the same
+meter and dim the live spoken preview.
 
-`KrakiMacTests` also runs all 27 shared transaction tests. Its six
+The branch is based on main `4e3d9dd` (includes PR #317). iOS's already-fixed
+free-form answer behavior is preserved, not reimplemented. A Mac native test
+checks question ID on both the correcting bubble and the final transport
+payload, with no steer flag even when the agent is active.
+
+`KrakiMacTests` also runs all 28 shared transaction tests. Its eight
 `MacVoiceComposerTests` use the production chat in an isolated native window,
 real mouse events and native bubble menus, with synthetic speech/captured
 transport. They cover recording send, steer, cancel, edit/caret, latest-original
-send/delete, image restoration, and ordered follow-ups. Screenshots are not a
+send/delete, image restoration, ordered follow-ups, disabled recording
+thumbnails, and free-form voice answers. Screenshots are not a
 physical microphone or live-network acceptance test.
 
 ## Physical acceptance before publication

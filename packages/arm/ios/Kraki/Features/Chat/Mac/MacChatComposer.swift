@@ -274,12 +274,15 @@ struct MacChatComposer: View {
     private var inputBox: some View {
         Group {
             if voiceOwnsComposer {
-                MacComposerVoiceSurface(
-                    controller: voiceController,
-                    preview: voiceComposer.preview,
-                    onFinish: { voiceComposer.finishToDraft() },
-                    onCancel: { voiceComposer.cancel() }
-                )
+                HStack(spacing: 0) {
+                    imageSlot
+                    MacComposerVoiceSurface(
+                        controller: voiceController,
+                        preview: voiceComposer.preview,
+                        onFinish: { voiceComposer.finishToDraft() },
+                        onCancel: { voiceComposer.cancel() }
+                    )
+                }
             } else {
                 HStack(alignment: .center, spacing: 0) {
                     imageSlot
@@ -370,7 +373,7 @@ struct MacChatComposer: View {
 
     private var primaryGlyph: String {
         if primaryRole == .stop { return "stop.fill" }
-        if voiceOwnsComposer && isStructuredResponse { return "checkmark" }
+        if voiceOwnsComposer && pendingPermission != nil { return "checkmark" }
         return submissionIntent == .steer ? "arrow.turn.right.up" : "arrow.up"
     }
 
@@ -407,7 +410,7 @@ struct MacChatComposer: View {
         .buttonStyle(.plain)
         .disabled(role == .stop ? (abortPending || !isDeviceReachable) : !canSend)
         .opacity(role == .stop ? (isDeviceReachable ? 1 : 0.5) : (canSend && !isDeviceReachable ? 0.6 : 1))
-        .accessibilityLabel(voiceOwnsComposer ? (isStructuredResponse ? "Edit voice text" : "Send voice message") : (role == .stop ? "Stop agent" : sendAccessibilityLabel))
+        .accessibilityLabel(voiceOwnsComposer ? (pendingPermission != nil ? "Edit voice text" : (pendingQuestion != nil ? "Submit voice answer" : "Send voice message")) : (role == .stop ? "Stop agent" : sendAccessibilityLabel))
         .accessibilityIdentifier(voiceOwnsComposer ? "voice-send" : "chat-primary")
         .accessibilityHint(role == .stop ? "Aborts the current agent turn" : sendAccessibilityHint)
     }
@@ -596,12 +599,14 @@ struct MacChatComposer: View {
 
     private func handleModeSubmit() {
         if voiceOwnsComposer {
-            // Structured responses must be reviewed before answering/denying.
-            if isStructuredResponse { voiceComposer.finishToDraft(); return }
+            // Free-form answers use main's answerTo-aware staged outbox;
+            // only permission denial still requires review in the editor.
+            if pendingPermission != nil { voiceComposer.finishToDraft(); return }
             let attachments = imageData.map {
                 [ImageAttachment(type: "image", mimeType: imageMimeType, data: $0.base64EncodedString())]
             }
-            if voiceComposer.send(attachments: attachments, delivery: submissionIntent == .steer ? .steer : .prompt) {
+            if voiceComposer.send(attachments: attachments, delivery: submissionIntent == .steer ? .steer : .prompt,
+                                  answerTo: pendingQuestion?.id) {
                 clearImage()
                 didSubmitFromComposer()
                 requestComposerFocus()
@@ -1128,27 +1133,36 @@ private struct MacComposerVoiceSurface: View {
     let onCancel: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            Button(action: onCancel) { Image(systemName: "xmark").frame(width: 24, height: 32).contentShape(Rectangle()) }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Cancel voice input")
-                .accessibilityIdentifier("voice-cancel")
+        HStack(spacing: 8) {
             MacComposerScrollableVoiceTranscript(pieces: displayedPieces, revision: revision)
                 .frame(maxWidth: .infinity)
                 .frame(height: MacComposerVoiceTranscriptView.lineHeight * 2)
-            VoiceComposerStatusModule(state: controller.state)
-                .frame(width: 38, height: 32)
+            VoiceLevelBars(levels: controller.levels)
+                .fixedSize()
+            Button(action: onCancel) {
+                Label("Cancel", systemImage: "xmark")
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 70, height: 30)
+                    .background(.primary.opacity(0.05), in: Capsule())
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel voice input")
+            .accessibilityIdentifier("voice-cancel")
             Button(action: onFinish) {
-                Image(systemName: "square.and.pencil")
-                    .frame(width: 28, height: 32)
-                    .contentShape(Rectangle())
+                Label("Edit", systemImage: "character.cursor.ibeam")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.krakiPrimary)
+                    .frame(width: 62, height: 30)
+                    .background(Color.krakiPrimary.opacity(0.10), in: Capsule())
+                    .contentShape(Capsule())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Edit voice text")
             .accessibilityIdentifier("voice-to-text")
         }
-        .padding(.leading, 18)
-        .padding(.trailing, 12)
+        .padding(.leading, 4)
+        .padding(.trailing, 5)
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
     }
@@ -1158,7 +1172,7 @@ private struct MacComposerVoiceSurface: View {
     }
 
     private var displayedPieces: [(text: String, opacity: Double)] {
-        [(preview.prefix, 1), (preview.spoken, 1), (preview.suffix, 1)]
+        [(preview.prefix, 1), (preview.spoken, 0.5), (preview.suffix, 1)]
     }
 }
 

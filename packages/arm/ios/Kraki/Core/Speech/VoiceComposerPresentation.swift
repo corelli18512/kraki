@@ -1,6 +1,38 @@
 import Foundation
 import SwiftUI
 
+/// Shared live input meter: dB-mapped peaks and a centre-weighted envelope.
+/// Kept identical on iPhone's second row and Mac's horizontal voice strip.
+struct VoiceLevelBars: View {
+    let levels: [Float]
+    private static let barCount = 8
+    private static let floorDB: Float = -48
+    private static let ceilDB: Float = -6
+
+    static func loudness(_ peak: Float) -> CGFloat {
+        guard peak > 0 else { return 0 }
+        let db = 20 * log10(peak)
+        return CGFloat(max(0, min(1, (db - floorDB) / (ceilDB - floorDB))))
+    }
+
+    var body: some View {
+        let recent = Array(levels.suffix(Self.barCount))
+        let padded = Array(repeating: Float(0), count: max(0, Self.barCount - recent.count)) + recent
+        HStack(spacing: 2.5) {
+            ForEach(0..<Self.barCount, id: \.self) { i in
+                let value = Self.loudness(padded[i])
+                let weight = 0.6 + 0.4 * (1 - abs(CGFloat(i) - CGFloat(Self.barCount - 1) / 2) / (CGFloat(Self.barCount - 1) / 2))
+                Capsule()
+                    .fill(Color.krakiPrimary.opacity(0.45 + 0.5 * Double(value)))
+                    .frame(width: 3, height: 4 + value * weight * 20)
+            }
+        }
+        .frame(height: 26)
+        .animation(.spring(response: 0.16, dampingFraction: 0.72), value: levels)
+        .accessibilityHidden(true)
+    }
+}
+
 /// Shared voice-composer presentation rules. Audio capture and native drawing
 /// remain platform-specific; the text and state semantics do not.
 enum VoiceComposerPresentation {
