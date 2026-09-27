@@ -1,0 +1,58 @@
+name: Lab — Mac embedded helper daemon
+
+# Throwaway validation build (chat.kraki.lab.* bundle ids). Never merged to main.
+on:
+  push:
+    branches: [lab/mac-helper-daemon]
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Import Apple certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/cert.p12
+          security import $RUNNER_TEMP/cert.p12 -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+      - name: Build, sign, notarize, staple v1 and v2
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          OUT=$RUNNER_TEMP/lab
+          mkdir -p $OUT/dist
+          for V in 1 2; do
+            lab/mac-helper-daemon/build.sh $V "$IDENTITY" $OUT
+            APP="$OUT/v$V/Kraki Lab.app"
+            ditto -c -k --keepParent "$APP" $RUNNER_TEMP/notarize.zip
+            xcrun notarytool submit $RUNNER_TEMP/notarize.zip \
+              --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+            xcrun stapler staple "$APP"
+            xcrun stapler validate "$APP"
+            spctl -a -vvv --type exec "$APP"
+            codesign -dr - "$APP/Contents/Library/Helpers/Kraki Lab Agent.app"
+            ditto -c -k --keepParent "$APP" "$OUT/dist/KrakiLab-v$V.zip"
+          done
+          cp $OUT/v1/child $OUT/dist/child
+          (cd $OUT/dist && shasum -a 256 * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: kraki-lab
+          path: ${{ runner.temp }}/lab/dist/*
+          retention-days: 14
