@@ -69,9 +69,13 @@ export function createKrakiConnectionAuthorizer(publicKeyPem, options = {}) {
     }
 
     const activationId = randomUUID();
-    const success = (reportedAudioSeconds = 0) => ({
+    // Head re-budgets the lease against the user's daily cap at activation and
+    // may allow less than the signed quota; never allow more.
+    const success = (reportedAudioSeconds = 0, allowedSeconds) => ({
       ok: true,
-      quotaSeconds: lease.payload.quota_seconds,
+      quotaSeconds: Number.isFinite(allowedSeconds) && allowedSeconds >= 0
+        ? Math.min(lease.payload.quota_seconds, allowedSeconds)
+        : lease.payload.quota_seconds,
       usedSeconds: reportedAudioSeconds,
       expiresAtUnixSec: lease.payload.exp,
       connectionKey: lease.payload.jti,
@@ -80,7 +84,7 @@ export function createKrakiConnectionAuthorizer(publicKeyPem, options = {}) {
     if (!activate) return success();
     return Promise.resolve(activate({ jti: lease.payload.jti, activationId }))
       .then((activated) => activated.ok
-        ? success(activated.reportedAudioSeconds ?? 0)
+        ? success(activated.reportedAudioSeconds ?? 0, activated.quotaSeconds)
         : {
             ok: false,
             reason: activated.reason ?? 'activation_failed',
@@ -135,6 +139,8 @@ export function createKrakiSettlementClient(settleUrl, settlementKey, options = 
       return {
         ok: true,
         reportedAudioSeconds: Number(result.reportedAudioSeconds) || 0,
+        // Absent from older Heads: the signed lease quota then applies.
+        quotaSeconds: typeof result.quotaSeconds === 'number' ? result.quotaSeconds : undefined,
       };
     },
     async onUsage(input) {

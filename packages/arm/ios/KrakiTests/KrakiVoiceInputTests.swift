@@ -875,6 +875,37 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertEqual(factory.sessions.count, 1)
     }
 
+    func testRejectedLeaseIsDiscardedAndReplacedWithBackoff() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let controller = KrakiVoiceInputController(
+            host: host,
+            sessionFactory: factory,
+            audioPolicy: FakeVoiceAudioPolicy()
+        )
+        controller.prepare()
+        controller.receiveLease(lease())
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
+
+        factory.sessions[0].emit(.failed("denied: lease_revoked"))
+        await Task.yield()
+        // Not an immediate retry…
+        XCTAssertEqual(host.requestedResources, ["voice/doubao"])
+        XCTAssertEqual(factory.sessions[0].closeCount, 1)
+        // …but after backoff a fresh lease is requested instead of reusing the dead one.
+        let deadline = Date().addingTimeInterval(5)
+        while host.requestedResources.count < 2, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(host.requestedResources, ["voice/doubao", "voice/doubao"])
+        XCTAssertEqual(factory.sessions.count, 1)
+
+        XCTAssertTrue(KrakiVoiceInputController.isLeaseRejection("denied: bad_signature"))
+        XCTAssertTrue(KrakiVoiceInputController.isLeaseRejection("lease_expired"))
+        XCTAssertFalse(KrakiVoiceInputController.isLeaseRejection("socket closed"))
+    }
+
     func testQuotaExhaustedConnectionRollsLeaseAndContinuesRecording() async {
         let host = FakeVoiceHost()
         let factory = FakeVoiceFactory()

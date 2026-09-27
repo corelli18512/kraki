@@ -89,9 +89,17 @@ the microphone path. A reconnect installs a new random `activationId` as the
 last-writer-wins owner and restores Head's exact cumulative audio checkpoint.
 A same-process takeover also transfers any audio not yet checkpointed before it
 closes the stale socket. The Broker reports monotonic cumulative `audioSeconds`
-during long recordings and after each final transcript. Head reserves the full signed quota while the
-lease remains valid, then collapses it to rounded-up actual usage after expiry
-plus a one-minute grace period. Lower/out-of-order checkpoints are harmless;
+during long recordings and after each final transcript, and a final report when
+the socket closes.
+
+Head has exactly one limit, `VOICE_DAILY_QUOTA_SEC` (seconds of audio per user
+per UTC day). It charges actual audio, plus the unused remainder only for leases
+whose socket is open (or that were issued moments ago and are still connecting),
+so idle, closed and abandoned warm leases cost nothing. On every activation Head
+re-budgets the lease against the user's other usage and reservations and
+returns `quotaSeconds`; the authorizer enforces `min(signed quota, quotaSeconds)`,
+so concurrent devices can never exceed the daily cap together. Leases never
+outlive the UTC day they are charged to. Lower/out-of-order checkpoints are harmless;
 checkpoints from replaced owners are rejected. Authorized sockets use standard
 WebSocket ping/pong with a 25-second ping cadence and 10-second pong timeout;
 there is no application-level keepalive frame. Each Head request has a bounded

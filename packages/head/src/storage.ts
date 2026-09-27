@@ -96,7 +96,25 @@ export interface StoredRegion {
   lastSeenAt?: string;
 }
 
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 12;
+
+/** Seconds an issued-but-not-yet-connected lease holds its reservation. */
+export const VOICE_PENDING_LEASE_RESERVE_SEC = 120;
+
+/**
+ * Broker usage reasons emitted while the warm socket stays open (periodic
+ * checkpoints, reconnect takeover, end of one recording). Any other reason is
+ * the broker's forced final report for a closing socket.
+ */
+const VOICE_OPEN_USAGE_REASONS = new Set([
+  'checkpoint',
+  'connection_takeover',
+  'session_final',
+  'asr_open_failed',
+  'asr_error',
+  'asr_closed',
+  'asr_send_failed',
+]);
 
 export class Storage {
   private db: Database.Database;
@@ -334,6 +352,37 @@ export class Storage {
         UPDATE voice_leases
         SET reported_audio_seconds = COALESCE(used_seconds, 0)
         WHERE reported_audio_seconds = 0 AND used_seconds IS NOT NULL
+      `);
+    }
+
+    if (currentVersion < 12) {
+      // Daily accounting = actual audio + a reservation only for sockets that
+      // are really open. `allowed_seconds` is the cumulative ceiling granted at
+      // activation (bounded by the remaining daily budget); `closed_at` is set
+      // when the broker reports the socket's final usage.
+      const columns = new Set(
+        (this.db.prepare('PRAGMA table_info(voice_leases)').all() as Array<{ name: string }>)
+          .map((column) => column.name)
+      );
+      if (!columns.has('allowed_seconds')) {
+        this.db.exec('ALTER TABLE voice_leases ADD COLUMN allowed_seconds REAL');
+      }
+      if (!columns.has('closed_at')) {
+        this.db.exec('ALTER TABLE voice_leases ADD COLUMN closed_at TEXT');
+      }
+      // Before this version close reports were not recorded. A client holds
+      // one lease per device, so every lease older than the device's newest
+      // one has been abandoned: stop it reserving quota.
+      this.db.exec(`
+        UPDATE voice_leases
+        SET closed_at = COALESCE(settled_at, activated_at, issued_at)
+        WHERE closed_at IS NULL AND EXISTS (
+          SELECT 1 FROM voice_leases newer
+          WHERE newer.user_id = voice_leases.user_id
+            AND newer.device_id = voice_leases.device_id
+            AND newer.resource = voice_leases.resource
+            AND newer.issued_at > voice_leases.issued_at
+        )
       `);
     }
 
@@ -712,24 +761,57 @@ export class Storage {
   }
 
   /**
-   * Daily reserved/consumed voice seconds for a user. Every unexpired lease
-   * reserves its full signed quota even after usage checkpoints, because the
-   * same warm authorization can still consume the remainder. One minute after
-   * expiry the reservation collapses to trusted broker-reported actual usage.
+   * Voice seconds charged against a user's daily cap (UTC day of issuance).
+   *
+   *   charge = actual audio (rounded up)
+   *          + remaining allowance, only while the lease can still record:
+   *            its broker socket is open, or it was issued moments ago and
+   *            the client is still connecting.
+   *
+   * Idle, closed or abandoned leases therefore cost only what was spoken.
+   * Open sockets keep their reservation so concurrent devices can never
+   * jointly exceed the cap. `excludeJti` removes one lease entirely (used
+   * when re-budgeting that lease at activation).
    */
-  sumVoiceLeaseQuotaIssuedToday(userId: string, nowUnixSec: number): number {
+  voiceSecondsAccountedToday(userId: string, nowUnixSec: number, excludeJti = ''): number {
     const day = new Date(nowUnixSec * 1000).toISOString().slice(0, 10);
     const row = this.db.prepare(`
       SELECT COALESCE(SUM(
-        CASE
-          WHEN unixepoch(expires_at) + 60 > ? THEN quota_seconds
-          ELSE COALESCE(used_seconds, 0)
+        COALESCE(used_seconds, 0) + CASE
+          WHEN revoked_at IS NULL
+            AND unixepoch(expires_at) + 60 > ?
+            AND (
+              (activated_at IS NOT NULL AND closed_at IS NULL)
+              OR (activated_at IS NULL AND unixepoch(issued_at) + ? > ?)
+            )
+          THEN MAX(0, COALESCE(allowed_seconds, quota_seconds) - COALESCE(reported_audio_seconds, 0))
+          ELSE 0
         END
       ), 0) AS total
       FROM voice_leases
-      WHERE user_id = ? AND substr(issued_at, 1, 10) = ?
-    `).get(nowUnixSec, userId, day) as { total: number };
-    return Number(row.total) || 0;
+      WHERE user_id = ? AND substr(issued_at, 1, 10) = ? AND jti != ?
+    `).get(
+      nowUnixSec,
+      VOICE_PENDING_LEASE_RESERVE_SEC,
+      nowUnixSec,
+      userId,
+      day,
+      excludeJti,
+    ) as { total: number };
+    return Math.ceil(Number(row.total) || 0);
+  }
+
+  /**
+   * A device only ever holds one lease: when it asks for a new one, its
+   * earlier leases that never connected are abandoned. Revoke them so their
+   * pending reservation is released and they can never be activated later.
+   */
+  revokePendingVoiceLeases(userId: string, deviceId: string, resource: string, nowUnixSec: number): number {
+    return this.db.prepare(`
+      UPDATE voice_leases SET revoked_at = ?
+      WHERE user_id = ? AND device_id = ? AND resource = ?
+        AND activated_at IS NULL AND revoked_at IS NULL
+    `).run(new Date(nowUnixSec * 1000).toISOString(), userId, deviceId, resource).changes;
   }
 
   /**
@@ -743,18 +825,29 @@ export class Storage {
     jti: string;
     activationId: string;
     activatedAtUnixSec?: number;
+    /** Per-user daily cap. When set, the lease's usable allowance is
+     *  re-budgeted against everything else the user has used or reserved. */
+    dailyCapSec?: number;
   }): {
-    status: 'activated' | 'unchanged' | 'replaced' | 'expired' | 'wrong_day' | 'revoked' | 'not_found';
+    status: 'activated' | 'unchanged' | 'replaced' | 'expired' | 'wrong_day' | 'revoked'
+      | 'quota_exhausted' | 'not_found';
     reportedAudioSeconds?: number;
+    /** Cumulative seconds this lease may reach; the broker enforces it. */
+    quotaSeconds?: number;
   } {
     const nowUnixSec = input.activatedAtUnixSec ?? Math.floor(Date.now() / 1000);
     const activationDay = new Date(nowUnixSec * 1000).toISOString().slice(0, 10);
     const lease = this.db.prepare(`
-      SELECT activation_id, activated_at, issued_at,
+      SELECT user_id, quota_seconds, allowed_seconds, used_seconds,
+             activation_id, activated_at, issued_at,
              unixepoch(expires_at) AS expires_at_unix, revoked_at,
              COALESCE(reported_audio_seconds, 0) AS reported_audio_seconds
       FROM voice_leases WHERE jti = ?
     `).get(input.jti) as {
+      user_id: string;
+      quota_seconds: number;
+      allowed_seconds: number | null;
+      used_seconds: number | null;
       activation_id: string | null;
       activated_at: string | null;
       issued_at: string;
@@ -769,18 +862,41 @@ export class Storage {
 
     const reportedAudioSeconds = Number(lease.reported_audio_seconds) || 0;
     if (lease.activated_at !== null && lease.activation_id === input.activationId) {
-      return { status: 'unchanged', reportedAudioSeconds };
+      return {
+        status: 'unchanged',
+        reportedAudioSeconds,
+        quotaSeconds: lease.allowed_seconds ?? lease.quota_seconds,
+      };
+    }
+
+    let allowedSeconds = lease.quota_seconds;
+    if (input.dailyCapSec !== undefined) {
+      const others = this.voiceSecondsAccountedToday(lease.user_id, nowUnixSec, input.jti);
+      const ownUsed = lease.used_seconds ?? Math.ceil(reportedAudioSeconds);
+      const budgetLeft = Math.max(0, input.dailyCapSec - others - ownUsed);
+      allowedSeconds = Math.min(lease.quota_seconds, reportedAudioSeconds + budgetLeft);
+      if (allowedSeconds - reportedAudioSeconds < 1) {
+        if (lease.activated_at === null) {
+          // Never connected and now unusable: drop its pending reservation.
+          this.db.prepare(`
+            UPDATE voice_leases SET revoked_at = ? WHERE jti = ? AND activated_at IS NULL
+          `).run(new Date(nowUnixSec * 1000).toISOString(), input.jti);
+        }
+        return { status: 'quota_exhausted', reportedAudioSeconds };
+      }
     }
 
     const activatedAt = new Date(nowUnixSec * 1000).toISOString();
     this.db.prepare(`
-      UPDATE voice_leases SET activation_id = ?, activated_at = ?
+      UPDATE voice_leases
+      SET activation_id = ?, activated_at = ?, allowed_seconds = ?, closed_at = NULL
       WHERE jti = ? AND revoked_at IS NULL
         AND unixepoch(expires_at) > ? AND substr(issued_at, 1, 10) = ?
-    `).run(input.activationId, activatedAt, input.jti, nowUnixSec, activationDay);
+    `).run(input.activationId, activatedAt, allowedSeconds, input.jti, nowUnixSec, activationDay);
     return {
       status: lease.activated_at === null ? 'activated' : 'replaced',
       reportedAudioSeconds,
+      quotaSeconds: allowedSeconds,
     };
   }
 
@@ -802,7 +918,7 @@ export class Storage {
     reportedAudioSeconds?: number;
   } {
     const lease = this.db.prepare(`
-      SELECT quota_seconds, used_seconds, activation_id, activated_at,
+      SELECT quota_seconds, used_seconds, activation_id, activated_at, closed_at,
              COALESCE(reported_audio_seconds, 0) AS reported_audio_seconds
       FROM voice_leases WHERE jti = ?
     `).get(input.jti) as {
@@ -810,11 +926,23 @@ export class Storage {
       used_seconds: number | null;
       activation_id: string | null;
       activated_at: string | null;
+      closed_at: string | null;
       reported_audio_seconds: number;
     } | undefined;
     if (!lease) return { status: 'not_found' };
     if (lease.activated_at === null) return { status: 'not_activated' };
     if (lease.activation_id !== input.activationId) return { status: 'conflict' };
+
+    const settledAtUnixSec = input.settledAtUnixSec ?? Math.floor(Date.now() / 1000);
+    // The broker's final report for a closing socket releases the lease's
+    // reservation. Only a new activation (reconnect) reopens it.
+    const closing = !VOICE_OPEN_USAGE_REASONS.has(input.reason ?? '');
+    if (closing && lease.closed_at === null) {
+      this.db.prepare(`
+        UPDATE voice_leases SET closed_at = ?
+        WHERE jti = ? AND activation_id = ? AND closed_at IS NULL
+      `).run(new Date(settledAtUnixSec * 1000).toISOString(), input.jti, input.activationId);
+    }
 
     const reportedAudioSeconds = Math.min(
       lease.quota_seconds,
@@ -838,9 +966,7 @@ export class Storage {
     }
 
     const usedSeconds = Math.ceil(reportedAudioSeconds);
-    const settledAt = new Date(
-      (input.settledAtUnixSec ?? Math.floor(Date.now() / 1000)) * 1000
-    ).toISOString();
+    const settledAt = new Date(settledAtUnixSec * 1000).toISOString();
     this.db.prepare(`
       UPDATE voice_leases
       SET reported_audio_seconds = ?, used_seconds = ?, settled_at = ?, settlement_reason = ?
@@ -874,18 +1000,21 @@ export class Storage {
     reportedAudioSeconds: number;
     activationId: string | null;
     activatedAt: string | null;
+    allowedSeconds: number | null;
+    closedAt: string | null;
   } | undefined {
     const row = this.db.prepare(`
       SELECT jti, user_id, device_id, resource, quota_seconds, issued_at,
              expires_at, revoked_at, used_seconds, settled_at, settlement_reason,
              COALESCE(reported_audio_seconds, 0) AS reported_audio_seconds,
-             activation_id, activated_at
+             activation_id, activated_at, allowed_seconds, closed_at
       FROM voice_leases WHERE jti = ?
     `).get(jti) as {
       jti: string; user_id: string; device_id: string; resource: string;
       quota_seconds: number; issued_at: string; expires_at: string; revoked_at: string | null;
       used_seconds: number | null; settled_at: string | null; settlement_reason: string | null;
       reported_audio_seconds: number; activation_id: string | null; activated_at: string | null;
+      allowed_seconds: number | null; closed_at: string | null;
     } | undefined;
     if (!row) return undefined;
     return {
@@ -903,6 +1032,8 @@ export class Storage {
       reportedAudioSeconds: Number(row.reported_audio_seconds) || 0,
       activationId: row.activation_id,
       activatedAt: row.activated_at,
+      allowedSeconds: row.allowed_seconds,
+      closedAt: row.closed_at,
     };
   }
 

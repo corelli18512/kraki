@@ -604,6 +604,7 @@ final class KrakiVoiceInputController {
 
         let leaseDayChanged = reason.localizedCaseInsensitiveContains("wrong_day")
         let requiresFreshLease = quotaExhausted || leaseDayChanged
+            || Self.isLeaseRejection(reason)
         closeConnection(keepLease: !requiresFreshLease)
         if isBusy {
             let message = Self.userFacingGatewayError(reason)
@@ -620,7 +621,21 @@ final class KrakiVoiceInputController {
             completion?(VoiceInputCompletion(text: raw, rawText: raw, completed: false))
             if !recoveredText.isEmpty { handler?(recoveredText) }
         }
-        if warmConnectionDesired { scheduleReconnect(immediate: requiresFreshLease) }
+        // Only well-understood lease turnovers retry immediately; any other
+        // rejection gets a fresh lease with backoff so a misconfigured broker
+        // can never cause a tight lease-issuance loop.
+        if warmConnectionDesired { scheduleReconnect(immediate: quotaExhausted || leaseDayChanged) }
+    }
+
+    /// The broker or Head refused this particular lease (expired, revoked,
+    /// unknown after a Head reset, or signed by a rotated key). Retrying the
+    /// same lease can never succeed; a newly issued one can.
+    static func isLeaseRejection(_ reason: String) -> Bool {
+        [
+            "lease_expired", "lease_revoked", "not_found", "bad_signature",
+            "malformed_lease", "not_yet_valid", "authorization_expired",
+            "wrong_user", "wrong_device",
+        ].contains { reason.localizedCaseInsensitiveContains($0) }
     }
 
     /// Broker `quota_exhausted` means this signed lease's rolling allowance was
