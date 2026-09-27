@@ -1832,6 +1832,8 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     var deliveryStatusFrameForRegression: CGRect { deliveryStatus.frame }
     /// Target opacity of the text bubble and image (the "not delivered yet" dim).
     /// On-screen opacity of the text bubble and the image.
+    /// Control only timer delivery in functional tests; production delay is unchanged.
+    static var pendingDimSchedulerForTesting: ((TimeInterval, DispatchWorkItem) -> Void)?
     var pendingDimForRegression: (text: CGFloat, image: CGFloat) {
         (CGFloat(renderClipView.layer.presentation()?.opacity ?? Float(renderClipView.alpha)),
          CGFloat(imageHost.layer.presentation()?.opacity ?? Float(imageHost.alpha)))
@@ -2124,6 +2126,12 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
                 }
             }
             pendingDimWork = work
+            #if DEBUG
+            if let schedule = Self.pendingDimSchedulerForTesting {
+                schedule(0.8, work)
+                return
+            }
+            #endif
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
         } else {
             let wasDimmed = dimmedMessageID != nil

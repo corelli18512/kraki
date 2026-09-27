@@ -464,6 +464,15 @@ final class CommandSender {
         var state: String? = nil
     }
 
+    #if DEBUG
+    /// Functional tests wait for the actual FIFO boundary, not a disk-speed guess.
+    func waitForOutboxWritesForTesting() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            Self.outboxWriteQueue.async { continuation.resume() }
+        }
+    }
+    #endif
+
     private func persistOutbox() {
         guard let outboxURL else { return }
         var stored: [StoredPending] = []

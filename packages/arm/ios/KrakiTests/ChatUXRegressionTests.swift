@@ -545,7 +545,7 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(texts.count, 1)
     }
 
-    func testStagedVoiceSurvivesRelaunchAsRetryableOriginal() throws {
+    func testStagedVoiceSurvivesRelaunchAsRetryableOriginal() async throws {
         let fx = try makeFixture(total: 2)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("outbox-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -553,29 +553,30 @@ final class ChatUXRegressionTests: XCTestCase {
         let clientId = try XCTUnwrap(first.stageInput(sessionId: sid, text: "original"))
         first.updateStagedInput(sessionId: sid, clientId: clientId, text: "corrected partial", original: "original")
         _ = first.sendInput(sessionId: sid, text: "other")   // persists the whole outbox
-        drain(300)
+        await first.waitForOutboxWritesForTesting()
         let restored = CommandSender(appState: fx.app, outboxURL: url)
         let voice = try XCTUnwrap(restored.pendingInputs(sid).first { $0.payload["clientId"]?.stringValue == clientId })
         XCTAssertEqual(restored.pendingState(voice), .failed)
         XCTAssertEqual(voice.content, "original")
     }
 
-    func testSentOutboxRestoresUnconfirmedAndOrderedClearDoesNotResurrect() throws {
+    func testSentOutboxRestoresUnconfirmedAndOrderedClearDoesNotResurrect() async throws {
         let fx = try makeFixture(total: 2)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("outbox-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
         let first = CommandSender(appState: fx.app, outboxURL: url)
         XCTAssertTrue(first.sendInput(sessionId: sid, text: "synthetic"))
         let id = try XCTUnwrap(first.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
-        drain(300)
+        await first.waitForOutboxWritesForTesting()
         let restored = CommandSender(appState: fx.app, outboxURL: url)
         XCTAssertEqual(restored.pendingState(try XCTUnwrap(restored.pendingInputs(sid).first)), .unconfirmed)
         for _ in 0..<20 { _ = first.sendInput(sessionId: sid, text: "synthetic") }
         first.clearAllPending(sid)
-        drain(500)
+        await first.waitForOutboxWritesForTesting()
         XCTAssertTrue(CommandSender(appState: fx.app, outboxURL: url).pendingInputs(sid).isEmpty)
         restored.clearPending(sid, clientId: id) // late authoritative echo
         XCTAssertTrue(restored.pendingInputs(sid).isEmpty)
+        await restored.waitForOutboxWritesForTesting()
     }
 
     // MARK: Delivery dim (text + image) and status placement
@@ -594,6 +595,9 @@ final class ChatUXRegressionTests: XCTestCase {
     }
 
     func testSendingMessageDimsTextAndImageTogetherWithoutFlashUntilDelivered() throws {
+        var timers: [(TimeInterval, DispatchWorkItem)] = []
+        TKBubbleCell.pendingDimSchedulerForTesting = { timers.append(($0, $1)) }
+        defer { TKBubbleCell.pendingDimSchedulerForTesting = nil }
         let fx = try makeFixture(total: 6)
         drain(400)
         let sender = try XCTUnwrap(fx.app.commandSender)
@@ -602,6 +606,9 @@ final class ChatUXRegressionTests: XCTestCase {
         fx.vc.syncLiveUpdates(); drain(150)
         let early = try XCTUnwrap(cell(fx, clientId: clientId)?.pendingDimForRegression)
         XCTAssertEqual(early.text, 1, accuracy: 0.05, "a fast confirmation must not flash a dim")
+        XCTAssertFalse(timers.isEmpty)
+        XCTAssertTrue(timers.allSatisfy { $0.0 == 0.8 }, "production delay remains 0.8 seconds")
+        timers.forEach { $0.1.perform() }
         drain(1_200)
         let pendingCell = try XCTUnwrap(cell(fx, clientId: clientId))
         XCTAssertEqual(pendingCell.pendingDimForRegression.text, 0.6, accuracy: 0.05)
@@ -616,6 +623,32 @@ final class ChatUXRegressionTests: XCTestCase {
         sender.clearPending(sid, clientId: clientId)
         fx.vc.syncLiveUpdates(); drain(500)
         let delivered = try XCTUnwrap(cell(fx, clientId: clientId))
+        XCTAssertNil(delivered.deliveryStatusForRegression)
+        XCTAssertEqual(delivered.pendingDimForRegression.text, 1, accuracy: 0.05)
+        XCTAssertEqual(delivered.pendingDimForRegression.image, 1, accuracy: 0.05)
+    }
+
+    func testEchoBeforeDimDeadlineCannotBeDimmedByRetiredTimer() throws {
+        var timers: [DispatchWorkItem] = []
+        TKBubbleCell.pendingDimSchedulerForTesting = { _, work in timers.append(work) }
+        defer { TKBubbleCell.pendingDimSchedulerForTesting = nil }
+        let fx = try makeFixture(total: 6)
+        drain(400)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "fast echo", attachments: [pngAttachment()]))
+        let id = try XCTUnwrap(sender.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
+        fx.vc.syncLiveUpdates(); drain(150)
+        XCTAssertFalse(timers.isEmpty)
+        let echo = try JSONSerialization.data(withJSONObject: [
+            "type": "user_message", "seq": 7, "sessionId": sid, "deviceId": dev,
+            "timestamp": "2026-09-01T00:00:03.000Z", "payload": ["content": "fast echo", "clientId": id],
+        ])
+        fx.app.messageProvider?.ingestTailCandidate(sid, json: echo)
+        sender.clearPending(sid, clientId: id)
+        fx.vc.syncLiveUpdates(); drain(500)
+        timers.forEach { $0.perform() }
+        drain(400)
+        let delivered = try XCTUnwrap(cell(fx, clientId: id))
         XCTAssertNil(delivered.deliveryStatusForRegression)
         XCTAssertEqual(delivered.pendingDimForRegression.text, 1, accuracy: 0.05)
         XCTAssertEqual(delivered.pendingDimForRegression.image, 1, accuracy: 0.05)
