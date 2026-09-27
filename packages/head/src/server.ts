@@ -72,11 +72,9 @@ export interface HeadServerOptions {
   region?: string;
   /** Voice-broker lease signer. If absent, request_voice_lease is rejected with 'not_entitled'. */
   leaseIssuer?: LeaseIssuer;
-  /** Warm-connection authorization lifetime in seconds. Default 600 (10m). */
+  /** Lease (device voice credential) lifetime in seconds. Default 86400 (24h). */
   voiceLeaseTtlSec?: number;
-  /** Cumulative audio budget per warm lease. Default 300 (5m). */
-  voiceLeaseQuotaSec?: number;
-  /** Per-user-per-day cap on reserved/actual seconds. Default 7200 (2h). */
+  /** The only voice limit: max seconds of audio per user per UTC day. Default 7200 (2h). */
   voiceDailyQuotaSec?: number;
   /**
    * Public WSS URL of the voice broker for this region (e.g.
@@ -94,9 +92,9 @@ export interface HeadServerOptions {
   voiceBrokerUrl?: string;
 }
 
-const DEFAULT_VOICE_LEASE_TTL_SEC = 600;
-const DEFAULT_VOICE_LEASE_QUOTA_SEC = 300;
+const DEFAULT_VOICE_LEASE_TTL_SEC = 86_400;
 const DEFAULT_VOICE_DAILY_QUOTA_SEC = 7_200;
+const MIN_VOICE_LEASE_GRANT_SEC = 1;
 const VALID_VOICE_RESOURCES = new Set<VoiceResource>(['voice/doubao']);
 
 const DEFAULT_MAX_PAYLOAD = 10 * 1024 * 1024;
@@ -652,15 +650,16 @@ export class HeadServer {
       return;
     }
 
-    const ttl = this.options.voiceLeaseTtlSec ?? DEFAULT_VOICE_LEASE_TTL_SEC;
-    const quotaPerLease = this.options.voiceLeaseQuotaSec ?? DEFAULT_VOICE_LEASE_QUOTA_SEC;
-    const dailyCap = this.options.voiceDailyQuotaSec ?? DEFAULT_VOICE_DAILY_QUOTA_SEC;
+    // A lease is a long-lived credential for this device; the audio budget
+    // is granted incrementally by usage reports, charged to the UTC day the
+    // audio is used. So issuance only checks that anything is left today.
     const nowSec = Math.floor(Date.now() / 1000);
-
-    const accountedToday = this.storage.sumVoiceLeaseQuotaIssuedToday(userId, nowSec);
-    if (accountedToday + quotaPerLease > dailyCap) {
+    const dailyCap = this.options.voiceDailyQuotaSec ?? DEFAULT_VOICE_DAILY_QUOTA_SEC;
+    this.storage.revokePendingVoiceLeases(userId, deviceId, requestedResource, nowSec);
+    const accountedToday = this.storage.voiceSecondsAccountedToday(userId, nowSec);
+    if (dailyCap - accountedToday < MIN_VOICE_LEASE_GRANT_SEC) {
       logger.info('Voice lease denied: daily quota exhausted', {
-        userId, deviceId, accountedToday, quotaPerLease, dailyCap,
+        userId, deviceId, accountedToday, dailyCap,
       });
       this.sendControlToDevice(deviceId, {
         type: 'voice_lease_denied',
@@ -669,11 +668,15 @@ export class HeadServer {
       });
       return;
     }
+    const ttl = this.options.voiceLeaseTtlSec ?? DEFAULT_VOICE_LEASE_TTL_SEC;
+    // Signed ceiling for one lease: all the UTC days it can span. The real
+    // limit is the daily grant Head hands out on each usage report.
+    const grant = dailyCap * (Math.ceil(ttl / 86_400) + 1);
 
     const lease = issuer.issue({
       userId,
       deviceId,
-      quotaSeconds: quotaPerLease,
+      quotaSeconds: grant,
       ttlSeconds: ttl,
       resource: requestedResource,
       nowUnixSec: nowSec,
@@ -685,7 +688,7 @@ export class HeadServer {
         userId,
         deviceId,
         resource: requestedResource,
-        quotaSeconds: quotaPerLease,
+        quotaSeconds: grant,
         issuedAtUnixSec: lease.payload.iat,
         expiresAtUnixSec: lease.payload.exp,
       });
@@ -703,7 +706,7 @@ export class HeadServer {
 
     logger.info('Voice lease issued', {
       userId, deviceId, jti: lease.payload.jti,
-      quotaSeconds: quotaPerLease, ttlSec: ttl,
+      quotaSeconds: grant, ttlSec: ttl, accountedToday, dailyCap,
     });
     this.sendControlToDevice(deviceId, { type: 'voice_lease_grant', lease });
   }

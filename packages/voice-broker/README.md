@@ -67,7 +67,8 @@ ffmpeg -i in.m4a -ac 1 -ar 16000 -sample_fmt s16 fixtures/your-clip.wav
 ## Production Coinfra adapter
 
 `deploy/coinfra-lease-serve.mjs` is the Kraki-owned entrypoint used with a
-built `@coinfra/voice` distribution. Configure:
+built `@coinfra/voice` distribution (0.3.0 or later: incremental usage grants).
+Configure:
 
 ```text
 KRAKI_VOICE_LEASE_PUBLIC_KEY_PATH=/path/to/voice-lease.pub.pem
@@ -89,9 +90,25 @@ the microphone path. A reconnect installs a new random `activationId` as the
 last-writer-wins owner and restores Head's exact cumulative audio checkpoint.
 A same-process takeover also transfers any audio not yet checkpointed before it
 closes the stale socket. The Broker reports monotonic cumulative `audioSeconds`
-during long recordings and after each final transcript. Head reserves the full signed quota while the
-lease remains valid, then collapses it to rounded-up actual usage after expiry
-plus a one-minute grace period. Lower/out-of-order checkpoints are harmless;
+during long recordings and after each final transcript, and a final report when
+the socket closes.
+
+Head has exactly one limit, `VOICE_DAILY_QUOTA_SEC` (seconds of audio per user
+per UTC day). A lease is a device credential (default 24 h), not an allowance:
+the budget is granted incrementally. Activation grants 60 s; every usage report
+(each 15 s while recording) replies with a renewed cumulative `quotaSeconds`
+one chunk ahead while the day's budget lasts, which the gateway applies
+(`@coinfra/voice` ≥ 0.3.0). Audio is charged to the UTC
+day it is reported on, so a recording across midnight is neither interrupted
+nor charged to one day only; lease expiry never cuts a recording in progress.
+Idle connections reserve at most one chunk, so concurrent devices never exceed
+the cap together. If Head is unreachable a connection can use at most its
+current chunk.
+Run one broker process per region: a reconnect replaces the lease's previous
+owner last-writer-wins and the broker transfers its unreported audio to the new
+owner. Across separate processes a replaced socket could use at most its last
+60 s chunk unaccounted. Deploy this broker before a Head that signs day-scale leases.
+Lower/out-of-order checkpoints are harmless;
 checkpoints from replaced owners are rejected. Authorized sockets use standard
 WebSocket ping/pong with a 25-second ping cadence and 10-second pong timeout;
 there is no application-level keepalive frame. Each Head request has a bounded
@@ -108,38 +125,17 @@ pnpm --filter @kraki/voice-broker test:deploy
 
 ## Coordinated release requirement
 
-Publish the `@coinfra/voice` minor release containing `authorizeConnection`
-first, then rebuild the Broker's `deploy/coinfra/` distribution from that exact
-version. Head settlement, the rebuilt Broker adapter, and the Apple clients are
-one protocol rollout unit. Do not release only one side while the public voice
-endpoint remains available: an old Broker does not activate sessions, and a new
-Broker cannot settle against an old
-Head. For production rollout, first stop accepting new voice connections, then
-upgrade both components and configure the matching settlement secret. Start
-Head, start the Broker, verify one activation/settlement probe, and only then
-restore the public voice route. Database backup and schema-v11 verification are
-required before reopening traffic.
+Incremental daily grants (this version) roll out in this order:
 
-## Going live
-
-1. Create a Doubao app at <https://console.volcengine.com/speech> →
-   流式语音识别大模型. Note the App Key, Access Key, and Resource ID.
-2. Copy `.env.example` → `.env`. Fill in `DOUBAO_APP_KEY`, `DOUBAO_ACCESS_KEY`,
-   `DOUBAO_RESOURCE_ID`. **Leave `DOUBAO_MOCK` unset (or `0`).**
-3. Run the probe against a real zh-en clip:
-   ```bash
-   pnpm --filter @kraki/voice-broker probe -- --file fixtures/zh-en-sample.wav
-   ```
-   This is also the moment to validate the "Doubao is best for mixed
-   Chinese+English speech" claim from the handover. If accuracy disappoints,
-   the fallback plan is Tencent Cloud realtime ASR (signed-URL auth, which
-   deletes the broker entirely — see handover §7).
-4. Run the broker live:
-   ```bash
-   pnpm --filter @kraki/voice-broker serve
-   ```
-
-The web test page (and eventually `arm`) connects unchanged.
+1. **Broker first.** Rebuild `deploy/coinfra/` from `@coinfra/voice@0.3.0`,
+   deploy this `deploy/kraki-lease-authorizer.mjs`, restart only the broker.
+   It works against the current Head: old Heads reply without `quotaSeconds`,
+   so the signed per-lease quota keeps applying.
+2. **Head.** Charges actual audio per UTC day and renews grants on each usage
+   report. Must not run with an old broker: its day-scale leases carry a large
+   signed ceiling that only a grant-aware broker narrows to the daily budget.
+3. **Apple clients** (Keychain lease, buffered start, idle renewal) ship with
+   the next app build; old clients keep working against the new Head.
 
 ---
 

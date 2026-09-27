@@ -95,12 +95,10 @@ if (args.includes('--help') || args.includes('-h')) {
     VOICE_LEASE_ENABLED            Set to "1" to enable lease issuance (default: off).
     VOICE_LEASE_DIR                Directory for the lease signing keypair
                                    (default: $HOME/.kraki-head).
-    VOICE_LEASE_TTL_SEC            Warm-connection authorization lifetime
-                                   (default: 600 = 10 min).
-    VOICE_LEASE_QUOTA_SEC          Cumulative audio budget per warm lease
-                                   (default: 300 = 5 min).
-    VOICE_DAILY_QUOTA_SEC          Per-user-per-day cap on reserved/actual seconds
-                                   (default: 7200 = 2h).
+    VOICE_DAILY_QUOTA_SEC          Max seconds of voice input per user per UTC day
+                                   (default: 7200 = 2h). The only voice limit.
+    VOICE_LEASE_TTL_SEC            Lifetime of a device's voice credential
+                                   (default: 86400 = 24h). Not a usage limit.
     VOICE_SETTLEMENT_KEY           Shared secret for broker usage settlement.
                                    Required when voice leases are enabled.
     VOICE_BROKER_URL               Public WSS URL of this region's voice broker
@@ -455,9 +453,8 @@ if (IS_CONNECTED_MODE) {
 
 // --- Voice lease issuance (optional) ---
 const VOICE_LEASE_DIR = process.env.VOICE_LEASE_DIR || defaultVoiceLeaseDir();
-const VOICE_LEASE_TTL_SEC = Math.max(60, parseInt(process.env.VOICE_LEASE_TTL_SEC || '600', 10) || 600);
-const VOICE_LEASE_QUOTA_SEC = Math.max(1, parseInt(process.env.VOICE_LEASE_QUOTA_SEC || '300', 10) || 300);
-const VOICE_DAILY_QUOTA_SEC = Math.max(VOICE_LEASE_QUOTA_SEC, parseInt(process.env.VOICE_DAILY_QUOTA_SEC || '7200', 10) || 7200);
+const VOICE_LEASE_TTL_SEC = Math.max(600, parseInt(process.env.VOICE_LEASE_TTL_SEC || '86400', 10) || 86400);
+const VOICE_DAILY_QUOTA_SEC = Math.max(1, parseInt(process.env.VOICE_DAILY_QUOTA_SEC || '7200', 10) || 7200);
 const VOICE_SETTLEMENT_KEY = process.env.VOICE_SETTLEMENT_KEY?.trim() || '';
 
 let voiceConfig;
@@ -484,7 +481,6 @@ if (VOICE_LEASE_ENABLED) {
   logger.info('Voice lease issuance enabled', {
     keyDir: VOICE_LEASE_DIR,
     ttlSec: VOICE_LEASE_TTL_SEC,
-    quotaSec: VOICE_LEASE_QUOTA_SEC,
     dailyQuotaSec: VOICE_DAILY_QUOTA_SEC,
     brokerUrl: VOICE_BROKER_URL,
   });
@@ -499,7 +495,6 @@ const head = new HeadServer(storage!, {
   region: REGION || undefined,
   leaseIssuer: VOICE_LEASE_ENABLED ? voiceLeaseIssuer : undefined,
   voiceLeaseTtlSec: VOICE_LEASE_TTL_SEC,
-  voiceLeaseQuotaSec: VOICE_LEASE_QUOTA_SEC,
   voiceDailyQuotaSec: VOICE_DAILY_QUOTA_SEC,
   voiceBrokerUrl: VOICE_BROKER_URL,
 });
@@ -558,7 +553,7 @@ const httpServer = createServer(async (req, res) => {
       const result = handleVoiceSettlement(storage!, VOICE_SETTLEMENT_KEY, {
         authorization: req.headers.authorization,
         body: Buffer.concat(chunks).toString('utf8'),
-      });
+      }, { dailyCapSec: VOICE_DAILY_QUOTA_SEC });
       if (result.status === 200) {
         logger.info('Voice lease accounting updated', {
           action: result.body.activationStatus ? 'activate' : 'settle',

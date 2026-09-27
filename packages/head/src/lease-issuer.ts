@@ -4,7 +4,7 @@
  * Owns the RSA-4096 signing keypair (persisted on disk so leases issued
  * before a restart remain verifiable after one). Pure functions for
  * issuance; the actual quota check lives in the WS handler that consults
- * Storage.sumVoiceLeaseQuotaIssuedToday.
+ * Storage.voiceSecondsAccountedToday.
  *
  * Wire format = @kraki/protocol's VoiceLease; signing primitive =
  * @kraki/crypto's signChallenge(canonicalJson(payload), privateKey).

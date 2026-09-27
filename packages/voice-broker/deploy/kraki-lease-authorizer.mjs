@@ -69,24 +69,33 @@ export function createKrakiConnectionAuthorizer(publicKeyPem, options = {}) {
     }
 
     const activationId = randomUUID();
-    const success = (reportedAudioSeconds = 0) => ({
+    // Head grants the allowance against the user's daily cap (initially one
+    // chunk, renewed by each usage report); never beyond the signed ceiling.
+    const signedQuota = lease.payload.quota_seconds;
+    const success = (reportedAudioSeconds = 0, allowedSeconds) => ({
       ok: true,
-      quotaSeconds: lease.payload.quota_seconds,
+      quotaSeconds: clampAllowance(allowedSeconds, signedQuota) ?? signedQuota,
       usedSeconds: reportedAudioSeconds,
       expiresAtUnixSec: lease.payload.exp,
       connectionKey: lease.payload.jti,
-      usageContext: { jti: lease.payload.jti, activationId },
+      usageContext: { jti: lease.payload.jti, activationId, signedQuota },
     });
     if (!activate) return success();
     return Promise.resolve(activate({ jti: lease.payload.jti, activationId }))
       .then((activated) => activated.ok
-        ? success(activated.reportedAudioSeconds ?? 0)
+        ? success(activated.reportedAudioSeconds ?? 0, activated.quotaSeconds)
         : {
             ok: false,
             reason: activated.reason ?? 'activation_failed',
             detail: activated.detail,
           });
   };
+}
+
+function clampAllowance(value, ceiling) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.min(ceiling, value)
+    : undefined;
 }
 
 export function createKrakiSettlementClient(settleUrl, settlementKey, options = {}) {
@@ -130,11 +139,13 @@ export function createKrakiSettlementClient(settleUrl, settlementKey, options = 
   };
   return {
     async activate({ jti, activationId }) {
-      const result = await post({ action: 'activate', jti, activationId });
+      const result = await post({ action: 'activate', jti, activationId, grants: true });
       if (!result.ok) return result;
       return {
         ok: true,
         reportedAudioSeconds: Number(result.reportedAudioSeconds) || 0,
+        // Absent from older Heads: the signed lease quota then applies.
+        quotaSeconds: typeof result.quotaSeconds === 'number' ? result.quotaSeconds : undefined,
       };
     },
     async onUsage(input) {
@@ -148,8 +159,16 @@ export function createKrakiSettlementClient(settleUrl, settlementKey, options = 
         activationId,
         audioSeconds: input.audioSeconds,
         reason: input.reason,
+        grants: true,
       });
       if (!result.ok) throw new Error(result.detail ?? result.reason ?? 'voice settlement failed');
+      // Older Heads reply without an allowance: the current one stays.
+      const signedQuota = input.authorization.usageContext.signedQuota;
+      const quotaSeconds = clampAllowance(
+        result.quotaSeconds,
+        Number.isFinite(signedQuota) ? signedQuota : Number.POSITIVE_INFINITY,
+      );
+      return quotaSeconds === undefined ? undefined : { quotaSeconds };
     },
   };
 }

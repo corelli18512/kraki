@@ -34,6 +34,68 @@ struct LiveVoiceInputSessionFactory: VoiceInputSessionFactory {
     }
 }
 
+/// Everything needed to open a broker connection without Head: lets a cold
+/// start (or foreground) warm the voice socket in parallel with Head auth.
+struct VoiceConnectionIdentity: Codable, Equatable {
+    let brokerUrl: String
+    let resource: String
+    let userID: String
+    let deviceID: String
+}
+
+struct StoredVoiceLease: Codable, Equatable {
+    let lease: VoiceLease
+    let identity: VoiceConnectionIdentity
+}
+
+protocol VoiceLeaseStore: AnyObject {
+    func load() -> StoredVoiceLease?
+    func save(_ lease: StoredVoiceLease)
+    func clear()
+}
+
+final class InMemoryVoiceLeaseStore: VoiceLeaseStore {
+    private var stored: StoredVoiceLease?
+    func load() -> StoredVoiceLease? { stored }
+    func save(_ lease: StoredVoiceLease) { stored = lease }
+    func clear() { stored = nil }
+}
+
+/// The lease is a device-bound bearer credential (about a day long); keep it
+/// in the Keychain, never synced or backed up.
+final class KeychainVoiceLeaseStore: VoiceLeaseStore {
+    private let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: "chat.kraki.voice-lease",
+        kSecAttrAccount as String: "current",
+    ]
+
+    func load() -> StoredVoiceLease? {
+        var request = query
+        request[kSecReturnData as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(request as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else { return nil }
+        return try? JSONDecoder().decode(StoredVoiceLease.self, from: data)
+    }
+
+    func save(_ lease: StoredVoiceLease) {
+        guard let data = try? JSONEncoder().encode(lease) else { return }
+        let update: [String: Any] = [kSecValueData as String: data]
+        if SecItemUpdate(query as CFDictionary, update as CFDictionary) == errSecItemNotFound {
+            var add = query
+            add[kSecValueData as String] = data
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            SecItemAdd(add as CFDictionary, nil)
+        }
+    }
+
+    func clear() {
+        SecItemDelete(query as CFDictionary)
+    }
+}
+
 enum VoiceMicrophonePermission: Equatable {
     case granted
     case undetermined
@@ -216,70 +278,161 @@ final class KrakiVoiceInputController {
     private var warmConnectionDesired = false
     private var leaseRolloverAttempt = 0
     private var rolloverRawPrefix = ""
+    private let leaseStore: VoiceLeaseStore
+    private var leaseIdentity: VoiceConnectionIdentity?
+    /// A renewal received while the current connection was in use; adopted
+    /// as soon as no recording or transcript needs that connection.
+    private var nextLease: (lease: VoiceLease, identity: VoiceConnectionIdentity)?
+    private var renewalRequested = false
 
     private static let maxLeaseRolloverAttempts = 1
 
     init(
         host: KrakiVoiceInputHost? = nil,
         sessionFactory: VoiceInputSessionFactory = LiveVoiceInputSessionFactory(),
-        audioPolicy: VoiceInputAudioPolicy? = nil
+        audioPolicy: VoiceInputAudioPolicy? = nil,
+        leaseStore: VoiceLeaseStore? = nil
     ) {
         self.host = host
         self.sessionFactory = sessionFactory
         self.audioPolicy = audioPolicy ?? LiveVoiceInputAudioPolicy()
+        self.leaseStore = leaseStore ?? InMemoryVoiceLeaseStore()
     }
 
     func bind(host: KrakiVoiceInputHost) {
         self.host = host
     }
 
-    /// Lease validity has two independent boundaries: its signed expiry and
-    /// the UTC calendar day on which it was issued. Head's daily accounting
-    /// intentionally rejects activation after that day, even when `exp` has
-    /// not elapsed yet.
+    /// A lease is a device credential, not a usage allowance: Head grants the
+    /// audio budget incrementally on the broker connection, charged to the
+    /// UTC day the audio is used. Only its signed validity window matters.
     static func isLeaseUsable(_ lease: VoiceLease, nowUnixSec: Int) -> Bool {
-        guard lease.payload.exp > nowUnixSec + 5,
-              lease.payload.iat <= nowUnixSec + 30 else { return false }
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        let issuedDay = calendar.dateComponents(
-            [.era, .year, .month, .day],
-            from: Date(timeIntervalSince1970: TimeInterval(lease.payload.iat))
+        lease.payload.exp > nowUnixSec + 5 && lease.payload.iat <= nowUnixSec + 30
+    }
+
+    private var hostIdentity: VoiceConnectionIdentity? {
+        guard let host, let capability = host.voiceCapability,
+              let userID = host.voiceUserID, let deviceID = host.voiceDeviceID else { return nil }
+        return VoiceConnectionIdentity(
+            brokerUrl: capability.brokerUrl,
+            resource: capability.resource,
+            userID: userID,
+            deviceID: deviceID
         )
-        let currentDay = calendar.dateComponents(
-            [.era, .year, .month, .day],
-            from: Date(timeIntervalSince1970: TimeInterval(nowUnixSec))
-        )
-        return issuedDay == currentDay
     }
 
     /// Ensure a signed and activated broker connection exists without touching
-    /// microphone permission or the audio session.
+    /// microphone permission or the audio session. A lease kept from an
+    /// earlier launch is used immediately, without waiting for Head.
     func prepare() {
         warmConnectionDesired = true
-        guard session == nil, !leaseRequestInFlight,
-              let host,
-              let capability = host.voiceCapability,
-              host.voiceTransportReady,
-              host.voiceUserID != nil,
-              host.voiceDeviceID != nil,
-              audioPolicy.permission != .denied else { return }
+        guard audioPolicy.permission != .denied else { return }
+        if lease == nil { restoreStoredLease() }
+
+        // Head is authoritative once connected: another account, device or
+        // broker (or voice switched off) invalidates everything held.
+        if let host, host.voiceTransportReady, lease != nil || session != nil,
+           hostIdentity == nil || hostIdentity != leaseIdentity {
+            nextLease = nil
+            abandonRecordingForIdentityChange()
+            closeConnection(keepLease: false)
+        }
+
+        if session != nil {
+            adoptNextLeaseIfIdle()
+            return
+        }
+        if let next = nextLease {
+            nextLease = nil
+            adopt(next.lease, identity: next.identity)
+        }
+        guard !leaseRequestInFlight else { return }
 
         let now = Int(Date().timeIntervalSince1970)
-        if let lease, Self.isLeaseUsable(lease, nowUnixSec: now) {
-            openConnection(lease, capability: capability)
+        if let lease, let identity = leaseIdentity, Self.isLeaseUsable(lease, nowUnixSec: now) {
+            openConnection(lease, identity: identity)
             return
         }
-
-        lease = nil
-        leaseRequestInFlight = true
+        if lease != nil { closeConnection(keepLease: false) }
         KLog.d("🎙️ [voice] stage=warm-lease-request")
-        guard host.requestVoiceLease(resource: capability.resource) else {
+        requestLease(renewal: false)
+    }
+
+    /// A recording started on a kept lease cannot continue once Head reports
+    /// another account, device or broker (or voice switched off): end it,
+    /// keeping whatever was already transcribed.
+    private func abandonRecordingForIdentityChange() {
+        guard isBusy else { return }
+        KLog.d("🎙️ [voice] stage=identity-changed busy=1")
+        let recoveredText = rawText
+        let handler = finalHandler
+        let completion = completionHandler
+        let owner = activeSessionID
+        recordingCleanup(clearHandlers: true)
+        failedSessionID = owner
+        state = .failed(
+            VoiceInputError.gateway("Voice input was reset for this account. Please try again.")
+                .localizedDescription
+        )
+        completion?(VoiceInputCompletion(text: recoveredText, rawText: recoveredText, completed: false))
+        if !recoveredText.isEmpty { handler?(recoveredText) }
+    }
+
+    /// Returns false when Head is not reachable yet (Head auth calls prepare).
+    @discardableResult
+    private func requestLease(renewal: Bool) -> Bool {
+        guard !leaseRequestInFlight, let host, let identity = hostIdentity,
+              host.voiceTransportReady else { return false }
+        leaseRequestInFlight = true
+        renewalRequested = renewal
+        guard host.requestVoiceLease(resource: identity.resource) else {
             leaseRequestInFlight = false
-            scheduleReconnect()
-            return
+            renewalRequested = false
+            if !renewal { scheduleReconnect() }
+            return false
         }
         scheduleLeaseTimeout()
+        return true
+    }
+
+    private func restoreStoredLease() {
+        guard let stored = leaseStore.load() else { return }
+        guard Self.isLeaseUsable(stored.lease, nowUnixSec: Int(Date().timeIntervalSince1970)) else {
+            leaseStore.clear()
+            return
+        }
+        lease = stored.lease
+        leaseIdentity = stored.identity
+        KLog.d("🎙️ [voice] stage=lease-restored")
+    }
+
+    private func adopt(_ newLease: VoiceLease, identity: VoiceConnectionIdentity) {
+        lease = newLease
+        leaseIdentity = identity
+        leaseStore.save(StoredVoiceLease(lease: newLease, identity: identity))
+    }
+
+    /// Switch to a renewed lease while nothing is using the connection. A
+    /// press during the short re-authorization still records immediately
+    /// (audio is buffered until the new connection is authorized).
+    private func adoptNextLeaseIfIdle() {
+        guard let next = nextLease else { return }
+        switch state {
+        case .recording, .finishing, .requestingPermission, .obtainingLease:
+            return
+        case .idle, .failed:
+            break
+        }
+        nextLease = nil
+        KLog.d("🎙️ [voice] stage=lease-renewed jti=\(next.lease.payload.jti.prefix(8))")
+        closeConnection(keepLease: true)
+        adopt(next.lease, identity: next.identity)
+        openConnection(next.lease, identity: next.identity)
+    }
+
+    /// A recording and its transcript are done with the connection.
+    private func didFinishUsingConnection() {
+        adoptNextLeaseIfIdle()
     }
 
     func suspendWarmConnection() {
@@ -291,9 +444,21 @@ final class KrakiVoiceInputController {
         leaseTimeoutTask?.cancel()
         leaseTimeoutTask = nil
         leaseRequestInFlight = false
+        renewalRequested = false
         closeConnection(keepLease: true)
+        if let next = nextLease {
+            nextLease = nil
+            adopt(next.lease, identity: next.identity)
+        }
         recordingCleanup(clearHandlers: true)
         state = .idle
+    }
+
+    /// Sign-out: nothing of this identity may survive, including the stored lease.
+    func forgetLease() {
+        suspendWarmConnection()
+        nextLease = nil
+        closeConnection(keepLease: false)
     }
 
     func resumeWarmConnection() {
@@ -333,11 +498,13 @@ final class KrakiVoiceInputController {
         correctionHandler = onCorrection
         completionHandler = onCompletion
 
-        guard let host, host.voiceCapability != nil else {
+        // An open broker connection needs nothing from Head; only a missing
+        // one has to wait for Head to issue a lease.
+        guard let host, host.voiceCapability != nil || session != nil else {
             failRecording(VoiceInputError.unavailable, closeTransport: false)
             return
         }
-        guard host.voiceTransportReady else {
+        guard host.voiceTransportReady || session != nil else {
             failRecording(VoiceInputError.offline, closeTransport: false)
             return
         }
@@ -396,7 +563,9 @@ final class KrakiVoiceInputController {
             return
         }
 
-        if isConnectionWarm, session != nil {
+        if session != nil {
+            // Warm, or still authorizing: capture starts immediately and the
+            // audio is buffered until the connection is authorized.
             startPendingRecording()
         } else {
             state = .obtainingLease
@@ -462,18 +631,23 @@ final class KrakiVoiceInputController {
 
     func receiveLease(_ lease: VoiceLease) {
         guard leaseRequestInFlight,
-              let host,
-              let capability = host.voiceCapability,
-              let deviceID = host.voiceDeviceID,
-              lease.payload.did == deviceID,
-              lease.payload.resource == capability.resource,
+              let identity = hostIdentity,
+              lease.payload.did == identity.deviceID,
+              lease.payload.resource == identity.resource,
               Self.isLeaseUsable(lease, nowUnixSec: Int(Date().timeIntervalSince1970)) else { return }
         leaseRequestInFlight = false
         leaseTimeoutTask?.cancel()
         leaseTimeoutTask = nil
-        self.lease = lease
-        KLog.d("🎙️ [voice] stage=lease-granted quota=\(lease.payload.quotaSeconds)s")
-        openConnection(lease, capability: capability)
+        let renewal = renewalRequested && session != nil
+        renewalRequested = false
+        KLog.d("🎙️ [voice] stage=lease-granted renewal=\(renewal ? 1 : 0)")
+        if renewal {
+            nextLease = (lease, identity)
+            adoptNextLeaseIfIdle()
+            return
+        }
+        adopt(lease, identity: identity)
+        openConnection(lease, identity: identity)
     }
 
     func receiveLeaseDenied(reason: VoiceLeaseDeniedReason, detail: String?) {
@@ -481,38 +655,41 @@ final class KrakiVoiceInputController {
         leaseRequestInFlight = false
         leaseTimeoutTask?.cancel()
         leaseTimeoutTask = nil
+        let renewal = renewalRequested
+        renewalRequested = false
         if state == .obtainingLease {
             failRecording(VoiceInputError.leaseDenied(reason, detail), closeTransport: false)
+        } else if renewal {
+            // The current lease is still valid; try again later.
+            scheduleRefresh(retry: true)
         } else if reason != .quotaExhausted {
             scheduleReconnect()
         }
     }
 
-    private func openConnection(_ lease: VoiceLease, capability: VoiceCapability) {
-        guard session == nil,
-              let host,
-              let userID = host.voiceUserID,
-              let deviceID = host.voiceDeviceID,
-              let gatewayURL = try? capability.validatedBrokerURL() else { return }
-
-        reconnectTask?.cancel()
-        reconnectTask = nil
-        isConnectionWarm = false
-        connectionGeneration = UUID()
-        let current = connectionGeneration
-        let configuration = VoiceInputConfiguration(
+    private func connectionConfiguration(_ lease: VoiceLease, identity: VoiceConnectionIdentity) -> VoiceInputConfiguration? {
+        guard let gatewayURL = URL(string: identity.brokerUrl) else { return nil }
+        return VoiceInputConfiguration(
             gatewayURL: gatewayURL,
-            userID: userID,
+            userID: identity.userID,
             correctionEnabled: true,
             authorizationFields: [
-                "deviceId": .string(deviceID),
+                "deviceId": .string(identity.deviceID),
                 "authorization": lease.voiceInputJSONValue,
             ],
             startFields: [
-                "deviceId": .string(deviceID),
+                "deviceId": .string(identity.deviceID),
                 "sampleRate": .number(16_000),
             ]
         )
+    }
+
+    private func openConnection(_ lease: VoiceLease, identity: VoiceConnectionIdentity) {
+        guard session == nil,
+              let configuration = connectionConfiguration(lease, identity: identity) else { return }
+        isConnectionWarm = false
+        connectionGeneration = UUID()
+        let current = connectionGeneration
         session = sessionFactory.makeSession(
             configuration: configuration,
             onEvent: { [weak self] event in
@@ -537,10 +714,10 @@ final class KrakiVoiceInputController {
     }
 
     private func startPendingRecording() {
-        guard let session, let context, isConnectionWarm else { return }
+        guard let session, let context else { return }
         state = .recording
         metricStart = .now
-        KLog.d("🎙️ [voice] stage=recording warm=1")
+        KLog.d("🎙️ [voice] stage=recording warm=\(isConnectionWarm ? 1 : 0)")
         session.startCapture(context: context.fields, vocabulary: context.vocabulary)
     }
 
@@ -592,6 +769,7 @@ final class KrakiVoiceInputController {
             state = .idle
             completion?(VoiceInputCompletion(text: validFinal ? finalText : completeRaw, rawText: completeRaw, completed: completed))
             if !finalText.isEmpty { handler?(finalText) }
+            didFinishUsingConnection()
         case .failed(let reason):
             handleConnectionFailure(reason)
         }
@@ -600,10 +778,15 @@ final class KrakiVoiceInputController {
     private func handleConnectionFailure(_ reason: String) {
         KLog.d("🎙️ [voice] stage=connection-failed reason=\(reason)")
         let quotaExhausted = reason.localizedCaseInsensitiveContains("quota_exhausted")
-        if quotaExhausted, recoverFromExhaustedLease() { return }
-
         let leaseDayChanged = reason.localizedCaseInsensitiveContains("wrong_day")
-        let requiresFreshLease = quotaExhausted || leaseDayChanged
+        let leaseRejected = Self.isLeaseRejection(reason) || leaseDayChanged
+        // Rolling over keeps an authorized recording going. Before
+        // authorization, buffered speech is gone with the socket: fail
+        // visibly (below) rather than continue with its beginning missing.
+        let bufferedSpeechLost = !isConnectionWarm && (state == .recording || state == .finishing)
+        if quotaExhausted, !bufferedSpeechLost, recoverFromExhaustedLease() { return }
+
+        let requiresFreshLease = quotaExhausted || leaseRejected
         closeConnection(keepLease: !requiresFreshLease)
         if isBusy {
             let message = Self.userFacingGatewayError(reason)
@@ -620,7 +803,26 @@ final class KrakiVoiceInputController {
             completion?(VoiceInputCompletion(text: raw, rawText: raw, completed: false))
             if !recoveredText.isEmpty { handler?(recoveredText) }
         }
-        if warmConnectionDesired { scheduleReconnect(immediate: requiresFreshLease) }
+        guard warmConnectionDesired else { return }
+        if nextLease != nil {
+            prepare()
+            return
+        }
+        // Only well-understood lease turnovers retry immediately; any other
+        // rejection gets a fresh lease with backoff so a misconfigured broker
+        // can never cause a tight lease-issuance loop.
+        scheduleReconnect(immediate: quotaExhausted || leaseDayChanged)
+    }
+
+    /// The broker or Head refused this particular lease (expired, revoked,
+    /// unknown after a Head reset, or signed by a rotated key). Retrying the
+    /// same lease can never succeed; a newly issued one can.
+    static func isLeaseRejection(_ reason: String) -> Bool {
+        [
+            "lease_expired", "lease_revoked", "not_found", "bad_signature",
+            "malformed_lease", "not_yet_valid", "authorization_expired",
+            "wrong_user", "wrong_device",
+        ].contains { reason.localizedCaseInsensitiveContains($0) }
     }
 
     /// Broker `quota_exhausted` means this signed lease's rolling allowance was
@@ -637,7 +839,16 @@ final class KrakiVoiceInputController {
             state = .obtainingLease
             metricStart = .now
             KLog.d("🎙️ [voice] stage=lease-rollover attempt=\(leaseRolloverAttempt)")
-            if warmConnectionDesired { scheduleReconnect(immediate: true) }
+            if let next = nextLease {
+                nextLease = nil
+                adopt(next.lease, identity: next.identity)
+                openConnection(next.lease, identity: next.identity)
+            } else if renewalRequested {
+                // Its lease is on the way; receiveLease opens it as current.
+                renewalRequested = false
+            } else if warmConnectionDesired {
+                scheduleReconnect(immediate: true)
+            }
             return true
 
         case .finishing:
@@ -684,6 +895,10 @@ final class KrakiVoiceInputController {
             try? await Task.sleep(for: .seconds(10))
             guard !Task.isCancelled, let self, self.leaseRequestInFlight else { return }
             self.leaseRequestInFlight = false
+            if self.renewalRequested {
+                self.renewalRequested = false
+                self.scheduleRefresh(retry: true)
+            }
             if self.state == .obtainingLease {
                 self.failRecording(VoiceInputError.leaseTimedOut, closeTransport: false)
             } else {
@@ -708,29 +923,37 @@ final class KrakiVoiceInputController {
         }
     }
 
-    private func scheduleRefresh() {
+    /// Renew well before expiry, at an idle moment, so a renewal never
+    /// interrupts speech. Nothing happens at UTC midnight: usage is charged
+    /// by Head to the day it happens, independent of the lease.
+    private func scheduleRefresh(retry: Bool = false) {
         refreshTask?.cancel()
         guard let lease else { return }
         let now = Int(Date().timeIntervalSince1970)
-        let expiryDelay = max(1, lease.payload.exp - now - 60)
-        var utc = Calendar(identifier: .gregorian)
-        utc.timeZone = TimeZone(secondsFromGMT: 0)!
-        let nowDate = Date(timeIntervalSince1970: TimeInterval(now))
-        let startOfToday = utc.startOfDay(for: nowDate)
-        let nextDay = utc.date(byAdding: .day, value: 1, to: startOfToday)
-            ?? nowDate.addingTimeInterval(86_400)
-        let dayBoundaryDelay = max(1, Int(ceil(nextDay.timeIntervalSince(nowDate))) + 1)
-        let delay = min(expiryDelay, dayBoundaryDelay)
+        let lifetime = max(60, lease.payload.exp - lease.payload.iat)
+        let lead = min(3600, lifetime / 4)
+        var delay = max(1, lease.payload.exp - now - lead)
+        if retry { delay = min(delay, 300) }
         refreshTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled, let self, self.warmConnectionDesired else { return }
-            if self.state == .idle || self.state.failedMessage != nil {
-                self.closeConnection(keepLease: false)
-                self.prepare()
-            } else {
-                self.scheduleRefreshAfterRecording()
-            }
+            self.refreshLease()
         }
+    }
+
+    private func refreshLease() {
+        guard state == .idle || state.failedMessage != nil else {
+            scheduleRefreshAfterRecording()
+            return
+        }
+        if session == nil {
+            closeConnection(keepLease: false)
+            prepare()
+            return
+        }
+        guard nextLease == nil, !leaseRequestInFlight else { return }
+        KLog.d("🎙️ [voice] stage=lease-renewal")
+        if !requestLease(renewal: true) { scheduleRefresh(retry: true) }
     }
 
     private func scheduleRefreshAfterRecording() {
@@ -738,12 +961,7 @@ final class KrakiVoiceInputController {
         refreshTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled, let self, self.warmConnectionDesired else { return }
-            if self.state == .idle || self.state.failedMessage != nil {
-                self.closeConnection(keepLease: false)
-                self.prepare()
-            } else {
-                self.scheduleRefreshAfterRecording()
-            }
+            self.refreshLease()
         }
     }
 
@@ -754,7 +972,11 @@ final class KrakiVoiceInputController {
         session?.close()
         session = nil
         isConnectionWarm = false
-        if !keepLease { lease = nil }
+        if !keepLease {
+            lease = nil
+            leaseIdentity = nil
+            leaseStore.clear()
+        }
     }
 
     private func resolvedFinalText(_ text: String, gatewayRawText: String?) -> String {

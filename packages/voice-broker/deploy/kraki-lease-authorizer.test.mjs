@@ -113,14 +113,65 @@ test('activation precedes acceptance and restores cumulative usage for reconnect
   });
   assert.equal(verdict.ok, true);
   assert.equal(verdict.usedSeconds, 4.75);
+  // Older Heads return no allowance: the signed lease quota applies.
+  assert.equal(verdict.quotaSeconds, 300);
   assert.equal(requests[0].body.action, 'activate');
   assert.equal(requests[0].body.jti, 'lease-1');
   assert.equal(requests[0].body.activationId, verdict.usageContext.activationId);
 
-  await client.onUsage({ authorization: verdict, audioSeconds: 9.25, reason: 'session_final' });
+  assert.equal(requests[0].body.grants, true);
+  // Older Head: no allowance in the reply, the current one stays.
+  assert.equal(await client.onUsage({ authorization: verdict, audioSeconds: 9.25, reason: 'session_final' }), undefined);
+  assert.equal(requests[1].body.grants, true);
   assert.equal(requests[1].body.action, 'settle');
   assert.equal(requests[1].body.activationId, verdict.usageContext.activationId);
   assert.equal(requests[1].body.audioSeconds, 9.25);
+});
+
+test('activation enforces the daily allowance Head returns, never above the signed quota', async () => {
+  const authorizeWith = async (activateBody, status = 200) => {
+    const client = createKrakiSettlementClient('https://head/internal/voice/settle', 'secret', {
+      wait: async () => {},
+      fetch: async () => response(status, activateBody),
+    });
+    return createKrakiConnectionAuthorizer(keys.publicKey, {
+      now: () => NOW,
+      activate: client.activate,
+    })({
+      authorize: { type: 'authorize', uid: 'user-1', deviceId: 'device-1', authorization: signedLease() },
+    });
+  };
+
+  const reduced = await authorizeWith({ reportedAudioSeconds: 10, quotaSeconds: 42.5 });
+  assert.equal(reduced.ok, true);
+  assert.equal(reduced.quotaSeconds, 42.5);
+  assert.equal(reduced.usedSeconds, 10);
+
+  const inflated = await authorizeWith({ reportedAudioSeconds: 0, quotaSeconds: 9999 });
+  assert.equal(inflated.quotaSeconds, 300);
+
+  const exhausted = await authorizeWith({ error: 'quota_exhausted' }, 409);
+  assert.equal(exhausted.ok, false);
+  assert.equal(exhausted.reason, 'quota_exhausted');
+});
+
+test('usage replies renew the allowance, clamped to the signed ceiling', async () => {
+  let reply = { reportedAudioSeconds: 0, quotaSeconds: 60 };
+  const client = createKrakiSettlementClient('https://head/internal/voice/settle', 'secret', {
+    wait: async () => {},
+    fetch: async () => response(200, reply),
+  });
+  const verdict = await createKrakiConnectionAuthorizer(keys.publicKey, {
+    now: () => NOW,
+    activate: client.activate,
+  })({
+    authorize: { type: 'authorize', uid: 'user-1', deviceId: 'device-1', authorization: signedLease() },
+  });
+  assert.equal(verdict.quotaSeconds, 60);
+  reply = { ok: true, quotaSeconds: 75 };
+  assert.deepEqual(await client.onUsage({ authorization: verdict, audioSeconds: 15, reason: 'checkpoint' }), { quotaSeconds: 75 });
+  reply = { ok: true, quotaSeconds: 5000 };
+  assert.deepEqual(await client.onUsage({ authorization: verdict, audioSeconds: 30, reason: 'checkpoint' }), { quotaSeconds: 300 });
 });
 
 test('usage reporter sends cumulative checkpoints with retries and skips legacy sessions', async () => {
@@ -145,7 +196,7 @@ test('usage reporter sends cumulative checkpoints with retries and skips legacy 
   assert.ok(requests[0].init.signal instanceof AbortSignal);
   assert.deepEqual(JSON.parse(requests[0].init.body), {
     action: 'settle', jti: 'lease-1', activationId: 'activation-1',
-    audioSeconds: 5.25, reason: 'checkpoint',
+    audioSeconds: 5.25, reason: 'checkpoint', grants: true,
   });
 
   await reporter({ authorization: { ok: true }, audioSeconds: 10, reason: 'legacy' });

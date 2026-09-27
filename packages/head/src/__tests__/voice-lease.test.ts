@@ -9,7 +9,7 @@ import Database from 'better-sqlite3';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { verifyChallenge, canonicalJson } from '@kraki/crypto';
-import { Storage } from '../storage.js';
+import { Storage, VOICE_EXPIRY_OVERRUN_SEC } from '../storage.js';
 import { LeaseIssuer, _LEASE_KEY_FILENAMES } from '../lease-issuer.js';
 import { handleVoiceSettlement } from '../voice-settlement.js';
 import { createTestEnv, connectDevice, type TestEnv, type MockDevice } from './integration-helpers.js';
@@ -120,20 +120,20 @@ describe('Storage voice_leases', () => {
 
     const migrated = new Storage(dbPath);
     try {
-      expect(migrated.rawDb.pragma('user_version', { simple: true })).toBe(11);
+      expect(migrated.rawDb.pragma('user_version', { simple: true })).toBe(12);
       expect(migrated.getVoiceLease('legacy-lease')).toMatchObject({
         activationId: 'legacy:legacy-lease',
         activatedAt: '2026-06-15T10:00:00.000Z',
         usedSeconds: null,
         reportedAudioSeconds: 0,
       });
-      expect(migrated.sumVoiceLeaseQuotaIssuedToday(
+      expect(migrated.voiceSecondsAccountedToday(
         'u1', Math.floor(new Date('2026-06-15T23:00:00Z').getTime() / 1000)
       )).toBe(0);
       expect(migrated.activateVoiceLease({
         jti: 'legacy-lease', activationId: 'activation-replay',
         activatedAtUnixSec: Math.floor(new Date('2026-06-15T10:01:00Z').getTime() / 1000),
-      })).toEqual({ status: 'replaced', reportedAudioSeconds: 0 });
+      })).toEqual({ status: 'replaced', reportedAudioSeconds: 0, quotaSeconds: 300 });
     } finally {
       migrated.close();
       rm(dir);
@@ -167,100 +167,299 @@ describe('Storage voice_leases', () => {
     })).toThrow();
   });
 
-  it('reserves full quota through expiry grace, then retains cumulative actual usage', () => {
-    storage.upsertUser('u1', 'a');
-    const issued = Math.floor(new Date('2026-06-15T10:00:00Z').getTime() / 1000);
+  const T = (iso: string) => Math.floor(new Date(iso).getTime() / 1000);
+  const record = (jti: string, deviceId: string, issued: number, ttl = 86_400, quota = 14_400) =>
     storage.recordVoiceLease({
-      jti: 'unused-expired', userId: 'u1', deviceId: 'd', resource: 'voice/doubao',
-      quotaSeconds: 300, issuedAtUnixSec: issued, expiresAtUnixSec: issued + 60,
+      jti, userId: 'u1', deviceId, resource: 'voice/doubao',
+      quotaSeconds: quota, issuedAtUnixSec: issued, expiresAtUnixSec: issued + ttl,
     });
-    storage.recordVoiceLease({
-      jti: 'used-expired', userId: 'u1', deviceId: 'd', resource: 'voice/doubao',
-      quotaSeconds: 300, issuedAtUnixSec: issued + 1, expiresAtUnixSec: issued + 61,
+  const activate = (jti: string, at: number, cap = 7200) =>
+    storage.activateVoiceLease({ jti, activationId: `act-${jti}`, activatedAtUnixSec: at, dailyCapSec: cap, grants: true });
+  const report = (jti: string, seconds: number, at: number, reason = 'checkpoint', cap = 7200) =>
+    storage.settleVoiceLease({
+      jti, activationId: `act-${jti}`, audioSeconds: seconds, reason,
+      settledAtUnixSec: at, dailyCapSec: cap, grants: true,
     });
-    storage.recordVoiceLease({
-      jti: 'active-unsettled', userId: 'u1', deviceId: 'd', resource: 'voice/doubao',
-      quotaSeconds: 300, issuedAtUnixSec: issued + 2, expiresAtUnixSec: issued + 62,
-    });
-    storage.activateVoiceLease({
-      jti: 'active-unsettled', activationId: 'activation-pending', activatedAtUnixSec: issued + 3,
-    });
-    storage.activateVoiceLease({ jti: 'used-expired', activationId: 'activation-used', activatedAtUnixSec: issued + 2 });
-    storage.settleVoiceLease({ jti: 'used-expired', activationId: 'activation-used', audioSeconds: 4.1, settledAtUnixSec: issued + 10 });
 
-    expect(storage.sumVoiceLeaseQuotaIssuedToday('u1', issued + 100)).toBe(900);
-    expect(storage.sumVoiceLeaseQuotaIssuedToday('u1', issued + 500)).toBe(5);
+  it('grants one chunk at activation and renews it with every usage report', () => {
+    storage.upsertUser('u1', 'a');
+    const t = T('2026-06-15T10:00:00Z');
+    record('phone', 'd1', t);
+    expect(activate('phone', t + 1)).toEqual({ status: 'activated', reportedAudioSeconds: 0, quotaSeconds: 60 });
+    // Idle but connected: only the chunk is reserved.
+    expect(storage.voiceSecondsAccountedToday('u1', t + 2)).toBe(60);
+    // A 10-minute recording: each 15 s checkpoint moves the allowance ahead.
+    let reply;
+    for (let second = 15; second <= 600; second += 15) {
+      reply = report('phone', second, t + 10 + second);
+      expect(reply.quotaSeconds).toBe(second + 60);
+    }
+    expect(report('phone', 603.4, t + 620, 'session_final').quotaSeconds).toBe(663.4);
+    expect(storage.voiceSecondsAccountedToday('u1', t + 620)).toBe(664);
+    // Socket closes: only real audio remains charged.
+    expect(report('phone', 603.4, t + 700, 'client_closed').quotaSeconds).toBeUndefined();
+    expect(storage.voiceSecondsAccountedToday('u1', t + 700)).toBe(604);
+    expect(storage.getVoiceLease('phone')?.closedAt).not.toBeNull();
+  });
+
+  it('production repro: many warm leases with ~23 min of speech do not exhaust a 2h cap', () => {
+    storage.upsertUser('u1', 'a');
+    const usage = [7, 48, 150, 147, 150, 150, 152, 150, 119, 150, 150, 150, 72, 0];
+    let t = T('2026-09-26T00:10:00Z');
+    for (let i = 0; i < 24; i++) {
+      const jti = `lease-${i}`;
+      record(jti, i % 2 === 0 ? 'iphone' : 'mac', t);
+      activate(jti, t + 1);
+      const seconds = usage[i] ?? 0;
+      if (seconds > 0) report(jti, seconds, t + 60, 'session_final');
+      if (i < 22) report(jti, seconds, t + 120, 'client_closed');
+      t += 1800;
+    }
+    const used = usage.reduce((a, b) => a + b, 0);
+    // Real audio + one chunk per still-connected device.
+    expect(storage.voiceSecondsAccountedToday('u1', t)).toBe(used + 120);
+  });
+
+  it('concurrent devices can never jointly exceed the daily cap', () => {
+    storage.upsertUser('u1', 'a');
+    const t = T('2026-06-15T10:00:00Z');
+    for (const d of ['d1', 'd2', 'd3']) record(d, d, t);
+    expect(activate('d1', t + 1, 100).quotaSeconds).toBe(60);
+    expect(activate('d2', t + 1, 100).quotaSeconds).toBe(40);
+    expect(activate('d3', t + 1, 100)).toEqual({ status: 'quota_exhausted', reportedAudioSeconds: 0 });
+    expect(storage.getVoiceLease('d3')?.revokedAt).not.toBeNull();
+    // d1 speaks 50 s; its renewal only gets what d2's reservation leaves.
+    expect(report('d1', 50, t + 60, 'checkpoint', 100).quotaSeconds).toBe(60);
+    // d2 disconnects unused: its 40 s return to d1.
+    report('d2', 0, t + 61, 'client_closed', 100);
+    expect(report('d1', 55, t + 75, 'checkpoint', 100).quotaSeconds).toBe(100);
+    expect(report('d1', 100, t + 130, 'checkpoint', 100).quotaSeconds).toBe(100);
+    expect(storage.voiceSecondsAccountedToday('u1', t + 130)).toBe(100);
+  });
+
+  it('a recording across UTC midnight is charged to each day and never stopped for the cap of the old day', () => {
+    storage.upsertUser('u1', 'a');
+    const evening = T('2026-06-15T23:40:00Z');
+    record('late', 'd1', evening);
+    activate('late', evening + 1, 1200);
+    // 1170 s already spoken on the 15th.
+    expect(report('late', 1170, T('2026-06-15T23:59:40Z'), 'checkpoint', 1200).quotaSeconds).toBe(1200);
+    // Next checkpoint lands after midnight: the new day's budget renews it.
+    expect(report('late', 1185, T('2026-06-16T00:00:05Z'), 'checkpoint', 1200).quotaSeconds).toBe(1245);
+    expect(report('late', 1260, T('2026-06-16T00:01:20Z'), 'session_final', 1200).quotaSeconds).toBe(1320);
+    report('late', 1260, T('2026-06-16T00:02:00Z'), 'client_closed', 1200);
+    expect(storage.voiceSecondsAccountedToday('u1', T('2026-06-15T23:59:59Z'))).toBe(1170);
+    expect(storage.voiceSecondsAccountedToday('u1', T('2026-06-16T12:00:00Z'))).toBe(90);
+  });
+
+  it('keeps granting a recording past lease expiry, but only for the overrun window', () => {
+    storage.upsertUser('u1', 'a');
+    const t = T('2026-06-15T10:00:00Z');
+    record('old', 'd1', t, 3600);
+    activate('old', t + 1);
+    expect(report('old', 30, t + 3600 + 30).quotaSeconds).toBe(90);
+    expect(report('old', 40, t + 3600 + VOICE_EXPIRY_OVERRUN_SEC + 1).quotaSeconds).toBe(40);
+    expect(storage.activateVoiceLease({ jti: 'old', activationId: 'late', activatedAtUnixSec: t + 3601 }))
+      .toEqual({ status: 'expired' });
+  });
+
+  it('revoked leases stop being renewed but their usage is still charged', () => {
+    storage.upsertUser('u1', 'a');
+    const t = T('2026-06-15T10:00:00Z');
+    record('r', 'd1', t);
+    activate('r', t + 1);
+    storage.rawDb.prepare('UPDATE voice_leases SET revoked_at = ? WHERE jti = ?').run(new Date().toISOString(), 'r');
+    expect(report('r', 20, t + 20)).toMatchObject({ status: 'updated', quotaSeconds: 20 });
+    expect(storage.voiceSecondsAccountedToday('u1', t + 20)).toBe(20);
+  });
+
+  it('review: a grant just before the overrun limit stays reserved (no double spend)', () => {
+    storage.upsertUser('u1', 'a');
+    const t = T('2026-06-15T10:00:00Z');
+    record('a', 'd1', t, 3600);
+    record('b', 'd2', t, 3600);
+    activate('a', t + 1, 120);
+    const boundary = t + 3600 + VOICE_EXPIRY_OVERRUN_SEC;
+    expect(report('a', 60, boundary - 1, 'checkpoint', 120).quotaSeconds).toBe(120);
+    // Past the boundary A still holds its last grant: B must not get it too.
+    expect(storage.activateVoiceLease({ jti: 'b', activationId: 'act-b', activatedAtUnixSec: boundary + 1, dailyCapSec: 120, grants: true }).status)
+      .toBe('expired');
+    record('b2', 'd2', boundary + 1, 3600);
+    expect(activate('b2', boundary + 2, 120)).toEqual({ status: 'quota_exhausted', reportedAudioSeconds: 0 });
+  });
+
+  it('review: a stale checkpoint after close neither reopens nor re-reserves', () => {
+    storage.upsertUser('u1', 'a');
+    const t = T('2026-06-15T10:00:00Z');
+    record('a', 'd1', t);
+    activate('a', t + 1);
+    report('a', 15, t + 20, 'checkpoint');
+    report('a', 15, t + 30, 'client_closed');
+    expect(storage.voiceSecondsAccountedToday('u1', t + 31)).toBe(15);
+    const late = report('a', 0, t + 32, 'checkpoint');
+    expect(late.quotaSeconds).toBe(15);
+    expect(storage.getVoiceLease('a')?.closedAt).not.toBeNull();
+    expect(storage.voiceSecondsAccountedToday('u1', t + 33)).toBe(15);
+  });
+
+  it('review: a replaced activation cannot charge or obtain grants (no double count on takeover)', () => {
+    storage.upsertUser('u1', 'a');
+    const t = T('2026-06-15T10:00:00Z');
+    record('a', 'd1', t);
+    activate('a', t + 1);
+    report('a', 15, t + 16);
+    expect(storage.activateVoiceLease({ jti: 'a', activationId: 'act-a2', activatedAtUnixSec: t + 20, dailyCapSec: 7200, grants: true }))
+      .toMatchObject({ status: 'replaced', reportedAudioSeconds: 15 });
+    // The old owner's in-flight checkpoint is rejected…
+    expect(report('a', 29, t + 21).status).toBe('conflict');
+    // …because the new owner reports the transferred audio itself.
+    storage.settleVoiceLease({ jti: 'a', activationId: 'act-a2', audioSeconds: 34, reason: 'client_closed', settledAtUnixSec: t + 40, dailyCapSec: 7200, grants: true });
+    expect(storage.voiceSecondsAccountedToday('u1', t + 41)).toBe(34);
+  });
+
+  it('review: migration orders leases activated in the same second', () => {
+    const dir = mkTmpLeaseDir();
+    const dbPath = join(dir, 'v11-same-second.db');
+    const now = Math.floor(Date.now() / 1000);
+    const v11 = new Storage(dbPath);
+    v11.upsertUser('u1', 'a');
+    for (const jti of ['x', 'y']) {
+      v11.recordVoiceLease({ jti, userId: 'u1', deviceId: 'd', resource: 'voice/doubao', quotaSeconds: 300, issuedAtUnixSec: now - 50, expiresAtUnixSec: now + 86_000 });
+      v11.activateVoiceLease({ jti, activationId: `act-${jti}`, activatedAtUnixSec: now - 40 });
+    }
+    v11.rawDb.exec(`UPDATE voice_leases SET closed_at = NULL, allowed_seconds = NULL; DROP TABLE voice_usage_daily; PRAGMA user_version = 11;`);
+    v11.close();
+    const migrated = new Storage(dbPath);
+    try {
+      const open = ['x', 'y'].filter((jti) => migrated.getVoiceLease(jti)?.closedAt === null);
+      expect(open).toEqual(['y']);
+      expect(migrated.voiceSecondsAccountedToday('u1', now)).toBe(300);
+    } finally {
+      migrated.close();
+      rm(dir);
+    }
+  });
+
+  it('review: a broker without grants cannot activate a day-scale lease', () => {
+    storage.upsertUser('u1', 'a');
+    const t = T('2026-06-15T10:00:00Z');
+    record('big', 'd1', t);
+    expect(storage.activateVoiceLease({ jti: 'big', activationId: 'x', activatedAtUnixSec: t, dailyCapSec: 7200 }))
+      .toEqual({ status: 'grants_required', reportedAudioSeconds: 0 });
+  });
+
+  it('review: migration keeps reserving a lease whose successor never connected', () => {
+    const dir = mkTmpLeaseDir();
+    const dbPath = join(dir, 'v11-pending.db');
+    const now = Math.floor(Date.now() / 1000);
+    const v11 = new Storage(dbPath);
+    v11.upsertUser('u1', 'a');
+    v11.recordVoiceLease({ jti: 'live', userId: 'u1', deviceId: 'd', resource: 'voice/doubao', quotaSeconds: 300, issuedAtUnixSec: now - 100, expiresAtUnixSec: now + 86_000 });
+    v11.activateVoiceLease({ jti: 'live', activationId: 'act-live', activatedAtUnixSec: now - 90 });
+    v11.recordVoiceLease({ jti: 'pending', userId: 'u1', deviceId: 'd', resource: 'voice/doubao', quotaSeconds: 300, issuedAtUnixSec: now - 10, expiresAtUnixSec: now + 86_000 });
+    v11.rawDb.exec(`UPDATE voice_leases SET closed_at = NULL, allowed_seconds = NULL; DROP TABLE voice_usage_daily; PRAGMA user_version = 11;`);
+    v11.close();
+    const migrated = new Storage(dbPath);
+    try {
+      expect(migrated.getVoiceLease('live')?.closedAt).toBeNull();
+      expect(migrated.voiceSecondsAccountedToday('u1', now)).toBe(300);
+    } finally {
+      migrated.close();
+      rm(dir);
+    }
+  });
+
+  it('legacy brokers (no grants) get all that is left today at activation', () => {
+    storage.upsertUser('u1', 'a');
+    const t = T('2026-06-15T10:00:00Z');
+    record('legacy', 'd1', t, 3600, 300);
+    expect(storage.activateVoiceLease({ jti: 'legacy', activationId: 'a', activatedAtUnixSec: t, dailyCapSec: 7200 }))
+      .toEqual({ status: 'activated', reportedAudioSeconds: 0, quotaSeconds: 300 });
+    expect(storage.settleVoiceLease({ jti: 'legacy', activationId: 'a', audioSeconds: 12, reason: 'checkpoint', settledAtUnixSec: t + 20, dailyCapSec: 7200 }))
+      .toEqual({ status: 'updated', usedSeconds: 12, reportedAudioSeconds: 12 });
+  });
+
+  it('revokes a device\'s never-connected leases when it asks again', () => {
+    storage.upsertUser('u1', 'a');
+    const t = T('2026-06-15T10:00:00Z');
+    record('first', 'd', t);
+    record('second', 'd', t);
+    activate('second', t + 1);
+    expect(storage.revokePendingVoiceLeases('u1', 'd', 'voice/doubao', t + 2)).toBe(1);
+    expect(storage.activateVoiceLease({ jti: 'first', activationId: 'late', activatedAtUnixSec: t + 3 }))
+      .toEqual({ status: 'revoked' });
+  });
+
+  it('migration seeds daily usage and stops abandoned older leases from reserving', () => {
+    const dir = mkTmpLeaseDir();
+    const dbPath = join(dir, 'v11.db');
+    const now = Math.floor(Date.now() / 1000);
+    const v11 = new Storage(dbPath);
+    v11.upsertUser('u1', 'a');
+    for (const [jti, offset] of [['old', 0], ['newest', 10]] as const) {
+      v11.recordVoiceLease({
+        jti, userId: 'u1', deviceId: 'd', resource: 'voice/doubao',
+        quotaSeconds: 300, issuedAtUnixSec: now - 100 + offset, expiresAtUnixSec: now + 86_000,
+      });
+      v11.activateVoiceLease({ jti, activationId: `activation-${jti}`, activatedAtUnixSec: now - 90 + offset });
+    }
+    v11.settleVoiceLease({ jti: 'old', activationId: 'activation-old', audioSeconds: 40, reason: 'session_final', settledAtUnixSec: now - 80 });
+    v11.rawDb.exec(`
+      UPDATE voice_leases SET closed_at = NULL, allowed_seconds = NULL;
+      DROP TABLE voice_usage_daily;
+      PRAGMA user_version = 11;
+    `);
+    v11.close();
+    const migrated = new Storage(dbPath);
+    try {
+      expect(migrated.getVoiceLease('old')?.closedAt).not.toBeNull();
+      expect(migrated.getVoiceLease('newest')?.closedAt).toBeNull();
+      // 40 s spoken + the newest lease's legacy reservation (300).
+      expect(migrated.voiceSecondsAccountedToday('u1', now)).toBe(340);
+    } finally {
+      migrated.close();
+      rm(dir);
+    }
   });
 
   it('rejects activation after expiry and replaces stale warm-connection owners', () => {
     storage.upsertUser('u1', 'a');
-    const now = Math.floor(new Date('2026-06-15T10:00:00Z').getTime() / 1000);
-    storage.recordVoiceLease({
-      jti: 'expired', userId: 'u1', deviceId: 'd', resource: 'voice/doubao',
-      quotaSeconds: 300, issuedAtUnixSec: now - 120, expiresAtUnixSec: now - 60,
-    });
-    expect(storage.activateVoiceLease({
-      jti: 'expired', activationId: 'activation-expired', activatedAtUnixSec: now,
-    })).toEqual({ status: 'expired' });
-
-    storage.recordVoiceLease({
-      jti: 'single-use', userId: 'u1', deviceId: 'd', resource: 'voice/doubao',
-      quotaSeconds: 300, issuedAtUnixSec: now, expiresAtUnixSec: now + 60,
-    });
-    expect(storage.activateVoiceLease({
-      jti: 'single-use', activationId: 'activation-first', activatedAtUnixSec: now + 1,
-    })).toEqual({ status: 'activated', reportedAudioSeconds: 0 });
-    expect(storage.activateVoiceLease({
-      jti: 'single-use', activationId: 'activation-first', activatedAtUnixSec: now + 2,
-    })).toEqual({ status: 'unchanged', reportedAudioSeconds: 0 });
-    expect(storage.activateVoiceLease({
-      jti: 'single-use', activationId: 'activation-replay', activatedAtUnixSec: now + 2,
-    })).toEqual({ status: 'replaced', reportedAudioSeconds: 0 });
-
-    const beforeMidnight = Math.floor(new Date('2026-06-15T23:59:30Z').getTime() / 1000);
-    const afterMidnight = Math.floor(new Date('2026-06-16T00:00:10Z').getTime() / 1000);
-    storage.recordVoiceLease({
-      jti: 'previous-day', userId: 'u1', deviceId: 'd', resource: 'voice/doubao',
-      quotaSeconds: 300, issuedAtUnixSec: beforeMidnight, expiresAtUnixSec: afterMidnight + 300,
-    });
-    expect(storage.activateVoiceLease({
-      jti: 'previous-day', activationId: 'activation-next-day', activatedAtUnixSec: afterMidnight,
-    })).toEqual({ status: 'wrong_day' });
+    const now = T('2026-06-15T10:00:00Z');
+    record('expired', 'd', now - 120, 60, 300);
+    expect(storage.activateVoiceLease({ jti: 'expired', activationId: 'x', activatedAtUnixSec: now }))
+      .toEqual({ status: 'expired' });
+    record('single-use', 'd', now, 60, 300);
+    expect(storage.activateVoiceLease({ jti: 'single-use', activationId: 'first', activatedAtUnixSec: now + 1 }))
+      .toEqual({ status: 'activated', reportedAudioSeconds: 0, quotaSeconds: 300 });
+    expect(storage.activateVoiceLease({ jti: 'single-use', activationId: 'first', activatedAtUnixSec: now + 2 }))
+      .toEqual({ status: 'unchanged', reportedAudioSeconds: 0, quotaSeconds: 300 });
+    expect(storage.activateVoiceLease({ jti: 'single-use', activationId: 'replay', activatedAtUnixSec: now + 2 }))
+      .toEqual({ status: 'replaced', reportedAudioSeconds: 0, quotaSeconds: 300 });
+    // Leases are no longer bound to their issuance day.
+    record('previous-day', 'd', T('2026-06-15T23:59:30Z'), 3600, 300);
+    expect(storage.activateVoiceLease({ jti: 'previous-day', activationId: 'next-day', activatedAtUnixSec: T('2026-06-16T00:00:10Z') }).status)
+      .toBe('activated');
   });
 
-  it('stores monotonic cumulative checkpoints and preserves full quota until expiry', () => {
+  it('stores monotonic cumulative checkpoints', () => {
     storage.upsertUser('u1', 'a');
-    const now = Math.floor(new Date('2026-06-15T10:00:00Z').getTime() / 1000);
-    storage.recordVoiceLease({
-      jti: 'actual', userId: 'u1', deviceId: 'd', resource: 'voice/doubao',
-      quotaSeconds: 300, issuedAtUnixSec: now, expiresAtUnixSec: now + 3600,
-    });
-    storage.recordVoiceLease({
-      jti: 'reserved', userId: 'u1', deviceId: 'd', resource: 'voice/doubao',
-      quotaSeconds: 300, issuedAtUnixSec: now + 1, expiresAtUnixSec: now + 3601,
-    });
-    expect(storage.sumVoiceLeaseQuotaIssuedToday('u1', now)).toBe(600);
-
-    storage.activateVoiceLease({ jti: 'actual', activationId: 'activation-actual', activatedAtUnixSec: now + 2 });
-    expect(storage.settleVoiceLease({ jti: 'actual', activationId: 'activation-actual', audioSeconds: 5.01, settledAtUnixSec: now + 10 }))
-      .toEqual({ status: 'updated', usedSeconds: 6, reportedAudioSeconds: 5.01 });
-    expect(storage.sumVoiceLeaseQuotaIssuedToday('u1', now)).toBe(600);
-    expect(storage.settleVoiceLease({ jti: 'actual', activationId: 'activation-actual', audioSeconds: 5.01, settledAtUnixSec: now + 20 }))
-      .toEqual({ status: 'unchanged', usedSeconds: 6, reportedAudioSeconds: 5.01 });
-    expect(storage.settleVoiceLease({ jti: 'actual', activationId: 'activation-actual', audioSeconds: 7, settledAtUnixSec: now + 20 }))
-      .toEqual({ status: 'updated', usedSeconds: 7, reportedAudioSeconds: 7 });
-    expect(storage.settleVoiceLease({ jti: 'actual', activationId: 'activation-actual', audioSeconds: 6, settledAtUnixSec: now + 21 }))
-      .toEqual({ status: 'stale', usedSeconds: 7, reportedAudioSeconds: 7 });
-    expect(storage.sumVoiceLeaseQuotaIssuedToday('u1', now + 4000)).toBe(7);
+    const now = T('2026-06-15T10:00:00Z');
+    record('actual', 'd', now, 3600, 300);
+    storage.activateVoiceLease({ jti: 'actual', activationId: 'a', activatedAtUnixSec: now + 2 });
+    const settle = (audioSeconds: number, at: number, reason = 'checkpoint') =>
+      storage.settleVoiceLease({ jti: 'actual', activationId: 'a', audioSeconds, reason, settledAtUnixSec: at });
+    expect(settle(5.01, now + 10)).toEqual({ status: 'updated', usedSeconds: 6, reportedAudioSeconds: 5.01 });
+    expect(settle(5.01, now + 20)).toEqual({ status: 'unchanged', usedSeconds: 6, reportedAudioSeconds: 5.01 });
+    expect(settle(7, now + 20, 'session_final')).toEqual({ status: 'updated', usedSeconds: 7, reportedAudioSeconds: 7 });
+    expect(settle(6, now + 21)).toEqual({ status: 'stale', usedSeconds: 7, reportedAudioSeconds: 7 });
+    expect(settle(7, now + 30, 'client_closed').status).toBe('unchanged');
+    expect(storage.voiceSecondsAccountedToday('u1', now + 30)).toBe(7);
   });
 
   it('clamps settled usage to the signed lease quota', () => {
     storage.upsertUser('u1', 'a');
     const now = Math.floor(Date.now() / 1000);
-    storage.recordVoiceLease({
-      jti: 'clamp', userId: 'u1', deviceId: 'd', resource: 'voice/doubao',
-      quotaSeconds: 300, issuedAtUnixSec: now, expiresAtUnixSec: now + 3600,
-    });
+    record('clamp', 'd', now, 3600, 300);
     storage.activateVoiceLease({ jti: 'clamp', activationId: 'activation-clamp' });
     expect(storage.settleVoiceLease({ jti: 'clamp', activationId: 'activation-clamp', audioSeconds: 999 }))
       .toEqual({ status: 'updated', usedSeconds: 300, reportedAudioSeconds: 300 });
@@ -268,27 +467,22 @@ describe('Storage voice_leases', () => {
       .toEqual({ status: 'not_found' });
   });
 
-  it('sums daily quota correctly across multiple leases', () => {
+  it('keeps daily usage per user and per UTC day', () => {
     storage.upsertUser('u1', 'a');
-    const day0 = Math.floor(new Date('2026-06-15T10:00:00Z').getTime() / 1000);
-    const day1 = Math.floor(new Date('2026-06-16T10:00:00Z').getTime() / 1000);
-
-    storage.recordVoiceLease({
-      jti: 'a', userId: 'u1', deviceId: 'd', resource: 'voice/doubao',
-      quotaSeconds: 1000, issuedAtUnixSec: day0, expiresAtUnixSec: day0 + 60,
-    });
-    storage.recordVoiceLease({
-      jti: 'b', userId: 'u1', deviceId: 'd', resource: 'voice/doubao',
-      quotaSeconds: 500, issuedAtUnixSec: day0 + 3600, expiresAtUnixSec: day0 + 3660,
-    });
-    storage.recordVoiceLease({
-      jti: 'c', userId: 'u1', deviceId: 'd', resource: 'voice/doubao',
-      quotaSeconds: 2000, issuedAtUnixSec: day1, expiresAtUnixSec: day1 + 60,
-    });
-
-    expect(storage.sumVoiceLeaseQuotaIssuedToday('u1', day0)).toBe(1500);
-    expect(storage.sumVoiceLeaseQuotaIssuedToday('u1', day1)).toBe(2000);
-    expect(storage.sumVoiceLeaseQuotaIssuedToday('u_other', day0)).toBe(0);
+    const day0 = T('2026-06-15T10:00:00Z');
+    const day1 = T('2026-06-16T10:00:00Z');
+    record('a', 'd', day0);
+    activate('a', day0);
+    report('a', 100, day0 + 60, 'client_closed');
+    record('b', 'd', day1);
+    activate('b', day1);
+    report('b', 30, day1 + 60, 'client_closed');
+    expect(storage.voiceSecondsAccountedToday('u1', day0 + 100)).toBe(100);
+    expect(storage.voiceSecondsAccountedToday('u1', day1 + 100)).toBe(30);
+    expect(storage.voiceSecondsAccountedToday('u_other', day0)).toBe(0);
+    // Issued but never connected leases cost nothing.
+    record('idle', 'd', day1);
+    expect(storage.voiceSecondsAccountedToday('u1', day1 + 100)).toBe(30);
   });
 });
 
@@ -327,7 +521,7 @@ describe('Voice settlement endpoint contract', () => {
       authorization: 'Bearer secret', body: activation,
     })).toEqual({
       status: 200,
-      body: { ok: true, activationStatus: 'activated', reportedAudioSeconds: 0 },
+      body: { ok: true, activationStatus: 'activated', reportedAudioSeconds: 0, quotaSeconds: 300 },
     });
     expect(handleVoiceSettlement(storage, 'secret', {
       authorization: 'Bearer secret', body: activation,
@@ -397,7 +591,6 @@ describe('request_voice_lease handler (integration)', () => {
     env = await createTestEnv({
       leaseIssuer: issuer,
       voiceLeaseTtlSec: 3600,
-      voiceLeaseQuotaSec: 1800,
       voiceDailyQuotaSec: 5400,
     });
     device = await connectDevice(env.port, 'arm-test', 'app', { kind: 'web' });
@@ -417,7 +610,7 @@ describe('request_voice_lease handler (integration)', () => {
     const lease = grant.lease as { payload: Record<string, unknown>; signature: string };
     expect(lease.payload).toMatchObject({
       ver: 1, iss: 'kraki-head', did: device.deviceId,
-      resource: 'voice/doubao', quota_seconds: 1800,
+      resource: 'voice/doubao', quota_seconds: 10_800,
     });
 
     // Pull the issuer's pubkey directly (out-of-band — like deployment).
@@ -439,25 +632,38 @@ describe('request_voice_lease handler (integration)', () => {
     expect(denied.reason).toBe('invalid_request');
   });
 
-  it('denies further leases once the daily quota is exhausted', async () => {
-    // 5400 daily / 1800 per lease = 3 leases per day max.
-    for (let i = 0; i < 3; i++) {
+  it('keeps issuing leases while real usage is below the cap and denies once it is reached', async () => {
+    const userId = env.storage.getAllUsers()[0].userId;
+    const useLease = async (audioSeconds: number) => {
       device.send({ type: 'request_voice_lease', deviceId: device.deviceId, resource: 'voice/doubao' });
       const grant = await device.waitFor('voice_lease_grant');
-      expect(grant.lease).toBeDefined();
-    }
+      const jti = (grant.lease as { payload: { jti: string } }).payload.jti;
+      const activationId = `activation-${jti}`;
+      expect(env.storage.activateVoiceLease({ jti, activationId, dailyCapSec: 5400, grants: true }).status)
+        .toBe('activated');
+      let reported = 0;
+      while (reported < audioSeconds) {
+        reported = Math.min(audioSeconds, reported + 15);
+        env.storage.settleVoiceLease({ jti, activationId, audioSeconds: reported, reason: 'checkpoint', dailyCapSec: 5400, grants: true });
+      }
+      env.storage.settleVoiceLease({ jti, activationId, audioSeconds: reported, reason: 'client_closed' });
+    };
+    // Idle leases (relaunches, reconnects) cost nothing.
+    for (let i = 0; i < 10; i++) await useLease(0);
+    expect(env.storage.voiceSecondsAccountedToday(userId, Math.floor(Date.now() / 1000))).toBe(0);
+    await useLease(3000);
+    await useLease(2400);
     device.send({ type: 'request_voice_lease', deviceId: device.deviceId, resource: 'voice/doubao' });
     const denied = await device.waitFor('voice_lease_denied');
     expect(denied.reason).toBe('quota_exhausted');
+    expect(String(denied.detail)).toContain('5400/5400');
   });
 
-  it('issued leases persist via Storage (daily counter sees them)', async () => {
+  it('issues long-lived leases independent of the UTC day', async () => {
     device.send({ type: 'request_voice_lease', deviceId: device.deviceId, resource: 'voice/doubao' });
-    await device.waitFor('voice_lease_grant');
-    const total = env.storage.sumVoiceLeaseQuotaIssuedToday(device.deviceId.includes('_') ? 'placeholder' : env.storage.getDevicesByUser(env.storage.getAllUsers()[0].userId)[0].userId, Math.floor(Date.now() / 1000));
-    // We can't easily know the userId without a getter; the test above proves
-    // grant works. Here we just assert storage has at least one row.
-    expect(total).toBeGreaterThanOrEqual(0);
+    const grant = await device.waitFor('voice_lease_grant');
+    const { iat, exp } = (grant.lease as { payload: { iat: number; exp: number } }).payload;
+    expect(exp - iat).toBe(3600);
   });
 });
 
