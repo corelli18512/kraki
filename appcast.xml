@@ -6,6 +6,22 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.39</title>
+            <pubDate>Sun, 27 Sep 2026 05:28:09 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.39</sparkle:fullReleaseNotesLink>
+            <sparkle:version>41</sparkle:version>
+            <sparkle:shortVersionString>0.2.39</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* chore(mac): bump to 0.2.39 (41) by @corelli18512 in https://github.com/corelli18512/kraki/pull/312
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.33.1...mac-v0.2.39
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.39/Kraki.app.zip" length="8339628" type="application/octet-stream" sparkle:edSignature="NITpWcyubGoA9tVm/zMiDn1fbsIxv5yzojqTHbim9n6VPqSO4fsrCwj/eSjq4Hv1CdNwe4QrS5g2bEufLj/BBQ=="/>
+        </item>
+        <item>
             <title>0.2.38</title>
             <pubDate>Sat, 26 Sep 2026 15:11:42 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -37,25 +53,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.37/Kraki.app.zip" length="8344195" type="application/octet-stream" sparkle:edSignature="0dFVL+b0m0c9Z0Qrggv3/GnClBrDSHAZBr/bULYpNsuLP0ssUtlXV6cnDYy7Udq67KTVznWIFSJ4Y2vIthKiCA=="/>
         </item>
-        <item>
-            <title>0.2.36</title>
-            <pubDate>Sat, 26 Sep 2026 12:06:23 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.36</sparkle:fullReleaseNotesLink>
-            <sparkle:version>38</sparkle:version>
-            <sparkle:shortVersionString>0.2.36</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* feat(ios,mac): one-row composer, tap-to-dictate with in-bubble correction, unified send/stop control by @corelli18512 in https://github.com/corelli18512/kraki/pull/301
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.35...mac-v0.2.36
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.36/Kraki.app.zip" length="8326207" type="application/octet-stream" sparkle:edSignature="NzPXXmJv3MWFfdit5BE9ej/G6bdfsQS0CDiH+t1jn1uS7qq7pgsq07COl25dn6kxtlphK2+YRYvLFCCu01aaBw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: wkeFewyAV/WxqbUcgdaTMvo93CWJjGPnL+2j2JdZtp654UujHhT0sQjpKC3fSiyPHQ+VfsheaVENamVbFMcwAg==
-length: 3832
+edSignature: xacCxQE9TU4GJj0V1hAjRNE72KPIgeoXARNIBYo+mwDPdsWn6OV1T02GnU6ZaYK306ZGz9nLUcnxkM77ewXHBw==
+length: 3759
 -->
