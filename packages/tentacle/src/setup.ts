@@ -5,7 +5,7 @@
  * device naming, and agent verification.
  */
 
-import { select, input, checkbox, confirm, password } from '@inquirer/prompts';
+import { select, input, checkbox } from '@inquirer/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
 import { hostname, platform } from 'node:os';
@@ -21,7 +21,7 @@ import {
   getOrCreateDeviceId,
   getConfigPath,
 } from './config.js';
-import { checkGhAuth, checkCopilotCli, checkClaudeCli, checkCodexCli, checkAnthropicCreds, saveAnthropicKey, probeFda, pollFda, ensureTccBundleRegistered, openAllTccPanes } from './checks.js';
+import { checkGhAuth, checkAgentCli, SETUP_AGENTS, probeFdaAsApp, pollFda, ensureTccBundleRegistered, openTccPane, revealKrakiApp, getKrakiAppBundlePath } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { isSea } from 'node:sea';
 import type { AgentId } from '@kraki/protocol';
@@ -32,6 +32,12 @@ import type { AgentId } from '@kraki/protocol';
  */
 function installToPath(): void {
   if (!isSea()) return;
+  // Installed as Kraki.app (install.sh / updater): ~/.local/bin/kraki is already
+  // a symlink into the bundle. Copying "ourselves" onto it would follow the
+  // symlink and rewrite the running bundle executable in place, which breaks
+  // its code-signature state; LaunchServices then refuses to launch the daemon
+  // ("Launchd job spawn failed", 162) until the cache settles ~30s later.
+  if (getKrakiAppBundlePath()) return;
 
   const { copyFileSync, existsSync, chmodSync } = require('node:fs');
   const { execSync } = require('node:child_process');
@@ -104,7 +110,7 @@ async function runFdaStep(stepNum: number, total: number): Promise<void> {
   // actually stick across future updates. Idempotent + safe.
   ensureTccBundleRegistered();
 
-  const fdaStatus = await probeFda();
+  const fdaStatus = await probeFdaAsApp();
   if (fdaStatus === 'granted') {
     console.log(chalk.green('    ✓ Full Disk Access already granted'));
     console.log(chalk.dim('    Other TCC services are only needed by specific features:'));
@@ -113,13 +119,18 @@ async function runFdaStep(stepNum: number, total: number): Promise<void> {
     return;
   }
 
-  console.log(chalk.dim('    Grant Full Disk Access to prevent recurring permission dialogs'));
-  console.log(chalk.dim('    during agent sessions, plus any other TCC service a feature needs.'));
-  console.log(chalk.dim('    Kraki.app is signed + registered with Launch Services, so these'));
-  console.log(chalk.dim('    grants survive every future update - grant once only.'));
+  console.log(chalk.dim('    Grant Full Disk Access once so agent sessions never trigger'));
+  console.log(chalk.dim('    macOS permission dialogs. It survives future updates.'));
   console.log('');
-  console.log(chalk.dim('    Opening System Settings panes…'));
-  openAllTccPanes();
+  console.log(`    ${chalk.bold('Drag Kraki from the Finder window into the Full Disk Access list,')}`);
+  console.log(`    ${chalk.bold('then turn it on.')}`);
+  console.log('');
+  // macOS never lists an app under Full Disk Access by itself, and Kraki.app
+  // lives in a hidden folder the "+" picker can't easily reach. Open only the
+  // FDA pane (the others are feature-specific: `kraki permissions --open`)
+  // and reveal the bundle so it can be dragged straight in.
+  openTccPane('fda');
+  revealKrakiApp();
 
   const ac = new AbortController();
   const spinner = ora({
@@ -128,7 +139,7 @@ async function runFdaStep(stepNum: number, total: number): Promise<void> {
   }).start();
 
   const granted = await Promise.race([
-    pollFda(2000, ac.signal).then((s) => { ac.abort(); return s === 'granted'; }),
+    pollFda(2000, ac.signal, probeFdaAsApp).then((s) => { ac.abort(); return s === 'granted'; }),
     input(
       { message: '' },
       { signal: ac.signal },
@@ -375,98 +386,46 @@ async function githubDeviceFlow(clientId: string): Promise<string> {
 // ── Setup flow ──────────────────────────────────────────
 
 /**
- * Detect installed agents (Copilot, Claude, Codex) and let the user choose which
- * to enable. Returns an explicit allow-list to persist in config, or
- * `undefined` to leave the daemon on auto-detect.
- *
- * For Claude, also offers to store an Anthropic API key in
- * ~/.claude/settings.json so the launchd-spawned daemon can read it.
+ * Detect installed agents and, when several are present, let the user choose
+ * which to enable. Returns an explicit allow-list to persist in config, or
+ * `undefined` to leave the daemon on auto-detect. Never blocks: a machine with
+ * no agent yet finishes setup and picks one up once it is installed.
  */
 async function runAgentStep(): Promise<AgentId[] | undefined> {
-  const copilotSpinner = ora({ text: 'Looking for Copilot CLI…', indent: 4 }).start();
-  const copilot = checkCopilotCli();
-  if (copilot.found) {
-    copilotSpinner.succeed(`Copilot CLI found (${copilot.version ?? 'unknown version'})`);
-  } else {
-    copilotSpinner.info('Copilot CLI not found');
-  }
-
-  const claudeSpinner = ora({ text: 'Looking for Claude CLI…', indent: 4 }).start();
-  const claude = checkClaudeCli();
-  if (claude.found) {
-    claudeSpinner.succeed(`Claude CLI found (${claude.version ?? 'unknown version'})`);
-  } else {
-    claudeSpinner.info('Claude CLI not found');
-  }
-
-  const codexSpinner = ora({ text: 'Looking for Codex CLI…', indent: 4 }).start();
-  const codex = checkCodexCli();
-  if (codex.found) {
-    codexSpinner.succeed(`Codex CLI found (${codex.version ?? 'unknown version'})`);
-  } else {
-    codexSpinner.info('Codex CLI not found');
-  }
-
+  // Kraki only relays — each agent keeps its own install and login, so this
+  // step just reports what is on PATH and never touches agent config.
   const available: AgentId[] = [];
-  if (copilot.found) available.push('copilot');
-  if (claude.found) available.push('claude');
-  if (codex.found) available.push('codex');
-  const labels: Partial<Record<AgentId, string>> = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex' };
-
-  // If Claude is present, make sure it has credentials it can actually use.
-  if (claude.found) {
-    let creds = checkAnthropicCreds();
-    if (!creds.configured) {
-      console.log(chalk.dim('    Claude needs an Anthropic API key (or Bedrock/Vertex env).'));
-      const enterKey = await confirm({
-        message: 'Add an Anthropic API key now?',
-        default: true,
-        theme: promptTheme,
-      });
-      if (enterKey) {
-        const key = await password({ message: 'Anthropic API key:', mask: '•' });
-        if (key.trim()) {
-          try {
-            saveAnthropicKey(key.trim());
-            console.log(chalk.green('    ✓ Saved to ~/.claude/settings.json'));
-            creds = { configured: true, source: 'settings' };
-          } catch (err) {
-            console.log(chalk.yellow(`    ! Could not save key: ${(err as Error).message}`));
-          }
-        }
-      }
+  for (const agent of SETUP_AGENTS) {
+    const result = checkAgentCli(agent.bin);
+    if (result.found) {
+      available.push(agent.id);
+      console.log(`    ${chalk.green('✔')} ${agent.name} ${chalk.dim(result.version ?? '')}`.trimEnd());
     } else {
-      console.log(chalk.green(`    ✓ Anthropic credentials available (${creds.source})`));
+      console.log(`    ${chalk.dim('–')} ${chalk.dim(`${agent.name} not found`)}`);
     }
   }
 
   if (available.length === 0) {
-    console.log(chalk.yellow('    No agents detected. Install at least one to run sessions:'));
-    console.log(chalk.dim('      • Copilot CLI — https://github.com/features/copilot/cli/'));
-    console.log(chalk.dim('      • Claude CLI  — https://docs.anthropic.com/en/docs/claude-code'));
-    console.log(chalk.dim('      • Codex CLI   — npm install -g @openai/codex; codex login'));
-    console.log(chalk.dim('    Continuing with auto-detect — install later and restart the daemon.'));
+    console.log('');
+    console.log(chalk.yellow('    No coding agent found. Install one to start sessions:'));
+    for (const agent of SETUP_AGENTS) {
+      console.log(chalk.dim(`      • ${agent.name} — ${agent.installUrl}`));
+    }
+    console.log(chalk.dim(`    Setup continues without one. After installing, run ${chalk.bold('kraki restart')}.`));
     return undefined;
   }
 
-  if (available.length === 1) {
-    const only = available[0];
-    // Only one agent installed — leave the daemon on auto-detect rather
-    // than pinning. If the user installs the other agent later it will be
-    // picked up automatically. (Explicit pinning is for the GUI wizard /
-    // `--agent` flag, where there's a real choice to constrain.)
-    console.log(chalk.dim(`    Using ${labels[only]} (auto-detect).`));
-    return undefined;
-  }
+  // One agent: stay on auto-detect so agents installed later are picked up.
+  if (available.length === 1) return undefined;
 
-  // Multiple installed — let the user pick the allow-list.
   const chosen = await checkbox<AgentId>({
     message: 'Enable which agents?',
     theme: promptTheme,
-    choices: available.map((id) => ({ name: labels[id]!, value: id, checked: true })),
+    choices: SETUP_AGENTS.filter((a) => available.includes(a.id)).map((a) => ({ name: a.name, value: a.id, checked: true })),
     validate: (items) => (items.length > 0 ? true : 'Select at least one agent'),
   });
-  return chosen;
+  // Everything checked means "all of them" — keep auto-detect for future installs.
+  return chosen.length === available.length ? undefined : chosen;
 }
 
 export async function runSetup(): Promise<KrakiConfig> {
@@ -619,7 +578,7 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
     console.log(`\n  ${icon} ${step(1, total)} ${chalk.bold('Relay')}`);
     const relayHost = await input({
       message: 'Relay:',
-      default: defaultRelay.replace(/^wss?:\/\//, ''),
+      default: defaultRelay.replace(/^wss:\/\//, ''), // keep ws:// so the default isn't upgraded to TLS
       theme: promptTheme,
       validate: (v) => {
         if (v.includes(' ')) return 'Invalid URL';
@@ -694,8 +653,7 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
 
   divider();
 
-  // The same agent discovery in both flows — self-hosted/SEA users do not
-  // need Copilot installed when they already have Codex (or another agent).
+  // 3. Agents
   console.log(`  ${icon} ${step(3, total)} ${chalk.bold('Agents')}`);
   const selectedAgents = await runAgentStep();
 
@@ -722,7 +680,7 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
     relay,
     authMethod: authMethod as KrakiConfig['authMethod'],
     device: { name: deviceName, id: deviceId },
-    ...(selectedAgents?.length && { agents: selectedAgents }),
+    ...(selectedAgents && selectedAgents.length > 0 && { agents: selectedAgents }),
     logging: { verbosity: DEFAULT_LOG_VERBOSITY },
   };
 
@@ -751,7 +709,7 @@ async function promptRelayUrl(defaultRelay: string): Promise<string> {
   while (true) {
     const relayHost = await input({
       message: 'Relay URL:',
-      default: defaultRelay.replace(/^wss?:\/\//, ''),
+      default: defaultRelay.replace(/^wss:\/\//, ''), // keep ws:// so the default isn't upgraded to TLS
       theme: promptTheme,
     });
     const relay = relayHost.startsWith('wss://') || relayHost.startsWith('ws://') ? relayHost : `wss://${relayHost}`;

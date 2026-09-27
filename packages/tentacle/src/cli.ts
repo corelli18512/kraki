@@ -1105,6 +1105,9 @@ main().catch((err) => {
     gracefulExit(0);
     return;
   }
-  console.error(chalk.red('Fatal error:'), err);
+  // Users see a one-line reason; the stack trace is only for KRAKI_DEBUG.
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`\n  ${chalk.red('✖')} ${message}`);
+  if (process.env.KRAKI_DEBUG) console.error(err);
   gracefulExit(1);
 });

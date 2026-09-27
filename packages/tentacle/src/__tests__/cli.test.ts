@@ -317,7 +317,7 @@ describe('CLI restart', () => {
 
     expect(mockStartDaemon).toHaveBeenCalledWith(config);
     expect(mockStartWorker).not.toHaveBeenCalled();
-    expect(consoleOutput.join('\n')).toContain('Fatal error:');
+    expect(consoleOutput.join('\n')).toContain('✖ background launch failed');
     expect(consoleOutput.join('\n')).toContain('background launch failed');
     expect(mockExit).toHaveBeenCalledWith(1);
   });
