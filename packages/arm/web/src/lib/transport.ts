@@ -183,7 +183,10 @@ export async function startOAuthFlow(clientId: string): Promise<void> {
   const verifier = generateCodeVerifier();
   const challenge = await deriveCodeChallenge(verifier);
 
-  const redirectUri = window.location.origin + OAUTH_CALLBACK_PATH;
+  // The desktop shell serves the app from its own origin, which GitHub does
+  // not know; it uses the Web's registered origin and intercepts the redirect.
+  const origin = window.krakiDesktop?.oauthRedirectOrigin ?? window.location.origin;
+  const redirectUri = origin + OAUTH_CALLBACK_PATH;
   storePkceMaterial(verifier, redirectUri);
 
   const params = new URLSearchParams({
