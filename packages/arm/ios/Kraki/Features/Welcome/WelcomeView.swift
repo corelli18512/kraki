@@ -58,7 +58,9 @@ struct WelcomeView: View {
         // whether or not this Mac is also running a local Tentacle daemon.
         // Local Tentacle lifecycle belongs in Preferences and must never mask
         // an already-synced session list with a blocking stopped-state card.
-        if !appState.sessionStore.sessions.isEmpty {
+        if !appState.devLocalActive, let attention = builtInAttentionCard {
+            attention
+        } else if !appState.sessionStore.sessions.isEmpty {
             selectSessionCard
         } else if appState.devLocalActive {
             devLocalContent
@@ -151,13 +153,13 @@ struct WelcomeView: View {
             icon: "exclamationmark.triangle.fill",
             iconColor: Color(hex: 0xFBBF24),
             title: "Kraki CLI not found",
-            subtitle: "Install the kraki command-line tool in Terminal, then come back here."
+            subtitle: "This build of Kraki has no built-in tentacle. Install the kraki command-line tool in Terminal, then come back here."
         ) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Image(systemName: "terminal")
                         .foregroundStyle(Color.krakiPrimary)
-                    Text("npm install -g @kraki/cli")
+                    Text(Self.cliInstallCommand)
                         .font(.system(.body, design: .monospaced))
                         .textSelection(.enabled)
                         .foregroundStyle(Color.textPrimary)
@@ -199,6 +201,8 @@ struct WelcomeView: View {
         case .unknown, .starting, .stopping:
             ProgressView("Talking to tentacle…")
                 .controlSize(.small)
+        case .needsApproval:
+            loginItemsCard
         case .stopped:
             daemonStoppedCard
         case .error(let msg):
@@ -293,6 +297,56 @@ struct WelcomeView: View {
             .buttonStyle(.borderedProminent)
             .tint(Color.krakiPrimary)
             .padding(.top, 4)
+        }
+    }
+
+    // MARK: - Built-in tentacle
+
+    static let cliInstallCommand = "curl -fsSL https://app.kraki.chat/install.sh | bash"
+
+    /// Problems with the built-in tentacle that need the user even while
+    /// remote sessions keep working: it was turned off in Login Items, or Full
+    /// Disk Access is still missing.
+    private var builtInAttentionCard: AnyView? {
+        guard tentacleCLI.mode == .builtIn else { return nil }
+        if case .needsApproval = tentacleCLI.daemonState { return AnyView(loginItemsCard) }
+        if case .running = tentacleCLI.daemonState, tentacleCLI.fdaStatus == "denied", !fdaReminderDismissed {
+            return AnyView(fullDiskAccessCard)
+        }
+        return nil
+    }
+
+    @AppStorage("tentacle.fdaReminderDismissed") private var fdaReminderDismissed = false
+
+    private var loginItemsCard: some View {
+        WelcomeCard(
+            icon: "exclamationmark.circle.fill",
+            iconColor: Color(hex: 0xFBBF24),
+            title: "Kraki is off in Login Items",
+            subtitle: "This Mac's agents are offline because Kraki is turned off in System Settings → General → Login Items. Turn it back on to reconnect them."
+        ) {
+            HStack {
+                Button("Open Login Items") { BuiltInTentacle.openLoginItemsSettings() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.krakiPrimary)
+                Button("Try Again") { Task { await tentacleCLI.startDaemon() } }
+            }
+        }
+    }
+
+    private var fullDiskAccessCard: some View {
+        WelcomeCard(
+            icon: "lock.shield.fill",
+            iconColor: Color(hex: 0xFBBF24),
+            title: "Allow Full Disk Access",
+            subtitle: "Without it, macOS keeps asking for permission whenever an agent touches Desktop, Documents or other protected folders. Turn on “Kraki” once in System Settings."
+        ) {
+            HStack {
+                Button("Open System Settings") { BuiltInTentacle.openFullDiskAccessSettings() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.krakiPrimary)
+                Button("Not Now") { fdaReminderDismissed = true }
+            }
         }
     }
 

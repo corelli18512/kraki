@@ -40,8 +40,10 @@
 		17D7BE16A8D5D790F068FF89 /* KrakiNotification.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 714C9952404A97A090FC011F /* KrakiNotification.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		191F9EF6860BAA09470DA919 /* MacBubbleImageGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716CF510D83856B445C94DA7 /* MacBubbleImageGrid.swift */; };
 		1A8B176B6FB20CE0C8414668 /* ChatScrollPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD1EB63914A8EE30FA1D18F5 /* ChatScrollPolicy.swift */; };
+		1B01E117986AF227249E2056 /* BuiltInTentacleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E83544E423901DC3D8E07FB /* BuiltInTentacleTests.swift */; };
 		1BA230F7EC3DA0D4AF911D14 /* MainWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5469FDA14AA91327B6DF4400 /* MainWindowView.swift */; };
 		1BAC94A2211D6ADAFD3D1A8B /* DeviceDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6463492D6BEB410FD49FF787 /* DeviceDetailView.swift */; };
+		1C5E0A0C9CD63583409196B7 /* BuiltInSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C513DCF24560A3E13BBBAFF3 /* BuiltInSetupView.swift */; };
 		1E3AB82960FD440D2F9425CD /* ImportSessionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C23602EA58067E4AE252F62 /* ImportSessionSheet.swift */; };
 		1ED0B27461AF3BFD9CBA4F28 /* LucideIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 924794751B4507709362A1AE /* LucideIcon.swift */; };
 		1FA04773E415B708A7C36B46 /* DevicesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F1C34007991B7E9D900DBF /* DevicesPane.swift */; };
@@ -60,6 +62,7 @@
 		2CF1B0661EEF7C51B63C4A35 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33641605B16E960C6A553E38 /* ChatView.swift */; };
 		2CF36A2578842439CD9CA78A /* MacNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = C024AE6690757FB0A6916CEE /* MacNotifications.swift */; };
 		2D394695172D2AD0857650A2 /* VoiceComposerPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88D48670B859C4CA3FFFA48 /* VoiceComposerPresentation.swift */; };
+		2D3B2608F2624CC6FD03BB30 /* BuiltInTentacle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EBD5FFCF0E54067B287536A /* BuiltInTentacle.swift */; };
 		2D511A9C6FB61ADC2DA98C62 /* MacChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8AD64AEE5A57AF1667249A7 /* MacChatView.swift */; };
 		2EB7589D7EBECE7995E65571 /* GeneralPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = B153278B8FD6A628243129FA /* GeneralPane.swift */; };
 		2EC40327706787FAA97C3224 /* PulseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = E45FF5DF9F0159EB23B50D72 /* PulseManager.swift */; };
@@ -73,6 +76,7 @@
 		381AA8D728145A34D33CB68E /* PermissionCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E355FDA07A62D1D2FA07ECB1 /* PermissionCardView.swift */; };
 		388347D65132D47B191241F1 /* MacAutomationDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5906FEF75EAE0DB111F19BD /* MacAutomationDriver.swift */; };
 		39CA771DFACE01A22668BCC5 /* KrakiApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AD698C5DD0F8DDB4A3D6CFE /* KrakiApp.swift */; };
+		3A71E711D1939B318CC0EC5C /* TentacleSetupRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A85098A6C3F08826873291AA /* TentacleSetupRunner.swift */; };
 		3B1435A3F3E6CE75A3D0621E /* AgentAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 427C7B2406F858D980E5DFBB /* AgentAvatar.swift */; };
 		3C4A11273BA4926B1804BD90 /* MacSessionSidebarRevealTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B60DD3157710F226FB5EF0DC /* MacSessionSidebarRevealTests.swift */; };
 		3D41352AEBFC0FFDA4E57F36 /* AvatarTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 830D9504C54F439410E9F9CD /* AvatarTestView.swift */; };
@@ -158,8 +162,10 @@
 		8DD4AE2E5880121FF778CCD3 /* KrakiPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACA594C1B063D6133CF3BC50 /* KrakiPlatform.swift */; };
 		8F6280E0F252F3D0E4DEA9D7 /* SessionCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F98323AAD3C8D23F7A63AAC9 /* SessionCardView.swift */; };
 		905C91DB5410CEEDA060E7A1 /* SessionsSidebarView+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DEFD8A1D19846132D2AE32A /* SessionsSidebarView+macOS.swift */; };
+		90CB99F531524D18FF2BD990 /* BuiltInTentacle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EBD5FFCF0E54067B287536A /* BuiltInTentacle.swift */; };
 		914847D19343236FEB95A20D /* LiveBubbleTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5BAEA7249F10D6067F0886F /* LiveBubbleTestView.swift */; };
 		92741DF0DA28DB1B5C2D6676 /* ChatHeightEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 522C9C637955C4ACB888C9C5 /* ChatHeightEstimator.swift */; };
+		9304EBE2869D89A4308C8D20 /* TentacleSetupRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A85098A6C3F08826873291AA /* TentacleSetupRunner.swift */; };
 		945558DB880907D741553F0E /* MacLaunchActivityIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D80A4B531EA5EBD081A0626 /* MacLaunchActivityIndicator.swift */; };
 		94C4BA9361E319CC750EAA19 /* MacBubbleImageGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716CF510D83856B445C94DA7 /* MacBubbleImageGrid.swift */; };
 		94F2F6AF6ADD79CED56E906E /* MacChatComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B7DBD1AD1C67E1CFB6ED036 /* MacChatComposer.swift */; };
@@ -212,6 +218,7 @@
 		C0C4528A1D3D1773A0BA9870 /* MessagesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D6472A002F2CB9C07380792 /* MessagesTests.swift */; };
 		C359E909D1763DA606DD8A6E /* ToolActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61AC5E0472D90CCB91CC0778 /* ToolActivityView.swift */; };
 		C3DD6301585CDBA8DB9E1FA4 /* KeychainManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DF2FADB7D9A46A1299A30E2 /* KeychainManager.swift */; };
+		C4FF5D48299265218A60123D /* BuiltInSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C513DCF24560A3E13BBBAFF3 /* BuiltInSetupView.swift */; };
 		C69062BD3C2E0844DCF29E5D /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA32D66EC88B6BEDF4675518 /* Commands.swift */; };
 		C6BB0C7305CBF9BC6A9C8A4E /* MacChatMockSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92398F20B425BB1B9F83DB93 /* MacChatMockSnapshot.swift */; };
 		C6C8EC4BB9D1B7EC88565DD8 /* MacChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8AD64AEE5A57AF1667249A7 /* MacChatView.swift */; };
@@ -345,6 +352,7 @@
 		1BF3123CD705AB984A21AD16 /* SpeechRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognizer.swift; sourceTree = "<group>"; };
 		1D6472A002F2CB9C07380792 /* MessagesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesTests.swift; sourceTree = "<group>"; };
 		1DF2FADB7D9A46A1299A30E2 /* KeychainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainManager.swift; sourceTree = "<group>"; };
+		1EBD5FFCF0E54067B287536A /* BuiltInTentacle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInTentacle.swift; sourceTree = "<group>"; };
 		20350221F5A369C6D4F3440F /* NewSessionJourneyUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionJourneyUITests.swift; sourceTree = "<group>"; };
 		21B22C573B738579E0AE6A1A /* NotificationsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationsPane.swift; sourceTree = "<group>"; };
 		22F6388085A5234FBAB8906F /* ProtocolTypesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTypesTests.swift; sourceTree = "<group>"; };
@@ -403,6 +411,7 @@
 		6B54EBE3BC7263D7BB438142 /* IOSNewSessionScenario.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSNewSessionScenario.swift; sourceTree = "<group>"; };
 		6D80A4B531EA5EBD081A0626 /* MacLaunchActivityIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLaunchActivityIndicator.swift; sourceTree = "<group>"; };
 		6DF461DDEA102ED1927719DE /* SessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStoreTests.swift; sourceTree = "<group>"; };
+		6E83544E423901DC3D8E07FB /* BuiltInTentacleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInTentacleTests.swift; sourceTree = "<group>"; };
 		6EDC494E5B0CBA712CCA550C /* ChatPerfListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPerfListView.swift; sourceTree = "<group>"; };
 		6FC184CE4CAFDEF1914453D4 /* TabBarHider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarHider.swift; sourceTree = "<group>"; };
 		714C9952404A97A090FC011F /* KrakiNotification.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = KrakiNotification.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -441,6 +450,7 @@
 		A625A24B0C13AF8010778069 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		A6E168D723AE41346C13EB32 /* DiagRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagRecorder.swift; sourceTree = "<group>"; };
 		A7BD9521683CD2FAA84C6AF6 /* Kraki.Release.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Kraki.Release.entitlements; sourceTree = "<group>"; };
+		A85098A6C3F08826873291AA /* TentacleSetupRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TentacleSetupRunner.swift; sourceTree = "<group>"; };
 		AA8F39B83EB04DE6DBA8346B /* KrakiNotification.Diagnostics.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KrakiNotification.Diagnostics.entitlements; sourceTree = "<group>"; };
 		ABE0847F43FAEAA37799CEE2 /* PendingTailBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingTailBuffer.swift; sourceTree = "<group>"; };
 		ACA594C1B063D6133CF3BC50 /* KrakiPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiPlatform.swift; sourceTree = "<group>"; };
@@ -459,6 +469,7 @@
 		C23E728794AEA9E7A803A564 /* SessionSubscriptionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSubscriptionController.swift; sourceTree = "<group>"; };
 		C4A34822755FED065BFDA075 /* TentaclePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TentaclePane.swift; sourceTree = "<group>"; };
 		C4FFB255BA0EAD5FA0EE3D2F /* IOSVoiceComposerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSVoiceComposerUITests.swift; sourceTree = "<group>"; };
+		C513DCF24560A3E13BBBAFF3 /* BuiltInSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInSetupView.swift; sourceTree = "<group>"; };
 		C553FCD0F7D8F0FC58C6EB97 /* IOSChatScrollScenario.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSChatScrollScenario.swift; sourceTree = "<group>"; };
 		C78E9D20D8646B35FBEBB79E /* MacChatUXRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatUXRegressionTests.swift; sourceTree = "<group>"; };
 		C7EEFA1D37EABA740112779F /* MacChatTestPages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatTestPages.swift; sourceTree = "<group>"; };
@@ -843,7 +854,10 @@
 		C0C1056D2F7C80D4C47605A0 /* Tentacle */ = {
 			isa = PBXGroup;
 			children = (
+				C513DCF24560A3E13BBBAFF3 /* BuiltInSetupView.swift */,
+				1EBD5FFCF0E54067B287536A /* BuiltInTentacle.swift */,
 				D219A1249EBFCAA247533E07 /* TentacleCLIManager.swift */,
+				A85098A6C3F08826873291AA /* TentacleSetupRunner.swift */,
 			);
 			path = Tentacle;
 			sourceTree = "<group>";
@@ -926,6 +940,7 @@
 		EF7888C9EB9415B5852E9E41 /* KrakiMacTests */ = {
 			isa = PBXGroup;
 			children = (
+				6E83544E423901DC3D8E07FB /* BuiltInTentacleTests.swift */,
 				C78E9D20D8646B35FBEBB79E /* MacChatUXRegressionTests.swift */,
 				5C6438C6608D2C3B47BA0AE2 /* MacChatUXTests.swift */,
 				B60DD3157710F226FB5EF0DC /* MacSessionSidebarRevealTests.swift */,
@@ -1034,6 +1049,7 @@
 				90562F65733123E69E9FD141 /* Sources */,
 				6919475AB58CCB18DFE3DE80 /* Resources */,
 				435E9F3651F22CF343D9C9F3 /* Frameworks */,
+				F69320AE6CB3867A2FDF0047 /* Embed built-in tentacle */,
 			);
 			buildRules = (
 			);
@@ -1207,11 +1223,34 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		F69320AE6CB3867A2FDF0047 /* Embed built-in tentacle */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed built-in tentacle";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "bash \"$SRCROOT/../../../scripts/mac/embed-tentacle-helper.sh\"";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		1064DDD183427AC7B6BA3755 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1B01E117986AF227249E2056 /* BuiltInTentacleTests.swift in Sources */,
 				231D593C8DB79D41E54AE803 /* MacChatUXRegressionTests.swift in Sources */,
 				0B0FC6D115637A972DEF0E3C /* MacChatUXTests.swift in Sources */,
 				3C4A11273BA4926B1804BD90 /* MacSessionSidebarRevealTests.swift in Sources */,
@@ -1257,6 +1296,8 @@
 				09C0D793D6B2F99D7AA81939 /* BubbleActionSlot.swift in Sources */,
 				C00B760A90E96341077B088A /* BubbleCatalogTestView.swift in Sources */,
 				0E23D63DF48D4BED0E117032 /* BubbleImageHostView.swift in Sources */,
+				1C5E0A0C9CD63583409196B7 /* BuiltInSetupView.swift in Sources */,
+				2D3B2608F2624CC6FD03BB30 /* BuiltInTentacle.swift in Sources */,
 				92741DF0DA28DB1B5C2D6676 /* ChatHeightEstimator.swift in Sources */,
 				71AB0F5DFBF3366EAC49D05D /* ChatLoadingState.swift in Sources */,
 				FCE093CC69E41DAA6487FFF2 /* ChatPerfListView.swift in Sources */,
@@ -1365,6 +1406,7 @@
 				4A82C1BB1E8E000A1D469831 /* TabBarHider.swift in Sources */,
 				A97C02EF361069D7F5305B77 /* TentacleCLIManager.swift in Sources */,
 				7072CE0B000723DAD5D771C6 /* TentaclePane.swift in Sources */,
+				9304EBE2869D89A4308C8D20 /* TentacleSetupRunner.swift in Sources */,
 				CFD8991B865BC90CE1602AAD /* TextKitBubble.swift in Sources */,
 				4301D37FC0E42C745BB47E4D /* Theme.swift in Sources */,
 				B8FF9EBBBEB7C81BA045175F /* ThemePlatform.swift in Sources */,
@@ -1403,6 +1445,8 @@
 				C8872C5D0D4A932E48C4CB36 /* AppState.swift in Sources */,
 				F67A09E157C2A96010AFEDB2 /* AttachmentStore.swift in Sources */,
 				3581F3000482E30C0DE2698C /* AuthManager.swift in Sources */,
+				C4FF5D48299265218A60123D /* BuiltInSetupView.swift in Sources */,
+				90CB99F531524D18FF2BD990 /* BuiltInTentacle.swift in Sources */,
 				897B6BA62036FC059D074526 /* ChatLoadingState.swift in Sources */,
 				0E763016C3E54D4BEE49A2CE /* ChatPlaceholderView+macOS.swift in Sources */,
 				1A8B176B6FB20CE0C8414668 /* ChatScrollPolicy.swift in Sources */,
@@ -1477,6 +1521,7 @@
 				4F248E44B2F839DA51C609BD /* SpeechRecognizer.swift in Sources */,
 				D01B522169B9950F05E31D64 /* TentacleCLIManager.swift in Sources */,
 				17A258966182927A4D3E35D5 /* TentaclePane.swift in Sources */,
+				3A71E711D1939B318CC0EC5C /* TentacleSetupRunner.swift in Sources */,
 				2C0D85737E6D0F881D7CF1D0 /* ThemePlatform.swift in Sources */,
 				B6922FDD9F417397FB74E61E /* ToolChipHeader.swift in Sources */,
 				861AF5304EF7CEADE103EB21 /* ToolStatusIcon.swift in Sources */,
@@ -2145,6 +2190,7 @@
 				CURRENT_PROJECT_VERSION = 42;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = KrakiMac.Debug.Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Kraki (Dev)";
@@ -2258,6 +2304,7 @@
 				CURRENT_PROJECT_VERSION = 42;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = KrakiMac.Diagnostics.Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -2282,6 +2329,7 @@
 				CURRENT_PROJECT_VERSION = 42;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = KrakiMac.Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Kraki;
@@ -2307,6 +2355,7 @@
 				CURRENT_PROJECT_VERSION = 42;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = KrakiMac.Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Kraki;
