@@ -21,6 +21,7 @@ import VoiceInputCore
         app.testOutboundMessageHandler = { [weak app] payload, sessionID, _ in
             if payload["type"] as? String == "abort_session" { driver.aborts += 1 }
             if payload["type"] as? String == "send_input" {
+                driver.lastAnswerTo = (payload["payload"] as? [String: Any])?["answerTo"] as? String ?? ""
                 driver.sentCount += 1
                 driver.lastSent = (payload["payload"] as? [String: Any])?["text"] as? String ?? ""
                 // Keep the scenario available for the next gesture without inventing a server reply.
@@ -43,6 +44,7 @@ import VoiceInputCore
     var lastSent = ""
     var starts = 0
     var aborts = 0
+    var lastAnswerTo = ""
     @ObservationIgnored lazy var voice = KrakiVoiceInputController(host: self, sessionFactory: self, audioPolicy: ScenarioAudio())
     func requestVoiceLease(resource: String) -> Bool {
         Task { @MainActor [weak self] in
@@ -121,6 +123,21 @@ struct IOSVoiceHoldScenarioView: View {
                     session.state = session.state == .active ? .idle : .active
                     app.sessionStore.sessions[id] = session
                 }
+                Button("Ask") {
+                    // The agent asks a free-form question on the spine.
+                    let seq = (app.sessionStore.sessions[id]?.lastSeq ?? 0) + 1
+                    app.messageProvider?.setTentacleInfo(sessionId: id, lastSeq: seq, deviceId: "voice-test-device")
+                    let message: [String: Any] = [
+                        "type": "agent_message", "seq": seq, "sessionId": id, "deviceId": "voice-test-device",
+                        "timestamp": ISO8601.now(),
+                        "payload": ["content": "我需要确认一下。",
+                                    "question": ["id": "q-\(seq)", "text": "新会话默认用哪个模型？"]],
+                    ]
+                    if let json = try? JSONSerialization.data(withJSONObject: message) {
+                        app.messageProvider?.ingestTailCandidate(id, json: json)
+                    }
+                    app.sessionStore.sessions[id]?.lastSeq = seq
+                }
                 Button("Reset") {
                     app.iosVoiceComposer.retireKeepingDraft()
                     app.sessionStore.setDraft(id, "")
@@ -130,6 +147,7 @@ struct IOSVoiceHoldScenarioView: View {
             Text("sent=\(driver.sentCount) starts=\(driver.starts) aborts=\(driver.aborts) rec=\(app.iosVoiceComposer.isRecording ? 1 : 0) finishing=\(app.iosVoiceComposer.isFinishing(in: id) ? 1 : 0) staged=\(stagedCount) session=\(id) appearance=\(colorScheme == .dark ? "dark" : "light")")
                 .font(.system(size: 10, design: .monospaced)).accessibilityIdentifier("voice-test-state")
             Text(driver.lastSent).font(.caption2).lineLimit(1).accessibilityIdentifier("voice-test-sent")
+            Text("answerTo=\(driver.lastAnswerTo)").font(.caption2).accessibilityIdentifier("voice-test-answer")
             NavigationStack { ChatView(sessionId: id).id(id) }
         }
         .onChange(of: app.iosVoiceComposer.isRecording) { _, recording in if recording { capture("recording", delay: 450) } }

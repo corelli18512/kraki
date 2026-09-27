@@ -43,8 +43,9 @@ send circle beside the capsule.
   transcript in place (corrected so far + not-yet-corrected rest, so no words
   vanish and the bubble never shrinks while correcting); it
   is **transmitted only when the correction completes**, so the agent always
-  receives corrected text. With a pending question/permission, ↑ behaves like
-  Edit (structured replies are reviewed in the field).
+  receives corrected text. A free-form answer to a pending question goes the
+  same way (the staged message carries `answerTo`). Only a permission deny
+  reason behaves like Edit (reviewed in the field).
 - Latin words get one separating space; CJK, whitespace and punctuation don't.
 - Leaving the conversation or the app becoming inactive while recording turns
   the speech into that conversation's draft (no focus, never sent). A staged

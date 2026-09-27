@@ -2196,9 +2196,9 @@ final class MacChatScrollView: MacSmoothScrollView {
         cancelled: Bool
     )?
 
-    private let jumpMaterial = NSVisualEffectView()
+    private let jumpMaterial = MacChatScrollView.makeJumpControlMaterial()
     private let jumpButton = NSButton()
-    private let latestStartMaterial = NSVisualEffectView()
+    private let latestStartMaterial = MacChatScrollView.makeJumpControlMaterial()
     private let latestStartButton = NSButton()
     private var jumpButtonVisibilityTargets: [ObjectIdentifier: Bool] = [:]
     private var jumpButtonVisibilityGenerations: [ObjectIdentifier: Int] = [:]
@@ -2206,6 +2206,15 @@ final class MacChatScrollView: MacSmoothScrollView {
     private let latestMessageTopPadding: CGFloat = MacChatHeaderMetrics.listTopInset
     /// Round navigation controls (pointer target; iOS uses 44pt for touch).
     static let jumpControlSize: CGFloat = 36
+    /// The ↑/↓ controls float over the conversation and must not hide the
+    /// text behind them: no material, just a faint wash plus the tinted
+    /// hairline border.
+    static func makeJumpControlMaterial() -> NSView {
+        let view = NSView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.22).cgColor
+        return view
+    }
     /// ↓ sits directly above the composer's send circle (same size and
     /// column), at a fixed height: a growing composer never pushes it up.
     private var jumpFrame: NSRect {
@@ -2347,9 +2356,6 @@ final class MacChatScrollView: MacSmoothScrollView {
         }
 
         for material in [jumpMaterial, latestStartMaterial] {
-            material.material = .popover
-            material.blendingMode = .withinWindow
-            material.state = .active
             material.wantsLayer = true
             material.layer?.cornerRadius = Self.jumpControlSize / 2
             material.layer?.masksToBounds = true
@@ -2831,9 +2837,13 @@ final class MacChatScrollView: MacSmoothScrollView {
         let dot = Self.unseenDotSize
         unseenDot.frame = NSRect(x: jumpFrame.maxX - dot + 2, y: jumpFrame.minY - 2, width: dot, height: dot)
         var ring = NSColor.windowBackgroundColor.cgColor
+        var wash = ring
         effectiveAppearance.performAsCurrentDrawingAppearance {
             ring = NSColor.windowBackgroundColor.cgColor
+            wash = NSColor.windowBackgroundColor.withAlphaComponent(0.22).cgColor
         }
+        jumpMaterial.layer?.backgroundColor = wash
+        latestStartMaterial.layer?.backgroundColor = wash
         unseenDot.layer?.borderColor = ring
     }
 
@@ -3489,7 +3499,7 @@ final class MacChatScrollView: MacSmoothScrollView {
 
     private func setJumpButtonVisibility(
         _ button: NSButton,
-        material: NSVisualEffectView,
+        material: NSView,
         shouldShow: Bool,
         animated: Bool
     ) {

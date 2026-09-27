@@ -1137,19 +1137,32 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         }
     }
 
+    /// The ↑/↓ controls float over the conversation and must not hide the
+    /// text behind them: no blur/glass (both render as an opaque disc here),
+    /// just a faint wash under the chevron plus the tinted hairline border.
+    private static func makeJumpControlBackground() -> UIVisualEffectView {
+        let view = UIVisualEffectView(effect: nil)
+        view.contentView.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.22)
+        return view
+    }
+
+    private static func prepareHiddenJumpMaterial(_ view: UIVisualEffectView) {
+        view.alpha = 0
+        view.isHidden = true
+    }
+
     private func setupJumpButton() {
         let tint = agentTint()
         let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
 
-        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+        let blur = Self.makeJumpControlBackground()
         blur.translatesAutoresizingMaskIntoConstraints = false
         blur.isUserInteractionEnabled = false
         blur.layer.cornerRadius = Self.jumpControlSize / 2
         blur.layer.masksToBounds = true
         blur.layer.borderWidth = 0.5
         blur.layer.borderColor = tint.withAlphaComponent(0.25).cgColor
-        blur.alpha = 0
-        blur.isHidden = true
+        Self.prepareHiddenJumpMaterial(blur)
 
         jumpButton.translatesAutoresizingMaskIntoConstraints = false
         // Keep the material view OUTSIDE the UIButton. UIKit may reorder a
@@ -1197,15 +1210,14 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
         let latestStart = latestMessageStartButton.bottomAnchor.constraint(equalTo: jumpButton.bottomAnchor)
         latestStartBottomConstraint = latestStart
-        let startBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+        let startBlur = Self.makeJumpControlBackground()
         startBlur.translatesAutoresizingMaskIntoConstraints = false
         startBlur.isUserInteractionEnabled = false
         startBlur.layer.cornerRadius = Self.jumpControlSize / 2
         startBlur.layer.masksToBounds = true
         startBlur.layer.borderWidth = 0.5
         startBlur.layer.borderColor = tint.withAlphaComponent(0.25).cgColor
-        startBlur.alpha = 0
-        startBlur.isHidden = true
+        Self.prepareHiddenJumpMaterial(startBlur)
 
         latestMessageStartButton.translatesAutoresizingMaskIntoConstraints = false
         latestMessageStartButton.setImage(

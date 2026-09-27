@@ -504,6 +504,21 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .sending)
     }
 
+    func testStagedVoiceAnswerDispatchesWithAnswerTo() throws {
+        var sent: [[String: Any]] = []
+        let fx = try makeFixture(total: 4) { msg in sent.append(msg); return true }
+        drain(300)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: "选二", answerTo: "q-7"))
+        XCTAssertTrue(sent.isEmpty)
+        XCTAssertEqual(sender.pendingInputs(sid).first?.payload["answerTo"]?.stringValue, "q-7")
+        XCTAssertTrue(sender.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "选第二个。"))
+        let payload = try XCTUnwrap(sent.first?["payload"] as? [String: Any])
+        XCTAssertEqual(payload["answerTo"] as? String, "q-7")
+        XCTAssertEqual(payload["text"] as? String, "选第二个。")
+        XCTAssertNil(payload["delivery"], "an answer is never a steer")
+    }
+
     func testStagedVoiceFailureRetriesOriginalAndDeleteWins() throws {
         var texts: [String] = []
         let fx = try makeFixture(total: 4) { msg in

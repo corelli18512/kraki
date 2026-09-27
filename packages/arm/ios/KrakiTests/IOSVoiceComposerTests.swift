@@ -61,7 +61,9 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
     var transmitted: [(String, String)] = []
     var acceptsTransport = true
     func requestVoiceLease(resource: String) -> Bool { true }
-    func stageVoiceInput(sessionID: String, text: String, attachments: [ImageAttachment]?, delivery: CommandSender.InputDelivery) -> String? {
+    var lastAnswerTo: String?
+    func stageVoiceInput(sessionID: String, text: String, attachments: [ImageAttachment]?, delivery: CommandSender.InputDelivery, answerTo: String?) -> String? {
+        lastAnswerTo = answerTo
         let id = UUID().uuidString
         staged[id] = Staged(sessionID: sessionID, text: text, original: text, state: "correcting", delivery: delivery, attachments: attachments?.count ?? 0)
         order.append(id)
@@ -194,6 +196,18 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
                        "Please fix the login page")
         XCTAssertEqual(IOSVoiceComposer.overlay(corrected: "Done.", onto: "done", coveredPrefix: 4), "Done.")
         XCTAssertEqual(IOSVoiceComposer.overlay(corrected: "", onto: "raw", coveredPrefix: 0), "raw")
+    }
+
+    func testVoiceAnswerIsStagedWithAnswerToAndSentCorrected() async {
+        let (host, voice) = make()
+        let session = await start(host, voice)
+        await partial("选第二个方案", session)
+        XCTAssertTrue(voice.send(attachments: nil, delivery: .prompt, answerTo: "q-1"))
+        XCTAssertEqual(host.lastAnswerTo, "q-1")
+        XCTAssertEqual(host.last?.state, "correcting", "answers correct in the bubble like any message")
+        XCTAssertTrue(host.transmitted.isEmpty)
+        await final("选第二个方案。", raw: "选第二个方案", session)
+        XCTAssertEqual(host.transmitted.map(\.1), ["选第二个方案。"])
     }
 
     func testSendWithDraftSelectionCorrectsOnlyTheUtterance() async {

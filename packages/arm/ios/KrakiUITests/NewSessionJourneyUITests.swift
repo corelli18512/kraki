@@ -88,4 +88,14 @@ final class NewSessionJourneyUITests: XCTestCase {
         settle()
         assertChatLayout(reference, "after cancelled +")
     }
+
+    func testJumpControlsScreenshotOverText() {
+        launch()
+        app.staticTexts["Existing session 2"].firstMatch.tap()
+        settle(1.5)
+        app.swipeDown(velocity: .slow)
+        settle(1.5)
+        let a = XCTAttachment(screenshot: app.screenshot()); a.name = "jump-controls-over-text"; a.lifetime = .keepAlways; add(a)
+        XCTAssertTrue(app.buttons["Jump to latest"].firstMatch.exists)
+    }
 }

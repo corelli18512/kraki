@@ -504,12 +504,16 @@ struct MessageInputView: View {
     private func sendVoice() {
         guard isRecordingHere else { return }
         switch submissionIntent {
-        case .answerQuestion, .denyPermission:
+        case .denyPermission:
+            // A deny reason resolves a permission, not a message: review it.
             withAnimation(Self.expandAnimation) { voice.finishToDraft() }
-        case .prompt, .steer:
+        case .prompt, .steer, .answerQuestion:
+            // An answer is an ordinary message carrying `answerTo`: same
+            // bubble-corrected send as a prompt.
             let delivery: CommandSender.InputDelivery = submissionIntent == .steer ? .steer : .prompt
+            let answerTo = submissionIntent == .answerQuestion ? pendingQuestion?.id : nil
             let staged = withAnimation(Self.expandAnimation) {
-                voice.send(attachments: imageAttachments, delivery: delivery)
+                voice.send(attachments: imageAttachments, delivery: delivery, answerTo: answerTo)
             }
             guard staged else {
                 showSubmitFailure()
