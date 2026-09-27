@@ -21,7 +21,7 @@ The `mac-updates` branch contains only the generated appcast. Release archives r
 
 ## Release flow
 
-A `mac-v*` tag runs the normal signed universal Mac archive pipeline. The archive is Developer ID signed, notarized, stapled, and uploaded as both the existing `.tar.gz` distribution asset and a `Kraki.app.zip` Sparkle update asset.
+A `mac-v*` tag runs the normal signed universal Mac archive pipeline. The archive is Developer ID signed, notarized, stapled, and uploaded as the `Kraki.dmg` download for new users, the existing `.tar.gz` distribution asset and a `Kraki.app.zip` Sparkle update asset.
 
 After the GitHub Release is created, a macOS release job downloads `Kraki.app.zip`, runs Sparkle's `generate_appcast`, signs the feed with the Ed25519 key, and pushes the updated `appcast.xml` to `mac-updates`.
 
@@ -29,6 +29,8 @@ The public Sparkle key is embedded in the production `Info.plist` as `SUPublicED
 
 ## Safety boundaries
 
-Sparkle verifies the Ed25519 update signature before installation. Apple Developer ID signing, notarization, and Gatekeeper validation remain required for every archive. The GUI updater does not update the separate Tentacle daemon; daemon compatibility and upgrade sequencing remain a separate release concern.
+Sparkle verifies the Ed25519 update signature before installation. Apple Developer ID signing, notarization, and Gatekeeper validation remain required for every archive. 
+
+The app embeds the tentacle built from the same commit (see `docs/mac-builtin-tentacle.md`), so a Sparkle update also updates the built-in daemon: after relaunch the app notices the running daemon reports an older version and restarts it in place. A standalone CLI install is not touched by the GUI updater and keeps updating itself.
 
 The appcast publisher is serialized with the `mac-updates-appcast` workflow concurrency group so two Mac tags cannot overwrite the feed concurrently.
