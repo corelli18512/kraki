@@ -21,7 +21,7 @@ import {
   getOrCreateDeviceId,
   getConfigPath,
 } from './config.js';
-import { checkGhAuth, checkCopilotCli, checkClaudeCli, checkAnthropicCreds, saveAnthropicKey, withRetry, probeFda, pollFda, ensureTccBundleRegistered, openAllTccPanes } from './checks.js';
+import { checkGhAuth, checkCopilotCli, checkClaudeCli, checkCodexCli, checkAnthropicCreds, saveAnthropicKey, probeFda, pollFda, ensureTccBundleRegistered, openAllTccPanes } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { isSea } from 'node:sea';
 import type { AgentId } from '@kraki/protocol';
@@ -375,7 +375,7 @@ async function githubDeviceFlow(clientId: string): Promise<string> {
 // ── Setup flow ──────────────────────────────────────────
 
 /**
- * Detect installed agents (Copilot, Claude) and let the user choose which
+ * Detect installed agents (Copilot, Claude, Codex) and let the user choose which
  * to enable. Returns an explicit allow-list to persist in config, or
  * `undefined` to leave the daemon on auto-detect.
  *
@@ -399,9 +399,19 @@ async function runAgentStep(): Promise<AgentId[] | undefined> {
     claudeSpinner.info('Claude CLI not found');
   }
 
+  const codexSpinner = ora({ text: 'Looking for Codex CLI…', indent: 4 }).start();
+  const codex = checkCodexCli();
+  if (codex.found) {
+    codexSpinner.succeed(`Codex CLI found (${codex.version ?? 'unknown version'})`);
+  } else {
+    codexSpinner.info('Codex CLI not found');
+  }
+
   const available: AgentId[] = [];
   if (copilot.found) available.push('copilot');
   if (claude.found) available.push('claude');
+  if (codex.found) available.push('codex');
+  const labels: Partial<Record<AgentId, string>> = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex' };
 
   // If Claude is present, make sure it has credentials it can actually use.
   if (claude.found) {
@@ -434,6 +444,7 @@ async function runAgentStep(): Promise<AgentId[] | undefined> {
     console.log(chalk.yellow('    No agents detected. Install at least one to run sessions:'));
     console.log(chalk.dim('      • Copilot CLI — https://github.com/features/copilot/cli/'));
     console.log(chalk.dim('      • Claude CLI  — https://docs.anthropic.com/en/docs/claude-code'));
+    console.log(chalk.dim('      • Codex CLI   — npm install -g @openai/codex; codex login'));
     console.log(chalk.dim('    Continuing with auto-detect — install later and restart the daemon.'));
     return undefined;
   }
@@ -444,18 +455,15 @@ async function runAgentStep(): Promise<AgentId[] | undefined> {
     // than pinning. If the user installs the other agent later it will be
     // picked up automatically. (Explicit pinning is for the GUI wizard /
     // `--agent` flag, where there's a real choice to constrain.)
-    console.log(chalk.dim(`    Using ${only === 'copilot' ? 'Copilot' : 'Claude'} (auto-detect).`));
+    console.log(chalk.dim(`    Using ${labels[only]} (auto-detect).`));
     return undefined;
   }
 
-  // Both installed — let the user pick the allow-list.
+  // Multiple installed — let the user pick the allow-list.
   const chosen = await checkbox<AgentId>({
     message: 'Enable which agents?',
     theme: promptTheme,
-    choices: [
-      { name: 'Copilot', value: 'copilot', checked: true },
-      { name: 'Claude', value: 'claude', checked: true },
-    ],
+    choices: available.map((id) => ({ name: labels[id]!, value: id, checked: true })),
     validate: (items) => (items.length > 0 ? true : 'Select at least one agent'),
   });
   return chosen;
@@ -540,7 +548,7 @@ export async function runSetup(): Promise<KrakiConfig> {
 
   divider();
 
-  // 3. Agent selection (Copilot and/or Claude)
+  // 3. Agent selection (Copilot, Claude and/or Codex)
   console.log(`  ${icon} ${step(3, total)} ${chalk.bold('Agents')}`);
   const selectedAgents = await runAgentStep();
 
@@ -686,30 +694,10 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
 
   divider();
 
-  // 3. Agent check
-  console.log(`  ${icon} ${step(3, total)} ${chalk.bold('Agent Verification')}`);
-  if (isSea()) {
-    const spinner = ora({ text: 'Looking for Copilot CLI…', indent: 4 }).start();
-    const copilotResult = await withRetry(
-      checkCopilotCli,
-      'Copilot CLI',
-      'Install from https://github.com/features/copilot/cli/',
-      spinner,
-    );
-    spinner.succeed(`Copilot CLI found (${copilotResult.version ?? 'unknown version'})`);
-
-    const authSpinner = ora({ text: 'Checking Copilot authentication…', indent: 4 }).start();
-    const hasGhToken = checkGhAuth().authenticated;
-    const hasEnvToken = !!process.env.GITHUB_TOKEN || !!process.env.GH_TOKEN || !!process.env.COPILOT_GITHUB_TOKEN;
-    if (hasGhToken || hasEnvToken) {
-      authSpinner.succeed('Copilot authentication available');
-    } else {
-      authSpinner.succeed('Copilot authentication available (via Copilot login)');
-    }
-  } else {
-    const spinner = ora({ text: 'Checking Copilot SDK…', indent: 4 }).start();
-    spinner.succeed('Copilot SDK available');
-  }
+  // The same agent discovery in both flows — self-hosted/SEA users do not
+  // need Copilot installed when they already have Codex (or another agent).
+  console.log(`  ${icon} ${step(3, total)} ${chalk.bold('Agents')}`);
+  const selectedAgents = await runAgentStep();
 
   divider();
 
@@ -734,6 +722,7 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
     relay,
     authMethod: authMethod as KrakiConfig['authMethod'],
     device: { name: deviceName, id: deviceId },
+    ...(selectedAgents?.length && { agents: selectedAgents }),
     logging: { verbosity: DEFAULT_LOG_VERBOSITY },
   };
 

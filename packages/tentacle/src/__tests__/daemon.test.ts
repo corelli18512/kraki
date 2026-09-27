@@ -330,6 +330,18 @@ describe('startDaemon()', () => {
     expect(launch.env.PATH).toContain(resolve('/tmp/npx/node_modules/kraki/node_modules/.bin'));
   });
 
+  it('preserves Windows Path when preparing a case-sensitive spawn environment', () => {
+    const oldEnv = process.env;
+    try {
+      process.env = { Path: 'C:\\nvm4w\\nodejs;C:\\Windows\\System32', SystemRoot: 'C:\\Windows' };
+      const launch = resolveDaemonLaunch(publishedCliPath, false, 'win32');
+      expect(launch.env.PATH).toContain(';C:\\nvm4w\\nodejs;C:\\Windows\\System32');
+      expect(Object.keys(launch.env).filter((key) => key.toLowerCase() === 'path')).toEqual(['PATH']);
+    } finally {
+      process.env = oldEnv;
+    }
+  });
+
   it('resolves SEA launch paths to the current executable', () => {
     const launch = resolveDaemonLaunch('/tmp/kraki', true);
 
