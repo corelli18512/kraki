@@ -17,7 +17,7 @@ Scope: iOS/macOS **session-list preview rows only**. No new composer or chat-bub
 - Confirmation clears only the matching client ID. Once no input remains, projection reveals the current runtime/preview/draft status rather than hard-coding a human icon.
 - Historical/range `user_message` echoes also confirm the same ID. Explicitly mismatched sessions and non-user messages never confirm. A row missing its own session ID inherits the authoritative batch envelope. Restoring the durable outbox checks the SQLite cache once per restored input, so an already confirmed send does not surface as a false failed row even when chat history has never been opened. There are no new SQL reads on the list's rendering path.
 
-The iOS diffable fingerprint includes the projected delivery text/state/time. SwiftUI card bodies observe the outbox and connection state directly. Correction content changes do not restart the glyph's animation.
+The iOS diffable fingerprint includes the projected delivery text/state/time. SwiftUI card bodies observe the outbox and connection state directly. Correction content changes do not restart the glyph's animation. Both native hosts and the SwiftUI wrapper reject hit testing: decorative status icons cannot intercept row navigation.
 
 ## Animation lifecycle
 

@@ -295,6 +295,11 @@ import UIKit
         let container = vc.view!; container.addSubview(host)
         defer { window.isHidden = true; window.rootViewController = nil }
         #endif
+        #if os(macOS)
+        XCTAssertNil(host.hitTest(CGPoint(x: 8, y: 8)), "Decorative glyph must not intercept row navigation")
+        #else
+        XCTAssertNil(host.hitTest(CGPoint(x: 8, y: 8), with: nil), "Decorative glyph must not intercept row navigation")
+        #endif
         func settle() { RunLoop.main.run(until: Date().addingTimeInterval(0.4)) }
         host.configure(kind: .compacting, color: blue, enabled: true); settle()
         XCTAssertTrue(host.renderer.isAnimating)

@@ -27,6 +27,7 @@ struct SessionPreviewStatusGlyph: View {
             .frame(width: 16, height: 16)
             .onAppear { appeared = true }
             .onDisappear { appeared = false }
+            .allowsHitTesting(false) // decorative; row navigation owns every click
             .accessibilityHidden(true) // the preview row exposes the full status + text
     }
 }
@@ -45,6 +46,7 @@ final class PreviewGlyphHost: PreviewPlatformView {
 
     #if os(macOS)
     override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true; layer?.addSublayer(renderer)
@@ -53,6 +55,7 @@ final class PreviewGlyphHost: PreviewPlatformView {
     override func layout() { super.layout(); reconcile() }
     #else
     override init(frame: CGRect) { super.init(frame: frame); layer.addSublayer(renderer) }
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
     override func didMoveToWindow() { super.didMoveToWindow(); reconcile() }
     override func layoutSubviews() { super.layoutSubviews(); reconcile() }
     #endif
