@@ -460,7 +460,7 @@ struct SessionsSidebarView: View {
                 Text("No sessions yet")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Color.textSecondary)
-                Text("Click + or run `kraki` in Terminal.")
+                Text("Click + to start a session.")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.textMuted)
                     .multilineTextAlignment(.center)
