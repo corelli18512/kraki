@@ -249,18 +249,23 @@ run('Pi 0.87 live RPC compatibility', () => {
     expect(callbacks.onAttachmentBytes).not.toHaveBeenCalled();
   });
 
-  it('finalizes an ends-on-tool turn without losing the final reply', async () => {
-    await create(); steps.push({ tool: 'kraki_get_mode', args: { query: 'current' } }, { text: '' }, { tool: 'finalize_reply', args: { resummarize: true, text: 'FINALIZED' } }, { text: '' });
-    await turn(); expect(lastReply()).toBe('FINALIZED'); expect(callbacks.onIdle).toHaveBeenCalledTimes(1);
-    expect(callbacks.onToolStart.mock.calls.map(c => c[1].toolName)).not.toContain('finalize_reply');
+  it('relays an ends-on-tool turn as steps without injecting a finalize request', async () => {
+    await create(); steps.push({ tool: 'kraki_get_mode', args: { query: 'current' } }, { text: '' });
+    await turn();
+    expect(callbacks.onMessage).not.toHaveBeenCalled();
+    expect(callbacks.onIdle).toHaveBeenCalledTimes(1);
+    expect(callbacks.onToolComplete.mock.calls.map(c => c[1].toolName)).toEqual(['kraki_get_mode']);
+    expect(requests).toHaveLength(2); // Tool request + Pi's own continuation, no Kraki-injected round.
   });
 
-  it('streams finalize_reply argument text with Pi 0.87 delta-only records', async () => {
-    await create(); steps.push({ tool: 'kraki_get_mode', args: { query: 'current' } }, { text: '' }, { tool: 'finalize_reply', args: { resummarize: true, text: 'FINAL_STREAMED_TEXT' } }, { text: '' });
-    await turn(); expect(lastReply()).toBe('FINAL_STREAMED_TEXT');
+  it('streams the natural closing reply after tools with Pi 0.87 delta-only records', async () => {
+    await create(); steps.push({ tool: 'kraki_get_mode', args: { query: 'current' } }, { text: 'NATURAL_CLOSING_REPLY' });
+    await turn(); expect(lastReply()).toBe('NATURAL_CLOSING_REPLY'); expect(callbacks.onIdle).toHaveBeenCalledTimes(1);
     expect(wire.some(e => e.assistantMessageEvent?.type === 'toolcall_delta')).toBe(true);
     expect(wire.filter(e => e.type === 'message_update').every(e => !e.assistantMessageEvent.partial)).toBe(true);
-    expect(callbacks.onFinalizeDelta.mock.calls.map(c => c[1].content).join('')).toBe('FINAL_STREAMED_TEXT');
+    expect(callbacks.onMessageDelta.mock.calls.map(c => c[1].content).join('')).toBe('NATURAL_CLOSING_REPLY');
+    expect(callbacks.onFinalizeDelta).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(2);
   });
 
   it('aborts an active stream and accepts the next prompt', async () => {
@@ -291,7 +296,8 @@ run('Pi 0.87 live RPC compatibility', () => {
   });
 
   it('aborts a pending permission without executing the denied write', async () => {
-    await create(); steps.push({ tool: 'write', args: { path: 'never-written.txt', content: 'no' } });
+    await create(); adapter.setSessionMode(sid, 'safe');
+    steps.push({ tool: 'write', args: { path: 'never-written.txt', content: 'no' } });
     await adapter.sendMessage(sid, 'pending approval');
     await wait(() => expect(callbacks.onPermissionRequest).toHaveBeenCalledTimes(1));
     await adapter.abortSession(sid);

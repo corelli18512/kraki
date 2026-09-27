@@ -130,6 +130,46 @@ describe('Pi compaction ownership across prompt preflight', () => {
     expect(adapter.onMessageDelta).toHaveBeenCalledWith(sid, { content: 'late text', turnId: 'previous' });
   });
 
+  it('does not let an older late ACK clear the next prompt preflight owner', async () => {
+    const { adapter, sid, proc, session, begin, emit, onCompaction } = setup();
+    const firstAck = deferred(), nextAck = deferred();
+    proc.request.mockReturnValueOnce(firstAck.promise).mockReturnValueOnce(nextAck.promise);
+    begin('first');
+    const firstSend = adapter.sendMessage(sid, 'first work');
+    await emit({ type: 'agent_start' });
+    session.settledTurn = session.logicalTurn;
+    begin('next');
+    const nextSend = adapter.sendMessage(sid, 'next work');
+    try {
+      firstAck.resolve();
+      await firstSend;
+      await emit({ type: 'compaction_start', reason: 'threshold' });
+      expect(onCompaction.mock.calls[0][1].turnId).toBe('next');
+    } finally {
+      firstAck.resolve(); nextAck.resolve();
+      await Promise.all([firstSend, nextSend]);
+    }
+  });
+
+  it('retires preflight ownership and compaction state on explicit abort', async () => {
+    const { adapter, sid, proc, session, begin, emit } = setup();
+    const ack = deferred();
+    proc.request.mockImplementation(type => type === 'prompt' ? ack.promise : Promise.resolve({}));
+    begin('next');
+    const sending = adapter.sendMessage(sid, 'work to abort');
+    try {
+      await emit({ type: 'compaction_start', reason: 'threshold' });
+      await adapter.abortSession(sid);
+      await sending;
+      expect(proc.kill).toHaveBeenCalledOnce();
+      expect((session as typeof session & { promptPreflight?: unknown }).promptPreflight).toBeUndefined();
+      expect((adapter as unknown as { compactingSessions: Map<string, unknown> }).compactingSessions.has(sid)).toBe(false);
+    } finally {
+      ack.resolve();
+      await sending;
+    }
+  });
+
   it.each(['accepted', 'rejected'] as const)('retires preflight ownership after the prompt is %s', async outcome => {
     const { adapter, sid, proc, begin, emit, send, onCompaction } = setup();
     begin('next');
