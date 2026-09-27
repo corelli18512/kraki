@@ -641,49 +641,24 @@ final class MacAutomationDriver {
     }
 
     private func compactingGlyphAnimationRegression(id: Any?, connection: Int32) {
-        let host = NSHostingView(rootView: MacCompactingStatusGlyph())
-        host.frame = NSRect(x: 0, y: 0, width: 16, height: 16)
-        let window = NSWindow(
-            contentRect: host.frame,
-            styleMask: .borderless,
-            backing: .buffered,
-            defer: false
-        )
-        window.isReleasedWhenClosed = false
-        window.contentView = host
-        window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
-        window.orderFrontRegardless()
-        host.layoutSubtreeIfNeeded()
-        host.display()
-
-        func renderedPNG() -> Data? {
-            guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
-            host.cacheDisplay(in: host.bounds, to: bitmap)
-            return bitmap.representation(using: .png, properties: [:])
-        }
-
-        guard let first = renderedPNG() else {
-            window.close()
-            send(error: "capture_failed", message: "Unable to render Compacting glyph", id: id, on: connection)
-            return
-        }
-
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            let second = renderedPNG()
-            let changed = second.map { $0 != first } ?? false
-            self?.send(
-                result: [
-                    "passed": changed,
-                    "changed": changed,
-                    "firstBytes": first.count,
-                    "secondBytes": second?.count ?? 0,
-                ],
-                id: id,
-                on: connection
-            )
-            window.close()
-        }
+        // The old probe compared NSView bitmap snapshots in an offscreen
+        // window. Compositor animations do not mutate that model snapshot,
+        // and offscreen hosts now intentionally suspend their animations.
+        // Audit the installed native curve instead; real host visibility/reuse
+        // and byte-level design parity have separate native regression gates.
+        let layer = SessionPreviewGlyphLayer()
+        let color = NSColor(Color.krakiPrimary).cgColor
+        layer.configure(kind: .compacting, color: color, image: nil, displayScale: 2, animate: true)
+        let curve = layer.planes[0].animation(forKey: "compression") as? CAKeyframeAnimation
+        let values = curve?.values as? [Double] ?? []
+        let changed = Set(values).count > 1
+        let installed = curve?.duration == 2 && values.count > 200 && layer.planes[1].animationKeys() == nil
+        layer.configure(kind: .compacting, color: color, image: nil, displayScale: 2, animate: false)
+        let stopped = layer.planes.allSatisfy { ($0.animationKeys() ?? []).isEmpty }
+        send(result: ["passed": changed && installed && stopped, "changed": changed,
+                      "samples": values.count, "stoppedOffscreen": stopped,
+                      "method": "Core Animation curve audit (not a pixel/FPS measurement)"],
+             id: id, on: connection)
     }
 
     private func captureSessionSpeakerGlyphs(path: String) -> Result<NSSize, CaptureError> {

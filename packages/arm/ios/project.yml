@@ -216,6 +216,7 @@ targets:
     platform: macOS
     sources:
       - path: KrakiMacTests
+      - path: KrakiTests/SessionPreviewGlyphTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.tests

@@ -12,6 +12,7 @@ enum SessionCardStatus: Equatable {
     case offline
     case agentMessage
     case humanMessage
+    case delivery(SessionDeliveryStatus)
     case idle
 
     static func resolve(
@@ -50,6 +51,7 @@ enum SessionCardStatus: Equatable {
         case .offline: return "Offline"
         case .agentMessage: return "Last message from agent"
         case .humanMessage: return "Last message from you"
+        case .delivery(let delivery): return delivery.accessibilityLabel
         case .idle: return nil
         }
     }
@@ -73,18 +75,22 @@ struct SessionCardProjection: Equatable {
         device: DeviceSummary?,
         preview: SessionPreview?,
         draft: String?,
-        isCompacting: Bool = false
+        isCompacting: Bool = false,
+        pendingInputs: [ChatMessage] = [],
+        isDeliveryOnline: Bool = true
     ) -> Self {
         let machineName = session.deviceName.isEmpty ? device?.name : session.deviceName
         let normalizedMachineName = machineName?.isEmpty == true ? nil : machineName
+        let pending = SessionPendingPreview.select(pendingInputs, sessionId: session.id,
+                                                   isOnline: isDeliveryOnline && device?.online != false)
         let normalizedDraft = draft?.collapseWhitespace()
-        let previewText = normalizedDraft?.isEmpty == false
+        let previewText = pending?.text ?? (normalizedDraft?.isEmpty == false
             ? normalizedDraft
-            : preview?.text.collapseWhitespace()
-        let timestamp = preview?.timestamp.isEmpty == false
+            : preview?.text.collapseWhitespace())
+        let timestamp = pending?.timestamp ?? (preview?.timestamp.isEmpty == false
             ? preview?.timestamp ?? ""
-            : ISO8601.withFractional.string(from: session.createdAt)
-        let hasDraft = normalizedDraft?.isEmpty == false
+            : ISO8601.withFractional.string(from: session.createdAt))
+        let hasDraft = pending == nil && normalizedDraft?.isEmpty == false
 
         return Self(
             title: session.displayTitle,
@@ -93,7 +99,7 @@ struct SessionCardProjection: Equatable {
             previewText: previewText?.isEmpty == true ? nil : previewText,
             timestamp: timestamp,
             timeLabel: SessionTimeFormatter.format(timestamp),
-            status: .resolve(
+            status: pending.map { .delivery($0.status) } ?? .resolve(
                 sessionState: isCompacting ? .compacting : session.state,
                 previewType: preview?.type,
                 deviceOnline: device?.online,
@@ -107,36 +113,9 @@ struct SessionCardProjection: Equatable {
     }
 }
 
-/// Shared Compacting glyph. Native variable-color layers provide the visual
-/// language; TimelineView periodically renews the view identity so a retained
-/// LazyVStack row cannot keep a stale symbol-effect presentation timeline.
+/// Shared native B3 geometry and compositor-driven animation on both clients.
 struct CompactingStatusGlyph: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private let cycleDuration: TimeInterval = 2.4
-
-    var body: some View {
-        if reduceMotion {
-            symbol
-        } else {
-            TimelineView(.animation(minimumInterval: 0.18)) { context in
-                let cycle = Int(context.date.timeIntervalSinceReferenceDate / cycleDuration)
-                symbol
-                    .id(cycle)
-                    .symbolEffect(
-                        .variableColor.iterative.reversing.hideInactiveLayers,
-                        options: .repeat(.continuous).speed(0.9),
-                        isActive: true
-                    )
-            }
-        }
-    }
-
-    private var symbol: some View {
-        Image(systemName: "square.stack.3d.down.right")
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(Color(hex: 0x0891B2))
-            .frame(width: 16, height: 16)
-    }
+    var body: some View { SessionPreviewStatusGlyph(kind: .compacting) }
 }
 
 #if os(iOS)
@@ -155,6 +134,8 @@ struct SessionCardStatusGlyph: View {
                 IOSSessionActivityDots(color: .krakiPrimary, reduceMotion: reduceMotion)
             case .compacting:
                 CompactingStatusGlyph()
+            case .delivery(let delivery):
+                SessionPreviewStatusGlyph(kind: .delivery(delivery))
             case .waiting:
                 LucideIcon(.messageCircleQuestion, size: 14, strokeWidth: 2.2, color: Color(hex: 0xD97706))
             case .approval:

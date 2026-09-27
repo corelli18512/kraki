@@ -32,7 +32,9 @@ private struct SessionCardBody: View {
             isCompacting: {
                 if case .compacting = appState.messageStore.runtimeStatus(session.id) { return true }
                 return false
-            }()
+            }(),
+            pendingInputs: appState.commandSender?.pendingInputs(session.id) ?? [],
+            isDeliveryOnline: appState.isFullyOnline
         )
     }
 
@@ -173,6 +175,8 @@ private struct SessionCardBody: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([projection.status.accessibilityLabel, projection.previewText].compactMap { $0 }.joined(separator: ": "))
     }
 }
 #endif

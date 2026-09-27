@@ -402,6 +402,20 @@ final class CommandSender {
         }
     }
 
+    /// A history/range replay is also an authoritative confirmation, even if
+    /// its live echo was missed. Match session, message type and client ID;
+    /// never clear another queued input or infer confirmation from text.
+    func confirmPendingInputs(_ sessionId: String, messages: [ChatMessage]) {
+        guard outbox[sessionId]?.isEmpty == false else { return }
+        // Some history rows inherit sessionId from their batch envelope.
+        for message in messages where (message.sessionId == nil || message.sessionId == sessionId)
+            && message.type == "user_message" && message.seq > 0 {
+            if let clientId = message.payload["clientId"]?.stringValue {
+                clearPending(sessionId, clientId: clientId)
+            }
+        }
+    }
+
     /// Remove a single pending entry by clientId. Called by
     /// `MessageRouter` when the matching `user_message` echo lands;
     /// also called from compose-side retry/cancel UI (when it exists).
@@ -487,12 +501,13 @@ final class CommandSender {
 
     /// Unconfirmed inputs from a previous process return as `failed`: whether
     /// they reached Tentacle is unknown, retry is idempotent, and ones that did
-    /// land are hidden as soon as the echoed message is in the loaded window.
+    /// land are removed if the echo is already cached, even without an open chat.
     private func restoreOutbox() {
         guard let outboxURL,
               let data = try? Data(contentsOf: outboxURL),
               let stored = try? JSONDecoder().decode([StoredPending].self, from: data) else { return }
         for item in stored {
+            if appState?.messageDatabase.hasConfirmedInput(item.sessionId, clientId: item.clientId) == true { continue }
             #if KRAKI_DIAG
             var diagFields: [DiagField: DiagValue] = [.clientId: .id(item.clientId), .phase: .tag("restored")]
             if let answerTo = item.answerTo { diagFields[.answerTo] = .id(answerTo) }
