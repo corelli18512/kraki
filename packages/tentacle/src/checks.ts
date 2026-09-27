@@ -6,7 +6,7 @@
  */
 
 import { execSync, execFileSync } from 'node:child_process';
-import { constants as fsConstants, promises as fsp, appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync, rmSync } from 'node:fs';
+import { promises as fsp, appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync, rmSync } from 'node:fs';
 import { homedir, platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { input } from '@inquirer/prompts';
@@ -289,21 +289,40 @@ export async function withRetry<T extends { found?: boolean; authenticated?: boo
 export type FdaStatus = 'granted' | 'denied' | 'missing';
 
 // Paths that macOS gates behind FDA (kTCCServiceSystemPolicyAllFiles).
-// A process without FDA receives EPERM when accessing any of these.
-// Multiple targets guard against Apple removing protection from any single
-// path in a future macOS release.
-const FDA_PROBE_TARGETS = [
-  'Library/Mail',
-  'Library/Safari/Databases',
-  'Library/Application Support/com.apple.TCC/TCC.db',
+// A process without FDA receives EPERM when it actually opens or lists any of
+// these. Multiple targets guard against Apple removing protection from any
+// single path in a future macOS release, and against a path that does not
+// exist yet on a fresh account.
+//
+// The probe must perform the real read. `access(2)` only evaluates Unix
+// permission bits and succeeds on these paths even when TCC would refuse the
+// open — the previous implementation therefore reported "granted" on machines
+// without FDA (reproduced on a clean macOS 26 VM).
+export const FDA_PROBE_TARGETS: readonly { rel: string; kind: 'dir' | 'file' }[] = [
+  { rel: 'Library/Safari', kind: 'dir' },
+  { rel: 'Library/Mail', kind: 'dir' },
+  { rel: 'Library/Application Support/com.apple.TCC/TCC.db', kind: 'file' },
 ];
 
+async function readProbe(target: string, kind: 'dir' | 'file'): Promise<void> {
+  if (kind === 'dir') {
+    await fsp.readdir(target);
+    return;
+  }
+  const handle = await fsp.open(target, 'r');
+  try {
+    await handle.read(Buffer.alloc(16), 0, 16, 0);
+  } finally {
+    await handle.close();
+  }
+}
+
 /**
- * Probe macOS Full Disk Access by attempting to read known TCC-protected
- * paths. Tries multiple targets so the check stays reliable across macOS
- * versions even if Apple changes protection on individual paths.
+ * Probe macOS Full Disk Access by reading known TCC-protected paths. Tries
+ * multiple targets so the check stays reliable across macOS versions even if
+ * Apple changes protection on individual paths.
  *
- * Never triggers a system dialog — it only checks the current state.
+ * Never triggers a system dialog — FDA-gated paths fail silently with EPERM.
  */
 export async function probeFda(): Promise<FdaStatus> {
   if (platform() !== 'darwin') return 'granted'; // non-macOS: not applicable
@@ -311,10 +330,10 @@ export async function probeFda(): Promise<FdaStatus> {
   const home = homedir();
   let sawBlocked = false;
 
-  for (const rel of FDA_PROBE_TARGETS) {
+  for (const { rel, kind } of FDA_PROBE_TARGETS) {
     const target = join(home, rel);
     try {
-      await fsp.access(target, fsConstants.R_OK);
+      await readProbe(target, kind);
       return 'granted';
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;

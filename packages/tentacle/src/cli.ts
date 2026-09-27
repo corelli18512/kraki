@@ -21,7 +21,7 @@ import { readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { select } from '@inquirer/prompts';
 
 import { loadConfig, saveConfig, getConfigPath, getKrakiHome, getLogVerbosity, getVersion, loadChannelKey, type KrakiConfig } from './config.js';
-import { INTERNAL_DAEMON_WORKER_COMMAND, INTERNAL_DAEMON_SMOKE_COMMAND, prepareDaemonWorkerBootstrap, isDaemonRunning, getDaemonStatus, startDaemon, runDaemonReleaseSmoke, stopDaemon } from './daemon.js';
+import { getCliLaunchdJobState, INTERNAL_DAEMON_WORKER_COMMAND, INTERNAL_DAEMON_SMOKE_COMMAND, prepareDaemonWorkerBootstrap, isDaemonRunning, getDaemonStatus, startDaemon, runDaemonReleaseSmoke, stopDaemon } from './daemon.js';
 import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
 import { printStaticBanner } from './banner.js';
@@ -29,6 +29,7 @@ import { readStatusFile } from './status-file.js';
 import { ensureWindowsSystemPath } from './checks.js';
 import type { AgentId } from '@kraki/protocol';
 import { SELF_MANAGEMENT_DENIAL_REASON } from './self-management-guard.js';
+import { loadManagedBy, kickstartManagedDaemon, isManagedDaemonLoaded, type ManagedByMarker } from './managed.js';
 
 // Self-heal PATH on Windows BEFORE any setup/check spawns a child
 // process. If kraki is launched from a context with a minimal PATH
@@ -76,6 +77,8 @@ function printHelp(): void {
                        Non-interactive setup (for toolbar / scripts)
                        [--relay --auth --device-name --github-token
                         --agent copilot|claude|both|auto --anthropic-key]
+  kraki setup --json [--device-name <name>] [--relay <url>] [--force-login]
+                       Guided setup as NDJSON events (used by Kraki for Mac)
   kraki resolve-relay --json [--github-token <tok>]
                        Resolve best relay + region as JSON
   kraki doctor         Print environment status as JSON
@@ -101,10 +104,88 @@ function printHelp(): void {
 
 // ── Commands ────────────────────────────────────────────
 
+// ── Ownership: Kraki for Mac vs. standalone CLI ─────────
+//
+// When Kraki for Mac supervises the daemon (managed-by.json, see managed.ts),
+// this CLI must never install its own launchd job or signal the daemon: the
+// app's job has KeepAlive, so a SIGTERM would just be followed by a respawn,
+// and a second job would run two daemons with one device id.
+
+/** True when this executable is the helper embedded inside Kraki for Mac. */
+export function isEmbeddedMacHelper(execPath = process.execPath): boolean {
+  return /\.app\/Contents\/Library\/Helpers\/[^/]+\.app\/Contents\/MacOS\/[^/]+$/.test(execPath);
+}
+
+function printManagedNotice(managed: ManagedByMarker): void {
+  const status = getDaemonStatus();
+  if (status.running) {
+    console.log(chalk.green(`  🦑 Kraki is running${status.pid ? ` (PID ${status.pid})` : ''}, managed by Kraki for Mac.`));
+  } else {
+    console.log(chalk.yellow('  Kraki is managed by Kraki for Mac and is not running right now.'));
+  }
+  if (managed.appPath) console.log(chalk.dim(`  App: ${managed.appPath}`));
+}
+
+function refuseManaged(action: 'start' | 'stop' | 'update' | 'setup', managed: ManagedByMarker): void {
+  printManagedNotice(managed);
+  const hint: Record<typeof action, string> = {
+    start: 'Open Kraki for Mac to start it (Settings → Tentacle).',
+    stop: 'Stop it from Kraki for Mac (Settings → Tentacle) or turn Kraki off in System Settings → General → Login Items.',
+    update: 'Kraki for Mac updates its built-in tentacle together with the app (Kraki → Check for Updates…).',
+    setup: 'Reconfigure from Kraki for Mac, or switch it to "Use external CLI" in Settings → Tentacle first.',
+  };
+  console.log(chalk.dim(`  ${hint[action]}`));
+  process.exitCode = 1;
+}
+
+function refuseEmbeddedHelper(): void {
+  console.log(chalk.yellow('  This kraki binary is the tentacle built into Kraki for Mac.'));
+  console.log(chalk.dim('  Open Kraki for Mac to set it up and run it in the background.'));
+  process.exitCode = 1;
+}
+
+async function restartManaged(managed: ManagedByMarker): Promise<void> {
+  if (!isManagedDaemonLoaded(managed.label)) {
+    refuseManaged('start', managed);
+    return;
+  }
+  const before = getDaemonStatus().pid;
+  if (!kickstartManagedDaemon(managed.label)) {
+    console.log(chalk.red('  Failed to restart the Kraki for Mac background service.'));
+    process.exitCode = 1;
+    return;
+  }
+  const { loadDaemonReady } = await import('./config.js');
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const ready = loadDaemonReady();
+    if (ready !== null && ready !== before) {
+      console.log(chalk.green(`  🦑 Kraki restarted (PID ${ready}), managed by Kraki for Mac.`));
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  console.log(chalk.yellow('  Restart requested; the daemon has not reported ready yet. Check `kraki logs`.'));
+}
+
 // ── kraki (default) — setup wizard + auto start ─────────
 
 async function cmdDefault(): Promise<void> {
   let config = loadConfig();
+
+  const managed = loadManagedBy();
+  if (managed) {
+    printManagedNotice(managed);
+    if (config && getDaemonStatus().running) {
+      const { showPairingQr } = await import('./setup.js');
+      await showPairingQr(config);
+    }
+    return;
+  }
+  if (isEmbeddedMacHelper()) {
+    refuseEmbeddedHelper();
+    return;
+  }
 
   // Quick update check (blocks up to 2s, uses cache if available)
   const { checkForUpdate } = await import('./update.js');
@@ -210,6 +291,17 @@ async function cmdStart(): Promise<void> {
 // ── Shared start logic ──────────────────────────────────
 
 async function silentStart(config: KrakiConfig): Promise<void> {
+  const managed = loadManagedBy();
+  if (managed) {
+    if (!getDaemonStatus().running) refuseManaged('start', managed);
+    else printManagedNotice(managed);
+    return;
+  }
+  if (isEmbeddedMacHelper()) {
+    refuseEmbeddedHelper();
+    return;
+  }
+
   // In install mode, finish configuration but leave startup to the install
   // script's subsequent `kraki start`. That command uses the normal background
   // daemon manager and shows the pairing QR only after readiness succeeds.
@@ -234,6 +326,11 @@ async function silentStart(config: KrakiConfig): Promise<void> {
 }
 
 function cmdStop(): void {
+  const managed = loadManagedBy();
+  if (managed) {
+    refuseManaged('stop', managed);
+    return;
+  }
   if (!isDaemonRunning()) {
     console.log(chalk.yellow('Kraki is not running.'));
     return;
@@ -260,6 +357,11 @@ async function waitForPidExit(pid: number, timeoutMs = 5_000): Promise<void> {
 }
 
 async function cmdRestart(): Promise<void> {
+  const managed = loadManagedBy();
+  if (managed) {
+    await restartManaged(managed);
+    return;
+  }
   const config = loadConfig();
   if (!config) {
     console.log(chalk.red('Cannot restart Kraki: no config found. Run `kraki` to set up first.'));
@@ -280,6 +382,8 @@ function cmdStatus(jsonOutput = false): void {
   const statusFile = readStatusFile();
 
   if (jsonOutput) {
+    const managed = loadManagedBy();
+    const cliJob = getCliLaunchdJobState();
     // Machine-readable for desktop apps (mac toolbar, etc.). Schema is
     // additive — only add fields, never remove, to keep older clients
     // working.
@@ -289,6 +393,14 @@ function cmdStatus(jsonOutput = false): void {
       daemon: {
         running: status.running,
         pid: status.pid,
+        // Additive fields for Kraki for Mac's onboarding and ownership logic.
+        owner: managed ? 'kraki-mac' : (cliJob.plistExists ? 'cli' : null),
+        managedLabel: managed?.label ?? null,
+        cliLaunchdJob: cliJob,
+        relayState: status.running ? (statusFile?.relayState ?? null) : null,
+        daemonVersion: status.running ? (statusFile?.version ?? null) : null,
+        fda: status.running ? (statusFile?.fda ?? null) : null,
+        fdaCheckedAt: status.running ? (statusFile?.fdaCheckedAt ?? null) : null,
       },
       config: config
         ? {
@@ -398,6 +510,8 @@ async function cmdConfigReset(): Promise<void> {
     // Config may not exist
   }
   await runSetup();
+  const managed = loadManagedBy();
+  if (managed) await restartManaged(managed);
 }
 
 async function cmdConnect(urlOnly = false, jsonOutput = false): Promise<void> {
@@ -1004,6 +1118,15 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'update') {
+    const managed = loadManagedBy();
+    if (managed) {
+      refuseManaged('update', managed);
+      return;
+    }
+    if (isEmbeddedMacHelper()) {
+      refuseEmbeddedHelper();
+      return;
+    }
     const { performUpdate } = await import('./update.js');
     await performUpdate(getVersion());
     return;
@@ -1029,7 +1152,15 @@ async function main(): Promise<void> {
   if (cmd === 'setup') {
     if (args.includes('--headless')) {
       await cmdSetupHeadless(args);
+    } else if (args.includes('--json')) {
+      const { runSetupJson } = await import('./setup-json.js');
+      process.exitCode = await runSetupJson(args);
     } else {
+      const managed = loadManagedBy();
+      if (managed) {
+        refuseManaged('setup', managed);
+        return;
+      }
       const config = await runSetup();
       await silentStart(config);
     }

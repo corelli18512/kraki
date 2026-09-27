@@ -145,6 +145,20 @@ describe('prepareDaemonWorkerBootstrap()', () => {
     expect(mockSaveDaemonIdentity).not.toHaveBeenCalled();
   });
 
+  it('does not wait for a Launch Services identity inside the Mac app helper', async () => {
+    const env: NodeJS.ProcessEnv = { KRAKI_MANAGED_BY: 'kraki-mac' };
+    const started = Date.now();
+
+    await prepareDaemonWorkerBootstrap(
+      env, 45678, '/Applications/Kraki.app/Contents/Library/Helpers/Kraki Tentacle.app',
+      mockGetProcessBundleIdentity, 5000,
+    );
+
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(mockGetProcessBundleIdentity).not.toHaveBeenCalled();
+    expect(mockSaveDaemonPid).toHaveBeenCalledWith(45678);
+  });
+
   it('captures a matching initial Launch Services identity before scrubbing the environment', async () => {
     const env: NodeJS.ProcessEnv = { __CFBundleIdentifier: 'chat.kraki.cli' };
     mockGetProcessBundleIdentity.mockReturnValue('chat.kraki.cli');
