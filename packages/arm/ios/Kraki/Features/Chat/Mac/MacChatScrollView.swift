@@ -2439,6 +2439,12 @@ final class MacChatScrollView: MacSmoothScrollView {
                 return event
             }
             let capture = context.capture
+            #if KRAKI_DIAG
+            if case .question(let questionId) = capture {
+                KrakiDiag.record(.uiMouse, session: representedSessionId,
+                    [.questionId: .id(questionId), .phase: .tag("down"), .eventNumber: .int(event.eventNumber), .clickCount: .int(event.clickCount)])
+            }
+            #endif
             let target = chatDocumentView.actionHitTarget(
                 for: capture,
                 atActionPoint: context.actionPoint
@@ -2459,6 +2465,12 @@ final class MacChatScrollView: MacSmoothScrollView {
 
         case .leftMouseUp:
             guard let pending = pendingBubbleActionClick else { return event }
+            #if KRAKI_DIAG
+            if case .question(let questionId) = pending.capture {
+                KrakiDiag.record(.uiMouse, session: representedSessionId,
+                    [.questionId: .id(questionId), .phase: .tag("up"), .eventNumber: .int(event.eventNumber), .clickCount: .int(event.clickCount)])
+            }
+            #endif
             pendingBubbleActionClick = nil
             guard !pending.cancelled,
                   let context = chatDocumentView.actionCaptureContext(
@@ -2492,6 +2504,9 @@ final class MacChatScrollView: MacSmoothScrollView {
         DispatchQueue.main.async {
             switch target {
             case .question(let target):
+                #if KRAKI_DIAG
+                KrakiDiag.record(.uiAnswer, [.questionId: .id(target.questionId), .origin: .tag("mac_monitor")])
+                #endif
                 answerCallback?(target.questionId, target.answer)
             case .permission(let target):
                 permissionCallback?(target.permissionId, target.toolName, target.decision)
@@ -3718,6 +3733,10 @@ struct MacChatListRepresentable: NSViewRepresentable {
     }
 
     private func updateNSViewBody(_ scrollView: MacChatScrollView, context: Context) {
+        #if KRAKI_DIAG
+        let diagWork = KrakiDiag.beginWork()
+        defer { KrakiDiag.endWork(diagWork, source: "mac.list_update", session: sessionId) }
+        #endif
         let totalStarted = CACurrentMediaTime()
         if context.coordinator.sessionId != sessionId
             || context.coordinator.entryGeneration != entryGeneration {

@@ -4,7 +4,11 @@ import Security
 import CryptoKit
 
 private enum NotificationBadgeStore {
+    #if KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY
+    static let appGroup = "group.chat.kraki.ios.diag"
+    #else
     static let appGroup = "group.chat.kraki.ios"
+    #endif
     static let unreadSessionIDsKey = "kraki.notification.unreadSessionIDs"
 
     static func addUnreadSession(_ sessionId: String, to content: UNMutableNotificationContent) {
@@ -151,7 +155,11 @@ class NotificationService: UNNotificationServiceExtension {
     }
 
     private func loadEncryptionKey() -> SecKey? {
+        #if KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY
+        let tag = "chat.kraki.ios.diag.encryption-key"
+        #else
         let tag = "chat.kraki.ios.encryption-key"
+        #endif
         let query: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrApplicationTag as String: tag.data(using: .utf8)!,

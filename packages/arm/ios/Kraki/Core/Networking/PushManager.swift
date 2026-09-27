@@ -30,7 +30,11 @@ final class PushManager: NSObject {
 
     private static let enabledKey = "kraki.pushNotificationsEnabled"
     private static let pendingUnregisterKey = "kraki.pushPendingUnregister"
+    #if KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY
+    private static let appGroup = "group.chat.kraki.ios.diag"
+    #else
     private static let appGroup = "group.chat.kraki.ios"
+    #endif
     private static let unreadSessionIDsKey = "kraki.notification.unreadSessionIDs"
 
     /// `true` once the user has explicitly turned on push in Settings. Persists

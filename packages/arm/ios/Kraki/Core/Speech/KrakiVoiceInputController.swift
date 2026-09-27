@@ -381,6 +381,9 @@ final class KrakiVoiceInputController {
     /// Returns false when Head is not reachable yet (Head auth calls prepare).
     @discardableResult
     private func requestLease(renewal: Bool) -> Bool {
+        #if KRAKI_DIAG
+        KrakiDiag.record(.voice, session: activeSessionID, [.source: .tag(renewal ? "lease.renewal" : "lease.request")])
+        #endif
         guard !leaseRequestInFlight, let host, let identity = hostIdentity,
               host.voiceTransportReady else { return false }
         leaseRequestInFlight = true
@@ -484,6 +487,9 @@ final class KrakiVoiceInputController {
         default:
             return
         }
+        #if KRAKI_DIAG
+        KrakiDiag.record(.voice, session: sessionID, [.source: .tag("recording.begin")])
+        #endif
         let currentRecording = UUID()
         recordingGeneration = currentRecording
         leaseRolloverAttempt = 0
@@ -576,6 +582,9 @@ final class KrakiVoiceInputController {
 
     func finish() {
         guard state == .recording else { return }
+        #if KRAKI_DIAG
+        KrakiDiag.record(.voice, session: activeSessionID, [.source: .tag("recording.finish"), .textLength: .int(rawText.utf8.count)])
+        #endif
         correctionSource = rawText
         correctionText = ""
         correctionSourceOffset = 0
@@ -612,6 +621,9 @@ final class KrakiVoiceInputController {
     }
 
     func cancel() {
+        #if KRAKI_DIAG
+        KrakiDiag.record(.voice, session: activeSessionID, [.source: .tag("recording.cancel")])
+        #endif
         closeConnection(keepLease: true)
         recordingCleanup(clearHandlers: true)
         state = .idle

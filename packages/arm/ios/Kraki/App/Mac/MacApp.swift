@@ -433,6 +433,14 @@ struct MacApp: App {
                         appState.handleForegroundRehydrate()
                     }
                 }
+                #if KRAKI_DIAG
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+                    KrakiDiag.phase("inactive")
+                }
+                .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.willSleepNotification)) { _ in
+                    KrakiDiag.phase("background")
+                }
+                #endif
                 .onReceive(NotificationCenter.default.publisher(
                     for: NSWindow.didBecomeKeyNotification
                 )) { _ in

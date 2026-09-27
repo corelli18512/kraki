@@ -3,6 +3,11 @@ name: iOS TestFlight
 on:
   workflow_dispatch:
     inputs:
+      diagnostics:
+        description: Explicit interim diagnostics delivery (normal releases stay disabled)
+        required: false
+        default: false
+        type: boolean
       version:
         description: Marketing version to upload (for example 0.1.1)
         required: true
@@ -105,13 +110,14 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
           BUILD_NUMBER: ${{ steps.version.outputs.build }}
+          BUILD_CONFIGURATION: ${{ inputs.diagnostics == true && 'DiagnosticsDelivery' || 'Release' }}
         run: |
           set -euo pipefail
           cd packages/arm/ios
           xcodebuild \
             -project Kraki.xcodeproj \
             -scheme Kraki \
-            -configuration Release \
+            -configuration "$BUILD_CONFIGURATION" \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Kraki.xcarchive" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData-iOS" \
@@ -128,6 +134,11 @@ jobs:
           set -euo pipefail
           APP="$RUNNER_TEMP/Kraki.xcarchive/Products/Applications/Kraki.app"
           test -d "$APP"
+          if [ '${{ inputs.diagnostics }}' = 'true' ]; then
+            bash scripts/diag/verify-diagnostic-delivery.sh "$APP"
+          else
+            bash scripts/diag/verify-no-diag.sh "$APP"
+          fi
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")" = "$VERSION"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")" = "$BUILD_NUMBER"
           # Keep both shipped bundles iPhone-only until a dedicated iPad layout exists.

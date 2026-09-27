@@ -15,10 +15,16 @@ import Observation
 final class ChatViewModel {
     let sessionId: String
     private weak var appState: AppState?
+    #if KRAKI_DIAG
+    @ObservationIgnored private var diagSnapshotKey = ""
+    #endif
 
     init(sessionId: String, appState: AppState) {
         self.sessionId = sessionId
         self.appState = appState
+        #if KRAKI_DIAG
+        KrakiDiag.record(.navigation, session: sessionId, [.source: .tag("view_model_created")])
+        #endif
     }
 
     // MARK: - Spine (flat, one bubble per message)
@@ -117,6 +123,18 @@ final class ChatViewModel {
         cachedMessages = TurnSpineProjection.project(
             Self.presentingQuestions(filteredMessages, pending: pendingInputsRaw, atHead: windowAtHead)
         ).filter(Self.shouldRender)
+        #if KRAKI_DIAG
+        let count = cachedMessages.count
+        let first = cachedMessages.first?.seq ?? 0
+        let last = cachedMessages.last?.seq ?? 0
+        let pending = pendingInputsRaw.count
+        let key = "\(count)|\(first)|\(last)|\(pending)"
+        if key != diagSnapshotKey {
+            diagSnapshotKey = key
+            KrakiDiag.record(.list, session: sessionId,
+                [.count: .int(count), .firstSeq: .int(first), .lastSeq: .int(last), .pending: .int(pending)])
+        }
+        #endif
     }
 
     // MARK: - Live card + trace

@@ -2223,6 +2223,10 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     }
 
     func configure(_ content: TKBubbleContent, cellWidth: CGFloat) {
+        #if KRAKI_DIAG
+        let diagWork = KrakiDiag.beginWork()
+        defer { KrakiDiag.endWork(diagWork, source: "ios.cell_configure", session: content.message.sessionId, seq: content.message.seq) }
+        #endif
         let previous = self.content
         self.content = content
         if content.liveBody != nil, previous?.liveBody === content.liveBody {

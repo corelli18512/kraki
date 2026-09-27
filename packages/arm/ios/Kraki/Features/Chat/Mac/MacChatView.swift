@@ -627,11 +627,17 @@ struct MacChatView: View {
     }
 
     private func answerQuestion(_ questionId: String, _ answer: String) {
+        #if KRAKI_DIAG
+        KrakiDiag.withAnswerInteraction(session: sessionId, question: questionId, origin: "mac_choice") {
+            appState.commandSender?.answer(sessionId: sessionId, questionId: questionId, answer: answer)
+        }
+        #else
         appState.commandSender?.answer(
             sessionId: sessionId,
             questionId: questionId,
             answer: answer
         )
+        #endif
         // Picking a choice is sending a message: return to the newest edge.
         NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil,
                                         userInfo: ["sessionId": sessionId])

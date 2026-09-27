@@ -208,7 +208,11 @@ final class AppState {
     /// Persistence is isolated by app identity on macOS so the stable Prod
     /// app and the local Debug app can run against the same relay concurrently.
     private static let sharedDefaults: UserDefaults = {
-        #if os(macOS)
+        #if KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY && os(iOS)
+        return UserDefaults(suiteName: "group.chat.kraki.ios.diag") ?? .standard
+        #elseif KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY
+        return .standard
+        #elseif os(macOS)
         #if DEBUG
         return UserDefaults(suiteName: "chat.kraki.mac.dev") ?? .standard
         #else
@@ -305,6 +309,9 @@ final class AppState {
     }
 
     func setupNetworking() {
+        #if KRAKI_DIAG
+        KrakiDiag.start()
+        #endif
         let crypto = CryptoManager()
         let keychain = KeychainManager()
 
@@ -490,6 +497,9 @@ final class AppState {
     /// reset everything to the pre-login state so RootView routes
     /// back to the login screen.
     func logout() {
+        #if KRAKI_DIAG
+        KrakiDiag.phase("logout")
+        #endif
         wsClient?.disconnect()
         pulseManager?.resetForIdentityChange()
         // The old decrypt pipeline may already have queued main-actor work.
@@ -528,6 +538,9 @@ final class AppState {
     /// kick a fresh connect immediately so the user doesn't have to
     /// wait out a long backoff timer that started in the background.
     func handleForegroundRehydrate(forceReconnect: Bool = false) {
+        #if KRAKI_DIAG
+        KrakiDiag.phase("active")
+        #endif
         updateReadVisibility(appForeground: true, conversationVisible: true)
         #if os(iOS)
         Task { await pushManager?.handleForeground() }
@@ -554,6 +567,9 @@ final class AppState {
     /// flush needed for messages. We still flush the SessionStore /
     /// DeviceStore JSON snapshots so debounced writes don't get lost.
     func handleInactive() {
+        #if KRAKI_DIAG
+        KrakiDiag.phase("inactive")
+        #endif
         #if os(iOS)
         if let owner = iosVoiceComposer.sessionID { iosVoiceComposer.depart(sessionID: owner) }
         #endif
@@ -561,6 +577,9 @@ final class AppState {
     }
 
     func handleBackground() {
+        #if KRAKI_DIAG
+        KrakiDiag.phase("background", pending: commandSender?.outbox.values.reduce(0) { $0 + $1.count } ?? 0)
+        #endif
         updateReadVisibility(appForeground: false, conversationVisible: false)
         #if os(iOS)
         // iOS may suspend immediately and the voice socket is closed below:
@@ -580,6 +599,15 @@ final class AppState {
     }
 
     private func handleConnectionStateChange(_ state: WebSocketState) {
+        #if KRAKI_DIAG
+        let diagState: String
+        switch state {
+        case .connected: diagState = "connected"
+        case .disconnected: diagState = "disconnected"
+        case .connecting: diagState = "connecting"
+        }
+        KrakiDiag.record(.connection, [.state: .tag(diagState), .attempt: .int(reconnectAttempt)])
+        #endif
         switch state {
         case .connected:
             connectionStatus = .authenticating

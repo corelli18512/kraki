@@ -817,12 +817,20 @@ final class MessageProvider {
     /// `append` contract changes accordingly: the gap branch is now
     /// a DEBUG assertion (see `MessageStore.append`).
     func ingestTailCandidate(_ sessionId: String, json: Data) {
+        #if KRAKI_DIAG
+        let diagWork = KrakiDiag.beginWork()
+        defer { KrakiDiag.endWork(diagWork, source: "provider.ingest_json", session: sessionId) }
+        #endif
         guard let msg = ProducerMessageDecoder.decode(json) else { return }
         ingestTailCandidate(sessionId, [msg])
     }
 
     /// Multi-message overload used by `handleRangeBatch`.
     func ingestTailCandidate(_ sessionId: String, _ messages: [ChatMessage]) {
+        #if KRAKI_DIAG
+        let diagWork = KrakiDiag.beginWork()
+        defer { KrakiDiag.endWork(diagWork, source: "provider.ingest_messages", session: sessionId) }
+        #endif
         guard !messages.isEmpty else { return }
 
         // Filter to persistent types — non-persistent pushes never

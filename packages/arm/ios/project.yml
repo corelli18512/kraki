@@ -23,11 +23,38 @@ packages:
     url: https://github.com/sparkle-project/Sparkle.git
     exactVersion: 2.9.5
 
+configs:
+  Debug: debug
+  Release: release
+  Diagnostics: release
+  DiagnosticsDelivery: release
+
 settings:
   base:
     SWIFT_VERSION: "5.9"
+  configs:
+    Diagnostics:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) KRAKI_DIAG"
+    DiagnosticsDelivery:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) KRAKI_DIAG KRAKI_DIAG_EXISTING_IDENTITY"
 
 schemes:
+  KrakiDiag:
+    build:
+      targets:
+        Kraki: all
+    run:
+      config: Diagnostics
+    archive:
+      config: Diagnostics
+  KrakiMacDiag:
+    build:
+      targets:
+        KrakiMac: all
+    run:
+      config: Diagnostics
+    archive:
+      config: Diagnostics
   Kraki:
     build:
       targets:
@@ -109,6 +136,16 @@ targets:
         # iPad support is deferred until it has a macOS-aligned layout.
         TARGETED_DEVICE_FAMILY: "1"
       configs:
+        Diagnostics:
+          PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.ios.diag
+          INFOPLIST_KEY_CFBundleDisplayName: "Kraki Diag"
+          CODE_SIGN_ENTITLEMENTS: Kraki/Kraki.Diagnostics.entitlements
+          ASSETCATALOG_COMPILER_APPICON_NAME: DevAppIcon
+        DiagnosticsDelivery:
+          CODE_SIGN_ENTITLEMENTS: Kraki/Kraki.Release.entitlements
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER: Kraki App Store CI
         Debug:
           CODE_SIGN_ENTITLEMENTS: Kraki/Kraki.entitlements
         Release:
@@ -142,6 +179,13 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_ENTITLEMENTS: KrakiNotification/KrakiNotification.entitlements
       configs:
+        Diagnostics:
+          PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.ios.diag.notification
+          CODE_SIGN_ENTITLEMENTS: KrakiNotification/KrakiNotification.Diagnostics.entitlements
+        DiagnosticsDelivery:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER: Kraki Notification App Store CI
         Release:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: Apple Distribution
@@ -257,8 +301,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac
         PRODUCT_NAME: Kraki
-        MARKETING_VERSION: "0.2.39"
-        CURRENT_PROJECT_VERSION: 41
+        MARKETING_VERSION: "0.2.40"
+        CURRENT_PROJECT_VERSION: 42
         GENERATE_INFOPLIST_FILE: false
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
@@ -271,6 +315,17 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Kraki/KrakiMac.entitlements
         SWIFT_OBJC_INTERFACE_HEADER_NAME: ""
       configs:
+        Diagnostics:
+          PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.diag
+          PRODUCT_NAME: "Kraki Diag"
+          INFOPLIST_FILE: KrakiMac.Diagnostics.Info.plist
+          ASSETCATALOG_COMPILER_APPICON_NAME: DevAppIcon
+        DiagnosticsDelivery:
+          PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac
+          PRODUCT_NAME: Kraki
+          INFOPLIST_FILE: KrakiMac.Info.plist
+          INFOPLIST_KEY_CFBundleDisplayName: Kraki
+          ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.dev
           PRODUCT_NAME: "Kraki Dev"

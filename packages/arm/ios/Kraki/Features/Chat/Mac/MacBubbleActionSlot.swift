@@ -327,6 +327,10 @@ struct MacBubbleActionSlot: View {
                     MacChatActionButton(
                         action: {
                             guard let questionId = message.questionId else { return }
+                            #if KRAKI_DIAG
+                            KrakiDiag.record(.uiAnswer, session: message.sessionId,
+                                [.questionId: .id(questionId), .origin: .tag("mac_button")])
+                            #endif
                             onAnswerQuestion(questionId, choice)
                         },
                         foreground: Color.textPrimary,

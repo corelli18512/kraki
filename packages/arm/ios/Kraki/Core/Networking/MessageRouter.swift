@@ -399,6 +399,14 @@ final class MessageRouter {
             // real bubble — produced via the normal store + grouper
             // pipeline — takes over.
             let clientId = payload?["clientId"] as? String
+            #if KRAKI_DIAG
+            if let clientId {
+                var fields: [DiagField: DiagValue] = [.clientId: .id(clientId), .messageSeq: .int(dict["seq"] as? Int ?? 0),
+                    .matched: .bool(appState.commandSender?.outbox[sessionId]?[clientId] != nil)]
+                if let answerTo = payload?["answerTo"] as? String { fields[.answerTo] = .id(answerTo) }
+                KrakiDiag.record(.echo, session: sessionId, fields)
+            }
+            #endif
             let content = payload?["content"] as? String
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             if let clientId {

@@ -15,6 +15,9 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            #if KRAKI_DIAG
+            DiagSettingsSection()
+            #endif
             accountSection
             preferencesSection
             aboutSection
