@@ -133,10 +133,12 @@ the original owner. Mac does not adopt iOS's app-inactive recording policy.
 Mac flattens iPhone's recording surface into one row: disabled image icon or
 existing thumbnail on the left, read-only transcript in the middle, labeled
 Cancel and Edit on the right. No mic icon is shown while recording. The
-separate primary circle remains Send. A low-opacity waveform spans the entire
-capsule behind all controls; interpolated microphone levels drive its spring
-animation (using iPhone's shared dB loudness mapping, not a canned animation).
-The background does not participate in layout or hit testing. Short transcripts
+separate primary circle remains Send. A low-opacity waveform fills only the
+middle transcript area, excluding the image slot and Cancel/Edit controls.
+Both horizontal edges fade to transparent over 12% of its width. Interpolated
+microphone levels drive its spring animation (using iPhone's shared dB loudness
+mapping, not a canned animation). The background does not participate in
+layout or hit testing. Short transcripts
 are vertically centered in the two-line viewport; longer ones retain native
 tail scrolling. iPhone retains its two-row layout, compact meter and timer.
 

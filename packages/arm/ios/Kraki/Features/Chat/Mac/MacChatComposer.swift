@@ -295,14 +295,6 @@ struct MacChatComposer: View {
         }
         .frame(maxWidth: .infinity)
         .frame(minHeight: Self.inputBoxHeight)
-        .background {
-            if voiceOwnsComposer {
-                MacVoiceBackgroundWaveform(levels: voiceController.levels)
-                    .clipShape(RoundedRectangle(cornerRadius: Self.inputBoxHeight / 2, style: .continuous))
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
-        }
         .background { inputBoxGlassBackground }
         .contentShape(RoundedRectangle(cornerRadius: Self.inputBoxHeight / 2, style: .continuous))
     }
@@ -1134,9 +1126,9 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
 
 // MARK: - Inline VoiceType transcript surface
 
-/// A quiet, full-width backdrop driven by real microphone peaks, never a
-/// canned idle animation. Background-only geometry cannot resize the capsule
-/// or intercept the transcript/Cancel/Edit controls.
+/// A quiet transcript-only backdrop driven by real microphone peaks, never
+/// a canned idle animation. Faded ends keep the adjacent image and action
+/// slots clear. Background geometry cannot resize or intercept the controls.
 struct MacVoiceBackgroundWaveform: View {
     let levels: [Float]
 
@@ -1184,6 +1176,20 @@ private struct MacComposerVoiceSurface: View {
             MacComposerScrollableVoiceTranscript(pieces: displayedPieces, revision: revision)
                 .frame(maxWidth: .infinity)
                 .frame(height: MacComposerVoiceTranscriptView.lineHeight * 2)
+                .background {
+                    MacVoiceBackgroundWaveform(levels: controller.levels)
+                        .mask {
+                            LinearGradient(stops: [
+                                .init(color: .clear, location: 0),
+                                .init(color: .white, location: 0.12),
+                                .init(color: .white, location: 0.88),
+                                .init(color: .clear, location: 1)
+                            ], startPoint: .leading, endPoint: .trailing)
+                        }
+                        .clipped()
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
             Button(action: onCancel) {
                 Label("Cancel", systemImage: "xmark")
                     .font(.system(size: 12, weight: .medium))
