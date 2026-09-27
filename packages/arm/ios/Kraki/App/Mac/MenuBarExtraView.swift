@@ -76,6 +76,7 @@ struct MenuBarExtraView: View {
             case .starting: return "Tentacle starting…"
             case .stopping: return "Tentacle stopping…"
             case .stopped:  return "Tentacle stopped"
+            case .needsApproval: return "Tentacle off in Login Items"
             case .error(let msg): return "Error: \(msg)"
             case .unknown:  return "Detecting tentacle…"
             }

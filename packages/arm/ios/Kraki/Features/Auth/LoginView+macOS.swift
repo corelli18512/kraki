@@ -17,6 +17,7 @@ enum MacEntryGateMode: Equatable {
 
 struct MacEntryGateView: View {
     @Environment(AppState.self) private var appState
+    @Environment(TentacleCLIManager.self) private var tentacleCLI
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let mode: MacEntryGateMode
@@ -146,7 +147,29 @@ struct MacEntryGateView: View {
         }
     }
 
+    /// New users set up the tentacle built into the app; people who already
+    /// run the standalone CLI keep signing in through it.
+    private var usesBuiltInSetup: Bool {
+        tentacleCLI.isBuiltInAvailable && tentacleCLI.mode == .builtIn
+    }
+
+    @ViewBuilder
     private var signedOutActions: some View {
+        if usesBuiltInSetup {
+            BuiltInSetupView(onFinished: onRetry)
+                .padding(.horizontal, 22)
+                .padding(.vertical, 20)
+                .background(Color.surfaceSecondary.opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.borderPrimary.opacity(0.8), lineWidth: 1)
+                )
+        } else {
+            externalCLIActions
+        }
+    }
+
+    private var externalCLIActions: some View {
         VStack(spacing: 16) {
             VStack(spacing: 7) {
                 Text("Sign in with the Kraki CLI")
@@ -219,7 +242,9 @@ struct MacEntryGateView: View {
 
     @ViewBuilder
     private var footerStatus: some View {
-        if mode == .signedOut {
+        if mode == .signedOut, usesBuiltInSetup {
+            EmptyView()
+        } else if mode == .signedOut {
             if isCheckingCredentials {
                 Text("Looking for a signed-in Kraki CLI…")
                     .font(.system(size: 10.5))
