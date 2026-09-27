@@ -103,7 +103,11 @@ day it is reported on, so a recording across midnight is neither interrupted
 nor charged to one day only; lease expiry never cuts a recording in progress.
 Idle connections reserve at most one chunk, so concurrent devices never exceed
 the cap together. If Head is unreachable a connection can use at most its
-current chunk. Deploy this broker before a Head that signs day-scale leases.
+current chunk.
+Run one broker process per region: a reconnect replaces the lease's previous
+owner last-writer-wins and the broker transfers its unreported audio to the new
+owner. Across separate processes a replaced socket could use at most its last
+60 s chunk unaccounted. Deploy this broker before a Head that signs day-scale leases.
 Lower/out-of-order checkpoints are harmless;
 checkpoints from replaced owners are rejected. Authorized sockets use standard
 WebSocket ping/pong with a 25-second ping cadence and 10-second pong timeout;
