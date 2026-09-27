@@ -210,6 +210,29 @@ function createKeyManager(): Record<string, unknown> {
   };
 }
 
+describe('RelayClient offline durability', () => {
+  it.each(['no socket', 'closed socket'])('persists a final reply and idle with %s for reconnect replay', (state) => {
+    const adapter = createAdapter();
+    const manager = createSessionManager();
+    const client = new RelayClient(adapter, manager, {
+      relayUrl: 'ws://localhost:4000', authMethod: 'open',
+      device: { name: 'Windows Codex', role: 'tentacle' },
+    }, createKeyManager());
+    if (state === 'closed socket') {
+      client.connect();
+      sockets.at(-1)!.readyState = 3;
+    }
+    (adapter.onMessage as (sid: string, event: { content: string }) => void)('offline-session', { content: 'RECONNECT_OK_927' });
+    (adapter.onIdle as (sid: string, event: object) => void)('offline-session', {});
+    const rows = (manager.appendMessage as ReturnType<typeof vi.fn>).mock.calls;
+    expect(rows.some(([sid, type, payload]) => sid === 'offline-session' && type === 'agent_message'
+      && JSON.parse(payload).payload.content === 'RECONNECT_OK_927')).toBe(true);
+    expect(rows.some(([, type]) => type === 'idle')).toBe(true);
+    expect(rows.some(([, type]) => type === 'system_message')).toBe(false);
+    client.disconnect();
+  });
+});
+
 describe('RelayClient auth negotiation', () => {
   beforeEach(() => {
     sockets.length = 0;

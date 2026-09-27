@@ -67,19 +67,27 @@ function cliExists(name: string): boolean {
 
 /**
  * Resolve the absolute path to a CLI on PATH, or undefined if not present.
- * On `where` (Windows) and `which` (Unix), the first line of stdout is the
- * resolved path. We strip whitespace and return that path so callers can
- * pass it to SDKs that need the binary location (e.g. Claude SDK's
+ * Preserve PATH order from `where` (Windows) and `which` (Unix), skipping
+ * non-executable POSIX shims on Windows. Return an absolute path for callers
+ * that need the binary location (e.g. Claude SDK's
  * pathToClaudeCodeExecutable, which is required when running inside SEA
  * binaries because the SDK's own resolution via createRequire/import.meta
  * cannot find a node_modules tree).
  */
+export function selectCliPath(output: string, os = platform()): string | undefined {
+  const paths = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  // npm installs an extensionless POSIX script beside its Windows .cmd shim.
+  // `where codex` lists that script first; CreateProcess cannot execute it.
+  return os === 'win32'
+    ? paths.find((path) => /\.(?:exe|com|cmd|bat)$/i.test(path))
+    : paths[0];
+}
+
 function resolveCliPath(name: string): string | undefined {
   try {
     const cmd = platform() === 'win32' ? `where ${name}` : `which ${name}`;
     const out = execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
-    const first = out.split(/\r?\n/).find((line) => line.trim().length > 0);
-    return first?.trim() || undefined;
+    return selectCliPath(out);
   } catch {
     return undefined;
   }
@@ -159,7 +167,7 @@ export class MultiAgentAdapter extends AgentAdapter {
     if (ids.length === 0) {
       throw new Error(
         'No coding agents available. Install Copilot CLI (gh auth login) ' +
-        'or Claude Code CLI (npm i -g @anthropic-ai/claude-code) to get started.',
+        'or Claude Code, pi, or Codex CLI to get started.',
       );
     }
 

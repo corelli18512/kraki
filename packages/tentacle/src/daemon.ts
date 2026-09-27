@@ -211,6 +211,7 @@ export function getDaemonBootstrapLogPath(): string {
 export function resolveDaemonLaunch(
   cliEntryPath: string | undefined = process.argv[1],
   seaMode = isSea(),
+  platform = process.platform,
 ): DaemonLaunchSpec {
   if (seaMode) {
     const {
@@ -268,6 +269,14 @@ export function resolveDaemonLaunch(
     cleanEnv.GITHUB_TOKEN = inheritedGhToken;
   }
 
+  // Windows environment keys are case-insensitive, but spreading process.env
+  // makes a case-sensitive object. Keeping both Path and PATH makes spawn pick
+  // PATH (lexicographically first), silently dropping every user-installed CLI.
+  const pathKeys = Object.keys(cleanEnv).filter((key) =>
+    platform === 'win32' ? key.toLowerCase() === 'path' : key === 'PATH');
+  const inheritedPath = pathKeys.map((key) => cleanEnv[key]).filter(Boolean).join(platform === 'win32' ? ';' : delimiter);
+  for (const key of pathKeys) delete cleanEnv[key];
+
   return {
     runtime: process.execPath,
     args: isTsSource
@@ -277,7 +286,7 @@ export function resolveDaemonLaunch(
     env: {
       ...cleanEnv,
       NODE_ENV: 'production',
-      PATH: [...binPaths, cleanEnv.PATH ?? ''].filter(Boolean).join(delimiter),
+      PATH: [...binPaths, inheritedPath].filter(Boolean).join(platform === 'win32' ? ';' : delimiter),
     },
     workerPath: entryPath,
   };
