@@ -143,12 +143,23 @@ import AppKit
     }
 
     func testBubbleEditPreservesImageAndLateCorrectionCannotSend() throws {
+        try assertBubbleEditPreservesImage()
+    }
+
+    func testFreeFormBubbleEditPreservesImageAndQuestionOnManualSend() throws {
+        let questionID = "voice-parity-question"
+        try installQuestion(questionID)
+        try assertBubbleEditPreservesImage(answerTo: questionID)
+        XCTAssertEqual(sentAnswerIDs, [questionID])
+    }
+
+    private func assertBubbleEditPreservesImage(answerTo: String? = nil) throws {
         try press("chat-voice-microphone")
         let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2, bitsPerSample: 8,
                                       samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
                                       bytesPerRow: 0, bitsPerPixel: 0)!
         let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-        XCTAssertTrue(app.iosVoiceComposer.send(attachments: [.init(type: "image", mimeType: "image/png", data: data.base64EncodedString())], delivery: .prompt))
+        XCTAssertTrue(app.iosVoiceComposer.send(attachments: [.init(type: "image", mimeType: "image/png", data: data.base64EncodedString())], delivery: .prompt, answerTo: answerTo))
         drain(300)
         let cell = try XCTUnwrap(views(window.contentView!).compactMap { $0 as? MacChatBubbleCell }.first(where: {
             $0.deliveryStatusForRegression?.contains("Correcting") == true
@@ -166,8 +177,7 @@ import AppKit
         XCTAssertEqual(sentAttachmentCounts, [1])
     }
 
-    func testFreeFormVoiceAnswerUsesOriginalQuestionAndNeverSteers() throws {
-        let questionID = "voice-parity-question"
+    private func installQuestion(_ questionID: String) throws {
         app.messageProvider?.setTentacleInfo(sessionId: sid, lastSeq: 1, deviceId: "voice-test-device")
         let question: [String: Any] = [
             "type": "agent_message", "seq": 1, "sessionId": sid, "deviceId": "voice-test-device",
@@ -180,6 +190,11 @@ import AppKit
         drain(500)
         let viewModel = ChatViewModel(sessionId: sid, appState: app)
         XCTAssertEqual(viewModel.questions.last?.id, questionID, "fixture must expose a live free-form question")
+    }
+
+    func testFreeFormVoiceAnswerUsesOriginalQuestionAndNeverSteers() throws {
+        let questionID = "voice-parity-question"
+        try installQuestion(questionID)
         try press("chat-voice-microphone")
         XCTAssertTrue(app.iosVoiceComposer.isRecording)
         try capture("06-freeform-recording")

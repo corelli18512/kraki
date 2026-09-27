@@ -633,9 +633,13 @@ struct MacChatComposer: View {
             guard appState.commandSender?.answer(
                 sessionId: sessionId,
                 questionId: question.id,
-                answer: answer
+                answer: answer,
+                attachments: imageData.map {
+                    [ImageAttachment(type: "image", mimeType: imageMimeType, data: $0.base64EncodedString())]
+                }
             ) == true else { NSSound.beep(); return }
             sessionStore.setDraft(sessionId, "")
+            clearImage()
             didSubmitFromComposer()
         case .prompt, .steer:
             handleSend()
