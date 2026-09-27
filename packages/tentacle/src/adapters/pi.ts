@@ -17,11 +17,6 @@ import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams, execSync } from 'node:child_process';
 import { readPiJsonLines } from './pi-jsonl.js';
 import { readPiModelScope, scopePiModels } from './pi-model-scope.js';
-/** The subset of pi's `message_update.assistantMessageEvent` the adapter reads. */
-interface AssistantStreamEvent {
-  type: string;
-  delta?: string;
-}
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -46,6 +41,12 @@ import { fitToMaxDimension } from '../image-resize.js';
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 
 const logger = createLogger('pi-adapter');
+
+/** The subset of pi's `message_update.assistantMessageEvent` the adapter reads. */
+interface AssistantStreamEvent {
+  type: string;
+  delta?: string;
+}
 const rpcLogger = createLogger('pi-rpc');
 
 // ─────────────────────────────────────────────────────────────────────────────
