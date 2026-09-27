@@ -46,7 +46,7 @@ import { AttachmentStore } from './attachment-store.js';
 import { KrakiMcpServer } from './mcp/index.js';
 import { createLogger } from './logger.js';
 import { initStatusFile, updateRelayState, updateRegion, clearStatusFile, updateFdaStatus, updateDaemonIdentity } from './status-file.js';
-import { isMacAppManagedWorker } from './managed.js';
+import { isMacAppManagedWorker, loadManagedBy } from './managed.js';
 import { hydrateLoginShellEnv } from './shell-env.js';
 import type { AgentAdapter } from './adapters/base.js';
 import type { AgentId } from '@kraki/protocol';
@@ -90,6 +90,16 @@ export async function startWorker(): Promise<WorkerResult> {
   }
 
   const managedByMacApp = isMacAppManagedWorker();
+
+  // Kraki for Mac owns the daemon for this home, yet the CLI's launchd job
+  // started us: that job is a leftover. Retire it and exit instead of running
+  // a second daemon under the same device id.
+  if (!managedByMacApp && platform() === 'darwin' && loadManagedBy()) {
+    logger.warn('Kraki for Mac runs the daemon for this home; retiring the leftover CLI launchd job');
+    const { retireCliLaunchdJob } = await import('./daemon.js');
+    retireCliLaunchdJob();
+    return process.exit(0);
+  }
 
   if (managedByMacApp) {
     // Started by Kraki for Mac's SMAppService job: launchd provides only a

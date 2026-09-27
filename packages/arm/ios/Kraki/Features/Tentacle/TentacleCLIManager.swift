@@ -72,6 +72,9 @@ final class TentacleCLIManager {
     private(set) var mode: TentacleMode = .external
     /// A standalone CLI found on this Mac, independent of the current mode.
     private(set) var externalCLI: (path: String, version: String?)?
+    /// A command-line install already runs Kraki and the user hasn't chosen
+    /// which one should (see TentacleMode.needsOwnerChoice).
+    private(set) var ownerChoicePending = false
     /// Daemon-reported Full Disk Access ("granted" | "denied" | "missing").
     private(set) var fdaStatus: String?
     /// Relay connection state reported by the daemon.
@@ -134,6 +137,13 @@ final class TentacleCLIManager {
             cliDaemonInstalled: BuiltInTentacle.cliDaemonInstalled,
             externalCLIFound: external != nil
         )
+        ownerChoicePending = TentacleMode.needsOwnerChoice(
+            preference: modePreference,
+            builtInAvailable: builtIn.isAvailable,
+            ownershipMarkerExists: builtIn.ownershipMarkerExists,
+            cliDaemonInstalled: BuiltInTentacle.cliDaemonInstalled,
+            externalCLIFound: external != nil
+        )
         switch mode {
         case .builtIn:
             installState = .available(path: builtIn.binaryPath, version: builtIn.version)
@@ -185,11 +195,22 @@ final class TentacleCLIManager {
     /// neither direction needs a new sign-in.
     func switchMode(to target: TentacleMode) async {
         guard target != mode || modePreference != target.rawValue else { return }
+        lastError = nil
         daemonState = .stopping
         switch target {
         case .builtIn:
             if let external = externalCLI, BuiltInTentacle.cliDaemonInstalled || daemonIsRunningNow {
-                _ = await runCapturing(binary: external.path, args: ["stop"])
+                let result = await runCapturing(binary: external.path, args: ["stop"])
+                // Taking over while the CLI's daemon still runs would put two
+                // daemons on one device id. Stay put and say why instead.
+                if BuiltInTentacle.cliDaemonInstalled && result?.exitCode != 0 {
+                    let output = [result?.stderr, result?.stdout].compactMap { $0 }.joined(separator: "\n")
+                    let detail = output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+                        .last { !$0.isEmpty } ?? ""
+                    lastError = "Couldn't stop the command-line Kraki." + (detail.isEmpty ? "" : " \(detail)")
+                    await refreshDaemonState()
+                    return
+                }
             }
             modePreference = TentacleMode.builtIn.rawValue
             await refreshInstallState()

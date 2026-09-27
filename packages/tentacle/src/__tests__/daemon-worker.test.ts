@@ -149,6 +149,23 @@ vi.mock('../shell-env.js', () => ({
   hydrateLoginShellEnv: (...args: unknown[]) => mockHydrateLoginShellEnv(...(args as [])),
 }));
 
+let mockManagedBy: unknown = null;
+vi.mock('../managed.js', () => ({
+  isMacAppManagedWorker: (env: NodeJS.ProcessEnv = process.env) => env.KRAKI_MANAGED_BY === 'kraki-mac',
+  loadManagedBy: () => mockManagedBy,
+}));
+
+const mockRetireCliLaunchdJob = vi.fn();
+vi.mock('../daemon.js', () => ({
+  retireCliLaunchdJob: () => mockRetireCliLaunchdJob(),
+}));
+
+let mockPlatform: string | null = null;
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, platform: () => (mockPlatform ?? actual.platform()) };
+});
+
 // Prevent process.exit from killing the test runner
 const mockExit = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
 
@@ -194,6 +211,35 @@ describe('daemon-worker: startWorker()', () => {
       await shutdown();
     } finally {
       delete process.env.KRAKI_MANAGED_BY;
+    }
+  });
+
+  it('as a leftover CLI job while Kraki for Mac owns the daemon: retires itself', async () => {
+    mockPlatform = 'darwin';
+    mockManagedBy = { by: 'kraki-mac', label: 'chat.kraki.mac.tentacle' };
+    try {
+      await startWorker();
+      expect(mockRetireCliLaunchdJob).toHaveBeenCalledTimes(1);
+      expect(mockExit).toHaveBeenCalledWith(0);
+      expect(mockRelay.connect).not.toHaveBeenCalled();
+    } finally {
+      mockPlatform = null;
+      mockManagedBy = null;
+    }
+  });
+
+  it('as the Mac app daemon: never retires itself because of its own marker', async () => {
+    mockPlatform = 'darwin';
+    mockManagedBy = { by: 'kraki-mac', label: 'chat.kraki.mac.tentacle' };
+    process.env.KRAKI_MANAGED_BY = 'kraki-mac';
+    try {
+      const { shutdown } = await startWorker();
+      expect(mockRetireCliLaunchdJob).not.toHaveBeenCalled();
+      await shutdown();
+    } finally {
+      delete process.env.KRAKI_MANAGED_BY;
+      mockPlatform = null;
+      mockManagedBy = null;
     }
   });
 

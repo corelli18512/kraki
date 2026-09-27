@@ -105,6 +105,15 @@ function cleanupLaunchdPlist(): void {
   const p = getLaunchdPlistPath();
   if (existsSync(p)) unlinkSync(p);
 }
+
+/**
+ * Remove the CLI's own launchd job for this KRAKI_HOME. Used when Kraki for
+ * Mac has taken over the daemon but a CLI job survived (for example because
+ * stopping it failed), so it cannot start a second daemon at the next login.
+ */
+export function retireCliLaunchdJob(): void {
+  if (process.platform === 'darwin') cleanupLaunchdPlist();
+}
 export function hasUntrackedLaunchdDaemon(
   pid: number | null = loadDaemonPid(),
   platform = process.platform,

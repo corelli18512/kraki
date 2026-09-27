@@ -36,6 +36,36 @@ final class BuiltInTentacleTests: XCTestCase {
         )
     }
 
+    private func needsChoice(
+        preference: String = "",
+        builtIn: Bool = true,
+        marker: Bool = false,
+        cliDaemon: Bool = true,
+        cli: Bool = true
+    ) -> Bool {
+        TentacleMode.needsOwnerChoice(
+            preference: preference,
+            builtInAvailable: builtIn,
+            ownershipMarkerExists: marker,
+            cliDaemonInstalled: cliDaemon,
+            externalCLIFound: cli
+        )
+    }
+
+    func testAnExistingCLIDaemonAsksTheUserOnce() {
+        XCTAssertTrue(needsChoice())
+        // Answered: never again, in either direction.
+        XCTAssertFalse(needsChoice(preference: "builtIn"))
+        XCTAssertFalse(needsChoice(preference: "external"))
+    }
+
+    func testNoQuestionWithoutACompetingCLIDaemon() {
+        XCTAssertFalse(needsChoice(cliDaemon: false))          // new user, or CLI tool only
+        XCTAssertFalse(needsChoice(cli: false))                // leftover plist, no CLI
+        XCTAssertFalse(needsChoice(marker: true))              // Kraki for Mac already owns it
+        XCTAssertFalse(needsChoice(builtIn: false))            // build without the helper
+    }
+
     func testNewUserGetsTheBuiltInTentacleWithoutAnyCLI() {
         XCTAssertEqual(resolve(), .builtIn)
     }

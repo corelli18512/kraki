@@ -375,9 +375,11 @@ struct MacApp: App {
                     )
                 } else {
                     productionRoot
+                        .modifier(ExistingCLIChoicePresenter(enabled: !launchCoordinator.isLaunchGateVisible))
                 }
                 #else
                 productionRoot
+                    .modifier(ExistingCLIChoicePresenter(enabled: !launchCoordinator.isLaunchGateVisible))
                 #endif
             }
                 .environment(appState)

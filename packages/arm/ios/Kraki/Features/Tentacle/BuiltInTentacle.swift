@@ -80,6 +80,23 @@ enum TentacleMode: String, Equatable {
         if cliDaemonInstalled && externalCLIFound { return .external }
         return .builtIn
     }
+
+    /// A command-line install already runs Kraki on this Mac and the user has
+    /// not said which one should: ask once instead of silently picking. The
+    /// answer is stored as the explicit preference, so this never repeats.
+    static func needsOwnerChoice(
+        preference: String,
+        builtInAvailable: Bool,
+        ownershipMarkerExists: Bool,
+        cliDaemonInstalled: Bool,
+        externalCLIFound: Bool
+    ) -> Bool {
+        builtInAvailable
+            && TentacleMode(rawValue: preference) == nil
+            && !ownershipMarkerExists
+            && cliDaemonInstalled
+            && externalCLIFound
+    }
 }
 
 struct BuiltInTentacle {

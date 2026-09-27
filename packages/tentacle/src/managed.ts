@@ -117,3 +117,21 @@ export function isManagedDaemonLoaded(
     return false;
   }
 }
+
+/** Where Kraki for Mac keeps the tentacle it ships (see BuiltInTentacle.swift). */
+export const MAC_APP_HELPER_BINARY = 'Contents/Library/Helpers/Kraki Tentacle.app/Contents/MacOS/kraki';
+
+/**
+ * A Kraki for Mac that ships its own tentacle, if one is installed. Such an app
+ * sets up and runs Kraki by itself, so a separate CLI install is redundant.
+ * Older Mac app versions (no helper) still rely on the CLI and are ignored.
+ */
+export function findMacAppWithBuiltIn(
+  home: string,
+  exists: (path: string) => boolean = existsSync,
+): string | null {
+  for (const app of ['/Applications/Kraki.app', join(home, 'Applications', 'Kraki.app')]) {
+    if (exists(join(app, MAC_APP_HELPER_BINARY))) return app;
+  }
+  return null;
+}

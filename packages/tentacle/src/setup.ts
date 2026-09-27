@@ -5,10 +5,10 @@
  * device naming, and agent verification.
  */
 
-import { select, input, checkbox } from '@inquirer/prompts';
+import { select, input, checkbox, confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
-import { hostname, platform } from 'node:os';
+import { homedir, hostname, platform } from 'node:os';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
@@ -23,6 +23,7 @@ import {
 } from './config.js';
 import { checkGhAuth, checkAgentCli, SETUP_AGENTS, probeFdaAsApp, pollFda, ensureTccBundleRegistered, openTccPane, revealKrakiApp, getKrakiAppBundlePath } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
+import { findMacAppWithBuiltIn } from './managed.js';
 import { isSea } from 'node:sea';
 import type { AgentId } from '@kraki/protocol';
 
@@ -428,8 +429,35 @@ async function runAgentStep(): Promise<AgentId[] | undefined> {
   return chosen.length === available.length ? undefined : chosen;
 }
 
+/**
+ * Kraki for Mac with a built-in tentacle sets Kraki up by itself; a separate
+ * CLI setup would create a second owner for the same Mac. Ask before going on.
+ * install.sh asks the same question before downloading, so it is skipped when
+ * the installer launched us (KRAKI_INSTALL=1).
+ */
+async function confirmDespiteMacApp(): Promise<void> {
+  if (platform() !== 'darwin' || process.env.KRAKI_INSTALL === '1') return;
+  const app = findMacAppWithBuiltIn(homedir());
+  if (!app) return;
+  console.log(chalk.yellow(`  ⚠  Kraki for Mac is installed (${app}).`));
+  console.log(chalk.dim('     It sets up Kraki and runs it in the background by itself, so this Mac'));
+  console.log(chalk.dim('     doesn\'t need the command-line setup. Open Kraki from Applications instead.'));
+  console.log('');
+  const proceed = await confirm({
+    message: 'Set up the command-line version anyway?',
+    default: false,
+    theme: promptTheme,
+  });
+  if (!proceed) {
+    const cancelled = new Error('Setup cancelled');
+    cancelled.name = 'ExitPromptError';
+    throw cancelled;
+  }
+}
+
 export async function runSetup(): Promise<KrakiConfig> {
   await printAnimatedBanner();
+  await confirmDespiteMacApp();
 
   // Self-hosted relay override — skip login-first routing
   const customRelay = process.env.KRAKI_RELAY_URL;
