@@ -783,7 +783,7 @@ final class KrakiVoiceInputController {
         // Rolling over keeps an authorized recording going. Before
         // authorization, buffered speech is gone with the socket: fail
         // visibly (below) rather than continue with its beginning missing.
-        let bufferedSpeechLost = !isConnectionWarm && state == .recording
+        let bufferedSpeechLost = !isConnectionWarm && (state == .recording || state == .finishing)
         if quotaExhausted, !bufferedSpeechLost, recoverFromExhaustedLease() { return }
 
         let requiresFreshLease = quotaExhausted || leaseRejected
