@@ -75,7 +75,9 @@ final class AppState {
             fatalError("Failed to open message database: \(error)")
         }
         self.messageStore = MessageStore(db: messageDatabase)
-        self.voiceInputController = KrakiVoiceInputController()
+        // The Keychain-kept lease lets a cold start warm the voice socket
+        // in parallel with Head auth instead of after it.
+        self.voiceInputController = KrakiVoiceInputController(leaseStore: KeychainVoiceLeaseStore())
         self.voiceInputController.bind(host: self)
         // attachmentStore is set up after the DB-backed stores so the
         // request-pull closure can capture self by weak reference
@@ -506,7 +508,7 @@ final class AppState {
         #if os(iOS)
         iosVoiceComposer.discard()
         #endif
-        voiceInputController.suspendWarmConnection()
+        voiceInputController.forgetLease()
         #if os(iOS)
         pushManager?.syncApplicationBadge(unreadSessionIDs: [])
         #endif

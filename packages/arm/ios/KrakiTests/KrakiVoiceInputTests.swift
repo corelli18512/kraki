@@ -133,7 +133,8 @@ final class KrakiVoiceInputTests: XCTestCase {
         expiryOffset: Int = 600,
         jti: String = "lease-1",
         issuedAt: Int? = nil,
-        expiration: Int? = nil
+        expiration: Int? = nil,
+        quota: Int = 600
     ) -> VoiceLease {
         let now = Int(Date().timeIntervalSince1970)
         return VoiceLease(
@@ -144,7 +145,7 @@ final class KrakiVoiceInputTests: XCTestCase {
                 did: "device-1",
                 iat: issuedAt ?? now,
                 exp: expiration ?? now + expiryOffset,
-                quotaSeconds: 600,
+                quotaSeconds: quota,
                 resource: "voice/doubao",
                 jti: jti
             ),
@@ -875,6 +876,150 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertEqual(factory.sessions.count, 1)
     }
 
+    private func storedLease(
+        _ lease: VoiceLease,
+        used: Double,
+        userID: String = "user-1"
+    ) -> InMemoryVoiceLeaseStore {
+        let store = InMemoryVoiceLeaseStore()
+        store.save(StoredVoiceLease(
+            lease: lease,
+            identity: VoiceConnectionIdentity(
+                brokerUrl: "wss://voice.example.test/voice",
+                resource: "voice/doubao",
+                userID: userID,
+                deviceID: "device-1"
+            ),
+            usedSeconds: used
+        ))
+        return store
+    }
+
+    private func settle(_ condition: () -> Bool) async {
+        for _ in 0..<40 where !condition() { await Task.yield() }
+    }
+
+    func testColdStartWarmsStoredLeaseBeforeHeadAndRecordsImmediately() async {
+        let host = FakeVoiceHost()
+        host.voiceTransportReady = false  // Head still connecting
+        let factory = FakeVoiceFactory()
+        let store = storedLease(lease(quota: 300), used: 12)
+        let controller = KrakiVoiceInputController(
+            host: host, sessionFactory: factory,
+            audioPolicy: FakeVoiceAudioPolicy(), leaseStore: store
+        )
+        controller.prepare()
+        XCTAssertEqual(factory.sessions.count, 1)
+        XCTAssertTrue(host.requestedResources.isEmpty)
+
+        // Pressing before the broker authorized still records at once.
+        await controller.begin(sessionID: "session-1", context: context()) { _ in }
+        XCTAssertEqual(controller.state, .recording)
+        XCTAssertEqual(factory.sessions[0].starts.count, 1)
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
+        XCTAssertEqual(controller.state, .recording)
+        XCTAssertEqual(factory.sessions[0].starts.count, 1)
+    }
+
+    func testDeadStoredLeaseWhileSpeakingRollsToFreshLease() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let store = storedLease(lease(quota: 300), used: 0)
+        let controller = KrakiVoiceInputController(
+            host: host, sessionFactory: factory,
+            audioPolicy: FakeVoiceAudioPolicy(), leaseStore: store
+        )
+        controller.prepare()
+        await controller.begin(sessionID: "session-1", context: context()) { _ in }
+        factory.sessions[0].emit(.failed("denied: lease_revoked"))
+        await settle { host.requestedResources.count == 1 }
+        XCTAssertEqual(controller.state, .obtainingLease)
+        XCTAssertNil(store.load())
+        controller.receiveLease(lease(jti: "lease-2"))
+        factory.sessions[1].emit(.connectionAuthorized)
+        await Task.yield()
+        XCTAssertEqual(controller.state, .recording)
+    }
+
+    func testLowLeaseRotatesInBackgroundAfterRecordingWithoutGap() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let controller = KrakiVoiceInputController(
+            host: host, sessionFactory: factory,
+            audioPolicy: FakeVoiceAudioPolicy(),
+            leaseStore: storedLease(lease(quota: 100), used: 80)
+        )
+        controller.prepare()
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
+        await controller.begin(sessionID: "session-1", context: context()) { _ in }
+        factory.sessions[0].emit(.final("hello", rawText: nil))
+        await settle { host.requestedResources.count == 1 }
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(host.requestedResources.count, 1)
+
+        // The replacement warms next to the still-open current socket.
+        controller.receiveLease(lease(jti: "lease-2", quota: 300))
+        XCTAssertEqual(factory.sessions.count, 2)
+        XCTAssertEqual(factory.sessions[0].closeCount, 0)
+        XCTAssertTrue(controller.isConnectionWarm)
+        factory.sessions[1].emit(.connectionAuthorized)
+        await Task.yield()
+        XCTAssertEqual(factory.sessions[0].closeCount, 1)
+        XCTAssertTrue(controller.isConnectionWarm)
+
+        await controller.begin(sessionID: "session-1", context: context()) { _ in }
+        XCTAssertEqual(controller.state, .recording)
+        XCTAssertEqual(factory.sessions[1].starts.count, 1)
+    }
+
+    func testLongRecordingPrefetchesSoRolloverNeverShowsAuthorizing() async {
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let controller = KrakiVoiceInputController(
+            host: host, sessionFactory: factory,
+            audioPolicy: FakeVoiceAudioPolicy(),
+            leaseStore: storedLease(lease(quota: 300), used: 290)
+        )
+        controller.prepare()
+        factory.sessions[0].emit(.connectionAuthorized)
+        await Task.yield()
+        await controller.begin(sessionID: "session-1", context: context()) { _ in }
+        await settle { host.requestedResources.count == 1 }
+        XCTAssertEqual(host.requestedResources.count, 1)
+        controller.receiveLease(lease(jti: "lease-2", quota: 300))
+        factory.sessions[1].emit(.connectionAuthorized)
+        await Task.yield()
+        // Not swapped mid-recording.
+        XCTAssertEqual(factory.sessions[0].closeCount, 0)
+
+        factory.sessions[0].emit(.partial("first half"))
+        factory.sessions[0].emit(.failed("denied: quota_exhausted"))
+        await Task.yield()
+        XCTAssertEqual(controller.state, .recording)
+        XCTAssertEqual(factory.sessions[1].starts.count, 1)
+        XCTAssertEqual(host.requestedResources.count, 1)
+        factory.sessions[1].emit(.partial("second half"))
+        await Task.yield()
+        XCTAssertEqual(controller.rawText, "first half second half")
+    }
+
+    func testStoredLeaseOfAnotherAccountIsDiscarded() async {
+        let host = FakeVoiceHost()
+        host.voiceUserID = "user-2"
+        let factory = FakeVoiceFactory()
+        let store = storedLease(lease(quota: 300), used: 0, userID: "user-1")
+        let controller = KrakiVoiceInputController(
+            host: host, sessionFactory: factory,
+            audioPolicy: FakeVoiceAudioPolicy(), leaseStore: store
+        )
+        controller.prepare()
+        XCTAssertTrue(factory.sessions.isEmpty)
+        XCTAssertEqual(host.requestedResources, ["voice/doubao"])
+        XCTAssertNil(store.load())
+    }
+
     func testRejectedLeaseIsDiscardedAndReplacedWithBackoff() async {
         let host = FakeVoiceHost()
         let factory = FakeVoiceFactory()
@@ -981,21 +1126,24 @@ final class KrakiVoiceInputTests: XCTestCase {
         for _ in 0..<20 where host.requestedResources.count < 2 {
             await Task.yield()
         }
-        controller.receiveLease(lease(jti: "lease-2"))
-        factory.sessions[1].emit(.connectionAuthorized)
-        await Task.yield()
-        XCTAssertEqual(controller.state, .recording)
-
-        factory.sessions[1].emit(.failed("denied: quota_exhausted"))
-        for _ in 0..<20 where host.requestedResources.count < 3 {
+        // One long recording may roll over a few times; a lease that keeps
+        // being exhausted immediately must not loop forever.
+        for index in 1...3 {
+            controller.receiveLease(lease(jti: "lease-\(index + 1)"))
+            factory.sessions[index].emit(.connectionAuthorized)
             await Task.yield()
+            XCTAssertEqual(controller.state, .recording)
+            factory.sessions[index].emit(.failed("denied: quota_exhausted"))
+            for _ in 0..<20 where host.requestedResources.count < index + 2 {
+                await Task.yield()
+            }
         }
 
         XCTAssertEqual(
             controller.state,
             .failed("The voice session couldn't be renewed. Please try again.")
         )
-        XCTAssertEqual(host.requestedResources.count, 3)
+        XCTAssertEqual(host.requestedResources.count, 5)
         XCTAssertTrue(finals.isEmpty)
     }
 

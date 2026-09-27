@@ -241,6 +241,9 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
     private var finishSent = false
     private var gatewayReady = false
     private var pendingAudio: [Data] = []
+    /// A recording started while the connection was still authorizing. The
+    /// microphone buffers locally; `start` is sent once `authorized` arrives.
+    private var pendingStart: (context: [String: VoiceInputJSONValue], vocabulary: [String])?
 
     private var dumpHandle: FileHandle?
     private var peakSample = 0
@@ -334,7 +337,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         context: [String: VoiceInputJSONValue],
         vocabulary: [String]
     ) {
-        guard receiveLoopRunning, connectionAuthorized, !recordingActive else {
+        guard receiveLoopRunning, !recordingActive else {
             fail("voice connection is not ready for a new recording")
             return
         }
@@ -349,8 +352,15 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         }
         resetRecordingState()
         recordingActive = true
-        send(json: configuration.gatewayStartMessage(context: context, vocabulary: vocabulary))
-        scheduleReadyTimeout()
+        if connectionAuthorized {
+            send(json: configuration.gatewayStartMessage(context: context, vocabulary: vocabulary))
+            scheduleReadyTimeout()
+        } else {
+            // Never make the user wait for authorization: capture now, send
+            // the buffered audio as soon as the connection is authorized.
+            pendingStart = (context, vocabulary)
+            logger("recording started before authorization; buffering")
+        }
         startEngine()
     }
 
@@ -368,6 +378,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         finishSent = false
         gatewayReady = false
         pendingAudio.removeAll()
+        pendingStart = nil
         peakSample = 0
         totalBytes = 0
         chunkCount = 0
@@ -516,6 +527,14 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
             authorizationTimeoutWork = nil
             metricHandler(.connectionAuthorized)
             emit(.connectionAuthorized)
+            if recordingActive, let pending = pendingStart {
+                pendingStart = nil
+                send(json: configuration.gatewayStartMessage(
+                    context: pending.context,
+                    vocabulary: pending.vocabulary
+                ))
+                scheduleReadyTimeout()
+            }
         case "ready":
             guard recordingActive else { return }
             metricHandler(.gatewayReady)
@@ -580,6 +599,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         captureEnded = false
         finishSent = false
         pendingAudio.removeAll()
+        pendingStart = nil
     }
 
     private func fail(_ reason: String) {
