@@ -18,7 +18,7 @@ def main():
     parser.add_argument('--state-dir', required=True, type=Path)
     parser.add_argument('--remote-ios', action='store_true')
     args = parser.parse_args()
-    root = args.state_dir
+    root = args.state_dir.resolve()
     ready = json.loads((root / 'ready.json').read_text())
     sid, model = ready['sessionId'], ready['model']
 

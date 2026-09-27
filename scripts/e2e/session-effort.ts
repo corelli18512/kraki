@@ -1,7 +1,7 @@
 // Isolated local Head + real Pi adapter for native client effort-only changes.
 // No prompt/LLM request is sent. Never launches/stops the installed daemon.
 // See docs/session-card-effort-testing.md for the native UI gates.
-import { mkdirSync, existsSync, readdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, existsSync, readdirSync, writeFileSync, readFileSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -58,7 +58,8 @@ async function main() {
     const acknowledgements = observer.messages.filter(m => m.type === 'session_model_set' && m.sessionId === sessionId);
     let runtime: unknown;
     try { runtime = JSON.parse(readFileSync(join(home, 'sessions', sessionId, '.pi-adapter.json'), 'utf8')); } catch { /* not yet */ }
-    writeFileSync(join(home, 'state.json'), JSON.stringify({ acknowledgements, metadata: manager.getMeta(sessionId), runtime }, null, 2));
+    writeFileSync(join(home, '.state.next'), JSON.stringify({ acknowledgements, metadata: manager.getMeta(sessionId), runtime }, null, 2));
+    renameSync(join(home, '.state.next'), join(home, 'state.json'));
   }, 250);
   async function stop() {
     clearInterval(timer);
