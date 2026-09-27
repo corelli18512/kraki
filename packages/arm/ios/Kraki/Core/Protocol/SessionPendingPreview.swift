@@ -3,13 +3,14 @@ import Foundation
 /// A local delivery overlay, not a new server SessionState. A pending input's
 /// text and icon always move together; clearing it reveals the live projection.
 enum SessionDeliveryStatus: Equatable {
-    case correcting, sending, failed, queued
+    case correcting, sending, unconfirmed, failed, queued
 
     var accessibilityLabel: String {
         switch self {
         case .correcting: return "Correcting voice message before sending"
         case .sending: return "Sending, awaiting confirmation"
-        case .failed: return "Send failed or not confirmed"
+        case .unconfirmed: return "Awaiting delivery confirmation"
+        case .failed: return "Send failed"
         case .queued: return "Waiting for connection"
         }
     }
@@ -39,6 +40,7 @@ struct SessionPendingPreview: Equatable {
         switch state(message) {
         case .correcting: status = .correcting // local correction is not transport
         case .failed: status = .failed
+        case .unconfirmed: status = .unconfirmed
         case .sending: status = isOnline ? .sending : .queued
         }
         let content = message.content?.collapseWhitespace() ?? ""
@@ -46,6 +48,7 @@ struct SessionPendingPreview: Equatable {
         let prefix: String
         switch status {
         case .failed: prefix = "Send failed · "
+        case .unconfirmed: prefix = "Awaiting confirmation · "
         case .queued: prefix = "Waiting for connection · "
         default: prefix = ""
         }

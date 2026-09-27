@@ -4,7 +4,7 @@ import MachO
 import zlib
 
 /// These types deliberately have no arbitrary log message / text / error field.
-/// Keep in sync with the receiver allowlist in head/src/diag-api.ts.
+/// Keep in sync with the receiver allowlist in packages/monitor/src/diag-api.ts.
 enum DiagEventName: String, Codable {
     case launch = "app.launch", phase = "app.phase", connection = "ws.state"
     case uiAnswer = "ui.answer", uiMouse = "ui.mouse", answer = "cmd.answer", input = "cmd.input", result = "cmd.result", handoff = "cmd.handoff"
@@ -156,6 +156,7 @@ final class DiagSpool {
         var dir = directory
         var values = URLResourceValues(); values.isExcludedFromBackup = true
         try? dir.setResourceValues(values)
+        try recoverMerge()
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey])
         for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where Self.isSegment(file) {
             let info = try file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
@@ -174,6 +175,8 @@ final class DiagSpool {
         let file = directory.appendingPathComponent("\(Int64(Date().timeIntervalSince1970 * 1000))_\(batchId).gz")
         try data.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        // Legacy/unmarked files are conservatively treated as attempted.
+        try Data().write(to: file.appendingPathExtension("fresh"), options: .atomic)
         segments.append(Segment(url: file, bytes: data.count)); trim()
         return file
     }
@@ -181,9 +184,98 @@ final class DiagSpool {
         guard segments.contains(where: { $0.url == url }) else { return }
         do { try FileManager.default.removeItem(at: url) }
         catch { if FileManager.default.fileExists(atPath: url.path) { return } }
+        try? FileManager.default.removeItem(at: url.appendingPathExtension("fresh"))
         segments.removeAll { $0.url == url }
     }
-    func clear() { for segment in segments { remove(segment.url) } }
+    func clear() {
+        // A pending merge must not resurrect records after the local kill switch.
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent("merge.json"))
+        // Include a partially committed merge output not yet in the inventory.
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        for file in files where Self.isSegment(file) || (file.pathExtension == "fresh" && Self.isSegment(file.deletingPathExtension())) {
+            try? FileManager.default.removeItem(at: file)
+        }
+        segments.removeAll()
+    }
+
+    /// Retire eligibility BEFORE HTTP. ACK loss/relaunch must reuse exact bytes.
+    func markAttempted(_ url: URL) throws {
+        let marker = url.appendingPathExtension("fresh")
+        if FileManager.default.fileExists(atPath: marker.path) {
+            try FileManager.default.removeItem(at: marker)
+        }
+    }
+
+    private struct Merge: Codable {
+        let sources: [String]
+        let output: String
+        let data: Data
+    }
+    private func recoverMerge() throws {
+        let journal = directory.appendingPathComponent("merge.json")
+        guard FileManager.default.fileExists(atPath: journal.path) else { return }
+        let merge = try JSONDecoder().decode(Merge.self, from: Data(contentsOf: journal))
+        let names = merge.sources + [merge.output]
+        guard merge.data.count <= 16 * 1024,
+              names.allSatisfy({ URL(fileURLWithPath: $0).lastPathComponent == $0 && Self.isSegment(directory.appendingPathComponent($0)) }),
+              !merge.sources.contains(merge.output) else { throw DiagError.size }
+        let output = directory.appendingPathComponent(merge.output)
+        try merge.data.write(to: output, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: output.path)
+        try Data().write(to: output.appendingPathExtension("fresh"), options: .atomic)
+        for name in merge.sources {
+            for file in [directory.appendingPathComponent(name), directory.appendingPathComponent(name + ".fresh")] {
+                if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+            }
+        }
+        try FileManager.default.removeItem(at: journal)
+    }
+
+    /// Merge only never-attempted adjacent batches of the SAME process/image.
+    /// Journal first; on a crash finish replacement before any network task.
+    /// Bound decoding work to 64 small files per tick; old builds are immutable.
+    func compact() throws {
+        let journal = directory.appendingPathComponent("merge.json")
+        if FileManager.default.fileExists(atPath: journal.path) {
+            // A previous partial IO failure needs a fresh disk inventory.
+            throw DiagError.unavailable
+        }
+        var sources: [Segment] = []
+        var metadata: [String: Any]?
+        var events: [[String: Any]] = []
+        let id = UUID().uuidString
+        var encoded = Data()
+        for segment in segments.prefix(64) {
+            guard FileManager.default.fileExists(atPath: segment.url.appendingPathExtension("fresh").path) else { break }
+            guard let data = try? Data(contentsOf: segment.url),
+                  let raw = try? diagGunzip(data),
+                  var batch = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any],
+                  let incoming = batch.removeValue(forKey: "events") as? [[String: Any]] else {
+                // Corrupt best-effort telemetry must not block the entire queue.
+                remove(segment.url); evicted += 1
+                return
+            }
+            batch.removeValue(forKey: "batchId")
+            if let metadata, !NSDictionary(dictionary: metadata).isEqual(to: batch) { break }
+            if metadata == nil { metadata = batch }
+            var candidate = batch
+            candidate["batchId"] = id
+            candidate["events"] = events + incoming
+            let json = try JSONSerialization.data(withJSONObject: candidate, options: [.sortedKeys])
+            guard events.count + incoming.count <= 1000, json.count <= 48 * 1024 else { break }
+            let compressed = try diagGzip(json)
+            guard compressed.count <= 16 * 1024 else { break }
+            encoded = compressed; events += incoming; sources.append(segment)
+        }
+        guard sources.count > 1, let first = sources.first else { return }
+        let prefix = first.url.lastPathComponent.split(separator: "_", maxSplits: 1)[0]
+        let name = "\(prefix)_\(id).gz"
+        let merge = Merge(sources: sources.map { $0.url.lastPathComponent }, output: name, data: encoded)
+        try JSONEncoder().encode(merge).write(to: journal, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        try recoverMerge()
+        segments.removeFirst(sources.count)
+        segments.insert(Segment(url: directory.appendingPathComponent(name), bytes: encoded.count), at: 0)
+    }
     private func trim() {
         while bytes > maxBytes || segments.count > maxFiles {
             guard let first = segments.first else { break }
@@ -195,6 +287,26 @@ final class DiagSpool {
     }
 }
 enum DiagError: Error { case size, compression, unavailable }
+
+func diagGunzip(_ input: Data) throws -> Data {
+    guard input.count <= 16 * 1024 else { throw DiagError.size }
+    var stream = z_stream()
+    guard inflateInit2_(&stream, MAX_WBITS + 16, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else { throw DiagError.compression }
+    defer { inflateEnd(&stream) }
+    var output = Data(count: 48 * 1024 + 1)
+    let result: Int32 = input.withUnsafeBytes { rawInput in
+        output.withUnsafeMutableBytes { rawOutput in
+            stream.next_in = UnsafeMutablePointer(mutating: rawInput.bindMemory(to: Bytef.self).baseAddress)
+            stream.avail_in = uInt(rawInput.count)
+            stream.next_out = rawOutput.bindMemory(to: Bytef.self).baseAddress
+            stream.avail_out = uInt(rawOutput.count)
+            return inflate(&stream, Z_FINISH)
+        }
+    }
+    guard result == Z_STREAM_END, stream.avail_in == 0, stream.total_out <= 48 * 1024 else { throw DiagError.compression }
+    output.count = Int(stream.total_out)
+    return output
+}
 
 func diagGzip(_ input: Data) throws -> Data {
     var stream = z_stream()

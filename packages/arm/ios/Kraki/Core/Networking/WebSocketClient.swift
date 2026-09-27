@@ -2,7 +2,7 @@
 ///
 /// Mirrors the behaviour of `transport.ts`:
 /// - Connects to the relay URL over WebSocket
-/// - Auto-reconnects with exponential back-off (1 s base, 30 s cap, 5 attempts)
+/// - Sole physical reconnect owner (1 s base, 30 s cap, no retry cap)
 /// - Sends protocol-level pings and actively detects half-open sockets
 /// - Exposes an `isAuthenticated` gate: `send(_:)` is blocked until auth
 ///   succeeds, while `sendRaw(_:)` bypasses the gate for the auth handshake.
@@ -77,6 +77,10 @@ final class WebSocketClient: NSObject {
     private var reconnectDelay: TimeInterval
     private var reconnectAttempts = 0
     private var intentionalClose = false
+    private var generation = 0
+    private var phaseDeadline: DispatchWorkItem?
+    static let connectTimeout: TimeInterval = 30
+    static let authenticationTimeout: TimeInterval = 90
 
     // MARK: Outbound retry queue
     //
@@ -104,7 +108,14 @@ final class WebSocketClient: NSObject {
 
     // MARK: - Public API
 
+    /// Ensure-connected is idempotent, including the authentication phase.
     func connect() {
+        guard state == .disconnected else { return }
+        startConnection()
+    }
+
+    private func startConnection() {
+        generation += 1
         cancelReconnect()
         intentionalClose = false
 
@@ -115,8 +126,8 @@ final class WebSocketClient: NSObject {
         }
 
         KLog.d("🔌 Connecting to \(relayURL)...")
-        // `connect()` is also the replacement primitive used by auth recovery,
-        // foreground rehydrate and SwiftUI task re-entry. URLSession does not
+        // Only explicit force-rehydrate and our owned retry enter here.
+        // Public connect() is ensure-connected, not replacement. URLSession does not
         // cancel the previous webSocketTask when its owning properties are
         // overwritten; without this teardown every retry leaves another live
         // proxy/TCP connection behind and stale auth callbacks can race the
@@ -156,9 +167,11 @@ final class WebSocketClient: NSObject {
         // as an absolute upper bound.
         task?.maximumMessageSize = 16 * 1024 * 1024
         task?.resume()
+        armPhaseDeadline(after: Self.connectTimeout, reason: "connect_timeout")
     }
 
     func disconnect() {
+        generation += 1
         intentionalClose = true
         cleanup()
         task?.cancel(with: .normalClosure, reason: nil)
@@ -179,6 +192,8 @@ final class WebSocketClient: NSObject {
             return
         }
         relayURL = newURL
+        generation += 1
+        let epoch = generation
         intentionalClose = true
         cleanup()
         task?.cancel(with: .normalClosure, reason: nil)
@@ -194,8 +209,10 @@ final class WebSocketClient: NSObject {
         outboundQueue.removeAll()
         // Reconnect to the new URL on the next runloop tick so callers
         // can finish updating any state before we touch the network.
+        state = .disconnected
         DispatchQueue.main.async { [weak self] in
-            self?.connect()
+            guard let self, self.generation == epoch else { return }
+            self.startConnection()
         }
     }
 
@@ -251,14 +268,16 @@ final class WebSocketClient: NSObject {
         stableConnectionWorkItem?.cancel()
         stableConnectionWorkItem = nil
         if value {
+            phaseDeadline?.cancel(); phaseDeadline = nil
             flushOutboundQueue()
             scheduleStableConnectionReset()
         }
     }
 
     private func scheduleStableConnectionReset() {
+        let epoch = generation
         let work = DispatchWorkItem { [weak self] in
-            guard let self,
+            guard let self, self.generation == epoch,
                   self.state == .connected,
                   self.isAuthenticated else { return }
             self.reconnectDelay = Self.reconnectBase
@@ -331,12 +350,13 @@ final class WebSocketClient: NSObject {
     ///                (next ping fires on its own timer).
     private func writeString(_ string: String, retryOnSendError: Bool) {
         let message = URLSessionWebSocketTask.Message.string(string)
-        task?.send(message) { [weak self] error in
+        let sendingTask = task
+        sendingTask?.send(message) { [weak self] error in
             guard let error else { return }
             KLog.d("⚠️ ws send completion failed: \(error)")
             guard retryOnSendError else { return }
             DispatchQueue.main.async {
-                guard let self else { return }
+                guard let self, self.task === sendingTask else { return }
                 self.enqueueOutbound(string)
             }
         }
@@ -350,28 +370,28 @@ final class WebSocketClient: NSObject {
         // second receive loop to the replacement socket.
         guard let receivingTask = task else { return }
         receivingTask.receive { [weak self, receivingTask] result in
-            guard let self, self.task === receivingTask else {
-                KLog.d("ℹ️ Ignoring stale WebSocket receive callback")
-                return
-            }
-            switch result {
-            case .success(let message):
-                self.recordInboundActivity()
-                switch message {
-                case .string(let text):
-                    if let data = text.data(using: .utf8) {
-                        self.onMessage?(data)
-                    }
-                case .data(let data):
-                    self.onMessage?(data)
-                @unknown default:
-                    break
+            DispatchQueue.main.async {
+                guard let self, self.task === receivingTask else {
+                    KLog.d("ℹ️ Ignoring stale WebSocket receive callback")
+                    return
                 }
-                // Continue listening only on the same connection generation.
-                self.listenForMessages()
-            case .failure:
-                // Connection lost — URLSessionDelegate methods handle reconnection.
-                break
+                switch result {
+                case .success(let message):
+                    self.recordInboundActivity()
+                    switch message {
+                    case .string(let text):
+                        if let data = text.data(using: .utf8) { self.onMessage?(data) }
+                    case .data(let data):
+                        self.onMessage?(data)
+                    @unknown default:
+                        break
+                    }
+                    // Message handling can synchronously redirect/logout/recover.
+                    guard self.task === receivingTask else { return }
+                    self.listenForMessages()
+                case .failure:
+                    self.recover(reason: "receive_failed")
+                }
             }
         }
     }
@@ -410,14 +430,14 @@ final class WebSocketClient: NSObject {
         if let pingStarted = livenessPingStartedAt,
            now.timeIntervalSince(pingStarted) > Self.livenessPingTimeout {
             KLog.d("⚠️ WebSocket liveness ping timed out — replacing stale connection")
-            resetBackoffAndReconnect()
+            recover(reason: "ping_timeout")
             return
         }
 
         if let lastLivenessAt,
            now.timeIntervalSince(lastLivenessAt) > Self.livenessTimeout {
             KLog.d("⚠️ WebSocket has been silent for too long — replacing stale connection")
-            resetBackoffAndReconnect()
+            recover(reason: "transport_silent")
             return
         }
 
@@ -430,7 +450,7 @@ final class WebSocketClient: NSObject {
                 self.livenessPingStartedAt = nil
                 if let error {
                     KLog.d("⚠️ WebSocket liveness ping failed: \(error)")
-                    self.resetBackoffAndReconnect()
+                    self.recover(reason: "ping_failed")
                 } else {
                     self.lastLivenessAt = Date()
                 }
@@ -461,8 +481,37 @@ final class WebSocketClient: NSObject {
 
     // MARK: - Reconnect
 
+    private func armPhaseDeadline(after delay: TimeInterval, reason: String) {
+        phaseDeadline?.cancel()
+        let epoch = generation
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.generation == epoch, !self.isAuthenticated else { return }
+            self.recover(reason: reason)
+        }
+        phaseDeadline = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// Recoverable close keeps the queue and owns one retry. User disconnect
+    /// instead retires the transport without scheduling recovery.
+    func recover(reason: String) {
+        guard !intentionalClose, task != nil else { return }
+        #if KRAKI_DIAG
+        KrakiDiag.record(.connection, [.source: .tag(reason), .count: .int(generation)])
+        #endif
+        generation += 1
+        let oldTask = task, oldSession = session
+        task = nil; session = nil
+        cleanup()
+        oldTask?.cancel(with: .goingAway, reason: nil)
+        oldSession?.invalidateAndCancel()
+        state = .disconnected
+        scheduleReconnect()
+    }
+
     private func scheduleReconnect() {
-        guard reconnectWorkItem == nil else { return }
+        guard !intentionalClose, state == .disconnected, task == nil, reconnectWorkItem == nil else { return }
+        let epoch = generation
 
         let delay = reconnectDelay
         reconnectAttempts += 1
@@ -470,8 +519,9 @@ final class WebSocketClient: NSObject {
         onReconnectAttempt?(reconnectAttempts)
 
         let work = DispatchWorkItem { [weak self] in
-            self?.reconnectWorkItem = nil
-            self?.connect()
+            guard let self, self.generation == epoch, !self.intentionalClose else { return }
+            self.reconnectWorkItem = nil
+            self.connect()
         }
         reconnectWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
@@ -485,7 +535,7 @@ final class WebSocketClient: NSObject {
         reconnectDelay = Self.reconnectBase
         reconnectAttempts = 0
         onReconnectAttempt?(0)
-        connect()
+        startConnection()
     }
 
     private func cancelReconnect() {
@@ -494,6 +544,7 @@ final class WebSocketClient: NSObject {
     }
 
     private func cleanup() {
+        phaseDeadline?.cancel(); phaseDeadline = nil
         isAuthenticated = false
         stopPing()
         stopLivenessMonitoring()
@@ -523,6 +574,7 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         // accumulated backoff until the socket remains authenticated for the
         // stability interval. The UI can still stop showing reconnecting now.
         onReconnectAttempt?(0)
+        armPhaseDeadline(after: Self.authenticationTimeout, reason: "auth_timeout")
         state = .connected
         startPing()
         startLivenessMonitoring()
@@ -541,11 +593,7 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         }
         let reasonStr = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "nil"
         KLog.d("🔒 WebSocket closed code=\(closeCode.rawValue) reason=\(reasonStr) intentional=\(intentionalClose) url=\(relayURL)")
-        cleanup()
-        if !intentionalClose {
-            state = .disconnected
-            scheduleReconnect()
-        }
+        recover(reason: "peer_closed")
     }
 
     func urlSession(
@@ -559,10 +607,6 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         }
         guard let error else { return }
         KLog.d("⚠️ WebSocket didCompleteWithError \(error.localizedDescription) intentional=\(intentionalClose) url=\(relayURL)")
-        cleanup()
-        if !intentionalClose {
-            state = .disconnected
-            scheduleReconnect()
-        }
+        recover(reason: "transport_error")
     }
 }

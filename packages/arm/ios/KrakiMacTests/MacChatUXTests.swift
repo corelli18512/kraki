@@ -649,7 +649,7 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
             fx.app.messageStore.endCardTurn(sid)
             drain(900)
             render(fx, "\(dir)/\(tag)-nav.png")
-            // 2. failed + sending inputs at the bottom, steps on the last reply
+            // 2. unconfirmed + sending inputs at the bottom, steps on the last reply
             fx.app.commandSender?.confirmationTimeout = .milliseconds(200)
             fx.sv.automationTapDown(); drain(600)
             _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "这条没有发出去")

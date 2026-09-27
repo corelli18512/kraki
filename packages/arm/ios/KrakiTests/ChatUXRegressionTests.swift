@@ -428,7 +428,7 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(order, ["第一条", "第二条", "第三条"])
     }
 
-    func testPendingDeliveryStateFailsRetriesAndDeduplicates() throws {
+    func testPendingDeliveryStateRemainsUnconfirmedRetriesAndDeduplicates() throws {
         var sends = 0
         let fx = try makeFixture(total: 10) { _ in sends += 1; return true }
         fx.app.commandSender?.confirmationTimeout = .milliseconds(200)
@@ -438,14 +438,14 @@ final class ChatUXRegressionTests: XCTestCase {
         let pending = try XCTUnwrap(sender.pendingInputs(sid).first)
         XCTAssertEqual(sender.pendingState(pending), .sending)
         drain(600)
-        XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .failed,
-                       "unconfirmed input must surface as failed, not hang forever")
+        XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .unconfirmed,
+                       "missing echo cannot prove delivery failure")
         fx.vc.syncLiveUpdates()
         drain(100)
         let failedCell = fx.cv.visibleCells.compactMap { $0 as? TKBubbleCell }
             .first { $0.contentSnapshot?.message.type == "pending_input" }
-        XCTAssertEqual(failedCell?.deliveryStatusForRegression, "Not delivered. Tap to retry",
-                       "the visible bubble must show the failed state")
+        XCTAssertEqual(failedCell?.deliveryStatusForRegression, "Awaiting confirmation. Tap to retry",
+                       "the visible bubble must state uncertainty, not false failure")
         let clientId = try XCTUnwrap(pending.payload["clientId"]?.stringValue)
         XCTAssertTrue(sender.retryPending(sessionId: sid, clientId: clientId))
         XCTAssertEqual(sends, 2, "retry resends with the same clientId")
@@ -545,7 +545,7 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(texts.count, 1)
     }
 
-    func testStagedVoiceSurvivesRelaunchAsRetryableOriginal() throws {
+    func testStagedVoiceSurvivesRelaunchAsRetryableOriginal() async throws {
         let fx = try makeFixture(total: 2)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("outbox-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -553,11 +553,30 @@ final class ChatUXRegressionTests: XCTestCase {
         let clientId = try XCTUnwrap(first.stageInput(sessionId: sid, text: "original"))
         first.updateStagedInput(sessionId: sid, clientId: clientId, text: "corrected partial", original: "original")
         _ = first.sendInput(sessionId: sid, text: "other")   // persists the whole outbox
-        drain(300)
+        await first.waitForOutboxWritesForTesting()
         let restored = CommandSender(appState: fx.app, outboxURL: url)
         let voice = try XCTUnwrap(restored.pendingInputs(sid).first { $0.payload["clientId"]?.stringValue == clientId })
         XCTAssertEqual(restored.pendingState(voice), .failed)
         XCTAssertEqual(voice.content, "original")
+    }
+
+    func testSentOutboxRestoresUnconfirmedAndOrderedClearDoesNotResurrect() async throws {
+        let fx = try makeFixture(total: 2)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("outbox-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let first = CommandSender(appState: fx.app, outboxURL: url)
+        XCTAssertTrue(first.sendInput(sessionId: sid, text: "synthetic"))
+        let id = try XCTUnwrap(first.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
+        await first.waitForOutboxWritesForTesting()
+        let restored = CommandSender(appState: fx.app, outboxURL: url)
+        XCTAssertEqual(restored.pendingState(try XCTUnwrap(restored.pendingInputs(sid).first)), .unconfirmed)
+        for _ in 0..<20 { _ = first.sendInput(sessionId: sid, text: "synthetic") }
+        first.clearAllPending(sid)
+        await first.waitForOutboxWritesForTesting()
+        XCTAssertTrue(CommandSender(appState: fx.app, outboxURL: url).pendingInputs(sid).isEmpty)
+        restored.clearPending(sid, clientId: id) // late authoritative echo
+        XCTAssertTrue(restored.pendingInputs(sid).isEmpty)
+        await restored.waitForOutboxWritesForTesting()
     }
 
     // MARK: Delivery dim (text + image) and status placement
@@ -576,6 +595,9 @@ final class ChatUXRegressionTests: XCTestCase {
     }
 
     func testSendingMessageDimsTextAndImageTogetherWithoutFlashUntilDelivered() throws {
+        var timers: [(TimeInterval, DispatchWorkItem)] = []
+        TKBubbleCell.pendingDimSchedulerForTesting = { timers.append(($0, $1)) }
+        defer { TKBubbleCell.pendingDimSchedulerForTesting = nil }
         let fx = try makeFixture(total: 6)
         drain(400)
         let sender = try XCTUnwrap(fx.app.commandSender)
@@ -584,6 +606,9 @@ final class ChatUXRegressionTests: XCTestCase {
         fx.vc.syncLiveUpdates(); drain(150)
         let early = try XCTUnwrap(cell(fx, clientId: clientId)?.pendingDimForRegression)
         XCTAssertEqual(early.text, 1, accuracy: 0.05, "a fast confirmation must not flash a dim")
+        XCTAssertFalse(timers.isEmpty)
+        XCTAssertTrue(timers.allSatisfy { $0.0 == 0.8 }, "production delay remains 0.8 seconds")
+        timers.forEach { $0.1.perform() }
         drain(1_200)
         let pendingCell = try XCTUnwrap(cell(fx, clientId: clientId))
         XCTAssertEqual(pendingCell.pendingDimForRegression.text, 0.6, accuracy: 0.05)
@@ -598,6 +623,32 @@ final class ChatUXRegressionTests: XCTestCase {
         sender.clearPending(sid, clientId: clientId)
         fx.vc.syncLiveUpdates(); drain(500)
         let delivered = try XCTUnwrap(cell(fx, clientId: clientId))
+        XCTAssertNil(delivered.deliveryStatusForRegression)
+        XCTAssertEqual(delivered.pendingDimForRegression.text, 1, accuracy: 0.05)
+        XCTAssertEqual(delivered.pendingDimForRegression.image, 1, accuracy: 0.05)
+    }
+
+    func testEchoBeforeDimDeadlineCannotBeDimmedByRetiredTimer() throws {
+        var timers: [DispatchWorkItem] = []
+        TKBubbleCell.pendingDimSchedulerForTesting = { _, work in timers.append(work) }
+        defer { TKBubbleCell.pendingDimSchedulerForTesting = nil }
+        let fx = try makeFixture(total: 6)
+        drain(400)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "fast echo", attachments: [pngAttachment()]))
+        let id = try XCTUnwrap(sender.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
+        fx.vc.syncLiveUpdates(); drain(150)
+        XCTAssertFalse(timers.isEmpty)
+        let echo = try JSONSerialization.data(withJSONObject: [
+            "type": "user_message", "seq": 7, "sessionId": sid, "deviceId": dev,
+            "timestamp": "2026-09-01T00:00:03.000Z", "payload": ["content": "fast echo", "clientId": id],
+        ])
+        fx.app.messageProvider?.ingestTailCandidate(sid, json: echo)
+        sender.clearPending(sid, clientId: id)
+        fx.vc.syncLiveUpdates(); drain(500)
+        timers.forEach { $0.perform() }
+        drain(400)
+        let delivered = try XCTUnwrap(cell(fx, clientId: id))
         XCTAssertNil(delivered.deliveryStatusForRegression)
         XCTAssertEqual(delivered.pendingDimForRegression.text, 1, accuracy: 0.05)
         XCTAssertEqual(delivered.pendingDimForRegression.image, 1, accuracy: 0.05)
@@ -639,14 +690,14 @@ final class ChatUXRegressionTests: XCTestCase {
         drain(700)
         fx.vc.syncLiveUpdates(); drain(200)
         let failed = try XCTUnwrap(cell(fx, clientId: clientId))
-        XCTAssertEqual(failed.deliveryStatusForRegression, "Not delivered. Tap to retry")
+        XCTAssertEqual(failed.deliveryStatusForRegression, "Awaiting confirmation. Tap to retry")
         XCTAssertTrue(failed.bubbleHiddenForRegression, "image-only: no text bubble")
         let image = failed.imageFrameForRegression, status = failed.deliveryStatusFrameForRegression
         XCTAssertGreaterThan(image.height, 0)
         XCTAssertGreaterThanOrEqual(status.minY, image.minY, "status is not above the image")
         XCTAssertLessThanOrEqual(status.maxY, image.maxY + 0.5)
         XCTAssertLessThanOrEqual(status.maxX, image.minX, "status sits beside the image")
-        XCTAssertEqual(failed.pendingDimForRegression.image, 1, accuracy: 0.05, "failed is shown normally with its !")
+        XCTAssertEqual(failed.pendingDimForRegression.image, 1, accuracy: 0.05, "unconfirmed is shown normally with its status")
     }
 
     // MARK: Jump controls

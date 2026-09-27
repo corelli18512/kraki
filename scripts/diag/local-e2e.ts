@@ -1,4 +1,4 @@
-/** Real Swift signature + URLSession -> ephemeral loopback Head collector.
+/** Real Swift signature + URLSession -> ephemeral loopback @kraki/monitor collector.
  * No production app, relay, credentials, database, Keychain or model calls.
  * Run on macOS: pnpm exec tsx scripts/diag/local-e2e.ts
  */
@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
-import { DiagApi, validateDiagBatch } from '../../packages/head/src/diag-api.js';
+import { DiagApi, validateDiagBatch } from '../../packages/monitor/src/diag-api.js';
 
 async function main() {
   const root = await mkdtemp(join(tmpdir(), 'kraki-diag-e2e-'));
@@ -18,8 +18,7 @@ async function main() {
   const dataDir = join(root, 'collector');
   const api = new DiagApi({ directory: dataDir, getDevice: id =>
     id === 'native-e2e-device' && existsSync(pub) ? {
-      id, userId: 'ephemeral-test-user', role: 'app', kind: 'desktop', name: 'test',
-      publicKey: readFileSync(pub, 'utf8'), encryptionKey: null, lastSeen: '', createdAt: '',
+      id, userId: 'ephemeral-test-user', role: 'app', publicKey: readFileSync(pub, 'utf8'),
     } : undefined,
   });
   let failNextPost = true;

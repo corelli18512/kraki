@@ -63,6 +63,16 @@ import UIKit
         XCTAssertEqual(project([pending("a", "failed")], online: false).status, .delivery(.failed))
         XCTAssertEqual(project([pending("a")], online: true).status, .delivery(.sending))
     }
+    func testUnconfirmedIsNotFailureOrEndlessSendingIncludingWhileOffline() {
+        for online in [true, false] {
+            let p = project([pending("uncertain", "unconfirmed")], online: online)
+            XCTAssertEqual(p.status, .delivery(.unconfirmed))
+            XCTAssertEqual(p.previewText, "Awaiting confirmation · hello")
+        }
+        XCTAssertFalse(SessionPreviewGlyphKind.delivery(.unconfirmed).animates)
+        XCTAssertEqual(SessionDeliveryStatus.unconfirmed.accessibilityLabel, "Awaiting delivery confirmation")
+        XCTAssertEqual(project([pending("uncertain", "unconfirmed", order: 2), pending("failed", "failed")]).status, .delivery(.failed))
+    }
     func testOtherSessionAndNonPendingRecordsNeverOverride() {
         let other = ChatMessage(type: "pending_input", seq: 0, sessionId: "other", deviceId: nil, timestamp: nil, payload: pending("a").payload)
         let echo = ChatMessage(type: "user_message", seq: 1, sessionId: sid, deviceId: nil, timestamp: nil, payload: pending("b").payload)
@@ -202,7 +212,7 @@ import UIKit
     }
     func testOffscreenReduceMotionReuseAndFailureClearAllAnimations() {
         let layer = SessionPreviewGlyphLayer(), color = CGColor(gray: 0.5, alpha: 1)
-        for kind: SessionPreviewGlyphKind in [.compacting, .delivery(.correcting), .delivery(.sending), .delivery(.failed), .delivery(.queued)] {
+        for kind: SessionPreviewGlyphKind in [.compacting, .delivery(.correcting), .delivery(.sending), .delivery(.unconfirmed), .delivery(.failed), .delivery(.queued)] {
             layer.configure(kind: kind, color: color, image: nil, displayScale: 2, animate: true)
             XCTAssertEqual(layer.isAnimating, kind.animates)
             layer.configure(kind: kind, color: color, image: nil, displayScale: 2, animate: false)

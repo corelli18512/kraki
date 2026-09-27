@@ -46,9 +46,10 @@ final class CommandSender {
     enum PendingState: String {
         /// Queued/sent, waiting for the Tentacle echo.
         case sending
-        /// Not confirmed within the delivery window (while online), or restored
-        /// after the app was terminated before confirmation. Retry is safe:
-        /// Tentacle deduplicates inputs by clientId.
+        /// No authoritative echo yet; timeout does not prove delivery failed.
+        /// Retrying keeps the original clientId and is safe.
+        case unconfirmed
+        /// A local send/correction failure, not inferred from an echo timeout.
         case failed
         /// A sent voice message whose transcript is still being corrected.
         /// Local only: nothing has been handed to transport yet.
@@ -60,11 +61,12 @@ final class CommandSender {
     @ObservationIgnored private var nextLocalOrder = 1
     @ObservationIgnored private var confirmationTasks: [String: Task<Void, Never>] = [:]
     /// How long an input may stay unconfirmed while the transport and target
-    /// device are online before it is marked failed.
+    /// device are online before its status becomes explicitly unconfirmed.
     @ObservationIgnored var confirmationTimeout: Duration = .seconds(20)
     /// Durable outbox (production only). Unconfirmed inputs survive process
     /// death and come back as retryable instead of silently disappearing.
     @ObservationIgnored private var outboxURL: URL?
+    private static let outboxWriteQueue = DispatchQueue(label: "chat.kraki.outbox.write", qos: .utility)
 
     private weak var appState: AppState?
 
@@ -336,7 +338,7 @@ final class CommandSender {
                 guard !Task.isCancelled, let self,
                       self.outbox[sessionId]?[clientId] != nil else { return }
                 if self.isDeliveryPathUp(sessionId) {
-                    self.setPendingState(sessionId, clientId: clientId, .failed)
+                    self.setPendingState(sessionId, clientId: clientId, .unconfirmed)
                     self.confirmationTasks[clientId] = nil
                     return
                 }
@@ -459,7 +461,17 @@ final class CommandSender {
         let delivery: String?
         let attachments: [[String: String]]?
         var answerTo: String? = nil
+        var state: String? = nil
     }
+
+    #if DEBUG
+    /// Functional tests wait for the actual FIFO boundary, not a disk-speed guess.
+    func waitForOutboxWritesForTesting() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            Self.outboxWriteQueue.async { continuation.resume() }
+        }
+    }
+    #endif
 
     private func persistOutbox() {
         guard let outboxURL else { return }
@@ -482,13 +494,16 @@ final class CommandSender {
                     text: message.payload["originalText"]?.stringValue ?? message.content ?? "",
                     delivery: message.payload["delivery"]?.stringValue,
                     attachments: persistedAttachments,
-                    answerTo: message.answerTo
+                    answerTo: message.answerTo,
+                    state: message.payload["localState"]?.stringValue
                 ))
             }
         }
         let url = outboxURL
         let data = try? JSONEncoder().encode(stored)
-        DispatchQueue.global(qos: .utility).async {
+        // Preserve mutation order: a late older write must not resurrect a
+        // just-cleared outbox after its newer delete has completed.
+        Self.outboxWriteQueue.async {
             if stored.isEmpty {
                 try? FileManager.default.removeItem(at: url)
             } else if let data {
@@ -499,7 +514,7 @@ final class CommandSender {
         }
     }
 
-    /// Unconfirmed inputs from a previous process return as `failed`: whether
+    /// Previously sent inputs return as `unconfirmed`: whether
     /// they reached Tentacle is unknown, retry is idempotent, and ones that did
     /// land are removed if the echo is already cached, even without an open chat.
     private func restoreOutbox() {
@@ -516,7 +531,8 @@ final class CommandSender {
             var payload: [String: AnyCodable] = [
                 "content": AnyCodable(item.text),
                 "clientId": AnyCodable(item.clientId),
-                "localState": AnyCodable(PendingState.failed.rawValue),
+                "localState": AnyCodable(item.state == "failed" || item.state == "correcting"
+                    ? PendingState.failed.rawValue : PendingState.unconfirmed.rawValue),
                 "localOrder": AnyCodable(item.order),
             ]
             if let delivery = item.delivery { payload["delivery"] = AnyCodable(delivery) }

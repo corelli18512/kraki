@@ -375,7 +375,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertEqual(fx.doc.automationVisibleCells.last?.cell.content?.pendingClientId != nil, true)
     }
 
-    func testFailedInputOffersRetryAndDelete() throws {
+    func testUnconfirmedInputOffersSameIDRetryAndDelete() throws {
         let fx = try makeFixture(total: 20)
         fx.app.commandSender?.confirmationTimeout = .milliseconds(300)
         drain(1_000)
@@ -387,16 +387,30 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertEqual(pending()?.deliveryStatusForRegression, "Sending")
         drain(800)
         let cell = try XCTUnwrap(pending())
-        XCTAssertEqual(cell.deliveryStatusForRegression?.hasPrefix("Not delivered"), true)
+        XCTAssertEqual(cell.deliveryStatusForRegression, "Awaiting confirmation. Click to retry or delete")
+        XCTAssertEqual(cell.content?.pendingDeliveryState, "unconfirmed")
         let clientId = try XCTUnwrap(cell.content?.pendingClientId)
         fx.doc.onPendingAction?(clientId, .retry)
         drain(100)
         XCTAssertEqual(pending()?.deliveryStatusForRegression, "Sending", "retry re-sends")
+        XCTAssertEqual(pending()?.content?.pendingClientId, clientId, "retry must preserve message identity")
         drain(800)
         fx.doc.onPendingAction?(clientId, .delete)
         drain(200)
-        XCTAssertNil(pending(), "delete removes the failed bubble")
+        XCTAssertNil(pending(), "delete removes the unconfirmed bubble")
         XCTAssertNil(fx.app.sessionStore.drafts[sid], "a sent message never returns to the composer")
+    }
+
+    func testRejectedStagedHandoffStillShowsFailure() throws {
+        let fx = try makeFixture(total: 20)
+        fx.app.testOutboundMessageHandler = { _, _, _ in false }
+        drain(1_000)
+        let clientId = try XCTUnwrap(fx.app.commandSender?.stageInput(sessionId: sid, text: "local handoff rejected"))
+        XCTAssertEqual(fx.app.commandSender?.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "local handoff rejected"), false)
+        drain(300)
+        let cell = try XCTUnwrap(fx.doc.automationVisibleCells.last { $0.cell.content?.pendingClientId != nil }?.cell)
+        XCTAssertEqual(cell.content?.pendingDeliveryState, "failed")
+        XCTAssertEqual(cell.deliveryStatusForRegression, "Not delivered. Click to retry or delete")
     }
 
     // MARK: Navigation

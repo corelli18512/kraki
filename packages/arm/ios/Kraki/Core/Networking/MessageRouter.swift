@@ -620,6 +620,10 @@ final class MessageRouter {
     @MainActor
     private func handleSessionList(_ dict: [String: Any]) {
         guard let appState else { return }
+        #if KRAKI_DIAG
+        let diagStart = KrakiDiag.beginWork()
+        defer { KrakiDiag.endWork(diagStart, source: "session_list.reconcile") }
+        #endif
 
         let payload = dict["payload"] as? [String: Any]
         guard let sessions = (payload?["sessions"] ?? dict["sessions"]) as? [[String: Any]] else {
@@ -645,6 +649,7 @@ final class MessageRouter {
         let parsed = sessions.compactMap { SessionDigest(json: $0) }
         let maxSeq = parsed.map(\.lastSeq).max() ?? 0
         KLog.chat("📋 [1/sessions] session_list device=\(deviceName) count=\(parsed.count) maxLastSeq=\(maxSeq)")
+        #if DEBUG
         for (i, d) in parsed.enumerated() {
             let pin = (d.pinned == true) ? "📌" : "  "
             let prev: String
@@ -666,6 +671,7 @@ final class MessageRouter {
             KLog.d("    [\(i)] \(pin) id=\(d.id) lastSeq=\(d.lastSeq) readSeq=\(d.readSeq) mode=\(d.mode.rawValue) agent=\(d.agent) model=\(d.model ?? "nil") state=\(d.state.rawValue) msgCount=\(d.messageCount) \(title) \(prev) \(usage)")
         }
 
+        #endif
         let reconcileStartedAt = Date()
         let removedSessionIDs = appState.sessionStore.reconcileSessionList(
             parsed,

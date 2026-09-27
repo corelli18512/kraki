@@ -3,7 +3,17 @@
 更新：2026-09-27。用户追加授权：**做到客户端发布 + 云端 REST 实际运行，不替用户安装/更新**。
 发布工作树：`kraki-client-diagnostics-release`，基于最新 main，保留现有客户端登录/数据。
 
-## 发布增补（优先于下文最初分阶段计划）
+## 当前代码归属：独立 `@kraki/monitor`
+
+诊断日志 REST 采集器现位于 [`packages/monitor`](../packages/monitor/README.md)，不再属于 Head package。
+它独立构建/启动/测试/部署，零运行时 npm 依赖；仅通过只读 SQLite adapter 查询注册设备公钥验签。
+Head 不再内嵌 collector，误发到 Head 的诊断路径返回 404。公网 `/api/diag/v1/*`、签名协议、
+`kraki-diag` 服务名、loopback:4011、环境变量与日志存储路径均保持不变。
+部署入口为 `packages/monitor/scripts/deploy.sh`，旧 `scripts/diag/deploy-sidecar.sh` 仅做兼容转发。
+本次重构仅本地修改与验证，**没有部署、重启 Head/collector 或更新用户 App**。
+下文第一阶段进度/性能数字是历史时点记录；不代表本轮重新授权部署或最新上传调度参数。
+
+## 发布增补（历史发布记录，优先于下文最初分阶段计划）
 
 - 本次使用显式 `DiagnosticsDelivery` 配置：Release 优化 + `KRAKI_DIAG KRAKI_DIAG_EXISTING_IDENTITY`。
   它保留生产 bundle/keychain/defaults/outbox 身份，沿现有 TestFlight / Sparkle 通道发布；
@@ -14,7 +24,7 @@
 - 设置有“记录并发送诊断日志”toggle（诊断版默认开）、最近上传时间、待上传量、人工异常标记按钮。
 - 追加 `ui.busy`（前台 runloop 完成的 ≥50ms busy interval，排除 sleeping；不是 watchdog 栈）、
   `list.snapshot`（数量/seq bounds/pending 变化）、`session.view`、跨平台 `voice.action` 元数据。
-- REST 部署为 **独立 sidecar** `diag-sidecar.ts`，Node 24 内置 SQLite 只读连接 Head 的 devices 表；
+- REST 部署为 **独立服务**（当前入口 `packages/monitor/src/cli.ts`），Node 24 内置 SQLite 只读连接 Head 的 devices 表；
   通过原域名的 `/api/diag/v1/*` 反向代理转发到 loopback:4011，不升级/重启 Head/Pulse。
 - 重型黑匣子、自动渲染异常判定和完整真机 A/B 继续迭代，不再作为这次中间版发布的前置门槛；
   仍不声称已有整机 CPU/网络延迟百分比。发布和线上验收结果另存 release verification 文档。
@@ -64,7 +74,7 @@
   - HTTP 压缩请求体尝试量最多 20 MiB/UTC 日，跨重启保存计数；失败尝试也计入。
   - 本地开关关闭取消 task、丢弃内存和未发送文件。已在网络上的字节无法撤回。
   - 切换设备/relay 清除旧 realm，绝不把另一个登录身份的批次传给新身份。
-- `packages/head/src/diag-api.ts`
+- `packages/monitor/src/diag-api.ts`
   - 独立签名鉴权、schema allowlist、大小/速率/配额/并发限制、幂等文件存储、14 天保留。
   - 无 `KRAKI_DIAG_DIR` 时返回 410，不操作诊断目录。
 - 编译配置、设置页开关、发布二进制守卫。
@@ -108,7 +118,8 @@ Mac 的窗口尺寸/缩放配置仍按原约定跨 Prod/Dev 共用，不能称�
 - `GET /api/diag/v1/config`
 - `POST /api/diag/v1/batch`：`Content-Type: application/json`，`Content-Encoding: gzip`
 
-在 `packages/head/src/cli.ts` 中**先于** AccountApi 的 `/api/*` service-key gate 分派；main/edge 均可用。
+由反向代理直接转发到独立 `@kraki/monitor` 进程，不进入 Head 的 AccountApi service-key gate。
+Head 本身不再提供这些 REST 路由；旧内嵌部署需要先迁移代理，否则返回 404。
 没有新增 Pulse 消息、stream、ACK 或 Tentacle handler。
 
 ### 签名
@@ -135,7 +146,8 @@ kraki-diag-v1
 <SHA256(压缩请求体) 的小写 hex；GET 使用空体>
 ```
 
-Head 用本地 Storage 已注册/镜像的 app-role device 公钥验签，时间容差 ±5 分钟。
+Monitor 用只读 SQLite adapter 查询已注册/镜像的 app-role device 公钥验签，时间容差 ±5 分钟。
+仅读取 `devices(id, user_id, role, public_key)`；不导入 Head 的 Storage 类型，不读会话消息，不创建/迁移/写入 Head DB。
 它是只写诊断能力，不是通用 HTTP 登录；不使用 OAuth、服务 Bearer、message E2E key。
 TLS 必需；仅显式 loopback 的本地测试允许 HTTP。客户端不跟随重定向，不发 cookies。
 公网部署必须有 TLS、入口限流、专用数据目录/磁盘告警；数据是 HTTPS 保护的元数据，
@@ -153,7 +165,7 @@ TLS 必需；仅显式 loopback 的本地测试允许 HTTP。客户端不跟随�
 - 路径：`$KRAKI_DIAG_DIR/<SHA256(userId + LF + deviceId)>/<batchId>.json.gz`。
 - 同 ID 同字节重试返回 204；同 ID 不同字节返回 409。跨重启/日期仍幂等。
 - 写临时文件后 rename，再返回 204；客户端仅在成功后删除该批次。
-- 一个 Head 实例独占一个目录；多副本共享目录的分布式配额/写入协调**不在 v1 范围**。
+- 一个 Monitor 实例独占一个目录；多副本共享目录的分布式配额/写入协调**不在 v1 范围**。
 
 操作员 kill switch：`touch "$KRAKI_DIAG_DIR/DISABLED"`；新 POST 410，GET 返回 enabled=false。
 不需重启 relay。客户端前台约每 15 分钟拉一次配置，收到关闭后清缓存/停止采集（首次认证后的请求更早）。
@@ -189,7 +201,7 @@ TLS 必需；仅显式 loopback 的本地测试允许 HTTP。客户端不跟随�
 | `cmd.input` | sendInput/stageInput 刚创建的新 ID、answerTo、字节数、附件个数、显式 ix；source 区分语音 stage |
 | `cmd.handoff` | 所有 send_input（含 retry/staged）的 AppState 交接结果、原始 answerTo、ID、调用栈；accepted 不代表服务端确认 |
 | `cmd.result` | 新 sendInput 的本地结果 |
-| `outbox.state` | created/restored/retry/cleared/sending/failed/correcting |
+| `outbox.state` | created/restored/retry/cleared/sending/unconfirmed/failed/correcting |
 | `echo.input` | authoritative user_message 的 seq、clientId、answerTo、清理前是否命中本地 outbox |
 | `app.launch/phase` | 启动、认证、active/inactive/background/logout；后台时 outbox 数 |
 | `ws.state` | 原有连接状态回调、重连次数 |
@@ -234,22 +246,22 @@ iOS 尚未观察 raw UITouch；不能依据“无 gesture 日志”推断设备�
 ### 已有测试入口
 
 ```
-pnpm --filter @kraki/head exec vitest run src/__tests__/diag-api.test.ts
-pnpm --filter @kraki/head exec tsc --noEmit
+pnpm test:monitor  # API + readonly WAL integration + isolated built runtime
+pnpm --filter @kraki/monitor typecheck
 bash scripts/diag/run-native-tests.sh
-pnpm exec tsx scripts/diag/local-e2e.ts  # macOS，真实 Swift RSA/URLSession → 独立 loopback Head
+pnpm exec tsx scripts/diag/local-e2e.ts  # macOS，真实 Swift RSA/URLSession → 独立 loopback Monitor
 python3 scripts/diag/timeline.py <本地下载目录或单个.gz> --question <id>
 bash scripts/diag/verify-no-diag.sh <Release.app>
 ```
 
 NativeTests 是独立优化构建，使用 URLProtocol mock、临时目录、隔离 Defaults；不启动真实 App，
 不读 Keychain/生产会话，不调用模型。覆盖有界队列、并发序号、开关、gzip、文件滚动/恢复、
-失败保留、同字节重试、注销停止。Head 测试覆盖禁用、验签、大小/隐私 schema、幂等/冲突、
+失败保留、同字节重试、注销停止。Monitor 测试覆盖禁用、验签、大小/隐私 schema、幂等/冲突、
 配额、限流、保留、kill switch。
 
-本轮验证结果（2026-09-27，本地，无签名/无发布）：
+首轮实施验证结果（2026-09-27，拆包前的历史记录，本地，无签名/无发布）：
 - `pnpm lint`、Head TypeScript `--noEmit` 通过；Head 全套 **18 文件 / 277 tests** 通过，其中新增 API 测试8项。
-- NativeTests 全部通过；真实 loopback E2E 用临时 RSA key、真实 URLSession、真实 Head collector，首次POST注入503，重试后只落盘1份。
+- NativeTests 全部通过；真实 loopback E2E 用临时 RSA key、真实 URLSession、真实 collector，首次POST注入503，重试后只落盘1份。
 - iOS Simulator arm64 / Mac arm64 的 Diagnostics 和 Release 四组合均 build 成功；最终诊断代码又增量复编两端通过。
 - 两个 Release app 通过发布守卫；两个正控（Diag身份、伪装生产metadata的Diag binary）均被拒绝。
 - native 单测已接入现有 macOS CI job；本地 E2E脚本另可手动运行。
@@ -270,7 +282,7 @@ NativeTests 是独立优化构建，使用 URLProtocol mock、临时目录、隔
 
 ## 9. 部署与退出
 
-用户后续已授权本轮发布/部署，按顶部发布增补执行。使用现有 Head 的 HTTPS 入口，显式设置私有 `KRAKI_DIAG_DIR`，
+用户后续已授权本轮发布/部署，按顶部发布增补执行。使用与 Head 共用的 HTTPS 域名，由反向代理单独路由至 Monitor；只给 Monitor 设置私有 `KRAKI_DIAG_DIR`，
 配置磁盘配额/告警/TLS入口限流后再启用；不把部署命令指向生产默认值试跑。
 先让一个诊断客户端小流量运行，再扩大采集目录；不一次把所有高频日志打开。
 

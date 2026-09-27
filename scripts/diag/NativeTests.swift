@@ -28,6 +28,7 @@ final class FakeHTTP: URLProtocol, @unchecked Sendable {
     static var posts: [Data] = []
     static var postStatus = 204
     static var configEnabled = true
+    static var configStatus = 200
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
@@ -44,7 +45,7 @@ final class FakeHTTP: URLProtocol, @unchecked Sendable {
             }
         } else { body = request.httpBody ?? Data() }
         if !isConfig { Self.posts.append(body) }
-        let status = isConfig ? 200 : Self.postStatus
+        let status = isConfig ? Self.configStatus : Self.postStatus
         let response = isConfig ? Data("{\"schema\":1,\"enabled\":\(Self.configEnabled)}".utf8) : Data()
         Self.lock.unlock()
         check(request.value(forHTTPHeaderField: "X-Kraki-Signature") == "test-only-signature", "signature attached")
@@ -96,6 +97,59 @@ final class FakeHTTP: URLProtocol, @unchecked Sendable {
         do { try spool.append(Data(count: 16385), batchId: UUID().uuidString); fatalError("oversize accepted") }
         catch DiagError.size { }
 
+        // Merge never-attempted tiny files, but never rewrite an ambiguous ACK.
+        let mergeDir = root.appendingPathComponent("merge")
+        let merging = try DiagSpool(directory: mergeDir)
+        func smallBatch(_ seq: Int, id: String, process: String = "test-process") throws -> Data {
+            try diagGzip(JSONSerialization.data(withJSONObject: ["schema": 1, "batchId": id,
+                "processId": process, "platform": "test", "version": "1", "build": "1",
+                "events": [["t": 1, "m": 1, "seq": seq, "ev": "user.marker", "d": [:]]]]))
+        }
+        for n in 1...60 {
+            let id = UUID().uuidString
+            try merging.append(smallBatch(n, id: id), batchId: id)
+        }
+        try merging.compact()
+        check(merging.segments.count == 1, "60 new tiny batches compact into one")
+        let first = merging.segments[0].url
+        let mergedBytes = try Data(contentsOf: first)
+        let mergedJSON = try JSONSerialization.jsonObject(with: diagGunzip(mergedBytes)) as! [String: Any]
+        let mergedEvents = mergedJSON["events"] as! [[String: Any]]
+        check(mergedEvents.compactMap { $0["seq"] as? Int } == Array(1...60), "compaction preserves all events in order")
+        try merging.markAttempted(first)
+        let id = UUID().uuidString
+        try merging.append(smallBatch(61, id: id), batchId: id)
+        try merging.compact()
+        let resumed = try DiagSpool(directory: mergeDir)
+        try resumed.compact()
+        let immutable = try Data(contentsOf: first)
+        check(resumed.segments.count == 2 && immutable == mergedBytes, "attempt marker survives restart; ACK loss bytes stay identical")
+        // A crash after journaling, or after output write, must finish replacing
+        // the inputs before either the old or new identity can go onto HTTP.
+        let crashDir = root.appendingPathComponent("crash-merge")
+        let crashSpool = try DiagSpool(directory: crashDir)
+        let old1 = UUID().uuidString, old2 = UUID().uuidString, newID = UUID().uuidString
+        let a = try crashSpool.append(smallBatch(1, id: old1), batchId: old1)
+        let b = try crashSpool.append(smallBatch(2, id: old2), batchId: old2)
+        let outputName = "1_\(newID).gz"
+        let replacement = try smallBatch(3, id: newID)
+        let journal = try JSONSerialization.data(withJSONObject: ["sources": [a.lastPathComponent, b.lastPathComponent],
+            "output": outputName, "data": replacement.base64EncodedString()])
+        try journal.write(to: crashDir.appendingPathComponent("merge.json"), options: .atomic)
+        try replacement.write(to: crashDir.appendingPathComponent(outputName))
+        let recovered = try DiagSpool(directory: crashDir)
+        check(recovered.segments.count == 1 && recovered.segments[0].url.lastPathComponent == outputName, "interrupted merge finishes exactly once")
+        recovered.clear()
+        let remaining = try FileManager.default.contentsOfDirectory(atPath: crashDir.path)
+        check(remaining.isEmpty, "toggle clears merge metadata and bodies")
+        let corrupt = try DiagSpool(directory: root.appendingPathComponent("corrupt"))
+        try corrupt.append(Data("broken".utf8), batchId: UUID().uuidString)
+        let validID = UUID().uuidString
+        try corrupt.append(smallBatch(1, id: validID), batchId: validID)
+        try corrupt.compact()
+        check(corrupt.segments.count == 1 && corrupt.evicted == 1, "corrupt fresh file cannot permanently block later telemetry")
+        print("PASS: compaction ordering, immutable attempted retry/restart, merge crash recovery, cleanup and corrupt-file recovery")
+
         let suite = "kraki.diag.test.\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -115,6 +169,7 @@ final class FakeHTTP: URLProtocol, @unchecked Sendable {
         client.testTick(); wait(client)
         FakeHTTP.lock.lock(); let posts = FakeHTTP.posts; FakeHTTP.lock.unlock()
         check(posts.count == 2 && posts[0] == posts[1], "retry preserves batch bytes and id")
+        check(client.testSnapshot().uploadDelay <= 6, "successful backlog uses bounded fast catch-up, not one file/minute")
         let payload = try JSONSerialization.jsonObject(with: decodeGzip(posts[0])) as! [String: Any]
         check(payload["schema"] as? Int == 1, "native HTTP wire schema")
         recorder.record(.launch)
@@ -136,6 +191,18 @@ final class FakeHTTP: URLProtocol, @unchecked Sendable {
         client.setForeground(false); client.testTick()
         check(!client.testSnapshot().task && client.testSnapshot().count == 1, "background saves locally without HTTP")
 
+        let retryRecorder = DiagRecorder()
+        let retryConfig = DiagClient(recorder: retryRecorder, root: root.appendingPathComponent("config-retry"), defaults: defaults, sessionConfiguration: config)
+        defer { retryConfig.testStop() }
+        FakeHTTP.lock.lock(); FakeHTTP.configStatus = 503; FakeHTTP.lock.unlock()
+        retryConfig.configure(relay: "wss://diag.invalid", device: "config-retry-device") { _ in "test-only-signature" }
+        retryConfig.testTick(); wait(retryConfig)
+        let retryDelay = retryConfig.testSnapshot().configDelay
+        check(retryDelay > 0 && retryDelay < 40, "config failure retries in ~30s, not 15 minutes")
+        FakeHTTP.lock.lock(); FakeHTTP.configStatus = 200; FakeHTTP.lock.unlock()
+        retryConfig.testTick(); wait(retryConfig)
+        check(retryConfig.testSnapshot().remote, "config retry can recover")
+
         // Optional real local HTTP receiver: uses ephemeral RSA keys, never Keychain.
         if let relay = ProcessInfo.processInfo.environment["KRAKI_DIAG_E2E_RELAY"],
            let publicKeyPath = ProcessInfo.processInfo.environment["KRAKI_DIAG_E2E_PUBLIC_KEY"] {
@@ -149,12 +216,12 @@ final class FakeHTTP: URLProtocol, @unchecked Sendable {
             real.configure(relay: relay, device: "native-e2e-device") { try crypto.signChallenge($0, privateKey: keys.privateKey) }
             realRecorder.record(.answer, session: "e2e-session", [.questionId: .id("e2e-question"), .textLength: .int(10)])
             real.testTick(); wait(real)
-            check(real.testSnapshot().remote, "Swift device signature accepted by real Head")
+            check(real.testSnapshot().remote, "Swift device signature accepted by real Monitor")
             real.testTick(); wait(real) // receiver injects one 503
             check(real.testSnapshot().count == 1, "real HTTP failure retains batch")
             real.testTick(); wait(real) // retry same signed compressed bytes
             check(real.testSnapshot().count == 1, "real ACK removes first batch (one upload-failure health batch remains)")
-            print("PASS: real Swift RSA -> URLSession -> local Head API, including retry")
+            print("PASS: real Swift RSA -> URLSession -> local Monitor API, including retry")
         }
 
         // Optimized-build microbenchmark, not an assertion about whole-app CPU/battery.
@@ -166,7 +233,7 @@ final class FakeHTTP: URLProtocol, @unchecked Sendable {
             if n % 100 == 99 { _ = bench.drain() }
         }
         let elapsed = ProcessInfo.processInfo.systemUptime - start
-        print("PASS: recorder, concurrency, gzip, disk cap/relaunch, HTTP retry, toggle/logout (15 groups)")
+        print("PASS: recorder, concurrency, gzip, disk cap/relaunch, HTTP retry, toggle/logout, compaction/crash recovery, bounded catch-up and config retry")
         print(String(format: "record+periodic-drain microbenchmark: %.3f us/event, %d events", elapsed * 1_000_000 / Double(count), count))
         if let path = ProcessInfo.processInfo.environment["KRAKI_DIAG_TEST_BATCH"] { try posts[0].write(to: URL(fileURLWithPath: path)) }
     }

@@ -2414,7 +2414,9 @@ final class MacChatScrollView: MacSmoothScrollView {
         bubbleActionMouseMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
         ) { [weak self] event in
-            self?.interceptBubbleActionMouseEvent(event) ?? event
+            EventMonitorForwarding.forward(event, owner: self) { owner, event in
+                owner.interceptBubbleActionMouseEvent(event)
+            }
         }
     }
 

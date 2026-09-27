@@ -59,6 +59,15 @@ The relay has three jobs:
 
 It stores no messages, no sessions, and no content. All message bodies are encrypted blobs that the relay cannot read.
 
+## Diagnostic log collection is a separate service
+
+Client diagnostic metadata is collected by [`@kraki/monitor`](../monitor/README.md),
+not this relay. Route `/api/diag/v1/*` to the independent collector (default
+loopback port4011). Head returns404 for these paths and no longer embeds a
+collector when `KRAKI_DIAG_DIR` is set. Existing embedded-mode deployments must
+move that route to Monitor before upgrading Head; independent `kraki-diag`
+deployments do not require a Head restart. See Monitor's migration instructions.
+
 ## Useful options
 
 ```bash

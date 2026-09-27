@@ -710,7 +710,7 @@ final class SessionStore {
         }
 
         for digest in digests {
-            let date = ISO8601.parse(digest.createdAt) ?? Date()
+            let parsedDate = ISO8601.parse(digest.createdAt)
             // The router's previous upsert + setPinned sequence treated an
             // omitted authoritative pin as false. Preserve that wire behavior.
             let pinned = digest.pinned ?? false
@@ -731,7 +731,7 @@ final class SessionStore {
                 existing.lastSeq = lastSeq
                 existing.readSeq = readSeq
                 existing.messageCount = digest.messageCount
-                existing.createdAt = ISO8601.parse(digest.createdAt) ?? existing.createdAt
+                existing.createdAt = parsedDate ?? existing.createdAt
                 existing.usage = digest.usage
                 existing.pinned = pinned
                 nextSessions[digest.id] = existing
@@ -756,7 +756,7 @@ final class SessionStore {
                     lastSeq: lastSeq,
                     readSeq: readSeq,
                     messageCount: digest.messageCount,
-                    createdAt: date,
+                    createdAt: parsedDate ?? Date(),
                     usage: digest.usage,
                     pinned: pinned,
                     currentToolName: nil,

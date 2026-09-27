@@ -182,6 +182,22 @@ jobs:
       - name: Test diagnostics recorder and off-band uploader (isolated)
         run: bash scripts/diag/run-native-tests.sh
 
+      - name: Test event consumption and shared transport lifecycle
+        run: bash scripts/diag/run-reliability-tests.sh
+
+      - name: Enable corepack for loopback peer
+        run: corepack enable
+
+      - name: Set up loopback peer Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Test real WebSocket recovery against isolated peer
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts --filter @kraki/head...
+          python3 scripts/diag/run-reliability-loopback.py
+
       - name: Test native voice audio safety
         run: swift test --package-path packages/arm/ios/Vendor/VoiceInputCore
 
