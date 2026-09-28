@@ -900,9 +900,12 @@ describe('KrakiWSClient', () => {
 
       expect(useStore.getState().status).toBe('disconnected');
       expect(useStore.getState().reconnectAttempts).toBe(1);
-      expect(useStore.getState().nextReconnectDelayMs).toBe(1000);
+      // First retry: 0.5 s ±20 % jitter.
+      const delay = useStore.getState().nextReconnectDelayMs!;
+      expect(delay).toBeGreaterThanOrEqual(400);
+      expect(delay).toBeLessThanOrEqual(600);
 
-      await vi.advanceTimersByTimeAsync(1500);
+      await vi.advanceTimersByTimeAsync(700);
 
       expect(lastWsInstance).not.toBe(firstWs);
       expect(useStore.getState().nextReconnectDelayMs).toBeNull();
@@ -1044,8 +1047,9 @@ describe('KrakiWSClient', () => {
       // Reset messages to track just pings
       lastWsInstance.sentMessages = [];
 
-      // Advance past ping interval (25s) — ping should fire
-      await vi.advanceTimersByTimeAsync(26000);
+      // Advance past the 10 s ping interval (and within the 22 s liveness
+      // timeout of a link that never answers) — a ping should fire
+      await vi.advanceTimersByTimeAsync(11000);
       const pings = lastWsInstance.sentMessages.filter(
         (m: string) => JSON.parse(m).type === 'ping',
       );
@@ -1606,6 +1610,143 @@ describe('KrakiWSClient', () => {
       await new Promise(r => setTimeout(r, 50));
       const oldMsgs = store.messages.get('sess-old');
       expect(oldMsgs?.length ?? 0).toBe(0);
+    });
+  });
+
+  describe('network resilience', () => {
+    /** This client's current socket (other tests' clients also create some). */
+    const socketOf = (client: KrakiWSClient) =>
+      (client as unknown as { transport: { ws: typeof lastWsInstance | null } }).transport.ws;
+
+    async function connectAndAuth(client: KrakiWSClient) {
+      client.connect();
+      await vi.advanceTimersByTimeAsync(1);
+      lastWsInstance._receive({
+        type: 'auth_ok', deviceId: 'dev-web-123',
+        devices: [{ id: 'dev-t', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'k' }],
+      });
+      await vi.advanceTimersByTimeAsync(1);
+    }
+
+    it('a silent authenticated socket is abandoned after 22 s and replaced', async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        await connectAndAuth(client);
+        const dead = lastWsInstance;
+        // The relay stops answering (half-open): our pings go unanswered.
+        // (Assert on the socket itself: clients from other tests may create
+        // sockets meanwhile.)
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(dead.onmessage).not.toBeNull();
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(dead.onmessage).toBeNull(); // abandoned
+        expect(dead.readyState).toBe(3);
+        client.disconnect();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('frames keep a slow link alive (no false dead-link)', async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        await connectAndAuth(client);
+        const ws = lastWsInstance;
+        for (let i = 0; i < 12; i++) {
+          await vi.advanceTimersByTimeAsync(15_000);
+          ws._receive({ type: 'pong' });
+        }
+        expect(ws.onmessage).not.toBeNull();
+        expect(ws.readyState).toBe(1);
+        client.disconnect();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps retrying forever and never stops at a fixed attempt count', async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        await connectAndAuth(client);
+        for (let i = 0; i < 30; i++) {
+          const ws = socketOf(client)!;
+          ws.readyState = 3;
+          ws.onclose?.({} as CloseEvent);
+          expect(useStore.getState().nextReconnectDelayMs).not.toBeNull();
+          await vi.advanceTimersByTimeAsync(40_000);
+          expect(socketOf(client)).not.toBe(ws);
+          expect(socketOf(client)).not.toBeNull();
+        }
+        client.disconnect();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('the browser coming back online retries at once instead of waiting out the backoff', async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        await connectAndAuth(client);
+        // Well into an outage: the next retry is 15-30 s away.
+        const ws = socketOf(client)!;
+        ws.readyState = 3;
+        ws.onclose?.({} as CloseEvent);
+        await vi.advanceTimersByTimeAsync(700);
+        const waiting = socketOf(client)!; // the fast first retry ran
+        vi.setSystemTime(Date.now() + 10 * 60_000);
+        waiting.readyState = 3;
+        waiting.onclose?.({} as CloseEvent);
+        expect(useStore.getState().nextReconnectDelayMs).toBeGreaterThanOrEqual(24_000);
+        window.dispatchEvent(new Event('online'));
+        expect(socketOf(client)).not.toBe(waiting);
+        expect(socketOf(client)).not.toBeNull();
+        client.disconnect();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reassembles a payload the Tentacle sent in fragments', async () => {
+      const { fragmentPayload } = await import('@kraki/protocol');
+      const client = new KrakiWSClient('ws://localhost:9999');
+      const name = 'x'.repeat(100_000);
+      const whole = JSON.stringify({ from: '@head', msg: { type: 'device_joined', device: { id: 'dev-big', name, role: 'app', online: true } } });
+      const parts = fragmentPayload(whole, 'f1')!;
+      expect(parts.length).toBeGreaterThan(2);
+      const deliver = (p: string) => (client as unknown as { handlePulseDelivered(p: string): void }).handlePulseDelivered(p);
+      for (const part of parts.slice(0, -1)) deliver(part);
+      expect(useStore.getState().devices.has('dev-big')).toBe(false);
+      deliver(parts.at(-1)!);
+      expect(useStore.getState().devices.get('dev-big')?.name).toBe(name);
+    });
+
+    it('declares fragment support to a Tentacle that offers it, and re-offers unconfirmed inputs', async () => {
+      const { outbox } = await import('./chat/outbox');
+      outbox.reset();
+      const client = new KrakiWSClient('ws://localhost:9999');
+      client.connect();
+      await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+      lastWsInstance._receive({
+        type: 'auth_ok', deviceId: 'dev-web-123',
+        devices: [{ id: 'dev-t', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'k' }],
+      });
+      useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'dev-t', deviceName: 'Mac', agent: 'copilot', state: 'idle', messageCount: 0 });
+      const clientId = client.sendInput('sess-1', 'hello');
+      await waitForDecodedSend(lastWsInstance);
+      lastWsInstance.sentMessages = [];
+
+      receiveInner({ type: 'device_greeting', deviceId: 'dev-t', seq: 0, timestamp: '', payload: { name: 'Mac', features: ['fragments', 'idempotent_input'] } });
+
+      await vi.waitFor(() => {
+        const sent = lastWsInstance.sentMessages.map(decodePulseSend).filter(Boolean) as Array<Record<string, unknown>>;
+        expect(sent.find((m) => m.type === 'client_features')?.payload).toMatchObject({ features: ['fragments'], targetDeviceId: 'dev-t' });
+        expect(sent.filter((m) => m.type === 'send_input').map((m) => (m.payload as { clientId: string }).clientId)).toEqual([clientId]);
+      });
+      outbox.reset();
     });
   });
 });

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { BotMessageSquare, Download, MonitorCloud, Plus, Search, Settings, UserCog, X } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
+import { useShowsReconnecting } from '../../hooks/useShowsReconnecting';
 import { useNarrow } from '../../hooks/useNarrow';
 import { SessionRow } from '../sessions/SessionRow';
 import { NewSessionDialog } from '../sessions/NewSessionDialog';
@@ -66,7 +67,7 @@ export function Sidebar() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const pinned = useStore((s) => s.pinnedSessions);
   const status = useStore((s) => s.status);
-  const reconnecting = useStore((s) => (s.status === 'disconnected' || s.status === 'connecting') && s.reconnectAttempts > 0);
+  const reconnecting = useShowsReconnecting();
   const [query, setQuery] = useState('');
   const [newOpen, setNewOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);

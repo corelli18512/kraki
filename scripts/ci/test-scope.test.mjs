@@ -4,19 +4,22 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { changedPaths, testScope } from './test-scope.mjs';
 
-const none = { typescript: false, native: false, binary: false, resilience: false };
-const all = { typescript: true, native: true, binary: true, resilience: true };
+const none = { typescript: false, native: false, binary: false, resilience: false, webResilience: false };
+const all = { typescript: true, native: true, binary: true, resilience: true, webResilience: true };
 const ts = { ...none, typescript: true };
+const web = { ...ts, webResilience: true };
 const native = { ...none, native: true, resilience: true };
 const binary = { ...ts, binary: true };
-const tentacle = { ...binary, resilience: true };
-const relay = { ...ts, resilience: true };
+const tentacle = { ...binary, resilience: true, webResilience: true };
+const relay = { ...ts, resilience: true, webResilience: true };
 for (const [name, paths, expected] of [
   ['docs do not launch platform tests', ['README.md', 'docs/a.md', 'packages/arm/ios/README.md'], none],
   ['runtime markdown is not documentation', ['packages/tentacle/prompts/system.md'], tentacle],
   ['native-only', ['packages/arm/ios/Kraki/App/AppState.swift'], native],
   ['vendor audio safety stays covered', ['packages/arm/ios/Vendor/VoiceInputCore/Package.swift'], native],
-  ['web-only', ['packages/arm/web/src/App.tsx'], ts],
+  ['web-only', ['packages/arm/web/src/App.tsx'], web],
+  ['web resilience scenarios', ['packages/arm/web/e2e/resilience/network.spec.ts'], web],
+  ['other TypeScript packages', ['packages/monitor/src/cli.ts'], ts],
   ['head-only', ['packages/head/src/relay.ts'], relay],
   ['chaos stack', ['packages/tests/src/chaos/proxy.ts', 'scripts/chaos/run-native.sh'], relay],
   ['Windows adapter does not launch native apps', ['packages/tentacle/src/adapters/codex.ts'], tentacle],

@@ -235,3 +235,44 @@
 - **D4 双方同时发、一方链路反复断开**：两台设备的全部输入都恰好送达一次，最终两台设备的会话一致。
 
 模拟器 / Mac 测试宿主能覆盖 App 自身的前后台逻辑。真机上被系统长时间挂起、后台推送唤醒等行为测不到，仍需真机抽查。
+
+## 12. Web 客户端（2026-09-29）
+
+运行方式：用真实构建的 Web 客户端（Chromium 无头模式，Playwright），连同一套本地故障栈（Head、真实 Tentacle、故障代理）。
+- 脚本：`scripts/chaos/run-web.sh`
+- 配置：`playwright.resilience.config.ts`
+- 用例：`e2e/resilience/network.spec.ts`
+- CI：新增 Linux 任务“Network resilience (web)”，改动 Web、协议、Tentacle、Head 或故障栈时运行，约 5 分钟。
+
+场景和结果如下。“修复前”是 main 4e6ca01 的表现；原始数据见 `network-resilience-results/web-baseline-vs-fix.md`。
+
+| 场景 | 修复前 | 修复后 |
+|---|---|---|
+| W0 健康 | 通过 | 通过 |
+| W1 瞬断（1 次 RST） | 闪出“Reconnecting…” | 0.8 s 恢复，不再闪 |
+| W2 断网 60 s | 重连 5 次（约 31 s）后放弃，全屏弹出 “Disconnected / Connect now”，必须手动点击 | 一直自动重连，恢复后 3–5 s 内送达，无弹窗 |
+| W3 半开连接 | 35–52 s 才发现死链；消息被误标为 “Not delivered”，但其实已经送达 | 23.5 s 发现死链；不误标 |
+| W4 1 MB 消息，0.32 Mbit/s | 回显排在大消息后面，20 s 就误标 “Not delivered” | 0 次重连；87 s 送达；不误标 |
+| W5 有未确认消息时刷新页面 | 刷新后消息标为失败，不会送达，只能手动重试 | 自动重发（同一 clientId），恰好送达一次 |
+
+修复内容（只改 Web 客户端，协议和服务端不动）：
+- **传输层（`transport.ts`）**
+  - 永不放弃重连。退避策略与原生一致：前 2 分钟从 0.5 s 起翻倍，封顶 4 s；到 5 分钟前每 15 s 一次；之后每 30 s 一次；抖动 ±20%。
+  - 退避只在认证成功后重置。如果中继接受连接后立刻断开，不会每 0.5 s 猛打一次。
+  - 浏览器触发 `online` 或页面回到前台时立即重连。
+  - 已认证的连接 22 s 内没有收到任何帧，就判定为死链并丢弃（每 10 s 发一次 ping）。
+  - 握手 10 s 超时。
+- **界面**
+  - 断线超过 2 s 才显示 “Reconnecting…”（`useShowsReconnecting`）。
+  - 连上过一次之后，不再弹全屏阻断弹窗。首次连接失败时仍然显示 “Connect now”。
+- **大消息切片**：Web 端能重组 `kfrag` 片段，并在 Tentacle 声明支持 `fragments` 时回一条 `client_features`。这样慢链路上一直有帧到达，22 s 的死链判定不会误伤。
+- **待发消息（outbox）**
+  - 确认计时只统计“链路活着，且确实停滞”的时间，上限 30 s。以下情况不计时：链路疑似已死（12 s 没收到帧），或者还有数据在持续到达（回显可能排在后面）。
+  - 刷新页面后恢复的消息，以及 Tentacle 重新发来问候时仍未确认的消息，会被标记为待重发。
+    - Tentacle 声明了 `idempotent_input`：自动用同一个 clientId 重发（Tentacle 会去重）。
+    - 旧版 Tentacle：标为 “Not delivered”，由用户决定，避免重复执行。
+
+尚未覆盖：
+- 无痕模式、Safari 和 Firefox。
+- Service Worker 离线页。
+- 移动端浏览器被系统挂起。

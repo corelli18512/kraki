@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { useStore } from '../hooks/useStore';
+import { useShowsReconnecting } from '../hooks/useShowsReconnecting';
 import { ChatView } from '../components/chat/ChatView';
 import { ChatHeader, HEADER_HEIGHT, type SessionMode } from '../components/chat/ChatHeader';
 import { wsClient } from '../lib/ws-client';
@@ -21,8 +22,7 @@ export function SessionPage() {
   const clearUnread = useStore((s) => s.clearUnread);
   const setActiveSessionId = useStore((s) => s.setActiveSessionId);
   const status = useStore((s) => s.status);
-  const reconnectAttempts = useStore((s) => s.reconnectAttempts);
-  const isReconnecting = (status === 'disconnected' || status === 'connecting') && reconnectAttempts > 0;
+  const isReconnecting = useShowsReconnecting();
   const totalOtherUnread = useStore((s) => {
     let count = 0;
     for (const [sid, n] of s.unreadCount) {
