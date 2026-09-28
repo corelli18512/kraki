@@ -32,7 +32,8 @@ jobs:
       - run: corepack enable
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          # Same runtime as the production Head (see ci.yml).
+          node-version: '24.16.0'
           cache: pnpm
       - name: Install and build the local stack
         run: |

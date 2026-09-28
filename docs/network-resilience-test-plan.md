@@ -197,6 +197,7 @@
 - URLSession 的 WebSocket 拿不到字节级进度：单个帧传输超过约 25 s（例如 0.3 Mbps 下的 1 MB 消息）仍可能被判断为死链。根治需要把超大实时消息分块。
 - 上行断但下行持续有数据时，客户端最多等 300 s；这种情况 Head 约 60 s 内会断开。
 - 未做：D3 iOS 前后台、D4 多设备、T3 netem 包级丢包/乱序和 8 h 浸泡、Web 客户端、TS mock-app 的协议级混沌。
+- Head 依赖的 `better-sqlite3` 11.x 在 macOS + Node 24.20 上，GC 回收语句对象时会触发原生断言崩溃（在 CI 上发现）。CI 已固定为生产 Head 使用的 Node 24.16。生产服务器升级 Node 前应先升级 `better-sqlite3`。
 - coinfra 的推送发布会因 crypto/payments 没有配置可信发布而失败（原有问题）；`@coinfra/pulse` 0.5.1 通过新增的单独发布入口发出。
 
 ### CI
