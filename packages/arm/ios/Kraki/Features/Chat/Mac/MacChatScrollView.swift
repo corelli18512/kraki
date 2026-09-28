@@ -3203,7 +3203,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         bottomContentInset = max(0, inset)
         // The Chat viewport and scrollbar remain full-height. The Composer is a
         // completely independent overlay; a fixed document footer reserves its
-        // base 62pt footprint plus 16pt of visible breathing room.
+        // base footprint (MacChatView.effectiveBottomInputHeight) plus breathing room.
         contentInsets.bottom = 0
         scrollerInsets.bottom = 0
         // Add one point of rounding tolerance so a 24pt visible gap remains
