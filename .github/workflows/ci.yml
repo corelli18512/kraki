@@ -257,7 +257,17 @@ jobs:
           pnpm --filter @kraki/protocol --filter @kraki/crypto --filter @kraki/head --filter @kraki/tentacle --filter @kraki/voice-broker build
 
       - name: Install Chromium
-        run: pnpm --filter @kraki/arm-web exec playwright install --with-deps chromium
+        # Headless shell only (all these runs are headless). The Playwright CDN
+        # download occasionally hangs after 100%: bound each attempt, retry.
+        timeout-minutes: 15
+        run: |
+          cd packages/arm/web
+          npx playwright install-deps chromium
+          for attempt in 1 2 3; do
+            timeout 240 npx playwright install --only-shell chromium && exit 0
+            echo "playwright install attempt $attempt failed or hung; retrying"
+          done
+          exit 1
 
       - name: Web network resilience scenarios
         run: bash scripts/chaos/run-web.sh
