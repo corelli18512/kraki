@@ -6,6 +6,28 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.46</title>
+            <pubDate>Mon, 28 Sep 2026 11:17:28 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.46</sparkle:fullReleaseNotesLink>
+            <sparkle:version>48</sparkle:version>
+            <sparkle:shortVersionString>0.2.46</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* fix(mac): keep correcting voice bubble and Chat stable during correction by @corelli18512 in https://github.com/corelli18512/kraki/pull/324
+* fix(mac): D1 voice start cue, 36 pt composer and stable multiline padding by @corelli18512 in https://github.com/corelli18512/kraki/pull/326
+* fix(mac): restore full session card width after overlay scroller switch by @corelli18512 in https://github.com/corelli18512/kraki/pull/327
+* feat: show_report for text-first reports; lazy, paced attachment loading by @corelli18512 in https://github.com/corelli18512/kraki/pull/325
+* fix(mac): waiting question shows its choices when the session is opened later by @corelli18512 in https://github.com/corelli18512/kraki/pull/304
+* feat(clients): show live reasoning effort on session cards by @corelli18512 in https://github.com/corelli18512/kraki/pull/310
+* chore(release): Mac 0.2.46 (48), iOS 0.1.11, Tentacle 0.33.3 by @corelli18512 in https://github.com/corelli18512/kraki/pull/328
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.45...mac-v0.2.46
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.46/Kraki.app.zip" length="9526787" type="application/octet-stream" sparkle:edSignature="tDI1yuTx12zDzrHp17EbQJNWWpZIw7DHI0YCqX3qpwEs76PQX/oO23gcXDAiMxB3W08mAkmGQm+sA2viuM+zAw=="/>
+        </item>
+        <item>
             <title>0.2.45</title>
             <pubDate>Mon, 28 Sep 2026 02:11:36 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -33,25 +55,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.44-diag/Kraki.app.zip" length="8636011" type="application/octet-stream" sparkle:edSignature="Qg+D2r9z8+ddD5/Nq2tQY30I36tVfhd+UvCLP6zFanbnRely0M7lQ2+Cmkl0/dqcXTAautO4h+z5+3yPPpjDBA=="/>
         </item>
-        <item>
-            <title>0.2.43</title>
-            <pubDate>Sun, 27 Sep 2026 15:20:15 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.43</sparkle:fullReleaseNotesLink>
-            <sparkle:version>45</sparkle:version>
-            <sparkle:shortVersionString>0.2.43</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(mac): recording Send parity, fading voice background; release 0.2.43 by @corelli18512 in https://github.com/corelli18512/kraki/pull/322
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.33.2...mac-v0.2.43
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.43/Kraki.app.zip" length="8472974" type="application/octet-stream" sparkle:edSignature="vagEt3shmc5h4MjMRJgDYIcrU6+KiSoWLr9q62nGxjW0PUMmBJTOoIlLnx8uFACXckhaJFnpjjgnc22SeMoXDQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: TR1gTEfhdxV78INpQ7Pq+9F6o0vJhs0DGoXCR3SaY4PjSpokfeK0JsrArhU/gx3B3hyLZe6kZZhIwXjRZUuGDw==
-length: 3631
+edSignature: 666vrBPXaQMfy1LtBm8q7zWoRxbOQV82Zq6qLd1O7PJeyuk0e2moweZ9w5vvedndZOTbYhSWAd8MfkRSSiACBw==
+length: 4466
 -->
