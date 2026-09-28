@@ -1945,7 +1945,14 @@ final class MacTransientOverlayScrollerController {
 
     private func applyConfiguration() {
         guard let scrollView else { return }
+        let reservedLegacyGutter = scrollView.scrollerStyle != .overlay
         scrollView.scrollerStyle = .overlay
+        defer {
+            // SwiftUI may already have laid its document out beside a legacy
+            // scroller. Switching style alone widens only the clip view, and
+            // leaves Session cards clipped by the stale 17 pt gutter.
+            if reservedLegacyGutter { invalidateDocumentWidth(in: scrollView) }
+        }
         scrollView.autohidesScrollers = false
         if !scrollView.hasVerticalScroller { scrollView.hasVerticalScroller = true }
         scrollView.verticalScroller?.scrollerStyle = .overlay
@@ -1963,6 +1970,20 @@ final class MacTransientOverlayScrollerController {
                 scroller.isEnabled = false
             }
         }
+    }
+
+    /// SwiftUI re-proposes its document width only on a scroll-view resize,
+    /// not on a scroller-style change. A same-turn 1 pt resize round trip
+    /// (never displayed) makes it adopt the full overlay-style width.
+    private func invalidateDocumentWidth(in scrollView: NSScrollView) {
+        let size = scrollView.frame.size
+        guard size.width > 1 else { return }
+        scrollView.tile()
+        scrollView.setFrameSize(NSSize(width: size.width - 1, height: size.height))
+        scrollView.layoutSubtreeIfNeeded()
+        scrollView.setFrameSize(size)
+        scrollView.tile()
+        scrollView.layoutSubtreeIfNeeded()
     }
 
     private func detachObservers() {
