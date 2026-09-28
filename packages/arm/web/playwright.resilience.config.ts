@@ -17,6 +17,8 @@ export default defineConfig({
     headless: true,
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
+    // Heap measurement in the soak (window.gc + precise performance.memory).
+    launchOptions: { args: ['--js-flags=--expose-gc', '--enable-precise-memory-info'] },
   },
   webServer: {
     command: 'pnpm build && pnpm preview --port 4180 --strictPort',

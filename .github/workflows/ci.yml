@@ -236,7 +236,7 @@ jobs:
     needs: scope
     if: needs.scope.outputs.webResilience == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Check out repository
@@ -259,8 +259,13 @@ jobs:
       - name: Web network resilience scenarios
         # The runner's preinstalled Google Chrome: `playwright install` hangs
         # extracting its download on this runner (after 100%, every attempt).
+        # KRAKI_NETEM: packet-level loss/jitter/reordering via tc netem on
+        # loopback (N1–N4); plus a short seeded soak (the long one is nightly).
         env:
           KRAKI_PW_CHANNEL: chrome
+          KRAKI_NETEM: '1'
+          KRAKI_SOAK_MINUTES: '5'
+          CHAOS_SEED: ${{ github.run_number }}
         run: |
           google-chrome --version
           bash scripts/chaos/run-web.sh
