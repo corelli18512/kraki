@@ -214,10 +214,10 @@ struct ToolActivityView: View {
     /// Kick off lazy fetches for both refs when the chip expands.
     private func triggerLazyFetches() {
         if let argsRef {
-            attachmentStore.requestIfNeeded(id: argsRef.id, sessionId: sessionId)
+            attachmentStore.requestIfNeeded(id: argsRef.id, sessionId: sessionId, priority: .userOpened)
         }
         if let resultRef {
-            attachmentStore.requestIfNeeded(id: resultRef.id, sessionId: sessionId)
+            attachmentStore.requestIfNeeded(id: resultRef.id, sessionId: sessionId, priority: .userOpened)
         }
     }
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ContentRef } from '@kraki/protocol';
 import { useAttachmentText } from '../../hooks/useAttachment';
+import { withMermaidRuntime } from '../../lib/report-mermaid';
 import { X, Maximize2, FileCode2, LoaderCircle, AlertTriangle } from 'lucide-react';
 
 const ATTACHMENT_PULL = (sessionId: string, ref: ContentRef): void => {
@@ -26,9 +27,17 @@ function ArtifactFrame({ artifact, sessionId }: { artifact: ContentRef; sessionI
       setUrl(null);
       return undefined;
     }
-    const blobUrl = URL.createObjectURL(new Blob([withArtifactCsp(text)], { type: 'text/html' }));
-    setUrl(blobUrl);
-    return () => URL.revokeObjectURL(blobUrl);
+    let blobUrl: string | null = null;
+    let cancelled = false;
+    void withMermaidRuntime(text).then((html) => {
+      if (cancelled) return;
+      blobUrl = URL.createObjectURL(new Blob([withArtifactCsp(html)], { type: 'text/html' }));
+      setUrl(blobUrl);
+    });
+    return () => {
+      cancelled = true;
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
   }, [artifact.id, status, text]);
 
   if (status === 'error') {

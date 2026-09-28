@@ -231,17 +231,17 @@ run('Pi 0.87 live RPC compatibility', () => {
     expect(toolResult('ask_user').content.some(c => c.type === 'image')).toBe(true);
   });
 
-  it('maps show_image and show_html results to persisted attachment refs', async () => {
+  it('maps show_image and show_report results to persisted attachment refs', async () => {
     await create(); writeFileSync(join(root, 'pixel.png'), Buffer.from(pixel, 'base64')); writeFileSync(join(root, 'report.html'), '<!doctype html><title>Audit</title>OK');
-    steps.push({ tool: 'show_image', args: { path: 'pixel.png', caption: 'fixture' } }, { tool: 'show_html', args: { path: 'report.html', title: 'Audit' } }, { text: 'ARTIFACTS_OK' });
+    steps.push({ tool: 'show_image', args: { path: 'pixel.png', caption: 'fixture' } }, { tool: 'show_report', args: { path: 'report.html', title: 'Audit' } }, { text: 'ARTIFACTS_OK' });
     await turn();
     const completed = callbacks.onToolComplete.mock.calls.map(c => c[1]);
     expect(completed.find(c => c.toolName === 'show_image').attachments[0].mimeType).toBe('image/png');
-    expect(completed.find(c => c.toolName === 'show_html').attachments[0].mimeType).toBe('text/html');
+    expect(completed.find(c => c.toolName === 'show_report').attachments[0].mimeType).toBe('text/html');
     expect(callbacks.onAttachmentBytes).toHaveBeenCalledTimes(2);
   });
 
-  it.each(['show_image', 'show_html'])('marks a failed %s as an error rather than a successful artifact', async tool => {
+  it.each(['show_image', 'show_report'])('marks a failed %s as an error rather than a successful artifact', async tool => {
     await create(); steps.push({ tool, args: { path: tool === 'show_image' ? 'does-not-exist.png' : 'does-not-exist.html' } }, { text: 'HANDLED_ARTIFACT_ERROR' });
     await turn();
     expect(toolResult(tool).isError).toBe(true);

@@ -1322,7 +1322,7 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
-  it('serves paced attachment requests one 256 KiB chunk at a time', () => {
+  it('serves paced attachment requests one 128 KiB chunk at a time', () => {
     const { ws, store, cleanup } = buildClientWithStore();
     try {
       const bytes = Buffer.alloc(600 * 1024, 0x61);
@@ -1338,39 +1338,80 @@ describe('RelayClient tool message lazy-load shape', () => {
 
       let chunks = decodePulseSends(ws.sent).filter(m => m.type === 'attachment_data');
       expect(chunks).toHaveLength(1);
-      expect(chunks[0].payload).toMatchObject({ id: ref.id, index: 0, total: 3, paced: true });
-      expect(Buffer.from(chunks[0].payload.data, 'base64')).toHaveLength(256 * 1024);
+      expect(chunks[0].payload).toMatchObject({ id: ref.id, index: 0, total: 5, paced: true });
+      expect(Buffer.from(chunks[0].payload.data, 'base64')).toHaveLength(128 * 1024);
 
       ws.sent.length = 0;
       ws.emit('message', Buffer.from(JSON.stringify({
         type: 'request_attachment',
         deviceId: 'consumer-dev',
         sessionId: 'sess_1',
-        payload: { id: ref.id, sessionId: 'sess_1', mode: 'paced', index: 2 },
+        payload: { id: ref.id, sessionId: 'sess_1', mode: 'paced', index: 4 },
       })));
       chunks = decodePulseSends(ws.sent).filter(m => m.type === 'attachment_data');
       expect(chunks).toHaveLength(1);
-      expect(chunks[0].payload).toMatchObject({ index: 2, total: 3, paced: true });
+      expect(chunks[0].payload).toMatchObject({ index: 4, total: 5, paced: true });
       expect(Buffer.from(chunks[0].payload.data, 'base64')).toHaveLength(88 * 1024);
     } finally { cleanup(); }
   });
 
-  it('keeps complete attachment responses for legacy Arm requests', () => {
+  it('rate-limits legacy whole-file attachment requests instead of bursting every chunk', () => {
+    vi.useFakeTimers();
     const { ws, store, cleanup } = buildClientWithStore();
     try {
       const ref = store.put('sess_1', Buffer.alloc(600 * 1024, 0x62), 'application/octet-stream');
       ws.sent.length = 0;
+      const legacy = () => ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'request_attachment',
+        deviceId: 'consumer-dev',
+        sessionId: 'sess_1',
+        payload: { id: ref.id, sessionId: 'sess_1' },
+      })));
+      legacy();
+      const chunks = () => decodePulseSends(ws.sent).filter(m => m.type === 'attachment_data');
+      expect(chunks()).toHaveLength(0);
+      vi.advanceTimersByTime(0);
+      expect(chunks().map(c => c.payload.index)).toEqual([0]);
+      // One 128 KiB chunk is ~300 KiB on the wire; at 160 KiB/s the next one
+      // must wait close to two seconds.
+      vi.advanceTimersByTime(1000);
+      expect(chunks()).toHaveLength(1);
+      vi.advanceTimersByTime(10_000);
+      expect(chunks().map(c => c.payload.index)).toEqual([0, 1, 2, 3, 4]);
+      expect(chunks().every(c => c.payload.total === 5 && c.payload.paced === undefined)).toBe(true);
+
+      // A repeated legacy request restarts from chunk 0 instead of duplicating.
+      ws.sent.length = 0;
+      legacy();
+      legacy();
+      vi.advanceTimersByTime(30_000);
+      expect(chunks().map(c => c.payload.index)).toEqual([0, 1, 2, 3, 4]);
+    } finally { cleanup(); vi.useRealTimers(); }
+  });
+
+  it('pauses a legacy transfer while the requester is offline and resumes on rejoin', () => {
+    vi.useFakeTimers();
+    const { ws, store, cleanup } = buildClientWithStore();
+    try {
+      const ref = store.put('sess_1', Buffer.alloc(300 * 1024, 0x63), 'application/octet-stream');
+      ws.sent.length = 0;
+      ws.emit('message', Buffer.from(JSON.stringify({ type: 'device_left', deviceId: 'consumer-dev' })));
       ws.emit('message', Buffer.from(JSON.stringify({
         type: 'request_attachment',
         deviceId: 'consumer-dev',
         sessionId: 'sess_1',
         payload: { id: ref.id, sessionId: 'sess_1' },
       })));
-      const chunks = decodePulseSends(ws.sent).filter(m => m.type === 'attachment_data');
-      expect(chunks).toHaveLength(3);
-      expect(chunks.map(c => c.payload.index)).toEqual([0, 1, 2]);
-      expect(chunks.every(c => c.payload.paced === undefined)).toBe(true);
-    } finally { cleanup(); }
+      vi.advanceTimersByTime(20_000);
+      const chunks = () => decodePulseSends(ws.sent).filter(m => m.type === 'attachment_data');
+      expect(chunks()).toHaveLength(0);
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'device_joined',
+        device: { id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub' },
+      })));
+      vi.advanceTimersByTime(20_000);
+      expect(chunks().map(c => c.payload.index)).toEqual([0, 1, 2]);
+    } finally { cleanup(); vi.useRealTimers(); }
   });
 
   it('tool_complete with no result has no resultRef', () => {

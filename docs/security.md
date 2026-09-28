@@ -133,8 +133,8 @@ Images produced by an agent (via the `kraki-show_image` MCP tool) are content-ad
 
 Bytes are delivered separately, encrypted per-recipient like any other message:
 
-- On live activity, the tentacle pushes the bytes as a chunked `attachment_data` stream to all session-member devices immediately after the referencing tool message.
-- On replay or cache miss, a receiver explicitly requests the bytes via a `request_attachment` unicast; the tentacle serves chunks back to that specific authenticated device.
+- Bytes are never pushed. A receiver that needs them (shown or opened) requests them via a `request_attachment` unicast; the tentacle serves chunks back to that specific authenticated device only.
+- Report HTML is rendered in a sandboxed web view with a strict CSP (inline scripts/styles only; no network, media, frames or forms). "Open in Browser" writes the original report to a temporary file and opens it outside that sandbox only on explicit user action.
 
 The relay sees the same opaque encrypted payloads it sees for any other message, plus chunked transfer adds nothing to its visibility. Bytes never leave the tentacle except on an authenticated session-member request, so the privacy boundary for screenshots matches the privacy boundary for prompts and tool output.
 

@@ -32,6 +32,7 @@ import { getKrakiHome } from './config.js';
 import { makeHeadline } from './tool-headline.js';
 import { TentaclePulse, streamForType, type PulseDeliveryTarget } from './tentacle-pulse.js';
 import { CardManager } from './card-manager.js';
+import { AttachmentPacer } from './attachment-pacer.js';
 
 const logger = createLogger('relay-client');
 /** Pulse-trace is OFF by default. Enable with env `KRAKI_TRACE_PULSE=1`
@@ -1131,6 +1132,7 @@ export class RelayClient {
         if (key) {
           this.consumerKeys.set(device.id, key);
           this.onlineConsumers.add(device.id);
+          this.attachmentPacer.notifyOnline(device.id);
           this.currentSessionByArm.set(device.id, null);
           // Send a greeting unicast so the app learns our capabilities
           this.sendGreetingTo(device.id, key);
@@ -1153,6 +1155,7 @@ export class RelayClient {
       this.consumerKeys.delete(deviceId);
       this.onlineConsumers.delete(deviceId);
       this.currentSessionByArm.delete(deviceId);
+      this.attachmentPacer.drop(deviceId);
       return;
     }
 
@@ -2973,11 +2976,26 @@ export class RelayClient {
 
   /** Keep encrypted frames small so control messages can interleave between
    *  attachment chunks. */
-  private static readonly ATTACHMENT_CHUNK_BYTES = 256 * 1024;
+  /** Chunk size for attachment_data. Small enough that one chunk (about 2.4x
+   *  on the wire after encryption and framing) never holds the relay link for
+   *  long in front of chat traffic and liveness pings. */
+  private static readonly ATTACHMENT_CHUNK_BYTES = 128 * 1024;
+
+  /** Serializes and rate-limits attachment bytes (see AttachmentPacer). */
+  private readonly attachmentPacer = new AttachmentPacer({
+    chunkBytes: RelayClient.ATTACHMENT_CHUNK_BYTES,
+    isOnline: (deviceId) => this.onlineConsumers.has(deviceId),
+    sendChunk: (job, index, total, slice) => {
+      const key = this.consumerKeys.get(job.deviceId);
+      if (!key) return 0;
+      return this.sendAttachmentChunk(job.deviceId, key, job.sessionId, job.id, job.mimeType, index, total, slice, false);
+    },
+  });
 
   /**
-   * Serve a `request_attachment` from a consumer device. Reads from the
-   * AttachmentStore, encrypts chunked unicasts to the requester only.
+   * Serve a `request_attachment` from a consumer device. Paced requests get
+   * exactly the requested chunk now; legacy whole-file requests are queued and
+   * rate-limited so they cannot saturate the relay link.
    */
   private async handleRequestAttachment(msg: ConsumerMessage): Promise<void> {
     if (msg.type !== 'request_attachment') return;
@@ -2998,36 +3016,60 @@ export class RelayClient {
       return;
     }
     const total = Math.max(1, Math.ceil(got.bytes.length / RelayClient.ATTACHMENT_CHUNK_BYTES));
-    const paced = msg.payload.mode === 'paced';
-    const requestedIndex = paced ? Math.floor(msg.payload.index ?? 0) : 0;
-    if (paced && (requestedIndex < 0 || requestedIndex >= total)) {
+    if (msg.payload.mode !== 'paced') {
+      this.attachmentPacer.enqueue({
+        deviceId: requesterDeviceId,
+        sessionId,
+        id,
+        bytes: got.bytes,
+        mimeType: got.meta.mimeType,
+      });
+      return;
+    }
+    const index = Math.floor(msg.payload.index ?? 0);
+    if (index < 0 || index >= total) {
       this.unicastAttachmentError(requesterDeviceId, requesterKey, sessionId, id, 'not_found');
       return;
     }
-    const first = paced ? requestedIndex : 0;
-    const end = paced ? requestedIndex + 1 : total;
-    for (let i = first; i < end; i++) {
-      const slice = got.bytes.subarray(
-        i * RelayClient.ATTACHMENT_CHUNK_BYTES,
-        Math.min((i + 1) * RelayClient.ATTACHMENT_CHUNK_BYTES, got.bytes.length),
-      );
-      const chunkMsg = {
-        type: 'attachment_data' as const,
-        deviceId: this.authInfo?.deviceId ?? '',
-        sessionId,
-        seq: ++this.seqCounter,
-        timestamp: new Date().toISOString(),
-        payload: {
-          id,
-          index: i,
-          total,
-          mimeType: got.meta.mimeType,
-          data: slice.toString('base64'),
-          ...(paced && { paced: true as const }),
-        },
-      };
-      this.sendReliableUnicastTo(requesterDeviceId, requesterKey, chunkMsg);
-    }
+    const slice = got.bytes.subarray(
+      index * RelayClient.ATTACHMENT_CHUNK_BYTES,
+      Math.min((index + 1) * RelayClient.ATTACHMENT_CHUNK_BYTES, got.bytes.length),
+    );
+    const wire = this.sendAttachmentChunk(requesterDeviceId, requesterKey, sessionId, id, got.meta.mimeType, index, total, slice, true);
+    this.attachmentPacer.charge(wire);
+  }
+
+  /** Send one attachment chunk; returns its estimated wire size. */
+  private sendAttachmentChunk(
+    deviceId: string,
+    key: string,
+    sessionId: string,
+    id: string,
+    mimeType: string,
+    index: number,
+    total: number,
+    slice: Buffer,
+    paced: boolean,
+  ): number {
+    const data = slice.toString('base64');
+    const chunkMsg = {
+      type: 'attachment_data' as const,
+      deviceId: this.authInfo?.deviceId ?? '',
+      sessionId,
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: {
+        id,
+        index,
+        total,
+        mimeType,
+        data,
+        ...(paced && { paced: true as const }),
+      },
+    };
+    this.sendReliableUnicastTo(deviceId, key, chunkMsg);
+    // base64 payload → AES blob base64 → Pulse frame base64.
+    return Math.ceil(data.length * 1.8);
   }
 
   private unicastAttachmentError(

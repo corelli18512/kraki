@@ -139,11 +139,7 @@ struct BubbleImageGallery: View {
         }
         .frame(width: boundedMaxWidth, alignment: alignment)
         .clipped()
-        .onAppear {
-            for ref in refs {
-                attachmentStore?.requestIfNeeded(id: ref.id, sessionId: sessionId)
-            }
-        }
+        .requestsAttachments(refs.map(\.id), sessionId: sessionId, store: attachmentStore)
     }
 
     @ViewBuilder
@@ -295,7 +291,7 @@ struct BubbleImageGallery: View {
 
     private func errorPlaceholder(_ ref: ContentRef, label: String, size: CGSize) -> some View {
         Button {
-            attachmentStore?.requestIfNeeded(id: ref.id, sessionId: sessionId)
+            attachmentStore?.requestIfNeeded(id: ref.id, sessionId: sessionId, priority: .userOpened)
         } label: {
             errorContent(label)
                 .frame(width: size.width, height: size.height)
