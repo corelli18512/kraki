@@ -1,6 +1,6 @@
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
-import { HEAD_PULSE_TARGET, normalizeSessionMode, type SessionMode } from '@kraki/protocol';
+import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, type SessionMode } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
 import { KrakiTransport, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
@@ -22,6 +22,13 @@ import { AttachmentPullQueue } from './attachment-pull-queue';
 const logger = createLogger('ws-client');
 
 
+/** No frame for longer than a ping round (10 s + slack) → the link is not
+ *  presumed live for outbox confirmation timing. */
+const LIVE_LINK_QUIET_MS = 12_000;
+/** Payload delivered this recently → data is still flowing, and an echo may
+ *  be queued behind it (head-of-line on a slow link): not a stall. */
+const DELIVERY_FLOWING_MS = 3_000;
+
 export class KrakiWSClient {
   private transport: KrakiTransport;
   private encryption: EncryptionHandler;
@@ -30,6 +37,13 @@ export class KrakiWSClient {
   private pulse: ArmPulse;
   private subscription: SessionSubscriptionController;
   private pulseTick: ReturnType<typeof setInterval> | null = null;
+  /** Reassembles payloads a Tentacle split into small parts (so a large
+   *  message never looks like a dead link on a slow network). */
+  private assembler = new PayloadAssembler();
+  /** Features each Tentacle advertised in its greeting. */
+  private deviceFeatures = new Map<string, Set<string>>();
+  /** Last time pulse delivered anything (a whole payload or a fragment). */
+  private lastDeliveryAt = 0;
   private attachmentPulls = new AttachmentPullQueue(({ sessionId, id, index }) => {
     if (getStore().status !== 'connected') return false;
     const deviceId = getStore().deviceId;
@@ -58,6 +72,7 @@ export class KrakiWSClient {
     outbox.configure({
       send: (msg) => this.transmit(msg),
       isDeliveryPathUp: (sessionId) => this.isDeliveryPathUp(sessionId),
+      acceptsResend: (sessionId) => this.acceptsResend(sessionId),
     });
     const keyStore = createAppKeyStore();
     this.encryption = new EncryptionHandler(keyStore);
@@ -76,6 +91,7 @@ export class KrakiWSClient {
         sendPulseFrame: (pulseB64, to) => this.sendPulseEnvelope(pulseB64, to),
         onDelivered: (blobB64) => this.handlePulseDelivered(blobB64),
         onAcked: (seqUpTo) => this.cmdState.resolvePulseAcked(seqUpTo),
+        onResetInbound: () => this.assembler.clear(),
       },
       `arm:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
     );
@@ -208,10 +224,16 @@ export class KrakiWSClient {
    *    directly, no decrypt.
    *  - `{blob, keys}` — the E2E ciphertext from a tentacle; decrypt then dispatch. */
   private handlePulseDelivered(payloadJson: string) {
+    this.lastDeliveryAt = Date.now();
     let parsed: { from?: string; msg?: InnerMessage; blob?: string; keys?: Record<string, string> };
     try {
       parsed = JSON.parse(payloadJson);
     } catch {
+      return;
+    }
+    if (isPayloadFragment(parsed)) {
+      const whole = this.assembler.accept(parsed);
+      if (whole !== null) this.handlePulseDelivered(whole);
       return;
     }
     if (parsed.from === HEAD_PULSE_TARGET && parsed.msg) {
@@ -234,6 +256,7 @@ export class KrakiWSClient {
 
   /** Route a decrypted inner message through subscription gating and the normal pipeline. */
   private dispatchInner(inner: InnerMessage) {
+    if (inner.type === 'device_greeting') this.onTentacleGreeting(inner as unknown as { deviceId: string; payload?: { features?: unknown } });
     if (inner.type === 'session_subscription_set') {
       this.subscription.onAck(inner as SessionSubscriptionSetMessage);
       this.handlers.forEach((h) => h(inner as unknown as Message));
@@ -312,12 +335,46 @@ export class KrakiWSClient {
     return new Promise((resolve) => this.sendEncrypted(msg, (seq) => resolve(seq !== null)));
   }
 
-  /** Relay connected and the session's device online (outbox timing). */
+  /** Whether the input's confirmation is overdue-able right now (outbox
+   *  timing): relay connected and live, the session's device online, and the
+   *  link stalled rather than busy. Time on a presumed-dead socket (silent
+   *  past a ping round) or while payload is still arriving (the echo may be
+   *  queued behind it) does not count against the input. */
   private isDeliveryPathUp(sessionId: string): boolean {
     const store = getStore();
     if (store.status !== 'connected') return false;
+    if (this.transport.msSinceLastRx() > LIVE_LINK_QUIET_MS) return false;
+    if (Date.now() - this.lastDeliveryAt < DELIVERY_FLOWING_MS) return false;
     const deviceId = store.sessions.get(sessionId)?.deviceId;
     return !!deviceId && store.devices.get(deviceId)?.online === true;
+  }
+
+  /** Whether the session's Tentacle deduplicates inputs by clientId, so an
+   *  input whose fate is unknown may be sent again. `undefined` until it has
+   *  greeted this page. */
+  private acceptsResend(sessionId: string): boolean | undefined {
+    const deviceId = getStore().sessions.get(sessionId)?.deviceId;
+    const features = deviceId ? this.deviceFeatures.get(deviceId) : undefined;
+    return features ? features.has('idempotent_input') : undefined;
+  }
+
+  private onTentacleGreeting(greeting: { deviceId: string; payload?: { features?: unknown } }) {
+    const raw = greeting.payload?.features;
+    const features = new Set(Array.isArray(raw) ? raw.filter((f): f is string => typeof f === 'string') : []);
+    this.deviceFeatures.set(greeting.deviceId, features);
+    if (features.has(PAYLOAD_FRAGMENT_FEATURE)) {
+      this.sendEncrypted({
+        type: 'client_features',
+        deviceId: getStore().deviceId ?? '',
+        seq: 0,
+        timestamp: new Date().toISOString(),
+        payload: { features: [PAYLOAD_FRAGMENT_FEATURE], targetDeviceId: greeting.deviceId },
+      });
+    }
+    // The Tentacle (re)started or we (re)connected: whatever it had not
+    // echoed may be lost. It deduplicates, so offer every unconfirmed input
+    // again (older Tentacles: the outbox marks them for manual retry).
+    outbox.resendUnconfirmed((sessionId) => getStore().sessions.get(sessionId)?.deviceId === greeting.deviceId);
   }
 
   /**

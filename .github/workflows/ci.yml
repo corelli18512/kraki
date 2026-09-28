@@ -21,7 +21,7 @@ jobs:
   validate:
     # Stable required check, also used by release.yml. Never hide a failed job.
     name: Validate
-    needs: [scope, test-typescript, test-ios, build-mac-gui, test-network-resilience, binary-daemon-launch, macos-daemon-launch]
+    needs: [scope, test-typescript, test-ios, build-mac-gui, test-network-resilience, test-network-resilience-web, binary-daemon-launch, macos-daemon-launch]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -37,6 +37,7 @@ jobs:
           scope = results['scope']['outputs']
           groups = {'test-typescript': 'typescript', 'test-ios': 'native',
                     'build-mac-gui': 'native', 'test-network-resilience': 'resilience',
+                    'test-network-resilience-web': 'webResilience',
                     'binary-daemon-launch': 'binary',
                     'macos-daemon-launch': 'binary'}
           for job, group in groups.items():
@@ -53,6 +54,7 @@ jobs:
       native: ${{ steps.scope.outputs.native }}
       binary: ${{ steps.scope.outputs.binary }}
       resilience: ${{ steps.scope.outputs.resilience }}
+      webResilience: ${{ steps.scope.outputs.webResilience }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -224,6 +226,56 @@ jobs:
             /tmp/kraki-chaos/timeline.json
             /tmp/kraki-chaos/stack.log
             /tmp/kraki-chaos/xcode.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  test-network-resilience-web:
+    # The built web client in Chromium against the same local chaos stack
+    # (docs/network-resilience-test-plan.md §12).
+    name: Network resilience (web)
+    needs: scope
+    if: needs.scope.outputs.webResilience == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.16.0'
+          cache: pnpm
+
+      - name: Install and build the local stack
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @kraki/protocol --filter @kraki/crypto --filter @kraki/head --filter @kraki/tentacle --filter @kraki/voice-broker build
+
+      - name: Web network resilience scenarios
+        # The runner's preinstalled Google Chrome: `playwright install` hangs
+        # extracting its download on this runner (after 100%, every attempt).
+        env:
+          KRAKI_PW_CHANNEL: chrome
+        run: |
+          google-chrome --version
+          bash scripts/chaos/run-web.sh
+
+      - name: Upload resilience evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: network-resilience-web
+          path: |
+            /tmp/kraki-chaos/results
+            /tmp/kraki-chaos/web.log
+            /tmp/kraki-chaos/web-report.json
+            /tmp/kraki-chaos/stack.log
+            packages/arm/web/test-results
           if-no-files-found: ignore
           retention-days: 14
 

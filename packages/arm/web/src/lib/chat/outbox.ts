@@ -5,9 +5,15 @@
  * A sent message shows at once as the user's own bubble (`sending`). The
  * Tentacle echo (`user_message` carrying the same `clientId`) confirms it and
  * the entry disappears as the real bubble lands. If no echo arrives while the
- * relay connection and the target device are up, it becomes `failed`
- * (Retry / Delete). Entries survive a reload (restored as `failed`: whether
- * they reached Tentacle is unknown; Retry is idempotent by clientId).
+ * relay connection is live and the target device is up, it becomes `failed`
+ * (Retry / Delete). Time on a dead or reconnecting link does not count:
+ * unconfirmed is not failed.
+ *
+ * Entries survive a reload. Whether they reached the Tentacle is unknown, so
+ * they wait (`needsResend`) until the session's Tentacle greets: one that
+ * deduplicates by clientId (`idempotent_input`) gets them again
+ * automatically; an older one would run a duplicate, so they are marked
+ * `failed` for the user to decide.
  */
 import { create } from 'zustand';
 import type { Attachment } from '@kraki/protocol';
@@ -26,14 +32,18 @@ export interface PendingInput {
   timestamp: string;
   order: number;
   state: PendingState;
+  /** Unknown fate: send again once the Tentacle is known to deduplicate. */
+  needsResend?: boolean;
 }
 
 interface OutboxDeps {
   /** Hand a consumer message to transport; resolves false when it could not
    *  be sent (no key / no target). */
   send: (msg: Record<string, unknown>) => Promise<boolean>;
-  /** Relay connected and the session's device online. */
+  /** Relay connected and live, and the session's device online. */
   isDeliveryPathUp: (sessionId: string) => boolean;
+  /** The session's Tentacle deduplicates inputs (`undefined`: not known yet). */
+  acceptsResend?: (sessionId: string) => boolean | undefined;
 }
 
 const STORAGE_KEY = 'kraki-outbox-v1';
@@ -41,7 +51,7 @@ const STORAGE_KEY = 'kraki-outbox-v1';
 const PERSIST_ATTACHMENT_LIMIT = 1_000_000;
 
 let deps: OutboxDeps | null = null;
-let confirmationTimeoutMs = 20_000;
+let confirmationTimeoutMs = 30_000;
 const deadlines = new Map<string, number>();
 let ticker: ReturnType<typeof setInterval> | null = null;
 
@@ -56,7 +66,10 @@ function restore(): PendingInput[] {
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null;
     if (!raw) return [];
     const stored = JSON.parse(raw) as PendingInput[];
-    return Array.isArray(stored) ? stored.map((e) => ({ ...e, state: 'failed' as const })) : [];
+    if (!Array.isArray(stored)) return [];
+    const restored = stored.map((e) => (e.state === 'failed' ? e : { ...e, state: 'sending' as const, needsResend: true }));
+    if (restored.some((e) => e.needsResend)) ensureTicker();
+    return restored;
   } catch {
     return [];
   }
@@ -105,6 +118,18 @@ function ensureTicker(): void {
 export function checkDeadlines(now = Date.now()): void {
   for (const entry of useOutbox.getState().entries) {
     if (entry.state !== 'sending') continue;
+    if (entry.needsResend) {
+      if (!deps?.isDeliveryPathUp(entry.sessionId)) continue;
+      const accepts = deps.acceptsResend?.(entry.sessionId);
+      if (accepts === undefined) continue;
+      if (accepts) {
+        transmit(clearResend(entry));
+      } else {
+        clearResend(entry);
+        setState(entry.clientId, 'failed');
+      }
+      continue;
+    }
     const deadline = deadlines.get(entry.clientId);
     if (deadline === undefined || now < deadline) continue;
     if (deps?.isDeliveryPathUp(entry.sessionId)) {
@@ -114,6 +139,11 @@ export function checkDeadlines(now = Date.now()): void {
       deadlines.set(entry.clientId, now + confirmationTimeoutMs);
     }
   }
+}
+
+function clearResend(entry: PendingInput): PendingInput {
+  update((entries) => entries.map((e) => (e.clientId === entry.clientId ? { ...e, needsResend: undefined } : e)));
+  return { ...entry, needsResend: undefined };
 }
 
 function transmit(entry: PendingInput): void {
@@ -173,6 +203,19 @@ export const outbox = {
     transmit({ ...entry, state: 'sending' });
   },
 
+  /** The Tentacle (re)greeted: inputs it has not echoed may be lost. If it
+   *  deduplicates, offer every unconfirmed one matching `inSession` again.
+   *  An older Tentacle is left alone: those inputs keep waiting for their
+   *  echo (the normal confirmation timeout applies). */
+  resendUnconfirmed(inSession: (sessionId: string) => boolean): void {
+    const eligible = (e: PendingInput) => e.state === 'sending' && inSession(e.sessionId)
+      && deps?.acceptsResend?.(e.sessionId) === true;
+    if (!useOutbox.getState().entries.some(eligible)) return;
+    update((entries) => entries.map((e) => (eligible(e) ? { ...e, needsResend: true } : e)));
+    ensureTicker();
+    checkDeadlines();
+  },
+
   /** Remove an unconfirmed input (Delete). Returns its text. */
   discard(clientId: string): string | undefined {
     const entry = useOutbox.getState().entries.find((e) => e.clientId === clientId);
@@ -204,6 +247,12 @@ export const outbox = {
   /** Drop a deleted session's entries. */
   clearSession(sessionId: string): void {
     update((list) => list.filter((e) => e.sessionId !== sessionId));
+  },
+
+  /** Test hook: re-read storage as a page reload would. */
+  reloadForTesting(): void {
+    deadlines.clear();
+    useOutbox.setState({ entries: restore() });
   },
 
   /** Test hook: forget everything. */

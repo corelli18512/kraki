@@ -26,6 +26,8 @@ export interface ArmPulseHost {
   onDelivered(payloadJson: string): void;
   /** The relay confirmed receipt of every send with seq ≤ seqUpTo. */
   onAcked(seqUpTo: bigint): void;
+  /** The relay restarted the inbound stream: partial payloads are gone. */
+  onResetInbound?(): void;
   now(): number;
 }
 
@@ -125,6 +127,7 @@ export class ArmPulse {
         case 'reset-inbound':
           traceEvent({ comp: 'arm', evt: 'PULSE-RESET-INBOUND', seq: String(e.fromSeq) });
           logger.warn('pulse reset-inbound (relay stream reset)', { from: String(e.fromSeq) });
+          this.host.onResetInbound?.();
           break;
       }
     }

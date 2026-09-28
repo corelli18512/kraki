@@ -85,20 +85,27 @@ describe('App', () => {
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 
-  it('shows a manual connect button after repeated retries', () => {
-    // Start as connected, then exhaust retries
+  it('never blocks the app after it has been connected, however long the outage', () => {
+    // Transport retries forever; the user keeps reading and queueing.
     useStore.getState().setStatus('connected');
     renderApp('/session/s1');
 
     act(() => {
       useStore.getState().setStatus('disconnected');
-      useStore.getState().setReconnectState(5, null);
+      useStore.getState().setReconnectState(40, 30_000);
     });
 
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('offers Connect now when the very first connection fails', () => {
+    renderApp('/session/s1');
+    act(() => {
+      useStore.getState().setStatus('error');
+    });
     expect(screen.getByRole('alertdialog')).toBeInTheDocument();
     vi.mocked(wsClient.connect).mockClear();
-    const button = screen.getByRole('button', { name: 'Connect now' });
-    fireEvent.click(button);
+    fireEvent.click(screen.getByRole('button', { name: 'Connect now' }));
     expect(wsClient.connect).toHaveBeenCalledTimes(1);
   });
 });

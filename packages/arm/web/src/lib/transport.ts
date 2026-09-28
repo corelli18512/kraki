@@ -8,9 +8,22 @@ export type MessageHandler = (msg: Message) => void;
 const logger = createLogger('transport');
 
 const DEFAULT_RELAY = import.meta.env.VITE_WS_URL ?? 'wss://relay.kraki.chat';
-const RECONNECT_BASE = 1000;
-const RECONNECT_MAX = 30000;
-const MAX_AUTO_RECONNECT_ATTEMPTS = 5;
+/** Reconnect schedule (same as the native apps): quick while an outage is
+ *  young, then back off. Never gives up — a network outage can last long and
+ *  the user should not have to click anything once it is back. */
+const RECONNECT_BASE = 500;
+const RECONNECT_FAST_CAP = 4_000;
+const RECONNECT_FAST_WINDOW = 120_000;
+const RECONNECT_SLOW = 15_000;
+const RECONNECT_SLOW_WINDOW = 300_000;
+const RECONNECT_MAX = 30_000;
+/** No frame at all for this long on an authenticated socket → dead link
+ *  (half-open). Pings every 10 s get a pong, and payload frames are ≤32 KB
+ *  from fragment-capable Tentacles, so a live link is never this quiet. */
+const LIVENESS_TIMEOUT = 22_000;
+const LIVENESS_CHECK = 2_000;
+/** A WebSocket handshake that has not opened by now is abandoned. */
+const CONNECT_TIMEOUT = 10_000;
 /** Application-level ping interval. 10s keeps the connection warm through
  *  proxies and bounds liveness-detection latency during read-only viewing. */
 const PING_INTERVAL = 10_000;
@@ -201,6 +214,17 @@ export class KrakiTransport {
   private reconnectAttempts = 0;
   private callbacks: TransportCallbacks;
   private authenticated = false;
+  /** When the current outage began (first failed/closed attempt). */
+  private outageStartedAt: number | null = null;
+  private lastRxAt = 0;
+  private livenessTimer: ReturnType<typeof setInterval> | null = null;
+  private connectTimer: ReturnType<typeof setTimeout> | null = null;
+  private wakeListenersInstalled = false;
+
+  /** Milliseconds since the last frame from the relay (Infinity if none). */
+  msSinceLastRx(now = Date.now()): number {
+    return this.lastRxAt ? now - this.lastRxAt : Number.POSITIVE_INFINITY;
+  }
 
   get url(): string { return this._url; }
 
@@ -264,23 +288,39 @@ export class KrakiTransport {
       getStore().setReconnectState(this.reconnectAttempts, null);
     }
     this.intentionalClose = false;
+    this.installWakeListeners();
 
+    let ws: WebSocket;
     try {
-      this.ws = new WebSocket(this._url);
+      ws = new WebSocket(this._url);
+      this.ws = ws;
     } catch {
       getStore().setStatus('error');
       this.scheduleReconnect();
       return;
     }
 
-    this.ws.onopen = async () => {
-      this.reconnectDelay = RECONNECT_BASE;
-      this.reconnectAttempts = 0;
+    if (this.connectTimer) clearTimeout(this.connectTimer);
+    this.connectTimer = setTimeout(() => {
+      this.connectTimer = null;
+      if (this.ws === ws && ws.readyState === WebSocket.CONNECTING) {
+        logger.warn('WebSocket handshake timed out');
+        this.abandon(ws);
+      }
+    }, CONNECT_TIMEOUT);
+
+    ws.onopen = async () => {
+      if (this.connectTimer) { clearTimeout(this.connectTimer); this.connectTimer = null; }
+      // Backoff resets on successful auth, not on open: a relay that accepts
+      // and drops connections must not be hammered every 0.5 s.
+      this.lastRxAt = Date.now();
       await this.callbacks.onOpen();
       this.startPing();
     };
 
-    this.ws.onmessage = (event) => {
+    ws.onmessage = (event) => {
+      if (this.ws !== ws) return;
+      this.lastRxAt = Date.now();
       try {
         const msg = JSON.parse(event.data as string) as Message;
         const rawLen = typeof event.data === 'string' ? event.data.length : 0;
@@ -291,18 +331,59 @@ export class KrakiTransport {
       }
     };
 
-    this.ws.onclose = () => {
-      this.cleanup();
-      this.callbacks.onClose?.();
-      if (!this.intentionalClose) {
-        getStore().setStatus('disconnected');
-        this.scheduleReconnect();
-      }
+    ws.onclose = () => {
+      if (this.ws !== ws) return; // already abandoned
+      this.handleClosed();
     };
 
-    this.ws.onerror = () => {
-      getStore().setStatus('error');
+    ws.onerror = () => {
+      if (this.ws !== ws) return;
+      // A failed handshake is followed by onclose, which reconnects. Keep a
+      // previously working session in "disconnected" (reconnecting), not
+      // "error" (which reads as a first-connect failure).
+      if (this.outageStartedAt === null && this.reconnectAttempts === 0 && !this.authenticated) {
+        getStore().setStatus('error');
+      }
     };
+  }
+
+  private handleClosed() {
+    this.cleanup();
+    this.callbacks.onClose?.();
+    if (!this.intentionalClose) {
+      getStore().setStatus('disconnected');
+      this.scheduleReconnect();
+    }
+  }
+
+  /** Stop using a socket that is dead but has not closed (half-open, stuck
+   *  handshake). The browser may take minutes to fire onclose on its own. */
+  private abandon(ws: WebSocket) {
+    if (this.ws !== ws) return;
+    this.ws = null;
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onclose = null;
+    ws.onerror = null;
+    try { ws.close(); } catch { /* already closing */ }
+    this.handleClosed();
+  }
+
+  /** Browser signals that the network may be back: retry now instead of
+   *  waiting out the backoff. */
+  private installWakeListeners() {
+    if (this.wakeListenersInstalled || typeof window === 'undefined') return;
+    this.wakeListenersInstalled = true;
+    const wake = (reason: string) => {
+      if (this.intentionalClose || !this.reconnectTimer) return;
+      logger.info('Reconnecting now:', reason);
+      this.reconnectDelay = RECONNECT_BASE;
+      this.connect();
+    };
+    window.addEventListener('online', () => wake('online'));
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') wake('visible');
+    });
   }
 
   disconnect() {
@@ -311,6 +392,7 @@ export class KrakiTransport {
     this.ws?.close();
     this.ws = null;
     this.reconnectAttempts = 0;
+    this.outageStartedAt = null;
     getStore().setReconnectState(0, null);
     getStore().setStatus('disconnected');
   }
@@ -347,21 +429,41 @@ export class KrakiTransport {
 
   setAuthenticated(value: boolean) {
     this.authenticated = value;
+    if (value) {
+      this.reconnectDelay = RECONNECT_BASE;
+      this.reconnectAttempts = 0;
+      this.outageStartedAt = null;
+    }
   }
 
   private startPing() {
     this.pingTimer = setInterval(() => {
       this.send({ type: 'ping' });
     }, PING_INTERVAL);
+    const ws = this.ws;
+    this.livenessTimer = setInterval(() => {
+      if (!ws || this.ws !== ws || !this.authenticated) return;
+      if (this.msSinceLastRx() > LIVENESS_TIMEOUT) {
+        logger.warn('No frames from relay — link is dead, reconnecting');
+        traceEvent({ comp: 'arm', evt: 'WS-LIVENESS-TIMEOUT', quietMs: this.msSinceLastRx() });
+        this.abandon(ws);
+      }
+    }, LIVENESS_CHECK);
+  }
+
+  /** Next reconnect delay for an outage that began `outageMs` ago. */
+  static reconnectDelayFor(previous: number, outageMs: number, random = Math.random()): number {
+    const base = outageMs < RECONNECT_FAST_WINDOW
+      ? Math.min(previous, RECONNECT_FAST_CAP)
+      : outageMs < RECONNECT_SLOW_WINDOW ? RECONNECT_SLOW : RECONNECT_MAX;
+    return Math.round(base * (0.8 + 0.4 * random));
   }
 
   private scheduleReconnect() {
     if (this.reconnectTimer) return;
-    if (this.reconnectAttempts >= MAX_AUTO_RECONNECT_ATTEMPTS) {
-      getStore().setReconnectState(this.reconnectAttempts, null);
-      return;
-    }
-    const delayMs = this.reconnectDelay;
+    const now = Date.now();
+    this.outageStartedAt ??= now;
+    const delayMs = KrakiTransport.reconnectDelayFor(this.reconnectDelay, now - this.outageStartedAt);
     this.reconnectAttempts += 1;
     getStore().setReconnectState(this.reconnectAttempts, delayMs);
     this.reconnectTimer = setTimeout(() => {
@@ -376,6 +478,14 @@ export class KrakiTransport {
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
+    }
+    if (this.livenessTimer) {
+      clearInterval(this.livenessTimer);
+      this.livenessTimer = null;
+    }
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
     }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);

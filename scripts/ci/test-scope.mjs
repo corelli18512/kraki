@@ -5,7 +5,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 export function testScope(paths, full = false) {
-  const scope = { typescript: full, native: full, binary: full, resilience: full };
+  const scope = { typescript: full, native: full, binary: full, resilience: full, webResilience: full };
   for (const path of paths) {
     // Do not exempt arbitrary .md files: prompts/fixtures can be runtime inputs.
     if ((!path.includes('/') && path.endsWith('.md')) || path.startsWith('docs/')
@@ -24,13 +24,19 @@ export function testScope(paths, full = false) {
       scope.typescript = true;
       scope.binary = true;
       scope.resilience = true;
+      scope.webResilience = true;
     } else if (/^packages\/(head|tests)\//.test(path) || path.startsWith('scripts/chaos/')) {
       // The relay path and the chaos stack itself: network-resilience scenarios.
       scope.typescript = true;
       scope.resilience = true;
+      scope.webResilience = true;
     } else if (path === 'packages/arm/web/public/install.ps1' || path === 'packages/arm/web/public/install.sh') {
       scope.typescript = true;
       scope.binary = true;
+    } else if (path.startsWith('packages/arm/web/')) {
+      // The browser client: its own network-resilience scenarios (Linux, fast).
+      scope.typescript = true;
+      scope.webResilience = true;
     } else if (path.startsWith('packages/')) {
       scope.typescript = true;
     } else if (/^install\.(sh|ps1)$/.test(path) || path.startsWith('scripts/e2e/')) {

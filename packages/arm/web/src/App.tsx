@@ -8,18 +8,11 @@ import { useStore } from './hooks/useStore';
 import { useSessionShortcuts } from './hooks/useSessionShortcuts';
 import { wsClient } from './lib/ws-client';
 
-const MAX_AUTO_RECONNECT_ATTEMPTS = 5;
-
 function RelayBlockingOverlay({
   status,
-  reconnectAttempts,
-  nextReconnectDelayMs,
 }: {
   status: 'disconnected' | 'error' | 'awaiting_login' | 'connecting' | 'connected';
-  reconnectAttempts: number;
-  nextReconnectDelayMs: number | null;
 }) {
-  const retriesPaused = reconnectAttempts >= MAX_AUTO_RECONNECT_ATTEMPTS && nextReconnectDelayMs === null && status !== 'connecting';
   const isConnecting = status === 'connecting';
   const title = status === 'error'
     ? 'Connection Error'
@@ -78,18 +71,16 @@ export function App() {
   const navigateToSession = useStore((s) => s.navigateToSession);
   const setNavigateToSession = useStore((s) => s.setNavigateToSession);
   const status = useStore((s) => s.status);
-  const reconnectAttempts = useStore((s) => s.reconnectAttempts);
-  const nextReconnectDelayMs = useStore((s) => s.nextReconnectDelayMs);
 
-  // First connect failure: show blocking dialog immediately
-  // Reconnect: non-blocking indicator in header, blocking after max attempts
+  // First connect failure: blocking dialog (nothing to show yet). After the
+  // app has been connected, a lost link only shows the non-blocking
+  // "Reconnecting…" indicator: transport retries forever, and the user keeps
+  // reading and queueing messages meanwhile.
   const wasConnectedRef = useRef(false);
   if (status === 'connected') wasConnectedRef.current = true;
 
-  const isReconnecting = wasConnectedRef.current && (status === 'disconnected' || (status === 'connecting' && reconnectAttempts > 0));
-  const reconnectExhausted = isReconnecting && reconnectAttempts >= MAX_AUTO_RECONNECT_ATTEMPTS;
   const firstConnectFailed = !wasConnectedRef.current && (status === 'error' || status === 'disconnected');
-  const showBlockingOverlay = firstConnectFailed || reconnectExhausted;
+  const showBlockingOverlay = firstConnectFailed;
 
   // Update document.title with total unread count
   const unreadCount = useStore((s) => s.unreadCount);
@@ -137,8 +128,6 @@ export function App() {
       {showBlockingOverlay && (
         <RelayBlockingOverlay
           status={status}
-          reconnectAttempts={reconnectAttempts}
-          nextReconnectDelayMs={nextReconnectDelayMs}
         />
       )}
     </div>

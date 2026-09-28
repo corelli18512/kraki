@@ -65,11 +65,81 @@ describe('outbox', () => {
     expect(outbox.confirm('s', undefined, 'hi')).toBe(true);
   });
 
-  it('persists and restores as failed', () => {
+  it('persists across a reload', () => {
     outbox.send('s', 'hi', { answerTo: 'q1' });
     const stored = JSON.parse(localStorage.getItem('kraki-outbox-v1')!);
     expect(stored[0]).toMatchObject({ text: 'hi', answerTo: 'q1' });
     expect(useOutbox.getState().entries).toHaveLength(1);
+  });
+
+  it('a dead or reconnecting link never fails an input (time only counts while live)', () => {
+    outbox.setConfirmationTimeout(30_000);
+    outbox.send('s', 'hi');
+    const t0 = Date.now();
+    pathUp = false; // e.g. half-open: quiet socket, or reconnecting
+    for (let t = 1; t <= 10; t++) checkDeadlines(t0 + t * 60_000);
+    expect(outbox.forSession('s')[0].state).toBe('sending');
+  });
+
+  it('a restored (reloaded) input is resent once its Tentacle is known to deduplicate', async () => {
+    const id = outbox.send('s', 'hi');
+    sent = [];
+    // Simulate a page reload: state re-read from storage.
+    outbox.reloadForTesting();
+    const fresh = { outbox, checkDeadlines };
+    let accepts: boolean | undefined;
+    const resent: Record<string, unknown>[] = [];
+    fresh.outbox.configure({
+      send: async (msg) => { resent.push(msg); return true; },
+      isDeliveryPathUp: () => true,
+      acceptsResend: () => accepts,
+    });
+    expect(fresh.outbox.forSession('s')[0].state).toBe('sending');
+    fresh.checkDeadlines();
+    expect(resent).toEqual([]); // Tentacle not greeted yet
+    accepts = true;
+    fresh.checkDeadlines();
+    expect((resent[0].payload as Record<string, unknown>).clientId).toBe(id);
+    fresh.checkDeadlines();
+    expect(resent).toHaveLength(1);
+    fresh.outbox.reset();
+  });
+
+  it('a restored input is left to the user when the Tentacle would run it twice', async () => {
+    outbox.send('s', 'hi');
+    outbox.reloadForTesting();
+    const fresh = { outbox, checkDeadlines };
+    const resent: Record<string, unknown>[] = [];
+    fresh.outbox.configure({
+      send: async (msg) => { resent.push(msg); return true; },
+      isDeliveryPathUp: () => true,
+      acceptsResend: () => false,
+    });
+    fresh.checkDeadlines();
+    expect(resent).toEqual([]);
+    expect(fresh.outbox.forSession('s')[0].state).toBe('failed');
+    fresh.outbox.reset();
+  });
+
+  it('a Tentacle re-greeting re-offers unconfirmed inputs (same clientId)', () => {
+    let accepts = true;
+    outbox.configure({
+      send: async (msg) => { sent.push(msg); return true; },
+      isDeliveryPathUp: () => pathUp,
+      acceptsResend: () => accepts,
+    });
+    const id = outbox.send('s', 'hi');
+    outbox.send('other', 'x');
+    sent = [];
+    outbox.resendUnconfirmed((sid) => sid === 's');
+    expect(sent.map((m) => (m.payload as Record<string, unknown>).clientId)).toEqual([id]);
+    // An older Tentacle re-greeting (e.g. on our reconnect) must not fail
+    // inputs that are simply still in flight, nor resend them.
+    accepts = false;
+    sent = [];
+    outbox.resendUnconfirmed((sid) => sid === 's');
+    expect(sent).toEqual([]);
+    expect(outbox.forSession('s')[0].state).toBe('sending');
   });
 
   it('discard returns the text', () => {

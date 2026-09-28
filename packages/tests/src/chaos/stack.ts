@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { Storage, HeadServer, OpenAuthProvider } from '@kraki/head';
 import { SessionManager, RelayClient, KeyManager, AttachmentStore } from '@kraki/tentacle';
 import { randomBytes } from 'node:crypto';
+import { WebSocket } from 'ws';
 import { ChaosProxy, type FaultProfile } from './proxy.js';
 import { ScriptedAdapter } from './scripted-adapter.js';
 import { connectApp, type MockApp } from '../helpers.js';
@@ -133,6 +134,20 @@ export class ChaosStack {
     return sessionId;
   }
 
+  /** One-time pairing token (open auth relay), as scripts/dev-local.ts does. */
+  pairingToken(): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${this.headPort}`);
+      const timer = setTimeout(() => { ws.close(); reject(new Error('pairing token timeout')); }, 10_000);
+      ws.on('open', () => ws.send(JSON.stringify({ type: 'request_pairing_token', token: 'dev' })));
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString()) as { type?: string; token?: string };
+        if (msg.type === 'pairing_token_created' && msg.token) { clearTimeout(timer); ws.close(); resolve(msg.token); }
+      });
+      ws.on('error', (err) => { clearTimeout(timer); reject(err); });
+    });
+  }
+
   /** Store an incompressible attachment in the Tentacle (like a big report). */
   putAttachment(bytes: number, sessionId = this.sessionId): Record<string, unknown> {
     return this.attachments.put(sessionId, randomBytes(bytes), 'application/octet-stream', { name: 'blob.bin' }) as unknown as Record<string, unknown>;
@@ -207,6 +222,7 @@ export class ChaosStack {
           break;
         case 'POST /agent/options': Object.assign(this.adapter.options, body); break;
         case 'POST /session': out = { sessionId: await this.createSession() }; break;
+        case 'POST /pairing-token': out = { token: await this.pairingToken() }; break;
         case 'POST /attachment': out = this.putAttachment(Number(body.bytes ?? 1_000_000), String(body.sessionId ?? this.sessionId)); break;
         case 'POST /legacy-pull': await this.legacyPull(String(body.id), String(body.sessionId ?? this.sessionId)); break;
         case 'POST /legacy-close': this.legacyApps.forEach((a) => a.close()); this.legacyApps = []; break;
