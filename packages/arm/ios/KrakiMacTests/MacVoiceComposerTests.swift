@@ -88,6 +88,29 @@ import AppKit
         let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
         attachment.name = "mac-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
     }
+    func testSingleLineAndRecordingCapsulesMatchPrimaryHeight() throws {
+        let host = NSHostingView(rootView: MacChatComposer(sessionId: sid).environment(app))
+        window.contentView = host
+        window.setContentSize(NSSize(width: 820, height: 100))
+        drain(300)
+        XCTAssertEqual(MacComposerMetrics.capsuleHeight, MacComposerMetrics.control)
+        let expectedHeight = MacComposerMetrics.control + MacComposerMetrics.verticalPadding * 2
+        let idleHeight = host.fittingSize.height
+        XCTAssertEqual(idleHeight, expectedHeight, accuracy: 0.5)
+        try capture("equal-height-idle")
+        app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
+        drain(500)
+        XCTAssertTrue(app.iosVoiceComposer.isRecording)
+        XCTAssertEqual(host.fittingSize.height, idleHeight, accuracy: 0.5,
+                       "entering recording must not resize the composer")
+        let transcript = try XCTUnwrap(views(host).compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
+        XCTAssertEqual(transcript.enclosingScrollView?.bounds.height ?? 0, MacComposerMetrics.control, accuracy: 0.5)
+        try capture("equal-height-recording")
+        app.iosVoiceComposer.cancel()
+        drain(300)
+        XCTAssertEqual(host.fittingSize.height, idleHeight, accuracy: 0.5)
+    }
+
     func testNativeSendCorrectsInBubbleAndFreesComposer() throws {
         try capture("01-idle")
         try press("chat-voice-microphone")

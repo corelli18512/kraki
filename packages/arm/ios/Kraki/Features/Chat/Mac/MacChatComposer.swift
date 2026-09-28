@@ -19,14 +19,15 @@ enum MacComposerPlaceholderPolicy {
 
 /// macOS counterpart of the production iOS `MessageInputView`.
 ///
-/// Same structure as iOS: one 42 pt glass capsule [image | thumbnail] text
+/// Same structure as iOS: one glass capsule [image | thumbnail] text
 /// [clear] [mic], and beside it one round primary control (the size and
 /// column of the chat's jump controls) that morphs Send / Stop / Steer.
 /// Dictation stays a single row on macOS (the capsule is wide enough).
 /// Session mode is chosen in the chat header, not on the composer.
 /// Permission/question controls remain in the live bubble.
 enum MacComposerMetrics {
-    static let capsuleHeight: CGFloat = 42
+    /// Single-line and recording capsule match the primary/jump circles.
+    static let capsuleHeight: CGFloat = control
     /// Primary circle — same as the chat's jump controls.
     static let control: CGFloat = 36
     /// Capsule ↔ primary circle, and between stacked round controls.
@@ -1218,8 +1219,10 @@ private struct MacComposerVoiceSurface: View {
         }
         .padding(.leading, 4)
         .padding(.trailing, 5)
-        .padding(.vertical, 4)
-        .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
+        // The two-line viewport already occupies the 36 pt capsule. Extra
+        // vertical padding used to grow recording from 42 to 44 pt.
+        .frame(maxWidth: .infinity)
+        .frame(height: MacComposerMetrics.capsuleHeight, alignment: .leading)
     }
 
     private var revision: String {
