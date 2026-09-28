@@ -238,7 +238,7 @@ export async function startWorker(): Promise<WorkerResult> {
       },
       authMethod: config.authMethod,
       token,
-      reconnectDelay: 3000,
+      reconnectDelay: 1000,
       version: getVersion(),
     },
     keyManager,

@@ -97,6 +97,11 @@ final class ScenarioTests: XCTestCase {
         w.sendA(marker(2))
         w.sendA(marker(3))
         XCTAssertEqual(payloads(w.deliveredB), [1])
+        // The first heartbeat shows B's cursor advanced (to 1): on a slow link
+        // that means frames still in flight, so the repair waits until the
+        // cursor has been stuck for a full interval (never resend in-flight).
+        w.advance(params.heartbeatIntervalMs + 1)
+        XCTAssertEqual(payloads(w.deliveredB), [1])
         w.advance(params.heartbeatIntervalMs + 1)
         XCTAssertEqual(payloads(w.deliveredB), [1, 2, 3])
     }

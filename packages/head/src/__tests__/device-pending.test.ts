@@ -156,4 +156,26 @@ describe('device_pending liveness broadcast', () => {
     tentacle.close();
     app.close();
   });
+
+  it('a late pong on a link that is still carrying client frames is slow, not dead', async () => {
+    env = await createTestEnv();
+    const { app, tentacle } = await setupPair();
+
+    env.server.simulatePingSent(tentacle.deviceId);
+    await new Promise(r => setTimeout(r, 5));
+    // The pong is stuck behind a congested downlink, but the client is still
+    // talking to us (its own heartbeat) — the connection is alive.
+    tentacle.send({ type: 'ping' });
+    await new Promise(r => setTimeout(r, 50));
+    env.server.expirePongGrace(tentacle.deviceId);
+    env.server.forceLivenessSweep();
+    env.server.forcePingPass();
+    await new Promise(r => setTimeout(r, 200));
+
+    expect(messagesOfType(app.messages, 'device_pending')).toHaveLength(0);
+    expect(messagesOfType(app.messages, 'device_left')).toHaveLength(0);
+
+    tentacle.close();
+    app.close();
+  });
 });

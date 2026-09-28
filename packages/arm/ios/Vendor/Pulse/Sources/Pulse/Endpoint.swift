@@ -130,6 +130,11 @@ public final class Endpoint {
     /// are suppressed until it advances or the bounded retry deadline expires.
     private var repairCursor: UInt64?
     private var repairSentAt: Int = 0
+    /// Highest cursor the peer advertised and when it last advanced (or when
+    /// this connection started). A lagging cursor that keeps advancing means
+    /// our frames are still in flight on a slow link, not lost.
+    private var lastPeerCursor: UInt64?
+    private var peerProgressAt: Int = 0
     private var clock: Int = 0
     /// Wall-clock ms of the most recent Connected → Disconnected transition,
     /// or nil while Connected. Preserved across snapshot/restore so a host
@@ -202,6 +207,8 @@ public final class Endpoint {
         attempt = 0
         reconnectAt = nil
         repairCursor = nil
+        peerProgressAt = now
+        if lastPeerCursor.map({ $0 < outboxBase }) ?? true { lastPeerCursor = outboxBase }
         lastRecvAt = now
         var effects: [Effect] = []
         effects.append(
@@ -247,11 +254,12 @@ public final class Endpoint {
         case let .data(seq, ack, payload, durable, coalesceKey):
             return onData(seq: seq, ack: ack, payload: payload, durable: durable, coalesceKey: coalesceKey, now: now)
         case let .ack(ack):
-            return onPeerCursor(ack, now)
+            // Sent by the peer only on a duplicate or a hole: act at once.
+            return onPeerCursor(ack, now, explicitAck: true)
         case let .reset(epoch, oldest):
             return onReset(epoch: epoch, oldest: oldest)
         case let .heartbeat(ack):
-            return onPeerCursor(ack, now)
+            return onPeerCursor(ack, now, explicitAck: false)
         }
     }
 
@@ -264,7 +272,8 @@ public final class Endpoint {
             // but do not let every duplicate ACK clone the retained suffix.
             if let cursor = repairCursor,
                cursor < sendSeq,
-               now - repairSentAt >= params.heartbeatIntervalMs {
+               now - repairSentAt >= params.heartbeatIntervalMs,
+               now - peerProgressAt >= params.heartbeatIntervalMs {
                 repairSentAt = now
                 resendWithGapAnnounce(cursor + 1, &effects, now)
             }
@@ -354,11 +363,15 @@ public final class Endpoint {
     /// A peer advertised its receive cursor (explicit ACK or idle HEARTBEAT).
     /// Prune what it confirms; if it lags our latest send, resend the gap so
     /// tail-loss and holes self-heal without a reconnect.
-    private func onPeerCursor(_ peerCursor: UInt64, _ now: Int) -> [Effect] {
+    private func onPeerCursor(_ peerCursor: UInt64, _ now: Int, explicitAck: Bool) -> [Effect] {
         var effects: [Effect] = []
         // ACKs are cumulative. An older ACK after a higher cursor was already
         // pruned is stale/in-flight and must never rewind recovery.
         if peerCursor < outboxBase { return effects }
+        if lastPeerCursor.map({ peerCursor > $0 }) ?? true {
+            lastPeerCursor = peerCursor
+            peerProgressAt = now
+        }
         pruneOutbox(peerCursor, &effects)
         if peerCursor >= sendSeq {
             repairCursor = nil
@@ -369,6 +382,14 @@ public final class Endpoint {
         // onTick retries it if that batch itself is lost.
         if repairCursor == peerCursor { return effects }
         repairCursor = peerCursor
+        // A heartbeat cursor that advanced within the last interval is behind
+        // only because our frames are still queued on a slow link: repair once
+        // it stops advancing (onTick). Resending in-flight frames would only
+        // multiply congestion. (Mirrors @coinfra/pulse.)
+        if !explicitAck, now - peerProgressAt < params.heartbeatIntervalMs {
+            repairSentAt = peerProgressAt
+            return effects
+        }
         repairSentAt = now
         resendWithGapAnnounce(peerCursor + 1, &effects, now)
         return effects
@@ -449,7 +470,7 @@ public final class Endpoint {
 
     public func nextDeadline() -> Int? {
         if state == .connected {
-            let repairDeadline = repairCursor.map { _ in repairSentAt + params.heartbeatIntervalMs } ?? Int.max
+            let repairDeadline = repairCursor.map { _ in max(repairSentAt, peerProgressAt) + params.heartbeatIntervalMs } ?? Int.max
             return min(
                 lastSendAt + params.heartbeatIntervalMs,
                 lastRecvAt + params.deadAfterMs,
