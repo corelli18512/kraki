@@ -107,6 +107,8 @@ final class MacChatDocumentView: NSView {
         return low...high
     }
 
+    var latestItemIsUser: Bool { contents.last?.isUser == true }
+
     /// Document frames of AI replies, oldest first.
     var replyFrames: [(key: String, frame: NSRect)] {
         contents.indices.compactMap { index in
@@ -1786,6 +1788,9 @@ struct MacChatItem {
     /// An AI reply (answer, frozen terminal card, live card): the ↑ control
     /// steps through these and new ones light the ↓ unseen dot.
     let isReply: Bool
+    /// The user's own message (landed or still pending). At the conversation
+    /// bottom the ↑ control hides while the latest item is one of these.
+    let isUser: Bool
     let makeContent: () -> MacChatBubbleContent
 
     init(
@@ -1795,6 +1800,7 @@ struct MacChatItem {
         estimatedHeight: CGFloat,
         visibleCharacterCount: Int = 0,
         isReply: Bool = false,
+        isUser: Bool = false,
         makeContent: @escaping () -> MacChatBubbleContent
     ) {
         self.seq = seq
@@ -1803,6 +1809,7 @@ struct MacChatItem {
         self.estimatedHeight = estimatedHeight
         self.visibleCharacterCount = visibleCharacterCount
         self.isReply = isReply
+        self.isUser = isUser
         self.makeContent = makeContent
     }
 }
@@ -2234,7 +2241,12 @@ final class MacChatScrollView: MacSmoothScrollView {
     /// Shared product policy. AppKit still owns native event delivery,
     /// virtualization, anchor restoration, and animation.
     private var scrollPolicy = ChatScrollPolicy()
-    var followingBottom: Bool { scrollPolicy.followingTail }
+    var followingBottom: Bool { sendTailLock || scrollPolicy.followingTail }
+    /// A local send follows the newest edge until the user scrolls. Without
+    /// this latch the just-inserted bubble (and a still-streaming reply) put
+    /// the geometry momentarily >24 pt from the bottom, the distance rule
+    /// dropped tail-following, and the Chat stopped short of the bottom.
+    private(set) var sendTailLock = false
     private var entryBottomLocked: Bool { scrollPolicy.entryBottomLocked }
     private var allowsEdgePaging: Bool { scrollPolicy.allowsEdgePaging }
     private var bottomContentInset: CGFloat = 0
@@ -2689,6 +2701,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         snapshotApplyActive = false
         suppressRunwayForNextReflect = false
         scrollPolicy.resetForEntry()
+        sendTailLock = false
         hasUserScrolled = false
         initialTailTrimRequested = false
         loadingOlder = false
@@ -2746,6 +2759,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         scrollSettlePending = false
         geometryAnchorLock = nil
         hasUserScrolled = true
+        sendTailLock = false
         scrollPolicy.beginUserInteraction(
             offset: contentView.bounds.minY,
             distanceToBottom: distanceToBottom
@@ -2957,7 +2971,15 @@ final class MacChatScrollView: MacSmoothScrollView {
     /// Anything submitted from the composer is a new message (as on iOS):
     /// return to the newest edge so the user sees what they just sent.
     func returnToNewestAfterLocalSubmit() {
+        sendTailLock = true
         jumpTapped()
+        // The controls must not ride over the message being sent: ↓ goes now
+        // (we are heading to the bottom) and ↑ rests in the low slot, hidden
+        // while the latest item is the user's own message.
+        setJumpButtonVisibility(jumpButton, material: jumpMaterial, shouldShow: false, animated: true)
+        setJumpButtonVisibility(latestStartButton, material: latestStartMaterial, shouldShow: false, animated: true)
+        placeLatestStart(raised: false, animated: false)
+        syncUnseenDot()
     }
 
     @objc private func jumpTapped() {
@@ -2983,6 +3005,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     @objc private func latestStartTapped() {
+        sendTailLock = false
         navigateToPreviousReplyStart()
     }
 
@@ -3210,6 +3233,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         let scrollsOlder = event.keyCode == 116 || event.keyCode == 115 || event.keyCode == 126
         if scrollsOlder {
             geometryAnchorLock = nil
+            sendTailLock = false
             scrollPolicy.beginUserInteraction(
                 offset: contentView.bounds.minY,
                 distanceToBottom: distanceToBottom
@@ -3243,6 +3267,7 @@ final class MacChatScrollView: MacSmoothScrollView {
 
     private func preparePreciseScrollDelta(_ deltaY: CGFloat) {
         cancelScrollAnimation()
+        if abs(deltaY) > 0.01 { sendTailLock = false }
         geometryAnchorLock = nil
         hasUserScrolled = true
         if !liveScrollActive { beginScrollInteraction(scrollerKnob: false) }
@@ -3355,6 +3380,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         let hasScrollDelta = abs(event.scrollingDeltaY) > 0.01
             || abs(event.scrollingDeltaX) > 0.01
         if hasScrollDelta {
+            sendTailLock = false
             scrollPolicy.beginUserInteraction(
                 offset: contentView.bounds.minY,
                 distanceToBottom: distanceToBottom
@@ -3550,7 +3576,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     var isPinnedToBottom: Bool {
-        scrollPolicy.isPinnedToTail(distanceToBottom: distanceToBottom)
+        sendTailLock || scrollPolicy.isPinnedToTail(distanceToBottom: distanceToBottom)
     }
     var isEntryBottomLocked: Bool { entryBottomLocked }
 
@@ -3597,8 +3623,11 @@ final class MacChatScrollView: MacSmoothScrollView {
         let hasContent = !chatDocumentView.itemKeys.isEmpty
         guard !moving || !hasContent || jumpButtonVisibilityTargets.isEmpty else { syncUnseenDot(); return }
         let showTail = hasContent && !isAtConversationBottom
-        // At the conversation bottom neither control shows (see iOS).
-        let showUp = hasContent && !isAtConversationBottom
+        // ↑ stays available at the bottom (resting in ↓'s slot, which lies in
+        // the Composer band below the last bubble) unless the newest item is
+        // the user's own message: there is nothing new to read back to yet.
+        let showUp = hasContent
+            && !(isAtConversationBottom && chatDocumentView.latestItemIsUser)
             && (previousReplyTarget() != nil || !diagnosticAtOldest)
         setJumpButtonVisibility(jumpButton, material: jumpMaterial, shouldShow: showTail, animated: animated)
         setJumpButtonVisibility(latestStartButton, material: latestStartMaterial, shouldShow: showUp, animated: animated)
@@ -4101,6 +4130,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
                     estimatedHeight: estimatedHeight(for: message),
                     visibleCharacterCount: utf8Length(message.content ?? message.result),
                     isReply: message.type == "agent_message",
+                    isUser: ["user_message", "send_input", "pending_input"].contains(message.type),
                     makeContent: {
                         MacChatBubbleContentBuilder.make(
                             message: message,

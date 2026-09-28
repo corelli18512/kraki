@@ -375,6 +375,102 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertEqual(fx.doc.automationVisibleCells.last?.cell.content?.pendingClientId != nil, true)
     }
 
+    /// Sending while an answer streams: the inserted bubble momentarily puts
+    /// the bottom >24 pt away, which used to drop tail-following, leaving the
+    /// Chat short of the bottom while the reply kept growing out of sight.
+    func testSendDuringStreamingKeepsFollowingTheBottom() throws {
+        let fx = try makeFixture(total: 60)
+        drain(1_200)
+        fx.app.sessionStore.sessions[sid]?.state = .active
+        try startTurn(fx, seq: 61)
+        let chars = Array(Self.longAnswer(2_500))
+        var i = 0, sent = false, worst: CGFloat = 0
+        var sentAt = CACurrentMediaTime()
+        while i < chars.count {
+            fx.app.messageStore.applyCardMessage(sid, String(chars[i..<min(i + 30, chars.count)]), reset: false)
+            i += 30
+            if !sent, i > 900 {
+                _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "先停一下，换个方向。")
+                NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
+                sent = true; sentAt = CACurrentMediaTime()
+            }
+            drain(33)
+            if sent, CACurrentMediaTime() - sentAt > 0.45 { worst = max(worst, distanceToBottom(fx)) }
+        }
+        drain(600)
+        XCTAssertLessThanOrEqual(worst, 1, "after the send glide the Chat keeps following the streaming reply")
+        XCTAssertLessThanOrEqual(distanceToBottom(fx), 1)
+        XCTAssertFalse(fx.sv.automationControlsVisible.down)
+    }
+
+    /// Scrolling away after a send releases the send's bottom latch.
+    func testUserScrollAfterSendReleasesTheBottomLatch() throws {
+        let fx = try makeFixture(total: 60)
+        drain(1_200)
+        fx.app.sessionStore.sessions[sid]?.state = .active
+        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "继续")
+        NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
+        drain(700)
+        try startTurn(fx, seq: 61)
+        for _ in 0..<12 { _ = fx.sv.automationPreciseScrollPacket(deltaY: 40); drain(8) }
+        drain(500)
+        let offset = fx.sv.contentView.bounds.minY
+        for k in 0..<30 {
+            fx.app.messageStore.applyCardMessage(sid, "第\(k)段：继续补充一些说明文字，让回复变长。", reset: false)
+            drain(33)
+        }
+        drain(400)
+        XCTAssertEqual(fx.sv.contentView.bounds.minY, offset, accuracy: 1, "the reader's position is kept")
+        XCTAssertGreaterThan(distanceToBottom(fx), 200)
+        XCTAssertTrue(fx.sv.automationControlsVisible.down)
+    }
+
+    /// Controls never ride over the message being sent; at the bottom ↑ is
+    /// hidden while the newest item is the user's own message and returns
+    /// (in ↓'s slot) once an AI reply is the newest item.
+    func testSendHidesControlsAndUpFollowsTheLatestItem() throws {
+        let fx = try makeFixture(total: 60)
+        drain(1_200)
+        for _ in 0..<30 { _ = fx.sv.automationPreciseScrollPacket(deltaY: 40); drain(8) }
+        drain(900)
+        XCTAssertTrue(fx.sv.automationControlsVisible.down)
+        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "上面那个问题我再补充一下。")
+        NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
+        XCTAssertFalse(fx.sv.automationControlsVisible.down, "↓ leaves as soon as the send starts")
+        XCTAssertFalse(fx.sv.automationControlsVisible.up, "↑ does not cover the message being sent")
+        var covered = 0
+        for _ in 0..<60 {
+            drain(10)
+            let frames = fx.sv.automationControlFrames, visible = fx.sv.automationControlsVisible
+            for (_, cell) in fx.doc.automationVisibleCells where cell.content?.pendingClientId != nil {
+                let bubble = cell.convert(cell.bubbleFrameForRegression, to: fx.sv)
+                if (visible.up && bubble.intersects(frames.up)) || (visible.down && bubble.intersects(frames.down)) { covered += 1 }
+            }
+        }
+        XCTAssertEqual(covered, 0, "no control overlaps the sent bubble during the glide")
+        XCTAssertLessThanOrEqual(distanceToBottom(fx), 1)
+        XCTAssertFalse(fx.sv.automationControlsVisible.up, "latest is the user's message: no ↑ at the bottom")
+        // The Tentacle echo carries the pending bubble's clientId.
+        let clientId = fx.app.commandSender?.pendingInputs(sid).last?.payload["clientId"]?.stringValue ?? ""
+        fx.app.messageStore.beginCardTurn(sid)
+        try ingest(fx, ["type": "user_message", "seq": 61, "sessionId": sid, "deviceId": dev,
+                        "timestamp": "2026-09-01T00:00:05.000Z",
+                        "payload": ["content": "上面那个问题我再补充一下。", "clientId": clientId]])
+        drain(400)
+        XCTAssertFalse(fx.sv.automationControlsVisible.up, "still the user's message after its echo")
+        try land(fx, seq: 62, text: Self.zh)
+        drain(900)
+        XCTAssertLessThanOrEqual(distanceToBottom(fx), 1)
+        XCTAssertTrue(fx.sv.automationControlsVisible.up, "an AI reply is newest: ↑ returns")
+        XCTAssertFalse(fx.sv.automationControlsVisible.down)
+        let frames = fx.sv.automationControlFrames
+        XCTAssertEqual(frames.up, frames.down, "↑ rests in ↓'s slot")
+        if let last = fx.doc.latestItemFrame() {
+            let bubble = fx.doc.convert(last, to: fx.sv)
+            XCTAssertLessThanOrEqual(bubble.maxY, frames.up.minY, "↑ at rest sits below the last bubble")
+        }
+    }
+
     func testUnconfirmedInputOffersSameIDRetryAndDelete() throws {
         let fx = try makeFixture(total: 20)
         fx.app.commandSender?.confirmationTimeout = .milliseconds(300)
@@ -528,7 +624,8 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertFalse(fx.sv.automationControlsVisible.down)
         XCTAssertEqual(fx.sv.bounds.height - atBottom.down.maxY, MacComposerMetrics.jumpControlBottom, accuracy: 0.5,
                        "↓ sits 9 pt above the send circle")
-        XCTAssertFalse(fx.sv.automationControlsVisible.up, "no controls at the conversation bottom")
+        XCTAssertTrue(fx.sv.automationControlsVisible.up, "latest is an AI reply: ↑ stays available at the bottom")
+        XCTAssertEqual(atBottom.up, atBottom.down, "↑ rests in ↓'s slot while ↓ is hidden")
         for _ in 0..<12 { _ = fx.sv.automationPreciseScrollPacket(deltaY: 40); drain(8) }
         drain(1_200)
         XCTAssertTrue(fx.sv.automationControlsVisible.down)
@@ -538,7 +635,9 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         fx.sv.automationTapDown()
         drain(1_500)
         XCTAssertFalse(fx.sv.automationControlsVisible.down)
-        XCTAssertFalse(fx.sv.automationControlsVisible.up, "both hide again at the bottom")
+        XCTAssertTrue(fx.sv.automationControlsVisible.up, "↑ drops back into ↓'s slot at the bottom")
+        let lowered = fx.sv.automationControlFrames
+        XCTAssertEqual(lowered.up, lowered.down)
     }
 
     func testUpStepsBackThroughReplyStartsAndDownShowsUnseenDot() throws {
