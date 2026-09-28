@@ -583,7 +583,9 @@ export interface DeviceGreetingMessage extends BaseEnvelope {
     version?: string;
     /** Behaviours an app may rely on. `idempotent_input`: a `send_input`
      *  retried with the same clientId is never dispatched twice and is
-     *  re-echoed, so apps may re-send unconfirmed inputs automatically. */
+     *  re-echoed, so apps may re-send unconfirmed inputs automatically.
+     *  `fragments`: accepts and (to apps that reply with `client_features`)
+     *  sends large payloads as fragments (see fragments.ts). */
     features?: string[];
   };
 }
@@ -762,6 +764,15 @@ export interface TurnTraceBatchMessage extends BaseEnvelope {
 }
 
 /** Atomic subscribe/replace/unsubscribe request for one Arm's visible session. */
+/** App → Tentacle, per connection: behaviours this app supports (sent after
+ *  a greeting that advertises them). `fragments`: can reassemble fragments. */
+export interface ClientFeaturesMessage extends BaseEnvelope {
+  type: 'client_features';
+  payload: {
+    features: string[];
+  };
+}
+
 export interface SetSessionSubscriptionMessage extends BaseEnvelope {
   type: 'set_session_subscription';
   payload: {
@@ -1147,7 +1158,8 @@ export type ConsumerMessage =
   | RequestLocalSessionsMessage
   | ImportSessionMessage
   | RequestAttachmentMessage
-  | SetSessionSubscriptionMessage;
+  | SetSessionSubscriptionMessage
+  | ClientFeaturesMessage;
 
 // ============================================================
 // Auth credentials — discriminated union by method
@@ -1228,6 +1240,12 @@ export interface AuthOkMessage {
    * See `VoiceCapability` for the contract.
    */
   voice?: VoiceCapability;
+  /**
+   * The relay acknowledges inbound Pulse data at least every this many bytes
+   * (instead of only on outbound traffic or idle heartbeats), so a client may
+   * pace large uploads by acknowledgements. Absent on older relays.
+   */
+  pulseAckBytes?: number;
 }
 
 export type AuthErrorCode =

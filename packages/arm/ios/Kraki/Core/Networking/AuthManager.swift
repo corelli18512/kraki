@@ -474,6 +474,9 @@ final class AuthManager {
 
         let githubClientId = message["githubClientId"] as? String
         let relayVersion = message["relayVersion"] as? String
+        // A relay that acknowledges inbound data promptly lets Pulse pace large
+        // uploads by acks; an older one only acks on idle heartbeats.
+        appState.pulseManager?.acksPromptly = (message["pulseAckBytes"] as? Int ?? 0) > 0
         let voiceCapability = (message["voice"] as? [String: Any]).flatMap(VoiceCapability.init(json:))
 
         if usesEphemeralOpenAuth {
@@ -852,6 +855,8 @@ final class AuthManager {
             "deviceId": deviceId,
             "publicKey": signingPublicKey,
             "encryptionKey": encryptionPublicKey,
+            // Vendored Pulse ≥0.5.1: progress heartbeats never trigger resends.
+            "pulseProgressAck": true,
         ]
         return dict.compactMapValues { $0 }
     }

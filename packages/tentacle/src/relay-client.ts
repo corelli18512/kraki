@@ -18,7 +18,8 @@ import type {
   BroadcastEnvelope, UnicastEnvelope, MulticastEnvelope, CardActionState,
   SessionLiveSnapshot, SessionDigest, IdleMessage,
 } from '@kraki/protocol';
-import { HEAD_PULSE_TARGET } from '@kraki/protocol';
+import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment } from '@kraki/protocol';
+import { randomUUID } from 'node:crypto';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
 import type { RecipientKey } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
@@ -126,6 +127,11 @@ export class RelayClient {
   /** Inputs (session + clientId) this process has admitted. Bounded by the
    *  process lifetime's input count (small strings). */
   private admittedInputs = new Set<string>();
+  /** Behaviours each online app declared with `client_features` on its
+   *  current connection (e.g. `fragments`). Cleared when it (re)joins/leaves. */
+  private appFeatures = new Map<string, Set<string>>();
+  /** Reassembles fragmented payloads from apps. */
+  private payloadAssembler = new PayloadAssembler();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private intentionalDisconnect = false;
   private authInfo: AuthOkMessage | null = null;
@@ -967,6 +973,8 @@ export class RelayClient {
       const device = {
         ...this.options.device,
         publicKey: this.keyManager?.getCompactPublicKey(),
+        // @coinfra/pulse ≥0.5.1: progress heartbeats never trigger resends.
+        pulseProgressAck: true,
       };
       const auth = this.buildAuthPayload(device);
       ws.send(JSON.stringify({ type: 'auth', auth, device }));
@@ -1145,6 +1153,7 @@ export class RelayClient {
         if (key) {
           this.consumerKeys.set(device.id, key);
           this.onlineConsumers.add(device.id);
+          this.appFeatures.delete(device.id);
           this.attachmentPacer.notifyOnline(device.id);
           this.currentSessionByArm.set(device.id, null);
           // Send a greeting unicast so the app learns our capabilities
@@ -1158,6 +1167,7 @@ export class RelayClient {
 
     if (msg.type === 'device_left') {
       const deviceId = msg.deviceId as string;
+      this.appFeatures.delete(deviceId);
       this.onlineConsumers.delete(deviceId);
       this.currentSessionByArm.delete(deviceId);
       return;
@@ -1165,6 +1175,7 @@ export class RelayClient {
 
     if (msg.type === 'device_removed') {
       const deviceId = msg.deviceId as string;
+      this.appFeatures.delete(deviceId);
       this.consumerKeys.delete(deviceId);
       this.onlineConsumers.delete(deviceId);
       this.currentSessionByArm.delete(deviceId);
@@ -1243,6 +1254,13 @@ export class RelayClient {
   }
 
   private handleConsumerMessage(msg: ConsumerMessage): void {
+    if (msg.type === 'client_features') {
+      const features = Array.isArray(msg.payload?.features) ? msg.payload.features.filter((f) => typeof f === 'string') : [];
+      this.appFeatures.set(msg.deviceId, new Set(features));
+      logger.info({ deviceId: msg.deviceId, features }, 'App features');
+      return;
+    }
+
     // create_session is special — no sessionId yet
     if (msg.type === 'create_session') {
       this.handleCreateSession(msg);
@@ -3330,13 +3348,7 @@ export class RelayClient {
         const content = (msg.payload as Record<string, unknown>).content as string;
         if (content) this.lastAgentContent.set(msg.sessionId, content);
       }
-      this.pulse.send(
-        JSON.stringify({ blob, keys }),
-        usableTargets,
-        false,
-        coalesceKeyFor(msg),
-        streamForType(msg.type),
-      );
+      this.sendPayload(JSON.stringify({ blob, keys }), usableTargets, false, coalesceKeyFor(msg), streamForType(msg.type));
     } catch (err) {
       logger.error({ err }, 'Encrypted multicast failed');
     }
@@ -3365,6 +3377,28 @@ export class RelayClient {
   /** A reliable consumer message was delivered in order by pulse (arm→tentacle),
    *  OR a plaintext head-originated control message ({from:'@head'} — presence).
    *  `payloadJson` is a JSON string of either shape; dispatch accordingly. */
+  /**
+   * Send an E2E payload to app targets. Large payloads go as fragments to the
+   * targets that declared `fragments` (each part is a small Pulse message, so
+   * a slow link keeps showing progress) and whole to the others. Parts never
+   * carry the coalesce key (a superseded part must not be dropped from a set);
+   * a large coalesced payload therefore trades supersession for progress.
+   */
+  private sendPayload(payloadJson: string, target: string | string[], durable: boolean, coalesceKey: string | undefined, stream: number): void {
+    const targets = Array.isArray(target) ? target : [target];
+    const fragmenting = targets.filter((t) => this.appFeatures.get(t)?.has(PAYLOAD_FRAGMENT_FEATURE));
+    const parts = fragmenting.length > 0 ? fragmentPayload(payloadJson, randomUUID()) : null;
+    if (!parts) {
+      this.pulse.send(payloadJson, target, durable, coalesceKey, stream);
+      return;
+    }
+    // Same envelope shape as before (unicast string / multicast array).
+    const shape = (ids: string[]): string | string[] => (Array.isArray(target) ? ids : ids[0]);
+    const whole = targets.filter((t) => !fragmenting.includes(t));
+    if (whole.length > 0) this.pulse.send(payloadJson, shape(whole), durable, coalesceKey, stream);
+    for (const part of parts) this.pulse.send(part, shape(fragmenting), durable, undefined, stream);
+  }
+
   private handlePulseDelivered(payloadJson: string): void {
     if (!this.keyManager || !this.authInfo) return;
     let parsed: { from?: string; msg?: Record<string, unknown>; blob?: string; keys?: Record<string, string> };
@@ -3372,6 +3406,11 @@ export class RelayClient {
       parsed = JSON.parse(payloadJson);
     } catch (err) {
       logger.error({ err }, 'Pulse delivered payload parse failed');
+      return;
+    }
+    if (isPayloadFragment(parsed)) {
+      const whole = this.payloadAssembler.accept(parsed);
+      if (whole !== null) this.handlePulseDelivered(whole);
       return;
     }
     // Head-originated plaintext control (device_joined/left/removed, etc.): route
@@ -3502,7 +3541,7 @@ export class RelayClient {
       const { blob, keys } = encryptToBlob(JSON.stringify(msg), [
         { deviceId: targetDeviceId, publicKey: recipientPubKey },
       ]);
-      this.pulse.send(JSON.stringify({ blob, keys }), targetDeviceId, durable, undefined, streamForType((msg as { type?: string }).type));
+      this.sendPayload(JSON.stringify({ blob, keys }), targetDeviceId, durable, undefined, streamForType((msg as { type?: string }).type));
     } catch (err) {
       logger.error({ err, targetDeviceId }, 'Reliable unicast failed');
     }
@@ -3540,7 +3579,7 @@ export class RelayClient {
         kind: this.options.device.kind,
         agents: this.options.device.capabilities?.agents,
         version: this.options.version,
-        features: ['idempotent_input'],
+        features: ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE],
       },
     };
     this.sendReliableUnicastTo(targetDeviceId, compactPubKey, greeting);
@@ -3549,6 +3588,7 @@ export class RelayClient {
   private updateConsumerKeys(devices: DeviceSummary[]): void {
     this.consumerKeys.clear();
     this.onlineConsumers.clear();
+    this.appFeatures.clear();
     this.currentSessionByArm.clear();
     this.legacyReplayWarned.clear();
     for (const d of devices) {

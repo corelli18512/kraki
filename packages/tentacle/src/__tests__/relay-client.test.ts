@@ -78,6 +78,7 @@ vi.mock('@kraki/crypto', async () => {
 import { RelayClient } from '../relay-client.js';
 import { AttachmentStore } from '../attachment-store.js';
 import { createHash } from 'node:crypto';
+import { PayloadAssembler, isPayloadFragment, fragmentPayload } from '@kraki/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -91,6 +92,7 @@ import { join } from 'node:path';
  *  `.blob` → parse = the inner message. Order is preserved. */
 function decodePulseSends(sent: string[]): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
+  const assembler = new PayloadAssembler();
   for (const raw of sent) {
     let env: Record<string, unknown>;
     try {
@@ -106,11 +108,30 @@ function decodePulseSends(sent: string[]): Array<Record<string, unknown>> {
     const frame = decodeFrame(new Uint8Array(Buffer.from(env.pulse as string, 'base64')));
     if (!frame || frame.t !== 'data') continue;
     try {
-      const { blob } = JSON.parse(new TextDecoder().decode(frame.payload)) as { blob: string };
+      let payload = JSON.parse(new TextDecoder().decode(frame.payload)) as unknown;
+      if (isPayloadFragment(payload)) {
+        const whole = assembler.accept(payload);
+        if (whole === null) continue;
+        payload = JSON.parse(whole);
+      }
+      const { blob } = payload as { blob: string };
       out.push(JSON.parse(blob) as Record<string, unknown>);
     } catch {
       /* skip frames whose payload isn't a {blob} message */
     }
+  }
+  return out;
+}
+
+/** Raw Pulse payloads in send order, with their envelope target. */
+function pulsePayloads(sent: string[]): Array<{ to: unknown; payload: Record<string, unknown> }> {
+  const out: Array<{ to: unknown; payload: Record<string, unknown> }> = [];
+  for (const raw of sent) {
+    const env = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof env.pulse !== 'string') continue;
+    const frame = decodeFrame(new Uint8Array(Buffer.from(env.pulse, 'base64')));
+    if (!frame || frame.t !== 'data') continue;
+    try { out.push({ to: env.to, payload: JSON.parse(new TextDecoder().decode(frame.payload)) }); } catch { /* ignore */ }
   }
   return out;
 }
@@ -1388,6 +1409,64 @@ describe('RelayClient tool message lazy-load shape', () => {
         expect(echo).toMatchObject({ seq: 7, sessionId: 'sess_1', payload: { clientId: 'cid-echo', content: text } });
       });
       expect(adapter.sendMessage).not.toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+
+  it('fragments large payloads only to apps that declared fragments support', () => {
+    const { ws, store, cleanup } = buildClientWithStore();
+    try {
+      const ref = store.put('sess_1', Buffer.alloc(120 * 1024, 0x61), 'application/octet-stream');
+      const pull = () => ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'request_attachment', deviceId: 'consumer-dev', sessionId: 'sess_1',
+        payload: { id: ref.id, sessionId: 'sess_1', mode: 'paced', index: 0 },
+      })));
+      ws.sent.length = 0;
+      pull();
+      expect(pulsePayloads(ws.sent).filter((p) => isPayloadFragment(p.payload))).toHaveLength(0);
+
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'client_features', deviceId: 'consumer-dev', payload: { features: ['fragments'] },
+      })));
+      ws.sent.length = 0;
+      pull();
+      const frags = pulsePayloads(ws.sent).filter((p) => isPayloadFragment(p.payload));
+      expect(frags.length).toBeGreaterThan(2);
+      expect(frags.every((f) => f.to === 'consumer-dev')).toBe(true);
+      const chunk = decodePulseSends(ws.sent).find((m) => m.type === 'attachment_data');
+      expect(Buffer.from((chunk?.payload as { data: string }).data, 'base64')).toHaveLength(120 * 1024);
+
+      // A reconnect (device_joined) resets the declaration.
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'device_joined', device: { id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub' },
+      })));
+      ws.sent.length = 0;
+      pull();
+      expect(pulsePayloads(ws.sent).filter((p) => isPayloadFragment(p.payload))).toHaveLength(0);
+    } finally { cleanup(); }
+  });
+
+  it('reassembles fragmented payloads from apps before decrypting', async () => {
+    const { adapter, client, cleanup } = buildClientWithStore();
+    try {
+      const inner = { type: 'send_input', sessionId: 'sess_1', deviceId: 'consumer-dev', seq: 0,
+        timestamp: new Date().toISOString(), payload: { text: 'big ' + 'x'.repeat(200_000), clientId: 'cid-big' } };
+      const payload = JSON.stringify({ blob: JSON.stringify(inner), keys: {} });
+      const parts = fragmentPayload(payload, 'frag-1')!;
+      expect(parts.length).toBeGreaterThan(5);
+      const deliver = (p: string) => (client as unknown as { handlePulseDelivered(p: string): void }).handlePulseDelivered(p);
+      for (const part of parts.slice(0, -1)) deliver(part);
+      expect(adapter.sendMessage).not.toHaveBeenCalled();
+      deliver(parts[parts.length - 1]);
+      await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+      expect((adapter.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1]).toHaveLength(inner.payload.text.length);
+    } finally { cleanup(); }
+  });
+
+  it('greets with fragments support', () => {
+    const { ws, cleanup } = buildClientWithStore();
+    try {
+      const greeting = decodePulseSends(ws.sent).find((m) => m.type === 'device_greeting');
+      expect(greeting?.payload).toMatchObject({ features: expect.arrayContaining(['fragments']) });
     } finally { cleanup(); }
   });
 

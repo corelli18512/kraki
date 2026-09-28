@@ -174,6 +174,10 @@ final class MessageRouter {
                 // A Tentacle that was away may have missed inputs the Relay
                 // could not hold; re-send what is still waiting for it.
                 if summary.role == .tentacle {
+                    // A Tentacle that (re)connected forgot this app's features.
+                    if appState?.deviceStore.deviceFeatures[summary.id]?.contains(PayloadFragments.feature) == true {
+                        declareClientFeatures(to: summary.id)
+                    }
                     appState?.commandSender?.resendPendingInputs(deviceId: summary.id, reason: "tentacle_online")
                 }
             }
@@ -889,6 +893,7 @@ final class MessageRouter {
         }
         let features = payload?["features"] as? [String] ?? []
         appState.deviceStore.setDeviceFeatures(deviceId, features: features)
+        if features.contains(PayloadFragments.feature) { declareClientFeatures(to: deviceId) }
         if features.contains("idempotent_input") {
             // Relaunch/reconnect: this Tentacle can take our pending inputs
             // again safely now that we know it deduplicates.
@@ -899,6 +904,19 @@ final class MessageRouter {
         // re-inserts into pendingGreetingIds) so the net effect of a
         // greeting frame is "device is online + no longer pending".
         appState.deviceStore.markGreeted(deviceId)
+    }
+
+    /// Tell a Tentacle (that advertised `fragments`) this app reassembles
+    /// fragments, so it may send large payloads in small parts.
+    private func declareClientFeatures(to deviceId: String) {
+        guard let appState else { return }
+        _ = appState.sendEncryptedMessage([
+            "type": "client_features",
+            "deviceId": appState.deviceId ?? "",
+            "seq": 0,
+            "timestamp": ISO8601.now(),
+            "payload": ["features": [PayloadFragments.feature]],
+        ], routingTarget: deviceId, connectionScoped: true)
     }
 
     /// Build an agent slice array from a `device_greeting` payload.

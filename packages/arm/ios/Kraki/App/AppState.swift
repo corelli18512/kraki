@@ -854,7 +854,10 @@ final class AppState {
                 blob: blob.blob,
                 keys: blob.keys,
                 target: targetDeviceId,
-                connectionScoped: connectionScoped
+                connectionScoped: connectionScoped,
+                fragment: targetDeviceId.map {
+                    deviceStore.deviceFeatures[$0]?.contains(PayloadFragments.feature) == true
+                } ?? false
             )
             return true
         } catch {

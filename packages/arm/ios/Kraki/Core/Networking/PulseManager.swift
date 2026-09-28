@@ -51,6 +51,7 @@ final class PulseManager {
     static let transportActiveWindowMs = 30_000
     static let starvedStreamMaxMs = 300_000
     private var lastFrameAtMs: Int?
+    private let assembler = PayloadAssembler()
     /// Last time a DATA payload (not a heartbeat) was delivered to the app.
     private(set) var lastDeliveryAt: Date?
     private var starvedSinceMs: Int?
@@ -94,6 +95,8 @@ final class PulseManager {
         cancelTick()
         targetByStream.removeAll()
         connectionScopedLiveSeqs.removeAll()
+        outQueue.removeAll()
+        inflight.removeAll()
         (live, streams) = Self.makeEndpoints()
     }
 
@@ -105,12 +108,72 @@ final class PulseManager {
         blob: String,
         keys: [String: String],
         target: String?,
-        connectionScoped: Bool = false
+        connectionScoped: Bool = false,
+        fragment: Bool = false
     ) {
         guard let payload = try? JSONSerialization.data(
             withJSONObject: ["blob": blob, "keys": keys]
         ) else { return }
+        // Large payloads to a Tentacle that reassembles go as small ordered
+        // parts so a slow uplink keeps showing progress. Connection-scoped
+        // commands stay whole: a purge on disconnect must not leave a partial.
+        if fragment, !connectionScoped, target != nil, let parts = PayloadFragments.split(payload) {
+            for part in parts { outQueue.append(Queued(payload: part, target: target, connectionScoped: false)) }
+            pumpOutQueue()
+            return
+        }
+        // Keep order: nothing overtakes parts of an earlier payload still queued.
+        if !outQueue.isEmpty {
+            outQueue.append(Queued(payload: payload, target: target, connectionScoped: connectionScoped))
+            pumpOutQueue()
+            return
+        }
         sendPayload(payload, target: target, connectionScoped: connectionScoped)
+    }
+
+    // MARK: - Flow control for fragmented uploads
+    //
+    // Handing every part to the socket at once would put the whole payload in
+    // the kernel send buffer ahead of our own liveness ping: on a slow uplink
+    // the pong could not return before the ping deadline and the upload would
+    // be killed and restarted forever. Instead at most `windowBytes` of queued
+    // payload is unacknowledged by the Relay at a time; each Pulse ACK frees
+    // room (and is itself proof the link is moving).
+
+    private struct Queued { let payload: Data; let target: String?; let connectionScoped: Bool }
+    static let windowBytes = 100 * 1024  // three 32 KiB parts with their envelopes
+    /// Fail open if the Relay stops acknowledging (it never should).
+    static let windowStallSeconds: TimeInterval = 120
+    private var outQueue: [Queued] = []
+    /// Set from auth_ok (`pulseAckBytes`). Without prompt relay acks, pacing
+    /// would stall for a heartbeat interval per window, so parts go at once.
+    var acksPromptly = false
+    private var inflight: [(seq: UInt64, bytes: Int, sentAt: Date)] = []
+
+    #if DEBUG
+    var queuedForTesting: Int { outQueue.count }
+    var inflightBytesForTesting: Int { inflight.reduce(0) { $0 + $1.bytes } }
+    #endif
+
+    private func pumpOutQueue() {
+        if !acksPromptly {
+            while let next = outQueue.first {
+                outQueue.removeFirst()
+                sendPayload(next.payload, target: next.target, connectionScoped: next.connectionScoped)
+            }
+            inflight.removeAll()
+            return
+        }
+        if let oldest = inflight.first, Date().timeIntervalSince(oldest.sentAt) > Self.windowStallSeconds {
+            inflight.removeAll()
+        }
+        while let next = outQueue.first {
+            let used = inflight.reduce(0) { $0 + $1.bytes }
+            if !inflight.isEmpty, used + next.payload.count > Self.windowBytes { break }
+            outQueue.removeFirst()
+            let seq = sendPayload(next.payload, target: next.target, connectionScoped: next.connectionScoped)
+            inflight.append((seq, next.payload.count, Date()))
+        }
     }
 
     /// Head-bound control is plaintext by design: the authenticated head is the
@@ -125,17 +188,19 @@ final class PulseManager {
         return true
     }
 
+    @discardableResult
     private func sendPayload(
         _ payload: Data,
         target: String?,
         connectionScoped: Bool
-    ) {
+    ) -> UInt64 {
         let (seq, effects) = live.send([UInt8](payload), durable: false, coalesceKey: nil)
         if let target {
             targetByStream[Self.liveStream, default: [:]][seq] = target
         }
         if connectionScoped { connectionScopedLiveSeqs.insert(seq) }
         handle(effects)
+        return seq
     }
 
     // MARK: - Receive
@@ -166,6 +231,8 @@ final class PulseManager {
             generation += 1
             _ = streams.onDisconnected(nowMs)
         }
+        // Connection-scoped commands not yet handed to Pulse die with the connection.
+        outQueue.removeAll { $0.connectionScoped }
         // Even an attempt that never authenticated must retire scoped commands
         // queued during that attempt. Don't rearm endpoint reconnect deadlines.
         if !connectionScopedLiveSeqs.isEmpty {
@@ -220,14 +287,23 @@ final class PulseManager {
                 host?.sendPulseFrame(b64, target: target)
             case .deliver(_, let payload, _, _):
                 lastDeliveryAt = Date()
-                host?.onDelivered(json: String(decoding: payload, as: UTF8.self))
+                let (isFragment, whole) = assembler.accept(payload)
+                if isFragment {
+                    if let whole { host?.onDelivered(json: whole) }
+                } else {
+                    host?.onDelivered(json: String(decoding: payload, as: UTF8.self))
+                }
             case .acked(let seqUpTo):
                 // Arm business sends currently exist only on stream 0. Stream 1
                 // has no outbound DATA, so an acked effect is necessarily live.
                 pruneTargets(stream: Self.liveStream, through: seqUpTo)
                 connectionScopedLiveSeqs = connectionScopedLiveSeqs.filter { $0 > seqUpTo }
                 host?.onAcked(seqUpTo: seqUpTo)
+                inflight.removeAll { $0.seq <= seqUpTo }
+                pumpOutQueue()
             case .resetInbound(let fromSeq, let epoch):
+                // The peer restarted: parts of a payload in progress are gone.
+                assembler.clear()
                 host?.onResetInbound(fromSeq: fromSeq, epoch: epoch)
             case .open:
                 // WS owns physical retries. Never let stream deadlines replace auth.
@@ -252,6 +328,8 @@ final class PulseManager {
                     connectionScopedLiveSeqs.remove(seq)
                 }
                 targetByStream[Self.liveStream] = liveTargets.isEmpty ? nil : liveTargets
+                let dropped = Set(droppedSeqs)
+                inflight.removeAll { dropped.contains($0.seq) }
             case .store, .unstore:
                 break  // Arm is not durable-supported.
             }
