@@ -413,6 +413,110 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertEqual(cell.deliveryStatusForRegression, "Not delivered. Click to retry or delete")
     }
 
+    /// Voice correction rewrites the optimistic bubble many times. Each
+    /// revision must replace the text in place: no estimated-height pass, no
+    /// placeholder, and the Chat around it must not bounce.
+    func testCorrectingVoiceBubbleDoesNotBounceTheChat() throws {
+        let fx = try makeFixture(total: 30)
+        drain(1_200)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        let raw = "那个我想说的是就是登录页面那个报错信息现在全是英文的然后用户看不懂所以我们需要把它改成中文然后顺便看一下注册流程里面邮箱校验的那个边界情况还有密码强度提示也一起检查一下"
+        let corrected = "我想说的是：登录页面的报错信息现在全是英文，用户看不懂，所以需要改成中文。另外顺便检查注册流程里邮箱校验的边界情况，以及密码强度提示。"
+        let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: raw))
+        drain(600)
+        let fixed = Array(corrected), rawCount = raw.count
+        // Same staging rule as the shared voice composer: corrected prefix +
+        // the still-uncorrected raw tail, which is faded.
+        let updates: [(String, NSRange?)] = (1...24).map { step in
+            IOSVoiceComposer.staged(corrected: String(fixed.prefix(fixed.count * step / 24)), raw: raw,
+                                    covered: rawCount * step / 24, base: "", range: NSRange(location: 0, length: 0))
+        }
+        let r = recordCorrection(fx, sender: sender, clientId: clientId, original: raw, updates: updates)
+        XCTAssertTrue(r.spikes.isEmpty, "correcting bubble height flashed: \(r.spikes.prefix(6))")
+        XCTAssertTrue(r.shrinks.isEmpty, "correcting bubble shrank: \(r.shrinks.prefix(6))")
+        XCTAssertTrue(r.bounces.isEmpty, "Chat bounced during correction: \(r.bounces.prefix(6))")
+        XCTAssertEqual(r.placeholders, 0, "correcting bubble replaced by a placeholder")
+    }
+
+    /// `corrected prefix + raw tail` may wrap to one line fewer and back again
+    /// while correction streams. The row keeps its size (it may grow) until
+    /// the input leaves `correcting`, then settles once — as on iOS.
+    func testCorrectingVoiceBubbleNeverShrinksUntilSent() throws {
+        let fx = try makeFixture(total: 30)
+        drain(1_200)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        let line = "把登录页的错误提示改成中文，并检查注册流程里邮箱校验的边界情况。"
+        let long = String(repeating: line, count: 3), short = line
+        let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: long))
+        drain(600)
+        var updates: [(String, NSRange?)] = []
+        for _ in 0..<5 { updates += [(short, nil), (long, nil)] }
+        updates += [(String(repeating: line, count: 7), nil), (short, nil)]
+        let r = recordCorrection(fx, sender: sender, clientId: clientId, original: long, updates: updates)
+        XCTAssertTrue(r.shrinks.isEmpty, "correcting bubble shrank: \(r.shrinks.prefix(6))")
+        XCTAssertTrue(r.spikes.isEmpty, "correcting bubble height flashed: \(r.spikes.prefix(6))")
+        XCTAssertTrue(r.bounces.isEmpty, "Chat bounced during correction: \(r.bounces.prefix(6))")
+        XCTAssertEqual(r.placeholders, 0)
+        let grown = try XCTUnwrap(r.heights.last)
+        XCTAssertGreaterThan(grown, try XCTUnwrap(r.heights.first) + 30, "a correction that adds lines still grows the bubble")
+
+        // Once sent, the bubble takes its real (shorter) height in one step.
+        XCTAssertTrue(sender.dispatchStagedInput(sessionId: sid, clientId: clientId, text: short))
+        drain(500)
+        let cell = try XCTUnwrap(fx.doc.automationVisibleCells.last { $0.key.contains(":pending:") }?.cell)
+        XCTAssertLessThan(cell.frame.height, grown - 20, "after correction the bubble fits its sent text")
+        XCTAssertEqual(cell.frame.height, cell.configuredHeight(), accuracy: 0.5)
+        XCTAssertLessThanOrEqual(abs(distanceToBottom(fx)), 1, "the sent bubble stays at the newest edge")
+    }
+
+    struct CorrectionRecording {
+        var heights: [CGFloat] = [], shrinks: [String] = [], spikes: [String] = [], bounces: [String] = []
+        var placeholders = 0
+    }
+
+    /// Streams `updates` into a staged voice input and records, after every
+    /// Core Animation commit, the bubble height and the rows above it. Rows
+    /// above may only move up by exactly the bubble's growth (pinned to the
+    /// newest edge), never back down.
+    func recordCorrection(_ fx: Fx, sender: CommandSender, clientId: String, original: String,
+                          updates: [(String, NSRange?)]) -> CorrectionRecording {
+        let shots = recordFrames(fx) {
+            for (text, fade) in updates {
+                sender.updateStagedInput(sessionId: sid, clientId: clientId, text: text, original: original, uncorrected: fade)
+                drain(45)
+            }
+            drain(400)
+        }
+        var r = CorrectionRecording()
+        guard let key = shots.lazy.flatMap(\.rows.keys).first(where: { $0.contains(":pending:") }) else {
+            r.placeholders = shots.count
+            return r
+        }
+        r.heights = shots.compactMap { $0.rows[key]?.h }
+        let h = r.heights
+        for i in 1..<max(1, h.count) where h[i] < h[i - 1] - 0.5 {
+            r.shrinks.append(String(format: "f%d %.0f->%.0f", i, h[i - 1], h[i]))
+        }
+        for i in 1..<max(1, h.count - 1)
+        where abs(h[i] - h[i - 1]) > 0.5 && abs(h[i + 1] - h[i]) > 0.5 && (h[i] - h[i - 1]).sign != (h[i + 1] - h[i]).sign {
+            r.spikes.append(String(format: "f%d %.0f->%.0f->%.0f", i, h[i - 1], h[i], h[i + 1]))
+        }
+        for i in 1..<max(1, shots.count) {
+            guard let now = shots[i].rows[key], let before = shots[i - 1].rows[key] else { continue }
+            let growth = max(0, now.h - before.h)
+            for (other, row) in shots[i].rows where other != key {
+                guard let prior = shots[i - 1].rows[other] else { continue }
+                let move = row.y - prior.y
+                if abs(move) > 1, abs(move + growth) > 1 {
+                    r.bounces.append(String(format: "f%d row moved %.0f (bubble growth %.0f)", i, move, growth))
+                    break
+                }
+            }
+        }
+        r.placeholders = shots.filter { $0.rows[key] == nil && $0.placeholders > 0 }.count
+        return r
+    }
+
     // MARK: Navigation
 
     func testJumpControlsSitAboveSendAndUpRestsInDownSlot() throws {

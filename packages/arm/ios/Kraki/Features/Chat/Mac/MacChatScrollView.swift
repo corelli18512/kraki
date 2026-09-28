@@ -115,6 +115,11 @@ final class MacChatDocumentView: NSView {
         }
     }
     private var itemSignatures: [String] = []
+    /// Cache key → row height a correcting voice bubble may not drop below.
+    /// While correction streams, `corrected prefix + raw tail` can wrap to one
+    /// line fewer and back again; the row keeps its size (it may grow) until
+    /// the input leaves `correcting`, as on iOS (`allowShrink: !correcting`).
+    private var correctingHeightFloor: [String: CGFloat] = [:]
     private var indexByKey: [String: Int] = [:]
     private var indexBySeq: [Int: Int] = [:]
     private var validCacheKeys: Set<String> = []
@@ -373,6 +378,16 @@ final class MacChatDocumentView: NSView {
         let oldDisplayedHeightByKey = Dictionary(
             uniqueKeysWithValues: zip(oldKeys, itemFrames.map(\.height))
         )
+        let oldSignatureByKey = Dictionary(zip(oldKeys, itemSignatures), uniquingKeysWith: { a, _ in a })
+        // Only an exact, settled height can become a correcting floor; an
+        // estimate must never be locked in.
+        var oldExactHeightByKey: [String: CGFloat] = [:]
+        for (index, item) in contents.enumerated() where index < itemFrames.count && item.key.contains(":pending:") {
+            let key = cacheKey(item)
+            if heightCache[key] != nil, pendingHeights[key] == nil {
+                oldExactHeightByKey[item.key] = itemFrames[index].height
+            }
+        }
         stopLiveHeightAnimation()
         let oldVisible = visibleCells
         let oldVisibleSignatures = visibleSignatures
@@ -435,6 +450,8 @@ final class MacChatDocumentView: NSView {
             }
         }
         primeNewShortIdentities(oldKeys: oldKeys)
+        primeRewrittenRows(oldSignatureByKey: oldSignatureByKey, oldDisplayedHeightByKey: oldDisplayedHeightByKey)
+        updateCorrectingFloors(oldExactHeightByKey: widthChanged || modeChanged ? [:] : oldExactHeightByKey)
         // A live card keeps one logical identity while its text revision changes.
         // Carry the currently displayed height into the new signature so a token
         // update never collapses the bubble back to its capped estimate while the
@@ -563,10 +580,11 @@ final class MacChatDocumentView: NSView {
                                 forKey: key as NSString,
                                 cost: 16
                             )
-                            if abs((self.heightCache[key] ?? 0) - exactHeight) > 0.5 {
-                                self.pendingHeights[key] = exactHeight
+                            let target = self.floored(exactHeight, forKey: key)
+                            if abs((self.heightCache[key] ?? 0) - target) > 0.5 {
+                                self.pendingHeights[key] = target
                             } else {
-                                self.heightCache[key] = exactHeight
+                                self.heightCache[key] = target
                             }
                         }
                     }
@@ -1239,10 +1257,11 @@ final class MacChatDocumentView: NSView {
                                 forKey: key as NSString,
                                 cost: 16
                             )
-                            if abs((self.heightCache[key] ?? item.estimatedHeight) - exactHeight) > 0.5 {
-                                self.pendingHeights[key] = exactHeight
+                            let target = self.floored(exactHeight, forKey: key)
+                            if abs((self.heightCache[key] ?? item.estimatedHeight) - target) > 0.5 {
+                                self.pendingHeights[key] = target
                             } else {
-                                self.heightCache[key] = exactHeight
+                                self.heightCache[key] = target
                             }
                         }
                         if elapsedMs >= 16 {
@@ -1345,25 +1364,79 @@ final class MacChatDocumentView: NSView {
         }
         var primed = 0
         for item in fresh.reversed() {
-            let key = cacheKey(item)
-            guard heightCache[key] == nil else { continue }
+            guard heightCache[cacheKey(item)] == nil else { continue }
             guard primed < 4 else { break }
-            let content = resolvedContent(for: item)
-            // Action slots (tool / permission / open question) are measured by
-            // their hosted view once configured.
-            guard content.action == nil else { continue }
-            let artifact = content.body.flatMap {
-                MacCoreTextLayoutArtifact.cached(
-                    attributed: $0,
-                    width: content.bodyTextWidth,
-                    key: "\(item.key)|\(item.signature)|\(Int(documentWidth.rounded()))|\(sessionMode.rawValue)"
-                )
-            }
-            let exact = MacChatBubbleCell.height(for: content, bodyHeight: artifact?.height ?? 0)
-            heightCache[key] = exact
-            Self.exactHeightCache.setObject(NSNumber(value: Double(exact)), forKey: key as NSString, cost: 16)
-            primed += 1
+            if primeExactHeight(for: item) { primed += 1 }
         }
+    }
+
+    /// A row that keeps its identity while its text is rewritten in place — a
+    /// voice bubble being corrected, a pending input changing delivery state —
+    /// gets a new signature on every revision. Its new cache key has no height
+    /// yet, and falling back to the character-count estimate for even one
+    /// layout pass changes the document height: pinned to the newest edge,
+    /// the scroll offset is clamped and the whole Chat bounces by the
+    /// estimate error on every revision. Measure the short rewritten row now
+    /// (as `primeNewShortIdentities` does for new rows); if that is not
+    /// allowed (active scrolling, long text, action slot), keep the height it
+    /// is currently displayed at until its exact geometry commits.
+    private func primeRewrittenRows(
+        oldSignatureByKey: [String: String],
+        oldDisplayedHeightByKey: [String: CGFloat]
+    ) {
+        guard documentWidth > 1 else { return }
+        var primed = 0
+        for item in contents.reversed() where item.key != "__live__" {
+            guard let oldSignature = oldSignatureByKey[item.key], oldSignature != item.signature,
+                  heightCache[cacheKey(item)] == nil else { continue }
+            if !scrollInteractionActive, primed < 4, item.visibleCharacterCount <= 1_500,
+               primeExactHeight(for: item) {
+                primed += 1
+            } else if let displayed = oldDisplayedHeightByKey[item.key] {
+                heightCache[cacheKey(item)] = displayed
+            }
+        }
+    }
+
+    private func updateCorrectingFloors(oldExactHeightByKey: [String: CGFloat]) {
+        var floors: [String: CGFloat] = [:]
+        for item in contents where item.key.contains(":pending:") {
+            guard let floor = oldExactHeightByKey[item.key],
+                  resolvedContent(for: item).pendingDeliveryState == "correcting" else { continue }
+            let key = cacheKey(item)
+            floors[key] = floor
+            heightCache[key] = max(heightCache[key] ?? floor, floor)
+            if let pending = pendingHeights[key] {
+                if pending <= floor + 0.5 { pendingHeights.removeValue(forKey: key) }
+            }
+        }
+        correctingHeightFloor = floors
+    }
+
+    /// A correcting row's height may grow but never drop below its floor.
+    private func floored(_ height: CGFloat, forKey key: String) -> CGFloat {
+        max(height, correctingHeightFloor[key] ?? 0)
+    }
+
+    /// Exact height of a short non-action row, computed synchronously on main
+    /// (~1–3ms). Returns false for action slots, which are measured by their
+    /// hosted view once configured.
+    @discardableResult
+    private func primeExactHeight(for item: MacChatItem) -> Bool {
+        let key = cacheKey(item)
+        let content = resolvedContent(for: item)
+        guard content.action == nil else { return false }
+        let artifact = content.body.flatMap {
+            MacCoreTextLayoutArtifact.cached(
+                attributed: $0,
+                width: content.bodyTextWidth,
+                key: "\(item.key)|\(item.signature)|\(Int(documentWidth.rounded()))|\(sessionMode.rawValue)"
+            )
+        }
+        let exact = MacChatBubbleCell.height(for: content, bodyHeight: artifact?.height ?? 0)
+        heightCache[key] = floored(exact, forKey: key)
+        Self.exactHeightCache.setObject(NSNumber(value: Double(exact)), forKey: key as NSString, cost: 16)
+        return true
     }
 
     private func resolvedContent(for item: MacChatItem) -> MacChatBubbleContent {
@@ -1380,7 +1453,7 @@ final class MacChatDocumentView: NSView {
         for item: MacChatItem,
         cacheKey key: String
     ) -> Bool {
-        let exactHeight = cell.configuredHeight()
+        let exactHeight = floored(cell.configuredHeight(), forKey: key)
         guard abs((heightCache[key] ?? item.estimatedHeight) - exactHeight) > 0.5 else {
             heightCache[key] = exactHeight
             Self.exactHeightCache.setObject(
