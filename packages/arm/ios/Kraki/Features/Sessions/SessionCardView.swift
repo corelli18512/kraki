@@ -145,6 +145,17 @@ private struct SessionCardBody: View {
                     .truncationMode(.tail)
             }
 
+            if let effort = projection.effortLabel {
+                Text("· \(effort)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
+                    .accessibilityLabel("Reasoning effort: \(effort)")
+                    .accessibilityIdentifier("session-effort-\(session.id)")
+            }
+
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
