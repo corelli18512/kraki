@@ -74,6 +74,41 @@ final class MacSessionSidebarRevealTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(offset + visible, rowTop + rowHeight - 4, "the new row is fully visible")
     }
 
+    /// Deterministic form of the intermittent sidebar clipping: SwiftUI laid
+    /// the list out while a legacy scroller reserved a gutter, and the later
+    /// switch to Kraki's overlay scroller left the document 17 pt too narrow.
+    func testOverlaySwitchRestoresFullDocumentWidthAfterLegacyLayout() throws {
+        let host = NSHostingView(rootView: ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(0..<40, id: \.self) { i in
+                    Text("Row \(i)").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }
+            }
+        }.frame(width: 280, height: 400))
+        let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 280, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFrontRegardless()
+        windows.append(window)
+        drain(300)
+        let scroll = try XCTUnwrap(scrollView(in: host))
+        scroll.scrollerStyle = .legacy
+        scroll.hasVerticalScroller = true
+        scroll.tile()
+        host.layoutSubtreeIfNeeded()
+        drain(300)
+        let legacyWidth = scroll.documentView?.frame.width ?? 0
+        XCTAssertLessThan(legacyWidth, 279, "fixture: legacy scroller must reserve a gutter")
+        let controller = MacTransientOverlayScrollerController()
+        controller.attach(to: scroll)
+        drain(300)
+        XCTAssertEqual(scroll.scrollerStyle, .overlay)
+        XCTAssertEqual(scroll.contentView.bounds.width, 280, accuracy: 0.5)
+        XCTAssertEqual(scroll.documentView?.frame.width ?? 0, scroll.contentView.bounds.width, accuracy: 0.5,
+                       "overlay switch must re-propose the full width to the SwiftUI document")
+    }
+
     func testVisibleNewSessionDoesNotMoveTheSidebar() throws {
         let (app, sv) = try makeSidebar(pinned: 2)
         let before = sv.contentView.bounds.minY
