@@ -96,7 +96,7 @@ struct ThisMacSetupStep: View {
     private var agentsSummary: String {
         if check.isRunning { return "Checking…" }
         switch check.readyCount {
-        case 0: return "No agent is ready yet. You can also set one up later."
+        case 0: return "No agent is ready yet."
         case 1: return "1 agent is ready."
         default: return "\(check.readyCount) agents are ready."
         }
@@ -194,6 +194,20 @@ struct ThisMacSetupStep: View {
 
     // MARK: Actions
 
+    /// Running agents here needs at least one working agent and Full Disk
+    /// Access; without them the user can still skip (remote-only).
+    private var blockingReason: String? {
+        Self.blockingReason(isChecking: check.isRunning, readyAgents: check.readyCount, hasFullDiskAccess: hasFullDiskAccess)
+    }
+
+    static func blockingReason(isChecking: Bool, readyAgents: Int, hasFullDiskAccess: Bool) -> String? {
+        if readyAgents == 0 {
+            return isChecking ? "Checking the agents on this Mac…" : "Set up at least one coding agent, then click Check Again."
+        }
+        if !hasFullDiskAccess { return "Allow Full Disk Access to continue." }
+        return nil
+    }
+
     private var actions: some View {
         VStack(spacing: 8) {
             Button {
@@ -204,7 +218,14 @@ struct ThisMacSetupStep: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(Color.krakiPrimary)
+            .disabled(blockingReason != nil)
             .accessibilityIdentifier("mac.setup.thisMac.continue")
+
+            if let reason = blockingReason {
+                Text(reason)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Color.textMuted)
+            }
 
             Button {
                 check.cancel()

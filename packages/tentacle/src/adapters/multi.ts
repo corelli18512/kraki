@@ -11,6 +11,7 @@
  *  - Claude:  `@anthropic-ai/claude-agent-sdk` importable + `claude` CLI on PATH
  */
 
+import { findAppBundledCli } from '../agent-paths.js';
 import { execSync } from 'node:child_process';
 import { platform } from 'node:os';
 import type { ModelDetail, SessionUsage, AgentId, AgentCapabilities, Attachment } from '@kraki/protocol';
@@ -56,13 +57,7 @@ async function canImportClaudeSdk(): Promise<boolean> {
 }
 
 function cliExists(name: string): boolean {
-  try {
-    const cmd = platform() === 'win32' ? `where ${name}` : `which ${name}`;
-    execSync(cmd, { stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
+  return resolveCliPath(name) !== undefined;
 }
 
 /**
@@ -83,14 +78,15 @@ export function selectCliPath(output: string, os = platform()): string | undefin
     : paths[0];
 }
 
-function resolveCliPath(name: string): string | undefined {
+/** PATH first, then the CLI bundled in the agent's desktop app (see agent-paths.ts). */
+export function resolveCliPath(name: string): string | undefined {
   try {
     const cmd = platform() === 'win32' ? `where ${name}` : `which ${name}`;
     const out = execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
-    return selectCliPath(out);
-  } catch {
-    return undefined;
-  }
+    const onPath = selectCliPath(out);
+    if (onPath) return onPath;
+  } catch { /* not on PATH */ }
+  return findAppBundledCli(name);
 }
 
 /** Detect which agents can be started on this machine. */

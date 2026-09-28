@@ -35,7 +35,7 @@ final class LocalAgentsCheck {
         Agent(id: "claude", name: "Claude Code", status: .checking),
         Agent(id: "codex", name: "Codex", status: .checking),
         Agent(id: "copilot", name: "GitHub Copilot CLI", status: .checking),
-        Agent(id: "pi", name: "pi", status: .checking),
+        Agent(id: "pi", name: "Pi", status: .checking),
     ]
 
     private(set) var agents: [Agent] = LocalAgentsCheck.placeholders

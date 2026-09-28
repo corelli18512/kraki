@@ -15,7 +15,7 @@ final class ThisMacSetupSnapshot: XCTestCase {
             A(id: "claude", name: "Claude Code", status: .needsLogin, version: "2.1.220", hint: "Run `claude` in Terminal and sign in."),
             A(id: "codex", name: "Codex", status: .ready, version: "0.157.1", models: 7),
             A(id: "copilot", name: "GitHub Copilot CLI", status: .notInstalled, installURL: URL(string: "https://github.com/features/copilot/cli")),
-            A(id: "pi", name: "pi", status: .ready, version: "0.87.1", models: 6),
+            A(id: "pi", name: "Pi", status: .ready, version: "0.87.1", models: 6),
         ]
         let checking = LocalAgentsCheck.placeholders
         let none: [A] = mixed.map { var a = $0; a.status = .notInstalled; a.version = nil; return a }

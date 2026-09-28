@@ -10,6 +10,7 @@ import { promises as fsp, appendFileSync, mkdirSync, readFileSync, writeFileSync
 import { homedir, platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { input } from '@inquirer/prompts';
+import { findAppBundledCli } from './agent-paths.js';
 import chalk from 'chalk';
 
 /**
@@ -152,20 +153,28 @@ export const SETUP_AGENTS: ReadonlyArray<{ id: 'claude' | 'codex' | 'copilot' | 
   { id: 'claude', name: 'Claude Code', bin: 'claude', installUrl: 'https://code.claude.com/docs/en/setup' },
   { id: 'codex', name: 'Codex', bin: 'codex', installUrl: 'https://developers.openai.com/codex/cli' },
   { id: 'copilot', name: 'GitHub Copilot CLI', bin: 'copilot', installUrl: 'https://github.com/features/copilot/cli' },
-  { id: 'pi', name: 'pi', bin: 'pi', installUrl: 'https://github.com/earendil-works/pi#readme' },
+  { id: 'pi', name: 'Pi', bin: 'pi', installUrl: 'https://github.com/earendil-works/pi#readme' },
 ];
 
-/** Is `bin` runnable, and which version (leading semver when present)? */
-export function checkAgentCli(bin: string): CliCheckResult {
+/** Is `bin` runnable, and which version (leading semver when present)? Looks on
+ *  PATH, then inside the agent's desktop app (Codex / Claude, see agent-paths.ts). */
+export function checkAgentCli(bin: string): CliCheckResult & { path?: string } {
+  const parse = (output: string, path?: string) => {
+    const first = output.trim().split('\n')[0] ?? '';
+    const match = first.match(/(\d+\.\d+\.\d+)/);
+    return { found: true, version: match?.[1] ?? (first || undefined), ...(path && { path }) };
+  };
   try {
     // execSync (not execFile) so Windows resolves .cmd shims like the other checks.
-    const output = execSync(`${bin} --version`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000 }).trim();
-    const first = output.split('\n')[0] ?? '';
-    const match = first.match(/(\d+\.\d+\.\d+)/);
-    return { found: true, version: match?.[1] ?? (first || undefined) };
-  } catch {
-    return { found: false };
+    return parse(execSync(`${bin} --version`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000 }));
+  } catch { /* not on PATH */ }
+  const bundled = findAppBundledCli(bin);
+  if (bundled) {
+    try {
+      return parse(execFileSync(bundled, ['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000 }), bundled);
+    } catch { /* broken app install */ }
   }
+  return { found: false };
 }
 
 export function checkClaudeCli(): CliCheckResult {

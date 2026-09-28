@@ -220,4 +220,12 @@ final class BuiltInTentacleTests: XCTestCase {
         XCTAssertEqual(agents[0].hint, "Run `claude`")
         XCTAssertEqual(agents[3].status, .checking)
     }
+
+    func testContinueNeedsAWorkingAgentAndFullDiskAccess() {
+        typealias S = ThisMacSetupStep
+        XCTAssertNotNil(S.blockingReason(isChecking: true, readyAgents: 0, hasFullDiskAccess: true))
+        XCTAssertNotNil(S.blockingReason(isChecking: false, readyAgents: 0, hasFullDiskAccess: true))
+        XCTAssertEqual(S.blockingReason(isChecking: false, readyAgents: 1, hasFullDiskAccess: false), "Allow Full Disk Access to continue.")
+        XCTAssertNil(S.blockingReason(isChecking: true, readyAgents: 1, hasFullDiskAccess: true))
+    }
 }

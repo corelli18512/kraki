@@ -15,7 +15,7 @@ struct AgentInstallLink: Identifiable {
                          url: URL(string: "https://developers.openai.com/codex/cli")!),
         AgentInstallLink(id: "copilot", name: "GitHub Copilot CLI",
                          url: URL(string: "https://github.com/features/copilot/cli")!),
-        AgentInstallLink(id: "pi", name: "pi",
+        AgentInstallLink(id: "pi", name: "Pi",
                          url: URL(string: "https://github.com/earendil-works/pi#readme")!),
     ]
 }
