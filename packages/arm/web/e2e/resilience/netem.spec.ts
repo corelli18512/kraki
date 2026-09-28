@@ -1,5 +1,5 @@
 /**
- * Packet-level faults (tc netem: loss, jitter, reordering, duplication) and a
+ * Packet-level faults (tc netem: loss, jitter, reordering) and a
  * long randomized soak, for the web client against the local chaos stack.
  *
  *   N1–N4  need KRAKI_NETEM=1 (Linux CI with sudo; scripts/chaos/netem.sh)
@@ -39,7 +39,9 @@ test.describe('web under packet loss (netem)', () => {
     const m: Metrics = (results['N1 mobile network: 3% loss, jitter, reordering'] = {});
     const sid = await openSession(page);
     const before = await connections();
-    netem('app', 'delay 60ms 30ms distribution normal loss 3% reorder 5% 50% duplicate 1%');
+    // (No `duplicate`: the kernel forbids it with more than one netem in the
+    // tree, and TCP drops duplicate segments before the app anyway.)
+    netem('app', 'delay 60ms 30ms distribution normal loss 3% reorder 5% 50%');
     const texts = await chat(page, 'n1', 15, [1_000, 2_500]);
     await expectDelivered(page, sid, texts, 60_000, m);
     m.reconnects = (await connections()) - before;
@@ -172,7 +174,7 @@ test.describe('web soak', () => {
             'delay 60ms 30ms distribution normal loss 3% reorder 5% 50%',
             'delay 200ms 80ms distribution normal loss 5%',
             'delay 30ms 10ms loss 15%',
-            'delay 100ms duplicate 3% reorder 10% 50%',
+            'delay 100ms 20ms reorder 10% 50%',
           ]));
           healAt = Date.now() + between(20_000, 90_000);
           count('netem');
