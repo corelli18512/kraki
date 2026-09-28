@@ -13,6 +13,7 @@ struct IOSHTMLArtifactPreview: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
     @State private var loadedArtifactID: String?
+    @State private var exportURL: IOSReportExportItem?
 
     let selection: IOSSelectedHTMLArtifact
 
@@ -21,7 +22,7 @@ struct IOSHTMLArtifactPreview: View {
         let name = selection.ref.name?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let caption, !caption.isEmpty { return caption }
         if let name, !name.isEmpty { return name }
-        return "HTML Report"
+        return "Report"
     }
 
     var body: some View {
@@ -31,6 +32,18 @@ struct IOSHTMLArtifactPreview: View {
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    if let html = readyHTML {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button {
+                                if let url = try? HTMLReportExport.writeBrowserCopy(html: html, ref: selection.ref) {
+                                    exportURL = IOSReportExportItem(url: url)
+                                }
+                            } label: {
+                                Image(systemName: "square.and.arrow.up")
+                            }
+                            .accessibilityLabel("Open in Another App")
+                        }
+                    }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
                             dismiss()
@@ -41,13 +54,28 @@ struct IOSHTMLArtifactPreview: View {
                     }
                 }
         }
+        .sheet(item: $exportURL) { item in
+            IOSActivityView(items: [item.url])
+                .presentationDetents([.medium, .large])
+        }
         .task(id: selection.ref.id) {
             guard selection.ref.size <= HTMLArtifactSecurity.maxBytes else { return }
             appState.attachmentStore.requestIfNeeded(
                 id: selection.ref.id,
-                sessionId: selection.sessionId
+                sessionId: selection.sessionId,
+                priority: .userOpened
             )
         }
+        .onDisappear {
+            appState.attachmentStore.release(id: selection.ref.id, priority: .userOpened)
+        }
+    }
+
+    private var readyHTML: String? {
+        guard case .ready(let mimeType, let data) = appState.attachmentStore.state(for: selection.ref.id),
+              mimeType == "text/html",
+              data.count <= HTMLArtifactSecurity.maxBytes else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     @ViewBuilder
@@ -114,6 +142,23 @@ struct IOSHTMLArtifactPreview: View {
     }
 }
 
+private struct IOSReportExportItem: Identifiable {
+    let url: URL
+    var id: String { url.path }
+}
+
+/// System share sheet: lets the user open the standalone report in a
+/// browser-capable app or save it to Files when the viewer is not enough.
+private struct IOSActivityView: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
 private struct IOSHTMLArtifactWebView: UIViewRepresentable {
     let html: String
     let artifactID: String
@@ -137,7 +182,7 @@ private struct IOSHTMLArtifactWebView: UIViewRepresentable {
         webView.allowsBackForwardNavigationGestures = false
         webView.allowsLinkPreview = false
         webView.isInspectable = false
-        webView.accessibilityLabel = "HTML report content"
+        webView.accessibilityLabel = "Report content"
         context.coordinator.load(html: html, artifactID: artifactID, into: webView)
         return webView
     }
@@ -170,6 +215,9 @@ private struct IOSHTMLArtifactWebView: UIViewRepresentable {
             loadedHTML = html
             initialNavigationPending = true
             webView.stopLoading()
+            let scripts = webView.configuration.userContentController
+            scripts.removeAllUserScripts()
+            HTMLReportMermaid.install(into: scripts, for: html)
             webView.loadHTMLString(html, baseURL: nil)
         }
 

@@ -1166,7 +1166,7 @@ export class SessionManager {
         attachments?: unknown;
       };
       if (payload.success === false || payload.termination !== undefined) continue;
-      if (payload.toolName !== 'show_image' && payload.toolName !== 'show_html') continue;
+      if (payload.toolName !== 'show_image' && payload.toolName !== 'show_report' && payload.toolName !== 'show_html') continue;
       if (!Array.isArray(payload.attachments)) continue;
 
       for (const candidate of payload.attachments) {
@@ -1205,7 +1205,7 @@ export class SessionManager {
     return entries;
   }
 
-  private validTurnArtifact(candidate: unknown, toolName: 'show_image' | 'show_html'): ContentRef | null {
+  private validTurnArtifact(candidate: unknown, toolName: 'show_image' | 'show_report' | 'show_html'): ContentRef | null {
     if (!candidate || typeof candidate !== 'object') return null;
     const ref = candidate as Partial<ContentRef>;
     if (ref.type !== 'content_ref') return null;
@@ -1213,7 +1213,7 @@ export class SessionManager {
     if (typeof ref.mimeType !== 'string') return null;
     if (typeof ref.size !== 'number' || !Number.isFinite(ref.size) || ref.size < 0) return null;
     if (toolName === 'show_image' && !ref.mimeType.startsWith('image/')) return null;
-    if (toolName === 'show_html' && ref.mimeType !== 'text/html') return null;
+    if (toolName !== 'show_image' && ref.mimeType !== 'text/html') return null;
     if (ref.name !== undefined && typeof ref.name !== 'string') return null;
     if (ref.caption !== undefined && typeof ref.caption !== 'string') return null;
     if (ref.width !== undefined && (typeof ref.width !== 'number' || !Number.isFinite(ref.width) || ref.width < 0)) return null;

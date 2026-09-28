@@ -136,16 +136,18 @@ Its job is to:
 4. For each offline device with a registered token and a matching key in the preview, `head` sends the preview via the push service (APNs, FCM, or Web Push/VAPID).
 5. The device's service worker receives the push, decrypts the preview, and shows a notification with the actual content.
 
-### 6. Image attachments
+### 6. Attachments (images, reports, tool arguments/results)
 
-Image bytes travel as a separate chunked stream, not inline in activity messages.
+Attachment bytes travel as a separate chunked stream, never inline in activity messages, and only when a device actually needs them.
 
-1. The agent invokes the `kraki-show_image` MCP tool.
+1. The agent invokes `show_image` / `show_report`, or a tool produces large arguments/results.
 2. `tentacle` stores bytes content-addressed under `~/.kraki/sessions/<sid>/attachments/`.
-3. The `tool_complete` message carries an `AttachmentRef` (id, size, mime, caption) — never bytes.
-4. `tentacle` pushes bytes as `attachment_data` chunks (≤ 2 MB each) over the broadcast channel.
-5. Receivers decrypt, reassemble, write to IndexedDB (LRU-bounded cache).
-6. Late joiners send `request_attachment`; `tentacle` serves chunks on demand.
+3. The message carries a `ContentRef` (id, size, mime, caption) — never bytes. Nothing is pushed.
+4. A device requests bytes only when they are shown (an inline image, after a short on-screen dwell) or opened (a report, an expanded tool step), with `request_attachment {mode: "paced", index}`: one 128 KiB chunk per request, at most one chunk in flight per device, highest priority first (user-opened before merely visible). Transfers pause while the connection is not authenticated and resume at the first missing chunk.
+5. Older clients that request whole files are served by a rate-limited queue in `tentacle` (about 160 KiB/s of wire bytes, shared with paced traffic), so attachments cannot saturate the relay link in front of chat traffic and liveness pings.
+6. Receivers reassemble and cache bytes locally (native: `<caches>/kraki-attachments`; web: IndexedDB).
+
+`show_report` is a report viewer, not a browser: reports are text-first HTML (prose, tables, inline SVG, Mermaid source rendered by the client), at most 1 MB, without video/audio, external resources or inlined libraries. Native clients offer "Open in Browser" (macOS) / share (iOS) for content that needs a real browser.
 
 ## Trust boundaries
 

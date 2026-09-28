@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>断线风暴调查 · Mermaid 压力测试</title>
+<style>
+body{font:15px/1.65 -apple-system,system-ui,sans-serif;color:#1d2733;max-width:980px;margin:28px auto;padding:0 20px}
+h1{font-size:26px}h2{font-size:19px;margin-top:34px;border-bottom:1px solid #e3e8ee;padding-bottom:6px}
+table{border-collapse:collapse;width:100%;font-size:13.5px}td,th{border-bottom:1px solid #e6ebf0;padding:7px 9px;text-align:left}
+.note{background:#fff8e6;border-left:3px solid #e8b44a;padding:10px 14px}
+pre.mermaid{background:#fafbfc;border:1px solid #e6ebf0;border-radius:8px;padding:12px;overflow:auto}
+</style>
+</head>
+<body>
+<h1>断线风暴调查 · 复杂 Mermaid 渲染测试</h1>
+<p>本报告只含文字、表格和 Mermaid 源码。Mermaid 库由客户端注入，报告本身不内联任何脚本库、图片或视频。</p>
+
+<h2>1. 系统拓扑（约 40 个节点、6 个子图）</h2>
+<pre class="mermaid">
+flowchart LR
+  subgraph Home["家庭网络 192.168.50.0/24"]
+    direction TB
+    MacA["Mac · Kraki 0.2.44<br/>dev_147988d0"]
+    Tentacle["Tentacle 守护进程<br/>Pi · Claude · Copilot"]
+    Xray["xray 分流<br/>:2080 :2081 :2181"]
+    Hy["hysteria 隧道 :1080"]
+    iPhone["iPhone · iOS 0.1.11<br/>dev_04c9b55f"]
+    Store[("附件存储<br/>~/.kraki/sessions")]
+    Spool[("诊断 spool<br/>gzip 批次")]
+    MacA --> Xray
+    iPhone -->|PAC| Xray
+    Xray -->|geoip:cn direct| NET
+    Xray -->|境外| Hy
+    Tentacle --> Store
+    MacA --> Spool
+  end
+  subgraph Office["另一台 Mac"]
+    MacB["Mac · Kraki/35<br/>dev_bc1b4633"]
+  end
+  NET(("公网"))
+  subgraph CN["腾讯云 cn.relay · 2C/1.7G · ~3 Mbps 下行"]
+    direction TB
+    Nginx["nginx :443<br/>WebSocket 反代"]
+    Head["Head 0.18.0<br/>kraki-relay"]
+    Hub["pulse-hub<br/>live / bulk 双流"]
+    DB[("SQLite<br/>devices · pulse_outbox")]
+    Monitor["Monitor<br/>kraki-diag :4011"]
+    Logs[("/var/lib/kraki-diag")]
+    Nginx --> Head
+    Nginx -->|/api/diag/v1| Monitor
+    Head --> Hub
+    Head --> DB
+    Monitor -.->|只读 4 列| DB
+    Monitor --> Logs
+  end
+  subgraph JP["AWS 东京 relay"]
+    HeadJP["Head 0.17.4"]
+    MonJP["Monitor"]
+  end
+  subgraph Voice["语音"]
+    STT["cn.stt 语音识别"]
+    Lease["语音租约结算"]
+  end
+  subgraph Push["推送"]
+    APNs["APNs"]
+  end
+  NET --> Nginx
+  MacB --> NET
+  Tentacle -->|直连 wss| Nginx
+  Head --> APNs
+  Head --> Lease
+  iPhone -.-> STT
+  MacA -.-> STT
+  HeadJP -.-|无流量| NET
+  MonJP -.- HeadJP
+  classDef hot fill:#ffe9e6,stroke:#d9534f;
+  class Nginx,Hub hot;
+</pre>
+
+<h2>2. 一次断线风暴（时序）</h2>
+<pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant P as Pi agent
+  participant T as Tentacle
+  participant H as Head (cn)
+  participant A as Mac A
+  participant B as Mac B
+  participant I as iPhone
+  P->>T: show_html(chat.html 9.84 MB)
+  T->>T: attachmentStore.put
+  T->>H: tool_complete {turnArtifacts:[ref]}
+  H-->>A: tool_complete
+  H-->>B: tool_complete
+  H-->>I: tool_complete
+  Note over A,I: 每台设备 markAwaitingPush，10 秒计时
+  A->>H: request_attachment (整份)
+  B->>H: request_attachment (整份)
+  I->>H: request_attachment (整份)
+  H->>T: 转发 ×3
+  T-->>H: 40 块 × 256 KB × 3 设备
+  par 下行被占满
+    H-->>A: ~18 MB
+  and
+    H-->>B: ~18 MB
+  and
+    H-->>I: ~18 MB
+  end
+  H->>A: ping (排在大块数据后面)
+  Note right of H: 30 秒内没收到 pong
+  H--xA: Terminating stale connection
+  A->>A: ping_failed → reconnect
+  A->>H: auth → device_joined
+  H-->>T: device_joined
+  T-->>A: greeting + session_list
+  A->>H: request_attachment (再次)
+  Note over A,H: 循环直到传完或用户离开
+</pre>
+
+<h2>3. 客户端附件状态机（改造后）</h2>
+<pre class="mermaid">
+stateDiagram-v2
+  [*] --> Unknown
+  Unknown --> Cached: 磁盘命中
+  Unknown --> Queued: 用户打开 / 可见 300 ms
+  Queued --> Waiting: 未认证 / 重连中
+  Waiting --> Queued: 认证完成
+  Queued --> InFlight: 调度器选中（优先级最高）
+  InFlight --> InFlight: 收到第 n 块 → 请求 n+1
+  InFlight --> Paused: 被更高优先级抢占
+  Paused --> Queued
+  InFlight --> Queued: 块超时 / 断线（保留已收块）
+  InFlight --> Ready: 最后一块
+  Queued --> Unknown: 离开屏幕（取消）
+  Ready --> Cached
+  Cached --> [*]
+  InFlight --> Failed: not_found / too_large
+  Failed --> Queued: 用户点重试
+</pre>
+
+<h2>4. 组件关系</h2>
+<pre class="mermaid">
+classDiagram
+  class AttachmentStore {
+    +state(id) AttachmentState
+    +requestIfNeeded(id, session, priority)
+    +cancel(id)
+    -pendingChunks
+  }
+  class AttachmentScheduler {
+    -queue: PriorityQueue
+    -inFlight: Request?
+    +enqueue(ref, priority)
+    +onChunk(id, index, total)
+    +onConnectivity(ready)
+  }
+  class Priority {
+    &lt;&lt;enumeration&gt;&gt;
+    userOpened
+    visible
+    prefetch
+  }
+  class TentacleAttachmentSender {
+    +handleRequest(msg)
+    -legacyQueue
+    -tokenBucket
+  }
+  AttachmentStore --> AttachmentScheduler
+  AttachmentScheduler --> Priority
+  AttachmentScheduler ..> TentacleAttachmentSender : request_attachment(mode=paced)
+</pre>
+
+<h2>5. 数据模型</h2>
+<pre class="mermaid">
+erDiagram
+  SESSION ||--o{ MESSAGE : contains
+  MESSAGE ||--o{ CONTENT_REF : references
+  CONTENT_REF ||--|| ATTACHMENT_BLOB : "sha256 id"
+  CONTENT_REF {
+    string id
+    string mimeType
+    int size
+    string name
+    string caption
+  }
+  ATTACHMENT_BLOB {
+    bytes data
+    int chunkSize
+  }
+  DEVICE ||--o{ PULL_REQUEST : issues
+  PULL_REQUEST }o--|| CONTENT_REF : targets
+  PULL_REQUEST {
+    string mode
+    int index
+    string priority
+  }
+</pre>
+
+<h2>6. 修复排期</h2>
+<pre class="mermaid">
+gantt
+  dateFormat YYYY-MM-DD
+  title 附件与报告治理
+  section Agent (A/C)
+  show_report 规范与校验     :a1, 2026-09-28, 1d
+  旧客户端整份拉取限速      :a2, after a1, 1d
+  section 客户端 (B)
+  去掉自动拉取              :b1, 2026-09-28, 1d
+  分块限速 + 优先级调度      :b2, after b1, 2d
+  内置 Mermaid              :b3, 2026-09-28, 1d
+  在浏览器中打开            :b4, after b3, 1d
+  section 验证
+  弱网复现与回归            :v1, after b2, 2d
+</pre>
+
+<h2>7. 关键数据</h2>
+<table>
+<tr><th>指标</th><th>数值</th><th>说明</th></tr>
+<tr><td>中国节点下行</td><td>~0.35 MB/s</td><td>约 3 Mbps</td></tr>
+<tr><td>HTML 报告中位数</td><td>24 KB</td><td>254 份</td></tr>
+<tr><td>纯文字报告 p99</td><td>177 KB</td><td>最大 505 KB</td></tr>
+<tr><td>大报告体积占比</td><td>视频 45% · PNG 26% · JPEG 20%</td><td>46 份共 146 MB</td></tr>
+<tr><td>内联 Mermaid 库</td><td>3.56 MB/份</td><td>源码只有几 KB</td></tr>
+</table>
+<p class="note">结论：只要报告只含文字和 Mermaid 源码，即使有 6 张复杂图，体积也在几十 KB 量级，远低于 1 MB。</p>
+</body>
+</html>
