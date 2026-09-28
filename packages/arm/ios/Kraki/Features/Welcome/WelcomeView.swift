@@ -347,7 +347,7 @@ struct WelcomeView: View {
     /// remote sessions keep working: it was turned off in Login Items, or Full
     /// Disk Access is still missing.
     private var builtInAttentionCard: AnyView? {
-        guard tentacleCLI.mode == .builtIn else { return nil }
+        guard tentacleCLI.mode == .builtIn, BuiltInTentacle.thisMacRole != .remoteOnly else { return nil }
         if case .needsApproval = tentacleCLI.daemonState { return AnyView(loginItemsCard) }
         if case .running = tentacleCLI.daemonState, tentacleCLI.fdaStatus == "denied", !fdaReminderDismissed {
             return AnyView(fullDiskAccessCard)

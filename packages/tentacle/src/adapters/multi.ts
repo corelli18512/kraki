@@ -148,6 +148,48 @@ export interface MultiAgentAdapterOptions {
   krakiMcp?: { urlForSession: (sid: string) => string; bearerToken: string };
 }
 
+/**
+ * Build the adapter for one agent (not started). Shared by the daemon and by
+ * `kraki agents --json`, so the setup check exercises exactly what sessions
+ * will use. Returns null when the agent's CLI cannot be resolved.
+ */
+export async function createAgentAdapter(
+  id: AgentId,
+  adapterOpts: Pick<MultiAgentAdapterOptions, 'attachmentStore' | 'krakiMcp'> = {},
+): Promise<AgentAdapter | null> {
+  if (id === 'copilot') {
+    const { CopilotAdapter } = await import('./copilot.js');
+    return new CopilotAdapter(adapterOpts);
+  }
+  if (id === 'claude') {
+    const { ClaudeAdapter } = await import('./claude.js');
+    // Claude SDK uses createRequire(import.meta.url) and fileURLToPath to
+    // locate the bundled `claude` binary. Inside our SEA binary that path
+    // resolution fails (no node_modules next to the executable), so we
+    // resolve the system-installed `claude` path up-front and hand it to
+    // the adapter via pathToClaudeCodeExecutable.
+    return new ClaudeAdapter({ ...adapterOpts, claudeExecutablePath: resolveCliPath('claude') });
+  }
+  if (id === 'pi') {
+    const { PiAdapter } = await import('./pi.js');
+    const piPath = resolveCliPath('pi');
+    if (!piPath) { logger.warn('pi CLI path unresolved, skipping'); return null; }
+    // pi has no MCP; it only needs the attachment store to externalize
+    // image bytes from its show_image tool (krakiMcp is not applicable).
+    return new PiAdapter({ cliPath: piPath, attachmentStore: adapterOpts.attachmentStore });
+  }
+  if (id === 'codex') {
+    const { CodexAdapter } = await import('./codex.js');
+    const codexPath = resolveCliPath('codex');
+    if (!codexPath) { logger.warn('codex CLI path unresolved, skipping'); return null; }
+    // Kraki tools (ask_user / show_image / kraki_get_mode) are hosted by the
+    // adapter as Codex dynamic tools, so krakiMcp is not needed.
+    return new CodexAdapter({ cliPath: codexPath, attachmentStore: adapterOpts.attachmentStore });
+  }
+  logger.warn({ id }, 'Unknown agent ID, skipping');
+  return null;
+}
+
 // ── MultiAgentAdapter ───────────────────────────────────
 
 export class MultiAgentAdapter extends AgentAdapter {
@@ -176,41 +218,10 @@ export class MultiAgentAdapter extends AgentAdapter {
       ...(this.opts.krakiMcp && { krakiMcp: this.opts.krakiMcp }),
     };
 
-    // Claude SDK uses createRequire(import.meta.url) and fileURLToPath to
-    // locate the bundled `claude` binary. Inside our SEA binary that path
-    // resolution fails (no node_modules next to the executable), so we
-    // resolve the system-installed `claude` path up-front and hand it to
-    // the adapter via pathToClaudeCodeExecutable.
-    const claudeExecutablePath = ids.includes('claude') ? resolveCliPath('claude') : undefined;
-
     for (const id of ids) {
       try {
-        let adapter: AgentAdapter;
-        if (id === 'copilot') {
-          const { CopilotAdapter } = await import('./copilot.js');
-          adapter = new CopilotAdapter(adapterOpts);
-        } else if (id === 'claude') {
-          const { ClaudeAdapter } = await import('./claude.js');
-          adapter = new ClaudeAdapter({ ...adapterOpts, claudeExecutablePath });
-        } else if (id === 'pi') {
-          const { PiAdapter } = await import('./pi.js');
-          const piPath = resolveCliPath('pi');
-          if (!piPath) { logger.warn('pi CLI path unresolved, skipping'); continue; }
-          // pi has no MCP; it only needs the attachment store to externalize
-          // image bytes from its show_image tool (krakiMcp is not applicable).
-          adapter = new PiAdapter({ cliPath: piPath, attachmentStore: this.opts.attachmentStore });
-        } else if (id === 'codex') {
-          const { CodexAdapter } = await import('./codex.js');
-          const codexPath = resolveCliPath('codex');
-          if (!codexPath) { logger.warn('codex CLI path unresolved, skipping'); continue; }
-          // Kraki tools (ask_user / show_image / kraki_get_mode) are hosted by the
-          // adapter as Codex dynamic tools, so krakiMcp is not needed.
-          adapter = new CodexAdapter({ cliPath: codexPath, attachmentStore: this.opts.attachmentStore });
-        } else {
-          logger.warn({ id }, 'Unknown agent ID, skipping');
-          continue;
-        }
-
+        const adapter = await createAgentAdapter(id, adapterOpts);
+        if (!adapter) continue;
         this.wireCallbacks(id, adapter);
         await adapter.start();
         this.adapters.set(id, adapter);

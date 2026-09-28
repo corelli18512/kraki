@@ -9,6 +9,7 @@ import SwiftUI
 
 struct TentaclePane: View {
     @Environment(TentacleCLIManager.self) private var tentacleCLI
+    @AppStorage(BuiltInTentacle.thisMacRoleKey) private var runsAgentsHere = ""
 
     @AppStorage("tentacle.autostart") private var autostart: Bool = false
     @State private var switching = false
@@ -85,6 +86,16 @@ struct TentaclePane: View {
         .disabled(switching || (tentacleCLI.externalCLI == nil && tentacleCLI.mode == .builtIn))
 
         if tentacleCLI.mode == .builtIn {
+            Toggle("Run agents on this Mac", isOn: Binding(
+                get: { runsAgentsHere != BuiltInTentacle.ThisMacRole.remoteOnly.rawValue },
+                set: { on in
+                    runsAgentsHere = (on ? BuiltInTentacle.ThisMacRole.runsAgents : .remoteOnly).rawValue
+                    Task { await tentacleCLI.setRunsAgentsOnThisMac(on) }
+                }
+            ))
+            Text("When off, this Mac only controls agents on your other computers.")
+                .font(.caption)
+                .foregroundStyle(Color.textSecondary)
             LabeledContent("Version", value: tentacleCLI.builtIn.version ?? "unknown")
             if tentacleCLI.externalCLI != nil {
                 Text("The kraki CLI on this Mac stays usable for commands like `kraki status` and `kraki logs`; Kraki keeps the background daemon.")

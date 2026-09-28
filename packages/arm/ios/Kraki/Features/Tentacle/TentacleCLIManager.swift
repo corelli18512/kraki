@@ -223,6 +223,23 @@ final class TentacleCLIManager {
         }
     }
 
+    /// Settings → Tentacle "Run agents on this Mac": turn the built-in daemon
+    /// on (and remember it) or off (only control other computers from here).
+    func setRunsAgentsOnThisMac(_ on: Bool) async {
+        UserDefaults.standard.set(
+            (on ? BuiltInTentacle.ThisMacRole.runsAgents : .remoteOnly).rawValue,
+            forKey: BuiltInTentacle.thisMacRoleKey
+        )
+        if on {
+            await startDaemon()
+        } else {
+            daemonState = .stopping
+            do { try await builtIn.disable() } catch { lastError = error.localizedDescription }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            await refreshDaemonState()
+        }
+    }
+
     private var daemonIsRunningNow: Bool {
         if case .running = daemonState { return true }
         return false
@@ -329,6 +346,8 @@ final class TentacleCLIManager {
     func startDaemon() async {
         guard case .available(let path, _) = installState else { return }
         if mode == .builtIn {
+            // The user chose to only control other computers from this Mac.
+            guard BuiltInTentacle.thisMacRole != .remoteOnly else { return }
             await startBuiltIn()
             return
         }

@@ -175,29 +175,49 @@ final class BuiltInTentacleTests: XCTestCase {
         location: AppInstallLocation = .stable,
         configured: Bool = true,
         daemon: TentacleCLIManager.DaemonState = .running(pid: 1),
-        fda: String? = "granted",
-        skipped: Bool = false
+        role: BuiltInTentacle.ThisMacRole = .runsAgents
     ) -> BuiltInSetupView.Step {
         BuiltInSetupView.step(
             installState: install, location: location, configured: configured,
-            daemonState: daemon, fdaStatus: fda, fdaSkipped: skipped
+            daemonState: daemon, role: role
         )
     }
 
     func testSetupStepsInOrder() {
         XCTAssertEqual(step(install: .unknown), .detecting)
-        XCTAssertEqual(step(location: .translocated, configured: false), .moveToApplications(.translocated))
-        XCTAssertEqual(step(configured: false), .signIn)
+        XCTAssertEqual(step(location: .translocated, configured: false, role: .undecided), .moveToApplications(.translocated))
+        // 1. This Mac (agents + Full Disk Access) comes before sign-in.
+        XCTAssertEqual(step(configured: false, role: .undecided), .thisMac)
+        // 2. Sign-in, whichever way step 1 went.
+        XCTAssertEqual(step(configured: false, role: .runsAgents), .signIn)
+        XCTAssertEqual(step(configured: false, role: .remoteOnly), .signIn)
+        // 3. Background service, only when agents run here.
         XCTAssertEqual(step(daemon: .stopped), .background)
         XCTAssertEqual(step(daemon: .needsApproval), .background)
-        XCTAssertEqual(step(fda: "denied"), .fullDiskAccess)
-        XCTAssertEqual(step(fda: "denied", skipped: true), .done)
         XCTAssertEqual(step(), .done)
     }
 
-    func testSetupWaitsForTheDaemonsOwnFullDiskAccessReport() {
-        XCTAssertEqual(step(fda: nil), .background)
-        // No protected path exists on this account: nothing to ask for.
-        XCTAssertEqual(step(fda: "missing"), .done)
+    func testRemoteOnlyNeverStartsTheBackgroundService() {
+        XCTAssertEqual(step(daemon: .stopped, role: .remoteOnly), .done)
+    }
+
+    func testInstallsFromBeforeTheStepSkipIt() {
+        // Configured by an older build: no role stored, still runs agents.
+        XCTAssertEqual(step(daemon: .stopped, role: .undecided), .background)
+        XCTAssertEqual(step(role: .undecided), .done)
+    }
+
+    func testAgentCheckEventsFillTheRows() {
+        typealias C = LocalAgentsCheck
+        var agents = C.placeholders
+        agents = C.apply(line: #"{"event":"agent","id":"codex","name":"Codex","status":"ready","version":"0.157.1","models":7,"sampleModels":["gpt-6-luna"],"installUrl":"https://x"}"#, to: agents)
+        agents = C.apply(line: #"{"event":"agent","id":"claude","name":"Claude Code","status":"needs_login","hint":"Run `claude`","models":0,"installUrl":"https://x"}"#, to: agents)
+        agents = C.apply(line: #"{"event":"checking","id":"pi","name":"pi"}"#, to: agents)
+        XCTAssertEqual(agents.map(\.id), ["claude", "codex", "copilot", "pi"])
+        XCTAssertEqual(agents[1].status, .ready)
+        XCTAssertEqual(agents[1].models, 7)
+        XCTAssertEqual(agents[0].status, .needsLogin)
+        XCTAssertEqual(agents[0].hint, "Run `claude`")
+        XCTAssertEqual(agents[3].status, .checking)
     }
 }

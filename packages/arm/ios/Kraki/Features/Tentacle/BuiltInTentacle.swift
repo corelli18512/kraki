@@ -230,6 +230,41 @@ struct BuiltInTentacle {
         FileManager.default.fileExists(atPath: cliLaunchAgentPlist.path)
     }
 
+    // MARK: This Mac's role
+
+    /// What the user chose in setup's "Set up this Mac" step.
+    enum ThisMacRole: String {
+        /// Not asked yet (or an existing install from before the step existed).
+        case undecided = ""
+        /// Run the coding agents installed on this Mac (the built-in daemon).
+        case runsAgents = "agents"
+        /// Only control agents on other computers; no daemon on this Mac.
+        case remoteOnly = "remoteOnly"
+    }
+
+    static let thisMacRoleKey = "tentacle.thisMac"
+
+    static var thisMacRole: ThisMacRole {
+        ThisMacRole(rawValue: UserDefaults.standard.string(forKey: thisMacRoleKey) ?? "") ?? .undecided
+    }
+
+    // MARK: Full Disk Access (probed in-app)
+
+    /// Whether Kraki has Full Disk Access, without prompting. TCC attributes
+    /// the built-in daemon to this app, so the app's own access is the answer,
+    /// and it is available before the daemon ever runs. Same probe as the
+    /// tentacle's (checks.ts FDA_PROBE_TARGETS): read something only FDA opens.
+    static func hasFullDiskAccess(home: String = NSHomeDirectory()) -> Bool {
+        let fm = FileManager.default
+        for dir in ["Library/Safari", "Library/Mail"] {
+            let path = (home as NSString).appendingPathComponent(dir)
+            guard fm.fileExists(atPath: path) else { continue }
+            return (try? fm.contentsOfDirectory(atPath: path)) != nil
+        }
+        let tcc = (home as NSString).appendingPathComponent("Library/Application Support/com.apple.TCC/TCC.db")
+        return FileHandle(forReadingAtPath: tcc) != nil
+    }
+
     // MARK: System Settings
 
     static func openLoginItemsSettings() {

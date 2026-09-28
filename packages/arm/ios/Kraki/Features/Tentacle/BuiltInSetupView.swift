@@ -2,15 +2,19 @@
 ///
 /// Replaces "install the CLI and run `kraki connect`" for new users:
 ///
-///   1. Location   — refuse to run from a translocated/disk-image path
+///   0. Location   — refuse to run from a translocated/disk-image path
+///   1. This Mac   — which coding agents can run here (installed, signed in,
+///                   models available) and Full Disk Access. Skippable: the
+///                   user can use this Mac only to control other computers.
 ///   2. Sign in    — one click in the system web-auth window (device code as
-///                   fallback), driven by `kraki setup --json --oauth`
-///   3. Background — register the daemon with SMAppService (Login Items)
-///   4. Access     — Full Disk Access for Kraki, granted once (skippable)
+///                   fallback), driven by `kraki setup --json --oauth`. Not
+///                   skippable until a local-only mode exists.
+///   3. Background — register the daemon with SMAppService (Login Items),
+///                   unless step 1 was skipped
 ///
-/// Every step is derived from live state (install location, config, daemon
-/// status, daemon-reported FDA), so relaunching the app — which System
-/// Settings forces after an FDA grant — resumes at the right place.
+/// Every step is derived from live state (install location, stored choice,
+/// config, daemon status), so relaunching the app — which System Settings
+/// forces after a Full Disk Access grant — resumes at the right place.
 
 #if os(macOS)
 import AppKit
@@ -19,7 +23,7 @@ import SwiftUI
 struct BuiltInSetupView: View {
     @Environment(TentacleCLIManager.self) private var tentacleCLI
     @State private var runner = TentacleSetupRunner()
-    @AppStorage("tentacle.fdaSkipped") private var fdaSkipped = false
+    @AppStorage(BuiltInTentacle.thisMacRoleKey) private var thisMacRole = BuiltInTentacle.ThisMacRole.undecided.rawValue
     @State private var finished = false
 
     /// Called once the tentacle is configured and running; the caller retries
@@ -29,9 +33,11 @@ struct BuiltInSetupView: View {
     enum Step: Equatable {
         case detecting
         case moveToApplications(AppInstallLocation)
+        /// Step 1: which agents can run here + Full Disk Access. Skippable.
+        case thisMac
+        /// Step 2: sign in.
         case signIn
         case background
-        case fullDiskAccess
         case done
     }
 
@@ -40,32 +46,36 @@ struct BuiltInSetupView: View {
         location: AppInstallLocation,
         configured: Bool,
         daemonState: TentacleCLIManager.DaemonState,
-        fdaStatus: String?,
-        fdaSkipped: Bool
+        role: BuiltInTentacle.ThisMacRole
     ) -> Step {
         if case .unknown = installState { return .detecting }
         if location != .stable { return .moveToApplications(location) }
+        // Existing installs (configured before this step existed) skip it.
+        if !configured, role == .undecided { return .thisMac }
+        // Sign-in cannot be skipped yet: every Kraki client needs an account
+        // today. Once a local-only mode exists (use this Mac's agents without
+        // an account), make this step skippable too.
         if !configured { return .signIn }
+        if role == .remoteOnly { return .done }
         guard case .running = daemonState else { return .background }
-        // The worker publishes its own FDA probe a few seconds after start;
-        // deciding before that would skip the step on every first run.
-        guard let fdaStatus else { return .background }
-        if fdaStatus == "denied", !fdaSkipped { return .fullDiskAccess }
         return .done
+    }
+
+    private var role: BuiltInTentacle.ThisMacRole {
+        BuiltInTentacle.ThisMacRole(rawValue: thisMacRole) ?? .undecided
     }
 
     private var currentStep: Step {
         if case .done = runner.phase, tentacleCLI.configInfo?.exists != true {
             // Config was just written; the next status poll will confirm it.
-            return .background
+            return .signIn
         }
         return Self.step(
             installState: tentacleCLI.installState,
             location: tentacleCLI.installLocation,
             configured: tentacleCLI.configInfo?.exists == true,
             daemonState: tentacleCLI.daemonState,
-            fdaStatus: tentacleCLI.fdaStatus,
-            fdaSkipped: fdaSkipped
+            role: role
         )
     }
 
@@ -76,12 +86,16 @@ struct BuiltInSetupView: View {
                 ProgressView().controlSize(.small)
             case .moveToApplications(let location):
                 moveToApplications(location)
+            case .thisMac:
+                ThisMacSetupStep(
+                    binaryPath: tentacleCLI.builtIn.binaryPath,
+                    onContinue: { thisMacRole = BuiltInTentacle.ThisMacRole.runsAgents.rawValue },
+                    onSkip: { thisMacRole = BuiltInTentacle.ThisMacRole.remoteOnly.rawValue }
+                )
             case .signIn:
                 signIn
             case .background:
                 background
-            case .fullDiskAccess:
-                fullDiskAccess
             case .done:
                 ProgressView("Connecting…").controlSize(.small)
             }
@@ -97,7 +111,7 @@ struct BuiltInSetupView: View {
             guard case .done = phase else { return }
             Task {
                 await tentacleCLI.refreshDaemonState()
-                await tentacleCLI.startDaemon()
+                if role != .remoteOnly { await tentacleCLI.startDaemon() }
             }
         }
         .task {
@@ -133,7 +147,7 @@ struct BuiltInSetupView: View {
         switch runner.phase {
         case .idle, .failed:
             StepCard(
-                step: "Step 1 of 2",
+                step: "Step 2 of 2",
                 title: "Sign in",
                 detail: "Sign in with GitHub. The coding agents on this Mac become available here, on your phone and on your other computers."
             ) {
@@ -162,7 +176,7 @@ struct BuiltInSetupView: View {
             ProgressView("Contacting GitHub…").controlSize(.small)
         case .waitingForBrowser:
             StepCard(
-                step: "Step 1 of 2",
+                step: "Step 2 of 2",
                 title: "Continue in the sign-in window",
                 detail: "Approve Kraki on GitHub. If you're already signed in to GitHub, that's one click."
             ) {
@@ -184,7 +198,7 @@ struct BuiltInSetupView: View {
             }
         case .waitingForGitHub(let code, _):
             StepCard(
-                step: "Step 1 of 2",
+                step: "Step 2 of 2",
                 title: "Enter this code on GitHub",
                 detail: "The code is copied and GitHub is open in your browser. Paste it there and approve Kraki."
             ) {
@@ -243,37 +257,9 @@ struct BuiltInSetupView: View {
             ProgressView("Starting Kraki in the background…").controlSize(.small)
         }
     }
-
-    private var fullDiskAccess: some View {
-        StepCard(
-            step: "Step 2 of 2",
-            title: "Allow Full Disk Access",
-            detail: "Your agents read and edit files across your projects. Give Kraki Full Disk Access once, and macOS won't interrupt them with permission prompts again."
-        ) {
-            VStack(spacing: 10) {
-                HStack(spacing: 10) {
-                    Button("Open System Settings") { BuiltInTentacle.openFullDiskAccessSettings() }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color.krakiPrimary)
-                        .accessibilityIdentifier("mac.setup.openFDA")
-                    Button("Later") { fdaSkipped = true }
-                }
-                Text("Turn on “Kraki” in the list. If macOS offers to quit and reopen Kraki, choose Quit & Reopen.")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Color.textMuted)
-                    .multilineTextAlignment(.center)
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.mini)
-                    Text("Waiting for access…")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(Color.textMuted)
-                }
-            }
-        }
-    }
 }
 
-private struct StepCard<Actions: View>: View {
+struct StepCard<Actions: View>: View {
     var step: String? = nil
     let title: String
     let detail: String

@@ -82,6 +82,7 @@ function printHelp(): void {
   kraki resolve-relay --json [--github-token <tok>]
                        Resolve best relay + region as JSON
   kraki doctor         Print environment status as JSON
+  kraki agents --json  Check which coding agents can run here, as NDJSON
   kraki fda --json     Print macOS Full Disk Access status as JSON
   kraki fda --watch    Stream FDA status as NDJSON until granted
   kraki permissions    macOS TCC status (bundle registration + FDA) as JSON
@@ -1183,6 +1184,14 @@ async function main(): Promise<void> {
 
   if (cmd === 'fda') {
     await cmdFda(args);
+    return;
+  }
+
+  if (cmd === 'agents') {
+    const { runAgentsCheckJson } = await import('./agents-check.js');
+    process.exitCode = await runAgentsCheckJson();
+    // Adapters can leave child processes / timers behind; this is a one-shot probe.
+    gracefulExit(process.exitCode ?? 0);
     return;
   }
 
