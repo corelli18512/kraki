@@ -197,7 +197,7 @@
 - ~~URLSession 的 WebSocket 拿不到字节级进度，单个超大帧会被判为死链~~：已由第 10 节的消息切片解决。
 - 上行断但下行持续有数据时，客户端最多等 300 s；这种情况 Head 约 60 s 内会断开。
 - 未做：D3 iOS 前后台、D4 多设备、T3 netem 包级丢包/乱序和 8 h 浸泡、Web 客户端、TS mock-app 的协议级混沌。
-- Head 依赖的 `better-sqlite3` 11.x 在 macOS + Node 24.20 上，GC 回收语句对象时会触发原生断言崩溃（在 CI 上发现）。CI 已固定为生产 Head 使用的 Node 24.16。生产服务器升级 Node 前应先升级 `better-sqlite3`。
+- ~~Head 依赖的 `better-sqlite3` 11.x 在较新的 Node 24（24.20/24.21，macOS 和 Linux 都会）上回收语句对象时触发原生断言崩溃~~：第 10 节的改动中已把 Head 升到 13.0.3（与 `tests` 包一致；自带 linux/darwin 预编译二进制，要求 Node ≥ 22）。
 - coinfra 的推送发布会因 crypto/payments 没有配置可信发布而失败（原有问题）；`@coinfra/pulse` 0.5.1 通过新增的单独发布入口发出。
 
 ### CI
@@ -219,5 +219,7 @@
 - **Relay 及时确认**：Pulse 接收端平时只在自己发数据或 15 s 空闲心跳时才确认。Head 现在每收到 64 KB 就回一个带当前游标的心跳帧，并在 `auth_ok` 里声明 `pulseAckBytes`。只有认证时声明了 `pulseProgressAck` 的设备才会收到这种心跳：旧版 Pulse 看到落后的游标会整段重发。App 只有在 Head 声明了该能力时才启用流量控制，连旧 Head 时照旧把切片一次全部发出。
 
 结果：G1 零重连，约 87 s 送达（接近链路极限）；G2 零重连，约 86 s 往返；全部 23 个场景通过（种子 777，20 轮随机混沌）：`network-resilience-results/fragments-full-matrix-seed777.txt`。
+
+另外：CI 上反复出现 Head 测试进程在退出时崩溃（better-sqlite3 11.x + Node 24.21 的回收缺陷，崩溃位置随进程内对象分布而变化）。已把 Head 的 `better-sqlite3` 升到 13.0.3，同时消除了生产隐患。部署新 Head 时，服务器会使用自带的预编译二进制。
 
 已知限制：同一条 TCP 连接上存在队头阻塞。0.32 Mbit/s 下，大消息传输期间发出的聊天回显，要排在这条大消息后面才能到（G1 中约 87 s）。要改善，需要 Relay 在发送时让实时流优先于大块数据，属于后续工作。
