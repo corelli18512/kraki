@@ -4,19 +4,22 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { changedPaths, testScope } from './test-scope.mjs';
 
-const none = { typescript: false, native: false, binary: false };
-const all = { typescript: true, native: true, binary: true };
+const none = { typescript: false, native: false, binary: false, resilience: false };
+const all = { typescript: true, native: true, binary: true, resilience: true };
 const ts = { ...none, typescript: true };
-const native = { ...none, native: true };
+const native = { ...none, native: true, resilience: true };
 const binary = { ...ts, binary: true };
+const tentacle = { ...binary, resilience: true };
+const relay = { ...ts, resilience: true };
 for (const [name, paths, expected] of [
   ['docs do not launch platform tests', ['README.md', 'docs/a.md', 'packages/arm/ios/README.md'], none],
-  ['runtime markdown is not documentation', ['packages/tentacle/prompts/system.md'], binary],
+  ['runtime markdown is not documentation', ['packages/tentacle/prompts/system.md'], tentacle],
   ['native-only', ['packages/arm/ios/Kraki/App/AppState.swift'], native],
   ['vendor audio safety stays covered', ['packages/arm/ios/Vendor/VoiceInputCore/Package.swift'], native],
   ['web-only', ['packages/arm/web/src/App.tsx'], ts],
-  ['head-only', ['packages/head/src/relay.ts'], ts],
-  ['Windows adapter does not launch native apps', ['packages/tentacle/src/adapters/codex.ts'], binary],
+  ['head-only', ['packages/head/src/relay.ts'], relay],
+  ['chaos stack', ['packages/tests/src/chaos/proxy.ts', 'scripts/chaos/run-native.sh'], relay],
+  ['Windows adapter does not launch native apps', ['packages/tentacle/src/adapters/codex.ts'], tentacle],
   ['shared contract affects all clients', ['packages/protocol/src/types.ts'], all],
   ['lockfile', ['pnpm-lock.yaml'], all],
   ['CI rules', ['.github/workflows/ci.yml'], all],
@@ -25,10 +28,10 @@ for (const [name, paths, expected] of [
   ['unknown config is conservative', ['new-build-config.json'], all],
   ['installer', ['install.ps1'], binary],
   ['web installer copy', ['packages/arm/web/public/install.ps1'], binary],
-  ['daemon smoke script', ['packages/tentacle/scripts/daemon-release-smoke.mjs'], binary],
+  ['daemon smoke script', ['packages/tentacle/scripts/daemon-release-smoke.mjs'], tentacle],
   ['Windows E2E script', ['scripts/e2e/windows-installer.test.ps1'], binary],
   ['native diagnostics', ['scripts/diag/run-native-tests.sh'], native],
-  ['mixed files union their scopes', ['packages/head/src/a.ts', 'packages/arm/ios/project.yml'], { ...ts, native: true }],
+  ['mixed files union their scopes', ['packages/head/src/a.ts', 'packages/arm/ios/project.yml'], { ...relay, native: true }],
 ]) {
   test(name, () => assert.deepEqual(testScope(paths), expected));
 }
@@ -53,7 +56,7 @@ test('cross-package moves retain the source scope even when moved to docs', () =
     assert.ok(args.includes('--no-renames'));
     return 'packages/tentacle/src/removed.ts\0docs/removed.ts\0';
   });
-  assert.deepEqual(testScope(paths), binary);
+  assert.deepEqual(testScope(paths), tentacle);
 });
 test('missing push history requests conservative full coverage', () => {
   assert.equal(changedPaths({ before: '000000', after: 'b' }), null);

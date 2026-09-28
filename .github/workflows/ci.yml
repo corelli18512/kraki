@@ -21,7 +21,7 @@ jobs:
   validate:
     # Stable required check, also used by release.yml. Never hide a failed job.
     name: Validate
-    needs: [scope, test-typescript, test-ios, build-mac-gui, binary-daemon-launch, macos-daemon-launch]
+    needs: [scope, test-typescript, test-ios, build-mac-gui, test-network-resilience, binary-daemon-launch, macos-daemon-launch]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -36,7 +36,8 @@ jobs:
           assert results['scope']['result'] == 'success', results
           scope = results['scope']['outputs']
           groups = {'test-typescript': 'typescript', 'test-ios': 'native',
-                    'build-mac-gui': 'native', 'binary-daemon-launch': 'binary',
+                    'build-mac-gui': 'native', 'test-network-resilience': 'resilience',
+                    'binary-daemon-launch': 'binary',
                     'macos-daemon-launch': 'binary'}
           for job, group in groups.items():
               expected = 'success' if scope[group] == 'true' else 'skipped'
@@ -51,6 +52,7 @@ jobs:
       typescript: ${{ steps.scope.outputs.typescript }}
       native: ${{ steps.scope.outputs.native }}
       binary: ${{ steps.scope.outputs.binary }}
+      resilience: ${{ steps.scope.outputs.resilience }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -155,6 +157,64 @@ jobs:
           path: packages/arm/ios/build/DerivedData-iOS/Logs/Test/*.xcresult
           if-no-files-found: ignore
           retention-days: 7
+
+  test-network-resilience:
+    # Production Swift networking (Mac test host) against a local Head + real
+    # Tentacle behind a fault-injection proxy. Fast subset here; the full
+    # matrix and random chaos run nightly (network-resilience.yml).
+    name: Network resilience (fast)
+    needs: scope
+    if: needs.scope.outputs.resilience == 'true'
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install and build the local stack
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @kraki/protocol --filter @kraki/crypto --filter @kraki/head --filter @kraki/tentacle --filter @kraki/voice-broker build
+
+      - name: Chaos stack smoke (protocol level)
+        run: pnpm --filter @kraki/tests exec vitest run src/chaos/smoke.test.ts
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Network resilience scenarios
+        run: |
+          T=-only-testing:KrakiMacTests/NetworkResilienceTests
+          bash scripts/chaos/run-native.sh $T/test_S0_healthyBaseline $T/test_A1_flashReset \
+            $T/test_A2_outage15s $T/test_A3_halfOpen $T/test_B1_incidentProfile \
+            $T/test_C2_resetRightAfterSend $T/test_C6_relaunchWithUnconfirmedInput \
+            $T/test_D2_inboundDuringOutage $T/test_E1_headRestart $T/test_E2_tentacleOffline30s
+
+      - name: Upload resilience evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: network-resilience-fast
+          path: |
+            /tmp/kraki-chaos/results
+            /tmp/kraki-chaos/timeline.json
+            /tmp/kraki-chaos/stack.log
+            /tmp/kraki-chaos/xcode.log
+          if-no-files-found: ignore
+          retention-days: 14
 
   build-mac-gui:
     name: Build macOS GUI (KrakiMac)

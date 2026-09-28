@@ -1,6 +1,6 @@
 # Kraki 抗网络波动：测试方案（生产级目标）
 
-状态：设计稿（2026-09-28），分支 `test/network-resilience`，基于 main `985a310`。
+状态：已实施（2026-09-28），分支 `test/network-resilience`，基于 main `985a310`。结果见第 9 节。
 范围：iOS / Mac 客户端 ↔ Head，Tentacle ↔ Head。Web 端作为第二优先级复用同一套设施。
 
 ## 1. 目标：什么叫“生产级”
@@ -149,3 +149,56 @@
 - 不连生产 relay、不用你的账号与钥匙串身份、不产生付费模型调用、不访问麦克风。
 - 不修改你正在用的客户端与本机 daemon；测试栈使用独立端口与 `KRAKI_HOME`。
 - 本分支只做测试设施与方案；每项产品修复单独提 PR，附带由红转绿的场景证据。
+
+
+## 9. 结果（2026-09-28）
+
+测试设施（第 3 节）已落地：
+- `packages/tests/src/chaos/`：故障注入代理、本地服务栈（真实 Head、真实 Tentacle，agent 用确定性的脚本化适配器，零费用）、控制面。
+- `KrakiMacTests/NetworkResilienceTests.swift`：用生产网络栈（AppState/WebSocket/Pulse/CommandSender）跑 22 个场景。
+- `scripts/chaos/run-native.sh`：一键运行，输出每个场景的指标 JSON 和时间线。
+
+与计划的差异：agent 用脚本化适配器，没有用真实 Pi 加假模型。网络路径（RelayClient、SessionManager、Head）全部是真实实现，这样更确定、更快。
+
+### 基线（main 985a310）→ 修复后
+
+| 场景 | 基线 | 修复后 |
+|---|---|---|
+| A2 断网 45 s | 网络恢复后 16 s 才重连 | 0.7 s |
+| A3 半开 | 25 s 发现，但 20 s 已显示“未确认” | 25.6 s 发现，不误报 |
+| A4 仅上行断 | —（新场景）57 s，由 Head 踢掉 | 25.7 s |
+| B1 事故复现（3 Mbps + 旧客户端整份拉 2 MB） | 误杀 4 次，3 条消息 90 s 未确认 | 0 重连，回显 p95 0.88 s |
+| B1b 0.32 Mbps 持续占满 | 误杀、显示“未确认” | 0 重连，最大投递间隔 6.8 s |
+| B2 20 s 延迟尖峰 | 误杀 1 次 | 0 重连 |
+| C6 App 发送后被杀再启动 | 消息丢失 | 1.1 s 送达 |
+| A8 断网 3 min | — | 前 2 min 约 4 s 一次，之后约 15 s 一次（最后一分钟 4 次）|
+| E2b agent 离线 6 min（超过 Head 5 min 清理） | — | 恢复后 21 s 内送达 |
+| F 随机混沌（20 轮） | — | 0 丢、0 重、0 误报 |
+
+全部 22 个场景通过：`docs/network-resilience-results/final-full-matrix.txt`；基线原始输出：`baseline-main-985a310.txt`。
+
+### 修复（每项都有对应场景由红转绿，另有单元测试）
+
+1. **Pulse（`@coinfra/pulse` 0.5.1 + vendored Swift）**：对方游标在前进时，不再把在途数据当成丢失整段重发。这是拥塞下断线风暴的放大器：端点模型里 45 s 内旧实现重发 120 帧，新实现为 0。
+2. **Head**：pong 迟到时，如果客户端在 ping 之后还有帧，或者发送缓冲在减少，就不判死链，也不广播 `device_pending`。
+3. **客户端连接**：只有 pong 能了结自己发出的 ping（修复“仅上行断”发现不了的问题）；拥塞时只要仍有真实数据在投递，最多等 300 s；ping 超时 22 s、检查间隔 2 s；重连退避 0.5 s 起步，前 2 min 上限 4 s，然后 15 s，10 min 后 30 s，±20% 抖动；Pulse 某一路流被兄弟流“饿”时容忍到 300 s。
+4. **客户端发送**：重连后、agent 重新上线后、重启后自动重发（同一 `clientId`）；传输层暂时拒绝时排队，不再静默丢弃；“未确认”只按“链路通但 30 s 内没有任何数据投递”计时，满一半时静默重发一次。
+5. **Tentacle**：同一进程内已接收（排队或运行中）的输入被重试时，不再二次派发；重复输入会把已存储的 `user_message` 回显给请求方；重连改为指数退避加抖动（1 s → 30 s），认证成功后才清零。
+6. **UI**：“重连中”延迟 2 s 显示（`AppState.showsReconnecting`），瞬断不闪。
+
+### 目标调整（诚实记录）
+
+- G4“重连 ≤3 s”：服务端不可达、本机网络无变化时，由探测频率决定：最坏约 5 s（上限 4 s 加 20% 抖动）。实测 0.7–1.6 s。系统网络变化触发立即重连（NWPathMonitor）尚未实现。
+- 尾部丢包（连接内、发送端随后空闲）：修复需要 2 个心跳周期（≤30 s）而不是 1 个。这是为了不在拥塞时误重发做的取舍。
+
+### 尚未覆盖 / 已知限制
+
+- URLSession 的 WebSocket 拿不到字节级进度：单个帧传输超过约 25 s（例如 0.3 Mbps 下的 1 MB 消息）仍可能被判断为死链。根治需要把超大实时消息分块。
+- 上行断但下行持续有数据时，客户端最多等 300 s；这种情况 Head 约 60 s 内会断开。
+- 未做：D3 iOS 前后台、D4 多设备、T3 netem 包级丢包/乱序和 8 h 浸泡、Web 客户端、TS mock-app 的协议级混沌。
+- coinfra 的推送发布会因 crypto/payments 没有配置可信发布而失败（原有问题）；`@coinfra/pulse` 0.5.1 通过新增的单独发布入口发出。
+
+### CI
+
+- PR：`Network resilience (fast)`，约 10 个场景加服务栈冒烟，由 `resilience` 范围触发（Swift 客户端、Head、Tentacle、crypto、protocol、tests、scripts/chaos）。
+- 夜间和手动：`network-resilience.yml` 跑全部 22 个场景加随机混沌（默认 50 轮，种子为运行编号，可复现）。
