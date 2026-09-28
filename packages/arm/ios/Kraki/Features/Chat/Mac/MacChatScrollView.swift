@@ -565,9 +565,9 @@ final class MacChatDocumentView: NSView {
         }
     }
 
-    /// Runs a pending entrance the first time the bubble is on screen. The
-    /// animation is additive on the layer's presentation only, so frame and
-    /// height updates during streaming never fight it.
+    /// Runs a pending entrance the first time the bubble is on screen. It is
+    /// a Core Animation presentation-only transform/opacity, never the view
+    /// frame, so frame and height updates during streaming never fight it.
     private func runEntranceIfPending(_ cell: MacChatBubbleCell, key: String, onScreen: Bool) {
         guard onScreen, let entrance = pendingEntrances.removeValue(forKey: key),
               entrance.deadline > CACurrentMediaTime() else { return }
@@ -577,7 +577,6 @@ final class MacChatDocumentView: NSView {
         let slide = CABasicAnimation(keyPath: "transform.translation.x")
         slide.fromValue = (entrance.fromTrailing ? 1 : -1) * Self.entranceOffset
         slide.toValue = 0
-        slide.isAdditive = false
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = 0
         fade.toValue = 1
