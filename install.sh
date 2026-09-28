@@ -165,7 +165,8 @@ ensure_path_configured() {
       SHELL_NAME=$(basename "${SHELL:-/bin/sh}")
       PROFILE=""
       case "$SHELL_NAME" in
-        zsh)  PROFILE="$HOME/.zshrc" ;;
+        # macOS ships zsh without a ~/.zshrc; create it so `kraki` works in new shells.
+        zsh)  PROFILE="$HOME/.zshrc"; [ -f "$PROFILE" ] || : > "$PROFILE" ;;
         bash)
           if [ -f "$HOME/.bash_profile" ]; then PROFILE="$HOME/.bash_profile"
           elif [ -f "$HOME/.bashrc" ]; then PROFILE="$HOME/.bashrc"
