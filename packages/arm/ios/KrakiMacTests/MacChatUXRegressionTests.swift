@@ -401,16 +401,28 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertNil(fx.app.sessionStore.drafts[sid], "a sent message never returns to the composer")
     }
 
-    func testRejectedStagedHandoffStillShowsFailure() throws {
+    /// A corrected voice message the transport cannot take right now is
+    /// queued (shown as sending, never "failed") and goes out automatically
+    /// once transport accepts it, keeping its clientId.
+    func testRejectedStagedHandoffQueuesAndDispatchesLater() throws {
         let fx = try makeFixture(total: 20)
-        fx.app.testOutboundMessageHandler = { _, _, _ in false }
+        var accept = false
+        var sent: [String] = []
+        fx.app.testOutboundMessageHandler = { msg, _, _ in
+            guard accept else { return false }
+            sent.append(((msg["payload"] as? [String: Any])?["clientId"] as? String) ?? "")
+            return true
+        }
+        fx.app.commandSender?.confirmationTimeout = .seconds(10)
         drain(1_000)
         let clientId = try XCTUnwrap(fx.app.commandSender?.stageInput(sessionId: sid, text: "local handoff rejected"))
-        XCTAssertEqual(fx.app.commandSender?.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "local handoff rejected"), false)
+        XCTAssertEqual(fx.app.commandSender?.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "local handoff rejected"), true)
         drain(300)
         let cell = try XCTUnwrap(fx.doc.automationVisibleCells.last { $0.cell.content?.pendingClientId != nil }?.cell)
-        XCTAssertEqual(cell.content?.pendingDeliveryState, "failed")
-        XCTAssertEqual(cell.deliveryStatusForRegression, "Not delivered. Click to retry or delete")
+        XCTAssertEqual(cell.content?.pendingDeliveryState, "sending")
+        accept = true
+        drain(1_500)
+        XCTAssertEqual(sent, [clientId])
     }
 
     /// Voice correction rewrites the optimistic bubble many times. Each

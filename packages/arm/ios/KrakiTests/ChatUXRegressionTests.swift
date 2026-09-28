@@ -440,6 +440,7 @@ final class ChatUXRegressionTests: XCTestCase {
         drain(600)
         XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .unconfirmed,
                        "missing echo cannot prove delivery failure")
+        XCTAssertEqual(sends, 2, "one silent same-clientId resend halfway through the window")
         fx.vc.syncLiveUpdates()
         drain(100)
         let failedCell = fx.cv.visibleCells.compactMap { $0 as? TKBubbleCell }
@@ -448,7 +449,7 @@ final class ChatUXRegressionTests: XCTestCase {
                        "the visible bubble must state uncertainty, not false failure")
         let clientId = try XCTUnwrap(pending.payload["clientId"]?.stringValue)
         XCTAssertTrue(sender.retryPending(sessionId: sid, clientId: clientId))
-        XCTAssertEqual(sends, 2, "retry resends with the same clientId")
+        XCTAssertEqual(sends, 3, "retry resends with the same clientId")
         XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .sending)
 
         // Tentacle deduplicates retries and may not re-echo; the persisted
@@ -560,7 +561,7 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(voice.content, "original")
     }
 
-    func testSentOutboxRestoresUnconfirmedAndOrderedClearDoesNotResurrect() async throws {
+    func testSentOutboxRestoresAsSendingAndOrderedClearDoesNotResurrect() async throws {
         let fx = try makeFixture(total: 2)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("outbox-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -569,7 +570,8 @@ final class ChatUXRegressionTests: XCTestCase {
         let id = try XCTUnwrap(first.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
         await first.waitForOutboxWritesForTesting()
         let restored = CommandSender(appState: fx.app, outboxURL: url)
-        XCTAssertEqual(restored.pendingState(try XCTUnwrap(restored.pendingInputs(sid).first)), .unconfirmed)
+        XCTAssertEqual(restored.pendingState(try XCTUnwrap(restored.pendingInputs(sid).first)), .sending,
+                       "restored after relaunch and re-sent automatically on connect")
         for _ in 0..<20 { _ = first.sendInput(sessionId: sid, text: "synthetic") }
         first.clearAllPending(sid)
         await first.waitForOutboxWritesForTesting()
@@ -742,11 +744,26 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(loud, 1, accuracy: 0.01)
     }
 
-    func testSendFailureKeepsNothingOptimistic() throws {
-        let fx = try makeFixture(total: 4) { _ in false }
+    /// A transient transport refusal (reconnecting, Tentacle key not known
+    /// yet) must not drop what the user typed: it stays queued as sending and
+    /// goes out as soon as transport accepts it — with the same clientId.
+    func testTransientSendFailureQueuesAndDispatchesLater() throws {
+        var accept = false
+        var sent: [String] = []
+        let fx = try makeFixture(total: 4) { msg in
+            guard accept else { return false }
+            sent.append(((msg["payload"] as? [String: Any])?["clientId"] as? String) ?? "")
+            return true
+        }
+        fx.app.commandSender?.confirmationTimeout = .seconds(10)
         drain(300)
-        XCTAssertFalse(fx.app.commandSender?.sendInput(sessionId: sid, text: "x") == true)
-        XCTAssertTrue(fx.app.commandSender?.pendingInputs(sid).isEmpty == true)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "x"))
+        let pending = try XCTUnwrap(sender.pendingInputs(sid).first)
+        XCTAssertEqual(sender.pendingState(pending), .sending)
+        accept = true
+        drain(1_500)
+        XCTAssertEqual(sent, [pending.payload["clientId"]?.stringValue ?? "?"], "dispatched once the path accepts it")
     }
 
     // MARK: Questions (on the spine)
@@ -883,14 +900,17 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(width(.open), width(.answered), accuracy: 0.5)
     }
 
-    func testFailedAnswerKeepsTheQuestionAnswerable() throws {
+    /// An answer the transport cannot take right now is queued like any
+    /// message (never lost); it carries answerTo and goes out once possible.
+    func testAnswerDuringTransportRefusalIsQueuedWithAnswerTo() throws {
         let fx = try makeFixture(total: 4) { msg in (msg["type"] as? String) != "send_input" }
         drain(300)
         try startTurn(fx, seq: 5)
         try ask(fx, seq: 6, id: "q2")
-        XCTAssertFalse(fx.app.commandSender?.answer(sessionId: sid, questionId: "q2", answer: "B") == true)
-        fx.vc.syncLiveUpdates(); drain(100)
-        XCTAssertEqual(questionRow(fx, seq: 6), "\(sid):6#q-open")
+        XCTAssertTrue(fx.app.commandSender?.answer(sessionId: sid, questionId: "q2", answer: "B") == true)
+        let pending = try XCTUnwrap(fx.app.commandSender?.pendingInputs(sid).first)
+        XCTAssertEqual(pending.payload["answerTo"]?.stringValue, "q2")
+        XCTAssertEqual(fx.app.commandSender?.pendingState(pending), .sending)
     }
 
     /// Projection keeps a question that an aborted turn's terminal status

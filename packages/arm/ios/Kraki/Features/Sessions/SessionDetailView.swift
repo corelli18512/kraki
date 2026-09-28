@@ -127,7 +127,7 @@ struct SessionDetailView: View {
         // "Reconnecting…" so the user knows the chat is currently in a
         // stale-read state. Wording matches the ambient indicator on the
         // brand header.
-        let title = appState.isReconnecting ? "Reconnecting…" : session.displayTitle
+        let title = appState.showsReconnecting ? "Reconnecting…" : session.displayTitle
         return pageWithHeader(title: title, opensInfo: true) {
             ChatView(sessionId: sessionId)
         }

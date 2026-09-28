@@ -62,7 +62,14 @@ final class CommandSender {
     @ObservationIgnored private var confirmationTasks: [String: Task<Void, Never>] = [:]
     /// How long an input may stay unconfirmed while the transport and target
     /// device are online before its status becomes explicitly unconfirmed.
-    @ObservationIgnored var confirmationTimeout: Duration = .seconds(20)
+    @ObservationIgnored var confirmationTimeout: Duration = .seconds(30)
+    /// Inputs accepted from the user but not yet handed to transport (the
+    /// path was down or the Tentacle's key unknown). Dispatched on reconnect.
+    @ObservationIgnored private var undispatched = Set<String>()
+    /// Payload deliveries this recent mean the link is busy, not broken: an
+    /// echo queued behind a backlog legitimately takes longer. Heartbeats do
+    /// not count, so a quiet healthy link still surfaces a lost input.
+    static let busyLinkWindow: TimeInterval = 30
     /// Durable outbox (production only). Unconfirmed inputs survive process
     /// death and come back as retryable instead of silently disappearing.
     @ObservationIgnored private var outboxURL: URL?
@@ -138,8 +145,12 @@ final class CommandSender {
         let (pending, payload) = makePendingInput(sessionId: sessionId, clientId: clientId, text: text,
                                                   attachments: attachments, delivery: delivery,
                                                   answerTo: answerTo, state: .sending)
-        guard send(["type": "send_input", "payload": payload], sessionId: sessionId) else {
-            return false
+        // Signed out: nothing can ever deliver it. Anything else (reconnecting,
+        // the Tentacle's key not known yet) is transient: keep the input queued
+        // and dispatch it when the path is back instead of dropping it.
+        guard isSignedIn else { return false }
+        if !send(["type": "send_input", "payload": payload], sessionId: sessionId) {
+            undispatched.insert(clientId)
         }
         #if KRAKI_DIAG
         diagAccepted = true
@@ -282,9 +293,14 @@ final class CommandSender {
         var payload = outboundPayloads[clientId] ?? ["clientId": clientId]
         payload["text"] = text
         outboundPayloads[clientId] = payload
-        guard send(["type": "send_input", "payload": payload], sessionId: sessionId) else {
+        // A transient transport refusal queues it (sent on reconnect), like a
+        // typed message; only a signed-out app fails it.
+        guard isSignedIn else {
             setPendingState(sessionId, clientId: clientId, .failed)
             return false
+        }
+        if !send(["type": "send_input", "payload": payload], sessionId: sessionId) {
+            undispatched.insert(clientId)
         }
         setPendingState(sessionId, clientId: clientId, .sending)
         armConfirmationTimeout(sessionId: sessionId, clientId: clientId)
@@ -326,22 +342,102 @@ final class CommandSender {
         persistOutbox()
     }
 
-    /// Confirmation is the Tentacle echo. Time only counts while the Relay
-    /// connection and the target device are up: an offline device means the
-    /// input is legitimately queued ("will deliver when it reconnects").
+    /// Confirmation is the Tentacle echo. Only *stalled* time counts: the
+    /// Relay connection and the target device are up and no inbound traffic is
+    /// flowing. An offline device means the input is legitimately queued; a
+    /// busy link means the echo is behind a backlog. Halfway through, the input
+    /// is re-sent once with the same clientId (idempotent in Tentacle); only
+    /// after the full window is it shown as unconfirmed.
     private func armConfirmationTimeout(sessionId: String, clientId: String) {
         confirmationTasks[clientId]?.cancel()
         let timeout = confirmationTimeout
+        let step = min(Duration.seconds(1), timeout / 10)
         confirmationTasks[clientId] = Task { @MainActor [weak self] in
+            var stalled = Duration.zero
+            var resent = false
             while !Task.isCancelled {
-                try? await Task.sleep(for: timeout)
+                try? await Task.sleep(for: step)
                 guard !Task.isCancelled, let self,
                       self.outbox[sessionId]?[clientId] != nil else { return }
-                if self.isDeliveryPathUp(sessionId) {
+                guard self.isDeliveryPathUp(sessionId) else { continue }
+                if self.undispatched.contains(clientId) {
+                    // Accepted while the path was down: send as soon as it is up.
+                    self.redispatch(sessionId: sessionId, clientId: clientId, reason: "path_up")
+                    continue
+                }
+                guard !self.isLinkBusy else { continue }
+                stalled += step
+                if !resent, stalled >= timeout / 2 {
+                    resent = true
+                    self.redispatch(sessionId: sessionId, clientId: clientId, reason: "stalled")
+                }
+                if stalled >= timeout {
                     self.setPendingState(sessionId, clientId: clientId, .unconfirmed)
                     self.confirmationTasks[clientId] = nil
                     return
                 }
+            }
+        }
+    }
+
+    /// An input can eventually be delivered only by a signed-in app. Before
+    /// the first authentication of a cold launch the device id is not known
+    /// yet, but stored credentials mean it will be.
+    private var isSignedIn: Bool {
+        guard let appState else { return false }
+        #if DEBUG
+        if appState.testOutboundMessageHandler != nil { return true }
+        #endif
+        return appState.deviceId != nil || appState.hasStoredCredentials
+    }
+
+    private var isLinkBusy: Bool {
+        #if DEBUG
+        if appState?.testOutboundMessageHandler != nil { return false }
+        #endif
+        guard let last = appState?.pulseManager?.lastDeliveryAt else { return false }
+        return Date().timeIntervalSince(last) < Self.busyLinkWindow
+    }
+
+    /// Hand an existing pending input to transport again (same clientId).
+    /// Returns whether transport accepted it.
+    @discardableResult
+    private func redispatch(sessionId: String, clientId: String, reason: String) -> Bool {
+        guard let message = outbox[sessionId]?[clientId] else { return false }
+        var payload = outboundPayloads[clientId] ?? ["text": message.content ?? "", "clientId": clientId]
+        if payload["text"] == nil { payload["text"] = message.content ?? "" }
+        #if KRAKI_DIAG
+        KrakiDiag.record(.outbox, session: sessionId, [.clientId: .id(clientId), .phase: .tag("resend_\(reason)")])
+        #endif
+        guard send(["type": "send_input", "payload": payload], sessionId: sessionId) else {
+            undispatched.insert(clientId)
+            return false
+        }
+        undispatched.remove(clientId)
+        outboundPayloads[clientId] = payload
+        return true
+    }
+
+    /// Re-send every input still waiting for its echo — after this app
+    /// (re)authenticates, when a session's Tentacle comes back online, or after
+    /// a relaunch. Tentacle deduplicates by clientId and re-echoes, so this is
+    /// safe even when the first copy did arrive. Inputs still being corrected
+    /// or that failed locally are never sent automatically.
+    func resendPendingInputs(sessionId only: String? = nil, deviceId: String? = nil, reason: String) {
+        for (sessionId, bucket) in outbox {
+            if let only, only != sessionId { continue }
+            if let deviceId, appState?.sessionStore.sessions[sessionId]?.deviceId != deviceId { continue }
+            for (clientId, message) in bucket.sorted(by: {
+                ($0.value.payload["localOrder"]?.intValue ?? 0) < ($1.value.payload["localOrder"]?.intValue ?? 0)
+            }) {
+                let state = pendingState(message)
+                guard state == .sending || state == .unconfirmed else { continue }
+                // Not deliverable yet (session/Tentacle unknown right after a
+                // relaunch) stays queued; the armed timer sends it once the
+                // path is up.
+                redispatch(sessionId: sessionId, clientId: clientId, reason: reason)
+                setPendingState(sessionId, clientId: clientId, .sending)
+                armConfirmationTimeout(sessionId: sessionId, clientId: clientId)
             }
         }
     }
@@ -436,6 +532,7 @@ final class CommandSender {
         }
         confirmationTasks.removeValue(forKey: clientId)?.cancel()
         outboundPayloads.removeValue(forKey: clientId)
+        undispatched.remove(clientId)
         persistOutbox()
     }
 
@@ -514,9 +611,9 @@ final class CommandSender {
         }
     }
 
-    /// Previously sent inputs return as `unconfirmed`: whether
-    /// they reached Tentacle is unknown, retry is idempotent, and ones that did
-    /// land are removed if the echo is already cached, even without an open chat.
+    /// Previously sent inputs return as `sending` and are re-sent automatically
+    /// once connected (retry is idempotent by clientId); ones that did land are
+    /// removed if the echo is already cached, even without an open chat.
     private func restoreOutbox() {
         guard let outboxURL,
               let data = try? Data(contentsOf: outboxURL),
@@ -532,7 +629,7 @@ final class CommandSender {
                 "content": AnyCodable(item.text),
                 "clientId": AnyCodable(item.clientId),
                 "localState": AnyCodable(item.state == "failed" || item.state == "correcting"
-                    ? PendingState.failed.rawValue : PendingState.unconfirmed.rawValue),
+                    ? PendingState.failed.rawValue : PendingState.sending.rawValue),
                 "localOrder": AnyCodable(item.order),
             ]
             if let delivery = item.delivery { payload["delivery"] = AnyCodable(delivery) }

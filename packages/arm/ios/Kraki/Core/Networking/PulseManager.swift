@@ -44,6 +44,16 @@ final class PulseManager {
     /// COMPLETE logical messages and native WS ping/pong have different clocks.
     /// Allow bounded slow-message progress; pongs cannot mask a stuck stream forever.
     static let logicalProgressTimeoutMs = 120_000
+    /// A stream silent past its deadline while the socket keeps delivering
+    /// frames on the other stream is starved by a congested FIFO link, not
+    /// stuck. Tolerate that (frames within `transportActiveWindowMs`) up to an
+    /// absolute bound so a genuinely wedged stream is still recovered.
+    static let transportActiveWindowMs = 30_000
+    static let starvedStreamMaxMs = 300_000
+    private var lastFrameAtMs: Int?
+    /// Last time a DATA payload (not a heartbeat) was delivered to the app.
+    private(set) var lastDeliveryAt: Date?
+    private var starvedSinceMs: Int?
     private var nowMs: Int {
         #if DEBUG
         if let clockForTesting { return clockForTesting }
@@ -134,6 +144,7 @@ final class PulseManager {
     func onFrame(_ b64: String) {
         guard authenticated else { return }
         guard let data = Data(base64Encoded: b64) else { return }
+        lastFrameAtMs = nowMs
         handle(streams.onBytes([UInt8](data), nowMs))
     }
 
@@ -143,6 +154,8 @@ final class PulseManager {
         guard !authenticated else { return }
         authenticated = true
         generation += 1
+        lastFrameAtMs = nowMs
+        starvedSinceMs = nil
         handle(streams.onConnected(nowMs))
         scheduleTick()
     }
@@ -182,7 +195,9 @@ final class PulseManager {
 
     private func tick(epoch: Int) {
         guard authenticated, generation == epoch else { return }
-        handle(streams.onTick(nowMs))
+        let effects = streams.onTick(nowMs)
+        if !effects.contains(where: { if case .close = $0 { return true }; return false }) { starvedSinceMs = nil }
+        handle(effects)
         guard authenticated, generation == epoch else { return }
         scheduleTick()
     }
@@ -204,6 +219,7 @@ final class PulseManager {
                 let target = recoverTarget(forBytes: bytes)
                 host?.sendPulseFrame(b64, target: target)
             case .deliver(_, let payload, _, _):
+                lastDeliveryAt = Date()
                 host?.onDelivered(json: String(decoding: payload, as: UTF8.self))
             case .acked(let seqUpTo):
                 // Arm business sends currently exist only on stream 0. Stream 1
@@ -218,6 +234,12 @@ final class PulseManager {
                 break
             case .close:
                 guard authenticated else { return }
+                let now = nowMs
+                if let last = lastFrameAtMs, now - last < Self.transportActiveWindowMs {
+                    let since = starvedSinceMs ?? now
+                    starvedSinceMs = since
+                    if now - since < Self.starvedStreamMaxMs - Self.logicalProgressTimeoutMs { continue }
+                }
                 onDisconnected()
                 host?.requestPulseRecovery()
                 return // one physical recovery; discard remaining old effects

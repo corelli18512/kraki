@@ -67,7 +67,18 @@ final class TestPulseHost: PulseHost {
             if case .transmit(let bytes) = effect { manager.onFrame(Data(bytes).base64EncodedString()) }
         }
         manager.clockForTesting = 260_000; manager.tickForTesting()
-        check(host.recovery == 2, "one stuck stream cannot be masked by a healthy sibling")
+        check(host.recovery == 1, "a stream silent while its sibling delivers is starved by a congested FIFO link, not stuck")
+        // Sibling keeps delivering; the silent stream is still recovered at the absolute bound.
+        for time in [300_000, 360_000, 420_000] {
+            manager.clockForTesting = time
+            for effect in bulk.onTick(time) {
+                if case .transmit(let bytes) = effect { manager.onFrame(Data(bytes).base64EncodedString()) }
+            }
+            manager.tickForTesting()
+        }
+        check(host.recovery == 1, "tolerated below the starvation bound")
+        manager.clockForTesting = 445_000; manager.tickForTesting()
+        check(host.recovery == 2, "one stuck stream cannot be masked by a healthy sibling forever")
         manager.resetForIdentityChange(); manager.tickForTesting()
         check(!manager.tickActiveForTesting, "identity reset disables callbacks")
         manager.sendEncrypted(blob: "scoped-during-auth", keys: [:], target: nil, connectionScoped: true)
@@ -75,6 +86,6 @@ final class TestPulseHost: PulseHost {
         manager.onDisconnected()
         check(manager.connectionScopedCountForTesting == 0 && manager.liveOutboxSizeForTesting == 1,
               "failed auth still retires scoped commands, preserves ordinary retry")
-        print("PASS: production event forwarding + real PulseManager lifecycle (slow frame budget, single-stream stall, duplicate effects, auth isolation, timer reentrancy, identity reset)")
+        print("PASS: production event forwarding + real PulseManager lifecycle (slow frame budget, congestion starvation bound, single-stream stall, duplicate effects, auth isolation, timer reentrancy, identity reset)")
     }
 }
