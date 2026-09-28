@@ -1,6 +1,7 @@
 import XCTest
 import SwiftUI
 import AppKit
+import CryptoKit
 @testable import Kraki_Dev
 
 /// Production MacChatView + real AppKit/SwiftUI controls; synthetic speech and
@@ -88,6 +89,87 @@ import AppKit
         let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
         attachment.name = "mac-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
     }
+    func testSelectedD1CueIsBundledAndUnchanged() throws {
+        let data = try XCTUnwrap(NSDataAsset(name: "VoiceStartCue")?.data)
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(digest, "d16a5be4e7390c40225bd3024462212dfa26cd24a07080014f14c6794b6a3f9e")
+        let sound = try XCTUnwrap(NSSound(data: data))
+        XCTAssertEqual(sound.duration, 0.202, accuracy: 0.005)
+    }
+
+    func testSingleAndMultilinePaddingStaysOutsideScrollingViewport() throws {
+        let host = NSHostingView(rootView: MacChatComposer(sessionId: sid).environment(app))
+        host.sizingOptions = [.intrinsicContentSize]
+        window.contentView = host
+        window.setContentSize(NSSize(width: 820, height: 100))
+        var measurements: [[String: Any]] = []
+        func measure(_ name: String, voice: Bool, expectedHeight: CGFloat) throws {
+            drain(250)
+            // Avoid using a stale fitting size from the previously mounted
+            // full Chat view as the first window-height proposal.
+            window.setContentSize(NSSize(width: 820, height: expectedHeight + MacComposerMetrics.verticalPadding * 2))
+            drain(150)
+            host.layoutSubtreeIfNeeded()
+            let height = host.fittingSize.height - MacComposerMetrics.verticalPadding * 2
+            XCTAssertEqual(height, expectedHeight, accuracy: 0.5, name)
+            let scroll: NSScrollView
+            let drawn: CGRect
+            if voice {
+                let v = try XCTUnwrap(views(host).compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
+                scroll = try XCTUnwrap(v.enclosingScrollView)
+                drawn = v.convert(v.textDrawingRect, to: nil)
+                if name.contains("overflow") {
+                    XCTAssertGreaterThan(v.contentHeight, scroll.contentView.bounds.height)
+                    XCTAssertEqual(scroll.contentView.bounds.maxY, v.bounds.height, accuracy: 1)
+                }
+            } else {
+                let v = try XCTUnwrap(views(host).compactMap { $0 as? NSTextView }.first(where: { $0.isEditable }))
+                scroll = try XCTUnwrap(v.enclosingScrollView)
+                let c = try XCTUnwrap(v.textContainer)
+                let layout = try XCTUnwrap(v.layoutManager)
+                layout.ensureLayout(for: c)
+                let used = layout.usedRect(for: c).offsetBy(dx: v.textContainerOrigin.x, dy: v.textContainerOrigin.y)
+                drawn = v.convert(used, to: nil)
+            }
+            let viewport = scroll.contentView.convert(scroll.contentView.bounds, to: nil)
+            let top = MacComposerMetrics.verticalPadding + height - viewport.maxY
+            let bottom = viewport.minY - MacComposerMetrics.verticalPadding
+            XCTAssertEqual(top, MacComposerMetrics.textVerticalPadding, accuracy: 0.5, name)
+            XCTAssertEqual(bottom, MacComposerMetrics.textVerticalPadding, accuracy: 0.5, name)
+            let visible = drawn.intersection(viewport)
+            let topText = MacComposerMetrics.verticalPadding + height - visible.maxY
+            let bottomText = visible.minY - MacComposerMetrics.verticalPadding
+            if !name.contains("overflow") && !name.contains("trailing") {
+                XCTAssertEqual(topText, voice ? 8 : 9, accuracy: 0.5, name)
+                XCTAssertEqual(bottomText, voice ? 8 : 9, accuracy: 0.5, name)
+            }
+            measurements.append(["state": name, "capsuleHeight": height, "topSpace": topText,
+                                 "bottomSpace": bottomText, "viewportTopPadding": top, "viewportBottomPadding": bottom])
+            try capture("padding-fixed-" + name)
+        }
+        let samples: [(String, String, CGFloat)] = [
+            ("one", "第一行文字", 36), ("two", "第一行文字\n第二行文字", 54),
+            ("three", "第一行文字\n第二行文字\n第三行文字", 72),
+            ("overflow", String(repeating: "这是一段自动换行的中文文字。", count: 20), 72)
+        ]
+        for (name, text, height) in samples {
+            app.sessionStore.setDraft(sid, text)
+            try measure("typed-" + name, voice: false, expectedHeight: height)
+        }
+        app.sessionStore.setDraft(sid, "第一行文字\n")
+        try measure("typed-trailing-newline", voice: false, expectedHeight: 54)
+        app.sessionStore.setDraft(sid, "")
+        app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
+        drain(400)
+        XCTAssertTrue(app.iosVoiceComposer.isRecording)
+        for (name, text, height) in samples {
+            app.voiceInputController.debugApplyPartial(text)
+            try measure("voice-" + name, voice: true, expectedHeight: height)
+        }
+        try JSONSerialization.data(withJSONObject: measurements, options: [.prettyPrinted, .sortedKeys])
+            .write(to: URL(fileURLWithPath: "/tmp/kraki-voice-parity-evidence/padding-fixed.json"))
+    }
+
     func testSingleLineAndRecordingCapsulesMatchPrimaryHeight() throws {
         let host = NSHostingView(rootView: MacChatComposer(sessionId: sid).environment(app))
         window.contentView = host
@@ -104,7 +186,7 @@ import AppKit
         XCTAssertEqual(host.fittingSize.height, idleHeight, accuracy: 0.5,
                        "entering recording must not resize the composer")
         let transcript = try XCTUnwrap(views(host).compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
-        XCTAssertEqual(transcript.enclosingScrollView?.bounds.height ?? 0, MacComposerMetrics.control, accuracy: 0.5)
+        XCTAssertEqual(transcript.enclosingScrollView?.bounds.height ?? 0, MacComposerMetrics.minimumTextHeight, accuracy: 0.5)
         try capture("equal-height-recording")
         app.iosVoiceComposer.cancel()
         drain(300)
@@ -268,8 +350,8 @@ import AppKit
         try press("chat-voice-microphone")
         let transcript = try XCTUnwrap(views(window.contentView!).compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
         let initialFrame = transcript.convert(transcript.bounds, to: window.contentView)
-        XCTAssertGreaterThan(transcript.textDrawingRect.minY, 0, "short text must not sit at the top of its viewport")
         XCTAssertEqual(transcript.textDrawingRect.midY, transcript.bounds.midY, accuracy: 0.5)
+        XCTAssertEqual(transcript.enclosingScrollView?.bounds.height ?? 0, MacComposerMetrics.minimumTextHeight, accuracy: 0.5)
         let driver = IOSVoiceHoldScenarioFixture.driver
         for _ in 0..<40 { driver.emitLevel(0) }
         drain(300)

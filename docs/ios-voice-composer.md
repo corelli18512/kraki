@@ -116,7 +116,7 @@ failure → original, relaunch). `KrakiVoiceUITests` drives the real composer.
 for `onFinal` to fill a draft. While recording the primary control sends voice
 including free-form answers through main PR #317's `answerTo` path. Only
 permission denial returns to the editor for review. Recording Send never
-aborts the agent. Cancel and Edit remain inside the single-row capsule.
+aborts the agent. Cancel and Edit remain inside the capsule, bottom-aligned.
 Send immediately frees the editor and stages a bubble; typed follow-ups can be
 composed but cannot overtake the correcting message. The mic shows progress.
 
@@ -130,7 +130,7 @@ Native caret/selection restoration follows the utterance; real typing or caret
 interaction takes over from a late draft correction. Session departure preserves
 the original owner. Mac does not adopt iOS's app-inactive recording policy.
 
-Mac flattens iPhone's recording surface into one row: disabled image icon or
+Mac uses a compact recording surface: disabled image icon or
 existing thumbnail on the left, read-only transcript in the middle, labeled
 Cancel and Edit on the right. No mic icon is shown while recording. The
 separate primary circle remains Send. A low-opacity waveform fills only the
@@ -138,22 +138,37 @@ middle transcript area, excluding the image slot and Cancel/Edit controls.
 Both horizontal edges fade to transparent over 12% of its width. Interpolated
 microphone levels drive its spring animation (using iPhone's shared dB loudness
 mapping, not a canned animation). The background does not participate in
-layout or hit testing. Short transcripts
-are vertically centered in the two-line viewport; longer ones retain native
-tail scrolling. iPhone retains its two-row layout, compact meter and timer.
+layout or hit testing. The single-line capsule and primary/jump circles are
+36 pt. Both typed and voice text expand upward to a three-line cap (36 / 54 /
+72 pt for the tested 15 pt font), then scroll inside their viewport. The same
+8 pt vertical padding stays OUTSIDE the viewport, including during overflow;
+TextKit additionally retains its 1 pt caret inset on every line. Image and
+Cancel/Edit controls stay at the bottom row. Short transcripts remain centered.
+iPhone retains its two-row layout, compact meter and timer.
 
-The release branch includes main through `6e59671` (PR #317, #320 and #321). iOS's already-fixed
+Mac's start cue is the user-selected original D1 warm single tone: 520 Hz,
+150 ms designed sound plus 52 ms silence, packaged as `VoiceStartCue` in the
+asset catalog. The WAV is byte-identical to the approved audition (SHA-256
+`d16a5be4e7390c40225bd3024462212dfa26cd24a07080014f14c6794b6a3f9e`).
+It replaces Hero; an unavailable cue now fails silently rather than beeping.
+The cue still indicates the start action, not a guarantee that capture is ready.
+iOS has no new start sound.
+
+The current work includes main through `5116a9e` (including PR #324). iOS's already-fixed
 free-form answer behavior is preserved, not reimplemented. A Mac native test
 checks question ID on both the correcting bubble and the final transport
 payload, with no steer flag even when the agent is active.
 
-`KrakiMacTests` also runs all 28 shared transaction tests. Its ten
+`KrakiMacTests` also runs all 28 shared transaction tests. Its thirteen
 `MacVoiceComposerTests` use the production chat in an isolated native window,
 real mouse events and native bubble menus, with synthetic speech/captured
 transport. They cover recording send, steer, cancel, edit/caret, latest-original
 send/delete, image restoration, ordered follow-ups, disabled recording
 thumbnails, free-form voice answers, and real level-event updates without
-moving the centered text or intercepting controls. Screenshots are not a
+moving the centered text or intercepting controls. They also verify exact D1
+asset bytes/playability, single-row size stability, and actual viewport/text
+padding for one/two/three lines, trailing newline, natural wrapping and overflow.
+Screenshots are not a
 physical microphone or live-network acceptance test.
 
 ## Physical acceptance before publication

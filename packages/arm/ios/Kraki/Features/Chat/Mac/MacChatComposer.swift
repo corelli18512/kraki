@@ -36,6 +36,10 @@ enum MacComposerMetrics {
     /// bordered glass control against the solid circle).
     static let stackGap: CGFloat = 9
     static let verticalPadding: CGFloat = 6
+    /// Outside the scrolling viewport: retained even when text scrolls.
+    static let textVerticalPadding: CGFloat = 8
+    static let maxVisibleTextLines: CGFloat = 3
+    static var minimumTextHeight: CGFloat { capsuleHeight - textVerticalPadding * 2 }
     /// Distance from the chat bottom to the bottom of the ↓ jump control.
     static var jumpControlBottom: CGFloat {
         verticalPadding + (capsuleHeight - control) / 2 + control + stackGap
@@ -85,10 +89,8 @@ struct MacChatComposer: View {
 
     private static let inputBoxHeight: CGFloat = MacComposerMetrics.capsuleHeight
     private static let voiceStartSound: NSSound? = {
-        let sound = NSSound(
-            contentsOfFile: "/System/Library/Sounds/Hero.aiff",
-            byReference: false
-        )
+        guard let data = NSDataAsset(name: "VoiceStartCue")?.data else { return nil }
+        let sound = NSSound(data: data)
         sound?.volume = 1.0
         return sound
     }()
@@ -275,7 +277,7 @@ struct MacChatComposer: View {
     private var inputBox: some View {
         Group {
             if voiceOwnsComposer {
-                HStack(spacing: 0) {
+                HStack(alignment: .bottom, spacing: 0) {
                     imageSlot
                     MacComposerVoiceSurface(
                         controller: voiceController,
@@ -285,7 +287,7 @@ struct MacChatComposer: View {
                     )
                 }
             } else {
-                HStack(alignment: .center, spacing: 0) {
+                HStack(alignment: .bottom, spacing: 0) {
                     imageSlot
                     textFieldForMode
                     if hasText || hasImage { clearButton }
@@ -354,6 +356,7 @@ struct MacChatComposer: View {
             )
             .padding(.leading, 0)
             .padding(.trailing, 4)
+            .padding(.vertical, MacComposerMetrics.textVerticalPadding)
         }
         .frame(maxWidth: .infinity)
         .onPasteCommand(
@@ -519,14 +522,13 @@ struct MacChatComposer: View {
 
     private static func playVoiceStartCue() {
         guard let sound = voiceStartSound else {
-            KLog.diag("🎙️ [voice] start cue unavailable; using system alert")
-            NSSound.beep()
+            KLog.diag("🎙️ [voice] start cue unavailable; continuing silently")
             return
         }
         sound.stop()
         let played = sound.play()
         KLog.diag("🎙️ [voice] start cue played=\(played)")
-        if !played { NSSound.beep() }
+        // A missing/unplayable cue must not become an unrelated warning beep.
     }
 
     /// Single image: the attach icon itself becomes the thumbnail (click to
@@ -859,7 +861,9 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
 
     private static let font = NSFont.systemFont(ofSize: 15)
     private static let lineHeight = ceil(NSLayoutManager().defaultLineHeight(for: font))
-    private static let verticalPadding: CGFloat = 4
+    // One point for the text/caret; the stable visual padding lives outside
+    // the scroll view so it remains present at every scroll position.
+    private static let verticalPadding: CGFloat = 1
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: MacComposerScrollableTextInput
@@ -1107,25 +1111,24 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
     ) -> CGSize? {
         let width = max(1, proposal.width ?? nsView.frame.width)
         let measured = Self.measuredHeight(text, width: width)
-        let minHeight = Self.lineHeight + Self.verticalPadding * 2
-        let maxHeight = Self.lineHeight * 3 + Self.verticalPadding * 2
+        let minHeight = MacComposerMetrics.minimumTextHeight
+        let maxHeight = Self.lineHeight * MacComposerMetrics.maxVisibleTextLines + Self.verticalPadding * 2
         return CGSize(width: width, height: min(max(measured, minHeight), maxHeight))
     }
 
     private static func measuredHeight(_ text: String, width: CGFloat) -> CGFloat {
-        let attributed = NSAttributedString(
-            string: text.isEmpty ? " " : text,
-            attributes: [.font: font]
-        )
-        let framesetter = CTFramesetterCreateWithAttributedString(attributed)
-        let suggested = CTFramesetterSuggestFrameSizeWithConstraints(
-            framesetter,
-            CFRange(location: 0, length: attributed.length),
-            nil,
-            CGSize(width: max(1, width - 8), height: .greatestFiniteMagnitude),
-            nil
-        )
-        return ceil(suggested.height) + verticalPadding * 2
+        // Measure with the same TextKit layout as NSTextView, including an
+        // empty trailing line. CoreText's extra rounding used to change the
+        // apparent padding when the editor grew from one line to two.
+        let storage = NSTextStorage(string: text.isEmpty ? " " : text, attributes: [.font: font])
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: max(1, width - 8), height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        layout.ensureLayout(for: container)
+        let height = max(layout.usedRect(for: container).maxY, layout.extraLineFragmentRect.maxY)
+        return max(lineHeight, ceil(height)) + verticalPadding * 2
     }
 }
 
@@ -1175,12 +1178,22 @@ private struct MacComposerVoiceSurface: View {
     let preview: (prefix: String, spoken: String, suffix: String)
     let onFinish: () -> Void
     let onCancel: () -> Void
+    @State private var transcriptWidth: CGFloat = 0
+
+    private var viewportHeight: CGFloat {
+        guard transcriptWidth > 1 else { return MacComposerMetrics.minimumTextHeight }
+        return min(
+            max(MacComposerMetrics.minimumTextHeight, MacComposerVoiceTranscriptView.measure(displayedPieces, width: transcriptWidth)),
+            MacComposerMetrics.minimumTextHeight + MacComposerVoiceTranscriptView.lineHeight * (MacComposerMetrics.maxVisibleTextLines - 1)
+        )
+    }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .bottom, spacing: 8) {
             MacComposerScrollableVoiceTranscript(pieces: displayedPieces, revision: revision)
                 .frame(maxWidth: .infinity)
-                .frame(height: MacComposerVoiceTranscriptView.lineHeight * 2)
+                .frame(height: viewportHeight)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { transcriptWidth = $0 }
                 .background {
                     MacVoiceBackgroundWaveform(levels: controller.levels)
                         .mask {
@@ -1195,6 +1208,7 @@ private struct MacComposerVoiceSurface: View {
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
+                .padding(.vertical, MacComposerMetrics.textVerticalPadding)
             Button(action: onCancel) {
                 Label("Cancel", systemImage: "xmark")
                     .font(.system(size: 12, weight: .medium))
@@ -1205,6 +1219,7 @@ private struct MacComposerVoiceSurface: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Cancel voice input")
             .accessibilityIdentifier("voice-cancel")
+            .padding(.bottom, (MacComposerMetrics.control - 30) / 2)
             Button(action: onFinish) {
                 Label("Edit", systemImage: "character.cursor.ibeam")
                     .font(.system(size: 12, weight: .medium))
@@ -1216,13 +1231,11 @@ private struct MacComposerVoiceSurface: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Edit voice text")
             .accessibilityIdentifier("voice-to-text")
+            .padding(.bottom, (MacComposerMetrics.control - 30) / 2)
         }
         .padding(.leading, 4)
         .padding(.trailing, 5)
-        // The two-line viewport already occupies the 36 pt capsule. Extra
-        // vertical padding used to grow recording from 42 to 44 pt.
-        .frame(maxWidth: .infinity)
-        .frame(height: MacComposerMetrics.capsuleHeight, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var revision: String {
@@ -1351,7 +1364,7 @@ final class MacComposerVoiceTranscriptView: NSView {
         needsDisplay = true
     }
 
-    /// Short speech is vertically centered in the fixed two-line viewport.
+    /// Short speech is vertically centered within its current viewport.
     /// Long speech keeps its complete document height and native tail scroll.
     var textDrawingRect: CGRect {
         let inset = max(0, (bounds.height - contentHeight) / 2)
@@ -1483,7 +1496,7 @@ private final class MacComposerVoiceScrollView: NSScrollView {
     }
 }
 
-/// A fixed-height native scroll surface for the live voice transcript. The
+/// A growing, three-line-capped native scroll surface for voice text. The
 /// document keeps the complete CoreText layout while the clip view follows
 /// its bottom edge after every recognition update, so long dictation remains
 /// readable and the newest words never disappear below the composer.
@@ -1523,7 +1536,7 @@ private struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
             // NSScrollView may perform an internal clip-view layout after the
             // representable update. Reassert the document extent after that
             // pass so AppKit cannot collapse the document back to its
-            // intrinsic two-line viewport height.
+            // intrinsic viewport height.
             documentView.setFrameSize(NSSize(width: width, height: documentHeight))
             documentView.setFrameOrigin(.zero)
             scrollToTail(scrollView)
@@ -1590,14 +1603,17 @@ private struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
         context.coordinator.proposedWidth = width
         return CGSize(
             width: width,
-            height: MacComposerVoiceTranscriptView.lineHeight * 2
+            height: min(
+                max(MacComposerMetrics.minimumTextHeight, MacComposerVoiceTranscriptView.measure(pieces, width: width)),
+                MacComposerMetrics.minimumTextHeight + MacComposerVoiceTranscriptView.lineHeight * (MacComposerMetrics.maxVisibleTextLines - 1)
+            )
         )
     }
 }
 
 #if DEBUG
-/// Debug-only production-shaped probe for the fixed-height voice transcript
-/// scroll surface. It is intentionally isolated from Relay and AppState.
+/// Debug-only fixed-height stress probe for the native voice transcript
+/// scroll surface (the production composer now grows to a three-line cap). It is intentionally isolated from Relay and AppState.
 enum MacComposerVoiceScrollRegression {
     static func run() -> [String: Any] {
         let text = String(repeating: "Long voice transcript keeps appending so the newest words remain visible. ", count: 18)
