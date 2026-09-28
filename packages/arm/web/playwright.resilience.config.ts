@@ -24,5 +24,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 180_000,
   },
-  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
+  // CI uses the runner's installed Chrome (KRAKI_PW_CHANNEL=chrome); locally
+  // the Playwright-managed Chromium.
+  projects: [{ name: 'chromium', use: { browserName: 'chromium', channel: process.env.KRAKI_PW_CHANNEL || undefined } }],
 });
