@@ -119,8 +119,18 @@ final class AttachmentStore {
     @ObservationIgnored private var pendingChunks: [String: [Int: String]] = [:]
     @ObservationIgnored private var pendingTotal: [String: Int] = [:]
 
-    /// Sends `request_attachment {mode: paced, index}` for (id, sessionId, index).
-    @ObservationIgnored private let requestChunk: (String, String, Int) -> Void
+    /// Sends `request_attachment {mode: paced, index}` for (id, sessionId,
+    /// index); false when it could not be handed to the transport.
+    @ObservationIgnored private let requestChunk: (String, String, Int) -> Bool
+    @ObservationIgnored private var retryWork: DispatchWorkItem?
+
+    /// Ready bytes kept in memory for views that released them (LRU,
+    /// oldest first). Views still showing an attachment are never evicted;
+    /// evicted entries reload from the disk cache when shown again.
+    @ObservationIgnored private var releasedReady: [String] = []
+    @ObservationIgnored private var persisted: Set<String> = []
+    static let memoryBudgetBytes = 64 * 1024 * 1024
+    static let diskBudgetBytes: Int64 = 512 * 1024 * 1024
 
     // MARK: - Disk layout
 
@@ -135,12 +145,14 @@ final class AttachmentStore {
         cacheDirectory: URL = KrakiDataPaths.attachmentCacheDirectory(),
         visibleDwell: TimeInterval = 0.3,
         chunkTimeout: TimeInterval = 30,
-        requestChunk: @escaping (String, String, Int) -> Void
+        requestChunk: @escaping (String, String, Int) -> Bool
     ) {
         self.cacheDir = cacheDirectory
         self.visibleDwell = visibleDwell
         self.chunkTimeout = chunkTimeout
         self.requestChunk = requestChunk
+        let dir = cacheDirectory
+        diskQueue.async { Self.trimDiskCache(dir, budget: Self.diskBudgetBytes) }
     }
 
     // MARK: - Public API
@@ -155,6 +167,7 @@ final class AttachmentStore {
     /// priority of an existing request). A request after an error retries.
     @MainActor
     func requestIfNeeded(id: String, sessionId: String, priority: AttachmentPriority = .visible) {
+        releasedReady.removeAll { $0 == id }
         if case .ready = states[id] { return }
         if hydrating.contains(id) { return }
         if case .error = states[id] {
@@ -186,6 +199,11 @@ final class AttachmentStore {
     @MainActor
     func release(id: String, priority: AttachmentPriority = .visible) {
         dwellWork.removeValue(forKey: id)?.cancel()
+        if case .ready = states[id] {
+            releasedReady.removeAll { $0 == id }
+            releasedReady.append(id)
+            evictMemoryIfNeeded()
+        }
         guard let want = wants[id], want.priority <= priority else { return }
         wants[id] = nil
         switch states[id] {
@@ -269,7 +287,40 @@ final class AttachmentStore {
         let flight = InFlight(id: id, index: index, generation: generation)
         inFlight = flight
         armTimeout(for: flight)
-        requestChunk(id, want.sessionId, index)
+        guard requestChunk(id, want.sessionId, index) else {
+            // Not handed to the transport (e.g. the session's tentacle is
+            // unknown right now). Retry shortly without spending an attempt.
+            clearInFlight()
+            scheduleRetry()
+            return
+        }
+    }
+
+    @MainActor
+    private func scheduleRetry() {
+        guard retryWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.retryWork = nil
+            self?.pump()
+        }
+        retryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+    }
+
+    @MainActor
+    private func evictMemoryIfNeeded() {
+        var total = releasedReady.reduce(0) { sum, id in
+            if case .ready(_, let data) = states[id] { return sum + data.count }
+            return sum
+        }
+        var index = 0
+        while total > Self.memoryBudgetBytes, index < releasedReady.count {
+            let id = releasedReady[index]
+            guard persisted.contains(id), case .ready(_, let data) = states[id] else { index += 1; continue }
+            total -= data.count
+            states[id] = nil
+            releasedReady.remove(at: index)
+        }
     }
 
     @MainActor
@@ -373,7 +424,7 @@ final class AttachmentStore {
 
     // MARK: - Disk cache
 
-    private struct DiskMeta: Codable {
+    fileprivate struct DiskMeta: Codable {
         let mimeType: String
         let size: Int
         let lastAccessed: TimeInterval
@@ -428,8 +479,36 @@ final class AttachmentStore {
                     self.requestIfNeeded(id: id, sessionId: sessionId, priority: priority)
                     return
                 }
+                self.persisted.insert(id)
                 self.states[id] = .ready(mimeType: result.mimeType, data: result.data)
             }
+        }
+    }
+
+    /// Keeps the disk cache under `budget`, dropping least recently used
+    /// entries (by recorded access time, else file date).
+    static func trimDiskCache(_ dir: URL, budget: Int64) {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return }
+        var entries: [(id: String, size: Int64, used: TimeInterval)] = []
+        var total: Int64 = 0
+        for name in names where !name.hasSuffix(".json") {
+            let bytes = dir.appendingPathComponent(name)
+            let attrs = try? fm.attributesOfItem(atPath: bytes.path)
+            let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+            var used = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+            if let data = try? Data(contentsOf: dir.appendingPathComponent(name + ".json")),
+               let meta = try? JSONDecoder().decode(DiskMeta.self, from: data) {
+                used = meta.lastAccessed
+            }
+            entries.append((name, size, used))
+            total += size
+        }
+        guard total > budget else { return }
+        for entry in entries.sorted(by: { $0.used < $1.used }) where total > budget {
+            try? fm.removeItem(at: dir.appendingPathComponent(entry.id))
+            try? fm.removeItem(at: dir.appendingPathComponent(entry.id + ".json"))
+            total -= entry.size
         }
     }
 
@@ -471,11 +550,12 @@ final class AttachmentStore {
             size: data.count,
             lastAccessed: Date().timeIntervalSince1970
         )
-        diskQueue.async {
+        diskQueue.async { [weak self] in
             try? data.write(to: bytesPath, options: .atomic)
             if let blob = try? JSONEncoder().encode(meta) {
                 try? blob.write(to: metaPath, options: .atomic)
             }
+            Task { @MainActor in self?.persisted.insert(id) }
         }
     }
 

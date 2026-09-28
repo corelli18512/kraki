@@ -121,16 +121,7 @@ struct MacBubbleImageGrid: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: alignment)
-        .onAppear {
-            for ref in refs {
-                attachmentStore?.requestIfNeeded(id: ref.id, sessionId: sessionId, priority: .visible)
-            }
-        }
-        .onDisappear {
-            for ref in refs {
-                attachmentStore?.release(id: ref.id)
-            }
-        }
+        .requestsAttachments(refs.map(\.id), sessionId: sessionId, store: attachmentStore)
     }
 
     @ViewBuilder

@@ -8,6 +8,7 @@ import XCTest
 final class AttachmentSchedulerTests: XCTestCase {
     private var dir: URL!
     private var requests: [(id: String, session: String, index: Int)] = []
+    private var sendSucceeds = true
 
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-attach-\(UUID().uuidString)")
@@ -22,6 +23,7 @@ final class AttachmentSchedulerTests: XCTestCase {
     private func makeStore(dwell: TimeInterval = 0.05, timeout: TimeInterval = 30) -> AttachmentStore {
         AttachmentStore(cacheDirectory: dir, visibleDwell: dwell, chunkTimeout: timeout) { [weak self] id, session, index in
             self?.requests.append((id, session, index))
+            return self?.sendSucceeds ?? true
         }
     }
 
@@ -153,5 +155,51 @@ final class AttachmentSchedulerTests: XCTestCase {
         store.requestIfNeeded(id: "img", sessionId: "s")
         await settle()
         XCTAssertEqual(requests.last.map { [$0.id, String($0.index)] }, ["img", "1"])
+    }
+
+    func testFailedSendRetriesSoonWithoutSpendingAnAttempt() async {
+        let store = makeStore(dwell: 0, timeout: 30)
+        store.setTransportReady(true)
+        sendSucceeds = false
+        store.requestIfNeeded(id: "r", sessionId: "s", priority: .userOpened)
+        XCTAssertNil(store.inFlightForTesting)
+        sendSucceeds = true
+        await settle(2.3)
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(store.inFlightForTesting?.id, "r")
+        XCTAssertEqual(store.state(for: "r"), .fetching)
+    }
+
+    func testReleasedReadyBytesAreEvictedToDiskAndReloadWithoutNetwork() async {
+        let store = makeStore(dwell: 0)
+        store.setTransportReady(true)
+        let big = String(repeating: "x", count: 40 * 1024 * 1024)
+        for id in ["a", "b"] {
+            store.requestIfNeeded(id: id, sessionId: "s", priority: .userOpened)
+            await chunk(store, id, 0, 1, big)
+        }
+        await settle(1.0) // persisted
+        store.release(id: "a", priority: .userOpened)
+        store.release(id: "b", priority: .userOpened)
+        XCTAssertNil(store.state(for: "a"), "oldest released entry evicted over the memory budget")
+        guard case .ready = store.state(for: "b") else { return XCTFail("recent entry kept") }
+        let before = requests.count
+        store.requestIfNeeded(id: "a", sessionId: "s")
+        await settle(1.0)
+        XCTAssertEqual(store.text(for: "a")?.count, big.count)
+        XCTAssertEqual(requests.count, before, "reloaded from disk, not the network")
+    }
+
+    func testDiskCacheTrimDropsLeastRecentlyUsed() throws {
+        let enc = JSONEncoder()
+        for (id, used) in [("old", 1.0), ("new", 2.0)] {
+            try Data(count: 600).write(to: dir.appendingPathComponent(id))
+            try enc.encode(["mimeType": "a/b"]).write(to: dir.appendingPathComponent(id + ".json"))
+            let meta = "{\"mimeType\":\"a/b\",\"size\":600,\"lastAccessed\":\(used)}"
+            try Data(meta.utf8).write(to: dir.appendingPathComponent(id + ".json"))
+        }
+        AttachmentStore.trimDiskCache(dir, budget: 1000)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("old").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("new").path))
     }
 }

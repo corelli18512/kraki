@@ -52,12 +52,7 @@ struct LazyImageView: View {
                 loadingPlaceholder()
             }
         }
-        .onAppear {
-            attachmentStore.requestIfNeeded(id: ref.id, sessionId: sessionId, priority: .visible)
-        }
-        .onDisappear {
-            attachmentStore.release(id: ref.id)
-        }
+        .requestsAttachments([ref.id], sessionId: sessionId, store: attachmentStore)
     }
 
     @ViewBuilder

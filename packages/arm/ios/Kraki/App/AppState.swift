@@ -81,8 +81,8 @@ final class AppState {
         // request-pull closure can capture self by weak reference
         // and the rest of setup (router, ws) can read it.
         self.attachmentStore = AttachmentStore { [weak self] id, sessionId, index in
-            guard let self else { return }
-            self.sendEncryptedMessage([
+            guard let self else { return false }
+            return self.sendEncryptedMessage([
                 "type": "request_attachment",
                 "deviceId": self.deviceId ?? "",
                 "sessionId": sessionId,
@@ -138,7 +138,7 @@ final class AppState {
         self.messageStore = MessageStore(db: testDatabase)
         self.voiceInputController = voiceController ?? KrakiVoiceInputController.isolatedForTesting()
         if voiceController == nil { self.voiceInputController.bind(host: self) }
-        self.attachmentStore = AttachmentStore { _, _, _ in }
+        self.attachmentStore = AttachmentStore { _, _, _ in true }
         self.commandSender = CommandSender(appState: self)
         self.messageProvider = MessageProvider(appState: self)
         self.messageRouter = MessageRouter(appState: self)
