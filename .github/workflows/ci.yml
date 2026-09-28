@@ -77,6 +77,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Served installers match the repo installers
+        # app.kraki.chat serves packages/arm/web/public/install.*; the copies
+        # drifted once and the served macOS installer failed on clean Macs.
+        run: |
+          cmp install.sh packages/arm/web/public/install.sh
+          cmp install.ps1 packages/arm/web/public/install.ps1
+
       - name: Enable corepack
         run: corepack enable
 

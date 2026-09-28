@@ -147,6 +147,27 @@ export function checkCopilotCli(): CliCheckResult {
   }
 }
 
+/** Coding agents Kraki can run, in the order setup lists them. */
+export const SETUP_AGENTS: ReadonlyArray<{ id: 'claude' | 'codex' | 'copilot' | 'pi'; name: string; bin: string; installUrl: string }> = [
+  { id: 'claude', name: 'Claude Code', bin: 'claude', installUrl: 'https://code.claude.com/docs/en/setup' },
+  { id: 'codex', name: 'Codex', bin: 'codex', installUrl: 'https://developers.openai.com/codex/cli' },
+  { id: 'copilot', name: 'GitHub Copilot CLI', bin: 'copilot', installUrl: 'https://github.com/features/copilot/cli' },
+  { id: 'pi', name: 'pi', bin: 'pi', installUrl: 'https://github.com/earendil-works/pi#readme' },
+];
+
+/** Is `bin` runnable, and which version (leading semver when present)? */
+export function checkAgentCli(bin: string): CliCheckResult {
+  try {
+    // execSync (not execFile) so Windows resolves .cmd shims like the other checks.
+    const output = execSync(`${bin} --version`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000 }).trim();
+    const first = output.split('\n')[0] ?? '';
+    const match = first.match(/(\d+\.\d+\.\d+)/);
+    return { found: true, version: match?.[1] ?? (first || undefined) };
+  } catch {
+    return { found: false };
+  }
+}
+
 export function checkClaudeCli(): CliCheckResult {
   try {
     const output = execSync('claude --version', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
@@ -345,11 +366,39 @@ export async function probeFda(): Promise<FdaStatus> {
  * Returns the final observed status ('granted' once the user toggles FDA
  * in System Settings, or the last polled status if aborted early).
  */
+/**
+ * Probe FDA as Kraki.app itself. A CLI started from Terminal is attributed to
+ * Terminal by TCC, so an in-process probe reports Terminal's access, not the
+ * grant the user just gave Kraki. Launching `kraki fda --json` through
+ * LaunchServices gives the probe Kraki's bundle identity, exactly like the
+ * daemon. Falls back to the in-process probe when not running from a bundle.
+ */
+export async function probeFdaAsApp(): Promise<FdaStatus> {
+  const app = platform() === 'darwin' ? getKrakiAppBundlePath() : null;
+  if (!app) return probeFda();
+  const out = join(tmpdir(), `kraki-fda-${process.pid}-${Date.now()}.json`);
+  try {
+    execFileSync('/usr/bin/open', ['-W', '-n', '-g', '-a', app, '--stdout', out, '--stderr', '/dev/null', '--args', 'fda', '--json'], {
+      stdio: 'ignore',
+      timeout: 15_000,
+    });
+    const line = readFileSync(out, 'utf8').trim().split('\n').pop() ?? '';
+    const status = (JSON.parse(line) as { status?: string }).status;
+    if (status === 'granted' || status === 'denied' || status === 'missing') return status;
+  } catch {
+    /* fall through to the in-process probe */
+  } finally {
+    try { rmSync(out, { force: true }); } catch { /* ignore */ }
+  }
+  return probeFda();
+}
+
 export async function pollFda(
   intervalMs = 2000,
   signal?: AbortSignal,
+  probe: () => Promise<FdaStatus> = probeFda,
 ): Promise<FdaStatus> {
-  const initial = await probeFda();
+  const initial = await probe();
   if (initial === 'granted') return 'granted';
 
   while (!signal?.aborted) {
@@ -361,12 +410,12 @@ export async function pollFda(
       }
     });
     if (signal?.aborted) break;
-    const status = await probeFda();
+    const status = await probe();
     if (status === 'granted') return 'granted';
   }
 
   // Final check after abort - the user may have granted just before skip
-  return probeFda();
+  return probe();
 }
 
 // ── macOS TCC: Launch Services registration ───────────────
@@ -772,6 +821,18 @@ export function openTccPane(service: TccService): boolean {
   if (!info) return false;
   try {
     execSync(`open "${info.url}"`, { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Select Kraki.app in a Finder window so it can be dragged into a TCC list. */
+export function revealKrakiApp(): boolean {
+  const app = getKrakiAppBundlePath();
+  if (!app) return false;
+  try {
+    execFileSync('open', ['-R', app], { stdio: 'ignore' });
     return true;
   } catch {
     return false;

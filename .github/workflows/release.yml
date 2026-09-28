@@ -689,11 +689,20 @@ jobs:
         if: needs.prepare.outputs.publish_mode == 'publish'
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
-          gh release create "${{ needs.prepare.outputs.release_tag }}" \
+          # install.sh / install.ps1 and the README download links resolve the
+          # CLI through GitHub's "latest" release. Only CLI tags (v*) may take
+          # it; a Mac or head release marked latest breaks the one-line install.
+          case "$RELEASE_TAG" in
+            v*) latest=true ;;
+            *) latest=false ;;
+          esac
+          gh release create "$RELEASE_TAG" \
             --repo "${{ github.repository }}" \
-            --title "${{ needs.prepare.outputs.release_tag }}" \
+            --title "$RELEASE_TAG" \
             --generate-notes \
+            --latest="$latest" \
             release-assets/*
 
   # ─── Publish Sparkle appcast ───────────────────────────
