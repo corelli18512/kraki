@@ -203,12 +203,15 @@ export const outbox = {
     transmit({ ...entry, state: 'sending' });
   },
 
-  /** The Tentacle (re)greeted: inputs it has not echoed may be lost. Queue
-   *  every unconfirmed one matching `inSession` for a resend decision. */
+  /** The Tentacle (re)greeted: inputs it has not echoed may be lost. If it
+   *  deduplicates, offer every unconfirmed one matching `inSession` again.
+   *  An older Tentacle is left alone: those inputs keep waiting for their
+   *  echo (the normal confirmation timeout applies). */
   resendUnconfirmed(inSession: (sessionId: string) => boolean): void {
-    const hit = useOutbox.getState().entries.some((e) => e.state === 'sending' && inSession(e.sessionId));
-    if (!hit) return;
-    update((entries) => entries.map((e) => (e.state === 'sending' && inSession(e.sessionId) ? { ...e, needsResend: true } : e)));
+    const eligible = (e: PendingInput) => e.state === 'sending' && inSession(e.sessionId)
+      && deps?.acceptsResend?.(e.sessionId) === true;
+    if (!useOutbox.getState().entries.some(eligible)) return;
+    update((entries) => entries.map((e) => (eligible(e) ? { ...e, needsResend: true } : e)));
     ensureTicker();
     checkDeadlines();
   },

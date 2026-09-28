@@ -270,7 +270,7 @@
   - 确认计时只统计“链路活着，且确实停滞”的时间，上限 30 s。以下情况不计时：链路疑似已死（12 s 没收到帧），或者还有数据在持续到达（回显可能排在后面）。
   - 刷新页面后恢复的消息，以及 Tentacle 重新发来问候时仍未确认的消息，会被标记为待重发。
     - Tentacle 声明了 `idempotent_input`：自动用同一个 clientId 重发（Tentacle 会去重）。
-    - 旧版 Tentacle：标为 “Not delivered”，由用户决定，避免重复执行。
+    - 旧版 Tentacle：刷新后恢复的消息标为 “Not delivered”，由用户决定；链路上还在途的消息照常等回显，不因 Tentacle 重新问候而被标失败。
 
 尚未覆盖：
 - 无痕模式、Safari 和 Firefox。

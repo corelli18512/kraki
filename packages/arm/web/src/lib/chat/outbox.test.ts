@@ -133,9 +133,13 @@ describe('outbox', () => {
     sent = [];
     outbox.resendUnconfirmed((sid) => sid === 's');
     expect(sent.map((m) => (m.payload as Record<string, unknown>).clientId)).toEqual([id]);
+    // An older Tentacle re-greeting (e.g. on our reconnect) must not fail
+    // inputs that are simply still in flight, nor resend them.
     accepts = false;
+    sent = [];
     outbox.resendUnconfirmed((sid) => sid === 's');
-    expect(outbox.forSession('s')[0].state).toBe('failed');
+    expect(sent).toEqual([]);
+    expect(outbox.forSession('s')[0].state).toBe('sending');
   });
 
   it('discard returns the text', () => {
