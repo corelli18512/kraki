@@ -351,6 +351,9 @@ final class AppState {
     /// a drop, or sitting authenticated-pending-handshake. Used by the
     /// brand-header status indicator.
     var isReconnecting: Bool {
+        // Closing the socket while in the background is intentional, not a
+        // lost connection; foregrounding reconnects at once.
+        if isInBackground { return false }
         switch connectionStatus {
         case .connecting, .authenticating, .disconnected:
             return hasCompletedInitialConnect
@@ -620,6 +623,12 @@ final class AppState {
     /// kick a fresh connect immediately so the user doesn't have to
     /// wait out a long backoff timer that started in the background.
     func handleForegroundRehydrate(forceReconnect: Bool = false) {
+        if isInBackground {
+            isInBackground = false
+            // The debounce restarts now: a quick foreground reconnect never
+            // shows "Reconnecting".
+            updateReconnectingIndicator()
+        }
         #if KRAKI_DIAG
         KrakiDiag.phase("active")
         #endif
@@ -658,7 +667,12 @@ final class AppState {
         updateReadVisibility(appForeground: false, conversationVisible: false)
     }
 
+    /// Between handleBackground and handleForegroundRehydrate.
+    private(set) var isInBackground = false
+
     func handleBackground() {
+        isInBackground = true
+        updateReconnectingIndicator()
         #if KRAKI_DIAG
         KrakiDiag.phase("background", pending: commandSender?.outbox.values.reduce(0) { $0 + $1.count } ?? 0)
         #endif

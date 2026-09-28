@@ -1,0 +1,8 @@
+{"controlPort":45786,"appPort":45780,"app2Port":45781,"headPort":45779,"tentaclePort":45782,"sessionId":"muloly0d-i60whhb7","tentacleId":"dev_4ff2a4e7-5ca"}
+FAILED test_D3_backgroundThenForeground()
+    NetworkResilienceTests.swift:598: XCTAssertFalse failed - G8: returning to the app must not flash Reconnecting for a normal quick reconnect
+PASS test_D4_bothSendWhileOneFlaps()
+PASS test_D4_oneDeviceOfflineOtherUnaffected()
+test_D3_backgroundThenForeground: deliveryGapsOver10s=[20], duplicated=0, echoMax=20.216742038726807, echoP50=20.216742038726807, echoP95=20.216742038726807, failureStates={}, inboundCatchUpSeconds=0.004078030586242676, inboundMissing=0, lost=0, maxDeliveryGap=20.162227034568787, reconnectingShownAfterForeground=True, reconnectingSpells=[20.01022696495056], reconnectSeconds=0.05406606197357178, recoveryReasons=[], sent=1, settleSeconds=7.30752944946289e-05, stillPending=0
+test_D4_bothSendWhileOneFlaps: deliveryGapsOver10s=[], duplicated=0, echoMax=2.582706928253174, echoP50=0.7348190546035767, echoP95=2.582706928253174, failureStates={}, lost=0, maxDeliveryGap=4.038891911506653, reconnectingSpells=[0.5243629217147827, 0.9538990259170532, 2.3733880519866943], recoveryReasons=['receive_failed', 'receive_failed', 'receive_failed'], sent=6, settleSeconds=3.1948089599609375e-05, stillPending=0
+test_D4_oneDeviceOfflineOtherUnaffected: bCatchUpSeconds=1.00798499584198, deliveryGapsOver10s=[], duplicated=0, echoMax=0.1730560064315796, echoP50=0.15584707260131836, echoP95=0.1730560064315796, failureStates={}, lost=0, maxDeliveryGap=5.69197404384613, reconnectingSpells=[], reconnectsA=0, recoveryReasons=[], sent=3, settleSeconds=8.940696716308594e-06, stillPending=0

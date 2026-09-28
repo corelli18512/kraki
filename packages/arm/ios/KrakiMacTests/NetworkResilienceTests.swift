@@ -12,7 +12,7 @@ import XCTest
 /// docs/network-resilience-test-plan.md (G1–G10).
 @MainActor
 final class NetworkResilienceTests: XCTestCase {
-    struct StackInfo: Decodable { let controlPort: Int; let appPort: Int; let sessionId: String; let tentacleId: String }
+    struct StackInfo: Decodable { let controlPort: Int; let appPort: Int; let app2Port: Int; let sessionId: String; let tentacleId: String }
 
     private var stack: StackInfo?
     private var app: AppState!
@@ -568,6 +568,108 @@ final class NetworkResilienceTests: XCTestCase {
         metrics["reconnects"] = try await connections() - before
         XCTAssertEqual(metrics["reconnects"] as? Int, 0, "G6: an upload in progress is not a dead link")
         XCTAssertEqual(app.wsClient?.recoveryReasons ?? [], [])
+    }
+
+    // MARK: - D3: background / foreground (iOS lifecycle)
+
+    /// The user sends, then immediately leaves the app (lock/switch). The app
+    /// closes its socket in the background; the agent keeps replying. On
+    /// return: quick reconnect, no "Reconnecting" flash, everything caught up,
+    /// the input delivered exactly once.
+    func test_D3_backgroundThenForeground() async throws {
+        send("beforeBackground")
+        app.handleBackground()
+        try await control("POST", "/agent/burst", ["sessionId": sessionId, "count": 4, "prefix": "while-backgrounded"])
+        await pause(20)
+        var flashed = false
+        let foregroundAt = Date()
+        app.handleForegroundRehydrate()
+        try await waitUntil(15, "reconnected") {
+            if self.app.showsReconnecting { flashed = true }
+            return self.app.connectionStatus == .connected
+        }
+        metrics["reconnectSeconds"] = Date().timeIntervalSince(foregroundAt)
+        await pause(3)
+        flashed = flashed || app.showsReconnecting
+        metrics["reconnectingShownAfterForeground"] = flashed
+        try await settleAndCheckDelivery(within: 20)
+        try await checkInbound(within: 10)
+        XCTAssertLessThanOrEqual(metrics["reconnectSeconds"] as? Double ?? 99, 3, "G4: foreground reconnect is immediate")
+        XCTAssertFalse(flashed, "G8: returning to the app must not flash Reconnecting for a normal quick reconnect")
+    }
+
+    // MARK: - D4: several devices
+
+    private func secondDevice() async throws -> AppState {
+        let outbox = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-net-outbox-b-\(UUID().uuidString).json")
+        let b = AppState.makeNetworkHarness(relayPort: stack!.app2Port, outboxURL: outbox)
+        try await waitUntil(20, "second device connected") {
+            b.connectionStatus == .connected && b.sessionStore.sessions[self.sessionId] != nil
+                && b.deviceStore.devices[self.stack!.tentacleId]?.online == true
+        }
+        b.sessionSubscriptionController.setDesired(sessionId)
+        _ = b.messageProvider?.openSession(sessionId)
+        try await waitUntil(10, "second device subscribed") { b.sessionSubscriptionController.liveReady }
+        return b
+    }
+
+    private func spine(_ device: AppState) -> [ChatMessage] {
+        device.messageDatabase.messagesAfter(sessionId, afterSeq: 0, limit: 10_000)
+    }
+
+    /// Device B loses its link for 30 s while A keeps chatting with the agent:
+    /// A is unaffected; B catches up everything (A's messages and replies).
+    func test_D4_oneDeviceOfflineOtherUnaffected() async throws {
+        let b = try await secondDevice()
+        defer { b.disconnect() }
+        let before = try await connections()
+        try await fault("app2", ["refuse": true])
+        try await control("POST", "/reset", ["link": "app2"])
+        for i in 0..<3 { send("fromA\(i)"); await pause(6) }
+        try await control("POST", "/agent/burst", ["sessionId": sessionId, "count": 2, "prefix": "while-b-away"])
+        await pause(8)
+        try await settleAndCheckDelivery(within: 20)
+        metrics["reconnectsA"] = try await connections() - before
+        XCTAssertEqual(metrics["reconnectsA"] as? Int, 0, "A is not disturbed by B's outage")
+        XCTAssertLessThanOrEqual(metrics["echoP95"] as? Double ?? 99, 5)
+
+        let healedAt = Date()
+        try await control("POST", "/heal", ["link": "app2"])
+        let emitted = (try await control("GET", "/ledger?sessionId=\(sessionId)"))["emitted"] as? [String] ?? []
+        let texts = sent.map(\.text)
+        try await waitUntil(30, "B caught up") {
+            let rows = self.spine(b)
+            let agent = rows.filter { $0.type == "agent_message" }.compactMap(\.content)
+            let users = Set(rows.filter { $0.type == "user_message" }.compactMap(\.content))
+            return agent == emitted && texts.allSatisfy(users.contains)
+        }
+        metrics["bCatchUpSeconds"] = Date().timeIntervalSince(healedAt)
+        let rows = spine(b)
+        XCTAssertEqual(Set(rows.map(\.seq)).count, rows.count, "G7: no duplicate rows on B")
+        XCTAssertLessThanOrEqual(metrics["bCatchUpSeconds"] as? Double ?? 99, 10, "G4: B catches up quickly")
+    }
+
+    /// Both devices type while A's link keeps flapping: every input from both
+    /// is delivered exactly once and both see the same conversation.
+    func test_D4_bothSendWhileOneFlaps() async throws {
+        let b = try await secondDevice()
+        defer { b.disconnect() }
+        var bTexts: [String] = []
+        for i in 0..<6 {
+            send("A\(i)")
+            let text = "B\(i)-\(UUID().uuidString.prefix(6))"
+            XCTAssertTrue(b.commandSender?.sendInput(sessionId: sessionId, text: text) ?? false)
+            bTexts.append(text)
+            if i % 2 == 0 { try await control("POST", "/reset", ["link": "app"]) }
+            await pause(2.5)
+        }
+        try await settleAndCheckDelivery(within: 40)
+        try await waitUntil(40, "B inputs confirmed") { (b.commandSender?.pendingInputs(self.sessionId).count ?? 1) == 0 }
+        let received = (try await control("GET", "/ledger?sessionId=\(sessionId)"))["received"] as? [String: Int] ?? [:]
+        XCTAssertEqual(bTexts.filter { received[$0] != 1 }, [], "G1/G2: every input from B exactly once")
+        try await waitUntil(20, "both converge") {
+            self.spine(self.app).map(\.seq) == self.spine(b).map(\.seq) && !self.spine(b).isEmpty
+        }
     }
 }
 
