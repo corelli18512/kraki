@@ -431,6 +431,7 @@ final class ChatUXRegressionTests: XCTestCase {
     func testPendingDeliveryStateRemainsUnconfirmedRetriesAndDeduplicates() throws {
         var sends = 0
         let fx = try makeFixture(total: 10) { _ in sends += 1; return true }
+        fx.app.deviceStore.setDeviceFeatures(dev, features: ["idempotent_input"])
         fx.app.commandSender?.confirmationTimeout = .milliseconds(200)
         drain(600)
         let sender = try XCTUnwrap(fx.app.commandSender)
@@ -742,6 +743,26 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertGreaterThan(quiet, 0.3, "ordinary speech peaks visibly move the bars")
         XCTAssertGreaterThan(normal, quiet + 0.2)
         XCTAssertEqual(loud, 1, accuracy: 0.01)
+    }
+
+    /// An older Tentacle (no `idempotent_input`) could run a queued input
+    /// twice, so an input that was already handed to transport is never
+    /// re-sent automatically; the user can still retry explicitly.
+    func testNoAutomaticResendToATentacleWithoutIdempotentInput() throws {
+        var sends = 0
+        let fx = try makeFixture(total: 10) { _ in sends += 1; return true }
+        fx.app.commandSender?.confirmationTimeout = .milliseconds(200)
+        drain(600)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "legacy"))
+        drain(600)
+        sender.resendPendingInputs(reason: "reconnected")
+        drain(100)
+        XCTAssertEqual(sends, 1, "no silent or reconnect re-send without idempotent_input")
+        XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .unconfirmed)
+        fx.app.deviceStore.setDeviceFeatures(dev, features: ["idempotent_input"])
+        sender.resendPendingInputs(reason: "greeting")
+        XCTAssertEqual(sends, 2, "re-sent once the Tentacle advertises idempotent_input")
     }
 
     /// A transient transport refusal (reconnecting, Tentacle key not known

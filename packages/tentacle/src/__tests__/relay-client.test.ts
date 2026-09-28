@@ -1355,6 +1355,14 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
+  it('advertises idempotent_input in its greeting so apps may re-send automatically', () => {
+    const { ws, cleanup } = buildClientWithStore();
+    try {
+      const greeting = decodePulseSends(ws.sent).find((m) => m.type === 'device_greeting');
+      expect(greeting?.payload.features).toContain('idempotent_input');
+    } finally { cleanup(); }
+  });
+
   it('re-echoes the stored user_message when a client retries an input it already sent', async () => {
     const { ws, sm, adapter, cleanup } = buildClientWithStore();
     try {

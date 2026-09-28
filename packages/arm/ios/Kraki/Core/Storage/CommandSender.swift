@@ -66,6 +66,10 @@ final class CommandSender {
     /// Inputs accepted from the user but not yet handed to transport (the
     /// path was down or the Tentacle's key unknown). Dispatched on reconnect.
     @ObservationIgnored private var undispatched = Set<String>()
+    /// Inputs whose delivery became uncertain (restored after a relaunch, or
+    /// a reconnect happened after they were sent). Re-sent once, as soon as
+    /// the session's Tentacle is known, online and deduplicates retries.
+    @ObservationIgnored private var needsResend = Set<String>()
     /// Payload deliveries this recent mean the link is busy, not broken: an
     /// echo queued behind a backlog legitimately takes longer. Heartbeats do
     /// not count, so a quiet healthy link still surfaces a lost input.
@@ -365,9 +369,17 @@ final class CommandSender {
                     self.redispatch(sessionId: sessionId, clientId: clientId, reason: "path_up")
                     continue
                 }
+                if self.needsResend.contains(clientId), self.canResendAutomatically(sessionId) {
+                    self.needsResend.remove(clientId)
+                    if self.redispatch(sessionId: sessionId, clientId: clientId, reason: "uncertain") {
+                        self.setPendingState(sessionId, clientId: clientId, .sending)
+                        stalled = .zero
+                    }
+                    continue
+                }
                 guard !self.isLinkBusy else { continue }
                 stalled += step
-                if !resent, stalled >= timeout / 2 {
+                if !resent, stalled >= timeout / 2, self.canResendAutomatically(sessionId) {
                     resent = true
                     self.redispatch(sessionId: sessionId, clientId: clientId, reason: "stalled")
                 }
@@ -378,6 +390,14 @@ final class CommandSender {
                 }
             }
         }
+    }
+
+    /// Automatic re-sends of an input that may already have arrived are safe
+    /// only if the session's Tentacle advertised `idempotent_input`.
+    private func canResendAutomatically(_ sessionId: String) -> Bool {
+        guard let appState else { return false }
+        guard let deviceId = appState.sessionStore.sessions[sessionId]?.deviceId else { return false }
+        return appState.deviceStore.deviceFeatures[deviceId]?.contains("idempotent_input") == true
     }
 
     /// An input can eventually be delivered only by a signed-in app. Before
@@ -432,12 +452,26 @@ final class CommandSender {
             }) {
                 let state = pendingState(message)
                 guard state == .sending || state == .unconfirmed else { continue }
-                // Not deliverable yet (session/Tentacle unknown right after a
-                // relaunch) stays queued; the armed timer sends it once the
-                // path is up.
-                redispatch(sessionId: sessionId, clientId: clientId, reason: reason)
-                setPendingState(sessionId, clientId: clientId, .sending)
-                armConfirmationTimeout(sessionId: sessionId, clientId: clientId)
+                // One never handed to transport is always safe to send. One
+                // that was is re-sent only to a Tentacle that deduplicates
+                // retries (older ones could run a queued input twice). Either
+                // way the armed timer finishes the job if the path, session or
+                // Tentacle features are not known yet (e.g. right after launch).
+                if undispatched.contains(clientId) {
+                    if redispatch(sessionId: sessionId, clientId: clientId, reason: reason) {
+                        setPendingState(sessionId, clientId: clientId, .sending)
+                    }
+                } else if isDeliveryPathUp(sessionId), canResendAutomatically(sessionId) {
+                    needsResend.remove(clientId)
+                    if redispatch(sessionId: sessionId, clientId: clientId, reason: reason) {
+                        setPendingState(sessionId, clientId: clientId, .sending)
+                    }
+                } else {
+                    needsResend.insert(clientId)
+                }
+                if confirmationTasks[clientId] == nil || state == .unconfirmed {
+                    armConfirmationTimeout(sessionId: sessionId, clientId: clientId)
+                }
             }
         }
     }
@@ -533,6 +567,7 @@ final class CommandSender {
         confirmationTasks.removeValue(forKey: clientId)?.cancel()
         outboundPayloads.removeValue(forKey: clientId)
         undispatched.remove(clientId)
+        needsResend.remove(clientId)
         persistOutbox()
     }
 
@@ -646,6 +681,10 @@ final class CommandSender {
             if let attachments = item.attachments { wire["attachments"] = attachments }
             outboundPayloads[item.clientId] = wire
             nextLocalOrder = max(nextLocalOrder, item.order + 1)
+            if item.state != "failed" && item.state != "correcting" {
+                needsResend.insert(item.clientId)
+                armConfirmationTimeout(sessionId: item.sessionId, clientId: item.clientId)
+            }
         }
     }
 

@@ -3540,6 +3540,7 @@ export class RelayClient {
         kind: this.options.device.kind,
         agents: this.options.device.capabilities?.agents,
         version: this.options.version,
+        features: ['idempotent_input'],
       },
     };
     this.sendReliableUnicastTo(targetDeviceId, compactPubKey, greeting);

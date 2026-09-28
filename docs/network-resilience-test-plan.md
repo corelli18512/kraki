@@ -155,7 +155,7 @@
 
 测试设施（第 3 节）已落地：
 - `packages/tests/src/chaos/`：故障注入代理、本地服务栈（真实 Head、真实 Tentacle，agent 用确定性的脚本化适配器，零费用）、控制面。
-- `KrakiMacTests/NetworkResilienceTests.swift`：用生产网络栈（AppState/WebSocket/Pulse/CommandSender）跑 22 个场景。
+- `KrakiMacTests/NetworkResilienceTests.swift`：用生产网络栈（AppState/WebSocket/Pulse/CommandSender）跑 21 个场景。
 - `scripts/chaos/run-native.sh`：一键运行，输出每个场景的指标 JSON 和时间线。
 
 与计划的差异：agent 用脚本化适配器，没有用真实 Pi 加假模型。网络路径（RelayClient、SessionManager、Head）全部是真实实现，这样更确定、更快。
@@ -175,7 +175,7 @@
 | E2b agent 离线 6 min（超过 Head 5 min 清理） | — | 恢复后 21 s 内送达 |
 | F 随机混沌（20 轮） | — | 0 丢、0 重、0 误报 |
 
-全部 22 个场景通过：`docs/network-resilience-results/final-full-matrix.txt`；基线原始输出：`baseline-main-985a310.txt`。
+全部 21 个场景通过（合入最新 main 后，种子 329 与 4242 各跑 20 轮随机混沌）：`docs/network-resilience-results/`；基线原始输出：`baseline-main-985a310.txt`。
 
 ### 修复（每项都有对应场景由红转绿，另有单元测试）
 
@@ -183,7 +183,8 @@
 2. **Head**：pong 迟到时，如果客户端在 ping 之后还有帧，或者发送缓冲在减少，就不判死链，也不广播 `device_pending`。
 3. **客户端连接**：只有 pong 能了结自己发出的 ping（修复“仅上行断”发现不了的问题）；拥塞时只要仍有真实数据在投递，最多等 300 s；ping 超时 22 s、检查间隔 2 s；重连退避 0.5 s 起步，前 2 min 上限 4 s，然后 15 s，10 min 后 30 s，±20% 抖动；Pulse 某一路流被兄弟流“饿”时容忍到 300 s。
 4. **客户端发送**：重连后、agent 重新上线后、重启后自动重发（同一 `clientId`）；传输层暂时拒绝时排队，不再静默丢弃；“未确认”只按“链路通但 30 s 内没有任何数据投递”计时，满一半时静默重发一次。
-5. **Tentacle**：同一进程内已接收（排队或运行中）的输入被重试时，不再二次派发；重复输入会把已存储的 `user_message` 回显给请求方；重连改为指数退避加抖动（1 s → 30 s），认证成功后才清零。
+5. **Tentacle**：同一进程内已接收（排队或运行中）的输入被重试时，不再二次派发；重复输入会把已存储的 `user_message` 回显给请求方；重连改为指数退避加抖动（1 s → 30 s），认证成功后才清零；在 `device_greeting.features` 中声明 `idempotent_input`。
+   - 兼容性：客户端只对声明了 `idempotent_input` 的 Tentacle 自动重发已发出过的输入（旧 Tentacle 在输入排队时收到重试可能执行两次）；从未发出过的输入始终可以发送。
 6. **UI**：“重连中”延迟 2 s 显示（`AppState.showsReconnecting`），瞬断不闪。
 
 ### 目标调整（诚实记录）
@@ -201,4 +202,4 @@
 ### CI
 
 - PR：`Network resilience (fast)`，约 10 个场景加服务栈冒烟，由 `resilience` 范围触发（Swift 客户端、Head、Tentacle、crypto、protocol、tests、scripts/chaos）。
-- 夜间和手动：`network-resilience.yml` 跑全部 22 个场景加随机混沌（默认 50 轮，种子为运行编号，可复现）。
+- 夜间和手动：`network-resilience.yml` 跑全部 21 个场景加随机混沌（默认 50 轮，种子为运行编号，可复现）。

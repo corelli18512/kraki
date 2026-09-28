@@ -887,6 +887,13 @@ final class MessageRouter {
         if let version = payload?["version"] as? String {
             appState.deviceStore.setDeviceVersion(deviceId, version: version)
         }
+        let features = payload?["features"] as? [String] ?? []
+        appState.deviceStore.setDeviceFeatures(deviceId, features: features)
+        if features.contains("idempotent_input") {
+            // Relaunch/reconnect: this Tentacle can take our pending inputs
+            // again safely now that we know it deduplicates.
+            appState.commandSender?.resendPendingInputs(deviceId: deviceId, reason: "greeting")
+        }
         // Greeting fully landed — clear the amber "connecting" dot.
         // This must come AFTER `setDeviceOnline(true)` above (which
         // re-inserts into pendingGreetingIds) so the net effect of a
