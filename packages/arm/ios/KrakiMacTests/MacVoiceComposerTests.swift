@@ -63,7 +63,7 @@ import CryptoKit
         default: XCTFail("unknown control"); return
         }
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: 27), modifierFlags: [],
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: MacComposerMetrics.bottomPadding + MacComposerMetrics.capsuleHeight / 2), modifierFlags: [],
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                 context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
             window.sendEvent(event)
@@ -107,10 +107,10 @@ import CryptoKit
             drain(250)
             // Avoid using a stale fitting size from the previously mounted
             // full Chat view as the first window-height proposal.
-            window.setContentSize(NSSize(width: 820, height: expectedHeight + MacComposerMetrics.verticalPadding * 2))
+            window.setContentSize(NSSize(width: 820, height: expectedHeight + (MacComposerMetrics.verticalPadding + MacComposerMetrics.bottomPadding)))
             drain(150)
             host.layoutSubtreeIfNeeded()
-            let height = host.fittingSize.height - MacComposerMetrics.verticalPadding * 2
+            let height = host.fittingSize.height - (MacComposerMetrics.verticalPadding + MacComposerMetrics.bottomPadding)
             XCTAssertEqual(height, expectedHeight, accuracy: 0.5, name)
             let scroll: NSScrollView
             let drawn: CGRect
@@ -132,13 +132,13 @@ import CryptoKit
                 drawn = v.convert(used, to: nil)
             }
             let viewport = scroll.contentView.convert(scroll.contentView.bounds, to: nil)
-            let top = MacComposerMetrics.verticalPadding + height - viewport.maxY
-            let bottom = viewport.minY - MacComposerMetrics.verticalPadding
+            let top = MacComposerMetrics.bottomPadding + height - viewport.maxY
+            let bottom = viewport.minY - MacComposerMetrics.bottomPadding
             XCTAssertEqual(top, MacComposerMetrics.textVerticalPadding, accuracy: 0.5, name)
             XCTAssertEqual(bottom, MacComposerMetrics.textVerticalPadding, accuracy: 0.5, name)
             let visible = drawn.intersection(viewport)
-            let topText = MacComposerMetrics.verticalPadding + height - visible.maxY
-            let bottomText = visible.minY - MacComposerMetrics.verticalPadding
+            let topText = MacComposerMetrics.bottomPadding + height - visible.maxY
+            let bottomText = visible.minY - MacComposerMetrics.bottomPadding
             if !name.contains("overflow") && !name.contains("trailing") {
                 XCTAssertEqual(topText, voice ? 8 : 9, accuracy: 0.5, name)
                 XCTAssertEqual(bottomText, voice ? 8 : 9, accuracy: 0.5, name)
@@ -176,7 +176,7 @@ import CryptoKit
         window.setContentSize(NSSize(width: 820, height: 100))
         drain(300)
         XCTAssertEqual(MacComposerMetrics.capsuleHeight, MacComposerMetrics.control)
-        let expectedHeight = MacComposerMetrics.control + MacComposerMetrics.verticalPadding * 2
+        let expectedHeight = MacComposerMetrics.control + (MacComposerMetrics.verticalPadding + MacComposerMetrics.bottomPadding)
         let idleHeight = host.fittingSize.height
         XCTAssertEqual(idleHeight, expectedHeight, accuracy: 0.5)
         try capture("equal-height-idle")

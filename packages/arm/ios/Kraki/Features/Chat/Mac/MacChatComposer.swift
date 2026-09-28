@@ -36,13 +36,16 @@ enum MacComposerMetrics {
     /// bordered glass control against the solid circle).
     static let stackGap: CGFloat = 9
     static let verticalPadding: CGFloat = 6
+    /// Space below the Composer row: keeps the capsule and the right-hand
+    /// control column off the window's bottom edge.
+    static let bottomPadding: CGFloat = 12
     /// Outside the scrolling viewport: retained even when text scrolls.
     static let textVerticalPadding: CGFloat = 8
     static let maxVisibleTextLines: CGFloat = 3
     static var minimumTextHeight: CGFloat { capsuleHeight - textVerticalPadding * 2 }
     /// Distance from the chat bottom to the bottom of the ↓ jump control.
     static var jumpControlBottom: CGFloat {
-        verticalPadding + (capsuleHeight - control) / 2 + control + stackGap
+        bottomPadding + (capsuleHeight - control) / 2 + control + stackGap
     }
     static let stopRed = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -262,7 +265,7 @@ struct MacChatComposer: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, MacComposerMetrics.verticalPadding)
-        .padding(.bottom, MacComposerMetrics.verticalPadding)
+        .padding(.bottom, MacComposerMetrics.bottomPadding)
         .frame(maxWidth: .infinity)
     }
 

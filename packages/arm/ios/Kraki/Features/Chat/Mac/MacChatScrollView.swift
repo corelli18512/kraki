@@ -85,6 +85,13 @@ final class MacChatDocumentView: NSView {
 
     private(set) var itemKeys: [String] = []
     private(set) var lastApplyPrepended = false
+    /// Bubbles newly added at the tail by the latest apply that should make an
+    /// entrance (user from the trailing edge, AI from the leading edge).
+    private(set) var lastApplyEntrances = 0
+    /// Entrance pending until the bubble's cell is first shown on screen.
+    private var pendingEntrances: [String: (fromTrailing: Bool, deadline: CFTimeInterval)] = [:]
+    static let entranceDuration: CFTimeInterval = 0.32
+    static let entranceOffset: CGFloat = 48
     private(set) var lastApplyAppendedReplies = 0
 
     #if DEBUG
@@ -107,6 +114,8 @@ final class MacChatDocumentView: NSView {
         return low...high
     }
 
+    var latestItemIsUser: Bool { contents.last?.isUser == true }
+
     /// Document frames of AI replies, oldest first.
     var replyFrames: [(key: String, frame: NSRect)] {
         contents.indices.compactMap { index in
@@ -124,6 +133,7 @@ final class MacChatDocumentView: NSView {
     private var indexBySeq: [Int: Int] = [:]
     private var validCacheKeys: Set<String> = []
     private var contents: [MacChatItem] = []
+    private var contentsSnapshotBeforeApply: [MacChatItem] = []
     private var itemFrames: [NSRect] = []
     private var visibleCells: [Int: MacChatBubbleCell] = [:]
     private var visibleSignatures: [Int: String] = [:]
@@ -277,6 +287,8 @@ final class MacChatDocumentView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func resetForSessionReuse() {
+        pendingEntrances.removeAll()
+        lastApplyEntrances = 0
         warmGeneration += 1
         warmer.cancelAll()
         warmupDelayWorkItem?.cancel()
@@ -375,6 +387,8 @@ final class MacChatDocumentView: NSView {
         sessionMode: SessionMode
     ) {
         let oldKeys = itemKeys
+        contentsSnapshotBeforeApply = contents
+        defer { contentsSnapshotBeforeApply = [] }
         let oldDisplayedHeightByKey = Dictionary(
             uniqueKeysWithValues: zip(oldKeys, itemFrames.map(\.height))
         )
@@ -492,6 +506,7 @@ final class MacChatDocumentView: NSView {
         } else {
             lastApplyAppendedReplies = 0
         }
+        recordEntrances(oldKeys: oldKeys, newContents: newContents)
 
         let newIndexByKey = indexByKey
         visibleCells.removeAll(keepingCapacity: true)
@@ -516,6 +531,69 @@ final class MacChatDocumentView: NSView {
         rebuildFrames()
         scheduleFullWindowWarmup()
     }
+
+    /// New tail bubbles get an entrance; a bubble that only changes identity
+    /// does not: the live card landing as its answer (or a frozen card), and a
+    /// pending input landing as its user_message, remove an old tail item of
+    /// the same role in the same snapshot, so they are treated as replacements.
+    private func recordEntrances(oldKeys: [String], newContents: [MacChatItem]) {
+        lastApplyEntrances = 0
+        let now = CACurrentMediaTime()
+        pendingEntrances = pendingEntrances.filter { $0.value.deadline > now }
+        guard !oldKeys.isEmpty, !lastApplyPrepended else { return }
+        let newKeySet = Set(newContents.map(\.key))
+        let oldKeySet = Set(oldKeys)
+        let oldItemsByKey = Dictionary(contentsSnapshotBeforeApply.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+        var removedUser = 0, removedReply = 0
+        for key in oldKeys where !newKeySet.contains(key) {
+            guard let item = oldItemsByKey[key] else { continue }
+            if item.isUser { removedUser += 1 } else if item.isReply { removedReply += 1 }
+        }
+        // Only the tail: items after the last surviving old item.
+        guard let survivingTail = newContents.lastIndex(where: { oldKeySet.contains($0.key) }) else { return }
+        let appended = newContents[(survivingTail + 1)...].filter { $0.isUser || $0.isReply }
+        // A catch-up burst (reconnect, newer page) is not a conversation beat.
+        guard !appended.isEmpty, appended.count <= 2 else { return }
+        for item in appended {
+            if item.isUser {
+                if removedUser > 0 { removedUser -= 1; continue }
+            } else if removedReply > 0 {
+                removedReply -= 1; continue
+            }
+            pendingEntrances[item.key] = (item.isUser, now + 0.8)
+            lastApplyEntrances += 1
+        }
+    }
+
+    /// Runs a pending entrance the first time the bubble is on screen. It is
+    /// a Core Animation presentation-only transform/opacity, never the view
+    /// frame, so frame and height updates during streaming never fight it.
+    private func runEntranceIfPending(_ cell: MacChatBubbleCell, key: String, onScreen: Bool) {
+        guard onScreen, let entrance = pendingEntrances.removeValue(forKey: key),
+              entrance.deadline > CACurrentMediaTime() else { return }
+        cell.wantsLayer = true
+        guard let layer = cell.layer else { return }
+        let timing = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+        let slide = CABasicAnimation(keyPath: "transform.translation.x")
+        slide.fromValue = (entrance.fromTrailing ? 1 : -1) * Self.entranceOffset
+        slide.toValue = 0
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        let group = CAAnimationGroup()
+        group.animations = [slide, fade]
+        group.duration = Self.entranceDuration
+        group.timingFunction = timing
+        group.fillMode = .backwards
+        layer.add(group, forKey: "kraki.entrance")
+        #if DEBUG
+        entranceLog.append((key, entrance.fromTrailing, CACurrentMediaTime()))
+        #endif
+    }
+
+    #if DEBUG
+    private(set) var entranceLog: [(key: String, fromTrailing: Bool, at: CFTimeInterval)] = []
+    #endif
 
     private func scheduleFullWindowWarmup() {
         guard !warmBatchActive,
@@ -841,6 +919,9 @@ final class MacChatDocumentView: NSView {
                 // cannot commit one stale-color frame during session switches.
                 cell.layoutSubtreeIfNeeded()
                 cell.isHidden = false
+            }
+            if !pendingEntrances.isEmpty, !cell.isPlaceholderFlag {
+                runEntranceIfPending(cell, key: item.key, onScreen: intersectsViewport)
             }
         }
 
@@ -1786,6 +1867,9 @@ struct MacChatItem {
     /// An AI reply (answer, frozen terminal card, live card): the ↑ control
     /// steps through these and new ones light the ↓ unseen dot.
     let isReply: Bool
+    /// The user's own message (landed or still pending). At the conversation
+    /// bottom the ↑ control hides while the latest item is one of these.
+    let isUser: Bool
     let makeContent: () -> MacChatBubbleContent
 
     init(
@@ -1795,6 +1879,7 @@ struct MacChatItem {
         estimatedHeight: CGFloat,
         visibleCharacterCount: Int = 0,
         isReply: Bool = false,
+        isUser: Bool = false,
         makeContent: @escaping () -> MacChatBubbleContent
     ) {
         self.seq = seq
@@ -1803,6 +1888,7 @@ struct MacChatItem {
         self.estimatedHeight = estimatedHeight
         self.visibleCharacterCount = visibleCharacterCount
         self.isReply = isReply
+        self.isUser = isUser
         self.makeContent = makeContent
     }
 }
@@ -2234,7 +2320,12 @@ final class MacChatScrollView: MacSmoothScrollView {
     /// Shared product policy. AppKit still owns native event delivery,
     /// virtualization, anchor restoration, and animation.
     private var scrollPolicy = ChatScrollPolicy()
-    var followingBottom: Bool { scrollPolicy.followingTail }
+    var followingBottom: Bool { sendTailLock || scrollPolicy.followingTail }
+    /// A local send follows the newest edge until the user scrolls. Without
+    /// this latch the just-inserted bubble (and a still-streaming reply) put
+    /// the geometry momentarily >24 pt from the bottom, the distance rule
+    /// dropped tail-following, and the Chat stopped short of the bottom.
+    private(set) var sendTailLock = false
     private var entryBottomLocked: Bool { scrollPolicy.entryBottomLocked }
     private var allowsEdgePaging: Bool { scrollPolicy.allowsEdgePaging }
     private var bottomContentInset: CGFloat = 0
@@ -2689,6 +2780,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         snapshotApplyActive = false
         suppressRunwayForNextReflect = false
         scrollPolicy.resetForEntry()
+        sendTailLock = false
         hasUserScrolled = false
         initialTailTrimRequested = false
         loadingOlder = false
@@ -2746,6 +2838,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         scrollSettlePending = false
         geometryAnchorLock = nil
         hasUserScrolled = true
+        sendTailLock = false
         scrollPolicy.beginUserInteraction(
             offset: contentView.bounds.minY,
             distanceToBottom: distanceToBottom
@@ -2861,7 +2954,7 @@ final class MacChatScrollView: MacSmoothScrollView {
             guard chatDocumentView.commitWarmedHeights() else { return }
         }
         let heightDelta = chatDocumentView.frame.height - oldHeight
-        if followingBottom || isEntryBottomLocked, abs(heightDelta) > 0.5 {
+        if (followingBottom || isEntryBottomLocked) && !bottomGlideActive, abs(heightDelta) > 0.5 {
             contentView.bounds.origin.y += heightDelta
         } else if let anchor,
                   let frame = chatDocumentView.frame(forKey: anchor.key) {
@@ -2873,7 +2966,9 @@ final class MacChatScrollView: MacSmoothScrollView {
 
     private func applyAnimatedLiveHeightStep(_ delta: CGFloat) {
         guard abs(delta) > 0.001 else { return }
-        if followingBottom || isEntryBottomLocked {
+        // A bottom glide re-targets every frame; compensating here as well
+        // would push it past its interpolated position and pull it back.
+        if (followingBottom || isEntryBottomLocked) && !bottomGlideActive {
             contentView.bounds.origin.y += delta
         }
         chatDocumentView.layoutSubtreeIfNeeded()
@@ -2957,7 +3052,15 @@ final class MacChatScrollView: MacSmoothScrollView {
     /// Anything submitted from the composer is a new message (as on iOS):
     /// return to the newest edge so the user sees what they just sent.
     func returnToNewestAfterLocalSubmit() {
+        sendTailLock = true
         jumpTapped()
+        // The controls must not ride over the message being sent: ↓ goes now
+        // (we are heading to the bottom) and ↑ rests in the low slot, hidden
+        // while the latest item is the user's own message.
+        setJumpButtonVisibility(jumpButton, material: jumpMaterial, shouldShow: false, animated: true)
+        setJumpButtonVisibility(latestStartButton, material: latestStartMaterial, shouldShow: false, animated: true)
+        placeLatestStart(raised: false, animated: false)
+        syncUnseenDot()
     }
 
     @objc private func jumpTapped() {
@@ -2983,6 +3086,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     @objc private func latestStartTapped() {
+        sendTailLock = false
         navigateToPreviousReplyStart()
     }
 
@@ -3098,7 +3202,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         bottomContentInset = max(0, inset)
         // The Chat viewport and scrollbar remain full-height. The Composer is a
         // completely independent overlay; a fixed document footer reserves its
-        // base 62pt footprint plus 16pt of visible breathing room.
+        // base footprint (MacChatView.effectiveBottomInputHeight) plus breathing room.
         contentInsets.bottom = 0
         scrollerInsets.bottom = 0
         // Add one point of rounding tolerance so a 24pt visible gap remains
@@ -3210,6 +3314,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         let scrollsOlder = event.keyCode == 116 || event.keyCode == 115 || event.keyCode == 126
         if scrollsOlder {
             geometryAnchorLock = nil
+            sendTailLock = false
             scrollPolicy.beginUserInteraction(
                 offset: contentView.bounds.minY,
                 distanceToBottom: distanceToBottom
@@ -3243,6 +3348,7 @@ final class MacChatScrollView: MacSmoothScrollView {
 
     private func preparePreciseScrollDelta(_ deltaY: CGFloat) {
         cancelScrollAnimation()
+        if abs(deltaY) > 0.01 { sendTailLock = false }
         geometryAnchorLock = nil
         hasUserScrolled = true
         if !liveScrollActive { beginScrollInteraction(scrollerKnob: false) }
@@ -3355,6 +3461,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         let hasScrollDelta = abs(event.scrollingDeltaY) > 0.01
             || abs(event.scrollingDeltaX) > 0.01
         if hasScrollDelta {
+            sendTailLock = false
             scrollPolicy.beginUserInteraction(
                 offset: contentView.bounds.minY,
                 distanceToBottom: distanceToBottom
@@ -3413,7 +3520,7 @@ final class MacChatScrollView: MacSmoothScrollView {
             in: clipView.bounds,
             runwayOverride: runwayOverride
         )
-        if followingBottom || isEntryBottomLocked {
+        if (followingBottom || isEntryBottomLocked) && !bottomGlideActive {
             let delta = chatDocumentView.frame.height - oldHeight
             if abs(delta) > 0.5 {
                 clipView.bounds.origin.y += delta
@@ -3550,7 +3657,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     var isPinnedToBottom: Bool {
-        scrollPolicy.isPinnedToTail(distanceToBottom: distanceToBottom)
+        sendTailLock || scrollPolicy.isPinnedToTail(distanceToBottom: distanceToBottom)
     }
     var isEntryBottomLocked: Bool { entryBottomLocked }
 
@@ -3582,8 +3689,11 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     /// End of the WHOLE conversation (unloaded newer history counts as not).
+    /// While the list is following the newest edge it is (or is gliding to
+    /// be) at the bottom; content that just arrived must not flash ↓/↑ for
+    /// the few frames before the pin or arrival glide catches up.
     private var isAtConversationBottom: Bool {
-        !hasUnloadedNewer && distanceToBottom <= 8
+        !hasUnloadedNewer && (distanceToBottom <= 8 || followingBottom)
     }
 
     /// The ↑/↓ controls keep their pre-motion state while the list moves
@@ -3597,8 +3707,11 @@ final class MacChatScrollView: MacSmoothScrollView {
         let hasContent = !chatDocumentView.itemKeys.isEmpty
         guard !moving || !hasContent || jumpButtonVisibilityTargets.isEmpty else { syncUnseenDot(); return }
         let showTail = hasContent && !isAtConversationBottom
-        // At the conversation bottom neither control shows (see iOS).
-        let showUp = hasContent && !isAtConversationBottom
+        // ↑ stays available at the bottom (resting in ↓'s slot, which lies in
+        // the Composer band below the last bubble) unless the newest item is
+        // the user's own message: there is nothing new to read back to yet.
+        let showUp = hasContent
+            && !(isAtConversationBottom && chatDocumentView.latestItemIsUser)
             && (previousReplyTarget() != nil || !diagnosticAtOldest)
         setJumpButtonVisibility(jumpButton, material: jumpMaterial, shouldShow: showTail, animated: animated)
         setJumpButtonVisibility(latestStartButton, material: latestStartMaterial, shouldShow: showUp, animated: animated)
@@ -3678,6 +3791,12 @@ final class MacChatScrollView: MacSmoothScrollView {
     func scrollToBottom(animated: Bool) {
         geometryAnchorLock = nil
         guard chatDocumentView.frame.height > 0 else { return }
+        // A running glide to the bottom re-targets every frame; a streaming
+        // pin must not cut it short into a jump.
+        if !animated, bottomGlideActive {
+            scrollPolicy.pinToTail(observedOffset: contentView.bounds.minY)
+            return
+        }
         let bottom = max(
             -topContentInset,
             chatDocumentView.frame.height - contentView.bounds.height
@@ -3694,6 +3813,7 @@ final class MacChatScrollView: MacSmoothScrollView {
                 self.scrollPolicy.pinToTail(observedOffset: self.contentView.bounds.minY)
                 self.updateJumpButtonVisibility(animated: true)
             })
+            bottomGlideActive = true
         } else {
             cancelScrollAnimation()
             contentView.bounds.origin = point
@@ -3731,7 +3851,10 @@ final class MacChatScrollView: MacSmoothScrollView {
         scrollAnimationTimer = timer
     }
 
+    private(set) var bottomGlideActive = false
+
     func cancelScrollAnimation() {
+        bottomGlideActive = false
         scrollAnimationTimer?.invalidate()
         scrollAnimationTimer = nil
         scrollAnimation = nil
@@ -3983,7 +4106,12 @@ struct MacChatListRepresentable: NSViewRepresentable {
                 )
             } else if hasUsableViewport,
                       wasPinned || context.coordinator.forcePinOnNextUpdate {
-                scrollView.scrollToBottom(animated: context.coordinator.forcePinOnNextUpdate)
+                // A new bubble arriving at the followed bottom: the list glides
+                // up to make room while the bubble slides in from its side.
+                scrollView.scrollToBottom(
+                    animated: context.coordinator.forcePinOnNextUpdate
+                        || scrollView.chatDocumentView.lastApplyEntrances > 0
+                )
                 context.coordinator.forcePinOnNextUpdate = false
             } else if let visibleAnchor,
                       let frame = scrollView.chatDocumentView.frame(forKey: visibleAnchor.key) {
@@ -4101,6 +4229,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
                     estimatedHeight: estimatedHeight(for: message),
                     visibleCharacterCount: utf8Length(message.content ?? message.result),
                     isReply: message.type == "agent_message",
+                    isUser: ["user_message", "send_input", "pending_input"].contains(message.type),
                     makeContent: {
                         MacChatBubbleContentBuilder.make(
                             message: message,
