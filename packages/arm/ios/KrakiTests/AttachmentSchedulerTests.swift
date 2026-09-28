@@ -33,6 +33,12 @@ final class AttachmentSchedulerTests: XCTestCase {
         await settle()
     }
 
+    /// Polls until `condition` holds (bounded), so slow CI disks are not a guess.
+    private func waitUntil(_ timeout: TimeInterval = 10, _ condition: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline { await settle(0.02) }
+    }
+
     private func settle(_ seconds: TimeInterval = 0.02) async {
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
@@ -133,13 +139,14 @@ final class AttachmentSchedulerTests: XCTestCase {
         first.setTransportReady(true)
         first.requestIfNeeded(id: "c", sessionId: "s", priority: .userOpened)
         await chunk(first, "c", 0, 1, "cached")
-        await settle(0.2) // disk write
+        await first.waitForDiskForTesting()
 
         requests = []
         let second = makeStore(dwell: 0)
         second.setTransportReady(true)
         second.requestIfNeeded(id: "c", sessionId: "s")
-        await settle(0.2)
+        await second.waitForDiskForTesting()
+        await waitUntil { second.text(for: "c") != nil }
         XCTAssertEqual(second.text(for: "c"), "cached")
         XCTAssertTrue(requests.isEmpty)
     }
@@ -178,14 +185,16 @@ final class AttachmentSchedulerTests: XCTestCase {
             store.requestIfNeeded(id: id, sessionId: "s", priority: .userOpened)
             await chunk(store, id, 0, 1, big)
         }
-        await settle(1.0) // persisted
+        await store.waitForDiskForTesting()
+        await settle() // persisted flags hop back to the main actor
         store.release(id: "a", priority: .userOpened)
         store.release(id: "b", priority: .userOpened)
         XCTAssertNil(store.state(for: "a"), "oldest released entry evicted over the memory budget")
         guard case .ready = store.state(for: "b") else { return XCTFail("recent entry kept") }
         let before = requests.count
         store.requestIfNeeded(id: "a", sessionId: "s")
-        await settle(1.0)
+        await store.waitForDiskForTesting()
+        await waitUntil { store.text(for: "a") != nil }
         XCTAssertEqual(store.text(for: "a")?.count, big.count)
         XCTAssertEqual(requests.count, before, "reloaded from disk, not the network")
     }
@@ -201,5 +210,20 @@ final class AttachmentSchedulerTests: XCTestCase {
         AttachmentStore.trimDiskCache(dir, budget: 1000)
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("old").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("new").path))
+    }
+
+    func testSameImageInTwoMessagesStaysWantedUntilTheLastViewLeaves() async {
+        let store = makeStore(dwell: 0)
+        store.setTransportReady(true)
+        store.requestIfNeeded(id: "shared", sessionId: "s")
+        store.requestIfNeeded(id: "shared", sessionId: "s")
+        await settle()
+        XCTAssertEqual(requests.map(\.id), ["shared"])
+        store.release(id: "shared")
+        await chunk(store, "shared", 0, 2, "a")
+        XCTAssertEqual(requests.map(\.index), [0, 1], "still on screen in the other message")
+        store.release(id: "shared")
+        await chunk(store, "shared", 1, 2, "b")
+        XCTAssertEqual(store.text(for: "shared"), "ab", "an in-flight chunk still completes the transfer")
     }
 }

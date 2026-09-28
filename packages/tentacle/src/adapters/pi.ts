@@ -32,6 +32,8 @@ import type { SessionContext } from '../session-manager.js';
 import type { ModelDetail, SessionUsage, ReasoningEffort, ToolArgs } from '@kraki/protocol';
 import { createLogger } from '../logger.js';
 import { REPORT_MAX_BYTES } from '../report-policy.js';
+
+const LEGACY_SHOW_HTML_MAX_BYTES = 10 * 1024 * 1024;
 import { getKrakiHome, getConfigDir } from '../config.js';
 import { PI_KRAKI_TOOLS_SOURCE } from './pi-kraki-tools.js';
 import { DEFAULT_SESSION_MODE, normalizeSessionMode } from '@kraki/protocol';
@@ -1175,7 +1177,10 @@ export class PiAdapter extends AgentAdapter {
               const html = readFileSync(htmlPath);
               const title = typeof (details as { title?: unknown }).title === 'string' ? (details as { title: string }).title : undefined;
               const name = typeof (details as { name?: unknown }).name === 'string' ? (details as { name: string }).name : 'report.html';
-              if (html.length <= REPORT_MAX_BYTES) {
+              // show_report validates its own 1 MB policy before returning; a Pi
+              // session started before the rename still has show_html, whose
+              // original 10 MB safety cap stays until that session restarts.
+              if (html.length <= (toolName === 'show_html' ? LEGACY_SHOW_HTML_MAX_BYTES : REPORT_MAX_BYTES)) {
                 outputAttachments.push(this.attachmentStore.put(sessionId, html, 'text/html', { name, caption: title }));
               }
             } catch (err) {

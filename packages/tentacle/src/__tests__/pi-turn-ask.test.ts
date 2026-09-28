@@ -694,6 +694,23 @@ describe('pi outbound images (tool result → attachment store)', () => {
     }
   });
 
+  it.each([['show_report', false], ['show_html', true]] as const)('applies the %s size cap (legacy stays 10 MB)', async (tool, stored) => {
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-report-cap-'));
+    const htmlPath = join(dir, 'big.html');
+    writeFileSync(htmlPath, Buffer.alloc(2 * 1024 * 1024, 0x61));
+    try {
+      const { adapter, emit, put } = makeAdapterWithStore();
+      adapter.onToolComplete = vi.fn();
+      await emit({
+        type: 'tool_execution_end', toolName: tool, toolCallId: 'cap-1', isError: false,
+        result: { content: [{ type: 'text', text: 'ok' }], details: { htmlPath, name: 'big.html' } },
+      });
+      expect(put).toHaveBeenCalledTimes(stored ? 1 : 0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('ignores an htmlPath handle from tools other than show_report', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'kraki-show-html-spoof-'));
     const htmlPath = join(dir, 'secret.html');

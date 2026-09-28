@@ -128,6 +128,10 @@ final class AttachmentStore {
     /// oldest first). Views still showing an attachment are never evicted;
     /// evicted entries reload from the disk cache when shown again.
     @ObservationIgnored private var releasedReady: [String] = []
+    /// Views currently holding each attachment, per priority. Ids are content
+    /// hashes, so the same image can be on screen in several messages; only
+    /// the last holder going away releases it.
+    @ObservationIgnored private var holders: [String: [AttachmentPriority: Int]] = [:]
     @ObservationIgnored private var persisted: Set<String> = []
     static let memoryBudgetBytes = 64 * 1024 * 1024
     static let diskBudgetBytes: Int64 = 512 * 1024 * 1024
@@ -167,6 +171,7 @@ final class AttachmentStore {
     /// priority of an existing request). A request after an error retries.
     @MainActor
     func requestIfNeeded(id: String, sessionId: String, priority: AttachmentPriority = .visible) {
+        holders[id, default: [:]][priority, default: 0] += 1
         releasedReady.removeAll { $0 == id }
         if case .ready = states[id] { return }
         if hydrating.contains(id) { return }
@@ -198,8 +203,14 @@ final class AttachmentStore {
     /// visible requests stop; received chunks are kept for later.
     @MainActor
     func release(id: String, priority: AttachmentPriority = .visible) {
+        var held = holders[id] ?? [:]
+        held[priority] = max(0, (held[priority] ?? 0) - 1)
+        if held[priority] == 0 { held[priority] = nil }
+        holders[id] = held.isEmpty ? nil : held
+        // Another view still shows it at this priority or higher: keep it.
+        if held.contains(where: { $0.key >= priority }) { return }
         dwellWork.removeValue(forKey: id)?.cancel()
-        if case .ready = states[id] {
+        if held.isEmpty, case .ready = states[id] {
             releasedReady.removeAll { $0 == id }
             releasedReady.append(id)
             evictMemoryIfNeeded()
@@ -245,6 +256,13 @@ final class AttachmentStore {
     }
 
     #if DEBUG
+    /// Tests wait for queued disk reads/writes instead of guessing disk speed.
+    func waitForDiskForTesting() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            diskQueue.async { continuation.resume() }
+        }
+    }
+
     /// Test introspection: the chunk currently requested, if any.
     var inFlightForTesting: (id: String, index: Int)? {
         inFlight.map { ($0.id, $0.index) }
