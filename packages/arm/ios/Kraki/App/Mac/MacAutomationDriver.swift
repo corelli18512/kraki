@@ -502,6 +502,33 @@ final class MacAutomationDriver {
             let delivery = (params["delivery"] as? String).flatMap(CommandSender.InputDelivery.init(rawValue:)) ?? .prompt
             let accepted = appState.commandSender?.sendInput(sessionId: sessionId, text: text, delivery: delivery) ?? false
             send(result: ["accepted": accepted], id: id, on: connection)
+        case "presentSessionInfo":
+            postUIAction("info", selectedSessionId.map { ["sessionId": $0] } ?? [:])
+            send(result: ["requested": true], id: id, on: connection)
+        case "chooseReasoningEffort":
+            // Operate the real SwiftUI Picker's native control, not SessionStore
+            // or CommandSender directly. No OS-level mouse/focus automation.
+            guard let raw = params["effort"] as? String,
+                  ReasoningEffort(rawValue: raw) != nil else {
+                send(error: "invalid_params", message: "valid effort is required", id: id, on: connection); return
+            }
+            func controls(in view: NSView) -> [NSSegmentedControl] {
+                (view as? NSSegmentedControl).map { [$0] } ?? view.subviews.flatMap { controls(in: $0) }
+            }
+            let pickers = NSApp.windows.filter { $0.sheetParent != nil }
+                .compactMap(\.contentView).flatMap { controls(in: $0) }
+            let matches = pickers.flatMap { picker in
+                (0..<picker.segmentCount).compactMap { index -> (NSSegmentedControl, Int)? in
+                    picker.label(forSegment: index)?.lowercased() == raw ? (picker, index) : nil
+                }
+            }
+            guard matches.count == 1, let (picker, index) = matches.first,
+                  picker.isEnabled, picker.isEnabled(forSegment: index), let action = picker.action else {
+                send(error: "invalid_state", message: "Open Session Info with a supported effort picker first", id: id, on: connection); return
+            }
+            picker.selectedSegment = index
+            let dispatched = picker.sendAction(action, to: picker.target)
+            send(result: ["dispatched": dispatched, "effort": raw], id: id, on: connection)
         case "setMode":
             guard let appState,
                   let sessionId = params["sessionId"] as? String,
@@ -2039,6 +2066,12 @@ final class MacAutomationDriver {
                     "lastSeq": session.lastSeq, "messageCount": session.messageCount,
                 ]
                 if let model = session.model { item["model"] = model }
+                if let effort = session.reasoningEffort { item["reasoningEffort"] = effort.rawValue }
+                let card = SessionCardProjection.make(
+                    session: session, device: appState.deviceStore.devices[session.deviceId],
+                    preview: appState.sessionStore.sessionPreviews[session.id], draft: nil
+                )
+                if let effort = card.effortLabel { item["cardEffortLabel"] = effort }
                 if let preview = appState.sessionStore.sessionPreviews[session.id] {
                     item["preview"] = preview.text
                     item["previewType"] = preview.type

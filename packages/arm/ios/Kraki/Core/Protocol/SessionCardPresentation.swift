@@ -61,6 +61,9 @@ struct SessionCardProjection: Equatable {
     let title: String
     let machineName: String?
     let model: String?
+    /// Authoritative per-session effort. Never infer it from model defaults or
+    /// the client's last-used picker preference (other sessions may differ).
+    let effortLabel: String?
     let previewText: String?
     let timestamp: String
     let timeLabel: String
@@ -96,6 +99,7 @@ struct SessionCardProjection: Equatable {
             title: session.displayTitle,
             machineName: normalizedMachineName,
             model: session.model,
+            effortLabel: session.model?.isEmpty == false ? session.reasoningEffort?.rawValue : nil,
             previewText: previewText?.isEmpty == true ? nil : previewText,
             timestamp: timestamp,
             timeLabel: SessionTimeFormatter.format(timestamp),

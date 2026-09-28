@@ -166,6 +166,8 @@ Supported methods:
 - `selectSession`
 - `sendInput`
 - `setMode`
+- `presentSessionInfo` — opens the selected session's real info sheet
+- `chooseReasoningEffort` — `{ "effort": "low" }`; selects the real info sheet's native segmented control and dispatches its action, without OS-level mouse/focus events. Requires an open sheet and a supported effort. The returned `dispatched` flag is not a server acknowledgement: verify `reasoningEffort` / `cardEffortLabel` via `snapshot`, plus capture the sidebar after the round-trip.
 - `abort`
 - `permission`
 - `answer`

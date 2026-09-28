@@ -193,6 +193,31 @@ import CryptoKit
         XCTAssertEqual(host.fittingSize.height, idleHeight, accuracy: 0.5)
     }
 
+    /// Real MacChatView cold open: the trailing question is drawn while the head
+    /// is unknown; session_list then reports that head without a store change.
+    func testColdOpenQuestionGetsChoicesWhenHeadArrives() throws {
+        app.messageProvider?.observeLiveMessageSeq(sid, seq: 40, kind: "test")
+        let question: [String: Any] = [
+            "type": "agent_message", "seq": 1, "sessionId": sid, "deviceId": "voice-test-device",
+            "timestamp": ISO8601.now(),
+            "payload": ["content": "我看了一下，有两个方案。", "question": ["id": "cold-q", "text": "选哪个？", "choices": ["方案甲", "方案乙"]]]
+        ]
+        app.messageProvider?.ingestTailCandidate(sid, json: try JSONSerialization.data(withJSONObject: question))
+        drain(700)
+        func choices() -> [String]? {
+            views(window.contentView!).compactMap { $0 as? MacChatBubbleCell }
+                .compactMap { $0.content?.action?.choices }.first
+        }
+        let before = choices()
+        // session_list: the authoritative head equals the loaded window.
+        app.messageProvider?.setTentacleInfo(sessionId: sid, lastSeq: 1, deviceId: "voice-test-device")
+        app.sessionStore.sessions[sid]?.lastSeq = 1
+        drain(900)
+        let after = choices()
+        XCTAssertNil(before, "undetermined while the head is unknown")
+        XCTAssertEqual(after, ["方案甲", "方案乙"], "choices must appear once the head is known")
+    }
+
     func testNativeSendCorrectsInBubbleAndFreesComposer() throws {
         try capture("01-idle")
         try press("chat-voice-microphone")

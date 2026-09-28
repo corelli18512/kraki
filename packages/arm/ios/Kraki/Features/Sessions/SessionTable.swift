@@ -299,6 +299,7 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         hasher.combine(session.deviceId)
         hasher.combine(session.deviceName)
         hasher.combine(session.model ?? "")
+        hasher.combine(projection.effortLabel ?? "")
         hasher.combine(session.state)
         hasher.combine(projection.previewText ?? "")
         hasher.combine(projection.timestamp)
