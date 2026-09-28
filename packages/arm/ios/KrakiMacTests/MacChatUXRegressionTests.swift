@@ -471,6 +471,84 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         }
     }
 
+    // MARK: New bubble entrance
+
+    private func entrances(_ fx: Fx) -> [(key: String, fromTrailing: Bool)] {
+        fx.doc.entranceLog.map { ($0.key, $0.fromTrailing) }
+    }
+
+    /// Records every 8 ms and returns the largest backward step of the list
+    /// offset (the list must only glide toward the newest edge).
+    private func watchGlide(_ fx: Fx, ms: Int) -> CGFloat {
+        var last = fx.sv.contentView.bounds.minY, worst: CGFloat = 0
+        let end = CACurrentMediaTime() + Double(ms) / 1000
+        while CACurrentMediaTime() < end {
+            drain(8)
+            let y = fx.sv.contentView.bounds.minY
+            worst = max(worst, last - y); last = y
+        }
+        return worst
+    }
+
+    /// Each new bubble enters from its own side while the list glides up; a
+    /// bubble that only changes identity (pending → echo, live → landed)
+    /// does not enter again, and session entry animates nothing.
+    func testNewBubblesSlideInFromTheirSideOnce() throws {
+        let fx = try makeFixture(total: 60)
+        drain(1_200)
+        XCTAssertTrue(entrances(fx).isEmpty, "session entry has no entrances")
+
+        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "帮我再看一下这个问题")
+        NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
+        let back1 = watchGlide(fx, ms: 600)
+        XCTAssertEqual(entrances(fx).count, 1)
+        XCTAssertEqual(entrances(fx).last?.fromTrailing, true, "the user's bubble enters from the right")
+        XCTAssertLessThanOrEqual(back1, 0.5, "the list glides up without stepping back")
+        XCTAssertLessThanOrEqual(distanceToBottom(fx), 1)
+
+        let clientId = fx.app.commandSender?.pendingInputs(sid).last?.payload["clientId"]?.stringValue ?? ""
+        fx.app.sessionStore.sessions[sid]?.state = .active
+        fx.app.messageStore.beginCardTurn(sid)
+        try ingest(fx, ["type": "user_message", "seq": 61, "sessionId": sid, "deviceId": dev,
+                        "timestamp": "2026-09-01T00:00:05.000Z",
+                        "payload": ["content": "帮我再看一下这个问题", "clientId": clientId]])
+        drain(500)
+        XCTAssertEqual(entrances(fx).count, 1, "the echo replaces the pending bubble without a second entrance")
+
+        let before = fx.sv.contentView.bounds.minY
+        fx.app.messageStore.applyCardMessage(sid, "好的，我先看一下相关代码。", reset: false)
+        var back2: CGFloat = 0, downShown = false
+        for k in 0..<24 {
+            fx.app.messageStore.applyCardMessage(sid, "第\(k)段补充说明，让回复继续变长。", reset: false)
+            back2 = max(back2, watchGlide(fx, ms: 33))
+            downShown = downShown || fx.sv.automationControlsVisible.down
+        }
+        XCTAssertFalse(downShown, "a reply arriving at the followed bottom never flashes ↓")
+        XCTAssertTrue(fx.sv.automationControlsVisible.up, "the newest item is now an AI reply: ↑ in the low slot")
+        XCTAssertEqual(entrances(fx).count, 2, "the reply enters once, not per token")
+        XCTAssertEqual(entrances(fx).last?.fromTrailing, false, "the AI bubble enters from the left")
+        XCTAssertEqual(entrances(fx).last?.key, "__live__")
+        XCTAssertGreaterThan(fx.sv.contentView.bounds.minY, before)
+        XCTAssertLessThanOrEqual(back2, 0.5, "streaming during the arrival glide never pulls the list back")
+        XCTAssertLessThanOrEqual(distanceToBottom(fx), 1, "the streaming reply stays followed")
+
+        try land(fx, seq: 62, text: Self.zh + Self.zh)
+        fx.app.sessionStore.sessions[sid]?.state = .idle
+        drain(700)
+        XCTAssertEqual(entrances(fx).count, 2, "landing the answer is not a new bubble")
+        XCTAssertLessThanOrEqual(distanceToBottom(fx), 1)
+    }
+
+    /// Older history paging in at the top is not a conversation beat.
+    func testOlderHistoryDoesNotAnimateEntrances() throws {
+        let fx = try makeFixture(total: 120)
+        drain(1_200)
+        for _ in 0..<80 { _ = fx.sv.automationPreciseScrollPacket(deltaY: 60); drain(8) }
+        drain(1_500)
+        XCTAssertLessThan(fx.app.messageStore.windows[sid]?.topSeq ?? 999, 90, "fixture: older pages loaded")
+        XCTAssertTrue(entrances(fx).isEmpty)
+    }
+
     func testUnconfirmedInputOffersSameIDRetryAndDelete() throws {
         let fx = try makeFixture(total: 20)
         fx.app.commandSender?.confirmationTimeout = .milliseconds(300)
