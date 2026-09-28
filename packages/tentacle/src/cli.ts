@@ -1189,7 +1189,7 @@ async function main(): Promise<void> {
 
   if (cmd === 'agents') {
     const { runAgentsCheckJson } = await import('./agents-check.js');
-    process.exitCode = await runAgentsCheckJson();
+    process.exitCode = await runAgentsCheckJson(args);
     // Adapters can leave child processes / timers behind; this is a one-shot probe.
     gracefulExit(process.exitCode ?? 0);
     return;

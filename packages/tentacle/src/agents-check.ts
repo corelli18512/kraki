@@ -104,9 +104,11 @@ export async function checkAgent(
 export async function runAgentsCheckWith(
   emit: (event: AgentsCheckEvent) => void,
   deps: AgentsCheckDeps,
+  only?: string[],
 ): Promise<AgentCheckResult[]> {
-  for (const agent of SETUP_AGENTS) emit({ event: 'checking', id: agent.id as AgentId, name: agent.name });
-  const results = await Promise.all(SETUP_AGENTS.map(async (agent) => {
+  const agents = only?.length ? SETUP_AGENTS.filter((a) => only.includes(a.id)) : SETUP_AGENTS;
+  for (const agent of agents) emit({ event: 'checking', id: agent.id as AgentId, name: agent.name });
+  const results = await Promise.all(agents.map(async (agent) => {
     const result = await checkAgent(agent, deps);
     emit({ event: 'agent', ...result });
     return result;
@@ -115,15 +117,25 @@ export async function runAgentsCheckWith(
   return results;
 }
 
-export async function runAgentsCheckJson(): Promise<number> {
+export async function runAgentsCheckJson(args: string[] = []): Promise<number> {
   // Spawned by the Mac app with LaunchServices' minimal environment: resolve
   // agents (nvm, homebrew, …) with the user's login-shell PATH, like the daemon.
   const { hydrateLoginShellEnv } = await import('./shell-env.js');
   hydrateLoginShellEnv();
+  // Agents inherit our working directory and some scan it on start. Run from
+  // an empty scratch folder so the check never touches the user's folders
+  // (which would raise macOS Desktop/Documents/Downloads prompts before Full
+  // Disk Access is granted).
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  process.chdir(mkdtempSync(join(tmpdir(), 'kraki-agents-')));
   const { createAgentAdapter } = await import('./adapters/multi.js');
   await runAgentsCheckWith(
     (event) => process.stdout.write(JSON.stringify(event) + '\n'),
     { checkCli: checkAgentCli, createAdapter: (id) => createAgentAdapter(id), timeoutMs: 45_000 },
+    // `--only codex,pi`: check a subset (diagnostics).
+    args.includes('--only') ? (args[args.indexOf('--only') + 1] ?? '').split(',') : undefined,
   );
   return 0;
 }

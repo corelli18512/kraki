@@ -83,22 +83,30 @@ struct MacEntryGateView: View {
         ZStack {
             entryBackdrop
 
-            VStack(spacing: 0) {
-                Spacer(minLength: 48)
+            // Setup step 1 lists four agents plus Full Disk Access: on a small
+            // screen it is taller than the window, so the page scrolls.
+            GeometryReader { proxy in
+                ScrollView(.vertical) {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 48)
 
-                signedOutBrand
+                        signedOutBrand
 
-                signedOutActions
-                    .frame(maxWidth: 420, minHeight: 210, alignment: .top)
-                    .padding(.top, 24)
+                        signedOutActions
+                            .frame(maxWidth: 480, minHeight: 210, alignment: .top)
+                            .padding(.top, 24)
 
-                Spacer(minLength: 36)
+                        Spacer(minLength: 36)
 
-                footerStatus
-                    .frame(minHeight: 24)
+                        footerStatus
+                            .frame(minHeight: 24)
+                    }
+                    .padding(.horizontal, 48)
+                    .padding(.vertical, 34)
+                    .frame(maxWidth: .infinity, minHeight: proxy.size.height)
+                }
+                .scrollBounceBehavior(.basedOnSize)
             }
-            .padding(.horizontal, 48)
-            .padding(.vertical, 34)
         }
     }
 
