@@ -171,6 +171,11 @@ final class MessageRouter {
             if let deviceDict = json["device"] as? [String: Any],
                let summary = DeviceSummary(json: deviceDict) {
                 appState?.deviceStore.addDevice(summary)
+                // A Tentacle that was away may have missed inputs the Relay
+                // could not hold; re-send what is still waiting for it.
+                if summary.role == .tentacle {
+                    appState?.commandSender?.resendPendingInputs(deviceId: summary.id, reason: "tentacle_online")
+                }
             }
 
         case "device_left":
@@ -881,6 +886,13 @@ final class MessageRouter {
 
         if let version = payload?["version"] as? String {
             appState.deviceStore.setDeviceVersion(deviceId, version: version)
+        }
+        let features = payload?["features"] as? [String] ?? []
+        appState.deviceStore.setDeviceFeatures(deviceId, features: features)
+        if features.contains("idempotent_input") {
+            // Relaunch/reconnect: this Tentacle can take our pending inputs
+            // again safely now that we know it deduplicates.
+            appState.commandSender?.resendPendingInputs(deviceId: deviceId, reason: "greeting")
         }
         // Greeting fully landed — clear the amber "connecting" dot.
         // This must come AFTER `setDeviceOnline(true)` above (which

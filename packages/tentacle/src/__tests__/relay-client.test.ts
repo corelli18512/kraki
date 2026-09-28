@@ -1355,6 +1355,42 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
+  it('advertises idempotent_input in its greeting so apps may re-send automatically', () => {
+    const { ws, cleanup } = buildClientWithStore();
+    try {
+      const greeting = decodePulseSends(ws.sent).find((m) => m.type === 'device_greeting');
+      expect(greeting?.payload.features).toContain('idempotent_input');
+    } finally { cleanup(); }
+  });
+
+  it('re-echoes the stored user_message when a client retries an input it already sent', async () => {
+    const { ws, sm, adapter, cleanup } = buildClientWithStore();
+    try {
+      const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+      const text = 'already here';
+      smMock.getInputLedgerEntry.mockReturnValue({
+        version: 1, clientId: 'cid-echo', status: 'delivered', requestedDelivery: 'prompt', delivery: 'prompt',
+        turnId: 'sess_1:7', contentLength: text.length, userSeq: 7, updatedAt: new Date().toISOString(),
+        contentHash: createHash('sha256').update(JSON.stringify({ text, attachments: [] })).digest('hex'),
+      });
+      smMock.findUserMessageSeqByClientId.mockReturnValue(7);
+      smMock.getMessagesAfterSeq.mockImplementation((_sid: string, after: number) => after === 6 ? [{
+        seq: 7, type: 'user_message', ts: '2026-09-28T00:00:00.000Z',
+        payload: JSON.stringify({ type: 'user_message', sessionId: 'sess_1', payload: { content: text, clientId: 'cid-echo' } }),
+      }] : []);
+      ws.sent.length = 0;
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'send_input', sessionId: 'sess_1', deviceId: 'consumer-dev', seq: 0,
+        timestamp: new Date().toISOString(), payload: { text, clientId: 'cid-echo' },
+      })));
+      await vi.waitFor(() => {
+        const echo = decodePulseSends(ws.sent).find((m) => m.type === 'user_message');
+        expect(echo).toMatchObject({ seq: 7, sessionId: 'sess_1', payload: { clientId: 'cid-echo', content: text } });
+      });
+      expect(adapter.sendMessage).not.toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+
   it('rate-limits legacy whole-file attachment requests instead of bursting every chunk', () => {
     vi.useFakeTimers();
     const { ws, store, cleanup } = buildClientWithStore();
@@ -2617,6 +2653,40 @@ describe('RelayClient pending-question digest', () => {
     expect(ledger.get('cid-once')?.status).toBe('delivered');
   });
 
+  it('never dispatches twice when a client retries an input still queued behind a running turn', async () => {
+    const { adapter, sm, ws } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    const ledger = new Map<string, Record<string, unknown>>();
+    smMock.getInputLedgerEntry.mockImplementation((_sessionId: string, clientId: string) => ledger.get(clientId) ?? null);
+    smMock.recordInputLedger.mockImplementation((_sessionId: string, entry: Record<string, unknown>) => {
+      ledger.set(String(entry.clientId), { ...entry });
+    });
+    const send = (seq: number, text: string, clientId: string) => ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq,
+      timestamp: new Date().toISOString(), payload: { text, clientId },
+    })));
+
+    send(800, 'running', 'cid-running');
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    send(801, 'queued', 'cid-queued');
+    await vi.waitFor(() => expect(ledger.get('cid-queued')?.status).toBe('persisted'));
+    // The app lost the echo (reconnect) and re-sends the same clientId while
+    // the first copy is still waiting for the running turn to finish.
+    send(802, 'queued', 'cid-queued');
+    send(803, 'queued', 'cid-queued');
+    await Promise.resolve();
+
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+    // Let the queued turn finish too: a wrongly re-admitted copy would run now.
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    await vi.advanceTimersByTimeAsync(50);
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    await vi.advanceTimersByTimeAsync(50);
+    expect(adapter.sendMessage).toHaveBeenCalledTimes(2);
+    expect(smMock.appendMessage.mock.calls.filter((call) => call[1] === 'user_message')).toHaveLength(2);
+  });
+
   it('retries a rejected adapter input with the same clientId without appending it twice', async () => {
     const { adapter, sm, ws } = buildClient();
     const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
@@ -3335,5 +3405,33 @@ describe('RelayClient pending-question digest', () => {
     })));
     const inners = decodePulseSends(ws.sent);
     expect(inners.some((m) => m.type === 'card_action' || m.type === 'agent_message_delta')).toBe(false);
+  });
+});
+
+describe('RelayClient reconnect backoff', () => {
+  it('backs off exponentially with jitter and resets only after authentication', () => {
+    vi.useFakeTimers();
+    const delays: number[] = [];
+    const realSetTimeout = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => {
+      delays.push(ms ?? 0);
+      return realSetTimeout(() => {}, 0);
+    }) as typeof setTimeout);
+    try {
+      const client = new RelayClient(createAdapter(), createSessionManager(), {
+        relayUrl: 'ws://localhost:1', authMethod: 'open', device: { name: 'T', role: 'tentacle' }, reconnectDelay: 1000,
+      });
+      const schedule = () => (client as unknown as { scheduleReconnect(): void }).scheduleReconnect();
+      const attempts = (n: number) => { (client as unknown as { reconnectAttempts: number }).reconnectAttempts = n; };
+      for (let n = 0; n < 8; n++) { attempts(n); schedule(); }
+      const expected = [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000];
+      delays.forEach((d, i) => {
+        expect(d).toBeGreaterThanOrEqual(expected[i] * 0.8);
+        expect(d).toBeLessThanOrEqual(expected[i] * 1.2);
+      });
+    } finally {
+      spy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

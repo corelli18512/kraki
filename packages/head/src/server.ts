@@ -51,6 +51,10 @@ interface ClientState {
   lastPingSentAt?: number;
   /** Diagnostic: last time we received a pong from this client (ms epoch). */
   lastPongRecvAt?: number;
+  /** Last time any frame arrived from this client (ms epoch). */
+  lastInboundAt?: number;
+  /** ws.bufferedAmount when the last ping was queued. */
+  bufferedAtPing?: number;
 }
 
 interface PairingToken {
@@ -171,6 +175,12 @@ export class HeadServer {
       const now = Date.now();
       for (const [deviceId, ws] of this.connections) {
         const state = this.clients.get(ws);
+        if (state && !state.isAlive && this.linkProgressing(ws, state)) {
+          // The pong is queued behind our own backlog (a congested downlink)
+          // or the client is actively sending: slow, not dead.
+          getLogger().debug('Pong late but link is progressing', { deviceId, bufferedAmount: ws.bufferedAmount });
+          state.isAlive = true;
+        }
         if (state && !state.isAlive) {
           // Missed last pong — connection is dead. Log diagnostic timing so
           // post-mortems can tell network drop from event-loop block.
@@ -193,6 +203,7 @@ export class HeadServer {
               state.pongOverdueAt = now + PONG_GRACE_MS;
               state.pendingLivenessBroadcast = false;
               state.lastPingSentAt = now;
+              state.bufferedAtPing = ws.bufferedAmount;
             }
             getLogger().debug('Sent ping', {
               deviceId,
@@ -255,11 +266,22 @@ export class HeadServer {
       if (state.pongOverdueAt === null) continue;
       if (state.pendingLivenessBroadcast) continue;
       if (now <= state.pongOverdueAt) continue;
+      if (this.linkProgressing(ws, state)) continue;
 
       state.pendingLivenessBroadcast = true;
       getLogger().debug('Broadcasting device_pending (pong overdue)', { deviceId });
       this.broadcastDevicePending(state.userId, deviceId);
     }
+  }
+
+  /** A missing pong alone does not prove a dead link: when the downlink is
+   *  congested the pong answers a ping that is still queued behind our own
+   *  backlog. The link is alive if the client sent anything since the ping,
+   *  or if our send buffer is draining. */
+  private linkProgressing(ws: WebSocket, state: ClientState): boolean {
+    if (state.lastPingSentAt === undefined) return false;
+    if ((state.lastInboundAt ?? 0) > state.lastPingSentAt) return true;
+    return state.bufferedAtPing !== undefined && state.bufferedAtPing > 0 && ws.bufferedAmount < state.bufferedAtPing;
   }
 
   /** Test hook: force a liveness sweep without waiting for the timer. */
@@ -352,6 +374,7 @@ export class HeadServer {
     ws.on('pong', () => { this.onPongReceived(state); });
 
     ws.on('message', (data) => {
+      state.lastInboundAt = Date.now();
       try {
         const msg = JSON.parse(data.toString());
         if (!isValidMessage(msg)) {
@@ -1780,6 +1803,7 @@ export class HeadServer {
   forcePingPass(): void {
     for (const [deviceId, ws] of this.connections) {
       const state = this.clients.get(ws);
+      if (state && !state.isAlive && this.linkProgressing(ws, state)) state.isAlive = true;
       if (state && !state.isAlive) {
         getLogger().info('Terminating stale connection (no pong)', { deviceId });
         this.removeConnection(deviceId);
@@ -1793,6 +1817,8 @@ export class HeadServer {
           if (state) {
             state.pongOverdueAt = Date.now() + PONG_GRACE_MS;
             state.pendingLivenessBroadcast = false;
+            state.lastPingSentAt = Date.now();
+            state.bufferedAtPing = ws.bufferedAmount;
           }
         }
       } catch {
@@ -1813,6 +1839,8 @@ export class HeadServer {
     state.isAlive = false;
     state.pongOverdueAt = Date.now() + PONG_GRACE_MS;
     state.pendingLivenessBroadcast = false;
+    state.lastPingSentAt = Date.now();
+    state.bufferedAtPing = ws.bufferedAmount;
   }
 
   /** Test hook: expire the pong grace timer for a specific device so the next

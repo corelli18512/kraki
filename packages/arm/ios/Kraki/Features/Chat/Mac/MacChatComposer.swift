@@ -160,7 +160,7 @@ struct MacChatComposer: View {
             let name = device?.name ?? session?.deviceName ?? "Device"
             return "\(name) is offline — message will deliver when it reconnects."
         }
-        if !appState.isFullyOnline { return "Reconnecting…" }
+        if appState.showsReconnecting { return "Reconnecting…" }
         return nil
     }
 

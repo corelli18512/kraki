@@ -581,6 +581,10 @@ export interface DeviceGreetingMessage extends BaseEnvelope {
     kind?: string;
     agents?: import('./devices.js').AgentCapabilities[];
     version?: string;
+    /** Behaviours an app may rely on. `idempotent_input`: a `send_input`
+     *  retried with the same clientId is never dispatched twice and is
+     *  re-echoed, so apps may re-send unconfirmed inputs automatically. */
+    features?: string[];
   };
 }
 

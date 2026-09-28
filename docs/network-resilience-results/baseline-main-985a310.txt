@@ -1,0 +1,35 @@
+{"controlPort":65128,"appPort":65123,"headPort":65122,"tentaclePort":65124,"sessionId":"mul4omi6-iywygqle","tentacleId":"dev_82496301-615"}
+PASS test_A1_flashReset()
+PASS test_A2_outage15s()
+FAILED test_A2_outage45s()
+    NetworkResilienceTests.swift:229: XCTAssertLessThanOrEqual failed: ("16.235674023628235") is greater than ("3.0") - G4: reconnect ≤3 s after the network returns
+FAILED test_A3_halfOpen()
+    NetworkResilienceTests.swift:244: XCTAssertEqual failed: ("["D3F6C42A-ED28-471C-9150-104E42FC3ACF": "unconfirmed"]") is not equal to ("[:]") - G3: no unconfirmed/failed/rejected state shown
+FAILED test_B1_congestedDownlink()
+    NetworkResilienceTests.swift:254: XCTAssertEqual failed: ("3") is not equal to ("0") - G1/G4: all inputs confirmed within 90.0s
+    NetworkResilienceTests.swift:254: XCTAssertEqual failed: ("["CE999DBC-C3BD-4238-A5B8-2A2362751BFF": "unconfirmed", "5174D435-1326-4A8C-9D31-DA235B460B44": "unconfirmed", "FDAAE251-B31F-4B0E-8ED7-72707A020B05": "unconfirmed"]") is not equal to ("[:]") - G3: no 
+    NetworkResilienceTests.swift:256: XCTAssertEqual failed: ("Optional(4)") is not equal to ("Optional(0)") - G6: no liveness kill while data flows
+FAILED test_B2_latencySpike()
+    NetworkResilienceTests.swift:268: XCTAssertEqual failed: ("Optional(1)") is not equal to ("Optional(0)") - G6: a slow but live link is not killed
+PASS test_C2_resetRightAfterSend()
+PASS test_C5_sendWhileReconnecting()
+FAILED test_C6_relaunchWithUnconfirmedInput()
+    NetworkResilienceTests.swift:306: XCTAssertEqual failed: ("["test_C6_relaunchWithUnconfirmedInput-beforeKill-6E378B"]") is not equal to ("[]") - G1: every sent input reaches the agent
+    NetworkResilienceTests.swift:306: XCTAssertEqual failed: ("1") is not equal to ("0") - G1/G4: all inputs confirmed within 30.0s
+PASS test_D2_inboundDuringOutage()
+PASS test_E1_headRestart()
+PASS test_E2_tentacleOffline30s()
+PASS test_S0_healthyBaseline()
+test_A1_flashReset: duplicated=0, failureStates={}, lost=0, reconnectingSpells=[1.016077995300293], reconnects=1, sent=3, settleSeconds=0.26001501083374023, stillPending=0
+test_A2_outage15s: duplicated=0, failureStates={}, lost=0, reconnectingSpells=[15.075156092643738], reconnectSeconds=0.10976791381835938, sent=3, settleSeconds=0.20966601371765137, stillPending=0
+test_A2_outage45s: duplicated=0, failureStates={}, lost=0, reconnectingSpells=[61.30720794200897], reconnectSeconds=16.235674023628235, sent=3, settleSeconds=0.21170306205749512, stillPending=0
+test_A3_halfOpen: deadLinkDetectSeconds=24.64663600921631, duplicated=0, failureStates={'D3F6C42A-ED28-471C-9150-104E42FC3ACF': 'unconfirmed'}, lost=0, reconnectingSpells=[1.0277429819107056], sent=2, settleSeconds=1.1939949989318848, stillPending=0
+test_B1_congestedDownlink: duplicated=0, failureStates={'5174D435-1326-4A8C-9D31-DA235B460B44': 'unconfirmed', 'CE999DBC-C3BD-4238-A5B8-2A2362751BFF': 'unconfirmed', 'FDAAE251-B31F-4B0E-8ED7-72707A020B05': 'unconfirmed'}, lost=0, reconnectingSpells=[1.4461380243301392, 1.4517979621887207, 1.4685519933700562, 1.471545934677124], reconnects=4, sent=4, settleSeconds=90.05284798145294, stillPending=3
+test_B2_latencySpike: duplicated=0, failureStates={}, lost=0, reconnectingSpells=[26.04568600654602], reconnects=1, sent=1, settleSeconds=17.634212017059326, stillPending=0
+test_C2_resetRightAfterSend: duplicated=0, failureStates={}, lost=0, reconnectingSpells=[1.023488998413086, 2.1493409872055054], sent=3, settleSeconds=2.8014183044433594e-05, stillPending=0
+test_C5_sendWhileReconnecting: acceptedJustReconnected=True, acceptedWhileOffline=True, duplicated=0, failureStates={}, lost=0, reconnectingSpells=[1.0512620210647583], sent=2, settleSeconds=0.15970802307128906, stillPending=0
+test_C6_relaunchWithUnconfirmedInput: duplicated=0, failureStates={}, lost=1, reconnectingSpells=[], sent=1, settleSeconds=30.033529043197632, stillPending=1
+test_D2_inboundDuringOutage: inboundCatchUpSeconds=0.21844899654388428, inboundMissing=0
+test_E1_headRestart: duplicated=0, failureStates={}, lost=0, reconnectingSpells=[3.0597150325775146], sent=2, settleSeconds=0.3134269714355469, stillPending=0
+test_E2_tentacleOffline30s: duplicated=0, failureStates={}, lost=0, reconnectingSpells=[], sent=3, settleSeconds=3.3067710399627686, stillPending=0
+test_S0_healthyBaseline: duplicated=0, failureStates={}, inboundCatchUpSeconds=0.002696990966796875, inboundMissing=0, lost=0, reconnectingSpells=[], sent=5, settleSeconds=2.9802322387695312e-06, stillPending=0

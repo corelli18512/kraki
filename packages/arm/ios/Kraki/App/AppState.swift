@@ -80,15 +80,7 @@ final class AppState {
         // attachmentStore is set up after the DB-backed stores so the
         // request-pull closure can capture self by weak reference
         // and the rest of setup (router, ws) can read it.
-        self.attachmentStore = AttachmentStore { [weak self] id, sessionId, index in
-            guard let self else { return false }
-            return self.sendEncryptedMessage([
-                "type": "request_attachment",
-                "deviceId": self.deviceId ?? "",
-                "sessionId": sessionId,
-                "payload": ["id": id, "sessionId": sessionId, "mode": "paced", "index": index],
-            ])
-        }
+        self.attachmentStore = Self.makeAttachmentStore(for: self)
         setupNetworking()
 
         // App-termination flush. SwiftUI's `scenePhase` already drives
@@ -117,6 +109,43 @@ final class AppState {
     #if DEBUG
     /// The XCTest host itself must not initialize the user's database, Keychain,
     /// network graph or audio before the individual test fixtures are created.
+    /// Paced attachment transfers through this app's encrypted channel.
+    static func makeAttachmentStore(for state: AppState) -> AttachmentStore {
+        AttachmentStore { [weak state] id, sessionId, index in
+            guard let state else { return false }
+            return state.sendEncryptedMessage([
+                "type": "request_attachment",
+                "deviceId": state.deviceId ?? "",
+                "sessionId": sessionId,
+                "payload": ["id": id, "sessionId": sessionId, "mode": "paced", "index": index],
+            ])
+        }
+    }
+
+    /// Real networking (WebSocket, auth, Pulse, CommandSender) with an
+    /// isolated database, outbox and process-local open-auth identity, for
+    /// resilience tests against a local stack. Never production credentials.
+    @MainActor
+    static func makeNetworkHarness(relayPort: Int, outboxURL: URL? = nil) -> AppState {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-net-harness-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let state: AppState
+        do {
+            state = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite")))
+        } catch {
+            fatalError("Failed to create network harness: \(error)")
+        }
+        state.hasCompletedInitialConnect = false
+        state.attachmentStore = makeAttachmentStore(for: state)
+        state.setupNetworking(outboxURL: outboxURL ?? root.appendingPathComponent("outbox.json"))
+        #if os(macOS)
+        state.authManager?.useEphemeralKeysForCurrentProcess()
+        #endif
+        state.devConnect(port: relayPort)
+        return state
+    }
+
     static func makeUnitTestHost() -> AppState {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("kraki-unit-host-\(UUID().uuidString)", isDirectory: true)
@@ -153,7 +182,14 @@ final class AppState {
     // MARK: - Connection
     var connectionStatus: ConnectionStatus = .awaitingLogin {
         didSet {
-            guard connectionStatus != oldValue, let store = attachmentStore else { return }
+            guard connectionStatus != oldValue else { return }
+            if connectionStatus == .connected {
+                // Anything still waiting for its echo is re-sent on the new
+                // connection (idempotent by clientId in Tentacle).
+                commandSender?.resendPendingInputs(reason: "reconnected")
+            }
+            updateReconnectingIndicator()
+            guard let store = attachmentStore else { return }
             let ready = connectionStatus == .connected
             if Thread.isMainThread {
                 MainActor.assumeIsolated { store.setTransportReady(ready) }
@@ -323,12 +359,36 @@ final class AppState {
         }
     }
 
+    /// What the UI shows: reconnecting only after it has lasted
+    /// `reconnectingIndicatorDelay`, so sub-second blips (and a reconnect that
+    /// the transport completes on its own quickly) never flash a warning.
+    private(set) var showsReconnecting = false
+    @ObservationIgnored private var reconnectingIndicatorWork: DispatchWorkItem?
+    static let reconnectingIndicatorDelay: TimeInterval = 2
+
+    func updateReconnectingIndicator() {
+        guard isReconnecting else {
+            reconnectingIndicatorWork?.cancel()
+            reconnectingIndicatorWork = nil
+            if showsReconnecting { showsReconnecting = false }
+            return
+        }
+        guard !showsReconnecting, reconnectingIndicatorWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.reconnectingIndicatorWork = nil
+            if self.isReconnecting { self.showsReconnecting = true }
+        }
+        reconnectingIndicatorWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.reconnectingIndicatorDelay, execute: work)
+    }
+
     /// True only when the WS is fully connected and authenticated.
     var isFullyOnline: Bool {
         connectionStatus == .connected
     }
 
-    func setupNetworking() {
+    func setupNetworking(outboxURL: URL? = nil) {
         #if KRAKI_DIAG
         KrakiDiag.start()
         #endif
@@ -342,7 +402,7 @@ final class AppState {
             crypto: crypto,
             appState: self
         )
-        let sender = CommandSender(appState: self, outboxURL: Self.pendingOutboxURL())
+        let sender = CommandSender(appState: self, outboxURL: outboxURL ?? Self.pendingOutboxURL())
         let provider = MessageProvider(appState: self)
         #if os(iOS)
         let push = PushManager(appState: self)
@@ -354,6 +414,10 @@ final class AppState {
         }
         client.onStateChange = { [weak self] state in
             self?.handleConnectionStateChange(state)
+        }
+        client.isReceivingPayload = { [weak self] in
+            guard let last = self?.pulseManager?.lastDeliveryAt else { return false }
+            return Date().timeIntervalSince(last) < 25
         }
         client.onReconnectAttempt = { [weak self] attempt in
             self?.updateReconnectAttempt(attempt)
@@ -463,7 +527,7 @@ final class AppState {
     /// matching `scripts/dev-local.ts`'s default relay port). On the iOS
     /// Simulator `localhost` resolves to the host Mac, so this just
     /// works when the dev daemon is up.
-    func devConnect() {
+    func devConnect(port overridePort: Int? = nil) {
         #if DEBUG
         // Local dev is a process-scoped open-auth identity. Keep production
         // pairing/device credentials and RSA keys intact so entering dev mode
@@ -471,7 +535,7 @@ final class AppState {
         authManager?.pairingToken = nil
         authManager?.usesEphemeralOpenAuth = true
         // `KRAKI_LOCAL_RELAY_PORT` env override matches `scripts/dev-local.ts`.
-        let port = ProcessInfo.processInfo.environment["KRAKI_LOCAL_RELAY_PORT"] ?? "4400"
+        let port = overridePort.map(String.init) ?? ProcessInfo.processInfo.environment["KRAKI_LOCAL_RELAY_PORT"] ?? "4400"
         let devURL = "ws://localhost:\(port)"
         relayURL = devURL
         // Intentionally NOT persisting to App Group — the dev URL is

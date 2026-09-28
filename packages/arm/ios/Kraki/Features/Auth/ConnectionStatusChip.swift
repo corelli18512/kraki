@@ -45,6 +45,9 @@ struct ConnectionStatusChip: View {
             }
             applyConnectionState(immediate: true)
         }
+        .onChange(of: appState.showsReconnecting) { _, _ in
+            applyConnectionState(immediate: false)
+        }
         .onChange(of: appState.connectionStatus) { _, _ in
             applyConnectionState(immediate: false)
         }
@@ -67,16 +70,9 @@ struct ConnectionStatusChip: View {
         transitionGeneration &+= 1
         let generation = transitionGeneration
 
-        if appState.isReconnecting {
-            if immediate {
-                phase = .reconnecting
-            } else {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    guard transitionGeneration == generation,
-                          appState.isReconnecting else { return }
-                    phase = .reconnecting
-                }
-            }
+        // AppState already debounces short blips (showsReconnecting).
+        if appState.showsReconnecting {
+            phase = .reconnecting
             return
         }
 

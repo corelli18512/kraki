@@ -254,6 +254,14 @@ final class DeviceStore {
     /// Both the new (`agents`) and legacy (`models`/`modelDetails`)
     /// shapes are accepted — see `MessageRouter.handleDeviceGreeting`
     /// for the synthesis rule when only legacy fields are present.
+    /// Features a Tentacle advertised in its greeting (in memory; re-sent on
+    /// every connect). `idempotent_input` allows automatic input re-sends.
+    private(set) var deviceFeatures: [String: Set<String>] = [:]
+
+    func setDeviceFeatures(_ deviceId: String, features: [String]) {
+        deviceFeatures[deviceId] = Set(features)
+    }
+
     func setGreeting(
         _ deviceId: String,
         name: String,

@@ -25,7 +25,13 @@ final class WebSocketClient: NSObject {
 
     private(set) var relayURL: String
 
-    private static let reconnectBase: TimeInterval = 1.0
+    private static let reconnectBase: TimeInterval = 0.5
+    /// Reconnect cadence while the relay is unreachable: at most `fastCap`
+    /// apart for the first two minutes of an outage (a returning network is
+    /// picked up within a few seconds), then 15 s, then 30 s after ten minutes
+    /// so a long outage costs almost nothing. Jitter spreads reconnects when a
+    /// relay restart drops many clients at once.
+    private static let reconnectFastCap: TimeInterval = 4.0
     private static let reconnectMax: TimeInterval = 30.0
     // Note: there is intentionally no hard retry cap. We keep backing
     // off (exponential, capped at `reconnectMax`) for as long as the
@@ -36,8 +42,18 @@ final class WebSocketClient: NSObject {
     /// The liveness check is intentionally shorter than the relay's roughly
     /// 30-second presence cadence. It catches a sleep/proxy half-open before
     /// the relay has to evict the stale connection.
-    private static let livenessCheckInterval: TimeInterval = 5.0
-    private static let livenessPingTimeout: TimeInterval = 15.0
+    private static let livenessCheckInterval: TimeInterval = 2.0
+    /// Tolerates latency spikes up to ~20 s (mobile handover, bufferbloat)
+    /// while still detecting a half-open link within ~26 s.
+    private static let livenessPingTimeout: TimeInterval = 22.0
+    /// While real payload keeps arriving, our pong may sit behind the whole
+    /// downlink backlog. The bound only matters if the uplink is broken while
+    /// the downlink streams; the Relay independently drops a client it hears
+    /// nothing from within about a minute, which closes this socket too.
+    private static let congestedPingTimeout: TimeInterval = 300.0
+    /// Whether real payload (not heartbeats) arrived recently; set by the
+    /// owner, which sees decoded Pulse deliveries.
+    var isReceivingPayload: () -> Bool = { false }
     private static let livenessTimeout: TimeInterval = 45.0
     private static let stableConnectionInterval: TimeInterval = 15.0
 
@@ -71,6 +87,17 @@ final class WebSocketClient: NSObject {
     private var pingTimer: Timer?
     private var livenessTimer: Timer?
     private var lastLivenessAt: Date?
+    /// Start of the current outage (first failed/closed connection since the
+    /// last stable connection); drives the reconnect cadence.
+    private var outageStartedAt: Date?
+    #if DEBUG
+    /// Why this client replaced its connection (tests only).
+    private(set) var recoveryReasons: [String] = []
+    /// When each reconnect attempt was scheduled (tests only).
+    private(set) var reconnectScheduledAt: [Date] = []
+    #endif
+    /// Most recent inbound activity (a frame, a pong, or bytes in progress).
+    var lastInboundActivityAt: Date? { lastLivenessAt }
     private var livenessPingStartedAt: Date?
     private var stableConnectionWorkItem: DispatchWorkItem?
     private var reconnectWorkItem: DispatchWorkItem?
@@ -282,6 +309,7 @@ final class WebSocketClient: NSObject {
                   self.isAuthenticated else { return }
             self.reconnectDelay = Self.reconnectBase
             self.reconnectAttempts = 0
+            self.outageStartedAt = nil
             self.onReconnectAttempt?(0)
             self.stableConnectionWorkItem = nil
             KLog.d("✅ WebSocket stable for \(Int(Self.stableConnectionInterval))s — reconnect backoff reset")
@@ -417,9 +445,11 @@ final class WebSocketClient: NSObject {
         livenessPingStartedAt = nil
     }
 
+    /// Any inbound frame proves the downlink. It does NOT answer our own
+    /// ping: with only the uplink broken the Relay's heartbeats keep arriving,
+    /// so only the pong clears an outstanding ping.
     private func recordInboundActivity() {
         lastLivenessAt = Date()
-        livenessPingStartedAt = nil
     }
 
     private func checkLiveness() {
@@ -428,7 +458,10 @@ final class WebSocketClient: NSObject {
         let now = Date()
 
         if let pingStarted = livenessPingStartedAt,
-           now.timeIntervalSince(pingStarted) > Self.livenessPingTimeout {
+           now.timeIntervalSince(pingStarted) > Self.livenessPingTimeout,
+           // A pong can be queued behind a congested downlink that is still
+           // delivering real data: slow, not dead — up to a hard bound.
+           !(isReceivingPayload() && now.timeIntervalSince(pingStarted) < Self.congestedPingTimeout) {
             KLog.d("⚠️ WebSocket liveness ping timed out — replacing stale connection")
             recover(reason: "ping_timeout")
             return
@@ -496,6 +529,9 @@ final class WebSocketClient: NSObject {
     /// instead retires the transport without scheduling recovery.
     func recover(reason: String) {
         guard !intentionalClose, task != nil else { return }
+        #if DEBUG
+        recoveryReasons.append(reason)
+        #endif
         #if KRAKI_DIAG
         KrakiDiag.record(.connection, [.source: .tag(reason), .count: .int(generation)])
         #endif
@@ -513,9 +549,17 @@ final class WebSocketClient: NSObject {
         guard !intentionalClose, state == .disconnected, task == nil, reconnectWorkItem == nil else { return }
         let epoch = generation
 
-        let delay = reconnectDelay
+        let now = Date()
+        if outageStartedAt == nil { outageStartedAt = now }
+        let outage = now.timeIntervalSince(outageStartedAt ?? now)
+        let cap = outage < 120 ? Self.reconnectFastCap : (outage < 600 ? 15 : Self.reconnectMax)
+        let base = min(reconnectDelay, cap)
+        let delay = base * Double.random(in: 0.8...1.2)
         reconnectAttempts += 1
         reconnectDelay = min(reconnectDelay * 2, Self.reconnectMax)
+        #if DEBUG
+        reconnectScheduledAt.append(now)
+        #endif
         onReconnectAttempt?(reconnectAttempts)
 
         let work = DispatchWorkItem { [weak self] in
@@ -534,6 +578,7 @@ final class WebSocketClient: NSObject {
         cancelReconnect()
         reconnectDelay = Self.reconnectBase
         reconnectAttempts = 0
+        outageStartedAt = nil
         onReconnectAttempt?(0)
         startConnection()
     }

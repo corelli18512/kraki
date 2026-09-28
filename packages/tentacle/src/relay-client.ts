@@ -123,6 +123,9 @@ export class RelayClient {
   private options: RelayClientOptions;
   private state: RelayClientState = 'disconnected';
   private reconnectAttempts = 0;
+  /** Inputs (session + clientId) this process has admitted. Bounded by the
+   *  process lifetime's input count (small strings). */
+  private admittedInputs = new Set<string>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private intentionalDisconnect = false;
   private authInfo: AuthOkMessage | null = null;
@@ -343,6 +346,12 @@ export class RelayClient {
       if (existing.contentHash !== fingerprint.contentHash) {
         return { duplicate: true, conflict: true, recovery: false, effectiveDelivery, turnId };
       }
+      // Admitted by this process: it is queued or running right now. A client
+      // retry (lost echo, reconnect) must not dispatch it a second time; the
+      // recovery paths below are only for entries left by a previous process.
+      if (this.admittedInputs.has(`${sessionId}\u0000${clientId}`) && existing.status !== 'rejected') {
+        return { duplicate: true, conflict: false, recovery: false, effectiveDelivery, turnId, entry: existing };
+      }
       // `persisted` means the user_message is durable but adapter dispatch has
       // not started. It is the only restart state that is safe to recover by
       // sending the replayed payload again. `dispatching` is deliberately
@@ -353,6 +362,7 @@ export class RelayClient {
         // transcript row already exists, so retry the same clientId without
         // appending another user_message. `dispatching` remains at-most-once:
         // a crash may have crossed the adapter boundary before the state write.
+        this.admittedInputs.add(`${sessionId}\u0000${clientId}`);
         return { duplicate: false, conflict: false, recovery: true, effectiveDelivery: existing.delivery === 'steer' ? 'steer' : 'prompt', turnId: existing.turnId, entry: existing };
       }
       if (existing.status === 'pending') {
@@ -365,10 +375,12 @@ export class RelayClient {
             updatedAt: new Date().toISOString(),
           };
           this.sessionManager.recordInputLedger(sessionId, recovered);
-          return { duplicate: false, conflict: false, recovery: true, effectiveDelivery: recovered.delivery === 'steer' ? 'steer' : 'prompt', turnId: recovered.turnId, entry: recovered };
+          this.admittedInputs.add(`${sessionId}\u0000${clientId}`);
+        return { duplicate: false, conflict: false, recovery: true, effectiveDelivery: recovered.delivery === 'steer' ? 'steer' : 'prompt', turnId: recovered.turnId, entry: recovered };
         }
         // The reservation survived but the transcript append did not. Reuse
         // its identity and perform the normal persistence path exactly once.
+        this.admittedInputs.add(`${sessionId}\u0000${clientId}`);
         return { duplicate: false, conflict: false, recovery: false, effectiveDelivery: existing.delivery === 'steer' ? 'steer' : 'prompt', turnId: existing.turnId, entry: existing };
       }
       return { duplicate: true, conflict: false, recovery: false, effectiveDelivery, turnId, entry: existing };
@@ -411,6 +423,7 @@ export class RelayClient {
       updatedAt: new Date().toISOString(),
     };
     this.sessionManager.recordInputLedger(sessionId, entry);
+    this.admittedInputs.add(`${sessionId}\u0000${clientId}`);
     return { duplicate: false, conflict: false, recovery: false, effectiveDelivery, turnId, entry };
   }
 
@@ -949,7 +962,6 @@ export class RelayClient {
 
     ws.on('open', () => {
       this.setState('authenticating');
-      this.reconnectAttempts = 0;
       this.lastActivityAt = Date.now();
       this.startStaleCheck();
       const device = {
@@ -1055,6 +1067,7 @@ export class RelayClient {
     if (msg.type === 'auth_ok') {
       this.authInfo = msg as unknown as AuthOkMessage;
       this.preferChallengeAuth = true;
+      this.reconnectAttempts = 0;
       // Cache consumer device public keys for E2E
       if (this.authInfo.devices) {
         this.updateConsumerKeys(this.authInfo.devices);
@@ -1344,7 +1357,13 @@ export class RelayClient {
             this.send({ type: 'error', sessionId, payload: { message: 'Input clientId was already used for different content.' } });
             break;
           }
-          if (reservation.duplicate) break;
+          if (reservation.duplicate) {
+            // A retry of an input we already hold (its echo was lost or is
+            // still queued). Re-echo the stored row to the sender so it can
+            // settle the optimistic bubble; never run the turn twice.
+            if (clientId) this.reechoInput(msg.deviceId, sessionId, clientId);
+            break;
+          }
 
           const inputEntry = reservation.entry;
           const effectiveDelivery = reservation.effectiveDelivery;
@@ -3521,6 +3540,7 @@ export class RelayClient {
         kind: this.options.device.kind,
         agents: this.options.device.capabilities?.agents,
         version: this.options.version,
+        features: ['idempotent_input'],
       },
     };
     this.sendReliableUnicastTo(targetDeviceId, compactPubKey, greeting);
@@ -3668,6 +3688,25 @@ export class RelayClient {
     }
   }
 
+  /** Unicast the persisted user_message for `clientId` back to `deviceId`. */
+  private reechoInput(deviceId: string, sessionId: string, clientId: string): void {
+    const key = this.consumerKeys.get(deviceId);
+    const seq = this.sessionManager.findUserMessageSeqByClientId(sessionId, clientId);
+    if (!key || seq === null) return;
+    const [row] = this.sessionManager.getMessagesAfterSeq(sessionId, seq - 1, 1);
+    if (!row || row.seq !== seq) return;
+    try {
+      const message = JSON.parse(row.payload) as Record<string, unknown>;
+      message.seq = row.seq;
+      if (!message.timestamp) message.timestamp = row.ts;
+      if (!message.sessionId) message.sessionId = sessionId;
+      this.sendReliableUnicastTo(deviceId, key, message);
+      logger.info({ sessionId, deviceId, seq }, 'Re-echoed duplicate input');
+    } catch (err) {
+      logger.warn({ err, sessionId, seq }, 'Could not re-echo duplicate input');
+    }
+  }
+
   // ── Reconnect logic ─────────────────────────────────
 
   private scheduleReconnect(): void {
@@ -3677,7 +3716,11 @@ export class RelayClient {
       return;
     }
 
-    const delay = this.options.reconnectDelay ?? 3000;
+    // Exponential backoff with jitter from `reconnectDelay` (first retry) to
+    // 30 s, reset on authentication: a Relay restart does not reconnect every
+    // Tentacle in lockstep, and a long outage does not spin every few seconds.
+    const base = this.options.reconnectDelay ?? 1000;
+    const delay = Math.round(Math.min(30_000, base * 2 ** Math.min(this.reconnectAttempts, 5)) * (0.8 + Math.random() * 0.4));
     this.reconnectTimer = setTimeout(() => {
       this.reconnectAttempts++;
       this.connect();
