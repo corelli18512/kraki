@@ -20,19 +20,20 @@ function setup(accepts: boolean) {
     broadcastTargets: () => [],
     onDeliverToSelf: () => {},
     acceptsProgressAck: () => accepts,
-  });
+  }, { intervalMs: 0 });
   hub.onDeviceConnected('app');
   const app = new Endpoint({ epoch: 'app-epoch', random: () => 0.5 });
   const feed = (effects: ReturnType<Endpoint['onConnected']>) => {
     for (const e of effects) if (e.t === 'transmit') hub.onPulseEnvelope('app', { pulse: b64(e.bytes), to: 'tentacle' });
   };
   feed(app.onConnected(1_000));
-  return { hub, app, feed, toApp, db };
+  const dispose = () => { hub.close(); db.close(); };
+  return { hub, app, feed, toApp, dispose };
 }
 
 describe('pulse-hub progress acks', () => {
   it('acknowledges an upload every PULSE_ACK_EVERY_BYTES for clients that declared support', () => {
-    const { app, feed, toApp, db } = setup(true);
+    const { app, feed, toApp, dispose } = setup(true);
     toApp.length = 0;
     const part = new Uint8Array(32 * 1024);
     for (let i = 0; i < 6; i++) feed(app.send(part).effects);
@@ -46,15 +47,15 @@ describe('pulse-hub progress acks', () => {
     }
     expect(resent).toBe(0);
     expect(app.outboxSize).toBe(0);
-    db.close();
+    dispose();
   });
 
   it('never sends progress acks to clients that did not declare support', () => {
-    const { app, feed, toApp, db } = setup(false);
+    const { app, feed, toApp, dispose } = setup(false);
     toApp.length = 0;
     for (let i = 0; i < 6; i++) feed(app.send(new Uint8Array(32 * 1024)).effects);
     expect(toApp.filter((f) => f.t === 'heartbeat')).toHaveLength(0);
-    db.close();
+    dispose();
   });
 });
 
