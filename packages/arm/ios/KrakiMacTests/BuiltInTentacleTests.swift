@@ -228,4 +228,10 @@ final class BuiltInTentacleTests: XCTestCase {
         XCTAssertEqual(S.blockingReason(isChecking: false, readyAgents: 1, hasFullDiskAccess: false), "Allow Full Disk Access to continue.")
         XCTAssertNil(S.blockingReason(isChecking: true, readyAgents: 1, hasFullDiskAccess: true))
     }
+
+    func testAgentsWindowRestartsOnlyWhenTheReadySetChanged() {
+        XCTAssertFalse(LocalAgentsWindow.needsRestart(ready: ["codex", "pi"], offered: ["pi", "codex"]))
+        XCTAssertTrue(LocalAgentsWindow.needsRestart(ready: ["codex", "pi"], offered: ["codex"]))
+        XCTAssertTrue(LocalAgentsWindow.needsRestart(ready: ["codex"], offered: ["codex", "claude"]))
+    }
 }

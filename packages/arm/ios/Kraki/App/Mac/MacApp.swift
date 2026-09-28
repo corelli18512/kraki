@@ -510,6 +510,15 @@ struct MacApp: App {
         }
         .restorationBehavior(.disabled)
 
+        Window("Coding Agents", id: "local-agents") {
+            LocalAgentsWindow()
+                .environment(appState)
+                .environment(tentacleCLI)
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+        .restorationBehavior(.disabled)
+
         Window("Logs", id: "logs") {
             LogsWindow()
                 .environment(tentacleCLI)

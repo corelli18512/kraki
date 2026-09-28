@@ -17,6 +17,7 @@ struct WelcomeView: View {
     @Environment(TentacleCLIManager.self) private var tentacleCLI
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openURL) private var openURL
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 18) {
@@ -278,11 +279,17 @@ struct WelcomeView: View {
                 title: "Install a coding agent",
                 subtitle: "Kraki is connected. To start a session, this Mac needs a coding agent."
             ) {
-                NoAgentsGuide(
-                    deviceName: "this Mac",
-                    isThisMac: true,
-                    checkAgain: { await recheckLocalAgents(local) }
-                )
+                VStack(alignment: .leading, spacing: 8) {
+                    NoAgentsGuide(
+                        deviceName: "this Mac",
+                        isThisMac: true,
+                        checkAgain: { await recheckLocalAgents(local) }
+                    )
+                    // Shows which agents are installed but not signed in, and why.
+                    Button("See what's on this Mac…") { openWindow(id: "local-agents") }
+                        .buttonStyle(.link)
+                        .font(.system(size: 11))
+                }
             }
         } else {
             WelcomeCard(

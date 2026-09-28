@@ -86,6 +86,14 @@ final class TentacleCLIManager {
     @ObservationIgnored private var restartedForVersion: String?
 
     var isBuiltInAvailable: Bool { builtIn.isAvailable }
+
+    /// Binary for `kraki agents --json`: the built-in tentacle when present
+    /// (it is independent of who runs the daemon), else a CLI new enough.
+    var agentCheckBinaryPath: String? {
+        if builtIn.isAvailable { return builtIn.binaryPath }
+        if case .available(let path, _) = installState { return path }
+        return nil
+    }
     var installLocation: AppInstallLocation { AppInstallLocation.current }
 
     struct ConfigInfo: Equatable {

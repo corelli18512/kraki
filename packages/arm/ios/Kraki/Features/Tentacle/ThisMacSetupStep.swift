@@ -49,12 +49,14 @@ struct ThisMacSetupStep: View {
             detail: "Kraki runs the coding agents installed on this Mac, so you can use them from here, your phone and your other computers."
         ) {
             VStack(spacing: 14) {
-                agentsSection
+                section(title: "Coding agents") {
+                    LocalAgentsPanel(check: check, binaryPath: binaryPath)
+                }
                 fullDiskAccessSection
                 actions
             }
         }
-        .task { check.run(binaryPath: binaryPath) }
+        .task { if !check.previewOnly { check.run(binaryPath: binaryPath) } }
         .task {
             // Picks up the grant while System Settings is open (and after the
             // Quit & Reopen macOS offers, the step reloads with it granted).
@@ -64,99 +66,6 @@ struct ThisMacSetupStep: View {
             }
         }
         .onDisappear { check.cancel() }
-    }
-
-    // MARK: Agents
-
-    private var agentsSection: some View {
-        section(title: "Coding agents") {
-            VStack(spacing: 0) {
-                ForEach(check.agents) { agent in
-                    agentRow(agent)
-                    if agent.id != check.agents.last?.id { Divider().opacity(0.5) }
-                }
-            }
-            HStack {
-                Text(agentsSummary)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Color.textMuted)
-                Spacer()
-                Button("Check Again") { check.run(binaryPath: binaryPath) }
-                    .controlSize(.small)
-                    .disabled(check.isRunning)
-                    .accessibilityIdentifier("mac.setup.agents.checkAgain")
-            }
-            .padding(.top, 6)
-            if let failure = check.failure {
-                Text(failure).font(.system(size: 10.5)).foregroundStyle(Color.orange)
-            }
-        }
-    }
-
-    private var agentsSummary: String {
-        if check.isRunning { return "Checking…" }
-        switch check.readyCount {
-        case 0: return "No agent is ready yet."
-        case 1: return "1 agent is ready."
-        default: return "\(check.readyCount) agents are ready."
-        }
-    }
-
-    private func agentRow(_ agent: LocalAgentsCheck.Agent) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 9) {
-            statusIcon(agent.status)
-                .frame(width: 14)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(agent.name)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.textPrimary)
-                    if let version = agent.version, agent.status != .notInstalled {
-                        Text(version).font(.system(size: 10.5)).foregroundStyle(Color.textMuted)
-                    }
-                }
-                if let line = detailLine(agent) {
-                    Text(line)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(agent.status == .ready ? Color.textSecondary : Color.textMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-            }
-            Spacer(minLength: 8)
-            if agent.status == .notInstalled, let url = agent.installURL {
-                Button("Install…") { NSWorkspace.shared.open(url) }
-                    .controlSize(.small)
-            }
-        }
-        .padding(.vertical, 6)
-        .accessibilityIdentifier("mac.setup.agent.\(agent.id)")
-    }
-
-    private func detailLine(_ agent: LocalAgentsCheck.Agent) -> String? {
-        switch agent.status {
-        case .checking: return nil
-        case .ready:
-            let noun = agent.models == 1 ? "model" : "models"
-            return "Ready · \(agent.models) \(noun)"
-        case .needsLogin: return "Not signed in. " + (agent.hint ?? "")
-        case .notInstalled: return "Not installed"
-        case .error: return agent.hint ?? "Couldn't start."
-        }
-    }
-
-    @ViewBuilder
-    private func statusIcon(_ status: LocalAgentsCheck.Status) -> some View {
-        switch status {
-        case .checking:
-            ProgressView().controlSize(.mini)
-        case .ready:
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.green)
-        case .needsLogin, .error:
-            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Color.orange)
-        case .notInstalled:
-            Image(systemName: "minus.circle").foregroundStyle(Color.textMuted)
-        }
     }
 
     // MARK: Full Disk Access

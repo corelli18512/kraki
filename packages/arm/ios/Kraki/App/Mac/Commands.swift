@@ -188,6 +188,12 @@ struct MacCommands: Commands {
 
             Divider()
 
+            Button("Coding Agents on This Mac…") {
+                openWindow(id: "local-agents")
+            }
+
+            Divider()
+
             Button("Show Logs in Finder") {
                 tentacleCLI.openLogsInFinder()
             }
