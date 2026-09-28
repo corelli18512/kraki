@@ -210,7 +210,8 @@ jobs:
           bash scripts/chaos/run-native.sh $T/test_S0_healthyBaseline $T/test_A1_flashReset \
             $T/test_A2_outage15s $T/test_A3_halfOpen $T/test_B1_incidentProfile \
             $T/test_C2_resetRightAfterSend $T/test_C6_relaunchWithUnconfirmedInput \
-            $T/test_D2_inboundDuringOutage $T/test_E1_headRestart $T/test_E2_tentacleOffline30s
+            $T/test_D2_inboundDuringOutage $T/test_E1_headRestart $T/test_E2_tentacleOffline30s \
+            $T/test_G1_largeDownlinkMessage $T/test_G2_largeUplinkMessage
 
       - name: Upload resilience evidence
         if: always()

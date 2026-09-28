@@ -89,6 +89,8 @@ export interface PulseHubHost {
   /** Send a pulse-framed envelope's `pulse` string to `deviceId` if online.
    *  Returns true if the device is currently connected. */
   sendPulseTo(deviceId: string, pulseB64: string): boolean;
+  /** Whether the device's current connection declared `pulseProgressAck`. */
+  acceptsProgressAck?(deviceId: string): boolean;
   /** Fan-out targets for a BROADCAST from `fromDevice`: the other devices of the
    *  same user that the delivered payload should be forwarded to. (A tentacle
    *  broadcasts to all the user's apps; an app that broadcasts, to the
@@ -105,7 +107,13 @@ export interface PulseHubHost {
 const b64encode = (u: Uint8Array): string => Buffer.from(u).toString('base64');
 const b64decode = (s: string): Uint8Array => new Uint8Array(Buffer.from(s, 'base64'));
 
+/** Inbound DATA bytes after which the hub acknowledges without waiting for
+ *  outbound traffic or the idle heartbeat (advertised in auth_ok). */
+export const PULSE_ACK_EVERY_BYTES = 64 * 1024;
+
 interface PerDevice {
+  /** Inbound DATA bytes per stream since the last explicit progress ack. */
+  unackedIn?: Map<number, number>;
   streams: StreamSet;
   /** live(0) and bulk(1) endpoints, cached for direct access (snapshot, GC).
    *  Both share the device's connection via the StreamSet. */
@@ -375,11 +383,33 @@ export class PulseHub {
       }
     }
     this.run(fromDevice, effects, dests, selfBound);
+    if (decoded?.frame.t === 'data') this.ackProgress(fromDevice, d, decoded.streamId, decoded.frame.payload.length);
     const willSnapshot = effects.some((e) => e.t === 'store' || e.t === 'unstore');
     trace('HUB-ONPULSE', { from: fromDevice, effects: effects.map((e) => e.t), willSnapshot });
     // Only persist when a durable entry was added/removed (store/unstore effect).
     // Same rationale as forward() — saving on every message was the OOM cause.
     if (willSnapshot) this.saveSnapshot(fromDevice);
+  }
+
+  /**
+   * Pulse acknowledges in-order DATA only when the receiver next transmits or
+   * idles into a heartbeat (15 s). A client pacing a large upload by acks would
+   * crawl. Every PULSE_ACK_EVERY_BYTES received, advertise our cursor with a
+   * HEARTBEAT frame: to the sender that is progress, never a loss signal
+   * (Pulse ≥0.5.1 repairs only a cursor that stops advancing).
+   */
+  private ackProgress(deviceId: string, d: PerDevice, streamId: number, bytes: number): void {
+    const counts = d.unackedIn ?? (d.unackedIn = new Map());
+    const total = (counts.get(streamId) ?? 0) + bytes;
+    if (!this.host.acceptsProgressAck?.(deviceId)) return;
+    if (total < PULSE_ACK_EVERY_BYTES) {
+      counts.set(streamId, total);
+      return;
+    }
+    counts.set(streamId, 0);
+    const endpoint = streamId === STREAM_BULK ? d.bulk : d.live;
+    const frame = encodeFrame({ t: 'heartbeat', ack: endpoint.recvCursorValue }, streamId);
+    this.host.sendPulseTo(deviceId, b64encode(frame));
   }
 
   /**

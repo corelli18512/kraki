@@ -96,6 +96,18 @@ final class WebSocketClient: NSObject {
     /// When each reconnect attempt was scheduled (tests only).
     private(set) var reconnectScheduledAt: [Date] = []
     #endif
+    /// Outbound frames handed to URLSession and not yet written, and when the
+    /// last one completed. While our own upload is in progress, our ping (and
+    /// the Relay's pong to it) waits behind it: completions still arriving
+    /// prove the uplink is moving, not dead.
+    private var pendingWrites = 0
+    private var lastWriteCompletedAt: Date?
+
+    private func isUploading(_ now: Date) -> Bool {
+        guard pendingWrites > 0, let last = lastWriteCompletedAt else { return false }
+        return now.timeIntervalSince(last) < 25
+    }
+
     /// Most recent inbound activity (a frame, a pong, or bytes in progress).
     var lastInboundActivityAt: Date? { lastLivenessAt }
     private var livenessPingStartedAt: Date?
@@ -379,7 +391,13 @@ final class WebSocketClient: NSObject {
     private func writeString(_ string: String, retryOnSendError: Bool) {
         let message = URLSessionWebSocketTask.Message.string(string)
         let sendingTask = task
+        pendingWrites += 1
         sendingTask?.send(message) { [weak self] error in
+            DispatchQueue.main.async {
+                guard let self, self.task === sendingTask else { return }
+                self.pendingWrites = max(0, self.pendingWrites - 1)
+                if error == nil { self.lastWriteCompletedAt = Date() }
+            }
             guard let error else { return }
             KLog.d("⚠️ ws send completion failed: \(error)")
             guard retryOnSendError else { return }
@@ -461,7 +479,7 @@ final class WebSocketClient: NSObject {
            now.timeIntervalSince(pingStarted) > Self.livenessPingTimeout,
            // A pong can be queued behind a congested downlink that is still
            // delivering real data: slow, not dead — up to a hard bound.
-           !(isReceivingPayload() && now.timeIntervalSince(pingStarted) < Self.congestedPingTimeout) {
+           !((isReceivingPayload() || isUploading(now)) && now.timeIntervalSince(pingStarted) < Self.congestedPingTimeout) {
             KLog.d("⚠️ WebSocket liveness ping timed out — replacing stale connection")
             recover(reason: "ping_timeout")
             return
@@ -589,6 +607,8 @@ final class WebSocketClient: NSObject {
     }
 
     private func cleanup() {
+        pendingWrites = 0
+        lastWriteCompletedAt = nil
         phaseDeadline?.cancel(); phaseDeadline = nil
         isAuthenticated = false
         stopPing()

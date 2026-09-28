@@ -1,0 +1,8 @@
+{"controlPort":33312,"appPort":33307,"headPort":33306,"tentaclePort":33308,"sessionId":"muliv9sf-59tmcdkr","tentacleId":"dev_ab6450c0-e3c"}
+FAILED test_G1_largeDownlinkMessage()
+    NetworkResilienceTests.swift:545: XCTAssertEqual failed: ("[]") is not equal to ("["huge 1/1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    NetworkResilienceTests.swift:548: XCTAssertEqual failed: ("Optional(4)") is not equal to ("Optional(0)") - G6: a slow large message is not a dead link
+    NetworkResilienceTests.swift:549: XCTAssertEqual failed: ("["ping_timeout", "ping_timeout", "ping_timeout", "ping_timeout"]") is not equal to ("[]")
+FAILED test_G2_largeUplinkMessage()
+    The test runner exited with code 0 before finishing running tests. This may be due to your code calling 'exit', consider adding a symbolic breakpoint on 'exit' to debug.
+test_G1_largeDownlinkMessage: deliveryGapsOver10s=[26, 26, 26, 26], duplicated=0, echoMax=23.557589054107666, echoP50=23.557589054107666, echoP95=23.557589054107666, failureStates={}, inboundCatchUpSeconds=120.2102380990982, inboundMissing=2, lost=0, maxDeliveryGap=26.61116111278534, reconnectingSpells=[0.6152150630950928, 0.41074907779693604, 0.6146950721740723, 0.5179619789123535], reconnects=4, recoveryReasons=['ping_timeout', 'ping_timeout', 'ping_timeout', 'ping_timeout'], sent=1, settleSeconds=7.033348083496094e-06, stillPending=0

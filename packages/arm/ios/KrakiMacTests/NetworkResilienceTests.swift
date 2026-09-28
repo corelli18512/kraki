@@ -529,6 +529,46 @@ final class NetworkResilienceTests: XCTestCase {
         try await settleAndCheckDelivery(within: 90)
         try await checkInbound(within: 30)
     }
+
+    // MARK: - G: single large messages on a slow link
+
+    /// G1: one ~1 MB agent message on a 0.32 Mbit/s downlink (~45 s on the
+    /// wire). Native WebSockets show no progress inside one frame, so a whole
+    /// message looks like a dead link and is replaced forever; fragments keep
+    /// delivering. The user keeps chatting meanwhile.
+    func test_G1_largeDownlinkMessage() async throws {
+        let before = try await connections()
+        try await fault("app", ["bytesPerSec": 40_000])
+        try await control("POST", "/agent/burst", ["sessionId": sessionId, "count": 1, "bytes": 1_000_000, "prefix": "huge"])
+        await pause(3)
+        send("duringHuge")
+        try await checkInbound(within: 120)
+        try await settleAndCheckDelivery(within: 60)
+        metrics["reconnects"] = try await connections() - before
+        XCTAssertEqual(metrics["reconnects"] as? Int, 0, "G6: a slow large message is not a dead link")
+        XCTAssertEqual(app.wsClient?.recoveryReasons ?? [], [])
+    }
+
+    /// G2: the user sends a ~700 KB image on a 0.32 Mbit/s uplink (and its
+    /// echo comes back down). Our own ping waits behind the upload.
+    func test_G2_largeUplinkMessage() async throws {
+        let before = try await connections()
+        try await fault("app", ["bytesPerSec": 40_000])
+        let image = Data((0..<700_000).map { UInt8(truncatingIfNeeded: $0 &* 2_654_435_761 >> 13) })
+        let text = "image-\(UUID().uuidString.prefix(6))"
+        let accepted = app.commandSender?.sendInput(
+            sessionId: sessionId, text: text,
+            attachments: [ImageAttachment(type: "image", mimeType: "image/png", data: image.base64EncodedString())]
+        ) ?? false
+        XCTAssertTrue(accepted)
+        let clientId = app.commandSender?.pendingInputs(sessionId).first { $0.content == text }?
+            .payload["clientId"]?.stringValue ?? "?"
+        sent.append((text, clientId, Date()))
+        try await settleAndCheckDelivery(within: 150)
+        metrics["reconnects"] = try await connections() - before
+        XCTAssertEqual(metrics["reconnects"] as? Int, 0, "G6: an upload in progress is not a dead link")
+        XCTAssertEqual(app.wsClient?.recoveryReasons ?? [], [])
+    }
 }
 
 /// SplitMix64: deterministic across runs so failures reproduce from the seed.

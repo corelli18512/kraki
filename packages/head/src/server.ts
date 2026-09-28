@@ -10,7 +10,7 @@ import type {
 } from '@kraki/protocol';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { Storage } from './storage.js';
-import { PulseHub } from './pulse-hub.js';
+import { PulseHub, PULSE_ACK_EVERY_BYTES } from './pulse-hub.js';
 import { LeaseIssuer } from './lease-issuer.js';
 import type { AuthProvider, AuthUser, AuthOutcome as ProviderAuthOutcome } from './auth.js';
 import { GitHubAuthProvider } from './auth.js';
@@ -55,6 +55,8 @@ interface ClientState {
   lastInboundAt?: number;
   /** ws.bufferedAmount when the last ping was queued. */
   bufferedAtPing?: number;
+  /** Declared at auth: this client's Pulse accepts progress heartbeats. */
+  pulseProgressAck?: boolean;
 }
 
 interface PairingToken {
@@ -162,6 +164,10 @@ export class HeadServer {
     this.pulseHub = new PulseHub(this.storage.rawDb, {
       now: () => Date.now(),
       sendPulseTo: (deviceId, pulseB64) => this.sendPulseFrameTo(deviceId, pulseB64),
+      acceptsProgressAck: (deviceId) => {
+        const ws = this.connections.get(deviceId);
+        return ws ? this.clients.get(ws)?.pulseProgressAck === true : false;
+      },
       broadcastTargets: (fromDevice) => this.pulseBroadcastTargets(fromDevice),
       onDeliverToSelf: (fromDevice, payload) => this.deliverPulseToSelf(fromDevice, payload),
     });
@@ -913,6 +919,7 @@ export class HeadServer {
   // --- Auth ---
 
   private async handleAuth(ws: WebSocket, state: ClientState, msg: AuthMessage): Promise<void> {
+    state.pulseProgressAck = msg.device?.pulseProgressAck === true;
     const logger = getLogger();
     const { auth } = msg;
 
@@ -1292,6 +1299,7 @@ export class HeadServer {
       githubClientId: params.githubClientId ?? this.getGitHubClientId(),
       vapidPublicKey: params.vapidPublicKey ?? this.getVapidPublicKey(),
       relayVersion: this.options.version,
+      pulseAckBytes: PULSE_ACK_EVERY_BYTES,
       ...(this.getVoiceCapability() && { voice: this.getVoiceCapability() }),
     }));
 

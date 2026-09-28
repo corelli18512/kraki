@@ -60,6 +60,10 @@ export interface DeviceInfo {
   deviceId?: string;
   /** Capabilities reported by the device */
   capabilities?: DeviceCapabilities;
+  /** This client's Pulse treats an advancing heartbeat cursor as progress
+   *  (≥0.5.1), so the relay may acknowledge its uploads promptly with
+   *  heartbeats. Older Pulse would resend its unacked suffix on each one. */
+  pulseProgressAck?: boolean;
 }
 
 export interface DeviceCapabilities {

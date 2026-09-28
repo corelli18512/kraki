@@ -11,7 +11,9 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
+import { WebSocket } from 'ws';
 import { createTestEnv, connectDevice, type TestEnv } from './integration-helpers.js';
+import { PULSE_ACK_EVERY_BYTES } from '../pulse-hub.js';
 
 describe('device_pending liveness broadcast', () => {
   let env: TestEnv;
@@ -177,5 +179,31 @@ describe('device_pending liveness broadcast', () => {
 
     tentacle.close();
     app.close();
+  });
+
+  it('advertises pulseAckBytes and records only explicit pulseProgressAck declarations', async () => {
+    env = await createTestEnv();
+    const plain = await connectDevice(env.port, 'Old App', 'app');
+    const authOk = plain.messages.find((m) => m.type === 'auth_ok');
+    expect(authOk?.pulseAckBytes).toBe(PULSE_ACK_EVERY_BYTES);
+    const host = (env.server as unknown as { pulseHub: { host: { acceptsProgressAck(id: string): boolean } } }).pulseHub.host;
+    expect(host.acceptsProgressAck(String(authOk?.deviceId))).toBe(false);
+
+    const ws = new WebSocket(`ws://127.0.0.1:${env.port}`);
+    await new Promise((r) => ws.on('open', r));
+    const ok = new Promise<Record<string, unknown>>((resolve) => ws.on('message', (d) => {
+      const m = JSON.parse(d.toString());
+      if (m.type === 'auth_ok') resolve(m);
+    }));
+    ws.send(JSON.stringify({ type: 'auth', auth: { method: 'open' }, device: { name: 'New App', role: 'app', pulseProgressAck: true } }));
+    const declared = await ok;
+    expect(host.acceptsProgressAck(String(declared.deviceId))).toBe(true);
+
+    // Let the server finish handling both disconnects before storage closes.
+    const closed = new Promise((r) => ws.on('close', r));
+    ws.close();
+    plain.close();
+    await closed;
+    await new Promise((r) => setTimeout(r, 100));
   });
 });

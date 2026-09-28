@@ -86,6 +86,60 @@ final class TestPulseHost: PulseHost {
         manager.onDisconnected()
         check(manager.connectionScopedCountForTesting == 0 && manager.liveOutboxSizeForTesting == 1,
               "failed auth still retires scoped commands, preserves ordinary retry")
-        print("PASS: production event forwarding + real PulseManager lifecycle (slow frame budget, congestion starvation bound, single-stream stall, duplicate effects, auth isolation, timer reentrancy, identity reset)")
+        // Payload fragments: split/reassemble, bounds, and paced upload.
+        let payload = Data(("{\"blob\":\"" + String(repeating: "Q", count: 200_000) + "\",\"keys\":{\"d\":\"k\"}}").utf8)
+        check(PayloadFragments.split(Data("{\"blob\":\"small\"}".utf8)) == nil, "small payload stays whole")
+        check(PayloadFragments.split(Data(String(repeating: "é", count: 70_000).utf8)) == nil, "non-ASCII stays whole")
+        let parts = PayloadFragments.split(payload, id: "p1")!
+        check(parts.count == (payload.count + PayloadFragments.size - 1) / PayloadFragments.size, "part count")
+        let asm = PayloadAssembler()
+        var whole: String?
+        for part in parts.reversed() {
+            let r = asm.accept([UInt8](part))
+            check(r.isFragment, "a Swift-encoded part is recognised")
+            if let w = r.whole { whole = w }
+        }
+        check(whole.map { Data($0.utf8) == payload } ?? false, "out-of-order parts reassemble exactly")
+        check(asm.accept([UInt8]("{\"blob\":\"x\"}".utf8)).isFragment == false, "ordinary payload passes through")
+        let tsStyle = #"{"kfrag":1,"id":"t","i":0,"n":2,"d":"ab"}"#
+        check(asm.accept([UInt8](tsStyle.utf8)).isFragment && asm.pendingPayloads == 1, "TS-encoded part recognised")
+        var clock = Date(timeIntervalSince1970: 0)
+        let bounded = PayloadAssembler(maxBytes: 100_000, ttl: 10, now: { clock })
+        let a = PayloadFragments.split(payload, id: "a")!, b = PayloadFragments.split(payload, id: "b")!
+        _ = bounded.accept([UInt8](a[0])); _ = bounded.accept([UInt8](a[1]))
+        _ = bounded.accept([UInt8](b[0])); _ = bounded.accept([UInt8](b[1]))
+        check(bounded.pendingPayloads == 1, "oldest partial evicted beyond the byte budget")
+        clock = clock.addingTimeInterval(60); _ = bounded.accept([UInt8](a[0]))
+        check(bounded.pendingPayloads == 1, "stale partial expired")
+
+        let fhost = TestPulseHost(); let fm = PulseManager(host: fhost); fhost.manager = fm
+        fm.clockForTesting = 0; fm.onConnected(); fhost.frames.removeAll()
+        let dataFrames = { fhost.frames.filter { if case .data = $0.frame { return true }; return false }.count }
+        fm.acksPromptly = true
+        fm.sendEncrypted(blob: String(repeating: "Z", count: 300_000), keys: ["t": "k"], target: "tent", fragment: true)
+        fm.sendEncrypted(blob: "after", keys: ["t": "k"], target: "tent")
+        let firstWindow = dataFrames()
+        check(firstWindow == 3 && fm.inflightBytesForTesting <= PulseManager.windowBytes, "one window of parts in flight")
+        check(fm.queuedForTesting > 1, "rest (and the later message) wait in order")
+        // A relay progress heartbeat acknowledges the window: the next one goes.
+        let ackBytes = try! encodeFrame(.heartbeat(ack: UInt64(firstWindow)), streamId: 0)
+        fm.onFrame(Data(ackBytes).base64EncodedString())
+        check(dataFrames() == firstWindow * 2, "each acknowledgement releases the next window")
+        var guardSteps = 0
+        while fm.queuedForTesting > 0, guardSteps < 100 {
+            let sent = dataFrames()
+            fm.onFrame(Data(try! encodeFrame(.heartbeat(ack: UInt64(sent)), streamId: 0)).base64EncodedString())
+            guardSteps += 1
+        }
+        check(fm.queuedForTesting == 0, "queue drains by acknowledgements")
+        let lastPayload = fhost.frames.last.flatMap { if case .data(_, _, let p, _, _) = $0.frame { return p }; return nil }
+        check(lastPayload.map { String(decoding: $0, as: UTF8.self).contains("after") } ?? false, "later message stays after the parts")
+
+        let legacyHost = TestPulseHost(); let legacy = PulseManager(host: legacyHost); legacyHost.manager = legacy
+        legacy.clockForTesting = 0; legacy.onConnected(); legacyHost.frames.removeAll()
+        legacy.sendEncrypted(blob: String(repeating: "Z", count: 300_000), keys: ["t": "k"], target: "tent", fragment: true)
+        check(legacy.queuedForTesting == 0, "an old relay (no prompt acks) gets all parts at once, as before")
+
+        print("PASS: production event forwarding + real PulseManager lifecycle (slow frame budget, congestion starvation bound, payload fragments + ack-paced upload, single-stream stall, duplicate effects, auth isolation, timer reentrancy, identity reset)")
     }
 }

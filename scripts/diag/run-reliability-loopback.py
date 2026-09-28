@@ -10,6 +10,7 @@ with tempfile.TemporaryDirectory(prefix='kraki-reliability-net-') as tmp:
                     '-emit-module-path', str(b/'Pulse.swiftmodule'), '-o', str(b/'libPulse.dylib')], check=True)
     subprocess.run(['swiftc', '-swift-version', '5', '-I', tmp, '-L', tmp, '-lPulse',
                     str(src/'Kraki/Core/Networking/PulseManager.swift'),
+                    str(src/'Kraki/Core/Networking/PayloadFragments.swift'),
                     str(src/'Kraki/Core/Networking/WebSocketClient.swift'),
                     str(ROOT/'scripts/diag/ReliabilityLoopback.swift'), '-o', str(b/'client')], check=True)
     peer = subprocess.Popen(['node', str(ROOT/'scripts/diag/reliability-peer.mjs')], stdin=subprocess.PIPE,

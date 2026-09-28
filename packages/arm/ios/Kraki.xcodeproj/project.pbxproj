@@ -219,6 +219,7 @@
 		B320E431D3B0720779F6C57B /* AgentAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 427C7B2406F858D980E5DFBB /* AgentAvatar.swift */; };
 		B481E371DBAC6C56C5F80E1E /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E805046685AE086D68B890D4 /* MainTabView.swift */; };
 		B48D7154FCD6A38CF2F94726 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B2ACA651B6DE122BE92C76 /* LoginView.swift */; };
+		B59F50706CFB0FB9A6306E72 /* PayloadFragments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11A7EB4EC1634A535D5A90D5 /* PayloadFragments.swift */; };
 		B5DA69C28AA7894A77411D10 /* mermaid.min.js in Resources */ = {isa = PBXBuildFile; fileRef = 291B381B54DD41127DED6D5C /* mermaid.min.js */; };
 		B6922FDD9F417397FB74E61E /* ToolChipHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = F163484AD442AE1D67F4E8A7 /* ToolChipHeader.swift */; };
 		B7C46A0BC08656D1F5C64D5E /* DeviceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04BA085D5DB073C1C3E8D700 /* DeviceStore.swift */; };
@@ -233,6 +234,7 @@
 		BD0DF68048D4DDD4EA0F66BD /* IOSChatScrollProductionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 019837F19EFDB3EAE1431A18 /* IOSChatScrollProductionTests.swift */; };
 		BD1B72D8C802E5E5C45BE8CD /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 61D4D890D63054395E2C6FEB /* GRDB */; };
 		BDBC81A8682AC662CD78C2F1 /* MainWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5469FDA14AA91327B6DF4400 /* MainWindowView.swift */; };
+		BFFB90095FF6AE0810E25671 /* PayloadFragments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11A7EB4EC1634A535D5A90D5 /* PayloadFragments.swift */; };
 		C00B760A90E96341077B088A /* BubbleCatalogTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CF1D3D6CED61870261C4724 /* BubbleCatalogTestView.swift */; };
 		C0AD5E96F22955DB2473E341 /* MacUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD6C23118C2C309C39C2A515 /* MacUpdateController.swift */; };
 		C0C4528A1D3D1773A0BA9870 /* MessagesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D6472A002F2CB9C07380792 /* MessagesTests.swift */; };
@@ -369,6 +371,7 @@
 		0C23602EA58067E4AE252F62 /* ImportSessionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportSessionSheet.swift; sourceTree = "<group>"; };
 		0E80769CD696851C28434036 /* AppColorScheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppColorScheme.swift; sourceTree = "<group>"; };
 		102ABECDD210B084B5B19319 /* MessageInputView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageInputView.swift; sourceTree = "<group>"; };
+		11A7EB4EC1634A535D5A90D5 /* PayloadFragments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PayloadFragments.swift; sourceTree = "<group>"; };
 		11B2053230A2F15EC2518979 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		13466FFA7CC929AF90E4097E /* LocalSessionSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSessionSummary.swift; sourceTree = "<group>"; };
 		179780D06C1EF0B6ED5E0C38 /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
@@ -658,6 +661,7 @@
 				8261534E96234C67C920EDCA /* AuthManager.swift */,
 				41EB27413D7A5189B3C42D36 /* EncryptionHandler.swift */,
 				654A17BD8AED96C7CD6AA7A5 /* MessageRouter.swift */,
+				11A7EB4EC1634A535D5A90D5 /* PayloadFragments.swift */,
 				2C0AE2F0350124712EAE0E17 /* PreferencesManager.swift */,
 				E45FF5DF9F0159EB23B50D72 /* PulseManager.swift */,
 				C97B0E319E0F6D893D83C12A /* PushManager.swift */,
@@ -1450,6 +1454,7 @@
 				F134E18404408B23FA5A7B57 /* PKCE.swift in Sources */,
 				0D94E4000C0462E3581D4126 /* PairingSheet+macOS.swift in Sources */,
 				DE13B9CBD5E65011E5CF4D46 /* PairingView.swift in Sources */,
+				BFFB90095FF6AE0810E25671 /* PayloadFragments.swift in Sources */,
 				891350586A2DF1FF3E5312BF /* PendingTailBuffer.swift in Sources */,
 				381AA8D728145A34D33CB68E /* PermissionCardView.swift in Sources */,
 				F030B7B0198D76CB4CAD4366 /* PreferencesManager.swift in Sources */,
@@ -1582,6 +1587,7 @@
 				A30457395FCEECC9CE6E8C53 /* NotificationsPane.swift in Sources */,
 				23B61F1BCE6CD4B7ABCFDA79 /* PKCE.swift in Sources */,
 				F5B867504AFC26C37BE4E2DB /* PairingSheet+macOS.swift in Sources */,
+				B59F50706CFB0FB9A6306E72 /* PayloadFragments.swift in Sources */,
 				F6582FAA807D4A92471EBCA8 /* PendingTailBuffer.swift in Sources */,
 				4EC8B5AAF16DFE0A9859EA35 /* PreferencesManager.swift in Sources */,
 				3F9854AE8D35E76D9D514EBA /* PreferencesWindow.swift in Sources */,
