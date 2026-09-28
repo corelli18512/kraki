@@ -231,7 +231,8 @@ struct MacChatView: View {
         // Chat geometry to multiline typing, microphone, or streaming height.
         // Those surfaces grow upward over the Chat without moving its viewport.
         guard composerVisible else { return 0 }
-        return 62
+        // Tracks the Composer footprint, including its bottom padding.
+        return 56 + MacComposerMetrics.bottomPadding
     }
 
     /// Persisted window identity only (not the live card), so the spine
