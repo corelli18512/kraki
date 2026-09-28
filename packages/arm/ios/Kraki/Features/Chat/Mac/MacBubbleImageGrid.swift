@@ -123,7 +123,12 @@ struct MacBubbleImageGrid: View {
         .frame(maxWidth: .infinity, alignment: alignment)
         .onAppear {
             for ref in refs {
-                attachmentStore?.requestIfNeeded(id: ref.id, sessionId: sessionId)
+                attachmentStore?.requestIfNeeded(id: ref.id, sessionId: sessionId, priority: .visible)
+            }
+        }
+        .onDisappear {
+            for ref in refs {
+                attachmentStore?.release(id: ref.id)
             }
         }
     }
@@ -282,7 +287,7 @@ struct MacBubbleImageGrid: View {
     private func errorPlaceholder(_ ref: ContentRef, label: String) -> some View {
         let size = placeholderSize(ref)
         return Button {
-            attachmentStore?.requestIfNeeded(id: ref.id, sessionId: sessionId)
+            attachmentStore?.requestIfNeeded(id: ref.id, sessionId: sessionId, priority: .userOpened)
         } label: {
             errorContent(label)
                 .frame(width: size.width, height: size.height)
@@ -292,7 +297,7 @@ struct MacBubbleImageGrid: View {
 
     private func stackedErrorCard(_ ref: ContentRef, label: String, width: CGFloat) -> some View {
         Button {
-            attachmentStore?.requestIfNeeded(id: ref.id, sessionId: sessionId)
+            attachmentStore?.requestIfNeeded(id: ref.id, sessionId: sessionId, priority: .userOpened)
         } label: {
             errorContent(label)
                 .frame(width: width, height: MacImageGalleryLayout.multiCardHeight)

@@ -80,13 +80,13 @@ final class AppState {
         // attachmentStore is set up after the DB-backed stores so the
         // request-pull closure can capture self by weak reference
         // and the rest of setup (router, ws) can read it.
-        self.attachmentStore = AttachmentStore { [weak self] id, sessionId in
+        self.attachmentStore = AttachmentStore { [weak self] id, sessionId, index in
             guard let self else { return }
             self.sendEncryptedMessage([
                 "type": "request_attachment",
                 "deviceId": self.deviceId ?? "",
                 "sessionId": sessionId,
-                "payload": ["id": id, "sessionId": sessionId],
+                "payload": ["id": id, "sessionId": sessionId, "mode": "paced", "index": index],
             ])
         }
         setupNetworking()
@@ -138,7 +138,7 @@ final class AppState {
         self.messageStore = MessageStore(db: testDatabase)
         self.voiceInputController = voiceController ?? KrakiVoiceInputController.isolatedForTesting()
         if voiceController == nil { self.voiceInputController.bind(host: self) }
-        self.attachmentStore = AttachmentStore { _, _ in }
+        self.attachmentStore = AttachmentStore { _, _, _ in }
         self.commandSender = CommandSender(appState: self)
         self.messageProvider = MessageProvider(appState: self)
         self.messageRouter = MessageRouter(appState: self)
@@ -151,7 +151,17 @@ final class AppState {
     #endif
 
     // MARK: - Connection
-    var connectionStatus: ConnectionStatus = .awaitingLogin
+    var connectionStatus: ConnectionStatus = .awaitingLogin {
+        didSet {
+            guard connectionStatus != oldValue, let store = attachmentStore else { return }
+            let ready = connectionStatus == .connected
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { store.setTransportReady(ready) }
+            } else {
+                Task { @MainActor in store.setTransportReady(ready) }
+            }
+        }
+    }
     var deviceId: String?
     var user: UserInfo?
 

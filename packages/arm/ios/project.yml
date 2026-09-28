@@ -116,6 +116,10 @@ targets:
       - path: Kraki
         excludes:
           - "**/.DS_Store"
+          - "Resources/Mermaid/**"
+      # Client-side Mermaid runtime for show_report (MIT; see LICENSE-mermaid.txt).
+      - path: Kraki/Resources/Mermaid
+        buildPhase: resources
     resources:
       - path: Kraki/Resources/Assets.xcassets
     settings:
@@ -305,6 +309,9 @@ targets:
       - path: Kraki/Features/Pairing/PairingSheet+macOS.swift
       # Asset catalog (iOS universal icon + macOS icon sizes).
       - path: Kraki/Resources/Assets.xcassets
+      # Client-side Mermaid runtime for show_report (MIT; see LICENSE-mermaid.txt).
+      - path: Kraki/Resources/Mermaid
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac

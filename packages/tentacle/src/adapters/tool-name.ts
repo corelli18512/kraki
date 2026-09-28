@@ -9,7 +9,7 @@ export function canonicalArtifactToolName(
   mcpServerName?: string,
   mcpToolName?: string,
 ): string {
-  if (mcpServerName === 'kraki' && (mcpToolName === 'show_image' || mcpToolName === 'show_html')) {
+  if (mcpServerName === 'kraki' && (mcpToolName === 'show_image' || mcpToolName === 'show_report' || mcpToolName === 'show_html')) {
     return mcpToolName;
   }
   if (
@@ -22,5 +22,10 @@ export function canonicalArtifactToolName(
     || toolName === 'kraki-show_html'
     || toolName === 'mcp__kraki__show_html'
   ) return 'show_html';
+  if (
+    toolName === 'show_report'
+    || toolName === 'kraki-show_report'
+    || toolName === 'mcp__kraki__show_report'
+  ) return 'show_report';
   return toolName;
 }

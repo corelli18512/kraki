@@ -31,6 +31,7 @@ import {
 import type { SessionContext } from '../session-manager.js';
 import type { ModelDetail, SessionUsage, ReasoningEffort, ToolArgs } from '@kraki/protocol';
 import { createLogger } from '../logger.js';
+import { REPORT_MAX_BYTES } from '../report-policy.js';
 import { getKrakiHome, getConfigDir } from '../config.js';
 import { PI_KRAKI_TOOLS_SOURCE } from './pi-kraki-tools.js';
 import { DEFAULT_SESSION_MODE, normalizeSessionMode } from '@kraki/protocol';
@@ -130,7 +131,7 @@ class PiRpcProcess {
     // the precise jsonl instead. The absolute path also survives a cwd change.
     if (this.opts.sessionFile) args.push('--session', this.opts.sessionFile);
     if (this.opts.appendSystemPrompt) args.push('--append-system-prompt', this.opts.appendSystemPrompt);
-    // Kraki tools extension (ask_user / show_image / show_html /
+    // Kraki tools extension (ask_user / show_image / show_report /
     // kraki_get_mode + permission gate), always loaded. rpc mode has no built-in
     // tool-approval round-trip, so the gate's ctx.ui.confirm surfaces as an
     // extension_ui_request the adapter maps to a Kraki permission card (or
@@ -526,10 +527,11 @@ export const KRAKI_SYSTEM_PROMPT =
   'yourself. To get a decision or missing information from the human, call the ' +
   'ask_user tool (it blocks and returns their answer). To visually show the human ' +
   'an image (a screenshot, diagram, chart, or generated graphic they cannot ' +
-  'already see), call the show_image tool with the file path. When the human asks you to ' +
-  'inspect, open, review, generate, or update a local HTML report, call show_html before ' +
-  'concluding so it remains accessible in the producing message; a shell command that ' +
-  'opens the system browser is not a substitute.\n\n' + KRAKI_MODES_PROMPT;
+  'already see), call the show_image tool with the file path. When you write a report for ' +
+  'the human to read (analysis, design, investigation), save it as a text-first HTML file ' +
+  'and call show_report before concluding so it remains accessible in the producing ' +
+  'message. show_report is a report viewer, not a browser: for web pages, apps, or when ' +
+  'the human asks to open something in a browser, use the shell (e.g. `open`).\n\n' + KRAKI_MODES_PROMPT;
 
 
 interface PromptWatchdogOptions {
@@ -1165,7 +1167,7 @@ export class PiAdapter extends AgentAdapter {
           resultText = typeof raw === 'string' ? raw : JSON.stringify(raw ?? '');
         }
         const details = raw && typeof raw === 'object' && (raw as { details?: unknown }).details;
-        if (toolName === 'show_html' && this.attachmentStore && details && typeof details === 'object') {
+        if ((toolName === 'show_report' || toolName === 'show_html') && this.attachmentStore && details && typeof details === 'object') {
           const htmlPath = (details as { htmlPath?: unknown }).htmlPath;
           const lowerHtmlPath = typeof htmlPath === 'string' ? htmlPath.toLowerCase() : '';
           if (typeof htmlPath === 'string' && (lowerHtmlPath.endsWith('.html') || lowerHtmlPath.endsWith('.htm'))) {
@@ -1173,7 +1175,7 @@ export class PiAdapter extends AgentAdapter {
               const html = readFileSync(htmlPath);
               const title = typeof (details as { title?: unknown }).title === 'string' ? (details as { title: string }).title : undefined;
               const name = typeof (details as { name?: unknown }).name === 'string' ? (details as { name: string }).name : 'report.html';
-              if (html.length <= 10 * 1024 * 1024) {
+              if (html.length <= REPORT_MAX_BYTES) {
                 outputAttachments.push(this.attachmentStore.put(sessionId, html, 'text/html', { name, caption: title }));
               }
             } catch (err) {

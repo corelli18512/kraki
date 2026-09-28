@@ -22,7 +22,7 @@ struct MacHTMLArtifactPanel: View {
         let name = selection.ref.name?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let caption, !caption.isEmpty { return caption }
         if let name, !name.isEmpty { return name }
-        return "HTML Report"
+        return "Report"
     }
 
     var body: some View {
@@ -38,13 +38,27 @@ struct MacHTMLArtifactPanel: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.textTitle)
                         .lineLimit(1)
-                    Text("HTML Report · \(ByteCountFormatter.string(fromByteCount: Int64(selection.ref.size), countStyle: .file))")
+                    Text("Report · \(ByteCountFormatter.string(fromByteCount: Int64(selection.ref.size), countStyle: .file))")
                         .font(.system(size: 9.5))
                         .foregroundStyle(Color.textMuted)
                         .lineLimit(1)
                 }
 
                 Spacer(minLength: 8)
+
+                if let html = readyHTML {
+                    Button {
+                        openInBrowser(html)
+                    } label: {
+                        Image(systemName: "safari")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(width: 26, height: 26)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.textSecondary)
+                    .help("Open in Browser")
+                    .accessibilityLabel("Open in Browser")
+                }
 
                 if canToggleExpanded {
                     Button(action: onToggleExpanded) {
@@ -78,13 +92,38 @@ struct MacHTMLArtifactPanel: View {
         }
         .background(Color.surfacePrimary)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("HTML report preview")
+        .accessibilityLabel("Report preview")
         .task(id: selection.ref.id) {
             guard selection.ref.size <= HTMLArtifactSecurity.maxBytes else { return }
             appState.attachmentStore.requestIfNeeded(
                 id: selection.ref.id,
-                sessionId: selection.sessionId
+                sessionId: selection.sessionId,
+                priority: .userOpened
             )
+        }
+        .onChange(of: selection.ref.id) { oldID, _ in
+            appState.attachmentStore.release(id: oldID, priority: .userOpened)
+        }
+        .onDisappear {
+            appState.attachmentStore.release(id: selection.ref.id, priority: .userOpened)
+        }
+    }
+
+    private var readyHTML: String? {
+        guard case .ready(let mimeType, let data) = appState.attachmentStore.state(for: selection.ref.id),
+              mimeType == "text/html",
+              data.count <= HTMLArtifactSecurity.maxBytes else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// Fallback for content that needs a real browser (the viewer is a
+    /// sandboxed, offline report renderer).
+    private func openInBrowser(_ html: String) {
+        do {
+            let url = try HTMLReportExport.writeBrowserCopy(html: html, ref: selection.ref)
+            NSWorkspace.shared.open(url)
+        } catch {
+            KLog.d("Open report in browser failed: \(error.localizedDescription)")
         }
     }
 
@@ -160,7 +199,7 @@ private struct MacHTMLArtifactWebView: NSViewRepresentable {
         webView.allowsBackForwardNavigationGestures = false
         webView.allowsLinkPreview = false
         webView.isInspectable = false
-        webView.setAccessibilityLabel("HTML report content")
+        webView.setAccessibilityLabel("Report content")
         context.coordinator.load(html: html, artifactID: artifactID, into: webView)
         return webView
     }
@@ -187,6 +226,9 @@ private struct MacHTMLArtifactWebView: NSViewRepresentable {
             loadedHTML = html
             initialNavigationPending = true
             webView.stopLoading()
+            let scripts = webView.configuration.userContentController
+            scripts.removeAllUserScripts()
+            HTMLReportMermaid.install(into: scripts, for: html)
             webView.loadHTMLString(html, baseURL: nil)
         }
 

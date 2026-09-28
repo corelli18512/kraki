@@ -11,6 +11,10 @@ describe('canonicalArtifactToolName', () => {
     ['mcp__kraki__show_html', undefined, undefined, 'show_html'],
     ['view', 'kraki', 'show_image', 'show_image'],
     ['tool', 'kraki', 'show_html', 'show_html'],
+    ['show_report', undefined, undefined, 'show_report'],
+    ['kraki-show_report', undefined, undefined, 'show_report'],
+    ['mcp__kraki__show_report', undefined, undefined, 'show_report'],
+    ['tool', 'kraki', 'show_report', 'show_report'],
   ])('normalizes %s / %s / %s to %s', (name, server, tool, expected) => {
     expect(canonicalArtifactToolName(name, server, tool)).toBe(expected);
   });

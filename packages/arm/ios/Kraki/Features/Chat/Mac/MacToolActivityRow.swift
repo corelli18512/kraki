@@ -227,10 +227,10 @@ struct MacToolActivityRow: View {
 
     private func triggerLazyFetches() {
         if let ref = message.argsRef {
-            appState.attachmentStore?.requestIfNeeded(id: ref.id, sessionId: sessionId)
+            appState.attachmentStore?.requestIfNeeded(id: ref.id, sessionId: sessionId, priority: .userOpened)
         }
         if let ref = message.resultRef {
-            appState.attachmentStore?.requestIfNeeded(id: ref.id, sessionId: sessionId)
+            appState.attachmentStore?.requestIfNeeded(id: ref.id, sessionId: sessionId, priority: .userOpened)
         }
     }
 

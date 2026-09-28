@@ -651,7 +651,7 @@ describe('pi outbound images (tool result → attachment store)', () => {
     });
   });
 
-  it('stores show_html output as a text/html attachment and broadcasts its bytes', async () => {
+  it.each(['show_report', 'show_html'])('stores %s output as a text/html attachment and broadcasts its bytes', async (tool) => {
     const dir = mkdtempSync(join(tmpdir(), 'kraki-show-html-'));
     const htmlPath = join(dir, 'report.html');
     writeFileSync(htmlPath, '<!doctype html><title>Report</title>');
@@ -664,7 +664,7 @@ describe('pi outbound images (tool result → attachment store)', () => {
 
       await emit({
         type: 'tool_execution_end',
-        toolName: 'show_html',
+        toolName: tool,
         toolCallId: 'html-1',
         isError: false,
         result: {
@@ -680,7 +680,7 @@ describe('pi outbound images (tool result → attachment store)', () => {
         { name: 'report.html', caption: 'Architecture Report' },
       );
       expect(onToolComplete).toHaveBeenCalledWith('s1', {
-        toolName: 'show_html',
+        toolName: tool,
         result: 'HTML report ready for preview.',
         toolCallId: 'html-1',
         success: true,
@@ -694,7 +694,7 @@ describe('pi outbound images (tool result → attachment store)', () => {
     }
   });
 
-  it('ignores an htmlPath handle from tools other than show_html', async () => {
+  it('ignores an htmlPath handle from tools other than show_report', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'kraki-show-html-spoof-'));
     const htmlPath = join(dir, 'secret.html');
     writeFileSync(htmlPath, '<p>secret</p>');
@@ -1217,10 +1217,11 @@ describe('pi agent lifecycle boundaries', () => {
 });
 
 describe('Pi Kraki system prompt', () => {
-  it('directs local HTML reports through show_html instead of the system browser', () => {
-    expect(KRAKI_SYSTEM_PROMPT).toContain('call show_html');
+  it('directs written reports through show_report and browser requests to the shell', () => {
+    expect(KRAKI_SYSTEM_PROMPT).toContain('call show_report');
     expect(KRAKI_SYSTEM_PROMPT).toContain('remains accessible in the producing message');
-    expect(KRAKI_SYSTEM_PROMPT).toContain('is not a substitute');
+    expect(KRAKI_SYSTEM_PROMPT).toContain('not a browser');
+    expect(KRAKI_SYSTEM_PROMPT).not.toContain('show_html');
   });
 });
 
@@ -1229,7 +1230,8 @@ describe('PI_KRAKI_TOOLS_SOURCE extension shape', () => {
     expect(PI_KRAKI_TOOLS_SOURCE).not.toContain('finalize_reply');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "ask_user"');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "show_image"');
-    expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "show_html"');
+    expect(PI_KRAKI_TOOLS_SOURCE).toContain('name: "show_report"');
+    expect(PI_KRAKI_TOOLS_SOURCE).not.toContain('name: "show_html"');
     expect(PI_KRAKI_TOOLS_SOURCE).not.toContain('present_to_user');
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('pi.registerTool');
   });
@@ -1241,15 +1243,15 @@ describe('PI_KRAKI_TOOLS_SOURCE extension shape', () => {
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('"show_image"');
   });
 
-  it('show_html returns a local attachment handle without returning HTML bytes to pi', () => {
+  it('show_report returns a local attachment handle without returning HTML bytes to pi', () => {
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('details: { htmlPath: abs');
-    expect(PI_KRAKI_TOOLS_SOURCE).toContain('10 * 1024 * 1024');
+    expect(PI_KRAKI_TOOLS_SOURCE).toContain('krakiValidateReport(bytes)');
     expect(PI_KRAKI_TOOLS_SOURCE).not.toContain('htmlBase64');
   });
 
   it('whitelists the capability tools from the always-on permission gate', () => {
     expect(PI_KRAKI_TOOLS_SOURCE).toContain('"ask_user"');
-    expect(PI_KRAKI_TOOLS_SOURCE).toContain('"show_html"');
+    expect(PI_KRAKI_TOOLS_SOURCE).toContain('"show_report"');
     // The gate is loaded in every mode (no KRAKI_PI_GATE env guard); the adapter
     // decides silent-approve vs card per its mode policy.
     expect(PI_KRAKI_TOOLS_SOURCE).not.toContain('process.env.KRAKI_PI_GATE');

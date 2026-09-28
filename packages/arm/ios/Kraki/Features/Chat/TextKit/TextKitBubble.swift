@@ -1709,9 +1709,9 @@ private final class TKHTMLArtifactButton: UIControl {
         let name = artifact.name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = caption?.isEmpty == false
             ? caption!
-            : (name?.isEmpty == false ? name! : "HTML Report")
+            : (name?.isEmpty == false ? name! : "Report")
         titleLabel.text = title
-        detailLabel.text = "HTML Report · \(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))"
+        detailLabel.text = "Report · \(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))"
         accessibilityLabel = title
         accessibilityValue = detailLabel.text
         accessibilityHint = "Opens report preview"

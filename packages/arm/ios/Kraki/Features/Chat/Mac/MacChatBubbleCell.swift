@@ -703,7 +703,7 @@ private final class MacHTMLArtifactButton: NSButton {
 
         iconView.image = NSImage(
             systemSymbolName: "doc.richtext",
-            accessibilityDescription: "HTML report"
+            accessibilityDescription: "Report"
         )
         iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
         iconView.contentTintColor = NSColor.controlAccentColor
@@ -739,9 +739,9 @@ private final class MacHTMLArtifactButton: NSButton {
         let name = artifact.name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let displayTitle = !(title ?? "").isEmpty
             ? title!
-            : (!(name ?? "").isEmpty ? name! : "HTML Report")
+            : (!(name ?? "").isEmpty ? name! : "Report")
         titleLabel.stringValue = displayTitle
-        detailLabel.stringValue = "HTML Report · \(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))"
+        detailLabel.stringValue = "Report · \(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))"
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
         setAccessibilityLabel("Open report \(displayTitle)")

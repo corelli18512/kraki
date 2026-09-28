@@ -423,7 +423,6 @@ final class MessageRouter {
             if let content = payload?["content"] as? String {
                 appState.sessionStore.setAgentTextActivity(sessionId, text: content)
             }
-            registerContentRefs(in: payload, sessionId: sessionId)
 
         case "turn_status":
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
@@ -487,14 +486,12 @@ final class MessageRouter {
                 appState.sessionStore.setCurrentTool(
                     sessionId, toolName: name, headline: payload?["headline"] as? String)
             }
-            registerContentRefs(in: payload, sessionId: sessionId)
 
         case "tool_complete":
             appState.messageStore.clearRuntimeStatusIfCompacting(sessionId)
             let name = payload?["toolName"] as? String
             appState.sessionStore.clearCurrentTool(
                 sessionId, ifMatching: name, success: payload?["success"] as? Bool)
-            registerContentRefs(in: payload, sessionId: sessionId)
 
 
         // ── Attachment chunk push ────────────────────────────────────────
@@ -505,7 +502,6 @@ final class MessageRouter {
         // ── Session state ────────────────────────────────────────────────
 
         case "idle":
-            registerContentRefs(in: payload, sessionId: sessionId)
             appState.sessionStore.updateState(sessionId, state: "idle")
             appState.messageStore.clearRuntimeStatus(sessionId)
             appState.messageStore.endCardTurn(sessionId)
@@ -1091,32 +1087,10 @@ final class MessageRouter {
 
     // MARK: - Attachment helpers
 
-    /// Inspect a payload dict for `argsRef` / `resultRef` (top-level) and
-    /// register each as awaiting-push so any view that subsequently
-    /// expands the tool chip sees a spinner immediately while bytes
-    /// arrive. No-op if a ref is already in flight or already on disk.
-    @MainActor
-    private func registerContentRefs(in payload: [String: Any]?, sessionId: String) {
-        guard let appState, let payload else { return }
-        for key in ["argsRef", "resultRef"] {
-            if let dict = payload[key] as? [String: Any],
-               let type = dict["type"] as? String,
-               (type == "content_ref" || type == "image_ref"),
-               let id = dict["id"] as? String {
-                appState.attachmentStore.markAwaitingPush(id: id, sessionId: sessionId)
-            }
-        }
-        for key in ["attachments", "turnArtifacts"] {
-            guard let arr = payload[key] as? [[String: Any]] else { continue }
-            for att in arr {
-                if let type = att["type"] as? String,
-                   (type == "content_ref" || type == "image_ref"),
-                   let id = att["id"] as? String {
-                    appState.attachmentStore.markAwaitingPush(id: id, sessionId: sessionId)
-                }
-            }
-        }
-    }
+    // Live messages no longer register their ContentRefs for download:
+    // attachments load only when a view shows or the user opens them (see
+    // AttachmentStore), so a report produced in a session nobody is looking
+    // at costs no bandwidth.
 
     /// Process an inbound `attachment_data` chunk by routing it to the
     /// attachment store. Errors carried in the chunk envelope are
@@ -1135,7 +1109,8 @@ final class MessageRouter {
             total: total,
             mimeType: mimeType,
             data: data,
-            error: error
+            error: error,
+            paced: payload["paced"] as? Bool ?? false
         )
     }
 }

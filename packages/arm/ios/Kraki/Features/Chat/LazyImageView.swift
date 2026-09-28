@@ -53,7 +53,10 @@ struct LazyImageView: View {
             }
         }
         .onAppear {
-            attachmentStore.requestIfNeeded(id: ref.id, sessionId: sessionId)
+            attachmentStore.requestIfNeeded(id: ref.id, sessionId: sessionId, priority: .visible)
+        }
+        .onDisappear {
+            attachmentStore.release(id: ref.id)
         }
     }
 
@@ -75,7 +78,7 @@ struct LazyImageView: View {
     @ViewBuilder
     private func errorPlaceholder(label: String) -> some View {
         Button {
-            attachmentStore.requestIfNeeded(id: ref.id, sessionId: sessionId)
+            attachmentStore.requestIfNeeded(id: ref.id, sessionId: sessionId, priority: .userOpened)
         } label: {
             ZStack {
                 RoundedRectangle(cornerRadius: 8)

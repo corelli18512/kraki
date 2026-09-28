@@ -1,26 +1,24 @@
-/// AttachmentStore — chunk reassembly + disk-backed cache for lazy
-/// content referenced by `ContentRef`.
+/// AttachmentStore — lazy, low-priority loading of `ContentRef` bytes
+/// (images, HTML reports, tool arguments/results).
 ///
-/// Mirrors the web client's `packages/arm/web/src/lib/attachments.ts`:
+/// Attachments share one relay connection with chat messages and liveness
+/// pings, and the relay link can be only a few Mbps. Bytes are therefore
+/// never pulled speculatively: something must be on screen (`.visible`) or
+/// explicitly opened by the user (`.userOpened`). Transfers are paced —
+/// one chunk per request, at most one chunk in flight — so a transfer can
+/// never queue megabytes in front of chat traffic, and a higher-priority
+/// request (the report the user just opened) takes over between chunks.
 ///
-///   awaiting-chunks  ← message router calls markAwaitingPush() when a
-///                       fresh tool_start / tool_complete / agent_message
-///                       carrying a ContentRef arrives. Chunks land via
-///                       `attachment_data` envelopes.
-///   fetching         ← UI explicitly triggered a pull (e.g. cold replay,
-///                       or a safety-timeout fallback after no push
-///                       arrived in PUSH_TIMEOUT_MS).
-///   ready            ← bytes assembled & persisted; available to UI.
-///   error            ← chunk-level error or pull failed.
+///   nil            ← nothing wanted (or released while off-screen)
+///   fetching       ← wanted; waiting for its turn / disk / first chunk
+///   awaitingChunks ← partially received (partial chunks survive pauses,
+///                    reconnects and scrolling away)
+///   ready          ← assembled and cached on disk
+///   error          ← server error or repeated timeouts; a new request retries
 ///
-/// Storage:
-///   - In-memory state machine + chunk buffers per id (this class).
-///   - Disk cache at `<caches>/kraki-attachments/<id>` (raw bytes) +
-///     `<id>.json` (mimeType, size, lastAccessed). Disk is a
-///     content-addressed flat directory; ids are sha256 hex so collisions
-///     across sessions are intentional (dedup).
-///   - The OS may purge the caches directory under pressure; that's safe
-///     since the tentacle still holds the source bytes and we can refetch.
+/// Disk cache: `<caches>/kraki-attachments/<id>` + `<id>.json`. Ids are
+/// content hashes, so the cache is shared across sessions; the OS may purge
+/// it and the tentacle still holds the source bytes.
 
 import Foundation
 import Observation
@@ -31,6 +29,17 @@ enum AttachmentState: Equatable {
     case fetching
     case ready(mimeType: String, data: Data)
     case error(reason: String)
+}
+
+/// Why a view wants an attachment. Higher values are served first.
+enum AttachmentPriority: Int, Comparable {
+    /// On screen (an inline image). Starts after a short dwell so fast
+    /// scrolling does not start transfers; released when it scrolls away.
+    case visible = 1
+    /// The user opened it (a report, an expanded tool step).
+    case userOpened = 2
+
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 }
 
 enum HTMLArtifactSecurity {
@@ -68,39 +77,50 @@ final class AttachmentStore {
 
     // MARK: - Tunables
 
-    /// Time we'll wait for the first chunk to arrive after marking a ref
-    /// awaiting-push, before falling back to an explicit
-    /// `request_attachment` pull. Matches the web client's value.
-    private let pushTimeoutSeconds: TimeInterval = 10.0
+    /// Dwell before a merely-visible attachment starts transferring.
+    @ObservationIgnored private let visibleDwell: TimeInterval
+    /// A paced chunk that has not arrived by then is re-requested.
+    @ObservationIgnored private let chunkTimeout: TimeInterval
+    /// Consecutive timeouts before surfacing an error (the user can retry).
+    static let maxAttempts = 3
 
     // MARK: - State
 
     /// Per-id public state observed by views.
     private(set) var states: [String: AttachmentState] = [:]
 
-    /// Per-id chunk buffer during assembly. Map from chunk index → base64
-    /// string. Kept separate from `states` so the observable dict isn't
-    /// invalidated on every chunk arrival; we publish state transitions
-    /// to `states` at coarser granularity.
+    private struct Want {
+        var sessionId: String
+        var priority: AttachmentPriority
+        var order: Int
+    }
+
+    private struct InFlight {
+        let id: String
+        let index: Int
+        let generation: Int
+    }
+
+    @ObservationIgnored private var wants: [String: Want] = [:]
+    @ObservationIgnored private var nextOrder = 0
+    @ObservationIgnored private var dwellWork: [String: DispatchWorkItem] = [:]
+    @ObservationIgnored private var inFlight: InFlight?
+    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var timeoutWork: DispatchWorkItem?
+    @ObservationIgnored private var attempts: [String: Int] = [:]
+    /// Ids an older tentacle is streaming whole (it ignores `paced`); wait
+    /// for the stream instead of requesting more chunks.
+    @ObservationIgnored private var streamingWhole: Set<String> = []
+    @ObservationIgnored private var hydrating: Set<String> = []
+    @ObservationIgnored private(set) var transportReady = false
+
+    /// Chunk buffers (index → base64) kept across pauses so a transfer
+    /// resumes where it stopped.
     @ObservationIgnored private var pendingChunks: [String: [Int: String]] = [:]
     @ObservationIgnored private var pendingTotal: [String: Int] = [:]
-    @ObservationIgnored private var pendingMimeType: [String: String] = [:]
-    @ObservationIgnored private var pendingStartedAt: [String: Date] = [:]
 
-    /// Per-id callbacks scheduled to fire if push timeout elapses with no
-    /// chunks. Cancelled on first chunk / ingest / completion.
-    @ObservationIgnored private var pushTimers: [String: DispatchSourceTimer] = [:]
-
-    /// Closure used to issue `request_attachment` messages. Injected by
-    /// `AppState` at construction time so AttachmentStore stays
-    /// network-agnostic and easy to unit test.
-    @ObservationIgnored private let requestPull: (String, String) -> Void
-
-    /// Lock for the chunk buffers and timers. The store is owned by
-    /// `@MainActor` `AppState`, so most calls are already main-actor;
-    /// `attachment_data` may arrive on the WS thread, so we serialize
-    /// chunk ingest defensively.
-    @ObservationIgnored private let lock = NSLock()
+    /// Sends `request_attachment {mode: paced, index}` for (id, sessionId, index).
+    @ObservationIgnored private let requestChunk: (String, String, Int) -> Void
 
     // MARK: - Disk layout
 
@@ -109,92 +129,182 @@ final class AttachmentStore {
         qos: .utility
     )
 
-    @ObservationIgnored private let cacheDir: URL = {
-        KrakiDataPaths.attachmentCacheDirectory()
-    }()
+    @ObservationIgnored private let cacheDir: URL
 
-    /// Construct with a `requestPull` closure that maps (id, sessionId)
-    /// → outbound `request_attachment` envelope. Injected so we don't
-    /// import AppState here.
-    init(requestPull: @escaping (String, String) -> Void) {
-        self.requestPull = requestPull
+    init(
+        cacheDirectory: URL = KrakiDataPaths.attachmentCacheDirectory(),
+        visibleDwell: TimeInterval = 0.3,
+        chunkTimeout: TimeInterval = 30,
+        requestChunk: @escaping (String, String, Int) -> Void
+    ) {
+        self.cacheDir = cacheDirectory
+        self.visibleDwell = visibleDwell
+        self.chunkTimeout = chunkTimeout
+        self.requestChunk = requestChunk
     }
 
     // MARK: - Public API
 
-    /// Current state for an id. Views should use this; it triggers
-    /// observation tracking via the `states` dict.
+    /// Current state for an id; views observe it.
     func state(for id: String) -> AttachmentState? {
-        return states[id]
+        states[id]
     }
 
-    /// Called by the router for every ContentRef encountered in a LIVE
-    /// message (tool_start, tool_complete, agent_message with attachments).
-    /// Schedules a push timeout; once chunks arrive the timeout is
-    /// cancelled in `ingestChunk`.
+    /// A view needs these bytes. Cached bytes load from disk; otherwise the
+    /// attachment joins the paced transfer queue at `priority` (raising the
+    /// priority of an existing request). A request after an error retries.
     @MainActor
-    func markAwaitingPush(id: String, sessionId: String) {
-        if let existing = states[id],
-           case .ready = existing { return }
-        if let existing = states[id],
-           case .awaitingChunks = existing { return }
-        if let existing = states[id],
-           case .fetching = existing { return }
-
-        // If the bytes are already on disk, kick off an async hydrate
-        // and skip the push timer. Reads of large images (multi-MB)
-        // would otherwise stall the runloop if done synchronously.
-        if hasOnDisk(id: id) {
-            states[id] = .fetching
-            hydrateFromDiskAsync(id: id, sessionId: sessionId)
-            return
-        }
-
-        states[id] = .awaitingChunks(received: 0, total: nil)
-        pendingChunks[id] = [:]
-        pendingTotal.removeValue(forKey: id)
-        pendingMimeType.removeValue(forKey: id)
-        pendingStartedAt[id] = Date()
-
-        schedulePushTimeout(id: id, sessionId: sessionId)
-    }
-
-    /// Called by the UI when it wants to display an attachment whose ref
-    /// it just saw — typically on a tool-bubble expand, or when a session
-    /// is replayed from cold storage. We:
-    ///   1) hydrate from disk if cached, else
-    ///   2) if not already in flight, dispatch a `request_attachment`.
-    @MainActor
-    func requestIfNeeded(id: String, sessionId: String) {
+    func requestIfNeeded(id: String, sessionId: String, priority: AttachmentPriority = .visible) {
         if case .ready = states[id] { return }
-        if case .awaitingChunks = states[id] { return }
-        if case .fetching = states[id] { return }
-
-        if hasOnDisk(id: id) {
-            states[id] = .fetching
-            hydrateFromDiskAsync(id: id, sessionId: sessionId)
+        if hydrating.contains(id) { return }
+        if case .error = states[id] {
+            attempts[id] = nil
+            states[id] = nil
+        }
+        if wants[id] == nil, hasOnDisk(id: id) {
+            if states[id] == nil { states[id] = .fetching }
+            hydrateFromDiskAsync(id: id, sessionId: sessionId, priority: priority)
             return
         }
-        states[id] = .fetching
-        requestPull(id, sessionId)
+        if priority == .visible, wants[id] == nil {
+            guard dwellWork[id] == nil else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.dwellWork[id] = nil
+                self.want(id: id, sessionId: sessionId, priority: .visible)
+            }
+            dwellWork[id] = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + visibleDwell, execute: work)
+            return
+        }
+        dwellWork.removeValue(forKey: id)?.cancel()
+        want(id: id, sessionId: sessionId, priority: priority)
     }
 
-    /// Process an inbound `attachment_data` chunk. May run on the WS
-    /// thread; we bounce to MainActor before mutating observable state.
+    /// The view that wanted `id` went away (scrolled off, closed). Merely
+    /// visible requests stop; received chunks are kept for later.
+    @MainActor
+    func release(id: String, priority: AttachmentPriority = .visible) {
+        dwellWork.removeValue(forKey: id)?.cancel()
+        guard let want = wants[id], want.priority <= priority else { return }
+        wants[id] = nil
+        switch states[id] {
+        case .fetching:
+            states[id] = nil
+        default:
+            break
+        }
+    }
+
+    /// Transfers run only on an authenticated connection. Losing it drops
+    /// the in-flight marker (the chunk may be lost); partial chunks stay.
+    @MainActor
+    func setTransportReady(_ ready: Bool) {
+        guard ready != transportReady else { return }
+        transportReady = ready
+        if !ready {
+            clearInFlight()
+            streamingWhole.removeAll()
+        }
+        pump()
+    }
+
+    /// Process an inbound `attachment_data` chunk. May be called off the
+    /// main thread; state changes hop to the main actor. `paced` is the
+    /// tentacle's echo that it served exactly this chunk on request.
     nonisolated func ingestChunk(
         id: String,
         index: Int,
         total: Int,
         mimeType: String,
         data: String,
-        error: String?
+        error: String?,
+        paced: Bool = false
     ) {
         Task { @MainActor in
-            self.handleChunk(id: id, index: index, total: total, mimeType: mimeType, data: data, error: error)
+            self.handleChunk(id: id, index: index, total: total, mimeType: mimeType, data: data, error: error, paced: paced)
         }
     }
 
-    // MARK: - Internals
+    #if DEBUG
+    /// Test introspection: the chunk currently requested, if any.
+    var inFlightForTesting: (id: String, index: Int)? {
+        inFlight.map { ($0.id, $0.index) }
+    }
+    #endif
+
+    // MARK: - Scheduling
+
+    @MainActor
+    private func want(id: String, sessionId: String, priority: AttachmentPriority) {
+        if var existing = wants[id] {
+            if priority > existing.priority {
+                existing.priority = priority
+                wants[id] = existing
+            }
+        } else {
+            nextOrder += 1
+            wants[id] = Want(sessionId: sessionId, priority: priority, order: nextOrder)
+            if states[id] == nil { states[id] = .fetching }
+        }
+        pump()
+    }
+
+    /// Request the next chunk of the most important wanted attachment.
+    @MainActor
+    private func pump() {
+        guard transportReady, inFlight == nil else { return }
+        guard let (id, want) = wants
+            .filter({ !hydrating.contains($0.key) })
+            .max(by: { a, b in
+                a.value.priority != b.value.priority
+                    ? a.value.priority < b.value.priority
+                    : a.value.order > b.value.order
+            }) else { return }
+        let received = pendingChunks[id] ?? [:]
+        var index = 0
+        while received[index] != nil { index += 1 }
+        if let total = pendingTotal[id], index >= total { return }
+        generation += 1
+        let flight = InFlight(id: id, index: index, generation: generation)
+        inFlight = flight
+        armTimeout(for: flight)
+        requestChunk(id, want.sessionId, index)
+    }
+
+    @MainActor
+    private func armTimeout(for flight: InFlight) {
+        timeoutWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.chunkTimedOut(flight)
+        }
+        timeoutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + chunkTimeout, execute: work)
+    }
+
+    @MainActor
+    private func clearInFlight() {
+        inFlight = nil
+        timeoutWork?.cancel()
+        timeoutWork = nil
+    }
+
+    @MainActor
+    private func chunkTimedOut(_ flight: InFlight) {
+        guard inFlight?.generation == flight.generation else { return }
+        clearInFlight()
+        streamingWhole.remove(flight.id)
+        let count = (attempts[flight.id] ?? 0) + 1
+        attempts[flight.id] = count
+        if count >= Self.maxAttempts {
+            wants[flight.id] = nil
+            attempts[flight.id] = nil
+            states[flight.id] = .error(reason: "Timed out loading this attachment")
+        }
+        pump()
+    }
+
+    // MARK: - Chunks
 
     @MainActor
     private func handleChunk(
@@ -203,75 +313,61 @@ final class AttachmentStore {
         total: Int,
         mimeType: String,
         data: String,
-        error: String?
+        error: String?,
+        paced: Bool
     ) {
-        cancelPushTimeout(id: id)
-
+        let wasInFlight = inFlight?.id == id
         if let error {
+            if wasInFlight { clearInFlight() }
+            wants[id] = nil
+            attempts[id] = nil
+            streamingWhole.remove(id)
+            pendingChunks[id] = nil
+            pendingTotal[id] = nil
             states[id] = .error(reason: error)
-            pendingChunks.removeValue(forKey: id)
-            pendingTotal.removeValue(forKey: id)
-            pendingMimeType.removeValue(forKey: id)
-            pendingStartedAt.removeValue(forKey: id)
+            pump()
             return
         }
+        if case .ready = states[id] { return }
 
-        lock.lock()
-        var buf = pendingChunks[id] ?? [:]
-        buf[index] = data
-        pendingChunks[id] = buf
+        var buffer = pendingChunks[id] ?? [:]
+        buffer[index] = data
+        pendingChunks[id] = buffer
         pendingTotal[id] = total
-        pendingMimeType[id] = mimeType
-        let receivedCount = buf.count
-        lock.unlock()
+        attempts[id] = nil
 
-        if receivedCount < total {
-            states[id] = .awaitingChunks(received: receivedCount, total: total)
+        if buffer.count >= total {
+            var assembled = Data()
+            for i in 0..<total {
+                if let b64 = buffer[i], let chunk = Data(base64Encoded: b64) {
+                    assembled.append(chunk)
+                }
+            }
+            pendingChunks[id] = nil
+            pendingTotal[id] = nil
+            wants[id] = nil
+            streamingWhole.remove(id)
+            states[id] = .ready(mimeType: mimeType, data: assembled)
+            persistToDisk(id: id, mimeType: mimeType, data: assembled)
+            if wasInFlight { clearInFlight() }
+            pump()
             return
         }
 
-        // Assemble bytes in order.
-        lock.lock()
-        let sorted = (pendingChunks[id] ?? [:]).sorted { $0.key < $1.key }
-        lock.unlock()
-        var assembled = Data()
-        for (_, b64) in sorted {
-            if let chunk = Data(base64Encoded: b64) {
-                assembled.append(chunk)
-            }
+        if wants[id] != nil || wasInFlight {
+            states[id] = .awaitingChunks(received: buffer.count, total: total)
         }
-
-        pendingChunks.removeValue(forKey: id)
-        pendingTotal.removeValue(forKey: id)
-        pendingMimeType.removeValue(forKey: id)
-        pendingStartedAt.removeValue(forKey: id)
-
-        states[id] = .ready(mimeType: mimeType, data: assembled)
-        persistToDisk(id: id, mimeType: mimeType, data: assembled)
-    }
-
-    @MainActor
-    private func schedulePushTimeout(id: String, sessionId: String) {
-        cancelPushTimeout(id: id)
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + pushTimeoutSeconds)
-        timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            // Only pull if we're still waiting and have received no chunks.
-            if case .awaitingChunks(let received, _) = self.states[id], received == 0 {
-                KLog.d("⏱ attachment \(id.prefix(8)) push timeout — pulling")
-                self.states[id] = .fetching
-                self.requestPull(id, sessionId)
-            }
-        }
-        timer.resume()
-        pushTimers[id] = timer
-    }
-
-    @MainActor
-    private func cancelPushTimeout(id: String) {
-        if let t = pushTimers.removeValue(forKey: id) {
-            t.cancel()
+        guard wasInFlight, let flight = inFlight else { return }
+        if paced {
+            // Exactly the requested chunk: choose the next (possibly a
+            // higher-priority attachment) now.
+            clearInFlight()
+            pump()
+        } else {
+            // An older tentacle streams the whole file for one request. Do
+            // not request more; keep waiting while chunks keep coming.
+            streamingWhole.insert(id)
+            armTimeout(for: flight)
         }
     }
 
@@ -298,12 +394,11 @@ final class AttachmentStore {
             && FileManager.default.fileExists(atPath: metaURL(id).path)
     }
 
-    /// Read the cached attachment bytes on the disk queue and publish
-    /// the result back to MainActor. Large images (multi-MB) can stall
-    /// many frames if read synchronously on the main thread, so we
-    /// offload the actual `Data(contentsOf:)` call.
+    /// Read cached bytes off the main thread. A corrupt or purged cache
+    /// entry falls back to the network queue at the caller's priority.
     @MainActor
-    private func hydrateFromDiskAsync(id: String, sessionId: String) {
+    private func hydrateFromDiskAsync(id: String, sessionId: String, priority: AttachmentPriority) {
+        hydrating.insert(id)
         let bytesPath = bytesURL(id)
         let metaPath = metaURL(id)
         diskQueue.async { [weak self] in
@@ -313,7 +408,6 @@ final class AttachmentStore {
                 let data = try Data(contentsOf: bytesPath)
                 let meta = try JSONDecoder().decode(DiskMeta.self, from: Data(contentsOf: metaPath))
                 result = (meta.mimeType, data)
-                // Touch lastAccessed for future eviction.
                 let updated = DiskMeta(
                     mimeType: meta.mimeType,
                     size: meta.size,
@@ -323,14 +417,15 @@ final class AttachmentStore {
                     try? blob.write(to: metaPath, options: .atomic)
                 }
             } catch {
+                try? FileManager.default.removeItem(at: bytesPath)
+                try? FileManager.default.removeItem(at: metaPath)
                 result = nil
             }
             Task { @MainActor in
+                self.hydrating.remove(id)
                 guard let result else {
-                    // Fall through to the network path — disk read
-                    // failed mid-flight (corrupt cache, etc.).
-                    self.states[id] = .fetching
-                    self.requestPull(id, sessionId)
+                    self.states[id] = nil
+                    self.requestIfNeeded(id: id, sessionId: sessionId, priority: priority)
                     return
                 }
                 self.states[id] = .ready(mimeType: result.mimeType, data: result.data)

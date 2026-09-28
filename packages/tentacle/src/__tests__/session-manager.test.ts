@@ -1487,12 +1487,13 @@ describe('SessionManager', () => {
       expect(sm2.readTurnTrace(sessionId, bubble).entries).toHaveLength(2);
     });
 
-    it('extracts only successful show_image/show_html ContentRefs from the current persisted turn', () => {
+    it('extracts only successful show_image/show_report (and legacy show_html) ContentRefs from the current persisted turn', () => {
       const { sessionId } = sm.createSession('pi');
       sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: { content: 'render' } }));
       const image = { type: 'content_ref', id: 'img-1', mimeType: 'image/png', size: 10, name: 'a.png', width: 2, height: 3 };
       const imageWithUnknownField = { ...image, localPath: '/private/result.png' };
       const html = { type: 'content_ref', id: 'html-1', mimeType: 'text/html', size: 20, name: 'report.html', caption: 'Report' };
+      const report = { ...html, id: 'report-1', name: 'findings.html' };
       const appendComplete = (payload: Record<string, unknown>) => sm.appendTrace(sessionId, 'tool_complete', JSON.stringify({
         type: 'tool_complete', sessionId, payload,
       }));
@@ -1504,11 +1505,13 @@ describe('SessionManager', () => {
       appendComplete({ toolName: 'bash', attachments: [{ ...image, id: 'unrelated' }] });
       appendComplete({ toolName: 'show_image', attachments: [{ ...html, id: 'wrong-image-mime' }] });
       appendComplete({ toolName: 'show_html', attachments: [{ ...image, id: 'wrong-html-mime' }] });
+      appendComplete({ toolName: 'show_report', attachments: [report] });
+      appendComplete({ toolName: 'show_report', attachments: [{ ...image, id: 'wrong-report-mime' }] });
       appendComplete({ toolName: 'show_image', resultRef: { ...image, id: 'result-ref' }, argsRef: { ...image, id: 'args-ref' } });
       appendComplete({ toolName: 'show_image', attachments: [{ type: 'content_ref', id: '', mimeType: 'image/png', size: 1 }] });
       appendComplete({ toolName: 'show_image', attachments: [{ type: 'content_ref', id: 'bad-size', mimeType: 'image/png', size: -1 }] });
 
-      expect(sm.readCurrentTurnArtifacts(sessionId)).toEqual([image, html]);
+      expect(sm.readCurrentTurnArtifacts(sessionId)).toEqual([image, html, report]);
     });
 
     it('reads current-turn artifacts after restart and never leaks previous-turn refs', () => {
