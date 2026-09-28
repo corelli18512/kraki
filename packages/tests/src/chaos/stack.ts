@@ -28,6 +28,8 @@ export class ChaosStack {
   readonly root = mkdtempSync(join(tmpdir(), 'kraki-chaos-'));
   readonly adapter = new ScriptedAdapter();
   readonly appProxy = new ChaosProxy('app', () => this.headPort);
+  /** A second app link, so two devices can be faulted independently. */
+  readonly app2Proxy = new ChaosProxy('app2', () => this.headPort);
   readonly tentacleProxy = new ChaosProxy('tentacle', () => this.headPort);
   headPort = 0;
   sessionId = '';
@@ -51,6 +53,7 @@ export class ChaosStack {
   async start(options: StackOptions = {}): Promise<void> {
     await this.startHead(options.headPort ?? 0);
     await this.appProxy.listen();
+    await this.app2Proxy.listen();
     await this.tentacleProxy.listen();
     this.sessions = new SessionManager(join(this.root, 'sessions'));
     this.keys = new KeyManager(join(this.root, 'keys'));
@@ -145,7 +148,9 @@ export class ChaosStack {
   }
 
   proxy(link: string): ChaosProxy {
-    return link === 'tentacle' ? this.tentacleProxy : this.appProxy;
+    if (link === 'tentacle') return this.tentacleProxy;
+    if (link === 'app2') return this.app2Proxy;
+    return this.appProxy;
   }
 
   ledger(sessionId = this.sessionId): Record<string, unknown> {
@@ -155,7 +160,7 @@ export class ChaosStack {
   }
 
   timeline(): unknown[] {
-    return [...this.events, ...this.appProxy.timeline, ...this.tentacleProxy.timeline].sort((a, b) => a.t - b.t);
+    return [...this.events, ...this.appProxy.timeline, ...this.app2Proxy.timeline, ...this.tentacleProxy.timeline].sort((a, b) => a.t - b.t);
   }
 
   private async waitFor(check: () => boolean, ms: number, what: string): Promise<void> {
@@ -194,7 +199,7 @@ export class ChaosStack {
           break;
         }
         case 'POST /heal':
-          if (body.link) this.proxy(link).heal(); else { this.appProxy.heal(); this.tentacleProxy.heal(); }
+          if (body.link) this.proxy(link).heal(); else { this.appProxy.heal(); this.app2Proxy.heal(); this.tentacleProxy.heal(); }
           break;
         case 'POST /reset': this.proxy(link).reset(); break;
         case 'POST /agent/burst':
@@ -212,6 +217,7 @@ export class ChaosStack {
         case 'GET /stats':
           out = {
             app: { live: this.appProxy.liveConnections, total: this.appProxy.totalConnections, bytes: this.appProxy.bytesForwarded },
+            app2: { live: this.app2Proxy.liveConnections, total: this.app2Proxy.totalConnections },
             tentacle: { live: this.tentacleProxy.liveConnections, total: this.tentacleProxy.totalConnections },
           };
           break;
@@ -227,7 +233,7 @@ export class ChaosStack {
 
   info(): Record<string, unknown> {
     return {
-      controlPort: this.controlPort, appPort: this.appProxy.port, headPort: this.headPort,
+      controlPort: this.controlPort, appPort: this.appProxy.port, app2Port: this.app2Proxy.port, headPort: this.headPort,
       tentaclePort: this.tentacleProxy.port, sessionId: this.sessionId, tentacleId: this.tentacleId,
     };
   }
@@ -237,6 +243,7 @@ export class ChaosStack {
     this.admin?.close();
     this.legacyApps.forEach((a) => a.close());
     await this.appProxy.close();
+    await this.app2Proxy.close();
     await this.tentacleProxy.close();
     await this.stopHead().catch(() => {});
     await new Promise<void>((resolve) => this.control ? this.control.close(() => resolve()) : resolve());
