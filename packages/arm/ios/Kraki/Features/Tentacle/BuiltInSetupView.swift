@@ -3,7 +3,8 @@
 /// Replaces "install the CLI and run `kraki connect`" for new users:
 ///
 ///   1. Location   — refuse to run from a translocated/disk-image path
-///   2. Sign in    — GitHub device code, driven by `kraki setup --json`
+///   2. Sign in    — one click in the system web-auth window (device code as
+///                   fallback), driven by `kraki setup --json --oauth`
 ///   3. Background — register the daemon with SMAppService (Login Items)
 ///   4. Access     — Full Disk Access for Kraki, granted once (skippable)
 ///
@@ -151,11 +152,36 @@ struct BuiltInSetupView: View {
                             .font(.system(size: 11))
                             .foregroundStyle(Color.orange)
                             .multilineTextAlignment(.center)
+                        Button("Sign in with a code instead") { runner.startWithCode() }
+                            .buttonStyle(.link)
+                            .font(.system(size: 10.5))
                     }
                 }
             }
         case .starting:
             ProgressView("Contacting GitHub…").controlSize(.small)
+        case .waitingForBrowser:
+            StepCard(
+                step: "Step 1 of 2",
+                title: "Continue in the sign-in window",
+                detail: "Approve Kraki on GitHub. If you're already signed in to GitHub, that's one click."
+            ) {
+                VStack(spacing: 10) {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("Waiting for GitHub…")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Color.textMuted)
+                    }
+                    HStack(spacing: 10) {
+                        Button("Show Sign-in Window") { runner.reopenBrowser() }
+                        Button("Cancel") { runner.cancel() }
+                    }
+                    Button("Sign in with a code instead") { runner.startWithCode() }
+                        .buttonStyle(.link)
+                        .font(.system(size: 10.5))
+                }
+            }
         case .waitingForGitHub(let code, _):
             StepCard(
                 step: "Step 1 of 2",

@@ -553,6 +553,20 @@ export class LocalAuthBackend implements AuthBackend {
     return this.authProviders.get(mode);
   }
 
+  /**
+   * Exchange a GitHub OAuth code for an access token on behalf of a native
+   * client (Kraki for Mac's built-in tentacle). The client keeps the PKCE
+   * verifier; the client secret never leaves this server.
+   */
+  async exchangeGitHubCode(
+    code: string,
+    opts: { codeVerifier: string; redirectUri: string },
+  ): Promise<{ ok: true; token: string } | { ok: false; message: string }> {
+    const gh = this.findGitHubProvider();
+    if (!gh?.oauthConfigured) return { ok: false, message: 'GitHub sign-in is not configured on this server' };
+    return gh.exchangeCode(code, opts);
+  }
+
   private findGitHubProvider(): GitHubAuthProvider | undefined {
     const provider = this.authProviders.get('github');
     if (!provider) return undefined;

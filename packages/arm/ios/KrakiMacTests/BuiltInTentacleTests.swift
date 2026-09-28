@@ -152,6 +152,22 @@ final class BuiltInTentacleTests: XCTestCase {
         XCTAssertNil(R.phase(after: .starting, line: "not json"))
     }
 
+    func testBrowserSignInEvents() {
+        typealias R = TentacleSetupRunner
+        let url = #"{"event":"oauth_url","url":"https://github.com/login/oauth/authorize?client_id=c","callbackScheme":"kraki"}"#
+        XCTAssertEqual(R.phase(after: .starting, line: url), .waitingForBrowser)
+        let request = R.oauthRequest(line: url)
+        XCTAssertEqual(request?.0.host, "github.com")
+        XCTAssertEqual(request?.1, "kraki")
+        // Only GitHub over https may be opened.
+        XCTAssertNil(R.oauthRequest(line: #"{"event":"oauth_url","url":"https://evil.test/x","callbackScheme":"kraki"}"#))
+        // Older servers: fall back to the device code; other errors don't.
+        XCTAssertEqual(R.oauthFallback(line: #"{"event":"error","code":"oauth_unavailable","message":"x"}"#), true)
+        XCTAssertEqual(R.oauthFallback(line: #"{"event":"error","code":"denied","message":"x"}"#), false)
+        // Closing the sign-in window returns to the Sign in button, not an error.
+        XCTAssertEqual(R.phase(after: .waitingForBrowser, line: #"{"event":"error","code":"cancelled","message":"x"}"#), .idle)
+    }
+
     // MARK: Onboarding steps
 
     private func step(

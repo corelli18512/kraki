@@ -18,9 +18,19 @@
  *   --device-name <name>   Device name (default: existing config, else hostname)
  *   --relay <url>          Use this relay (self-hosted); skips relay resolution
  *   --force-login          Ignore gh / saved tokens and run the device flow
+ *   --oauth                Sign in through the browser instead of a device code:
+ *                          emits {"event":"oauth_url","url":…,"callbackScheme":"kraki"},
+ *                          then reads the kraki://auth/callback?… URL the app
+ *                          received from one line on stdin. The PKCE verifier
+ *                          never leaves this process; the server adds the client
+ *                          secret (POST /api/auth/github/token). Official
+ *                          Kraki only; a self-hosted relay uses the device flow.
+ *                          Fails with code "oauth_unavailable" on servers that
+ *                          predate the exchange endpoint, so the app can fall back.
  */
 
 import { hostname } from 'node:os';
+import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
 import {
@@ -39,10 +49,17 @@ import { hydrateLoginShellEnv } from './shell-env.js';
 export type SetupJsonEvent =
   | { event: 'start'; version: string }
   | { event: 'device_code'; userCode: string; verificationUri: string; expiresIn: number }
-  | { event: 'authenticated'; username: string; source: 'gh' | 'saved' | 'device_flow' }
+  | { event: 'oauth_url'; url: string; callbackScheme: string }
+  | { event: 'authenticated'; username: string; source: TokenSource }
   | { event: 'relay'; relay: string; region: string | null; fallback: boolean }
   | { event: 'done'; configPath: string; relay: string; username: string; deviceName: string }
   | { event: 'error'; code: string; message: string };
+
+type TokenSource = 'gh' | 'saved' | 'device_flow' | 'oauth';
+
+/** Where GitHub sends the browser; a sub-path of the registered /auth/callback. */
+export const DESKTOP_OAUTH_CALLBACK_PATH = '/auth/callback/desktop';
+export const DESKTOP_OAUTH_SCHEME = 'kraki';
 
 export interface SetupJsonDeps {
   emit: (event: SetupJsonEvent) => void;
@@ -53,6 +70,10 @@ export interface SetupJsonDeps {
   resolveRelay: (token: string) => Promise<{ ok: boolean; relayUrl: string; region?: string }>;
   apiBase: string;
   officialRelay: string;
+  /** Kraki web origin that hosts the desktop OAuth bounce page. */
+  webBase: string;
+  /** One line from stdin (the OAuth callback URL); null on EOF. */
+  readLine: () => Promise<string | null>;
 }
 
 class SetupJsonError extends Error {
@@ -133,10 +154,63 @@ async function deviceFlow(deps: SetupJsonDeps): Promise<string> {
   throw new SetupJsonError('expired', 'The GitHub code expired. Try again.');
 }
 
+const base64url = (buf: Buffer) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+async function browserFlow(deps: SetupJsonDeps): Promise<string> {
+  const clientId = await resolveClientId(deps);
+  const verifier = base64url(randomBytes(32));
+  const challenge = base64url(createHash('sha256').update(verifier).digest());
+  const state = base64url(randomBytes(16));
+  const redirectUri = `${deps.webBase}${DESKTOP_OAUTH_CALLBACK_PATH}`;
+  const url = new URL('https://github.com/login/oauth/authorize');
+  url.search = new URLSearchParams({
+    client_id: clientId,
+    scope: 'read:user',
+    state,
+    redirect_uri: redirectUri,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+  }).toString();
+  deps.emit({ event: 'oauth_url', url: url.toString(), callbackScheme: DESKTOP_OAUTH_SCHEME });
+
+  const line = await deps.readLine();
+  if (!line) throw new SetupJsonError('cancelled', 'GitHub sign-in was cancelled.');
+  let callback: URL;
+  try { callback = new URL(line.trim()); } catch { throw new SetupJsonError('bad_callback', 'Invalid sign-in callback.'); }
+  const params = callback.searchParams;
+  if (params.get('error') === 'access_denied') throw new SetupJsonError('denied', 'GitHub sign-in was cancelled.');
+  const code = params.get('code');
+  if (!code || params.get('state') !== state) {
+    throw new SetupJsonError('bad_callback', 'GitHub sign-in could not be verified. Try again.');
+  }
+
+  let res: Response;
+  try {
+    res = await deps.fetch(`${deps.apiBase}/api/auth/github/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, codeVerifier: verifier, redirectUri }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    throw new SetupJsonError('network', `Could not reach Kraki (${(err as Error).message}).`);
+  }
+  if (res.status === 404 || res.status === 401) {
+    // Server predates the exchange endpoint: the app falls back to a device code.
+    throw new SetupJsonError('oauth_unavailable', 'Browser sign-in is not available yet.');
+  }
+  const body = await res.json().catch(() => ({})) as { ok?: boolean; token?: string; message?: string };
+  if (!res.ok || !body.token) {
+    throw new SetupJsonError('exchange_failed', body.message ?? `GitHub sign-in failed (${res.status}).`);
+  }
+  return body.token;
+}
+
 async function resolveToken(
   deps: SetupJsonDeps,
   forceLogin: boolean,
-): Promise<{ token: string; username: string; source: 'gh' | 'saved' | 'device_flow' }> {
+  useBrowser: boolean,
+): Promise<{ token: string; username: string; source: TokenSource }> {
   if (!forceLogin) {
     const gh = deps.ghAuthToken();
     if (gh) {
@@ -149,20 +223,23 @@ async function resolveToken(
       if (username) return { token: saved, username, source: 'saved' };
     }
   }
-  const token = await deviceFlow(deps);
+  const token = useBrowser ? await browserFlow(deps) : await deviceFlow(deps);
   const username = await githubUser(deps, token);
   if (!username) throw new SetupJsonError('token_invalid', 'GitHub did not accept the new sign-in. Try again.');
   saveGitHubToken(token);
-  return { token, username, source: 'device_flow' };
+  return { token, username, source: useBrowser ? 'oauth' : 'device_flow' };
 }
 
 export async function runSetupJsonWith(args: string[], deps: SetupJsonDeps): Promise<number> {
   deps.emit({ event: 'start', version: getVersion() });
   try {
-    const { token, username, source } = await resolveToken(deps, args.includes('--force-login'));
+    const explicitRelay = getArg(args, '--relay') ?? process.env.KRAKI_RELAY_URL;
+    // Browser sign-in goes through the official web + account API; a
+    // self-hosted relay keeps the device flow it has always used.
+    const useBrowser = args.includes('--oauth') && !explicitRelay;
+    const { token, username, source } = await resolveToken(deps, args.includes('--force-login'), useBrowser);
     deps.emit({ event: 'authenticated', username, source });
 
-    const explicitRelay = getArg(args, '--relay') ?? process.env.KRAKI_RELAY_URL;
     let relay: string;
     let region: string | null = null;
     let fallback = false;
@@ -224,5 +301,28 @@ export async function runSetupJson(args: string[]): Promise<number> {
     resolveRelay: (token) => setup.resolveRelay(token),
     apiBase: process.env.KRAKI_API_URL ?? setup.OFFICIAL_API,
     officialRelay: setup.OFFICIAL_RELAY,
+    webBase: process.env.KRAKI_WEB_URL ?? 'https://app.kraki.chat',
+    readLine: () => readStdinLine(),
+  });
+}
+
+function readStdinLine(): Promise<string | null> {
+  return new Promise((resolve) => {
+    let buf = '';
+    const done = (value: string | null) => {
+      process.stdin.off('data', onData);
+      process.stdin.off('end', onEnd);
+      process.stdin.pause();
+      resolve(value);
+    };
+    const onData = (chunk: Buffer | string) => {
+      buf += chunk.toString();
+      const nl = buf.indexOf('\n');
+      if (nl >= 0) done(buf.slice(0, nl));
+    };
+    const onEnd = () => done(buf.length > 0 ? buf : null);
+    process.stdin.on('data', onData);
+    process.stdin.on('end', onEnd);
+    process.stdin.resume();
   });
 }
