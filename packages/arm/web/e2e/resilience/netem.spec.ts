@@ -7,6 +7,7 @@
  *          otherwise proxy-level faults only. Seeded by CHAOS_SEED.
  */
 import { expect, type Page, test } from '@playwright/test';
+import { writeFileSync } from 'node:fs';
 import {
   NETEM, connections, control, expectDelivered, fault, installSampler, netem, netemClear, openSession, pause, send,
   uid, writeResult, type Metrics,
@@ -101,12 +102,12 @@ function rng(seed: number): () => number {
   };
 }
 
-interface Carried { failedEver: boolean; blockedEver: boolean; sentAt: Record<string, number> }
+interface Carried { failedEver: boolean; blockedEver: boolean; sentAt: Record<string, number>; failedAt: Record<string, number> }
 
 async function harvest(page: Page): Promise<Carried> {
   return page.evaluate(() => {
     const k = (window as unknown as { __k: Carried }).__k;
-    return { failedEver: k.failedEver, blockedEver: k.blockedEver, sentAt: k.sentAt };
+    return { failedEver: k.failedEver, blockedEver: k.blockedEver, sentAt: k.sentAt, failedAt: k.failedAt };
   });
 }
 
@@ -126,13 +127,18 @@ test.describe('web soak', () => {
     const seed = Number(process.env.CHAOS_SEED ?? Date.now() % 100_000);
     const random = rng(seed);
     const m: Metrics = (results.S1 = { seed, minutes: SOAK_MINUTES, actions: {} as Record<string, number> });
-    const count = (a: string) => { (m.actions as Record<string, number>)[a] = ((m.actions as Record<string, number>)[a] ?? 0) + 1; };
+    const t0 = Date.now();
+    const log: Array<[number, string, string?]> = (m.log = []) as Array<[number, string, string?]>;
+    const count = (a: string, detail?: string) => {
+      (m.actions as Record<string, number>)[a] = ((m.actions as Record<string, number>)[a] ?? 0) + 1;
+      if (a !== 'send') log.push([Date.now() - t0, a, detail]);
+    };
     const sid = await openSession(page);
     await pause(3_000);
     m.heapStartMb = await heapMb(page);
 
     const texts: string[] = [];
-    const carried: Carried = { failedEver: false, blockedEver: false, sentAt: {} };
+    const carried: Carried = { failedEver: false, blockedEver: false, sentAt: {}, failedAt: {} };
     let healAt = 0;
     const end = Date.now() + SOAK_MINUTES * 60_000;
     const pick = <T>(xs: T[]) => xs[Math.floor(random() * xs.length)];
@@ -154,39 +160,45 @@ test.describe('web soak', () => {
           await send(page, text);
           count('send');
         } else if (roll < 0.50) {
-          await control('POST', '/reset', { link: pick(['app', 'tentacle']) });
-          count('reset');
+          const link = pick(['app', 'tentacle']);
+          await control('POST', '/reset', { link });
+          count('reset', link);
         } else if (roll < 0.55 && faultFree) {
           await fault({ blackhole: 'both' });
           healAt = Date.now() + between(5_000, 35_000);
-          count('blackhole');
+          count('blackhole', `${Math.round((healAt - Date.now()) / 1000)} s`);
         } else if (roll < 0.60 && faultFree) {
           await fault({ refuse: true });
           await control('POST', '/reset', { link: 'app' });
           healAt = Date.now() + between(5_000, 60_000);
-          count('outage');
+          count('outage', `${Math.round((healAt - Date.now()) / 1000)} s`);
         } else if (roll < 0.65 && faultFree) {
-          await fault({ bytesPerSec: Math.round(between(40_000, 200_000)) });
+          const rate = Math.round(between(40_000, 200_000));
+          await fault({ bytesPerSec: rate });
           healAt = Date.now() + between(20_000, 60_000);
-          count('slow');
+          count('slow', `${rate} B/s for ${Math.round((healAt - Date.now()) / 1000)} s`);
         } else if (roll < 0.78 && faultFree && NETEM) {
-          netem(pick(['app', 'tentacle']), pick([
+          const link = pick<'app' | 'tentacle'>(['app', 'tentacle']);
+          const profile = pick([
             'delay 60ms 30ms distribution normal loss 3% reorder 5% 50%',
             'delay 200ms 80ms distribution normal loss 5%',
             'delay 30ms 10ms loss 15%',
             'delay 100ms 20ms reorder 10% 50%',
-          ]));
+          ]);
+          netem(link, profile);
           healAt = Date.now() + between(20_000, 90_000);
-          count('netem');
+          count('netem', `${link}: ${profile} for ${Math.round((healAt - Date.now()) / 1000)} s`);
         } else if (roll < 0.80) {
           // A large agent output now and then (report, long diff).
-          await control('POST', '/agent/burst', { sessionId: sid, count: 1, bytes: Math.round(between(20_000, 300_000)), prefix: 'soak' });
-          count('burst');
+          const bytes = Math.round(between(20_000, 300_000));
+          await control('POST', '/agent/burst', { sessionId: sid, count: 1, bytes, prefix: 'soak' });
+          count('burst', String(bytes));
         } else if (roll < 0.88 && faultFree) {
           const k = await harvest(page);
           carried.failedEver ||= k.failedEver;
           carried.blockedEver ||= k.blockedEver;
           Object.assign(carried.sentAt, k.sentAt);
+          Object.assign(carried.failedAt, k.failedAt);
           await page.reload();
           await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 60_000 });
           await page.evaluate(installSampler);
@@ -200,7 +212,16 @@ test.describe('web soak', () => {
     }
 
     // Quiet period, then everything must be there exactly once.
-    await expectDelivered(page, sid, texts, 240_000, m);
+    m.t0 = t0;
+    m.failedBeforeReload = Object.fromEntries(Object.entries(carried.failedAt).map(([t, at]) => [t, { atS: (at - t0) / 1000, sinceSendMs: carried.sentAt[t] ? at - carried.sentAt[t] : null }]));
+    try {
+      await expectDelivered(page, sid, texts, 240_000, m);
+    } finally {
+      const failedAt = m.failedAt as Record<string, { at: number }> | undefined;
+      for (const v of Object.values(failedAt ?? {})) (v as Record<string, number>).atS = (v.at - t0) / 1000;
+      m.sendLog = Object.entries({ ...carried.sentAt, ...(await harvest(page)).sentAt }).map(([t, at]) => [(at - t0) / 1000, t]);
+      writeFileSync('/tmp/kraki-chaos/results/soak-timeline.json', JSON.stringify(await control('GET', '/timeline')));
+    }
     expect(carried.failedEver, 'G3: no "Not delivered" before any reload').toBe(false);
     expect(carried.blockedEver, 'G4: never blocked before any reload').toBe(false);
     m.messages = texts.length;

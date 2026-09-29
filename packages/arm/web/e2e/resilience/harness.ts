@@ -56,16 +56,22 @@ interface Sampled {
   blockedEver: boolean;
   sentAt: Record<string, number>;
   confirmedAt: Record<string, number>;
+  /** Text of each bubble first seen marked "Not delivered", and when. */
+  failedAt: Record<string, number>;
 }
 
 /** Samples the page every 200 ms: failure marks, "Reconnecting", modals, and
  *  when each sent text became a confirmed (non-pending) bubble. */
 export function installSampler(): void {
   const w = window as unknown as { __k: Sampled };
-  w.__k = { failedEver: false, reconnectingEver: false, blockedEver: false, sentAt: {}, confirmedAt: {} };
+  w.__k = { failedEver: false, reconnectingEver: false, blockedEver: false, sentAt: {}, confirmedAt: {}, failedAt: {} };
   setInterval(() => {
     const k = w.__k;
-    if (document.querySelector('[aria-label="Not delivered. Retry or delete"]')) k.failedEver = true;
+    for (const mark of document.querySelectorAll('[aria-label="Not delivered. Retry or delete"]')) {
+      k.failedEver = true;
+      const text = mark.closest('.krow-user')?.textContent?.replace('!', '').trim() ?? '?';
+      k.failedAt[text] ??= Date.now();
+    }
     if (document.body.innerText.includes('Reconnecting')) k.reconnectingEver = true;
     if (document.querySelector('[role="alertdialog"]')) k.blockedEver = true;
     const pending = new Set<string>();
@@ -124,6 +130,7 @@ export async function expectDelivered(page: Page, sessionId: string, texts: stri
   const latencies = texts.flatMap((t) => (k.sentAt[t] && k.confirmedAt[t] ? [k.confirmedAt[t] - k.sentAt[t]] : []));
   Object.assign(m, {
     failedEver: k.failedEver, reconnectingEver: k.reconnectingEver, blockedEver: k.blockedEver,
+    failedAt: Object.fromEntries(Object.entries(k.failedAt).map(([t, at]) => [t, { at, sinceSendMs: k.sentAt[t] ? at - k.sentAt[t] : null }])),
     confirmP50Ms: percentile(latencies, 50), confirmP95Ms: percentile(latencies, 95), confirmMaxMs: percentile(latencies, 100),
     lost: texts.filter((t) => !received[t]),
     duplicated: texts.filter((t) => (received[t] ?? 0) > 1),
