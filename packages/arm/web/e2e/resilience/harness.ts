@@ -100,10 +100,14 @@ export async function openSession(page: Page): Promise<string> {
   return sessionId;
 }
 
+/** Type into the composer and press Enter, whatever its mode: "Send a
+ *  message…" when idle, "Steer the agent…" while a turn runs (the input then
+ *  steers it). Bounded: a harness must never block on the UI while a fault it
+ *  is supposed to heal keeps a turn from ending. */
 export async function send(page: Page, text: string): Promise<void> {
-  const box = page.getByRole('textbox', { name: 'Send a message…' });
-  await box.fill(text);
-  await box.press('Enter');
+  const box = page.locator('.kcomposer textarea');
+  await box.fill(text, { timeout: 15_000 });
+  await box.press('Enter', { timeout: 5_000 });
   await page.evaluate((t) => { (window as unknown as { __k: Sampled }).__k.sentAt[t] = Date.now(); }, text);
 }
 

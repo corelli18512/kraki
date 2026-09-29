@@ -4,6 +4,7 @@
  * behind a fault-injection proxy. Nothing here touches production.
  */
 import { expect, test } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import {
   connections, control, expectDelivered, fault, installSampler, openSession, pause, send, uid, writeResult,
   type Metrics,
@@ -114,5 +115,69 @@ test.describe('web network resilience', () => {
     await pause(3_000);
     await control('POST', '/reset', { link: 'tentacle' });
     await expectDelivered(page, sid, texts, 90_000, m);
+  });
+
+  test('W7 steer while the agent is replying', async ({ page }) => {
+    // Nightly soak (30 min): inputs typed while a turn was running were
+    // received by the agent but never confirmed on the page.
+    const m: Metrics = (results['W7 steer while the agent is replying'] = {});
+    const sid = await openSession(page);
+    await control('POST', '/agent/options', { replyDelayMs: 150, deltas: 40, deltaIntervalMs: 250 });
+    try {
+      const texts = [`w7-a-${uid()}`, `w7-b-${uid()}`, `w7-c-${uid()}`];
+      await send(page, texts[0]);
+      await expect(page.getByRole('textbox', { name: 'Steer the agent…' })).toBeVisible({ timeout: 10_000 });
+      await send(page, texts[1]);
+      await pause(1_500);
+      await send(page, texts[2]);
+      await expectDelivered(page, sid, texts, 60_000, m);
+    } finally {
+      await control('POST', '/agent/options', { replyDelayMs: 150, deltas: 4, deltaIntervalMs: 80 });
+    }
+  });
+
+  test('W8 inputs sent into a dead link while the Tentacle reconnects', async ({ page }) => {
+    // Nightly soak (30 min, seed 4242, 340 s): sent during a blackhole; the
+    // Tentacle reconnected before the app did. The agent got every input but
+    // the page never confirmed them.
+    const m: Metrics = (results['W8 inputs sent into a dead link while the Tentacle reconnects'] = {});
+    const sid = await openSession(page);
+    await fault({ blackhole: 'both' });
+    const texts = [`w8-a-${uid()}`, `w8-b-${uid()}`, `w8-c-${uid()}`];
+    for (const t of texts) { await send(page, t); await pause(3_000); }
+    await pause(15_000);
+    await control('POST', '/heal');
+    await pause(14_000);
+    await control('POST', '/reset', { link: 'tentacle' });
+    await pause(13_000);
+    await control('POST', '/reset', { link: 'app' });
+    await expectDelivered(page, sid, texts, 90_000, m);
+  });
+
+  test('W9 echo lost on the way back', async ({ page }) => {
+    test.setTimeout(240_000);
+    // Nightly soak: the input reached the agent but its echo did not reach
+    // the page (it was offline for that moment). The page resends; the
+    // Tentacle recognises the duplicate and must re-echo it to this page —
+    // which needs to know who sent it.
+    const m: Metrics = (results['W9 echo lost on the way back'] = {});
+    const sid = await openSession(page);
+    // Half-open link: the proxy holds bytes both ways. The page gives the
+    // socket up after 22 s (its close frame is held too). On heal the held
+    // input and the close reach the Head together: the Tentacle runs the
+    // input while this page is offline, so the echo goes nowhere.
+    await fault({ blackhole: 'both' });
+    const texts = [`w9-a-${uid()}`, `w9-b-${uid()}`];
+    await send(page, texts[0]);
+    await pause(1_000);
+    await send(page, texts[1]);
+    await pause(30_000);
+    await control('POST', '/heal');
+    await expectDelivered(page, sid, texts, 150_000, m);
+    // Whether the original echo won the race or not, every retry the Tentacle
+    // recognised as a duplicate must have been re-echoed to this page.
+    const log = readFileSync('/tmp/kraki-chaos/stack.out', 'utf8');
+    m.reechoFailures = log.split('\n').filter((l) => l.includes('Cannot re-echo duplicate input')).length;
+    expect(m.reechoFailures, 'a duplicate input is always re-echoed to its sender').toBe(0);
   });
 });

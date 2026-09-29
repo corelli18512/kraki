@@ -137,6 +137,23 @@ async function harvest(page: Page): Promise<Carried> {
   });
 }
 
+/** Input-pipeline trace events (sends, pulse acks, echoes, outbox decisions),
+ *  drained from the page's trace ring so it never overflows. */
+const TRACE_EVENTS = new Set([
+  'APP-SEND-ENCRYPTED', 'APP-ENCRYPT-FAIL', 'PULSE-SEND', 'PULSE-ACKED', 'PULSE-CONNECTED', 'PULSE-DISCONNECTED',
+  'PULSE-RESET-INBOUND', 'APP-USER-MESSAGE-ECHO', 'WS-LIVENESS-TIMEOUT', 'OUTBOX-RESEND-DECISION', 'OUTBOX-HALF-RESEND',
+  'OUTBOX-FAILED', 'OUTBOX-TRANSMIT', 'OUTBOX-REGREET', 'OUTBOX-CONFIRM',
+]);
+async function drainTrace(page: Page, into: unknown[]): Promise<void> {
+  const events = await page.evaluate(() => {
+    const w = window as unknown as { _pulseTrace?: Array<Record<string, unknown>>; _pulseTraceClear?: () => void };
+    const out = [...(w._pulseTrace ?? [])];
+    w._pulseTraceClear?.();
+    return out;
+  }).catch(() => [] as Array<Record<string, unknown>>);
+  for (const e of events) if (TRACE_EVENTS.has(e.evt as string)) into.push(e);
+}
+
 async function heapMb(page: Page): Promise<number> {
   return page.evaluate(() => {
     (window as unknown as { gc?: () => void }).gc?.();
@@ -150,8 +167,9 @@ test.describe('web soak', () => {
 
   test('S1 randomized soak', async ({ page }, info) => {
     test.setTimeout(SOAK_MINUTES * 60_000 + 6 * 60_000);
-    // --repeat-each N explores N consecutive seeds.
-    const seed = Number(process.env.CHAOS_SEED ?? Date.now() % 100_000) + info.repeatEachIndex;
+    // --repeat-each N explores N consecutive seeds (CHAOS_SEED_STEP=0 replays one).
+    const step = Number(process.env.CHAOS_SEED_STEP ?? 1);
+    const seed = Number(process.env.CHAOS_SEED ?? Date.now() % 100_000) + step * info.repeatEachIndex;
     const random = rng(seed);
     const m: Metrics = (results.S1 = { seed, minutes: SOAK_MINUTES, actions: {} as Record<string, number> });
     const t0 = Date.now();
@@ -161,6 +179,10 @@ test.describe('web soak', () => {
       if (a !== 'send') log.push([Date.now() - t0, a, detail]);
     };
     const sid = await openSession(page);
+    // Trace the input pipeline (persists across reloads via localStorage).
+    await page.evaluate(() => (window as unknown as { _pulseTraceEnable: () => void })._pulseTraceEnable());
+    const trace: unknown[] = [];
+    let lastDrain = Date.now();
     await pause(3_000);
     m.heapStartMb = await heapMb(page);
 
@@ -173,6 +195,7 @@ test.describe('web soak', () => {
 
     try {
       while (Date.now() < end) {
+        if (Date.now() - lastDrain > 20_000) { await drainTrace(page, trace); lastDrain = Date.now(); }
         if (healAt && Date.now() >= healAt) {
           netemClear();
           await control('POST', '/heal');
@@ -229,6 +252,7 @@ test.describe('web soak', () => {
           await control('POST', '/agent/burst', { sessionId: sid, count: 1, bytes, prefix: 'soak' });
           count('burst', String(bytes));
         } else if (action === 'reload') {
+          await drainTrace(page, trace);
           const k = await harvest(page);
           carried.failedEver ||= k.failedEver;
           carried.blockedEver ||= k.blockedEver;
@@ -256,6 +280,8 @@ test.describe('web soak', () => {
       for (const v of Object.values(failedAt ?? {})) (v as Record<string, number>).atS = (v.at - t0) / 1000;
       m.sendLog = Object.entries({ ...carried.sentAt, ...(await harvest(page)).sentAt }).map(([t, at]) => [(at - t0) / 1000, t]);
       writeFileSync(`/tmp/kraki-chaos/results/soak-timeline-${info.repeatEachIndex}.json`, JSON.stringify(await control('GET', '/timeline')));
+      await drainTrace(page, trace);
+      writeFileSync(`/tmp/kraki-chaos/results/soak-web-trace-${info.repeatEachIndex}.json`, JSON.stringify(trace));
     }
     expect(carried.failedEver, 'G3: no "Not delivered" before any reload').toBe(false);
     expect(carried.blockedEver, 'G4: never blocked before any reload').toBe(false);

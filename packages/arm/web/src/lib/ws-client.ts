@@ -197,6 +197,10 @@ export class KrakiWSClient {
    *  `onSeq`, if given, receives the pulse send seq (for optimistic-rollback
    *  tracking), or null when the target/key could not be resolved. */
   sendEncrypted(msg: Record<string, unknown>, onSeq?: (seq: bigint | null) => void) {
+    // The Tentacle only learns the sender from inside the E2E payload (Head
+    // forwards it opaque). Without it, it cannot address replies such as the
+    // re-echo of a duplicate input, which then stays unconfirmed forever.
+    if (msg.deviceId === undefined && getStore().deviceId) msg = { ...msg, deviceId: getStore().deviceId };
     const durable = msg.type === 'delete_session';
     const clientId = (msg.payload as { clientId?: string } | undefined)?.clientId;
     traceEvent({ comp: 'arm', evt: 'APP-SEND-ENCRYPTED', type: msg.type as string, sessionId: (msg as { sessionId?: string }).sessionId, clientId });

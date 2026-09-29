@@ -277,6 +277,7 @@ jobs:
           name: network-resilience-web
           path: |
             /tmp/kraki-chaos/results
+            /tmp/kraki-chaos/stack.out
             /tmp/kraki-chaos/web.log
             /tmp/kraki-chaos/web-report.json
             /tmp/kraki-chaos/stack.log

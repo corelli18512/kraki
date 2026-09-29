@@ -1779,6 +1779,22 @@ describe('KrakiWSClient', () => {
       });
     });
 
+    it('every consumer message names its sender (the Tentacle re-echoes duplicate inputs to it)', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      client.connect();
+      await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+      lastWsInstance._receive({
+        type: 'auth_ok', deviceId: 'dev-web-123',
+        devices: [{ id: 'dev-t', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'k' }],
+      });
+      useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'dev-t', deviceName: 'Mac', agent: 'copilot', state: 'idle', messageCount: 0 });
+      lastWsInstance.sentMessages = [];
+      client.sendInput('sess-1', 'hello');
+      const sent = await waitForDecodedSend(lastWsInstance);
+      expect(sent.type).toBe('send_input');
+      expect(sent.deviceId).toBe('dev-web-123');
+    });
+
     it('reassembles a payload the Tentacle sent in fragments', async () => {
       const { fragmentPayload } = await import('@kraki/protocol');
       const client = new KrakiWSClient('ws://localhost:9999');
