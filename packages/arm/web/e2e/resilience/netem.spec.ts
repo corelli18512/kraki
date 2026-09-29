@@ -167,8 +167,9 @@ test.describe('web soak', () => {
 
   test('S1 randomized soak', async ({ page }, info) => {
     test.setTimeout(SOAK_MINUTES * 60_000 + 6 * 60_000);
-    // --repeat-each N explores N consecutive seeds.
-    const seed = Number(process.env.CHAOS_SEED ?? Date.now() % 100_000) + info.repeatEachIndex;
+    // --repeat-each N explores N consecutive seeds (CHAOS_SEED_STEP=0 replays one).
+    const step = Number(process.env.CHAOS_SEED_STEP ?? 1);
+    const seed = Number(process.env.CHAOS_SEED ?? Date.now() % 100_000) + step * info.repeatEachIndex;
     const random = rng(seed);
     const m: Metrics = (results.S1 = { seed, minutes: SOAK_MINUTES, actions: {} as Record<string, number> });
     const t0 = Date.now();

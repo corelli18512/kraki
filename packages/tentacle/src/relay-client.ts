@@ -3733,9 +3733,16 @@ export class RelayClient {
   private reechoInput(deviceId: string, sessionId: string, clientId: string): void {
     const key = this.consumerKeys.get(deviceId);
     const seq = this.sessionManager.findUserMessageSeqByClientId(sessionId, clientId);
-    if (!key || seq === null) return;
+    // Each early return leaves the sender's input unconfirmed; say why.
+    if (!key || seq === null) {
+      logger.warn({ sessionId, deviceId, clientId, reason: !key ? 'no_consumer_key' : 'no_user_message' }, 'Cannot re-echo duplicate input');
+      return;
+    }
     const [row] = this.sessionManager.getMessagesAfterSeq(sessionId, seq - 1, 1);
-    if (!row || row.seq !== seq) return;
+    if (!row || row.seq !== seq) {
+      logger.warn({ sessionId, deviceId, clientId, seq, rowSeq: row?.seq ?? null }, 'Cannot re-echo duplicate input: row mismatch');
+      return;
+    }
     try {
       const message = JSON.parse(row.payload) as Record<string, unknown>;
       message.seq = row.seq;

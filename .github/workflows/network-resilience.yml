@@ -27,6 +27,16 @@ on:
         required: false
         default: '1'
         type: string
+      soak_seed_step:
+        description: Seed increment per repeat (0 = replay the same seed)
+        required: false
+        default: '1'
+        type: string
+      web_only_soak:
+        description: Skip the W/N matrix and run only the soak repeats
+        required: false
+        default: 'false'
+        type: string
 
 permissions:
   contents: read
@@ -96,12 +106,17 @@ jobs:
           KRAKI_SOAK_MINUTES: ${{ inputs.soak_minutes || '30' }}
           CHAOS_SEED: ${{ inputs.seed || github.run_number }}
           SOAK_REPEATS: ${{ inputs.soak_repeats || '1' }}
+          CHAOS_SEED_STEP: ${{ inputs.soak_seed_step || '1' }}
+          # Tentacle input trace (INPUT-PERSISTED / INPUT-DUPLICATE …) into stack.out.
+          KRAKI_TRACE_PULSE: '1'
         run: |
-          echo "Soak seed=$CHAOS_SEED minutes=$KRAKI_SOAK_MINUTES repeats=$SOAK_REPEATS"
+          echo "Soak seed=$CHAOS_SEED step=$CHAOS_SEED_STEP minutes=$KRAKI_SOAK_MINUTES repeats=$SOAK_REPEATS"
           set +e
-          bash scripts/chaos/run-web.sh; first=$?
+          first=0
+          if [ "${{ inputs.web_only_soak }}" != "true" ]; then bash scripts/chaos/run-web.sh; first=$?; fi
+          mkdir -p /tmp/kraki-chaos
           second=0
-          if [ "$SOAK_REPEATS" -gt 1 ]; then
+          if [ "$SOAK_REPEATS" -gt 1 ] || [ "${{ inputs.web_only_soak }}" = "true" ]; then
             mv /tmp/kraki-chaos /tmp/kraki-chaos-main
             bash scripts/chaos/run-web.sh -g S1 --repeat-each "$SOAK_REPEATS"; second=$?
           fi
