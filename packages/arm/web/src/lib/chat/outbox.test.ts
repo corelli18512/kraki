@@ -20,6 +20,11 @@ describe('outbox', () => {
   afterEach(() => vi.useRealTimers());
 
   const payload = () => sent.at(-1)!.payload as Record<string, unknown>;
+  /** Tick once a second from `from` for `seconds`; returns the last time. */
+  const run = (from: number, seconds: number) => {
+    for (let i = 1; i <= seconds; i++) checkDeadlines(from + i * 1_000);
+    return from + seconds * 1_000;
+  };
 
   it('sends at once and is confirmed by the echo', () => {
     const id = outbox.send('s', 'hi');
@@ -37,14 +42,16 @@ describe('outbox', () => {
     expect(payload().delivery).toBe('steer');
   });
 
-  it('fails only while the delivery path is up; retry keeps the clientId', () => {
+  it('fails only after the full window of stalled time; retry keeps the clientId', () => {
     const id = outbox.send('s', 'hi');
-    const t0 = Date.now();
+    let t = Date.now();
     pathUp = false;
-    checkDeadlines(t0 + 21_000);
+    t = run(t, 60);
     expect(outbox.forSession('s')[0].state).toBe('sending');
     pathUp = true;
-    checkDeadlines(t0 + 42_000);
+    t = run(t, 19);
+    expect(outbox.forSession('s')[0].state).toBe('sending');
+    t = run(t, 2);
     expect(outbox.forSession('s')[0].state).toBe('failed');
     outbox.retry(id);
     expect(outbox.forSession('s')[0].state).toBe('sending');
@@ -75,10 +82,62 @@ describe('outbox', () => {
   it('a dead or reconnecting link never fails an input (time only counts while live)', () => {
     outbox.setConfirmationTimeout(30_000);
     outbox.send('s', 'hi');
-    const t0 = Date.now();
     pathUp = false; // e.g. half-open: quiet socket, or reconnecting
-    for (let t = 1; t <= 10; t++) checkDeadlines(t0 + t * 60_000);
+    run(Date.now(), 600);
     expect(outbox.forSession('s')[0].state).toBe('sending');
+  });
+
+  it('down time is not counted even when the link is up at the old deadline (soak seed 1300)', () => {
+    // Sent into a blackhole: 26 s dead, then reconnected and catching up.
+    outbox.setConfirmationTimeout(30_000);
+    outbox.send('s', 'hi');
+    let t = Date.now();
+    pathUp = false;
+    t = run(t, 26);
+    pathUp = true;
+    t = run(t, 6); // 32 s after sending, but only 6 s stalled
+    expect(outbox.forSession('s')[0].state).toBe('sending');
+    t = run(t, 25);
+    expect(outbox.forSession('s')[0].state).toBe('failed');
+  });
+
+  it('a throttled background tick counts at most 2 s', () => {
+    outbox.setConfirmationTimeout(30_000);
+    outbox.send('s', 'hi');
+    let t = Date.now();
+    for (let i = 0; i < 10; i++) { t += 60_000; checkDeadlines(t); }
+    expect(outbox.forSession('s')[0].state).toBe('sending');
+  });
+
+  it('halfway through, a deduplicating Tentacle gets the input once more (same clientId)', () => {
+    outbox.setConfirmationTimeout(30_000);
+    outbox.configure({
+      send: async (msg) => { sent.push(msg); return true; },
+      isDeliveryPathUp: () => true,
+      acceptsResend: () => true,
+    });
+    const id = outbox.send('s', 'hi');
+    let t = Date.now();
+    t = run(t, 14);
+    expect(sent).toHaveLength(1);
+    t = run(t, 2);
+    expect(sent.map((m) => (m.payload as Record<string, unknown>).clientId)).toEqual([id, id]);
+    t = run(t, 10);
+    expect(sent).toHaveLength(2);
+    expect(outbox.forSession('s')[0].state).toBe('sending');
+  });
+
+  it('an older Tentacle never gets an automatic resend', () => {
+    outbox.setConfirmationTimeout(30_000);
+    outbox.configure({
+      send: async (msg) => { sent.push(msg); return true; },
+      isDeliveryPathUp: () => true,
+      acceptsResend: () => false,
+    });
+    outbox.send('s', 'hi');
+    run(Date.now(), 31);
+    expect(sent).toHaveLength(1);
+    expect(outbox.forSession('s')[0].state).toBe('failed');
   });
 
   it('a restored (reloaded) input is resent once its Tentacle is known to deduplicate', async () => {

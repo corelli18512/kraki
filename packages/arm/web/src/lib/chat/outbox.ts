@@ -4,10 +4,12 @@
  *
  * A sent message shows at once as the user's own bubble (`sending`). The
  * Tentacle echo (`user_message` carrying the same `clientId`) confirms it and
- * the entry disappears as the real bubble lands. If no echo arrives while the
- * relay connection is live and the target device is up, it becomes `failed`
- * (Retry / Delete). Time on a dead or reconnecting link does not count:
- * unconfirmed is not failed.
+ * the entry disappears as the real bubble lands. It becomes `failed`
+ * (Retry / Delete) only after 30 s of *stalled* time, accumulated in steps:
+ * relay connected and live, device online, and no payload arriving. Time on a
+ * dead, reconnecting or busy link never counts: unconfirmed is not failed.
+ * Halfway through, a Tentacle that deduplicates gets it once more (same
+ * clientId), like the native apps.
  *
  * Entries survive a reload. Whether they reached the Tentacle is unknown, so
  * they wait (`needsResend`) until the session's Tentacle greets: one that
@@ -52,7 +54,12 @@ const PERSIST_ATTACHMENT_LIMIT = 1_000_000;
 
 let deps: OutboxDeps | null = null;
 let confirmationTimeoutMs = 30_000;
-const deadlines = new Map<string, number>();
+/** A tick never counts more than this: background tabs throttle timers to
+ *  about one a minute, and that minute was not observed as stalled. */
+const MAX_STEP_MS = 2_000;
+/** Stalled time so far per transmitted, unconfirmed input. */
+const stalls = new Map<string, { stalledMs: number; resent: boolean }>();
+let lastTickAt: number | null = null;
 let ticker: ReturnType<typeof setInterval> | null = null;
 
 interface OutboxState {
@@ -113,9 +120,11 @@ function ensureTicker(): void {
   ticker = setInterval(checkDeadlines, 1_000);
 }
 
-/** Confirmation is the Tentacle echo. Time only counts while the delivery
- *  path is up: an offline device means the input is legitimately queued. */
+/** One confirmation tick (every second). The echo is the confirmation; only
+ *  stalled time counts toward failure (see `OutboxDeps.isDeliveryPathUp`). */
 export function checkDeadlines(now = Date.now()): void {
+  const step = lastTickAt === null ? 0 : Math.max(0, Math.min(now - lastTickAt, MAX_STEP_MS));
+  lastTickAt = now;
   for (const entry of useOutbox.getState().entries) {
     if (entry.state !== 'sending') continue;
     if (entry.needsResend) {
@@ -130,13 +139,18 @@ export function checkDeadlines(now = Date.now()): void {
       }
       continue;
     }
-    const deadline = deadlines.get(entry.clientId);
-    if (deadline === undefined || now < deadline) continue;
-    if (deps?.isDeliveryPathUp(entry.sessionId)) {
-      deadlines.delete(entry.clientId);
+    const stall = stalls.get(entry.clientId);
+    if (!stall || !deps?.isDeliveryPathUp(entry.sessionId)) continue;
+    stall.stalledMs += step;
+    if (!stall.resent && stall.stalledMs >= confirmationTimeoutMs / 2 && deps.acceptsResend?.(entry.sessionId) === true) {
+      // Maybe lost on the way (e.g. a socket that died with it): offer it
+      // once more; the Tentacle drops a duplicate by clientId.
+      stall.resent = true;
+      void deps.send({ type: 'send_input', sessionId: entry.sessionId, payload: wirePayload(entry) });
+    }
+    if (stall.stalledMs >= confirmationTimeoutMs) {
+      stalls.delete(entry.clientId);
       setState(entry.clientId, 'failed');
-    } else {
-      deadlines.set(entry.clientId, now + confirmationTimeoutMs);
     }
   }
 }
@@ -147,12 +161,13 @@ function clearResend(entry: PendingInput): PendingInput {
 }
 
 function transmit(entry: PendingInput): void {
-  deadlines.set(entry.clientId, Date.now() + confirmationTimeoutMs);
+  stalls.set(entry.clientId, { stalledMs: 0, resent: false });
+  lastTickAt ??= Date.now();
   ensureTicker();
   const send = deps?.send;
   if (!send) { setState(entry.clientId, 'failed'); return; }
   void send({ type: 'send_input', sessionId: entry.sessionId, payload: wirePayload(entry) }).then((ok) => {
-    if (!ok) { deadlines.delete(entry.clientId); setState(entry.clientId, 'failed'); }
+    if (!ok) { stalls.delete(entry.clientId); setState(entry.clientId, 'failed'); }
   });
 }
 
@@ -219,7 +234,7 @@ export const outbox = {
   /** Remove an unconfirmed input (Delete). Returns its text. */
   discard(clientId: string): string | undefined {
     const entry = useOutbox.getState().entries.find((e) => e.clientId === clientId);
-    deadlines.delete(clientId);
+    stalls.delete(clientId);
     update((list) => list.filter((e) => e.clientId !== clientId));
     return entry?.text;
   },
@@ -235,7 +250,7 @@ export const outbox = {
         ? entries.find((e) => e.sessionId === sessionId && e.text === content)
         : undefined;
     if (!match) return false;
-    deadlines.delete(match.clientId);
+    stalls.delete(match.clientId);
     update((list) => list.filter((e) => e.clientId !== match.clientId));
     return true;
   },
@@ -251,13 +266,15 @@ export const outbox = {
 
   /** Test hook: re-read storage as a page reload would. */
   reloadForTesting(): void {
-    deadlines.clear();
+    stalls.clear();
+    lastTickAt = null;
     useOutbox.setState({ entries: restore() });
   },
 
   /** Test hook: forget everything. */
   reset(): void {
-    deadlines.clear();
+    stalls.clear();
+    lastTickAt = null;
     useOutbox.setState({ entries: [] });
     persist([]);
   },
