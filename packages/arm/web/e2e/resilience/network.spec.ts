@@ -115,4 +115,41 @@ test.describe('web network resilience', () => {
     await control('POST', '/reset', { link: 'tentacle' });
     await expectDelivered(page, sid, texts, 90_000, m);
   });
+
+  test('W7 steer while the agent is replying', async ({ page }) => {
+    // Nightly soak (30 min): inputs typed while a turn was running were
+    // received by the agent but never confirmed on the page.
+    const m: Metrics = (results['W7 steer while the agent is replying'] = {});
+    const sid = await openSession(page);
+    await control('POST', '/agent/options', { replyDelayMs: 150, deltas: 40, deltaIntervalMs: 250 });
+    try {
+      const texts = [`w7-a-${uid()}`, `w7-b-${uid()}`, `w7-c-${uid()}`];
+      await send(page, texts[0]);
+      await expect(page.getByRole('textbox', { name: 'Steer the agent…' })).toBeVisible({ timeout: 10_000 });
+      await send(page, texts[1]);
+      await pause(1_500);
+      await send(page, texts[2]);
+      await expectDelivered(page, sid, texts, 60_000, m);
+    } finally {
+      await control('POST', '/agent/options', { replyDelayMs: 150, deltas: 4, deltaIntervalMs: 80 });
+    }
+  });
+
+  test('W8 inputs sent into a dead link while the Tentacle reconnects', async ({ page }) => {
+    // Nightly soak (30 min, seed 4242, 340 s): sent during a blackhole; the
+    // Tentacle reconnected before the app did. The agent got every input but
+    // the page never confirmed them.
+    const m: Metrics = (results['W8 inputs sent into a dead link while the Tentacle reconnects'] = {});
+    const sid = await openSession(page);
+    await fault({ blackhole: 'both' });
+    const texts = [`w8-a-${uid()}`, `w8-b-${uid()}`, `w8-c-${uid()}`];
+    for (const t of texts) { await send(page, t); await pause(3_000); }
+    await pause(15_000);
+    await control('POST', '/heal');
+    await pause(14_000);
+    await control('POST', '/reset', { link: 'tentacle' });
+    await pause(13_000);
+    await control('POST', '/reset', { link: 'app' });
+    await expectDelivered(page, sid, texts, 90_000, m);
+  });
 });

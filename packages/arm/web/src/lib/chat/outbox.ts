@@ -19,6 +19,7 @@
  */
 import { create } from 'zustand';
 import type { Attachment } from '@kraki/protocol';
+import { traceEvent } from '../trace';
 
 export type PendingState = 'sending' | 'failed';
 
@@ -135,6 +136,7 @@ export function checkDeadlines(now = Date.now()): void {
       if (!deps?.isDeliveryPathUp(entry.sessionId)) continue;
       const accepts = deps.acceptsResend?.(entry.sessionId);
       if (accepts === undefined) continue;
+      traceEvent({ comp: 'arm', evt: 'OUTBOX-RESEND-DECISION', clientId: entry.clientId, accepts });
       if (accepts) {
         transmit(clearResend(entry));
       } else {
@@ -150,9 +152,11 @@ export function checkDeadlines(now = Date.now()): void {
       // Maybe lost on the way (e.g. a socket that died with it): offer it
       // once more; the Tentacle drops a duplicate by clientId.
       stall.resent = true;
+      traceEvent({ comp: 'arm', evt: 'OUTBOX-HALF-RESEND', clientId: entry.clientId });
       void deps.send({ type: 'send_input', sessionId: entry.sessionId, payload: wirePayload(entry) });
     }
     if (stall.stalledMs >= confirmationTimeoutMs) {
+      traceEvent({ comp: 'arm', evt: 'OUTBOX-FAILED', clientId: entry.clientId, stalledMs: stall.stalledMs });
       stalls.delete(entry.clientId);
       setState(entry.clientId, 'failed');
     }
@@ -171,6 +175,7 @@ function transmit(entry: PendingInput): void {
   const send = deps?.send;
   if (!send) { setState(entry.clientId, 'failed'); return; }
   void send({ type: 'send_input', sessionId: entry.sessionId, payload: wirePayload(entry) }).then((ok) => {
+    traceEvent({ comp: 'arm', evt: 'OUTBOX-TRANSMIT', clientId: entry.clientId, ok });
     if (!ok) { stalls.delete(entry.clientId); setState(entry.clientId, 'failed'); }
   });
 }
@@ -234,6 +239,7 @@ export const outbox = {
   resendUnconfirmed(inSession: (sessionId: string) => boolean): void {
     const eligible = (e: PendingInput) => e.state === 'sending' && inSession(e.sessionId)
       && deps?.acceptsResend?.(e.sessionId) === true;
+    traceEvent({ comp: 'arm', evt: 'OUTBOX-REGREET', pending: useOutbox.getState().entries.filter((e) => e.state === 'sending').map((e) => e.clientId), eligible: useOutbox.getState().entries.filter(eligible).map((e) => e.clientId) });
     if (!useOutbox.getState().entries.some(eligible)) return;
     update((entries) => entries.map((e) => (eligible(e) ? { ...e, needsResend: true } : e)));
     ensureTicker();
@@ -258,6 +264,7 @@ export const outbox = {
       : content !== undefined
         ? entries.find((e) => e.sessionId === sessionId && e.text === content)
         : undefined;
+    traceEvent({ comp: 'arm', evt: 'OUTBOX-CONFIRM', clientId, matched: match?.clientId ?? null });
     if (!match) return false;
     stalls.delete(match.clientId);
     update((list) => list.filter((e) => e.clientId !== match.clientId));

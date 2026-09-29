@@ -17,6 +17,16 @@ on:
         required: false
         default: '50'
         type: string
+      soak_minutes:
+        description: Web soak length per seed (minutes)
+        required: false
+        default: '30'
+        type: string
+      soak_repeats:
+        description: Web soak seeds to run (seed, seed+1, …)
+        required: false
+        default: '1'
+        type: string
 
 permissions:
   contents: read
@@ -67,7 +77,7 @@ jobs:
     # bounded JS heap.
     name: Web soak (netem + chaos)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 170
     steps:
       - uses: actions/checkout@v6
       - run: corepack enable
@@ -83,11 +93,19 @@ jobs:
         env:
           KRAKI_PW_CHANNEL: chrome
           KRAKI_NETEM: '1'
-          KRAKI_SOAK_MINUTES: '30'
+          KRAKI_SOAK_MINUTES: ${{ inputs.soak_minutes || '30' }}
           CHAOS_SEED: ${{ inputs.seed || github.run_number }}
+          SOAK_REPEATS: ${{ inputs.soak_repeats || '1' }}
         run: |
-          echo "Soak seed=$CHAOS_SEED"
-          bash scripts/chaos/run-web.sh
+          echo "Soak seed=$CHAOS_SEED minutes=$KRAKI_SOAK_MINUTES repeats=$SOAK_REPEATS"
+          set +e
+          bash scripts/chaos/run-web.sh; first=$?
+          second=0
+          if [ "$SOAK_REPEATS" -gt 1 ]; then
+            mv /tmp/kraki-chaos /tmp/kraki-chaos-main
+            bash scripts/chaos/run-web.sh -g S1 --repeat-each "$SOAK_REPEATS"; second=$?
+          fi
+          [ $first -eq 0 ] && [ $second -eq 0 ]
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -95,6 +113,10 @@ jobs:
           name: network-resilience-web-soak
           path: |
             /tmp/kraki-chaos/results
+            /tmp/kraki-chaos/stack.out
+            /tmp/kraki-chaos-main/results
+            /tmp/kraki-chaos-main/web.log
+            /tmp/kraki-chaos-main/stack.out
             /tmp/kraki-chaos/web.log
             /tmp/kraki-chaos/web-report.json
             /tmp/kraki-chaos/stack.log
