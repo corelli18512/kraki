@@ -88,16 +88,18 @@ test.describe('web under packet loss (netem)', () => {
   test('N5 lossy Tentacle link while the agent is producing output', async ({ page }) => {
     // Soak seeds 2001/2003: echoes queue behind agent output on a link whose
     // TCP recovery leaves multi-second gaps. Late, never "Not delivered".
+    test.setTimeout(420_000);
     const m: Metrics = (results['N5 lossy Tentacle link while the agent is producing output'] = {});
     const sid = await openSession(page);
     netem('tentacle', 'delay 30ms 10ms loss 15%');
     const texts: string[] = [];
-    for (let i = 0; i < 6; i++) {
-      await control('POST', '/agent/burst', { sessionId: sid, count: 1, bytes: 150_000, prefix: `n5-${i}` });
-      texts.push(...await chat(page, `n5-${i}`, 1, [8_000, 10_000]));
+    // ~2.5 MB of agent output (large tool output / logs) over ~70 s.
+    for (let i = 0; i < 10; i++) {
+      await control('POST', '/agent/burst', { sessionId: sid, count: 1, bytes: 250_000, prefix: `n5-${i}` });
+      texts.push(...await chat(page, `n5-${i}`, 1, [6_000, 8_000]));
     }
     netem('tentacle', '');
-    await expectDelivered(page, sid, texts, 180_000, m);
+    await expectDelivered(page, sid, texts, 240_000, m);
   });
 });
 
