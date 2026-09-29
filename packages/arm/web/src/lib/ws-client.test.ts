@@ -1710,6 +1710,27 @@ describe('KrakiWSClient', () => {
       }
     });
 
+    it('confirmation time does not count for 30 s after any delivery (busy link, like native)', async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        await connectAndAuth(client);
+        useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'dev-t', deviceName: 'Mac', agent: 'copilot', state: 'idle', messageCount: 0 });
+        const c = client as unknown as { isDeliveryPathUp(s: string): boolean; handlePulseDelivered(p: string): void };
+        const ws = socketOf(client)!;
+        c.handlePulseDelivered(JSON.stringify({ from: '@head', msg: { type: 'pong' } }));
+        for (let i = 0; i < 29; i++) { await vi.advanceTimersByTimeAsync(1_000); ws._receive({ type: 'pong' }); }
+        expect(c.isDeliveryPathUp('sess-1')).toBe(false); // still busy: an echo may be queued
+        for (let i = 0; i < 2; i++) { await vi.advanceTimersByTimeAsync(1_000); ws._receive({ type: 'pong' }); }
+        expect(c.isDeliveryPathUp('sess-1')).toBe(true); // quiet and live: stalled
+        await vi.advanceTimersByTimeAsync(13_000); // no frames at all: presumed dead
+        expect(c.isDeliveryPathUp('sess-1')).toBe(false);
+        client.disconnect();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('reassembles a payload the Tentacle sent in fragments', async () => {
       const { fragmentPayload } = await import('@kraki/protocol');
       const client = new KrakiWSClient('ws://localhost:9999');

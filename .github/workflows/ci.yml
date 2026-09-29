@@ -265,10 +265,10 @@ jobs:
           KRAKI_PW_CHANNEL: chrome
           KRAKI_NETEM: '1'
           KRAKI_SOAK_MINUTES: '5'
-          CHAOS_SEED: '2000' # TEMP: probe seeds 2000-2003
+          CHAOS_SEED: '2000' # TEMP: probe seeds 2000-2005
         run: |
           google-chrome --version
-          bash scripts/chaos/run-web.sh -g S1 --repeat-each 4
+          bash scripts/chaos/run-web.sh -g S1 --repeat-each 6
 
       - name: Upload resilience evidence
         if: always()
