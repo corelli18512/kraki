@@ -29,7 +29,7 @@ const LIVE_LINK_QUIET_MS = 12_000;
  *  be queued behind it (head-of-line on a slow or lossy link, where TCP
  *  retransmission backoff alone leaves multi-second gaps): not a stall.
  *  Same window as the native apps (`CommandSender.busyLinkWindow`). */
-const DELIVERY_FLOWING_MS = 3_000; // TEMP red check
+const DELIVERY_FLOWING_MS = 30_000;
 
 export class KrakiWSClient {
   private transport: KrakiTransport;

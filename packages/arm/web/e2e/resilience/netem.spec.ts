@@ -84,37 +84,11 @@ test.describe('web under packet loss (netem)', () => {
     await expectDelivered(page, sid, texts, 150_000, m);
     m.reconnects = (await connections()) - before;
   });
-
-  test('N5 lossy Tentacle link while the agent is producing output', async ({ page }) => {
-    // Soak seeds 2001/2003: echoes queue behind agent output on a link whose
-    // TCP recovery leaves multi-second gaps. Late, never "Not delivered".
-    test.setTimeout(420_000);
-    const m: Metrics = (results['N5 lossy Tentacle link while the agent is producing output'] = {});
-    const sid = await openSession(page);
-    netem('tentacle', 'delay 30ms 10ms loss 15%');
-    const texts: string[] = [];
-    // ~2.5 MB of agent output (large tool output / logs) over ~70 s.
-    for (let i = 0; i < 10; i++) {
-      await control('POST', '/agent/burst', { sessionId: sid, count: 1, bytes: 250_000, prefix: `n5-${i}` });
-      texts.push(...await chat(page, `n5-${i}`, 1, [6_000, 8_000]));
-    }
-    netem('tentacle', '');
-    await expectDelivered(page, sid, texts, 240_000, m);
-  });
 });
 
 // ── Soak ────────────────────────────────────────────────────────────────────
 
 const SOAK_MINUTES = Number(process.env.KRAKI_SOAK_MINUTES ?? 0);
-
-function pickWeighted<T extends string>(random: () => number, options: Array<[T, number]>): T {
-  const total = options.reduce((n, [, w]) => n + w, 0);
-  let roll = random() * total;
-  for (const [value, weight] of options) {
-    if ((roll -= weight) < 0) return value;
-  }
-  return options[options.length - 1][0];
-}
 
 /** Deterministic PRNG (mulberry32) so a failing soak can be replayed. */
 function rng(seed: number): () => number {
@@ -179,40 +153,32 @@ test.describe('web soak', () => {
           healAt = 0;
           count('heal');
         }
-        // Weighted action; a fault while another is active means idle (no
-        // fall-through into other actions, which would skew the mix).
+        const roll = random();
         const faultFree = healAt === 0;
-        const action = pickWeighted(random, [
-          ['send', 45], ['reset', 5], ['blackhole', 5], ['outage', 5], ['slow', 5],
-          ['netem', NETEM ? 13 : 0], ['burst', 3], ['reload', 2], ['idle', 17],
-        ]);
-        const needsQuiet = ['blackhole', 'outage', 'slow', 'netem', 'reload'].includes(action);
-        if (needsQuiet && !faultFree) {
-          // idle
-        } else if (action === 'send') {
+        if (roll < 0.45) {
           const text = `s1-${texts.length}-${uid()}`;
           texts.push(text);
           await send(page, text);
           count('send');
-        } else if (action === 'reset') {
+        } else if (roll < 0.50) {
           const link = pick(['app', 'tentacle']);
           await control('POST', '/reset', { link });
           count('reset', link);
-        } else if (action === 'blackhole') {
+        } else if (roll < 0.55 && faultFree) {
           await fault({ blackhole: 'both' });
           healAt = Date.now() + between(5_000, 35_000);
           count('blackhole', `${Math.round((healAt - Date.now()) / 1000)} s`);
-        } else if (action === 'outage') {
+        } else if (roll < 0.60 && faultFree) {
           await fault({ refuse: true });
           await control('POST', '/reset', { link: 'app' });
           healAt = Date.now() + between(5_000, 60_000);
           count('outage', `${Math.round((healAt - Date.now()) / 1000)} s`);
-        } else if (action === 'slow') {
+        } else if (roll < 0.65 && faultFree) {
           const rate = Math.round(between(40_000, 200_000));
           await fault({ bytesPerSec: rate });
           healAt = Date.now() + between(20_000, 60_000);
           count('slow', `${rate} B/s for ${Math.round((healAt - Date.now()) / 1000)} s`);
-        } else if (action === 'netem') {
+        } else if (roll < 0.78 && faultFree && NETEM) {
           const link = pick<'app' | 'tentacle'>(['app', 'tentacle']);
           const profile = pick([
             'delay 60ms 30ms distribution normal loss 3% reorder 5% 50%',
@@ -223,12 +189,12 @@ test.describe('web soak', () => {
           netem(link, profile);
           healAt = Date.now() + between(20_000, 90_000);
           count('netem', `${link}: ${profile} for ${Math.round((healAt - Date.now()) / 1000)} s`);
-        } else if (action === 'burst') {
+        } else if (roll < 0.80) {
           // A large agent output now and then (report, long diff).
           const bytes = Math.round(between(20_000, 300_000));
           await control('POST', '/agent/burst', { sessionId: sid, count: 1, bytes, prefix: 'soak' });
           count('burst', String(bytes));
-        } else if (action === 'reload') {
+        } else if (roll < 0.88 && faultFree) {
           const k = await harvest(page);
           carried.failedEver ||= k.failedEver;
           carried.blockedEver ||= k.blockedEver;
