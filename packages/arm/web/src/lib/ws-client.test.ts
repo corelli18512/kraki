@@ -1710,6 +1710,75 @@ describe('KrakiWSClient', () => {
       }
     });
 
+    it('confirmation time does not count for 30 s after any delivery (busy link, like native)', async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new KrakiWSClient('ws://localhost:9999');
+        await connectAndAuth(client);
+        useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'dev-t', deviceName: 'Mac', agent: 'copilot', state: 'idle', messageCount: 0 });
+        const c = client as unknown as { isDeliveryPathUp(s: string): boolean; handlePulseDelivered(p: string): void };
+        const { outbox } = await import('./chat/outbox');
+        const busy = () => outbox.depsForTesting()!.isLinkBusy!();
+        const ws = socketOf(client)!;
+        c.handlePulseDelivered(JSON.stringify({ from: '@head', msg: { type: 'pong' } }));
+        for (let i = 0; i < 29; i++) { await vi.advanceTimersByTimeAsync(1_000); ws._receive({ type: 'pong' }); }
+        expect(busy()).toBe(true); // an echo may be queued behind recent payload
+        expect(c.isDeliveryPathUp('sess-1')).toBe(true); // but inputs can go out now
+        for (let i = 0; i < 2; i++) { await vi.advanceTimersByTimeAsync(1_000); ws._receive({ type: 'pong' }); }
+        expect(busy()).toBe(false); // quiet and live: stalled
+        await vi.advanceTimersByTimeAsync(13_000); // no frames at all: presumed dead
+        expect(c.isDeliveryPathUp('sess-1')).toBe(false);
+        client.disconnect();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('a greeting without features keeps what the Tentacle already advertised (soak seed 2003)', async () => {
+      const { outbox } = await import('./chat/outbox');
+      outbox.reset();
+      const client = new KrakiWSClient('ws://localhost:9999');
+      client.connect();
+      await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+      lastWsInstance._receive({
+        type: 'auth_ok', deviceId: 'dev-web-123',
+        devices: [{ id: 'dev-t', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'k' }],
+      });
+      useStore.getState().upsertSession({ id: 'sess-1', deviceId: 'dev-t', deviceName: 'Mac', agent: 'copilot', state: 'idle', messageCount: 0 });
+      const accepts = () => (client as unknown as { acceptsResend(s: string): boolean | undefined }).acceptsResend('sess-1');
+      expect(accepts()).toBeUndefined();
+      receiveInner({ type: 'device_greeting', deviceId: 'dev-t', seq: 0, timestamp: '', payload: { name: 'Mac', features: ['fragments', 'idempotent_input'] } });
+      expect(accepts()).toBe(true);
+      // The Tentacle reconnected and broadcast a greeting without features.
+      receiveInner({ type: 'device_greeting', deviceId: 'dev-t', seq: 0, timestamp: '', payload: { name: 'Mac' } });
+      expect(accepts()).toBe(true);
+      // An explicit list still replaces it.
+      receiveInner({ type: 'device_greeting', deviceId: 'dev-t', seq: 0, timestamp: '', payload: { name: 'Mac', features: [] } });
+      expect(accepts()).toBe(false);
+      // A Tentacle never seen advertising features is an older one.
+      receiveInner({ type: 'device_greeting', deviceId: 'dev-old', seq: 0, timestamp: '', payload: { name: 'Old' } });
+      useStore.getState().upsertSession({ id: 'sess-old', deviceId: 'dev-old', deviceName: 'Old', agent: 'copilot', state: 'idle', messageCount: 0 });
+      expect((client as unknown as { acceptsResend(s: string): boolean | undefined }).acceptsResend('sess-old')).toBe(false);
+    });
+
+    it('re-declares fragment support when a fragment-capable Tentacle rejoins (it forgets app features)', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      client.connect();
+      await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+      lastWsInstance._receive({
+        type: 'auth_ok', deviceId: 'dev-web-123',
+        devices: [{ id: 'dev-t', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'k' }],
+      });
+      receiveInner({ type: 'device_greeting', deviceId: 'dev-t', seq: 0, timestamp: '', payload: { name: 'Mac', features: ['fragments'] } });
+      await waitForDecodedSend(lastWsInstance);
+      lastWsInstance.sentMessages = [];
+      lastWsInstance._receive({ type: 'device_joined', device: { id: 'dev-t', name: 'Mac', role: 'tentacle', online: true, encryptionKey: 'k' } });
+      await vi.waitFor(() => {
+        const sent = lastWsInstance.sentMessages.map(decodePulseSend).filter(Boolean) as Array<Record<string, unknown>>;
+        expect(sent.some((m) => m.type === 'client_features')).toBe(true);
+      });
+    });
+
     it('reassembles a payload the Tentacle sent in fragments', async () => {
       const { fragmentPayload } = await import('@kraki/protocol');
       const client = new KrakiWSClient('ws://localhost:9999');

@@ -59,3 +59,46 @@ jobs:
             /tmp/kraki-chaos/xcode.log
           if-no-files-found: ignore
           retention-days: 30
+
+  web-soak:
+    # The web client for a long randomized soak: proxy faults (resets,
+    # blackholes, outages, throttling) plus packet-level netem profiles,
+    # agent bursts and page reloads. Exactly-once, no false "Not delivered",
+    # bounded JS heap.
+    name: Web soak (netem + chaos)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - run: corepack enable
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.16.0'
+          cache: pnpm
+      - name: Install and build the local stack
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @kraki/protocol --filter @kraki/crypto --filter @kraki/head --filter @kraki/tentacle --filter @kraki/voice-broker build
+      - name: Web scenarios, netem matrix and 30-minute soak
+        env:
+          KRAKI_PW_CHANNEL: chrome
+          KRAKI_NETEM: '1'
+          KRAKI_SOAK_MINUTES: '30'
+          CHAOS_SEED: ${{ inputs.seed || github.run_number }}
+        run: |
+          echo "Soak seed=$CHAOS_SEED"
+          bash scripts/chaos/run-web.sh
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: network-resilience-web-soak
+          path: |
+            /tmp/kraki-chaos/results
+            /tmp/kraki-chaos/web.log
+            /tmp/kraki-chaos/web-report.json
+            /tmp/kraki-chaos/stack.log
+            packages/arm/web/test-results
+          if-no-files-found: ignore
+          retention-days: 30
+

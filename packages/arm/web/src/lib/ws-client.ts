@@ -26,8 +26,10 @@ const logger = createLogger('ws-client');
  *  presumed live for outbox confirmation timing. */
 const LIVE_LINK_QUIET_MS = 12_000;
 /** Payload delivered this recently → data is still flowing, and an echo may
- *  be queued behind it (head-of-line on a slow link): not a stall. */
-const DELIVERY_FLOWING_MS = 3_000;
+ *  be queued behind it (head-of-line on a slow or lossy link, where TCP
+ *  retransmission backoff alone leaves multi-second gaps): not a stall.
+ *  Same window as the native apps (`CommandSender.busyLinkWindow`). */
+const DELIVERY_FLOWING_MS = 30_000;
 
 export class KrakiWSClient {
   private transport: KrakiTransport;
@@ -72,6 +74,7 @@ export class KrakiWSClient {
     outbox.configure({
       send: (msg) => this.transmit(msg),
       isDeliveryPathUp: (sessionId) => this.isDeliveryPathUp(sessionId),
+      isLinkBusy: () => Date.now() - this.lastDeliveryAt < DELIVERY_FLOWING_MS,
       acceptsResend: (sessionId) => this.acceptsResend(sessionId),
     });
     const keyStore = createAppKeyStore();
@@ -335,16 +338,12 @@ export class KrakiWSClient {
     return new Promise((resolve) => this.sendEncrypted(msg, (seq) => resolve(seq !== null)));
   }
 
-  /** Whether the input's confirmation is overdue-able right now (outbox
-   *  timing): relay connected and live, the session's device online, and the
-   *  link stalled rather than busy. Time on a presumed-dead socket (silent
-   *  past a ping round) or while payload is still arriving (the echo may be
-   *  queued behind it) does not count against the input. */
+  /** Relay connected and live (not silent past a ping round), and the
+   *  session's device online: an input can go out now. */
   private isDeliveryPathUp(sessionId: string): boolean {
     const store = getStore();
     if (store.status !== 'connected') return false;
     if (this.transport.msSinceLastRx() > LIVE_LINK_QUIET_MS) return false;
-    if (Date.now() - this.lastDeliveryAt < DELIVERY_FLOWING_MS) return false;
     const deviceId = store.sessions.get(sessionId)?.deviceId;
     return !!deviceId && store.devices.get(deviceId)?.online === true;
   }
@@ -360,21 +359,30 @@ export class KrakiWSClient {
 
   private onTentacleGreeting(greeting: { deviceId: string; payload?: { features?: unknown } }) {
     const raw = greeting.payload?.features;
-    const features = new Set(Array.isArray(raw) ? raw.filter((f): f is string => typeof f === 'string') : []);
+    // A greeting without `features` says nothing about them (some Tentacle
+    // builds omit them from the broadcast after their own reconnect): keep
+    // what this Tentacle already told us. Never seen any → an older Tentacle.
+    const features = Array.isArray(raw)
+      ? new Set(raw.filter((f): f is string => typeof f === 'string'))
+      : this.deviceFeatures.get(greeting.deviceId) ?? new Set<string>();
     this.deviceFeatures.set(greeting.deviceId, features);
-    if (features.has(PAYLOAD_FRAGMENT_FEATURE)) {
-      this.sendEncrypted({
-        type: 'client_features',
-        deviceId: getStore().deviceId ?? '',
-        seq: 0,
-        timestamp: new Date().toISOString(),
-        payload: { features: [PAYLOAD_FRAGMENT_FEATURE], targetDeviceId: greeting.deviceId },
-      });
-    }
+    if (features.has(PAYLOAD_FRAGMENT_FEATURE)) this.declareClientFeatures(greeting.deviceId);
     // The Tentacle (re)started or we (re)connected: whatever it had not
     // echoed may be lost. It deduplicates, so offer every unconfirmed input
     // again (older Tentacles: the outbox marks them for manual retry).
     outbox.resendUnconfirmed((sessionId) => getStore().sessions.get(sessionId)?.deviceId === greeting.deviceId);
+  }
+
+  /** Tell a Tentacle this app reassembles fragments. Needed again after the
+   *  Tentacle reconnects: it forgets apps' features on every auth. */
+  private declareClientFeatures(tentacleId: string) {
+    this.sendEncrypted({
+      type: 'client_features',
+      deviceId: getStore().deviceId ?? '',
+      seq: 0,
+      timestamp: new Date().toISOString(),
+      payload: { features: [PAYLOAD_FRAGMENT_FEATURE], targetDeviceId: tentacleId },
+    });
   }
 
   /**
@@ -908,6 +916,9 @@ export class KrakiWSClient {
           // broadcast. Tentacle rebuilds currentSessionByArm during that auth.
           if (joined.device.role === 'tentacle') {
             this.subscription.onTentacleAuthorityReset(joined.device.id);
+            if (this.deviceFeatures.get(joined.device.id)?.has(PAYLOAD_FRAGMENT_FEATURE)) {
+              this.declareClientFeatures(joined.device.id);
+            }
           }
           getStore().upsertDevice(joined.device);
         }

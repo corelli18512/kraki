@@ -3,92 +3,18 @@
  * The real built web app runs in Chromium against a local Head + Tentacle
  * behind a fault-injection proxy. Nothing here touches production.
  */
-import { expect, type Page, test } from '@playwright/test';
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { expect, test } from '@playwright/test';
+import {
+  connections, control, expectDelivered, fault, installSampler, openSession, pause, send, uid, writeResult,
+  type Metrics,
+} from './harness';
 
-interface Stack { controlPort: number; appPort: number; tentacleId: string }
-const stack = JSON.parse(readFileSync('/tmp/kraki-chaos/stack.json', 'utf8')) as Stack;
-const CONTROL = `http://127.0.0.1:${stack.controlPort}`;
-const RELAY = `ws://127.0.0.1:${stack.appPort}`;
-
-async function control(method: 'GET' | 'POST', path: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const res = await fetch(`${CONTROL}${path}`, { method, headers: { 'content-type': 'application/json' }, ...(body && { body: JSON.stringify(body) }) });
-  return (await res.json()) as Record<string, unknown>;
-}
-const fault = (patch: Record<string, unknown>) => control('POST', '/fault', { link: 'app', ...patch });
-const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
-async function connections(): Promise<number> {
-  return (((await control('GET', '/stats')).app as { total: number }).total);
-}
-
-/** Samples what the user sees, in the page, every 200 ms. */
-function installSampler(): void {
-  const w = window as unknown as { __k: { failedEver: boolean; reconnectingEver: boolean; blockedEver: boolean } };
-  w.__k = { failedEver: false, reconnectingEver: false, blockedEver: false };
-  setInterval(() => {
-    if (document.querySelector('[aria-label="Not delivered. Retry or delete"]')) w.__k.failedEver = true;
-    if (document.body.innerText.includes('Reconnecting')) w.__k.reconnectingEver = true;
-    if (document.querySelector('[role="alertdialog"]')) w.__k.blockedEver = true;
-  }, 200);
-}
-
-async function openSession(page: Page): Promise<string> {
-  await control('POST', '/heal');
-  const { sessionId } = await control('POST', '/session') as { sessionId: string };
-  await page.goto('/');
-  await page.evaluate(() => localStorage.clear());
-  const { token } = await control('POST', '/pairing-token') as { token: string };
-  await page.goto(`/?relay=${encodeURIComponent(RELAY)}&token=${token}`);
-  await expect(page.getByText('Chaos Tentacle').first()).toBeVisible({ timeout: 20_000 });
-  await page.goto(`/session/${sessionId}`);
-  await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 20_000 });
-  await page.waitForTimeout(1_000);
-  await page.evaluate(installSampler);
-  return sessionId;
-}
-
-async function send(page: Page, text: string): Promise<void> {
-  const box = page.getByRole('textbox', { name: 'Send a message…' });
-  await box.fill(text);
-  await box.press('Enter');
-}
-
-type Metrics = Record<string, unknown>;
 const results: Record<string, Metrics> = {};
-
-/** Every text reaches the agent exactly once; the page shows no failure. */
-async function expectDelivered(page: Page, sessionId: string, texts: string[], withinMs: number, m: Metrics): Promise<void> {
-  const start = Date.now();
-  let received: Record<string, number> = {};
-  while (Date.now() - start < withinMs) {
-    received = (await control('GET', `/ledger?sessionId=${sessionId}`)).received as Record<string, number>;
-    const pending = await page.locator('.krow-user.is-sending').count();
-    if (texts.every((t) => received[t]) && pending === 0) break;
-    await pause(250);
-  }
-  m.settleMs = Date.now() - start;
-  await pause(1_000);
-  received = (await control('GET', `/ledger?sessionId=${sessionId}`)).received as Record<string, number>;
-  const k = await page.evaluate(() => (window as unknown as { __k: Record<string, boolean> }).__k);
-  Object.assign(m, k, {
-    lost: texts.filter((t) => !received[t]),
-    duplicated: texts.filter((t) => (received[t] ?? 0) > 1),
-    stillSending: await page.locator('.krow-user.is-sending').count(),
-  });
-  expect(m.lost, 'G1: every input reaches the agent').toEqual([]);
-  expect(m.duplicated, 'G2: exactly once').toEqual([]);
-  expect(m.stillSending, 'G1/G4: all confirmed').toBe(0);
-  expect(k.failedEver, 'G3: no "Not delivered" shown').toBe(false);
-  expect(k.blockedEver, 'G4: the app is never blocked by a modal').toBe(false);
-}
-
-const uid = () => Math.random().toString(36).slice(2, 8);
 
 test.describe('web network resilience', () => {
   test.afterEach(async ({}, info) => {
     await control('POST', '/heal');
-    mkdirSync('/tmp/kraki-chaos/results', { recursive: true });
-    writeFileSync(`/tmp/kraki-chaos/results/web_${info.title.split(' ')[0]}.json`, JSON.stringify(results[info.title] ?? {}, null, 2));
+    writeResult(info.title.split(' ')[0], results[info.title] ?? {});
   });
 
   test('W0 healthy baseline', async ({ page }) => {
@@ -168,5 +94,25 @@ test.describe('web network resilience', () => {
     await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 20_000 });
     await page.evaluate(installSampler);
     await expectDelivered(page, sid, texts, 30_000, m);
+  });
+
+  test('W6 reload with an unconfirmed input, then the Tentacle reconnects', async ({ page }) => {
+    // Soak seed 2003: the Tentacle's greeting after its own reconnect carried
+    // no features, so the restored input was judged unsafe to resend and
+    // left "Not delivered" — never delivered.
+    const m: Metrics = (results['W6 reload with an unconfirmed input, then the Tentacle reconnects'] = {});
+    const sid = await openSession(page);
+    await fault({ refuse: true });
+    await control('POST', '/reset', { link: 'app' });
+    const texts = [`w6-${uid()}`];
+    await send(page, texts[0]);
+    await pause(2_000);
+    await control('POST', '/heal');
+    await page.reload();
+    await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 20_000 });
+    await page.evaluate(installSampler);
+    await pause(3_000);
+    await control('POST', '/reset', { link: 'tentacle' });
+    await expectDelivered(page, sid, texts, 90_000, m);
   });
 });
