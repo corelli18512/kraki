@@ -122,7 +122,7 @@ async function heapMb(page: Page): Promise<number> {
 test.describe('web soak', () => {
   test.skip(!SOAK_MINUTES, 'needs KRAKI_SOAK_MINUTES');
 
-  test('S1 randomized soak', async ({ page }) => {
+  test('S1 randomized soak', async ({ page }, info) => {
     test.setTimeout(SOAK_MINUTES * 60_000 + 6 * 60_000);
     const seed = Number(process.env.CHAOS_SEED ?? Date.now() % 100_000);
     const random = rng(seed);
@@ -220,7 +220,7 @@ test.describe('web soak', () => {
       const failedAt = m.failedAt as Record<string, { at: number }> | undefined;
       for (const v of Object.values(failedAt ?? {})) (v as Record<string, number>).atS = (v.at - t0) / 1000;
       m.sendLog = Object.entries({ ...carried.sentAt, ...(await harvest(page)).sentAt }).map(([t, at]) => [(at - t0) / 1000, t]);
-      writeFileSync('/tmp/kraki-chaos/results/soak-timeline.json', JSON.stringify(await control('GET', '/timeline')));
+      writeFileSync(`/tmp/kraki-chaos/results/soak-timeline-${info.repeatEachIndex}.json`, JSON.stringify(await control('GET', '/timeline')));
     }
     expect(carried.failedEver, 'G3: no "Not delivered" before any reload').toBe(false);
     expect(carried.blockedEver, 'G4: never blocked before any reload').toBe(false);
@@ -232,5 +232,5 @@ test.describe('web soak', () => {
     expect((m.heapEndMb as number) - (m.heapStartMb as number), 'JS heap growth (MB)').toBeLessThan(64);
   });
 
-  test.afterEach(() => writeResult('S1', results.S1 ?? {}));
+  test.afterEach(({}, info) => writeResult(info.repeatEachIndex ? `S1-${info.repeatEachIndex}` : 'S1', results.S1 ?? {}));
 });
