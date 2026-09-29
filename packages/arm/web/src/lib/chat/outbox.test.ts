@@ -101,6 +101,27 @@ describe('outbox', () => {
     expect(outbox.forSession('s')[0].state).toBe('failed');
   });
 
+  it('a busy link pauses the failure clock but never delays a resend', () => {
+    outbox.setConfirmationTimeout(30_000);
+    let busy = true;
+    const resent: Record<string, unknown>[] = [];
+    outbox.configure({
+      send: async (msg) => { resent.push(msg); return true; },
+      isDeliveryPathUp: () => true,
+      isLinkBusy: () => busy,
+      acceptsResend: () => true,
+    });
+    outbox.send('s', 'hi');
+    let t = run(Date.now(), 120);
+    expect(outbox.forSession('s')[0].state).toBe('sending'); // busy: not stalled
+    // A restored / re-offered input goes out at once even while busy.
+    outbox.resendUnconfirmed(() => true);
+    expect(resent.length).toBe(2);
+    busy = false;
+    t = run(t, 31);
+    expect(outbox.forSession('s')[0].state).toBe('failed');
+  });
+
   it('a throttled background tick counts at most 2 s', () => {
     outbox.setConfirmationTimeout(30_000);
     outbox.send('s', 'hi');

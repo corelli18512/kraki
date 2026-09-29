@@ -265,10 +265,10 @@ jobs:
           KRAKI_PW_CHANNEL: chrome
           KRAKI_NETEM: '1'
           KRAKI_SOAK_MINUTES: '5'
-          CHAOS_SEED: '2001' # TEMP: old soak harness, seeds 2001-2003, fixed product
+          CHAOS_SEED: ${{ github.run_number }}
         run: |
           google-chrome --version
-          bash scripts/chaos/run-web.sh -g S1 --repeat-each 3
+          bash scripts/chaos/run-web.sh
 
       - name: Upload resilience evidence
         if: always()

@@ -416,6 +416,41 @@ final class MessageProviderHeadTests: XCTestCase {
     }
 }
 
+@MainActor
+final class DeviceGreetingFeaturesTests: XCTestCase {
+    /// Soak finding (seed 2003): the Tentacle's broadcast greeting after its
+    /// own reconnect had no `features`; treating that as "none" stopped
+    /// automatic re-sends of unconfirmed inputs.
+    func testGreetingWithoutFeaturesKeepsKnownFeatures() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-greeting-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
+        let app = AppState(testDatabase: database)
+        let router = MessageRouter(appState: app)
+
+        func greet(_ deviceId: String, features: [String]?) throws {
+            var payload: [String: Any] = ["name": "Mac"]
+            if let features { payload["features"] = features }
+            let data = try JSONSerialization.data(withJSONObject: [
+                "type": "device_greeting", "deviceId": deviceId, "seq": 0,
+                "timestamp": "2026-09-29T00:00:00Z", "payload": payload,
+            ])
+            router.handleDataMessage(data)
+        }
+
+        try greet("dev-t", features: ["idempotent_input", "fragments"])
+        XCTAssertEqual(app.deviceStore.deviceFeatures["dev-t"], ["idempotent_input", "fragments"])
+        try greet("dev-t", features: nil)
+        XCTAssertEqual(app.deviceStore.deviceFeatures["dev-t"], ["idempotent_input", "fragments"],
+                       "a greeting without features must not erase them")
+        try greet("dev-t", features: [])
+        XCTAssertEqual(app.deviceStore.deviceFeatures["dev-t"], [], "an explicit list still replaces them")
+        try greet("dev-old", features: nil)
+        XCTAssertEqual(app.deviceStore.deviceFeatures["dev-old"], [], "never advertised → an older Tentacle")
+    }
+}
+
 final class ProducerMessageDecoderTests: XCTestCase {
 
     func testDecodeAgentMessage() {

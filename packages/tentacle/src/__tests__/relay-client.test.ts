@@ -1384,6 +1384,24 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
+  it('every greeting (unicast to a joining app and the broadcast after its own reconnect) carries the same features', () => {
+    const { ws, cleanup } = buildClientWithStore();
+    try {
+      // Soak finding: the broadcast (sent on every Tentacle auth) had no
+      // features, so apps concluded this Tentacle neither deduplicates nor
+      // fragments, and stopped re-sending unconfirmed inputs.
+      (ws as unknown as { emit(e: string, d: Buffer): void }).emit('message', Buffer.from(JSON.stringify({
+        type: 'auth_ok', deviceId: 'dev-tentacle', authMethod: 'open',
+        devices: [{ id: 'consumer-dev', name: 'App', role: 'app', online: true, encryptionKey: 'k' }],
+      })));
+      const greetings = decodePulseSends(ws.sent).filter((m) => m.type === 'device_greeting');
+      expect(greetings.length).toBeGreaterThanOrEqual(2);
+      for (const g of greetings) {
+        expect((g.payload as { features?: string[] }).features).toEqual(expect.arrayContaining(['idempotent_input', 'fragments']));
+      }
+    } finally { cleanup(); }
+  });
+
   it('re-echoes the stored user_message when a client retries an input it already sent', async () => {
     const { ws, sm, adapter, cleanup } = buildClientWithStore();
     try {

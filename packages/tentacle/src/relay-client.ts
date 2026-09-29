@@ -3556,13 +3556,20 @@ export class RelayClient {
       deviceId: this.authInfo?.deviceId ?? '',
       seq: ++this.seqCounter,
       timestamp: new Date().toISOString(),
-      payload: {
-        name: this.options.device.name,
-        kind: this.options.device.kind,
-        agents: this.options.device.capabilities?.agents,
-        version: this.options.version,
-      },
+      payload: this.greetingPayload(),
     } as ProducerMessage);
+  }
+
+  /** The one greeting payload. Apps read `features` from whichever greeting
+   *  arrived last, so every greeting must carry all of them. */
+  private greetingPayload() {
+    return {
+      name: this.options.device.name,
+      kind: this.options.device.kind,
+      agents: this.options.device.capabilities?.agents,
+      version: this.options.version,
+      features: ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE],
+    };
   }
 
   /**
@@ -3574,13 +3581,7 @@ export class RelayClient {
       deviceId: this.authInfo?.deviceId ?? '',
       seq: ++this.seqCounter,
       timestamp: new Date().toISOString(),
-      payload: {
-        name: this.options.device.name,
-        kind: this.options.device.kind,
-        agents: this.options.device.capabilities?.agents,
-        version: this.options.version,
-        features: ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE],
-      },
+      payload: this.greetingPayload(),
     };
     this.sendReliableUnicastTo(targetDeviceId, compactPubKey, greeting);
   }

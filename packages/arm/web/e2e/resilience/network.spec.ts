@@ -95,4 +95,24 @@ test.describe('web network resilience', () => {
     await page.evaluate(installSampler);
     await expectDelivered(page, sid, texts, 30_000, m);
   });
+
+  test('W6 reload with an unconfirmed input, then the Tentacle reconnects', async ({ page }) => {
+    // Soak seed 2003: the Tentacle's greeting after its own reconnect carried
+    // no features, so the restored input was judged unsafe to resend and
+    // left "Not delivered" — never delivered.
+    const m: Metrics = (results['W6 reload with an unconfirmed input, then the Tentacle reconnects'] = {});
+    const sid = await openSession(page);
+    await fault({ refuse: true });
+    await control('POST', '/reset', { link: 'app' });
+    const texts = [`w6-${uid()}`];
+    await send(page, texts[0]);
+    await pause(2_000);
+    await control('POST', '/heal');
+    await page.reload();
+    await expect(page.locator('[data-chat-scroll]')).toBeVisible({ timeout: 20_000 });
+    await page.evaluate(installSampler);
+    await pause(3_000);
+    await control('POST', '/reset', { link: 'tentacle' });
+    await expectDelivered(page, sid, texts, 90_000, m);
+  });
 });

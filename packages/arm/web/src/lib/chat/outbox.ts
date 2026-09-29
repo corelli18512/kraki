@@ -42,8 +42,12 @@ interface OutboxDeps {
   /** Hand a consumer message to transport; resolves false when it could not
    *  be sent (no key / no target). */
   send: (msg: Record<string, unknown>) => Promise<boolean>;
-  /** Relay connected and live, and the session's device online. */
+  /** Relay connected and live, and the session's device online: an input
+   *  can go out now. */
   isDeliveryPathUp: (sessionId: string) => boolean;
+  /** Payload arrived recently: an echo may be queued behind it, so time does
+   *  not count as stalled. */
+  isLinkBusy?: () => boolean;
   /** The session's Tentacle deduplicates inputs (`undefined`: not known yet). */
   acceptsResend?: (sessionId: string) => boolean | undefined;
 }
@@ -140,7 +144,7 @@ export function checkDeadlines(now = Date.now()): void {
       continue;
     }
     const stall = stalls.get(entry.clientId);
-    if (!stall || !deps?.isDeliveryPathUp(entry.sessionId)) continue;
+    if (!stall || !deps?.isDeliveryPathUp(entry.sessionId) || deps.isLinkBusy?.()) continue;
     stall.stalledMs += step;
     if (!stall.resent && stall.stalledMs >= confirmationTimeoutMs / 2 && deps.acceptsResend?.(entry.sessionId) === true) {
       // Maybe lost on the way (e.g. a socket that died with it): offer it
@@ -184,6 +188,11 @@ function newClientId(): string {
 export const outbox = {
   configure(next: OutboxDeps): void {
     deps = next;
+  },
+
+  /** Test hook. */
+  depsForTesting(): OutboxDeps | null {
+    return deps;
   },
 
   /** Test hook. */

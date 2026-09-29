@@ -891,7 +891,11 @@ final class MessageRouter {
         if let version = payload?["version"] as? String {
             appState.deviceStore.setDeviceVersion(deviceId, version: version)
         }
-        let features = payload?["features"] as? [String] ?? []
+        // A greeting without `features` says nothing about them (some Tentacle
+        // builds omit them from the broadcast after their own reconnect):
+        // keep what this Tentacle already told us. Never seen any → older.
+        let features = payload?["features"] as? [String]
+            ?? Array(appState.deviceStore.deviceFeatures[deviceId] ?? [])
         appState.deviceStore.setDeviceFeatures(deviceId, features: features)
         if features.contains(PayloadFragments.feature) { declareClientFeatures(to: deviceId) }
         if features.contains("idempotent_input") {
