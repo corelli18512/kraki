@@ -459,6 +459,59 @@ function parseContext(s: string): number {
   return Number.isFinite(n) ? n : 200_000;
 }
 
+/** A cold pi start right after login can exceed this; the adapter retries. */
+const PI_LIST_MODELS_TIMEOUT_MS = 15_000;
+/** Backoff for retrying a failed `--list-models`; the last delay repeats. */
+const PI_LIST_MODELS_RETRY_DELAYS_MS = [10_000, 30_000, 60_000, 120_000, 300_000];
+
+export interface PiListModelsError extends Error {
+  timedOut?: boolean;
+  exitCode?: number | null;
+  signal?: NodeJS.Signals | null;
+  stdoutTail?: string;
+  stderrTail?: string;
+}
+
+/** Run `pi --list-models` asynchronously. On failure the error carries the
+ *  elapsed outcome and the tail of whatever pi printed, so a slow or stuck
+ *  start is diagnosable instead of a bare `ETIMEDOUT`. */
+export function runPiListModels(cliPath: string, timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cliPath, ['--list-models'], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let settled = false;
+    const tail = (text: string) => text.slice(-600).trim() || undefined;
+    const fail = (message: string, extra: Partial<PiListModelsError>) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const err = new Error(message) as PiListModelsError;
+      Object.assign(err, extra, { stdoutTail: tail(stdout), stderrTail: tail(stderr) });
+      reject(err);
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+      fail(`pi --list-models timed out after ${timeoutMs}ms`, { timedOut: true });
+    }, timeoutMs);
+    child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+    child.on('error', (e) => fail(`pi --list-models failed to start: ${e.message}`, {}));
+    child.on('close', (code, signal) => {
+      if (timedOut || settled) return;
+      if (code !== 0) {
+        fail(`pi --list-models exited with ${code ?? signal}`, { exitCode: code, signal });
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(stdout);
+    });
+  });
+}
+
 function resolveDefaultModel(models: PiModelRow[]): string {
   if (models.length === 0) return 'deepseek/deepseek-v4-pro';
   // Prefer a pro/large model as default, then the first model
@@ -598,6 +651,8 @@ export function queryPiCatalog(cliPath: string, timeoutMs = 15_000): Promise<PiC
 
 export class PiAdapter extends AgentAdapter {
   private cliPath: string;
+  private readonly modelListTimeoutMs: number;
+  private readonly modelListRetryDelaysMs: number[];
   private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
   private readonly promptWatchdog: PromptWatchdogOptions;
   private sessions = new Map<string, PiSession>();
@@ -616,9 +671,14 @@ export class PiAdapter extends AgentAdapter {
     attachmentStore?: import('../attachment-store.js').AttachmentStore;
     /** Test-only timing override; production uses conservative defaults. */
     promptWatchdog?: Partial<PromptWatchdogOptions>;
+    /** Test-only: `--list-models` timeout and retry backoff. */
+    modelListTimeoutMs?: number;
+    modelListRetryDelaysMs?: number[];
   }) {
     super();
     this.cliPath = opts.cliPath;
+    this.modelListTimeoutMs = opts.modelListTimeoutMs ?? PI_LIST_MODELS_TIMEOUT_MS;
+    this.modelListRetryDelaysMs = opts.modelListRetryDelaysMs ?? PI_LIST_MODELS_RETRY_DELAYS_MS;
     this.attachmentStore = opts.attachmentStore;
     this.promptWatchdog = {
       ackGraceMs: opts.promptWatchdog?.ackGraceMs ?? PROMPT_ACK_GRACE_MS,
@@ -726,6 +786,8 @@ export class PiAdapter extends AgentAdapter {
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
+    this.clearModelRetry();
     if (this.evictTimer) clearInterval(this.evictTimer);
     for (const s of this.sessions.values()) s.proc.kill();
     this.sessions.clear();
@@ -1767,7 +1829,15 @@ export class PiAdapter extends AgentAdapter {
     }));
   }
 
+  /** Raw `--list-models` catalog. Only a successful read is cached: a failed
+   *  read (e.g. pi is slow right after login while the machine is busy) must
+   *  not leave the agent with no models until the daemon restarts. */
   private cachedModels: PiModelRow[] | null = null;
+  private modelsLoad: Promise<PiModelRow[] | null> | null = null;
+  private modelRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private modelRetryAttempt = 0;
+  private modelListFailed = false;
+  private stopped = false;
   private modelScope: string[] | undefined;
   private scopeLoaded = false;
 
@@ -1781,27 +1851,97 @@ export class PiAdapter extends AgentAdapter {
       logger.warn('Could not read Pi enabledModels; retaining last valid scope');
       if (!this.scopeLoaded) return [];
     }
-    return scopePiModels(this.fetchRawModels(), this.modelScope);
+    return scopePiModels(this.cachedModels ?? [], this.modelScope);
   }
 
-  private fetchRawModels(): PiModelRow[] {
-    if (this.cachedModels) return this.cachedModels;
+  /** Load the raw catalog without blocking the daemon's event loop. Concurrent
+   *  callers share one pi process. On failure the list stays unloaded, a
+   *  backoff retry is scheduled, and the eventual success is announced via
+   *  `onCapabilitiesChanged` so apps receive the models without a restart. */
+  private ensureRawModels(): Promise<PiModelRow[] | null> {
+    if (this.cachedModels) return Promise.resolve(this.cachedModels);
+    if (this.modelsLoad) return this.modelsLoad;
+    const load = (async () => {
+      const started = Date.now();
+      try {
+        const rows = parsePiListModels(await runPiListModels(this.cliPath, this.modelListTimeoutMs));
+        if (this.stopped) return null;
+        this.cachedModels = rows;
+        const recovered = this.modelListFailed;
+        this.modelListFailed = false;
+        this.modelRetryAttempt = 0;
+        this.clearModelRetry();
+        logger.info({ count: rows.length, elapsedMs: Date.now() - started, recovered }, 'Fetched pi model list');
+        if (recovered) this.onCapabilitiesChanged?.();
+        return rows;
+      } catch (err) {
+        const e = err as PiListModelsError;
+        this.modelListFailed = true;
+        logger.warn({
+          err: e.message,
+          elapsedMs: Date.now() - started,
+          timeoutMs: this.modelListTimeoutMs,
+          timedOut: e.timedOut ?? false,
+          exitCode: e.exitCode,
+          signal: e.signal,
+          stdoutTail: e.stdoutTail,
+          stderrTail: e.stderrTail,
+          attempt: this.modelRetryAttempt + 1,
+        }, 'Could not fetch pi model list; will retry');
+        this.scheduleModelRetry();
+        return null;
+      } finally {
+        this.modelsLoad = null;
+      }
+    })();
+    this.modelsLoad = load;
+    return load;
+  }
+
+  private scheduleModelRetry(): void {
+    if (this.stopped || this.modelRetryTimer) return;
+    const delays = this.modelListRetryDelaysMs;
+    const delay = delays[Math.min(this.modelRetryAttempt, delays.length - 1)];
+    this.modelRetryAttempt += 1;
+    this.modelRetryTimer = setTimeout(() => {
+      this.modelRetryTimer = null;
+      void this.ensureRawModels();
+    }, delay);
+    this.modelRetryTimer.unref?.();
+  }
+
+  private clearModelRetry(): void {
+    if (this.modelRetryTimer) clearTimeout(this.modelRetryTimer);
+    this.modelRetryTimer = null;
+  }
+
+  /** Synchronous last resort for session spawn paths that need a default model
+   *  before any async capabilities request completed. Same behavior as before
+   *  (blocking read), except that a failure is not cached. */
+  private ensureRawModelsSync(): void {
+    if (this.cachedModels) return;
     try {
       const stdout = execSync(`"${this.cliPath}" --list-models`, {
         encoding: 'utf-8',
-        timeout: 15_000,
+        timeout: this.modelListTimeoutMs,
         env: process.env,
       });
       this.cachedModels = parsePiListModels(stdout);
-      logger.info({ count: this.cachedModels.length }, 'Fetched pi model list');
+      logger.info({ count: this.cachedModels.length }, 'Fetched pi model list (sync)');
+      if (this.modelListFailed) {
+        this.modelListFailed = false;
+        this.clearModelRetry();
+        this.onCapabilitiesChanged?.();
+      }
     } catch (err) {
-      logger.warn({ err: (err as Error).message }, 'Could not fetch pi model list, using empty list');
-      this.cachedModels = [];
+      logger.warn({ err: (err as Error).message }, 'Could not fetch pi model list (sync)');
+      this.modelListFailed = true;
+      this.scheduleModelRetry();
     }
-    return this.cachedModels;
   }
 
   private getDefaultModel(): string {
+    this.ensureRawModelsSync();
     const models = this.fetchModels();
     if (this.modelScope?.length || !this.scopeLoaded) {
       if (!models.length) throw new Error('No Pi models match enabledModels; check Pi settings');
@@ -1811,6 +1951,7 @@ export class PiAdapter extends AgentAdapter {
   }
 
   async listModels(): Promise<string[]> {
+    await this.ensureRawModels();
     return this.fetchModels().map(m => `${m.provider}/${m.model}`);
   }
 
@@ -1843,6 +1984,7 @@ export class PiAdapter extends AgentAdapter {
   }
 
   async listModelDetails(): Promise<ModelDetail[]> {
+    await this.ensureRawModels();
     const byModel = await this.fetchEfforts();
     return this.fetchModels().map(m => {
       const id = `${m.provider}/${m.model}`;

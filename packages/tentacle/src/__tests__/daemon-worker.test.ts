@@ -40,6 +40,7 @@ const mockRelay = {
   onStateChange: null as ((state: string) => void) | null,
   onAuthenticated: null as ((info: Record<string, unknown>) => void) | null,
   onFatalError: null as ((message: string) => void) | null,
+  updateAgentCapabilities: vi.fn(),
 };
 
 vi.mock('../relay-client.js', () => ({
@@ -192,6 +193,28 @@ describe('daemon-worker: startWorker()', () => {
     expect(mockClearDaemonIdentity).toHaveBeenCalled();
     expect(mockRelay.disconnect).toHaveBeenCalled();
     expect(mockAdapter.stop).toHaveBeenCalled();
+  });
+
+  it('re-greets apps when an agent reports its model list recovered after startup', async () => {
+    const detail = { id: 'anthropic/opus', name: 'Anthropic opus' };
+    const adapterWithModels = mockAdapter as typeof mockAdapter & {
+      listModelDetails?: ReturnType<typeof vi.fn>;
+      onCapabilitiesChanged?: (() => void) | null;
+    };
+    adapterWithModels.listModelDetails = vi.fn().mockResolvedValueOnce([]).mockResolvedValue([detail]);
+    try {
+      const { shutdown } = await startWorker();
+      mockRelay.updateAgentCapabilities.mockClear();
+      expect(adapterWithModels.onCapabilitiesChanged).toBeTypeOf('function');
+
+      adapterWithModels.onCapabilitiesChanged?.();
+      await vi.waitFor(() => expect(mockRelay.updateAgentCapabilities).toHaveBeenCalledTimes(1));
+      const [agents] = mockRelay.updateAgentCapabilities.mock.calls[0] as [{ id: string; models?: string[] }[]];
+      expect(agents).toContainEqual(expect.objectContaining({ id: 'copilot', models: ['anthropic/opus'], modelDetails: [detail] }));
+      await shutdown();
+    } finally {
+      delete adapterWithModels.listModelDetails;
+    }
   });
 
   it('exits if no config found', async () => {
