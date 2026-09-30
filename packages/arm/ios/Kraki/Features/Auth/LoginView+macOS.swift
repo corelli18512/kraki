@@ -164,7 +164,7 @@ struct MacEntryGateView: View {
     /// New users set up the tentacle built into the app; people who already
     /// run the standalone CLI keep signing in through it.
     private var usesBuiltInSetup: Bool {
-        tentacleCLI.isBuiltInAvailable && tentacleCLI.mode == .builtIn
+        tentacleCLI.isBuiltInAvailable && (tentacleCLI.mode == .builtIn || tentacleCLI.ownerChoicePending)
     }
 
     @ViewBuilder

@@ -83,8 +83,10 @@ final class MacLaunchCoordinator {
 
         if !servicesStarted {
             servicesStarted = true
+            // Install state decides whether a command-line install must be
+            // resolved in setup first (see below), so wait for it here.
+            await tentacleCLI.refreshInstallState()
             Task { @MainActor in
-                await tentacleCLI.refreshInstallState()
                 await tentacleCLI.refreshDaemonState()
                 tentacleCLI.startPolling()
             }
@@ -104,6 +106,11 @@ final class MacLaunchCoordinator {
             canEnterAuthenticatedRoot = true
         } else if mock {
             canEnterAuthenticatedRoot = true
+        } else if tentacleCLI.ownerChoicePending {
+            // A command-line install already runs Kraki and has signed in.
+            // Ask which one should run it in setup, before entering the app,
+            // instead of reusing the CLI login and asking over the chat window.
+            canEnterAuthenticatedRoot = false
         } else {
             // Keep the launch gate mounted while the app resolves its preferred
             // CLI credential. This removes the old signed-out-page flash before
@@ -375,11 +382,11 @@ struct MacApp: App {
                     )
                 } else {
                     productionRoot
-                        .modifier(ExistingCLIChoicePresenter(enabled: !launchCoordinator.isLaunchGateVisible))
+                        .modifier(ExistingCLIChoicePresenter(enabled: launchCoordinator.phase == .authenticated && !launchCoordinator.isLaunchGateVisible))
                 }
                 #else
                 productionRoot
-                    .modifier(ExistingCLIChoicePresenter(enabled: !launchCoordinator.isLaunchGateVisible))
+                    .modifier(ExistingCLIChoicePresenter(enabled: launchCoordinator.phase == .authenticated && !launchCoordinator.isLaunchGateVisible))
                 #endif
             }
                 .environment(appState)

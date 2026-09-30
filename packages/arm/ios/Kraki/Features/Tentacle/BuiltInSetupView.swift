@@ -25,6 +25,7 @@ struct BuiltInSetupView: View {
     @State private var runner = TentacleSetupRunner()
     @AppStorage(BuiltInTentacle.thisMacRoleKey) private var thisMacRole = BuiltInTentacle.ThisMacRole.undecided.rawValue
     @State private var finished = false
+    @AppStorage("tentacle.movedFromCLI") private var movedFromCLI = false
 
     /// Called once the tentacle is configured and running; the caller retries
     /// the credential discovery that moves the app into the signed-in UI.
@@ -33,6 +34,8 @@ struct BuiltInSetupView: View {
     enum Step: Equatable {
         case detecting
         case moveToApplications(AppInstallLocation)
+        /// A command-line install already runs Kraki: which one should?
+        case chooseOwner
         /// Step 1: which agents can run here + Full Disk Access. Skippable.
         case thisMac
         /// Step 2: sign in.
@@ -46,12 +49,17 @@ struct BuiltInSetupView: View {
         location: AppInstallLocation,
         configured: Bool,
         daemonState: TentacleCLIManager.DaemonState,
-        role: BuiltInTentacle.ThisMacRole
+        role: BuiltInTentacle.ThisMacRole,
+        ownerChoicePending: Bool = false,
+        movedFromCLI: Bool = false
     ) -> Step {
         if case .unknown = installState { return .detecting }
         if location != .stable { return .moveToApplications(location) }
-        // Existing installs (configured before this step existed) skip it.
-        if !configured, role == .undecided { return .thisMac }
+        if ownerChoicePending { return .chooseOwner }
+        // Existing installs (configured before this step existed) skip it;
+        // someone who just moved over from the CLI still needs it (agents and
+        // Full Disk Access for Kraki for Mac), but not a new sign-in.
+        if role == .undecided, !configured || movedFromCLI { return .thisMac }
         // Sign-in cannot be skipped yet: every Kraki client needs an account
         // today. Once a local-only mode exists (use this Mac's agents without
         // an account), make this step skippable too.
@@ -75,7 +83,9 @@ struct BuiltInSetupView: View {
             location: tentacleCLI.installLocation,
             configured: tentacleCLI.configInfo?.exists == true,
             daemonState: tentacleCLI.daemonState,
-            role: role
+            role: role,
+            ownerChoicePending: tentacleCLI.ownerChoicePending,
+            movedFromCLI: movedFromCLI
         )
     }
 
@@ -86,11 +96,26 @@ struct BuiltInSetupView: View {
                 ProgressView().controlSize(.small)
             case .moveToApplications(let location):
                 moveToApplications(location)
+            case .chooseOwner:
+                ExistingCLIChoiceView(embedded: true) { mode in
+                    if mode == .builtIn {
+                        movedFromCLI = true
+                    } else {
+                        // Keep the CLI: it is signed in, go straight in.
+                        finished = true
+                        onFinished()
+                    }
+                }
             case .thisMac:
                 ThisMacSetupStep(
                     binaryPath: tentacleCLI.builtIn.binaryPath,
-                    onContinue: { thisMacRole = BuiltInTentacle.ThisMacRole.runsAgents.rawValue },
-                    onSkip: { thisMacRole = BuiltInTentacle.ThisMacRole.remoteOnly.rawValue }
+                    stepLabel: movedFromCLI ? nil : "Step 1 of 2",
+                    onContinue: { thisMacRole = BuiltInTentacle.ThisMacRole.runsAgents.rawValue; movedFromCLI = false },
+                    onSkip: {
+                        movedFromCLI = false
+                        // Also stops a daemon the move from the CLI already started.
+                        Task { await tentacleCLI.setRunsAgentsOnThisMac(false) }
+                    }
                 )
             case .signIn:
                 signIn
@@ -155,11 +180,16 @@ struct BuiltInSetupView: View {
                     Button {
                         runner.start(binaryPath: tentacleCLI.builtIn.binaryPath)
                     } label: {
-                        Label("Sign in with GitHub", systemImage: "person.badge.key")
-                            .frame(minWidth: 180, minHeight: 24)
+                        HStack(spacing: 8) {
+                            GitHubMark().frame(width: 16, height: 16)
+                            Text("Sign in with GitHub")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .foregroundStyle(.white)
+                        .frame(minWidth: 200, minHeight: 32)
+                        .background(Color(red: 0.141, green: 0.161, blue: 0.184), in: RoundedRectangle(cornerRadius: 8)) // #24292f, same as web/iOS
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.krakiPrimary)
+                    .buttonStyle(.plain)
                     .accessibilityIdentifier("mac.setup.signIn")
                     if case .failed(let message) = runner.phase {
                         Text(message)

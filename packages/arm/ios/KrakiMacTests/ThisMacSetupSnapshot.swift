@@ -31,6 +31,17 @@ final class ThisMacSetupSnapshot: XCTestCase {
             try XCTUnwrap(rep.representation(using: .png, properties: [:]))
                 .write(to: URL(fileURLWithPath: dir).appendingPathComponent("this-mac-\(name).png"))
         }
+        let choice = VStack(spacing: 14) {
+            ExistingCLIChoiceView(embedded: true)
+        }
+        .padding(.horizontal, 22).padding(.vertical, 20)
+        .frame(width: 520)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .environment(TentacleCLIManager())
+        let r2 = ImageRenderer(content: choice); r2.scale = 2
+        let rep2 = try XCTUnwrap(NSBitmapImageRep(data: XCTUnwrap(XCTUnwrap(r2.nsImage).tiffRepresentation)))
+        try XCTUnwrap(rep2.representation(using: .png, properties: [:]))
+            .write(to: URL(fileURLWithPath: dir).appendingPathComponent("choose-owner.png"))
     }
 }
 #endif

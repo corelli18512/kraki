@@ -175,12 +175,22 @@ final class BuiltInTentacleTests: XCTestCase {
         location: AppInstallLocation = .stable,
         configured: Bool = true,
         daemon: TentacleCLIManager.DaemonState = .running(pid: 1),
-        role: BuiltInTentacle.ThisMacRole = .runsAgents
+        role: BuiltInTentacle.ThisMacRole = .runsAgents,
+        ownerChoice: Bool = false,
+        moved: Bool = false
     ) -> BuiltInSetupView.Step {
         BuiltInSetupView.step(
             installState: install, location: location, configured: configured,
-            daemonState: daemon, role: role
+            daemonState: daemon, role: role, ownerChoicePending: ownerChoice, movedFromCLI: moved
         )
+    }
+
+    func testAnExistingCLIIsResolvedInSetupFirst() {
+        // Signed-in CLI (configured) that runs the daemon: ask before anything else.
+        XCTAssertEqual(step(role: .undecided, ownerChoice: true), .chooseOwner)
+        // Moved to Kraki for Mac: agents + Full Disk Access, no new sign-in.
+        XCTAssertEqual(step(daemon: .running(pid: 1), role: .undecided, moved: true), .thisMac)
+        XCTAssertEqual(step(role: .runsAgents, moved: true), .done)
     }
 
     func testSetupStepsInOrder() {

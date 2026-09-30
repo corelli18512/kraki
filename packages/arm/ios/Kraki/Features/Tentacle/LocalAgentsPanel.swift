@@ -70,9 +70,19 @@ struct LocalAgentsPanel: View {
                 }
             }
             Spacer(minLength: 8)
+            // Installing an agent is the vendor's business: a plain link for
+            // convenience, not a call to action.
             if agent.status == .notInstalled, let url = agent.installURL {
-                Button("Install…") { NSWorkspace.shared.open(url) }
-                    .controlSize(.small)
+                Button { NSWorkspace.shared.open(url) } label: {
+                    HStack(spacing: 2) {
+                        Text("How to install")
+                        Image(systemName: "arrow.up.right").font(.system(size: 8, weight: .semibold))
+                    }
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Color.textMuted)
+                }
+                .buttonStyle(.plain)
+                .help(url.absoluteString)
             }
         }
         .padding(.vertical, 4)

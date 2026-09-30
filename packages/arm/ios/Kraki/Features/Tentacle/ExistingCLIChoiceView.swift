@@ -13,14 +13,22 @@ struct ExistingCLIChoiceView: View {
     @Environment(TentacleCLIManager.self) private var tentacleCLI
     @State private var switching: TentacleMode?
 
+    /// Shown inside the setup card (no logo, card supplies padding) rather
+    /// than as a sheet over the app.
+    var embedded = false
+    /// Called after the choice has been applied.
+    var onChosen: (TentacleMode) -> Void = { _ in }
+
     var body: some View {
         VStack(spacing: 18) {
             VStack(spacing: 8) {
-                Image("KrakiLogo")
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: 56, height: 56)
-                    .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                if !embedded {
+                    Image("KrakiLogo")
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 56, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                }
                 Text("Kraki is already set up on this Mac")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.textPrimary)
@@ -59,8 +67,9 @@ struct ExistingCLIChoiceView: View {
                 .font(.system(size: 10.5))
                 .foregroundStyle(Color.textMuted)
         }
-        .padding(26)
-        .frame(width: 440)
+        .padding(embedded ? 0 : 26)
+        .frame(width: embedded ? nil : 440)
+        .frame(maxWidth: embedded ? 460 : nil)
         .interactiveDismissDisabled()
     }
 
@@ -76,6 +85,7 @@ struct ExistingCLIChoiceView: View {
             Task {
                 await tentacleCLI.switchMode(to: mode)
                 switching = nil
+                if tentacleCLI.lastError == nil { onChosen(mode) }
             }
         } label: {
             HStack(alignment: .top, spacing: 12) {

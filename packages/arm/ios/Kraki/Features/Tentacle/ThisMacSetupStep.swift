@@ -14,6 +14,8 @@ import SwiftUI
 
 struct ThisMacSetupStep: View {
     let binaryPath: String
+    /// "Step 1 of 2" for new users; nil when there is no sign-in step after.
+    var stepLabel: String? = "Step 1 of 2"
     let onContinue: () -> Void
     let onSkip: () -> Void
 
@@ -21,8 +23,9 @@ struct ThisMacSetupStep: View {
     @State private var hasFullDiskAccess: Bool
     private let pollsFullDiskAccess: Bool
 
-    init(binaryPath: String, onContinue: @escaping () -> Void, onSkip: @escaping () -> Void) {
+    init(binaryPath: String, stepLabel: String? = "Step 1 of 2", onContinue: @escaping () -> Void, onSkip: @escaping () -> Void) {
         self.binaryPath = binaryPath
+        self.stepLabel = stepLabel
         self.onContinue = onContinue
         self.onSkip = onSkip
         _check = State(initialValue: LocalAgentsCheck())
@@ -44,7 +47,7 @@ struct ThisMacSetupStep: View {
 
     var body: some View {
         StepCard(
-            step: "Step 1 of 2",
+            step: stepLabel,
             title: "Set up this Mac",
             detail: "Kraki runs the coding agents installed on this Mac, so you can use them from here, your phone and your other computers."
         ) {
