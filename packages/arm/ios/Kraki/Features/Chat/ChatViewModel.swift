@@ -127,6 +127,7 @@ final class ChatViewModel {
         cachedMessages = TurnSpineProjection.project(
             Self.presentingQuestions(filteredMessages, pending: pendingInputsRaw, atHead: windowAtHead)
         ).filter(Self.shouldRender)
+        appState?.noteConversationRendered(sessionId, hasContent: !cachedMessages.isEmpty)
         #if KRAKI_DIAG
         let count = cachedMessages.count
         let first = cachedMessages.first?.seq ?? 0

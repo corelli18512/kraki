@@ -89,6 +89,34 @@ describe('off-band diagnostics', () => {
     const event = { ev: 'ws.state', seq: 1, t: Date.now(), m: 10, d: { source: 'pulse_progress_timeout', count: 3 } };
     expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, events: [event] })))).status).toBe(204);
   });
+  it('accepts metadata-only stability summaries and rejects free text in their tags', async () => {
+    const f = await fixture();
+    const ready = { ev: 'ready.summary', seq: 1, t: Date.now(), m: 10, d: {
+      kind: 'warm', outcome: 'ready', path: 'wifi', attempt: 0, gap: 3, viewing: true, backgroundMs: 61000,
+      firstContentMs: 0, wsOpenMs: 180, authedMs: 420, listFreshMs: 700, viewCurrentMs: 950 } };
+    const outage = { ev: 'outage.summary', seq: 2, t: Date.now(), m: 11, d: {
+      source: 'transport_error', code: '-1005', outcome: 'recovered', path: 'cellular', attempt: 2, detectMs: 1200,
+      reconnectMs: 3100, catchupMs: 400, impactMs: 4700, visibleMs: 2600, pathChanged: true, afterWake: false } };
+    const send = { ev: 'send.summary', seq: 3, t: Date.now(), m: 12, d: {
+      kind: 'voice', outcome: 'delivered', shown: 'failed', shownMs: 4200, falseAlarm: false, manualRetries: 1,
+      autoResends: 0, restored: 0, offline: false, attachments: 0, textLength: 478, background: true,
+      confirmMs: 16_000, correctionMs: 2100, cause: 'correction' } };
+    const voice = { ev: 'voice.summary', seq: 4, t: Date.now(), m: 13, d: {
+      outcome: 'failed', stage: 'recording', cause: 'lease_denied_quota_exhausted', confirmed: false, textLength: 0,
+      warm: true, count: 0, startMs: 120, recordMs: 5300 } };
+    const open = { ev: 'open.summary', seq: 5, t: Date.now(), m: 14, d: { outcome: 'current', gap: 2, firstContentMs: 40, viewCurrentMs: 600 } };
+    const resend = { ev: 'outbox.state', seq: 6, t: Date.now(), m: 15, d: { clientId: randomUUID(), phase: 'resend_stalled' } };
+    expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, events: [ready, outage, send, voice, open, resend] })))).status).toBe(204);
+    expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, events: [{ ...voice, d: { ...voice.d, cause: 'The voice service timed out.' } }] })))).status).toBe(400);
+    for (const bad of [
+      { ...ready, d: { ...ready.d, kind: 'lukewarm' } },
+      { ...outage, d: { ...outage.d, code: 'connection reset by peer' } },
+      { ...outage, d: { ...outage.d, path: 'Home-WiFi-5G' } },
+      { ...ready, d: { ...ready.d, source: 'x' } },
+    ]) {
+      expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, events: [bad] })))).status).toBe(400);
+    }
+  });
   it('accepts the client unconfirmed outbox state without arbitrary phase strings', async () => {
     const f = await fixture();
     const event = { ev: 'outbox.state', seq: 1, t: Date.now(), m: 10, d: { clientId: randomUUID(), phase: 'unconfirmed' } };

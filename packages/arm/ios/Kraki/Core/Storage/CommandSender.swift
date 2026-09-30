@@ -156,6 +156,10 @@ final class CommandSender {
         if !send(["type": "send_input", "payload": payload], sessionId: sessionId) {
             undispatched.insert(clientId)
         }
+        appState?.sendMetrics.created(
+            clientId, kind: answerTo != nil ? .answer : delivery == .steer ? .steer : .typed,
+            textLength: text.utf8.count, attachments: attachments?.count ?? 0,
+            pathUp: isDeliveryPathUp(sessionId))
         #if KRAKI_DIAG
         diagAccepted = true
         KrakiDiag.record(.outbox, session: sessionId, [.clientId: .id(clientId), .phase: .tag("created")])
@@ -245,6 +249,8 @@ final class CommandSender {
                                                   attachments: attachments, delivery: delivery,
                                                   answerTo: answerTo, state: .correcting)
         pending.payload["originalText"] = AnyCodable(text)
+        appState?.sendMetrics.created(clientId, kind: .voice, textLength: text.utf8.count,
+                                      attachments: attachments?.count ?? 0, pathUp: isDeliveryPathUp(sessionId))
         var bucket = outbox[sessionId] ?? [:]
         bucket[clientId] = pending
         outbox[sessionId] = bucket
@@ -297,10 +303,11 @@ final class CommandSender {
         var payload = outboundPayloads[clientId] ?? ["clientId": clientId]
         payload["text"] = text
         outboundPayloads[clientId] = payload
+        appState?.sendMetrics.dispatched(clientId)
         // A transient transport refusal queues it (sent on reconnect), like a
         // typed message; only a signed-out app fails it.
         guard isSignedIn else {
-            setPendingState(sessionId, clientId: clientId, .failed)
+            setPendingState(sessionId, clientId: clientId, .failed, cause: "signed_out")
             return false
         }
         if !send(["type": "send_input", "payload": payload], sessionId: sessionId) {
@@ -325,7 +332,7 @@ final class CommandSender {
         var payload = outboundPayloads[clientId] ?? ["clientId": clientId]
         payload["text"] = text
         outboundPayloads[clientId] = payload
-        setPendingState(sessionId, clientId: clientId, .failed)
+        setPendingState(sessionId, clientId: clientId, .failed, cause: "correction")
     }
 
     // MARK: - Delivery state
@@ -334,9 +341,12 @@ final class CommandSender {
         message.payload["localState"]?.stringValue.flatMap(PendingState.init(rawValue:)) ?? .sending
     }
 
-    private func setPendingState(_ sessionId: String, clientId: String, _ state: PendingState) {
+    private func setPendingState(_ sessionId: String, clientId: String, _ state: PendingState, cause: String? = nil) {
         guard var bucket = outbox[sessionId], var message = bucket[clientId] else { return }
         guard message.payload["localState"]?.stringValue != state.rawValue else { return }
+        appState?.sendMetrics.state(clientId, state.rawValue,
+                                    cause: cause ?? (state == .unconfirmed ? "stalled" : nil),
+                                    inBackground: appState?.isInBackground ?? false)
         #if KRAKI_DIAG
         KrakiDiag.record(.outbox, session: sessionId, [.clientId: .id(clientId), .phase: .tag(state.rawValue)])
         #endif
@@ -435,6 +445,7 @@ final class CommandSender {
         }
         undispatched.remove(clientId)
         outboundPayloads[clientId] = payload
+        appState?.sendMetrics.retried(clientId, manual: false)
         return true
     }
 
@@ -499,8 +510,9 @@ final class CommandSender {
         if outboundPayloads[clientId] == nil, message.payload["delivery"]?.stringValue == "steer" {
             payload["delivery"] = "steer"
         }
+        appState?.sendMetrics.retried(clientId, manual: true)
         guard send(["type": "send_input", "payload": payload], sessionId: sessionId) else {
-            setPendingState(sessionId, clientId: clientId, .failed)
+            setPendingState(sessionId, clientId: clientId, .failed, cause: "refused")
             return false
         }
         outboundPayloads[clientId] = payload
@@ -513,6 +525,7 @@ final class CommandSender {
     @discardableResult
     func discardPending(sessionId: String, clientId: String) -> String? {
         let text = outbox[sessionId]?[clientId]?.content
+        appState?.sendMetrics.finished(clientId, .deleted)
         clearPending(sessionId, clientId: clientId)
         return text
     }
@@ -568,6 +581,8 @@ final class CommandSender {
         outboundPayloads.removeValue(forKey: clientId)
         undispatched.remove(clientId)
         needsResend.remove(clientId)
+        // No-op when already finished as deleted; otherwise its echo landed.
+        appState?.sendMetrics.finished(clientId, .delivered)
         persistOutbox()
     }
 
@@ -575,6 +590,7 @@ final class CommandSender {
     /// session deletion / explicit cancel-all.
     func clearAllPending(_ sessionId: String) {
         for clientId in (outbox[sessionId].map { Array($0.keys) } ?? []) {
+            appState?.sendMetrics.finished(clientId, .cleared)
             confirmationTasks.removeValue(forKey: clientId)?.cancel()
             outboundPayloads.removeValue(forKey: clientId)
         }
@@ -670,6 +686,12 @@ final class CommandSender {
             if let delivery = item.delivery { payload["delivery"] = AnyCodable(delivery) }
             if let answerTo = item.answerTo { payload["answerTo"] = AnyCodable(answerTo) }
             if let attachments = item.attachments { payload["attachments"] = AnyCodable(attachments) }
+            appState?.sendMetrics.restored(
+                item.clientId,
+                kind: item.state == "correcting" ? .voice : item.answerTo != nil ? .answer
+                    : item.delivery == "steer" ? .steer : .typed,
+                createdAt: item.timestamp.flatMap { ISO8601.parse($0) },
+                failed: item.state == "failed" || item.state == "correcting")
             var bucket = outbox[item.sessionId] ?? [:]
             bucket[item.clientId] = ChatMessage(
                 type: "pending_input", seq: 0, sessionId: item.sessionId, deviceId: nil,
