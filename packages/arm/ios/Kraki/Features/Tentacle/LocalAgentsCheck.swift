@@ -42,7 +42,28 @@ final class LocalAgentsCheck {
     private(set) var isRunning = false
     private(set) var failure: String?
 
-    var readyCount: Int { agents.filter { $0.status == .ready }.count }
+    var readyCount: Int { displayedAgents.filter { $0.status == .ready }.count }
+
+    /// Agents this Mac's running Kraki already serves, with their model count.
+    /// The daemon is the ground truth: a one-off check can miss an agent that
+    /// is working (e.g. its sign-in lives in a Keychain item that a second,
+    /// short-lived process could not read right after login).
+    var running: [String: Int] = [:]
+
+    /// `agents` with anything the running daemon serves shown as ready.
+    var displayedAgents: [Agent] { Self.merging(agents, running: running) }
+
+    static func merging(_ agents: [Agent], running: [String: Int]) -> [Agent] {
+        agents.map { agent in
+            guard let models = running[agent.id], models > 0,
+                  agent.status == .needsLogin || agent.status == .error else { return agent }
+            var a = agent
+            a.status = .ready
+            a.models = models
+            a.hint = nil
+            return a
+        }
+    }
 
     @ObservationIgnored private var process: Process?
     @ObservationIgnored private var buffer = Data()

@@ -17,9 +17,9 @@ struct LocalAgentsPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(spacing: 0) {
-                ForEach(check.agents) { agent in
+                ForEach(check.displayedAgents) { agent in
                     agentRow(agent)
-                    if agent.id != check.agents.last?.id { Divider().opacity(0.5) }
+                    if agent.id != check.displayedAgents.last?.id { Divider().opacity(0.5) }
                 }
             }
             HStack {

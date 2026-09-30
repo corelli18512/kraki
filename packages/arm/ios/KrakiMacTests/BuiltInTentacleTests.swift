@@ -242,6 +242,19 @@ final class BuiltInTentacleTests: XCTestCase {
     func testAgentsWindowRestartsOnlyWhenTheReadySetChanged() {
         XCTAssertFalse(LocalAgentsWindow.needsRestart(ready: ["codex", "pi"], offered: ["pi", "codex"]))
         XCTAssertTrue(LocalAgentsWindow.needsRestart(ready: ["codex", "pi"], offered: ["codex"]))
-        XCTAssertTrue(LocalAgentsWindow.needsRestart(ready: ["codex"], offered: ["codex", "claude"]))
+        // A check that misses a working agent must not restart the daemon.
+        XCTAssertFalse(LocalAgentsWindow.needsRestart(ready: ["codex"], offered: ["codex", "claude"]))
+    }
+
+    func testAgentsTheDaemonServesShowAsReady() {
+        typealias C = LocalAgentsCheck
+        let agents = [
+            C.Agent(id: "copilot", name: "GitHub Copilot CLI", status: .needsLogin, hint: "x"),
+            C.Agent(id: "codex", name: "Codex", status: .needsLogin, hint: "y"),
+        ]
+        let merged = C.merging(agents, running: ["copilot": 1, "codex": 0])
+        XCTAssertEqual(merged[0].status, .ready)
+        XCTAssertNil(merged[0].hint)
+        XCTAssertEqual(merged[1].status, .needsLogin) // served but without models
     }
 }

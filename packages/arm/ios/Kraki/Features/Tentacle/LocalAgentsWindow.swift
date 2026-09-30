@@ -34,7 +34,10 @@ struct LocalAgentsWindow: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(Color.surfaceSecondary.opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .task { check.run(binaryPath: binaryPath) }
+                    .task {
+                        check.running = runningAgents
+                        check.run(binaryPath: binaryPath)
+                    }
             } else {
                 Text("Kraki's built-in tentacle isn't available in this build.")
                     .font(.system(size: 11.5))
@@ -68,21 +71,34 @@ struct LocalAgentsWindow: View {
         .onDisappear { check.cancel() }
     }
 
-    /// Restart the running daemon when its agents are out of date.
-    private func applyIfChanged() async {
+    /// What this Mac's running daemon serves: agent id → model count.
+    private var runningAgents: [String: Int] {
         guard case .running = tentacleCLI.daemonState,
-              let deviceId = tentacleCLI.configInfo?.deviceId else { return }
-        let ready = Set(check.agents.filter { $0.status == .ready }.map(\.id))
-        let offered = Set(appState.deviceStore.agents(for: deviceId).map { "\($0.id)" })
+              let deviceId = tentacleCLI.configInfo?.deviceId else { return [:] }
+        var out: [String: Int] = [:]
+        for agent in appState.deviceStore.agents(for: deviceId) {
+            out["\(agent.id)"] = agent.models?.count ?? agent.modelDetails?.count ?? 0
+        }
+        return out
+    }
+
+    /// Restart the running daemon when an agent became ready that it does not
+    /// serve yet (it only detects agents at start).
+    private func applyIfChanged() async {
+        guard case .running = tentacleCLI.daemonState else { return }
+        let ready = Set(check.displayedAgents.filter { $0.status == .ready }.map(\.id))
+        let offered = Set(runningAgents.keys)
         guard Self.needsRestart(ready: ready, offered: offered) else { return }
         applied = "Updating Kraki to use these agents…"
         await tentacleCLI.restartDaemon()
         applied = "Kraki now uses the agents that are ready."
     }
 
-    /// Pure for testing: restart only when the ready set really changed.
+    /// Pure for testing. Only a newly ready agent is worth a restart: a
+    /// restart never removes an agent the daemon can still start, and a check
+    /// that misses a working agent must not interrupt running sessions.
     static func needsRestart(ready: Set<String>, offered: Set<String>) -> Bool {
-        ready != offered
+        !ready.subtracting(offered).isEmpty
     }
 }
 
