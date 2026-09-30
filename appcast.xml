@@ -6,6 +6,26 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.49</title>
+            <pubDate>Wed, 30 Sep 2026 13:50:31 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.49</sparkle:fullReleaseNotesLink>
+            <sparkle:version>51</sparkle:version>
+            <sparkle:shortVersionString>0.2.49</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* feat(diag): stability summaries — opening, outages, sending, voice, conversation opens by @corelli18512 in https://github.com/corelli18512/kraki/pull/342
+* fix(tentacle): recover pi model list after a failed startup read by @corelli18512 in https://github.com/corelli18512/kraki/pull/341
+* fix(voice): a failed correction still sends the raw transcript by @corelli18512 in https://github.com/corelli18512/kraki/pull/343
+* Kraki for Mac includes Kraki: set up without Terminal by @corelli18512 in https://github.com/corelli18512/kraki/pull/344
+* chore(release): protocol 0.24.0 for Tentacle 0.34.0 by @corelli18512 in https://github.com/corelli18512/kraki/pull/345
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.48...mac-v0.2.49
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.49/Kraki.app.zip" length="91402835" type="application/octet-stream" sparkle:edSignature="FHIfmV4ALpBKzQIN0eAJxKOchxexGMd9llgK1qJ8W0XN4CPyZj8/YGFTXfyqdOAVhO7UGm9vOzj/3L8KJkKYAQ=="/>
+        </item>
+        <item>
             <title>0.2.48</title>
             <pubDate>Wed, 30 Sep 2026 05:04:17 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -52,31 +72,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.47/Kraki.app.zip" length="9539177" type="application/octet-stream" sparkle:edSignature="1OXQDcq8mVsv8lOhfmh6vtt969O6l0SVTgvJk7xQ6BblrzWcYcgvjFbgYhSfcUB7e92EhMCwYawPQtQ7xDi1BA=="/>
         </item>
-        <item>
-            <title>0.2.46</title>
-            <pubDate>Mon, 28 Sep 2026 11:17:28 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.46</sparkle:fullReleaseNotesLink>
-            <sparkle:version>48</sparkle:version>
-            <sparkle:shortVersionString>0.2.46</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(mac): keep correcting voice bubble and Chat stable during correction by @corelli18512 in https://github.com/corelli18512/kraki/pull/324
-* fix(mac): D1 voice start cue, 36 pt composer and stable multiline padding by @corelli18512 in https://github.com/corelli18512/kraki/pull/326
-* fix(mac): restore full session card width after overlay scroller switch by @corelli18512 in https://github.com/corelli18512/kraki/pull/327
-* feat: show_report for text-first reports; lazy, paced attachment loading by @corelli18512 in https://github.com/corelli18512/kraki/pull/325
-* fix(mac): waiting question shows its choices when the session is opened later by @corelli18512 in https://github.com/corelli18512/kraki/pull/304
-* feat(clients): show live reasoning effort on session cards by @corelli18512 in https://github.com/corelli18512/kraki/pull/310
-* chore(release): Mac 0.2.46 (48), iOS 0.1.11, Tentacle 0.33.3 by @corelli18512 in https://github.com/corelli18512/kraki/pull/328
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.45...mac-v0.2.46
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.46/Kraki.app.zip" length="9526787" type="application/octet-stream" sparkle:edSignature="tDI1yuTx12zDzrHp17EbQJNWWpZIw7DHI0YCqX3qpwEs76PQX/oO23gcXDAiMxB3W08mAkmGQm+sA2viuM+zAw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: Cd56/FMGnYCDrmBrlg+Avc37+gbNBpGPiQqCHn+1yGcKcz6MkpVrHVSrXYSe1t4IaVr35wdFyLD40EUgA1QlDw==
-length: 6790
+edSignature: eOkTvi5RaqcjWjsnJDGdAJKWvxIOTRObUd2tw3L56Zon18fQe4G2ajNc7KExOHUufY2TMP8lMACsUOy0AZNbBg==
+length: 6486
 -->
