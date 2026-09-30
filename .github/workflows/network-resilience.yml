@@ -1,11 +1,9 @@
 name: Network resilience (full)
 
 # Full G1–G10 matrix (docs/network-resilience-test-plan.md), including the long
-# outage/offline scenarios and seeded random chaos. Nightly and on demand; not a
-# merge gate. Local only: an isolated Head/Tentacle stack on the runner.
+# outage/offline scenarios and seeded random chaos. Manual only (Actions → Run
+# workflow); never scheduled, not a merge gate. Local stack on the runner.
 on:
-  schedule:
-    - cron: '17 19 * * *'
   workflow_dispatch:
     inputs:
       seed:
