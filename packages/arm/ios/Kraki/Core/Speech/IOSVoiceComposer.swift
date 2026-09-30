@@ -311,8 +311,10 @@ protocol IOSVoiceComposerHost: AnyObject {
                     host.discardVoiceInput(sessionID: sessionID, clientID: clientID)
                 }
             } else {
-                // Correction failed or can't be confirmed: keep the original,
-                // let the user choose (Retry = send original, or Delete).
+                // No usable final transcript (the recording failed or ended
+                // early): keep what was heard, let the user choose (Retry =
+                // send it, or Delete). A failed *correction* still completes
+                // with the raw transcript and is sent above.
                 host.failVoiceInput(sessionID: sessionID, clientID: clientID, text: original)
             }
         }

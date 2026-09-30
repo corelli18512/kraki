@@ -841,19 +841,25 @@ final class KrakiVoiceInputController {
             let completion = completionHandler
             let completeRaw = gatewayRawText.map { resolvedFinalText($0, gatewayRawText: $0) } ?? rawText
             let validFinal = !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            // The gateway can silently fall back to raw on corrector failure.
-            // Its current contract supplies rawText only for successful changed
-            // correction. For unchanged correction, require a complete matching
-            // stream, not merely a first/partial delta. Unknown finals stay draft.
-            // The gateway returns the corrector's output trimmed, while deltas
-            // carry the untrimmed stream; compare trimmed forms.
+            // Gateway contract: `rawText` accompanies the final only when the
+            // corrector succeeded AND changed the text. Without it the final
+            // *is* the complete raw ASR transcript: an unchanged correction, or
+            // the gateway's fallback when the corrector failed (quota, timeout).
+            // It is never a partial correction, so it is sent as is: a failed
+            // correction must not stop the user's words from going out.
+            // Whether a correction was actually applied is only reported.
+            // (The gateway returns the corrector's output trimmed, while deltas
+            // carry the untrimmed stream; compare trimmed forms.)
             let streamedFinal = (pendingCorrectionText ?? correctionText)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let correctionConfirmed = gatewayRawText?.isEmpty == false
                 || (!streamedFinal.isEmpty
                     && streamedFinal == finalText.trimmingCharacters(in: .whitespacesAndNewlines))
-            let completed = validFinal && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && correctionConfirmed
-            metrics.finalReceived(textLength: finalText.utf8.count, correctionConfirmed: completed)
+            let completed = validFinal && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            metrics.finalReceived(textLength: finalText.utf8.count, correctionConfirmed: correctionConfirmed)
+            if !correctionConfirmed {
+                KLog.d("🎙️ [voice] stage=final correction=unconfirmed sending=raw")
+            }
             recordingCleanup(clearHandlers: true)
             state = .idle
             completion?(VoiceInputCompletion(text: validFinal ? finalText : completeRaw, rawText: completeRaw, completed: completed))
