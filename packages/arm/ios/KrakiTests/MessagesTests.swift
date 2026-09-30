@@ -907,4 +907,18 @@ final class ProducerMessageCodableTests: XCTestCase {
         XCTAssertEqual(decoded.seq, 3)
         XCTAssertEqual(decoded.message.typeString, "send_input")
     }
+
+    func testImageOnlyMessageWithoutItsImageIsShownAsUnavailable() {
+        func message(_ payload: [String: AnyCodable]) -> ChatMessage {
+            ChatMessage(type: "user_message", seq: 6, sessionId: "s", deviceId: nil, timestamp: nil, payload: payload)
+        }
+        let lost = message(["content": AnyCodable("[image]")])
+        XCTAssertTrue(lost.imageUnavailable)
+        let kept = message(["content": AnyCodable("[image]"),
+                            "attachments": AnyCodable([["type": "image", "mimeType": "image/png", "data": "AA=="]])])
+        XCTAssertFalse(kept.imageUnavailable)
+        XCTAssertFalse(message(["content": AnyCodable("hello")]).imageUnavailable)
+        let content = TKBubbleContent.make(message: lost, sessionId: "s", agent: "pi")
+        XCTAssertEqual(content.body?.string, "Image unavailable", "the message stays visible")
+    }
 }

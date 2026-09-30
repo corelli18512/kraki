@@ -206,7 +206,7 @@ private final class RealCellSizer {
             ? usable - width * TKMetrics.userLeadingGapFraction
             : usable - width * TKMetrics.trailingGapFraction
         let bodyWidth = max(80, bubbleWidth - TKMetrics.msgPadH * 2)
-        let text = t.content ?? t.result ?? t.interruptedDraft ?? ""
+        let text = t.imageUnavailable ? ChatMessage.imageUnavailableText : (t.content ?? t.result ?? t.interruptedDraft ?? "")
         let bodyHeight: CGFloat
         if text.isEmpty || text == "[image]" {
             bodyHeight = 0

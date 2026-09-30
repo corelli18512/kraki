@@ -376,6 +376,15 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     /// Content-ref typed entries in the message's `attachments` array
     /// (used for tool-produced images via `kraki-show_image`). Inline
     /// image attachments are still surfaced via `attachments`.
+    /// An image-only message ("[image]" placeholder text) whose image is no
+    /// longer on the record. Shown as a note instead of vanishing entirely.
+    var imageUnavailable: Bool {
+        guard content == "[image]" else { return false }
+        if attachments?.contains(where: { $0.type == "image" }) == true { return false }
+        return !contentRefAttachments.contains { $0.mimeType.hasPrefix("image/") }
+    }
+    static let imageUnavailableText = "_Image unavailable_"
+
     var contentRefAttachments: [ContentRef] {
         guard let arr = payload["attachments"]?.arrayValue else { return [] }
         return arr.compactMap { item -> ContentRef? in

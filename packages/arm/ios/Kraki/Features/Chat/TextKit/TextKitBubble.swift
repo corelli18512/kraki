@@ -1331,7 +1331,7 @@ final class TKBubbleContent {
         }
         // `interrupted_turn` / `turn_status` are excluded from the bubble list
         // in ChatViewModel — they render via the frozen LiveAgentBubble path.
-        let source = message.content
+        let source = message.imageUnavailable ? ChatMessage.imageUnavailableText : message.content
         let rawBody = source.flatMap { text -> NSAttributedString? in
             guard !text.isEmpty, text != "[image]" else { return nil }
             return TKMarkdown.attributed(text, cacheKey: "\(message.id):body:\(text.count)")
