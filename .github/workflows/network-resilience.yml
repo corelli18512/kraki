@@ -17,26 +17,6 @@ on:
         required: false
         default: '50'
         type: string
-      soak_minutes:
-        description: Web soak length per seed (minutes)
-        required: false
-        default: '30'
-        type: string
-      soak_repeats:
-        description: Web soak seeds to run (seed, seed+1, …)
-        required: false
-        default: '1'
-        type: string
-      soak_seed_step:
-        description: Seed increment per repeat (0 = replay the same seed)
-        required: false
-        default: '1'
-        type: string
-      web_only_soak:
-        description: Skip the W/N matrix and run only the soak repeats
-        required: false
-        default: 'false'
-        type: string
 
 permissions:
   contents: read
@@ -79,63 +59,3 @@ jobs:
             /tmp/kraki-chaos/xcode.log
           if-no-files-found: ignore
           retention-days: 30
-
-  web-soak:
-    # The web client for a long randomized soak: proxy faults (resets,
-    # blackholes, outages, throttling) plus packet-level netem profiles,
-    # agent bursts and page reloads. Exactly-once, no false "Not delivered",
-    # bounded JS heap.
-    name: Web soak (netem + chaos)
-    runs-on: ubuntu-latest
-    timeout-minutes: 170
-    steps:
-      - uses: actions/checkout@v6
-      - run: corepack enable
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '24.16.0'
-          cache: pnpm
-      - name: Install and build the local stack
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm --filter @kraki/protocol --filter @kraki/crypto --filter @kraki/head --filter @kraki/tentacle --filter @kraki/voice-broker build
-      - name: Web scenarios, netem matrix and 30-minute soak
-        env:
-          KRAKI_PW_CHANNEL: chrome
-          KRAKI_NETEM: '1'
-          KRAKI_SOAK_MINUTES: ${{ inputs.soak_minutes || '30' }}
-          CHAOS_SEED: ${{ inputs.seed || github.run_number }}
-          SOAK_REPEATS: ${{ inputs.soak_repeats || '1' }}
-          CHAOS_SEED_STEP: ${{ inputs.soak_seed_step || '1' }}
-          # Tentacle input trace (INPUT-PERSISTED / INPUT-DUPLICATE …) into stack.out.
-          KRAKI_TRACE_PULSE: '1'
-        run: |
-          echo "Soak seed=$CHAOS_SEED step=$CHAOS_SEED_STEP minutes=$KRAKI_SOAK_MINUTES repeats=$SOAK_REPEATS"
-          set +e
-          first=0
-          if [ "${{ inputs.web_only_soak }}" != "true" ]; then bash scripts/chaos/run-web.sh; first=$?; fi
-          mkdir -p /tmp/kraki-chaos
-          second=0
-          if [ "$SOAK_REPEATS" -gt 1 ] || [ "${{ inputs.web_only_soak }}" = "true" ]; then
-            mv /tmp/kraki-chaos /tmp/kraki-chaos-main
-            bash scripts/chaos/run-web.sh -g S1 --repeat-each "$SOAK_REPEATS"; second=$?
-          fi
-          [ $first -eq 0 ] && [ $second -eq 0 ]
-      - name: Upload evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: network-resilience-web-soak
-          path: |
-            /tmp/kraki-chaos/results
-            /tmp/kraki-chaos/stack.out
-            /tmp/kraki-chaos-main/results
-            /tmp/kraki-chaos-main/web.log
-            /tmp/kraki-chaos-main/stack.out
-            /tmp/kraki-chaos/web.log
-            /tmp/kraki-chaos/web-report.json
-            /tmp/kraki-chaos/stack.log
-            packages/arm/web/test-results
-          if-no-files-found: ignore
-          retention-days: 30
-

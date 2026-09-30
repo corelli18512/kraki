@@ -4,9 +4,8 @@ export default defineConfig({
   testDir: './e2e',
   // real-stack/ owns a separate config (playwright.realstack.config.ts) and needs
   // the orchestrator's control plane on :4710. Keep it out of the default run,
-  // which uses per-test random-port mock relays. resilience/ runs against the
-  // chaos stack (scripts/chaos/run-web.sh, playwright.resilience.config.ts).
-  testIgnore: ['**/real-stack/**', '**/local-stack/**', '**/resilience/**'],
+  // which uses per-test random-port mock relays.
+  testIgnore: ['**/real-stack/**', '**/local-stack/**'],
   timeout: 30000,
   retries: 1,
   use: {
