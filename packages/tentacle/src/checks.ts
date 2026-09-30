@@ -682,7 +682,7 @@ export function unregisterAppBundlePath(appPath: string): void {
         '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>' +
         '<key>CFBundleIdentifier</key><string>' + KRAKI_BUNDLE_ID + '</string>' +
         '<key>CFBundleExecutable</key><string>kraki</string>' +
-        '<key>CFBundleName</key><string>Kraki</string>' +
+        '<key>CFBundleName</key><string>Kraki CLI</string>' +
         '<key>CFBundleVersion</key><string>0</string>' +
         '</dict></plist>\n',
       );

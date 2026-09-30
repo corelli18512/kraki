@@ -123,8 +123,8 @@ async function runFdaStep(stepNum: number, total: number): Promise<void> {
   console.log(chalk.dim('    Grant Full Disk Access once so agent sessions never trigger'));
   console.log(chalk.dim('    macOS permission dialogs. It survives future updates.'));
   console.log('');
-  console.log(`    ${chalk.bold('Drag Kraki from the Finder window into the Full Disk Access list,')}`);
-  console.log(`    ${chalk.bold('then turn it on.')}`);
+  console.log(`    ${chalk.bold('Turn on “Kraki CLI” in the Full Disk Access list. If it is not')}`);
+  console.log(`    ${chalk.bold('there, drag it in from the Finder window, then turn it on.')}`);
   console.log('');
   // macOS never lists an app under Full Disk Access by itself, and Kraki.app
   // lives in a hidden folder the "+" picker can't easily reach. Open only the

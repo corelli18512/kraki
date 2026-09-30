@@ -300,7 +300,7 @@ jobs:
               <key>CFBundleIdentifier</key>
               <string>chat.kraki.cli</string>
               <key>CFBundleName</key>
-              <string>Kraki</string>
+              <string>Kraki CLI</string>
               <key>CFBundleExecutable</key>
               <string>kraki</string>
               <key>CFBundleIconFile</key>
