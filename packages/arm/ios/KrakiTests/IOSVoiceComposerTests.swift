@@ -103,6 +103,11 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
 }
 
 @MainActor final class IOSVoiceComposerTests: XCTestCase {
+    override func setUpWithError() throws {
+        try requireForegroundUITests()
+        try super.setUpWithError()
+    }
+
     private func settle(_ ms: Int = 20) async { try? await Task.sleep(for: .milliseconds(ms)) }
     private func start(_ host: VoiceHost, _ voice: IOSVoiceComposer, session id: String = "a", range: NSRange? = nil) async -> VoiceSession {
         voice.begin(sessionID: id, selection: range, context: .init(fields: [:], vocabulary: []))

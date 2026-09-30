@@ -7,6 +7,11 @@ import XCTest
 /// sidebar never jumps to the top, and never moves when the row is visible.
 @MainActor
 final class MacSessionSidebarRevealTests: XCTestCase {
+    override func setUpWithError() throws {
+        try requireForegroundUITests()
+        try super.setUpWithError()
+    }
+
     private var windows: [NSWindow] = []
     override func tearDown() {
         windows.forEach { $0.orderOut(nil) }

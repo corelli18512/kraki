@@ -16,6 +16,11 @@ func requireNativePerformanceTests(file: StaticString = #filePath, line: UInt = 
 /// production data.
 @MainActor
 class MacChatUXTestCase: XCTestCase {
+    override func setUpWithError() throws {
+        try requireForegroundUITests()
+        try super.setUpWithError()
+    }
+
     var roots: [URL] = []
     var windows: [NSWindow] = []
     var states: [AppState] = []

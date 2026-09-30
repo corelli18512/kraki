@@ -52,6 +52,10 @@ Use the isolated runner rather than installing or launching the normal Dev app:
 
 ```sh
 bash scripts/test-native.sh mac \
+  -only-testing:KrakiMacTests/BuiltInTentacleTests
+
+# Window/voice suites (see below) need KRAKI_RUN_UI_TESTS=1.
+KRAKI_RUN_UI_TESTS=1 bash scripts/test-native.sh mac \
   -only-testing:KrakiMacTests/MacChatUXRegressionTests/testFailedInputOffersRetryAndDelete
 
 # Select a dedicated, already-created iPhone Simulator; never a personal device.
@@ -69,9 +73,20 @@ The shared unit-test schemes set `KRAKI_TEST_ISOLATION=1`. Test hosts start with
 empty temporary app graph, not the user's Keychain/auth/network graph. UI fixtures
 use a no-device audio policy and no-network voice session factory unless a test
 explicitly injects fakes. The live audio policy also refuses permission requests,
-input-device queries and audio activation under XCTest by default. Voice state
-machine and ObjC audio-safety tests continue to use fakes and **remain routine**.
-They must not be mistaken for microphone/hardware tests.
+input-device queries and audio activation under XCTest by default. They must not
+be mistaken for microphone/hardware tests.
+
+## Window and voice suites run in CI, not in routine local runs
+
+Tests that put real windows on screen (they can take the developer's window
+focus, keyboard or pointer) and the voice composer/input suites skip unless
+`KRAKI_RUN_UI_TESTS=1` (`requireForegroundUITests()`). CI's iOS job sets it.
+Run them locally only while working on those features:
+`MacChatUXRegressionTests` and the other `MacChatUXTestCase` suites,
+`MacSessionSidebarRevealTests`, `MacImageGridReuseTests`, `MacVoiceComposerTests`,
+`ChatUXRegressionTests`, `NewSessionJourneyTests`, `IOSChatScrollProductionTests`,
+`BubbleImageReuseTests`, `IOSVoiceComposerTests`, `KrakiVoiceInputTests` and the
+window cases in `NativeSessionPreviewGlyphTests`.
 
 ## Performance is manual, not a release gate
 

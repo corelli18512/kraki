@@ -154,6 +154,7 @@ jobs:
             -derivedDataPath build/DerivedData-iOS \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
+            KRAKI_RUN_UI_TESTS=1 \
             test
 
       - name: Upload iOS test results

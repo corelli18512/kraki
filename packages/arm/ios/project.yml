@@ -69,6 +69,7 @@ schemes:
       environmentVariables:
         KRAKI_TEST_ISOLATION: "1"
         KRAKI_RUN_PERF_TESTS: "$(KRAKI_RUN_PERF_TESTS)"
+        KRAKI_RUN_UI_TESTS: "$(KRAKI_RUN_UI_TESTS)"
   KrakiUITests:
     build:
       targets:
@@ -106,6 +107,7 @@ schemes:
         # Empty isolated host; tests create their own offline windows/databases.
         KRAKI_TEST_ISOLATION: "1"
         KRAKI_RUN_PERF_TESTS: "$(KRAKI_RUN_PERF_TESTS)"
+        KRAKI_RUN_UI_TESTS: "$(KRAKI_RUN_UI_TESTS)"
         KRAKI_DATA_DIR: /tmp/kraki-mac-tests-data
 
 targets:
@@ -221,6 +223,7 @@ targets:
     sources:
       - path: KrakiMacTests
       - path: KrakiTests/NativeSessionPreviewGlyphTests.swift
+      - path: KrakiTests/ForegroundTestGate.swift
       - path: KrakiTests/IOSVoiceComposerTests.swift
     settings:
       base:

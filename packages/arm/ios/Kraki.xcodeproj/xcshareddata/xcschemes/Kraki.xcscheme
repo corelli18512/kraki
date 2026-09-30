@@ -74,6 +74,11 @@
             isEnabled = "YES">
          </EnvironmentVariable>
          <EnvironmentVariable
+            key = "KRAKI_RUN_UI_TESTS"
+            value = "$(KRAKI_RUN_UI_TESTS)"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
             key = "KRAKI_TEST_ISOLATION"
             value = "1"
             isEnabled = "YES">

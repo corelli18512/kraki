@@ -7,6 +7,11 @@ import CryptoKit
 /// Production MacChatView + real AppKit/SwiftUI controls; synthetic speech and
 /// captured transport only. No production app, microphone or network.
 @MainActor final class MacVoiceComposerTests: XCTestCase {
+    override func setUpWithError() throws {
+        try requireForegroundUITests()
+        try super.setUpWithError()
+    }
+
     private var app: AppState!
     private var window: NSWindow!
     private var sent: [String] = []
