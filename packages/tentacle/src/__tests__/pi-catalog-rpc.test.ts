@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { queryPiCatalog, PiAdapter } from '../adapters/pi.js';
+import { queryPiCatalog, PiAdapter, runPiListModels, type PiListModelsError } from '../adapters/pi.js';
 
 const tempDirs: string[] = [];
 let agentDir: string;
@@ -167,5 +167,102 @@ describe('queryPiCatalog — throwaway RPC lifecycle', () => {
 
     await expect(queryPiCatalog(cli, 80)).rejects.toThrow('pi catalog query timed out');
     expect(Date.now() - started).toBeLessThan(1500);
+  });
+});
+
+describe('pi --list-models recovery', () => {
+  const header = "console.log('provider   model   context   max-out   thinking   images');";
+  const row = "console.log('anthropic  opus    200K      32K       yes        no');";
+  // RPC catalog answers so listModelDetails does not wait on it.
+  const rpc = `process.stdin.once('data', c => { const m = JSON.parse(String(c)); console.log(JSON.stringify({ id: m.id, type: 'response', command: m.type, success: true, data: { models: [] } })); });`;
+
+  function countingPi(listModels: string): { cli: string; count: () => number } {
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-pi-list-'));
+    tempDirs.push(dir);
+    const log = join(dir, 'calls');
+    const cli = join(dir, 'pi');
+    writeFileSync(cli, `#!/usr/bin/env node
+      const fs = require('node:fs');
+      const log = ${JSON.stringify(log)};
+      if (process.argv.includes('--list-models')) {
+        fs.appendFileSync(log, 'x');
+        const call = fs.readFileSync(log, 'utf8').length;
+        ${listModels}
+      } else { ${rpc} }
+    `, 'utf8');
+    chmodSync(cli, 0o755);
+    return { cli, count: () => { try { return readFileSync(log, 'utf8').length; } catch { return 0; } } };
+  }
+  const until = async (pred: () => boolean, ms = 5000) => {
+    const end = Date.now() + ms;
+    while (!pred()) {
+      if (Date.now() > end) throw new Error('condition not reached');
+      await new Promise(r => setTimeout(r, 20));
+    }
+  };
+
+  it('does not cache a timed-out list; retries in the background and announces recovery', async () => {
+    const { cli, count } = countingPi(`
+      if (call === 1) { console.error('loading providers…'); setTimeout(() => {}, 60_000); }
+      else { ${header} ${row} }
+    `);
+    const adapter = new PiAdapter({ cliPath: cli, modelListTimeoutMs: 300, modelListRetryDelaysMs: [50] });
+    let changed = 0;
+    adapter.onCapabilitiesChanged = () => { changed++; };
+
+    expect(await adapter.listModels()).toEqual([]);
+    await until(() => changed === 1);
+    expect(count()).toBe(2);
+    expect(await adapter.listModels()).toEqual(['anthropic/opus']);
+    expect((await adapter.listModelDetails()).map(m => m.id)).toEqual(['anthropic/opus']);
+    expect(count()).toBe(2); // success is cached
+    await adapter.stop();
+  });
+
+  it('shares one pi process between concurrent capability requests', async () => {
+    const { cli, count } = countingPi(`setTimeout(() => { ${header} ${row} }, 150);`);
+    const adapter = new PiAdapter({ cliPath: cli });
+    const [a, b, c] = await Promise.all([adapter.listModels(), adapter.listModels(), adapter.listModelDetails()]);
+    expect(a).toEqual(['anthropic/opus']);
+    expect(b).toEqual(a);
+    expect(c.map(m => m.id)).toEqual(a);
+    expect(count()).toBe(1);
+    await adapter.stop();
+  });
+
+  it('keeps retrying with backoff while pi keeps failing, and stops retrying on stop()', async () => {
+    const { cli, count } = countingPi(`console.error('no auth'); process.exit(3);`);
+    const adapter = new PiAdapter({ cliPath: cli, modelListRetryDelaysMs: [30, 30] });
+    let changed = 0;
+    adapter.onCapabilitiesChanged = () => { changed++; };
+    expect(await adapter.listModels()).toEqual([]);
+    await until(() => count() >= 3);
+    await adapter.stop();
+    await new Promise(r => setTimeout(r, 200));
+    const after = count();
+    await new Promise(r => setTimeout(r, 200));
+    expect(count()).toBe(after);
+    expect(changed).toBe(0);
+  });
+});
+
+describe('runPiListModels diagnostics', () => {
+  it('reports a timeout with the output pi produced before it was killed', async () => {
+    const cli = fakePi(`console.log('partial'); console.error('waiting for auth.json lock'); setTimeout(() => {}, 60_000);`);
+    const started = Date.now();
+    const err = await runPiListModels(cli, 1500).catch(e => e as PiListModelsError);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.timedOut).toBe(true);
+    expect(err.stdoutTail).toBe('partial');
+    expect(err.stderrTail).toBe('waiting for auth.json lock');
+    expect(Date.now() - started).toBeLessThan(4000);
+  });
+
+  it('reports a non-zero exit with stderr', async () => {
+    const cli = fakePi(`console.error('models.json invalid'); process.exit(4);`);
+    const err = await runPiListModels(cli, 2000).catch(e => e as PiListModelsError);
+    expect(err.exitCode).toBe(4);
+    expect(err.timedOut).toBeUndefined();
+    expect(err.stderrTail).toBe('models.json invalid');
   });
 });
