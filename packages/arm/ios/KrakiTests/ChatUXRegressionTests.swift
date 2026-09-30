@@ -466,6 +466,54 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertTrue(vm.pendingMessages.isEmpty, "landed clientId must suppress its optimistic twin")
     }
 
+    // MARK: Send summaries (send.summary)
+
+    func testSendSummaryRecordsTheWholeDeliveryJourney() throws {
+        var sends = 0
+        let fx = try makeFixture(total: 10) { _ in sends += 1; return true }
+        fx.app.deviceStore.setDeviceFeatures(dev, features: ["idempotent_input"])
+        fx.app.commandSender?.confirmationTimeout = .milliseconds(200)
+        drain(600)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "hello"))
+        let clientId = try XCTUnwrap(sender.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
+        drain(600) // silent resend, then shown unconfirmed
+        XCTAssertTrue(fx.app.sendMetrics.summaries.isEmpty, "still in flight")
+        XCTAssertTrue(sender.retryPending(sessionId: sid, clientId: clientId))
+        drain(50)
+        sender.clearPending(sid, clientId: clientId) // the echo landed
+
+        let summary = try XCTUnwrap(fx.app.sendMetrics.summaries.last)
+        XCTAssertEqual(summary.kind, .typed)
+        XCTAssertEqual(summary.outcome, .delivered)
+        XCTAssertEqual(summary.shown, .unconfirmed)
+        XCTAssertEqual(summary.cause, "stalled")
+        XCTAssertEqual(summary.autoResends, 1)
+        XCTAssertEqual(summary.manualRetries, 1)
+        XCTAssertFalse(summary.falseAlarm, "the user had to retry")
+        XCTAssertGreaterThan(summary.shownMs, 0)
+        XCTAssertGreaterThan(try XCTUnwrap(summary.confirmMs), 400)
+        XCTAssertEqual(summary.textLength, 5)
+    }
+
+    func testSendSummaryForAVoiceInputWhoseCorrectionFailedAndWasDeleted() throws {
+        let fx = try makeFixture(total: 10) { _ in true }
+        drain(300)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: "spoken words"))
+        sender.failStagedInput(sessionId: sid, clientId: clientId, text: "spoken words")
+        drain(50)
+        sender.discardPending(sessionId: sid, clientId: clientId)
+
+        let summary = try XCTUnwrap(fx.app.sendMetrics.summaries.last)
+        XCTAssertEqual(summary.kind, .voice)
+        XCTAssertEqual(summary.outcome, .deleted)
+        XCTAssertEqual(summary.shown, .failed)
+        XCTAssertEqual(summary.cause, "correction")
+        XCTAssertNil(summary.confirmMs)
+        XCTAssertEqual(fx.app.sendMetrics.summaries.count, 1, "deleting then clearing is one record")
+    }
+
     // MARK: Voice: sent bubble corrected in place
 
     private func pendingCell(_ fx: Fx) -> TKBubbleCell? {

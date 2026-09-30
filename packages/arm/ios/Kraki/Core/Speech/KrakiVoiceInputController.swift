@@ -282,7 +282,11 @@ final class KrakiVoiceInputController {
         case failed(String)
     }
 
-    private(set) var state: State = .idle
+    private(set) var state: State = .idle {
+        didSet { if state != oldValue { metrics.stateChanged(state.metricTag) } }
+    }
+    /// One summary per recording attempt (metadata only).
+    @ObservationIgnored let metrics = VoiceTracker()
     private(set) var rawText = ""
     private(set) var correctionSource = ""
     private(set) var correctionText = ""
@@ -437,6 +441,7 @@ final class KrakiVoiceInputController {
         let owner = activeSessionID
         recordingCleanup(clearHandlers: true)
         failedSessionID = owner
+        metrics.cause("identity_changed")
         state = .failed(
             VoiceInputError.gateway("Voice input was reset for this account. Please try again.")
                 .localizedDescription
@@ -521,6 +526,7 @@ final class KrakiVoiceInputController {
             adopt(next.lease, identity: next.identity)
         }
         recordingCleanup(clearHandlers: true)
+        metrics.outcome(.suspended)
         state = .idle
     }
 
@@ -557,6 +563,7 @@ final class KrakiVoiceInputController {
         #if KRAKI_DIAG
         KrakiDiag.record(.voice, session: sessionID, [.source: .tag("recording.begin")])
         #endif
+        metrics.begin(warm: isConnectionWarm)
         let currentRecording = UUID()
         recordingGeneration = currentRecording
         leaseRolloverAttempt = 0
@@ -679,6 +686,7 @@ final class KrakiVoiceInputController {
             let recoveredText = rawText
             let handler = finalHandler
             let completion = completionHandler
+            metrics.outcome(.departed)
             cancel()
             completion?(VoiceInputCompletion(text: recoveredText, rawText: recoveredText, completed: false))
             if !recoveredText.isEmpty { handler?(recoveredText) }
@@ -693,6 +701,7 @@ final class KrakiVoiceInputController {
         #endif
         closeConnection(keepLease: true)
         recordingCleanup(clearHandlers: true)
+        metrics.outcome(.cancelled, overwrite: false)
         state = .idle
         if warmConnectionDesired { scheduleReconnect(immediate: true) }
     }
@@ -844,6 +853,7 @@ final class KrakiVoiceInputController {
                 || (!streamedFinal.isEmpty
                     && streamedFinal == finalText.trimmingCharacters(in: .whitespacesAndNewlines))
             let completed = validFinal && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && correctionConfirmed
+            metrics.finalReceived(textLength: finalText.utf8.count, correctionConfirmed: completed)
             recordingCleanup(clearHandlers: true)
             state = .idle
             completion?(VoiceInputCompletion(text: validFinal ? finalText : completeRaw, rawText: completeRaw, completed: completed))
@@ -878,6 +888,7 @@ final class KrakiVoiceInputController {
             let owner = activeSessionID
             recordingCleanup(clearHandlers: true)
             failedSessionID = owner
+            metrics.cause(VoiceTracker.classify(gatewayReason: reason))
             state = .failed(message)
             completion?(VoiceInputCompletion(text: raw, rawText: raw, completed: false))
             if !recoveredText.isEmpty { handler?(recoveredText) }
@@ -913,6 +924,7 @@ final class KrakiVoiceInputController {
         case .recording, .obtainingLease:
             guard leaseRolloverAttempt < Self.maxLeaseRolloverAttempts else { return false }
             leaseRolloverAttempt += 1
+            metrics.rollover()
             checkpointCurrentRawSegment()
             closeConnection(keepLease: false)
             state = .obtainingLease
@@ -936,6 +948,9 @@ final class KrakiVoiceInputController {
             let completion = completionHandler
             closeConnection(keepLease: false)
             recordingCleanup(clearHandlers: true)
+            // The quota ran out while finishing: the raw draft is kept.
+            metrics.cause("quota")
+            metrics.outcome(.ended)
             state = .idle
             completion?(VoiceInputCompletion(text: recoveredText, rawText: recoveredText, completed: false))
             if !recoveredText.isEmpty { handler?(recoveredText) }
@@ -1202,6 +1217,7 @@ final class KrakiVoiceInputController {
         let raw = rawText
         recordingCleanup(clearHandlers: true)
         failedSessionID = owner
+        metrics.cause(error.metricCause)
         state = .failed(error.localizedDescription)
         completion?(VoiceInputCompletion(text: raw, rawText: raw, completed: false))
     }
@@ -1266,5 +1282,35 @@ private extension KrakiVoiceInputController.State {
     var failedMessage: String? {
         if case .failed(let message) = self { return message }
         return nil
+    }
+
+    var metricTag: String {
+        switch self {
+        case .idle: return "idle"
+        case .requestingPermission: return "requestingPermission"
+        case .obtainingLease: return "obtainingLease"
+        case .recording: return "recording"
+        case .finishing: return "finishing"
+        case .failed: return "failed"
+        }
+    }
+}
+
+extension VoiceInputError {
+    /// Coarse failure class for voice summaries (never the message text).
+    var metricCause: String {
+        switch self {
+        case .unavailable: return "unavailable"
+        case .invalidBrokerURL: return "config"
+        case .offline: return "offline"
+        case .microphoneDenied: return "permission"
+        case .microphoneUnavailable: return "mic_unavailable"
+        case .leaseInFlight: return "lease_busy"
+        case .leaseTimedOut: return "lease_timeout"
+        case .leaseDenied(let reason, _): return "lease_denied_\(reason.rawValue)"
+        case .gateway(let reason):
+            return reason.localizedCaseInsensitiveContains("audio session")
+                ? "audio_session" : VoiceTracker.classify(gatewayReason: reason)
+        }
     }
 }

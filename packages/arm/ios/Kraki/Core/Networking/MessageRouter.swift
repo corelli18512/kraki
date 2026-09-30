@@ -687,6 +687,7 @@ final class MessageRouter {
             appState.messageStore.clearRuntimeStatus(sid)
             appState.messageStore.clearCard(sid)
         }
+        appState.noteSessionListApplied()
 
         for digest in parsed {
             // Runtime status is ephemeral and the producer is authoritative.

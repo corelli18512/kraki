@@ -244,6 +244,12 @@ final class AppState {
     func beginViewingSession(_ sessionId: String) {
         if sessionStore.activeSessionId != sessionId {
             sessionStore.allowAutoRead(sessionId)
+            stability.conversationOpened(
+                sessionId: sessionId,
+                lastSeq: sessionStore.sessions[sessionId]?.lastSeq ?? 0,
+                localSeq: messageStore.dbLastSeq(sessionId),
+                online: connectionStatus == .connected
+            )
         }
         sessionStore.activeSessionId = sessionId
     }
@@ -404,17 +410,153 @@ final class AppState {
         guard isReconnecting else {
             reconnectingIndicatorWork?.cancel()
             reconnectingIndicatorWork = nil
-            if showsReconnecting { showsReconnecting = false }
+            if showsReconnecting {
+                showsReconnecting = false
+                stability.reconnectingShown(false)
+            }
             return
         }
         guard !showsReconnecting, reconnectingIndicatorWork == nil else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.reconnectingIndicatorWork = nil
-            if self.isReconnecting { self.showsReconnecting = true }
+            if self.isReconnecting {
+                self.showsReconnecting = true
+                self.stability.reconnectingShown(true)
+            }
         }
         reconnectingIndicatorWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.reconnectingIndicatorDelay, execute: work)
+    }
+
+    /// Opening and outage summaries (metadata only; see StabilityTracker).
+    @ObservationIgnored let stability = StabilityTracker()
+    @ObservationIgnored let sendMetrics = SendTracker()
+    @ObservationIgnored private var pathObserver: NetworkPathObserver?
+    @ObservationIgnored private let exitMarker = ForegroundExitMarker(defaults: .standard)
+
+    /// Starts the opening record: the first call per process is a cold start,
+    /// later ones only after the app was hidden or the Mac slept.
+    private func noteVisible() {
+        stability.appVisible(
+            hasCachedContent: !sessionStore.sessions.isEmpty,
+            viewing: sessionStore.activeSessionId != nil
+        )
+        exitMarker.enteredForeground()
+    }
+
+    /// The app leaves the screen in an orderly way (background, sleep, quit):
+    /// the next launch will not report an unclean exit.
+    private func noteOrderlyExit() {
+        exitMarker.leftForeground()
+    }
+
+    /// The session list was applied: is the open conversation up to date?
+    func noteSessionListApplied() {
+        let viewed = sessionStore.activeSessionId.flatMap { sid in
+            sessionStore.sessions[sid].map { (sessionId: sid, lastSeq: $0.lastSeq, localSeq: messageStore.dbLastSeq(sid)) }
+        }
+        stability.sessionListApplied(viewed: viewed)
+    }
+
+    /// The conversation view refreshed (cheap: a few comparisons).
+    func noteConversationRendered(_ sessionId: String, hasContent: Bool) {
+        guard stability.wantsConversationUpdates, let session = sessionStore.sessions[sessionId] else { return }
+        stability.conversationRendered(
+            sessionId: sessionId,
+            localSeq: messageStore.dbLastSeq(sessionId),
+            lastSeq: session.lastSeq,
+            hasContent: hasContent
+        )
+    }
+
+    #if os(macOS)
+    func handleSystemWillSleep() {
+        stability.systemWillSleep()
+        noteOrderlyExit()
+    }
+
+    func handleWillTerminate() {
+        noteOrderlyExit()
+    }
+    #endif
+
+    @ObservationIgnored private var stabilityStarted = false
+
+    private func startStabilityTracking() {
+        guard !stabilityStarted else { return }
+        stabilityStarted = true
+        #if KRAKI_DIAG || DEBUG
+        // Summaries are only sent by diagnostics builds: do not run a path
+        // monitor in ordinary releases for records nobody receives.
+        pathObserver = NetworkPathObserver { [weak self] kind in self?.stability.pathChanged(to: kind) }
+        #endif
+        // Read before this process marks itself foreground.
+        let previousExit = exitMarker.previousExit()
+        stability.previousExit = { previousExit }
+        #if KRAKI_DIAG
+        stability.onOpen = { open in
+            var f: [DiagField: DiagValue] = [.outcome: .tag(open.outcome.rawValue), .gap: .int(open.gap)]
+            if let v = open.firstContentMs { f[.firstContentMs] = .number(v) }
+            if let v = open.currentMs { f[.viewCurrentMs] = .number(v) }
+            KrakiDiag.record(.open, f)
+        }
+        sendMetrics.onSummary = { send in
+            var f: [DiagField: DiagValue] = [
+                .kind: .tag(send.kind.rawValue), .outcome: .tag(send.outcome.rawValue),
+                .shown: .tag(send.shown.rawValue), .shownMs: .number(send.shownMs),
+                .falseAlarm: .bool(send.falseAlarm), .manualRetries: .int(send.manualRetries),
+                .autoResends: .int(send.autoResends), .restored: .int(send.restored ? 1 : 0),
+                .offline: .bool(send.offlineAtSend), .attachments: .int(send.attachments),
+                .textLength: .int(send.textLength), .background: .bool(send.failedInBackground),
+            ]
+            if let v = send.confirmMs { f[.confirmMs] = .number(v) }
+            if let v = send.correctionMs { f[.correctionMs] = .number(v) }
+            if let v = send.cause { f[.cause] = .tag(v) }
+            KrakiDiag.record(.send, f)
+        }
+        voiceInputController.metrics.onSummary = { voice in
+            var f: [DiagField: DiagValue] = [
+                .outcome: .tag(voice.outcome.rawValue), .stage: .tag(voice.stage),
+                .confirmed: .bool(voice.correctionConfirmed), .textLength: .int(voice.textLength),
+                .warm: .bool(voice.warm), .count: .int(voice.leaseRollovers),
+            ]
+            if let v = voice.cause { f[.cause] = .tag(v) }
+            if let v = voice.startMs { f[.startMs] = .number(v) }
+            if let v = voice.recordMs { f[.recordMs] = .number(v) }
+            if let v = voice.finalizeMs { f[.finalizeMs] = .number(v) }
+            KrakiDiag.record(.voiceSummary, f)
+        }
+        stability.onReady = { ready in
+            var f: [DiagField: DiagValue] = [
+                .kind: .tag(ready.kind.rawValue), .outcome: .tag(ready.outcome.rawValue),
+                .path: .tag(ready.path), .attempt: .int(ready.attempts), .gap: .int(ready.gap),
+                .viewing: .bool(ready.viewing),
+            ]
+            if let v = ready.backgroundMs { f[.backgroundMs] = .number(v) }
+            if let v = ready.firstContentMs { f[.firstContentMs] = .number(v) }
+            if let v = ready.wsOpenMs { f[.wsOpenMs] = .number(v) }
+            if let v = ready.authedMs { f[.authedMs] = .number(v) }
+            if let v = ready.listFreshMs { f[.listFreshMs] = .number(v) }
+            if let v = ready.viewCurrentMs { f[.viewCurrentMs] = .number(v) }
+            if let v = ready.previousExit { f[.previousExit] = .tag(v) }
+            KrakiDiag.record(.ready, f)
+        }
+        stability.onOutage = { outage in
+            var f: [DiagField: DiagValue] = [
+                .source: .tag(outage.reason), .outcome: .tag(outage.outcome.rawValue),
+                .path: .tag(outage.path), .attempt: .int(outage.attempts),
+                .detectMs: .number(outage.detectMs), .visibleMs: .number(outage.visibleMs),
+                .pathChanged: .bool(outage.pathChanged), .afterWake: .bool(outage.afterWake),
+            ]
+            // As a tag: numbers are encoded non-negative, NSURLError codes are negative.
+            if let v = outage.code { f[.code] = .tag(String(v)) }
+            if let v = outage.reconnectMs { f[.reconnectMs] = .number(v) }
+            if let v = outage.catchupMs { f[.catchupMs] = .number(v) }
+            if let v = outage.impactMs { f[.impactMs] = .number(v) }
+            KrakiDiag.record(.outage, f)
+        }
+        #endif
     }
 
     /// True only when the WS is fully connected and authenticated.
@@ -452,6 +594,9 @@ final class AppState {
         client.isReceivingPayload = { [weak self] in
             guard let last = self?.pulseManager?.lastDeliveryAt else { return false }
             return Date().timeIntervalSince(last) < 25
+        }
+        client.onRecover = { [weak self] reason, code, quietFor in
+            self?.stability.transportLost(reason: reason, code: code, quietFor: quietFor)
         }
         client.onReconnectAttempt = { [weak self] attempt in
             self?.updateReconnectAttempt(attempt)
@@ -767,6 +912,7 @@ final class AppState {
         #if KRAKI_DIAG
         KrakiDiag.phase("active")
         #endif
+        noteVisible()
         updateReadVisibility(appForeground: true, conversationVisible: true)
         #if os(iOS)
         Task { await pushManager?.handleForeground() }
@@ -807,6 +953,8 @@ final class AppState {
 
     func handleBackground() {
         isInBackground = true
+        stability.appHidden()
+        noteOrderlyExit()
         updateReconnectingIndicator()
         #if KRAKI_DIAG
         KrakiDiag.phase("background", pending: commandSender?.outbox.values.reduce(0) { $0 + $1.count } ?? 0)
@@ -839,6 +987,17 @@ final class AppState {
         }
         KrakiDiag.record(.connection, [.state: .tag(diagState), .attempt: .int(reconnectAttempt)])
         #endif
+        switch state {
+        case .connected: stability.socketOpen()
+        case .connecting:
+            // Every connection path (launch, CLI login, relay switch, dev)
+            // passes here: the first attempt of the process opens the cold
+            // record.
+            startStabilityTracking()
+            if !isInBackground { noteVisible() }
+            stability.connecting()
+        case .disconnected: break
+        }
         switch state {
         case .connected:
             connectionStatus = .authenticating
@@ -883,6 +1042,7 @@ final class AppState {
         // session reconnects re-enter this method too, which is fine
         // — setting it to true again is a no-op.
         self.hasCompletedInitialConnect = true
+        stability.authenticated()
 
         // The relay rejects Pulse frames before auth and only starts its peer
         // endpoint after sending auth_ok. Start our endpoint at the same
