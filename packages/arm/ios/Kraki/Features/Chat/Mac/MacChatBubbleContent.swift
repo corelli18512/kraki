@@ -62,7 +62,8 @@ enum MacChatBubbleContentBuilder {
         default: kind = isUser ? .user : .agent
         }
 
-        let rawBody = message.content.flatMap { text -> NSAttributedString? in
+        let source = message.imageUnavailable ? ChatMessage.imageUnavailableText : message.content
+        let rawBody = source.flatMap { text -> NSAttributedString? in
             guard !text.isEmpty, text != "[image]" else { return nil }
             return MacMarkdown.attributed(text, cacheKey: "\(message.id):body:\(text.count)")
         }
