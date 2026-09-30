@@ -75,7 +75,7 @@ struct LocalAgentsPanel: View {
                     .controlSize(.small)
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
         .accessibilityIdentifier("mac.setup.agent.\(agent.id)")
     }
 

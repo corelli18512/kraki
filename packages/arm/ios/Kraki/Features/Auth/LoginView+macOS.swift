@@ -83,26 +83,32 @@ struct MacEntryGateView: View {
         ZStack {
             entryBackdrop
 
-            // Setup step 1 lists four agents plus Full Disk Access: on a small
-            // screen it is taller than the window, so the page scrolls.
+            // Scrolling is only a fallback for very small windows.
             GeometryReader { proxy in
                 ScrollView(.vertical) {
                     VStack(spacing: 0) {
-                        Spacer(minLength: 48)
+                        // The launch screen already showed the big logo. During
+                        // the setup steps the card owns the page, so it fits
+                        // without scrolling on a normal window.
+                        Spacer(minLength: usesBuiltInSetup ? 12 : 48)
 
-                        signedOutBrand
+                        if !usesBuiltInSetup {
+                            signedOutBrand
+                        }
 
                         signedOutActions
                             .frame(maxWidth: 480, minHeight: 210, alignment: .top)
-                            .padding(.top, 24)
+                            .padding(.top, usesBuiltInSetup ? 0 : 24)
 
-                        Spacer(minLength: 36)
+                        Spacer(minLength: usesBuiltInSetup ? 12 : 36)
 
-                        footerStatus
-                            .frame(minHeight: 24)
+                        if !usesBuiltInSetup {
+                            footerStatus
+                                .frame(minHeight: 24)
+                        }
                     }
                     .padding(.horizontal, 48)
-                    .padding(.vertical, 34)
+                    .padding(.vertical, usesBuiltInSetup ? 20 : 34)
                     .frame(maxWidth: .infinity, minHeight: proxy.size.height)
                 }
                 .scrollBounceBehavior(.basedOnSize)
