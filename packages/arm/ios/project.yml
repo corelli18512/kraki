@@ -366,6 +366,11 @@ targets:
       - name: Embed built-in tentacle
         script: bash "$SRCROOT/../../../scripts/mac/embed-tentacle-helper.sh"
         basedOnDependencyAnalysis: false
+        # The script adds KrakiTentacleVersion to the processed Info.plist, so
+        # it must run after Xcode writes it; without this input an incremental
+        # build can process Info.plist afterwards and drop the key.
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
     dependencies:
       - package: GRDB
       - package: Pulse
