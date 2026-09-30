@@ -80,12 +80,16 @@ struct SessionCardProjection: Equatable {
         draft: String?,
         isCompacting: Bool = false,
         pendingInputs: [ChatMessage] = [],
-        isDeliveryOnline: Bool = true
+        isDeliveryOnline: Bool = true,
+        presenceKnown: Bool = true
     ) -> Self {
+        // Before the first sign-in the cached device list has no live
+        // presence: show it as unknown, never as every device offline.
+        let deviceOnline = presenceKnown ? device?.online : nil
         let machineName = session.deviceName.isEmpty ? device?.name : session.deviceName
         let normalizedMachineName = machineName?.isEmpty == true ? nil : machineName
         let pending = SessionPendingPreview.select(pendingInputs, sessionId: session.id,
-                                                   isOnline: isDeliveryOnline && device?.online != false)
+                                                   isOnline: isDeliveryOnline && deviceOnline != false)
         let normalizedDraft = draft?.collapseWhitespace()
         let previewText = pending?.text ?? (normalizedDraft?.isEmpty == false
             ? normalizedDraft
@@ -106,13 +110,13 @@ struct SessionCardProjection: Equatable {
             status: pending.map { .delivery($0.status) } ?? .resolve(
                 sessionState: isCompacting ? .compacting : session.state,
                 previewType: preview?.type,
-                deviceOnline: device?.online,
+                deviceOnline: deviceOnline,
                 hasDraft: hasDraft
             ),
             isUnread: session.readSeq < session.lastSeq,
             isPinned: session.pinned,
             isDraft: hasDraft,
-            deviceOnline: device?.online
+            deviceOnline: deviceOnline
         )
     }
 }

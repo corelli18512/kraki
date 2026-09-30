@@ -414,7 +414,8 @@ struct SessionsSidebarView: View {
                 return session.state
             }(),
             previewType: preview?.type,
-            deviceOnline: appState.deviceStore.devices[session.deviceId]?.online,
+            deviceOnline: appState.hasCompletedInitialConnect
+                ? appState.deviceStore.devices[session.deviceId]?.online : nil,
             hasDraft: hasDraft
         )
         return [status.accessibilityLabel, preview?.text]
@@ -508,7 +509,8 @@ struct MacSidebarSessionRow: View {
                 return false
             }(),
             pendingInputs: appState.commandSender?.pendingInputs(session.id) ?? [],
-            isDeliveryOnline: appState.isFullyOnline
+            isDeliveryOnline: appState.isFullyOnline,
+            presenceKnown: appState.hasCompletedInitialConnect
         )
     }
 

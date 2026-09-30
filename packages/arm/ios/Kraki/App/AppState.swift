@@ -106,10 +106,8 @@ final class AppState {
         #endif
     }
 
-    #if DEBUG
-    /// The XCTest host itself must not initialize the user's database, Keychain,
-    /// network graph or audio before the individual test fixtures are created.
     /// Paced attachment transfers through this app's encrypted channel.
+    /// (Used by the production init too, so it must not be DEBUG-only.)
     static func makeAttachmentStore(for state: AppState) -> AttachmentStore {
         AttachmentStore { [weak state] id, sessionId, index in
             guard let state else { return false }
@@ -121,6 +119,10 @@ final class AppState {
             ])
         }
     }
+
+    #if DEBUG
+    /// The XCTest host itself must not initialize the user's database, Keychain,
+    /// network graph or audio before the individual test fixtures are created.
 
     /// Real networking (WebSocket, auth, Pulse, CommandSender) with an
     /// isolated database, outbox and process-local open-auth identity, for
@@ -183,6 +185,14 @@ final class AppState {
     var connectionStatus: ConnectionStatus = .awaitingLogin {
         didSet {
             guard connectionStatus != oldValue else { return }
+            #if os(macOS)
+            if connectionStatus == .connected {
+                authRecoveryAttempts = 0
+                notConnectedSince = nil
+            } else if notConnectedSince == nil {
+                notConnectedSince = Date()
+            }
+            #endif
             if connectionStatus == .connected {
                 // Anything still waiting for its echo is re-sent on the new
                 // connection (idempotent by clientId in Tentacle).
@@ -356,10 +366,31 @@ final class AppState {
         if isInBackground { return false }
         switch connectionStatus {
         case .connecting, .authenticating, .disconnected:
+            #if os(macOS)
+            // The Mac shows its authenticated window as soon as it holds a
+            // credential (before auth_ok). Until that first sign-in completes
+            // the window must say so instead of looking connected-but-empty.
+            return hasCompletedInitialConnect || isSigningInWithCredentials
+            #else
             return hasCompletedInitialConnect
+            #endif
         default:
             return false
         }
+    }
+
+    #if os(macOS)
+    /// Holds a stored device or a CLI token, i.e. the window is past the
+    /// login screen and a sign-in is expected to succeed.
+    var isSigningInWithCredentials: Bool {
+        hasStoredCredentials || authManager?.cliGitHubToken != nil
+    }
+    #endif
+
+    /// User-facing connection notice for the Mac window (nil when online).
+    var connectionNotice: String? {
+        guard showsReconnecting, connectionStatus != .connected else { return nil }
+        return hasCompletedInitialConnect ? "Reconnecting…" : "Signing in…"
     }
 
     /// What the UI shows: reconnecting only after it has lasted
@@ -486,21 +517,44 @@ final class AppState {
     /// found and a connection has been started; false when the CLI isn't
     /// installed/logged in (caller falls back to the login screen).
     @discardableResult
-    func attemptCLILogin() async -> Bool {
+    func attemptCLILogin(ghDeadline: TimeInterval = AuthManager.launchGhDeadline) async -> Bool {
         // SwiftUI WindowGroup tasks can be recreated while the app is already
         // connecting/authenticating. Loading the CLI token twice used to call
         // connect twice and leave parallel sockets behind.
         if cliLoginInFlight { return true }
+        startAuthRecoveryWatchdog()
         if authManager?.cliGitHubToken != nil {
-            guard connectionStatus == .awaitingLogin || connectionStatus == .disconnected else {
+            switch connectionStatus {
+            case .connected, .authenticating:
+                return true
+            default:
+                // A token is loaded but the socket is not signed in with it
+                // (e.g. still open from a failed attempt): connect() alone is
+                // a no-op on an open socket, so replace it.
+                reconnectForNewCredentials(reason: "cli_token_retry")
                 return true
             }
-            connect()
-            return true
         }
         cliLoginInFlight = true
         defer { cliLoginInFlight = false }
-        guard let creds = await AuthManager.loadCLICredentials() else { return false }
+        guard let creds = await AuthManager.loadCLICredentials(ghDeadline: ghDeadline) else {
+            // The quick launch probe can time out on a cold `gh` (first run
+            // after an OS update). Keep looking in the background with a
+            // realistic deadline instead of giving up for this process.
+            if ghDeadline < AuthManager.recoveryGhDeadline {
+                Task { @MainActor [weak self] in
+                    await self?.recoverCLIAuthentication(reason: "launch_probe_timeout")
+                }
+            }
+            return false
+        }
+        adoptCLICredentials(creds)
+        return true
+    }
+
+    /// Use a CLI credential now: token auth with process-local keys, on a
+    /// fresh socket unless the current one is already signed in.
+    private func adoptCLICredentials(_ creds: (relay: String, token: String)) {
         // Token auth is independent of the old device's Keychain ACL. Use
         // process-local keys so a denied Keychain prompt cannot strand the
         // Mac before the relay refreshes this device's public keys.
@@ -511,13 +565,94 @@ final class AppState {
             wsClient?.setRelayURL(creds.relay)
         }
         authManager?.cliGitHubToken = creds.token
-        KLog.d("🔑 Reusing local kraki CLI login → \(creds.relay)")
+        KLog.diag("Auth: using local CLI login")
         // setRelayURL schedules the replacement connection itself. Calling
         // connect again here would briefly create two authenticated sockets.
-        if !relayChanged {
+        guard !relayChanged, connectionStatus != .connected else { return }
+        reconnectForNewCredentials(reason: "cli_token")
+    }
+
+    /// `connect()` is ensure-connected: it does nothing while a socket is
+    /// already open, so a credential obtained mid-attempt was never sent.
+    private func reconnectForNewCredentials(reason: String) {
+        guard let wsClient else { return }
+        if wsClient.state == .disconnected {
             connect()
+        } else {
+            KLog.diag("Auth: reconnecting to sign in with new credentials (\(reason))")
+            connectionStatus = .connecting
+            wsClient.resetBackoffAndReconnect()
         }
-        return true
+    }
+
+    private var cliRecoveryInFlight = false
+
+    /// Find the local CLI login with a realistic `gh` deadline and sign in
+    /// with it. Falls back to the relay login flow when there is none.
+    func recoverCLIAuthentication(reason: String) async {
+        guard !cliRecoveryInFlight, connectionStatus != .connected else { return }
+        cliRecoveryInFlight = true
+        defer { cliRecoveryInFlight = false }
+        KLog.diag("Auth: recovering sign-in (\(reason))")
+        if authManager?.cliGitHubToken == nil,
+           let creds = await AuthManager.loadCLICredentials(ghDeadline: AuthManager.recoveryGhDeadline) {
+            guard connectionStatus != .connected else { return }
+            adoptCLICredentials(creds)
+            return
+        }
+        guard connectionStatus != .connected else { return }
+        if authManager?.cliGitHubToken != nil || hasStoredCredentials {
+            reconnectForNewCredentials(reason: reason)
+        } else if connectionStatus == .awaitingLogin, wsClient?.state != .disconnected {
+            KLog.diag("Auth: no CLI login found — showing login")
+            authManager?.requestAuthInfo()
+        }
+    }
+
+    // MARK: Sign-in watchdog
+
+    /// When the window holds credentials but has not signed in for a while
+    /// (a socket open yet unauthenticated, or no CLI token found at launch),
+    /// retry automatically with growing intervals. Ordinary outages are left
+    /// to the WebSocket's own reconnect backoff.
+    private var authWatchdogTask: Task<Void, Never>?
+    @ObservationIgnored var notConnectedSince: Date?
+    @ObservationIgnored var authRecoveryAttempts = 0
+    @ObservationIgnored private var lastAuthRecoveryAt: Date?
+    #if DEBUG
+    @ObservationIgnored var authWatchdogInterval: TimeInterval = 5
+    @ObservationIgnored var authStuckThreshold: TimeInterval = 10
+    #else
+    private let authWatchdogInterval: TimeInterval = 5
+    private let authStuckThreshold: TimeInterval = 10
+    #endif
+
+    func startAuthRecoveryWatchdog() {
+        guard authWatchdogTask == nil else { return }
+        authWatchdogTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                let interval = self?.authWatchdogInterval ?? 5
+                try? await Task.sleep(for: .seconds(interval))
+                guard let self else { return }
+                await self.authWatchdogTick()
+            }
+        }
+    }
+
+    func authWatchdogTick() async {
+        guard !isInBackground, connectionStatus != .connected,
+              isSigningInWithCredentials,
+              let since = notConnectedSince else { return }
+        let transportOpen = wsClient?.state == .connected
+        let missingToken = authManager?.cliGitHubToken == nil
+        // A plain outage (no transport) with a token is the socket's job.
+        guard transportOpen || missingToken else { return }
+        let backoff = min(authStuckThreshold * pow(2, Double(authRecoveryAttempts)), 60)
+        let reference = max(since, lastAuthRecoveryAt ?? .distantPast)
+        guard Date().timeIntervalSince(reference) >= backoff else { return }
+        authRecoveryAttempts += 1
+        lastAuthRecoveryAt = Date()
+        await recoverCLIAuthentication(reason: transportOpen ? "stuck_unauthenticated" : "no_cli_token")
     }
     #endif
 
