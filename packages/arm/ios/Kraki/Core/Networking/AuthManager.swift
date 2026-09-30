@@ -97,6 +97,13 @@ final class AuthManager {
     var pairingToken: String?
 
     /// Set by `AppState.devConnect()` for the lifetime of a local-dev process.
+    #if DEBUG
+    /// Test harness: keep the device identity in memory only (no shared
+    /// defaults, no Keychain deletion).
+    var debugIsolatedIdentity = false
+    func debugSetStoredDeviceId(_ id: String?) { storedDeviceId = id; appState?.hasStoredCredentials = id != nil }
+    #endif
+
     /// Every reconnect uses open auth with an ephemeral relay identity. This
     /// never deletes or overwrites production device credentials or RSA keys.
     var usesEphemeralOpenAuth: Bool = false
@@ -132,7 +139,14 @@ final class AuthManager {
     /// Mirrors the kraki daemon's own token resolution order: `gh auth token`
     /// (gh CLI) first, then the saved device-flow token at ~/.kraki/github-token.
     /// The Mac app is not sandboxed, so `~/.kraki` is readable and `gh` spawnable.
-    static func loadCLICredentials() async -> (relay: String, token: String)? {
+    /// `ghDeadline` bounds only the `gh auth token` probe: the launch gate uses
+    /// a short one so a broken `gh` never holds the window, background
+    /// recovery a long one (a cold `gh` right after a macOS update can take
+    /// several seconds, which previously left the Mac unable to sign in).
+    static func loadCLICredentials(ghDeadline: TimeInterval = launchGhDeadline) async -> (relay: String, token: String)? {
+        #if DEBUG
+        if let loader = debugCLICredentialLoader { return await loader(ghDeadline) }
+        #endif
         #if DEBUG
         let krakiHome = ProcessInfo.processInfo.environment["KRAKI_CLI_CREDENTIAL_DIR"]
             ?? (NSHomeDirectory() + "/.kraki")
@@ -149,7 +163,7 @@ final class AuthManager {
 
         // 1. gh CLI token — the daemon's primary path (used whenever `gh` is
         //    authenticated, which is the common case on a dev machine).
-        if let ghToken = await runGhAuthToken(), !ghToken.isEmpty {
+        if let ghToken = await runGhAuthToken(deadline: ghDeadline), !ghToken.isEmpty {
             KLog.diag("Mac CLI login resolved a GitHub token")
             return (relay, ghToken)
         }
@@ -168,7 +182,15 @@ final class AuthManager {
     /// Resolve `gh` without assuming a GUI process inherited the user's shell
     /// PATH. Sparkle and LaunchServices relaunch apps with a minimal system
     /// environment, while MacPorts and Homebrew install `gh` outside it.
-    private static func runGhAuthToken() async -> String? {
+    static let launchGhDeadline: TimeInterval = 0.5
+    static let recoveryGhDeadline: TimeInterval = 8
+
+    #if DEBUG
+    /// Test seam replacing CLI discovery (argument: the gh deadline used).
+    static var debugCLICredentialLoader: ((TimeInterval) async -> (relay: String, token: String)?)?
+    #endif
+
+    private static func runGhAuthToken(deadline seconds: TimeInterval) async -> String? {
         let environment = ProcessInfo.processInfo.environment
         let home = NSHomeDirectory()
         var candidates = environment["PATH"]?
@@ -189,7 +211,7 @@ final class AuthManager {
         return await Task.detached(priority: .userInitiated) {
             // CLI discovery is part of the Mac launch gate. A broken shell/gh
             // installation must not hold the entire window indefinitely.
-            let deadline = Date().addingTimeInterval(0.5)
+            let deadline = Date().addingTimeInterval(seconds)
             for executable in executables {
                 guard Date() < deadline else { break }
                 let process = Process()
@@ -489,8 +511,15 @@ final class AuthManager {
         } else {
             storedDeviceId = deviceId
             pendingRegionDeviceId = nil
-            Self.sharedDefaults.set(deviceId, forKey: Self.deviceIdKey)
-            UserDefaults.standard.set(deviceId, forKey: Self.deviceIdKey)
+            #if DEBUG
+            let persistIdentity = !debugIsolatedIdentity
+            #else
+            let persistIdentity = true
+            #endif
+            if persistIdentity {
+                Self.sharedDefaults.set(deviceId, forKey: Self.deviceIdKey)
+                UserDefaults.standard.set(deviceId, forKey: Self.deviceIdKey)
+            }
             appState.hasStoredCredentials = true
         }
 
@@ -597,11 +626,26 @@ final class AuthManager {
                 || code == "unknown_device"
                 || code == "user_not_found"
             if fatal {
-                KLog.d("🚪 Fatal auth error (code=\(code ?? "nil")) — clearing credentials")
+                KLog.diag("Auth: fatal auth error (code=\(code ?? "nil")) — clearing stored device")
+                #if os(macOS)
+                // The stored Keychain identity is gone, but this Mac may still
+                // be signed in through the local CLI (the usual Mac path; the
+                // launch probe can simply have timed out). Recover with it
+                // instead of stranding the window signed out.
+                let failedWithoutCLIToken = cliGitHubToken == nil
+                #endif
                 clearStoredCredentials()
                 appState.onAuthFailed(
                     error: reason ?? "Authentication failed. Please scan a new pairing QR code."
                 )
+                #if os(macOS)
+                if failedWithoutCLIToken {
+                    Task { @MainActor [weak appState] in
+                        await appState?.recoverCLIAuthentication(reason: "fatal_challenge")
+                    }
+                    return
+                }
+                #endif
                 if appState.connectionStatus == .awaitingLogin {
                     requestAuthInfo()
                 }
@@ -629,6 +673,9 @@ final class AuthManager {
         pendingRegionDeviceId = nil
         #if os(macOS)
         cliGitHubToken = nil
+        #endif
+        #if DEBUG
+        if debugIsolatedIdentity { appState?.hasStoredCredentials = false; return }
         #endif
         Self.sharedDefaults.removeObject(forKey: Self.deviceIdKey)
         UserDefaults.standard.removeObject(forKey: Self.deviceIdKey)

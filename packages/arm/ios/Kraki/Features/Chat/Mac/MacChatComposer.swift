@@ -154,6 +154,9 @@ struct MacChatComposer: View {
     }
 
     private var unreachableHint: String? {
+        // Not signed in yet: device presence is unknown, so say that rather
+        // than blaming the device.
+        if !appState.hasCompletedInitialConnect, let notice = appState.connectionNotice { return notice }
         guard let deviceId = session?.deviceId else { return nil }
         let device = appState.deviceStore.devices[deviceId]
         if device?.online != true {

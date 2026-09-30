@@ -307,6 +307,7 @@ struct MainWindowView: View {
             if sidebarVisible {
                 VStack(spacing: 0) {
                     sidebarSectionHeader
+                    connectionNoticeRow
                     SessionsSidebarView(
                         selectedSessionId: $selectedSessionId,
                         searchText: sidebarSearchText,
@@ -504,6 +505,26 @@ struct MainWindowView: View {
         }
         .onChange(of: appState.sessionStore.totalUnread) { _, total in
             NSApp.dockTile.badgeLabel = total > 0 ? "\(total)" : ""
+        }
+    }
+
+    /// Shown while the window is not signed in (first sign-in or reconnect).
+    @ViewBuilder
+    private var connectionNoticeRow: some View {
+        if let notice = appState.connectionNotice {
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.small).scaleEffect(0.75)
+                Text(notice)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.textSecondary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 26)
+            .background(Color.surfaceSecondary.opacity(0.6))
+            .transition(.opacity)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("connection-notice")
         }
     }
 
