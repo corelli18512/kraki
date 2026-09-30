@@ -437,6 +437,12 @@ struct MacApp: App {
                         appState.handleForegroundRehydrate()
                     }
                 }
+                .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.willSleepNotification)) { _ in
+                    appState.handleSystemWillSleep()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    appState.handleWillTerminate()
+                }
                 #if KRAKI_DIAG
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
                     KrakiDiag.phase("inactive")

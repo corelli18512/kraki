@@ -22,10 +22,11 @@ const number = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v 
 const bool = (v: unknown) => typeof v === 'boolean';
 const choice = (...values: string[]) => (v: unknown) => typeof v === 'string' && values.includes(v);
 type Validator = (value: unknown) => boolean;
-const fields: Record<string, Validator> = {
+export const fields: Record<string, Validator> = {
   clientId: uuid, questionId: id, answerTo: id, ix: uuid,
   origin: choice('ios_choice', 'mac_choice', 'mac_monitor', 'mac_button', 'composer', 'unknown'),
-  phase: choice('active', 'inactive', 'background', 'authenticated', 'logout', 'created', 'restored', 'retry', 'cleared', 'sending', 'unconfirmed', 'failed', 'correcting', 'down', 'up'),
+  phase: v => choice('active', 'inactive', 'background', 'authenticated', 'logout', 'created', 'restored', 'retry', 'cleared', 'sending', 'unconfirmed', 'failed', 'correcting', 'down', 'up')(v)
+    || (typeof v === 'string' && /^resend_[a-z_]{1,32}$/.test(v)), // automatic resend, tagged with its trigger
   state: choice('connected', 'connecting', 'disconnected'),
   source: v => typeof v === 'string' && /^[\w+./:-]{1,160}$/.test(v), // compiler #fileID, not a path or text
   stack: v => typeof v === 'string' && /^(0x[\da-f]+)(,0x[\da-f]+){0,15}$/i.test(v),
@@ -33,9 +34,24 @@ const fields: Record<string, Validator> = {
   matched: bool, accepted: bool, duplicate: bool, restored: number, count: number,
   dropped: number, durationMs: number, clickCount: number, eventNumber: number,
   attempt: number, status: number, bytes: number, events: number, firstSeq: number, lastSeq: number,
+  // Stability summaries (StabilityTracker): durations, counts and tags only.
+  kind: choice('cold', 'warm', 'wake', 'typed', 'voice', 'answer', 'steer'),
+  outcome: choice('ready', 'abandoned', 'timeout', 'recovered', 'backgrounded', 'current', 'left',
+    'delivered', 'deleted', 'cleared', 'final', 'failed', 'cancelled', 'departed', 'suspended', 'ended'),
+  path: choice('wifi', 'cellular', 'wired', 'other', 'none', 'unknown'),
+  gap: number, viewing: bool, backgroundMs: number, firstContentMs: number, wsOpenMs: number, authedMs: number,
+  listFreshMs: number, viewCurrentMs: number,
+  code: v => typeof v === 'string' && /^-?\d{1,9}$/.test(v), // close code or NSError code (tag: may be negative)
+  detectMs: number, reconnectMs: number, catchupMs: number, impactMs: number, visibleMs: number,
+  pathChanged: bool, afterWake: bool, previousExit: choice('clean', 'unclean', 'first'),
+  shown: choice('none', 'unconfirmed', 'failed'), shownMs: number, falseAlarm: bool, manualRetries: number,
+  autoResends: number, offline: bool, background: bool, confirmMs: number, correctionMs: number,
+  cause: v => typeof v === 'string' && /^[a-z_]{1,48}$/.test(v), // coarse class, never a message
+  stage: choice('preflight', 'permission', 'lease', 'recording', 'finishing'),
+  confirmed: bool, warm: bool, startMs: number, recordMs: number, finalizeMs: number,
 };
 /** Adding an event requires consciously extending this allowlist and its native call site. */
-const schemas: Record<string, string[]> = {
+export const schemas: Record<string, string[]> = {
   'app.launch': [],
   'app.phase': ['phase', 'pending'],
   'ws.state': ['state', 'attempt', 'source', 'count'],
@@ -55,6 +71,15 @@ const schemas: Record<string, string[]> = {
   'voice.action': ['source', 'textLength', 'accepted'],
   'list.snapshot': ['count', 'pending', 'firstSeq', 'lastSeq'],
   'session.view': ['source'],
+  'ready.summary': ['kind', 'outcome', 'path', 'attempt', 'gap', 'viewing', 'backgroundMs', 'firstContentMs',
+    'wsOpenMs', 'authedMs', 'listFreshMs', 'viewCurrentMs', 'previousExit'],
+  'open.summary': ['outcome', 'gap', 'firstContentMs', 'viewCurrentMs'],
+  'send.summary': ['kind', 'outcome', 'shown', 'shownMs', 'falseAlarm', 'manualRetries', 'autoResends', 'restored',
+    'offline', 'attachments', 'textLength', 'background', 'confirmMs', 'correctionMs', 'cause'],
+  'voice.summary': ['outcome', 'stage', 'cause', 'confirmed', 'textLength', 'warm', 'count', 'startMs', 'recordMs',
+    'finalizeMs'],
+  'outage.summary': ['source', 'code', 'outcome', 'path', 'attempt', 'detectMs', 'reconnectMs', 'catchupMs',
+    'impactMs', 'visibleMs', 'pathChanged', 'afterWake'],
 };
 
 function object(value: unknown): value is Record<string, unknown> {

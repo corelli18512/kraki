@@ -19,7 +19,8 @@ enum KrakiDiag {
     static func record(_ name: DiagEventName, session: String? = nil, _ fields: [DiagField: DiagValue] = [:]) {
         guard recorder.record(name, session: session, fields) else { return }
         switch name {
-        case .answer, .input, .handoff, .outbox, .echo, .phase, .busy, .marker: client.requestFlush()
+        case .answer, .input, .handoff, .outbox, .echo, .phase, .busy, .marker, .ready, .outage, .open, .send, .voiceSummary:
+            client.requestFlush()
         default: break
         }
     }

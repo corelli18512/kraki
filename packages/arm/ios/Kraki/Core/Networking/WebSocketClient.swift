@@ -79,6 +79,9 @@ final class WebSocketClient: NSObject {
     /// Called on the main queue every time the retry counter bumps
     /// (or resets to 0 after a successful connect).
     var onReconnectAttempt: ((Int) -> Void)?
+    /// The transport gave up on its connection: reason tag, close/error code,
+    /// seconds since the last inbound frame (stability summaries).
+    var onRecover: ((String, Int?, TimeInterval?) -> Void)?
 
     // MARK: Internals
 
@@ -545,8 +548,9 @@ final class WebSocketClient: NSObject {
 
     /// Recoverable close keeps the queue and owns one retry. User disconnect
     /// instead retires the transport without scheduling recovery.
-    func recover(reason: String) {
+    func recover(reason: String, code: Int? = nil) {
         guard !intentionalClose, task != nil else { return }
+        onRecover?(reason, code, lastLivenessAt.map { Date().timeIntervalSince($0) })
         #if DEBUG
         recoveryReasons.append(reason)
         #endif
@@ -658,7 +662,7 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         }
         let reasonStr = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "nil"
         KLog.d("🔒 WebSocket closed code=\(closeCode.rawValue) reason=\(reasonStr) intentional=\(intentionalClose) url=\(relayURL)")
-        recover(reason: "peer_closed")
+        recover(reason: "peer_closed", code: closeCode.rawValue)
     }
 
     func urlSession(
@@ -672,6 +676,6 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
         }
         guard let error else { return }
         KLog.d("⚠️ WebSocket didCompleteWithError \(error.localizedDescription) intentional=\(intentionalClose) url=\(relayURL)")
-        recover(reason: "transport_error")
+        recover(reason: "transport_error", code: (error as NSError).code)
     }
 }

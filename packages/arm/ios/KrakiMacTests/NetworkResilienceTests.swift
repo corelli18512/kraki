@@ -219,7 +219,24 @@ final class NetworkResilienceTests: XCTestCase {
 
     // MARK: - Scenarios
 
+    /// Stability summaries recorded by the production tracker in this run.
+    private func stabilityMetrics() {
+        metrics["readies"] = app.stability.readies.map {
+            ["kind": $0.kind.rawValue, "outcome": $0.outcome.rawValue, "authedMs": $0.authedMs ?? -1,
+             "viewCurrentMs": $0.viewCurrentMs ?? -1, "backgroundMs": $0.backgroundMs ?? -1, "attempts": $0.attempts]
+        }
+        metrics["outages"] = app.stability.outages.map {
+            ["reason": $0.reason, "outcome": $0.outcome.rawValue, "detectMs": $0.detectMs,
+             "reconnectMs": $0.reconnectMs ?? -1, "impactMs": $0.impactMs ?? -1, "visibleMs": $0.visibleMs, "attempts": $0.attempts]
+        }
+    }
+
     func test_S0_healthyBaseline() async throws {
+        let cold = try XCTUnwrap(app.stability.readies.first, "the first connection records a cold opening")
+        XCTAssertEqual(cold.kind, .cold)
+        XCTAssertEqual(cold.outcome, .ready)
+        XCTAssertNotNil(cold.authedMs)
+        XCTAssertLessThan(try XCTUnwrap(cold.viewCurrentMs), 5_000)
         for i in 0..<5 { send("m\(i)"); await pause(0.3) }
         try await settleAndCheckDelivery(within: 10)
         try await checkInbound(within: 10)
@@ -238,6 +255,12 @@ final class NetworkResilienceTests: XCTestCase {
         metrics["visibleReconnecting"] = visibleReconnectingSeen
         XCTAssertLessThanOrEqual(metrics["reconnects"] as? Int ?? 99, 1, "G6: one outage, one reconnect")
         XCTAssertFalse(visibleReconnectingSeen, "G8: a sub-second blip never shows Reconnecting")
+        stabilityMetrics()
+        let outage = try XCTUnwrap(app.stability.outages.first, "the reset is recorded as one outage")
+        XCTAssertEqual(app.stability.outages.count, 1)
+        XCTAssertEqual(outage.outcome, .recovered)
+        XCTAssertEqual(outage.visibleMs, 0, "matches what the user saw")
+        XCTAssertLessThan(try XCTUnwrap(outage.impactMs), 5_000)
     }
 
     /// A2: relay unreachable for 15 s / 45 s; messages typed during the outage.
@@ -274,6 +297,13 @@ final class NetworkResilienceTests: XCTestCase {
         try await control("POST", "/heal")
         try await settleAndCheckDelivery(within: 20)
         XCTAssertLessThanOrEqual(metrics["deadLinkDetectSeconds"] as? Double ?? 99, 30, "G5")
+        stabilityMetrics()
+        let outage = try XCTUnwrap(app.stability.outages.first, "the half-open link is recorded")
+        XCTAssertTrue(["ping_timeout", "transport_silent"].contains(outage.reason), outage.reason)
+        XCTAssertEqual(outage.outcome, .recovered)
+        XCTAssertGreaterThan(outage.detectMs, 10_000, "detection time is the silent stretch, not ~0")
+        XCTAssertLessThan(outage.detectMs, 31_000)
+        XCTAssertGreaterThan(try XCTUnwrap(outage.impactMs), outage.detectMs)
     }
 
     /// B1: the incident profile — 3 Mbps shared downlink, an older client pulls
@@ -596,6 +626,13 @@ final class NetworkResilienceTests: XCTestCase {
         try await checkInbound(within: 10)
         XCTAssertLessThanOrEqual(metrics["reconnectSeconds"] as? Double ?? 99, 3, "G4: foreground reconnect is immediate")
         XCTAssertFalse(flashed, "G8: returning to the app must not flash Reconnecting for a normal quick reconnect")
+        stabilityMetrics()
+        let warm = try XCTUnwrap(app.stability.readies.last)
+        XCTAssertEqual(warm.kind, .warm)
+        XCTAssertEqual(warm.outcome, .ready)
+        XCTAssertEqual(try XCTUnwrap(warm.backgroundMs), 20_000, accuracy: 3_000)
+        XCTAssertLessThan(try XCTUnwrap(warm.viewCurrentMs), 3_000)
+        XCTAssertTrue(app.stability.outages.isEmpty, "a background close is not an outage")
     }
 
     // MARK: - D4: several devices
