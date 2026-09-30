@@ -22,7 +22,7 @@ afterEach(() => {
 describe('managed-by marker', () => {
   it('round-trips and is private to the user', () => {
     saveManagedBy({ by: 'kraki-mac', label: 'chat.kraki.mac.tentacle', appPath: '/Applications/Kraki.app' });
-    expect(loadManagedBy()).toMatchObject({ by: 'kraki-mac', label: 'chat.kraki.mac.tentacle', appPath: '/Applications/Kraki.app' });
+    expect(loadManagedBy(() => true)).toMatchObject({ by: 'kraki-mac', label: 'chat.kraki.mac.tentacle', appPath: '/Applications/Kraki.app' });
     expect(statSync(getManagedByPath()).mode & 0o777).toBe(0o600);
     clearManagedBy();
     expect(loadManagedBy()).toBeNull();

@@ -364,7 +364,13 @@ targets:
       # Without a staged helper the app builds without it (external CLI mode);
       # release CI sets KRAKI_REQUIRE_TENTACLE=1. See scripts/mac/.
       - name: Embed built-in tentacle
-        script: bash "$SRCROOT/../../../scripts/mac/embed-tentacle-helper.sh"
+        # Isolated test projects (scripts/test-native.sh) are generated outside
+        # the repository, where this relative path does not exist; they build
+        # without the helper (external CLI mode), like any build without one.
+        script: |
+          SCRIPT="$SRCROOT/../../../scripts/mac/embed-tentacle-helper.sh"
+          if [ ! -f "$SCRIPT" ]; then echo "note: $SCRIPT not found; building without the built-in tentacle"; exit 0; fi
+          bash "$SCRIPT"
         basedOnDependencyAnalysis: false
         # The script adds KrakiTentacleVersion to the processed Info.plist, so
         # it must run after Xcode writes it; without this input an incremental
