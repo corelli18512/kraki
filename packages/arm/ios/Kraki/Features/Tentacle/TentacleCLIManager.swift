@@ -84,6 +84,8 @@ final class TentacleCLIManager {
 
     @ObservationIgnored let builtIn = BuiltInTentacle()
     @ObservationIgnored private var restartedForVersion: String?
+    @ObservationIgnored private var notRunningSince: Date?
+    @ObservationIgnored private var reRegisteredThisLaunch = false
 
     var isBuiltInAvailable: Bool { builtIn.isAvailable }
 
@@ -299,6 +301,25 @@ final class TentacleCLIManager {
                 builtIn.kickstart()
             }
         }
+        // Self-heal: the job is registered and should run, yet nothing runs.
+        // After an app update launchd can refuse the new helper binary against
+        // the launch constraint it recorded at registration (seen with a
+        // re-signed helper: "Requesting repair LWCR update", exit 78 forever).
+        // Re-registering records the current binary. Once per app launch, and
+        // only after the job had time to come up on its own.
+        if mode == .builtIn, !running, builtIn.ownershipMarkerExists,
+           BuiltInTentacle.thisMacRole != .remoteOnly,
+           builtIn.service.status == .enabled, !reRegisteredThisLaunch {
+            if notRunningSince == nil { notRunningSince = Date() }
+            if let since = notRunningSince, Date().timeIntervalSince(since) > 20 {
+                reRegisteredThisLaunch = true
+                KLog.diag("[Tentacle] built-in daemon registered but not running for 20s; re-registering")
+                Task { await self.reRegisterBuiltIn() }
+            }
+        } else if running {
+            notRunningSince = nil
+        }
+
         if running, let pid {
             // Don't clobber a transient .starting state if we caught the
             // daemon mid-fork (kraki start already returned but pidfile
@@ -416,6 +437,26 @@ final class TentacleCLIManager {
     /// Refuses from a translocated/disk-image location (the registration would
     /// point at a path that vanishes on reboot) and never runs beside a daemon
     /// owned by an external CLI.
+    /// Remove the job from launchd and register it again (keeps ownership).
+    /// SMAppService.unregister alone leaves launchd's recorded launch
+    /// constraint in place (verified in a VM: the job kept failing with
+    /// exit 78); `launchctl bootout` drops it, and the next register records
+    /// the binary now in the app.
+    private func reRegisterBuiltIn() async {
+        _ = await runCapturing(binary: "/bin/launchctl", args: ["bootout", "gui/\(getuid())/\(builtIn.label)"])
+        do {
+            try await builtIn.service.unregister()
+        } catch {
+            KLog.diag("[Tentacle] unregister before re-register failed: \(error.localizedDescription)")
+        }
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        do {
+            _ = try builtIn.enable()
+        } catch {
+            daemonState = .error("Could not restart Kraki in the background: \(error.localizedDescription)")
+        }
+    }
+
     private func startBuiltIn() async {
         switch installLocation {
         case .translocated, .diskImage:
