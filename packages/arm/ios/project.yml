@@ -295,6 +295,7 @@ targets:
       - path: Kraki/Features/Auth/ConnectionStatusChip.swift
       - path: Kraki/Features/Auth/LoginView+macOS.swift
       - path: Kraki/Features/Auth/GitHubMark.swift
+      - path: Kraki/Features/Auth/MacSetupIntro.swift
       - path: Kraki/Features/Chat/ToolChipHeader.swift
       - path: Kraki/Features/Chat/ChatViewModel.swift
       - path: Kraki/Features/Chat/TurnSpineProjection.swift

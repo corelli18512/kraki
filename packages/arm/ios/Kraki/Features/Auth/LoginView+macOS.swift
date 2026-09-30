@@ -27,6 +27,8 @@ struct MacEntryGateView: View {
     var onLaunchActivityCommitted: () -> Void = {}
 
     @State private var appeared = false
+    @State private var introDone = false
+    @State private var pageHeight: CGFloat = 0
 
     var body: some View {
         Group {
@@ -83,37 +85,57 @@ struct MacEntryGateView: View {
         ZStack {
             entryBackdrop
 
-            // Scrolling is only a fallback for very small windows.
-            GeometryReader { proxy in
-                ScrollView(.vertical) {
-                    VStack(spacing: 0) {
-                        // The launch screen already showed the big logo. During
-                        // the setup steps the card owns the page, so it fits
-                        // without scrolling on a normal window.
-                        Spacer(minLength: usesBuiltInSetup ? 12 : 48)
-
-                        if !usesBuiltInSetup {
-                            signedOutBrand
-                        }
-
-                        signedOutActions
-                            .frame(maxWidth: 480, minHeight: 210, alignment: .top)
-                            .padding(.top, usesBuiltInSetup ? 0 : 24)
-
-                        Spacer(minLength: usesBuiltInSetup ? 12 : 36)
-
-                        if !usesBuiltInSetup {
-                            footerStatus
-                                .frame(minHeight: 24)
-                        }
+            if showsIntro {
+                MacSetupIntro { withAnimation(.easeOut(duration: 0.35)) { introDone = true } }
+                    .transition(.opacity)
+            } else {
+                // Scrollable, but the scroll bar only appears when the page
+                // is taller than the window: with a mouse, macOS otherwise
+                // keeps it visible even when everything fits.
+                GeometryReader { proxy in
+                    ScrollView(.vertical) {
+                        signedOutPage
+                            .frame(minHeight: proxy.size.height)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 }
                     }
-                    .padding(.horizontal, 48)
-                    .padding(.vertical, usesBuiltInSetup ? 20 : 34)
-                    .frame(maxWidth: .infinity, minHeight: proxy.size.height)
+                    .scrollBounceBehavior(.basedOnSize)
+                    .scrollIndicators(pageHeight > proxy.size.height + 1 ? .automatic : .never)
                 }
-                .scrollBounceBehavior(.basedOnSize)
+                .transition(.opacity.combined(with: .offset(y: 12)))
             }
         }
+    }
+
+    /// First open of the setup flow: the logo entrance before the steps.
+    private var showsIntro: Bool {
+        usesBuiltInSetup && !introDone && !reduceMotion
+            && !UserDefaults.standard.bool(forKey: MacSetupIntro.shownKey)
+    }
+
+    private var signedOutPage: some View {
+        VStack(spacing: 0) {
+            // The intro showed the big logo. During the setup steps the card
+            // owns the page, so it fits without scrolling on a normal window.
+            Spacer(minLength: usesBuiltInSetup ? 0 : 48)
+
+            if !usesBuiltInSetup {
+                signedOutBrand
+            }
+
+            signedOutActions
+                .frame(maxWidth: 480, minHeight: 210, alignment: .top)
+                .padding(.top, usesBuiltInSetup ? 0 : 24)
+
+            Spacer(minLength: usesBuiltInSetup ? 0 : 36)
+
+            if !usesBuiltInSetup {
+                footerStatus
+                    .frame(minHeight: 24)
+            }
+        }
+        .padding(.horizontal, 48)
+        .padding(.vertical, usesBuiltInSetup ? 8 : 34)
+        .frame(maxWidth: .infinity)
     }
 
     private var entryBackdrop: some View {
@@ -172,7 +194,7 @@ struct MacEntryGateView: View {
         if usesBuiltInSetup {
             BuiltInSetupView(onFinished: onRetry)
                 .padding(.horizontal, 22)
-                .padding(.vertical, 20)
+                .padding(.vertical, 16)
                 .background(Color.surfaceSecondary.opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
