@@ -204,6 +204,24 @@ export async function startWorker(): Promise<WorkerResult> {
 
   // 5. Build per-agent capabilities for device greeting
   let agentCapabilities: import('@kraki/protocol').AgentCapabilities[] | undefined;
+  // An agent whose model list was unavailable at startup (pi can be slow right
+  // after login) announces recovery later; rebuild and re-greet so apps get
+  // its models without a daemon restart. Installed before the relay client
+  // exists so a recovery during startup still lands in the first greeting.
+  let relayRef: { updateAgentCapabilities(agents: import('@kraki/protocol').AgentCapabilities[]): void } | null = null;
+  let capabilitiesRefresh: Promise<void> = Promise.resolve();
+  adapter.onCapabilitiesChanged = () => {
+    capabilitiesRefresh = capabilitiesRefresh.then(async () => {
+      try {
+        const next = await adapter.getAgentCapabilities();
+        agentCapabilities = next;
+        logger.info({ agents: next.map(a => ({ id: a.id, models: a.models?.length ?? 0 })) }, 'Agent capabilities changed; re-greeting apps');
+        relayRef?.updateAgentCapabilities(next);
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, 'Could not rebuild agent capabilities');
+      }
+    });
+  };
   if (adapterReady) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -244,6 +262,10 @@ export async function startWorker(): Promise<WorkerResult> {
     keyManager,
     attachmentStore,
   );
+
+  relayRef = relay;
+  // Capabilities may have been rebuilt while the relay client was constructed.
+  if (agentCapabilities?.length) relay.updateAgentCapabilities(agentCapabilities);
 
   relay.onStateChange = (state) => {
     logger.debug({ state }, 'Relay connection state changed');

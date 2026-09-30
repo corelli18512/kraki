@@ -425,6 +425,7 @@ export class MultiAgentAdapter extends AgentAdapter {
       this.onSessionCreated?.(event);
     };
     adapter.onMessage = (sid, e) => this.onMessage?.(sid, e);
+    adapter.onCapabilitiesChanged = () => this.onCapabilitiesChanged?.();
     adapter.onMessageDelta = (sid, e) => this.onMessageDelta?.(sid, e);
     adapter.onNarration = (sid, e) => this.onNarration?.(sid, e);
     adapter.onNarrationTrace = (sid, e) => this.onNarrationTrace?.(sid, e);

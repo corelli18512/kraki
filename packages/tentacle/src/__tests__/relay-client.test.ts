@@ -1384,6 +1384,21 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
+  it('re-greets connected apps with updated agent capabilities (e.g. a model list that recovered after startup)', () => {
+    const { ws, client, cleanup } = buildClientWithStore();
+    try {
+      ws.sent.length = 0;
+      client.updateAgentCapabilities([
+        { type: 'code', id: 'pi', models: ['anthropic/opus'], modelDetails: [{ id: 'anthropic/opus', name: 'Anthropic opus' }] },
+      ]);
+      const greetings = decodePulseSends(ws.sent).filter((m) => m.type === 'device_greeting');
+      expect(greetings).toHaveLength(1);
+      const payload = greetings[0].payload as { agents?: { id: string; models?: string[] }[]; features?: string[] };
+      expect(payload.agents).toEqual([expect.objectContaining({ id: 'pi', models: ['anthropic/opus'] })]);
+      expect(payload.features).toEqual(expect.arrayContaining(['idempotent_input', 'fragments']));
+    } finally { cleanup(); }
+  });
+
   it('every greeting (unicast to a joining app and the broadcast after its own reconnect) carries the same features', () => {
     const { ws, cleanup } = buildClientWithStore();
     try {

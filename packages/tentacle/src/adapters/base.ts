@@ -199,6 +199,10 @@ export abstract class AgentAdapter {
   onSessionEvicted: ((sessionId: string) => void) | null = null;
   /** Called when the agent produces a title for a session (e.g. via SDK event). */
   onTitleChanged: ((sessionId: string, title: string) => void) | null = null;
+  /** The agent's advertised models/capabilities changed after startup (e.g. a
+   *  model list that failed at startup became available). The daemon rebuilds
+   *  capabilities and re-greets connected apps. */
+  onCapabilitiesChanged: (() => void) | null = null;
   /** Called with updated cumulative token usage for a session */
   onUsageUpdate: ((sessionId: string, usage: SessionUsage) => void) | null = null;
 

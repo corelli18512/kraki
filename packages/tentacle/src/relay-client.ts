@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type {
+  AgentCapabilities,
   ProducerMessage, ConsumerMessage,
   DeviceInfo, AuthOkMessage, AuthErrorMessage, DeviceSummary, AuthMethod,
   BroadcastEnvelope, UnicastEnvelope, MulticastEnvelope, CardActionState,
@@ -3545,6 +3546,15 @@ export class RelayClient {
     } catch (err) {
       logger.error({ err, targetDeviceId }, 'Reliable unicast failed');
     }
+  }
+
+  /** Replace the advertised agent capabilities (e.g. a model list that was
+   *  unavailable at startup) and re-greet connected apps. Apps replace a
+   *  device's agents on every greeting, so no new message type is needed; the
+   *  next reconnect/auth also carries the updated capabilities. */
+  updateAgentCapabilities(agents: AgentCapabilities[]): void {
+    this.options.device.capabilities = agents.length ? { ...this.options.device.capabilities, agents } : undefined;
+    if (this.state === 'connected') this.sendGreetingBroadcast();
   }
 
   /**
