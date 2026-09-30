@@ -11,6 +11,7 @@
 		00D9A1D724388C88656314A9 /* Highlightr in Frameworks */ = {isa = PBXBuildFile; productRef = 58A77F08B0D342014F734926 /* Highlightr */; };
 		011C11527B518D1977DB2289 /* CommandSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ABD91DDEFD532C3C383BBDE /* CommandSender.swift */; };
 		028B61458E76278B13E26B2F /* Pulse in Frameworks */ = {isa = PBXBuildFile; productRef = 7FF5AA6801C008E56910369C /* Pulse */; };
+		030741A547AC17FE92C3A217 /* ThisMacSetupSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 593F51D017203A91FAB57F80 /* ThisMacSetupSnapshot.swift */; };
 		0313E21470C38A392FB20B51 /* StabilityTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E35AD5263921130DD1A18D /* StabilityTrackerTests.swift */; };
 		0449F8113EE71D0A83B333FD /* MacAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6813B385E0446BBC371C8AD3 /* MacAppDelegate.swift */; };
 		058F05193E5F187FE59EA1F9 /* MacToolActivityRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E5E8774CBFF404F8D467E90 /* MacToolActivityRow.swift */; };
@@ -34,6 +35,7 @@
 		0E363961B94F4006312809D8 /* Highlightr in Frameworks */ = {isa = PBXBuildFile; productRef = D489C81EB3DBE25897423901 /* Highlightr */; };
 		0E763016C3E54D4BEE49A2CE /* ChatPlaceholderView+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5626ED6495E1877F3D9A7F74 /* ChatPlaceholderView+macOS.swift */; };
 		1070A66DCB67C1EBF3CE79DB /* MacChatScrollView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F69BA2DA3E65AD7981E3F51 /* MacChatScrollView.swift */; };
+		107F58C6EEF583A34A463123 /* LocalAgentsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250E3DB62309C76D6D79AC25 /* LocalAgentsPanel.swift */; };
 		12CE3DD03C496B1E150386FB /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A9A346933E404A3656AD63 /* SessionStore.swift */; };
 		1392B71F4BA89CD3DE1C9E93 /* NewSessionSheet+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 788DB31948E59B27C4328EFE /* NewSessionSheet+macOS.swift */; };
 		13FB3A5224988D3C72001202 /* SessionTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF830792579504E8F32DFC4F /* SessionTable.swift */; };
@@ -42,8 +44,10 @@
 		17D7BE16A8D5D790F068FF89 /* KrakiNotification.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 714C9952404A97A090FC011F /* KrakiNotification.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		191F9EF6860BAA09470DA919 /* MacBubbleImageGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716CF510D83856B445C94DA7 /* MacBubbleImageGrid.swift */; };
 		1A8B176B6FB20CE0C8414668 /* ChatScrollPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD1EB63914A8EE30FA1D18F5 /* ChatScrollPolicy.swift */; };
+		1B01E117986AF227249E2056 /* BuiltInTentacleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E83544E423901DC3D8E07FB /* BuiltInTentacleTests.swift */; };
 		1BA230F7EC3DA0D4AF911D14 /* MainWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5469FDA14AA91327B6DF4400 /* MainWindowView.swift */; };
 		1BAC94A2211D6ADAFD3D1A8B /* DeviceDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6463492D6BEB410FD49FF787 /* DeviceDetailView.swift */; };
+		1C5E0A0C9CD63583409196B7 /* BuiltInSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C513DCF24560A3E13BBBAFF3 /* BuiltInSetupView.swift */; };
 		1E3AB82960FD440D2F9425CD /* ImportSessionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C23602EA58067E4AE252F62 /* ImportSessionSheet.swift */; };
 		1ED0B27461AF3BFD9CBA4F28 /* LucideIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 924794751B4507709362A1AE /* LucideIcon.swift */; };
 		1FA04773E415B708A7C36B46 /* DevicesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F1C34007991B7E9D900DBF /* DevicesPane.swift */; };
@@ -66,27 +70,33 @@
 		2CF1B0661EEF7C51B63C4A35 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33641605B16E960C6A553E38 /* ChatView.swift */; };
 		2CF36A2578842439CD9CA78A /* MacNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = C024AE6690757FB0A6916CEE /* MacNotifications.swift */; };
 		2D394695172D2AD0857650A2 /* VoiceComposerPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88D48670B859C4CA3FFFA48 /* VoiceComposerPresentation.swift */; };
+		2D3B2608F2624CC6FD03BB30 /* BuiltInTentacle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EBD5FFCF0E54067B287536A /* BuiltInTentacle.swift */; };
 		2D511A9C6FB61ADC2DA98C62 /* MacChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8AD64AEE5A57AF1667249A7 /* MacChatView.swift */; };
 		2EB7589D7EBECE7995E65571 /* GeneralPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = B153278B8FD6A628243129FA /* GeneralPane.swift */; };
 		2EC40327706787FAA97C3224 /* PulseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = E45FF5DF9F0159EB23B50D72 /* PulseManager.swift */; };
 		2F6ACAA1E3FE2A106BC70A32 /* SpeechRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BF3123CD705AB984A21AD16 /* SpeechRecognizer.swift */; };
 		3038625FBC08F11D1FC57F5B /* IOSVoiceComposerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4FFB255BA0EAD5FA0EE3D2F /* IOSVoiceComposerUITests.swift */; };
 		3081E32A4A16DAF6DBD9F6EE /* LICENSE-mermaid.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0B49EB7064E3E13899D443B5 /* LICENSE-mermaid.txt */; };
+		3192804128658945031F370F /* MacSetupIntro.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36FC4EAA96F9E5781C9A7449 /* MacSetupIntro.swift */; };
 		329CD52FB10EFC078920E6E5 /* NativeSessionPreviewGlyphTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84D022FEB21EC483DA523C2A /* NativeSessionPreviewGlyphTests.swift */; };
 		32DF29FABA40CB5C5FFEC3F1 /* AttachmentRequestModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59694366DCD0EF98D143260B /* AttachmentRequestModifier.swift */; };
 		331E5FA13A1DB2C8327BB977 /* GeneralPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = B153278B8FD6A628243129FA /* GeneralPane.swift */; };
 		33284C120326EAC492164F6D /* Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */; };
 		3428D6C520DD0E2E257AB76D /* PreferencesWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F499644AEF4467B28CDD1A6A /* PreferencesWindow.swift */; };
 		348C4411EA05E81F65F1E554 /* MessageProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7BD07326375D7E516A8ACD4 /* MessageProvider.swift */; };
+		34D126CB8B7709D243BC02C6 /* ExistingCLIChoiceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A326F8D2A24FFEE51C78A94E /* ExistingCLIChoiceView.swift */; };
 		3581F3000482E30C0DE2698C /* AuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8261534E96234C67C920EDCA /* AuthManager.swift */; };
 		381AA8D728145A34D33CB68E /* PermissionCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E355FDA07A62D1D2FA07ECB1 /* PermissionCardView.swift */; };
 		388347D65132D47B191241F1 /* MacAutomationDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5906FEF75EAE0DB111F19BD /* MacAutomationDriver.swift */; };
 		39CA771DFACE01A22668BCC5 /* KrakiApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AD698C5DD0F8DDB4A3D6CFE /* KrakiApp.swift */; };
+		3A71E711D1939B318CC0EC5C /* TentacleSetupRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A85098A6C3F08826873291AA /* TentacleSetupRunner.swift */; };
 		3B1435A3F3E6CE75A3D0621E /* AgentAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 427C7B2406F858D980E5DFBB /* AgentAvatar.swift */; };
 		3C4A11273BA4926B1804BD90 /* MacSessionSidebarRevealTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B60DD3157710F226FB5EF0DC /* MacSessionSidebarRevealTests.swift */; };
+		3C7F7695CD5685A48330A3D5 /* GitHubMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09D60ADBFACD8E9746EF968 /* GitHubMark.swift */; };
 		3D41352AEBFC0FFDA4E57F36 /* AvatarTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 830D9504C54F439410E9F9CD /* AvatarTestView.swift */; };
 		3D9E42E6CB81D0C1A79E9B77 /* IOSVoiceComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAEABA66C53A4169697F5D6A /* IOSVoiceComposer.swift */; };
 		3DA91B6874FF2006730C2C30 /* LICENSE-mermaid.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0B49EB7064E3E13899D443B5 /* LICENSE-mermaid.txt */; };
+		3E437588025F139129368109 /* ForegroundTestGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49BC47F1AAD6F888FD15878C /* ForegroundTestGate.swift */; };
 		3E6DC3A38E8C02979FFFA91D /* PendingTailBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97C99EF2A08DFF67F9951044 /* PendingTailBufferTests.swift */; };
 		3F9854AE8D35E76D9D514EBA /* PreferencesWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F499644AEF4467B28CDD1A6A /* PreferencesWindow.swift */; };
 		4054EC9FBD2DF2BCDD28596D /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76E84B41258D35243F545BDB /* AppState.swift */; };
@@ -94,6 +104,7 @@
 		40A33A5867D20686790F9258 /* MacStepsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07D6E0A7CA95492AFFEAA610 /* MacStepsView.swift */; };
 		418D62DFD69B58881D3390EA /* LucideIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 924794751B4507709362A1AE /* LucideIcon.swift */; };
 		41CD9A1A40C53FE761E997D5 /* KeychainManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DF2FADB7D9A46A1299A30E2 /* KeychainManager.swift */; };
+		424639E4743ECEAC40710698 /* NoAgentsGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = F054D38D8C25B25EDF5F20F9 /* NoAgentsGuide.swift */; };
 		429B505032A8A1AFE8218BB2 /* SessionPreviewGlyphLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63613BBDA6BD9F86BB1965EE /* SessionPreviewGlyphLayer.swift */; };
 		4301D37FC0E42C745BB47E4D /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A625A24B0C13AF8010778069 /* Theme.swift */; };
 		43833240798127A0E69CEDAD /* MacChatTestPages.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7EEFA1D37EABA740112779F /* MacChatTestPages.swift */; };
@@ -123,6 +134,7 @@
 		5095126837B9D8AF7B714EF9 /* NavigationIDs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9656866F24E385A14F14E699 /* NavigationIDs.swift */; };
 		5140DE3F2876AC1AA96FE488 /* ComposerHitAreaUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A130A3774A3144CDA4C6023 /* ComposerHitAreaUITests.swift */; };
 		51B6F1F4D09F0DD52D0E8285 /* MacChatTestPages.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7EEFA1D37EABA740112779F /* MacChatTestPages.swift */; };
+		52731419E058315E90679796 /* FailedTurnVisibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 813D862554B016FC9E0B527E /* FailedTurnVisibilityTests.swift */; };
 		52884F019776B2D42A94782B /* Messages.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BC3B39CCEB12DE1DD65808 /* Messages.swift */; };
 		5294ABB3C1CF9D77CD60F131 /* MacToolActivityRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E5E8774CBFF404F8D467E90 /* MacToolActivityRow.swift */; };
 		52A7B220249880A6B603CE4E /* HTMLReportSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA89046ADC416DAEDEAC1FF1 /* HTMLReportSupport.swift */; };
@@ -137,10 +149,13 @@
 		5AAAC8892D718A7C7AC7F28D /* ProtocolTypesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22F6388085A5234FBAB8906F /* ProtocolTypesTests.swift */; };
 		5C83B8F16B04BD50CE1B3C3A /* VoiceInputCore in Frameworks */ = {isa = PBXBuildFile; productRef = C47E464CF5CBD5AE59F27CD7 /* VoiceInputCore */; };
 		5C84A7024B48EF2DE6194D83 /* MacNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = C024AE6690757FB0A6916CEE /* MacNotifications.swift */; };
+		5EBF50BA43E1F185CF93A1E1 /* LocalAgentsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F0D3BD8FC6A18700879AEC /* LocalAgentsWindow.swift */; };
 		5F0B02123ED43B73877167F5 /* KrakiLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */; };
 		5F47265290B467B5BCA075C3 /* LogsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447FBAB1A2FAA65AD4B03988 /* LogsWindow.swift */; };
 		5FA173BA3D784B99B1DCF97B /* SessionPreviewStatusGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = F55032B437F50C6E8B1CCA24 /* SessionPreviewStatusGlyph.swift */; };
+		6006EB03F1FC303FC76A1531 /* ThisMacSetupStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACF9B7682A158350E82AECB6 /* ThisMacSetupStep.swift */; };
 		60226FAD058DC1FCB64B3A31 /* ActivityRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E85D17DFC304688DBB3F729 /* ActivityRow.swift */; };
+		6088B1B7B0692F4375FF68BC /* GitHubMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09D60ADBFACD8E9746EF968 /* GitHubMark.swift */; };
 		613A478009D713D6D8D81F36 /* DiagSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7209F58C4D298C8764042569 /* DiagSettingsSection.swift */; };
 		61DE330DBE66144398A6F8D4 /* MacBubbleTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D15C4DAE8AB0534C9C6226 /* MacBubbleTestView.swift */; };
 		638AB6D714A37B797A1AD183 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D17C06CC0E96BDAA7779524 /* SessionListView.swift */; };
@@ -160,6 +175,7 @@
 		71AB0F5DFBF3366EAC49D05D /* ChatLoadingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63003A2D28B352ABAB064761 /* ChatLoadingState.swift */; };
 		73D5BFF158132CA4867AE293 /* SessionPreviewStatusGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = F55032B437F50C6E8B1CCA24 /* SessionPreviewStatusGlyph.swift */; };
 		740A60CC9415FB46D2D73787 /* KrakiDiag.swift in Sources */ = {isa = PBXBuildFile; fileRef = D345DB389B2A4F5A8E198058 /* KrakiDiag.swift */; };
+		758376169036CA38E392113D /* LocalAgentsCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50BC90E20CAB53EA38363CD1 /* LocalAgentsCheck.swift */; };
 		759AE50B2E38D95776D64D57 /* LoginView+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 877AB77036AB504E9C76156D /* LoginView+macOS.swift */; };
 		770252CC17F7BF25C1A114C1 /* MacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE814884FDD9A0A46CCCCB69 /* MacApp.swift */; };
 		7999D41402AD34E2D934AA0E /* AccountPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E5D28B402A345F0D22B851 /* AccountPane.swift */; };
@@ -171,6 +187,7 @@
 		7F8B97ABC14A68350C0D43A6 /* KrakiVoiceInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27B142EE244DC79E4A704032 /* KrakiVoiceInputTests.swift */; };
 		7F988F04B287C0F6E680229C /* ConnectionStatusChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCAFB216C93DBDCD4ACE44C3 /* ConnectionStatusChip.swift */; };
 		8069508FC020876BEC23411F /* SwipeBackEnabler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82693FAB48A09CEA26F30331 /* SwipeBackEnabler.swift */; };
+		846189C0712D27DE650B1BDD /* ThisMacSetupStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACF9B7682A158350E82AECB6 /* ThisMacSetupStep.swift */; };
 		84CB45E78AD2AC208A053E49 /* SessionInfoSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 427AD031BE9C726645DEA33E /* SessionInfoSheet.swift */; };
 		85698BAF42714CA74CF81CB8 /* MessageDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2E016C4ACE0484D7DB04166 /* MessageDatabase.swift */; };
 		858780C909D555E4389D53F9 /* MacMockData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63302839C21EFDE37CC56C13 /* MacMockData.swift */; };
@@ -186,9 +203,11 @@
 		8DD4AE2E5880121FF778CCD3 /* KrakiPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACA594C1B063D6133CF3BC50 /* KrakiPlatform.swift */; };
 		8F6280E0F252F3D0E4DEA9D7 /* SessionCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F98323AAD3C8D23F7A63AAC9 /* SessionCardView.swift */; };
 		905C91DB5410CEEDA060E7A1 /* SessionsSidebarView+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DEFD8A1D19846132D2AE32A /* SessionsSidebarView+macOS.swift */; };
+		90CB99F531524D18FF2BD990 /* BuiltInTentacle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EBD5FFCF0E54067B287536A /* BuiltInTentacle.swift */; };
 		914847D19343236FEB95A20D /* LiveBubbleTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5BAEA7249F10D6067F0886F /* LiveBubbleTestView.swift */; };
 		92179DB4025882C8C975EC34 /* NativeSessionPreviewGlyphTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84D022FEB21EC483DA523C2A /* NativeSessionPreviewGlyphTests.swift */; };
 		92741DF0DA28DB1B5C2D6676 /* ChatHeightEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 522C9C637955C4ACB888C9C5 /* ChatHeightEstimator.swift */; };
+		9304EBE2869D89A4308C8D20 /* TentacleSetupRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A85098A6C3F08826873291AA /* TentacleSetupRunner.swift */; };
 		945558DB880907D741553F0E /* MacLaunchActivityIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D80A4B531EA5EBD081A0626 /* MacLaunchActivityIndicator.swift */; };
 		94C4BA9361E319CC750EAA19 /* MacBubbleImageGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716CF510D83856B445C94DA7 /* MacBubbleImageGrid.swift */; };
 		94F2F6AF6ADD79CED56E906E /* MacChatComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B7DBD1AD1C67E1CFB6ED036 /* MacChatComposer.swift */; };
@@ -231,6 +250,7 @@
 		B7C46A0BC08656D1F5C64D5E /* DeviceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04BA085D5DB073C1C3E8D700 /* DeviceStore.swift */; };
 		B84F034425AB3197961B56D9 /* WindowZoom.swift in Sources */ = {isa = PBXBuildFile; fileRef = F98488549005B2CCE060B76B /* WindowZoom.swift */; };
 		B8FF9EBBBEB7C81BA045175F /* ThemePlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBACFBCC6FD0563946CD080A /* ThemePlatform.swift */; };
+		B9148817156EDEF96AC47409 /* NoAgentsGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = F054D38D8C25B25EDF5F20F9 /* NoAgentsGuide.swift */; };
 		B92E7E829FC61E56473A4C80 /* AccountPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E5D28B402A345F0D22B851 /* AccountPane.swift */; };
 		B9799F37E9395C9A357E3A19 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = CDED8D6D15950EF64A1F92C5 /* GRDB */; };
 		B9904E6233735C93F73DEC6F /* DiagRunLoop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6812354F72EF32686A7E98C6 /* DiagRunLoop.swift */; };
@@ -246,6 +266,7 @@
 		C0C4528A1D3D1773A0BA9870 /* MessagesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D6472A002F2CB9C07380792 /* MessagesTests.swift */; };
 		C359E909D1763DA606DD8A6E /* ToolActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61AC5E0472D90CCB91CC0778 /* ToolActivityView.swift */; };
 		C3DD6301585CDBA8DB9E1FA4 /* KeychainManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DF2FADB7D9A46A1299A30E2 /* KeychainManager.swift */; };
+		C4FF5D48299265218A60123D /* BuiltInSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C513DCF24560A3E13BBBAFF3 /* BuiltInSetupView.swift */; };
 		C69062BD3C2E0844DCF29E5D /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA32D66EC88B6BEDF4675518 /* Commands.swift */; };
 		C6BB0C7305CBF9BC6A9C8A4E /* MacChatMockSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92398F20B425BB1B9F83DB93 /* MacChatMockSnapshot.swift */; };
 		C6C8EC4BB9D1B7EC88565DD8 /* MacChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8AD64AEE5A57AF1667249A7 /* MacChatView.swift */; };
@@ -270,6 +291,7 @@
 		D55885ACB978C03AC2DAE4E5 /* KrakiLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */; };
 		D64E0E6063EDA90F1CB6B30C /* CryptoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A28F5834F1C3C7CC175B7C5C /* CryptoManager.swift */; };
 		D760ADD6B42A59302671894C /* MessageBodyParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32B6A816B6624FE9CCD472F5 /* MessageBodyParser.swift */; };
+		D7C26171A2AF89D6276D6276 /* ExistingCLIChoiceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A326F8D2A24FFEE51C78A94E /* ExistingCLIChoiceView.swift */; };
 		D7E3CD08B7DCB2E17937B051 /* TabBarNavigationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6612B64B8037EF4E603EB59 /* TabBarNavigationUITests.swift */; };
 		D81F3DEF5710AD361C8B75BF /* ProtocolTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C8B3E613E598F2D688BE4DE /* ProtocolTypes.swift */; };
 		D949AA3B93675BB246AE7565 /* NetworkResilienceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A12AD389B30F05A2599BF32A /* NetworkResilienceTests.swift */; };
@@ -280,8 +302,10 @@
 		DEF3457C9DDC84533AE6636B /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 179780D06C1EF0B6ED5E0C38 /* WelcomeView.swift */; };
 		DFA7C9DEE69AE83C1C88F2AE /* MacChatMockSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92398F20B425BB1B9F83DB93 /* MacChatMockSnapshot.swift */; };
 		E0100C295B7D75341380EEAB /* IOSVoiceComposerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 931E212514D39039C91B350D /* IOSVoiceComposerTests.swift */; };
+		E22BA231CFC349EA61E2981F /* LocalAgentsCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50BC90E20CAB53EA38363CD1 /* LocalAgentsCheck.swift */; };
 		E28B775963A2EDAC7D4F166E /* DiagRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6E168D723AE41346C13EB32 /* DiagRecorder.swift */; };
 		E3C3A5804AF1AF52E8D8BBE8 /* AboutPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35F1A1C981D696BC1EB1A0FE /* AboutPane.swift */; };
+		E44838ABCB19A5FE0C34F666 /* LocalAgentsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F0D3BD8FC6A18700879AEC /* LocalAgentsWindow.swift */; };
 		E578C3D28FE88D4B38B71B55 /* MacStepsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07D6E0A7CA95492AFFEAA610 /* MacStepsView.swift */; };
 		E584D9C40B57680AF34DE750 /* FlatBubbleTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5DA5D4B10C2EF6EA184D1E3 /* FlatBubbleTestView.swift */; };
 		E74ACB62F0337BF8D7E95E3B /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E57D3E8B020B76BCD75B0243 /* ChatViewModel.swift */; };
@@ -292,16 +316,19 @@
 		EB8DEE5994FE4F2012FFDDA7 /* ExperienceTrackers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43FB5915A2C34921FF2DF24A /* ExperienceTrackers.swift */; };
 		EBB7E4C62FE6047767653940 /* NewSessionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD29591F2C7F6E0D0AFAE855 /* NewSessionSheet.swift */; };
 		EBBE7FD227990872EBFAFA2C /* AttachmentSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7155B0057D71BDD112CB0B8E /* AttachmentSchedulerTests.swift */; };
+		ECD0B5973DEEEEBEFD39ACAA /* ForegroundTestGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49BC47F1AAD6F888FD15878C /* ForegroundTestGate.swift */; };
 		ED69BD9687C030C318D9EF49 /* SessionSubscriptionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C23E728794AEA9E7A803A564 /* SessionSubscriptionController.swift */; };
 		EF182DDCEE43C64585164D92 /* VoiceInputCore in Frameworks */ = {isa = PBXBuildFile; productRef = C18741B12304BDBDCC5AF55E /* VoiceInputCore */; };
 		F030B7B0198D76CB4CAD4366 /* PreferencesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C0AE2F0350124712EAE0E17 /* PreferencesManager.swift */; };
 		F134E18404408B23FA5A7B57 /* PKCE.swift in Sources */ = {isa = PBXBuildFile; fileRef = B25E8CC25E0F72D13A5394C5 /* PKCE.swift */; };
 		F31C758A34766D63EDB6AAF6 /* DiagSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7209F58C4D298C8764042569 /* DiagSettingsSection.swift */; };
+		F3A5F80CDE40AB71227301D3 /* MacSetupIntro.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36FC4EAA96F9E5781C9A7449 /* MacSetupIntro.swift */; };
 		F5B867504AFC26C37BE4E2DB /* PairingSheet+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = F85975C0842C3E6C99D031CE /* PairingSheet+macOS.swift */; };
 		F5E796FF4FDE931F18A3680A /* PushManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C97B0E319E0F6D893D83C12A /* PushManager.swift */; };
 		F6582FAA807D4A92471EBCA8 /* PendingTailBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABE0847F43FAEAA37799CEE2 /* PendingTailBuffer.swift */; };
 		F67A09E157C2A96010AFEDB2 /* AttachmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77E056700BA106FD1E130382 /* AttachmentStore.swift */; };
 		F68223766885D060184C6278 /* LogsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447FBAB1A2FAA65AD4B03988 /* LogsWindow.swift */; };
+		F7876F1F5FF548F7C05C0BE7 /* LocalAgentsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250E3DB62309C76D6D79AC25 /* LocalAgentsPanel.swift */; };
 		F8289CBF9D6D730BE4F5A0A8 /* IOSVoiceComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAEABA66C53A4169697F5D6A /* IOSVoiceComposer.swift */; };
 		F9FDB8F828AADC3EADDB5A45 /* AuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8261534E96234C67C920EDCA /* AuthManager.swift */; };
 		FA148474BFE2419BD93D7EFF /* CommandSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ABD91DDEFD532C3C383BBDE /* CommandSender.swift */; };
@@ -389,10 +416,12 @@
 		1D6472A002F2CB9C07380792 /* MessagesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesTests.swift; sourceTree = "<group>"; };
 		1DF2FADB7D9A46A1299A30E2 /* KeychainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainManager.swift; sourceTree = "<group>"; };
 		1E254833E8916A34AD087E56 /* BackgroundReconnectingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundReconnectingTests.swift; sourceTree = "<group>"; };
+		1EBD5FFCF0E54067B287536A /* BuiltInTentacle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInTentacle.swift; sourceTree = "<group>"; };
 		20350221F5A369C6D4F3440F /* NewSessionJourneyUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionJourneyUITests.swift; sourceTree = "<group>"; };
 		21B22C573B738579E0AE6A1A /* NotificationsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationsPane.swift; sourceTree = "<group>"; };
 		22F6388085A5234FBAB8906F /* ProtocolTypesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTypesTests.swift; sourceTree = "<group>"; };
 		22F8C22AC09EBB3DFB038F97 /* ChatUXRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatUXRegressionTests.swift; sourceTree = "<group>"; };
+		250E3DB62309C76D6D79AC25 /* LocalAgentsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAgentsPanel.swift; sourceTree = "<group>"; };
 		2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiLogger.swift; sourceTree = "<group>"; };
 		27B142EE244DC79E4A704032 /* KrakiVoiceInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiVoiceInputTests.swift; sourceTree = "<group>"; };
 		28D15C4DAE8AB0534C9C6226 /* MacBubbleTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBubbleTestView.swift; sourceTree = "<group>"; };
@@ -407,6 +436,7 @@
 		341940FBEAD0F36C8E7F510C /* KrakiVoiceInputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiVoiceInputController.swift; sourceTree = "<group>"; };
 		35F1A1C981D696BC1EB1A0FE /* AboutPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutPane.swift; sourceTree = "<group>"; };
 		36547BB6B68E22C1BEB7D1CD /* KrakiMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KrakiMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		36FC4EAA96F9E5781C9A7449 /* MacSetupIntro.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSetupIntro.swift; sourceTree = "<group>"; };
 		37B56341037B8B54A732E91A /* ToolStatusIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolStatusIcon.swift; sourceTree = "<group>"; };
 		3A130A3774A3144CDA4C6023 /* ComposerHitAreaUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerHitAreaUITests.swift; sourceTree = "<group>"; };
 		3C568CFF12F4C661F328D4DA /* Kraki.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Kraki.entitlements; sourceTree = "<group>"; };
@@ -422,7 +452,9 @@
 		447FBAB1A2FAA65AD4B03988 /* LogsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsWindow.swift; sourceTree = "<group>"; };
 		447FC84D6CEC57ADB1D93CA5 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		49118B9C5B861B64143ACD87 /* EventMonitorForwarding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventMonitorForwarding.swift; sourceTree = "<group>"; };
+		49BC47F1AAD6F888FD15878C /* ForegroundTestGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForegroundTestGate.swift; sourceTree = "<group>"; };
 		4D17C06CC0E96BDAA7779524 /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
+		50BC90E20CAB53EA38363CD1 /* LocalAgentsCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAgentsCheck.swift; sourceTree = "<group>"; };
 		50E35AD5263921130DD1A18D /* StabilityTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StabilityTrackerTests.swift; sourceTree = "<group>"; };
 		5179D3E57BD2FCF3F327E11C /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
 		522C9C637955C4ACB888C9C5 /* ChatHeightEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatHeightEstimator.swift; sourceTree = "<group>"; };
@@ -430,6 +462,7 @@
 		5437A18846D42371499BC0F6 /* KrakiNotification.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KrakiNotification.entitlements; sourceTree = "<group>"; };
 		5469FDA14AA91327B6DF4400 /* MainWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowView.swift; sourceTree = "<group>"; };
 		5626ED6495E1877F3D9A7F74 /* ChatPlaceholderView+macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatPlaceholderView+macOS.swift"; sourceTree = "<group>"; };
+		593F51D017203A91FAB57F80 /* ThisMacSetupSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThisMacSetupSnapshot.swift; sourceTree = "<group>"; };
 		59694366DCD0EF98D143260B /* AttachmentRequestModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentRequestModifier.swift; sourceTree = "<group>"; };
 		5AE2C1783288D65F53D7F362 /* TabActionInterceptor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabActionInterceptor.swift; sourceTree = "<group>"; };
 		5B840BBE9C2E72331DE8CD87 /* MacVoiceComposerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacVoiceComposerTests.swift; sourceTree = "<group>"; };
@@ -454,6 +487,7 @@
 		6B54EBE3BC7263D7BB438142 /* IOSNewSessionScenario.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSNewSessionScenario.swift; sourceTree = "<group>"; };
 		6D80A4B531EA5EBD081A0626 /* MacLaunchActivityIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLaunchActivityIndicator.swift; sourceTree = "<group>"; };
 		6DF461DDEA102ED1927719DE /* SessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStoreTests.swift; sourceTree = "<group>"; };
+		6E83544E423901DC3D8E07FB /* BuiltInTentacleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInTentacleTests.swift; sourceTree = "<group>"; };
 		6EDC494E5B0CBA712CCA550C /* ChatPerfListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPerfListView.swift; sourceTree = "<group>"; };
 		6FC184CE4CAFDEF1914453D4 /* TabBarHider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarHider.swift; sourceTree = "<group>"; };
 		714C9952404A97A090FC011F /* KrakiNotification.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = KrakiNotification.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -466,6 +500,7 @@
 		77E056700BA106FD1E130382 /* AttachmentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentStore.swift; sourceTree = "<group>"; };
 		788DB31948E59B27C4328EFE /* NewSessionSheet+macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NewSessionSheet+macOS.swift"; sourceTree = "<group>"; };
 		7A84BF94261411BEF2B51101 /* LazyImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LazyImageView.swift; sourceTree = "<group>"; };
+		813D862554B016FC9E0B527E /* FailedTurnVisibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FailedTurnVisibilityTests.swift; sourceTree = "<group>"; };
 		8261534E96234C67C920EDCA /* AuthManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthManager.swift; sourceTree = "<group>"; };
 		82693FAB48A09CEA26F30331 /* SwipeBackEnabler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeBackEnabler.swift; sourceTree = "<group>"; };
 		830D9504C54F439410E9F9CD /* AvatarTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarTestView.swift; sourceTree = "<group>"; };
@@ -494,16 +529,20 @@
 		9EAEB25D42AF6E6FEEA99513 /* VoiceInputCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = VoiceInputCore; path = Vendor/VoiceInputCore; sourceTree = SOURCE_ROOT; };
 		A12AD389B30F05A2599BF32A /* NetworkResilienceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkResilienceTests.swift; sourceTree = "<group>"; };
 		A14B6DB3934575CD54101AA1 /* KrakiUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KrakiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1F0D3BD8FC6A18700879AEC /* LocalAgentsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAgentsWindow.swift; sourceTree = "<group>"; };
 		A1F1C34007991B7E9D900DBF /* DevicesPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesPane.swift; sourceTree = "<group>"; };
 		A28F5834F1C3C7CC175B7C5C /* CryptoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoManager.swift; sourceTree = "<group>"; };
+		A326F8D2A24FFEE51C78A94E /* ExistingCLIChoiceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExistingCLIChoiceView.swift; sourceTree = "<group>"; };
 		A4037D4173EC6CC310DB2771 /* IOSClientAlignmentPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSClientAlignmentPreview.swift; sourceTree = "<group>"; };
 		A429810ED3F81077317149B3 /* DeviceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceStoreTests.swift; sourceTree = "<group>"; };
 		A625A24B0C13AF8010778069 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		A6E168D723AE41346C13EB32 /* DiagRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagRecorder.swift; sourceTree = "<group>"; };
 		A7BD9521683CD2FAA84C6AF6 /* Kraki.Release.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Kraki.Release.entitlements; sourceTree = "<group>"; };
+		A85098A6C3F08826873291AA /* TentacleSetupRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TentacleSetupRunner.swift; sourceTree = "<group>"; };
 		AA8F39B83EB04DE6DBA8346B /* KrakiNotification.Diagnostics.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KrakiNotification.Diagnostics.entitlements; sourceTree = "<group>"; };
 		ABE0847F43FAEAA37799CEE2 /* PendingTailBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingTailBuffer.swift; sourceTree = "<group>"; };
 		ACA594C1B063D6133CF3BC50 /* KrakiPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiPlatform.swift; sourceTree = "<group>"; };
+		ACF9B7682A158350E82AECB6 /* ThisMacSetupStep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThisMacSetupStep.swift; sourceTree = "<group>"; };
 		AF830792579504E8F32DFC4F /* SessionTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTable.swift; sourceTree = "<group>"; };
 		B153278B8FD6A628243129FA /* GeneralPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneralPane.swift; sourceTree = "<group>"; };
 		B25E8CC25E0F72D13A5394C5 /* PKCE.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PKCE.swift; sourceTree = "<group>"; };
@@ -517,11 +556,13 @@
 		BE07323D3B27AC8EA6814441 /* SessionPendingPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionPendingPreview.swift; sourceTree = "<group>"; };
 		BE99230A4F9458AC4AA4F03F /* TKLiveBody.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TKLiveBody.swift; sourceTree = "<group>"; };
 		C024AE6690757FB0A6916CEE /* MacNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNotifications.swift; sourceTree = "<group>"; };
+		C09D60ADBFACD8E9746EF968 /* GitHubMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubMark.swift; sourceTree = "<group>"; };
 		C103BC836F016769C5E1F10E /* MacAuthRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAuthRecoveryTests.swift; sourceTree = "<group>"; };
 		C1B2ACA651B6DE122BE92C76 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		C23E728794AEA9E7A803A564 /* SessionSubscriptionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSubscriptionController.swift; sourceTree = "<group>"; };
 		C4A34822755FED065BFDA075 /* TentaclePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TentaclePane.swift; sourceTree = "<group>"; };
 		C4FFB255BA0EAD5FA0EE3D2F /* IOSVoiceComposerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSVoiceComposerUITests.swift; sourceTree = "<group>"; };
+		C513DCF24560A3E13BBBAFF3 /* BuiltInSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInSetupView.swift; sourceTree = "<group>"; };
 		C553FCD0F7D8F0FC58C6EB97 /* IOSChatScrollScenario.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSChatScrollScenario.swift; sourceTree = "<group>"; };
 		C78E9D20D8646B35FBEBB79E /* MacChatUXRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatUXRegressionTests.swift; sourceTree = "<group>"; };
 		C7EEFA1D37EABA740112779F /* MacChatTestPages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatTestPages.swift; sourceTree = "<group>"; };
@@ -550,6 +591,7 @@
 		E805046685AE086D68B890D4 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
 		EA32D66EC88B6BEDF4675518 /* Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Commands.swift; sourceTree = "<group>"; };
 		EF54424FDF29034ACFC16B5A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		F054D38D8C25B25EDF5F20F9 /* NoAgentsGuide.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoAgentsGuide.swift; sourceTree = "<group>"; };
 		F163484AD442AE1D67F4E8A7 /* ToolChipHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolChipHeader.swift; sourceTree = "<group>"; };
 		F1BC3B39CCEB12DE1DD65808 /* Messages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Messages.swift; sourceTree = "<group>"; };
 		F1E5D28B402A345F0D22B851 /* AccountPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountPane.swift; sourceTree = "<group>"; };
@@ -694,6 +736,7 @@
 				0C23602EA58067E4AE252F62 /* ImportSessionSheet.swift */,
 				DD29591F2C7F6E0D0AFAE855 /* NewSessionSheet.swift */,
 				788DB31948E59B27C4328EFE /* NewSessionSheet+macOS.swift */,
+				F054D38D8C25B25EDF5F20F9 /* NoAgentsGuide.swift */,
 				F98323AAD3C8D23F7A63AAC9 /* SessionCardView.swift */,
 				5179D3E57BD2FCF3F327E11C /* SessionDetailView.swift */,
 				427AD031BE9C726645DEA33E /* SessionInfoSheet.swift */,
@@ -708,8 +751,10 @@
 			isa = PBXGroup;
 			children = (
 				FCAFB216C93DBDCD4ACE44C3 /* ConnectionStatusChip.swift */,
+				C09D60ADBFACD8E9746EF968 /* GitHubMark.swift */,
 				C1B2ACA651B6DE122BE92C76 /* LoginView.swift */,
 				877AB77036AB504E9C76156D /* LoginView+macOS.swift */,
+				36FC4EAA96F9E5781C9A7449 /* MacSetupIntro.swift */,
 				E805046685AE086D68B890D4 /* MainTabView.swift */,
 				D5B791C3F6BA99245733A941 /* PairingView.swift */,
 			);
@@ -933,7 +978,15 @@
 		C0C1056D2F7C80D4C47605A0 /* Tentacle */ = {
 			isa = PBXGroup;
 			children = (
+				C513DCF24560A3E13BBBAFF3 /* BuiltInSetupView.swift */,
+				1EBD5FFCF0E54067B287536A /* BuiltInTentacle.swift */,
+				A326F8D2A24FFEE51C78A94E /* ExistingCLIChoiceView.swift */,
+				50BC90E20CAB53EA38363CD1 /* LocalAgentsCheck.swift */,
+				250E3DB62309C76D6D79AC25 /* LocalAgentsPanel.swift */,
+				A1F0D3BD8FC6A18700879AEC /* LocalAgentsWindow.swift */,
 				D219A1249EBFCAA247533E07 /* TentacleCLIManager.swift */,
+				A85098A6C3F08826873291AA /* TentacleSetupRunner.swift */,
+				ACF9B7682A158350E82AECB6 /* ThisMacSetupStep.swift */,
 			);
 			path = Tentacle;
 			sourceTree = "<group>";
@@ -1020,6 +1073,8 @@
 		EF7888C9EB9415B5852E9E41 /* KrakiMacTests */ = {
 			isa = PBXGroup;
 			children = (
+				6E83544E423901DC3D8E07FB /* BuiltInTentacleTests.swift */,
+				813D862554B016FC9E0B527E /* FailedTurnVisibilityTests.swift */,
 				8503ADABDC719A637FA3C5F6 /* HTMLReportMermaidTests.swift */,
 				C103BC836F016769C5E1F10E /* MacAuthRecoveryTests.swift */,
 				C78E9D20D8646B35FBEBB79E /* MacChatUXRegressionTests.swift */,
@@ -1028,6 +1083,7 @@
 				B60DD3157710F226FB5EF0DC /* MacSessionSidebarRevealTests.swift */,
 				5B840BBE9C2E72331DE8CD87 /* MacVoiceComposerTests.swift */,
 				A12AD389B30F05A2599BF32A /* NetworkResilienceTests.swift */,
+				593F51D017203A91FAB57F80 /* ThisMacSetupSnapshot.swift */,
 				5AEB62F9FC6509EEAC6E900F /* Fixtures */,
 			);
 			path = KrakiMacTests;
@@ -1053,6 +1109,7 @@
 				0B5C9B91D8E0CF8C6D63E91D /* CryptoTests.swift */,
 				A429810ED3F81077317149B3 /* DeviceStoreTests.swift */,
 				C847C12C5865CC3884732BFE /* ExperienceTrackersTests.swift */,
+				49BC47F1AAD6F888FD15878C /* ForegroundTestGate.swift */,
 				64BDD6DDB8BD5DCDD324CDA5 /* HelpersTests.swift */,
 				019837F19EFDB3EAE1431A18 /* IOSChatScrollProductionTests.swift */,
 				931E212514D39039C91B350D /* IOSVoiceComposerTests.swift */,
@@ -1142,6 +1199,7 @@
 				90562F65733123E69E9FD141 /* Sources */,
 				6919475AB58CCB18DFE3DE80 /* Resources */,
 				435E9F3651F22CF343D9C9F3 /* Frameworks */,
+				F69320AE6CB3867A2FDF0047 /* Embed built-in tentacle */,
 			);
 			buildRules = (
 			);
@@ -1328,11 +1386,37 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		F69320AE6CB3867A2FDF0047 /* Embed built-in tentacle */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
+			);
+			name = "Embed built-in tentacle";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "SCRIPT=\"$SRCROOT/../../../scripts/mac/embed-tentacle-helper.sh\"\nif [ ! -f \"$SCRIPT\" ]; then echo \"note: $SCRIPT not found; building without the built-in tentacle\"; exit 0; fi\nbash \"$SCRIPT\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		1064DDD183427AC7B6BA3755 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1B01E117986AF227249E2056 /* BuiltInTentacleTests.swift in Sources */,
+				52731419E058315E90679796 /* FailedTurnVisibilityTests.swift in Sources */,
+				ECD0B5973DEEEEBEFD39ACAA /* ForegroundTestGate.swift in Sources */,
 				442E00FDBE32C44255B6C4B8 /* HTMLReportMermaidTests.swift in Sources */,
 				E0100C295B7D75341380EEAB /* IOSVoiceComposerTests.swift in Sources */,
 				2205FA9CAD968A53A45DD693 /* MacAuthRecoveryTests.swift in Sources */,
@@ -1343,6 +1427,7 @@
 				29B069587F551B25D683BB2A /* MacVoiceComposerTests.swift in Sources */,
 				329CD52FB10EFC078920E6E5 /* NativeSessionPreviewGlyphTests.swift in Sources */,
 				D949AA3B93675BB246AE7565 /* NetworkResilienceTests.swift in Sources */,
+				030741A547AC17FE92C3A217 /* ThisMacSetupSnapshot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1358,6 +1443,7 @@
 				70666EBE60A847EF864AF2C1 /* CryptoTests.swift in Sources */,
 				45E3892DFF16FF95AE291B87 /* DeviceStoreTests.swift in Sources */,
 				7F3644FF333A604190D2C39D /* ExperienceTrackersTests.swift in Sources */,
+				3E437588025F139129368109 /* ForegroundTestGate.swift in Sources */,
 				DCDE31F2BEB3BB9017D46BE8 /* HelpersTests.swift in Sources */,
 				BD0DF68048D4DDD4EA0F66BD /* IOSChatScrollProductionTests.swift in Sources */,
 				B18A269A78EFA39A97A3A972 /* IOSVoiceComposerTests.swift in Sources */,
@@ -1394,6 +1480,8 @@
 				09C0D793D6B2F99D7AA81939 /* BubbleActionSlot.swift in Sources */,
 				C00B760A90E96341077B088A /* BubbleCatalogTestView.swift in Sources */,
 				0E23D63DF48D4BED0E117032 /* BubbleImageHostView.swift in Sources */,
+				1C5E0A0C9CD63583409196B7 /* BuiltInSetupView.swift in Sources */,
+				2D3B2608F2624CC6FD03BB30 /* BuiltInTentacle.swift in Sources */,
 				92741DF0DA28DB1B5C2D6676 /* ChatHeightEstimator.swift in Sources */,
 				71AB0F5DFBF3366EAC49D05D /* ChatLoadingState.swift in Sources */,
 				FCE093CC69E41DAA6487FFF2 /* ChatPerfListView.swift in Sources */,
@@ -1414,9 +1502,11 @@
 				F31C758A34766D63EDB6AAF6 /* DiagSettingsSection.swift in Sources */,
 				D087D8336F9F7A82D73AB4DD /* EncryptionHandler.swift in Sources */,
 				46AEB1D619ECB0277B3D042F /* EventMonitorForwarding.swift in Sources */,
+				D7C26171A2AF89D6276D6276 /* ExistingCLIChoiceView.swift in Sources */,
 				EB8DEE5994FE4F2012FFDDA7 /* ExperienceTrackers.swift in Sources */,
 				E584D9C40B57680AF34DE750 /* FlatBubbleTestView.swift in Sources */,
 				2EB7589D7EBECE7995E65571 /* GeneralPane.swift in Sources */,
+				6088B1B7B0692F4375FF68BC /* GitHubMark.swift in Sources */,
 				52A7B220249880A6B603CE4E /* HTMLReportSupport.swift in Sources */,
 				0D0FBFD6156B748621A453EE /* HeightMeasurementScheduler.swift in Sources */,
 				33284C120326EAC492164F6D /* Helpers.swift in Sources */,
@@ -1436,6 +1526,9 @@
 				7DC00DF43DEE954E5D78EEA1 /* KrakiVoiceInputController.swift in Sources */,
 				A28917FCF94F3FE2A0B5AD2A /* LazyImageView.swift in Sources */,
 				914847D19343236FEB95A20D /* LiveBubbleTestView.swift in Sources */,
+				758376169036CA38E392113D /* LocalAgentsCheck.swift in Sources */,
+				F7876F1F5FF548F7C05C0BE7 /* LocalAgentsPanel.swift in Sources */,
+				5EBF50BA43E1F185CF93A1E1 /* LocalAgentsWindow.swift in Sources */,
 				CB5335A6F0129A9A21088A72 /* LocalSessionSummary.swift in Sources */,
 				C88BC90C389AC1CC49D1B8F8 /* LoginView+macOS.swift in Sources */,
 				B48D7154FCD6A38CF2F94726 /* LoginView.swift in Sources */,
@@ -1458,6 +1551,7 @@
 				E99066BB398A92ECC653535A /* MacLaunchActivityIndicator.swift in Sources */,
 				858780C909D555E4389D53F9 /* MacMockData.swift in Sources */,
 				5C84A7024B48EF2DE6194D83 /* MacNotifications.swift in Sources */,
+				F3A5F80CDE40AB71227301D3 /* MacSetupIntro.swift in Sources */,
 				E578C3D28FE88D4B38B71B55 /* MacStepsView.swift in Sources */,
 				058F05193E5F187FE59EA1F9 /* MacToolActivityRow.swift in Sources */,
 				B28AD9034476281891032293 /* MacUpdateController.swift in Sources */,
@@ -1475,6 +1569,7 @@
 				063EA307ED63C7867624C342 /* NavigationIDs.swift in Sources */,
 				0A1071BB986ABE85A5D11E47 /* NewSessionSheet+macOS.swift in Sources */,
 				EBB7E4C62FE6047767653940 /* NewSessionSheet.swift in Sources */,
+				B9148817156EDEF96AC47409 /* NoAgentsGuide.swift in Sources */,
 				4C5EC2D159BE6C807F1FC854 /* NotificationsPane.swift in Sources */,
 				F134E18404408B23FA5A7B57 /* PKCE.swift in Sources */,
 				0D94E4000C0462E3581D4126 /* PairingSheet+macOS.swift in Sources */,
@@ -1510,9 +1605,11 @@
 				4A82C1BB1E8E000A1D469831 /* TabBarHider.swift in Sources */,
 				A97C02EF361069D7F5305B77 /* TentacleCLIManager.swift in Sources */,
 				7072CE0B000723DAD5D771C6 /* TentaclePane.swift in Sources */,
+				9304EBE2869D89A4308C8D20 /* TentacleSetupRunner.swift in Sources */,
 				CFD8991B865BC90CE1602AAD /* TextKitBubble.swift in Sources */,
 				4301D37FC0E42C745BB47E4D /* Theme.swift in Sources */,
 				B8FF9EBBBEB7C81BA045175F /* ThemePlatform.swift in Sources */,
+				846189C0712D27DE650B1BDD /* ThisMacSetupStep.swift in Sources */,
 				C359E909D1763DA606DD8A6E /* ToolActivityView.swift in Sources */,
 				2C1831EFAF427D90721F787F /* ToolChipHeader.swift in Sources */,
 				7E5A1ECF6308F2C8497326D9 /* ToolStatusIcon.swift in Sources */,
@@ -1550,6 +1647,8 @@
 				683B96FC8D6290D73BD26644 /* AttachmentRequestModifier.swift in Sources */,
 				F67A09E157C2A96010AFEDB2 /* AttachmentStore.swift in Sources */,
 				3581F3000482E30C0DE2698C /* AuthManager.swift in Sources */,
+				C4FF5D48299265218A60123D /* BuiltInSetupView.swift in Sources */,
+				90CB99F531524D18FF2BD990 /* BuiltInTentacle.swift in Sources */,
 				897B6BA62036FC059D074526 /* ChatLoadingState.swift in Sources */,
 				0E763016C3E54D4BEE49A2CE /* ChatPlaceholderView+macOS.swift in Sources */,
 				1A8B176B6FB20CE0C8414668 /* ChatScrollPolicy.swift in Sources */,
@@ -1565,8 +1664,10 @@
 				613A478009D713D6D8D81F36 /* DiagSettingsSection.swift in Sources */,
 				8BC5CECD42EA24EE4D580AC6 /* EncryptionHandler.swift in Sources */,
 				A6B46931BCA6C909B23C8B9F /* EventMonitorForwarding.swift in Sources */,
+				34D126CB8B7709D243BC02C6 /* ExistingCLIChoiceView.swift in Sources */,
 				5723493174679389435FE27D /* ExperienceTrackers.swift in Sources */,
 				331E5FA13A1DB2C8327BB977 /* GeneralPane.swift in Sources */,
+				3C7F7695CD5685A48330A3D5 /* GitHubMark.swift in Sources */,
 				8A7F59C78081DABAED337632 /* HTMLReportSupport.swift in Sources */,
 				449210BD9A5213261366CA6F /* HeightMeasurementScheduler.swift in Sources */,
 				8C74A12E6D7EA7794FCB3FAA /* Helpers.swift in Sources */,
@@ -1577,6 +1678,9 @@
 				5F0B02123ED43B73877167F5 /* KrakiLogger.swift in Sources */,
 				8DD4AE2E5880121FF778CCD3 /* KrakiPlatform.swift in Sources */,
 				D0DA7BC914F4D443E2F89695 /* KrakiVoiceInputController.swift in Sources */,
+				E22BA231CFC349EA61E2981F /* LocalAgentsCheck.swift in Sources */,
+				107F58C6EEF583A34A463123 /* LocalAgentsPanel.swift in Sources */,
+				E44838ABCB19A5FE0C34F666 /* LocalAgentsWindow.swift in Sources */,
 				87D91870B6D66F552948ADC1 /* LocalSessionSummary.swift in Sources */,
 				759AE50B2E38D95776D64D57 /* LoginView+macOS.swift in Sources */,
 				5F47265290B467B5BCA075C3 /* LogsWindow.swift in Sources */,
@@ -1598,6 +1702,7 @@
 				945558DB880907D741553F0E /* MacLaunchActivityIndicator.swift in Sources */,
 				6F7C13F76FDD7E9103905674 /* MacMockData.swift in Sources */,
 				2CF36A2578842439CD9CA78A /* MacNotifications.swift in Sources */,
+				3192804128658945031F370F /* MacSetupIntro.swift in Sources */,
 				40A33A5867D20686790F9258 /* MacStepsView.swift in Sources */,
 				5294ABB3C1CF9D77CD60F131 /* MacToolActivityRow.swift in Sources */,
 				C0AD5E96F22955DB2473E341 /* MacUpdateController.swift in Sources */,
@@ -1611,6 +1716,7 @@
 				6F355E1177288E02FB77EFDD /* Messages.swift in Sources */,
 				5095126837B9D8AF7B714EF9 /* NavigationIDs.swift in Sources */,
 				1392B71F4BA89CD3DE1C9E93 /* NewSessionSheet+macOS.swift in Sources */,
+				424639E4743ECEAC40710698 /* NoAgentsGuide.swift in Sources */,
 				A30457395FCEECC9CE6E8C53 /* NotificationsPane.swift in Sources */,
 				23B61F1BCE6CD4B7ABCFDA79 /* PKCE.swift in Sources */,
 				F5B867504AFC26C37BE4E2DB /* PairingSheet+macOS.swift in Sources */,
@@ -1633,7 +1739,9 @@
 				883F3668FB80B2AE0C2863AC /* StabilityTracker.swift in Sources */,
 				D01B522169B9950F05E31D64 /* TentacleCLIManager.swift in Sources */,
 				17A258966182927A4D3E35D5 /* TentaclePane.swift in Sources */,
+				3A71E711D1939B318CC0EC5C /* TentacleSetupRunner.swift in Sources */,
 				2C0D85737E6D0F881D7CF1D0 /* ThemePlatform.swift in Sources */,
+				6006EB03F1FC303FC76A1531 /* ThisMacSetupStep.swift in Sources */,
 				B6922FDD9F417397FB74E61E /* ToolChipHeader.swift in Sources */,
 				861AF5304EF7CEADE103EB21 /* ToolStatusIcon.swift in Sources */,
 				40A1135A70EFBBC66418181C /* TurnSpineProjection.swift in Sources */,
@@ -2298,9 +2406,10 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 50;
+				CURRENT_PROJECT_VERSION = 51;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = KrakiMac.Debug.Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Kraki (Dev)";
@@ -2308,7 +2417,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.48;
+				MARKETING_VERSION = 0.2.49;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.dev;
 				PRODUCT_NAME = "Kraki Dev";
 				SDKROOT = macosx;
@@ -2411,16 +2520,17 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 50;
+				CURRENT_PROJECT_VERSION = 51;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = KrakiMac.Diagnostics.Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.48;
+				MARKETING_VERSION = 0.2.49;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.diag;
 				PRODUCT_NAME = "Kraki Diag";
 				SDKROOT = macosx;
@@ -2435,9 +2545,10 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 50;
+				CURRENT_PROJECT_VERSION = 51;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = KrakiMac.Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Kraki;
@@ -2445,7 +2556,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.48;
+				MARKETING_VERSION = 0.2.49;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac;
 				PRODUCT_NAME = Kraki;
 				SDKROOT = macosx;
@@ -2460,9 +2571,10 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 50;
+				CURRENT_PROJECT_VERSION = 51;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = KrakiMac.Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Kraki;
@@ -2470,7 +2582,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.48;
+				MARKETING_VERSION = 0.2.49;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac;
 				PRODUCT_NAME = Kraki;
 				SDKROOT = macosx;

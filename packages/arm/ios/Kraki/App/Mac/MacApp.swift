@@ -83,8 +83,10 @@ final class MacLaunchCoordinator {
 
         if !servicesStarted {
             servicesStarted = true
+            // Install state decides whether a command-line install must be
+            // resolved in setup first (see below), so wait for it here.
+            await tentacleCLI.refreshInstallState()
             Task { @MainActor in
-                await tentacleCLI.refreshInstallState()
                 await tentacleCLI.refreshDaemonState()
                 tentacleCLI.startPolling()
             }
@@ -104,6 +106,11 @@ final class MacLaunchCoordinator {
             canEnterAuthenticatedRoot = true
         } else if mock {
             canEnterAuthenticatedRoot = true
+        } else if tentacleCLI.ownerChoicePending {
+            // A command-line install already runs Kraki and has signed in.
+            // Ask which one should run it in setup, before entering the app,
+            // instead of reusing the CLI login and asking over the chat window.
+            canEnterAuthenticatedRoot = false
         } else {
             // Keep the launch gate mounted while the app resolves its preferred
             // CLI credential. This removes the old signed-out-page flash before
@@ -227,8 +234,12 @@ final class MacLaunchCoordinator {
         )
     }
 
-    func retryLogin(appState: AppState) async {
+    func retryLogin(appState: AppState, tentacleCLI: TentacleCLIManager? = nil) async {
         guard !isCheckingCredentials else { return }
+        // While setup asks which install should run Kraki, don't slip in with
+        // the command-line login (e.g. on app activation): setup finishes the
+        // choice and then calls back here.
+        if let tentacleCLI, tentacleCLI.ownerChoicePending { return }
         isCheckingCredentials = true
         loginCheckFailed = false
         defer { isCheckingCredentials = false }
@@ -248,12 +259,13 @@ final class MacLaunchCoordinator {
 
     func reconcileAuthentication(
         hasStoredCredentials: Bool,
-        connectionStatus: ConnectionStatus
+        connectionStatus: ConnectionStatus,
+        ownerChoicePending: Bool = false
     ) {
         guard phase != .launching else { return }
         if hasStoredCredentials {
             loginCheckFailed = false
-            if phase == .signedOut {
+            if phase == .signedOut, !ownerChoicePending {
                 launchStartedAt = Date()
                 beginPreparingAuthenticatedSurface()
             }
@@ -375,9 +387,11 @@ struct MacApp: App {
                     )
                 } else {
                     productionRoot
+                        .modifier(ExistingCLIChoicePresenter(enabled: launchCoordinator.phase == .authenticated && !launchCoordinator.isLaunchGateVisible))
                 }
                 #else
                 productionRoot
+                    .modifier(ExistingCLIChoicePresenter(enabled: launchCoordinator.phase == .authenticated && !launchCoordinator.isLaunchGateVisible))
                 #endif
             }
                 .environment(appState)
@@ -413,13 +427,15 @@ struct MacApp: App {
                 .onChange(of: appState.hasStoredCredentials) { _, hasStoredCredentials in
                     launchCoordinator.reconcileAuthentication(
                         hasStoredCredentials: hasStoredCredentials,
-                        connectionStatus: appState.connectionStatus
+                        connectionStatus: appState.connectionStatus,
+                        ownerChoicePending: tentacleCLI.ownerChoicePending
                     )
                 }
                 .onChange(of: appState.connectionStatus) { _, connectionStatus in
                     launchCoordinator.reconcileAuthentication(
                         hasStoredCredentials: appState.hasStoredCredentials,
-                        connectionStatus: connectionStatus
+                        connectionStatus: connectionStatus,
+                        ownerChoicePending: tentacleCLI.ownerChoicePending
                     )
                 }
                 .onReceive(NotificationCenter.default.publisher(
@@ -429,7 +445,7 @@ struct MacApp: App {
                         // Returning from Terminal after `kraki connect` should
                         // discover the new CLI login without requiring a relaunch.
                         Task {
-                            await launchCoordinator.retryLogin(appState: appState)
+                            await launchCoordinator.retryLogin(appState: appState, tentacleCLI: tentacleCLI)
                         }
                     } else {
                         // macOS keeps the broker connection optimistically warm;
@@ -491,6 +507,11 @@ struct MacApp: App {
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .windowResizability(.contentMinSize)
         .defaultLaunchBehavior(.presented)
+        // Kraki reopens its own window and last session on every launch, so
+        // macOS state restoration adds nothing — and restoring windows at
+        // login re-entered SwiftUI's scene updates until the main thread's
+        // stack overflowed (crash seen on a clean Mac after a reboot).
+        .restorationBehavior(.disabled)
         .commands {
             MacCommands(appState: appState, tentacleCLI: tentacleCLI)
         }
@@ -501,6 +522,16 @@ struct MacApp: App {
                 .environment(tentacleCLI)
                 .frame(width: 540, height: 420)
         }
+        .restorationBehavior(.disabled)
+
+        Window("Coding Agents", id: "local-agents") {
+            LocalAgentsWindow()
+                .environment(appState)
+                .environment(tentacleCLI)
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+        .restorationBehavior(.disabled)
 
         Window("Logs", id: "logs") {
             LogsWindow()
@@ -509,6 +540,7 @@ struct MacApp: App {
         }
         .keyboardShortcut("l", modifiers: .command)
         .defaultPosition(.center)
+        .restorationBehavior(.disabled)
 
         #if DEBUG
         Window("Chat Scenario Test Page", id: "chat-scenarios") {
@@ -521,6 +553,7 @@ struct MacApp: App {
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1480, height: 920)
+        .restorationBehavior(.disabled)
         #endif
 
         MenuBarExtra {

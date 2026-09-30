@@ -14,6 +14,13 @@ export interface DaemonStatusFile {
   relay: string;
   deviceName: string;
   region?: string;
+  /** macOS Full Disk Access as observed by the daemon process itself. */
+  fda?: 'granted' | 'denied' | 'missing';
+  fdaCheckedAt?: number;
+  /** Who supervises this daemon: the Mac app's launchd job or the CLI. */
+  managedBy?: 'kraki-mac' | 'cli';
+  version?: string;
+  pid?: number;
   updatedAt: number;
 }
 
@@ -41,6 +48,17 @@ export function updateRelayState(state: DaemonStatusFile['relayState']): void {
 
 export function updateRegion(region: string): void {
   _current = { ..._current, region, updatedAt: Date.now() };
+  writeStatus();
+}
+
+export function updateFdaStatus(fda: NonNullable<DaemonStatusFile['fda']>): void {
+  const now = Date.now();
+  _current = { ..._current, fda, fdaCheckedAt: now, updatedAt: now };
+  writeStatus();
+}
+
+export function updateDaemonIdentity(identity: Pick<DaemonStatusFile, 'managedBy' | 'version' | 'pid'>): void {
+  _current = { ..._current, ...identity, updatedAt: Date.now() };
   writeStatus();
 }
 

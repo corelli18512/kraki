@@ -1,5 +1,15 @@
-/// TentacleCLIManager — Detects the locally-installed `kraki` CLI,
-/// queries its daemon state, and provides start/stop/connect actions.
+/// TentacleCLIManager — Drives this Mac's local tentacle: either the one
+/// built into Kraki for Mac (see BuiltInTentacle) or a separately installed
+/// `kraki` CLI, and provides start/stop/connect actions.
+///
+/// Mode
+/// ----
+/// `.builtIn`: the helper embedded in the app, supervised by SMAppService.
+/// All queries (`status --json`, `connect --json`, `setup --json`) run the
+/// embedded binary; lifecycle goes through SMAppService/launchctl.
+/// `.external`: the original model below — a user-installed CLI that owns its
+/// own launchd job. Both share ~/.kraki; `managed-by.json` makes sure only one
+/// of them ever supervises a daemon (see TentacleMode.resolve).
 ///
 /// Spawn model
 /// -----------
@@ -47,6 +57,9 @@ final class TentacleCLIManager {
         case running(pid: Int)
         case starting
         case stopping
+        /// Built-in only: the user turned Kraki off in System Settings → Login
+        /// Items; macOS will not run the daemon until it is re-enabled there.
+        case needsApproval
         case error(String)
     }
 
@@ -54,6 +67,36 @@ final class TentacleCLIManager {
     private(set) var daemonState: DaemonState = .unknown
     private(set) var configInfo: ConfigInfo?
     private(set) var lastError: String?
+
+    /// Which tentacle this app drives. Resolved by refreshInstallState().
+    private(set) var mode: TentacleMode = .external
+    /// A standalone CLI found on this Mac, independent of the current mode.
+    private(set) var externalCLI: (path: String, version: String?)?
+    /// A command-line install already runs Kraki and the user hasn't chosen
+    /// which one should (see TentacleMode.needsOwnerChoice).
+    private(set) var ownerChoicePending = false
+    /// Daemon-reported Full Disk Access ("granted" | "denied" | "missing").
+    private(set) var fdaStatus: String?
+    /// Relay connection state reported by the daemon.
+    private(set) var relayState: String?
+    /// Version of the running daemon binary (may lag the app after an update).
+    private(set) var runningDaemonVersion: String?
+
+    @ObservationIgnored let builtIn = BuiltInTentacle()
+    @ObservationIgnored private var restartedForVersion: String?
+    @ObservationIgnored private var notRunningSince: Date?
+    @ObservationIgnored private var reRegisteredThisLaunch = false
+
+    var isBuiltInAvailable: Bool { builtIn.isAvailable }
+
+    /// Binary for `kraki agents --json`: the built-in tentacle when present
+    /// (it is independent of who runs the daemon), else a CLI new enough.
+    var agentCheckBinaryPath: String? {
+        if builtIn.isAvailable { return builtIn.binaryPath }
+        if case .available(let path, _) = installState { return path }
+        return nil
+    }
+    var installLocation: AppInstallLocation { AppInstallLocation.current }
 
     struct ConfigInfo: Equatable {
         let exists: Bool
@@ -69,6 +112,10 @@ final class TentacleCLIManager {
 
     @ObservationIgnored
     @AppStorage("tentacle.binaryPathOverride") private var binaryPathOverride: String = ""
+
+    /// "builtIn" | "external" | "" (automatic). See TentacleMode.resolve.
+    @ObservationIgnored
+    @AppStorage("tentacle.mode") private var modePreference: String = ""
 
     // MARK: - Polling
 
@@ -91,35 +138,121 @@ final class TentacleCLIManager {
     // MARK: - Install detection
 
     func refreshInstallState() async {
+        let external = await detectExternalCLI()
+        externalCLI = external
+        mode = TentacleMode.resolve(
+            preference: modePreference,
+            builtInAvailable: builtIn.isAvailable,
+            ownershipMarkerExists: builtIn.ownershipMarkerExists,
+            cliDaemonInstalled: BuiltInTentacle.cliDaemonInstalled,
+            externalCLIFound: external != nil
+        )
+        ownerChoicePending = TentacleMode.needsOwnerChoice(
+            preference: modePreference,
+            builtInAvailable: builtIn.isAvailable,
+            ownershipMarkerExists: builtIn.ownershipMarkerExists,
+            cliDaemonInstalled: BuiltInTentacle.cliDaemonInstalled,
+            externalCLIFound: external != nil
+        )
+        switch mode {
+        case .builtIn:
+            installState = .available(path: builtIn.binaryPath, version: builtIn.version)
+        case .external:
+            if let external {
+                installState = .available(path: external.path, version: external.version)
+            } else {
+                installState = .notFound
+            }
+        }
+    }
+
+    private func detectExternalCLI() async -> (path: String, version: String?)? {
         // User-set override always wins, if it points at an executable.
         let override = binaryPathOverride.trimmingCharacters(in: .whitespacesAndNewlines)
         if !override.isEmpty, FileManager.default.isExecutableFile(atPath: override) {
             let version = await runCapturing(binary: override, args: ["--version"])?.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            installState = .available(path: override, version: version)
-            return
+            return (override, version)
         }
 
         // Login-shell which.
         if let result = await runCapturing(binary: "/bin/sh", args: ["-lc", "command -v kraki"]),
            result.exitCode == 0 {
             let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !path.isEmpty, FileManager.default.isExecutableFile(atPath: path) {
+            if !path.isEmpty, FileManager.default.isExecutableFile(atPath: path), !isEmbeddedHelper(path) {
                 let version = await runCapturing(binary: path, args: ["--version"])?.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-                installState = .available(path: path, version: version)
-                return
+                return (path, version)
             }
         }
 
         // Fallback common locations.
-        for path in fallbackPaths {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                let version = await runCapturing(binary: path, args: ["--version"])?.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-                installState = .available(path: path, version: version)
-                return
-            }
+        for path in fallbackPaths where FileManager.default.isExecutableFile(atPath: path) && !isEmbeddedHelper(path) {
+            let version = await runCapturing(binary: path, args: ["--version"])?.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (path, version)
         }
+        return nil
+    }
 
-        installState = .notFound
+    /// A `kraki` on PATH that is really a symlink into some Kraki for Mac is
+    /// not an independent CLI.
+    private func isEmbeddedHelper(_ path: String) -> Bool {
+        let resolved = (path as NSString).resolvingSymlinksInPath
+        return resolved.contains(".app/Contents/Library/Helpers/")
+    }
+
+    /// Persist the user's choice and apply it. Switching to the built-in
+    /// tentacle stops a CLI-owned daemon first; switching away releases the
+    /// built-in one. ~/.kraki (login, device id, sessions) is shared, so
+    /// neither direction needs a new sign-in.
+    func switchMode(to target: TentacleMode) async {
+        guard target != mode || modePreference != target.rawValue else { return }
+        lastError = nil
+        daemonState = .stopping
+        switch target {
+        case .builtIn:
+            if let external = externalCLI, BuiltInTentacle.cliDaemonInstalled || daemonIsRunningNow {
+                let result = await runCapturing(binary: external.path, args: ["stop"])
+                // Taking over while the CLI's daemon still runs would put two
+                // daemons on one device id. Stay put and say why instead.
+                if BuiltInTentacle.cliDaemonInstalled && result?.exitCode != 0 {
+                    let output = [result?.stderr, result?.stdout].compactMap { $0 }.joined(separator: "\n")
+                    let detail = output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+                        .last { !$0.isEmpty } ?? ""
+                    lastError = "Couldn't stop the command-line Kraki." + (detail.isEmpty ? "" : " \(detail)")
+                    await refreshDaemonState()
+                    return
+                }
+            }
+            modePreference = TentacleMode.builtIn.rawValue
+            await refreshInstallState()
+            await startDaemon()
+        case .external:
+            do { try await builtIn.disable() } catch { lastError = error.localizedDescription }
+            modePreference = TentacleMode.external.rawValue
+            await refreshInstallState()
+            await startDaemon()
+        }
+    }
+
+    /// Settings → Tentacle "Run agents on this Mac": turn the built-in daemon
+    /// on (and remember it) or off (only control other computers from here).
+    func setRunsAgentsOnThisMac(_ on: Bool) async {
+        UserDefaults.standard.set(
+            (on ? BuiltInTentacle.ThisMacRole.runsAgents : .remoteOnly).rawValue,
+            forKey: BuiltInTentacle.thisMacRoleKey
+        )
+        if on {
+            await startDaemon()
+        } else {
+            daemonState = .stopping
+            do { try await builtIn.disable() } catch { lastError = error.localizedDescription }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            await refreshDaemonState()
+        }
+    }
+
+    private var daemonIsRunningNow: Bool {
+        if case .running = daemonState { return true }
+        return false
     }
 
     /// Allow the user to set an explicit override (Preferences →
@@ -149,6 +282,44 @@ final class TentacleCLIManager {
         let daemon = json["daemon"] as? [String: Any]
         let running = daemon?["running"] as? Bool ?? false
         let pid = daemon?["pid"] as? Int
+        fdaStatus = daemon?["fda"] as? String
+        relayState = daemon?["relayState"] as? String
+        runningDaemonVersion = daemon?["daemonVersion"] as? String
+
+        if mode == .builtIn {
+            // SMAppService is the source of truth for whether the job may run.
+            if builtIn.service.status == .requiresApproval {
+                daemonState = .needsApproval
+                return
+            }
+            // After a Sparkle update the old daemon keeps running from memory.
+            // Restart it once onto the tentacle this app now ships.
+            if running, let shipped = builtIn.version, let live = runningDaemonVersion,
+               shipped != live, restartedForVersion != shipped, builtIn.ownershipMarkerExists {
+                restartedForVersion = shipped
+                KLog.diag("[Tentacle] restarting built-in daemon \(live) → \(shipped)")
+                builtIn.kickstart()
+            }
+        }
+        // Self-heal: the job is registered and should run, yet nothing runs.
+        // After an app update launchd can refuse the new helper binary against
+        // the launch constraint it recorded at registration (seen with a
+        // re-signed helper: "Requesting repair LWCR update", exit 78 forever).
+        // Re-registering records the current binary. Once per app launch, and
+        // only after the job had time to come up on its own.
+        if mode == .builtIn, !running, builtIn.ownershipMarkerExists,
+           BuiltInTentacle.thisMacRole != .remoteOnly,
+           builtIn.service.status == .enabled, !reRegisteredThisLaunch {
+            if notRunningSince == nil { notRunningSince = Date() }
+            if let since = notRunningSince, Date().timeIntervalSince(since) > 20 {
+                reRegisteredThisLaunch = true
+                KLog.diag("[Tentacle] built-in daemon registered but not running for 20s; re-registering")
+                Task { await self.reRegisterBuiltIn() }
+            }
+        } else if running {
+            notRunningSince = nil
+        }
+
         if running, let pid {
             // Don't clobber a transient .starting state if we caught the
             // daemon mid-fork (kraki start already returned but pidfile
@@ -203,6 +374,12 @@ final class TentacleCLIManager {
 
     func startDaemon() async {
         guard case .available(let path, _) = installState else { return }
+        if mode == .builtIn {
+            // The user chose to only control other computers from this Mac.
+            guard BuiltInTentacle.thisMacRole != .remoteOnly else { return }
+            await startBuiltIn()
+            return
+        }
 
         // Reuse, don't replace. The mac app is a CLIENT of the daemon,
         // never its owner. If the CLI (or a previous app launch) already
@@ -232,14 +409,87 @@ final class TentacleCLIManager {
     func stopDaemon() async {
         guard case .available(let path, _) = installState else { return }
         daemonState = .stopping
+        if mode == .builtIn {
+            do { try await builtIn.disable() } catch { lastError = error.localizedDescription }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            await refreshDaemonState()
+            return
+        }
         _ = await runCapturing(binary: path, args: ["stop"])
         try? await Task.sleep(nanoseconds: 300_000_000)
         await refreshDaemonState()
     }
 
     func restartDaemon() async {
+        if mode == .builtIn, daemonIsRunningNow {
+            daemonState = .starting
+            builtIn.kickstart()
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            await refreshDaemonState()
+            return
+        }
         await stopDaemon()
         await startDaemon()
+    }
+
+    /// Register the built-in daemon with SMAppService.
+    ///
+    /// Refuses from a translocated/disk-image location (the registration would
+    /// point at a path that vanishes on reboot) and never runs beside a daemon
+    /// owned by an external CLI.
+    /// Remove the job from launchd and register it again (keeps ownership).
+    /// SMAppService.unregister alone leaves launchd's recorded launch
+    /// constraint in place (verified in a VM: the job kept failing with
+    /// exit 78); `launchctl bootout` drops it, and the next register records
+    /// the binary now in the app.
+    private func reRegisterBuiltIn() async {
+        _ = await runCapturing(binary: "/bin/launchctl", args: ["bootout", "gui/\(getuid())/\(builtIn.label)"])
+        do {
+            try await builtIn.service.unregister()
+        } catch {
+            KLog.diag("[Tentacle] unregister before re-register failed: \(error.localizedDescription)")
+        }
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        do {
+            _ = try builtIn.enable()
+        } catch {
+            daemonState = .error("Could not restart Kraki in the background: \(error.localizedDescription)")
+        }
+    }
+
+    private func startBuiltIn() async {
+        switch installLocation {
+        case .translocated, .diskImage:
+            daemonState = .error("Move Kraki to the Applications folder before starting it.")
+            return
+        case .stable:
+            break
+        }
+        await refreshDaemonState()
+        if case .running = daemonState, builtIn.ownershipMarkerExists,
+           builtIn.service.status == .enabled { return }
+
+        daemonState = .starting
+        do {
+            let status = try builtIn.enable()
+            if status == .requiresApproval {
+                daemonState = .needsApproval
+                BuiltInTentacle.openLoginItemsSettings()
+                return
+            }
+        } catch {
+            daemonState = .error("Could not start Kraki in the background: \(error.localizedDescription)")
+            return
+        }
+        // The worker publishes its PID within a second or two; poll briefly so
+        // the UI moves straight to "running" instead of flashing "stopped".
+        for _ in 0..<40 {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            await refreshDaemonState()
+            if case .running = daemonState { return }
+            if case .needsApproval = daemonState { return }
+        }
+        if case .stopped = daemonState { daemonState = .starting }
     }
 
     // MARK: - Pairing
@@ -308,6 +558,7 @@ final class TentacleCLIManager {
         case .running:  return "circle.fill"
         case .starting, .stopping: return "circle.dashed"
         case .stopped:  return "circle"
+        case .needsApproval: return "exclamationmark.circle"
         case .error:    return "exclamationmark.circle"
         case .unknown:  return "questionmark.circle"
         }

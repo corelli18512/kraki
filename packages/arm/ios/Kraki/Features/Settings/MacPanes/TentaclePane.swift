@@ -1,4 +1,5 @@
-/// TentaclePane — CLI install state + daemon control + log path.
+/// TentaclePane — which tentacle this Mac runs (built-in or external CLI),
+/// daemon control, permissions and logs.
 ///
 /// Mirrors the welcome card design but lives inside Preferences so
 /// users can come back to it any time without leaving a chat.
@@ -8,21 +9,44 @@ import SwiftUI
 
 struct TentaclePane: View {
     @Environment(TentacleCLIManager.self) private var tentacleCLI
+    @Environment(\.openWindow) private var openWindow
+    @AppStorage(BuiltInTentacle.thisMacRoleKey) private var runsAgentsHere = ""
 
     @AppStorage("tentacle.autostart") private var autostart: Bool = false
+    @State private var switching = false
 
     var body: some View {
         Form {
-            Section("Install") {
-                installContent
-                Button("Re-check") {
-                    Task { await tentacleCLI.refreshInstallState() }
+            if tentacleCLI.isBuiltInAvailable {
+                Section("Tentacle") {
+                    modeContent
+                }
+            }
+
+            if tentacleCLI.mode == .external {
+                Section("Install") {
+                    installContent
+                    Button("Re-check") {
+                        Task { await tentacleCLI.refreshInstallState() }
+                    }
                 }
             }
 
             Section("Daemon") {
                 daemonContent
-                Toggle("Start tentacle automatically when Kraki opens", isOn: $autostart)
+                if tentacleCLI.mode == .external {
+                    Toggle("Start tentacle automatically when Kraki opens", isOn: $autostart)
+                } else {
+                    Text("Runs in the background and starts when you log in. You can also turn it off in System Settings → General → Login Items.")
+                        .font(.caption)
+                        .foregroundStyle(Color.textSecondary)
+                }
+            }
+
+            if tentacleCLI.mode == .builtIn {
+                Section("Permissions") {
+                    fdaContent
+                }
             }
 
             Section("Logs") {
@@ -42,7 +66,54 @@ struct TentaclePane: View {
         .padding()
     }
 
-    // MARK: - Install section
+    // MARK: - Mode section
+
+    @ViewBuilder
+    private var modeContent: some View {
+        Picker("Run agents with", selection: Binding(
+            get: { tentacleCLI.mode },
+            set: { target in
+                switching = true
+                Task {
+                    await tentacleCLI.switchMode(to: target)
+                    switching = false
+                }
+            }
+        )) {
+            Text("Kraki (built in)").tag(TentacleMode.builtIn)
+            Text("External kraki CLI").tag(TentacleMode.external)
+        }
+        .pickerStyle(.radioGroup)
+        .disabled(switching || (tentacleCLI.externalCLI == nil && tentacleCLI.mode == .builtIn))
+
+        if tentacleCLI.mode == .builtIn {
+            Toggle("Run agents on this Mac", isOn: Binding(
+                get: { runsAgentsHere != BuiltInTentacle.ThisMacRole.remoteOnly.rawValue },
+                set: { on in
+                    runsAgentsHere = (on ? BuiltInTentacle.ThisMacRole.runsAgents : .remoteOnly).rawValue
+                    Task { await tentacleCLI.setRunsAgentsOnThisMac(on) }
+                }
+            ))
+            Text("When off, this Mac only controls agents on your other computers.")
+                .font(.caption)
+                .foregroundStyle(Color.textSecondary)
+            LabeledContent("Coding agents") {
+                Button("Check Coding Agents…") { openWindow(id: "local-agents") }
+            }
+            LabeledContent("Version", value: tentacleCLI.builtIn.version ?? "unknown")
+            if tentacleCLI.externalCLI != nil {
+                Text("The kraki CLI on this Mac stays usable for commands like `kraki status` and `kraki logs`; Kraki keeps the background daemon.")
+                    .font(.caption)
+                    .foregroundStyle(Color.textSecondary)
+            }
+        } else {
+            Text("Switching to the built-in tentacle stops the CLI's daemon and keeps your sign-in and sessions. You'll grant Full Disk Access to Kraki once.")
+                .font(.caption)
+                .foregroundStyle(Color.textSecondary)
+        }
+    }
+
+    // MARK: - Install section (external CLI)
 
     @ViewBuilder
     private var installContent: some View {
@@ -57,7 +128,7 @@ struct TentaclePane: View {
                 Text("Install via Terminal:")
                     .font(.caption)
                     .foregroundStyle(Color.textSecondary)
-                Text("npm install -g @kraki/cli")
+                Text(WelcomeView.cliInstallCommand)
                     .font(.system(.body, design: .monospaced))
                     .textSelection(.enabled)
                     .padding(8)
@@ -102,9 +173,18 @@ struct TentaclePane: View {
             ProgressView("Starting…").controlSize(.small)
         case .stopping:
             ProgressView("Stopping…").controlSize(.small)
+        case .needsApproval:
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Turned off in Login Items", systemImage: "exclamationmark.circle.fill")
+                    .foregroundStyle(Color(hex: 0xFBBF24))
+                HStack {
+                    Button("Open Login Items") { BuiltInTentacle.openLoginItemsSettings() }
+                    Button("Try Again") { Task { await tentacleCLI.startDaemon() } }
+                }
+            }
         case .running(let pid):
             HStack {
-                Label("Running (pid \(pid))", systemImage: "circle.fill")
+                Label("Running (pid \(String(pid)))", systemImage: "circle.fill")
                     .foregroundStyle(Color(hex: 0x34D399))
                 Spacer()
                 Button("Stop") { Task { await tentacleCLI.stopDaemon() } }
@@ -121,6 +201,27 @@ struct TentaclePane: View {
                     .buttonStyle(.borderedProminent)
                     .tint(Color.krakiPrimary)
             }
+        }
+    }
+
+    // MARK: - Permissions section (built-in)
+
+    @ViewBuilder
+    private var fdaContent: some View {
+        HStack {
+            switch tentacleCLI.fdaStatus {
+            case "granted":
+                Label("Full Disk Access granted", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(Color(hex: 0x34D399))
+            case "denied":
+                Label("Full Disk Access not granted", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Color(hex: 0xFBBF24))
+            default:
+                Label("Full Disk Access: checked while the daemon runs", systemImage: "questionmark.circle")
+                    .foregroundStyle(Color.textMuted)
+            }
+            Spacer()
+            Button("Open System Settings") { BuiltInTentacle.openFullDiskAccessSettings() }
         }
     }
 

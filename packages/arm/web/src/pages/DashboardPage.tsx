@@ -1,10 +1,11 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useStore } from '../hooks/useStore';
 import { wsClient } from '../lib/ws-client';
 import { startOAuthFlow, loadStoredDevice } from '../lib/transport';
 import { getOAuthClientId, supportsOAuthLogin } from '../lib/oauth';
 import { ScanQrCode } from 'lucide-react';
 import { QrScanner } from '../components/common/QrScanner';
+import { MAC_RELEASES_PAGE, isMacBrowser, resolveMacDmgUrl } from '../lib/macDownload';
 
 /** GitHub mark SVG for the sign-in button */
 function GitHubMark({ className }: { className?: string }) {
@@ -38,6 +39,15 @@ export function DashboardPage() {
       }
     } catch { /* invalid URL — ignored */ }
   }, []);
+
+  const onMac = isMacBrowser();
+  const [macDmgUrl, setMacDmgUrl] = useState(MAC_RELEASES_PAGE);
+  useEffect(() => {
+    if (!onMac) return;
+    let cancelled = false;
+    void resolveMacDmgUrl().then((url) => { if (!cancelled) setMacDmgUrl(url); });
+    return () => { cancelled = true; };
+  }, [onMac]);
 
   if (status === 'awaiting_login' || (status === 'connecting' && !hasCredentials)) {
     const isAuthenticating = status === 'connecting';
@@ -92,6 +102,15 @@ export function DashboardPage() {
         <p className="mt-6 rounded-lg bg-surface-secondary px-4 py-2 font-mono text-xs text-text-muted animate-fade-up-d3">
           {wsClient.url}
         </p>
+
+        {onMac && (
+          <a
+            href={macDmgUrl}
+            className="mt-6 text-xs text-text-muted underline-offset-2 hover:text-text-primary hover:underline animate-fade-up-d3"
+          >
+            Use this Mac's coding agents? Download Kraki for Mac
+          </a>
+        )}
 
         {scannerOpen && (
           <QrScanner onScan={handleQrScan} onClose={() => setScannerOpen(false)} />

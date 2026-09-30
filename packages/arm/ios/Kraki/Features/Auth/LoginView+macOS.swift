@@ -17,6 +17,7 @@ enum MacEntryGateMode: Equatable {
 
 struct MacEntryGateView: View {
     @Environment(AppState.self) private var appState
+    @Environment(TentacleCLIManager.self) private var tentacleCLI
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let mode: MacEntryGateMode
@@ -26,6 +27,8 @@ struct MacEntryGateView: View {
     var onLaunchActivityCommitted: () -> Void = {}
 
     @State private var appeared = false
+    @State private var introDone = false
+    @State private var pageHeight: CGFloat = 0
 
     var body: some View {
         Group {
@@ -82,23 +85,57 @@ struct MacEntryGateView: View {
         ZStack {
             entryBackdrop
 
-            VStack(spacing: 0) {
-                Spacer(minLength: 48)
+            if showsIntro {
+                MacSetupIntro { withAnimation(.easeOut(duration: 0.35)) { introDone = true } }
+                    .transition(.opacity)
+            } else {
+                // Scrollable, but the scroll bar only appears when the page
+                // is taller than the window: with a mouse, macOS otherwise
+                // keeps it visible even when everything fits.
+                GeometryReader { proxy in
+                    ScrollView(.vertical) {
+                        signedOutPage
+                            .frame(minHeight: proxy.size.height)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 }
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .scrollIndicators(pageHeight > proxy.size.height + 1 ? .automatic : .never)
+                }
+                .transition(.opacity.combined(with: .offset(y: 12)))
+            }
+        }
+    }
 
+    /// First open of the setup flow: the logo entrance before the steps.
+    private var showsIntro: Bool {
+        usesBuiltInSetup && !introDone && !reduceMotion
+            && !UserDefaults.standard.bool(forKey: MacSetupIntro.shownKey)
+    }
+
+    private var signedOutPage: some View {
+        VStack(spacing: 0) {
+            // The intro showed the big logo. During the setup steps the card
+            // owns the page, so it fits without scrolling on a normal window.
+            Spacer(minLength: usesBuiltInSetup ? 0 : 48)
+
+            if !usesBuiltInSetup {
                 signedOutBrand
+            }
 
-                signedOutActions
-                    .frame(maxWidth: 420, minHeight: 210, alignment: .top)
-                    .padding(.top, 24)
+            signedOutActions
+                .frame(maxWidth: 480, minHeight: 210, alignment: .top)
+                .padding(.top, usesBuiltInSetup ? 0 : 24)
 
-                Spacer(minLength: 36)
+            Spacer(minLength: usesBuiltInSetup ? 0 : 36)
 
+            if !usesBuiltInSetup {
                 footerStatus
                     .frame(minHeight: 24)
             }
-            .padding(.horizontal, 48)
-            .padding(.vertical, 34)
         }
+        .padding(.horizontal, 48)
+        .padding(.vertical, usesBuiltInSetup ? 8 : 34)
+        .frame(maxWidth: .infinity)
     }
 
     private var entryBackdrop: some View {
@@ -136,7 +173,7 @@ struct MacEntryGateView: View {
                     .tracking(4.2)
                     .foregroundStyle(Color.textTitle)
 
-                Text("Connect this Mac to your relay")
+                Text("Your coding agents, on every device")
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(Color.textSecondary)
                     .multilineTextAlignment(.center)
@@ -146,7 +183,29 @@ struct MacEntryGateView: View {
         }
     }
 
+    /// New users set up the tentacle built into the app; people who already
+    /// run the standalone CLI keep signing in through it.
+    private var usesBuiltInSetup: Bool {
+        tentacleCLI.isBuiltInAvailable && (tentacleCLI.mode == .builtIn || tentacleCLI.ownerChoicePending)
+    }
+
+    @ViewBuilder
     private var signedOutActions: some View {
+        if usesBuiltInSetup {
+            BuiltInSetupView(onFinished: onRetry)
+                .padding(.horizontal, 22)
+                .padding(.vertical, 16)
+                .background(Color.surfaceSecondary.opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.borderPrimary.opacity(0.8), lineWidth: 1)
+                )
+        } else {
+            externalCLIActions
+        }
+    }
+
+    private var externalCLIActions: some View {
         VStack(spacing: 16) {
             VStack(spacing: 7) {
                 Text("Sign in with the Kraki CLI")
@@ -219,7 +278,9 @@ struct MacEntryGateView: View {
 
     @ViewBuilder
     private var footerStatus: some View {
-        if mode == .signedOut {
+        if mode == .signedOut, usesBuiltInSetup {
+            EmptyView()
+        } else if mode == .signedOut {
             if isCheckingCredentials {
                 Text("Looking for a signed-in Kraki CLI…")
                     .font(.system(size: 10.5))

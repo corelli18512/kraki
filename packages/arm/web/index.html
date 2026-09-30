@@ -6,6 +6,36 @@
     <meta name="theme-color" content="#020617" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
     <script>
+      // Kraki for Mac sign-in: GitHub redirects here (a sub-path of the
+      // registered /auth/callback), and we hand code+state to the app through
+      // its kraki:// callback. The PKCE verifier lives only in the app, so the
+      // code is useless to anyone else. Stop the web app from loading.
+      (function() {
+        if (location.pathname.indexOf('/auth/callback/desktop') !== 0) return;
+        var target = 'kraki://auth/callback' + location.search;
+        window.stop();
+        // The parser is halted mid-head: build the page with DOM calls (no
+        // markup strings, which the bundler would rewrite).
+        var root = document.documentElement;
+        while (root.firstChild) root.removeChild(root.firstChild);
+        root.appendChild(document.createElement('head'));
+        document.title = 'Kraki';
+        var body = document.createElement('body');
+        body.style.cssText = 'font:15px -apple-system,sans-serif;text-align:center;padding-top:22vh;color:#334155';
+        var line = function(tag, text, css) {
+          var el = document.createElement(tag); el.textContent = text;
+          if (css) el.style.cssText = css;
+          body.appendChild(el); return el;
+        };
+        line('p', 'You\u2019re signed in', 'font-size:18px;font-weight:600');
+        line('p', 'Return to Kraki to finish setting up.');
+        var link = line('a', 'Open Kraki');
+        link.href = target;
+        root.appendChild(body);
+        location.replace(target);
+      })();
+    </script>
+    <script>
       // Apply dark mode before first paint to avoid flash and iOS PWA white status bar
       (function() {
         var t = localStorage.getItem('kraki-theme');

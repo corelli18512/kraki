@@ -33,6 +33,7 @@ import {
   clearDaemonReady,
 } from './config.js';
 import { getKrakiAppBundlePath, getProcessBundleIdentity, KRAKI_BUNDLE_ID } from './checks.js';
+import { MAC_APP_OWNER } from './managed.js';
 
 // How long to wait for any background daemon to publish readiness. Agent
 // discovery and capability loading can be slow on a cold machine; the explicit
@@ -86,10 +87,32 @@ function isLaunchdAgentLoaded(
   }
 }
 
+/**
+ * The standalone CLI's own launchd job for the current KRAKI_HOME. Kraki for
+ * Mac reads this (via `kraki status --json`) to detect an existing CLI-owned
+ * daemon before it registers its built-in one.
+ */
+export function getCliLaunchdJobState(): { label: string; plistExists: boolean; loaded: boolean } {
+  return {
+    label: getLaunchdLabel(),
+    plistExists: process.platform === 'darwin' && existsSync(getLaunchdPlistPath()),
+    loaded: isLaunchdAgentLoaded(),
+  };
+}
+
 function cleanupLaunchdPlist(): void {
   unloadLaunchdAgent();
   const p = getLaunchdPlistPath();
   if (existsSync(p)) unlinkSync(p);
+}
+
+/**
+ * Remove the CLI's own launchd job for this KRAKI_HOME. Used when Kraki for
+ * Mac has taken over the daemon but a CLI job survived (for example because
+ * stopping it failed), so it cannot start a second daemon at the next login.
+ */
+export function retireCliLaunchdJob(): void {
+  if (process.platform === 'darwin') cleanupLaunchdPlist();
 }
 export function hasUntrackedLaunchdDaemon(
   pid: number | null = loadDaemonPid(),
@@ -140,7 +163,10 @@ export async function prepareDaemonWorkerBootstrap(
   timeoutMs = 5000,
 ): Promise<void> {
   clearDaemonIdentity();
-  if (appBundle !== null) {
+  // Kraki for Mac's helper is exec'd by launchd (SMAppService BundleProgram),
+  // so it never has a Launch Services identity to wait for; TCC attributes it
+  // to the enclosing app instead. See managed.ts.
+  if (appBundle !== null && env.KRAKI_MANAGED_BY !== MAC_APP_OWNER) {
     const deadline = Date.now() + timeoutMs;
     do {
       const bundleId = lookupIdentity(pid);

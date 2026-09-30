@@ -45,7 +45,9 @@ import { KeyManager } from './key-manager.js';
 import { AttachmentStore } from './attachment-store.js';
 import { KrakiMcpServer } from './mcp/index.js';
 import { createLogger } from './logger.js';
-import { initStatusFile, updateRelayState, updateRegion, clearStatusFile } from './status-file.js';
+import { initStatusFile, updateRelayState, updateRegion, clearStatusFile, updateFdaStatus, updateDaemonIdentity } from './status-file.js';
+import { isMacAppManagedWorker, loadManagedBy } from './managed.js';
+import { hydrateLoginShellEnv } from './shell-env.js';
 import type { AgentAdapter } from './adapters/base.js';
 import type { AgentId } from '@kraki/protocol';
 
@@ -67,6 +69,7 @@ export interface WorkerResult {
 }
 
 export async function startWorker(): Promise<WorkerResult> {
+  let pendingFda: 'granted' | 'denied' | 'missing' | null = null;
   // Launch Services injects this private bootstrap variable into Kraki.app.
   // It is not a child-process credential, so remove it before adapters spawn.
   // Correctness does not rely on this scrub: responsible-process attribution
@@ -86,11 +89,36 @@ export async function startWorker(): Promise<WorkerResult> {
     );
   }
 
-  // macOS: ensure the .app bundle is registered with Launch Services so
-  // TCC tracks grants by bundle id (stable across updates) instead of
-  // cdhash (invalidated every release). This self-heals machines that
-  // installed before the lsregister step existed. Idempotent + cheap.
-  if (platform() === 'darwin') {
+  const managedByMacApp = isMacAppManagedWorker();
+
+  // Kraki for Mac owns the daemon for this home, yet the CLI's launchd job
+  // started us: that job is a leftover. Retire it and exit instead of running
+  // a second daemon under the same device id.
+  if (!managedByMacApp && platform() === 'darwin' && loadManagedBy()) {
+    logger.warn('Kraki for Mac runs the daemon for this home; retiring the leftover CLI launchd job');
+    const { retireCliLaunchdJob } = await import('./daemon.js');
+    retireCliLaunchdJob();
+    return process.exit(0);
+  }
+
+  if (managedByMacApp) {
+    // Started by Kraki for Mac's SMAppService job: launchd provides only a
+    // minimal environment, so recover the user's login-shell PATH/proxies
+    // before any agent, `gh`, or version-manager shim is resolved.
+    const shellEnv = hydrateLoginShellEnv();
+    logger.info(
+      { source: shellEnv.source, shell: shellEnv.shell, added: shellEnv.addedKeys.length, error: shellEnv.error },
+      'Resolved login-shell environment for the Mac app daemon',
+    );
+  } else if (platform() === 'darwin') {
+    // Standalone CLI install: ensure its Kraki.app bundle is registered with
+    // Launch Services so TCC tracks grants by bundle id (stable across updates)
+    // instead of cdhash (invalidated every release). This self-heals machines
+    // that installed before the lsregister step existed. Idempotent + cheap.
+    //
+    // Not done for the Mac app's embedded helper: TCC attributes that daemon to
+    // the enclosing Kraki for Mac bundle (responsible process), and sweeping
+    // chat.kraki.cli records is the standalone CLI's business alone.
     ensureTccBundleRegistered();
     // Also purge zombie Launch Services entries from past updates / builds —
     // a one-time sweep that fixes every already-installed machine.
@@ -104,7 +132,10 @@ export async function startWorker(): Promise<WorkerResult> {
   }
 
   // macOS: check Full Disk Access status. FDA is required to prevent
-  // recurring TCC permission dialogs during agent sessions.
+  // recurring TCC permission dialogs during agent sessions. The daemon's own
+  // observation is authoritative (TCC decides per responsible process), so it
+  // is published in status.json for the Mac app's onboarding to follow.
+  let fdaMonitor: NodeJS.Timeout | null = null;
   if (platform() === 'darwin') {
     const fdaStatus = await probeFda();
     if (fdaStatus !== 'granted') {
@@ -112,13 +143,40 @@ export async function startWorker(): Promise<WorkerResult> {
         'Full Disk Access not granted — grant in System Settings → Privacy & Security → Full Disk Access to prevent recurring permission dialogs',
       );
     }
+    let lastFda = fdaStatus;
+    let nextCheckAt = 0;
+    fdaMonitor = setInterval(() => {
+      // Poll quickly while the user may be granting access, slowly afterwards
+      // (FDA can also be revoked at any time).
+      if (Date.now() < nextCheckAt) return;
+      probeFda().then((status) => {
+        if (status !== lastFda) {
+          logger.info({ from: lastFda, to: status }, 'Full Disk Access status changed');
+          lastFda = status;
+        }
+        updateFdaStatus(status);
+        nextCheckAt = Date.now() + (status === 'granted' ? 60_000 : 0);
+      }).catch(() => {});
+    }, 3000);
+    fdaMonitor.unref();
+    pendingFda = fdaStatus;
   }
 
   const configPath = getConfigPath();
   const channelKeyPath = getChannelKeyPath();
 
   // 1. Load config
-  const config = loadConfig();
+  let config = loadConfig();
+  if (!config && managedByMacApp) {
+    // The Mac app registers its job only after setup, but the user can still
+    // reset the config while the job is enabled. Exiting would make launchd
+    // respawn us every ThrottleInterval forever; wait for setup instead.
+    logger.warn({ configPath }, 'No config yet — waiting for Kraki for Mac to finish setup');
+    while (!config) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      config = loadConfig();
+    }
+  }
   if (!config) {
     logger.fatal({ configPath }, `No config found at ${configPath} — run \`kraki\` to set up`);
     process.exit(1);
@@ -294,6 +352,8 @@ export async function startWorker(): Promise<WorkerResult> {
   // Write initial status file so toolbar can detect the daemon. Readiness is
   // published only after the lifecycle handlers below are installed.
   initStatusFile(process.env.KRAKI_RELAY_URL ?? config.relay, config.device.name);
+  updateDaemonIdentity({ managedBy: managedByMacApp ? 'kraki-mac' : 'cli', version: getVersion(), pid: process.pid });
+  if (pendingFda) updateFdaStatus(pendingFda);
 
   // 6. Graceful shutdown
   let shuttingDown = false;
@@ -303,6 +363,7 @@ export async function startWorker(): Promise<WorkerResult> {
     logger.info('Shutting down…');
     clearDaemonReady();
     clearDaemonIdentity();
+    if (fdaMonitor) clearInterval(fdaMonitor);
     clearStatusFile();
     relay.disconnect();
     await adapter.stop();

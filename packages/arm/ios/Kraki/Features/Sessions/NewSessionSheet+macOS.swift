@@ -9,6 +9,7 @@ import SwiftUI
 
 struct NewSessionSheet: View {
     @Environment(AppState.self) private var appState
+    @Environment(TentacleCLIManager.self) private var tentacleCLI
     @Binding var isPresented: Bool
     var onCreated: (String) -> Void = { _ in }
 
@@ -22,6 +23,18 @@ struct NewSessionSheet: View {
     private var tentacles: [DeviceSummary] { deviceStore.tentacleDevices }
     private var onlineTentacles: [DeviceSummary] { tentacles.filter(\.online) }
     private var agents: [AgentCapabilities] { deviceStore.agents(for: selectedDeviceId) }
+    private var availability: DeviceStore.AgentAvailability {
+        deviceStore.agentAvailability(for: selectedDeviceId)
+    }
+    private var selectedDeviceName: String {
+        tentacles.first { $0.id == selectedDeviceId }?.name ?? "this device"
+    }
+    /// The selected device is this Mac's own tentacle, so we can re-detect
+    /// its agents ourselves.
+    private var selectedIsThisMac: Bool {
+        guard let local = tentacleCLI.configInfo?.deviceId else { return false }
+        return local == selectedDeviceId
+    }
     private var activeAgent: AgentCapabilities? {
         agents.first { $0.id == selectedAgentId } ?? agents.first
     }
@@ -58,6 +71,9 @@ struct NewSessionSheet: View {
         .onChange(of: selectedDeviceId) { _, _ in onDeviceChanged() }
         .onChange(of: selectedAgentId) { _, _ in onAgentChanged() }
         .onChange(of: selectedModel) { _, _ in onModelChanged() }
+        // Agents can arrive after the sheet opens (greeting still in flight,
+        // or the user just installed one and pressed Check Again).
+        .onChange(of: agents.map(\.id)) { _, _ in onDeviceChanged() }
         .onChange(of: reasoningEffort) { _, effort in
             if let effort, !selectedModel.isEmpty {
                 SessionPrefs.saveLastEffort(model: selectedModel, effort: effort)
@@ -93,7 +109,7 @@ struct NewSessionSheet: View {
             Text("No Tentacle Devices Online")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Color.textPrimary)
-            Text("Install the Kraki CLI on a device and start the daemon to create a session.")
+            Text("Open Kraki on a computer and sign in to create a session there.")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.textSecondary)
                 .multilineTextAlignment(.center)
@@ -124,6 +140,49 @@ struct NewSessionSheet: View {
                 .pickerStyle(.menu)
             }
 
+            switch availability {
+            case .ready:
+                agentFields
+            case .connecting:
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Connecting to \(selectedDeviceName)…")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.textSecondary)
+                }
+            case .offline:
+                Label("\(selectedDeviceName) is offline. Open Kraki on it to start a session there.",
+                      systemImage: "moon.zzz")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.textSecondary)
+            case .noAgents:
+                NoAgentsGuide(
+                    deviceName: selectedDeviceName,
+                    isThisMac: selectedIsThisMac,
+                    checkAgain: selectedIsThisMac ? { await recheckLocalAgents() } : nil
+                )
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 18)
+        .padding(.bottom, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// Restart this Mac's tentacle so it re-detects installed agents, then
+    /// wait (briefly) for the fresh greeting.
+    private func recheckLocalAgents() async {
+        await tentacleCLI.restartDaemon()
+        for _ in 0..<40 {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if !agents.isEmpty { return }
+        }
+    }
+
+    @ViewBuilder
+    private var agentFields: some View {
             VStack(alignment: .leading, spacing: 6) {
                 fieldLabel("Agent")
                 Picker("", selection: $selectedAgentId) {
@@ -176,13 +235,6 @@ struct NewSessionSheet: View {
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(submit)
             }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 18)
-        .padding(.bottom, 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func fieldLabel(_ text: String) -> some View {

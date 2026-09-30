@@ -144,6 +144,28 @@ vi.mock('../checks.js', () => ({
   probeFda: vi.fn().mockResolvedValue('granted'),
 }));
 
+const mockHydrateLoginShellEnv = vi.fn(() => ({ source: 'shell', shell: '/bin/zsh', addedKeys: [] }));
+vi.mock('../shell-env.js', () => ({
+  hydrateLoginShellEnv: (...args: unknown[]) => mockHydrateLoginShellEnv(...(args as [])),
+}));
+
+let mockManagedBy: unknown = null;
+vi.mock('../managed.js', () => ({
+  isMacAppManagedWorker: (env: NodeJS.ProcessEnv = process.env) => env.KRAKI_MANAGED_BY === 'kraki-mac',
+  loadManagedBy: () => mockManagedBy,
+}));
+
+const mockRetireCliLaunchdJob = vi.fn();
+vi.mock('../daemon.js', () => ({
+  retireCliLaunchdJob: () => mockRetireCliLaunchdJob(),
+}));
+
+let mockPlatform: string | null = null;
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, platform: () => (mockPlatform ?? actual.platform()) };
+});
+
 // Prevent process.exit from killing the test runner
 const mockExit = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
 
@@ -175,6 +197,55 @@ describe('daemon-worker: startWorker()', () => {
     const { shutdown } = await startWorker();
 
     expect(process.env.__CFBundleIdentifier).toBeUndefined();
+    await shutdown();
+  });
+
+  it('as the Mac app daemon: hydrates the login-shell env and skips CLI Launch Services upkeep', async () => {
+    const checks = await import('../checks.js');
+    process.env.KRAKI_MANAGED_BY = 'kraki-mac';
+    try {
+      const { shutdown } = await startWorker();
+      expect(mockHydrateLoginShellEnv).toHaveBeenCalledTimes(1);
+      expect(checks.ensureTccBundleRegistered).not.toHaveBeenCalled();
+      expect(checks.cleanupStaleBundleEntries).not.toHaveBeenCalled();
+      await shutdown();
+    } finally {
+      delete process.env.KRAKI_MANAGED_BY;
+    }
+  });
+
+  it('as a leftover CLI job while Kraki for Mac owns the daemon: retires itself', async () => {
+    mockPlatform = 'darwin';
+    mockManagedBy = { by: 'kraki-mac', label: 'chat.kraki.mac.tentacle' };
+    try {
+      await startWorker();
+      expect(mockRetireCliLaunchdJob).toHaveBeenCalledTimes(1);
+      expect(mockExit).toHaveBeenCalledWith(0);
+      expect(mockRelay.connect).not.toHaveBeenCalled();
+    } finally {
+      mockPlatform = null;
+      mockManagedBy = null;
+    }
+  });
+
+  it('as the Mac app daemon: never retires itself because of its own marker', async () => {
+    mockPlatform = 'darwin';
+    mockManagedBy = { by: 'kraki-mac', label: 'chat.kraki.mac.tentacle' };
+    process.env.KRAKI_MANAGED_BY = 'kraki-mac';
+    try {
+      const { shutdown } = await startWorker();
+      expect(mockRetireCliLaunchdJob).not.toHaveBeenCalled();
+      await shutdown();
+    } finally {
+      delete process.env.KRAKI_MANAGED_BY;
+      mockPlatform = null;
+      mockManagedBy = null;
+    }
+  });
+
+  it('as the CLI daemon: keeps its environment and Launch Services upkeep', async () => {
+    const { shutdown } = await startWorker();
+    expect(mockHydrateLoginShellEnv).not.toHaveBeenCalled();
     await shutdown();
   });
 

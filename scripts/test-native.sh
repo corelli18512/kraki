@@ -1,6 +1,8 @@
 #!/bin/bash
 # Isolated local native regression. No production app, login, daemon or microphone.
 # Usage: bash scripts/test-native.sh mac|ios [--perf] [xcodebuild test selectors...]
+# Window/voice tests (they can take window focus) are skipped unless
+# KRAKI_RUN_UI_TESTS=1; CI turns them on.
 set -euo pipefail
 platform="${1:-}"
 case "$platform" in mac|ios) shift ;; *) echo 'Usage: test-native.sh mac|ios [--perf] [xcodebuild selectors...]' >&2; exit 2 ;; esac
@@ -56,7 +58,7 @@ fi
 printf 'Isolated test evidence: %s\n' "$work"
 # Forward only validated test selectors, never arbitrary xcodebuild overrides.
 env -u KRAKI_HOME -u KRAKI_ALLOW_TEST_MICROPHONE -u SIMCTL_CHILD_KRAKI_ALLOW_TEST_MICROPHONE HOME="$work/home" \
-  xcodebuild "${args[@]}" "$@" KRAKI_RUN_PERF_TESTS="$perf" \
+  xcodebuild "${args[@]}" "$@" KRAKI_RUN_PERF_TESTS="$perf" KRAKI_RUN_UI_TESTS="${KRAKI_RUN_UI_TESTS:-0}" \
   CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_ENTITLEMENTS= test \
   >"$work/test.log" 2>&1 || { tail -80 "$work/test.log"; exit 1; }
 tail -15 "$work/test.log"

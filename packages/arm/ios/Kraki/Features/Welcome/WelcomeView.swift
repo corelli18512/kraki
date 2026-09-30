@@ -17,6 +17,7 @@ struct WelcomeView: View {
     @Environment(TentacleCLIManager.self) private var tentacleCLI
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openURL) private var openURL
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 18) {
@@ -58,7 +59,9 @@ struct WelcomeView: View {
         // whether or not this Mac is also running a local Tentacle daemon.
         // Local Tentacle lifecycle belongs in Preferences and must never mask
         // an already-synced session list with a blocking stopped-state card.
-        if !appState.sessionStore.sessions.isEmpty {
+        if !appState.devLocalActive, let attention = builtInAttentionCard {
+            attention
+        } else if !appState.sessionStore.sessions.isEmpty {
             selectSessionCard
         } else if appState.devLocalActive {
             devLocalContent
@@ -151,13 +154,13 @@ struct WelcomeView: View {
             icon: "exclamationmark.triangle.fill",
             iconColor: Color(hex: 0xFBBF24),
             title: "Kraki CLI not found",
-            subtitle: "Install the kraki command-line tool in Terminal, then come back here."
+            subtitle: "This build of Kraki has no built-in tentacle. Install the kraki command-line tool in Terminal, then come back here."
         ) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Image(systemName: "terminal")
                         .foregroundStyle(Color.krakiPrimary)
-                    Text("npm install -g @kraki/cli")
+                    Text(Self.cliInstallCommand)
                         .font(.system(.body, design: .monospaced))
                         .textSelection(.enabled)
                         .foregroundStyle(Color.textPrimary)
@@ -199,6 +202,8 @@ struct WelcomeView: View {
         case .unknown, .starting, .stopping:
             ProgressView("Talking to tentacle…")
                 .controlSize(.small)
+        case .needsApproval:
+            loginItemsCard
         case .stopped:
             daemonStoppedCard
         case .error(let msg):
@@ -258,20 +263,65 @@ struct WelcomeView: View {
         }
     }
 
+    /// This Mac's own tentacle device id, once its daemon is running.
+    private var localDeviceId: String? {
+        guard case .running = tentacleCLI.daemonState else { return nil }
+        return tentacleCLI.configInfo?.deviceId
+    }
+
+    @ViewBuilder
     private var noSessionsCard: some View {
-        WelcomeCard(
-            icon: "qrcode",
-            iconColor: Color.krakiPrimary,
-            title: "Pair a device",
-            subtitle: "Show this pairing code to your phone or another Mac to join your relay."
-        ) {
-            Button {
-                Task { await requestPairing() }
-            } label: {
-                Label("Generate pairing code", systemImage: "qrcode")
+        if let local = localDeviceId,
+           appState.deviceStore.agentAvailability(for: local) == .noAgents {
+            WelcomeCard(
+                icon: "puzzlepiece.extension.fill",
+                iconColor: Color(hex: 0xFBBF24),
+                title: "Install a coding agent",
+                subtitle: "Kraki is connected. To start a session, this Mac needs a coding agent."
+            ) {
+                VStack(alignment: .leading, spacing: 8) {
+                    NoAgentsGuide(
+                        deviceName: "this Mac",
+                        isThisMac: true,
+                        checkAgain: { await recheckLocalAgents(local) }
+                    )
+                    // Shows which agents are installed but not signed in, and why.
+                    Button("See what's on this Mac…") { openWindow(id: "local-agents") }
+                        .buttonStyle(.link)
+                        .font(.system(size: 11))
+                }
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Color.krakiPrimary)
+        } else {
+            WelcomeCard(
+                icon: "sparkles",
+                iconColor: Color.krakiPrimary,
+                title: "Start your first session",
+                subtitle: "Pick a coding agent and a model, then chat with it here. Pair your phone to follow along and approve actions from anywhere."
+            ) {
+                HStack {
+                    Button {
+                        NotificationCenter.default.post(name: .macOpenNewSession, object: nil)
+                    } label: {
+                        Label("New Session", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.krakiPrimary)
+
+                    Button {
+                        Task { await requestPairing() }
+                    } label: {
+                        Label("Pair a Phone", systemImage: "qrcode")
+                    }
+                }
+            }
+        }
+    }
+
+    private func recheckLocalAgents(_ deviceId: String) async {
+        await tentacleCLI.restartDaemon()
+        for _ in 0..<40 {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if appState.deviceStore.agentAvailability(for: deviceId) == .ready { return }
         }
     }
 
@@ -293,6 +343,56 @@ struct WelcomeView: View {
             .buttonStyle(.borderedProminent)
             .tint(Color.krakiPrimary)
             .padding(.top, 4)
+        }
+    }
+
+    // MARK: - Built-in tentacle
+
+    static let cliInstallCommand = "curl -fsSL https://app.kraki.chat/install.sh | bash"
+
+    /// Problems with the built-in tentacle that need the user even while
+    /// remote sessions keep working: it was turned off in Login Items, or Full
+    /// Disk Access is still missing.
+    private var builtInAttentionCard: AnyView? {
+        guard tentacleCLI.mode == .builtIn, BuiltInTentacle.thisMacRole != .remoteOnly else { return nil }
+        if case .needsApproval = tentacleCLI.daemonState { return AnyView(loginItemsCard) }
+        if case .running = tentacleCLI.daemonState, tentacleCLI.fdaStatus == "denied", !fdaReminderDismissed {
+            return AnyView(fullDiskAccessCard)
+        }
+        return nil
+    }
+
+    @AppStorage("tentacle.fdaReminderDismissed") private var fdaReminderDismissed = false
+
+    private var loginItemsCard: some View {
+        WelcomeCard(
+            icon: "exclamationmark.circle.fill",
+            iconColor: Color(hex: 0xFBBF24),
+            title: "Kraki is off in Login Items",
+            subtitle: "This Mac's agents are offline because Kraki is turned off in System Settings → General → Login Items. Turn it back on to reconnect them."
+        ) {
+            HStack {
+                Button("Open Login Items") { BuiltInTentacle.openLoginItemsSettings() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.krakiPrimary)
+                Button("Try Again") { Task { await tentacleCLI.startDaemon() } }
+            }
+        }
+    }
+
+    private var fullDiskAccessCard: some View {
+        WelcomeCard(
+            icon: "lock.shield.fill",
+            iconColor: Color(hex: 0xFBBF24),
+            title: "Allow Full Disk Access",
+            subtitle: "Without it, macOS keeps asking for permission whenever an agent touches Desktop, Documents or other protected folders. Turn on “Kraki” once in System Settings."
+        ) {
+            HStack {
+                Button("Open System Settings") { BuiltInTentacle.openFullDiskAccessSettings() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.krakiPrimary)
+                Button("Not Now") { fdaReminderDismissed = true }
+            }
         }
     }
 

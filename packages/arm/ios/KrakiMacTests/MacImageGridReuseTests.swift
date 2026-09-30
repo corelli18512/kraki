@@ -9,6 +9,11 @@ import XCTest
 /// placeholder forever even when the bytes are cached on disk.
 @MainActor
 final class MacImageGridReuseTests: XCTestCase {
+    override func setUpWithError() throws {
+        try requireForegroundUITests()
+        try super.setUpWithError()
+    }
+
     private func ref(_ id: String) -> ContentRef {
         ContentRef(type: "content_ref", id: id, mimeType: "image/png", size: 10, caption: nil, name: nil, width: 10, height: 10)
     }

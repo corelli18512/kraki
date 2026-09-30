@@ -232,6 +232,7 @@ import UIKit
         XCTAssertEqual(values.min() ?? 0, -0.65, accuracy: 0.0001)
     }
     func testProductionSessionRowObservesOutboxWithoutManualReconfiguration() throws {
+        try requireForegroundUITests()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("preview-row-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
@@ -290,7 +291,8 @@ import UIKit
         sender.clearPending(sid, clientId: failedId)
     }
 
-    func testNativeHostStopsWhenHiddenDetachedOrOffscreenAndResumes() {
+    func testNativeHostStopsWhenHiddenDetachedOrOffscreenAndResumes() throws {
+        try requireForegroundUITests()
         let host = PreviewGlyphHost(frame: CGRect(x: 10, y: 10, width: 16, height: 16))
         let blue = CGColor(red: 0, green: 0, blue: 1, alpha: 1)
         #if os(macOS)

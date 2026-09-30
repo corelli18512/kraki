@@ -10,6 +10,11 @@ func requireNativePerformanceTests(file: StaticString = #filePath, line: UInt = 
 
 @MainActor
 final class IOSChatScrollProductionTests: XCTestCase {
+    override func setUpWithError() throws {
+        try requireForegroundUITests()
+        try super.setUpWithError()
+    }
+
     private var temporaryRoots: [URL] = []
     private var windows: [UIWindow] = []
     private var appStates: [AppState] = []

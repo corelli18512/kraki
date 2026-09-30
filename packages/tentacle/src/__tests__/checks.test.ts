@@ -26,6 +26,10 @@ vi.mock('node:os', async (importActual) => {
   };
 });
 
+// FDA probe: every real read (readdir of a protected directory, open of a
+// protected file) funnels through one mock so tests can script TCC outcomes.
+const { fdaProbe } = vi.hoisted(() => ({ fdaProbe: vi.fn() }));
+
 vi.mock('node:fs', async (importActual) => {
   const actual = await importActual<typeof import('node:fs')>();
   return {
@@ -34,7 +38,13 @@ vi.mock('node:fs', async (importActual) => {
     realpathSync: vi.fn((p: string) => p),
     promises: {
       ...actual.promises,
-      access: vi.fn(), // FDA probe — default: resolves (granted)
+      // access(2) must never be used for FDA: it ignores TCC.
+      access: vi.fn(async () => { throw new Error('probeFda must not use access()'); }),
+      readdir: vi.fn(async (p: string) => { await fdaProbe(p, 'readdir'); return []; }),
+      open: vi.fn(async (p: string) => {
+        await fdaProbe(p, 'open');
+        return { read: async () => ({ bytesRead: 0 }), close: async () => {} };
+      }),
     },
   };
 });
@@ -50,7 +60,7 @@ const mockExecFileSync = execFileSync as unknown as ReturnType<typeof vi.fn>;
 const mockInput = input as unknown as ReturnType<typeof vi.fn>;
 const mockExistsSync = existsSync as unknown as ReturnType<typeof vi.fn>;
 const mockRealpathSync = realpathSync as unknown as ReturnType<typeof vi.fn>;
-const mockAccess = fsp.access as unknown as ReturnType<typeof vi.fn>;
+const mockAccess = fdaProbe;
 const mockPlatform = platform as unknown as ReturnType<typeof vi.fn>;
 const mockHomedir = homedir as unknown as ReturnType<typeof vi.fn>;
 
@@ -381,6 +391,17 @@ describe('probeFda()', () => {
   it('returns granted on win32', async () => {
     mockPlatform.mockReturnValue('win32');
     expect(await probeFda()).toBe('granted');
+  });
+
+  it('performs real reads: lists protected directories and opens TCC.db', async () => {
+    mockAccess.mockRejectedValue(Object.assign(new Error('perm'), { code: 'EPERM' }));
+    await probeFda();
+    const calls = mockAccess.mock.calls.map(([p, op]) => `${op}:${String(p).split('/Library/')[1]}`);
+    expect(calls).toEqual([
+      'readdir:Safari',
+      'readdir:Mail',
+      'open:Application Support/com.apple.TCC/TCC.db',
+    ]);
   });
 
   it('returns denied when all paths return EACCES', async () => {

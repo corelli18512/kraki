@@ -154,6 +154,7 @@ jobs:
             -derivedDataPath build/DerivedData-iOS \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
+            KRAKI_RUN_UI_TESTS=1 \
             test
 
       - name: Upload iOS test results
@@ -384,7 +385,7 @@ jobs:
           <plist version="1.0"><dict>
           <key>CFBundleExecutable</key><string>kraki</string>
           <key>CFBundleIdentifier</key><string>chat.kraki.cli</string>
-          <key>CFBundleName</key><string>Kraki</string>
+          <key>CFBundleName</key><string>Kraki CLI</string>
           <key>CFBundlePackageType</key><string>APPL</string>
           <key>CFBundleVersion</key><string>ci</string>
           <key>LSBackgroundOnly</key><true/>

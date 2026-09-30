@@ -48,6 +48,17 @@ vi.mock("ws", () => {
   return { WebSocket: MockWS };
 });
 
+let mockMacApp: string | null = null;
+vi.mock("../managed.js", () => ({
+  findMacAppWithBuiltIn: () => mockMacApp,
+}));
+
+let mockPlatform: string | null = null;
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, platform: () => (mockPlatform ?? actual.platform()) };
+});
+
 vi.mock("../banner.js", () => ({
   printAnimatedBanner: vi.fn(),
   printStaticBanner: vi.fn(),
@@ -310,5 +321,42 @@ describe("runSetup — agents step", () => {
 
     const result = await runSetup();
     expect(result.relay).toBe("ws://lab:4600");
+  });
+});
+
+describe("runSetup — Kraki for Mac already installed", () => {
+  beforeEach(() => {
+    mockPlatform = "darwin";
+    mockMacApp = "/Applications/Kraki.app";
+    process.env.KRAKI_RELAY_URL = "ws://lab:4600";
+    mockRelayMethods = ['open'];
+  });
+  afterEach(() => {
+    mockPlatform = null;
+    mockMacApp = null;
+    delete process.env.KRAKI_INSTALL;
+    mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
+  });
+
+  it("stops before setup when the user keeps Kraki for Mac", async () => {
+    mockConfirm.mockResolvedValueOnce(false);
+    await expect(runSetup()).rejects.toMatchObject({ name: 'ExitPromptError' });
+    expect(mockConfirm).toHaveBeenCalledWith(expect.objectContaining({ default: false }));
+    expect(mockSaveConfig).not.toHaveBeenCalled();
+  });
+
+  it("continues when the user wants the command-line version too", async () => {
+    mockConfirm.mockResolvedValueOnce(true);
+    mockInput.mockResolvedValueOnce("ws://lab:4600").mockResolvedValueOnce("mac");
+    const result = await runSetup();
+    expect(result.relay).toBe("ws://lab:4600");
+    expect(mockSaveConfig).toHaveBeenCalled();
+  });
+
+  it("does not ask again when install.sh already asked", async () => {
+    process.env.KRAKI_INSTALL = "1";
+    mockInput.mockResolvedValueOnce("ws://lab:4600").mockResolvedValueOnce("mac");
+    await runSetup();
+    expect(mockConfirm).not.toHaveBeenCalled();
   });
 });

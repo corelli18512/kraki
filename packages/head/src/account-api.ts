@@ -48,6 +48,7 @@ export class AccountApi {
     const publicRoute =
       (path === '/api/regions' && req.method === 'GET')
       || (path === '/api/login/resolve' && req.method === 'POST')
+      || (path === '/api/auth/github/token' && req.method === 'POST')
       || (path === '/api/edge/join' && req.method === 'POST');
 
     if (!publicRoute && !this.checkServiceKey(req, res)) return true;
@@ -62,6 +63,9 @@ export class AccountApi {
           break;
         case '/api/auth':
           if (req.method === 'POST') return await this.handleAuth(req, res);
+          break;
+        case '/api/auth/github/token':
+          if (req.method === 'POST') return await this.handleGitHubToken(req, res);
           break;
         case '/api/auth/challenge':
           if (req.method === 'POST') return await this.handleChallenge(req, res);
@@ -235,6 +239,31 @@ export class AccountApi {
     }
 
     this.json(res, 400, { ok: false, code: 'bad_request', message: 'userId or token required' });
+    return true;
+  }
+
+  /**
+   * PKCE code → GitHub token for native clients (public route). Only a caller
+   * holding the code verifier can redeem a code, so this reveals nothing to
+   * anyone else; the server just adds the client secret GitHub requires.
+   */
+  private async handleGitHubToken(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    const body = await readBody(req);
+    const code = body?.code;
+    const codeVerifier = body?.codeVerifier;
+    const redirectUri = body?.redirectUri;
+    if (typeof code !== 'string' || typeof codeVerifier !== 'string' || typeof redirectUri !== 'string'
+      || !code || codeVerifier.length < 43) {
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'code, codeVerifier and redirectUri are required' });
+      return true;
+    }
+    const result = await this.backend.exchangeGitHubCode(code, { codeVerifier, redirectUri });
+    if (!result.ok) {
+      getLogger().warn('GitHub code exchange failed', { reason: result.message });
+      this.json(res, 400, { ok: false, code: 'exchange_failed', message: result.message });
+      return true;
+    }
+    this.json(res, 200, { ok: true, token: result.token });
     return true;
   }
 

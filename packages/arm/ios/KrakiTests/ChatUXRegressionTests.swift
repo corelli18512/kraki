@@ -9,6 +9,11 @@ import SwiftUI
 /// network, Relay, Tentacle or production data.
 @MainActor
 final class ChatUXRegressionTests: XCTestCase {
+    override func setUpWithError() throws {
+        try requireForegroundUITests()
+        try super.setUpWithError()
+    }
+
     private var roots: [URL] = []
     private var windows: [UIWindow] = []
     private var states: [AppState] = []
@@ -1144,6 +1149,11 @@ final class ChatUXRegressionTests: XCTestCase {
 /// scripted offline Tentacle (see IOSNewSessionScenario).
 @MainActor
 final class NewSessionJourneyTests: XCTestCase {
+    override func setUpWithError() throws {
+        try requireForegroundUITests()
+        try super.setUpWithError()
+    }
+
     func testNewSessionJourney() throws {
         let app = IOSNewSessionScenario.makeAppState()
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)

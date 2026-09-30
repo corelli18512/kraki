@@ -160,8 +160,7 @@ ensure_path_configured() {
   case ":$PATH:" in
     *":${INSTALL_DIR}:"*) ;;
     *)
-      echo "  ⚠  Add to PATH:  export PATH=\"\$PATH:${INSTALL_DIR}\""
-      # Try to add to shell profile automatically
+      # Add to the shell profile automatically; only ask the user when that fails.
       SHELL_NAME=$(basename "${SHELL:-/bin/sh}")
       PROFILE=""
       case "$SHELL_NAME" in
@@ -175,9 +174,70 @@ ensure_path_configured() {
       if [ -n "$PROFILE" ] && [ -f "$PROFILE" ]; then
         if ! grep -q "${INSTALL_DIR}" "$PROFILE" 2>/dev/null; then
           printf '\nexport PATH="%s:$PATH"\n' "$INSTALL_DIR" >> "$PROFILE"
-          echo "  Added to ${PROFILE} (restart your shell or run: source ${PROFILE})"
         fi
+        echo "  Added ${INSTALL_DIR} to PATH in ${PROFILE}. Open a new Terminal window to use kraki."
+      else
+        echo "  ⚠  Add to PATH:  export PATH=\"\$PATH:${INSTALL_DIR}\""
       fi
+      ;;
+  esac
+}
+
+# ── Kraki for Mac already installed? ────────────────────
+#
+# Kraki for Mac (with its built-in tentacle) sets up and runs Kraki by itself,
+# so this install would be a second copy. Ask before downloading anything.
+# KRAKI_INSTALL_FORCE=1 skips the question for scripted installs.
+
+MAC_APP=""
+MAC_APP_MANAGED=0
+
+detect_mac_app() {
+  for app in "/Applications/Kraki.app" "${HOME}/Applications/Kraki.app"; do
+    if [ -x "${app}/Contents/Library/Helpers/Kraki Tentacle.app/Contents/MacOS/kraki" ]; then
+      MAC_APP="$app"
+      break
+    fi
+  done
+  MARKER="${HOME}/.kraki/managed-by.json"
+  if grep -q '"kraki-mac"' "$MARKER" 2>/dev/null; then
+    # Stale if the app it names was deleted (the CLI ignores it then, too).
+    MARKER_APP=$(sed -n 's/.*"appPath"[^"]*"\([^"]*\)".*/\1/p' "$MARKER" | sed 's#\\/#/#g' | head -1)
+    if [ -z "$MARKER_APP" ] || [ -d "$MARKER_APP" ]; then
+      MAC_APP_MANAGED=1
+    fi
+  fi
+}
+
+confirm_despite_mac_app() {
+  [ "$PLATFORM" = "macos" ] || return 0
+  detect_mac_app
+  if [ -z "$MAC_APP" ] && [ "$MAC_APP_MANAGED" = 0 ]; then
+    return 0
+  fi
+  [ "${KRAKI_INSTALL_FORCE:-}" = "1" ] && return 0
+
+  if [ "$MAC_APP_MANAGED" = 1 ]; then
+    echo "  ⚠ Kraki for Mac already runs Kraki on this Mac."
+    echo "    You don't need to install it again."
+    echo "    If you continue, you get the kraki command for Terminal. Kraki for Mac"
+    echo "    keeps running Kraki in the background."
+  else
+    echo "  ⚠ Kraki for Mac is installed (${MAC_APP})."
+    echo "    It sets up Kraki and runs it in the background by itself, so you"
+    echo "    don't need this install. Open Kraki from Applications instead."
+  fi
+  echo ""
+  printf "  Install the command-line version anyway? [y/N] "
+  answer=""
+  { read -r answer </dev/tty; } 2>/dev/null || answer=""
+  case "$answer" in
+    y|Y|yes|YES|Yes) echo "" ;;
+    *)
+      echo ""
+      echo "  Nothing was installed."
+      echo ""
+      exit 0
       ;;
   esac
 }
@@ -190,12 +250,21 @@ main() {
   echo ""
 
   detect_platform
+  confirm_despite_mac_app
   fetch_latest_version
   install
 
   echo ""
   echo "  ✓ Kraki ${VERSION} installed"
   echo ""
+
+  if [ "$MAC_APP_MANAGED" = 1 ]; then
+    # Kraki for Mac owns the background service and the sign-in; the CLI
+    # defers to it, so there is nothing to set up or start here.
+    echo "  Kraki for Mac keeps running Kraki. Try: kraki status"
+    echo ""
+    return 0
+  fi
 
   # Auto-run interactive setup. KRAKI_INSTALL=1 tells kraki to complete
   # configuration but exit before daemon startup or pairing output. The

@@ -71,6 +71,35 @@ final class DeviceStoreTests: XCTestCase {
         XCTAssertNil(store.deviceVersions["dev-1"])
     }
 
+    // MARK: - Agent availability
+
+    func testAgentAvailabilityConnectingUntilGreeting() {
+        store.addDevice(makeDevice(id: "dev-1", online: true))
+        XCTAssertEqual(store.agentAvailability(for: "dev-1"), .connecting)
+    }
+
+    func testAgentAvailabilityNoAgentsAfterEmptyGreeting() {
+        store.addDevice(makeDevice(id: "dev-1", online: true))
+        store.setGreeting("dev-1", name: "MacBook", agents: [], version: "0.33.1")
+        XCTAssertEqual(store.agentAvailability(for: "dev-1"), .noAgents)
+    }
+
+    func testAgentAvailabilityReadyWithAgents() {
+        store.addDevice(makeDevice(id: "dev-1", online: true))
+        store.setGreeting(
+            "dev-1", name: "MacBook",
+            agents: [AgentCapabilities(type: "code", id: "codex", models: ["gpt-5"], modelDetails: nil)],
+            version: "0.33.1"
+        )
+        XCTAssertEqual(store.agentAvailability(for: "dev-1"), .ready)
+    }
+
+    func testAgentAvailabilityOffline() {
+        store.addDevice(makeDevice(id: "dev-1", online: false))
+        XCTAssertEqual(store.agentAvailability(for: "dev-1"), .offline)
+        XCTAssertEqual(store.agentAvailability(for: "missing"), .offline)
+    }
+
     // MARK: - Online Status
 
     func testSetOnline() {

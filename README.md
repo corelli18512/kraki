@@ -17,7 +17,9 @@
 
 Kraki bridges your coding agent to your phone or browser. Watch sessions in real time, approve tool calls, answer questions, and send follow-up instructions — from anywhere, on any device. All traffic is end-to-end encrypted.
 
-Install with one command:
+**On a Mac**, [download Kraki for Mac](https://github.com/corelli18512/kraki/releases?q=mac-v&expanded=true) (`Kraki.dmg`), drag it to Applications and open it. It finds the coding agents on your Mac, runs Kraki in the background and signs you in — no Terminal needed.
+
+Or install the command-line version with one command:
 
 ```bash
 # macOS / Linux
@@ -39,6 +41,10 @@ kraki
 - **You work across multiple machines** and want one place to see all agent sessions from your phone or browser.
 
 ## Set up
+
+**Kraki for Mac** includes everything: download `Kraki.dmg` from the [Mac releases](https://github.com/corelli18512/kraki/releases?q=mac-v&expanded=true), drag Kraki to Applications and follow the two setup steps (coding agents + Full Disk Access, then sign in). If the command-line version is already installed, Kraki for Mac offers to take over; you only need one of them.
+
+Command-line version:
 
 ```bash
 # macOS / Linux

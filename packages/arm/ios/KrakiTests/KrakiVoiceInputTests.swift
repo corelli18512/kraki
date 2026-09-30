@@ -129,6 +129,11 @@ private final class SuspendedVoiceAudioPolicy: VoiceInputAudioPolicy {
 
 @MainActor
 final class KrakiVoiceInputTests: XCTestCase {
+    override func setUpWithError() throws {
+        try requireForegroundUITests()
+        try super.setUpWithError()
+    }
+
     func testRoutineTestHostCannotRequestLiveMicrophone() async {
         XCTAssertTrue(NativeTestRuntime.isRunningTests)
         XCTAssertFalse(NativeTestRuntime.allowsLiveAudio)

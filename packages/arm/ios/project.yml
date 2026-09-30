@@ -69,6 +69,7 @@ schemes:
       environmentVariables:
         KRAKI_TEST_ISOLATION: "1"
         KRAKI_RUN_PERF_TESTS: "$(KRAKI_RUN_PERF_TESTS)"
+        KRAKI_RUN_UI_TESTS: "$(KRAKI_RUN_UI_TESTS)"
   KrakiUITests:
     build:
       targets:
@@ -106,6 +107,7 @@ schemes:
         # Empty isolated host; tests create their own offline windows/databases.
         KRAKI_TEST_ISOLATION: "1"
         KRAKI_RUN_PERF_TESTS: "$(KRAKI_RUN_PERF_TESTS)"
+        KRAKI_RUN_UI_TESTS: "$(KRAKI_RUN_UI_TESTS)"
         KRAKI_DATA_DIR: /tmp/kraki-mac-tests-data
 
 targets:
@@ -221,6 +223,7 @@ targets:
     sources:
       - path: KrakiMacTests
       - path: KrakiTests/NativeSessionPreviewGlyphTests.swift
+      - path: KrakiTests/ForegroundTestGate.swift
       - path: KrakiTests/IOSVoiceComposerTests.swift
     settings:
       base:
@@ -289,10 +292,13 @@ targets:
       # macOS chat surface will be rewritten against the pure-spine model.
       - path: Kraki/Features/Sessions/SessionsSidebarView+macOS.swift
       - path: Kraki/Features/Sessions/NewSessionSheet+macOS.swift
+      - path: Kraki/Features/Sessions/NoAgentsGuide.swift
       - path: Kraki/Features/Sessions/SessionCardView.swift
       - path: Kraki/Features/Sessions/ActivityRow.swift
       - path: Kraki/Features/Auth/ConnectionStatusChip.swift
       - path: Kraki/Features/Auth/LoginView+macOS.swift
+      - path: Kraki/Features/Auth/GitHubMark.swift
+      - path: Kraki/Features/Auth/MacSetupIntro.swift
       - path: Kraki/Features/Chat/ToolChipHeader.swift
       - path: Kraki/Features/Chat/ChatViewModel.swift
       - path: Kraki/Features/Chat/TurnSpineProjection.swift
@@ -316,8 +322,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac
         PRODUCT_NAME: Kraki
-        MARKETING_VERSION: "0.2.48"
-        CURRENT_PROJECT_VERSION: 50
+        MARKETING_VERSION: "0.2.49"
+        CURRENT_PROJECT_VERSION: 51
         GENERATE_INFOPLIST_FILE: false
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
@@ -329,6 +335,8 @@ targets:
         ENABLE_HARDENED_RUNTIME: "YES"
         CODE_SIGN_ENTITLEMENTS: Kraki/KrakiMac.entitlements
         SWIFT_OBJC_INTERFACE_HEADER_NAME: ""
+        # The embed phase writes into Contents/Library (see postBuildScripts).
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
       configs:
         Diagnostics:
           PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.diag
@@ -353,6 +361,25 @@ targets:
           INFOPLIST_FILE: KrakiMac.Info.plist
           INFOPLIST_KEY_CFBundleDisplayName: Kraki
           ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    postBuildScripts:
+      # Built-in tentacle: copies a prebuilt, signed "Kraki Tentacle.app" into
+      # Contents/Library/Helpers and writes its SMAppService launch agent.
+      # Without a staged helper the app builds without it (external CLI mode);
+      # release CI sets KRAKI_REQUIRE_TENTACLE=1. See scripts/mac/.
+      - name: Embed built-in tentacle
+        # Isolated test projects (scripts/test-native.sh) are generated outside
+        # the repository, where this relative path does not exist; they build
+        # without the helper (external CLI mode), like any build without one.
+        script: |
+          SCRIPT="$SRCROOT/../../../scripts/mac/embed-tentacle-helper.sh"
+          if [ ! -f "$SCRIPT" ]; then echo "note: $SCRIPT not found; building without the built-in tentacle"; exit 0; fi
+          bash "$SCRIPT"
+        basedOnDependencyAnalysis: false
+        # The script adds KrakiTentacleVersion to the processed Info.plist, so
+        # it must run after Xcode writes it; without this input an incremental
+        # build can process Info.plist afterwards and drop the key.
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
     dependencies:
       - package: GRDB
       - package: Pulse
