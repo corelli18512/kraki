@@ -234,8 +234,12 @@ final class MacLaunchCoordinator {
         )
     }
 
-    func retryLogin(appState: AppState) async {
+    func retryLogin(appState: AppState, tentacleCLI: TentacleCLIManager? = nil) async {
         guard !isCheckingCredentials else { return }
+        // While setup asks which install should run Kraki, don't slip in with
+        // the command-line login (e.g. on app activation): setup finishes the
+        // choice and then calls back here.
+        if let tentacleCLI, tentacleCLI.ownerChoicePending { return }
         isCheckingCredentials = true
         loginCheckFailed = false
         defer { isCheckingCredentials = false }
@@ -255,12 +259,13 @@ final class MacLaunchCoordinator {
 
     func reconcileAuthentication(
         hasStoredCredentials: Bool,
-        connectionStatus: ConnectionStatus
+        connectionStatus: ConnectionStatus,
+        ownerChoicePending: Bool = false
     ) {
         guard phase != .launching else { return }
         if hasStoredCredentials {
             loginCheckFailed = false
-            if phase == .signedOut {
+            if phase == .signedOut, !ownerChoicePending {
                 launchStartedAt = Date()
                 beginPreparingAuthenticatedSurface()
             }
@@ -422,13 +427,15 @@ struct MacApp: App {
                 .onChange(of: appState.hasStoredCredentials) { _, hasStoredCredentials in
                     launchCoordinator.reconcileAuthentication(
                         hasStoredCredentials: hasStoredCredentials,
-                        connectionStatus: appState.connectionStatus
+                        connectionStatus: appState.connectionStatus,
+                        ownerChoicePending: tentacleCLI.ownerChoicePending
                     )
                 }
                 .onChange(of: appState.connectionStatus) { _, connectionStatus in
                     launchCoordinator.reconcileAuthentication(
                         hasStoredCredentials: appState.hasStoredCredentials,
-                        connectionStatus: connectionStatus
+                        connectionStatus: connectionStatus,
+                        ownerChoicePending: tentacleCLI.ownerChoicePending
                     )
                 }
                 .onReceive(NotificationCenter.default.publisher(
@@ -438,7 +445,7 @@ struct MacApp: App {
                         // Returning from Terminal after `kraki connect` should
                         // discover the new CLI login without requiring a relaunch.
                         Task {
-                            await launchCoordinator.retryLogin(appState: appState)
+                            await launchCoordinator.retryLogin(appState: appState, tentacleCLI: tentacleCLI)
                         }
                     } else {
                         // macOS keeps the broker connection optimistically warm;
