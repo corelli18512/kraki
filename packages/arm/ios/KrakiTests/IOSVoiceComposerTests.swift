@@ -236,17 +236,32 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
         XCTAssertEqual(host.transmitted.map(\.1), ["好的，继续"])
     }
 
-    func testSilentRawFallbackIsNeverTransmittedAutomatically() async {
+    func testCorrectionFailureStillSendsTheRawTranscript() async {
+        // The gateway's fallback when the corrector fails (e.g. the model's
+        // usage limit): the complete raw transcript as final, no rawText —
+        // possibly after a few correction deltas. The user's words go out.
         for streamed in ["", "incomplete"] {
             let (host, voice) = make()
             let session = await start(host, voice)
             await partial("raw source", session); voice.send(attachments: nil, delivery: .prompt)
             if !streamed.isEmpty { session.event(.correctionDelta(streamed)) }
             await final("raw source", session)
-            XCTAssertTrue(host.transmitted.isEmpty)
-            XCTAssertEqual(host.last?.state, "failed")
-            XCTAssertEqual(host.last?.text, "raw source", "failed bubble offers the original")
+            XCTAssertEqual(host.transmitted.map(\.1), ["raw source"], "sent uncorrected, never blocked")
+            XCTAssertEqual(host.last?.state, "sending")
+            XCTAssertEqual(voice.dispatchedSessionID, "a")
+            XCTAssertEqual(host.voiceInputController.metrics.summaries.last?.correctionConfirmed, false,
+                           "reported as not corrected")
         }
+    }
+
+    func testRecordingFailureWithoutFinalStillOffersTheOriginal() async {
+        let (host, voice) = make()
+        let session = await start(host, voice)
+        await partial("heard so far", session); voice.send(attachments: nil, delivery: .prompt)
+        session.event(.failed("socket disconnected")); await settle()
+        XCTAssertTrue(host.transmitted.isEmpty, "no final transcript: the user decides")
+        XCTAssertEqual(host.last?.state, "failed")
+        XCTAssertEqual(host.last?.text, "heard so far")
     }
 
     func testTransportFailureAfterCorrectionLeavesRetryableBubble() async {
