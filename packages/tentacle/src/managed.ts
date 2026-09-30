@@ -44,12 +44,20 @@ export function getManagedByPath(): string {
   return join(getKrakiHome(), 'managed-by.json');
 }
 
-export function loadManagedBy(): ManagedByMarker | null {
+/**
+ * The ownership marker, or null. A marker whose app is gone (the user deleted
+ * Kraki for Mac; macOS drops its background job with it) is stale: ignoring it
+ * lets the command-line install take over again instead of refusing to start.
+ */
+export function loadManagedBy(appExists: (path: string) => boolean = existsSync): ManagedByMarker | null {
   const path = getManagedByPath();
   if (!existsSync(path)) return null;
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<ManagedByMarker>;
     if (parsed.by !== MAC_APP_OWNER || typeof parsed.label !== 'string' || parsed.label.length === 0) {
+      return null;
+    }
+    if (typeof parsed.appPath === 'string' && parsed.appPath.length > 0 && !appExists(parsed.appPath)) {
       return null;
     }
     return {

@@ -58,3 +58,16 @@ describe('findMacAppWithBuiltIn', () => {
     expect(findMacAppWithBuiltIn('/Users/u', () => false)).toBeNull();
   });
 });
+
+describe('stale ownership marker', () => {
+  it('is ignored once Kraki for Mac has been deleted', () => {
+    saveManagedBy({ by: 'kraki-mac', label: 'chat.kraki.mac.tentacle', appPath: '/Applications/Kraki.app' });
+    expect(loadManagedBy(() => true)?.label).toBe('chat.kraki.mac.tentacle');
+    expect(loadManagedBy(() => false)).toBeNull();
+  });
+
+  it('without a recorded app path is still honoured', () => {
+    saveManagedBy({ by: 'kraki-mac', label: 'chat.kraki.mac.tentacle' });
+    expect(loadManagedBy(() => false)?.label).toBe('chat.kraki.mac.tentacle');
+  });
+});

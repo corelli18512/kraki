@@ -199,8 +199,13 @@ detect_mac_app() {
       break
     fi
   done
-  if grep -q '"kraki-mac"' "${HOME}/.kraki/managed-by.json" 2>/dev/null; then
-    MAC_APP_MANAGED=1
+  MARKER="${HOME}/.kraki/managed-by.json"
+  if grep -q '"kraki-mac"' "$MARKER" 2>/dev/null; then
+    # Stale if the app it names was deleted (the CLI ignores it then, too).
+    MARKER_APP=$(sed -n 's/.*"appPath"[^"]*"\([^"]*\)".*/\1/p' "$MARKER" | sed 's#\\/#/#g' | head -1)
+    if [ -z "$MARKER_APP" ] || [ -d "$MARKER_APP" ]; then
+      MAC_APP_MANAGED=1
+    fi
   fi
 }
 
