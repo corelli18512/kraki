@@ -6,6 +6,30 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.48</title>
+            <pubDate>Wed, 30 Sep 2026 05:04:17 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.48</sparkle:fullReleaseNotesLink>
+            <sparkle:version>50</sparkle:version>
+            <sparkle:shortVersionString>0.2.48</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* fix: fragment large payloads so slow links keep showing progress by @corelli18512 in https://github.com/corelli18512/kraki/pull/332
+* fix(native): no Reconnecting flash on foreground; multi-device + background resilience scenarios by @corelli18512 in https://github.com/corelli18512/kraki/pull/333
+* fix(web): web client network resilience (W0–W5 chaos scenarios) by @corelli18512 in https://github.com/corelli18512/kraki/pull/334
+* fix: soak-found delivery bugs (greeting features, stall clock) + netem/soak on CI by @corelli18512 in https://github.com/corelli18512/kraki/pull/335
+* fix(web): name the sender so duplicate inputs are re-echoed; soak harness + diagnostics by @corelli18512 in https://github.com/corelli18512/kraki/pull/336
+* chore(ci): drop web network-resilience job and nightly web soak by @corelli18512 in https://github.com/corelli18512/kraki/pull/337
+* chore(ci): no nightly network-resilience run (manual only) by @corelli18512 in https://github.com/corelli18512/kraki/pull/338
+* fix(tentacle): stop deleting images users sent; remove the legacy inline-image migration by @corelli18512 in https://github.com/corelli18512/kraki/pull/340
+* fix(mac): recover sign-in after a slow gh or failed Keychain challenge; release 0.2.48 by @corelli18512 in https://github.com/corelli18512/kraki/pull/339
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.33.4...mac-v0.2.48
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.48/Kraki.app.zip" length="9616051" type="application/octet-stream" sparkle:edSignature="22GGQxsGEulr3/789p7EFF7QDbsWoqH2Ag1Q3qgz7UgS1Wu2U0VngvZlqnulUGLDKJkUobyJXbewjxtCH34CCA=="/>
+        </item>
+        <item>
             <title>0.2.47</title>
             <pubDate>Mon, 28 Sep 2026 15:39:40 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -50,25 +74,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.46/Kraki.app.zip" length="9526787" type="application/octet-stream" sparkle:edSignature="tDI1yuTx12zDzrHp17EbQJNWWpZIw7DHI0YCqX3qpwEs76PQX/oO23gcXDAiMxB3W08mAkmGQm+sA2viuM+zAw=="/>
         </item>
-        <item>
-            <title>0.2.45</title>
-            <pubDate>Mon, 28 Sep 2026 02:11:36 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.45</sparkle:fullReleaseNotesLink>
-            <sparkle:version>47</sparkle:version>
-            <sparkle:shortVersionString>0.2.45</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(clients): repair delivery/reconnect lifecycle and extract Monitor by @corelli18512 in https://github.com/corelli18512/kraki/pull/323
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.44-diag...mac-v0.2.45
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.45/Kraki.app.zip" length="8491042" type="application/octet-stream" sparkle:edSignature="8Dsc2Jf8NnD4BHo2a/qfj8zuMKEY3p8qImnjWVu+AsEhMxTq8j3aZETR5MnJVZBYtZluTnv0mabmZQxsOV/xAw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: AGlyZkhJMo3mXK5+UFRS3Mb9sgcsoPoftRgyNUU2MPdAYE4IBRCcjt+De6es5EUXNJBKlqNVK7TV1t5gOhcOBw==
-length: 5620
+edSignature: Cd56/FMGnYCDrmBrlg+Avc37+gbNBpGPiQqCHn+1yGcKcz6MkpVrHVSrXYSe1t4IaVr35wdFyLD40EUgA1QlDw==
+length: 6790
 -->
