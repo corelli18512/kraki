@@ -55,6 +55,30 @@ final class ChatViewModel {
         return true
     }
 
+    /// `shouldRender`, plus one case it cannot see alone: a turn that FAILED
+    /// before producing any output. Its draft-less status row is the only
+    /// place the reason ("You've hit your usage limit…") can appear, so it is
+    /// kept — unless the previous visible row is the question that turn was
+    /// asking, which already draws the outcome (`presentingQuestions`).
+    static func renderable(_ spine: [ChatMessage]) -> [ChatMessage] {
+        var out: [ChatMessage] = []
+        out.reserveCapacity(spine.count)
+        for message in spine {
+            if shouldRender(message) {
+                out.append(message)
+            } else if isDraftlessFailure(message), out.last?.questionSpec == nil {
+                out.append(message)
+            }
+        }
+        return out
+    }
+
+    static func isDraftlessFailure(_ message: ChatMessage) -> Bool {
+        guard message.type == "turn_status" || message.type == "interrupted_turn",
+              let outcome = message.terminalOutcome, outcome.type == "failed" else { return false }
+        return !(outcome.message ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var pendingInputsRaw: [ChatMessage] {
         appState?.commandSender?.pendingInputs(sessionId) ?? []
     }
@@ -105,9 +129,9 @@ final class ChatViewModel {
         if let memo = currentSpineMemo, memo.revision == revision, memo.answering == answering, memo.atHead == atHead {
             return memo.messages + pendingMessages(landedIn: memo.messages)
         }
-        let spine = TurnSpineProjection.project(
+        let spine = Self.renderable(TurnSpineProjection.project(
             Self.presentingQuestions(filteredMessages, pending: pending, atHead: atHead)
-        ).filter(Self.shouldRender)
+        ))
         currentSpineMemo = (revision, answering, atHead, spine)
         return spine + pendingMessages(landedIn: spine)
     }
@@ -124,9 +148,9 @@ final class ChatViewModel {
 
     /// Recompute the flat spine snapshot. Called by the view on data changes.
     func refreshMessageCache() {
-        cachedMessages = TurnSpineProjection.project(
+        cachedMessages = Self.renderable(TurnSpineProjection.project(
             Self.presentingQuestions(filteredMessages, pending: pendingInputsRaw, atHead: windowAtHead)
-        ).filter(Self.shouldRender)
+        ))
         appState?.noteConversationRendered(sessionId, hasContent: !cachedMessages.isEmpty)
         #if KRAKI_DIAG
         let count = cachedMessages.count
