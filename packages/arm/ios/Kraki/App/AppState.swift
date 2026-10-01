@@ -1120,6 +1120,32 @@ final class AppState {
             targetDeviceId = nil
         }
 
+        let fragment = targetDeviceId.map {
+            deviceStore.deviceFeatures[$0]?.contains(PayloadFragments.feature) == true
+        } ?? false
+
+        // E2E v2 when every target Tentacle advertised `e2e_v2` and its key.
+        let v2Targets: [(deviceId: String, publicKey: String)]? = {
+            if let targetDeviceId {
+                return deviceStore.e2eV2Key(for: targetDeviceId).map { [(targetDeviceId, $0)] }
+            }
+            let tentacles = deviceStore.devices.values.filter {
+                $0.role == .tentacle && ($0.encryptionKey ?? $0.publicKey) != nil
+            }
+            let keyed = tentacles.compactMap { d in deviceStore.e2eV2Key(for: d.id).map { (d.id, $0) } }
+            return !tentacles.isEmpty && keyed.count == tentacles.count ? keyed : nil
+        }()
+        if let v2Targets, let pulseManager {
+            do {
+                let blob = try E2EV2.encrypt(innerString, recipients: v2Targets)
+                pulseManager.sendEncryptedPayload(["v": 2, "blob": blob], target: targetDeviceId,
+                                                  connectionScoped: connectionScoped, fragment: fragment)
+                return true
+            } catch {
+                KLog.d("⚠️ sendEncrypted: E2E v2 failed, using RSA: \(error)")
+            }
+        }
+
         // Collect recipient encryption keys
         var recipients: [RecipientKey] = []
         let crypto = CryptoManager()
@@ -1164,9 +1190,7 @@ final class AppState {
                 keys: blob.keys,
                 target: targetDeviceId,
                 connectionScoped: connectionScoped,
-                fragment: targetDeviceId.map {
-                    deviceStore.deviceFeatures[$0]?.contains(PayloadFragments.feature) == true
-                } ?? false
+                fragment: fragment
             )
             return true
         } catch {

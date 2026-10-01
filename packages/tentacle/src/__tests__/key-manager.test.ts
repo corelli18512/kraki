@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { KeyManager } from '../key-manager.js';
-import { encrypt } from '@kraki/crypto';
-import { mkdirSync, rmSync, existsSync } from 'node:fs';
+import { encrypt, encryptV2, decryptV2 } from '@kraki/crypto';
+import { mkdirSync, rmSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -22,6 +22,17 @@ describe('KeyManager', () => {
     const kp = km.getKeyPair();
     expect(kp.publicKey).toContain('BEGIN PUBLIC KEY');
     expect(kp.privateKey).toContain('BEGIN PRIVATE KEY');
+  });
+
+  it('persists one E2E v2 (X25519) key, private file 0600, reused across instances', () => {
+    const k1 = new KeyManager(dir).getE2EKey();
+    expect(k1.publicKey).toHaveLength(43);
+    const file = join(dir, 'e2e-x25519.key');
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    const k2 = new KeyManager(dir).getE2EKey();
+    expect(k2.publicKey).toBe(k1.publicKey);
+    const blob = encryptV2('hi', [{ recipientId: 't', publicKey: k1.publicKey }]);
+    expect(decryptV2(blob, 't', k2.privateKey)).toBe('hi');
   });
 
   it('should persist keys to disk', () => {

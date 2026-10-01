@@ -21,7 +21,7 @@ import type {
 } from '@kraki/protocol';
 import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment } from '@kraki/protocol';
 import { randomUUID } from 'node:crypto';
-import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
+import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge, encryptV2, decryptV2, isV2Payload, E2E_V2_FEATURE } from '@kraki/crypto';
 import type { RecipientKey } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
 import { toWellFormedText, type SessionManager, type SessionContext, type PendingHumanAction, type InputLedgerEntry } from './session-manager.js';
@@ -85,6 +85,12 @@ export interface RelayClientOptions {
   maxReconnects?: number;
   /** Tentacle version string (included in device_greeting) */
   version?: string;
+  /**
+   * Send E2E v2 (X25519) to apps that announced a key and `e2e_v2`, and
+   * advertise `e2e_v2` so apps send v2 to us. Inbound v2 is always accepted.
+   * Default: `KRAKI_E2E_V2=1` in the environment (off otherwise).
+   */
+  e2eV2?: boolean;
 }
 
 export type RelayClientState = 'disconnected' | 'connecting' | 'authenticating' | 'connected';
@@ -131,6 +137,10 @@ export class RelayClient {
   /** Behaviours each online app declared with `client_features` on its
    *  current connection (e.g. `fragments`). Cleared when it (re)joins/leaves. */
   private appFeatures = new Map<string, Set<string>>();
+  /** Payloads by E2E format since start (diagnostics, tests). */
+  readonly e2eStats = { v2In: 0, rsaIn: 0, v2Out: 0, rsaOut: 0 };
+  /** X25519 keys apps announced in `client_features` (E2E v2), per connection. */
+  private appE2EKeys = new Map<string, string>();
   /** Reassembles fragmented payloads from apps. */
   private payloadAssembler = new PayloadAssembler();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1155,6 +1165,7 @@ export class RelayClient {
           this.consumerKeys.set(device.id, key);
           this.onlineConsumers.add(device.id);
           this.appFeatures.delete(device.id);
+          this.appE2EKeys.delete(device.id);
           this.attachmentPacer.notifyOnline(device.id);
           this.currentSessionByArm.set(device.id, null);
           // Send a greeting unicast so the app learns our capabilities
@@ -1169,6 +1180,7 @@ export class RelayClient {
     if (msg.type === 'device_left') {
       const deviceId = msg.deviceId as string;
       this.appFeatures.delete(deviceId);
+      this.appE2EKeys.delete(deviceId);
       this.onlineConsumers.delete(deviceId);
       this.currentSessionByArm.delete(deviceId);
       return;
@@ -1177,6 +1189,7 @@ export class RelayClient {
     if (msg.type === 'device_removed') {
       const deviceId = msg.deviceId as string;
       this.appFeatures.delete(deviceId);
+      this.appE2EKeys.delete(deviceId);
       this.consumerKeys.delete(deviceId);
       this.onlineConsumers.delete(deviceId);
       this.currentSessionByArm.delete(deviceId);
@@ -1193,11 +1206,7 @@ export class RelayClient {
         return;
       }
       try {
-        const decrypted = decryptFromBlob(
-          { blob: msg.blob as string, keys: msg.keys as Record<string, string> },
-          this.authInfo.deviceId,
-          this.keyManager.getKeyPair().privateKey,
-        );
+        const decrypted = this.decryptFromApp(msg);
         const inner = JSON.parse(decrypted);
         this.handleConsumerMessage(inner as ConsumerMessage);
       } catch {
@@ -1258,7 +1267,10 @@ export class RelayClient {
     if (msg.type === 'client_features') {
       const features = Array.isArray(msg.payload?.features) ? msg.payload.features.filter((f) => typeof f === 'string') : [];
       this.appFeatures.set(msg.deviceId, new Set(features));
-      logger.info({ deviceId: msg.deviceId, features }, 'App features');
+      const x25519 = (msg.payload as { e2eKeys?: { x25519?: unknown } } | undefined)?.e2eKeys?.x25519;
+      if (typeof x25519 === 'string' && x25519.length === 43) this.appE2EKeys.set(msg.deviceId, x25519);
+      else this.appE2EKeys.delete(msg.deviceId);
+      logger.info({ deviceId: msg.deviceId, features, e2eV2Key: this.appE2EKeys.has(msg.deviceId) }, 'App features');
       return;
     }
 
@@ -3344,15 +3356,47 @@ export class RelayClient {
 
     try {
       const plaintext = JSON.stringify(msg);
-      const { blob, keys } = encryptToBlob(plaintext, recipients);
+      const payloadJson = this.encryptForApps(plaintext, usableTargets, () => encryptToBlob(plaintext, recipients));
       if (msg.type === 'agent_message' && msg.sessionId) {
         const content = (msg.payload as Record<string, unknown>).content as string;
         if (content) this.lastAgentContent.set(msg.sessionId, content);
       }
-      this.sendPayload(JSON.stringify({ blob, keys }), usableTargets, false, coalesceKeyFor(msg), streamForType(msg.type));
+      this.sendPayload(payloadJson, usableTargets, false, coalesceKeyFor(msg), streamForType(msg.type));
     } catch (err) {
       logger.error({ err }, 'Encrypted multicast failed');
     }
+  }
+
+  private get e2eV2Enabled(): boolean {
+    return this.options.e2eV2 ?? process.env.KRAKI_E2E_V2 === '1';
+  }
+
+  /**
+   * One payload for all targets: E2E v2 when enabled and every target
+   * announced an X25519 key and `e2e_v2`, otherwise the RSA `{blob, keys}`.
+   */
+  private encryptForApps(plaintext: string, targets: string[], rsa: () => { blob: string; keys: Record<string, string> }): string {
+    if (this.e2eV2Enabled && targets.length > 0
+      && targets.every((t) => this.appE2EKeys.has(t) && this.appFeatures.get(t)?.has(E2E_V2_FEATURE))) {
+      const blob = encryptV2(plaintext, targets.map((t) => ({ recipientId: t, publicKey: this.appE2EKeys.get(t)! })));
+      this.e2eStats.v2Out++;
+      return JSON.stringify({ v: 2, blob });
+    }
+    this.e2eStats.rsaOut++;
+    const { blob, keys } = rsa();
+    return JSON.stringify({ blob, keys });
+  }
+
+  /** Decrypt an app payload in either format. */
+  private decryptFromApp(parsed: unknown): string {
+    if (!this.keyManager || !this.authInfo) throw new Error('Not ready');
+    if (isV2Payload(parsed)) {
+      this.e2eStats.v2In++;
+      return decryptV2(parsed.blob, this.authInfo.deviceId, this.keyManager.getE2EKey().privateKey);
+    }
+    this.e2eStats.rsaIn++;
+    const { blob, keys } = parsed as { blob: string; keys: Record<string, string> };
+    return decryptFromBlob({ blob, keys }, this.authInfo.deviceId, this.keyManager.getKeyPair().privateKey);
   }
 
   /** Put a pulse frame on the wire using the sender-retained delivery target. */
@@ -3423,12 +3467,7 @@ export class RelayClient {
     }
     try {
       const decryptStart = process.hrtime.bigint();
-      const { blob, keys } = parsed as { blob: string; keys: Record<string, string> };
-      const decrypted = decryptFromBlob(
-        { blob, keys },
-        this.authInfo.deviceId,
-        this.keyManager.getKeyPair().privateKey,
-      );
+      const decrypted = this.decryptFromApp(parsed);
       const inner = JSON.parse(decrypted) as ConsumerMessage;
       traceLog.info({
         ns: process.hrtime.bigint().toString(),
@@ -3538,11 +3577,11 @@ export class RelayClient {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.keyManager) return;
 
     try {
-      const recipientPubKey = importPublicKey(compactPubKey);
-      const { blob, keys } = encryptToBlob(JSON.stringify(msg), [
-        { deviceId: targetDeviceId, publicKey: recipientPubKey },
-      ]);
-      this.sendPayload(JSON.stringify({ blob, keys }), targetDeviceId, durable, undefined, streamForType((msg as { type?: string }).type));
+      const plaintext = JSON.stringify(msg);
+      const payloadJson = this.encryptForApps(plaintext, [targetDeviceId], () => encryptToBlob(plaintext, [
+        { deviceId: targetDeviceId, publicKey: importPublicKey(compactPubKey) },
+      ]));
+      this.sendPayload(payloadJson, targetDeviceId, durable, undefined, streamForType((msg as { type?: string }).type));
     } catch (err) {
       logger.error({ err, targetDeviceId }, 'Reliable unicast failed');
     }
@@ -3578,7 +3617,10 @@ export class RelayClient {
       kind: this.options.device.kind,
       agents: this.options.device.capabilities?.agents,
       version: this.options.version,
-      features: ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE],
+      features: this.e2eV2Enabled
+        ? ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE, E2E_V2_FEATURE]
+        : ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE],
+      ...(this.keyManager ? { e2eKeys: { x25519: this.keyManager.getE2EKey().publicKey } } : {}),
     };
   }
 
@@ -3600,6 +3642,7 @@ export class RelayClient {
     this.consumerKeys.clear();
     this.onlineConsumers.clear();
     this.appFeatures.clear();
+    this.appE2EKeys.clear();
     this.currentSessionByArm.clear();
     this.legacyReplayWarned.clear();
     for (const d of devices) {

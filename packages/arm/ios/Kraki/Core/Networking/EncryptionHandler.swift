@@ -7,6 +7,7 @@
 /// - Queues encrypted messages that arrive before the keystore is ready and
 ///   drains the queue once auth completes.
 
+import CryptoKit
 import Foundation
 
 // MARK: - EncryptionError
@@ -62,6 +63,19 @@ final class EncryptionHandler {
     private let keyStateLock = NSLock()
     private var keyAvailabilityConfirmed = false
     private var cachedEncryptionKeyPair: (privateKey: SecKey, publicKey: SecKey)?
+    private var cachedE2EKey: Curve25519.KeyAgreement.PrivateKey?
+
+    /// This device's E2E v2 (X25519) key, cached after first use.
+    func e2eKey() throws -> Curve25519.KeyAgreement.PrivateKey {
+        keyStateLock.lock()
+        if let cachedE2EKey { keyStateLock.unlock(); return cachedE2EKey }
+        keyStateLock.unlock()
+        let key = try keychain.getOrCreateE2EKey()
+        keyStateLock.lock()
+        cachedE2EKey = key
+        keyStateLock.unlock()
+        return key
+    }
 
     // MARK: Init
 
@@ -234,8 +248,19 @@ final class EncryptionHandler {
             throw EncryptionError.notReady
         }
 
-        guard let json = try JSONSerialization.jsonObject(with: envelope) as? [String: Any],
-              let blob = json["blob"] as? String,
+        guard let json = try JSONSerialization.jsonObject(with: envelope) as? [String: Any] else {
+            KLog.d("❌ decrypt: invalid envelope structure")
+            throw EncryptionError.invalidEnvelope
+        }
+        if E2EV2.isPayload(json), let blob = json["blob"] as? String {
+            guard let plaintext = try E2EV2.decrypt(blob, deviceId: deviceId, privateKey: try e2eKey()) else {
+                throw EncryptionError.notAddressedToUs
+            }
+            guard let messageData = plaintext.data(using: .utf8) else { throw EncryptionError.decodingFailed }
+            let inner = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any]
+            return (message: messageData, sessionId: inner?["sessionId"] as? String)
+        }
+        guard let blob = json["blob"] as? String,
               let keys = json["keys"] as? [String: String] else {
             KLog.d("❌ decrypt: invalid envelope structure")
             throw EncryptionError.invalidEnvelope

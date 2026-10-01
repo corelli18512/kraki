@@ -27,6 +27,7 @@ env -u NODE_ENV -u KRAKI_HOME -u KRAKI_META_FILE bash scripts/test-native.sh mac
 code=$?
 port=$(python3 -c 'import json;print(json.load(open("/tmp/kraki-chaos/stack.json"))["controlPort"])')
 curl -s "http://127.0.0.1:$port/timeline" > "$STATE/timeline.json" || true
+curl -s "http://127.0.0.1:$port/stats" > "$STATE/stats.json" || true
 result=$(grep -o '/tmp/kraki-native-test\.[A-Za-z0-9]*/[a-z]*\.xcresult' "$STATE/xcode.log" | tail -1)
 [ -n "$result" ] && xcrun xcresulttool get test-results tests --path "$result" 2>/dev/null | python3 -c '
 import json,sys

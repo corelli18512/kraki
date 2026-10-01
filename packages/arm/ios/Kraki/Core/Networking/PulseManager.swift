@@ -111,9 +111,18 @@ final class PulseManager {
         connectionScoped: Bool = false,
         fragment: Bool = false
     ) {
-        guard let payload = try? JSONSerialization.data(
-            withJSONObject: ["blob": blob, "keys": keys]
-        ) else { return }
+        sendEncryptedPayload(["blob": blob, "keys": keys], target: target,
+                             connectionScoped: connectionScoped, fragment: fragment)
+    }
+
+    /// Send an E2E payload of either format (`{blob, keys}` or `{v: 2, blob}`).
+    func sendEncryptedPayload(
+        _ object: [String: Any],
+        target: String?,
+        connectionScoped: Bool = false,
+        fragment: Bool = false
+    ) {
+        guard let payload = try? JSONSerialization.data(withJSONObject: object) else { return }
         // Large payloads to a Tentacle that reassembles go as small ordered
         // parts so a slow uplink keeps showing progress. Connection-scoped
         // commands stay whole: a purge on disconnect must not leave a partial.
