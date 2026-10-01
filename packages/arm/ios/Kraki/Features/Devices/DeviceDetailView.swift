@@ -82,13 +82,15 @@ struct DeviceDetailView: View {
                 }
             }
 
-            // Subscription accounts signed in on this device and their quota.
+            // Subscription accounts signed in on this device. Each account's card in
+            // Devices › Accounts merges it across every device that shares it.
             if device.online, let usage = appState.deviceStore.deviceUsage[device.id], !usage.accounts.isEmpty {
+                let merged = appState.deviceStore.mergedUsage()
                 Section {
-                    ForEach(Array(usage.accounts.enumerated()), id: \.element.id) { index, account in
-                        AccountUsageTile(account: account, ringSize: 64, lineWidth: 6.5, showsPlan: true,
-                                         delay: 0.05 + Double(index) * 0.04)
-                            .padding(.vertical, 6)
+                    ForEach(usage.accounts) { account in
+                        if let m = merged.first(where: { $0.id == account.id }) {
+                            AccountUsageRow(merged: m)
+                        }
                     }
                 } header: {
                     Text("Accounts")

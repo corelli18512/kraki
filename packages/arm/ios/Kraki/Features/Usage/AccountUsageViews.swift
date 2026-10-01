@@ -216,3 +216,50 @@ struct AccountUsageTile: View {
         }
     }
 }
+
+/// One account as a list row: name and plan on the left, a ring per quota window
+/// on the right, and the devices it is signed in on underneath.
+struct AccountUsageRow: View {
+    let merged: MergedAccountUsage
+    var animateIn = true
+    var delay: Double = 0
+
+    /// Two names fit; beyond that, the first (online) device and a count.
+    private var deviceText: String {
+        let names = merged.devices.map(\.name)
+        return names.count > 2 ? "\(names[0]) +\(names.count - 1)" : names.joined(separator: " · ")
+    }
+
+    var body: some View {
+        let account = merged.account
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(account.label ?? account.providerTitle)
+                        .font(.system(size: 15, weight: .semibold))
+                        .lineLimit(1).truncationMode(.middle)
+                    UsageProviderChip(provider: account.provider)
+                }
+                HStack(spacing: 6) {
+                    if let plan = account.planTitle {
+                        Text(plan).font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                    if account.isStale() && !account.windows.isEmpty {
+                        Text("Stale").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(.white)
+                            .padding(.horizontal, 4).padding(.vertical, 1.5)
+                            .background(Color.gray, in: RoundedRectangle(cornerRadius: 4))
+                    }
+                }
+                Label(deviceText, systemImage: merged.devices.count > 1 ? "laptopcomputer.and.arrow.down" : "laptopcomputer")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .labelStyle(.titleAndIcon)
+                    .lineLimit(1)
+                    .opacity(merged.allOffline ? 0.6 : 1)
+            }
+            Spacer(minLength: 4)
+            AccountUsageRings(account: account, size: 50, lineWidth: 5, spacing: 10, animateIn: animateIn, delay: delay)
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+    }
+}
