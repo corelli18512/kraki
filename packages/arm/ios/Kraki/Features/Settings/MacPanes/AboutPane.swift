@@ -44,7 +44,7 @@ struct AboutPane: View {
 
             VStack(spacing: 3) {
                 versionRow("Mac App",  value: "\(version) (\(build))")
-                versionRow("Tentacle", value: tentacleVersion)
+                versionRow("Background Service", value: tentacleVersion)
                 versionRow("Relay",    value: "kraki.chat")
             }
             .padding(.top, 6)

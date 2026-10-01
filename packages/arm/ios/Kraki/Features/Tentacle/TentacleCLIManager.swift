@@ -233,7 +233,7 @@ final class TentacleCLIManager {
         }
     }
 
-    /// Settings → Tentacle "Run agents on this Mac": turn the built-in daemon
+    /// Settings → This Mac "Run agents on this Mac": turn the built-in daemon
     /// on (and remember it) or off (only control other computers from here).
     func setRunsAgentsOnThisMac(_ on: Bool) async {
         UserDefaults.standard.set(

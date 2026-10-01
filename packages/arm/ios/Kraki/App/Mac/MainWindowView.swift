@@ -784,7 +784,7 @@ private struct InspectorPane: View {
                         VStack(alignment: .leading, spacing: 8) {
                             sectionHeader("Device")
                             LabeledRow(label: "Name",   value: device.name)
-                            LabeledRow(label: "Role",   value: device.role.rawValue.capitalized)
+                            LabeledRow(label: "Role",   value: device.role.displayName)
                             LabeledRow(label: "Status", value: device.online ? "Online" : "Offline")
                         }
                     }

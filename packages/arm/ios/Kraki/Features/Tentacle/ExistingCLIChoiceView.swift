@@ -63,7 +63,7 @@ struct ExistingCLIChoiceView: View {
                     .multilineTextAlignment(.center)
             }
 
-            Text("You can change this later in Settings → Tentacle.")
+            Text("You can change this later in Settings → This Mac.")
                 .font(.system(size: 10.5))
                 .foregroundStyle(Color.textMuted)
         }

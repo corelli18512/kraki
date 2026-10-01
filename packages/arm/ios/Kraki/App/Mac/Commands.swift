@@ -169,19 +169,19 @@ struct MacCommands: Commands {
         }
         #endif
 
-        // Tentacle menu.
-        CommandMenu("Tentacle") {
-            Button("Start Daemon") {
+        // "This Mac" menu (the background service that runs agents here).
+        CommandMenu("This Mac") {
+            Button("Start Background Service") {
                 Task { await tentacleCLI.startDaemon() }
             }
             .disabled(!tentacleCLI.canStartDaemon)
 
-            Button("Stop Daemon") {
+            Button("Stop Background Service") {
                 Task { await tentacleCLI.stopDaemon() }
             }
             .disabled(!tentacleCLI.canStopDaemon)
 
-            Button("Restart Daemon") {
+            Button("Restart Background Service") {
                 Task { await tentacleCLI.restartDaemon() }
             }
             .disabled(!tentacleCLI.canStopDaemon)

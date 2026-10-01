@@ -51,13 +51,13 @@ function EmptySessions({ onNew, onImport }: { onNew: () => void; onImport: () =>
     <div className="ksb-empty">
       <BotMessageSquare className="ksb-empty-icon" strokeWidth={1.5} />
       <p className="ksb-empty-title">No sessions yet</p>
-      <p className="ksb-empty-hint">{hasTentacle ? 'Start an agent on your connected device.' : 'Connect a device with the Kraki CLI to get started.'}</p>
+      <p className="ksb-empty-hint">{hasTentacle ? 'Start an agent on your connected computer.' : 'Connect a computer with the Kraki CLI to get started.'}</p>
       {hasTentacle ? (
         <div className="ksb-empty-actions">
           <button type="button" className="ksb-button is-primary" onClick={onNew}>New Session</button>
           <button type="button" className="ksb-button" onClick={onImport}><Download /> Import</button>
         </div>
-      ) : <code className="ksb-code">npx @kraki/tentacle</code>}
+      ) : <code className="ksb-code">curl -fsSL https://app.kraki.chat/install.sh | bash</code>}
     </div>
   );
 }
