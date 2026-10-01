@@ -1322,4 +1322,16 @@ final class KrakiVoiceInputTests: XCTestCase {
         let many = (0..<150).map { "term\($0)" }.joined(separator: "\n")
         XCTAssertEqual(VoiceVocabulary.parse(many).count, VoiceVocabulary.maxEntries)
     }
+
+    func testVocabularyCheckReportsIgnoredLines() {
+        let report = VoiceVocabulary.check("Foo ＝ 福欧\n= 空\nBar =\n# note\nBaz")
+        XCTAssertEqual(report.entries, ["Foo = 福欧", "Baz"], "full-width ＝ is accepted")
+        XCTAssertEqual(report.issues, [.init(line: 2, kind: .emptySide), .init(line: 3, kind: .emptySide)])
+        let long = String(repeating: "x", count: 121)
+        XCTAssertEqual(VoiceVocabulary.check(long).issues, [.init(line: 1, kind: .tooLong)])
+        let many = (0..<101).map { "t\($0)" }.joined(separator: "\n")
+        XCTAssertEqual(VoiceVocabulary.check(many).issues, [.init(line: 101, kind: .overLimit)])
+        XCTAssertEqual(VoiceVocabularyEditor.describe(.init(line: 2, kind: .emptySide), more: 1),
+                       "Line 2 needs a word on both sides of “=” and is ignored (+1 more)")
+    }
 }

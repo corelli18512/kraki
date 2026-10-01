@@ -114,18 +114,32 @@ struct SettingsView: View {
 
     // MARK: - Preferences (Notifications + Theme)
 
+    @AppStorage(VoiceVocabulary.storageKey) private var vocabularyText = ""
+    private var vocabularyCount: Int { VoiceVocabulary.parse(vocabularyText).count }
+
     private var preferencesSection: some View {
         Section {
             notificationsRow
             themeRow
             NavigationLink {
-                Form { VoiceVocabularyEditor() }
-                    .navigationTitle("Voice Vocabulary")
+                Form {
+                    Section {
+                        VoiceVocabularyEditor()
+                    } footer: {
+                        VoiceVocabularyFooter()
+                    }
+                }
+                .navigationTitle("Voice Vocabulary")
+                .navigationBarTitleDisplayMode(.inline)
             } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "character.book.closed")
                         .foregroundStyle(Color.krakiPrimary)
                     Text("Voice Vocabulary")
+                    Spacer()
+                    if vocabularyCount > 0 {
+                        Text("\(vocabularyCount)").foregroundStyle(.secondary)
+                    }
                 }
             }
         } header: {

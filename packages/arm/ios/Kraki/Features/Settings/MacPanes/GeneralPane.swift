@@ -34,8 +34,14 @@ struct GeneralPane: View {
                 }
             }
 
-            Section("Voice Vocabulary") {
+            Section {
                 VoiceVocabularyEditor()
+            } header: {
+                Text("Voice Vocabulary")
+            } footer: {
+                VoiceVocabularyFooter()
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Behavior") {
