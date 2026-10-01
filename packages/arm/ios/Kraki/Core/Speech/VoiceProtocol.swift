@@ -137,11 +137,10 @@ struct VoiceSessionContext: Equatable, Sendable {
 }
 
 enum VoiceSessionContextBuilder {
-    private static let baseVocabulary = [
-        "Kraki = cracker, kracky, kraki, 克拉奇, 克拉基",
-    ]
-
-    static func build(session: SessionInfo, recentMessages: [ChatMessage]) -> VoiceSessionContext {
+    /// `userVocabulary`: the user's own terms (Settings → Voice Vocabulary),
+    /// first; then terms taken from the current conversation.
+    static func build(session: SessionInfo, recentMessages: [ChatMessage],
+                      userVocabulary: [String] = VoiceVocabulary.load()) -> VoiceSessionContext {
         var terms: [String] = []
         var seen = Set<String>()
 
@@ -194,7 +193,9 @@ enum VoiceSessionContextBuilder {
         ]
         return VoiceSessionContext(
             fields: fields,
-            vocabulary: baseVocabulary + terms
+            vocabulary: userVocabulary + terms.filter { term in
+                !userVocabulary.contains { $0.lowercased().hasPrefix(term.lowercased()) }
+            }
         )
     }
 }

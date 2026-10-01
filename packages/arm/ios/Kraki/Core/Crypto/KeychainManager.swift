@@ -232,18 +232,55 @@ public final class KeychainManager {
         if tag == Self.signingKeyTag, let pair = Self.ephemeralSigningPair { return pair }
         if tag == Self.encryptionKeyTag, let pair = Self.ephemeralEncryptionPair { return pair }
 
-        let attrs: [String: Any] = [
-            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
-            kSecAttrKeySizeInBits as String: 4096,
-            kSecPrivateKeyAttrs as String: [kSecAttrIsPermanent as String: false],
-        ]
-        let pair = try generateKeyPair(attributes: attrs)
+        let pair = try Self.makeProcessLocalKeyPair()
         if tag == Self.signingKeyTag {
             Self.ephemeralSigningPair = pair
         } else if tag == Self.encryptionKeyTag {
             Self.ephemeralEncryptionPair = pair
         }
         return pair
+    }
+
+    /// Process-local RSA-4096 pair on macOS's modern (corecrypto) SecKey
+    /// implementation. A plain in-memory key lands on the legacy CDSA path,
+    /// whose OAEP decrypt costs ~29 ms per inbound message on an M5 Pro
+    /// (~5 ms here); the key format and every wire byte are unchanged. The key
+    /// is never stored, so no keychain entitlement is involved. Falls back to
+    /// the legacy implementation if the modern one is unavailable.
+    static func makeProcessLocalKeyPair() throws -> (privateKey: SecKey, publicKey: SecKey) {
+        let base: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecAttrKeySizeInBits as String: 4096,
+            kSecPrivateKeyAttrs as String: [kSecAttrIsPermanent as String: false],
+        ]
+        var modern = base
+        modern[kSecUseDataProtectionKeychain as String] = true
+        if let pair = try? createPair(modern) { return pair }
+        return try createPair(base)
+    }
+
+    #if DEBUG
+    /// Benchmark/test seam: the pre-change legacy in-memory pair.
+    static func makeLegacyProcessLocalKeyPairForTesting() throws -> (privateKey: SecKey, publicKey: SecKey) {
+        try createPair([
+            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecAttrKeySizeInBits as String: 4096,
+            kSecPrivateKeyAttrs as String: [kSecAttrIsPermanent as String: false],
+        ])
+    }
+    #endif
+
+    private static func createPair(_ attributes: [String: Any]) throws -> (privateKey: SecKey, publicKey: SecKey) {
+        var error: Unmanaged<CFError>?
+        guard let privateKey = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
+            throw KeychainError.keyGenerationFailed(
+                error.map { String(describing: $0.takeRetainedValue()) } ?? "unknown"
+            )
+        }
+        guard let publicKey = SecKeyCopyPublicKey(privateKey) else {
+            throw KeychainError.keyGenerationFailed("Cannot extract public key")
+        }
+        return (privateKey: privateKey, publicKey: publicKey)
     }
     #endif
 
