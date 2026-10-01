@@ -49,10 +49,10 @@ vi.mock("ws", () => {
 });
 
 const mockExecSync = vi.fn();
-const mockSpawnSync = vi.fn(() => ({ status: 0 }));
+const mockSpawn = vi.fn(() => ({ on: vi.fn(), unref: vi.fn() }));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, execSync: (...a: unknown[]) => mockExecSync(...a), spawnSync: (...a: unknown[]) => mockSpawnSync(...a) };
+  return { ...actual, execSync: (...a: unknown[]) => mockExecSync(...a), spawn: (...a: unknown[]) => mockSpawn(...a) };
 });
 
 let mockMacApp: string | null = null;
@@ -233,7 +233,7 @@ describe("runSetup — GitHub device code", () => {
     const result = await runSetup();
     expect(result.relay).toBe('wss://r');
     expect(mockExecSync).toHaveBeenCalledWith('pbcopy', expect.objectContaining({ input: 'ABCD-1234' }));
-    expect(mockSpawnSync).toHaveBeenCalledWith('open', ['https://github.com/login/device'], expect.anything());
+    expect(mockSpawn).toHaveBeenCalledWith('open', ['https://github.com/login/device'], expect.objectContaining({ detached: true }));
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('ABCD-1234'));
     mockPlatform = null;
   });
