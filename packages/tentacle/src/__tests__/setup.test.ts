@@ -217,6 +217,7 @@ describe("runSetup — official service (same steps as Kraki for Mac)", () => {
 describe("runSetup — GitHub device code", () => {
   it("copies the code, opens GitHub and signs in once approved", async () => {
     delete process.env.SSH_CONNECTION; delete process.env.SSH_TTY;
+    mockPlatform = 'darwin';
     mockCheckGhAuth.mockReturnValueOnce({ authenticated: false });
     let polls = 0;
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
@@ -234,6 +235,7 @@ describe("runSetup — GitHub device code", () => {
     expect(mockExecSync).toHaveBeenCalledWith('pbcopy', expect.objectContaining({ input: 'ABCD-1234' }));
     expect(mockSpawnSync).toHaveBeenCalledWith('open', ['https://github.com/login/device'], expect.anything());
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('ABCD-1234'));
+    mockPlatform = null;
   });
 });
 
