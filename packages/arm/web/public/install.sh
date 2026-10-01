@@ -194,7 +194,9 @@ MAC_APP_MANAGED=0
 
 detect_mac_app() {
   for app in "/Applications/Kraki.app" "${HOME}/Applications/Kraki.app"; do
-    if [ -x "${app}/Contents/Library/Helpers/Kraki Tentacle.app/Contents/MacOS/kraki" ]; then
+    # "Kraki.app" since the helper rename; "Kraki Tentacle.app" before it.
+    if [ -x "${app}/Contents/Library/Helpers/Kraki.app/Contents/MacOS/kraki" ] \
+      || [ -x "${app}/Contents/Library/Helpers/Kraki Tentacle.app/Contents/MacOS/kraki" ]; then
       MAC_APP="$app"
       break
     fi

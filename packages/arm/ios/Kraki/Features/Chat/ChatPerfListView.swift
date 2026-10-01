@@ -45,11 +45,9 @@ private final class ChatPerfLog {
     private let queue = DispatchQueue(label: "chatperf.filelog")
     private let handle: FileHandle?
     /// Sandbox path (pull with `devicectl device copy from`):
-    /// Documents/chatperf.log — a durable sink that survives USB/syslog drops.
-    static let fileURL: URL = {
-        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        return dir.appendingPathComponent("chatperf.log")
-    }()
+    /// Documents/chatperf.log on iOS (~/Library/Logs/<bundle id>/ on macOS) —
+    /// a durable sink that survives USB/syslog drops.
+    static let fileURL = KrakiDiagnosticFiles.url("chatperf.log")
 
     init() {
         guard enabled else {

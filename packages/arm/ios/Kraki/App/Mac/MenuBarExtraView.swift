@@ -34,16 +34,16 @@ struct MenuBarExtraView: View {
         }
         .keyboardShortcut("0", modifiers: .command)
 
-        Menu("Tentacle") {
-            Button("Start Daemon") {
+        Menu("This Mac") {
+            Button("Start Background Service") {
                 Task { await tentacleCLI.startDaemon() }
             }
             .disabled(!tentacleCLI.canStartDaemon)
-            Button("Stop Daemon") {
+            Button("Stop Background Service") {
                 Task { await tentacleCLI.stopDaemon() }
             }
             .disabled(!tentacleCLI.canStopDaemon)
-            Button("Restart Daemon") {
+            Button("Restart Background Service") {
                 Task { await tentacleCLI.restartDaemon() }
             }
             .disabled(!tentacleCLI.canStopDaemon)
@@ -72,13 +72,13 @@ struct MenuBarExtraView: View {
         let line: String = {
             switch tentacleCLI.daemonState {
             case .running(let pid):
-                return "Tentacle running (pid \(pid))"
-            case .starting: return "Tentacle starting…"
-            case .stopping: return "Tentacle stopping…"
-            case .stopped:  return "Tentacle stopped"
-            case .needsApproval: return "Tentacle off in Login Items"
+                return "Running on this Mac (pid \(pid))"
+            case .starting: return "Starting on this Mac…"
+            case .stopping: return "Stopping on this Mac…"
+            case .stopped:  return "Not running on this Mac"
+            case .needsApproval: return "Turned off in Login Items"
             case .error(let msg): return "Error: \(msg)"
-            case .unknown:  return "Detecting tentacle…"
+            case .unknown:  return "Checking this Mac…"
             }
         }()
         Text(line)

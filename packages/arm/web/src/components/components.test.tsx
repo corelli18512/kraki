@@ -137,7 +137,7 @@ describe('NewSessionDialog', () => {
 
     renderWithRouter(<NewSessionDialog open onClose={() => {}} />);
 
-    expect(screen.getByText('No devices online')).toBeInTheDocument();
+    expect(screen.getByText('No computers online')).toBeInTheDocument();
     expect(screen.queryByText('Offline Mac')).not.toBeInTheDocument();
   });
 

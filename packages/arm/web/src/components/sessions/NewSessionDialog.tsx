@@ -221,10 +221,10 @@ export function NewSessionDialog({ open, onClose }: Props) {
 
         {tentacles.length === 0 ? (
           <div className="py-8 text-center">
-            <p className="text-sm text-text-secondary">No devices online</p>
-            <p className="mt-1 text-xs text-text-muted">Connect a tentacle to create sessions</p>
+            <p className="text-sm text-text-secondary">No computers online</p>
+            <p className="mt-1 text-xs text-text-muted">Connect a computer to create sessions</p>
             <code className="mt-3 inline-block rounded bg-surface-tertiary px-2.5 py-1 text-[11px] text-text-secondary">
-              npx @kraki/tentacle
+              curl -fsSL https://app.kraki.chat/install.sh | bash
             </code>
           </div>
         ) : (

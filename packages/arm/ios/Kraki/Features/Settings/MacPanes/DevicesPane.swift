@@ -44,7 +44,7 @@ private struct DeviceRow: View {
                 Text(device.name)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Color.textPrimary)
-                Text(device.role.rawValue.capitalized)
+                Text(device.role.displayName)
                     .font(.system(size: 10, weight: .semibold))
                     .tracking(0.4)
                     .textCase(.uppercase)

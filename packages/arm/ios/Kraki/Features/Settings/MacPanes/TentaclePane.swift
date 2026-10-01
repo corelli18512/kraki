@@ -18,7 +18,7 @@ struct TentaclePane: View {
     var body: some View {
         Form {
             if tentacleCLI.isBuiltInAvailable {
-                Section("Tentacle") {
+                Section("Agents on This Mac") {
                     modeContent
                 }
             }
@@ -32,10 +32,10 @@ struct TentaclePane: View {
                 }
             }
 
-            Section("Daemon") {
+            Section("Background Service") {
                 daemonContent
                 if tentacleCLI.mode == .external {
-                    Toggle("Start tentacle automatically when Kraki opens", isOn: $autostart)
+                    Toggle("Start the background service when Kraki opens", isOn: $autostart)
                 } else {
                     Text("Runs in the background and starts when you log in. You can also turn it off in System Settings → General → Login Items.")
                         .font(.caption)
@@ -102,12 +102,12 @@ struct TentaclePane: View {
             }
             LabeledContent("Version", value: tentacleCLI.builtIn.version ?? "unknown")
             if tentacleCLI.externalCLI != nil {
-                Text("The kraki CLI on this Mac stays usable for commands like `kraki status` and `kraki logs`; Kraki keeps the background daemon.")
+                Text("The kraki CLI on this Mac stays usable for commands like `kraki status` and `kraki logs`; Kraki keeps running the background service.")
                     .font(.caption)
                     .foregroundStyle(Color.textSecondary)
             }
         } else {
-            Text("Switching to the built-in tentacle stops the CLI's daemon and keeps your sign-in and sessions. You'll grant Full Disk Access to Kraki once.")
+            Text("Switching to Kraki stops the CLI's background service and keeps your sign-in and sessions. You'll grant Full Disk Access to Kraki once.")
                 .font(.caption)
                 .foregroundStyle(Color.textSecondary)
         }
@@ -158,7 +158,7 @@ struct TentaclePane: View {
     private var daemonContent: some View {
         switch tentacleCLI.daemonState {
         case .unknown:
-            ProgressView("Talking to daemon…").controlSize(.small)
+            ProgressView("Checking…").controlSize(.small)
         case .stopped:
             HStack {
                 Label("Stopped", systemImage: "moon.zzz.fill")
@@ -217,7 +217,7 @@ struct TentaclePane: View {
                 Label("Full Disk Access not granted", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(Color(hex: 0xFBBF24))
             default:
-                Label("Full Disk Access: checked while the daemon runs", systemImage: "questionmark.circle")
+                Label("Full Disk Access: checked while the background service runs", systemImage: "questionmark.circle")
                     .foregroundStyle(Color.textMuted)
             }
             Spacer()

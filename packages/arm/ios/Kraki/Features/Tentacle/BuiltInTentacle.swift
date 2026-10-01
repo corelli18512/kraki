@@ -2,7 +2,7 @@
 ///
 /// Layout (produced by scripts/mac/embed-tentacle-helper.sh):
 ///
-///   Kraki.app/Contents/Library/Helpers/Kraki Tentacle.app   the tentacle SEA
+///   Kraki.app/Contents/Library/Helpers/Kraki.app            the tentacle SEA
 ///   Kraki.app/Contents/Library/LaunchAgents/<id>.tentacle.plist
 ///
 /// The daemon is registered with `SMAppService.agent(plistName:)`. launchd
@@ -100,7 +100,12 @@ enum TentacleMode: String, Equatable {
 }
 
 struct BuiltInTentacle {
-    static let helperRelativePath = "Contents/Library/Helpers/Kraki Tentacle.app"
+    /// Named "Kraki" (not "Kraki Tentacle"): macOS shows the helper's name in
+    /// the privacy prompts the daemon's own work triggers, and users should
+    /// only ever see one app. Older versions named it "Kraki Tentacle.app".
+    static let helperRelativePath = "Contents/Library/Helpers/Kraki.app"
+    /// The program path launchd records for the job (relative to this app).
+    static let binaryRelativePath = helperRelativePath + "/Contents/MacOS/kraki"
     static let ownerId = "kraki-mac"
 
     let appBundle: Bundle

@@ -21,7 +21,7 @@ struct PreferencesWindow: View {
             NotificationsPane()
                 .tabItem { Label("Notifications", systemImage: "bell") }
             TentaclePane()
-                .tabItem { Label("Tentacle", systemImage: "terminal") }
+                .tabItem { Label("This Mac", systemImage: "desktopcomputer") }
             DevicesPane()
                 .tabItem { Label("Devices", systemImage: "laptopcomputer.and.iphone") }
             AboutPane()

@@ -123,10 +123,10 @@ function printManagedNotice(managed: ManagedByMarker): void {
 function refuseManaged(action: 'start' | 'stop' | 'update' | 'setup', managed: ManagedByMarker): void {
   printManagedNotice(managed);
   const hint: Record<typeof action, string> = {
-    start: 'Open Kraki for Mac to start it (Settings → Tentacle).',
-    stop: 'Stop it from Kraki for Mac (Settings → Tentacle) or turn Kraki off in System Settings → General → Login Items.',
+    start: 'Open Kraki for Mac to start it (Settings → This Mac).',
+    stop: 'Stop it from Kraki for Mac (Settings → This Mac) or turn Kraki off in System Settings → General → Login Items.',
     update: 'Kraki for Mac updates its built-in tentacle together with the app (Kraki → Check for Updates…).',
-    setup: 'Reconfigure from Kraki for Mac, or switch it to "Use external CLI" in Settings → Tentacle first.',
+    setup: 'Reconfigure from Kraki for Mac, or switch it to "Use external CLI" in Settings → This Mac first.',
   };
   console.log(chalk.dim(`  ${hint[action]}`));
   process.exitCode = 1;

@@ -411,8 +411,8 @@ struct NewSessionSheet: View {
     private var noDevicesView: some View {
         VStack(spacing: 12) {
             Spacer()
-            Text("No devices online").font(.title3).foregroundStyle(.secondary)
-            Text("Connect a tentacle to create sessions").font(.subheadline).foregroundStyle(.tertiary)
+            Text("No computers online").font(.title3).foregroundStyle(.secondary)
+            Text("Connect a computer to create sessions").font(.subheadline).foregroundStyle(.tertiary)
             Link("How?", destination: Self.helpURL)
                 .font(.subheadline)
             Spacer()

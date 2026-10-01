@@ -1,5 +1,5 @@
 /// LocalAgentsWindow — "Coding Agents on This Mac", reachable any time after
-/// setup (Tentacle menu, Settings → Tentacle, the home screen's "install a
+/// setup (This Mac menu, Settings → This Mac, the home screen's "install a
 /// coding agent" card). Same check and rows as setup step 1.
 ///
 /// After a check, if the working agents differ from what this Mac's running
@@ -39,13 +39,13 @@ struct LocalAgentsWindow: View {
                         check.run(binaryPath: binaryPath)
                     }
             } else {
-                Text("Kraki's built-in tentacle isn't available in this build.")
+                Text("This build of Kraki can't run agents on this Mac.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(Color.orange)
             }
 
             if BuiltInTentacle.thisMacRole == .remoteOnly, tentacleCLI.mode == .builtIn {
-                Text("This Mac is set to only control other computers. Turn on “Run agents on this Mac” in Settings → Tentacle to use these agents.")
+                Text("This Mac is set to only control other computers. Turn on “Run agents on this Mac” in Settings → This Mac to use these agents.")
                     .font(.system(size: 10.5))
                     .foregroundStyle(Color.orange)
                     .fixedSize(horizontal: false, vertical: true)
