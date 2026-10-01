@@ -6,6 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.52</title>
+            <pubDate>Thu, 01 Oct 2026 13:07:53 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.52</sparkle:fullReleaseNotesLink>
+            <sparkle:version>54</sparkle:version>
+            <sparkle:shortVersionString>0.2.52</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* chore(mac): prepare 0.2.51 (53) for a diagnostics delivery by @corelli18512 in https://github.com/corelli18512/kraki/pull/355
+* fix(presence): stale device_left after a Tentacle restart stopped live updates to the App by @corelli18512 in https://github.com/corelli18512/kraki/pull/357
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.51-diag...mac-v0.2.52
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.52/Kraki.app.zip" length="91418282" type="application/octet-stream" sparkle:edSignature="FrUP+BrXu7XecN8NtEwOIFk1xbxNlSyw0kvxhV1qu4avFDPY0cDLdVuirYTzn5JRRsjJV5lOj6PfjkMbfpv6DQ=="/>
+        </item>
+        <item>
             <title>0.2.51</title>
             <pubDate>Thu, 01 Oct 2026 06:57:33 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -34,29 +51,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.50/Kraki.app.zip" length="91415758" type="application/octet-stream" sparkle:edSignature="rMx6d7MoHK8JpxI6un6oO8rcvj8Q8Y/LGXBasMLmpespczwF0H8lCYQcSjY7OltBxZZLiUs5UzwxdjM5qlJTAA=="/>
         </item>
-        <item>
-            <title>0.2.49</title>
-            <pubDate>Wed, 30 Sep 2026 13:50:31 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.49</sparkle:fullReleaseNotesLink>
-            <sparkle:version>51</sparkle:version>
-            <sparkle:shortVersionString>0.2.49</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* feat(diag): stability summaries — opening, outages, sending, voice, conversation opens by @corelli18512 in https://github.com/corelli18512/kraki/pull/342
-* fix(tentacle): recover pi model list after a failed startup read by @corelli18512 in https://github.com/corelli18512/kraki/pull/341
-* fix(voice): a failed correction still sends the raw transcript by @corelli18512 in https://github.com/corelli18512/kraki/pull/343
-* Kraki for Mac includes Kraki: set up without Terminal by @corelli18512 in https://github.com/corelli18512/kraki/pull/344
-* chore(release): protocol 0.24.0 for Tentacle 0.34.0 by @corelli18512 in https://github.com/corelli18512/kraki/pull/345
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.48...mac-v0.2.49
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.49/Kraki.app.zip" length="91402835" type="application/octet-stream" sparkle:edSignature="FHIfmV4ALpBKzQIN0eAJxKOchxexGMd9llgK1qJ8W0XN4CPyZj8/YGFTXfyqdOAVhO7UGm9vOzj/3L8KJkKYAQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: OkybXvzSJ0Ik2HwO2+PKsPJAoaiUxipMcwemjDcaCRIGYa6oD2qkKxB4ZH1zYkoGuHOZUJp85MTjLJ1e4iyEBA==
-length: 4310
+edSignature: G9iRCA7tzkwrb1xZYtY7wPDi9793iE89qDOAiP3aUxqb2E304C/dSHjqnY/k5lbGbuKFcvdYz87cIFZYnXUHBg==
+length: 3934
 -->
