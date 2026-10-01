@@ -35,12 +35,33 @@ final class UsagePeekTests: XCTestCase {
         XCTAssertEqual(combo.display, "⌃⌥U")
     }
 
-    func testPanelHeightFollowsAccountCount() {
-        XCTAssertEqual(UsagePeekLayout.rows(3), 1)
-        XCTAssertEqual(UsagePeekLayout.rows(4), 2)
-        XCTAssertLessThan(UsagePeekLayout.compactHeight(3), UsagePeekLayout.compactHeight(4))
-        XCTAssertEqual(UsagePeekLayout.compactHeight(6), UsagePeekLayout.compactHeight(9), "compact shows at most six")
-        XCTAssertLessThan(UsagePeekLayout.detailHeight(3), UsagePeekLayout.detailHeight(4))
+    func testSmartLayoutBalancesRowsAndNarrowsThePanel() {
+        func rows(_ rings: [Int], _ m: UsagePeekLayout.Mode) -> [[Int]] { UsagePeekLayout.plan(rings: rings, m).rows }
+        // Two 2-ring + two 1-ring accounts: 2 + 2, not 3 + 1.
+        XCTAssertEqual(rows([2, 2, 1, 1], .compact), [[0, 1], [2, 3]])
+        XCTAssertEqual(rows([2, 2, 1, 1], .detail), [[0, 1], [2, 3]])
+        // Mostly weekly-only accounts fit three to a row.
+        XCTAssertEqual(rows([1, 1, 1], .compact), [[0, 1, 2]])
+        // Five cards split 3 + 2, never 4 + 1.
+        let five = rows([1, 1, 1, 1, 1], .compact)
+        XCTAssertEqual(five.map(\.count).sorted(), [2, 3])
+        // Compact shows at most six.
+        XCTAssertEqual(rows(Array(repeating: 1, count: 9), .compact).flatMap { $0 }.count, 6)
+        for rings in [[2], [1, 2], [2, 2, 1, 1], [1, 1, 1, 1, 1], [2, 2, 2, 2, 2]] {
+            for m in [UsagePeekLayout.Mode.compact, .detail] {
+                let plan = UsagePeekLayout.plan(rings: rings, m)
+                let inner = plan.size.width - UsagePeekLayout.padding(m) * 2
+                XCTAssertLessThanOrEqual(plan.size.width, UsagePeekLayout.maxWidth(m) + 0.5)
+                for row in plan.rows {
+                    // Every row fills the same width and no card is below its minimum.
+                    let used = row.map { plan.widths[$0] }.reduce(0, +) + UsagePeekLayout.gap(m) * CGFloat(row.count - 1)
+                    XCTAssertEqual(used, inner, accuracy: CGFloat(row.count))
+                    for i in row { XCTAssertGreaterThanOrEqual(plan.widths[i], UsagePeekLayout.minWidth(rings: rings[i], m) - 1) }
+                }
+            }
+        }
+        // One account doesn't get a half-empty 460-point panel.
+        XCTAssertLessThan(UsagePeekLayout.plan(rings: [1], .compact).size.width, 200)
     }
 }
 
@@ -75,32 +96,50 @@ final class UsagePeekRenderTests: XCTestCase {
             MergedAccountUsage(account: account("codex:2", "codex", "co•••ai@gmail.com", "prolite", [window("weekly", 64, hours: 134)]), devices: [mac]),
         ]
         let dir = ProcessInfo.processInfo.environment["KRAKI_USAGE_RENDER_DIR"]
-        for scheme in [ColorScheme.light, .dark] {
-            for (name, view, size) in [
-                ("compact", AnyView(UsagePeekCompact(accounts: accounts, currentKey: "claude:1", ns: Namespace().wrappedValue, entering: false)),
-                 CGSize(width: UsagePeekLayout.compactWidth, height: UsagePeekLayout.compactHeight(accounts.count))),
-                ("detail", AnyView(UsagePeekDetail(accounts: accounts, currentKey: "claude:1", ns: Namespace().wrappedValue, entering: false)),
-                 CGSize(width: UsagePeekLayout.detailWidth, height: UsagePeekLayout.detailHeight(accounts.count))),
-            ] {
-                let content = view
-                    .frame(width: size.width, height: size.height)
-                    .background(scheme == .dark ? Color(white: 0.16) : Color(white: 0.96))
-                    .environment(\.colorScheme, scheme)
-                let host = NSHostingView(rootView: content)
-                host.frame = NSRect(origin: .zero, size: size)
-                let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: size.width, height: size.height),
-                                      styleMask: .borderless, backing: .buffered, defer: false)
-                window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
-                window.contentView = host
-                window.orderBack(nil)
-                RunLoop.main.run(until: Date().addingTimeInterval(0.4))
-                host.layoutSubtreeIfNeeded()
-                let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-                host.cacheDisplay(in: host.bounds, to: rep)
-                window.orderOut(nil)
-                XCTAssertEqual(rep.size.width, size.width, accuracy: 1)
-                if let dir, let png = rep.representation(using: .png, properties: [:]) {
-                    try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("usage-\(name)-\(scheme == .dark ? "dark" : "light").png"))
+        var extraGPT: [MergedAccountUsage] = []
+        for n in 3...6 {
+            let five: AccountUsageWindow = window("five_hour", Double(90 - n * 9), hours: 1.5)
+            let weekly: AccountUsageWindow = window("weekly", Double(70 - n * 6), hours: 90)
+            let acc: AccountUsage = account("codex:x\(n)", "codex", "te•••m\(n)@corp.dev", "pro", [five, weekly])
+            extraGPT.append(MergedAccountUsage(account: acc, devices: [mac]))
+        }
+        let scenarios: [(String, [MergedAccountUsage])] = [
+            ("n1", Array(accounts.prefix(1))),
+            ("n2", [accounts[0], accounts[2]]),
+            ("n3", Array(accounts.prefix(3))),
+            ("n4", accounts),
+            ("n5", accounts + [extraGPT[0]]),
+            ("n6", accounts + Array(extraGPT.prefix(2))),
+        ]
+        for (tag, list) in scenarios {
+            let schemes: [ColorScheme] = tag == "n4" ? [.light, .dark] : [.dark]
+            for scheme in schemes {
+                let compactPlan = UsagePeekLayout.plan(rings: list.map(\.ringCount), .compact)
+                let detailPlan = UsagePeekLayout.plan(rings: list.map(\.ringCount), .detail)
+                let compactView: AnyView = AnyView(UsagePeekCompact(accounts: list, width: compactPlan.size.width, currentKey: "claude:1", ns: Namespace().wrappedValue, entering: false))
+                let detailView: AnyView = AnyView(UsagePeekDetail(accounts: list, width: detailPlan.size.width, currentKey: "claude:1", ns: Namespace().wrappedValue, entering: false))
+                let items: [(String, AnyView, CGSize)] = [("compact", compactView, compactPlan.size), ("detail", detailView, detailPlan.size)]
+                for (name, view, size) in items {
+                    let content = view
+                        .frame(width: size.width, height: size.height)
+                        .background(scheme == .dark ? Color(white: 0.16) : Color(white: 0.96))
+                        .environment(\.colorScheme, scheme)
+                    let host = NSHostingView(rootView: content)
+                    host.frame = NSRect(origin: .zero, size: size)
+                    let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: size.width, height: size.height),
+                                          styleMask: .borderless, backing: .buffered, defer: false)
+                    window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+                    window.contentView = host
+                    window.orderBack(nil)
+                    RunLoop.main.run(until: Date().addingTimeInterval(1.2))
+                    host.layoutSubtreeIfNeeded()
+                    let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                    host.cacheDisplay(in: host.bounds, to: rep)
+                    window.orderOut(nil)
+                    XCTAssertEqual(rep.size.width, size.width, accuracy: 1)
+                    if let dir, let png = rep.representation(using: .png, properties: [:]) {
+                        try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("usage-\(tag)-\(name)-\(scheme == .dark ? "dark" : "light").png"))
+                    }
                 }
             }
         }

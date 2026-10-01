@@ -103,30 +103,92 @@ private final class UsagePanelVisibilityAnimator {
     }
 }
 
+/// Packs account cards into balanced rows. A card's minimum width follows how many
+/// rings it draws (5-hour + weekly vs weekly only); rows keep the cards' order, use
+/// as few rows as fit, split them as evenly as possible, and every row stretches to
+/// the same width. The panel itself narrows to the content.
 enum UsagePeekLayout {
-    static let compactWidth: CGFloat = 460
-    static let detailWidth: CGFloat = 790
-    static let columns = 3
-    static let compactTile: CGFloat = 124
-    static let compactGap: CGFloat = 6
+    enum Mode { case compact, detail }
+
+    struct Plan: Equatable {
+        /// Card indices per row, in order.
+        var rows: [[Int]]
+        /// Panel size including padding.
+        var size: CGSize
+        /// Width of each card, by index.
+        var widths: [CGFloat]
+    }
+
+    static let compactMaxWidth: CGFloat = 460
+    static let detailMaxWidth: CGFloat = 790
     static let compactLimit = 6
-    static let detailCard: CGFloat = 232
-    static let detailGap: CGFloat = 12
-    static let detailPadding: CGFloat = 18
 
-    static func rows(_ count: Int) -> Int { max(1, (count + columns - 1) / columns) }
+    static func padding(_ m: Mode) -> CGFloat { m == .compact ? 9 : 18 }
+    static func gap(_ m: Mode) -> CGFloat { m == .compact ? 6 : 12 }
+    static func cardHeight(_ m: Mode) -> CGFloat { m == .compact ? 124 : 232 }
+    static func maxWidth(_ m: Mode) -> CGFloat { m == .compact ? compactMaxWidth : detailMaxWidth }
 
-    static func compactHeight(_ count: Int) -> CGFloat {
-        guard count > 0 else { return 96 }
-        let r = rows(min(count, compactLimit))
-        return 18 + CGFloat(r) * compactTile + CGFloat(r - 1) * compactGap
+    /// Narrowest a card can be and still fit its rings, tags and header.
+    static func minWidth(rings: Int, _ m: Mode) -> CGFloat {
+        switch m {
+        case .compact: return rings >= 2 ? 150 : 124
+        case .detail: return rings >= 2 ? 232 : 190
+        }
     }
 
-    static func detailHeight(_ count: Int) -> CGFloat {
-        guard count > 0 else { return 140 }
-        let r = rows(count)
-        return detailPadding * 2 + CGFloat(r) * detailCard + CGFloat(r - 1) * detailGap
+    /// Cards grow a little past their minimum before the panel stops narrowing.
+    static let comfort: CGFloat = 1.18
+
+    static func plan(rings: [Int], _ m: Mode, maxWidth limit: CGFloat? = nil) -> Plan {
+        let pad = padding(m), g = gap(m), h = cardHeight(m)
+        let rings = m == .compact ? Array(rings.prefix(compactLimit)) : rings
+        guard !rings.isEmpty else { return Plan(rows: [], size: CGSize(width: m == .compact ? 300 : 420, height: m == .compact ? 96 : 140), widths: []) }
+        let mins = rings.map { minWidth(rings: $0, m) }
+        let inner = (limit ?? maxWidth(m)) - pad * 2
+        func rowWidth(_ r: ArraySlice<CGFloat>) -> CGFloat { r.reduce(0, +) + g * CGFloat(max(0, r.count - 1)) }
+
+        // Fewest rows: greedy fill (order preserved).
+        var greedyRows = 1, current: CGFloat = 0
+        for (i, w) in mins.enumerated() {
+            let add = current == 0 ? w : current + g + w
+            if add > inner && i > 0 && current > 0 { greedyRows += 1; current = w } else { current = add }
+        }
+        // Most even split into that many rows (minimise the widest row), order preserved.
+        let n = mins.count, k = min(greedyRows, n)
+        var best = Array(repeating: Array(repeating: CGFloat.infinity, count: n + 1), count: k + 1)
+        var cut = Array(repeating: Array(repeating: 0, count: n + 1), count: k + 1)
+        best[0][0] = 0
+        for rows in 1...k {
+            for end in rows...n {
+                for start in (rows - 1)..<end where best[rows - 1][start] < .infinity {
+                    let width = max(best[rows - 1][start], rowWidth(mins[start..<end]))
+                    // Ties prefer more cards in earlier rows (current session row stays full).
+                    if width < best[rows][end] - 0.01 { best[rows][end] = width; cut[rows][end] = start }
+                }
+            }
+        }
+        var rows: [[Int]] = [], end = n
+        for r in stride(from: k, to: 0, by: -1) { let start = cut[r][end]; rows.insert(Array(start..<end), at: 0); end = start }
+
+        // Panel width: the widest row at a comfortable size, never beyond the limit.
+        let natural = rows.map { row in rowWidth(ArraySlice(row.map { mins[$0] * comfort })) }.max() ?? 0
+        let widest = rows.map { row in rowWidth(ArraySlice(row.map { mins[$0] })) }.max() ?? 0
+        let contentWidth = min(inner, max(widest, natural))
+        // Every row stretches to the same width, in proportion to its cards' minimums.
+        var widths = Array(repeating: CGFloat(0), count: n)
+        for row in rows {
+            let available = contentWidth - g * CGFloat(row.count - 1)
+            let total = row.map { mins[$0] }.reduce(0, +)
+            for i in row { widths[i] = (mins[i] / total * available).rounded(.down) }
+        }
+        let height = pad * 2 + CGFloat(rows.count) * h + CGFloat(rows.count - 1) * g
+        return Plan(rows: rows, size: CGSize(width: contentWidth + pad * 2, height: height), widths: widths)
     }
+}
+
+extension MergedAccountUsage {
+    /// Rings the card draws (at least one, for the empty ring).
+    var ringCount: Int { max(1, account.ringWindows.count) }
 }
 
 @MainActor
@@ -139,8 +201,8 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
     @Published private(set) var displayedPresentation: UsagePeekState.Presentation = .compact
     @Published private(set) var entranceSerial = 0
     @Published private(set) var closing = false
-    @Published private(set) var compactSize = NSSize(width: UsagePeekLayout.compactWidth, height: 160)
-    @Published private(set) var detailedSize = NSSize(width: UsagePeekLayout.detailWidth, height: 300)
+    @Published private(set) var compactSize = NSSize(width: UsagePeekLayout.compactMaxWidth, height: 160)
+    @Published private(set) var detailedSize = NSSize(width: UsagePeekLayout.detailMaxWidth, height: 300)
     private(set) var entranceUntil = Date.distantPast
 
     private(set) weak var appState: AppState?
@@ -284,12 +346,14 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
 
     private func computeFrames(screen: NSScreen?) {
         guard let visible = (screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame else { return }
-        let count = orderedAccounts().count
+        let rings = orderedAccounts().map(\.ringCount)
         maxHeight = min(640, visible.height - 28)
-        compactSize = NSSize(width: min(UsagePeekLayout.compactWidth, visible.width - 28),
-                             height: min(UsagePeekLayout.compactHeight(count), maxHeight))
-        detailedSize = NSSize(width: min(UsagePeekLayout.detailWidth, visible.width - 28),
-                              height: min(UsagePeekLayout.detailHeight(count), maxHeight))
+        let compact = UsagePeekLayout.plan(rings: rings, .compact, maxWidth: min(UsagePeekLayout.compactMaxWidth, visible.width - 28))
+        let detail = UsagePeekLayout.plan(rings: rings, .detail, maxWidth: min(UsagePeekLayout.detailMaxWidth, visible.width - 28))
+        compactSize = NSSize(width: compact.size.width, height: min(compact.size.height, maxHeight))
+        // The detail frame contains the compact one, so hovering can't flicker at an edge.
+        detailedSize = NSSize(width: max(detail.size.width, compact.size.width),
+                              height: max(min(detail.size.height, maxHeight), compactSize.height))
         // Anchored under the right end of the menu bar; both sizes share the top-right corner.
         anchor = NSPoint(x: visible.maxX - 12, y: visible.maxY - 8)
         compactFrame = NSRect(x: anchor.x - compactSize.width, y: anchor.y - compactSize.height,

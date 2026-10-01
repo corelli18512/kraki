@@ -24,12 +24,12 @@ struct UsagePeekView: View {
         GeometryReader { geometry in
             ZStack(alignment: .topTrailing) {
                 if detailed {
-                    UsagePeekDetail(accounts: accounts, currentKey: currentKey, ns: ns,
+                    UsagePeekDetail(accounts: accounts, width: controller.detailedSize.width, currentKey: currentKey, ns: ns,
                                     entering: Date() < controller.entranceUntil)
                         .frame(width: controller.detailedSize.width, height: controller.detailedSize.height)
                         .transition(.opacity.animation(.easeOut(duration: 0.2).delay(0.05)))
                 } else {
-                    UsagePeekCompact(accounts: accounts, currentKey: currentKey, ns: ns,
+                    UsagePeekCompact(accounts: accounts, width: controller.compactSize.width, currentKey: currentKey, ns: ns,
                                      entering: Date() < controller.entranceUntil)
                         .frame(width: controller.compactSize.width, height: controller.compactSize.height)
                         .transition(.opacity.animation(.easeOut(duration: 0.12)))
@@ -112,6 +112,8 @@ private struct UsageDeviceLine: View {
 
 struct UsagePeekCompact: View {
     let accounts: [MergedAccountUsage]
+    /// Panel width the layout plans for.
+    var width: CGFloat = UsagePeekLayout.compactMaxWidth
     let currentKey: String?
     let ns: Namespace.ID
     let entering: Bool
@@ -120,27 +122,31 @@ struct UsagePeekCompact: View {
         if accounts.isEmpty {
             UsagePeekEmpty()
         } else {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: UsagePeekLayout.compactGap),
-                                     count: UsagePeekLayout.columns),
-                      spacing: UsagePeekLayout.compactGap) {
-                ForEach(Array(accounts.prefix(UsagePeekLayout.compactLimit).enumerated()), id: \.element.id) { i, merged in
-                    let isCurrent = merged.id == currentKey
-                    AccountUsageTile(account: merged.account, ringSize: 48, lineWidth: 5, animateIn: entering,
-                                     delay: 0.14 + Double(i) * 0.035, geometry: ns)
-                        .padding(.horizontal, 10).padding(.top, 9).padding(.bottom, 8)
-                        .frame(maxWidth: .infinity, minHeight: UsagePeekLayout.compactTile,
-                               maxHeight: UsagePeekLayout.compactTile, alignment: .top)
-                        .background(isCurrent ? Color.krakiPrimary.opacity(0.08) : Color.primary.opacity(0.05),
-                                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(isCurrent ? Color.krakiPrimary.opacity(0.55) : Color.primary.opacity(0.06),
-                                          lineWidth: isCurrent ? 1.2 : 0.5))
-                        .help(isCurrent ? "Spent by the current session" : "")
-                        .modifier(UsageStaggerIn(index: i, active: entering))
+            let shown = Array(accounts.prefix(UsagePeekLayout.compactLimit))
+            let plan = UsagePeekLayout.plan(rings: shown.map(\.ringCount), .compact, maxWidth: width)
+            VStack(alignment: .leading, spacing: UsagePeekLayout.gap(.compact)) {
+                ForEach(Array(plan.rows.enumerated()), id: \.offset) { _, row in
+                    HStack(spacing: UsagePeekLayout.gap(.compact)) {
+                        ForEach(row, id: \.self) { i in
+                            let merged = shown[i]
+                            let isCurrent = merged.id == currentKey
+                            AccountUsageTile(account: merged.account, ringSize: 48, lineWidth: 5, animateIn: entering,
+                                             delay: 0.14 + Double(i) * 0.035, geometry: ns)
+                                .padding(.horizontal, 10).padding(.top, 9).padding(.bottom, 8)
+                                .frame(width: plan.widths[i], height: UsagePeekLayout.cardHeight(.compact), alignment: .top)
+                                .background(isCurrent ? Color.krakiPrimary.opacity(0.08) : Color.primary.opacity(0.05),
+                                            in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .strokeBorder(isCurrent ? Color.krakiPrimary.opacity(0.55) : Color.primary.opacity(0.06),
+                                                  lineWidth: isCurrent ? 1.2 : 0.5))
+                                .help(isCurrent ? "Spent by the current session" : "")
+                                .modifier(UsageStaggerIn(index: i, active: entering))
+                        }
+                    }
                 }
             }
-            .padding(9)
-            .frame(maxHeight: .infinity, alignment: .top)
+            .padding(UsagePeekLayout.padding(.compact))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 }
@@ -166,6 +172,7 @@ private struct UsageStaggerIn: ViewModifier {
 
 struct UsagePeekDetail: View {
     let accounts: [MergedAccountUsage]
+    var width: CGFloat = UsagePeekLayout.detailMaxWidth
     let currentKey: String?
     let ns: Namespace.ID
     let entering: Bool
@@ -175,16 +182,19 @@ struct UsagePeekDetail: View {
             UsagePeekEmpty()
         } else {
             ScrollView(.vertical, showsIndicators: false) {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: UsagePeekLayout.detailGap),
-                                         count: UsagePeekLayout.columns),
-                          spacing: UsagePeekLayout.detailGap) {
-                    ForEach(Array(accounts.enumerated()), id: \.element.id) { i, merged in
-                        UsagePeekCard(merged: merged, isCurrent: merged.id == currentKey, index: i,
-                                      entering: entering, ns: ns)
-                            .frame(height: UsagePeekLayout.detailCard)
+                let plan = UsagePeekLayout.plan(rings: accounts.map(\.ringCount), .detail, maxWidth: width)
+                VStack(alignment: .leading, spacing: UsagePeekLayout.gap(.detail)) {
+                    ForEach(Array(plan.rows.enumerated()), id: \.offset) { _, row in
+                        HStack(spacing: UsagePeekLayout.gap(.detail)) {
+                            ForEach(row, id: \.self) { i in
+                                UsagePeekCard(merged: accounts[i], isCurrent: accounts[i].id == currentKey, index: i,
+                                              entering: entering, ns: ns)
+                                    .frame(width: plan.widths[i], height: UsagePeekLayout.cardHeight(.detail))
+                            }
+                        }
                     }
                 }
-                .padding(UsagePeekLayout.detailPadding)
+                .padding(UsagePeekLayout.padding(.detail))
             }
         }
     }
