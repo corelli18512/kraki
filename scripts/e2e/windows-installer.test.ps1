@@ -24,7 +24,7 @@ Invoke-Expression $function.Extent.Text
 function New-Release($tag, $asset, $prerelease = $false) {
     return [pscustomobject]@{ tag_name = $tag; draft = $false; prerelease = $prerelease; assets = @([pscustomobject]@{ name = $asset; browser_download_url = "https://example.invalid/$tag/$asset" }) }
 }
-function Invoke-RestMethod([string]$Uri) {
+function Invoke-RestMethod([string]$Uri, [switch]$UseBasicParsing, [string]$Proxy) {
     $script:calls++
     if ($Uri -notmatch "per_page=100&page=$($script:calls)$") { throw "Unexpected URI: $Uri" }
     # Invoke-RestMethod returns a JSON array as one pipeline value on PS 5.1.

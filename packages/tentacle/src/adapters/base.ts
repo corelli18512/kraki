@@ -269,6 +269,11 @@ export abstract class AgentAdapter {
   /** List available models with rich metadata. Override in concrete adapters. */
   async listModelDetails(): Promise<ModelDetail[]> { return []; }
 
+  /** Why the last model list came back empty because the agent failed to run
+   *  (not because it has no models), if known. Used by `kraki agents` to tell
+   *  "didn't start" apart from "not signed in". */
+  modelListError(): string | undefined { return undefined; }
+
   /** Set permission mode for a session. Override in concrete adapters. */
   setSessionMode(_sessionId: string, _mode: import('@kraki/protocol').SessionMode): void { /* no-op by default */ }
 

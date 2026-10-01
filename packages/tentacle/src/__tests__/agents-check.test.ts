@@ -3,9 +3,10 @@ import type { AgentId } from '@kraki/protocol';
 import { runAgentsCheckWith, type AgentsCheckEvent, type AgentsCheckDeps } from '../agents-check.js';
 import type { AgentAdapter } from '../adapters/base.js';
 
-function fakeAdapter(opts: { start?: () => Promise<void>; models?: string[] }): AgentAdapter & { stopped: boolean } {
+function fakeAdapter(opts: { start?: () => Promise<void>; models?: string[]; listError?: string }): AgentAdapter & { stopped: boolean } {
   const a = {
     stopped: false,
+    modelListError: () => opts.listError,
     start: opts.start ?? (async () => {}),
     listModelDetails: async () => (opts.models ?? []).map((id) => ({ id, name: id })),
     stop: async () => { a.stopped = true; },
@@ -53,5 +54,11 @@ describe('kraki agents --json', () => {
     const { results } = await run(['copilot'], { copilot: stuck }, 20);
     expect(results.find((r) => r.id === 'copilot')).toMatchObject({ status: 'error', detail: expect.stringContaining('timed out') });
     expect(stuck.stopped).toBe(true);
+  });
+
+  it('reports an agent that cannot even be launched as an error, not as signed out', async () => {
+    const pi = fakeAdapter({ models: [], listError: 'spawn EINVAL' });
+    const { results } = await run(['pi'], { pi });
+    expect(results.find((r) => r.id === 'pi')).toMatchObject({ status: 'error', detail: 'spawn EINVAL' });
   });
 });

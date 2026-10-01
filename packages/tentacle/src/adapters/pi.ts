@@ -15,6 +15,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams, execSync } from 'node:child_process';
+import { cliSpawnArgs } from '../cli-launch.js';
 import { readPiJsonLines } from './pi-jsonl.js';
 import { readPiModelScope, scopePiModels } from './pi-model-scope.js';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync, appendFileSync } from 'node:fs';
@@ -141,7 +142,7 @@ class PiRpcProcess {
     // a mode change never respawns pi — the policy is enforced by the adapter.
     if (this.opts.extensionPath) args.push('--extension', this.opts.extensionPath);
 
-    this.child = spawn(this.opts.cliPath, args, {
+    this.child = spawn(...cliSpawnArgs(this.opts.cliPath, args), {
       cwd: this.opts.cwd ?? process.cwd(),
       env: this.opts.env ?? process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -477,7 +478,7 @@ export interface PiListModelsError extends Error {
  *  start is diagnosable instead of a bare `ETIMEDOUT`. */
 export function runPiListModels(cliPath: string, timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cliPath, ['--list-models'], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(...cliSpawnArgs(cliPath, ['--list-models']), { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -600,7 +601,7 @@ export function queryPiCatalog(cliPath: string, timeoutMs = 15_000): Promise<PiC
   return new Promise((resolve, reject) => {
     // --no-session: this process only answers one question, it must not leave a
     // session file behind next to the user's real ones.
-    const child = spawn(cliPath, ['--mode', 'rpc', '--no-session'], {
+    const child = spawn(...cliSpawnArgs(cliPath, ['--mode', 'rpc', '--no-session']), {
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -1811,7 +1812,7 @@ export class PiAdapter extends AgentAdapter {
       let err = '';
       let done = false;
       const finish = (value: string | null) => { if (!done) { done = true; clearTimeout(timer); resolve(value); } };
-      const child = spawn(this.cliPath, args, { cwd: tmpdir(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(...cliSpawnArgs(this.cliPath, args), { cwd: tmpdir(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
       const timer = setTimeout(() => { child.kill(); logger.warn({ sessionId }, 'pi title generation timed out'); finish(null); }, 45_000);
       child.stdout.on('data', (d) => { out += d.toString(); });
       child.stderr.on('data', (d) => { err += d.toString(); });
@@ -1837,6 +1838,11 @@ export class PiAdapter extends AgentAdapter {
   private modelRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private modelRetryAttempt = 0;
   private modelListFailed = false;
+  private lastModelListError: string | undefined;
+
+  override modelListError(): string | undefined {
+    return this.modelListFailed ? this.lastModelListError : undefined;
+  }
   private stopped = false;
   private modelScope: string[] | undefined;
   private scopeLoaded = false;
@@ -1877,6 +1883,7 @@ export class PiAdapter extends AgentAdapter {
       } catch (err) {
         const e = err as PiListModelsError;
         this.modelListFailed = true;
+        this.lastModelListError = e.message;
         logger.warn({
           err: e.message,
           elapsedMs: Date.now() - started,
@@ -1936,6 +1943,7 @@ export class PiAdapter extends AgentAdapter {
     } catch (err) {
       logger.warn({ err: (err as Error).message }, 'Could not fetch pi model list (sync)');
       this.modelListFailed = true;
+      this.lastModelListError = (err as Error).message;
       this.scheduleModelRetry();
     }
   }

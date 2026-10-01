@@ -8,6 +8,7 @@
  * - tentacle's public key (for E2E)
  */
 
+import { termLink } from './term-link.js';
 import { WebSocket } from 'ws';
 import { execSync } from 'node:child_process';
 import chalk from 'chalk';
@@ -129,7 +130,7 @@ export async function renderQrToTerminal(url: string): Promise<string> {
   const clipLine = copied ? '\n  Link copied to clipboard.' : '';
 
   const appBase = process.env.KRAKI_APP_URL ?? 'https://app.kraki.chat';
-  const appLink = `\u001b]8;;${appBase}\u0007${appBase.replace(/^https?:\/\//, '')}\u001b]8;;\u0007`;
+  const appLink = termLink(appBase.replace(/^https?:\/\//, ''), appBase);
 
   try {
     const qr = await import('qrcode-terminal');
