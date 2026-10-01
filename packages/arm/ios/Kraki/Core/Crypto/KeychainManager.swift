@@ -61,6 +61,61 @@ public enum KeychainError: Error, CustomStringConvertible {
     }
 }
 
+// MARK: - Mac Debug secret files
+
+#if os(macOS) && DEBUG
+/// Secrets of Mac Debug builds live in 0600 files instead of the login
+/// keychain.
+///
+/// Debug builds (Xcode, agents' `xcodebuild`, scripts/test-native.sh) are
+/// usually ad-hoc signed, so every rebuild has a new code identity. A keychain
+/// item's ACL is bound to the identity that created it, so the next build
+/// reading it makes macOS ask for the login password ("Kraki (Dev) wants to
+/// use your confidential information…") on every launch. Developer secrets do
+/// not need keychain protection; the CLI keeps its keys in ~/.kraki/keys too.
+/// Set KRAKI_DEV_USE_KEYCHAIN=1 to exercise the real keychain path.
+enum DevSecretFileStore {
+    static var isEnabled: Bool {
+        ProcessInfo.processInfo.environment["KRAKI_DEV_USE_KEYCHAIN"] != "1"
+    }
+
+    static let directory: URL = {
+        let fm = FileManager.default
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fm.temporaryDirectory
+        return base
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "chat.kraki.mac.dev", isDirectory: true)
+            .appendingPathComponent("DevSecrets", isDirectory: true)
+    }()
+
+    private static func url(_ name: String) -> URL {
+        directory.appendingPathComponent(name)
+    }
+
+    static func read(_ name: String) -> Data? {
+        try? Data(contentsOf: url(name))
+    }
+
+    @discardableResult
+    static func write(_ data: Data, name: String) -> Bool {
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true,
+                                   attributes: [.posixPermissions: 0o700])
+            try data.write(to: url(name), options: .atomic)
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url(name).path)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    static func delete(_ name: String) {
+        try? FileManager.default.removeItem(at: url(name))
+    }
+}
+#endif
+
 // MARK: - KeychainManager
 
 public final class KeychainManager {
@@ -201,6 +256,17 @@ public final class KeychainManager {
     // MARK: - Key Storage
 
     private func generateAndStoreKeyPair(tag: String) throws -> (privateKey: SecKey, publicKey: SecKey) {
+        #if os(macOS) && DEBUG
+        if DevSecretFileStore.isEnabled {
+            let pair = try Self.makeProcessLocalKeyPair()
+            var error: Unmanaged<CFError>?
+            guard let der = SecKeyCopyExternalRepresentation(pair.privateKey, &error) as Data?,
+                  DevSecretFileStore.write(der, name: tag) else {
+                throw KeychainError.saveFailed(errSecIO)
+            }
+            return pair
+        }
+        #endif
         var privateKeyAttrs: [String: Any] = [
             kSecAttrIsPermanent as String: true,
             kSecAttrApplicationTag as String: tag.data(using: .utf8)!,
@@ -300,6 +366,20 @@ public final class KeychainManager {
     }
 
     private func loadKeyPair(tag: String) throws -> (privateKey: SecKey, publicKey: SecKey)? {
+        #if os(macOS) && DEBUG
+        if DevSecretFileStore.isEnabled {
+            guard let der = DevSecretFileStore.read(tag) else { return nil }
+            let attrs: [String: Any] = [
+                kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+                kSecAttrKeyClass as String: kSecAttrKeyClassPrivate,
+            ]
+            guard let privateKey = SecKeyCreateWithData(der as CFData, attrs as CFDictionary, nil),
+                  let publicKey = SecKeyCopyPublicKey(privateKey) else {
+                throw KeychainError.unexpectedData
+            }
+            return (privateKey: privateKey, publicKey: publicKey)
+        }
+        #endif
         var query: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrApplicationTag as String: tag.data(using: .utf8)!,
@@ -333,6 +413,12 @@ public final class KeychainManager {
     }
 
     private func deleteKeyPair(tag: String) throws {
+        #if os(macOS) && DEBUG
+        if DevSecretFileStore.isEnabled {
+            DevSecretFileStore.delete(tag)
+            return
+        }
+        #endif
         var query: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrApplicationTag as String: tag.data(using: .utf8)!,

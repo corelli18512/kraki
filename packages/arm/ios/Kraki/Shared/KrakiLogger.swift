@@ -33,12 +33,38 @@ private let mirrorToOSLog: Bool = {
     #endif
 }()
 
+/// Where Kraki writes its own diagnostic files.
+///
+/// iOS: the app's sandboxed Documents folder (pulled with devicectl).
+/// macOS: `~/Library/Logs/<bundle id>/`. The Mac app is not sandboxed, so its
+/// Documents folder IS the user's `~/Documents`, a TCC-protected location.
+/// Writing there makes macOS ask "Kraki would like to access files in your
+/// Documents folder" (again on every rebuild of an ad-hoc signed Debug
+/// build) and litters the user's documents. ~/Library/Logs is unprotected.
+enum KrakiDiagnosticFiles {
+    static let directory: URL = {
+        let fm = FileManager.default
+        #if os(macOS)
+        let library = fm.urls(for: .libraryDirectory, in: .userDomainMask).first
+            ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Library", isDirectory: true)
+        let dir = library
+            .appendingPathComponent("Logs", isDirectory: true)
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "chat.kraki.mac", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+        #else
+        return fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        #endif
+    }()
+
+    static func url(_ name: String) -> URL {
+        directory.appendingPathComponent(name)
+    }
+}
+
 enum KLog {
     private static let entryQueue = DispatchQueue(label: "chat-entry.filelog")
-    private static let entryLogURL: URL = {
-        let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        return directory.appendingPathComponent("chat-entry.log")
-    }()
+    private static let entryLogURL = KrakiDiagnosticFiles.url("chat-entry.log")
     private static let entryLogLimit = 512 * 1024
 
     static func d(_ message: @autoclosure () -> String, file: String = #file, line: Int = #line) {
@@ -98,7 +124,7 @@ enum KLog {
     }
 
     /// Low-frequency, always-on chat-entry watcher. It mirrors state changes
-    /// to unified logging and to Documents/chat-entry.log so a physical-device
+    /// to unified logging and to chat-entry.log (see KrakiDiagnosticFiles) so a physical-device
     /// reproduction survives USB/syslog interruptions. The file is bounded and
     /// contains only session/window/list counts, never message content.
     static func chatEntry(_ message: @autoclosure () -> String, file: String = #file, line: Int = #line) {
