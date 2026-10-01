@@ -109,7 +109,8 @@ async function main() {
 
     const helpResult = runBinary(binaryPath, ['--help']);
     assertSuccess(binaryPath, ['--help'], helpResult);
-    assertOutput(helpResult, 'Usage:', '--help output');
+    assertOutput(helpResult, 'Get started', '--help output');
+    assertOutput(helpResult, 'kraki status', '--help output');
 
     const statusResult = runBinary(binaryPath, ['status'], { KRAKI_HOME: tempHome });
     assertSuccess(binaryPath, ['status'], statusResult, tempHome);
