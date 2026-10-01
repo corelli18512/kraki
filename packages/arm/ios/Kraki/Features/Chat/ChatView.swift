@@ -38,7 +38,10 @@ struct ChatView: View {
     private var isDeviceOnline: Bool { viewModel?.isDeviceOnline ?? false }
     private var isNewEmptySession: Bool {
         guard let viewModel else { return false }
-        return viewModel.cachedMessages.isEmpty && viewModel.pendingMessages.isEmpty && viewModel.card == nil
+        // Read the observed window (the body re-renders on it), not the list
+        // engine's snapshot, which SwiftUI does not observe.
+        return ChatViewModel.renderable(viewModel.filteredMessages).isEmpty
+            && viewModel.pendingMessages.isEmpty && viewModel.card == nil
     }
     #if DEBUG
     private var forceComposerForDiagnostics: Bool {

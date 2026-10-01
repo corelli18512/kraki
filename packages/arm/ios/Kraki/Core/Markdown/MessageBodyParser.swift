@@ -126,7 +126,11 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
         while index < fragment.endIndex {
             let next = fragment.index(after: index)
 
-            if fragment[index] == "\\", next < fragment.endIndex {
+            // Backslash escapes only ASCII punctuation (CommonMark). Anything
+            // else keeps its backslash, so Windows paths like C:\Users\me
+            // are shown as written.
+            if fragment[index] == "\\", next < fragment.endIndex,
+               fragment[next].isASCII, fragment[next].isPunctuation || fragment[next].isSymbol {
                 flushPlain(until: index)
                 append(String(fragment[next]))
                 index = fragment.index(after: next)

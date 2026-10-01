@@ -64,6 +64,11 @@ final class MarkdownEmphasisRulesTests: XCTestCase {
         XCTAssertEqual(parseMarkdownInline("**bold** text").filter(\.bold).map(\.text), ["bold"])
     }
 
+    func testWindowsPathsKeepTheirBackslashes() {
+        XCTAssertEqual(parseMarkdownInline(#"看一下 C:\kraki-ios\hello.js"#).map(\.text).joined(), #"看一下 C:\kraki-ios\hello.js"#)
+        XCTAssertEqual(parseMarkdownInline(#"literal \*star\*"#).map(\.text).joined(), "literal *star*")
+    }
+
     func testLoneOrSpacedStarsAreNotEmphasis() {
         XCTAssertEqual(italicText("rm *.txt and 2 * 3 * 4"), [])
     }
