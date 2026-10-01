@@ -6,6 +6,18 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.51</title>
+            <pubDate>Thu, 01 Oct 2026 06:57:33 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.51-diag</sparkle:fullReleaseNotesLink>
+            <sparkle:version>53</sparkle:version>
+            <sparkle:shortVersionString>0.2.51</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.35.1...mac-v0.2.51-diag
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.51-diag/Kraki.app.zip" length="91579028" type="application/octet-stream" sparkle:edSignature="I2DlC+2jYGEUaNJ3rx+hOEefoT5UQi2g9DpA/6BrY/skGVJNroNSB5NqKNQRTIHdECxA6TXFaO6ZJH+C2cnVDg=="/>
+        </item>
+        <item>
             <title>0.2.50</title>
             <pubDate>Thu, 01 Oct 2026 04:51:12 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -42,33 +54,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.49/Kraki.app.zip" length="91402835" type="application/octet-stream" sparkle:edSignature="FHIfmV4ALpBKzQIN0eAJxKOchxexGMd9llgK1qJ8W0XN4CPyZj8/YGFTXfyqdOAVhO7UGm9vOzj/3L8KJkKYAQ=="/>
         </item>
-        <item>
-            <title>0.2.48</title>
-            <pubDate>Wed, 30 Sep 2026 05:04:17 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.48</sparkle:fullReleaseNotesLink>
-            <sparkle:version>50</sparkle:version>
-            <sparkle:shortVersionString>0.2.48</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix: fragment large payloads so slow links keep showing progress by @corelli18512 in https://github.com/corelli18512/kraki/pull/332
-* fix(native): no Reconnecting flash on foreground; multi-device + background resilience scenarios by @corelli18512 in https://github.com/corelli18512/kraki/pull/333
-* fix(web): web client network resilience (W0–W5 chaos scenarios) by @corelli18512 in https://github.com/corelli18512/kraki/pull/334
-* fix: soak-found delivery bugs (greeting features, stall clock) + netem/soak on CI by @corelli18512 in https://github.com/corelli18512/kraki/pull/335
-* fix(web): name the sender so duplicate inputs are re-echoed; soak harness + diagnostics by @corelli18512 in https://github.com/corelli18512/kraki/pull/336
-* chore(ci): drop web network-resilience job and nightly web soak by @corelli18512 in https://github.com/corelli18512/kraki/pull/337
-* chore(ci): no nightly network-resilience run (manual only) by @corelli18512 in https://github.com/corelli18512/kraki/pull/338
-* fix(tentacle): stop deleting images users sent; remove the legacy inline-image migration by @corelli18512 in https://github.com/corelli18512/kraki/pull/340
-* fix(mac): recover sign-in after a slow gh or failed Keychain challenge; release 0.2.48 by @corelli18512 in https://github.com/corelli18512/kraki/pull/339
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.33.4...mac-v0.2.48
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.48/Kraki.app.zip" length="9616051" type="application/octet-stream" sparkle:edSignature="22GGQxsGEulr3/789p7EFF7QDbsWoqH2Ag1Q3qgz7UgS1Wu2U0VngvZlqnulUGLDKJkUobyJXbewjxtCH34CCA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: ws+oT/ObSTjFjPmaXH4M4gbJV1+MwN2sP6owKYe7Yug8urdsm/CJo/NlTO+s81lQbQQfLjZCWl9jbybMFfDeBw==
-length: 5632
+edSignature: OkybXvzSJ0Ik2HwO2+PKsPJAoaiUxipMcwemjDcaCRIGYa6oD2qkKxB4ZH1zYkoGuHOZUJp85MTjLJ1e4iyEBA==
+length: 4310
 -->
