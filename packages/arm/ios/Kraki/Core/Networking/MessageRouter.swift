@@ -175,7 +175,8 @@ final class MessageRouter {
                 // could not hold; re-send what is still waiting for it.
                 if summary.role == .tentacle {
                     // A Tentacle that (re)connected forgot this app's features.
-                    if appState?.deviceStore.deviceFeatures[summary.id]?.contains(PayloadFragments.feature) == true {
+                    if let features = appState?.deviceStore.deviceFeatures[summary.id],
+                       features.contains(PayloadFragments.feature) || features.contains(E2EV2.feature) {
                         declareClientFeatures(to: summary.id)
                     }
                     appState?.commandSender?.resendPendingInputs(deviceId: summary.id, reason: "tentacle_online")
@@ -898,7 +899,13 @@ final class MessageRouter {
         let features = payload?["features"] as? [String]
             ?? Array(appState.deviceStore.deviceFeatures[deviceId] ?? [])
         appState.deviceStore.setDeviceFeatures(deviceId, features: features)
-        if features.contains(PayloadFragments.feature) { declareClientFeatures(to: deviceId) }
+        // Same rule as features: a greeting without a key keeps the last one.
+        if let x25519 = (payload?["e2eKeys"] as? [String: Any])?["x25519"] as? String, x25519.count == 43 {
+            appState.deviceStore.setDeviceE2EKey(deviceId, x25519: x25519)
+        }
+        if features.contains(PayloadFragments.feature) || features.contains(E2EV2.feature) {
+            declareClientFeatures(to: deviceId)
+        }
         if features.contains("idempotent_input") {
             // Relaunch/reconnect: this Tentacle can take our pending inputs
             // again safely now that we know it deduplicates.
@@ -911,16 +918,22 @@ final class MessageRouter {
         appState.deviceStore.markGreeted(deviceId)
     }
 
-    /// Tell a Tentacle (that advertised `fragments`) this app reassembles
-    /// fragments, so it may send large payloads in small parts.
-    private func declareClientFeatures(to deviceId: String) {
+    /// Tell a Tentacle what this app supports: it reassembles fragments, and
+    /// it accepts E2E v2 with the announced X25519 key. A Tentacle forgets
+    /// this on every app reconnect, so it is declared per connection.
+    func declareClientFeatures(to deviceId: String) {
         guard let appState else { return }
+        var payload: [String: Any] = ["features": [PayloadFragments.feature]]
+        if let key = try? encryptionHandler.e2eKey() {
+            payload["features"] = [PayloadFragments.feature, E2EV2.feature]
+            payload["e2eKeys"] = ["x25519": E2EV2.publicKey(key)]
+        }
         _ = appState.sendEncryptedMessage([
             "type": "client_features",
             "deviceId": appState.deviceId ?? "",
             "seq": 0,
             "timestamp": ISO8601.now(),
-            "payload": ["features": [PayloadFragments.feature]],
+            "payload": payload,
         ], routingTarget: deviceId, connectionScoped: true)
     }
 

@@ -18,6 +18,7 @@
 /// `deleteAllKeys()` once after enabling the entitlement to migrate; new keys
 /// will be generated in the shared group on next access.
 
+import CryptoKit
 import Foundation
 import Security
 
@@ -183,8 +184,85 @@ public final class KeychainManager {
                (try? loadKeyPair(tag: Self.encryptionKeyTag)) != nil
     }
 
+    // MARK: - E2E v2 (X25519)
+
+    private static let e2eLock = NSLock()
+    private static var e2eKey: Curve25519.KeyAgreement.PrivateKey?
+    #if DEBUG
+    /// Tests: a fixed key instead of the Keychain / process key.
+    static var debugE2EKeyOverride: Curve25519.KeyAgreement.PrivateKey?
+    #endif
+
+    private static let e2eKeyService: String = encryptionKeyTag + ".x25519"
+
+    /// The X25519 key for E2E v2. It is announced to Tentacles in
+    /// `client_features` on every connection and never sent to the Head.
+    ///
+    /// iOS keeps it in the shared Keychain group (AfterFirstUnlock) so the
+    /// Notification Service Extension can read it. macOS uses a per-process
+    /// key, like the CLI-login RSA keys: it is re-announced on every
+    /// connection, and no Keychain ACL prompt can strand the app.
+    public func getOrCreateE2EKey() throws -> Curve25519.KeyAgreement.PrivateKey {
+        #if DEBUG
+        if let override = Self.debugE2EKeyOverride { return override }
+        #endif
+        Self.e2eLock.lock()
+        defer { Self.e2eLock.unlock() }
+        if let key = Self.e2eKey { return key }
+        #if os(macOS)
+        let key = Curve25519.KeyAgreement.PrivateKey()
+        #else
+        let key: Curve25519.KeyAgreement.PrivateKey
+        if let raw = try loadE2EKeyData() {
+            key = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw)
+        } else {
+            key = Curve25519.KeyAgreement.PrivateKey()
+            try storeE2EKeyData(key.rawRepresentation)
+        }
+        #endif
+        Self.e2eKey = key
+        return key
+    }
+
+    private func e2eKeyQuery() -> [String: Any] {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.e2eKeyService,
+            kSecAttrAccount as String: "x25519",
+        ]
+        if let group = accessGroup { query[kSecAttrAccessGroup as String] = group }
+        return query
+    }
+
+    private func loadE2EKeyData() throws -> Data? {
+        var query = e2eKeyQuery()
+        query[kSecReturnData as String] = true
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data else { throw KeychainError.loadFailed(status) }
+        return data
+    }
+
+    private func storeE2EKeyData(_ data: Data) throws {
+        var item = e2eKeyQuery()
+        item[kSecValueData as String] = data
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let status = SecItemAdd(item as CFDictionary, nil)
+        guard status == errSecSuccess else { throw KeychainError.saveFailed(status) }
+    }
+
     /// Delete all stored keys (for account reset or testing).
     public func deleteAllKeys() throws {
+        Self.e2eLock.lock()
+        Self.e2eKey = nil
+        Self.e2eLock.unlock()
+        #if os(iOS)
+        let e2eStatus = SecItemDelete(e2eKeyQuery() as CFDictionary)
+        if e2eStatus != errSecSuccess && e2eStatus != errSecItemNotFound {
+            throw KeychainError.deleteFailed(e2eStatus)
+        }
+        #endif
         #if os(macOS)
         defer {
             Self.ephemeralLock.lock()

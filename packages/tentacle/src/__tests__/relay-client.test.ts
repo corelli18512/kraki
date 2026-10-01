@@ -76,6 +76,7 @@ vi.mock('@kraki/crypto', async () => {
 });
 
 import { RelayClient } from '../relay-client.js';
+import { decryptV2, encryptV2, generateE2EKeyPair, importE2EPrivateKey } from '@kraki/crypto';
 import { AttachmentStore } from '../attachment-store.js';
 import { createHash } from 'node:crypto';
 import { PayloadAssembler, isPayloadFragment, fragmentPayload } from '@kraki/protocol';
@@ -224,10 +225,13 @@ function createSessionManager(): Record<string, unknown> {
   };
 }
 
+const tentacleE2E = generateE2EKeyPair();
+
 function createKeyManager(): Record<string, unknown> {
   return {
     getCompactPublicKey: vi.fn(() => 'pub-key'),
     getKeyPair: vi.fn(() => ({ privateKey: 'priv-key', publicKey: 'pub-key' })),
+    getE2EKey: vi.fn(() => ({ privateKey: importE2EPrivateKey(tentacleE2E.privateKey), publicKey: tentacleE2E.publicKey })),
   };
 }
 
@@ -1237,7 +1241,7 @@ describe('RelayClient tool message lazy-load shape', () => {
     vi.useFakeTimers();
   });
 
-  function buildClientWithStore() {
+  function buildClientWithStore(extra: { e2eV2?: boolean } = {}) {
     const tmp = mkdtempSync(join(tmpdir(), 'kraki-lazy-test-'));
     const store = new AttachmentStore(tmp);
 
@@ -1250,6 +1254,7 @@ describe('RelayClient tool message lazy-load shape', () => {
       authMethod: 'open',
       device: { name: 'Test', role: 'tentacle' },
       reconnectDelay: 10,
+      ...extra,
     }, createKeyManager(), store);
     client.connect();
     sockets[0].emit('open');
@@ -1493,6 +1498,79 @@ describe('RelayClient tool message lazy-load shape', () => {
       await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
       expect((adapter.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1]).toHaveLength(inner.payload.text.length);
     } finally { cleanup(); }
+  });
+
+  describe('E2E v2 (X25519)', () => {
+    const app = generateE2EKeyPair();
+    type Ws = { emit(e: string, d: Buffer): void; sent: string[] };
+    const announce = (ws: Ws, features: string[] = ['fragments', 'e2e_v2']) =>
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'client_features', deviceId: 'consumer-dev', payload: { features, e2eKeys: { x25519: app.publicKey } },
+      })));
+    const lastPayload = (sent: string[]) => pulsePayloads(sent).at(-1)?.payload as Record<string, unknown> | undefined;
+
+    it('greets with its X25519 key always, and e2e_v2 only when enabled', () => {
+      const off = buildClientWithStore();
+      try {
+        const g = decodePulseSends(off.ws.sent).find((m) => m.type === 'device_greeting')!;
+        expect(g.payload).toMatchObject({ e2eKeys: { x25519: tentacleE2E.publicKey } });
+        expect((g.payload as { features: string[] }).features).not.toContain('e2e_v2');
+      } finally { off.cleanup(); }
+      sockets.length = 0;
+      const on = buildClientWithStore({ e2eV2: true });
+      try {
+        const g = decodePulseSends(on.ws.sent).find((m) => m.type === 'device_greeting')!;
+        expect((g.payload as { features: string[] }).features).toContain('e2e_v2');
+      } finally { on.cleanup(); }
+    });
+
+    it('sends v2 to an app that announced its key and e2e_v2; RSA again after it reconnects', () => {
+      const { ws, client, cleanup } = buildClientWithStore({ e2eV2: true });
+      try {
+        announce(ws as unknown as Ws);
+        ws.sent.length = 0;
+        client.updateAgentCapabilities([]);
+        const payload = lastPayload(ws.sent)!;
+        expect(payload.v).toBe(2);
+        expect(payload.keys).toBeUndefined();
+        const inner = JSON.parse(decryptV2(payload.blob as string, 'consumer-dev', app.privateKey));
+        expect(inner.type).toBe('device_greeting');
+
+        ws.emit('message', Buffer.from(JSON.stringify({
+          type: 'device_joined', device: { id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub' },
+        })));
+        ws.sent.length = 0;
+        client.updateAgentCapabilities([]);
+        expect(lastPayload(ws.sent)?.v).toBeUndefined();
+        expect(lastPayload(ws.sent)?.keys).toBeDefined();
+      } finally { cleanup(); }
+    });
+
+    it('keeps RSA when disabled or when the app did not declare e2e_v2', () => {
+      const cases: Array<[{ e2eV2?: boolean }, string[]]> = [[{}, ['fragments', 'e2e_v2']], [{ e2eV2: true }, ['fragments']]];
+      for (const [opts, features] of cases) {
+        sockets.length = 0;
+        const { ws, client, cleanup } = buildClientWithStore(opts);
+        try {
+          announce(ws as unknown as Ws, features);
+          ws.sent.length = 0;
+          client.updateAgentCapabilities([]);
+          expect(lastPayload(ws.sent)?.v).toBeUndefined();
+        } finally { cleanup(); }
+      }
+    });
+
+    it('accepts v2 from apps even when sending v2 is disabled', async () => {
+      const { adapter, client, cleanup } = buildClientWithStore();
+      try {
+        const inner = { type: 'send_input', sessionId: 'sess_1', deviceId: 'consumer-dev', seq: 0,
+          timestamp: new Date().toISOString(), payload: { text: 'hello v2', clientId: 'cid-v2' } };
+        const blob = encryptV2(JSON.stringify(inner), [{ recipientId: 'dev_t', publicKey: tentacleE2E.publicKey }]);
+        (client as unknown as { handlePulseDelivered(p: string): void }).handlePulseDelivered(JSON.stringify({ v: 2, blob }));
+        await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+        expect((adapter.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1]).toBe('hello v2');
+      } finally { cleanup(); }
+    });
   });
 
   it('greets with fragments support', () => {

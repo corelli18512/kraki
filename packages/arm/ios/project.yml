@@ -19,6 +19,8 @@ packages:
     path: ./Vendor/Pulse
   VoiceInputCore:
     path: ./Vendor/VoiceInputCore
+  CoinfraCrypto:
+    path: ./Vendor/CoinfraCrypto
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle.git
     exactVersion: 2.9.5
@@ -169,6 +171,7 @@ targets:
       - package: Highlightr
       - package: Pulse
       - package: VoiceInputCore
+      - package: CoinfraCrypto
 
   KrakiNotification:
     type: app-extension
@@ -224,6 +227,8 @@ targets:
       - path: KrakiMacTests
       - path: KrakiTests/NativeSessionPreviewGlyphTests.swift
       - path: KrakiTests/ForegroundTestGate.swift
+      - path: KrakiTests/E2EV2Tests.swift
+      - path: KrakiTests/E2EV2NodeVectors.swift
       - path: KrakiTests/IOSVoiceComposerTests.swift
     settings:
       base:
@@ -385,4 +390,5 @@ targets:
       - package: Pulse
       - package: Highlightr
       - package: VoiceInputCore
+      - package: CoinfraCrypto
       - package: Sparkle

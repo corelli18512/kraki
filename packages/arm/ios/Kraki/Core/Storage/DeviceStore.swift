@@ -278,6 +278,19 @@ final class DeviceStore {
         deviceFeatures[deviceId] = Set(features)
     }
 
+    /// X25519 keys Tentacles announced in their greeting (E2E v2).
+    private(set) var deviceE2EKeys: [String: String] = [:]
+
+    func setDeviceE2EKey(_ deviceId: String, x25519: String?) {
+        deviceE2EKeys[deviceId] = x25519
+    }
+
+    /// The Tentacle takes E2E v2 from this app: it advertised `e2e_v2` and a key.
+    func e2eV2Key(for deviceId: String) -> String? {
+        guard deviceFeatures[deviceId]?.contains(E2EV2.feature) == true else { return nil }
+        return deviceE2EKeys[deviceId]
+    }
+
     func setGreeting(
         _ deviceId: String,
         name: String,
@@ -306,6 +319,7 @@ final class DeviceStore {
         devices.removeAll()
         deviceAgents.removeAll()
         deviceVersions.removeAll()
+        deviceE2EKeys.removeAll()
         pendingGreetingIds.removeAll()
         clearPersistentSnapshot()
     }
