@@ -115,6 +115,18 @@ there is no application-level keepalive frame. Each Head request has a bounded
 timeout (2 seconds by default) plus bounded retries, so authorization fails
 closed and graceful shutdown cannot hang forever when Head is unhealthy.
 
+Corrector observability (`@coinfra/voice` 0.3.1+), in the broker journal:
+
+- `corrector corrected` (info): `ms`, `firstMs`, `promptTokens`, `cachedTokens`,
+  `completionTokens`, `changed` per correction;
+- `corrector failed` (warn): `class` (`billing` = provider usage/spend limit,
+  `auth`, `rate_limit`, `timeout`, `server`, `network`, `empty`, `other`);
+- `corrector usage` (info, hourly): the day's calls, failures by class and tokens.
+
+```bash
+journalctl -u kraki-voice-broker -o cat | grep 'corrector usage' | tail -1
+```
+
 Validate the deployment adapter with:
 
 ```bash
