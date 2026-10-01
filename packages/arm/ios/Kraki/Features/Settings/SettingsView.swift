@@ -114,24 +114,17 @@ struct SettingsView: View {
 
     // MARK: - Preferences (Notifications + Theme)
 
-    @AppStorage(VoiceVocabulary.storageKey) private var vocabularyText = ""
-    private var vocabularyCount: Int { VoiceVocabulary.parse(vocabularyText).count }
-
     private var preferencesSection: some View {
         Section {
             notificationsRow
             themeRow
             NavigationLink {
-                VoiceVocabularyPage()
+                VoiceInputSettingsPage()
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "character.book.closed")
+                    Image(systemName: "mic")
                         .foregroundStyle(Color.krakiPrimary)
-                    Text(VoiceVocabularyCopy.title)
-                    Spacer()
-                    if vocabularyCount > 0 {
-                        Text("\(vocabularyCount)").foregroundStyle(.secondary)
-                    }
+                    Text(VoiceInputCopy.title)
                 }
             }
         } header: {

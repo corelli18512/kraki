@@ -140,7 +140,20 @@ enum VoiceSessionContextBuilder {
     /// `userVocabulary`: the user's own terms (Settings → Voice Vocabulary),
     /// first; then terms taken from the current conversation.
     static func build(session: SessionInfo, recentMessages: [ChatMessage],
-                      userVocabulary: [String] = VoiceVocabulary.load()) -> VoiceSessionContext {
+                      userVocabulary: [String] = VoiceVocabulary.load(),
+                      shareConversation: Bool = VoiceInputSettings.shareConversationContext) -> VoiceSessionContext {
+        // Without conversation context: only the user's own words and the
+        // locale leave the device (no title, agent, model or message terms).
+        guard shareConversation else {
+            return VoiceSessionContext(
+                fields: [
+                    "product": .string("kraki"),
+                    "inputMethod": .string("dictation"),
+                    "locale": .string(Locale.current.identifier),
+                ],
+                vocabulary: userVocabulary
+            )
+        }
         var terms: [String] = []
         var seen = Set<String>()
 

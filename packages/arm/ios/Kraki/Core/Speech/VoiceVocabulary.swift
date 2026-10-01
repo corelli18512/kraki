@@ -30,6 +30,23 @@ struct VoiceTerm: Identifiable, Equatable {
     }
 }
 
+/// Voice input preferences (Settings → Voice Input), stored on this device.
+enum VoiceInputSettings {
+    static let correctionKey = "voice.correction"
+    static let shareContextKey = "voice.correctionContext"
+
+    /// AI correction of the finished transcript. Off: exactly what speech
+    /// recognition produced is used.
+    static var correctionEnabled: Bool {
+        UserDefaults.standard.object(forKey: correctionKey) as? Bool ?? true
+    }
+    /// Send the conversation title and names/terms found in recent messages
+    /// (never the messages themselves) to help correction.
+    static var shareConversationContext: Bool {
+        UserDefaults.standard.object(forKey: shareContextKey) as? Bool ?? true
+    }
+}
+
 /// The user's own spelling vocabulary for voice correction, stored on this
 /// device (UserDefaults, one `Term = heard, …` line per entry). Nothing is
 /// built in: which words matter is entirely the user's.
@@ -306,3 +323,84 @@ struct VoiceVocabularyMacSection: View {
     }
 }
 #endif
+
+// MARK: - Voice Input settings screens
+
+enum VoiceInputCopy {
+    static let title = "Voice Input"
+    static let correction = "Correct Transcripts"
+    static let correctionFooter = "After you finish speaking, an AI model fixes recognition mistakes such as names, terms and punctuation. Turn off to use exactly what was recognized."
+    static let context = "Use Conversation Context"
+    static let contextFooter = "Sends the conversation title and names or terms that appear in recent messages, never the messages themselves, so names you are discussing are spelled right."
+}
+
+#if os(iOS)
+/// Settings → Voice Input.
+struct VoiceInputSettingsPage: View {
+    @Environment(AppState.self) private var appState
+    @AppStorage(VoiceInputSettings.correctionKey) private var correction = true
+    @AppStorage(VoiceInputSettings.shareContextKey) private var shareContext = true
+    @AppStorage(VoiceVocabulary.storageKey) private var vocabularyText = ""
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(VoiceInputCopy.correction, isOn: $correction)
+            } footer: { Text(VoiceInputCopy.correctionFooter) }
+
+            Section {
+                Toggle(VoiceInputCopy.context, isOn: $shareContext)
+                NavigationLink {
+                    VoiceVocabularyPage()
+                } label: {
+                    HStack {
+                        Text(VoiceVocabularyCopy.title)
+                        Spacer()
+                        let count = VoiceVocabulary.parse(vocabularyText).count
+                        if count > 0 { Text("\(count)").foregroundStyle(.secondary) }
+                    }
+                }
+            } header: {
+                Text("Correction")
+            } footer: {
+                Text(VoiceInputCopy.contextFooter)
+            }
+            .disabled(!correction)
+        }
+        .navigationTitle(VoiceInputCopy.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: correction) { _, _ in appState.voiceInputController.applySettings() }
+    }
+}
+#endif
+
+#if os(macOS)
+/// Settings → Voice Input (Mac tab).
+struct VoiceInputPane: View {
+    @Environment(AppState.self) private var appState
+    @AppStorage(VoiceInputSettings.correctionKey) private var correction = true
+    @AppStorage(VoiceInputSettings.shareContextKey) private var shareContext = true
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(VoiceInputCopy.correction, isOn: $correction)
+            } footer: {
+                Text(VoiceInputCopy.correctionFooter).font(.footnote).foregroundStyle(.secondary)
+            }
+            Section {
+                Toggle(VoiceInputCopy.context, isOn: $shareContext)
+            } footer: {
+                Text(VoiceInputCopy.contextFooter).font(.footnote).foregroundStyle(.secondary)
+            }
+            .disabled(!correction)
+            VoiceVocabularyMacSection()
+                .disabled(!correction)
+        }
+        .formStyle(.grouped)
+        .padding()
+        .onChange(of: correction) { _, _ in appState.voiceInputController.applySettings() }
+    }
+}
+#endif
+

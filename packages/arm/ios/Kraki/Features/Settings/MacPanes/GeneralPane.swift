@@ -34,8 +34,6 @@ struct GeneralPane: View {
                 }
             }
 
-            VoiceVocabularyMacSection()
-
             Section("Behavior") {
                 Toggle("Keep running in menu bar when window closes", isOn: $keepRunningInMenuBar)
                 Toggle("Open Kraki at login", isOn: $openAtLogin)

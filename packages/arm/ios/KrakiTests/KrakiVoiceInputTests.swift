@@ -1343,4 +1343,41 @@ final class KrakiVoiceInputTests: XCTestCase {
 
         XCTAssertEqual(VoiceVocabulary.parse("# note\nFoo ＝ 福欧\n= orphan\n"), ["Foo = 福欧"], "old text format still loads")
     }
+
+    func testWithoutConversationContextOnlyCustomWordsLeaveTheDevice() {
+        let session = SessionInfo(id: "s", deviceId: "d", deviceName: "D", agent: "pi", title: "Secret project",
+                                  state: .idle, mode: .auto, lastSeq: 0, readSeq: 0, messageCount: 0,
+                                  createdAt: Date(), pinned: false)
+        let message = ChatMessage(type: "user_message", seq: 1, sessionId: "s", deviceId: "d", timestamp: nil,
+                                  payload: ["content": AnyCodable("ship InternalCodename-v2 today")])
+        let off = VoiceSessionContextBuilder.build(session: session, recentMessages: [message],
+                                                   userVocabulary: ["Kraki = 克拉奇"], shareConversation: false)
+        XCTAssertEqual(off.vocabulary, ["Kraki = 克拉奇"])
+        XCTAssertNil(off.fields["session"])
+        XCTAssertNil(off.fields["sessionId"])
+        let on = VoiceSessionContextBuilder.build(session: session, recentMessages: [message],
+                                                  userVocabulary: [], shareConversation: true)
+        XCTAssertTrue(on.vocabulary.contains("InternalCodename-v2"))
+        XCTAssertNotNil(on.fields["session"])
+    }
+
+    func testCorrectionSettingReachesTheConnectionAndReopensItWhenChanged() async {
+        let defaults = UserDefaults.standard
+        defer { defaults.removeObject(forKey: VoiceInputSettings.correctionKey) }
+        defaults.set(false, forKey: VoiceInputSettings.correctionKey)
+        let host = FakeVoiceHost()
+        let factory = FakeVoiceFactory()
+        let controller = KrakiVoiceInputController(host: host, sessionFactory: factory, audioPolicy: FakeVoiceAudioPolicy())
+        controller.prepare()
+        controller.receiveLease(lease())
+        XCTAssertEqual(factory.configurations.last?.correctionEnabled, false)
+
+        defaults.set(true, forKey: VoiceInputSettings.correctionKey)
+        controller.applySettings() // idle: reopened at once with the new setting
+        XCTAssertEqual(factory.sessions.count, 2)
+        XCTAssertEqual(factory.sessions[0].closeCount, 1)
+        XCTAssertEqual(factory.configurations.last?.correctionEnabled, true)
+        controller.applySettings()
+        XCTAssertEqual(factory.sessions.count, 2, "no reconnect when nothing changed")
+    }
 }
