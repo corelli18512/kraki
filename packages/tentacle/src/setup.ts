@@ -158,7 +158,16 @@ const promptTheme = {
 };
 
 // Terminal hyperlink (OSC 8)
+/** Clickable OSC 8 links only where they work: a TTY, and on Windows only in
+ *  Windows Terminal / VS Code (the classic console prints nothing useful). */
+function supportsLinks(): boolean {
+  if (!process.stdout.isTTY) return false;
+  if (process.platform === 'win32') return Boolean(process.env.WT_SESSION) || process.env.TERM_PROGRAM === 'vscode';
+  return true;
+}
+
 function link(text: string, url: string): string {
+  if (!supportsLinks()) return text === url ? url : `${text}: ${url}`;
   return `\u001b]8;;${url}\u0007${text}\u001b]8;;\u0007`;
 }
 
