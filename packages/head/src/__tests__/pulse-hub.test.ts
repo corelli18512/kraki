@@ -282,6 +282,23 @@ describe('PulseHub: head as per-hop bridge', () => {
     expect(w.armReceived).toEqual([31]);
   });
 
+  it('drops presence queued before a reconnect (auth_ok supersedes it) but keeps data', () => {
+    const w = new World(db);
+    w.connectArm();
+    w.connectTentacle();
+    w.disconnectTentacle();
+    // Queued for the offline Tentacle: a stale presence frame, then app data.
+    w.hub.sendPresenceToDevice(TENT, new Uint8Array([0x50]));
+    w.armSend(9, false);
+    w.connectTentacle();
+    w.advance(1_000);
+    expect(w.tentReceived).toEqual([9]);
+
+    // Presence sent on the live connection is delivered normally.
+    w.hub.sendPresenceToDevice(TENT, new Uint8Array([0x51]));
+    expect(w.tentReceived).toEqual([9, 0x51]);
+  });
+
   it('deliver-to-self: a frame addressed to @head is consumed by head, NOT forwarded', () => {
     const w = new World(db);
     w.connectArm();

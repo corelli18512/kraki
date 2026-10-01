@@ -279,6 +279,7 @@ export class PulseHub {
    *  reconnect. */
   forgetDevice(deviceId: string): void {
     this.devices.delete(deviceId);
+    this.presenceSeqs.delete(deviceId);
     this.connectedDevices.delete(deviceId);
     this.bulkCapableEver.delete(deviceId);
     this.bulkCapableNow.delete(deviceId);
@@ -719,6 +720,8 @@ export class PulseHub {
         trace('GC-EVICT', { device: deviceId, offlineMs });
         this.devices.delete(deviceId);
         this.peerEpochs.delete(deviceId);
+        // Seqs belong to the evicted endpoint; never match a successor's entries.
+        this.presenceSeqs.delete(deviceId);
         this.previousProcessFenceBounds.delete(deviceId);
         evicted += 1;
         continue;
