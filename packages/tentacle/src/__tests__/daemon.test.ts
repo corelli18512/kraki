@@ -150,7 +150,7 @@ describe('prepareDaemonWorkerBootstrap()', () => {
     const started = Date.now();
 
     await prepareDaemonWorkerBootstrap(
-      env, 45678, '/Applications/Kraki.app/Contents/Library/Helpers/Kraki Tentacle.app',
+      env, 45678, '/Applications/Kraki.app/Contents/Library/Helpers/Kraki.app',
       mockGetProcessBundleIdentity, 5000,
     );
 

@@ -362,7 +362,7 @@ targets:
           INFOPLIST_KEY_CFBundleDisplayName: Kraki
           ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     postBuildScripts:
-      # Built-in tentacle: copies a prebuilt, signed "Kraki Tentacle.app" into
+      # Built-in tentacle: copies the prebuilt, signed helper "Kraki.app" into
       # Contents/Library/Helpers and writes its SMAppService launch agent.
       # Without a staged helper the app builds without it (external CLI mode);
       # release CI sets KRAKI_REQUIRE_TENTACLE=1. See scripts/mac/.

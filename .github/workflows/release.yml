@@ -482,7 +482,7 @@ jobs:
             --binary packages/tentacle/dist/sea/kraki-cli-macos-x64 \
             --out "$RUNNER_TEMP/tentacle-helper" \
             --sign "$APPLE_SIGNING_IDENTITY"
-          HELPER="$RUNNER_TEMP/tentacle-helper/Kraki Tentacle.app"
+          HELPER="$RUNNER_TEMP/tentacle-helper/Kraki.app"
           test "$(lipo -archs "$HELPER/Contents/MacOS/kraki")" = "x86_64 arm64"
           "$HELPER/Contents/MacOS/kraki" --version
           if arch -x86_64 /usr/bin/true 2>/dev/null; then
@@ -509,7 +509,7 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             ARCHS="arm64 x86_64" \
             ONLY_ACTIVE_ARCH=NO \
-            KRAKI_TENTACLE_HELPER="$RUNNER_TEMP/tentacle-helper/Kraki Tentacle.app" \
+            KRAKI_TENTACLE_HELPER="$RUNNER_TEMP/tentacle-helper/Kraki.app" \
             KRAKI_REQUIRE_TENTACLE=1 \
             archive | tail -40
 
@@ -561,7 +561,7 @@ jobs:
             "$SPARKLE/XPCServices/Downloader.xpc" \
             "$SPARKLE/XPCServices/Installer.xpc" \
             "$APP/Contents/Frameworks/Sparkle.framework" \
-            "$APP/Contents/Library/Helpers/Kraki Tentacle.app" \
+            "$APP/Contents/Library/Helpers/Kraki.app" \
             "$APP"; do
             codesign -dv --verbose=4 "$item" 2>&1 | tee "$RUNNER_TEMP/$(basename "$item").codesign.txt"
             grep -q 'Authority=Developer ID Application:' "$RUNNER_TEMP/$(basename "$item").codesign.txt"
@@ -657,7 +657,7 @@ jobs:
           grep -qw x86_64 <<< "$ARCHS"
           codesign --verify --strict --verbose=2 "$APP"
           # Built-in tentacle: universal helper, launch agent, version lock.
-          HELPER="$APP/Contents/Library/Helpers/Kraki Tentacle.app"
+          HELPER="$APP/Contents/Library/Helpers/Kraki.app"
           test "$(lipo -archs "$HELPER/Contents/MacOS/kraki")" = "x86_64 arm64"
           plutil -lint "$APP/Contents/Library/LaunchAgents/chat.kraki.mac.tentacle.plist"
           SHIPPED=$(/usr/libexec/PlistBuddy -c "Print :KrakiTentacleVersion" "$APP/Contents/Info.plist")

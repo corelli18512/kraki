@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { clearManagedBy, isMacAppManagedWorker, loadManagedBy, saveManagedBy, getManagedByPath, findMacAppWithBuiltIn, MAC_APP_HELPER_BINARY } from '../managed.js';
+import { clearManagedBy, isMacAppManagedWorker, loadManagedBy, saveManagedBy, getManagedByPath, findMacAppWithBuiltIn, MAC_APP_HELPER_BINARY, LEGACY_MAC_APP_HELPER_BINARY } from '../managed.js';
 
 let home: string;
 let prev: string | undefined;
@@ -52,6 +52,11 @@ describe('findMacAppWithBuiltIn', () => {
   it('checks ~/Applications too', () => {
     const present = new Set([join('/Users/u/Applications/Kraki.app', MAC_APP_HELPER_BINARY)]);
     expect(findMacAppWithBuiltIn('/Users/u', (p) => present.has(p))).toBe('/Users/u/Applications/Kraki.app');
+  });
+
+  it('finds a Mac app whose helper still has its old name', () => {
+    const present = new Set([join('/Applications/Kraki.app', LEGACY_MAC_APP_HELPER_BINARY)]);
+    expect(findMacAppWithBuiltIn('/Users/u', (p) => present.has(p))).toBe('/Applications/Kraki.app');
   });
 
   it('ignores older Mac apps without the helper', () => {

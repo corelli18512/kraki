@@ -292,6 +292,21 @@ final class TentacleCLIManager {
                 daemonState = .needsApproval
                 return
             }
+            // The job launchd knows may name a helper path this app no longer
+            // has (the helper was "Kraki Tentacle.app" before it became
+            // "Kraki.app"). Re-register at once so launchd records the current
+            // path, instead of waiting out the not-running self-heal below.
+            if !reRegisteredThisLaunch, builtIn.ownershipMarkerExists,
+               builtIn.service.status == .enabled,
+               let program = await registeredProgramIdentifier(),
+               program != BuiltInTentacle.binaryRelativePath {
+                reRegisteredThisLaunch = true
+                restartedForVersion = builtIn.version
+                KLog.diag("[Tentacle] built-in job points at \(program); re-registering")
+                Task { await self.reRegisterBuiltIn() }
+                daemonState = .starting
+                return
+            }
             // After a Sparkle update the old daemon keeps running from memory.
             // Restart it once onto the tentacle this app now ships.
             if running, let shipped = builtIn.version, let live = runningDaemonVersion,
@@ -437,6 +452,26 @@ final class TentacleCLIManager {
     /// Refuses from a translocated/disk-image location (the registration would
     /// point at a path that vanishes on reboot) and never runs beside a daemon
     /// owned by an external CLI.
+    /// The bundle-relative program launchd recorded for the built-in job
+    /// (`program identifier = …` in `launchctl print`), or nil if unknown.
+    private func registeredProgramIdentifier() async -> String? {
+        guard let result = await runCapturing(
+            binary: "/bin/launchctl", args: ["print", "gui/\(getuid())/\(builtIn.label)"]
+        ), result.exitCode == 0 else { return nil }
+        return Self.programIdentifier(fromLaunchctlPrint: result.stdout)
+    }
+
+    nonisolated static func programIdentifier(fromLaunchctlPrint output: String) -> String? {
+        for line in output.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("program identifier = ") else { continue }
+            var value = String(trimmed.dropFirst("program identifier = ".count))
+            if let mode = value.range(of: " (mode:") { value = String(value[..<mode.lowerBound]) }
+            return value
+        }
+        return nil
+    }
+
     /// Remove the job from launchd and register it again (keeps ownership).
     /// SMAppService.unregister alone leaves launchd's recorded launch
     /// constraint in place (verified in a VM: the job kept failing with
