@@ -112,5 +112,10 @@ final class MacDebugPromptFreeTests: XCTestCase {
         XCTAssertEqual(TentacleCLIManager.programIdentifier(fromLaunchctlPrint: output),
                        "Contents/Library/Helpers/Kraki Tentacle.app/Contents/MacOS/kraki")
         XCTAssertNil(TentacleCLIManager.programIdentifier(fromLaunchctlPrint: "state = running"))
+        XCTAssertTrue(TentacleCLIManager.isLegacyHelperProgram(
+            "Contents/Library/Helpers/Kraki Tentacle.app/Contents/MacOS/kraki"))
+        XCTAssertFalse(TentacleCLIManager.isLegacyHelperProgram(BuiltInTentacle.binaryRelativePath))
+        XCTAssertFalse(TentacleCLIManager.isLegacyHelperProgram(
+            "/Applications/Kraki.app/Contents/Library/Helpers/Kraki.app/Contents/MacOS/kraki"))
     }
 }
