@@ -139,3 +139,42 @@ export async function runAgentsCheckJson(args: string[] = []): Promise<number> {
   );
   return 0;
 }
+
+/**
+ * Run `kraki agents --json` as a child of this binary and collect the results.
+ * Interactive setup uses this rather than starting adapters in its own
+ * process: the check runs from a scratch folder (no cwd scanning of the
+ * user's folders) and leaves no adapter handles behind in the setup process.
+ */
+export async function runAgentsCheckChild(
+  onEvent: (event: AgentsCheckEvent) => void = () => {},
+  timeoutMs = 90_000,
+): Promise<AgentCheckResult[]> {
+  const { spawn } = await import('node:child_process');
+  const { isSea } = await import('node:sea');
+  const args = isSea() ? ['agents', '--json'] : [process.argv[1], 'agents', '--json'];
+  return new Promise((resolve) => {
+    const results: AgentCheckResult[] = [];
+    const child = spawn(process.execPath, args, { stdio: ['ignore', 'pipe', 'ignore'], env: process.env });
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    let buf = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      buf += chunk.toString();
+      let nl: number;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        try {
+          const event = JSON.parse(line) as AgentsCheckEvent;
+          if (event.event === 'agent') {
+            const { event: _e, ...result } = event;
+            results.push(result);
+          }
+          onEvent(event);
+        } catch { /* not an event line */ }
+      }
+    });
+    child.on('close', () => { clearTimeout(timer); resolve(results); });
+    child.on('error', () => { clearTimeout(timer); resolve(results); });
+  });
+}

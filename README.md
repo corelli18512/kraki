@@ -64,9 +64,11 @@ Or [download the binary manually](https://github.com/corelli18512/kraki/releases
 
 On first run, Kraki will:
 
-1. guide you through setup in the terminal
-2. connect to the hosted relay by default
-3. show a QR code / pairing flow for your browser or phone
+1. check the coding agents on this computer (installed, signed in, models available) and, on macOS, Full Disk Access — the same first step as Kraki for Mac
+2. sign you in with GitHub (reusing the GitHub CLI if it is signed in, else a one-time code) and connect to the hosted relay for your region
+3. start in the background and show a QR code for your phone
+
+Run `kraki agents` any time to recheck your agents.
 
 > 📲 **Tip:** On your phone, open the web app in Safari or Chrome and use "Add to Home Screen" to install it as a PWA. You get push notifications, full-screen mode, and instant access without opening a browser.
 
