@@ -338,6 +338,9 @@ jobs:
             *) echo "unsupported runner: ${RUNNER_OS}"; exit 1 ;;
           esac
           node packages/tentacle/scripts/daemon-release-smoke.mjs "$binary"
+          # Same binary smoke test as the release job, so a release cannot be
+          # the first place it fails.
+          node packages/tentacle/scripts/smoke-test-binary.mjs "$binary"
 
   macos-daemon-launch:
     name: macOS Daemon Launch
