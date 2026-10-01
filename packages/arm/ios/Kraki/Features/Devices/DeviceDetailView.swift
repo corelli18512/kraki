@@ -82,6 +82,19 @@ struct DeviceDetailView: View {
                 }
             }
 
+            // Subscription accounts signed in on this device and their quota.
+            if device.online, let usage = appState.deviceStore.deviceUsage[device.id], !usage.accounts.isEmpty {
+                Section {
+                    ForEach(Array(usage.accounts.enumerated()), id: \.element.id) { index, account in
+                        AccountUsageTile(account: account, ringSize: 64, lineWidth: 6.5, showsPlan: true,
+                                         delay: 0.05 + Double(index) * 0.04)
+                            .padding(.vertical, 6)
+                    }
+                } header: {
+                    Text("Accounts")
+                }
+            }
+
             // Models (expandable)
             if let models, !models.isEmpty {
                 Section {

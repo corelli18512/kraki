@@ -325,6 +325,11 @@ final class MessageRouter {
             return
         }
 
+        if type == "device_usage" {
+            handleDeviceUsage(dict)
+            return
+        }
+
         if type == "device_greeting" {
             handleDeviceGreeting(dict)
             return
@@ -872,6 +877,19 @@ final class MessageRouter {
             appState.commandSender?.resolveCreateRequest(
                 requestId, sessionId: sessionId
             )
+        }
+    }
+
+    private func handleDeviceUsage(_ dict: [String: Any]) {
+        guard let appState,
+              let deviceId = dict["deviceId"] as? String,
+              let payload = dict["payload"],
+              let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        do {
+            let usage = try JSONDecoder().decode(DeviceUsagePayload.self, from: data)
+            appState.deviceStore.setDeviceUsage(deviceId, accounts: usage.accounts)
+        } catch {
+            KLog.diag("[device_usage] undecodable payload from \(deviceId): \(error)")
         }
     }
 

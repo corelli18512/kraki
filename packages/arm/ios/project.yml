@@ -225,6 +225,7 @@ targets:
       - path: KrakiTests/NativeSessionPreviewGlyphTests.swift
       - path: KrakiTests/ForegroundTestGate.swift
       - path: KrakiTests/IOSVoiceComposerTests.swift
+      - path: KrakiTests/AccountUsageTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.tests
@@ -311,6 +312,7 @@ targets:
       - path: Kraki/Features/Welcome
       - path: Kraki/Features/Tentacle
       - path: Kraki/Features/Settings/MacPanes
+      - path: Kraki/Features/Usage
       - path: Kraki/Features/Chat/ChatPlaceholderView+macOS.swift
       - path: Kraki/Features/Pairing/PairingSheet+macOS.swift
       # Asset catalog (iOS universal icon + macOS icon sizes).

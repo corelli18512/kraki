@@ -18,6 +18,9 @@ final class DeviceStore {
     /// (multi-agent device).
     var deviceAgents: [String: [AgentCapabilities]] = [:]
     var deviceVersions: [String: String] = [:]
+    /// Latest subscription account quota per tentacle (`device_usage`).
+    /// In-memory only: a fresh reading arrives on every connect.
+    var deviceUsage: [String: DeviceUsageSnapshot] = [:]
     /// Per-device local-session catalog populated by `local_sessions_list`
     /// responses. Cleared and re-fetched by the import picker on open.
     var localSessions: [String: [LocalSessionSummary]] = [:]
@@ -359,5 +362,21 @@ final class DeviceStore {
     func setDeviceVersion(_ id: String, version: String) {
         deviceVersions[id] = version
         scheduleSave()
+    }
+
+    func setDeviceUsage(_ id: String, accounts: [AccountUsage], receivedAt: Date = Date()) {
+        deviceUsage[id] = DeviceUsageSnapshot(accounts: accounts, receivedAt: receivedAt)
+    }
+
+    /// Online tentacles that reported accounts, the device owning
+    /// `preferredDeviceId` (the current Session's) first.
+    func onlineUsageDevices(preferredDeviceId: String?) -> [(device: DeviceSummary, usage: DeviceUsageSnapshot)] {
+        let list = devices.values
+            .filter { $0.role == .tentacle && $0.online }
+            .compactMap { d in deviceUsage[d.id].flatMap { $0.accounts.isEmpty ? nil : (device: d, usage: $0) } }
+        return list.sorted { a, b in
+            if (a.device.id == preferredDeviceId) != (b.device.id == preferredDeviceId) { return a.device.id == preferredDeviceId }
+            return a.device.name.localizedStandardCompare(b.device.name) == .orderedAscending
+        }
     }
 }

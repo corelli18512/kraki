@@ -34,6 +34,10 @@ struct MenuBarExtraView: View {
         }
         .keyboardShortcut("0", modifiers: .command)
 
+        Button("Account Usage") {
+            UsagePeekController.shared.togglePinned()
+        }
+
         Menu("This Mac") {
             Button("Start Background Service") {
                 Task { await tentacleCLI.startDaemon() }

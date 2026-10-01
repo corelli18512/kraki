@@ -977,6 +977,34 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     app.close();
   });
 
+  // ── Account usage: delivered end-to-end through the real head ──
+
+  it("account usage reaches a joining app and updates reach online apps (encrypted, via head)", async () => {
+    await connectTentacle();
+    const accounts = [{
+      accountKey: "claude:abc", provider: "claude", label: "co•••ai@gmail.com", plan: "default_claude_max_20x",
+      windows: [
+        { id: "five_hour", kind: "five_hour", remainingPercent: 98, resetsAt: "2026-10-01T05:00:00.000Z", durationSeconds: 18000 },
+        { id: "seven_day", kind: "weekly", remainingPercent: 37, resetsAt: "2026-10-03T00:00:00.000Z", durationSeconds: 604800 },
+      ],
+      fetchedAt: "2026-10-01T00:00:00.000Z",
+    }];
+    relay.updateAccountUsage(accounts as never);
+
+    const app = await connectApp(env.port);
+    const first = await app.waitFor("device_usage");
+    expect(first.deviceId).toBe(relay.getAuthInfo()!.deviceId);
+    expect((first.payload as { accounts: unknown[] }).accounts).toEqual(accounts);
+    // Nothing on the wire is readable without the app's key.
+    expect(JSON.stringify(app.rawEnvelopes)).not.toContain("co•••ai@gmail.com");
+
+    const next = [{ ...accounts[0], windows: [{ ...accounts[0].windows[1], remainingPercent: 12 }] }];
+    relay.updateAccountUsage(next as never);
+    const update = await app.waitFor("device_usage");
+    expect((update.payload as { accounts: Array<{ windows: Array<{ remainingPercent: number }> }> }).accounts[0].windows[0].remainingPercent).toBe(12);
+    app.close();
+  });
+
   // ── Extra: server_error echoes ref from unicast envelope ──
 
   it("unicast to offline tentacle is queued and delivered on reconnect", async () => {

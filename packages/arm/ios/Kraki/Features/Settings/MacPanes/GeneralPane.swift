@@ -8,6 +8,7 @@ struct GeneralPane: View {
     @AppStorage("colorScheme") private var colorScheme: AppColorScheme = .system
     @AppStorage("mac.keepRunningInMenuBar") private var keepRunningInMenuBar: Bool = true
     @AppStorage("mac.openAtLogin") private var openAtLogin: Bool = false
+    @ObservedObject private var usagePeek = UsagePeekController.shared
 
     var body: some View {
         Form {
@@ -32,6 +33,19 @@ struct GeneralPane: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color.textMuted)
                 }
+            }
+
+            Section("Account Usage") {
+                LabeledContent("Hold to peek") {
+                    UsageShortcutRecorder(manager: usagePeek.hotkey)
+                        .frame(width: 230, height: 26)
+                }
+                Text("Hold the shortcut to see every online device's Claude and Codex quota; move the pointer in for details. \"Account Usage\" in the menu bar opens it too.")
+                    .font(.system(size: 11)).foregroundStyle(Color.textMuted)
+                if let error = usagePeek.hotkey.error {
+                    Text(error).font(.system(size: 11)).foregroundStyle(.orange)
+                }
+                Button("Reset to F6") { usagePeek.hotkey.update(.initial) }
             }
 
             Section("Behavior") {
