@@ -353,6 +353,20 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private var lastPinnedAdjustedInsets: UIEdgeInsets = .zero
     private var isPinningBottom = false
     private static let liveCardID = "__live_card__"
+
+    // MARK: New bubble entrance (parity with Mac `MacChatDocumentView`)
+
+    /// Bubbles newly added at the tail that should make an entrance the first
+    /// time they are displayed: the user's from the trailing edge, the AI's
+    /// from the leading edge. Expire if never shown.
+    private var pendingEntrances: [String: (fromTrailing: Bool, deadline: CFTimeInterval)] = [:]
+    static let entranceDuration: CFTimeInterval = 0.32
+    static let entranceOffset: CGFloat = 48
+    private static let entranceTiming = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+    #if DEBUG
+    private(set) var entranceLog: [(id: String, fromTrailing: Bool)] = []
+    private(set) var arrivalGlideLog: [CGFloat] = []
+    #endif
     var onResolvePermission: (String, String?, String) -> Void = { _, _, _ in }
     var onAnswerQuestion: (String, String) -> Void = { _, _ in }
     var onOpenImage: (IOSImagePreviewSelection) -> Void = { _ in }
@@ -2355,6 +2369,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             let oldItems = items
             lastLiveCardSignature = cardSig
             liveContentMemo = nil
+            let entrances = didInitialScroll && !isFirstMaterialization
+                ? recordEntrances(old: oldItems, new: newIds) : 0
+            let offsetBeforeArrival = collectionView.contentOffset.y
             if edgeStateChanged || isFirstMaterialization || !applyTailInPlace(old: oldItems, new: newIds) {
                 items = newIds
                 collectionView.reloadData()
@@ -2362,6 +2379,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             collectionView.layoutIfNeeded()
             if !items.isEmpty, !didInitialScroll || wasAtBottom {
                 pinToBottom(reason: "live-update", animated: false)
+                if entrances > 0, wasAtBottom {
+                    glideArrival(from: offsetBeforeArrival)
+                }
             } else if let anchor, let anchorID, let index = items.firstIndex(of: anchorID),
                       let frame = collectionView.layoutAttributesForItem(at: IndexPath(item: index, section: 0))?.frame {
                 // A reload must not move what the reader is looking at.
@@ -2410,6 +2430,103 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             sender.discardPending(sessionId: sessionId, clientId: clientId)
         }
         syncLiveUpdates()
+    }
+
+    /// Mirrors Mac `recordEntrances`: only new rows after the last surviving
+    /// old row, at most two (a catch-up burst is not a conversation beat), and
+    /// a row that only changes identity (pending → echoed message, live card →
+    /// landed answer) replaces an old tail row of the same role and does not
+    /// enter again. Session entry and older pages never get here.
+    @discardableResult
+    private func recordEntrances(old: [String], new: [String]) -> Int {
+        let now = CACurrentMediaTime()
+        pendingEntrances = pendingEntrances.filter { $0.value.deadline > now }
+        guard !old.isEmpty, !UIAccessibility.isReduceMotionEnabled else { return 0 }
+        let oldSet = Set(old), newSet = Set(new)
+        // Rows added at the top are older history, not an arrival.
+        if let first = old.first, let firstInNew = new.firstIndex(of: first), firstInNew > 0 { return 0 }
+        var removedUser = 0, removedReply = 0
+        for id in old where !newSet.contains(id) {
+            switch entranceRole(id) {
+            case .user?: removedUser += 1
+            case .reply?: removedReply += 1
+            case nil: break
+            }
+        }
+        guard let survivingTail = new.lastIndex(where: { oldSet.contains($0) }) else { return 0 }
+        let appended = new[(survivingTail + 1)...].compactMap { id in entranceRole(id).map { (id, $0) } }
+        guard !appended.isEmpty, appended.count <= 2 else { return 0 }
+        var recorded = 0
+        for (id, role) in appended {
+            switch role {
+            case .user where removedUser > 0: removedUser -= 1; continue
+            case .reply where removedReply > 0: removedReply -= 1; continue
+            default: break
+            }
+            pendingEntrances[id] = (role == .user, now + 0.8)
+            recorded += 1
+        }
+        return recorded
+    }
+
+    private enum EntranceRole { case user, reply }
+
+    private func entranceRole(_ id: String) -> EntranceRole? {
+        if id == Self.liveCardID { return .reply }
+        guard let message = message(id) else { return nil }
+        if ["user_message", "send_input", "pending_input"].contains(message.type) { return .user }
+        if message.type == "agent_message" || message.frozenCard != nil { return .reply }
+        return nil
+    }
+
+    /// The bubble slides in from its side while fading in. Additive on the
+    /// cell's presentation only, so frame/height updates while streaming never
+    /// fight it.
+    private func runEntranceIfPending(_ cell: UICollectionViewCell, id: String) {
+        guard let entrance = pendingEntrances.removeValue(forKey: id),
+              entrance.deadline > CACurrentMediaTime() else { return }
+        let slide = CABasicAnimation(keyPath: "transform.translation.x")
+        slide.fromValue = (entrance.fromTrailing ? 1 : -1) * Self.entranceOffset
+        slide.toValue = 0
+        slide.isAdditive = true
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        let group = CAAnimationGroup()
+        group.animations = [slide, fade]
+        group.duration = Self.entranceDuration
+        group.timingFunction = Self.entranceTiming
+        group.fillMode = .backwards
+        cell.layer.add(group, forKey: "kraki.entrance")
+        #if DEBUG
+        entranceLog.append((id, entrance.fromTrailing))
+        #endif
+    }
+
+    /// The list glides up to make room for an arrival. The real offset is
+    /// already pinned to the bottom; only the presentation starts from the old
+    /// position, so later streaming pins compose with it instead of cutting it.
+    private func glideArrival(from oldOffset: CGFloat) {
+        let delta = collectionView.contentOffset.y - oldOffset
+        guard delta > 0.5, collectionView.window != nil else { return }
+        let glide = CABasicAnimation(keyPath: "sublayerTransform.translation.y")
+        glide.fromValue = delta
+        glide.toValue = 0
+        glide.isAdditive = true
+        glide.duration = Self.entranceDuration
+        glide.timingFunction = Self.entranceTiming
+        collectionView.layer.add(glide, forKey: "kraki.arrivalGlide")
+        #if DEBUG
+        arrivalGlideLog.append(delta)
+        #endif
+    }
+
+    func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell,
+                        forItemAt indexPath: IndexPath) {
+        // A reused cell must not carry another row's unfinished entrance.
+        cell.layer.removeAnimation(forKey: "kraki.entrance")
+        guard !pendingEntrances.isEmpty, indexPath.item < items.count else { return }
+        runEntranceIfPending(cell, id: items[indexPath.item])
     }
 
     /// Apply a change confined to the newest rows (send, echo, stream start,
