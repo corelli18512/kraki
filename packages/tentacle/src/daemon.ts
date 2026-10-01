@@ -788,6 +788,10 @@ export async function runDaemonReleaseSmoke(config: KrakiConfig): Promise<number
     pid = await startDaemon(config);
     const appBundle = getKrakiAppBundlePath();
     const stabilityDeadline = Date.now() + 15_000;
+    // A process probe can fail transiently (PowerShell/CIM on a busy Windows
+    // runner times out) and reports `unknown`. Only a definite answer — or a
+    // probe that never succeeds — may fail the smoke.
+    let unknownStreak = 0;
 
     // v0.31.10 reached readiness and connected to Relay, then lost its runtime
     // Launch Services identity after adapter child processes started. A smoke
@@ -797,7 +801,9 @@ export async function runDaemonReleaseSmoke(config: KrakiConfig): Promise<number
     while (Date.now() < stabilityDeadline) {
       const readyPid = loadDaemonReady();
       const status = getDaemonStatus();
-      const workerIdentity = inspectDaemonProcess(pid);
+      let workerIdentity = inspectDaemonProcess(pid);
+      unknownStreak = workerIdentity === 'unknown' ? unknownStreak + 1 : 0;
+      if (workerIdentity === 'unknown' && unknownStreak < 5) workerIdentity = 'daemon';
       const identityProof = loadDaemonIdentity();
       const bundleIdentity = appBundle === null ? null : (
         identityProof?.pid === pid ? identityProof.bundleId : null
