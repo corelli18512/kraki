@@ -1285,7 +1285,7 @@ export class SessionManager {
             const draft = payload.draft;
             const failed = payload.reason === 'process_lost';
             return {
-              text: typeof draft === 'string' && draft ? stripMarkdownForPreview(draft) : (failed ? 'Turn failed' : 'Turn aborted'),
+              text: typeof draft === 'string' && draft ? stripMarkdownForPreview(draft) : (failed ? 'Turn failed' : 'Stopped'),
               type: 'agent',
               timestamp: entry.ts,
             };
@@ -1295,7 +1295,7 @@ export class SessionManager {
             const actionType = (payload.action as { type?: string } | undefined)?.type;
             const failed = actionType === 'failed';
             return {
-              text: typeof draft === 'string' && draft ? stripMarkdownForPreview(draft) : (failed ? 'Turn failed' : 'Turn aborted'),
+              text: typeof draft === 'string' && draft ? stripMarkdownForPreview(draft) : (failed ? 'Turn failed' : 'Stopped'),
               type: failed ? 'error' : 'agent',
               timestamp: entry.ts,
             };

@@ -504,6 +504,24 @@ describe('RemoteAuthBackend', () => {
     expect(config.methods).toContain('challenge');
   });
 
+  it('removes a device at the account service so edges stop re-mirroring it', async () => {
+    const auth = await remoteBackend.authenticate(
+      { method: 'open', sharedKey: 'test' } as import("@kraki/protocol").AuthMethod,
+      { name: 'Old PC', role: 'tentacle' },
+    );
+    expect(auth.ok).toBe(true);
+    if (!auth.ok) return;
+    expect(storage.getDevice(auth.deviceId)).toBeTruthy();
+
+    // Someone else's user id cannot remove it.
+    expect(await remoteBackend.removeDevice('someone-else', auth.deviceId)).toBe(false);
+    expect(storage.getDevice(auth.deviceId)).toBeTruthy();
+
+    expect(await remoteBackend.removeDevice(auth.userId, auth.deviceId)).toBe(true);
+    expect(storage.getDevice(auth.deviceId)).toBeFalsy();
+    expect(await remoteBackend.removeDevice(auth.userId, auth.deviceId)).toBe(false);
+  });
+
   it('should fail gracefully with wrong service key', async () => {
     const badBackend = new RemoteAuthBackend({
       accountUrl: `http://localhost:${port}`,

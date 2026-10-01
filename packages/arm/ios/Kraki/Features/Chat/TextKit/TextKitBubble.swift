@@ -2392,6 +2392,18 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         }
     }
 
+    /// The Steps "···" chip straddles the cell's top edge. For a steps-only
+    /// row (no bubble) most of the chip lies outside the cell, where UIKit
+    /// never delivers touches, so tapping it did nothing. Route any touch on
+    /// the visible chip to it, inside or outside the cell bounds.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if !moreButton.isHidden, moreButton.alpha > 0.01, isUserInteractionEnabled {
+            let local = convert(point, to: moreButton)
+            if moreButton.bounds.insetBy(dx: -6, dy: -6).contains(local) { return moreButton }
+        }
+        return super.hitTest(point, with: event)
+    }
+
     @objc private func openSteps() {
         guard let content, content.canShowSteps else { return }
         onOpenSteps?(content.message)

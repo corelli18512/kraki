@@ -376,6 +376,7 @@ struct AgentInfo {
         case "copilot": return AgentInfo(label: "Copilot")
         case "claude": return AgentInfo(label: "Claude")
         case "codex": return AgentInfo(label: "Codex")
+        case "pi": return AgentInfo(label: "Pi")
         default: return AgentInfo(label: agent.capitalized)
         }
     }

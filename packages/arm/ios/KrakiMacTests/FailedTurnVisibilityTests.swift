@@ -28,9 +28,9 @@ final class FailedTurnVisibilityTests: XCTestCase {
         XCTAssertEqual(ChatViewModel.renderable([user, failed(2, message: nil)]).map(\.seq), [1])
     }
 
-    func testUserAbortWithoutDraftStaysHidden() {
+    func testUserAbortWithoutDraftShowsAStoppedRow() {
         let user = msg("user_message", 1, ["content": AnyCodable("hi")])
         let abort = msg("turn_status", 2, ["action": AnyCodable(["type": "user_abort"])])
-        XCTAssertEqual(ChatViewModel.renderable([user, abort]).map(\.seq), [1])
+        XCTAssertEqual(ChatViewModel.renderable([user, abort]).map(\.seq), [1, 2])
     }
 }

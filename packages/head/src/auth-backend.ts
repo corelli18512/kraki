@@ -94,6 +94,13 @@ export interface AuthBackend {
    * Create a pairing token for an authenticated user.
    * Returns the token string and TTL.
    */
+  /**
+   * Forget a device in the account's source of truth. Edges call this so a
+   * removal survives the device list they re-mirror from it on every auth.
+   * Optional: backends without a separate account store don't need it.
+   */
+  removeDevice?(userId: string, deviceId: string): Promise<boolean>;
+
   createPairingToken(userId: string): { token: string; expiresIn: number };
 
   /**

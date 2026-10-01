@@ -93,6 +93,31 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
             ))
         }
 
+        // Emphasis delimiters follow CommonMark's flanking rules (simplified):
+        // the opener is followed by non-space, the closer preceded by
+        // non-space, and `_` never opens or closes inside a word — so
+        // SHOULD_NOT_APPEAR or snake_case_names stay literal text.
+        func isWordChar(_ c: Character) -> Bool { c.isLetter || c.isNumber }
+        func canOpen(at i: String.Index, length: Int) -> Bool {
+            let after = fragment.index(i, offsetBy: length)
+            guard after < fragment.endIndex, !fragment[after].isWhitespace else { return false }
+            if fragment[i] == "_", i > fragment.startIndex, isWordChar(fragment[fragment.index(before: i)]) { return false }
+            return true
+        }
+        func closer(for marker: String, from start: String.Index) -> String.Index? {
+            var search = start
+            while search < fragment.endIndex,
+                  let found = fragment.range(of: marker, range: search..<fragment.endIndex) {
+                let close = found.lowerBound
+                let afterClose = found.upperBound
+                let precededBySpace = close > start && fragment[fragment.index(before: close)].isWhitespace
+                let followedByWord = marker.hasPrefix("_") && afterClose < fragment.endIndex && isWordChar(fragment[afterClose])
+                if close > start, !precededBySpace, !followedByWord { return close }
+                search = fragment.index(after: close)
+            }
+            return nil
+        }
+
         func flushPlain(until end: String.Index) {
             guard plainStart < end else { return }
             append(String(fragment[plainStart..<end]))
@@ -121,7 +146,8 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
             if fragment[index...].hasPrefix("**") || fragment[index...].hasPrefix("__") {
                 let marker = String(fragment[index...].prefix(2))
                 let contentStart = fragment.index(index, offsetBy: 2)
-                if let close = fragment.range(of: marker, range: contentStart..<fragment.endIndex)?.lowerBound {
+                if canOpen(at: index, length: 2),
+                   let close = closer(for: marker, from: contentStart) {
                     flushPlain(until: index)
                     appendNested(String(fragment[contentStart..<close]), bold: true)
                     index = fragment.index(close, offsetBy: 2)
@@ -142,7 +168,8 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
             }
 
             if fragment[index] == "*" || fragment[index] == "_",
-               let close = fragment[next...].firstIndex(of: fragment[index]),
+               canOpen(at: index, length: 1),
+               let close = closer(for: String(fragment[index]), from: next),
                close > next {
                 flushPlain(until: index)
                 appendNested(String(fragment[next..<close]), italic: true)
@@ -333,6 +360,10 @@ func splitMessageBody(_ text: String) -> [MessageBodySegment] {
     var codeBuffer: [String] = []
     var codeLanguage: String?
     var inCodeBlock = false
+    /// Indentation of the opening fence. Fences nested in a list item are
+    /// indented ("  ```"); their content carries the same indent, which is
+    /// stripped so the block renders like a top-level one.
+    var codeIndent = 0
 
     func flushInline() {
         if !inlineBuffer.isEmpty {
@@ -352,25 +383,31 @@ func splitMessageBody(_ text: String) -> [MessageBodySegment] {
     while i < lines.count {
         let line = lines[i]
 
+        let fenceIndent = line.prefix(while: { $0 == " " }).count
+        let isFence = fenceIndent <= 8 && line.dropFirst(fenceIndent).hasPrefix("```")
+
         if inCodeBlock {
-            if line.hasPrefix("```") {
+            if isFence {
                 segments.append(.codeBlock(language: codeLanguage, code: codeBuffer.joined(separator: "\n")))
                 codeBuffer.removeAll()
                 codeLanguage = nil
                 inCodeBlock = false
+                codeIndent = 0
             } else {
-                codeBuffer.append(line)
+                let strip = min(codeIndent, line.prefix(while: { $0 == " " }).count)
+                codeBuffer.append(String(line.dropFirst(strip)))
             }
             i += 1
             continue
         }
 
-        if line.hasPrefix("```") {
+        if isFence {
             flushInline()
             flushQuote()
-            let lang = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            let lang = String(line.dropFirst(fenceIndent + 3)).trimmingCharacters(in: .whitespaces)
             codeLanguage = lang.isEmpty ? nil : lang
             inCodeBlock = true
+            codeIndent = fenceIndent
             i += 1
             continue
         }

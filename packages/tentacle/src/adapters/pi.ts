@@ -116,11 +116,18 @@ class PiRpcProcess {
   private seq = 0;
   private intentionalExit = false;
   private lastStderr = '';
+  /** Rolling tail of everything pi printed on stderr (for crash reasons). */
+  private stderrTail = '';
   onEvent: ((e: PiRpcEvent) => void) | null = null;
   /** Fires only on UNEXPECTED exit (crash). Intentional kill() is silent. */
   onExit: ((code: number | null) => void) | null = null;
 
   constructor(private opts: PiRpcOptions) {}
+
+  /** The most telling stderr line after a crash, e.g. "TypeError: …". */
+  crashReason(): string | undefined {
+    return summarizeCrash(this.stderrTail);
+  }
 
   start(): void {
     const args = ['--mode', 'rpc'];
@@ -152,6 +159,7 @@ class PiRpcProcess {
     this.child.stderr.on('data', (d) => {
       const stderr = d.toString().trim();
       if (stderr) this.lastStderr = stderr;
+      this.stderrTail = (this.stderrTail + '\n' + d.toString()).slice(-4000);
       rpcLogger.debug({ stderr }, 'pi stderr');
     });
     this.child.on('exit', (code) => {
@@ -471,6 +479,16 @@ export interface PiListModelsError extends Error {
   signal?: NodeJS.Signals | null;
   stdoutTail?: string;
   stderrTail?: string;
+}
+
+/** Pick the line that explains a crash from a stderr tail: the last
+ *  "SomethingError: …" line, else the last line that isn't Node's version
+ *  banner or a stack frame. */
+export function summarizeCrash(stderr: string): string | undefined {
+  const lines = stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const errorLine = [...lines].reverse().find((l) => /^(?:[A-Z]\w*)?Error\b[^:]*:/.test(l));
+  const pick = errorLine ?? [...lines].reverse().find((l) => !/^Node\.js v/.test(l) && !/^at\s/.test(l) && !/^\^+$/.test(l));
+  return pick?.slice(0, 300);
 }
 
 /** Run `pi --list-models` asynchronously. On failure the error carries the
@@ -827,7 +845,7 @@ export class PiAdapter extends AgentAdapter {
     });
     const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), relayTurnId: undefined, eventTurnId: undefined, exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 0, settledTurn: 0, pendingMaintenanceIdle: false, pendingNarration: '', aborting: false };
     proc.onEvent = (e) => this.handleEvent(sessionId, e);
-    proc.onExit = () => this.handleProcessExit(sessionId, sess);
+    proc.onExit = (code) => this.handleProcessExit(sessionId, sess, code);
     proc.start();
     this.sessions.set(sessionId, sess);
     // Write the meta sidecar up front so KRAKI_META_FILE points at a real file
@@ -836,7 +854,7 @@ export class PiAdapter extends AgentAdapter {
     return sess;
   }
 
-  private handleProcessExit(sessionId: string, sess: PiSession): void {
+  private handleProcessExit(sessionId: string, sess: PiSession, code: number | null = null): void {
     // Process gone (crash/kill) means agent_settled may never arrive.
     // Permissions cannot be reconstructed, but ask_user is durable at
     // RelayClient/CardManager: keep its id/card so the next answer can use a
@@ -849,6 +867,13 @@ export class PiAdapter extends AgentAdapter {
     if (sess.pendingError) {
       this.emitError(sessionId, sess, sess.pendingError);
       sess.pendingError = undefined;
+    } else if (!sess.aborting && sess.settledTurn !== sess.logicalTurn) {
+      // Pi died mid-turn (crash, killed, broken runtime). Without this the
+      // turn ends silently and clients show an empty "no reply" turn.
+      const reason = sess.proc.crashReason();
+      const exit = code === null ? '' : ` (exit code ${code})`;
+      logger.warn({ sessionId, code, reason }, 'pi exited during a turn');
+      this.emitError(sessionId, sess, `Pi stopped unexpectedly${exit}${reason ? `: ${reason}` : ''}`);
     }
     this.emitIdleOnce(sessionId, sess);
     this.onSessionEvicted?.(sessionId);

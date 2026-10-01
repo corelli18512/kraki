@@ -43,6 +43,14 @@ struct NewSessionSheet: View {
         tentacles.filter(\.online)
     }
 
+    /// Picker order: online computers first (the ones you can start a
+    /// session on), then offline ones, most recently seen first.
+    private var pickerDevices: [DeviceSummary] {
+        onlineTentacles + tentacles.filter { !$0.online }.sorted {
+            (DeviceDates.parse($0.lastSeen) ?? .distantPast) > (DeviceDates.parse($1.lastSeen) ?? .distantPast)
+        }
+    }
+
     private var agentsList: [AgentCapabilities] {
         deviceStore.agents(for: selectedDeviceId)
     }
@@ -275,7 +283,7 @@ struct NewSessionSheet: View {
     private var devicePickerCard: some View {
         AlwaysScrollableArea {
             VStack(spacing: 0) {
-                ForEach(Array(tentacles.enumerated()), id: \.element.id) { index, device in
+                ForEach(Array(pickerDevices.enumerated()), id: \.element.id) { index, device in
                     Button {
                         guard device.online else { return }
                         selectedDeviceId = device.id
@@ -286,8 +294,15 @@ struct NewSessionSheet: View {
                             Circle()
                                 .fill(device.online ? Color.green : Color.gray)
                                 .frame(width: 7, height: 7)
-                            Text(device.name)
-                                .foregroundStyle(device.online ? Color.primary : Color.secondary)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(device.name)
+                                    .foregroundStyle(device.online ? Color.primary : Color.secondary)
+                                if !device.online, let seen = DeviceDates.relative(device.lastSeen) {
+                                    Text("Last online \(seen)")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
                             Spacer()
                             if device.id == selectedDeviceId {
                                 Image(systemName: "checkmark")
@@ -302,7 +317,7 @@ struct NewSessionSheet: View {
                     .buttonStyle(.plain)
                     .disabled(!device.online)
 
-                    if index < tentacles.count - 1 {
+                    if index < pickerDevices.count - 1 {
                         Divider().padding(.leading, 16)
                     }
                 }
