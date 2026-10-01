@@ -81,6 +81,7 @@ export function streamForType(type: string | undefined): number {
     case 'session_messages_range_batch':
     case 'turn_trace_batch':
     case 'attachment_data':
+    case 'usage_history':
       return 1; // STREAM_BULK
     default:
       return 0; // STREAM_LIVE

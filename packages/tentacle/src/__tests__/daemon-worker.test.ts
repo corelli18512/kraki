@@ -41,7 +41,15 @@ const mockRelay = {
   onAuthenticated: null as ((info: Record<string, unknown>) => void) | null,
   onFatalError: null as ((message: string) => void) | null,
   updateAgentCapabilities: vi.fn(),
+  updateAccountUsage: vi.fn(),
+  usageHistoryReader: null as unknown,
 };
+
+const mockUsageMonitor = { start: vi.fn(), stop: vi.fn(), onChange: null as unknown };
+vi.mock('../account-usage.js', () => ({
+  AccountUsageMonitor: vi.fn().mockImplementation(() => mockUsageMonitor),
+  UsageHistory: vi.fn().mockImplementation((path: string) => ({ path, load: vi.fn(() => []) })),
+}));
 
 vi.mock('../relay-client.js', () => ({
   RelayClient: vi.fn().mockImplementation(() => mockRelay),
@@ -115,6 +123,7 @@ vi.mock('../config.js', () => ({
   getConfigPath: vi.fn(() => '/tmp/fake-kraki/config.json'),
   getChannelKeyPath: vi.fn(() => '/tmp/fake-kraki/channel.key'),
   getConfigDir: vi.fn(() => '/tmp/fake-kraki'),
+  getKrakiHome: vi.fn(() => '/tmp/fake-kraki'),
   getVersion: vi.fn(() => '0.0.0-test'),
   saveDaemonPid: (...args: unknown[]) => mockSaveDaemonPid(...args),
   saveDaemonReady: (...args: unknown[]) => mockSaveDaemonReady(...args),
@@ -264,6 +273,14 @@ describe('daemon-worker: startWorker()', () => {
     expect(mockClearDaemonIdentity).toHaveBeenCalled();
     expect(mockRelay.disconnect).toHaveBeenCalled();
     expect(mockAdapter.stop).toHaveBeenCalled();
+  });
+
+  it('starts the read-only account usage monitor and forwards readings to the relay', async () => {
+    await startWorker();
+    expect(mockUsageMonitor.start).toHaveBeenCalled();
+    (mockUsageMonitor.onChange as (a: unknown[]) => void)([{ accountKey: 'k' }]);
+    expect(mockRelay.updateAccountUsage).toHaveBeenCalledWith([{ accountKey: 'k' }]);
+    expect(typeof mockRelay.usageHistoryReader).toBe('function');
   });
 
   it('re-greets apps when an agent reports its model list recovered after startup', async () => {
