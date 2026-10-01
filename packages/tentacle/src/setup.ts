@@ -412,10 +412,11 @@ async function signInWithGitHub(clientId: () => Promise<string | undefined>): Pr
 async function runAgentStep(): Promise<AgentCheckResult[]> {
   subhead('Coding agents');
   for (;;) {
-    const spinner = ora({ text: 'Checking the coding agents on this computer…', indent: 4 }).start();
+    // prefixText, not indent: ora's clear() leaves the cursor at the indent
+    // column, which shifts the first row (visibly so on Windows consoles).
+    const spinner = ora({ text: 'Checking the coding agents on this computer…', prefixText: '   ' }).start();
     const results = await setupDeps.checkAgents();
     spinner.stop();
-    process.stdout.write('\r');
     const byId = new Map(results.map((r) => [r.id, r]));
     for (const agent of SETUP_AGENTS) printAgentRow(agent, byId.get(agent.id));
     const ready = results.filter((r) => r.status === 'ready');
@@ -464,10 +465,9 @@ function printAgentRow(agent: (typeof SETUP_AGENTS)[number], r: AgentCheckResult
 /** `kraki agents`: the setup check as a standalone report. */
 export async function printAgentsCheck(): Promise<void> {
   console.log('');
-  const spinner = ora({ text: 'Checking the coding agents on this computer…', indent: 4 }).start();
+  const spinner = ora({ text: 'Checking the coding agents on this computer…', prefixText: '   ' }).start();
   const results = await setupDeps.checkAgents();
   spinner.stop();
-  process.stdout.write('\r');
   const byId = new Map(results.map((r) => [r.id, r]));
   for (const agent of SETUP_AGENTS) printAgentRow(agent, byId.get(agent.id));
   console.log('');
@@ -516,6 +516,18 @@ async function runThisComputerStep(n: number, total: number): Promise<AgentCheck
     await runFullDiskAccess();
   }
   return agents;
+}
+
+/** A first WebSocket connection can be slow on some networks: retry briefly before asking. */
+async function reachRelay(relay: string, attempts = 3): Promise<RelayInfo> {
+  for (let i = 1; ; i++) {
+    try {
+      return await queryRelayInfo(relay, 10_000);
+    } catch (err) {
+      if (i >= attempts) throw err;
+      await new Promise((r) => setTimeout(r, 1000 * i));
+    }
+  }
 }
 
 /** Keep the device name across re-setup; a new device is named after the host. */
@@ -583,11 +595,11 @@ export async function runSetup(): Promise<KrakiConfig> {
   let relay = resolved.relayUrl;
   const region = resolved.region;
   try {
-    await queryRelayInfo(relay);
+    await reachRelay(relay);
     connecting.succeed(`Connected${region ? ` (${region})` : ''}`);
   } catch (err) {
-    connecting.fail(`Cannot reach Kraki: ${(err as Error).message}`);
-    relay = await promptRelayUrl(OFFICIAL_RELAY);
+    connecting.fail(`Cannot reach ${relay.replace(/^wss?:\/\//, '')}: ${(err as Error).message}`);
+    relay = await promptRelayUrl(relay);
   }
 
   const name = deviceName();

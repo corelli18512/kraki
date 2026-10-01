@@ -85,6 +85,8 @@ export async function checkAgent(
     const models = await withTimeout(adapter.listModelDetails(), deps.timeoutMs, `${agent.name} model list`);
     const ids = models.map((m) => m.id);
     if (ids.length === 0) {
+      const failure = adapter.modelListError?.();
+      if (failure && !LOGIN_ERROR.test(failure)) throw new Error(failure);
       // Installed and running, but no model it can use: almost always a
       // missing sign-in or API key in that agent.
       return { ...base, version, status: 'needs_login', hint: LOGIN_HINTS[agent.id] };
@@ -95,7 +97,7 @@ export async function checkAgent(
     if (LOGIN_ERROR.test(message)) {
       return { ...base, version, status: 'needs_login', hint: LOGIN_HINTS[agent.id], detail: message };
     }
-    return { ...base, version, status: 'error', hint: `${agent.name} didn't start. Open it in Terminal once to check it works.`, detail: message };
+    return { ...base, version, status: 'error', hint: `${agent.name} didn't start. Run it once in a terminal to check it works.`, detail: message };
   } finally {
     try { await adapter?.stop(); } catch { /* best effort */ }
   }

@@ -10,12 +10,18 @@ Write-Host ""
 Write-Host "  Kraki Installer" -ForegroundColor Cyan
 Write-Host ""
 
+# Windows PowerShell's web cmdlets ignore HTTPS_PROXY; pass it explicitly so
+# networks that reach GitHub only through a proxy can install too.
+$web = @{ UseBasicParsing = $true }
+$proxy = @($env:HTTPS_PROXY, $env:https_proxy, $env:HTTP_PROXY, $env:http_proxy) | Where-Object { $_ } | Select-Object -First 1
+if ($proxy) { $web.Proxy = $proxy }
+
 # This repository also publishes Mac-only releases. GitHub's /latest may
 # point at one of those, so select a stable release that actually has our asset.
 function Get-KrakiWindowsRelease {
     param([string]$Repository, [string]$AssetName)
     for ($page = 1; $page -le 5; $page++) {
-        $releases = Invoke-RestMethod "https://api.github.com/repos/$Repository/releases?per_page=100&page=$page"
+        $releases = Invoke-RestMethod "https://api.github.com/repos/$Repository/releases?per_page=100&page=$page" @web
         foreach ($candidate in $releases) {
             if ($candidate.draft -or $candidate.prerelease) { continue }
             if (@($candidate.assets | Where-Object { $_.name -eq $AssetName }).Count -gt 0) {
@@ -37,7 +43,16 @@ $installDir = Join-Path $env:LOCALAPPDATA "Kraki"
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 $target = Join-Path $installDir $binaryName
 
-Invoke-WebRequest -Uri $url -OutFile $target -UseBasicParsing
+try {
+    Invoke-WebRequest -Uri $url -OutFile $target @web
+} catch {
+    Write-Host "  Could not download $url" -ForegroundColor Red
+    Write-Host "  $($_.Exception.Message)"
+    if (-not $proxy) {
+        Write-Host "  If this network reaches GitHub only through a proxy, set HTTPS_PROXY and run the installer again."
+    }
+    throw
+}
 Write-Host "  Downloaded to $target"
 
 # Add to user PATH if not already there
