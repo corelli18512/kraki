@@ -1389,9 +1389,12 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         }
         guard !jumpControlsFrozen else { return }
         let showTail = !isAtConversationBottom
-        // At the conversation bottom neither control shows: they would sit
-        // on the newest (often short, right-aligned) message.
-        let showUp = !isAtConversationBottom
+        // ↑ stays available at the bottom (resting in ↓'s slot) unless the
+        // newest item is the user's own message: there is nothing new to read
+        // back to yet, and a right-aligned user bubble sits under the slot.
+        // Accepted trade-off (user-confirmed): at rest it may cover the bottom
+        // trailing corner of a full-width AI reply. Mac parity (#330).
+        let showUp = !(isAtConversationBottom && latestItemIsUser)
             && (previousReplyTarget() != nil || (!atOldest && hasLoadedWindow))
         let slotChanged = jumpButtonVisibilityTargets[ObjectIdentifier(jumpButton)] != showTail
         setJumpButtonVisibility(jumpButton, material: jumpButtonBlur, shouldShow: showTail)
@@ -1581,6 +1584,12 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
          jumpButtonVisibilityTargets[ObjectIdentifier(jumpButton)] == true)
     }
     var automationUnseenArrivals: Int { unseenArrivals }
+    /// Control frames in the list controller's view.
+    var automationControlFrames: (up: CGRect, down: CGRect) {
+        view.layoutIfNeeded()
+        return (latestMessageStartButton.convert(latestMessageStartButton.bounds, to: view),
+                jumpButton.convert(jumpButton.bounds, to: view))
+    }
     var automationJumpControlSizes: (up: CGSize, down: CGSize) {
         view.layoutIfNeeded()
         return (latestMessageStartButton.bounds.size, jumpButton.bounds.size)
@@ -1682,6 +1691,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         navigationLoadTask?.cancel()
         navigationLoadInFlight = false
         syncLiveUpdates()
+        // The controls must not ride over the message being sent: ↓ goes now
+        // (we are heading to the bottom) and ↑ drops to the low slot, hidden
+        // while the newest item is the user's own message. Applied before the
+        // glide freezes control updates. Mac parity (#330).
+        setJumpButtonVisibility(jumpButton, material: jumpButtonBlur, shouldShow: false)
+        setJumpButtonVisibility(latestMessageStartButton, material: latestMessageStartButtonBlur, shouldShow: false)
+        placeLatestStartButton(aboveTail: false)
         unseenArrivals = 0
         refreshJumpButtonTitle()
         if isAtConversationBottom {
@@ -2470,6 +2486,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     private enum EntranceRole { case user, reply }
+
+    private var latestItemIsUser: Bool {
+        items.last.flatMap(entranceRole) == .user
+    }
 
     private func entranceRole(_ id: String) -> EntranceRole? {
         if id == Self.liveCardID { return .reply }
