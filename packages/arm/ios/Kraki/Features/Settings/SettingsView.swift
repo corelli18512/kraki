@@ -127,7 +127,7 @@ struct SettingsView: View {
                 HStack(spacing: 12) {
                     Image(systemName: "character.book.closed")
                         .foregroundStyle(Color.krakiPrimary)
-                    Text("Voice Vocabulary")
+                    Text(VoiceVocabularyCopy.title)
                     Spacer()
                     if vocabularyCount > 0 {
                         Text("\(vocabularyCount)").foregroundStyle(.secondary)

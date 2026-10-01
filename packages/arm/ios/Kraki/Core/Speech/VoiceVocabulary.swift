@@ -102,15 +102,16 @@ final class VoiceVocabularyStore {
 }
 
 enum VoiceVocabularyCopy {
-    static let explanation = "Names and jargon voice input may not know: products, people, tools. Optionally add a few ways it might come out as examples. They are hints, not find-and-replace: your voice messages are corrected in context, similar sounds are caught too, and ordinary words that sound the same are left alone. Kept on this device."
-    static let emptyTitle = "No terms yet"
-    static let soundsLike = "Sounds like (examples)"
-    static let soundsLikeFooter = "Optional. A few ways voice input might write it, separated by commas. Used as hints: similar sounds are recognized too, and ordinary words that sound the same are left alone."
+    static let title = "Custom Words"
+    static let explanation = "Help voice input get your names and terms right, like product names, people or tech jargon. Kept on this device."
+    static let emptyTitle = "No custom words yet"
+    static let recognizedAs = "Often recognized as"
+    static let recognizedAsFooter = "Optional. How voice input tends to get it wrong, separated by commas. Similar spellings are caught too."
     static let termFooter = "Spelled exactly as it should appear."
 }
 
 #if os(iOS)
-/// Settings → Voice Vocabulary.
+/// Settings → Custom Words.
 struct VoiceVocabularyPage: View {
     @State private var store = VoiceVocabularyStore()
     @State private var editing: VoiceTerm?
@@ -128,7 +129,7 @@ struct VoiceVocabularyPage: View {
                         Text(VoiceVocabularyCopy.explanation)
                             .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         Button { add() } label: {
-                            HStack(spacing: 6) { Image(systemName: "plus"); Text("Add Term") }
+                            HStack(spacing: 6) { Image(systemName: "plus"); Text("Add Word") }
                                 .padding(.horizontal, 6)
                         }
                         .buttonStyle(.borderedProminent).padding(.top, 4)
@@ -146,14 +147,14 @@ struct VoiceVocabularyPage: View {
                         ids.forEach(store.remove)
                     }
                     if !store.isFull {
-                        Button { add() } label: { Label("Add Term", systemImage: "plus") }
+                        Button { add() } label: { Label("Add Word", systemImage: "plus") }
                     }
                 } footer: {
                     Text(VoiceVocabularyCopy.explanation + " \(store.savedCount) of \(VoiceVocabulary.maxEntries).")
                 }
             }
         }
-        .navigationTitle("Voice Vocabulary")
+        .navigationTitle(VoiceVocabularyCopy.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if !store.terms.isEmpty {
@@ -174,7 +175,7 @@ private struct VoiceTermRow: View {
         VStack(alignment: .leading, spacing: 3) {
             Text(term.cleanTerm).font(.body)
             if !term.heardList.isEmpty {
-                Text("Sounds like " + term.heardList.joined(separator: ", "))
+                Text("Often recognized as " + term.heardList.joined(separator: ", "))
                     .font(.footnote).foregroundStyle(.secondary).lineLimit(2)
             }
         }
@@ -211,23 +212,23 @@ private struct VoiceTermEditor: View {
                     TextField("e.g. PostgreSQL, 张三丰", text: $term.term)
                         .focused($focus)
                         .autocorrectionDisabled().textInputAutocapitalization(.never)
-                } header: { Text("Term") } footer: {
+                } header: { Text("Word or name") } footer: {
                     if duplicate { Text("Already in your vocabulary.").foregroundStyle(.orange) }
                     else { Text(VoiceVocabularyCopy.termFooter) }
                 }
                 Section {
                     TextField("e.g. 破四格, post gress", text: $term.heardAs, axis: .vertical)
                         .autocorrectionDisabled().textInputAutocapitalization(.never)
-                } header: { Text(VoiceVocabularyCopy.soundsLike) } footer: {
-                    Text(VoiceVocabularyCopy.soundsLikeFooter)
+                } header: { Text(VoiceVocabularyCopy.recognizedAs + " (optional)") } footer: {
+                    Text(VoiceVocabularyCopy.recognizedAsFooter)
                 }
                 if !isNew {
                     Section {
-                        Button("Delete Term", role: .destructive) { store.remove(term.id); dismiss() }
+                        Button("Delete Word", role: .destructive) { store.remove(term.id); dismiss() }
                     }
                 }
             }
-            .navigationTitle(isNew ? "Add Term" : "Edit Term")
+            .navigationTitle(isNew ? "Add Word" : "Edit Word")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: dismiss) }
@@ -243,7 +244,7 @@ private struct VoiceTermEditor: View {
 #endif
 
 #if os(macOS)
-/// Settings → General → Voice Vocabulary: one editable row per word.
+/// Settings → General → Custom Words: one editable row per word.
 struct VoiceVocabularyMacSection: View {
     @State private var store = VoiceVocabularyStore()
     @FocusState private var focused: UUID?
@@ -251,25 +252,25 @@ struct VoiceVocabularyMacSection: View {
     var body: some View {
         Section {
             if store.terms.isEmpty {
-                Text("No terms yet. Add names and jargon that voice input may not know.")
+                Text("No custom words yet. Add names and terms voice input gets wrong.")
                     .foregroundStyle(.secondary)
             } else {
                 HStack(spacing: 10) {
-                    Text("Term").frame(width: 180, alignment: .leading)
-                    Text(VoiceVocabularyCopy.soundsLike)
+                    Text("Word or name").frame(width: 180, alignment: .leading)
+                    Text(VoiceVocabularyCopy.recognizedAs + " (optional)")
                     Spacer()
                 }
                 .font(.caption).foregroundStyle(.secondary)
             }
             ForEach($store.terms) { $term in
                 HStack(spacing: 10) {
-                    TextField("Term", text: $term.term, prompt: Text("e.g. PostgreSQL"))
+                    TextField("Word or name", text: $term.term, prompt: Text("e.g. PostgreSQL"))
                         .labelsHidden()
                         .multilineTextAlignment(.leading)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 180)
                         .focused($focused, equals: term.id)
-                    TextField(VoiceVocabularyCopy.soundsLike, text: $term.heardAs,
+                    TextField(VoiceVocabularyCopy.recognizedAs, text: $term.heardAs,
                               prompt: Text("Optional, e.g. 破四格, post gress"))
                         .labelsHidden()
                         .multilineTextAlignment(.leading)
@@ -290,14 +291,14 @@ struct VoiceVocabularyMacSection: View {
                     let new = VoiceTerm()
                     store.upsert(new)
                     focused = new.id
-                } label: { Label("Add Term", systemImage: "plus") }
+                } label: { Label("Add Word", systemImage: "plus") }
                 .disabled(store.isFull)
                 Spacer()
                 Text("\(store.savedCount) / \(VoiceVocabulary.maxEntries)")
                     .monospacedDigit().font(.caption).foregroundStyle(.secondary)
             }
         } header: {
-            Text("Voice Vocabulary")
+            Text(VoiceVocabularyCopy.title)
         } footer: {
             Text(VoiceVocabularyCopy.explanation)
                 .font(.footnote).foregroundStyle(.secondary)
