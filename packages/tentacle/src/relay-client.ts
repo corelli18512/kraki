@@ -1254,7 +1254,20 @@ export class RelayClient {
     }
   }
 
+  /** An App that is sending to us is online. Presence frames from the Head can
+   *  arrive stale (a `device_left` from before our last `auth_ok`, replayed by
+   *  Pulse resume after a Tentacle restart), which would silently stop every
+   *  broadcast to a connected App until it reconnects. */
+  private noteAppAlive(deviceId: string | undefined): void {
+    if (!deviceId || this.onlineConsumers.has(deviceId) || !this.consumerKeys.has(deviceId)) return;
+    this.onlineConsumers.add(deviceId);
+    if (!this.currentSessionByArm.has(deviceId)) this.currentSessionByArm.set(deviceId, null);
+    this.attachmentPacer.notifyOnline(deviceId);
+    logger.warn({ deviceId }, 'App marked offline is sending; restored as online');
+  }
+
   private handleConsumerMessage(msg: ConsumerMessage): void {
+    this.noteAppAlive(msg.deviceId);
     if (msg.type === 'client_features') {
       const features = Array.isArray(msg.payload?.features) ? msg.payload.features.filter((f) => typeof f === 'string') : [];
       this.appFeatures.set(msg.deviceId, new Set(features));

@@ -430,6 +430,31 @@ final class NetworkResilienceTests: XCTestCase {
         try await settleAndCheckDelivery(within: 45)
     }
 
+    /// E3: the Tentacle process restarts while the app stays connected (the
+    /// built-in Tentacle is replaced by every Mac app update). Live events for
+    /// the open Session and for a background Session must keep reaching the app.
+    func test_E3_tentacleRestartKeepsLiveEvents() async throws {
+        let background = try await control("POST", "/session")["sessionId"] as? String ?? ""
+        try await waitUntil(10, "background session listed") { self.app.sessionStore.sessions[background] != nil }
+        try await control("POST", "/restart/tentacle", ["downMs": 2_000])
+        try await waitUntil(20, "tentacle back") { self.tentacleOnline }
+        await pause(2)
+        send("afterRestart")
+        try await control("POST", "/agent/burst", ["sessionId": background, "count": 1, "prefix": "bg-live"])
+        try await control("POST", "/agent/burst", ["sessionId": sessionId, "count": 1, "prefix": "fg-live"])
+        var bgPreview: String?
+        try? await waitUntil(10, "background preview") {
+            bgPreview = self.app.sessionStore.sessionPreviews[background]?.text
+            return bgPreview?.contains("bg-live") == true
+        }
+        metrics["bgPreview"] = bgPreview ?? "nil"
+        metrics["fgPreview"] = app.sessionStore.sessionPreviews[sessionId]?.text ?? "nil"
+        XCTAssertTrue(bgPreview?.contains("bg-live") == true, "background card updates live after a Tentacle restart")
+        XCTAssertTrue(app.sessionStore.sessionPreviews[sessionId]?.text.contains("fg-live") == true
+            || agentMessages().contains { $0.contains("fg-live") }, "open session receives live output")
+        try await settleAndCheckDelivery(within: 15)
+    }
+
     /// E2: the Tentacle's link drops for 30 s; the user keeps typing.
     func test_E2_tentacleOffline30s() async throws {
         try await fault("tentacle", ["refuse": true])
