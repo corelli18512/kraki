@@ -49,6 +49,8 @@ export interface UsageCredential {
 }
 
 export class UsageAuthError extends Error {}
+/** The provider answered for a different account than the credential names. */
+export class UsageWrongAccount extends Error {}
 export class UsageRateLimited extends Error {
   constructor(readonly retryAt: number) { super('rate limited'); }
 }
@@ -366,7 +368,7 @@ export class UsageClient {
     if (cred.provider === 'codex') {
       const root = await this.get('https://chatgpt.com/backend-api/wham/usage', cred);
       const reported = root.account_id as string | undefined;
-      if (reported && cred.accountId && reported !== cred.accountId) throw new UsageAuthError('account mismatch');
+      if (reported && cred.accountId && reported !== cred.accountId) throw new UsageWrongAccount('account mismatch');
       const parsed = parseCodexUsage(root, now);
       const id = cred.accountId ?? reported;
       return { accountKey: id ? `codex:${hash(id)}` : `codex-slot:${hash(cred.sourceId + cred.token)}`,
@@ -460,6 +462,35 @@ export function runCodexAppServer(codexHome: string, timeoutMs = 25_000): Promis
   });
 }
 
+// ── Pi-owned renewal ─────────────────────────────────────
+
+/** Pi provider ids for `pi auth check`. */
+export const piProviderId = (provider: UsageProvider): string => (provider === 'claude' ? 'anthropic' : 'openai-codex');
+
+/**
+ * Asks Pi itself to renew an expired OAuth login (`pi auth check --provider … --json`).
+ * Pi refreshes under its own lock on auth.json and re-reads the file inside it, so this
+ * can't race running Pi processes; this module still never writes the file. No
+ * conversation is created. Resolves true when Pi reports the login ready.
+ */
+export function renewPiLogin(provider: UsageProvider, agentDir: string, timeoutMs = 30_000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn('pi', ['auth', 'check', '--provider', piProviderId(provider), '--json'], {
+      env: { ...process.env, PI_CODING_AGENT_DIR: agentDir }, cwd: homedir(), stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true, shell: process.platform === 'win32',
+    });
+    let out = '';
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    child.stdout.on('data', (c: Buffer) => { if (out.length < 10_000) out += c.toString('utf8'); });
+    child.on('error', () => { clearTimeout(timer); resolve(false); });
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      // Never log the output; this form carries no credentials, but stay strict.
+      try { resolve(code === 0 && (JSON.parse(out) as { status?: string }).status === 'ready'); } catch { resolve(false); }
+    });
+  });
+}
+
 // ── History ──────────────────────────────────────────────
 
 /** Append-only JSON Lines file (0600). No credentials, no emails. */
@@ -507,7 +538,7 @@ export function agentForSource(sourceId: string): string {
 
 // ── Monitor ──────────────────────────────────────────────
 
-interface Slot { cred: UsageCredential; account?: FetchedAccount; error?: string; nextAllowed: number }
+interface Slot { cred: UsageCredential; account?: FetchedAccount; error?: string; nextAllowed: number; lastRenewal?: number }
 
 export interface AccountUsageMonitorOptions {
   paths?: UsagePaths;
@@ -515,6 +546,8 @@ export interface AccountUsageMonitorOptions {
   history?: UsageHistory;
   intervalMs?: number;
   now?: () => number;
+  /** Override for tests; defaults to `renewPiLogin`. */
+  renewPi?: (provider: UsageProvider, agentDir: string) => Promise<boolean>;
 }
 
 /** Polls every 5 minutes and reports the deduplicated account list on change. */
@@ -581,20 +614,35 @@ export class AccountUsageMonitor {
       seen.add(cred.sourceId);
       const prev = this.slots.get(cred.sourceId);
       const changed = prev && (prev.cred.token !== cred.token || prev.cred.provider !== cred.provider);
-      // A different token may belong to a different account: never inherit its numbers.
-      this.slots.set(cred.sourceId, prev && !changed ? { ...prev, cred } : { cred, nextAllowed: 0 });
+      if (prev && !changed) { this.slots.set(cred.sourceId, { ...prev, cred }); continue; }
+      // A renewed token in the same source is normally the same account: keep its last reading
+      // (shown as stale until a fresh one lands) unless the credential names a different account.
+      const sameAccount = prev && prev.cred.provider === cred.provider
+        && !(prev.cred.accountId && cred.accountId && prev.cred.accountId !== cred.accountId);
+      this.slots.set(cred.sourceId, sameAccount
+        ? { cred, account: prev.account, error: prev.error, nextAllowed: 0, lastRenewal: prev.lastRenewal }
+        : { cred, nextAllowed: 0 });
     }
     for (const id of [...this.slots.keys()]) if (!seen.has(id)) this.slots.delete(id);
 
     const now = this.now();
     await Promise.all([...this.slots.values()].filter(s => s.nextAllowed <= now).map(async (slot) => {
       try {
-        slot.account = await this.client.fetch(slot.cred, this.now());
+        try {
+          slot.account = await this.client.fetch(slot.cred, this.now());
+        } catch (err) {
+          const renewed = err instanceof UsageAuthError ? await this.renewViaPi(slot) : null;
+          if (!renewed) throw err;
+          slot.cred = renewed;
+          slot.account = await this.client.fetch(renewed, this.now());
+        }
         slot.error = undefined;
         slot.nextAllowed = this.now() + 60_000;
       } catch (err) {
         if (err instanceof UsageRateLimited) { slot.nextAllowed = err.retryAt; slot.error = 'rate_limited'; }
-        else if (err instanceof UsageAuthError) { slot.account = undefined; slot.error = 'auth'; slot.nextAllowed = this.now() + 60_000; }
+        // An expired login keeps the last numbers; apps show them as stale.
+        else if (err instanceof UsageAuthError) { slot.error = 'auth'; slot.nextAllowed = this.now() + 60_000; }
+        else if (err instanceof UsageWrongAccount) { slot.account = undefined; slot.error = 'auth'; slot.nextAllowed = this.now() + 60_000; }
         else { slot.error = 'unavailable'; slot.nextAllowed = this.now() + 60_000; }
         logger.debug({ source: slot.cred.sourceId, err: (err as Error).message }, 'usage fetch failed');
       }
@@ -607,6 +655,18 @@ export class AccountUsageMonitor {
       this.lastPayload = payload;
       this.onChange?.(accounts);
     }
+  }
+
+  /** Pi logins only, at most once per source every 10 minutes. Returns the reread credential. */
+  private async renewViaPi(slot: Slot): Promise<UsageCredential | null> {
+    if (!slot.cred.sourceId.startsWith('pi:')) return null;
+    if (slot.lastRenewal && this.now() - slot.lastRenewal < 600_000) return null;
+    slot.lastRenewal = this.now();
+    const ok = await (this.opts.renewPi ?? renewPiLogin)(slot.cred.provider, dirname(this.paths.piAuth));
+    if (!ok) return null;
+    const fresh = discoverCredentials(this.paths).find(c => c.sourceId === slot.cred.sourceId);
+    if (!fresh || (fresh.token === slot.cred.token && (fresh.expiresAt ?? Infinity) <= this.now())) return null;
+    return fresh;
   }
 
   private record(accounts: AccountUsage[]): void {

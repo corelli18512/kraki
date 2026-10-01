@@ -144,4 +144,45 @@ describe('AccountUsageMonitor', () => {
     await monitor.refresh();
     expect(history.load()).toHaveLength(2);
   });
+
+  it('an expired Pi login is renewed by Pi itself, then reread and fetched', async () => {
+    const root = tmp(), p = paths(root);
+    mkdirSync(join(root, 'pi'));
+    writeFileSync(p.piAuth, JSON.stringify({ anthropic: { type: 'oauth', access: 'old', expires: 1 } }));
+    const fetch = fakeFetch({ 'https://api.anthropic.com/api/oauth/usage': { body: { seven_day: { utilization: 20 } } } });
+    const renewPi = vi.fn(async (provider: string, agentDir: string) => {
+      expect([provider, agentDir]).toEqual(['claude', join(root, 'pi')]);
+      writeFileSync(p.piAuth, JSON.stringify({ anthropic: { type: 'oauth', access: 'new', expires: 9e15 } }));
+      return true;
+    });
+    const monitor = new AccountUsageMonitor({ paths: p, client: new UsageClient(fetch), renewPi, now: () => 1_790_000_000_000 });
+    await monitor.refresh();
+    expect(renewPi).toHaveBeenCalledTimes(1);
+    expect(monitor.accounts[0]).toMatchObject({ windows: [{ remainingPercent: 80 }] });
+    expect(monitor.accounts[0].error).toBeUndefined();
+  });
+
+  it('a login that stays expired keeps the last reading, marked as an auth error, and renewal is throttled', async () => {
+    const root = tmp(), p = paths(root);
+    mkdirSync(join(root, 'pi'));
+    writeFileSync(p.piAuth, JSON.stringify({ anthropic: { type: 'oauth', access: 'a', expires: 9e15 } }));
+    let status = 200;
+    const fetch = vi.fn(async () => ({ status, headers: { get: () => null }, json: async () => ({ seven_day: { utilization: 30 } }) })) as unknown as FetchLike;
+    const renewPi = vi.fn(async () => false);
+    let now = 1_790_000_000_000;
+    const monitor = new AccountUsageMonitor({ paths: p, client: new UsageClient(fetch), renewPi, now: () => now });
+    await monitor.refresh();
+    expect(monitor.accounts[0].windows[0].remainingPercent).toBe(70);
+    status = 401; now += 61_000;
+    await monitor.refresh();
+    expect(monitor.accounts[0]).toMatchObject({ error: 'auth', windows: [{ remainingPercent: 70 }] });
+    now += 61_000;
+    await monitor.refresh();
+    expect(renewPi).toHaveBeenCalledTimes(1);
+    // Pi renewed it on its own: the same source with a new token keeps the old reading until it refreshes.
+    writeFileSync(p.piAuth, JSON.stringify({ anthropic: { type: 'oauth', access: 'b', expires: 9e15 } }));
+    status = 200; now += 61_000;
+    await monitor.refresh();
+    expect(monitor.accounts[0].error).toBeUndefined();
+  });
 });
