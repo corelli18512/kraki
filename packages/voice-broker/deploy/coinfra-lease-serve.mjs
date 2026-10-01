@@ -58,7 +58,13 @@ async function main() {
         timeoutMs: envInt('CORRECTOR_TIMEOUT_MS', 15_000),
         maxTokens: envInt('CORRECTOR_MAX_TOKENS', 512),
         disableThinking: /^(1|true|yes|on)$/i.test(process.env.CORRECTOR_DISABLE_THINKING?.trim() ?? ''),
-        log: (message, fields) => log.debug(`corrector ${message}`, fields),
+        // Per-call latency/token usage and the hourly daily-usage summary at
+        // info (cost tracking); failures at warn with their class
+        // (billing = a provider usage/spend limit: correction is off).
+        log: (message, fields) => {
+          if (message === 'failed') log.warn(`corrector ${message}`, fields);
+          else log.info(`corrector ${message}`, fields);
+        },
       })
     : passthroughCorrector;
 
