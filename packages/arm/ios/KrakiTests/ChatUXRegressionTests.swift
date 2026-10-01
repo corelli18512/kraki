@@ -57,7 +57,11 @@ final class ChatUXRegressionTests: XCTestCase {
 
     struct Fx { let vc: ChatPerfListVC; let cv: UICollectionView; let app: AppState }
 
-    private func makeFixture(total: Int, outbound: (([String: Any]) -> Bool)? = nil) throws -> Fx {
+    /// `onScreen`: attach the window to the simulator's real UIWindowScene so
+    /// Core Animation actually renders (needed to sample presentation layers;
+    /// a scene-less window never composites and finishes animations at once).
+    private func makeFixture(total: Int, onScreen: Bool = false,
+                             outbound: (([String: Any]) -> Bool)? = nil) throws -> Fx {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ux-gate-\(UUID().uuidString)")
         roots.append(root)
         let db = try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite"))
@@ -80,7 +84,15 @@ final class ChatUXRegressionTests: XCTestCase {
         app.messageProvider?.setTentacleInfo(sessionId: sid, lastSeq: total, deviceId: dev)
         _ = app.messageStore.loadInitialWindow(sid)
         let vc = ChatPerfListVC(sessionId: sid, appState: app, agent: "claude", bottomContentInset: 54)
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        let frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        let window: UIWindow
+        if onScreen, let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+            window = UIWindow(windowScene: scene)
+            window.frame = frame
+            window.windowLevel = .alert + 1
+        } else {
+            window = UIWindow(frame: frame)
+        }
         window.rootViewController = vc
         window.makeKeyAndVisible()
         windows.append(window)
@@ -411,6 +423,222 @@ final class ChatUXRegressionTests: XCTestCase {
     }
 
     // MARK: Sending
+
+    // MARK: New bubble entrance (Mac parity)
+
+    private func entranceAnimation(_ fx: Fx, id: String) -> CAAnimationGroup? {
+        guard let index = fx.vc.automationItemIDs.firstIndex(of: id),
+              let cell = fx.cv.cellForItem(at: IndexPath(item: index, section: 0)) else { return nil }
+        return cell.layer.animation(forKey: "kraki.entrance") as? CAAnimationGroup
+    }
+
+    private func slideFrom(_ group: CAAnimationGroup?) -> CGFloat? {
+        let slide = group?.animations?.first { ($0 as? CABasicAnimation)?.keyPath == "transform.translation.x" } as? CABasicAnimation
+        return (slide?.fromValue as? NSNumber).map { CGFloat($0.doubleValue) }
+    }
+
+    /// Each new bubble enters once from its own side while the list glides up;
+    /// pending → echo and live → landed are replacements, not new bubbles.
+    func testNewBubblesSlideInFromTheirSideOnce() throws {
+        let fx = try makeFixture(total: 60, onScreen: true)
+        drain(1_000)
+        XCTAssertTrue(fx.vc.entranceLog.isEmpty, "session entry has no entrances")
+
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "帮我再看一下这个问题"))
+        fx.vc.returnToNewestAfterLocalSubmit()
+        let pendingID = try XCTUnwrap(fx.vc.automationItemIDs.last)
+        XCTAssertTrue(pendingID.contains(":pending:"))
+        XCTAssertEqual(fx.vc.entranceLog.map(\.id), [pendingID])
+        XCTAssertEqual(fx.vc.entranceLog.last?.fromTrailing, true, "the user's bubble enters from the right")
+        XCTAssertEqual(slideFrom(entranceAnimation(fx, id: pendingID)), 48)
+        XCTAssertEqual(fx.vc.arrivalGlideLog.count, 1, "the list glides up to make room")
+        XCTAssertGreaterThan(fx.vc.arrivalGlideLog.last ?? 0, 20)
+        XCTAssertNotNil(fx.cv.layer.animation(forKey: "kraki.arrivalGlide"))
+        XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1, "the real offset is pinned at once")
+        // Rendered motion, sampled from the presentation layers: the bubble
+        // slides left into place and the list settles upward, monotonically.
+        let pendingCell = try XCTUnwrap(fx.vc.automationItemIDs.firstIndex(of: pendingID)
+            .flatMap { fx.cv.cellForItem(at: IndexPath(item: $0, section: 0)) })
+        var slideX: [CGFloat] = [], glideY: [CGFloat] = []
+        for _ in 0..<30 {
+            drain(16)
+            slideX.append(pendingCell.layer.presentation()?.transform.m41 ?? 0)
+            glideY.append(fx.cv.layer.presentation()?.sublayerTransform.m42 ?? 0)
+        }
+        XCTAssertGreaterThan(slideX.first ?? 0, 5, "the bubble starts offset to the right")
+        XCTAssertEqual(slideX.last ?? 1, 0, accuracy: 0.5)
+        XCTAssertTrue(zip(slideX, slideX.dropFirst()).allSatisfy { $1 <= $0 + 0.01 }, "slide is monotonic: \(slideX)")
+        XCTAssertGreaterThan(glideY.first ?? 0, 5, "the list starts below and glides up")
+        XCTAssertEqual(glideY.last ?? 1, 0, accuracy: 0.5)
+        XCTAssertTrue(zip(glideY, glideY.dropFirst()).allSatisfy { $1 <= $0 + 0.01 }, "glide never steps back: \(glideY)")
+        drain(100)
+
+        let clientId = try XCTUnwrap(sender.pendingInputs(sid).last?.payload["clientId"]?.stringValue)
+        fx.app.messageStore.beginCardTurn(sid)
+        try ingestSpine(fx, ["type": "user_message", "seq": 61, "sessionId": sid, "deviceId": dev,
+                             "timestamp": "2026-09-01T00:00:05.000Z",
+                             "payload": ["content": "帮我再看一下这个问题", "clientId": clientId]])
+        drain(300)
+        XCTAssertEqual(fx.vc.entranceLog.count, 1, "the echo replaces the pending bubble without a second entrance")
+
+        fx.app.messageStore.applyCardMessage(sid, "好的，我先看一下相关代码。", reset: false)
+        fx.vc.syncLiveUpdates()
+        XCTAssertEqual(fx.vc.entranceLog.count, 2)
+        XCTAssertEqual(fx.vc.entranceLog.last?.id, "__live_card__")
+        XCTAssertEqual(fx.vc.entranceLog.last?.fromTrailing, false, "the AI bubble enters from the left")
+        XCTAssertEqual(slideFrom(entranceAnimation(fx, id: "__live_card__")), -48)
+        XCTAssertEqual(fx.vc.arrivalGlideLog.count, 2)
+        var worstHidden: CGFloat = 0, downShown = fx.vc.automationControlsVisible.down
+        for k in 0..<20 {
+            fx.app.messageStore.applyCardMessage(sid, "第\(k)段补充说明，让回复继续变长。", reset: false)
+            fx.vc.syncLiveUpdates()
+            drain(33)
+            worstHidden = max(worstHidden, hiddenBelowComposer(fx.cv))
+            downShown = downShown || fx.vc.automationControlsVisible.down
+        }
+        XCTAssertEqual(fx.vc.entranceLog.count, 2, "the reply enters once, not per token")
+        XCTAssertFalse(downShown, "a reply arriving at the followed bottom never flashes ↓")
+        XCTAssertTrue(fx.vc.automationControlsVisible.up, "an AI reply is newest: ↑ in the low slot")
+        XCTAssertLessThanOrEqual(worstHidden, 1, "the streaming reply stays followed during and after the glide")
+
+        try land(fx, seq: 62, text: Self.zh + Self.zh)
+        drain(500)
+        XCTAssertEqual(fx.vc.entranceLog.count, 2, "landing the answer is not a new bubble")
+        XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1)
+    }
+
+    func testCatchUpBurstAndOlderHistoryDoNotAnimate() throws {
+        let fx = try makeFixture(total: 120)
+        drain(1_000)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        for text in ["一", "二", "三"] { XCTAssertTrue(sender.sendInput(sessionId: sid, text: text)) }
+        fx.vc.syncLiveUpdates()
+        drain(300)
+        XCTAssertTrue(fx.vc.entranceLog.isEmpty, "three rows at once are a catch-up, not a conversation beat")
+        XCTAssertTrue(fx.vc.arrivalGlideLog.isEmpty)
+
+        fx.vc.scrollViewWillBeginDragging(fx.cv)
+        for _ in 0..<40 {
+            fx.cv.contentOffset.y -= 200
+            fx.vc.scrollViewDidScroll(fx.cv)
+            drain(16)
+        }
+        fx.vc.scrollViewDidEndDragging(fx.cv, willDecelerate: false)
+        drain(1_500)
+        XCTAssertTrue(fx.vc.entranceLog.isEmpty, "older pages never animate")
+    }
+
+    // MARK: Send keeps the bottom; ↑/↓ rules (Mac #330 parity)
+
+    private func scrollUp(_ fx: Fx, by distance: CGFloat) {
+        fx.vc.automationUserScrollActive = true
+        defer { fx.vc.automationUserScrollActive = false }
+        fx.vc.scrollViewWillBeginDragging(fx.cv)
+        var moved: CGFloat = 0
+        while moved < distance {
+            fx.cv.contentOffset.y -= 200; moved += 200
+            fx.vc.scrollViewDidScroll(fx.cv)
+            drain(16)
+        }
+        fx.vc.scrollViewDidEndDragging(fx.cv, willDecelerate: false)
+    }
+
+    private func submit(_ fx: Fx, _ text: String) {
+        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: text)
+        NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
+    }
+
+    /// Sending while an answer streams keeps following the growing reply.
+    func testSendDuringStreamingKeepsFollowingTheBottom() throws {
+        let fx = try makeFixture(total: 60)
+        drain(1_000)
+        try startTurn(fx, seq: 61)
+        let chars = Array(Self.longAnswer(2_500))
+        var i = 0, sent = false, worst: CGFloat = 0
+        var sentAt = CACurrentMediaTime()
+        while i < chars.count {
+            fx.app.messageStore.applyCardMessage(sid, String(chars[i..<min(i + 30, chars.count)]), reset: false)
+            i += 30
+            fx.vc.syncLiveUpdates()
+            if !sent, i > 900 { submit(fx, "先停一下，换个方向。"); sent = true; sentAt = CACurrentMediaTime() }
+            drain(33)
+            if sent, CACurrentMediaTime() - sentAt > 0.45 { worst = max(worst, distanceToBottom(fx.cv)) }
+        }
+        drain(600)
+        XCTAssertLessThanOrEqual(worst, 1, "after the send the Chat keeps following the streaming reply")
+        XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1)
+        XCTAssertFalse(fx.vc.automationControlsVisible.down)
+    }
+
+    /// Scrolling away after a send stops following; the reader's place is kept.
+    func testUserScrollAfterSendStopsFollowing() throws {
+        let fx = try makeFixture(total: 60)
+        drain(1_000)
+        submit(fx, "继续")
+        drain(700)
+        try startTurn(fx, seq: 61)
+        scrollUp(fx, by: 600)
+        drain(500)
+        let offset = fx.cv.contentOffset.y
+        for k in 0..<30 {
+            fx.app.messageStore.applyCardMessage(sid, "第\(k)段：继续补充一些说明文字，让回复变长。", reset: false)
+            fx.vc.syncLiveUpdates()
+            drain(33)
+        }
+        drain(400)
+        XCTAssertEqual(fx.cv.contentOffset.y, offset, accuracy: 1, "the reader's position is kept")
+        XCTAssertGreaterThan(distanceToBottom(fx.cv), 200)
+        XCTAssertTrue(fx.vc.automationControlsVisible.down)
+    }
+
+    /// Controls never ride over the message being sent. At the bottom ↑ is
+    /// hidden while the newest item is the user's own message and is shown
+    /// (in ↓'s slot, below the last bubble) once an AI reply is newest.
+    func testSendHidesControlsAndUpFollowsTheLatestItem() throws {
+        let fx = try makeFixture(total: 60)
+        drain(1_000)
+        scrollUp(fx, by: 2_400)
+        drain(900)
+        XCTAssertTrue(fx.vc.automationControlsVisible.down)
+        submit(fx, "上面那个问题我再补充一下。")
+        XCTAssertFalse(fx.vc.automationControlsVisible.down, "↓ leaves as soon as the send starts")
+        XCTAssertFalse(fx.vc.automationControlsVisible.up, "↑ does not cover the message being sent")
+        var covered = 0
+        for _ in 0..<60 {
+            drain(10)
+            let frames = fx.vc.automationControlFrames, visible = fx.vc.automationControlsVisible
+            for cell in fx.cv.visibleCells.compactMap({ $0 as? TKBubbleCell })
+            where cell.contentSnapshot?.message.type == "pending_input" {
+                let bubble = cell.convert(cell.bounds, to: fx.vc.view)
+                if (visible.up && bubble.intersects(frames.up)) || (visible.down && bubble.intersects(frames.down)) { covered += 1 }
+            }
+        }
+        XCTAssertEqual(covered, 0, "no control overlaps the sent bubble during the glide")
+        drain(800)
+        XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1)
+        XCTAssertFalse(fx.vc.automationControlsVisible.up, "latest is the user's message: no ↑ at the bottom")
+        let clientId = fx.app.commandSender?.pendingInputs(sid).last?.payload["clientId"]?.stringValue ?? ""
+        fx.app.messageStore.beginCardTurn(sid)
+        try ingestSpine(fx, ["type": "user_message", "seq": 61, "sessionId": sid, "deviceId": dev,
+                             "timestamp": "2026-09-01T00:00:05.000Z",
+                             "payload": ["content": "上面那个问题我再补充一下。", "clientId": clientId]])
+        drain(400)
+        XCTAssertFalse(fx.vc.automationControlsVisible.up, "still the user's message after its echo")
+        try land(fx, seq: 62, text: Self.zh)
+        drain(900)
+        XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1)
+        XCTAssertTrue(fx.vc.automationControlsVisible.up, "an AI reply is newest: ↑ is available at the bottom")
+        XCTAssertFalse(fx.vc.automationControlsVisible.down)
+        let frames = fx.vc.automationControlFrames
+        XCTAssertEqual(frames.up.minY, frames.down.minY, accuracy: 0.5, "↑ rests in ↓'s slot")
+        // At the bottom ↑ rests in ↓'s slot. It may cover the trailing corner
+        // of a full-width AI reply (accepted); it never covers a user bubble.
+        for cell in fx.cv.visibleCells.compactMap({ $0 as? TKBubbleCell })
+        where ["user_message", "pending_input"].contains(cell.contentSnapshot?.message.type ?? "") {
+            XCTAssertFalse(cell.convert(cell.bubbleFrameForRegression, to: fx.vc.view).intersects(frames.up))
+        }
+    }
 
     func testSendReturnsToNewestAndKeepsOrder() throws {
         let fx = try makeFixture(total: 80)
@@ -758,18 +986,21 @@ final class ChatUXRegressionTests: XCTestCase {
 
     // MARK: Jump controls
 
-    func testNoControlsAtBottomAndBothAppearOnlyAfterMotionSettles() throws {
+    /// At the bottom ↓ is hidden; ↑ stays in ↓'s slot because the newest item
+    /// is an AI reply (Mac #330 rule). Controls change only once motion settles.
+    func testUpRestsInDownSlotAtBottomAndControlsChangeOnlyAfterMotionSettles() throws {
         let fx = try makeFixture(total: 80)
         drain(900)
         XCTAssertEqual(fx.vc.automationControlsVisible.down, false, "at the newest edge")
-        XCTAssertEqual(fx.vc.automationControlsVisible.up, false, "nothing covers the newest message at the bottom")
+        XCTAssertEqual(fx.vc.automationControlsVisible.up, true, "the newest item is an AI reply: ↑ stays available")
+        XCTAssertEqual(fx.vc.automationJumpControlFrames.up, fx.vc.automationJumpControlFrames.down, "↑ rests in ↓'s slot")
         guard fx.vc.automationUpTargetItem != nil else { throw XCTSkip("no earlier reply to jump to") }
         let rest = fx.vc.automationJumpControlFrames
 
         fx.vc.automationTapUp()
         drain(30)
         XCTAssertEqual(fx.vc.automationControlsVisible.down, false, "controls keep their state mid-glide")
-        XCTAssertEqual(fx.vc.automationControlsVisible.up, false)
+        XCTAssertEqual(fx.vc.automationControlsVisible.up, true)
 
         drain(1_800)
         XCTAssertEqual(fx.vc.automationControlsVisible.down, true, "re-evaluated once the glide settles")
@@ -780,8 +1011,9 @@ final class ChatUXRegressionTests: XCTestCase {
         fx.vc.automationTapDown()
         drain(1_800)
         XCTAssertEqual(fx.vc.automationControlsVisible.down, false)
-        XCTAssertEqual(fx.vc.automationControlsVisible.up, false, "both hide again at the bottom")
+        XCTAssertEqual(fx.vc.automationControlsVisible.up, true, "↑ drops back into ↓'s slot at the bottom")
         XCTAssertEqual(fx.vc.automationJumpControlFrames.down.maxY, rest.down.maxY, accuracy: 0.5)
+        XCTAssertEqual(fx.vc.automationJumpControlFrames.up.maxY, rest.down.maxY, accuracy: 0.5)
     }
 
     func testDictationBoxMinimumReachesTheControlAboveSend() {
