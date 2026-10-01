@@ -767,6 +767,14 @@ export class HeadServer {
     this.pulseHub.sendToDevice(deviceId, new Uint8Array(payload));
   }
 
+  /** Presence (device_joined/left/removed/pending): the destination's next
+   *  `auth_ok` device list supersedes it, so it is never replayed across a
+   *  reconnect (a stale device_left would hide an online peer). */
+  private sendPresenceToDevice(deviceId: string, msg: Record<string, unknown>): void {
+    const payload = Buffer.from(JSON.stringify({ from: HEAD_PULSE_TARGET, msg }), 'utf8');
+    this.pulseHub.sendPresenceToDevice(deviceId, new Uint8Array(payload));
+  }
+
   /** A pulse frame addressed to HEAD_PULSE_TARGET was delivered in-order by the
    *  source device's endpoint. The payload is PLAINTEXT control JSON. Resolve the
    *  originating authenticated connection and route it through the SAME control
@@ -1600,7 +1608,7 @@ export class HeadServer {
     for (const d of userDevices) {
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      this.sendControlToDevice(d.id, { type: 'device_removed', deviceId: removedDeviceId });
+      this.sendPresenceToDevice(d.id, { type: 'device_removed', deviceId: removedDeviceId });
     }
   }
 
@@ -1631,7 +1639,7 @@ export class HeadServer {
       if (d.id === newDeviceId) continue;
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      this.sendControlToDevice(d.id, { type: 'device_joined', device: summary });
+      this.sendPresenceToDevice(d.id, { type: 'device_joined', device: summary });
     }
   }
 
@@ -1644,7 +1652,7 @@ export class HeadServer {
       if (d.id === leftDeviceId) continue;
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      this.sendControlToDevice(d.id, { type: 'device_left', deviceId: leftDeviceId });
+      this.sendPresenceToDevice(d.id, { type: 'device_left', deviceId: leftDeviceId });
     }
   }
 
@@ -1657,7 +1665,7 @@ export class HeadServer {
       if (d.id === pendingDeviceId) continue;
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      this.sendControlToDevice(d.id, { type: 'device_pending', deviceId: pendingDeviceId });
+      this.sendPresenceToDevice(d.id, { type: 'device_pending', deviceId: pendingDeviceId });
     }
   }
 

@@ -191,11 +191,11 @@ describe('Pulse per-hop e2e: tentacle ⇄ head(hub) ⇄ app', () => {
     appTentaclePubKeys.clear();
   });
 
-  async function connectTentacle(): Promise<void> {
+  async function connectTentacle(deviceId?: string): Promise<void> {
     relay = new RelayClient(
       adapter as unknown as AgentAdapter,
       sm,
-      { relayUrl: `ws://127.0.0.1:${env.port}`, device: { name: 'Pulse Laptop', role: 'tentacle', kind: 'desktop' } },
+      { relayUrl: `ws://127.0.0.1:${env.port}`, device: { name: 'Pulse Laptop', role: 'tentacle', kind: 'desktop', ...(deviceId && { deviceId }) } },
       km,
     );
     await new Promise<void>((resolve, reject) => {
@@ -295,6 +295,71 @@ describe('Pulse per-hop e2e: tentacle ⇄ head(hub) ⇄ app', () => {
       expect(second.received.some((m) => m.type === 'agent_message')).toBe(false);
     } finally {
       first.close();
+      second.close();
+    }
+  });
+
+  it('a restarted Tentacle keeps broadcasting to an App whose stale device_left is replayed', async () => {
+    // A Mac app update quits the App and restarts the built-in Tentacle about a
+    // second apart. Head queues device_left(App) on the old Tentacle's Pulse
+    // stream; the App is back (same device id) before the new Tentacle process
+    // connects, so no device_joined follows. The new Tentacle's auth_ok lists
+    // the App online, then Pulse resume replays the old device_left.
+    const identity = { keyPair: generateKeyPair(), deviceId: `app-joint-${Date.now()}` };
+    const first = await connectPulseApp(env.port, { ...identity, epoch: 'joint-1' });
+    await connectTentacle();
+    await waitMs(400);
+    const tentacleId = relay.getAuthInfo()!.deviceId;
+
+    first.close();
+    await waitMs(200); // device_left(App) is delivered to the old Tentacle, not yet acked
+    relay.disconnect();
+    const second = await connectPulseApp(env.port, { ...identity, epoch: 'joint-2' });
+    await waitMs(200);
+    await connectTentacle(tentacleId);
+    expect(relay.getAuthInfo()!.deviceId).toBe(tentacleId);
+    await waitMs(800); // Pulse resume + any replayed control
+
+    adapter.onSessionCreated?.({ sessionId: 's-joint', agent: 'mock', model: 'm' });
+    adapter.onMessage?.('s-joint', { content: 'after-joint-restart' });
+    const deadline = Date.now() + 3_000;
+    const got = () => second.received.some((m) => m.type === 'agent_message'
+      && (m.payload as Record<string, unknown>).content === 'after-joint-restart');
+    while (!got() && Date.now() < deadline) await waitMs(25);
+    try {
+      expect(got()).toBe(true);
+    } finally {
+      second.close();
+    }
+  });
+
+  it('a Tentacle given a stale device_left resumes broadcasting once the App speaks', async () => {
+    // Same joint restart; covers Heads that still replay presence (≤ 0.19.0):
+    // the App declares client_features on every connection, which proves it online.
+    const identity = { keyPair: generateKeyPair(), deviceId: `app-heal-${Date.now()}` };
+    const first = await connectPulseApp(env.port, { ...identity, epoch: 'heal-1' });
+    await connectTentacle();
+    await waitMs(400);
+    const tentacleId = relay.getAuthInfo()!.deviceId;
+    first.close();
+    await waitMs(200);
+    relay.disconnect();
+    const second = await connectPulseApp(env.port, { ...identity, epoch: 'heal-2' });
+    await waitMs(200);
+    await connectTentacle(tentacleId);
+    await waitMs(800);
+    second.sendReliable({ type: 'client_features', deviceId: identity.deviceId, payload: { features: ['fragments'] } }, tentacleId);
+    await waitMs(400);
+
+    adapter.onSessionCreated?.({ sessionId: 's-heal', agent: 'mock', model: 'm' });
+    adapter.onMessage?.('s-heal', { content: 'after-heal' });
+    const deadline = Date.now() + 3_000;
+    const got = () => second.received.some((m) => m.type === 'agent_message'
+      && (m.payload as Record<string, unknown>).content === 'after-heal');
+    while (!got() && Date.now() < deadline) await waitMs(25);
+    try {
+      expect(got()).toBe(true);
+    } finally {
       second.close();
     }
   });
