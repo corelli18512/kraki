@@ -1291,8 +1291,9 @@ final class KrakiVoiceInputTests: XCTestCase {
             timestamp: nil,
             payload: ["content": AnyCodable(secretSentence)]
         )
-        let context = VoiceSessionContextBuilder.build(session: session, recentMessages: [message])
+        let context = VoiceSessionContextBuilder.build(session: session, recentMessages: [message], userVocabulary: [])
         XCTAssertTrue(context.vocabulary.contains("KrakiVoiceInputController"))
+        XCTAssertFalse(context.vocabulary.contains { $0.contains("克拉奇") }, "no built-in product vocabulary")
         XCTAssertFalse(context.vocabulary.contains(secretSentence))
         guard case .object(let sessionFields)? = context.fields["session"],
               case .array(let terms)? = sessionFields["terms"] else {
@@ -1305,5 +1306,20 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertEqual(VoiceDraftMerger.merge(existing: "", final: "hello"), "hello")
         XCTAssertEqual(VoiceDraftMerger.merge(existing: "prefix", final: "hello"), "prefix hello")
         XCTAssertEqual(VoiceDraftMerger.merge(existing: "prefix ", final: "hello"), "prefix hello")
+    }
+
+    func testUserVocabularyComesFirstAndIsTheOnlyFixedVocabulary() {
+        let session = SessionInfo(id: "s", deviceId: "d", deviceName: "D", agent: "pi", title: "Tentacle work",
+                                  state: .idle, mode: .auto, lastSeq: 0, readSeq: 0, messageCount: 0,
+                                  createdAt: Date(), pinned: false)
+        let context = VoiceSessionContextBuilder.build(
+            session: session, recentMessages: [],
+            userVocabulary: VoiceVocabulary.parse("# mine\nKraki = 克拉奇, 克拉基\n\n  Tentacle  \nkraki = dup\n")
+        )
+        XCTAssertEqual(Array(context.vocabulary.prefix(2)), ["Kraki = 克拉奇, 克拉基", "Tentacle"])
+        XCTAssertFalse(context.vocabulary.contains("Tentacle work") && context.vocabulary.filter { $0 == "Tentacle" }.count > 1)
+        XCTAssertEqual(VoiceVocabulary.parse("kraki = a\nKRAKI = a\n").count, 1, "case-insensitive duplicates")
+        let many = (0..<150).map { "term\($0)" }.joined(separator: "\n")
+        XCTAssertEqual(VoiceVocabulary.parse(many).count, VoiceVocabulary.maxEntries)
     }
 }

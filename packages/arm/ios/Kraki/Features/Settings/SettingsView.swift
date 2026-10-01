@@ -118,6 +118,16 @@ struct SettingsView: View {
         Section {
             notificationsRow
             themeRow
+            NavigationLink {
+                Form { VoiceVocabularyEditor() }
+                    .navigationTitle("Voice Vocabulary")
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "character.book.closed")
+                        .foregroundStyle(Color.krakiPrimary)
+                    Text("Voice Vocabulary")
+                }
+            }
         } header: {
             Text("Preferences")
         }
