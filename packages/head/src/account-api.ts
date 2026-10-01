@@ -82,6 +82,9 @@ export class AccountApi {
         case '/api/config':
           if (req.method === 'GET') return this.handleGetConfig(req, res);
           break;
+        case '/api/devices/remove':
+          if (req.method === 'POST') return await this.handleRemoveDevice(req, res);
+          break;
         case '/api/edge/join':
           if (req.method === 'POST') return await this.handleEdgeJoin(req, res);
           break;
@@ -202,6 +205,18 @@ export class AccountApi {
     } else {
       this.json(res, 200, result);
     }
+    return true;
+  }
+
+  /** Service-key route: an edge forwards a user's device removal here. */
+  private async handleRemoveDevice(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    const body = await readBody(req);
+    if (typeof body?.userId !== 'string' || typeof body?.deviceId !== 'string') {
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'userId and deviceId required' });
+      return true;
+    }
+    const removed = await this.backend.removeDevice(body.userId, body.deviceId);
+    this.json(res, removed ? 200 : 404, removed ? { ok: true } : { ok: false, code: 'not_found', message: 'Device not found' });
     return true;
   }
 

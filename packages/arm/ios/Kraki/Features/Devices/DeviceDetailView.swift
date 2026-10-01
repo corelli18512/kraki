@@ -22,6 +22,10 @@ struct DeviceDetailView: View {
         return list.isEmpty ? nil : list
     }
 
+    private var agentNames: String {
+        appState.deviceStore.agents(for: device.id).map { AgentInfo.from($0.id).label }.joined(separator: ", ")
+    }
+
     private var version: String? {
         appState.deviceStore.deviceVersions[device.id]
     }
@@ -63,7 +67,12 @@ struct DeviceDetailView: View {
             // Info rows
             Section {
                 infoRow("Status", value: statusLabel, valueColor: statusColor)
-                infoRow("Added", value: formatDate(device.createdAt))
+                if !agentNames.isEmpty {
+                    infoRow("Coding agents", value: agentNames)
+                }
+                if DeviceDates.parse(device.createdAt) != nil {
+                    infoRow("Added", value: formatDate(device.createdAt))
+                }
                 infoRow("Last online", value: device.online ? "Now" : formatDate(device.lastSeen))
                 if let version {
                     infoRow("Version", value: version)
@@ -193,10 +202,7 @@ struct DeviceDetailView: View {
     }()
 
     private func formatDate(_ iso: String?) -> String {
-        guard let iso, !iso.isEmpty else { return "—" }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = formatter.date(from: iso) else { return "—" }
+        guard let date = DeviceDates.parse(iso) else { return "—" }
         return date.formatted(date: .abbreviated, time: .omitted)
     }
 }

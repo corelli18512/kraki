@@ -66,11 +66,20 @@ final class ChatViewModel {
         for message in spine {
             if shouldRender(message) {
                 out.append(message)
-            } else if isDraftlessFailure(message), out.last?.questionSpec == nil {
+            } else if isDraftlessFailure(message) || isDraftlessStop(message), out.last?.questionSpec == nil {
                 out.append(message)
             }
         }
         return out
+    }
+
+    /// A turn the user stopped before any reply. Without its row the stop
+    /// left no trace: the running step simply vanished. The row shows
+    /// "Stopped" and keeps the turn's Steps reachable.
+    static func isDraftlessStop(_ message: ChatMessage) -> Bool {
+        guard message.type == "turn_status" || message.type == "interrupted_turn",
+              let outcome = message.terminalOutcome else { return false }
+        return outcome.type == "user_abort"
     }
 
     static func isDraftlessFailure(_ message: ChatMessage) -> Bool {

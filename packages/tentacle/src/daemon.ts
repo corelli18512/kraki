@@ -12,6 +12,7 @@
  * daemon inside the interactive CLI process.
  */
 
+import { enableWindowsAutostart } from './windows-autostart.js';
 import { spawn, execSync, execFileSync, type ChildProcess } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, writeFileSync, existsSync, unlinkSync, chmodSync } from 'node:fs';
 import { delimiter, join, dirname, resolve } from 'node:path';
@@ -744,6 +745,7 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
 
   const child = spawn(launch.runtime, launch.args, {
     detached: true,
+    windowsHide: true,
     stdio: ['ignore', bootstrapFd, bootstrapFd],
     cwd: launch.cwd,
     env: launch.env,
@@ -774,6 +776,7 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
 
   child.unref();
   saveDaemonPid(child.pid);
+  if (process.platform === 'win32') enableWindowsAutostart();
   return child.pid;
 }
 

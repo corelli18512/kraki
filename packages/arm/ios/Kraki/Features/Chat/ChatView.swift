@@ -36,6 +36,10 @@ struct ChatView: View {
 
     private var session: SessionInfo? { viewModel?.session }
     private var isDeviceOnline: Bool { viewModel?.isDeviceOnline ?? false }
+    private var isNewEmptySession: Bool {
+        guard let viewModel else { return false }
+        return viewModel.cachedMessages.isEmpty && viewModel.pendingMessages.isEmpty && viewModel.card == nil
+    }
     #if DEBUG
     private var forceComposerForDiagnostics: Bool {
         ProcessInfo.processInfo.environment["KRAKI_FORCE_COMPOSER"] == "1"
@@ -133,6 +137,18 @@ struct ChatView: View {
                         )
                     }
                 )
+            }
+        }
+        // A brand-new session: say where it runs, so the empty screen is
+        // not ambiguous ("which computer / agent / model is this?").
+        .overlay {
+            if !waitingForLatest, isNewEmptySession, let session {
+                NewSessionIntro(
+                    deviceName: appState.deviceStore.device(for: session.deviceId)?.name,
+                    agent: AgentInfo.from(session.agent).label,
+                    model: session.model
+                )
+                .allowsHitTesting(false)
             }
         }
         // Let the chat collection view extend behind BOTH the top navbar
@@ -333,6 +349,33 @@ struct ChatView: View {
         // Picking a choice is sending a message: return to the newest edge.
         NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil,
                                         userInfo: ["sessionId": sessionId])
+    }
+}
+/// Shown in an empty, just-created session.
+private struct NewSessionIntro: View {
+    let deviceName: String?
+    let agent: String
+    let model: String?
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "desktopcomputer")
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(.secondary)
+            if let deviceName {
+                Text(deviceName).font(.headline)
+            }
+            Text([agent, model].compactMap { $0 }.joined(separator: " · "))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text("Ask \(agent) to do something on this computer.")
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
+                .padding(.top, 4)
+        }
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 32)
+        .accessibilityElement(children: .combine)
     }
 }
 #endif

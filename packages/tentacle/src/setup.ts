@@ -8,7 +8,7 @@
 import { select, input, confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
-import { homedir, hostname, platform } from 'node:os';
+import { homedir, hostname, platform, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { execSync, spawn } from 'node:child_process';
@@ -64,7 +64,6 @@ function installToPath(): void {
           execSync('setx KRAKI_PATH_SET 1', { stdio: 'ignore' });
         }
       } catch { /* PATH update failed — not critical */ }
-      console.log(chalk.dim(`  Installed to ${dest}`));
     } else {
       // macOS / Linux: copy to /usr/local/bin or ~/.local/bin
       const dest1 = '/usr/local/bin/kraki';
@@ -81,7 +80,6 @@ function installToPath(): void {
         copyFileSync(src, dest2);
         chmodSync(dest2, 0o755);
       }
-      console.log(chalk.dim(`  Installed to ${dest}`));
     }
   } catch {
     // Silent failure — not critical
@@ -539,7 +537,19 @@ async function reachRelay(relay: string, attempts = 3): Promise<RelayInfo> {
 
 /** Keep the device name across re-setup; a new device is named after the host. */
 function deviceName(): string {
-  return loadConfig()?.device.name ?? hostname().replace(/\.local$/, '');
+  return loadConfig()?.device.name ?? defaultDeviceName();
+}
+
+/** Windows' factory names ("DESKTOP-7Q2K9JX", "LAPTOP-…") say nothing on a
+ *  phone; name those after the user instead. Other hostnames are kept. */
+export function defaultDeviceName(host = hostname(), os = platform(), user = safeUsername()): string {
+  const name = host.replace(/\.local$/, '');
+  if (os === 'win32' && user && /^(DESKTOP|LAPTOP|PC|WIN)-[A-Z0-9]{5,}$/i.test(name)) return `${user}'s Windows PC`;
+  return name;
+}
+
+function safeUsername(): string | undefined {
+  try { return userInfo().username || undefined; } catch { return undefined; }
 }
 
 async function officialClientId(apiBase: string): Promise<string | undefined> {

@@ -1,3 +1,4 @@
+import { RemoteAuthBackend } from './remote-auth-backend.js';
 import { WebSocketServer, WebSocket } from 'ws';
 import { randomBytes, createVerify } from 'crypto';
 import { v4 as uuid } from 'uuid';
@@ -1541,6 +1542,19 @@ export class HeadServer {
     // never authenticate again.
     this.pulseHub.forgetDevice(targetDeviceId);
     logger.info('Device removed', { deviceId: targetDeviceId, byDevice: state.deviceId });
+
+    // Edge mode: the account service owns the device list and every auth
+    // mirrors it back here, so the removal must reach it too (otherwise the
+    // device reappears after the next reconnect).
+    const remote = this.options.authBackend;
+    if (remote instanceof RemoteAuthBackend) {
+      const userId = state.userId;
+      remote.removeDevice(userId, targetDeviceId).then((ok) => {
+        if (!ok) logger.warn('Account service did not remove device', { deviceId: targetDeviceId });
+      }).catch((err) => {
+        logger.warn('Failed to remove device at account service', { deviceId: targetDeviceId, error: (err as Error).message });
+      });
+    }
 
     // Broadcast removal to all remaining user devices
     this.broadcastDeviceRemoved(state.userId, targetDeviceId);

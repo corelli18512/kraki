@@ -3632,10 +3632,14 @@ export class RelayClient {
   // ── Title generation scheduling ──────────────────────
 
   private maybeGenerateTitle(sessionId: string): void {
-    const turns = (this.turnCounts.get(sessionId) ?? 0) + 1;
+    const meta = this.sessionManager.getMeta(sessionId);
+    // The turn counter is in memory. After a daemon restart a session that
+    // already has a title must not count from 1 again (that retitled it on
+    // every restart): resume past the early refinements.
+    const known = this.turnCounts.get(sessionId) ?? (meta?.autoTitle ? 5 : 0);
+    const turns = known + 1;
     this.turnCounts.set(sessionId, turns);
 
-    const meta = this.sessionManager.getMeta(sessionId);
     if (!meta) return;
 
     // Manual title set — skip auto-generation

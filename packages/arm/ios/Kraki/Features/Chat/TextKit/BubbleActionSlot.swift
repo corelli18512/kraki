@@ -21,12 +21,12 @@ enum BubbleActionMetrics {
     static let outcomeLabelFont = UIFont.systemFont(ofSize: 13, weight: .medium)
     static let outcomeDetailFont = UIFont.systemFont(ofSize: 12)
     static func outcomeSymbol(failed: Bool) -> String { failed ? "xmark.octagon.fill" : "stop.circle.fill" }
-    static func outcomeLabel(failed: Bool) -> String { failed ? "Turn failed" : "User aborted" }
+    static func outcomeLabel(failed: Bool) -> String { failed ? "Turn failed" : "Stopped" }
 
     static let choiceFont = UIFont.systemFont(ofSize: 14, weight: .medium)
     static let choicePaddingH: CGFloat = 14
 
-    /// Natural width of the "User aborted" / "Turn failed" row.
+    /// Natural width of the "Stopped" / "Turn failed" row.
     static func outcomeWidth(failed: Bool, detail: String?) -> CGFloat {
         let symbol = UIImage(systemName: outcomeSymbol(failed: failed),
                              withConfiguration: UIImage.SymbolConfiguration(font: .systemFont(ofSize: outcomeIconSize)))

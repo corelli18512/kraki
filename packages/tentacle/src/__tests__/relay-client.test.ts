@@ -654,6 +654,17 @@ describe('RelayClient title generation', () => {
     expect(adapter.generateTitle).toHaveBeenCalledTimes(1);
   });
 
+  it('does not retitle an already-titled session on its first turn after a daemon restart', () => {
+    const { adapter, sm } = connectClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', state: 'idle', autoTitle: 'Fix login bug' });
+    smMock.getMessagesAfterSeq.mockReturnValue([
+      { seq: 1, type: 'user_message', payload: JSON.stringify({ type: 'user_message', payload: { content: 'hello' } }), ts: '' },
+    ]);
+    (adapter.onIdle as (sessionId: string) => void)('s1');
+    expect(adapter.generateTitle).not.toHaveBeenCalled();
+  });
+
   it('handles rename_session consumer message', () => {
     const { sm } = connectClient();
     const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
