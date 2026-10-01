@@ -11,7 +11,7 @@ import ora from 'ora';
 import { homedir, hostname, platform } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
-import { execSync, spawnSync } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 
 import {
   DEFAULT_LOG_VERBOSITY,
@@ -375,12 +375,18 @@ function copyToClipboard(text: string): boolean {
 /** Open a URL locally, but not from an SSH session (it would open on the remote desktop, or nowhere). */
 function openInBrowser(url: string): boolean {
   if (process.env.SSH_CONNECTION || process.env.SSH_TTY) return false;
+  // Fire and forget: never wait on the browser. On a brand-new Windows account
+  // `start <url>` can block indefinitely (no default browser chosen yet), which
+  // used to freeze setup before the code was even shown.
   try {
     const os = platform();
-    const r = os === 'darwin' ? spawnSync('open', [url], { stdio: 'ignore' })
-      : os === 'win32' ? spawnSync('cmd', ['/c', 'start', '', url], { stdio: 'ignore' })
-      : spawnSync('xdg-open', [url], { stdio: 'ignore' });
-    return r.status === 0;
+    const [cmd, args] = os === 'darwin' ? ['open', [url]]
+      : os === 'win32' ? ['cmd', ['/c', 'start', '', url]]
+      : ['xdg-open', [url]];
+    const child = spawn(cmd as string, args as string[], { stdio: 'ignore', detached: true, windowsHide: true });
+    child.on('error', () => {});
+    child.unref();
+    return true;
   } catch {
     return false;
   }
