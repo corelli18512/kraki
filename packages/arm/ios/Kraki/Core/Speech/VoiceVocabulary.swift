@@ -1,138 +1,306 @@
 import Foundation
+import Observation
 import SwiftUI
 
+/// One entry of the user's voice vocabulary: a word or name spelled as it
+/// should appear, and (optionally) how speech recognition tends to mishear it.
+struct VoiceTerm: Identifiable, Equatable {
+    let id: UUID
+    var term: String
+    /// Mishearings as typed: separated by commas (`,` `，` `、` `;` `；`).
+    var heardAs: String
+
+    init(id: UUID = UUID(), term: String = "", heardAs: String = "") {
+        self.id = id; self.term = term; self.heardAs = heardAs
+    }
+
+    var heardList: [String] {
+        heardAs.split(whereSeparator: { ",，、;；".contains($0) })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    var cleanTerm: String { term.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// The line sent to the corrector: `Term` or `Term = heard 1, heard 2`.
+    var line: String? {
+        guard !cleanTerm.isEmpty else { return nil }
+        let heard = heardList
+        return heard.isEmpty ? cleanTerm : "\(cleanTerm) = \(heard.joined(separator: ", "))"
+    }
+}
+
 /// The user's own spelling vocabulary for voice correction, stored on this
-/// device. One entry per line: a term (`Kubernetes`), or a term with the ways
-/// speech recognition tends to mishear it (`PostgreSQL = post gress`).
-/// Lines starting with `#` are comments. Nothing is built in: which words
-/// matter is entirely the user's.
+/// device (UserDefaults, one `Term = heard, …` line per entry). Nothing is
+/// built in: which words matter is entirely the user's.
 enum VoiceVocabulary {
     static let storageKey = "voice.vocabulary"
     /// Bounded so the correction prompt (and its cost) stays small.
     static let maxEntries = 100
     static let maxEntryLength = 120
 
-    /// One line the parser had to skip or could not read as intended.
-    struct Issue: Equatable {
-        enum Kind: Equatable { case tooLong, emptySide, overLimit }
-        let line: Int
-        let kind: Kind
-    }
-
-    struct Report: Equatable {
-        var entries: [String] = []
-        var issues: [Issue] = []
-    }
-
-    /// A full-width “＝” (Chinese input) means the same as “=”.
-    private static func normalized(_ raw: Substring) -> String {
-        raw.replacingOccurrences(of: "＝", with: "=").trimmingCharacters(in: .whitespaces)
-    }
-
-    static func check(_ text: String) -> Report {
-        var report = Report()
+    static func terms(from text: String) -> [VoiceTerm] {
         var seen = Set<String>()
-        for (index, raw) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-            let line = normalized(raw)
+        var result: [VoiceTerm] = []
+        for raw in text.split(whereSeparator: \.isNewline) {
+            let line = raw.replacingOccurrences(of: "＝", with: "=").trimmingCharacters(in: .whitespaces)
             guard !line.isEmpty, !line.hasPrefix("#") else { continue }
-            if line.count > maxEntryLength { report.issues.append(Issue(line: index + 1, kind: .tooLong)); continue }
-            if let eq = line.firstIndex(of: "=") {
-                let term = line[..<eq].trimmingCharacters(in: .whitespaces)
-                let heard = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
-                if term.isEmpty || heard.isEmpty { report.issues.append(Issue(line: index + 1, kind: .emptySide)); continue }
-            }
-            guard seen.insert(line.lowercased()).inserted else { continue }
-            if report.entries.count == maxEntries { report.issues.append(Issue(line: index + 1, kind: .overLimit)); continue }
-            report.entries.append(line)
+            let parts = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+            let term = VoiceTerm(term: parts[0], heardAs: parts.count > 1 ? parts[1] : "")
+            guard let entry = term.line, entry.count <= maxEntryLength,
+                  seen.insert(term.cleanTerm.lowercased()).inserted else { continue }
+            result.append(term)
+            if result.count == maxEntries { break }
         }
-        return report
+        return result
     }
 
-    static func parse(_ text: String) -> [String] { check(text).entries }
+    static func text(from terms: [VoiceTerm]) -> String {
+        terms.compactMap(\.line).joined(separator: "\n")
+    }
+
+    /// Entries for the correction request.
+    static func parse(_ text: String) -> [String] { terms(from: text).compactMap(\.line) }
 
     static func load(_ defaults: UserDefaults = .standard) -> [String] {
         parse(defaults.string(forKey: storageKey) ?? "")
     }
 }
 
-/// The editor (iOS settings page and the Mac General pane).
-struct VoiceVocabularyEditor: View {
-    @AppStorage(VoiceVocabulary.storageKey) private var text = ""
-    @FocusState private var focused: Bool
+/// Editing state shared by the iOS page and the Mac pane. Rows being typed
+/// (empty word) stay in memory and are never saved.
+@Observable
+final class VoiceVocabularyStore {
+    private let defaults: UserDefaults
+    var terms: [VoiceTerm] { didSet { save() } }
 
-    static let placeholder = "PostgreSQL = post gress, 破四格\nKubernetes = 酷伯内提斯\n张三丰 = 张三风"
-
-    #if os(macOS)
-    private let lineHeight: CGFloat = 19
-    #else
-    private let lineHeight: CGFloat = 24
-    #endif
-
-    private var editorHeight: CGFloat {
-        let lines = max(text.split(separator: "\n", omittingEmptySubsequences: false).count, 3)
-        return min(CGFloat(lines + 1) * lineHeight + 12, 360)
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        terms = VoiceVocabulary.terms(from: defaults.string(forKey: VoiceVocabulary.storageKey) ?? "")
     }
 
-    var body: some View {
-        let report = VoiceVocabulary.check(text)
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .topLeading) {
-                TextEditor(text: $text)
-                    .focused($focused)
-                    .font(.body)
-                    .autocorrectionDisabled()
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    #endif
-                    .scrollContentBackground(.hidden)
-                if text.isEmpty {
-                    Text(Self.placeholder)
-                        .font(.body)
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 8)
-                        #if os(macOS)
-                        .padding(.leading, 5)
-                        #else
-                        .padding(.leading, 5)
-                        #endif
-                        .allowsHitTesting(false)
-                }
-            }
-            .frame(maxWidth: .infinity, minHeight: editorHeight, maxHeight: editorHeight)
-            #if os(macOS)
-            .padding(6)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(nsColor: .separatorColor)))
-            #endif
+    var savedCount: Int { terms.filter { $0.line != nil }.count }
+    var isFull: Bool { terms.count >= VoiceVocabulary.maxEntries }
 
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                if let issue = report.issues.first {
-                    Label(Self.describe(issue, more: report.issues.count - 1), systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                }
-                Spacer(minLength: 8)
-                Text("\(report.entries.count) / \(VoiceVocabulary.maxEntries)")
-                    .monospacedDigit()
-                    .foregroundStyle(report.entries.count >= VoiceVocabulary.maxEntries ? Color.orange : Color.secondary)
-            }
-            .font(.caption)
-        }
+    /// A term already in the list, other than `id` (case-insensitive).
+    func isDuplicate(_ term: String, excluding id: UUID?) -> Bool {
+        let key = term.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return !key.isEmpty && terms.contains { $0.id != id && $0.cleanTerm.lowercased() == key }
     }
 
-    static func describe(_ issue: VoiceVocabulary.Issue, more: Int) -> String {
-        let what: String
-        switch issue.kind {
-        case .tooLong: what = "is longer than \(VoiceVocabulary.maxEntryLength) characters"
-        case .emptySide: what = "needs a word on both sides of “=”"
-        case .overLimit: what = "is over the \(VoiceVocabulary.maxEntries)-entry limit"
-        }
-        return "Line \(issue.line) \(what) and is ignored" + (more > 0 ? " (+\(more) more)" : "")
+    func upsert(_ term: VoiceTerm) {
+        if let i = terms.firstIndex(where: { $0.id == term.id }) { terms[i] = term } else if !isFull { terms.append(term) }
+    }
+
+    func remove(_ id: UUID) { terms.removeAll { $0.id == id } }
+
+    private func save() {
+        var seen = Set<String>()
+        let unique = terms.filter { $0.line != nil && seen.insert($0.cleanTerm.lowercased()).inserted }
+        defaults.set(VoiceVocabulary.text(from: unique), forKey: VoiceVocabulary.storageKey)
     }
 }
 
-/// Shown under the editor.
-struct VoiceVocabularyFooter: View {
+enum VoiceVocabularyCopy {
+    static let explanation = "Words and names that voice input often gets wrong. Spell each the way it should appear and, optionally, how it tends to be misheard. Used only to fix spelling in your voice messages; kept on this device."
+    static let heardPlaceholder = "Often heard as (optional)"
+}
+
+#if os(iOS)
+/// Settings → Voice Vocabulary.
+struct VoiceVocabularyPage: View {
+    @State private var store = VoiceVocabularyStore()
+    @State private var editing: VoiceTerm?
+    @State private var isNew = false
+
     var body: some View {
-        Text("One word or name per line. After “=”, list how voice input tends to mishear it. Lines starting with # are notes. Only used to fix spelling in your voice messages, and kept on this device.")
+        List {
+            if store.terms.isEmpty {
+                Section {
+                    VStack(spacing: 10) {
+                        Image(systemName: "character.book.closed")
+                            .font(.system(size: 34, weight: .light))
+                            .foregroundStyle(Color.krakiPrimary)
+                        Text("No words yet").font(.headline)
+                        Text(VoiceVocabularyCopy.explanation)
+                            .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        Button { add() } label: {
+                            HStack(spacing: 6) { Image(systemName: "plus"); Text("Add Word") }
+                                .padding(.horizontal, 6)
+                        }
+                        .buttonStyle(.borderedProminent).padding(.top, 4)
+                    }
+                    .frame(maxWidth: .infinity).padding(.vertical, 18)
+                }
+            } else {
+                Section {
+                    ForEach(store.terms) { term in
+                        Button { isNew = false; editing = term } label: { VoiceTermRow(term: term) }
+                            .foregroundStyle(.primary)
+                    }
+                    .onDelete { offsets in
+                        let ids = offsets.map { store.terms[$0].id }
+                        ids.forEach(store.remove)
+                    }
+                    if !store.isFull {
+                        Button { add() } label: { Label("Add Word", systemImage: "plus") }
+                    }
+                } footer: {
+                    Text(VoiceVocabularyCopy.explanation + " \(store.savedCount) of \(VoiceVocabulary.maxEntries).")
+                }
+            }
+        }
+        .navigationTitle("Voice Vocabulary")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !store.terms.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) { EditButton() }
+            }
+        }
+        .sheet(item: $editing) { term in
+            VoiceTermEditor(term: term, isNew: isNew, store: store) { editing = nil }
+        }
+    }
+
+    private func add() { isNew = true; editing = VoiceTerm() }
+}
+
+private struct VoiceTermRow: View {
+    let term: VoiceTerm
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(term.cleanTerm).font(.body)
+            if !term.heardList.isEmpty {
+                Text("Heard as " + term.heardList.joined(separator: " · "))
+                    .font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+            }
+        }
+        .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 }
+
+#if DEBUG
+/// Screenshot/test access to the editor sheet.
+struct VoiceTermEditorForTesting: View {
+    let term: VoiceTerm; let isNew: Bool; let store: VoiceVocabularyStore
+    var body: some View { VoiceTermEditor(term: term, isNew: isNew, store: store) {} }
+}
+#endif
+
+private struct VoiceTermEditor: View {
+    @State var term: VoiceTerm
+    let isNew: Bool
+    let store: VoiceVocabularyStore
+    let dismiss: () -> Void
+    @FocusState private var focus: Bool
+
+    private var duplicate: Bool { store.isDuplicate(term.term, excluding: term.id) }
+    private var canSave: Bool {
+        !term.cleanTerm.isEmpty && !duplicate && (term.line?.count ?? 0) <= VoiceVocabulary.maxEntryLength
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("e.g. PostgreSQL", text: $term.term)
+                        .focused($focus)
+                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                } header: { Text("Word or name") } footer: {
+                    if duplicate { Text("Already in your vocabulary.").foregroundStyle(.orange) }
+                    else { Text("Spelled exactly the way it should appear.") }
+                }
+                Section {
+                    TextField("e.g. post gress, 破四格", text: $term.heardAs, axis: .vertical)
+                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                } header: { Text("Often heard as") } footer: {
+                    Text("Optional. Separate with commas. These are replaced by the word above.")
+                }
+                if !isNew {
+                    Section {
+                        Button("Delete Word", role: .destructive) { store.remove(term.id); dismiss() }
+                    }
+                }
+            }
+            .navigationTitle(isNew ? "Add Word" : "Edit Word")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: dismiss) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isNew ? "Add" : "Save") { store.upsert(term); dismiss() }.disabled(!canSave)
+                }
+            }
+            .onAppear { if isNew { focus = true } }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+#endif
+
+#if os(macOS)
+/// Settings → General → Voice Vocabulary: one editable row per word.
+struct VoiceVocabularyMacSection: View {
+    @State private var store = VoiceVocabularyStore()
+    @FocusState private var focused: UUID?
+
+    var body: some View {
+        Section {
+            if store.terms.isEmpty {
+                Text("No words yet. Add words and names that voice input often gets wrong.")
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 10) {
+                    Text("Word or name").frame(width: 180, alignment: .leading)
+                    Text("Often heard as").padding(.leading, 22)
+                    Spacer()
+                }
+                .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach($store.terms) { $term in
+                HStack(spacing: 10) {
+                    TextField("Word or name", text: $term.term, prompt: Text("e.g. PostgreSQL"))
+                        .labelsHidden()
+                        .multilineTextAlignment(.leading)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 180)
+                        .focused($focused, equals: term.id)
+                    Image(systemName: "arrow.left")
+                        .font(.caption).foregroundStyle(.tertiary)
+                    TextField(VoiceVocabularyCopy.heardPlaceholder, text: $term.heardAs,
+                              prompt: Text("Optional, e.g. post gress, 破四格"))
+                        .labelsHidden()
+                        .multilineTextAlignment(.leading)
+                        .textFieldStyle(.roundedBorder)
+                    Button { store.remove(term.id) } label: {
+                        Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Remove")
+                }
+                if store.isDuplicate(term.term, excluding: term.id) {
+                    Text("“\(term.cleanTerm)” is already in the list; only the first is used.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+            HStack {
+                Button {
+                    let new = VoiceTerm()
+                    store.upsert(new)
+                    focused = new.id
+                } label: { Label("Add Word", systemImage: "plus") }
+                .disabled(store.isFull)
+                Spacer()
+                Text("\(store.savedCount) / \(VoiceVocabulary.maxEntries)")
+                    .monospacedDigit().font(.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Voice Vocabulary")
+        } footer: {
+            Text(VoiceVocabularyCopy.explanation + " Separate several mishearings with commas.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+}
+#endif

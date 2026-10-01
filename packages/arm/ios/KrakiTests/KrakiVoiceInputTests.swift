@@ -1323,15 +1323,24 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertEqual(VoiceVocabulary.parse(many).count, VoiceVocabulary.maxEntries)
     }
 
-    func testVocabularyCheckReportsIgnoredLines() {
-        let report = VoiceVocabulary.check("Foo ＝ 福欧\n= 空\nBar =\n# note\nBaz")
-        XCTAssertEqual(report.entries, ["Foo = 福欧", "Baz"], "full-width ＝ is accepted")
-        XCTAssertEqual(report.issues, [.init(line: 2, kind: .emptySide), .init(line: 3, kind: .emptySide)])
-        let long = String(repeating: "x", count: 121)
-        XCTAssertEqual(VoiceVocabulary.check(long).issues, [.init(line: 1, kind: .tooLong)])
-        let many = (0..<101).map { "t\($0)" }.joined(separator: "\n")
-        XCTAssertEqual(VoiceVocabulary.check(many).issues, [.init(line: 101, kind: .overLimit)])
-        XCTAssertEqual(VoiceVocabularyEditor.describe(.init(line: 2, kind: .emptySide), more: 1),
-                       "Line 2 needs a word on both sides of “=” and is ignored (+1 more)")
+    func testVocabularyStoreSavesEntriesAsCorrectorLines() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "kraki-vocab-\(UUID().uuidString)"))
+        let store = VoiceVocabularyStore(defaults: defaults)
+        XCTAssertTrue(store.terms.isEmpty)
+        store.upsert(VoiceTerm(term: "PostgreSQL", heardAs: "post gress，破四格、 "))
+        store.upsert(VoiceTerm(term: "Kubernetes"))
+        store.upsert(VoiceTerm(term: "  "))                       // a row still being typed
+        store.upsert(VoiceTerm(term: "postgresql", heardAs: "x")) // duplicate: first wins
+        XCTAssertEqual(VoiceVocabulary.load(defaults), ["PostgreSQL = post gress, 破四格", "Kubernetes"])
+        XCTAssertEqual(store.savedCount, 3)
+        XCTAssertTrue(store.isDuplicate("POSTGRESQL", excluding: nil))
+
+        var edited = store.terms[1]; edited.heardAs = "酷伯内提斯"
+        store.upsert(edited)
+        store.remove(store.terms[0].id)
+        let reloaded = VoiceVocabularyStore(defaults: defaults)
+        XCTAssertEqual(reloaded.terms.map(\.line), ["Kubernetes = 酷伯内提斯", "postgresql = x"])
+
+        XCTAssertEqual(VoiceVocabulary.parse("# note\nFoo ＝ 福欧\n= orphan\n"), ["Foo = 福欧"], "old text format still loads")
     }
 }

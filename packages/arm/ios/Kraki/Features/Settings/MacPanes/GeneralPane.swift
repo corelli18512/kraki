@@ -34,15 +34,7 @@ struct GeneralPane: View {
                 }
             }
 
-            Section {
-                VoiceVocabularyEditor()
-            } header: {
-                Text("Voice Vocabulary")
-            } footer: {
-                VoiceVocabularyFooter()
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            VoiceVocabularyMacSection()
 
             Section("Behavior") {
                 Toggle("Keep running in menu bar when window closes", isOn: $keepRunningInMenuBar)

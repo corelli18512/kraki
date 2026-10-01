@@ -122,15 +122,7 @@ struct SettingsView: View {
             notificationsRow
             themeRow
             NavigationLink {
-                Form {
-                    Section {
-                        VoiceVocabularyEditor()
-                    } footer: {
-                        VoiceVocabularyFooter()
-                    }
-                }
-                .navigationTitle("Voice Vocabulary")
-                .navigationBarTitleDisplayMode(.inline)
+                VoiceVocabularyPage()
             } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "character.book.closed")
