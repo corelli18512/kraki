@@ -1,7 +1,8 @@
-# Pulse and VoiceInputCore are small Swift packages required by every clean
+# Pulse, VoiceInputCore and CoinfraCrypto are small Swift packages required by every clean
 # iOS/macOS checkout. Keep SwiftPM output out of source snapshots.
 Vendor/*
 !Vendor/Pulse/
 !Vendor/VoiceInputCore/
+!Vendor/CoinfraCrypto/
 Vendor/**/.build/
 Vendor/**/.swiftpm/
