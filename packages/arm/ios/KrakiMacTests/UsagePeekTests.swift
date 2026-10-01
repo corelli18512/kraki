@@ -35,11 +35,12 @@ final class UsagePeekTests: XCTestCase {
         XCTAssertEqual(combo.display, "⌃⌥U")
     }
 
-    func testPanelHeightFollowsDevicesAndAccounts() {
+    func testPanelHeightFollowsAccountCount() {
         XCTAssertEqual(UsagePeekLayout.rows(3), 1)
         XCTAssertEqual(UsagePeekLayout.rows(4), 2)
-        XCTAssertLessThan(UsagePeekLayout.compactHeight([3]), UsagePeekLayout.compactHeight([3, 1]))
-        XCTAssertLessThan(UsagePeekLayout.detailHeight([3]), UsagePeekLayout.detailHeight([4]))
+        XCTAssertLessThan(UsagePeekLayout.compactHeight(3), UsagePeekLayout.compactHeight(4))
+        XCTAssertEqual(UsagePeekLayout.compactHeight(6), UsagePeekLayout.compactHeight(9), "compact shows at most six")
+        XCTAssertLessThan(UsagePeekLayout.detailHeight(3), UsagePeekLayout.detailHeight(4))
     }
 }
 
@@ -64,23 +65,22 @@ final class UsagePeekRenderTests: XCTestCase {
     func testRenderPanels() throws {
         let mac = device("mac", "MacBook Pro")
         let server = device("srv", "build-server", kind: .server)
-        let macUsage = DeviceUsageSnapshot(accounts: [
-            account("claude:1", "claude", "co•••ai@gmail.com", "default_claude_max_20x", [window("five_hour", 80, hours: 2.3), window("weekly", 12, hours: 52)]),
-            account("codex:1", "codex", "co•••12@outlook.com", "prolite", [window("weekly", 0, hours: 141)]),
-            account("codex:2", "codex", "co•••ai@gmail.com", "prolite", [window("weekly", 0, hours: 134)]),
-        ], receivedAt: Date())
-        let serverUsage = DeviceUsageSnapshot(accounts: [
-            account("claude:2", "claude", "wo•••rk@studio.dev", "default_claude_max_5x", [window("five_hour", 46, hours: 0.6), window("weekly", 71, hours: 98)]),
-        ], receivedAt: Date())
-        // The current Session runs on the server, so it is listed first.
-        let sections = [(device: server, usage: serverUsage), (device: mac, usage: macUsage)]
+        let mac2 = device("mac2", "Mac mini")
+        let claudeMain = account("claude:1", "claude", "co•••ai@gmail.com", "default_claude_max_20x", [window("five_hour", 80, hours: 2.3), window("weekly", 12, hours: 52)])
+        // The current Session is a Pi session on the server spending the shared Max 20× account.
+        let accounts = [
+            MergedAccountUsage(account: claudeMain, devices: [server, mac, mac2]),
+            MergedAccountUsage(account: account("claude:2", "claude", "wo•••rk@studio.dev", "default_claude_max_5x", [window("five_hour", 46, hours: 0.6), window("weekly", 71, hours: 98)]), devices: [server]),
+            MergedAccountUsage(account: account("codex:1", "codex", "co•••12@outlook.com", "prolite", [window("weekly", 0, hours: 141)]), devices: [mac, mac2]),
+            MergedAccountUsage(account: account("codex:2", "codex", "co•••ai@gmail.com", "prolite", [window("weekly", 64, hours: 134)]), devices: [mac]),
+        ]
         let dir = ProcessInfo.processInfo.environment["KRAKI_USAGE_RENDER_DIR"]
         for scheme in [ColorScheme.light, .dark] {
             for (name, view, size) in [
-                ("compact", AnyView(UsagePeekCompact(sections: sections, currentId: "srv", ns: Namespace().wrappedValue, entering: false)),
-                 CGSize(width: UsagePeekLayout.compactWidth, height: UsagePeekLayout.compactHeight([1, 3]))),
-                ("detail", AnyView(UsagePeekDetail(sections: sections, currentId: "srv", ns: Namespace().wrappedValue, entering: false)),
-                 CGSize(width: UsagePeekLayout.detailWidth, height: UsagePeekLayout.detailHeight([1, 3]))),
+                ("compact", AnyView(UsagePeekCompact(accounts: accounts, currentKey: "claude:1", ns: Namespace().wrappedValue, entering: false)),
+                 CGSize(width: UsagePeekLayout.compactWidth, height: UsagePeekLayout.compactHeight(accounts.count))),
+                ("detail", AnyView(UsagePeekDetail(accounts: accounts, currentKey: "claude:1", ns: Namespace().wrappedValue, entering: false)),
+                 CGSize(width: UsagePeekLayout.detailWidth, height: UsagePeekLayout.detailHeight(accounts.count))),
             ] {
                 let content = view
                     .frame(width: size.width, height: size.height)

@@ -622,6 +622,9 @@ export interface AccountUsage {
   fetchedAt: string;
   /** Present when the last attempt failed; windows then hold the last good reading (possibly none). */
   error?: string;
+  /** Agents on this machine signed in with this account (`pi`, `claude`, `codex`), so an app can tell
+   *  which account a Session is spending. One account may be shared by several machines and agents. */
+  agents?: string[];
 }
 
 /** The subscription accounts this tentacle can read and their remaining quota.

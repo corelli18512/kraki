@@ -4,7 +4,7 @@
 /// tentacle's accounts; move the pointer in and it smoothly grows into the
 /// detail view; move out while still holding and it shrinks back; release
 /// and it fades away. "Account Usage" in the menu bar opens it pinned.
-/// The device running the Session currently open in Kraki is listed first.
+/// Accounts are merged across devices; the one the open Session spends is listed first.
 ///
 /// Keyboard peeks use a non-activating panel so the focused editor keeps
 /// typing focus. Ported from the standalone Kraki Usage prototype.
@@ -109,26 +109,23 @@ enum UsagePeekLayout {
     static let columns = 3
     static let compactTile: CGFloat = 124
     static let compactGap: CGFloat = 6
-    static let compactHeader: CGFloat = 26
-    static let compactSectionGap: CGFloat = 8
-    static let detailCard: CGFloat = 214
+    static let compactLimit = 6
+    static let detailCard: CGFloat = 232
     static let detailGap: CGFloat = 12
-    static let detailHeader: CGFloat = 30
-    static let detailSectionGap: CGFloat = 16
     static let detailPadding: CGFloat = 18
 
     static func rows(_ count: Int) -> Int { max(1, (count + columns - 1) / columns) }
 
-    static func compactHeight(_ sections: [Int]) -> CGFloat {
-        guard !sections.isEmpty else { return 96 }
-        let body = sections.map { compactHeader + CGFloat(rows($0)) * compactTile + CGFloat(rows($0) - 1) * compactGap }
-        return 18 + body.reduce(0, +) + CGFloat(sections.count - 1) * compactSectionGap
+    static func compactHeight(_ count: Int) -> CGFloat {
+        guard count > 0 else { return 96 }
+        let r = rows(min(count, compactLimit))
+        return 18 + CGFloat(r) * compactTile + CGFloat(r - 1) * compactGap
     }
 
-    static func detailHeight(_ sections: [Int]) -> CGFloat {
-        guard !sections.isEmpty else { return 140 }
-        let body = sections.map { detailHeader + CGFloat(rows($0)) * detailCard + CGFloat(rows($0) - 1) * detailGap }
-        return detailPadding * 2 + body.reduce(0, +) + CGFloat(sections.count - 1) * detailSectionGap
+    static func detailHeight(_ count: Int) -> CGFloat {
+        guard count > 0 else { return 140 }
+        let r = rows(count)
+        return detailPadding * 2 + CGFloat(r) * detailCard + CGFloat(r - 1) * detailGap
     }
 }
 
@@ -162,10 +159,21 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
     private var monitors: [Any] = []
     private var observers: [NSObjectProtocol] = []
 
-    /// The device running the Session open in Kraki, listed first and highlighted.
-    var currentDeviceId: String? {
-        guard let appState, let id = currentSessionId() else { return nil }
-        return appState.sessionStore.sessions[id]?.deviceId
+    /// The account the Session open in Kraki is spending, listed first and highlighted.
+    var currentAccountKey: String? {
+        guard let appState, let id = currentSessionId(), let session = appState.sessionStore.sessions[id] else { return nil }
+        return appState.deviceStore.accountKey(forSessionOn: session.deviceId, agent: session.agent, model: session.model)
+    }
+
+    /// Merged accounts, the current Session's first.
+    func orderedAccounts() -> [MergedAccountUsage] {
+        guard let store = appState?.deviceStore else { return [] }
+        let current = currentAccountKey
+        let list = store.mergedUsage()
+        guard let current, let i = list.firstIndex(where: { $0.id == current }) else { return list }
+        var out = list
+        out.insert(out.remove(at: i), at: 0)
+        return out
     }
 
     func install(appState: AppState, currentSessionId: @escaping () -> String?) {
@@ -274,18 +282,14 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
         if peek.held && !peek.pinned { startHoverTracking() } else { stopHoverTracking() }
     }
 
-    private func sectionCounts() -> [Int] {
-        appState?.deviceStore.onlineUsageDevices(preferredDeviceId: currentDeviceId).map(\.usage.accounts.count) ?? []
-    }
-
     private func computeFrames(screen: NSScreen?) {
         guard let visible = (screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame else { return }
-        let counts = sectionCounts()
+        let count = orderedAccounts().count
         maxHeight = min(640, visible.height - 28)
         compactSize = NSSize(width: min(UsagePeekLayout.compactWidth, visible.width - 28),
-                             height: min(UsagePeekLayout.compactHeight(counts.map { min($0, 6) }), maxHeight))
+                             height: min(UsagePeekLayout.compactHeight(count), maxHeight))
         detailedSize = NSSize(width: min(UsagePeekLayout.detailWidth, visible.width - 28),
-                              height: min(UsagePeekLayout.detailHeight(counts), maxHeight))
+                              height: min(UsagePeekLayout.detailHeight(count), maxHeight))
         // Anchored under the right end of the menu bar; both sizes share the top-right corner.
         anchor = NSPoint(x: visible.maxX - 12, y: visible.maxY - 8)
         compactFrame = NSRect(x: anchor.x - compactSize.width, y: anchor.y - compactSize.height,

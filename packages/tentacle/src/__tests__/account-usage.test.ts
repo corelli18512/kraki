@@ -132,7 +132,8 @@ describe('AccountUsageMonitor', () => {
     monitor.onChange = (a) => seen.push(a);
     await monitor.refresh();
     expect(monitor.accounts).toHaveLength(1);
-    expect(monitor.accounts[0]).toMatchObject({ accountKey: `codex:${hash('same')}`, windows: [{ remainingPercent: 70 }] });
+    expect(monitor.accounts[0]).toMatchObject({ accountKey: `codex:${hash('same')}`, windows: [{ remainingPercent: 70 }],
+      agents: ['codex', 'pi'] });
     expect(history.load()).toHaveLength(1);
     expect(statSync(history.path).mode & 0o777).toBe(0o600);
     // Inside the per-source minimum interval nothing is refetched, recorded or re-announced.

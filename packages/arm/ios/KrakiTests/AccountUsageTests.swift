@@ -19,12 +19,13 @@ final class AccountUsageTests: XCTestCase {
                       online: online, lastSeen: nil, createdAt: nil)
     }
 
-    private func account(_ key: String, five: Double? = nil, weekly: Double? = nil) -> AccountUsage {
+    private func account(_ key: String, five: Double? = nil, weekly: Double? = nil, provider: String = "claude",
+                         agents: [String]? = nil, at date: Date = Date()) -> AccountUsage {
         var windows: [AccountUsageWindow] = []
         if let five { windows.append(AccountUsageWindow(id: "five_hour", kind: "five_hour", remainingPercent: five)) }
         if let weekly { windows.append(AccountUsageWindow(id: "seven_day", kind: "weekly", remainingPercent: weekly)) }
-        return AccountUsage(accountKey: key, provider: "claude", windows: windows,
-                            fetchedAt: ISO8601DateFormatter().string(from: Date()))
+        return AccountUsage(accountKey: key, provider: provider, windows: windows,
+                            fetchedAt: ISO8601DateFormatter().string(from: date), agents: agents)
     }
 
     func testDeviceUsageMessageIsStoredPerDevice() throws {
@@ -48,19 +49,42 @@ final class AccountUsageTests: XCTestCase {
         XCTAssertNotNil(accounts[0].ringWindows[0].resetDate)
     }
 
-    func testOnlineDevicesListTheCurrentSessionDeviceFirstAndSkipOfflineOnes() throws {
+    func testOneAccountSharedByDevicesIsOneEntryWithTheFreshestReading() throws {
         let (app, root) = try makeApp()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = app.deviceStore
         store.setDevices([device("a", "Alpha"), device("b", "Beta"), device("c", "Gamma", online: false),
                           device("phone", "iPhone", role: .app)])
-        for id in ["a", "b", "c", "phone"] { store.setDeviceUsage(id, accounts: [account("k-\(id)", weekly: 50)]) }
-        store.setDeviceUsage("a", accounts: [account("k-a", weekly: 50)])
-        XCTAssertEqual(store.onlineUsageDevices(preferredDeviceId: nil).map(\.device.id), ["a", "b"])
-        XCTAssertEqual(store.onlineUsageDevices(preferredDeviceId: "b").map(\.device.id), ["b", "a"])
-        // A device that reported no accounts has nothing to show.
-        store.setDeviceUsage("b", accounts: [])
-        XCTAssertEqual(store.onlineUsageDevices(preferredDeviceId: "b").map(\.device.id), ["a"])
+        let now = Date()
+        store.setDeviceUsage("a", accounts: [account("shared", weekly: 60, at: now.addingTimeInterval(-300)), account("only-a", weekly: 10)])
+        store.setDeviceUsage("b", accounts: [account("shared", weekly: 55, at: now)])
+        store.setDeviceUsage("c", accounts: [account("shared", weekly: 90, at: now.addingTimeInterval(-3600))])
+        store.setDeviceUsage("phone", accounts: [account("ignored", weekly: 1)])
+        let merged = store.mergedUsage()
+        XCTAssertEqual(Set(merged.map(\.id)), ["shared", "only-a"])
+        let shared = try XCTUnwrap(merged.first { $0.id == "shared" })
+        XCTAssertEqual(shared.account.windows.first?.remainingPercent, 55, "freshest reading wins")
+        XCTAssertEqual(shared.devices.map(\.id), ["a", "b", "c"], "online devices first, offline last")
+        XCTAssertFalse(shared.allOffline)
+    }
+
+    func testTheSessionsAccountIsMatchedByDeviceAgentAndModel() throws {
+        let (app, root) = try makeApp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = app.deviceStore
+        store.setDevices([device("a", "Alpha")])
+        store.setDeviceUsage("a", accounts: [
+            account("claude-pi", weekly: 50, provider: "claude", agents: ["pi"]),
+            account("gpt-pi-codex", weekly: 50, provider: "codex", agents: ["codex", "pi"]),
+            account("claude-code", weekly: 50, provider: "claude", agents: ["claude"]),
+        ])
+        XCTAssertEqual(store.accountKey(forSessionOn: "a", agent: "pi", model: "anthropic/claude-opus-5"), "claude-pi")
+        XCTAssertEqual(store.accountKey(forSessionOn: "a", agent: "pi", model: "openai-codex/gpt-6-sol"), "gpt-pi-codex")
+        XCTAssertEqual(store.accountKey(forSessionOn: "a", agent: "claude", model: "claude-opus-5"), "claude-code")
+        XCTAssertEqual(store.accountKey(forSessionOn: "a", agent: "codex", model: nil), "gpt-pi-codex")
+        XCTAssertNil(store.accountKey(forSessionOn: "a", agent: "pi", model: nil), "ambiguous: two Pi accounts")
+        XCTAssertNil(store.accountKey(forSessionOn: "a", agent: "copilot", model: "gpt-5"))
+        XCTAssertNil(store.accountKey(forSessionOn: "zzz", agent: "pi", model: "anthropic/x"))
     }
 
     func testRingsAreFiveHourThenWeeklyAndRingStateColors() {

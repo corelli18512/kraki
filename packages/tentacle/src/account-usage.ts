@@ -498,6 +498,13 @@ export class UsageHistory {
   }
 }
 
+/** The Kraki agent id that spends a credential source's account. */
+export function agentForSource(sourceId: string): string {
+  if (sourceId.startsWith('pi:')) return 'pi';
+  if (sourceId === 'claude-code') return 'claude';
+  return 'codex';
+}
+
 // ── Monitor ──────────────────────────────────────────────
 
 interface Slot { cred: UsageCredential; account?: FetchedAccount; error?: string; nextAllowed: number }
@@ -539,9 +546,13 @@ export class AccountUsageMonitor {
 
   get accounts(): AccountUsage[] {
     const byKey = new Map<string, Slot>();
+    const agentsByKey = new Map<string, Set<string>>();
     for (const slot of this.slots.values()) {
       if (!slot.account && !slot.error) continue;
       const key = slot.account?.accountKey ?? `${slot.cred.provider}-slot:${hash(slot.cred.sourceId)}`;
+      const agents = agentsByKey.get(key) ?? new Set<string>();
+      agents.add(agentForSource(slot.cred.sourceId));
+      agentsByKey.set(key, agents);
       const prev = byKey.get(key);
       // Same account from several sources: keep the freshest successful reading.
       if (!prev || (slot.account && !slot.error && (!prev.account || prev.error || slot.account.fetchedAt > prev.account.fetchedAt))) byKey.set(key, slot);
@@ -554,6 +565,7 @@ export class AccountUsageMonitor {
       windows: slot.account?.windows ?? [],
       fetchedAt: new Date(slot.account?.fetchedAt ?? this.now()).toISOString(),
       ...(slot.error && { error: slot.error }),
+      agents: [...(agentsByKey.get(accountKey) ?? [])].sort(),
     })).sort((a, b) => a.provider.localeCompare(b.provider) || (a.label ?? '').localeCompare(b.label ?? ''));
   }
 

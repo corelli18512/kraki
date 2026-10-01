@@ -27,6 +27,8 @@ struct AccountUsage: Codable, Hashable, Sendable, Identifiable {
     let windows: [AccountUsageWindow]
     let fetchedAt: String
     var error: String?
+    /// Agents on the reporting machine signed in with this account.
+    var agents: [String]?
 
     var id: String { accountKey }
 
@@ -69,4 +71,26 @@ struct DeviceUsagePayload: Codable, Sendable {
 struct DeviceUsageSnapshot: Equatable, Sendable {
     var accounts: [AccountUsage]
     var receivedAt: Date
+}
+
+/// One subscription account across every device that reports it. Quota is
+/// per account, so the same account signed in on three machines is one card.
+struct MergedAccountUsage: Identifiable, Equatable, Sendable {
+    /// The freshest reading among the reporting devices.
+    var account: AccountUsage
+    /// Devices this account is signed in on; online ones first.
+    var devices: [DeviceSummary]
+    var id: String { account.accountKey }
+    /// True when no online device reports it any more.
+    var allOffline: Bool { !devices.contains(where: \.online) }
+}
+
+extension AccountUsage {
+    /// Pi model ids carry the provider: `anthropic/…`, `openai-codex/…`.
+    static func provider(forModel model: String?) -> String? {
+        guard let model = model?.lowercased() else { return nil }
+        if model.hasPrefix("anthropic/") || model.contains("claude") { return "claude" }
+        if model.hasPrefix("openai") || model.contains("gpt") || model.contains("codex") { return "codex" }
+        return nil
+    }
 }
