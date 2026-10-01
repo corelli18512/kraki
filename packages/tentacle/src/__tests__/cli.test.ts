@@ -210,7 +210,7 @@ describe('CLI --help', () => {
     await runCli(['--help']);
     const output = consoleOutput.join('\n');
     expect(output).toContain('kraki');
-    expect(output).toContain('Usage:');
+    expect(output).toContain('Get started');
     expect(output).toContain('stop');
     expect(output).toContain('status');
   });
@@ -226,7 +226,7 @@ describe('CLI --help', () => {
 
   it('-h also prints help', async () => {
     await runCli(['-h']);
-    expect(consoleOutput.join('\n')).toContain('Usage:');
+    expect(consoleOutput.join('\n')).toContain('Get started');
   });
 });
 

@@ -48,6 +48,13 @@ vi.mock("ws", () => {
   return { WebSocket: MockWS };
 });
 
+const mockExecSync = vi.fn();
+const mockSpawnSync = vi.fn(() => ({ status: 0 }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, execSync: (...a: unknown[]) => mockExecSync(...a), spawnSync: (...a: unknown[]) => mockSpawnSync(...a) };
+});
+
 let mockMacApp: string | null = null;
 vi.mock("../managed.js", () => ({
   findMacAppWithBuiltIn: () => mockMacApp,
@@ -66,7 +73,7 @@ vi.mock("../banner.js", () => ({
 
 vi.mock("chalk", () => {
   const handler: ProxyHandler<(...args: unknown[]) => unknown> = {
-    get: () => proxy,
+    get: (_t, prop) => (prop === 'hex' || prop === 'bgHex' ? () => proxy : proxy),
     apply: (_target, _thisArg, args) => {
       if (args.length === 1 && typeof args[0] === "string") return args[0];
       return proxy;
@@ -86,20 +93,20 @@ vi.mock("../config.js", () => ({
   getConfigPath: () => "/tmp/fake-kraki/config.json",
   getConfigDir: () => "/tmp/fake-kraki",
   loadChannelKey: () => null,
+  loadConfig: () => mockExistingConfig,
+  saveGitHubToken: vi.fn(),
 }));
 
+let mockExistingConfig: unknown = null;
+
 const mockCheckGhAuth = vi.fn().mockReturnValue({ authenticated: true, username: 'testuser', token: 'fake-token' });
-// Default agent detection: only Copilot installed → runAgentStep leaves auto-detect.
-let installedAgents: string[] = ['copilot'];
-const mockCheckAgentCli = vi.fn((bin: string) => installedAgents.includes(bin) ? { found: true, version: '1.0.0' } : { found: false });
 vi.mock("../checks.js", () => ({
   checkGhAuth: (...args: unknown[]) => mockCheckGhAuth(...args),
-  checkAgentCli: (bin: string) => mockCheckAgentCli(bin),
   SETUP_AGENTS: [
     { id: 'claude', name: 'Claude Code', bin: 'claude', installUrl: 'https://code.claude.com/docs/en/setup' },
     { id: 'codex', name: 'Codex', bin: 'codex', installUrl: 'https://developers.openai.com/codex/cli' },
     { id: 'copilot', name: 'GitHub Copilot CLI', bin: 'copilot', installUrl: 'https://github.com/features/copilot/cli' },
-    { id: 'pi', name: 'pi', bin: 'pi', installUrl: 'https://github.com/earendil-works/pi#readme' },
+    { id: 'pi', name: 'Pi', bin: 'pi', installUrl: 'https://github.com/earendil-works/pi#readme' },
   ],
   probeFda: vi.fn().mockResolvedValue('granted'),
   probeFdaAsApp: vi.fn().mockResolvedValue('granted'),
@@ -108,6 +115,15 @@ vi.mock("../checks.js", () => ({
   openTccPane: vi.fn(),
   revealKrakiApp: vi.fn(),
   getKrakiAppBundlePath: vi.fn().mockReturnValue(null),
+}));
+
+// Agent check (normally `kraki agents --json` in a child process)
+type Check = { id: string; name: string; status: string; models: number; sampleModels: string[]; installUrl: string; hint?: string };
+const agent = (id: string, status: string, models = 3): Check => ({ id, name: id, status, models, sampleModels: [], installUrl: '' });
+let agentRounds: Check[][] = [];
+const mockAgentsCheck = vi.fn(async () => (agentRounds.length > 1 ? agentRounds.shift() : agentRounds[0]) ?? []);
+vi.mock("../agents-check.js", () => ({
+  runAgentsCheckChild: () => mockAgentsCheck(),
 }));
 
 // Mock pair module to avoid real WebSocket connection
@@ -123,7 +139,8 @@ let originalFetch: typeof globalThis.fetch;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  installedAgents = ['copilot'];
+  agentRounds = [[agent('copilot', 'ready')]];
+  mockExistingConfig = null;
   vi.spyOn(console, "log").mockImplementation(() => {});
   originalFetch = globalThis.fetch;
   // Remove KRAKI_RELAY_URL so login-first flow is used by default
@@ -137,103 +154,135 @@ afterEach(() => {
   delete process.env.KRAKI_API_URL;
 });
 
-describe("runSetup — login-first flow (official relay)", () => {
-  it('detects Codex in the official login-first wizard too', async () => {
-    globalThis.fetch = vi.fn().mockRejectedValue(new Error('network error')) as typeof fetch;
-    installedAgents = ['codex'];
-    mockInput.mockResolvedValueOnce('codex-pc');
-    const result = await runSetup();
-    expect(mockCheckAgentCli).toHaveBeenCalledWith('codex');
-    expect(result.authMethod).toBe('github_token');
-    expect(result.agents).toBeUndefined();
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Codex'));
-  });
+function mockOfficialApi(region = 'us', relayUrl = 'wss://kraki-us.corelli.cloud') {
+  globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+    if (typeof url === 'string' && url.includes('/api/login/resolve')) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, region, relayUrl, user: { login: 'testuser' } }) });
+    }
+    if (typeof url === 'string' && url.includes('/api/config')) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ githubClientId: 'test-client-id' }) });
+    }
+    return Promise.reject(new Error(`unmocked fetch: ${url}`));
+  }) as typeof fetch;
+}
 
-  it("authenticates → resolves region → verifies relay → device name → saves", async () => {
-    // Mock fetch for /api/login/resolve
-    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-      if (typeof url === 'string' && url.includes('/api/login/resolve')) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({
-            ok: true,
-            region: 'us',
-            relayUrl: 'wss://kraki-us.corelli.cloud',
-            user: { login: 'testuser' },
-          }),
-        });
-      }
-      if (typeof url === 'string' && url.includes('/api/config')) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({ githubClientId: 'test-client-id' }),
-        });
-      }
-      return Promise.reject(new Error(`unmocked fetch: ${url}`));
-    }) as typeof fetch;
-
-    // device name prompt
-    mockInput.mockResolvedValueOnce("my-laptop");
-
+describe("runSetup — official service (same steps as Kraki for Mac)", () => {
+  it("checks agents, signs in, resolves the region's relay and saves — no prompts when all is ready", async () => {
+    mockOfficialApi();
     const result = await runSetup();
     expect(result).toEqual({
       relay: "wss://kraki-us.corelli.cloud",
       authMethod: "github_token",
-      device: { name: "my-laptop", id: "dev_test123" },
+      device: { name: expect.any(String), id: "dev_test123" },
       logging: { verbosity: "normal" },
     });
+    expect(mockAgentsCheck).toHaveBeenCalledTimes(1);
+    expect(mockSelect).not.toHaveBeenCalled();
+    expect(mockInput).not.toHaveBeenCalled();
     expect(mockSaveConfig).toHaveBeenCalledWith(result);
   });
 
-  it("falls back to default relay if API is unreachable", async () => {
+  it("checks agents before signing in", async () => {
+    mockOfficialApi();
+    const order: string[] = [];
+    mockAgentsCheck.mockImplementationOnce(async () => { order.push('agents'); return [agent('codex', 'ready')]; });
+    mockCheckGhAuth.mockImplementationOnce(() => { order.push('signin'); return { authenticated: true, username: 'u', token: 't' }; });
+    await runSetup();
+    expect(order).toEqual(['agents', 'signin']);
+  });
+
+  it("keeps the device name of an existing setup", async () => {
+    mockOfficialApi();
+    mockExistingConfig = { device: { name: 'studio', id: 'dev_old' }, logging: { verbosity: 'verbose' } };
+    const result = await runSetup();
+    expect(result.device.name).toBe('studio');
+    expect(result.logging).toEqual({ verbosity: 'verbose' });
+  });
+
+  it("falls back to the default relay if the API is unreachable", async () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error("network error")) as typeof fetch;
-
-    // device name prompt
-    mockInput.mockResolvedValueOnce("my-laptop");
-
     const result = await runSetup();
     expect(result.relay).toBe("wss://relay.kraki.chat");
     expect(result.authMethod).toBe("github_token");
   });
+
+  it("never pins agents in config (the daemon auto-detects)", async () => {
+    mockOfficialApi();
+    agentRounds = [[agent('claude', 'ready'), agent('codex', 'ready')]];
+    const result = await runSetup();
+    expect(result.agents).toBeUndefined();
+  });
+});
+
+describe("runSetup — GitHub device code", () => {
+  it("copies the code, opens GitHub and signs in once approved", async () => {
+    delete process.env.SSH_CONNECTION; delete process.env.SSH_TTY;
+    mockPlatform = 'darwin';
+    mockCheckGhAuth.mockReturnValueOnce({ authenticated: false });
+    let polls = 0;
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      const ok = (body: unknown) => Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
+      if (url.includes('/api/config')) return ok({ githubClientId: 'cid' });
+      if (url.includes('/login/device/code')) return ok({ device_code: 'dc', user_code: 'ABCD-1234', verification_uri: 'https://github.com/login/device', expires_in: 60, interval: 0 });
+      if (url.includes('/login/oauth/access_token')) return ok(++polls < 2 ? { error: 'authorization_pending' } : { access_token: 'gho_x' });
+      if (url.includes('api.github.com/user')) return ok({ login: 'octo' });
+      if (url.includes('/api/login/resolve')) return ok({ ok: true, region: 'us', relayUrl: 'wss://r', user: { login: 'octo' } });
+      return Promise.reject(new Error(url));
+    }) as typeof fetch;
+
+    const result = await runSetup();
+    expect(result.relay).toBe('wss://r');
+    expect(mockExecSync).toHaveBeenCalledWith('pbcopy', expect.objectContaining({ input: 'ABCD-1234' }));
+    expect(mockSpawnSync).toHaveBeenCalledWith('open', ['https://github.com/login/device'], expect.anything());
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('ABCD-1234'));
+    mockPlatform = null;
+  });
+});
+
+describe("runSetup — coding agents", () => {
+  beforeEach(() => mockOfficialApi());
+
+  it("waits on 'Check again' until an agent is ready", async () => {
+    agentRounds = [[agent('codex', 'not_installed')], [agent('codex', 'ready')]];
+    mockSelect.mockResolvedValueOnce('again');
+    await runSetup();
+    expect(mockAgentsCheck).toHaveBeenCalledTimes(2);
+    expect(mockSelect).toHaveBeenCalledTimes(1);
+    expect((mockSelect.mock.calls[0][0] as { choices: { value: string }[] }).choices[0].value).toBe('again');
+  });
+
+  it("lets the user continue without any agent", async () => {
+    agentRounds = [[]];
+    mockSelect.mockResolvedValueOnce('continue');
+    const result = await runSetup();
+    expect(mockSaveConfig).toHaveBeenCalledWith(result);
+  });
+
+  it("offers Continue first when one agent is ready and another needs sign-in", async () => {
+    agentRounds = [[agent('claude', 'ready'), { ...agent('codex', 'needs_login', 0), hint: 'Run `codex login` in Terminal.' }]];
+    mockSelect.mockResolvedValueOnce('continue');
+    await runSetup();
+    expect((mockSelect.mock.calls[0][0] as { choices: { value: string }[] }).choices[0].value).toBe('continue');
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Run `codex login` in Terminal.'));
+  });
+
+  it("lists every supported agent, installed or not", async () => {
+    agentRounds = [[agent('codex', 'ready', 7)]];
+    await runSetup();
+    const lines = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]));
+    for (const name of ['Claude Code', 'Codex', 'GitHub Copilot CLI', 'Pi']) {
+      expect(lines.some((l) => l.includes(name))).toBe(true);
+    }
+    expect(lines.some((l) => l.includes('7 models'))).toBe(true);
+  });
 });
 
 describe("runSetup — direct flow (KRAKI_RELAY_URL set)", () => {
-  it('detects Codex-only installs without requiring Copilot', async () => {
-    process.env.KRAKI_RELAY_URL = 'ws://localhost:4791';
-    mockRelayMethods = ['open'];
-    installedAgents = ['codex'];
-    mockInput.mockResolvedValueOnce('ws://localhost:4791').mockResolvedValueOnce('codex-pc');
-    const result = await runSetup();
-    expect(mockCheckAgentCli).toHaveBeenCalledWith('codex');
-    expect(mockCheckbox).not.toHaveBeenCalled();
-    expect(result.agents).toBeUndefined(); // auto-detect, including future installs
-    mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
-  });
-
-  it('offers Codex alongside Copilot and persists the selection', async () => {
-    process.env.KRAKI_RELAY_URL = 'ws://localhost:4791';
-    mockRelayMethods = ['open'];
-    installedAgents = ['copilot', 'codex'];
-    mockCheckbox.mockResolvedValueOnce(['codex']);
-    mockInput.mockResolvedValueOnce('ws://localhost:4791').mockResolvedValueOnce('codex-pc');
-    const result = await runSetup();
-    expect(mockCheckbox).toHaveBeenCalledWith(expect.objectContaining({
-      choices: [
-        { name: 'Codex', value: 'codex', checked: true },
-        { name: 'GitHub Copilot CLI', value: 'copilot', checked: true },
-      ],
-    }));
-    expect(result.agents).toEqual(['codex']);
-    expect(mockSaveConfig).toHaveBeenCalledWith(result);
-    mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge'];
-  });
-
   it("uses custom relay URL with apikey auth", async () => {
     process.env.KRAKI_RELAY_URL = "ws://my-vps:4000";
     mockRelayMethods = ['apikey', 'open'];
     mockInput.mockResolvedValueOnce("ws://my-vps:4000");       // relay URL
     mockSelect.mockResolvedValueOnce("apikey");                // auth method
-    mockInput.mockResolvedValueOnce("server-1");               // device name
 
     const result = await runSetup();
     expect(result.relay).toBe("ws://my-vps:4000");
@@ -245,7 +294,6 @@ describe("runSetup — direct flow (KRAKI_RELAY_URL set)", () => {
     process.env.KRAKI_RELAY_URL = "wss://my-relay.example.com";
     mockRelayMethods = ['open'];
     mockInput.mockResolvedValueOnce("wss://my-relay.example.com");
-    mockInput.mockResolvedValueOnce("dev-box");
 
     const result = await runSetup();
     expect(result.authMethod).toBe("open");
@@ -258,7 +306,6 @@ describe("runSetup — edge cases", () => {
     process.env.KRAKI_RELAY_URL = "wss://relay.kraki.chat";
     mockRelayMethods = ['open'];
     mockInput.mockResolvedValueOnce("wss://relay.kraki.chat");
-    mockInput.mockResolvedValueOnce("dev");
 
     const result = await runSetup();
     expect(result).toBeTruthy();
@@ -266,61 +313,25 @@ describe("runSetup — edge cases", () => {
   });
 });
 
-describe("runSetup — agents step", () => {
-  function directRelay() {
+describe("runSetup — self-hosted relay", () => {
+  beforeEach(() => {
     process.env.KRAKI_RELAY_URL = "ws://lab:4600";
     mockRelayMethods = ['open'];
-  }
+  });
   afterEach(() => { mockRelayMethods = ['github_token', 'open', 'pairing', 'challenge']; });
 
-  it("does not require Copilot on a self-hosted relay (Codex-only machine)", async () => {
-    directRelay();
-    installedAgents = ['codex'];
-    mockInput.mockResolvedValueOnce("ws://lab:4600").mockResolvedValueOnce("mac");
-
-    const result = await runSetup();
-    expect(result.agents).toBeUndefined();
-    expect(mockCheckbox).not.toHaveBeenCalled();
-  });
-
-  it("finishes setup when no agent is installed yet", async () => {
-    directRelay();
-    installedAgents = [];
-    mockInput.mockResolvedValueOnce("ws://lab:4600").mockResolvedValueOnce("mac");
-
-    const result = await runSetup();
-    expect(result.agents).toBeUndefined();
-    expect(mockSaveConfig).toHaveBeenCalled();
-  });
-
-  it("offers every installed agent and keeps auto-detect when all stay checked", async () => {
-    directRelay();
-    installedAgents = ['claude', 'codex', 'pi'];
-    mockInput.mockResolvedValueOnce("ws://lab:4600").mockResolvedValueOnce("mac");
-    mockCheckbox.mockResolvedValueOnce(['claude', 'codex', 'pi']);
-
-    const result = await runSetup();
-    const choices = (mockCheckbox.mock.calls[0][0] as { choices: { value: string }[] }).choices.map((c) => c.value);
-    expect(choices).toEqual(['claude', 'codex', 'pi']);
-    expect(result.agents).toBeUndefined();
-  });
-
-  it("pins the subset the user picked", async () => {
-    directRelay();
-    installedAgents = ['claude', 'codex'];
-    mockInput.mockResolvedValueOnce("ws://lab:4600").mockResolvedValueOnce("mac");
-    mockCheckbox.mockResolvedValueOnce(['codex']);
-
-    const result = await runSetup();
-    expect(result.agents).toEqual(['codex']);
-  });
-
   it("keeps a ws:// relay default instead of switching it to TLS", async () => {
-    directRelay();
-    mockInput.mockImplementationOnce(async (opts: { default?: string }) => opts.default ?? '').mockResolvedValueOnce("mac");
-
+    mockInput.mockImplementationOnce(async (opts: { default?: string }) => opts.default ?? '');
     const result = await runSetup();
     expect(result.relay).toBe("ws://lab:4600");
+  });
+
+  it("asks for the relay, then checks agents", async () => {
+    const order: string[] = [];
+    mockInput.mockImplementationOnce(async () => { order.push('relay'); return 'ws://lab:4600'; });
+    mockAgentsCheck.mockImplementationOnce(async () => { order.push('agents'); return [agent('pi', 'ready')]; });
+    await runSetup();
+    expect(order).toEqual(['relay', 'agents']);
   });
 });
 
@@ -347,7 +358,7 @@ describe("runSetup — Kraki for Mac already installed", () => {
 
   it("continues when the user wants the command-line version too", async () => {
     mockConfirm.mockResolvedValueOnce(true);
-    mockInput.mockResolvedValueOnce("ws://lab:4600").mockResolvedValueOnce("mac");
+    mockInput.mockResolvedValueOnce("ws://lab:4600");
     const result = await runSetup();
     expect(result.relay).toBe("ws://lab:4600");
     expect(mockSaveConfig).toHaveBeenCalled();
@@ -355,7 +366,7 @@ describe("runSetup — Kraki for Mac already installed", () => {
 
   it("does not ask again when install.sh already asked", async () => {
     process.env.KRAKI_INSTALL = "1";
-    mockInput.mockResolvedValueOnce("ws://lab:4600").mockResolvedValueOnce("mac");
+    mockInput.mockResolvedValueOnce("ws://lab:4600");
     await runSetup();
     expect(mockConfirm).not.toHaveBeenCalled();
   });

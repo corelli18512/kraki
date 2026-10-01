@@ -1,226 +1,163 @@
 /**
- * Animated ASCII banner for Kraki CLI.
- * Renders a colored octopus logo with radial reveal + title animation.
+ * Kraki CLI banner: the current Kraki logo (the octopus with the coffee cup,
+ * same artwork as the apps) drawn with half-block characters — each cell is
+ * two pixels, top (▀ foreground) and bottom (background) — so the terminal
+ * shows the real shapes and colours instead of an ASCII approximation.
+ *
+ * banner-data.json is generated from the app icon by scripts/gen-banner.py.
+ *
+ * The animated version reveals the logo radially from the centre through a
+ * short glyph scramble (like the original banner), then fades in the
+ * wordmark and tagline. Without a TTY or colour it prints text only.
  */
 
 import chalk from 'chalk';
 import bannerData from './banner-data.json' with { type: 'json' };
 
-const data = bannerData as { lines: string[]; colors: [number, number, number, number][][]; w: number; h: number };
+type Px = string | null; // "rrggbb" or transparent
+const data = bannerData as unknown as { w: number; h: number; cells: [Px, Px][][] };
 
-const SCRAMBLE = '!@#$%^&*=+<>~/';
 const TITLE = 'KRAKI';
-const TITLE_COLORS = ['#00c9a7', '#00b4d8', '#ea6046', '#0891b2', '#ea6046'];
-
-const BLOCK_MAP: Record<string, string> = {
-  '.': '░', ':': '░', '-': '▒', '=': '▓', '+': '█', '*': '█', '#': '█', '%': '█', '@': '█',
-};
-
-/** Whether to render this cell as a block character (dense head) or original ASCII (tentacles) */
-function useBlockChar(x: number, y: number, w: number): boolean {
-  if (y < 8) return true;
-  if (y === 8) {
-    const cx = Math.floor(w / 2);
-    return x >= cx - 9 && x < cx + 9;
-  }
-  return false;
-}
-
-/** Convert a character to its block equivalent if in the head region */
-function toDisplayChar(ch: string, x: number, y: number, w: number): string {
-  return useBlockChar(x, y, w) ? (BLOCK_MAP[ch] ?? ch) : ch;
-}
+const TAGLINE = 'Your coding agents, on every device';
+/** Logo blues, dark → light (sampled from the artwork). */
+const TITLE_COLORS = ['#0e5a9e', '#176fbd', '#2384d4', '#3a9de6', '#56b9f2'];
+const SCRAMBLE = '░▒▓·:+*';
+const LEFT = '  ';
+const GAP = '   ';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function hex(c: string): string { return `#${c}`; }
+
+/** One logo cell as coloured half blocks. */
+function cell([top, bottom]: [Px, Px]): string {
+  if (top && bottom) return chalk.hex(hex(top)).bgHex(hex(bottom))('▀');
+  if (top) return chalk.hex(hex(top))('▀');
+  if (bottom) return chalk.hex(hex(bottom))('▄');
+  return ' ';
+}
+
+function title(shown = TITLE.length): string {
+  return TITLE.slice(0, shown).split('').map((ch, i) => chalk.hex(TITLE_COLORS[i]).bold(ch)).join(' ');
+}
+
+/** Where the wordmark sits: beside the logo when it fits, else below. */
+function layout(columns: number): 'side' | 'below' {
+  return columns >= LEFT.length + data.w + GAP.length + TAGLINE.length + 1 ? 'side' : 'below';
+}
+
+/** Text rows beside the logo, vertically centred (title, blank, tagline). */
+function sideText(y: number, titleShown: number, tagShown: number): string {
+  const mid = Math.floor(data.h / 2);
+  if (y === mid - 1 && titleShown > 0) return GAP + title(titleShown);
+  if (y === mid + 1 && tagShown > 0) return GAP + chalk.dim(TAGLINE.slice(0, tagShown));
+  return '';
+}
+
+function canDraw(): boolean {
+  return Boolean(process.stdout.isTTY) && chalk.level > 0;
+}
+
+function printTextOnly(): void {
+  console.log('');
+  console.log(`${LEFT}${TITLE.split('').join(' ')}`);
+  console.log(`${LEFT}${TAGLINE}`);
+  console.log('');
+}
+
 export async function printAnimatedBanner(): Promise<void> {
-  const { lines, colors, h, w } = data;
+  if (!canDraw()) { printTextOnly(); return; }
+  const { w, h, cells } = data;
+  const mode = layout(process.stdout.columns ?? 80);
+
+  // Reveal order: distance from the logo centre (rows are twice as tall).
   const cx = w / 2;
   const cy = h / 2;
-
-  // Build all cells with distance from center
-  type Cell = { x: number; y: number; ch: string; r: number; g: number; b: number; dist: number };
-  const cells: Cell[] = [];
-
+  const order: { x: number; y: number; d: number }[] = [];
   for (let y = 0; y < h; y++) {
-    const colorMap = new Map(colors[y].map((c) => [c[0], c]));
     for (let x = 0; x < w; x++) {
-      const ch = lines[y][x];
-      if (ch === ' ') continue;
-      const c = colorMap.get(x);
-      if (!c) continue;
-      const dist = Math.sqrt((x - cx) ** 2 + ((y - cy) * 2) ** 2);
-      cells.push({ x, y, ch, r: c[1], g: c[2], b: c[3], dist });
+      if (cells[y][x][0] || cells[y][x][1]) order.push({ x, y, d: Math.hypot(x - cx, (y - cy) * 2) });
     }
   }
+  const maxD = Math.max(...order.map((o) => o.d));
+  const FRAMES = 18;
+  const state: ('hidden' | 'scramble' | 'done')[][] = cells.map((r) => r.map(() => 'hidden'));
+  const frameOf = (d: number) => Math.min(FRAMES - 1, Math.floor((d / maxD) * FRAMES));
 
-  const maxDist = Math.max(...cells.map((c) => c.dist));
+  const totalText = TITLE.length + TAGLINE.length;
+  const textFrom = Math.floor(FRAMES * 0.45);
+  let textShown = 0;
+  const rowsTotal = h + (mode === 'below' ? 3 : 0);
 
-  // Build frame buffer
-  const buffer: string[][] = [];
-  for (let y = 0; y < h; y++) {
-    buffer.push(new Array(w).fill(' '));
-  }
-
-  // Group cells into frames by distance
-  const totalFrames = 20;
-  const frames: Cell[][] = Array.from({ length: totalFrames }, () => []);
-  for (const cell of cells) {
-    const frame = Math.min(Math.floor((cell.dist / maxDist) * totalFrames), totalFrames - 1);
-    frames[frame].push(cell);
-  }
-
-  // Hide cursor, clear screen, move to top
-  process.stdout.write('\x1B[?25l\x1B[2J\x1B[H');
-
-  const leftPad = '    ';
-  console.log('');
-
-  // Print empty lines to reserve space
-  for (let y = 0; y < h; y++) {
-    console.log('');
-  }
-
-  // Title + tagline placement: bottom-right, overlapping logo with 1 char padding
-  const titleRow = h - 2;
-  const taglineRow = h - 1;
-  const tagline = 'E2E encrypted AI agent relay';
-
-  // Both lines start right of center of the logo, +8 more right
-  const textStart = Math.floor(w / 2) + 7;
-
-  // Total text chars to animate (title spaced + tagline)
-  const titleSpaced = TITLE.split('').map((c, i) => ({ ch: c, color: TITLE_COLORS[i] }));
-  const totalTextChars = TITLE.length + tagline.length;
-  let textCharsShown = 0;
-  const textStartFrame = Math.floor(totalFrames * 0.4); // start at 40%, end with logo
-
-  // Redraw helper
-  const redraw = () => {
-    process.stdout.write(`\x1B[${h}A`);
+  const render = (first: boolean) => {
+    if (!first) process.stdout.write(`\x1B[${rowsTotal}A`);
+    const titleShown = Math.min(textShown, TITLE.length);
+    const tagShown = Math.max(0, textShown - TITLE.length);
     for (let y = 0; y < h; y++) {
-      const logoChars = [...buffer[y]];
-      let suffix = '';
-
-      if (y === titleRow && textCharsShown > 0) {
-        const shown = Math.min(textCharsShown, TITLE.length);
-        // Clear logo chars from textStart-1 onward on this row
-        for (let c = Math.max(0, textStart - 1); c < w; c++) logoChars[c] = ' ';
-        // Place title chars
-        for (let i = 0; i < shown; i++) {
-          const col = textStart + i * 2;
-          if (col < w) {
-            logoChars[col] = chalk.hex(titleSpaced[i].color).bold(titleSpaced[i].ch);
-          } else {
-            suffix += chalk.hex(titleSpaced[i].color).bold(titleSpaced[i].ch) + ' ';
-          }
-        }
+      let line = '';
+      for (let x = 0; x < w; x++) {
+        const s = state[y][x];
+        if (s === 'done') line += cell(cells[y][x]);
+        else if (s === 'scramble') {
+          const c = cells[y][x][0] ?? cells[y][x][1];
+          line += chalk.hex(hex(c as string))(SCRAMBLE[Math.floor(Math.random() * SCRAMBLE.length)]);
+        } else line += ' ';
       }
-
-      if (y === taglineRow && textCharsShown > TITLE.length) {
-        const tagShown = Math.min(textCharsShown - TITLE.length, tagline.length);
-        // Clear logo chars from textStart-1 onward on this row
-        for (let c = Math.max(0, textStart - 1); c < w; c++) logoChars[c] = ' ';
-        // Place tagline chars
-        for (let i = 0; i < tagShown; i++) {
-          const col = textStart + i;
-          if (col < w) {
-            logoChars[col] = chalk.dim(tagline[i]);
-          } else {
-            suffix += chalk.dim(tagline[i]);
-          }
-        }
-      }
-
-      process.stdout.write(leftPad + logoChars.join('') + suffix + '\x1B[K\n');
+      const suffix = mode === 'side' ? sideText(y, titleShown, tagShown) : '';
+      process.stdout.write(`${LEFT}${line}${suffix}\x1B[K\n`);
+    }
+    if (mode === 'below') {
+      process.stdout.write('\x1B[K\n');
+      process.stdout.write(`${LEFT}${titleShown ? title(titleShown) : ''}\x1B[K\n`);
+      process.stdout.write(`${LEFT}${chalk.dim(TAGLINE.slice(0, tagShown))}\x1B[K\n`);
     }
   };
 
-  // Animate logo frames
-  for (let f = 0; f < totalFrames; f++) {
-    for (const cell of frames[f]) {
-      const sc = SCRAMBLE[Math.floor(Math.random() * SCRAMBLE.length)];
-      buffer[cell.y][cell.x] = chalk.rgb(cell.r, cell.g, cell.b)(sc);
-    }
-
-    if (f > 0) {
-      for (const cell of frames[f - 1]) {
-        buffer[cell.y][cell.x] = chalk.rgb(cell.r, cell.g, cell.b)(toDisplayChar(cell.ch, cell.x, cell.y, w));
+  process.stdout.write('\x1B[?25l'); // hide cursor
+  const restore = () => process.stdout.write('\x1B[?25h');
+  process.once('exit', restore);
+  try {
+    console.log('');
+    render(true);
+    for (let f = 0; f < FRAMES; f++) {
+      for (const o of order) {
+        const at = frameOf(o.d);
+        if (at === f) state[o.y][o.x] = 'scramble';
+        else if (at === f - 1) state[o.y][o.x] = 'done';
       }
+      if (f >= textFrom) {
+        textShown = Math.min(totalText, Math.ceil(((f - textFrom + 1) / (FRAMES - textFrom)) * totalText));
+      }
+      render(false);
+      await sleep(45);
     }
-
-    // Reveal text chars proportionally so they finish with the logo
-    if (f >= textStartFrame) {
-      const progress = (f - textStartFrame) / (totalFrames - 1 - textStartFrame);
-      textCharsShown = Math.min(Math.floor(progress * totalTextChars), totalTextChars);
-    }
-
-    redraw();
-    await sleep(50);
+    for (const o of order) state[o.y][o.x] = 'done';
+    textShown = totalText;
+    render(false);
+    console.log('');
+  } finally {
+    restore();
+    process.removeListener('exit', restore);
   }
-
-  // Resolve final frame
-  for (const cell of frames[totalFrames - 1]) {
-    buffer[cell.y][cell.x] = chalk.rgb(cell.r, cell.g, cell.b)(toDisplayChar(cell.ch, cell.x, cell.y, w));
-  }
-  textCharsShown = totalTextChars;
-  redraw();
-  console.log('');
-
-  // Show cursor
-  process.stdout.write('\x1B[?25h');
 }
 
-/** Static (non-animated) banner for quick display */
+/** Static banner (help screen). */
 export function printStaticBanner(): void {
-  const { lines, colors, h, w } = data;
-
-  const titleRow = h - 2;
-  const taglineRow = h - 1;
-  const tagline = 'E2E encrypted AI agent relay';
-  const textStart = Math.floor(w / 2) + 7;
-
+  if (!canDraw()) { printTextOnly(); return; }
+  const { w, h, cells } = data;
+  const mode = layout(process.stdout.columns ?? 80);
   console.log('');
   for (let y = 0; y < h; y++) {
-    const colorMap = new Map(colors[y].map((c) => [c[0], c]));
-    const chars: string[] = [];
-    for (let x = 0; x < lines[y].length; x++) {
-      const ch = lines[y][x];
-      const c = colorMap.get(x);
-      if (ch === ' ' || !c) {
-        chars.push(' ');
-      } else {
-        chars.push(chalk.rgb(c[1], c[2], c[3])(toDisplayChar(ch, x, y, w)));
-      }
-    }
-
-    let suffix = '';
-    if (y === titleRow) {
-      for (let c = Math.max(0, textStart - 1); c < w; c++) chars[c] = ' ';
-      for (let i = 0; i < TITLE.length; i++) {
-        const col = textStart + i * 2;
-        if (col < w) {
-          chars[col] = chalk.hex(TITLE_COLORS[i]).bold(TITLE[i]);
-        } else {
-          suffix += chalk.hex(TITLE_COLORS[i]).bold(TITLE[i]) + ' ';
-        }
-      }
-    }
-    if (y === taglineRow) {
-      for (let c = Math.max(0, textStart - 1); c < w; c++) chars[c] = ' ';
-      for (let i = 0; i < tagline.length; i++) {
-        const col = textStart + i;
-        if (col < w) {
-          chars[col] = chalk.dim(tagline[i]);
-        } else {
-          suffix += chalk.dim(tagline[i]);
-        }
-      }
-    }
-
-    console.log('    ' + chars.join('') + suffix);
+    let line = '';
+    for (let x = 0; x < w; x++) line += cell(cells[y][x]);
+    console.log(LEFT + line + (mode === 'side' ? sideText(y, TITLE.length, TAGLINE.length) : ''));
+  }
+  if (mode === 'below') {
+    console.log('');
+    console.log(LEFT + title());
+    console.log(LEFT + chalk.dim(TAGLINE));
   }
   console.log('');
 }

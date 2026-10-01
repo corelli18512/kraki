@@ -5,27 +5,27 @@
  * device naming, and agent verification.
  */
 
-import { select, input, checkbox, confirm } from '@inquirer/prompts';
+import { select, input, confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
 import { homedir, hostname, platform } from 'node:os';
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
+import { execSync, spawnSync } from 'node:child_process';
 
 import {
   DEFAULT_LOG_VERBOSITY,
   type KrakiConfig,
   saveConfig,
-  saveChannelKey,
   getOrCreateDeviceId,
   getConfigPath,
+  loadConfig,
 } from './config.js';
-import { checkGhAuth, checkAgentCli, SETUP_AGENTS, probeFdaAsApp, pollFda, ensureTccBundleRegistered, openTccPane, revealKrakiApp, getKrakiAppBundlePath } from './checks.js';
+import { checkGhAuth, SETUP_AGENTS, probeFdaAsApp, pollFda, ensureTccBundleRegistered, openTccPane, revealKrakiApp, getKrakiAppBundlePath } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { findMacAppWithBuiltIn } from './managed.js';
+import { runAgentsCheckChild, type AgentCheckResult } from './agents-check.js';
 import { isSea } from 'node:sea';
-import type { AgentId } from '@kraki/protocol';
 
 /**
  * Silently install the current binary as `kraki` in a PATH directory.
@@ -90,41 +90,37 @@ function installToPath(): void {
 export const OFFICIAL_RELAY = 'wss://relay.kraki.chat';
 export const OFFICIAL_API = 'https://relay.kraki.chat';
 
-function getBrand(s: string) { return chalk.hex('#ea6046')(s); }
-const icon = '◈';
-function step(n: number, total: number) { return chalk.dim(`[${n}/${total}]`); }
-function divider() { console.log(chalk.dim('  ─────────────────────────────────')); }
+/** Same wording as Kraki for Mac's setup ("Step 1 of 2 · Set up this computer"). */
+function stepHeader(n: number, total: number, title: string): void {
+  console.log('');
+  console.log(`  ${chalk.hex('#2384d4').bold(`Step ${n} of ${total}`)}  ${chalk.bold(title)}`);
+  console.log('');
+}
+function subhead(title: string): void {
+  console.log(`    ${chalk.dim(title.toUpperCase())}`);
+}
 
 /**
- * Check and guide the user through granting macOS TCC permissions.
- *
- * This is where the recurring "kraki lost its permissions after update"
- * bug is fixed end-to-end: register the .app bundle with Launch Services
- * (so TCC tracks grants by bundle id, stable across updates, instead of
- * cdhash, invalidated every release), then open every TCC pane the user
- * must toggle, and poll FDA as the "done" signal.
+ * Full Disk Access, as in Kraki for Mac's first setup step: agents read and
+ * edit files across the user's projects, so grant it once and macOS never
+ * interrupts a session with a permission prompt. The grant is keyed to the
+ * signed Kraki CLI app bundle (registered with Launch Services), so it
+ * survives updates. Waits for the grant; Enter skips.
  */
-async function runFdaStep(stepNum: number, total: number): Promise<void> {
-  console.log(`  ${icon} ${step(stepNum, total)} ${chalk.bold('macOS Privacy')}`);
-
-  // Register the bundle with Launch Services so the grants we ask for
-  // actually stick across future updates. Idempotent + safe.
+async function runFullDiskAccess(): Promise<void> {
+  subhead('Full Disk Access');
   ensureTccBundleRegistered();
 
-  const fdaStatus = await probeFdaAsApp();
-  if (fdaStatus === 'granted') {
-    console.log(chalk.green('    ✓ Full Disk Access already granted'));
-    console.log(chalk.dim('    Other TCC services are only needed by specific features:'));
-    console.log(chalk.dim('    Accessibility, Input Monitoring, Screen Recording, Automation.'));
-    console.log(chalk.dim('    Run `kraki permissions --open` to grant them.'));
+  if (await probeFdaAsApp() === 'granted') {
+    console.log(`    ${chalk.green('✔')} Allowed. Agents can work in any folder without macOS prompts.`);
     return;
   }
 
-  console.log(chalk.dim('    Grant Full Disk Access once so agent sessions never trigger'));
-  console.log(chalk.dim('    macOS permission dialogs. It survives future updates.'));
+  console.log('    Agents read and edit files across your projects. Allow it once and macOS');
+  console.log("    won't interrupt them with permission prompts.");
   console.log('');
-  console.log(`    ${chalk.bold('Turn on “Kraki CLI” in the Full Disk Access list. If it is not')}`);
-  console.log(`    ${chalk.bold('there, drag it in from the Finder window, then turn it on.')}`);
+  console.log(`    ${chalk.bold('Turn on “Kraki CLI” in the list that opens.')} ${chalk.dim('If it is not there, drag it in')}`);
+  console.log(chalk.dim('    from the Finder window that opens next to it.'));
   console.log('');
   // macOS never lists an app under Full Disk Access by itself, and Kraki.app
   // lives in a hidden folder the "+" picker can't easily reach. Open only the
@@ -136,7 +132,7 @@ async function runFdaStep(stepNum: number, total: number): Promise<void> {
   const ac = new AbortController();
   const spinner = ora({
     indent: 4,
-    text: `Waiting for Full Disk Access…  ${chalk.dim('(press Enter to skip)')}`,
+    text: `Waiting for Full Disk Access…  ${chalk.dim('(Enter to skip)')}`,
   }).start();
 
   const granted = await Promise.race([
@@ -149,9 +145,9 @@ async function runFdaStep(stepNum: number, total: number): Promise<void> {
   ]);
 
   if (granted) {
-    spinner.succeed('Full Disk Access granted');
+    spinner.succeed('Full Disk Access allowed');
   } else {
-    spinner.warn('Skipped — grant Full Disk Access later in System Settings');
+    spinner.warn('Skipped. macOS may ask for permission during sessions; allow it later in System Settings.');
   }
 }
 
@@ -282,12 +278,11 @@ interface DeviceCodeResponse {
 }
 
 /**
- * Authenticate with GitHub using the device authorization flow.
- * Opens the browser, copies the code to clipboard, and polls for approval.
- * Returns the access token and saves it for future use.
+ * Sign in with a GitHub device code. Like Kraki for Mac's code fallback: the
+ * code is copied and GitHub opens in the browser right away (no extra
+ * keypress); the user pastes it and approves. Saves the token for the daemon.
  */
-async function githubDeviceFlow(clientId: string): Promise<string> {
-  // 1. Request device code
+async function githubDeviceFlow(clientId: string): Promise<{ token: string; username: string }> {
   const res = await fetch('https://github.com/login/device/code', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -296,138 +291,192 @@ async function githubDeviceFlow(clientId: string): Promise<string> {
   if (!res.ok) throw new Error(`GitHub device code request failed: ${res.status}`);
   const data = await res.json() as DeviceCodeResponse;
 
-  // 2. Prompt to copy code and open browser
-  console.log(chalk.dim(`    Your device code: ${chalk.bold(data.user_code)}`));
-  await input({ message: 'Press Enter to copy code and open GitHub…', theme: promptTheme });
+  const copied = copyToClipboard(data.user_code);
+  const opened = openInBrowser(data.verification_uri);
+  console.log(`    Enter this code on GitHub:  ${chalk.bold.hex('#56b9f2')(data.user_code)}${copied ? chalk.dim('  (copied)') : ''}`);
+  console.log(chalk.dim(`    ${opened ? 'Opened' : 'Open'} ${link(data.verification_uri, data.verification_uri)}${opened ? ' in your browser.' : ' in a browser.'}`));
+  console.log('');
 
-  // Copy to clipboard
-  try {
-    const { execSync } = await import('node:child_process');
-    const platform = (await import('node:os')).platform();
-    if (platform === 'darwin') {
-      execSync('pbcopy', { input: data.user_code, stdio: ['pipe', 'ignore', 'ignore'] });
-    } else if (platform === 'win32') {
-      execSync('clip', { input: data.user_code, stdio: ['pipe', 'ignore', 'ignore'] });
-    } else {
-      try {
-        execSync('xclip -selection clipboard', { input: data.user_code, stdio: ['pipe', 'ignore', 'ignore'] });
-      } catch {
-        execSync('xsel --clipboard', { input: data.user_code, stdio: ['pipe', 'ignore', 'ignore'] });
-      }
-    }
-    console.log(chalk.dim(`    Code copied to clipboard ✓`));
-  } catch { /* clipboard not available */ }
-
-  // Open browser
-  try {
-    const { spawnSync } = await import('node:child_process');
-    const platform = (await import('node:os')).platform();
-    if (platform === 'darwin') {
-      spawnSync('open', [data.verification_uri], { stdio: 'ignore' });
-    } else if (platform === 'win32') {
-      spawnSync('cmd', ['/c', 'start', '', data.verification_uri], { stdio: 'ignore' });
-    } else {
-      spawnSync('xdg-open', [data.verification_uri], { stdio: 'ignore' });
-    }
-  } catch { /* browser open failed — user can navigate manually */ }
-
-  // 4. Poll for authorization
-  const spinner = ora({ text: 'Waiting for authorization…', indent: 4 }).start();
+  const spinner = ora({ text: 'Waiting for you to approve Kraki on GitHub…', indent: 4 }).start();
   const interval = (data.interval ?? 5) * 1000;
   const deadline = Date.now() + data.expires_in * 1000;
 
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, interval));
-    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({
-        client_id: clientId,
-        device_code: data.device_code,
-        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-      }),
-    });
-    const tokenData = await tokenRes.json() as Record<string, string>;
+    let tokenData: Record<string, string>;
+    try {
+      const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          client_id: clientId,
+          device_code: data.device_code,
+          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        }),
+      });
+      tokenData = await tokenRes.json() as Record<string, string>;
+    } catch {
+      continue; // transient network error: keep polling until the code expires
+    }
 
     if (tokenData.access_token) {
-      // Fetch username
-      let username = 'unknown';
-      try {
-        const userRes = await fetch('https://api.github.com/user', {
-          headers: { Authorization: `Bearer ${tokenData.access_token}`, 'User-Agent': 'kraki-tentacle' },
-        });
-        const userData = await userRes.json() as Record<string, unknown>;
-        username = String(userData.login ?? 'unknown');
-      } catch { /* ignore */ }
-
-      spinner.succeed(`Authenticated as ${chalk.bold(username)}`);
-
-      // Save token for daemon to use
+      const username = await githubLogin(tokenData.access_token) ?? 'unknown';
+      spinner.succeed(`Signed in as ${chalk.bold(username)}`);
       const { saveGitHubToken } = await import('./config.js');
       saveGitHubToken(tokenData.access_token);
-      return tokenData.access_token;
+      return { token: tokenData.access_token, username };
     }
 
     if (tokenData.error === 'slow_down') {
       await new Promise(r => setTimeout(r, 5000)); // extra backoff
     } else if (tokenData.error === 'expired_token') {
-      spinner.fail('Device code expired. Please try again.');
-      throw new Error('Device code expired');
+      spinner.fail('The code expired.');
+      throw new Error('The GitHub code expired. Run `kraki` to try again.');
     } else if (tokenData.error === 'access_denied') {
-      spinner.fail('Authorization denied.');
-      throw new Error('Access denied');
+      spinner.fail('Sign-in was cancelled on GitHub.');
+      throw new Error('GitHub sign-in was cancelled.');
     }
     // 'authorization_pending' — keep polling
   }
 
-  spinner.fail('Authorization timed out.');
-  throw new Error('Device flow timed out');
+  spinner.fail('The code expired.');
+  throw new Error('The GitHub code expired. Run `kraki` to try again.');
+}
+
+async function githubLogin(token: string): Promise<string | null> {
+  try {
+    const res = await fetch('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'kraki-tentacle' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const body = await res.json() as { login?: unknown };
+    return typeof body.login === 'string' ? body.login : null;
+  } catch {
+    return null;
+  }
+}
+
+function copyToClipboard(text: string): boolean {
+  try {
+    const os = platform();
+    if (os === 'darwin') execSync('pbcopy', { input: text, stdio: ['pipe', 'ignore', 'ignore'] });
+    else if (os === 'win32') execSync('clip', { input: text, stdio: ['pipe', 'ignore', 'ignore'] });
+    else {
+      try { execSync('xclip -selection clipboard', { input: text, stdio: ['pipe', 'ignore', 'ignore'] }); }
+      catch { execSync('xsel --clipboard', { input: text, stdio: ['pipe', 'ignore', 'ignore'] }); }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Open a URL locally, but not from an SSH session (it would open on the remote desktop, or nowhere). */
+function openInBrowser(url: string): boolean {
+  if (process.env.SSH_CONNECTION || process.env.SSH_TTY) return false;
+  try {
+    const os = platform();
+    const r = os === 'darwin' ? spawnSync('open', [url], { stdio: 'ignore' })
+      : os === 'win32' ? spawnSync('cmd', ['/c', 'start', '', url], { stdio: 'ignore' })
+      : spawnSync('xdg-open', [url], { stdio: 'ignore' });
+    return r.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * GitHub sign-in: reuse a signed-in GitHub CLI (`gh`) when there is one,
+ * else a device code.
+ */
+async function signInWithGitHub(clientId: () => Promise<string | undefined>): Promise<{ token: string; username: string }> {
+  const gh = checkGhAuth();
+  if (gh.authenticated && gh.token) {
+    console.log(`    ${chalk.green('✔')} Signed in as ${chalk.bold(gh.username ?? 'unknown')} ${chalk.dim('(GitHub CLI)')}`);
+    return { token: gh.token, username: gh.username ?? 'unknown' };
+  }
+  const id = await clientId();
+  if (!id) throw new Error('Could not reach Kraki to start GitHub sign-in. Check your network connection.');
+  return githubDeviceFlow(id);
 }
 
 // ── Setup flow ──────────────────────────────────────────
 
 /**
- * Detect installed agents and, when several are present, let the user choose
- * which to enable. Returns an explicit allow-list to persist in config, or
- * `undefined` to leave the daemon on auto-detect. Never blocks: a machine with
- * no agent yet finishes setup and picks one up once it is installed.
+ * Coding agents on this computer, as in Kraki for Mac: each supported agent
+ * is checked for real (installed, signed in, models available) by starting it
+ * the way sessions will. Read-only — Kraki only relays, so a problem gets a
+ * hint for the user to fix in that agent. Agents are auto-detected by the
+ * daemon; nothing is pinned in config.
  */
-async function runAgentStep(): Promise<AgentId[] | undefined> {
-  // Kraki only relays — each agent keeps its own install and login, so this
-  // step just reports what is on PATH and never touches agent config.
-  const available: AgentId[] = [];
-  for (const agent of SETUP_AGENTS) {
-    const result = checkAgentCli(agent.bin);
-    if (result.found) {
-      available.push(agent.id);
-      console.log(`    ${chalk.green('✔')} ${agent.name} ${chalk.dim(result.version ?? '')}`.trimEnd());
-    } else {
-      console.log(`    ${chalk.dim('–')} ${chalk.dim(`${agent.name} not found`)}`);
-    }
-  }
-
-  if (available.length === 0) {
+async function runAgentStep(): Promise<AgentCheckResult[]> {
+  subhead('Coding agents');
+  for (;;) {
+    const spinner = ora({ text: 'Checking the coding agents on this computer…', indent: 4 }).start();
+    const results = await setupDeps.checkAgents();
+    spinner.stop();
+    process.stdout.write('\r');
+    const byId = new Map(results.map((r) => [r.id, r]));
+    for (const agent of SETUP_AGENTS) printAgentRow(agent, byId.get(agent.id));
+    const ready = results.filter((r) => r.status === 'ready');
+    const fixable = results.filter((r) => r.status === 'needs_login' || r.status === 'error');
     console.log('');
-    console.log(chalk.yellow('    No coding agent found. Install one to start sessions:'));
-    for (const agent of SETUP_AGENTS) {
-      console.log(chalk.dim(`      • ${agent.name} — ${agent.installUrl}`));
+    console.log(chalk.dim(`    ${ready.length === 0 ? 'No agent is ready yet.' : ready.length === 1 ? '1 agent is ready.' : `${ready.length} agents are ready.`}`));
+
+    if (ready.length > 0 && fixable.length === 0) return results;
+    const choices = ready.length > 0
+      ? [{ name: '  Continue', value: 'continue' }, { name: '  Check again', value: 'again' }]
+      : [{ name: '  Check again', value: 'again' }, { name: '  Continue without an agent', value: 'continue' }];
+    const action = await select({
+      message: ready.length > 0 ? 'Fix the agents above in their own app or Terminal, or continue:' : 'Install or sign in to an agent, then check again:',
+      theme: promptTheme,
+      choices,
+    });
+    if (action === 'continue') {
+      if (ready.length === 0) {
+        console.log(chalk.dim(`    Kraki starts without one. After setting one up, run ${chalk.bold('kraki restart')}.`));
+      }
+      return results;
     }
-    console.log(chalk.dim(`    Setup continues without one. After installing, run ${chalk.bold('kraki restart')}.`));
-    return undefined;
+    console.log('');
   }
-
-  // One agent: stay on auto-detect so agents installed later are picked up.
-  if (available.length === 1) return undefined;
-
-  const chosen = await checkbox<AgentId>({
-    message: 'Enable which agents?',
-    theme: promptTheme,
-    choices: SETUP_AGENTS.filter((a) => available.includes(a.id)).map((a) => ({ name: a.name, value: a.id, checked: true })),
-    validate: (items) => (items.length > 0 ? true : 'Select at least one agent'),
-  });
-  // Everything checked means "all of them" — keep auto-detect for future installs.
-  return chosen.length === available.length ? undefined : chosen;
 }
+
+function printAgentRow(agent: (typeof SETUP_AGENTS)[number], r: AgentCheckResult | undefined): void {
+  const version = r?.version ? chalk.dim(` ${r.version}`) : '';
+  switch (r?.status) {
+    case 'ready': {
+      const n = r.models;
+      console.log(`    ${chalk.green('✔')} ${agent.name}${version}  ${chalk.dim(`ready · ${n} ${n === 1 ? 'model' : 'models'}`)}`);
+      break;
+    }
+    case 'needs_login':
+      console.log(`    ${chalk.yellow('!')} ${agent.name}${version}  ${chalk.yellow('not signed in')}${r.hint ? chalk.dim(` — ${r.hint}`) : ''}`);
+      break;
+    case 'error':
+      console.log(`    ${chalk.yellow('!')} ${agent.name}${version}  ${chalk.yellow("didn't start")}${r.hint ? chalk.dim(` — ${r.hint}`) : ''}`);
+      break;
+    default:
+      console.log(chalk.dim(`    – ${agent.name}  not installed · ${link('how to install', agent.installUrl)}`));
+  }
+}
+
+/** `kraki agents`: the setup check as a standalone report. */
+export async function printAgentsCheck(): Promise<void> {
+  console.log('');
+  const spinner = ora({ text: 'Checking the coding agents on this computer…', indent: 4 }).start();
+  const results = await setupDeps.checkAgents();
+  spinner.stop();
+  process.stdout.write('\r');
+  const byId = new Map(results.map((r) => [r.id, r]));
+  for (const agent of SETUP_AGENTS) printAgentRow(agent, byId.get(agent.id));
+  console.log('');
+}
+
+/** Overridable in tests. */
+export const setupDeps = {
+  checkAgents: (): Promise<AgentCheckResult[]> => runAgentsCheckChild(),
+};
 
 /**
  * Kraki for Mac with a built-in tentacle sets Kraki up by itself; a separate
@@ -455,6 +504,61 @@ async function confirmDespiteMacApp(): Promise<void> {
   }
 }
 
+/** Step 1 — this computer: coding agents, then (macOS) Full Disk Access. */
+async function runThisComputerStep(n: number, total: number): Promise<AgentCheckResult[]> {
+  stepHeader(n, total, 'Set up this computer');
+  console.log(chalk.dim('    Kraki runs the coding agents installed here, so you can use them from your'));
+  console.log(chalk.dim('    phone, the web and your other computers.'));
+  console.log('');
+  const agents = await runAgentStep();
+  if (platform() === 'darwin') {
+    console.log('');
+    await runFullDiskAccess();
+  }
+  return agents;
+}
+
+/** Keep the device name across re-setup; a new device is named after the host. */
+function deviceName(): string {
+  return loadConfig()?.device.name ?? hostname().replace(/\.local$/, '');
+}
+
+async function officialClientId(apiBase: string): Promise<string | undefined> {
+  try {
+    const res = await fetch(`${apiBase}/api/config`, { signal: AbortSignal.timeout(5000) });
+    const body = await res.json() as { githubClientId?: string };
+    if (body.githubClientId) return body.githubClientId;
+  } catch { /* fall back to the relay */ }
+  try {
+    return (await queryRelayInfo(OFFICIAL_RELAY)).githubClientId;
+  } catch {
+    return undefined;
+  }
+}
+
+function printDone(lines: { user?: string; relay: string; region?: string; device: string; agents: AgentCheckResult[] }): void {
+  const ready = SETUP_AGENTS.filter((a) => lines.agents.some((r) => r.id === a.id && r.status === 'ready')).map((a) => a.name);
+  console.log('');
+  printBox([
+    `${chalk.green.bold('✔')} ${chalk.bold('Kraki is set up')}`,
+    '',
+    ...(lines.user ? [`${chalk.dim('Signed in')}  ${chalk.cyan(lines.user)}`] : []),
+    `${chalk.dim('Agents')}     ${chalk.cyan(ready.length > 0 ? ready.join(', ') : 'none yet')}`,
+    `${chalk.dim('Device')}     ${chalk.cyan(lines.device)}`,
+    `${chalk.dim('Relay')}      ${chalk.cyan(lines.region ? `${lines.relay} (${lines.region})` : lines.relay)}`,
+    '',
+    chalk.dim(`Config saved to ${getConfigPath()}`),
+  ]);
+}
+
+/**
+ * First-run setup, in the same order as Kraki for Mac:
+ *   1. Set up this computer — coding agents (installed, signed in, models)
+ *      and, on macOS, Full Disk Access.
+ *   2. Sign in — GitHub (GitHub CLI if signed in, else a device code); the
+ *      relay for the account's region is resolved silently.
+ * A self-hosted relay (KRAKI_RELAY_URL) adds a relay step first.
+ */
 export async function runSetup(): Promise<KrakiConfig> {
   await printAnimatedBanner();
   await confirmDespiteMacApp();
@@ -465,153 +569,56 @@ export async function runSetup(): Promise<KrakiConfig> {
     return runSetupDirect(customRelay);
   }
 
-  const fdaSteps = platform() === 'darwin' ? 1 : 0;
-  const total = 4 + fdaSteps;
   const apiBase = process.env.KRAKI_API_URL ?? OFFICIAL_API;
+  const agents = await runThisComputerStep(1, 2);
 
-  // 1. Authentication
-  console.log(`\n  ${icon} ${step(1, total)} ${chalk.bold('Authentication')}`);
+  stepHeader(2, 2, 'Sign in');
+  console.log(chalk.dim('    Sign in with GitHub. This computer then shows up in Kraki on your phone,'));
+  console.log(chalk.dim('    the web and your other computers.'));
+  console.log('');
+  const { token, username } = await signInWithGitHub(() => officialClientId(apiBase));
 
-  let ghToken: string | undefined;
-  const spinner = ora({ text: 'Checking GitHub CLI…', indent: 4 }).start();
-  const ghResult = checkGhAuth();
-  if (ghResult.authenticated) {
-    spinner.succeed(`Authenticated via GitHub CLI as ${chalk.bold(ghResult.username ?? 'unknown')}`);
-    try {
-      const { execSync } = await import('node:child_process');
-      ghToken = execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim() || undefined;
-    } catch { /* ignore */ }
-  } else {
-    // Try device flow — need GitHub client ID from the API first
-    spinner.info('GitHub CLI not authenticated — signing in via browser');
-    let clientId: string | undefined;
-    try {
-      const configRes = await fetch(`${apiBase}/api/config`, { signal: AbortSignal.timeout(5000) });
-      const configData = await configRes.json() as { githubClientId?: string };
-      clientId = configData.githubClientId;
-    } catch { /* ignore */ }
-
-    if (!clientId) {
-      // Fall back to querying the relay directly for client ID
-      try {
-        const info = await queryRelayInfo(OFFICIAL_RELAY);
-        clientId = info.githubClientId;
-      } catch { /* ignore */ }
-    }
-
-    if (!clientId) {
-      throw new Error('Could not obtain GitHub client ID. Install GitHub CLI and run: gh auth login');
-    }
-    ghToken = await githubDeviceFlow(clientId);
-  }
-
-  divider();
-
-  // 2. Resolve region + relay URL
-  console.log(`  ${icon} ${step(2, total)} ${chalk.bold('Relay')}`);
-  let relay: string;
-  let region: string | undefined;
-
-  const resolveSpinner = ora({ text: 'Finding best relay…', indent: 4 }).start();
-  const resolved = await resolveRelay(ghToken, apiBase);
-  relay = resolved.relayUrl;
-  region = resolved.region;
-  if (resolved.ok) {
-    resolveSpinner.succeed(`Relay assigned${region ? ` (${region})` : ''}`);
-  } else {
-    resolveSpinner.info('Could not resolve relay — using default');
-  }
-
-  // Verify relay is reachable
-  const connSpinner = ora({ text: 'Verifying relay…', indent: 4 }).start();
+  const connecting = ora({ text: 'Connecting to Kraki…', indent: 4 }).start();
+  const resolved = await resolveRelay(token, apiBase);
+  let relay = resolved.relayUrl;
+  const region = resolved.region;
   try {
     await queryRelayInfo(relay);
-    connSpinner.succeed('Relay is reachable');
+    connecting.succeed(`Connected${region ? ` (${region})` : ''}`);
   } catch (err) {
-    connSpinner.fail(`Cannot reach relay: ${(err as Error).message}`);
-    // Fall back to manual input
+    connecting.fail(`Cannot reach Kraki: ${(err as Error).message}`);
     relay = await promptRelayUrl(OFFICIAL_RELAY);
   }
 
-  divider();
-
-  // 3. Agent selection (Copilot, Claude and/or Codex)
-  console.log(`  ${icon} ${step(3, total)} ${chalk.bold('Agents')}`);
-  const selectedAgents = await runAgentStep();
-
-  divider();
-
-  // 4. Device naming
-  console.log(`  ${icon} ${step(4, total)} ${chalk.bold('Device Name')}`);
-  const defaultName = hostname().replace(/\.local$/, '');
-  const deviceName = await input({
-    message: 'Device name:',
-    theme: promptTheme,
-    default: defaultName,
-  });
-
-  // 5. macOS Privacy (Full Disk Access)
-  if (fdaSteps > 0) {
-    console.log('');
-    await runFdaStep(5, total);
-  }
-
-  // Build config
-  const deviceId = getOrCreateDeviceId();
+  const name = deviceName();
   const config: KrakiConfig = {
     relay,
     authMethod: 'github_token',
-    device: { name: deviceName, id: deviceId },
-    ...(selectedAgents && selectedAgents.length > 0 && { agents: selectedAgents }),
-    logging: { verbosity: DEFAULT_LOG_VERBOSITY },
+    device: { name, id: getOrCreateDeviceId() },
+    logging: { verbosity: loadConfig()?.logging?.verbosity ?? DEFAULT_LOG_VERBOSITY },
   };
-
-  // Save
   saveConfig(config);
-
-  // Install to PATH (silent — only for SEA binaries)
   installToPath();
-
-  // Summary box
-  console.log('');
-  printBox([
-    `${chalk.green.bold('✔')} ${chalk.bold('Setup complete!')}`,
-    '',
-    `${chalk.dim('Relay')}    ${chalk.cyan(relay)}`,
-    ...(region ? [`${chalk.dim('Region')}   ${chalk.cyan(region)}`] : []),
-    `${chalk.dim('Auth')}     ${chalk.cyan('github_token')}`,
-    `${chalk.dim('Agents')}   ${chalk.cyan(selectedAgents && selectedAgents.length > 0 ? selectedAgents.join(', ') : 'auto-detect')}`,
-    `${chalk.dim('Device')}   ${chalk.cyan(deviceName)}`,
-    `${chalk.dim('Logs')}     ${chalk.cyan(DEFAULT_LOG_VERBOSITY)}`,
-    '',
-    chalk.dim(`Config saved to ${getConfigPath()}`),
-  ]);
-
+  printDone({ user: username, relay, region, device: name, agents });
   return config;
 }
 
 /**
- * Direct setup — for self-hosted relays (KRAKI_RELAY_URL set).
- * Connects to the relay, queries capabilities, does inline auth.
+ * Self-hosted relay (KRAKI_RELAY_URL): relay, this computer, sign in.
  */
 async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
-  const fdaSteps = platform() === 'darwin' ? 1 : 0;
-  const total = 4 + fdaSteps;
+  const total = 3;
 
   // 1. Relay URL (with retry loop)
+  stepHeader(1, total, 'Relay');
   let relay: string = defaultRelay;
   let relayInfo: RelayInfo = { methods: ['open'], pairing: true };
-  let urlConfirmed = false;
-  while (!urlConfirmed) {
-    console.log(`\n  ${icon} ${step(1, total)} ${chalk.bold('Relay')}`);
+  for (let confirmed = false; !confirmed;) {
     const relayHost = await input({
       message: 'Relay:',
       default: defaultRelay.replace(/^wss:\/\//, ''), // keep ws:// so the default isn't upgraded to TLS
       theme: promptTheme,
-      validate: (v) => {
-        if (v.includes(' ')) return 'Invalid URL';
-        return true;
-      },
+      validate: (v) => (v.includes(' ') ? 'Invalid URL' : true),
     });
     relay = relayHost.startsWith('wss://') || relayHost.startsWith('ws://') ? relayHost : `wss://${relayHost}`;
 
@@ -620,7 +627,7 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
       try {
         relayInfo = await queryRelayInfo(relay);
         connSpinner.succeed('Relay is reachable');
-        urlConfirmed = true;
+        confirmed = true;
         break;
       } catch (err) {
         connSpinner.fail(`Cannot reach relay: ${(err as Error).message}`);
@@ -637,39 +644,26 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
     }
   }
 
-  divider();
+  // 2. This computer
+  const agents = await runThisComputerStep(2, total);
 
-  // 2. Auth method
+  // 3. Sign in (whatever the relay supports)
+  stepHeader(3, total, 'Sign in');
   const cliAuthLabels: Record<string, string> = {
     github_token: '  GitHub (recommended)',
     apikey: '  API key',
     open: '  Open (no auth)',
   };
-
-  const hasGitHub = relayInfo.methods.includes('github_token');
   const cliMethods = relayInfo.methods.filter((m) => cliAuthLabels[m]);
   let authMethod: string;
-
-  if (hasGitHub) {
+  let user: string | undefined;
+  if (relayInfo.methods.includes('github_token')) {
     authMethod = 'github_token';
-    console.log(`  ${icon} ${step(2, total)} ${chalk.bold('Authentication')}`);
-    const spinner = ora({ text: 'Checking GitHub CLI…', indent: 4 }).start();
-    const ghResult = checkGhAuth();
-    if (ghResult.authenticated) {
-      spinner.succeed(`Authenticated via GitHub CLI as ${chalk.bold(ghResult.username ?? 'unknown')}`);
-    } else {
-      spinner.info('GitHub CLI not authenticated — signing in via browser');
-      if (!relayInfo.githubClientId) {
-        throw new Error('Relay does not provide a GitHub client ID. Install GitHub CLI and run: gh auth login');
-      }
-      await githubDeviceFlow(relayInfo.githubClientId);
-    }
+    user = (await signInWithGitHub(async () => relayInfo.githubClientId)).username;
   } else if (cliMethods.length === 1) {
     authMethod = cliMethods[0];
-    console.log(`  ${icon} ${step(2, total)} ${chalk.bold('Authentication')}`);
-    console.log(chalk.dim(`    Auto-selected: ${cliAuthLabels[authMethod]?.trim() ?? authMethod}`));
+    console.log(chalk.dim(`    ${cliAuthLabels[authMethod]?.trim() ?? authMethod}`));
   } else if (cliMethods.length > 1) {
-    console.log(`  ${icon} ${step(2, total)} ${chalk.bold('Authentication')}`);
     authMethod = await select({
       message: 'Authentication:',
       theme: promptTheme,
@@ -679,54 +673,16 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
     throw new Error('No supported auth method found on this relay');
   }
 
-  divider();
-
-  // 3. Agents
-  console.log(`  ${icon} ${step(3, total)} ${chalk.bold('Agents')}`);
-  const selectedAgents = await runAgentStep();
-
-  divider();
-
-  // 4. Device naming
-  console.log(`  ${icon} ${step(4, total)} ${chalk.bold('Device Name')}`);
-  const defaultName = hostname().replace(/\.local$/, '');
-  const deviceName = await input({
-    message: 'Device name:',
-    theme: promptTheme,
-    default: defaultName,
-  });
-
-  // 5. macOS Privacy (Full Disk Access)
-  if (fdaSteps > 0) {
-    console.log('');
-    await runFdaStep(5, total);
-  }
-
-  // Build config
-  const deviceId = getOrCreateDeviceId();
+  const name = deviceName();
   const config: KrakiConfig = {
     relay,
     authMethod: authMethod as KrakiConfig['authMethod'],
-    device: { name: deviceName, id: deviceId },
-    ...(selectedAgents && selectedAgents.length > 0 && { agents: selectedAgents }),
-    logging: { verbosity: DEFAULT_LOG_VERBOSITY },
+    device: { name, id: getOrCreateDeviceId() },
+    logging: { verbosity: loadConfig()?.logging?.verbosity ?? DEFAULT_LOG_VERBOSITY },
   };
-
   saveConfig(config);
   installToPath();
-
-  console.log('');
-  printBox([
-    `${chalk.green.bold('✔')} ${chalk.bold('Setup complete!')}`,
-    '',
-    `${chalk.dim('Relay')}   ${chalk.cyan(relay)}`,
-    `${chalk.dim('Auth')}    ${chalk.cyan(authMethod)}`,
-    `${chalk.dim('Device')}  ${chalk.cyan(deviceName)}`,
-    `${chalk.dim('Logs')}    ${chalk.cyan(DEFAULT_LOG_VERBOSITY)}`,
-    '',
-    chalk.dim(`Config saved to ${getConfigPath()}`),
-  ]);
-
+  printDone({ user, relay, device: name, agents });
   return config;
 }
 
@@ -758,7 +714,7 @@ async function promptRelayUrl(defaultRelay: string): Promise<string> {
  */
 export async function showPairingQr(config: KrakiConfig): Promise<void> {
   console.log('');
-  const pairSpinner = ora({ text: 'Generating pairing code…', indent: 2 }).start();
+  const pairSpinner = ora({ text: 'Creating a connect code…', indent: 2 }).start();
   try {
     let token: string | undefined;
     if (config.authMethod === 'github_token') {
@@ -780,9 +736,9 @@ export async function showPairingQr(config: KrakiConfig): Promise<void> {
     const qr = await renderQrToTerminal(url);
     pairSpinner.stop();
     console.log(qr);
-    console.log(chalk.dim('  Token expires in 5 minutes and can only be claimed once.\n'));
+    console.log(chalk.dim('  The code works once and expires in 5 minutes (`kraki connect` makes a new one).\n'));
   } catch {
-    pairSpinner.warn('Could not generate pairing code.');
+    pairSpinner.warn('Could not create a connect code.');
     console.log(chalk.dim('  Run `kraki connect` later to connect your phone.\n'));
   }
 }

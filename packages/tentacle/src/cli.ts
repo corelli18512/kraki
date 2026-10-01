@@ -63,44 +63,37 @@ function gracefulExit(code: number): void {
 
 function printHelp(): void {
   printStaticBanner();
-  console.log(`${chalk.bold('Usage:')}
-  kraki                Setup wizard + start (first time or reconfigure)
-  kraki start          Start silently from existing config
-  kraki stop           Stop Kraki
-  kraki restart        Restart Kraki
-  kraki update         Check for updates and install the latest version
-  kraki connect        Generate QR code to connect a device
-  kraki connect --url-only
-                       Print pairing URL only (for toolbar / scripts)
-  kraki connect --json Print pairing token + url + expiry as JSON
-  kraki setup --headless
-                       Non-interactive setup (for toolbar / scripts)
-                       [--relay --auth --device-name --github-token
-                        --agent copilot|claude|both|auto --anthropic-key]
-  kraki setup --json [--device-name <name>] [--relay <url>] [--force-login]
-                       Guided setup as NDJSON events (used by Kraki for Mac)
-  kraki resolve-relay --json [--github-token <tok>]
-                       Resolve best relay + region as JSON
-  kraki doctor         Print environment status as JSON
-  kraki agents --json  Check which coding agents can run here, as NDJSON
-  kraki fda --json     Print macOS Full Disk Access status as JSON
-  kraki fda --watch    Stream FDA status as NDJSON until granted
-  kraki permissions    macOS TCC status (bundle registration + FDA) as JSON
-  kraki permissions --open
-                       Open every TCC pane in System Settings
-  kraki permissions --clean
-                       Also purge stale Launch Services entries
-  kraki status         Show status and connection info
-  kraki status --json  Print status as JSON (for desktop apps)
-  kraki logs [-f]      Tail log files (-f to follow)
-  kraki config         Print current config
-  kraki config log     Show current log verbosity
-  kraki config log <normal|verbose>
-                       Set log verbosity for future daemon starts
-  kraki config reset   Delete config and re-run setup
-  kraki --help         Show this help
-  kraki --version      Show version
-`);
+  const cmd = (c: string, d: string) => `    ${chalk.bold(c.padEnd(20))} ${d}`;
+  const head = (t: string) => `  ${chalk.hex('#2384d4').bold(t)}`;
+  console.log([
+    head('Get started'),
+    cmd('kraki', 'Set up this computer and start Kraki'),
+    cmd('kraki connect', 'Show a QR code to connect your phone'),
+    '',
+    head('Everyday'),
+    cmd('kraki status', 'Is Kraki running and connected?'),
+    cmd('kraki agents', 'Check the coding agents on this computer'),
+    cmd('kraki logs [-f]', 'Show logs (-f to follow)'),
+    cmd('kraki start', 'Start Kraki in the background'),
+    cmd('kraki stop', 'Stop Kraki'),
+    cmd('kraki restart', 'Restart Kraki (e.g. after installing an agent)'),
+    cmd('kraki update', 'Install the latest version'),
+    '',
+    head('Settings'),
+    cmd('kraki config', 'Print the current config'),
+    cmd('kraki config log <normal|verbose>', ''),
+    cmd('', 'Set log detail for the next start'),
+    cmd('kraki config reset', 'Delete the config and set up again'),
+    cmd('kraki permissions', 'macOS privacy status (--open to open the panes)'),
+    '',
+    `${chalk.dim('  For apps and scripts: setup --json | --headless [--agent …], connect --json | --url-only,')}`,
+    `${chalk.dim('  status --json, agents --json, doctor, fda --json | --watch, resolve-relay --json')}`,
+    '',
+    ...(process.platform === 'darwin'
+      ? [`${chalk.dim('  Prefer an app? Kraki for Mac does all this without the CLI:')}`,
+        `${chalk.dim('  https://github.com/corelli18512/kraki/releases?q=mac-v')}`, '']
+      : []),
+  ].join('\n'));
 }
 
 // ── Commands ────────────────────────────────────────────
@@ -211,6 +204,7 @@ async function cmdDefault(): Promise<void> {
         },
         choices: [
           { name: '  Show pairing QR', value: 'qr' },
+          { name: '  Check coding agents', value: 'agents' },
           { name: '  Stop', value: 'stop' },
           { name: '  Restart', value: 'restart' },
           { name: '  Clean restart (reconfigure)', value: 'reconfig' },
@@ -221,6 +215,11 @@ async function cmdDefault(): Promise<void> {
         case 'qr': {
           const { showPairingQr } = await import('./setup.js');
           await showPairingQr(config);
+          break;
+        }
+        case 'agents': {
+          const { printAgentsCheck } = await import('./setup.js');
+          await printAgentsCheck();
           break;
         }
         case 'stop':
@@ -311,18 +310,16 @@ async function silentStart(config: KrakiConfig): Promise<void> {
   }
 
   const pid = await startDaemon(config);
-  console.log(chalk.green(`  🦑 Kraki started (PID ${pid})`));
+  console.log('');
+  console.log(`  ${chalk.green('✔')} ${chalk.bold('Kraki is running')} ${chalk.dim(`in the background (PID ${pid})${process.platform === 'darwin' ? ' and starts again when you log in' : ''}.`)}`);
+  console.log('');
+  console.log(`  ${chalk.hex('#2384d4').bold('Use it from your phone')}`);
 
   // Show pairing QR code
   const { showPairingQr } = await import('./setup.js');
   await showPairingQr(config);
 
-  // Tips
-  console.log(chalk.dim('  Commands:'));
-  console.log(chalk.dim('    kraki connect   Generate a new connect code'));
-  console.log(chalk.dim('    kraki status    Show connection status'));
-  console.log(chalk.dim('    kraki logs -f   Follow logs'));
-  console.log(chalk.dim('    kraki stop      Stop Kraki'));
+  console.log(chalk.dim(`  ${chalk.bold('kraki status')} to check on it, ${chalk.bold('kraki agents')} to recheck agents, ${chalk.bold('kraki --help')} for more.`));
   console.log('');
 }
 
@@ -1184,6 +1181,12 @@ async function main(): Promise<void> {
 
   if (cmd === 'fda') {
     await cmdFda(args);
+    return;
+  }
+
+  if (cmd === 'agents' && !args.includes('--json')) {
+    const { printAgentsCheck } = await import('./setup.js');
+    await printAgentsCheck();
     return;
   }
 
