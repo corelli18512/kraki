@@ -79,7 +79,7 @@ describe('parseServerFrame', () => {
   it('round-trips a JSON server response via buildServerResponseFrame', () => {
     const payload = {
       code: 20_000_000,
-      result: { text: '你好', confidence: 0.9, utterances: [{ text: '你好', definite: true }] },
+      result: { text: '\u4F60\u597D', confidence: 0.9, utterances: [{ text: '\u4F60\u597D', definite: true }] },
     };
     const frame = buildServerResponseFrame(payload, { isLast: true, sequence: 42 });
     const parsed = parseServerFrame(frame);

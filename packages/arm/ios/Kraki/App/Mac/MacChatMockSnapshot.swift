@@ -259,7 +259,7 @@ private enum MacChatMockSanitizer {
             } else if CharacterSet.lowercaseLetters.contains(scalar) {
                 result.append("x")
             } else if CharacterSet.letters.contains(scalar) {
-                result.append("文")
+                result.append("\u{6587}")
             } else if CharacterSet.decimalDigits.contains(scalar) {
                 result.append("0")
             } else {

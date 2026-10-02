@@ -161,20 +161,20 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
     func testSendStagesAtOnceStreamsCorrectionAndTransmitsCorrectedOnce() async {
         let (host, voice) = make()
         let session = await start(host, voice)
-        await partial("把登录页的报错改成中文", session)
+        await partial("\u{628A}\u{767B}\u{5F55}\u{9875}\u{7684}\u{62A5}\u{9519}\u{6539}\u{6210}\u{4E2D}\u{6587}", session)
         XCTAssertTrue(voice.send(attachments: nil, delivery: .prompt))
         XCTAssertFalse(voice.isRecording, "composer collapses at once")
         XCTAssertNil(host.sessionStore.drafts["a"], "composer is free for the next message")
         XCTAssertEqual(host.last?.state, "correcting")
-        XCTAssertEqual(host.last?.text, "把登录页的报错改成中文")
+        XCTAssertEqual(host.last?.text, "\u{628A}\u{767B}\u{5F55}\u{9875}\u{7684}\u{62A5}\u{9519}\u{6539}\u{6210}\u{4E2D}\u{6587}")
         XCTAssertTrue(host.transmitted.isEmpty, "nothing leaves the device before correction")
-        session.event(.correctionDelta("把登录页的报错")); await settle(40)
-        XCTAssertEqual(host.last?.text, "把登录页的报错改成中文",
+        session.event(.correctionDelta("\u{628A}\u{767B}\u{5F55}\u{9875}\u{7684}\u{62A5}\u{9519}")); await settle(40)
+        XCTAssertEqual(host.last?.text, "\u{628A}\u{767B}\u{5F55}\u{9875}\u{7684}\u{62A5}\u{9519}\u{6539}\u{6210}\u{4E2D}\u{6587}",
                        "a partial correction is applied over the transcript; no words disappear")
-        XCTAssertEqual(host.last?.original, "把登录页的报错改成中文")
+        XCTAssertEqual(host.last?.original, "\u{628A}\u{767B}\u{5F55}\u{9875}\u{7684}\u{62A5}\u{9519}\u{6539}\u{6210}\u{4E2D}\u{6587}")
         XCTAssertTrue(voice.isFinishing(in: "a"))
-        await final("把登录页的报错改成中文。", raw: "把登录页的报错改成中文", session)
-        XCTAssertEqual(host.transmitted.map(\.1), ["把登录页的报错改成中文。"])
+        await final("\u{628A}\u{767B}\u{5F55}\u{9875}\u{7684}\u{62A5}\u{9519}\u{6539}\u{6210}\u{4E2D}\u{6587}\u{3002}", raw: "\u{628A}\u{767B}\u{5F55}\u{9875}\u{7684}\u{62A5}\u{9519}\u{6539}\u{6210}\u{4E2D}\u{6587}", session)
+        XCTAssertEqual(host.transmitted.map(\.1), ["\u{628A}\u{767B}\u{5F55}\u{9875}\u{7684}\u{62A5}\u{9519}\u{6539}\u{6210}\u{4E2D}\u{6587}\u{3002}"])
         XCTAssertEqual(host.last?.state, "sending")
         XCTAssertNil(voice.operation)
         XCTAssertEqual(voice.dispatchedSessionID, "a")
@@ -185,17 +185,17 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
     func testStreamingCorrectionReplacesWordsInPlaceKeepingTheRest() async {
         let (host, voice) = make()
         let session = await start(host, voice)
-        await partial("请帮我把登入页的报错改成中文然后跑一下测试", session)
+        await partial("\u{8BF7}\u{5E2E}\u{6211}\u{628A}\u{767B}\u{5165}\u{9875}\u{7684}\u{62A5}\u{9519}\u{6539}\u{6210}\u{4E2D}\u{6587}\u{7136}\u{540E}\u{8DD1}\u{4E00}\u{4E0B}\u{6D4B}\u{8BD5}", session)
         voice.send(attachments: nil, delivery: .prompt)
-        XCTAssertEqual(host.last?.uncorrected, "请帮我把登入页的报错改成中文然后跑一下测试", "all light before correction")
-        session.event(.correctionDelta("请帮我把登录页")); await settle(40)
-        XCTAssertEqual(host.last?.text, "请帮我把登录页的报错改成中文然后跑一下测试")
-        XCTAssertEqual(host.last?.uncorrected, "的报错改成中文然后跑一下测试", "corrected part turns solid")
-        session.event(.correctionDelta("请帮我把登录页的报错改成中文，然后")); await settle(40)
-        XCTAssertEqual(host.last?.text, "请帮我把登录页的报错改成中文，然后跑一下测试")
+        XCTAssertEqual(host.last?.uncorrected, "\u{8BF7}\u{5E2E}\u{6211}\u{628A}\u{767B}\u{5165}\u{9875}\u{7684}\u{62A5}\u{9519}\u{6539}\u{6210}\u{4E2D}\u{6587}\u{7136}\u{540E}\u{8DD1}\u{4E00}\u{4E0B}\u{6D4B}\u{8BD5}", "all light before correction")
+        session.event(.correctionDelta("\u{8BF7}\u{5E2E}\u{6211}\u{628A}\u{767B}\u{5F55}\u{9875}")); await settle(40)
+        XCTAssertEqual(host.last?.text, "\u{8BF7}\u{5E2E}\u{6211}\u{628A}\u{767B}\u{5F55}\u{9875}\u{7684}\u{62A5}\u{9519}\u{6539}\u{6210}\u{4E2D}\u{6587}\u{7136}\u{540E}\u{8DD1}\u{4E00}\u{4E0B}\u{6D4B}\u{8BD5}")
+        XCTAssertEqual(host.last?.uncorrected, "\u{7684}\u{62A5}\u{9519}\u{6539}\u{6210}\u{4E2D}\u{6587}\u{7136}\u{540E}\u{8DD1}\u{4E00}\u{4E0B}\u{6D4B}\u{8BD5}", "corrected part turns solid")
+        session.event(.correctionDelta("\u{8BF7}\u{5E2E}\u{6211}\u{628A}\u{767B}\u{5F55}\u{9875}\u{7684}\u{62A5}\u{9519}\u{6539}\u{6210}\u{4E2D}\u{6587}\u{FF0C}\u{7136}\u{540E}")); await settle(40)
+        XCTAssertEqual(host.last?.text, "\u{8BF7}\u{5E2E}\u{6211}\u{628A}\u{767B}\u{5F55}\u{9875}\u{7684}\u{62A5}\u{9519}\u{6539}\u{6210}\u{4E2D}\u{6587}\u{FF0C}\u{7136}\u{540E}\u{8DD1}\u{4E00}\u{4E0B}\u{6D4B}\u{8BD5}")
         // A shorter/odd delta never moves the covered point backwards.
-        session.event(.correctionDelta("请帮我")); await settle(40)
-        XCTAssertTrue(host.last?.text.hasSuffix("跑一下测试") == true)
+        session.event(.correctionDelta("\u{8BF7}\u{5E2E}\u{6211}")); await settle(40)
+        XCTAssertTrue(host.last?.text.hasSuffix("\u{8DD1}\u{4E00}\u{4E0B}\u{6D4B}\u{8BD5}") == true)
         XCTAssertTrue(host.transmitted.isEmpty)
     }
 
@@ -209,13 +209,13 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
     func testVoiceAnswerIsStagedWithAnswerToAndSentCorrected() async {
         let (host, voice) = make()
         let session = await start(host, voice)
-        await partial("选第二个方案", session)
+        await partial("\u{9009}\u{7B2C}\u{4E8C}\u{4E2A}\u{65B9}\u{6848}", session)
         XCTAssertTrue(voice.send(attachments: nil, delivery: .prompt, answerTo: "q-1"))
         XCTAssertEqual(host.lastAnswerTo, "q-1")
         XCTAssertEqual(host.last?.state, "correcting", "answers correct in the bubble like any message")
         XCTAssertTrue(host.transmitted.isEmpty)
-        await final("选第二个方案。", raw: "选第二个方案", session)
-        XCTAssertEqual(host.transmitted.map(\.1), ["选第二个方案。"])
+        await final("\u{9009}\u{7B2C}\u{4E8C}\u{4E2A}\u{65B9}\u{6848}\u{3002}", raw: "\u{9009}\u{7B2C}\u{4E8C}\u{4E2A}\u{65B9}\u{6848}", session)
+        XCTAssertEqual(host.transmitted.map(\.1), ["\u{9009}\u{7B2C}\u{4E8C}\u{4E2A}\u{65B9}\u{6848}\u{3002}"])
     }
 
     func testSendWithDraftSelectionCorrectsOnlyTheUtterance() async {
@@ -235,10 +235,10 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
         // `output.trim()` as the final; an unchanged correction has no rawText.
         let (host, voice) = make()
         let session = await start(host, voice)
-        await partial("好的，继续", session); voice.send(attachments: nil, delivery: .prompt)
-        session.event(.correctionDelta("好的，继续\n"))
-        session.event(.final("好的，继续", rawText: nil)); await settle()
-        XCTAssertEqual(host.transmitted.map(\.1), ["好的，继续"])
+        await partial("\u{597D}\u{7684}\u{FF0C}\u{7EE7}\u{7EED}", session); voice.send(attachments: nil, delivery: .prompt)
+        session.event(.correctionDelta("\u{597D}\u{7684}\u{FF0C}\u{7EE7}\u{7EED}\n"))
+        session.event(.final("\u{597D}\u{7684}\u{FF0C}\u{7EE7}\u{7EED}", rawText: nil)); await settle()
+        XCTAssertEqual(host.transmitted.map(\.1), ["\u{597D}\u{7684}\u{FF0C}\u{7EE7}\u{7EED}"])
     }
 
     func testCorrectionFailureStillSendsTheRawTranscript() async {
@@ -355,14 +355,14 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
 
     func testEditInsertsRawThenCorrectionReplacesUtteranceWithoutSending() async {
         let (host, voice) = make()
-        host.sessionStore.setDraft("a", "前🙂旧后")
+        host.sessionStore.setDraft("a", "\u{524D}🙂\u{65E7}\u{540E}")
         let session = await start(host, voice, range: NSRange(location: 3, length: 1))
-        await partial("新", session)
+        await partial("\u{65B0}", session)
         voice.finishToDraft()
         XCTAssertNotNil(voice.editorRequest)
-        XCTAssertEqual(host.sessionStore.drafts["a"], "前🙂新后")
-        await final("新词", session)
-        XCTAssertEqual(host.sessionStore.drafts["a"], "前🙂新词后")
+        XCTAssertEqual(host.sessionStore.drafts["a"], "\u{524D}🙂\u{65B0}\u{540E}")
+        await final("\u{65B0}\u{8BCD}", session)
+        XCTAssertEqual(host.sessionStore.drafts["a"], "\u{524D}🙂\u{65B0}\u{8BCD}\u{540E}")
         XCTAssertEqual(voice.selectionRequest, NSRange(location: 5, length: 0))
         XCTAssertTrue(host.staged.isEmpty && host.transmitted.isEmpty)
     }
@@ -488,7 +488,7 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
         for text in ["a🙂b", "a👨‍👩‍👧‍👦b", "ae\u{301}b"] {
             let invalid = NSRange(location: 2, length: 0)
             XCTAssertEqual(IOSVoiceComposer.safeRange(invalid, in: text).location, text.utf16.count)
-            XCTAssertEqual(IOSVoiceComposer.insert("新", into: text, range: invalid).0, text + "新")
+            XCTAssertEqual(IOSVoiceComposer.insert("\u{65B0}", into: text, range: invalid).0, text + "\u{65B0}")
         }
     }
 
@@ -504,9 +504,9 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
         XCTAssertEqual(insert("big", "Hello there", 5).0, "Hello big there")
         XCTAssertEqual(insert("big", "Hello there", 5).1, 9)
         XCTAssertEqual(insert("big", "Hellothere", 5).0, "Hello big there")
-        XCTAssertEqual(insert("新话", "前文").0, "前文新话")
-        XCTAssertEqual(insert("请帮我", "Prefix SUFFIX").0, "Prefix SUFFIX请帮我")
-        XCTAssertEqual(insert("Kraki", "接入").0, "接入Kraki")
+        XCTAssertEqual(insert("\u{65B0}\u{8BDD}", "\u{524D}\u{6587}").0, "\u{524D}\u{6587}\u{65B0}\u{8BDD}")
+        XCTAssertEqual(insert("\u{8BF7}\u{5E2E}\u{6211}", "Prefix SUFFIX").0, "Prefix SUFFIX\u{8BF7}\u{5E2E}\u{6211}")
+        XCTAssertEqual(insert("Kraki", "\u{63A5}\u{5165}").0, "\u{63A5}\u{5165}Kraki")
         XCTAssertEqual(insert("done", "(").0, "(done")
         XCTAssertEqual(insert("ok", "say .", 4).0, "say ok.")
         XCTAssertEqual(insert("x", "").0, "x")

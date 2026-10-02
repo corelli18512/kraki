@@ -19,7 +19,7 @@ final class TabBarNavigationUITests: XCTestCase {
 
     private func row(_ index: Int) -> XCUIElement {
         // Fixture rows 4 and 5 carry long titles (header truncation checks).
-        let titles = [3: "重构 iOS 聊天列表的滚动锚点、流式增量渲染和发送状态机（第二轮验收）",
+        let titles = [3: "\u{91CD}\u{6784} iOS \u{804A}\u{5929}\u{5217}\u{8868}\u{7684}\u{6EDA}\u{52A8}\u{951A}\u{70B9}\u{3001}\u{6D41}\u{5F0F}\u{589E}\u{91CF}\u{6E32}\u{67D3}\u{548C}\u{53D1}\u{9001}\u{72B6}\u{6001}\u{673A}\u{FF08}\u{7B2C}\u{4E8C}\u{8F6E}\u{9A8C}\u{6536}\u{FF09}",
                       4: "Refactor the iOS chat list scroll anchoring and streaming renderer"]
         return app.staticTexts[titles[index] ?? "Existing session \(index + 1)"].firstMatch
     }

@@ -176,8 +176,8 @@ final class VoiceInputCoreTests: XCTestCase {
     }
 
     func testCorrectionDeltaIsNotAnAuthoritativeFinal() {
-        let delta = VoiceInputEvent.correctionDelta("正在修正")
-        let final = VoiceInputEvent.final("最终文本", rawText: "原始文本")
+        let delta = VoiceInputEvent.correctionDelta("\u{6B63}\u{5728}\u{4FEE}\u{6B63}")
+        let final = VoiceInputEvent.final("\u{6700}\u{7EC8}\u{6587}\u{672C}", rawText: "\u{539F}\u{59CB}\u{6587}\u{672C}")
         XCTAssertNotEqual(delta, final)
     }
 }

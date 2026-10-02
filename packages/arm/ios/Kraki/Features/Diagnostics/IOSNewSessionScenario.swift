@@ -49,13 +49,13 @@ enum IOSNewSessionScenario {
                 let history = (1...12).map { seq in
                     ChatMessage(type: seq % 2 == 1 ? "user_message" : "agent_message", seq: seq,
                                 sessionId: id, deviceId: deviceID, timestamp: "2026-09-25T00:00:00Z",
-                                payload: ["content": AnyCodable(seq % 2 == 1 ? "帮我看一下第 \(seq) 个问题" : answer)])
+                                payload: ["content": AnyCodable(seq % 2 == 1 ? "\u{5E2E}\u{6211}\u{770B}\u{4E00}\u{4E0B}\u{7B2C} \(seq) \u{4E2A}\u{95EE}\u{9898}" : answer)])
                 }
                 try database.insert(id, history)
                 app.sessionStore.upsertSession(SessionInfo(
                     id: id, deviceId: deviceID, deviceName: "Scenario Mac", agent: "pi",
                     model: "m",
-                    title: index == 3 ? "重构 iOS 聊天列表的滚动锚点、流式增量渲染和发送状态机（第二轮验收）"
+                    title: index == 3 ? "\u{91CD}\u{6784} iOS \u{804A}\u{5929}\u{5217}\u{8868}\u{7684}\u{6EDA}\u{52A8}\u{951A}\u{70B9}\u{3001}\u{6D41}\u{5F0F}\u{589E}\u{91CF}\u{6E32}\u{67D3}\u{548C}\u{53D1}\u{9001}\u{72B6}\u{6001}\u{673A}\u{FF08}\u{7B2C}\u{4E8C}\u{8F6E}\u{9A8C}\u{6536}\u{FF09}"
                         : index == 4 ? "Refactor the iOS chat list scroll anchoring and streaming renderer" : "Existing session \(index + 1)",
                     state: .idle, mode: .auto,
                     lastSeq: 12, readSeq: 12, messageCount: 12,
@@ -165,9 +165,9 @@ enum IOSNewSessionScenario {
     }
 
     static let answer: String = {
-        let zh = "好的，我先确认一下需求：你希望新建会话之后，第一条消息从输入框发出，界面立即显示并回到底部，AI 的回复紧接着出现在下面。"
-        let list = "我会按这个顺序检查：\n\n1. 占位页切换到真实会话\n2. 第一条消息的位置\n3. 流式回复时的滚动\n4. 返回会话列表"
-        let table = "| 阶段 | 期望 |\n|---|---|\n| 创建 | 立即进入 |\n| 发送 | 回到底部 |\n| 返回 | 列表顶部是新会话 |"
+        let zh = "\u{597D}\u{7684}\u{FF0C}\u{6211}\u{5148}\u{786E}\u{8BA4}\u{4E00}\u{4E0B}\u{9700}\u{6C42}\u{FF1A}\u{4F60}\u{5E0C}\u{671B}\u{65B0}\u{5EFA}\u{4F1A}\u{8BDD}\u{4E4B}\u{540E}\u{FF0C}\u{7B2C}\u{4E00}\u{6761}\u{6D88}\u{606F}\u{4ECE}\u{8F93}\u{5165}\u{6846}\u{53D1}\u{51FA}\u{FF0C}\u{754C}\u{9762}\u{7ACB}\u{5373}\u{663E}\u{793A}\u{5E76}\u{56DE}\u{5230}\u{5E95}\u{90E8}\u{FF0C}AI \u{7684}\u{56DE}\u{590D}\u{7D27}\u{63A5}\u{7740}\u{51FA}\u{73B0}\u{5728}\u{4E0B}\u{9762}\u{3002}"
+        let list = "\u{6211}\u{4F1A}\u{6309}\u{8FD9}\u{4E2A}\u{987A}\u{5E8F}\u{68C0}\u{67E5}\u{FF1A}\n\n1. \u{5360}\u{4F4D}\u{9875}\u{5207}\u{6362}\u{5230}\u{771F}\u{5B9E}\u{4F1A}\u{8BDD}\n2. \u{7B2C}\u{4E00}\u{6761}\u{6D88}\u{606F}\u{7684}\u{4F4D}\u{7F6E}\n3. \u{6D41}\u{5F0F}\u{56DE}\u{590D}\u{65F6}\u{7684}\u{6EDA}\u{52A8}\n4. \u{8FD4}\u{56DE}\u{4F1A}\u{8BDD}\u{5217}\u{8868}"
+        let table = "| \u{9636}\u{6BB5} | \u{671F}\u{671B} |\n|---|---|\n| \u{521B}\u{5EFA} | \u{7ACB}\u{5373}\u{8FDB}\u{5165} |\n| \u{53D1}\u{9001} | \u{56DE}\u{5230}\u{5E95}\u{90E8} |\n| \u{8FD4}\u{56DE} | \u{5217}\u{8868}\u{9876}\u{90E8}\u{662F}\u{65B0}\u{4F1A}\u{8BDD} |"
         return [zh, list, table, zh, list, zh, table, list, zh].joined(separator: "\n\n")
     }()
 }
@@ -289,7 +289,7 @@ struct IOSNewSessionScenarioView: View {
         let subscribed = IOSNewSessionScenario.scriptedTentacle?.subscribedSessions.contains(sessionId) == true
         IOSNewSessionScenario.log("CHECK lifecycle active=\(active == sessionId ? "ok" : "BAD(\(active ?? "nil"))") desired=\(desired == sessionId ? "ok" : "BAD") subscribed=\(subscribed ? "ok" : "BAD") acceptsLive=\(appState.sessionSubscriptionController.acceptsLive(sessionId) ? "ok" : "BAD")")
         IOSNewSessionScenario.log("phase=send session=\(sessionId)")
-        if appState.commandSender?.sendInput(sessionId: sessionId, text: "新会话的第一条消息：帮我检查一下这个流程") == true {
+        if appState.commandSender?.sendInput(sessionId: sessionId, text: "\u{65B0}\u{4F1A}\u{8BDD}\u{7684}\u{7B2C}\u{4E00}\u{6761}\u{6D88}\u{606F}\u{FF1A}\u{5E2E}\u{6211}\u{68C0}\u{67E5}\u{4E00}\u{4E0B}\u{8FD9}\u{4E2A}\u{6D41}\u{7A0B}") == true {
             NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil,
                                             userInfo: ["sessionId": sessionId])
         }

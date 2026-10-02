@@ -97,7 +97,7 @@ final class NewSessionJourneyUITests: XCTestCase {
         settle(1.5)
         // Bring a user bubble (right-aligned, blue) right behind the controls.
         let jump = app.buttons["Jump to latest"].firstMatch
-        let bubbles = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH '帮我看一下第'"))
+        let bubbles = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH '\u{5E2E}\u{6211}\u{770B}\u{4E00}\u{4E0B}\u{7B2C}'"))
         for _ in 0..<8 {
             let target = jump.frame.midY - 30
             guard let bubble = bubbles.allElementsBoundByIndex.min(by: {

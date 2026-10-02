@@ -19,10 +19,10 @@ enum IOSChatScrollScenarioFixture {
             // Realistic mixed content: uniform English prose is the one shape
             // whose estimated height is already exact, so it cannot reveal
             // estimate→exact jumps. Mix CJK prose, code, lists and tables.
-            let zh = "好的，我来检查一下这个问题。首先确认服务端配置，再看客户端请求是否带上了正确的鉴权头；两边都没问题的话，多半是缓存导致的。"
-            let code = "修改如下：\n\n```swift\nfunc load() async throws {\n    let data = try await api.fetch()\n    cache.store(data)\n    try decode(data)\n}\n```\n\n再跑一次测试。"
-            let list = "改动：\n\n1. 修复登录态\n2. 优化滚动\n3. 新增重试\n\n- 风险：低\n- 需要回归：是"
-            let table = "| 指标 | 之前 | 之后 |\n|---|---|---|\n| 冷启动 | 1.8s | 0.9s |\n| 掉帧 | 12% | 2% |"
+            let zh = "\u{597D}\u{7684}\u{FF0C}\u{6211}\u{6765}\u{68C0}\u{67E5}\u{4E00}\u{4E0B}\u{8FD9}\u{4E2A}\u{95EE}\u{9898}\u{3002}\u{9996}\u{5148}\u{786E}\u{8BA4}\u{670D}\u{52A1}\u{7AEF}\u{914D}\u{7F6E}\u{FF0C}\u{518D}\u{770B}\u{5BA2}\u{6237}\u{7AEF}\u{8BF7}\u{6C42}\u{662F}\u{5426}\u{5E26}\u{4E0A}\u{4E86}\u{6B63}\u{786E}\u{7684}\u{9274}\u{6743}\u{5934}\u{FF1B}\u{4E24}\u{8FB9}\u{90FD}\u{6CA1}\u{95EE}\u{9898}\u{7684}\u{8BDD}\u{FF0C}\u{591A}\u{534A}\u{662F}\u{7F13}\u{5B58}\u{5BFC}\u{81F4}\u{7684}\u{3002}"
+            let code = "\u{4FEE}\u{6539}\u{5982}\u{4E0B}\u{FF1A}\n\n```swift\nfunc load() async throws {\n    let data = try await api.fetch()\n    cache.store(data)\n    try decode(data)\n}\n```\n\n\u{518D}\u{8DD1}\u{4E00}\u{6B21}\u{6D4B}\u{8BD5}\u{3002}"
+            let list = "\u{6539}\u{52A8}\u{FF1A}\n\n1. \u{4FEE}\u{590D}\u{767B}\u{5F55}\u{6001}\n2. \u{4F18}\u{5316}\u{6EDA}\u{52A8}\n3. \u{65B0}\u{589E}\u{91CD}\u{8BD5}\n\n- \u{98CE}\u{9669}\u{FF1A}\u{4F4E}\n- \u{9700}\u{8981}\u{56DE}\u{5F52}\u{FF1A}\u{662F}"
+            let table = "| \u{6307}\u{6807} | \u{4E4B}\u{524D} | \u{4E4B}\u{540E} |\n|---|---|---|\n| \u{51B7}\u{542F}\u{52A8} | 1.8s | 0.9s |\n| \u{6389}\u{5E27} | 12% | 2% |"
             let shapes = [zh + "\n\n" + zh, code, list, table, zh + zh + zh]
             let messages = (1...totalMessages).map { seq in
                 let content: String
@@ -31,7 +31,7 @@ enum IOSChatScrollScenarioFixture {
                 } else if seq.isMultiple(of: 2) {
                     content = "Message \(seq): " + shapes[(seq / 2) % shapes.count]
                 } else {
-                    content = "Message \(seq): 帮我看一下为什么往上翻历史会跳"
+                    content = "Message \(seq): \u{5E2E}\u{6211}\u{770B}\u{4E00}\u{4E0B}\u{4E3A}\u{4EC0}\u{4E48}\u{5F80}\u{4E0A}\u{7FFB}\u{5386}\u{53F2}\u{4F1A}\u{8DF3}"
                 }
                 return ChatMessage(
                     type: seq.isMultiple(of: 2) ? "agent_message" : "user_message",

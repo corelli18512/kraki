@@ -12,7 +12,7 @@ import SwiftUI
 
 struct LiveBubbleTestView: View {
     private let sessionId = "mock-live-1"
-    @State private var card = MessageStore.SessionCard(text: "我先定位一下 hitch 的根因。", action: nil)
+    @State private var card = MessageStore.SessionCard(text: "\u{6211}\u{5148}\u{5B9A}\u{4F4D}\u{4E00}\u{4E0B} hitch \u{7684}\u{6839}\u{56E0}\u{3002}", action: nil)
     @State private var hasSteps = true
     @State private var showSteps = false
     @State private var running = false
@@ -26,7 +26,7 @@ struct LiveBubbleTestView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     // A little static spine context above the live bubble.
-                    userBubble("把 ChatView 的滚动 hitch 修一下")
+                    userBubble("\u{628A} ChatView \u{7684}\u{6EDA}\u{52A8} hitch \u{4FEE}\u{4E00}\u{4E0B}")
                     BubbleActionSlot(action: card.action ?? ChatMessage(type: "tool_start", seq: 0, sessionId: nil, deviceId: nil, timestamp: nil, payload: [:]),
                         sessionMode: .auto,
                         onResolvePermission: { _, _, decision in resolvePermission(decision) })
@@ -48,7 +48,7 @@ struct LiveBubbleTestView: View {
             switch ProcessInfo.processInfo.environment["KRAKI_LIVEBUBBLE_STATE"] {
             case "tool": card = .init(text: "", action: action("tool_start", ["toolName": AnyCodable("bash"), "headline": AnyCodable("$ grep -n height cache ChatPerfListView.swift")]))
             case "batch": card = .init(text: "", action: action("tool_batch", ["running": AnyCodable(3)]))
-            case "perm": card = .init(text: "准备改 height cache，需要你确认写入。", action: action("permission", ["id": AnyCodable("p1"), "toolName": AnyCodable("write_file"), "description": AnyCodable("ChatPerfListView.swift")]))
+            case "perm": card = .init(text: "\u{51C6}\u{5907}\u{6539} height cache\u{FF0C}\u{9700}\u{8981}\u{4F60}\u{786E}\u{8BA4}\u{5199}\u{5165}\u{3002}", action: action("permission", ["id": AnyCodable("p1"), "toolName": AnyCodable("write_file"), "description": AnyCodable("ChatPerfListView.swift")]))
             case "steps": DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showSteps = true }
             default: break
             }
@@ -68,11 +68,11 @@ struct LiveBubbleTestView: View {
     private var controls: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ctl("Draft") { card = .init(text: "我先定位一下 hitch 的根因，看起来是巨型 turn 的高度测量卡在主线程。", action: nil) }
+                ctl("Draft") { card = .init(text: "\u{6211}\u{5148}\u{5B9A}\u{4F4D}\u{4E00}\u{4E0B} hitch \u{7684}\u{6839}\u{56E0}\u{FF0C}\u{770B}\u{8D77}\u{6765}\u{662F}\u{5DE8}\u{578B} turn \u{7684}\u{9AD8}\u{5EA6}\u{6D4B}\u{91CF}\u{5361}\u{5728}\u{4E3B}\u{7EBF}\u{7A0B}\u{3002}", action: nil) }
                 ctl("Tool") { card = .init(text: "", action: action("tool_start", ["toolName": AnyCodable("bash"), "headline": AnyCodable("$ grep -n height cache ChatPerfListView.swift")])) }
                 ctl("Batch") { card = .init(text: "", action: action("tool_batch", ["running": AnyCodable(3)])) }
-                ctl("Perm") { card = .init(text: "准备改 height cache，需要你确认写入。", action: action("permission", ["id": AnyCodable("p1"), "toolName": AnyCodable("write_file"), "description": AnyCodable("ChatPerfListView.swift")])) }
-                ctl("Done") { card = .init(text: "修好了 ✅ 去掉 height cache 投机预热，131ms 原子测量就没了。", action: nil) }
+                ctl("Perm") { card = .init(text: "\u{51C6}\u{5907}\u{6539} height cache\u{FF0C}\u{9700}\u{8981}\u{4F60}\u{786E}\u{8BA4}\u{5199}\u{5165}\u{3002}", action: action("permission", ["id": AnyCodable("p1"), "toolName": AnyCodable("write_file"), "description": AnyCodable("ChatPerfListView.swift")])) }
+                ctl("Done") { card = .init(text: "\u{4FEE}\u{597D}\u{4E86} ✅ \u{53BB}\u{6389} height cache \u{6295}\u{673A}\u{9884}\u{70ED}\u{FF0C}131ms \u{539F}\u{5B50}\u{6D4B}\u{91CF}\u{5C31}\u{6CA1}\u{4E86}\u{3002}", action: nil) }
                 ctl(running ? "…" : "▶︎ Sim") { simulate() }.disabled(running)
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
@@ -103,13 +103,13 @@ struct LiveBubbleTestView: View {
         Task { @MainActor in
             func sleep(_ ms: UInt64) async { try? await Task.sleep(nanoseconds: ms * 1_000_000) }
             card = .init(text: "", action: nil)
-            for ch in "我先定位一下 hitch 的根因。" { card.text.append(ch); await sleep(20) }
+            for ch in "\u{6211}\u{5148}\u{5B9A}\u{4F4D}\u{4E00}\u{4E0B} hitch \u{7684}\u{6839}\u{56E0}\u{3002}" { card.text.append(ch); await sleep(20) }
             await sleep(400)
             card = .init(text: "", action: action("tool_start", ["toolName": AnyCodable("bash"), "headline": AnyCodable("$ grep -n height cache")]))
             await sleep(900)
             card.action = action("tool_batch", ["running": AnyCodable(3)])
             await sleep(1000)
-            card = .init(text: "准备改 height cache，需要你确认写入。", action: action("permission", ["id": AnyCodable("p1"), "toolName": AnyCodable("write_file"), "description": AnyCodable("ChatPerfListView.swift")]))
+            card = .init(text: "\u{51C6}\u{5907}\u{6539} height cache\u{FF0C}\u{9700}\u{8981}\u{4F60}\u{786E}\u{8BA4}\u{5199}\u{5165}\u{3002}", action: action("permission", ["id": AnyCodable("p1"), "toolName": AnyCodable("write_file"), "description": AnyCodable("ChatPerfListView.swift")]))
             // wait for user (auto-approve after 5s)
             var waited: UInt64 = 0
             while waited < 5000 {
@@ -119,17 +119,17 @@ struct LiveBubbleTestView: View {
             if card.action?.payload["decision"]?.stringValue == nil { resolvePermission("approve") }
             await sleep(300)
             card = .init(text: "", action: nil)
-            for ch in "修好了 ✅ 去掉 height cache，131ms 原子测量没了，hitch 应该消失。" { card.text.append(ch); await sleep(18) }
+            for ch in "\u{4FEE}\u{597D}\u{4E86} ✅ \u{53BB}\u{6389} height cache\u{FF0C}131ms \u{539F}\u{5B50}\u{6D4B}\u{91CF}\u{6CA1}\u{4E86}\u{FF0C}hitch \u{5E94}\u{8BE5}\u{6D88}\u{5931}\u{3002}" { card.text.append(ch); await sleep(18) }
             running = false
         }
     }
 
     private var mockSteps: [ChatMessage] {
         [
-            action("agent_narration", ["content": AnyCodable("先定位 hitch 根因。")]),
+            action("agent_narration", ["content": AnyCodable("\u{5148}\u{5B9A}\u{4F4D} hitch \u{6839}\u{56E0}\u{3002}")]),
             action("tool_start", ["toolName": AnyCodable("bash"), "headline": AnyCodable("$ grep -n height cache"), "toolCallId": AnyCodable("c1")]),
             action("tool_complete", ["toolName": AnyCodable("bash"), "headline": AnyCodable("$ grep -n height cache"), "toolCallId": AnyCodable("c1"), "success": AnyCodable(true)]),
-            action("agent_narration", ["content": AnyCodable("确认是巨型 turn 的原子测量。")]),
+            action("agent_narration", ["content": AnyCodable("\u{786E}\u{8BA4}\u{662F}\u{5DE8}\u{578B} turn \u{7684}\u{539F}\u{5B50}\u{6D4B}\u{91CF}\u{3002}")]),
         ]
     }
 }

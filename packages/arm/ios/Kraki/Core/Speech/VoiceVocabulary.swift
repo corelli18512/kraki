@@ -7,7 +7,7 @@ import SwiftUI
 struct VoiceTerm: Identifiable, Equatable {
     let id: UUID
     var term: String
-    /// Mishearings as typed: separated by commas (`,` `，` `、` `;` `；`).
+    /// Mishearings as typed: separated by commas or semicolons (ASCII or full-width) or the ideographic comma.
     var heardAs: String
 
     init(id: UUID = UUID(), term: String = "", heardAs: String = "") {
@@ -17,7 +17,7 @@ struct VoiceTerm: Identifiable, Equatable {
     var heardList: [String] {
         // Newlines count as separators: the iOS field is multi-line, and a
         // newline must never reach the one-entry-per-line storage.
-        heardAs.split(whereSeparator: { ",，、;；".contains($0) || $0.isNewline })
+        heardAs.split(whereSeparator: { ",\u{FF0C}\u{3001};\u{FF1B}".contains($0) || $0.isNewline })
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
     }
@@ -30,7 +30,7 @@ struct VoiceTerm: Identifiable, Equatable {
     /// `Term = …` line, so the word itself may not hold “=” or start with “#”.
     var problem: String? {
         let t = cleanTerm
-        if t.contains("=") || t.contains("＝") { return "A word can't contain “=”." }
+        if t.contains("=") || t.contains("\u{FF1D}") { return "A word can't contain “=”." }
         if t.hasPrefix("#") { return "A word can't start with “#”." }
         if let l = line, l.count > VoiceVocabulary.maxEntryLength {
             return "Too long (max \(VoiceVocabulary.maxEntryLength) characters)."
@@ -76,7 +76,7 @@ enum VoiceVocabulary {
         var seen = Set<String>()
         var result: [VoiceTerm] = []
         for raw in text.split(whereSeparator: \.isNewline) {
-            let line = raw.replacingOccurrences(of: "＝", with: "=").trimmingCharacters(in: .whitespaces)
+            let line = raw.replacingOccurrences(of: "\u{FF1D}", with: "=").trimmingCharacters(in: .whitespaces)
             guard !line.isEmpty, !line.hasPrefix("#") else { continue }
             let parts = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
             let term = VoiceTerm(term: parts[0], heardAs: parts.count > 1 ? parts[1] : "")

@@ -6,12 +6,12 @@ const m = (type: string, seq: number, payload: Record<string, unknown> = {}): Ch
   ({ type, seq, sessionId: 's', deviceId: 'd', timestamp: '2026-09-01T00:00:00Z', payload }) as unknown as ChatMessage;
 
 const ask = (seq: number, id: string, extra: Record<string, unknown> = {}) =>
-  m('agent_message', seq, { content: '有两个方案', question: { id, text: '删旧接口？', choices: ['删', '留'] }, ...extra });
+  m('agent_message', seq, { content: '\u6709\u4E24\u4E2A\u65B9\u6848', question: { id, text: '\u5220\u65E7\u63A5\u53E3\uFF1F', choices: ['\u5220', '\u7559'] }, ...extra });
 const abort = (seq: number, draft = '') => m('turn_status', seq, { draft, action: { type: 'user_abort', payload: {} } });
 
 describe('questions on the spine', () => {
   it('open at the head, undetermined elsewhere, answered by answerTo', () => {
-    const raw = [ask(1, 'q1'), ask(2, 'q2'), m('user_message', 3, { content: '好', answerTo: 'q2' })];
+    const raw = [ask(1, 'q1'), ask(2, 'q2'), m('user_message', 3, { content: '\u597D', answerTo: 'q2' })];
     const items = presentQuestions(raw, [], true);
     expect(items[0].question?.state).toBe('open');
     expect(items[1].question?.state).toBe('answered');
@@ -28,9 +28,9 @@ describe('questions on the spine', () => {
   it('the text is identical open and answered; only open adds choices', () => {
     const open = frozenCardOf({ message: ask(1, 'q1'), question: { state: 'open' } })!;
     const answered = frozenCardOf({ message: ask(1, 'q1'), question: { state: 'answered' } })!;
-    expect(open.text).toBe('有两个方案\n\n**删旧接口？**');
+    expect(open.text).toBe('\u6709\u4E24\u4E2A\u65B9\u6848\n\n**\u5220\u65E7\u63A5\u53E3\uFF1F**');
     expect(answered.text).toBe(open.text);
-    expect(open.action).toEqual({ type: 'question', id: 'q1', choices: ['删', '留'] });
+    expect(open.action).toEqual({ type: 'question', id: 'q1', choices: ['\u5220', '\u7559'] });
     expect(answered.action).toBeUndefined();
   });
 
@@ -53,7 +53,7 @@ describe('questions on the spine', () => {
 
   it('never borrows an older reply across a question', () => {
     const rows = spineRows([
-      m('agent_message', 1, { content: '上一轮' }), m('user_message', 2, { content: '继续' }),
+      m('agent_message', 1, { content: '\u4E0A\u4E00\u8F6E' }), m('user_message', 2, { content: '\u7EE7\u7EED' }),
       ask(3, 'q1'), abort(4), m('idle', 5),
     ], [], true);
     // (A segment without an idle belongs to the aborted turn — as on iOS.)

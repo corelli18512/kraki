@@ -140,9 +140,9 @@ run('Pi 0.87 live RPC compatibility', () => {
   });
 
   it('streams text including Unicode separators, acknowledges before completion, and settles once', async () => {
-    await create(); steps.push({ text: 'hello\u2028world\u2029你好' });
+    await create(); steps.push({ text: 'hello\u2028world\u2029\u4F60\u597D' });
     await turn();
-    expect(lastReply()).toBe('hello\u2028world\u2029你好');
+    expect(lastReply()).toBe('hello\u2028world\u2029\u4F60\u597D');
     expect(callbacks.onMessageDelta.mock.calls.map(c => c[1].content).join('')).toBe(lastReply());
     expect(callbacks.onIdle).toHaveBeenCalledTimes(1);
     expect(callbacks.onError).not.toHaveBeenCalled();
@@ -157,9 +157,9 @@ run('Pi 0.87 live RPC compatibility', () => {
     expect((await proc().request('get_state')).isStreaming).toBe(true);
     expect(callbacks.onIdle).not.toHaveBeenCalled();
     await adapter.abortSession(sid);
-    adapter.setTurnIdentity(sid, 'turn-audit-2'); steps.push({ text: '你好 STREAM_OK' }); await turn();
-    expect(lastReply()).toBe('你好 STREAM_OK');
-    expect(callbacks.onMessageDelta.mock.calls.map(c => c[1].content).join('')).toBe('你好 STREAM_OK');
+    adapter.setTurnIdentity(sid, 'turn-audit-2'); steps.push({ text: '\u4F60\u597D STREAM_OK' }); await turn();
+    expect(lastReply()).toBe('\u4F60\u597D STREAM_OK');
+    expect(callbacks.onMessageDelta.mock.calls.map(c => c[1].content).join('')).toBe('\u4F60\u597D STREAM_OK');
     expect(callbacks.onMessage.mock.calls[0][1].turnId).toBe('turn-audit-2');
     expect(callbacks.onIdle.mock.calls[0][1].turnId).toBe('turn-audit-2');
   });

@@ -199,7 +199,7 @@ test.describe.serial('real-stack terminal status cards', () => {
 
     // --- turn 1 ---
     const prompt1 = 'Run the full suite again';
-    const reply1 = '已重置并重新启动，开屏动画和模式选择正在从头播放';
+    const reply1 = '\u5DF2\u91CD\u7F6E\u5E76\u91CD\u65B0\u542F\u52A8\uFF0C\u5F00\u5C4F\u52A8\u753B\u548C\u6A21\u5F0F\u9009\u62E9\u6B63\u5728\u4ECE\u5934\u64AD\u653E';
     await sendPrompt(page, prompt1);
     await control('/error', { sid: sessionId, message: '524 status code (no body)' });
     await control('/error', { sid: sessionId, message: '524 status code (no body)' });
@@ -212,8 +212,8 @@ test.describe.serial('real-stack terminal status cards', () => {
     await expect(card1.getByText('Turn failed')).toBeVisible();
 
     // --- turn 2 ---
-    const prompt2 = '回到原来的卡片大小 只保留卡片内容';
-    const reply2 = '已经按你的要求调整：卡片恢复到之前的尺寸';
+    const prompt2 = '\u56DE\u5230\u539F\u6765\u7684\u5361\u7247\u5927\u5C0F \u53EA\u4FDD\u7559\u5361\u7247\u5185\u5BB9';
+    const reply2 = '\u5DF2\u7ECF\u6309\u4F60\u7684\u8981\u6C42\u8C03\u6574\uFF1A\u5361\u7247\u6062\u590D\u5230\u4E4B\u524D\u7684\u5C3A\u5BF8';
     await sendPrompt(page, prompt2);
     await control('/error', { sid: sessionId, message: '524 status code (no body)' });
     await control('/msg', { sid: sessionId, text: reply2 });
@@ -238,8 +238,8 @@ test.describe.serial('real-stack terminal status cards', () => {
     // mrhuha8u-tcpn1tz8 seq 81-83: user -> agent_message -> idle (no error,
     // no turn_status). It must render as a normal agent bubble, NOT a terminal
     // card, and must not absorb the preceding failed turn.
-    const prompt3 = '不是我是说加入棋盘之前的那个尺寸';
-    const reply3 = '已按你刚才的准确意思修改：卡片恢复到之前的大小';
+    const prompt3 = '\u4E0D\u662F\u6211\u662F\u8BF4\u52A0\u5165\u68CB\u76D8\u4E4B\u524D\u7684\u90A3\u4E2A\u5C3A\u5BF8';
+    const reply3 = '\u5DF2\u6309\u4F60\u521A\u624D\u7684\u51C6\u786E\u610F\u601D\u4FEE\u6539\uFF1A\u5361\u7247\u6062\u590D\u5230\u4E4B\u524D\u7684\u5927\u5C0F';
     await sendPrompt(page, prompt3);
     await control('/msg', { sid: sessionId, text: reply3 });
     await control('/idle', { sid: sessionId });

@@ -357,7 +357,7 @@ pnpm test
 | Build | Pass |
 """),
         Sample(title: "Unicode and emoji",
-               body: "中文排版、かな、한국어, emoji 🦑🚀, combining café, and a verylongtoken_without_breaks_abcdefghijklmnopqrstuvwxyz0123456789."),
+               body: "\u{4E2D}\u{6587}\u{6392}\u{7248}\u{3001}かな\u{3001}한국어, emoji 🦑🚀, combining café, and a verylongtoken_without_breaks_abcdefghijklmnopqrstuvwxyz0123456789."),
     ]
 }
 

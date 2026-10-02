@@ -26,7 +26,7 @@ enum ChatHeightEstimator {
             let codeChar = ("0" as NSString).size(withAttributes: [.font: code]).width
             let latin = ("abcdefghijklmnopqrstuvwxyz ABCDEFGHIJ,." as NSString)
                 .size(withAttributes: [.font: body]).width / 40
-            let wide = ("中" as NSString).size(withAttributes: [.font: body]).width
+            let wide = ("\u{4E2D}" as NSString).size(withAttributes: [.font: body]).width
             return Metrics(
                 bodyFont: body,
                 bodyLine: ceil(body.lineHeight),
