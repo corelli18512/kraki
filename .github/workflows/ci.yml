@@ -319,6 +319,11 @@ jobs:
       - name: Build tentacle SEA
         run: pnpm --filter @kraki/tentacle run build:binary:local
 
+      # Same platform-sensitive unit tests the release job runs on each OS,
+      # so a Windows-only failure shows up on the PR, not at release time.
+      - name: Platform-sensitive tentacle unit tests
+        run: pnpm --filter @kraki/tentacle exec vitest run src/adapters/__tests__/copilot.test.ts src/__tests__/daemon.test.ts src/__tests__/cli.test.ts src/__tests__/logger.test.ts
+
       - name: Test Windows installer release selection
         if: runner.os == 'Windows'
         shell: powershell
