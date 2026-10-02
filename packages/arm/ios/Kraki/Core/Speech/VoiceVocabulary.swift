@@ -15,12 +15,28 @@ struct VoiceTerm: Identifiable, Equatable {
     }
 
     var heardList: [String] {
-        heardAs.split(whereSeparator: { ",，、;；".contains($0) })
+        // Newlines count as separators: the iOS field is multi-line, and a
+        // newline must never reach the one-entry-per-line storage.
+        heardAs.split(whereSeparator: { ",，、;；".contains($0) || $0.isNewline })
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
     }
 
-    var cleanTerm: String { term.trimmingCharacters(in: .whitespacesAndNewlines) }
+    var cleanTerm: String {
+        term.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Why this entry cannot be kept as typed (nil: fine). Storage is one
+    /// `Term = …` line, so the word itself may not hold “=” or start with “#”.
+    var problem: String? {
+        let t = cleanTerm
+        if t.contains("=") || t.contains("＝") { return "A word can't contain “=”." }
+        if t.hasPrefix("#") { return "A word can't start with “#”." }
+        if let l = line, l.count > VoiceVocabulary.maxEntryLength {
+            return "Too long (max \(VoiceVocabulary.maxEntryLength) characters)."
+        }
+        return nil
+    }
 
     /// The line sent to the corrector: `Term` or `Term = heard 1, heard 2`.
     var line: String? {
@@ -113,7 +129,7 @@ final class VoiceVocabularyStore {
 
     private func save() {
         var seen = Set<String>()
-        let unique = terms.filter { $0.line != nil && seen.insert($0.cleanTerm.lowercased()).inserted }
+        let unique = terms.filter { $0.line != nil && $0.problem == nil && seen.insert($0.cleanTerm.lowercased()).inserted }
         defaults.set(VoiceVocabulary.text(from: unique), forKey: VoiceVocabulary.storageKey)
     }
 }
@@ -218,9 +234,7 @@ private struct VoiceTermEditor: View {
     @FocusState private var focus: Bool
 
     private var duplicate: Bool { store.isDuplicate(term.term, excluding: term.id) }
-    private var canSave: Bool {
-        !term.cleanTerm.isEmpty && !duplicate && (term.line?.count ?? 0) <= VoiceVocabulary.maxEntryLength
-    }
+    private var canSave: Bool { !term.cleanTerm.isEmpty && !duplicate && term.problem == nil }
 
     var body: some View {
         NavigationStack {
@@ -230,7 +244,8 @@ private struct VoiceTermEditor: View {
                         .focused($focus)
                         .autocorrectionDisabled().textInputAutocapitalization(.never)
                 } header: { Text("Word or name") } footer: {
-                    if duplicate { Text("Already in your vocabulary.").foregroundStyle(.orange) }
+                    if duplicate { Text("Already in your custom words.").foregroundStyle(.orange) }
+                    else if let problem = term.problem { Text(problem).foregroundStyle(.orange) }
                     else { Text(VoiceVocabularyCopy.termFooter) }
                 }
                 Section {
@@ -261,7 +276,7 @@ private struct VoiceTermEditor: View {
 #endif
 
 #if os(macOS)
-/// Settings → General → Custom Words: one editable row per word.
+/// Settings → Voice Input → Custom Words (Mac): one editable row per word.
 struct VoiceVocabularyMacSection: View {
     @State private var store = VoiceVocabularyStore()
     @FocusState private var focused: UUID?
@@ -298,7 +313,9 @@ struct VoiceVocabularyMacSection: View {
                     .buttonStyle(.borderless)
                     .help("Remove")
                 }
-                if store.isDuplicate(term.term, excluding: term.id) {
+                if let problem = term.problem {
+                    Text(problem + " This word isn't saved.").font(.caption).foregroundStyle(.orange)
+                } else if store.isDuplicate(term.term, excluding: term.id) {
                     Text("“\(term.cleanTerm)” is already in the list; only the first is used.")
                         .font(.caption).foregroundStyle(.orange)
                 }

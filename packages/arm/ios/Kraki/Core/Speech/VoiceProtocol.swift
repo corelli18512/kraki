@@ -137,7 +137,7 @@ struct VoiceSessionContext: Equatable, Sendable {
 }
 
 enum VoiceSessionContextBuilder {
-    /// `userVocabulary`: the user's own terms (Settings → Voice Vocabulary),
+    /// `userVocabulary`: the user's own terms (Settings → Voice Input → Custom Words),
     /// first; then terms taken from the current conversation.
     static func build(session: SessionInfo, recentMessages: [ChatMessage],
                       userVocabulary: [String] = VoiceVocabulary.load(),

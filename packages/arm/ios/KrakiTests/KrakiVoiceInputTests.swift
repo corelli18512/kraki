@@ -1380,4 +1380,18 @@ final class KrakiVoiceInputTests: XCTestCase {
         controller.applySettings()
         XCTAssertEqual(factory.sessions.count, 2, "no reconnect when nothing changed")
     }
+
+    func testCustomWordEdgeCasesNeverCorruptStorage() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "kraki-vocab-\(UUID().uuidString)"))
+        let store = VoiceVocabularyStore(defaults: defaults)
+        store.upsert(VoiceTerm(term: "Foo", heardAs: "福欧\n富欧"))     // newline in the multi-line field
+        store.upsert(VoiceTerm(term: "a=b", heardAs: "x"))              // '=' in the word
+        store.upsert(VoiceTerm(term: "#tag"))                           // would read back as a comment
+        store.upsert(VoiceTerm(term: String(repeating: "x", count: 130)))
+        XCTAssertEqual(VoiceVocabulary.load(defaults), ["Foo = 福欧, 富欧"])
+        XCTAssertNotNil(store.terms[1].problem)
+        XCTAssertNotNil(store.terms[2].problem)
+        XCTAssertNotNil(store.terms[3].problem)
+        XCTAssertEqual(VoiceVocabularyStore(defaults: defaults).terms.map(\.line), ["Foo = 福欧, 富欧"])
+    }
 }
