@@ -2420,6 +2420,11 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
     /// ↑ rests in ↓'s slot while ↓ is hidden and is pushed up when ↓ shows.
     private var latestStartRaised = false
+    /// Window resize counts as motion: reflow can carry the list across the
+    /// "at bottom" line mid-drag, so ↑/↓ keep their state until it settles.
+    private var isResizingControls = false
+    private var controlsLayoutWidth: CGFloat = 0
+    private var resizeSettleGeneration = 0
     private var latestStartMoveGeneration = 0
     private var latestStartFrame: NSRect {
         let jump = jumpFrame
@@ -2447,6 +2452,38 @@ final class MacChatScrollView: MacSmoothScrollView {
             self.latestStartMoveGeneration = 0
         }
     }
+    /// A width change starts (or extends) a resize: ↑ drops any in-flight move
+    /// so it is placed with ↓ every frame, and visibility is re-evaluated only
+    /// after the window has held still.
+    private func noteControlsWidth(_ width: CGFloat) {
+        defer { controlsLayoutWidth = width }
+        guard controlsLayoutWidth > 0, abs(width - controlsLayoutWidth) > 0.5 else { return }
+        if latestStartMoveGeneration != 0 {
+            latestStartMoveGeneration = 0
+            latestStartMaterial.layer?.removeAllAnimations()
+            latestStartButton.layer?.removeAllAnimations()
+        }
+        isResizingControls = true
+        resizeSettleGeneration &+= 1
+        let generation = resizeSettleGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self, self.resizeSettleGeneration == generation, self.window?.inLiveResize != true else { return }
+            self.settleControlsAfterResize()
+        }
+    }
+
+    private func settleControlsAfterResize() {
+        guard isResizingControls else { return }
+        isResizingControls = false
+        updateJumpButtonVisibility(animated: true)
+    }
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        resizeSettleGeneration &+= 1
+        settleControlsAfterResize()
+    }
+
     static let unseenDotSize: CGFloat = 11
     private let unseenDot = NSView()
 
@@ -3032,6 +3069,7 @@ final class MacChatScrollView: MacSmoothScrollView {
             scrollPolicy.pinToTail(observedOffset: bottom)
         }
         _ = chatDocumentView.updateVisibleCells(in: contentView.bounds)
+        noteControlsWidth(bounds.width)
         let jumpFrame = self.jumpFrame
         jumpMaterial.frame = jumpFrame
         jumpButton.frame = jumpFrame
@@ -3703,7 +3741,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         guard !isDeallocating else { return }
         if isAtConversationBottom, unseenReplies > 0 { unseenReplies = 0 }
         let moving = scrollPolicy.navigationActive || navigationLoadInFlight || isProgrammaticScrollActive
-            || isScrollInteractionActive
+            || isScrollInteractionActive || isResizingControls
         let hasContent = !chatDocumentView.itemKeys.isEmpty
         guard !moving || !hasContent || jumpButtonVisibilityTargets.isEmpty else { syncUnseenDot(); return }
         let showTail = hasContent && !isAtConversationBottom
