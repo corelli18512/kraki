@@ -275,9 +275,21 @@ struct BuiltInSetupView: View {
         case .error(let message):
             StepCard(title: "Kraki couldn't start", detail: message) {
                 HStack(spacing: 10) {
-                    Button("Try Again") { Task { await tentacleCLI.startDaemon() } }
+                    if message == TentacleCLIManager.launchdStuckMessage {
+                        // macOS's own "Are you sure you want to restart?" dialog.
+                        Button("Restart Mac…") {
+                            NSAppleScript(source: "tell application \"loginwindow\" to «event aevtrrst»")?.executeAndReturnError(nil)
+                        }
                         .buttonStyle(.borderedProminent)
                         .tint(Color.krakiPrimary)
+                    }
+                    if message == TentacleCLIManager.launchdStuckMessage {
+                        Button("Try Again") { Task { await tentacleCLI.startDaemon() } }
+                    } else {
+                        Button("Try Again") { Task { await tentacleCLI.startDaemon() } }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.krakiPrimary)
+                    }
                     Button("Show Logs") {
                         NSWorkspace.shared.open(URL(fileURLWithPath: tentacleCLI.logsDirectory, isDirectory: true))
                     }

@@ -85,7 +85,9 @@ final class TentacleCLIManager {
     @ObservationIgnored let builtIn = BuiltInTentacle()
     @ObservationIgnored private var restartedForVersion: String?
     @ObservationIgnored private var notRunningSince: Date?
-    @ObservationIgnored private var kickstartedThisLaunch = false
+    @ObservationIgnored private var lastKickstartAt: Date?
+    @ObservationIgnored private var onDemandCheckedAt: Date?
+    @ObservationIgnored private var launchdDomainStuck = false
     @ObservationIgnored private var reRegisteredThisLaunch = false
     @ObservationIgnored private var checkedLegacyHelperPath = false
 
@@ -329,28 +331,47 @@ final class TentacleCLIManager {
         // re-signed helper: "Requesting repair LWCR update", exit 78 forever).
         // Re-registering records the current binary. Once per app launch, and
         // only after the job had time to come up on its own.
+        var stuck = false
         if mode == .builtIn, !running, builtIn.ownershipMarkerExists,
            BuiltInTentacle.thisMacRole != .remoteOnly,
-           builtIn.service.status == .enabled, !reRegisteredThisLaunch {
-            if notRunningSince == nil { notRunningSince = Date() }
-            // First, ask launchd to start it. A registered RunAtLoad/KeepAlive
-            // job is never spawned while the user's launchd domain is stuck in
-            // on-demand-only mode (e.g. after macOS's scheduled-update restart
-            // was interrupted) — only an explicit kickstart starts it. Seen on
-            // a real Mac: "pending spawn, domain in on-demand-only mode", the
-            // app sat on "Starting Kraki in background" forever.
-            if let since = notRunningSince, Date().timeIntervalSince(since) > 6, !kickstartedThisLaunch {
-                kickstartedThisLaunch = true
-                KLog.diag("[Tentacle] built-in daemon registered but not running; kickstarting")
+           builtIn.service.status == .enabled {
+            let now = Date()
+            if notRunningSince == nil { notRunningSince = now }
+            let down = now.timeIntervalSince(notRunningSince ?? now)
+            // Ask launchd to start it, and keep asking while the app is open.
+            // A registered RunAtLoad/KeepAlive job is never spawned while the
+            // user's launchd domain is stuck in on-demand-only mode (after an
+            // interrupted restart/logout, until the next reboot); an explicit
+            // kickstart still is. Seen on a real Mac after an update: "pending
+            // spawn, domain in on-demand-only mode", and the app sat on
+            // "Starting Kraki in background" forever.
+            if down > 6, lastKickstartAt.map({ now.timeIntervalSince($0) > 15 }) ?? true {
+                lastKickstartAt = now
+                KLog.diag("[Tentacle] built-in daemon registered but not running for \(Int(down))s; kickstarting")
                 builtIn.kickstart()
             }
-            if let since = notRunningSince, Date().timeIntervalSince(since) > 20 {
+            // Re-registering records the current binary (launch-constraint
+            // repair after an update). Once per app launch.
+            if down > 20, !reRegisteredThisLaunch {
                 reRegisteredThisLaunch = true
                 KLog.diag("[Tentacle] built-in daemon registered but not running for 20s; re-registering")
                 Task { await self.reRegisterBuiltIn() }
             }
+            // Still down: tell the user why instead of spinning forever.
+            if down > 45 {
+                if let checked = onDemandCheckedAt, now.timeIntervalSince(checked) < 30 {
+                    stuck = launchdDomainStuck
+                } else {
+                    onDemandCheckedAt = now
+                    launchdDomainStuck = await isLaunchdDomainOnDemandOnly()
+                    stuck = launchdDomainStuck
+                    if stuck { KLog.diag("[Tentacle] launchd domain is in on-demand-only mode; daemon cannot start") }
+                }
+            }
         } else if running {
             notRunningSince = nil
+            lastKickstartAt = nil
+            launchdDomainStuck = false
         }
 
         if running, let pid {
@@ -366,7 +387,7 @@ final class TentacleCLIManager {
         } else {
             // Avoid flapping .stopping → .stopped → .starting if the
             // user spammed buttons. Trust the JSON here.
-            daemonState = .stopped
+            daemonState = stuck ? .error(Self.launchdStuckMessage) : .stopped
         }
 
         if let cfg = json["config"] as? [String: Any] {
@@ -486,6 +507,26 @@ final class TentacleCLIManager {
         } catch {
             daemonState = .error("Could not restart Kraki in the background: \(error.localizedDescription)")
         }
+    }
+
+    static let launchdStuckMessage =
+        "macOS hasn't finished a restart, so it isn't starting background apps right now. Restart your Mac to fix this."
+
+    /// True while the user's launchd domain only spawns jobs on explicit
+    /// demand (`on-demand count` > 0 in `launchctl print gui/<uid>`): the
+    /// state an interrupted restart/logout leaves behind until the next reboot.
+    private func isLaunchdDomainOnDemandOnly() async -> Bool {
+        guard let result = await runCapturing(binary: "/bin/launchctl", args: ["print", "gui/\(getuid())"]),
+              result.exitCode == 0 else { return false }
+        return Self.onDemandCount(fromLaunchctlPrint: result.stdout) > 0
+    }
+
+    nonisolated static func onDemandCount(fromLaunchctlPrint text: String) -> Int {
+        for line in text.split(separator: "\n") {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("on-demand count = "), let n = Int(t.dropFirst("on-demand count = ".count)) { return n }
+        }
+        return 0
     }
 
     /// The bundle-relative program launchd recorded for the built-in job
@@ -651,9 +692,18 @@ final class TentacleCLIManager {
                     return
                 }
 
-                process.waitUntilExit()
+                // Drain both pipes while the process runs: waiting first
+                // deadlocks once a command writes more than the pipe buffer
+                // (e.g. `launchctl print gui/<uid>` is ~130 KB).
+                var errData = Data()
+                let errDone = DispatchSemaphore(value: 0)
+                DispatchQueue.global(qos: .userInitiated).async {
+                    errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                    errDone.signal()
+                }
                 let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                errDone.wait()
+                process.waitUntilExit()
                 continuation.resume(returning: CommandResult(
                     exitCode: process.terminationStatus,
                     stdout: String(data: outData, encoding: .utf8) ?? "",
