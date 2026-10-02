@@ -47,6 +47,29 @@ struct TentaclePane: View {
                 Section("Permissions") {
                     fdaContent
                 }
+                Section {
+                    ForEach(BuiltInTentacle.agentPrivacyPanes, id: \.anchor) { pane in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(pane.title)
+                                Text(pane.detail)
+                                    .font(.caption)
+                                    .foregroundStyle(Color.textSecondary)
+                            }
+                            Spacer()
+                            Button("Open") { BuiltInTentacle.openPrivacyPane(pane.anchor) }
+                        }
+                    }
+                    Button("Show Kraki's Background Service in Finder") {
+                        BuiltInTentacle.revealHelperInFinder()
+                    }
+                } header: {
+                    Text("For Agents That Operate the Computer")
+                } footer: {
+                    Text("Optional. Agents run under Kraki's background service, so turn these on for \"Kraki\" if you want agents to click, type, see the screen or control apps. If Kraki isn't in a list yet, drag it in from the Finder window.")
+                        .font(.caption)
+                        .foregroundStyle(Color.textSecondary)
+                }
             }
 
             Section("Logs") {

@@ -258,10 +258,26 @@ must toggle each switch once. After this fix, **once is enough forever**.
 kraki permissions --open
 ```
 
-opens **Full Disk Access** in System Settings — the only privacy permission
-Kraki asks for (agents read and edit your projects). Kraki does not use
-Accessibility, Input Monitoring, Screen Recording or Automation and never asks
-for them.
+opens the privacy panes that matter to coding agents:
+
+- **Full Disk Access** — needed: agents read and edit your projects
+- **Accessibility** — optional: agents that click, type and operate apps
+- **Screen Recording** — optional: agents that take screenshots / see the screen
+- **Automation** — optional: agents that control other apps (macOS asks per app)
+- **Input Monitoring** — optional, rarely needed
+
+Agents run as children of Kraki's app bundle (the CLI's `Kraki.app`, or the
+built-in helper inside Kraki for Mac), so macOS attributes their requests to
+it. Requests that macOS asks about at runtime need a usage string in that
+bundle's Info.plist, and under the hardened runtime some also need an
+entitlement; otherwise they are denied silently (e.g. "No route to host" on the
+local network, error -1743 for Apple events). Both live in
+`packages/tentacle/agent-privacy.plist` (merged into both bundles at build time)
+and `packages/tentacle/entitlements.plist`: local network, Apple events,
+camera, microphone, speech recognition, contacts, calendars, reminders, photos,
+location, Bluetooth, Desktop/Documents/Downloads, removable and network
+volumes. Kraki relays the user's agents; it does not decide which of these an
+agent may use — the user does, in System Settings or at the prompt.
 
 The setup wizard (`kraki`) runs this step automatically and polls FDA as
 its "done" signal.
@@ -270,7 +286,7 @@ its "done" signal.
 
 ```
 kraki permissions            # JSON: bundle registration + per-service status
-kraki permissions --open     # open the Full Disk Access pane
+kraki permissions --open     # open every relevant privacy pane
 kraki doctor                 # now includes a `tcc` block (bundled/registered/path)
 kraki fda [--json|--watch]   # unchanged, retained for compatibility
 ```

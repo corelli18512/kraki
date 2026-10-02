@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Privacy usage strings for the app bundle that runs Kraki's daemon (the CLI's
+  Kraki.app and Kraki for Mac's built-in helper). Merged into both Info.plists
+  at build time.
+
+  Coding agents run as children of that bundle, so macOS attributes their
+  privacy requests to it. Without a usage string the system does not ask the
+  user; it silently denies (e.g. "No route to host" for the local network,
+  error -1743 for Apple events). Kraki relays the user's agents and does not
+  decide what they may do, so every request an agent can make has a string.
+  Accessibility, Input Monitoring, Screen Recording and Full Disk Access have
+  no usage key; they are granted in System Settings.
+-->
+<plist version="1.0">
+<dict>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Coding agents started by Kraki can reach computers and servers on your local network, such as a dev server, a NAS or another computer over SSH.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Coding agents started by Kraki can control other apps for you, such as Terminal, Finder, Safari or Xcode.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Coding agents started by Kraki can use the camera when a task you ask for needs it.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Coding agents started by Kraki can use the microphone when a task you ask for needs it.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Coding agents started by Kraki can transcribe speech when a task you ask for needs it.</string>
+    <key>NSContactsUsageDescription</key>
+    <string>Coding agents started by Kraki can read your contacts when a task you ask for needs them.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>Coding agents started by Kraki can read and add calendar events when a task you ask for needs them.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Coding agents started by Kraki can read and add calendar events when a task you ask for needs them.</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>Coding agents started by Kraki can read and add reminders when a task you ask for needs them.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>Coding agents started by Kraki can read and add reminders when a task you ask for needs them.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Coding agents started by Kraki can use your photo library when a task you ask for needs it.</string>
+    <key>NSLocationUsageDescription</key>
+    <string>Coding agents started by Kraki can use this Mac's location when a task you ask for needs it.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Coding agents started by Kraki can use this Mac's location when a task you ask for needs it.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Coding agents started by Kraki can talk to Bluetooth devices when a task you ask for needs it.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Coding agents started by Kraki read and edit projects in your Desktop folder.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Coding agents started by Kraki read and edit projects in your Documents folder.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Coding agents started by Kraki read and edit files in your Downloads folder.</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>Coding agents started by Kraki read and edit projects on external drives.</string>
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>Coding agents started by Kraki read and edit projects on network drives.</string>
+    <key>NSSystemAdministrationUsageDescription</key>
+    <string>Coding agents started by Kraki can change system settings when a task you ask for needs it.</string>
+</dict>
+</plist>
