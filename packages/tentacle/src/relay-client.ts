@@ -33,6 +33,7 @@ import { EventsWatcher } from './events-watcher.js';
 import { createLogger } from './logger.js';
 import { getKrakiHome } from './config.js';
 import { makeHeadline } from './tool-headline.js';
+import { markdownToPlainText, truncateUtf8, PUSH_SUMMARY_MAX_BYTES } from './push-preview-text.js';
 import { TentaclePulse, streamForType, type PulseDeliveryTarget } from './tentacle-pulse.js';
 import { CardManager } from './card-manager.js';
 import { AttachmentPacer } from './attachment-pacer.js';
@@ -568,7 +569,11 @@ export class RelayClient {
     // the runtime indicator. Overflow recovery never reaches this idle path.
     const usage = this.adapter.getSessionUsage(sessionId) ?? undefined;
     if (usage) this.sessionManager.setUsage(sessionId, usage);
-    this.sendTurnIdle(sessionId, { usage, ...(terminalError && { reason: 'failed' as const }) });
+    this.sendTurnIdle(
+      sessionId,
+      { usage, ...(terminalError && { reason: 'failed' as const }) },
+      terminalError ? { failure: terminalError.message } : {},
+    );
     // The closing idle changes the turn boundary — the agent reply / terminal
     // outcome now replaces the user_message as the preview anchor. Broadcast so
     // every arm's digest-derived preview advances authoritatively. Without this
@@ -595,8 +600,11 @@ export class RelayClient {
   private sendTurnIdle(
     sessionId: string,
     payload: Omit<IdleMessage['payload'], 'turnArtifacts'>,
+    push: { failure?: string } | null = {},
   ): void {
     const turnArtifacts = this.sessionManager.readCurrentTurnArtifacts(sessionId);
+    if (push) this.closingTurnPush.set(sessionId, push);
+    else this.closingTurnPush.delete(sessionId);
     this.send({
       type: 'idle',
       sessionId,
@@ -605,6 +613,7 @@ export class RelayClient {
         ...(turnArtifacts.length > 0 && { turnArtifacts }),
       },
     }, payload.reason !== 'aborted');
+    this.closingTurnPush.delete(sessionId);
   }
 
   private dispatchInput(sessionId: string, task: () => Promise<void>): Promise<void> {
@@ -619,8 +628,13 @@ export class RelayClient {
   }
 
   // ── Push preview state ─────────────────────────────
-  /** Last agent message content per session (for idle push preview) */
+  /** Final reply of the CURRENT turn per session (for the turn-end push).
+   *  Cleared when a new user turn starts, so a turn that ends without a reply
+   *  (steps only, failed) never re-sends the previous turn's text. */
   private lastAgentContent = new Map<string, string>();
+  /** Terminal failure message of the turn currently closing, read by the
+   *  closing idle's push preview. Set and cleared around sendTurnIdle. */
+  private closingTurnPush = new Map<string, { failure?: string }>();
 
   // ── Streaming delta debounce ───────────────────────
   // Each agent_message_delta otherwise triggers a full hybrid encryption
@@ -1738,7 +1752,8 @@ export class RelayClient {
               this.resolveTurnIdle(sessionId);
               this.sessionManager.markIdle(sessionId);
               this.clearCompacting(sessionId);
-              this.sendTurnIdle(sessionId, { reason: 'aborted' });
+              // The user stopped this turn themselves: no turn-end push.
+              this.sendTurnIdle(sessionId, { reason: 'aborted' }, null);
               // Turn boundary changed (aborted outcome). See settleAdapterIdle.
               this.broadcastSessionList();
             })
@@ -3443,6 +3458,7 @@ export class RelayClient {
       if (type === 'user_message' && (enriched.payload as { delivery?: string } | undefined)?.delivery !== 'steer') {
         this.turnStepCounts.set(sessionId, 0);
         this.turnHasOutcome.delete(sessionId);
+        this.lastAgentContent.delete(sessionId);
       } else if (type === 'agent_message' || type === 'system_message' || type === 'interrupted_turn' || type === 'turn_status') {
         this.turnHasOutcome.add(sessionId);
         const p = enriched.payload as Record<string, unknown> | undefined;
@@ -3569,10 +3585,6 @@ export class RelayClient {
     try {
       const plaintext = JSON.stringify(msg);
       const { blob, keys } = encryptToBlob(plaintext, recipients);
-      if (msg.type === 'agent_message' && msg.sessionId) {
-        const content = (msg.payload as Record<string, unknown>).content as string;
-        if (content) this.lastAgentContent.set(msg.sessionId, content);
-      }
       this.sendPayload(JSON.stringify({ blob, keys }), usableTargets, false, coalesceKeyFor(msg), streamForType(msg.type));
     } catch (err) {
       logger.error({ err }, 'Encrypted multicast failed');
@@ -3703,14 +3715,23 @@ export class RelayClient {
       previewType = 'question';
       previewSummary = (msg.payload as { question: { text: string } }).question.text;
     } else if (msg.type === 'idle') {
-      previewType = 'idle';
-      previewSummary = this.lastAgentContent.get(msg.sessionId as string);
+      // Only the idle that closes a real user turn notifies; create/import/fork
+      // idles bypass sendTurnIdle and never push. The summary is THIS turn's
+      // reply (never a previous turn's); a failed turn pushes its error; a
+      // reply-less turn pushes with no summary (clients show a generic line).
+      const closing = this.closingTurnPush.get(msg.sessionId as string);
+      if (!closing) return undefined;
+      if (closing.failure !== undefined) {
+        previewType = 'error';
+        previewSummary = closing.failure;
+      } else {
+        previewType = 'idle';
+        previewSummary = this.lastAgentContent.get(msg.sessionId as string) ?? '';
+      }
     }
-    if (!previewType || !previewSummary) return undefined;
-    const normalizedSummary = toWellFormedText(previewSummary)
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (!normalizedSummary) return undefined;
+    if (!previewType || previewSummary === undefined) return undefined;
+    const normalizedSummary = truncateUtf8(markdownToPlainText(previewSummary), PUSH_SUMMARY_MAX_BYTES);
+    if (!normalizedSummary && previewType !== 'idle') return undefined;
     const meta = this.sessionManager.getMeta(msg.sessionId as string);
     const rawTitle = meta?.title ?? meta?.autoTitle;
     const normalizedTitle = rawTitle ? toWellFormedText(rawTitle).replace(/\s+/g, ' ').trim() : undefined;
@@ -3734,7 +3755,8 @@ export class RelayClient {
     try {
       const preview = JSON.stringify({
         type: previewType,
-        summary: Array.from(normalizedSummary).slice(0, 50).join(''),
+        ...(normalizedSummary && { summary: normalizedSummary }),
+        ...(previewType === 'idle' && !normalizedSummary && { steps: this.turnStepCounts.get(msg.sessionId as string) ?? 0 }),
         sessionId: msg.sessionId,
         ...(title ? { title } : {}),
       });

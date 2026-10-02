@@ -1175,7 +1175,11 @@ export class PiAdapter extends AgentAdapter {
           if (s) {
             s.lastStopReason = m.stopReason;
             if (m.stopReason === 'error') {
-              s.pendingError = m.errorMessage;
+              // A failure without an errorMessage is still a failure: keep a
+              // non-empty message so it is reported instead of ending as a
+              // silent reply-less turn.
+              s.pendingError = m.errorMessage?.trim()
+                || 'The model request failed without an error message. Try sending again.';
             } else {
               s.pendingError = undefined;
             }

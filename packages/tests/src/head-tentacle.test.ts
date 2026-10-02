@@ -15,6 +15,7 @@ import {
 import { SessionManager, RelayClient, KeyManager } from "@kraki/tentacle";
 import type { AgentAdapter, CreateSessionConfig, SessionInfo, SessionContext } from "@kraki/tentacle";
 import type { AuthProvider, AuthUser } from "@kraki/head";
+import { buildApnsPayload } from "@kraki/head";
 import type { AuthCredentials, AuthOutcome } from "@kraki/head";
 import { WebSocket } from "ws";
 
@@ -1269,7 +1270,34 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     app.close();
   });
 
-  it("pushPreview summary is truncated to 50 chars", async () => {
+  it("an online device with a local token gets the encrypted preview over its connection", async () => {
+    const app = await connectApp(env.port);
+    app.send({ type: "register_push_token", payload: { provider: "local", token: app.deviceId } });
+    await app.waitFor("push_token_registered");
+    await connectTentacle();
+
+    const { sessionId } = await adapter.createSession();
+    await app.waitFor("session_created");
+    await subscribeApp(app, sessionId);
+
+    adapter.onPermissionRequest?.(sessionId, {
+      id: "perm-local",
+      toolArgs: { type: "shell", command: "npm test" },
+      description: "Run shell command: npm test",
+    });
+
+    const msg = await app.waitFor("notification_preview");
+    const payload = msg.payload as { blob: string; key: string };
+    const parsed = JSON.parse(decryptFromBlob(
+      { blob: payload.blob, keys: { [app.deviceId]: payload.key } },
+      app.deviceId, app.keyPair.privateKey,
+    ));
+    expect(parsed).toMatchObject({ type: "permission", sessionId, summary: "Run shell command: npm test" });
+
+    app.close();
+  });
+
+  it("pushPreview summary is byte-bounded and the APNs payload stays under 4 KB", async () => {
     const app = await connectApp(env.port);
     await connectTentacle();
 
@@ -1277,7 +1305,8 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     await app.waitFor("session_created");
     await subscribeApp(app, sessionId);
 
-    const longDescription = "This is a very long permission description that should definitely be truncated to fit the lock screen";
+    // Worst case for the byte budget: 3-byte CJK characters well past the cap.
+    const longDescription = "这是一段很长的审批说明".repeat(200);
     adapter.onPermissionRequest?.(sessionId, {
       id: "perm-long",
       toolArgs: { type: "shell", command: "echo hello" },
@@ -1293,8 +1322,12 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
       { blob: preview!.blob, keys: preview!.keys },
       app.deviceId, app.keyPair.privateKey,
     ));
-    expect(parsed.summary.length).toBe(50);
-    expect(parsed.summary).toBe(longDescription.slice(0, 50));
+    expect(Buffer.byteLength(parsed.summary, "utf8")).toBeLessThanOrEqual(1500);
+    expect(parsed.summary.endsWith("…")).toBe(true);
+    expect(longDescription.startsWith(parsed.summary.slice(0, -1))).toBe(true);
+
+    const apns = buildApnsPayload({ blob: preview!.blob, key: preview!.keys[app.deviceId] });
+    expect(Buffer.byteLength(apns)).toBeLessThanOrEqual(4096);
 
     app.close();
   });

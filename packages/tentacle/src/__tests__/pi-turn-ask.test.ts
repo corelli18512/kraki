@@ -949,6 +949,19 @@ describe('pi turn conclusion (relayed as-is, no injected rounds)', () => {
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
+  it('backend error without an errorMessage still reports an error, not a silent reply-less turn', () => {
+    const { adapter, emit } = makeAdapter();
+    const onIdle = vi.fn();
+    const onError = vi.fn();
+    adapter.onIdle = onIdle;
+    adapter.onError = onError;
+    emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error' } });
+    emit({ type: 'agent_settled' });
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith('s1', { message: expect.stringContaining('failed without an error message') });
+    expect(onIdle).toHaveBeenCalledTimes(1);
+  });
+
   it('echoes the relay turn identity on final message and idle callbacks', () => {
     const { adapter, sid, emit, narrate } = makeAdapter();
     const onMessage = vi.fn();

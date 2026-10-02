@@ -73,7 +73,10 @@ export interface DeviceCapabilities {
 
 // ── Push notification providers ──────────────────────────
 
-export type PushProviderType = 'apns' | 'fcm' | 'web_push';
+/** `local`: an online native client (macOS) that posts its own local
+ *  notifications; the relay forwards it the encrypted preview as a
+ *  `notification_preview` control message instead of using a push service. */
+export type PushProviderType = 'apns' | 'fcm' | 'web_push' | 'local';
 
 // ── Model metadata ──────────────────────────────────────
 

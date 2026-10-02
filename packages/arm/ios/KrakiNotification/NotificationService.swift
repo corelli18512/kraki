@@ -73,10 +73,11 @@ class NotificationService: UNNotificationServiceExtension {
 
         do {
             let decrypted = try decryptPreview(blob: blob, wrappedKey: key)
-            let preview = parsePreview(decrypted)
+            let preview = PushPreviewFormat.content(fromJSON: decrypted)
             content.title = preview.title
-            content.subtitle = preview.subtitle
+            content.subtitle = ""
             content.body = preview.body
+            content.categoryIdentifier = preview.category
             if let sessionId = preview.sessionId {
                 content.userInfo["sessionId"] = sessionId
                 applySessionPresentation(sessionId, to: content)
@@ -85,7 +86,7 @@ class NotificationService: UNNotificationServiceExtension {
             // Decryption failed: retain a useful, private fallback. The raw APNs
             // payload already carries the default sound and attention badge.
             content.title = "Kraki"
-            content.subtitle = "New activity"
+            content.subtitle = ""
             content.body = "Open Kraki to view the update."
         }
 
@@ -95,7 +96,7 @@ class NotificationService: UNNotificationServiceExtension {
     override func serviceExtensionTimeWillExpire() {
         if let contentHandler = contentHandler, let content = bestAttemptContent {
             content.title = "Kraki"
-            content.subtitle = "New activity"
+            content.subtitle = ""
             content.body = "Open Kraki to view the update."
             content.sound = .default
             contentHandler(content)
@@ -177,71 +178,4 @@ class NotificationService: UNNotificationServiceExtension {
         return bridgeToSecKey(ref)
     }
 
-    // MARK: - Preview Parsing
-
-    private struct Preview {
-        let title: String
-        let subtitle: String
-        let body: String
-        let sessionId: String?
-    }
-
-    private func parsePreview(_ json: String) -> Preview {
-        guard let data = json.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return Preview(
-                title: "Kraki",
-                subtitle: "New activity",
-                body: "Open Kraki to view the update.",
-                sessionId: nil
-            )
-        }
-
-        // Tentacle's encrypted preview payload. The app name is already shown by
-        // iOS, so use the Session title as the notification title and reserve the
-        // subtitle for the kind of attention required.
-        let messageType = obj["type"] as? String
-        let sessionId = obj["sessionId"] as? String
-        let sessionTitle = normalized(obj["title"] as? String)
-        let summary = normalized(obj["summary"] as? String)
-
-        let subtitle: String
-        let fallbackBody: String
-        switch messageType {
-        case "permission":
-            subtitle = "Approval needed"
-            fallbackBody = "Review the requested tool action."
-        case "question":
-            subtitle = "Question from agent"
-            fallbackBody = "Open the Session to respond."
-        case "idle":
-            subtitle = "Reply ready"
-            fallbackBody = "The agent finished responding."
-        case "error":
-            subtitle = "Action failed"
-            fallbackBody = "Open the Session for details."
-        case "session_ended":
-            subtitle = "Session ended"
-            fallbackBody = "The Session is no longer running."
-        default:
-            subtitle = "New activity"
-            fallbackBody = "Open Kraki to view the update."
-        }
-
-        return Preview(
-            title: sessionTitle ?? "Kraki",
-            subtitle: subtitle,
-            body: summary ?? fallbackBody,
-            sessionId: sessionId
-        )
-    }
-
-    private func normalized(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let text = value
-            .components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        return text.isEmpty ? nil : text
-    }
 }

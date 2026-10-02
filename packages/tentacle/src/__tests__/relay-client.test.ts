@@ -3839,3 +3839,87 @@ describe('RelayClient reconnect backoff', () => {
     }
   });
 });
+
+describe('turn-end push preview', () => {
+  function setup() {
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    const client = new RelayClient(
+      adapter as unknown as Parameters<typeof RelayClient>[0],
+      sm as unknown as Parameters<typeof RelayClient>[1],
+      { relayUrl: 'ws://localhost:4000', authMethod: 'open', device: { name: 'Test', role: 'tentacle' }, reconnectDelay: 10 },
+      createKeyManager() as unknown as Parameters<typeof RelayClient>[3],
+    );
+    client.connect();
+    const ws = sockets[sockets.length - 1];
+    ws.emit('open');
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_t', authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' },
+      devices: [{ id: 'app-offline', name: 'Phone', role: 'app', online: false, encryptionKey: 'app-key' }],
+    })));
+    const internals = client as unknown as {
+      send(msg: Record<string, unknown>): void;
+      beginAdapterTurn(sessionId: string): string;
+    };
+    const startTurn = (text: string) => {
+      internals.beginAdapterTurn('sess_1');
+      internals.send({ type: 'user_message', sessionId: 'sess_1', payload: { content: text } });
+    };
+    const previews = () => decodeHeadControls(ws.sent)
+      .filter((m) => m.type === 'dispatch_push')
+      // encryptToBlob is mocked to return the plaintext as the blob.
+      .map((m) => JSON.parse((m.payload as { preview: { blob: string } }).preview.blob) as Record<string, unknown>);
+    const reset = () => { ws.sent.length = 0; };
+    return { adapter, internals, startTurn, previews, reset };
+  }
+
+  it('never re-sends the previous turn reply when a turn ends without one', () => {
+    const { adapter, startTurn, previews, reset } = setup();
+    startTurn('first');
+    (adapter.onMessage as (sid: string, e: Record<string, unknown>) => void)('sess_1', { content: 'Reply of turn one' });
+    reset();
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    expect(previews()).toEqual([expect.objectContaining({ type: 'idle', summary: 'Reply of turn one' })]);
+
+    startTurn('second');
+    (adapter.onToolStart as (sid: string, e: Record<string, unknown>) => void)('sess_1', { toolName: 'bash', args: { command: 'ls' }, toolCallId: 'tc-2' });
+    reset();
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    const [preview] = previews();
+    expect(preview).toMatchObject({ type: 'idle', sessionId: 'sess_1' });
+    expect(preview.summary).toBeUndefined();
+    expect(preview.steps).toBeGreaterThan(0);
+  });
+
+  it('sends the reply as plain text, far beyond the old 50-character cut', () => {
+    const { adapter, startTurn, previews, reset } = setup();
+    startTurn('first');
+    const reply = `## Done\n\n**Fixed** the push. ${'a'.repeat(300)}`;
+    (adapter.onMessage as (sid: string, e: Record<string, unknown>) => void)('sess_1', { content: reply });
+    reset();
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    const [preview] = previews();
+    expect(preview.summary).toBe(`Done Fixed the push. ${'a'.repeat(300)}`);
+  });
+
+  it('pushes a failed turn as an error, even when the error has no text', () => {
+    const { adapter, startTurn, previews, reset } = setup();
+    startTurn('first');
+    (adapter.onMessage as (sid: string, e: Record<string, unknown>) => void)('sess_1', { content: 'Reply of turn one' });
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+
+    startTurn('second');
+    (adapter.onError as (sid: string, e: { message: string }) => void)('sess_1', { message: '' });
+    reset();
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    expect(previews()).toEqual([expect.objectContaining({ type: 'error', summary: 'Agent request failed' })]);
+  });
+
+  it('does not push for idles that do not close a user turn', () => {
+    const { internals, previews, reset } = setup();
+    reset();
+    internals.send({ type: 'idle', sessionId: 'sess_1', payload: {} });
+    expect(previews()).toEqual([]);
+  });
+});

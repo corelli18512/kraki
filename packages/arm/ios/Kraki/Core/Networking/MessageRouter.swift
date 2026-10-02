@@ -220,6 +220,24 @@ final class MessageRouter {
             #endif
             KLog.d("✅ push_token_registered")
 
+        case "notification_preview":
+            // Relay-forwarded encrypted push preview for an online Mac.
+            #if os(macOS)
+            guard let appState, let deviceId = appState.deviceId,
+                  let payload = json["payload"] as? [String: Any],
+                  let blob = payload["blob"] as? String,
+                  let key = payload["key"] as? String,
+                  let envelope = try? JSONSerialization.data(withJSONObject: ["blob": blob, "keys": [deviceId: key]]),
+                  let decrypted = try? encryptionHandler.decryptInbound(envelope),
+                  let text = String(data: decrypted.message, encoding: .utf8) else {
+                KLog.d("⚠️ notification_preview could not be decrypted")
+                return
+            }
+            Task { @MainActor in
+                MacNotifications.shared.present(decryptedPreview: text, appState: appState)
+            }
+            #endif
+
         case "voice_lease_grant":
             if let lease = Self.decodeVoiceLease(json["lease"]) {
                 KLog.d("🎙️ Voice lease grant received")
