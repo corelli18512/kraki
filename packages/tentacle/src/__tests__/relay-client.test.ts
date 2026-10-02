@@ -379,6 +379,34 @@ describe('RelayClient agent-mapping pre-registration on auth_ok', () => {
     vi.useFakeTimers();
   });
 
+  it('normalises leftover active/idle sessions only on the first auth, never after a relay reconnect', () => {
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getResumableSessions.mockReturnValue([
+      { id: 'running', agent: 'pi', state: 'active' },
+      { id: 'quiet', agent: 'pi', state: 'idle' },
+    ]);
+    const client = new RelayClient(adapter, sm, {
+      relayUrl: 'ws://localhost:4000', authMethod: 'open',
+      device: { name: 'Test', role: 'tentacle' }, reconnectDelay: 10,
+    }, null);
+    const authOk = Buffer.from(JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_1', authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' }, devices: [],
+    }));
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', authOk);
+    expect(smMock.markDisconnected).toHaveBeenCalledTimes(2); // daemon start: leftovers
+
+    smMock.markDisconnected.mockClear();
+    // Head restarts: same process re-authenticates while a turn is running.
+    (client as unknown as { handleMessage: (m: Record<string, unknown>) => void })
+      .handleMessage(JSON.parse(authOk.toString()));
+    expect(smMock.markDisconnected).not.toHaveBeenCalled();
+  });
+
   it('pre-registers agent mapping for every resumable session so multi-adapter routing survives daemon restart', () => {
     const adapter = createAdapter();
     const sm = createSessionManager();
