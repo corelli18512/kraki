@@ -277,9 +277,28 @@ struct BuiltInTentacle {
     }
 
     static func openFullDiskAccessSettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+        openPrivacyPane("Privacy_AllFiles")
+    }
+
+    /// Privacy panes for agents that operate the computer. The grant belongs
+    /// to the helper (agents run under it), not to this app.
+    static let agentPrivacyPanes: [(title: String, detail: String, anchor: String)] = [
+        ("Accessibility", "Click, type and operate apps", "Privacy_Accessibility"),
+        ("Screen Recording", "Take screenshots and see the screen", "Privacy_ScreenCapture"),
+        ("Automation", "Control other apps (macOS asks per app)", "Privacy_Automation"),
+        ("Input Monitoring", "Watch keyboard and mouse input", "Privacy_ListenEvent"),
+    ]
+
+    static func openPrivacyPane(_ anchor: String) {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    /// Select the helper in Finder so it can be dragged into a privacy list:
+    /// it lives inside Kraki.app, where the "+" file picker doesn't look.
+    static func revealHelperInFinder() {
+        NSWorkspace.shared.activateFileViewerSelecting([BuiltInTentacle().helperURL])
     }
 
     static func revealAppInFinder() {

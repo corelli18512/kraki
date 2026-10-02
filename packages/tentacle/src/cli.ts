@@ -95,7 +95,7 @@ function printHelp(): void {
     cmd('kraki config log <normal|verbose>', ''),
     cmd('', 'Set log detail for the next start'),
     cmd('kraki config reset', 'Delete the config and set up again'),
-    cmd('kraki permissions', 'macOS Full Disk Access status (--open to open the pane)'),
+    cmd('kraki permissions', 'macOS privacy status (--open to open the panes)'),
     '',
     `${chalk.dim('  For apps and scripts: setup --json | --headless [--agent …], connect --json | --url-only,')}`,
     `${chalk.dim('  status --json, agents --json, doctor, fda --json | --watch, resolve-relay --json')}`,
@@ -862,9 +862,9 @@ async function cmdPermissions(args: string[]): Promise<void> {
   if (open) {
     openAllTccPanes();
     if (!json) {
-      console.log(chalk.bold('  Opening Full Disk Access in System Settings…'));
-      console.log(chalk.dim('  TCC grants cannot be applied automatically (SIP-protected).'));
-      console.log(chalk.dim('  Turn on the switch for Kraki.'));
+      console.log(chalk.bold('  Opening the privacy panes in System Settings…'));
+      console.log(chalk.dim('  macOS only lets you grant these yourself. Turn on Kraki in each one you want:'));
+      console.log(chalk.dim('  Full Disk Access is needed; the others only for agents that operate the computer.'));
       console.log('');
       for (const s of TCC_SERVICES) {
         console.log(`    ${chalk.bold(s.label)}`);

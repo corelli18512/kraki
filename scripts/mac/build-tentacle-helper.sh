@@ -101,14 +101,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <true/>
     <key>LSBackgroundOnly</key>
     <true/>
-    <!-- Agents run under this helper. Without a usage string macOS Local
-         Network privacy silently denies them every LAN host (NAS, a dev
-         server on another machine, ssh) with "No route to host". -->
-    <key>NSLocalNetworkUsageDescription</key>
-    <string>Coding agents started by Kraki can reach computers and servers on your local network, such as a dev server or a NAS.</string>
 </dict>
 </plist>
 PLIST
+# Agents run under this helper; without usage strings macOS silently denies
+# their privacy requests (local network, Apple events, camera, ...).
+/usr/libexec/PlistBuddy -c "Merge $ROOT/packages/tentacle/agent-privacy.plist" "$APP/Contents/Info.plist" >/dev/null
 
 # Sign inside-out with the tentacle's JIT entitlements (Node/V8 needs them
 # under the hardened runtime). --timestamp is required for notarization and
