@@ -3,6 +3,7 @@
 /// Tabs:
 ///   General        — appearance, window close-to-menubar
 ///   Account        — login state, logout
+///   Voice Input    — correction, conversation context, custom words
 ///   Notifications  — toggle + system settings deeplink
 ///   Tentacle       — install state, daemon control, log path, autostart
 ///   Devices        — paired devices, revoke (placeholder for now)
@@ -18,6 +19,8 @@ struct PreferencesWindow: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
             AccountPane()
                 .tabItem { Label("Account", systemImage: "person.crop.circle") }
+            VoiceInputPane()
+                .tabItem { Label("Voice Input", systemImage: "mic") }
             NotificationsPane()
                 .tabItem { Label("Notifications", systemImage: "bell") }
             TentaclePane()

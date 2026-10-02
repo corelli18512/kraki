@@ -119,13 +119,12 @@ struct SettingsView: View {
             notificationsRow
             themeRow
             NavigationLink {
-                Form { VoiceVocabularyEditor() }
-                    .navigationTitle("Voice Vocabulary")
+                VoiceInputSettingsPage()
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "character.book.closed")
+                    Image(systemName: "mic")
                         .foregroundStyle(Color.krakiPrimary)
-                    Text("Voice Vocabulary")
+                    Text(VoiceInputCopy.title)
                 }
             }
         } header: {

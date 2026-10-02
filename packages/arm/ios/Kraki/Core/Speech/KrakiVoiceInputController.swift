@@ -680,6 +680,11 @@ final class KrakiVoiceInputController {
             return
         }
 
+        if let warm = session, warm.correctionEnabled != VoiceInputSettings.correctionEnabled {
+            // The correction setting changed since this connection opened:
+            // reopen with the new one (the lease is kept).
+            closeConnection(keepLease: true)
+        }
         if session != nil {
             // Warm, or still authorizing: capture starts immediately and the
             // audio is buffered until the connection is authorized.
@@ -743,6 +748,14 @@ final class KrakiVoiceInputController {
         if warmConnectionDesired { scheduleReconnect(immediate: true) }
     }
 
+    /// Settings → Voice Input changed. An idle warm connection opened with the
+    /// other correction setting is reopened now, so the next press is fast.
+    func applySettings() {
+        guard !isBusy, let warm = session, warm.correctionEnabled != VoiceInputSettings.correctionEnabled else { return }
+        closeConnection(keepLease: true)
+        if warmConnectionDesired { prepare() }
+    }
+
     func hasFailure(for sessionID: String) -> Bool {
         guard case .failed = state else { return false }
         return failedSessionID == nil || failedSessionID == sessionID
@@ -797,7 +810,7 @@ final class KrakiVoiceInputController {
         return VoiceInputConfiguration(
             gatewayURL: gatewayURL,
             userID: identity.userID,
-            correctionEnabled: true,
+            correctionEnabled: VoiceInputSettings.correctionEnabled,
             authorizationFields: [
                 "deviceId": .string(identity.deviceID),
                 "authorization": lease.voiceInputJSONValue,
