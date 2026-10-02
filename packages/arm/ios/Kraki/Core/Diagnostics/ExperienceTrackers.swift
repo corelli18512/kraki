@@ -129,6 +129,9 @@ final class VoiceTracker {
         var finalizeMs: Double?
         /// Correction confirmed by the gateway (else the raw text is kept as a draft).
         var correctionConfirmed = false
+        /// The user's Correct Transcripts setting for this recording. Off:
+        /// `correctionConfirmed` is false by design, not a correction failure.
+        var correctionEnabled = true
         var textLength = 0
         /// The broker connection was already warm when the user pressed.
         var warm = false
@@ -147,8 +150,8 @@ final class VoiceTracker {
     private var finishingAt: TimeInterval?
     private var pendingOutcome: Summary.Outcome?
 
-    func begin(warm: Bool) {
-        current = Summary(warm: warm)
+    func begin(warm: Bool, correctionEnabled: Bool = true) {
+        current = Summary(correctionEnabled: correctionEnabled, warm: warm)
         began = now()
         recordingAt = nil
         finishingAt = nil

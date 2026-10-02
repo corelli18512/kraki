@@ -21,7 +21,7 @@ enum DiagField: String {
     case kind, outcome, path, gap, viewing, backgroundMs, firstContentMs, wsOpenMs, authedMs, listFreshMs, viewCurrentMs
     case code, detectMs, reconnectMs, catchupMs, impactMs, visibleMs, pathChanged, afterWake, previousExit
     case shown, shownMs, falseAlarm, manualRetries, autoResends, offline, background, confirmMs, correctionMs, cause
-    case stage, confirmed, warm, startMs, recordMs, finalizeMs
+    case stage, confirmed, warm, startMs, recordMs, finalizeMs, correctionOn
 }
 enum DiagValue: Encodable {
     case id(String), tag(String), number(Double), bool(Bool)

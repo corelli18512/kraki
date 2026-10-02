@@ -103,7 +103,7 @@ describe('off-band diagnostics', () => {
       confirmMs: 16_000, correctionMs: 2100, cause: 'correction' } };
     const voice = { ev: 'voice.summary', seq: 4, t: Date.now(), m: 13, d: {
       outcome: 'failed', stage: 'recording', cause: 'lease_denied_quota_exhausted', confirmed: false, textLength: 0,
-      warm: true, count: 0, startMs: 120, recordMs: 5300 } };
+      warm: true, count: 0, startMs: 120, recordMs: 5300, correctionOn: true } };
     const open = { ev: 'open.summary', seq: 5, t: Date.now(), m: 14, d: { outcome: 'current', gap: 2, firstContentMs: 40, viewCurrentMs: 600 } };
     const resend = { ev: 'outbox.state', seq: 6, t: Date.now(), m: 15, d: { clientId: randomUUID(), phase: 'resend_stalled' } };
     expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, events: [ready, outage, send, voice, open, resend] })))).status).toBe(204);

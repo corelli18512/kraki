@@ -129,6 +129,17 @@ final class VoiceTrackerTests: XCTestCase {
         XCTAssertEqual(t.summaries.first?.cause, "permission")
     }
 
+    func testCorrectionTurnedOffIsRecordedSoUnconfirmedIsNotAFailure() throws {
+        let t = tracker()
+        t.begin(warm: true, correctionEnabled: false)
+        t.stateChanged("recording"); clock += 2; t.stateChanged("finishing")
+        clock += 0.3; t.finalReceived(textLength: 10, correctionConfirmed: false); t.stateChanged("idle")
+        let s = try XCTUnwrap(t.summaries.first)
+        XCTAssertFalse(s.correctionEnabled)
+        XCTAssertFalse(s.correctionConfirmed)
+        XCTAssertEqual(s.outcome, .final)
+    }
+
     func testCauseClassesNeverCarryText() {
         XCTAssertEqual(VoiceTracker.classify(gatewayReason: "quota_exhausted"), "quota")
         XCTAssertEqual(VoiceTracker.classify(gatewayReason: "lease_expired"), "lease_rejected")

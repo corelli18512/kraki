@@ -77,6 +77,7 @@
   - `confirmed`：纠错是否被确认；未确认时保留原文草稿
   - `warm`：按下时连接是否已预热
   - `count`：租约续期（rollover）次数
+  - `correctionOn`：这次录音时用户是否开着 Correct Transcripts。关闭时 `confirmed=false` 是预期，不算纠错失败
 
 ### `open.summary`：点开一个会话
 只在在线、且不处于打开 App 或断线过程中时记录。

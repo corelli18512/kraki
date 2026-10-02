@@ -520,6 +520,7 @@ final class AppState {
                 .outcome: .tag(voice.outcome.rawValue), .stage: .tag(voice.stage),
                 .confirmed: .bool(voice.correctionConfirmed), .textLength: .int(voice.textLength),
                 .warm: .bool(voice.warm), .count: .int(voice.leaseRollovers),
+                .correctionOn: .bool(voice.correctionEnabled),
             ]
             if let v = voice.cause { f[.cause] = .tag(v) }
             if let v = voice.startMs { f[.startMs] = .number(v) }

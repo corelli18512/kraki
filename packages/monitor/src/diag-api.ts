@@ -48,7 +48,7 @@ export const fields: Record<string, Validator> = {
   autoResends: number, offline: bool, background: bool, confirmMs: number, correctionMs: number,
   cause: v => typeof v === 'string' && /^[a-z_]{1,48}$/.test(v), // coarse class, never a message
   stage: choice('preflight', 'permission', 'lease', 'recording', 'finishing'),
-  confirmed: bool, warm: bool, startMs: number, recordMs: number, finalizeMs: number,
+  confirmed: bool, warm: bool, startMs: number, recordMs: number, finalizeMs: number, correctionOn: bool,
 };
 /** Adding an event requires consciously extending this allowlist and its native call site. */
 export const schemas: Record<string, string[]> = {
@@ -77,7 +77,7 @@ export const schemas: Record<string, string[]> = {
   'send.summary': ['kind', 'outcome', 'shown', 'shownMs', 'falseAlarm', 'manualRetries', 'autoResends', 'restored',
     'offline', 'attachments', 'textLength', 'background', 'confirmMs', 'correctionMs', 'cause'],
   'voice.summary': ['outcome', 'stage', 'cause', 'confirmed', 'textLength', 'warm', 'count', 'startMs', 'recordMs',
-    'finalizeMs'],
+    'finalizeMs', 'correctionOn'],
   'outage.summary': ['source', 'code', 'outcome', 'path', 'attempt', 'detectMs', 'reconnectMs', 'catchupMs',
     'impactMs', 'visibleMs', 'pathChanged', 'afterWake'],
 };
