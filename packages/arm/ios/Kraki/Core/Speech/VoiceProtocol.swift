@@ -147,7 +147,6 @@ enum VoiceSessionContextBuilder {
         guard shareConversation else {
             return VoiceSessionContext(
                 fields: [
-                    "product": .string("kraki"),
                     "inputMethod": .string("dictation"),
                     "locale": .string(Locale.current.identifier),
                 ],
@@ -192,7 +191,6 @@ enum VoiceSessionContextBuilder {
         }
 
         let fields: [String: VoiceInputJSONValue] = [
-            "product": .string("kraki"),
             "sessionId": .string(session.id),
             "inputMethod": .string("dictation"),
             "locale": .string(Locale.current.identifier),
