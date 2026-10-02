@@ -89,5 +89,5 @@ export class PushManager {
 }
 
 export { type PushProvider, type PushPayload, type PushResult } from './provider.js';
-export { ApnsProvider, type ApnsConfig } from './apns.js';
+export { ApnsProvider, buildApnsPayload, type ApnsConfig } from './apns.js';
 export { WebPushProvider, type WebPushConfig } from './web-push.js';

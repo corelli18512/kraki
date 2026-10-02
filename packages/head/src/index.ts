@@ -8,7 +8,7 @@ export { LeaseIssuer, defaultVoiceLeaseDir } from './lease-issuer.js';
 export type { IssueLeaseInput } from './lease-issuer.js';
 export { Logger, getLogger, setGlobalLogger } from './logger.js';
 export type { LoggerOptions, LogLevel } from './logger.js';
-export { PushManager, ApnsProvider, WebPushProvider } from './push/index.js';
+export { PushManager, ApnsProvider, WebPushProvider, buildApnsPayload } from './push/index.js';
 export type { PushProvider, PushPayload, PushResult, ApnsConfig, WebPushConfig } from './push/index.js';
 
 // Multi-region support

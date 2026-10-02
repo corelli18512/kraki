@@ -289,6 +289,9 @@ struct SessionDetailView: View {
     private func markReadIfFocused() {
         guard scenePhase == .active, session != nil else { return }
         appState.markSessionReadIfVisible(sessionId)
+        #if os(iOS)
+        appState.pushManager?.removeDeliveredNotifications(forSession: sessionId)
+        #endif
     }
 }
 

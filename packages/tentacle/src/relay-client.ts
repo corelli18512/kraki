@@ -33,6 +33,7 @@ import { EventsWatcher } from './events-watcher.js';
 import { createLogger } from './logger.js';
 import { getKrakiHome } from './config.js';
 import { makeHeadline } from './tool-headline.js';
+import { markdownToPlainText, truncateUtf8, PUSH_SUMMARY_MAX_BYTES } from './push-preview-text.js';
 import { TentaclePulse, streamForType, type PulseDeliveryTarget } from './tentacle-pulse.js';
 import { CardManager } from './card-manager.js';
 import { AttachmentPacer } from './attachment-pacer.js';
@@ -3729,9 +3730,7 @@ export class RelayClient {
       }
     }
     if (!previewType || previewSummary === undefined) return undefined;
-    const normalizedSummary = toWellFormedText(previewSummary)
-      .replace(/\s+/g, ' ')
-      .trim();
+    const normalizedSummary = truncateUtf8(markdownToPlainText(previewSummary), PUSH_SUMMARY_MAX_BYTES);
     if (!normalizedSummary && previewType !== 'idle') return undefined;
     const meta = this.sessionManager.getMeta(msg.sessionId as string);
     const rawTitle = meta?.title ?? meta?.autoTitle;
@@ -3756,7 +3755,8 @@ export class RelayClient {
     try {
       const preview = JSON.stringify({
         type: previewType,
-        ...(normalizedSummary && { summary: Array.from(normalizedSummary).slice(0, 50).join('') }),
+        ...(normalizedSummary && { summary: normalizedSummary }),
+        ...(previewType === 'idle' && !normalizedSummary && { steps: this.turnStepCounts.get(msg.sessionId as string) ?? 0 }),
         sessionId: msg.sessionId,
         ...(title ? { title } : {}),
       });

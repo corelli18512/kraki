@@ -75,8 +75,9 @@ class NotificationService: UNNotificationServiceExtension {
             let decrypted = try decryptPreview(blob: blob, wrappedKey: key)
             let preview = parsePreview(decrypted)
             content.title = preview.title
-            content.subtitle = preview.subtitle
+            content.subtitle = ""
             content.body = preview.body
+            content.categoryIdentifier = preview.category
             if let sessionId = preview.sessionId {
                 content.userInfo["sessionId"] = sessionId
                 applySessionPresentation(sessionId, to: content)
@@ -85,7 +86,7 @@ class NotificationService: UNNotificationServiceExtension {
             // Decryption failed: retain a useful, private fallback. The raw APNs
             // payload already carries the default sound and attention badge.
             content.title = "Kraki"
-            content.subtitle = "New activity"
+            content.subtitle = ""
             content.body = "Open Kraki to view the update."
         }
 
@@ -95,7 +96,7 @@ class NotificationService: UNNotificationServiceExtension {
     override func serviceExtensionTimeWillExpire() {
         if let contentHandler = contentHandler, let content = bestAttemptContent {
             content.title = "Kraki"
-            content.subtitle = "New activity"
+            content.subtitle = ""
             content.body = "Open Kraki to view the update."
             content.sound = .default
             contentHandler(content)
@@ -181,59 +182,58 @@ class NotificationService: UNNotificationServiceExtension {
 
     private struct Preview {
         let title: String
-        let subtitle: String
         let body: String
+        let category: String
         let sessionId: String?
     }
 
+    /// Notification layout (agreed 2026-10-02):
+    /// - title: the Session name, like a chat app uses the contact name; the
+    ///   app icon already says "Kraki", so the app name is not repeated.
+    /// - no subtitle.
+    /// - body: the reply itself; when the human must act, a short label
+    ///   leads the body ("Needs approval: …", "Question: …", "Failed: …").
+    /// - category: selects the locked-screen placeholder registered by the
+    ///   app (`PushManager.registerNotificationCategories`).
     private func parsePreview(_ json: String) -> Preview {
         guard let data = json.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return Preview(
-                title: "Kraki",
-                subtitle: "New activity",
-                body: "Open Kraki to view the update.",
-                sessionId: nil
-            )
+            return Preview(title: "Kraki", body: "Open Kraki to view the update.", category: "", sessionId: nil)
         }
 
-        // Tentacle's encrypted preview payload. The app name is already shown by
-        // iOS, so use the Session title as the notification title and reserve the
-        // subtitle for the kind of attention required.
         let messageType = obj["type"] as? String
         let sessionId = obj["sessionId"] as? String
         let sessionTitle = normalized(obj["title"] as? String)
         let summary = normalized(obj["summary"] as? String)
+        let steps = obj["steps"] as? Int ?? 0
 
-        let subtitle: String
-        let fallbackBody: String
+        let body: String
+        let category: String
         switch messageType {
         case "permission":
-            subtitle = "Approval needed"
-            fallbackBody = "Review the requested tool action."
+            body = "Needs approval: " + (summary ?? "Review the requested action.")
+            category = "kraki.permission"
         case "question":
-            subtitle = "Question from agent"
-            fallbackBody = "Open the Session to respond."
-        case "idle":
-            subtitle = "Reply ready"
-            fallbackBody = "The agent finished responding."
+            body = "Question: " + (summary ?? "Open the Session to respond.")
+            category = "kraki.question"
         case "error":
-            subtitle = "Action failed"
-            fallbackBody = "Open the Session for details."
-        case "session_ended":
-            subtitle = "Session ended"
-            fallbackBody = "The Session is no longer running."
+            body = "Failed: " + (summary ?? "The turn did not finish.")
+            category = "kraki.failed"
+        case "idle":
+            if let summary {
+                body = summary
+            } else if steps > 0 {
+                body = "Finished with \(steps) step\(steps == 1 ? "" : "s") and no reply."
+            } else {
+                body = "Finished with no reply."
+            }
+            category = "kraki.reply"
         default:
-            subtitle = "New activity"
-            fallbackBody = "Open Kraki to view the update."
+            body = summary ?? "Open Kraki to view the update."
+            category = ""
         }
 
-        return Preview(
-            title: sessionTitle ?? "Kraki",
-            subtitle: subtitle,
-            body: summary ?? fallbackBody,
-            sessionId: sessionId
-        )
+        return Preview(title: sessionTitle ?? "Kraki", body: body, category: category, sessionId: sessionId)
     }
 
     private func normalized(_ value: String?) -> String? {

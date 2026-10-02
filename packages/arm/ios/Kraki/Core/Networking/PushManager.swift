@@ -76,6 +76,51 @@ final class PushManager: NSObject {
         self.appState = appState
         super.init()
         UNUserNotificationCenter.current().delegate = self
+        Self.registerNotificationCategories()
+    }
+
+    /// Categories exist only to give each kind of notification its own
+    /// locked-screen text. With iOS "Show Previews: When Unlocked" (the
+    /// default), the Session name and reply are hidden and this placeholder
+    /// is shown instead, so a locked phone still tells a reply from a
+    /// request that needs the human. The Notification Service Extension
+    /// picks the category per preview type. No actions: approvals happen in
+    /// the app.
+    private static func registerNotificationCategories() {
+        let placeholders: [(String, String)] = [
+            ("kraki.reply", "New reply"),
+            ("kraki.permission", "Needs your approval"),
+            ("kraki.question", "Has a question for you"),
+            ("kraki.failed", "A turn failed"),
+        ]
+        let categories = Set(placeholders.map { id, placeholder in
+            UNNotificationCategory(
+                identifier: id,
+                actions: [],
+                intentIdentifiers: [],
+                hiddenPreviewsBodyPlaceholder: placeholder,
+                options: []
+            )
+        })
+        UNUserNotificationCenter.current().setNotificationCategories(categories)
+    }
+
+    /// Remove this Session's notifications from Notification Center once the
+    /// human is looking at it, so read Sessions do not pile up there.
+    /// Notifications are grouped by Session (`threadIdentifier`, set by the
+    /// Notification Service Extension), which is also the match key here.
+    func removeDeliveredNotifications(forSession sessionId: String) {
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { notifications in
+            let ids = notifications
+                .filter {
+                    $0.request.content.threadIdentifier == sessionId
+                        || ($0.request.content.userInfo["sessionId"] as? String) == sessionId
+                }
+                .map(\.request.identifier)
+            guard !ids.isEmpty else { return }
+            center.removeDeliveredNotifications(withIdentifiers: ids)
+        }
     }
 
     // MARK: - Public API

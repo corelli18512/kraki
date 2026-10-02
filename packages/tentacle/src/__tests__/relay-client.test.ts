@@ -3889,6 +3889,18 @@ describe('turn-end push preview', () => {
     const [preview] = previews();
     expect(preview).toMatchObject({ type: 'idle', sessionId: 'sess_1' });
     expect(preview.summary).toBeUndefined();
+    expect(preview.steps).toBeGreaterThan(0);
+  });
+
+  it('sends the reply as plain text, far beyond the old 50-character cut', () => {
+    const { adapter, startTurn, previews, reset } = setup();
+    startTurn('first');
+    const reply = `## Done\n\n**Fixed** the push. ${'a'.repeat(300)}`;
+    (adapter.onMessage as (sid: string, e: Record<string, unknown>) => void)('sess_1', { content: reply });
+    reset();
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    const [preview] = previews();
+    expect(preview.summary).toBe(`Done Fixed the push. ${'a'.repeat(300)}`);
   });
 
   it('pushes a failed turn as an error, even when the error has no text', () => {

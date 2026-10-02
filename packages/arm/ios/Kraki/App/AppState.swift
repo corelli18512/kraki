@@ -268,6 +268,9 @@ final class AppState {
         isConversationWindowVisible = conversationVisible
         guard becameReadable, let sessionId = sessionStore.activeSessionId else { return }
         markSessionReadIfVisible(sessionId)
+        #if os(iOS)
+        pushManager?.removeDeliveredNotifications(forSession: sessionId)
+        #endif
     }
 
     /// macOS dev-local mode: connected to a local `pnpm dev` relay with no
