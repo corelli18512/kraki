@@ -24,7 +24,7 @@ import {
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
 import { createLogger } from '../logger.js';
-import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, symlinkSync, lstatSync, unlinkSync, cpSync, rmSync, statSync, linkSync, copyFileSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, symlinkSync, lstatSync, unlinkSync, cpSync, rmSync, rmdirSync, statSync, linkSync, copyFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getConfigDir } from '../config.js';
@@ -85,7 +85,7 @@ export function loadClaudeSettingsEnv(configDir: string): Record<string, string>
  * and files hard links (copies across volumes). Returns false on failure.
  */
 export function linkIntoShadow(src: string, dest: string, os: NodeJS.Platform = process.platform): boolean {
-  try { lstatSync(dest); rmSync(dest, { recursive: false, force: true }); } catch { /* dest absent */ }
+  removeShadowEntry(dest);
   try {
     if (os !== 'win32') {
       symlinkSync(src, dest);
@@ -100,6 +100,22 @@ export function linkIntoShadow(src: string, dest: string, os: NodeJS.Platform = 
   } catch {
     return false;
   }
+}
+
+/** Remove a previous link (or a real file/dir Claude wrote) at `dest` —
+ *  never what a link points to. Windows junctions are directories to rm(). */
+function removeShadowEntry(dest: string): void {
+  let st;
+  try { st = lstatSync(dest); } catch { return; }
+  try {
+    if (st.isSymbolicLink()) {
+      try { unlinkSync(dest); } catch { rmdirSync(dest); }
+    } else if (st.isDirectory()) {
+      rmSync(dest, { recursive: true, force: true });
+    } else {
+      unlinkSync(dest);
+    }
+  } catch { /* linking reports the failure */ }
 }
 
 /** The user's real Claude Code config root: an explicit CLAUDE_CONFIG_DIR,

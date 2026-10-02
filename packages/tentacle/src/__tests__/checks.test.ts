@@ -197,7 +197,7 @@ describe('withRetry()', () => {
       .mockReturnValueOnce({ found: true, version: '1.0' });
 
     // Mock reg query calls that refreshPathOnWindows() makes
-    mockExecSync
+    mockExecFileSync
       .mockReturnValueOnce('    Path    REG_EXPAND_SZ    C:\\Windows\\system32')
       .mockReturnValueOnce('    Path    REG_EXPAND_SZ    C:\\Users\\me\\bin');
 

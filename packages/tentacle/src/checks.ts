@@ -74,6 +74,12 @@ export function ensureWindowsSystemPath(): string[] {
   return missing;
 }
 
+/** `reg query <key> /v Path`, by absolute path: PATH itself may be stale. */
+function regQueryPath(key: string): string {
+  const reg = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'reg.exe');
+  return execFileSync(reg, ['query', key, '/v', 'Path'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+}
+
 /** The value of a `reg query … /v Path` answer; `%VAR%` expanded from env. */
 export function parseRegPath(output: string, env: NodeJS.ProcessEnv = process.env): string {
   const line = output.split(/\r?\n/).find((l) => /\sREG_(?:EXPAND_)?SZ\s/i.test(l));
@@ -89,10 +95,10 @@ export function parseRegPath(output: string, env: NodeJS.ProcessEnv = process.en
  * installed in another window (e.g. an agent, during setup) are found without
  * restarting Kraki. Entries already on PATH are kept. No-op elsewhere.
  */
-export function refreshPathOnWindows(run: (cmd: string) => string = (cmd) => execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }), os = platform()): void {
+export function refreshPathOnWindows(run: (key: string) => string = regQueryPath, os = platform()): void {
   if (os !== 'win32') return;
   const read = (key: string) => {
-    try { return parseRegPath(run(`reg query "${key}" /v Path`)); } catch { return ''; }
+    try { return parseRegPath(run(key)); } catch { return ''; }
   };
   const machine = read('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment');
   const user = read('HKCU\\Environment');
