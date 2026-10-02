@@ -4,7 +4,7 @@
  * Deleted on daemon shutdown.
  */
 
-import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'node:fs';
+import { writeFileSync, readFileSync, unlinkSync, existsSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { getKrakiHome } from './config.js';
 
@@ -78,6 +78,10 @@ export function readStatusFile(): DaemonStatusFile | null {
 
 function writeStatus(): void {
   try {
-    writeFileSync(getStatusPath(), JSON.stringify(_current, null, 2), 'utf8');
+    // tmp + rename: readers (`kraki status`, Kraki for Mac) never see a
+    // half-written file and briefly report "not running".
+    const path = getStatusPath();
+    writeFileSync(`${path}.tmp`, JSON.stringify(_current, null, 2), 'utf8');
+    renameSync(`${path}.tmp`, path);
   } catch { /* ignore write errors (e.g. disk full) */ }
 }

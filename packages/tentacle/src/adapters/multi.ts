@@ -214,18 +214,23 @@ export class MultiAgentAdapter extends AgentAdapter {
       ...(this.opts.krakiMcp && { krakiMcp: this.opts.krakiMcp }),
     };
 
-    for (const id of ids) {
+    // Start agents in parallel: each one spawns its CLI and lists models, and
+    // the sum easily exceeded the daemon's readiness window on a cold machine.
+    // Insert in detection order so the default agent stays deterministic.
+    const started = await Promise.all(ids.map(async (id) => {
       try {
         const adapter = await createAgentAdapter(id, adapterOpts);
-        if (!adapter) continue;
+        if (!adapter) return null;
         this.wireCallbacks(id, adapter);
         await adapter.start();
-        this.adapters.set(id, adapter);
         logger.info({ id }, 'Agent adapter started');
+        return [id, adapter] as const;
       } catch (err) {
         logger.warn({ id, err: (err as Error).message }, 'Agent adapter failed to start — skipping');
+        return null;
       }
-    }
+    }));
+    for (const entry of started) if (entry) this.adapters.set(entry[0], entry[1]);
 
     if (this.adapters.size === 0) {
       throw new Error('All agent adapters failed to start.');
@@ -322,8 +327,10 @@ export class MultiAgentAdapter extends AgentAdapter {
     return this.getSessionAdapter(sessionId).sendMessage(sessionId, text, attachments, options);
   }
 
-  async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision): Promise<void> {
-    return this.getSessionAdapter(sessionId).respondToPermission(sessionId, permissionId, decision);
+  async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision, reason?: string): Promise<void> {
+    return reason
+      ? this.getSessionAdapter(sessionId).respondToPermission(sessionId, permissionId, decision, reason)
+      : this.getSessionAdapter(sessionId).respondToPermission(sessionId, permissionId, decision);
   }
 
   async respondToQuestion(sessionId: string, questionId: string, answer: QuestionAnswer | string, wasFreeform: boolean): Promise<QuestionResponseResult> {

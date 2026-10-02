@@ -817,7 +817,9 @@ final class MessageRouter {
         let deviceId = dict["deviceId"] as? String ?? ""
         let device = appState.deviceStore.device(for: deviceId)
 
-        let modeStr = payload?["mode"] as? String ?? "safe"
+        // Older Tentacles omit `mode`; their sessions start in the protocol
+        // default (auto). Never show Safe for a session that is not.
+        let modeStr = payload?["mode"] as? String ?? SessionMode.default.rawValue
         // `session_created` has no separate payload createdAt field; its
         // envelope timestamp is the producer's creation acknowledgement.
         // Use it instead of the receiver's wall clock so ordering remains
@@ -834,7 +836,7 @@ final class MessageRouter {
             title: nil,
             autoTitle: nil,
             state: .active,
-            mode: SessionMode(rawValue: modeStr) ?? .safe,
+            mode: SessionMode(rawValue: modeStr) ?? .default,
             lastSeq: 0,
             readSeq: 0,
             messageCount: 0,

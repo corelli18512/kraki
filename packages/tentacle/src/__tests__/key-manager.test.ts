@@ -77,3 +77,19 @@ describe('KeyManager', () => {
     expect(() => km.decryptForMe(encrypted, 'dev_wrong')).toThrow();
   });
 });
+
+describe('KeyManager recovery (release review Z8)', () => {
+  it('derives a lost public key instead of minting a new identity', async () => {
+    const { mkdtempSync, unlinkSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { KeyManager } = await import('../key-manager.js');
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-keys-'));
+    const first = new KeyManager(dir).getCompactPublicKey();
+    const priv = readFileSync(join(dir, 'private.pem'), 'utf8');
+    unlinkSync(join(dir, 'public.pem'));
+    const km = new KeyManager(dir);
+    expect(km.getCompactPublicKey()).toBe(first);
+    expect(km.getKeyPair().privateKey).toBe(priv);
+  });
+});

@@ -78,15 +78,26 @@ describe('kraki setup --json', () => {
     expect(readFileSync(join(home, 'github-token'), 'utf8').trim()).toBe('gho_new');
   });
 
-  it('reuses a valid gh token without a device flow and without copying it', async () => {
+  it('never reuses the GitHub CLI token (its scopes are too broad for the relay)', async () => {
+    const ghAuthToken = vi.fn(() => 'gho_from_gh');
     const { deps, events } = makeDeps({
+      'https://api.test/api/config': () => json({ githubClientId: 'cid' }),
+      'https://github.com/login/device/code': () => json({ device_code: 'dc', user_code: 'X', verification_uri: 'u', expires_in: 900 }),
+      'https://github.com/login/oauth/access_token': () => json({ access_token: 'gho_kraki' }),
       'https://api.github.com/user': () => json({ login: 'octocat' }),
-    }, { ghAuthToken: () => 'gho_from_gh' });
+    }, { ghAuthToken });
 
     expect(await runSetupJsonWith([], deps)).toBe(0);
-    expect(events.find((e) => e.event === 'authenticated')).toMatchObject({ source: 'gh' });
-    expect(events.some((e) => e.event === 'device_code')).toBe(false);
-    expect(existsSync(join(home, 'github-token'))).toBe(false);
+    expect(ghAuthToken).not.toHaveBeenCalled();
+    expect(events.find((e) => e.event === 'authenticated')).toMatchObject({ source: 'device_flow' });
+    expect(readFileSync(join(home, 'github-token'), 'utf8').trim()).toBe('gho_kraki');
+  });
+
+  it('reuses Kraki\'s own saved token without a new sign-in', async () => {
+    writeFileSync(join(home, 'github-token'), 'gho_saved\n');
+    const { deps, events } = makeDeps({ 'https://api.github.com/user': () => json({ login: 'octocat' }) });
+    expect(await runSetupJsonWith([], deps)).toBe(0);
+    expect(events.find((e) => e.event === 'authenticated')).toMatchObject({ source: 'saved' });
   });
 
   it('falls through a revoked saved token to the device flow', async () => {
@@ -118,10 +129,10 @@ describe('kraki setup --json', () => {
   });
 
   it('fails with relay_unreachable before writing config', async () => {
+    writeFileSync(join(home, 'github-token'), 'gho_saved\n');
     const { deps, events } = makeDeps({
       'https://api.github.com/user': () => json({ login: 'octocat' }),
     }, {
-      ghAuthToken: () => 'gho_from_gh',
       queryRelayInfo: async () => { throw new Error('ECONNREFUSED'); },
     });
 
@@ -135,9 +146,10 @@ describe('kraki setup --json', () => {
       relay: 'wss://old', authMethod: 'github_token', device: { name: 'Old Name', id: 'dev_keep' }, agents: ['claude'],
     }));
     writeFileSync(join(home, 'device-id'), 'dev_keep');
+    writeFileSync(join(home, 'github-token'), 'gho_saved\n');
     const { deps } = makeDeps({
       'https://api.github.com/user': () => json({ login: 'octocat' }),
-    }, { ghAuthToken: () => 'gho_from_gh' });
+    });
 
     expect(await runSetupJsonWith([], deps)).toBe(0);
     const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'));
@@ -225,8 +237,9 @@ describe('kraki setup --json --oauth (browser sign-in)', () => {
     expect(events.map((e) => e.event)).not.toContain('oauth_url');
   });
 
-  it('skips the browser entirely when gh is already signed in', async () => {
-    const { deps, events } = makeDeps({ 'https://api.github.com/user': () => json({ login: 'octocat' }) }, { ghAuthToken: () => 'gho_gh' });
+  it('skips the browser entirely when Kraki is already signed in', async () => {
+    writeFileSync(join(home, 'github-token'), 'gho_saved\n');
+    const { deps, events } = makeDeps({ 'https://api.github.com/user': () => json({ login: 'octocat' }) });
     expect(await runSetupJsonWith(['--oauth'], deps)).toBe(0);
     expect(events.map((e) => e.event)).not.toContain('oauth_url');
   });

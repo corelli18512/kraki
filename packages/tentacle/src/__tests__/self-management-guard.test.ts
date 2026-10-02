@@ -13,6 +13,12 @@ describe('isKrakiSelfManagementCommand', () => {
     '/Users/test/.local/bin/kraki restart',
     'echo before && kraki update',
     'env FOO=bar kraki stop --force',
+    'kraki.exe stop',
+    'C:\\\\Users\\\\me\\\\AppData\\\\Local\\\\Kraki\\\\kraki.exe restart',
+    'cd /tmp; kraki restart',
+    'npm test || kraki update',
+    'pkill -f kraki',
+    'taskkill /F /IM kraki.exe',
   ])('blocks %s', (command) => {
     expect(isKrakiSelfManagementCommand(command)).toBe(true);
   });
@@ -22,6 +28,10 @@ describe('isKrakiSelfManagementCommand', () => {
     'kraki logs -f',
     'echo "run kraki later"',
     'echo kraki stopwatch',
+    'git commit -m "fix kraki restart hang"',
+    'grep -rn "kraki stop" docs/',
+    'echo "run kraki update to upgrade" >> README.md',
+    "cat > notes.md <<'EOF'\\nThe guard blocks kraki restart.\\nEOF",
   ])('allows %s', (command) => {
     expect(isKrakiSelfManagementCommand(command)).toBe(false);
   });

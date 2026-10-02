@@ -29,8 +29,8 @@ describe('shouldAutoApprove — Kraki shared policy', () => {
   });
 
   it('legacy mode names never silently tighten or loosen', () => {
-    // discuss / execute from before the rename mean auto.
-    expect(shouldAutoApprove('discuss' as never, 'write', {})).toBe(true);
+    // The legacy wire name `execute` means auto.
+    expect(shouldAutoApprove('execute' as never, 'write', {})).toBe(true);
     expect(shouldAutoApprove('execute' as never, 'bash', {})).toBe(true);
   });
 });

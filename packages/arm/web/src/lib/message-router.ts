@@ -146,6 +146,17 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     return;
   }
 
+  // A create/fork/import failure has no session yet; it is correlated by the
+  // requestId the app sent. Show it instead of failing silently.
+  if (msg.type === 'error' && !msg.sessionId) {
+    const reqId = (msg.payload as { requestId?: string }).requestId;
+    if (reqId && ctx.cmdState.pendingCreateRequests.delete(reqId)) {
+      ctx.cmdState.pendingPrompts.delete(reqId);
+      store.setLastError(msg.payload.message);
+    }
+    return;
+  }
+
   if (!('sessionId' in msg) || !msg.sessionId) return;
   const sid = msg.sessionId;
   const replaying = false; // Replay now arrives as batch, not individual messages

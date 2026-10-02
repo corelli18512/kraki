@@ -166,7 +166,7 @@ enum SessionState: String, Codable, Sendable {
 ///  - auto: never ask (default).
 ///  - delegate: never ask; the agent's questions are auto-answered.
 ///
-/// `discuss` / `execute` are names from the four-mode era: both parse as
+/// `execute` is the pre-rename wire name for `.auto` and parses as
 /// `.auto`, so every existing `SessionMode(rawValue:)` call site accepts them.
 enum SessionMode: RawRepresentable, Codable, Sendable, CaseIterable, Hashable {
     case safe
@@ -183,7 +183,7 @@ enum SessionMode: RawRepresentable, Codable, Sendable, CaseIterable, Hashable {
     init?(rawValue: String) {
         switch rawValue {
         case "safe": self = .safe
-        case "auto", "execute", "discuss": self = .auto
+        case "auto", "execute": self = .auto
         case "delegate": self = .delegate
         default: return nil
         }

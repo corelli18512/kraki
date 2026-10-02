@@ -314,6 +314,20 @@ export function toolNameToKind(toolName: string): ToolKind {
   }
 }
 
+/** Minimal unified-style diff of Claude Edit/MultiEdit replacements. */
+export function editsToDiff(path: string, edits: Array<{ old_string?: unknown; new_string?: unknown }>): string {
+  const lines = [`--- ${path}`, `+++ ${path}`];
+  for (const edit of edits) {
+    const before = typeof edit.old_string === 'string' ? edit.old_string : '';
+    const after = typeof edit.new_string === 'string' ? edit.new_string : '';
+    lines.push('@@');
+    if (before) for (const l of before.split('\n')) lines.push(`-${l}`);
+    if (after) for (const l of after.split('\n')) lines.push(`+${l}`);
+  }
+  const diff = lines.join('\n');
+  return diff.length > 16_000 ? `${diff.slice(0, 16_000)}\n… (truncated)` : diff;
+}
+
 /**
  * Parse a Claude SDK tool call into Kraki protocol ToolArgs + description.
  */
@@ -339,8 +353,13 @@ function parseClaudeToolCall(toolName: string, input: Record<string, unknown>): 
     case 'Edit':
     case 'MultiEdit': {
       const path = (input.file_path ?? input.path ?? '') as string;
+      // Show what changes, like Codex/Copilot cards do, so a `safe` approval
+      // is not blind. Same `content` slot the clients already render.
+      const edits = toolName === 'MultiEdit' && Array.isArray(input.edits)
+        ? input.edits as Array<{ old_string?: unknown; new_string?: unknown }>
+        : [{ old_string: input.old_string, new_string: input.new_string }];
       return {
-        toolArgs: { toolName: 'write_file', args: { path, content: '' } },
+        toolArgs: { toolName: 'write_file', args: { path, content: editsToDiff(path, edits) } },
         description: `Edit: ${path}`,
       };
     }
@@ -661,6 +680,7 @@ export class ClaudeAdapter extends AgentAdapter {
         logger.info({ count: this.cachedModels.length }, 'Fetched Claude model list from SDK');
       }
     } catch (err) {
+      this.lastModelListError = (err as Error).message;
       logger.warn({ err: (err as Error).message }, 'Could not fetch model list from SDK');
     }
 
@@ -1016,6 +1036,7 @@ export class ClaudeAdapter extends AgentAdapter {
     sessionId: string,
     permissionId: string,
     decision: PermissionDecision,
+    reason?: string,
   ): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
@@ -1049,7 +1070,7 @@ export class ClaudeAdapter extends AgentAdapter {
     if (decision === 'approve' || decision === 'always_allow') {
       pending.resolve({ behavior: 'allow', updatedInput: pending.input });
     } else {
-      pending.resolve({ behavior: 'deny', message: 'Denied by user' });
+      pending.resolve({ behavior: 'deny', message: reason ? `Denied by user: ${reason}` : 'Denied by user' });
     }
     entry.pendingPermissions.delete(permissionId);
     logger.debug({ permissionId, sessionId, decision }, 'permission resolved');
@@ -1158,6 +1179,13 @@ export class ClaudeAdapter extends AgentAdapter {
     }
   }
 
+  /** Why the model list is empty, so `kraki agents` can show the real cause
+   *  instead of guessing "not signed in". */
+  private lastModelListError: string | undefined;
+  override modelListError(): string | undefined {
+    return this.cachedModels.length === 0 ? this.lastModelListError : undefined;
+  }
+
   async listModels(): Promise<string[]> {
     return this.cachedModels.map(m => m.id);
   }
@@ -1226,9 +1254,25 @@ export class ClaudeAdapter extends AgentAdapter {
   // ── Title generation (tool-less side-call) ──────────
 
   async generateTitle(sessionId: string, context: TitleContext): Promise<string | null> {
-    // The session's own model: whatever the user runs this session on is, by
-    // construction, reachable with this account/provider.
-    const model = context.model ?? this.sessions.get(sessionId)?.model ?? this.loadMeta(sessionId)?.model;
+    // The session's own model is, by construction, reachable with this
+    // account/provider. A title needs no big model, though: when this user's
+    // own Claude catalog offers a Haiku alias, try it first (cheaper, does not
+    // eat an Opus quota), falling back to the session model. Nothing is
+    // hardcoded — an account without Haiku just uses the session model.
+    const sessionModel = context.model ?? this.sessions.get(sessionId)?.model ?? this.loadMeta(sessionId)?.model;
+    const haiku = [...this.modelAliasMap.entries()]
+      .find(([, alias]) => alias.replace(/\[[^\]]*\]$/, '') === 'haiku')?.[0];
+    const candidates = [...new Set([haiku, sessionModel].filter((m): m is string => !!m))];
+    if (candidates.length === 0) candidates.push('');
+    for (const model of candidates) {
+      const title = await this.runTitleQuery(sessionId, context, model || undefined);
+      if (title) return title;
+    }
+    return null;
+  }
+
+  private async runTitleQuery(sessionId: string, context: TitleContext, model?: string): Promise<string | null> {
+    const supportsEffort = model ? this.cachedModels.find((m) => m.id === model)?.supportsReasoningEffort : false;
     try {
       const { query: queryFn } = await import('@anthropic-ai/claude-agent-sdk');
       let raw = '';
@@ -1239,6 +1283,7 @@ export class ClaudeAdapter extends AgentAdapter {
           env: this.claudeEnv(secureStorageEnv()),
           systemPrompt: TITLE_SYSTEM_PROMPT,
           ...(model && { model: this.sdkModel(model) }),
+          ...(supportsEffort && { effort: 'low' as Options['effort'] }),
           // A pure text side-call: no tools, no MCP, no filesystem settings, no
           // transcript, and every permission denied. The prompt contains user
           // text, so it must never be able to act on the machine.
@@ -1254,7 +1299,7 @@ export class ClaudeAdapter extends AgentAdapter {
       }
       return cleanTitle(raw);
     } catch (err) {
-      logger.warn({ err: (err as Error).message, sessionId }, 'Title generation failed');
+      logger.warn({ err: (err as Error).message, sessionId, model }, 'Title generation failed');
       return null;
     }
   }
@@ -1300,9 +1345,24 @@ export class ClaudeAdapter extends AgentAdapter {
       }
       logger.error({ err, sessionId }, 'Session consumer loop error');
       const entry = this.sessions.get(sessionId);
-      if (entry) this.emitError(sessionId, entry, getErrorMessage(err));
-      else this.onError?.(sessionId, { message: getErrorMessage(err) });
-      this.onSessionEnded?.(sessionId, { reason: 'error' });
+      if (entry) {
+        this.emitError(sessionId, entry, getErrorMessage(err));
+        // Settle the turn that was running when the process died so the
+        // relay freezes it as failed instead of waiting forever.
+        if (!entry.turnFinalized && !entry.userAborted) {
+          entry.turnFinalized = true;
+          this.emitIdle(sessionId, entry);
+        }
+        this.broadcastPendingResolutions(sessionId);
+        try { entry.inputChannel.end(); } catch { /* already closed */ }
+        // The process is gone but the transcript is intact. Drop the dead
+        // entry and report an eviction (like Pi/Codex), so the next message
+        // lazily resumes instead of being pushed into a dead input channel.
+        if (this.sessions.get(sessionId) === entry) this.sessions.delete(sessionId);
+      } else {
+        this.onError?.(sessionId, { message: getErrorMessage(err) });
+      }
+      this.onSessionEvicted?.(sessionId);
     }
   }
 
@@ -1508,11 +1568,12 @@ export class ClaudeAdapter extends AgentAdapter {
             cacheReadTokens: 0, cacheWriteTokens: 0,
             totalCost: 0, totalDurationMs: 0,
           };
+          void u;
+          // Token counters are accumulated per assistant message (updateUsage).
+          // Replacing them with this turn's result usage threw away every
+          // earlier turn; the result only adds cost and duration.
           const updated: SessionUsage = {
-            inputTokens: (u.input_tokens as number) ?? prev.inputTokens,
-            outputTokens: (u.output_tokens as number) ?? prev.outputTokens,
-            cacheReadTokens: (u.cache_read_input_tokens as number) ?? prev.cacheReadTokens,
-            cacheWriteTokens: (u.cache_creation_input_tokens as number) ?? prev.cacheWriteTokens,
+            ...prev,
             totalCost: (resultAny.total_cost_usd as number) ?? prev.totalCost,
             totalDurationMs: ((resultAny.duration_ms as number) ?? 0) + (prev.totalDurationMs ?? 0),
           };
@@ -1851,6 +1912,10 @@ export class ClaudeAdapter extends AgentAdapter {
       cacheWriteTokens: prev.cacheWriteTokens + ((usage.cache_creation_input_tokens as number) ?? 0),
       totalCost: prev.totalCost,
       totalDurationMs: prev.totalDurationMs,
+      // Prompt size of the latest call = how full the context window is.
+      contextTokens: ((usage.input_tokens as number) ?? 0)
+        + ((usage.cache_read_input_tokens as number) ?? 0)
+        + ((usage.cache_creation_input_tokens as number) ?? 0) || prev.contextTokens,
     };
     this.sessionUsage.set(sessionId, updated);
     this.onUsageUpdate?.(sessionId, updated);
@@ -1859,7 +1924,9 @@ export class ClaudeAdapter extends AgentAdapter {
   private cacheModelsFromInit(sysMsg: SDKSystemMessage): void {
     try {
       const models = (sysMsg as unknown as { models?: Array<{ id: string; name?: string }> }).models;
-      if (Array.isArray(models) && models.length > 0) {
+      // start() already built the resolved, de-duplicated catalog (aliases,
+      // effort levels). Only fall back to the raw init list when it is empty.
+      if (this.cachedModels.length === 0 && Array.isArray(models) && models.length > 0) {
         this.cachedModels = models.map(m => ({
           id: m.id,
           name: m.name ?? m.id,

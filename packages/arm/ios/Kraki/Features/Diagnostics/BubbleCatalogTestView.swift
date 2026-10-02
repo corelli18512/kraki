@@ -133,7 +133,7 @@ struct BubbleCatalogTestView: View {
 
     private var permissionCases: [BubbleCatalogCase] {
         [
-            live("perm-discuss-write", "Permission · pending write/discuss", text: "I need to update the file.", action: permission("perm-write", tool: "edit", description: "Edit Sources/App.swift"), sessionMode: .auto),
+            live("perm-pending-write", "Permission · pending write", text: "I need to update the file.", action: permission("perm-write", tool: "edit", description: "Edit Sources/App.swift"), sessionMode: .auto),
             live("perm-execute-write", "Permission · pending write/execute", text: "I need to update the file.", action: permission("perm-execute", tool: "edit", description: "Edit Sources/App.swift"), sessionMode: .auto),
             live("perm-read", "Permission · pending read", text: "This command needs approval.", action: permission("perm-read", tool: "bash", description: "$ cat ~/.config/private")),
             live("perm-approved", "Permission · approved", text: "Permission was resolved.", action: permission("perm-approved", tool: "bash", description: "$ pwd", decision: "approve"), frozen: true),

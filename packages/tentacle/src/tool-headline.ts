@@ -25,38 +25,52 @@ export function makeHeadline(toolName: string, args: Record<string, unknown> | u
 }
 
 function pickRaw(toolName: string, args: Record<string, unknown>): string {
-  switch (toolName) {
+  // Agents spell tool names differently (Claude: `Bash`/`Read`/`Edit`; Copilot
+  // and Codex: `bash`/`view`/`edit`; Pi: `read`/`ls`/`find`). Match
+  // case-insensitively and accept both `path` and Claude's `file_path`.
+  const path = () => strField(args, 'path') || strField(args, 'file_path') || strField(args, 'notebook_path');
+  switch (toolName.toLowerCase()) {
     case 'bash':
     case 'shell': {
       const cmd = strField(args, 'command');
       return cmd ? `$ ${cmd}` : '';
     }
     case 'view':
+    case 'read':
     case 'read_file':
-      return strField(args, 'path');
+    case 'ls':
+      return path();
     case 'edit':
+    case 'multiedit':
     case 'edit_file':
     case 'create':
     case 'create_file':
     case 'write_file':
     case 'write':
-      return strField(args, 'path') || strField(args, 'file_path');
+    case 'notebookedit':
+      return path();
     case 'grep':
     case 'search': {
       const pattern = strField(args, 'pattern');
       return pattern ? `/${pattern}/` : '';
     }
     case 'glob':
-      return strField(args, 'pattern');
+    case 'find':
+      return strField(args, 'pattern') || path();
     case 'fetch_url':
     case 'web_fetch':
+    case 'webfetch':
       return strField(args, 'url');
+    case 'websearch':
+    case 'web_search':
+      return strField(args, 'query');
     case 'mcp': {
       const server = strField(args, 'server') || '?';
       const tool = strField(args, 'tool') || '?';
       return `${server}/${tool}`;
     }
-    case 'task': {
+    case 'task':
+    case 'agent': {
       const desc = strField(args, 'description') || strField(args, 'prompt');
       return desc;
     }
@@ -71,8 +85,6 @@ function pickRaw(toolName: string, args: Record<string, unknown>): string {
       //  - The chip still shows the toolName, which is enough signal
       //    for an unknown tool. Users who want details can expand to
       //    fetch the full args.
-      //  - When a new tool is observed in real sessions, add a case
-      //    above with the right field.
       return '';
   }
 }

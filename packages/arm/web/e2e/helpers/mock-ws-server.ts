@@ -94,7 +94,7 @@ export class MockRelayServer {
         deviceId: tentacleDeviceId,
         payload: {
           sessions: sessions.map(s => ({
-            mode: 'discuss',
+            mode: 'auto',
             lastSeq: 0,
             readSeq: 0,
             messageCount: 0,

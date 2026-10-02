@@ -376,7 +376,7 @@ describe('KrakiWSClient', () => {
       receiveInner({
         type: 'session_list', deviceId: 'dev-1', seq: 40, timestamp: '',
         payload: { sessions: [{
-          id: 'sess-1', agent: 'pi', state: 'idle', mode: 'discuss',
+          id: 'sess-1', agent: 'pi', state: 'idle', mode: 'auto',
           lastSeq: 10, readSeq: 9, messageCount: 10, createdAt: '',
         }] },
       });
@@ -1357,7 +1357,7 @@ describe('KrakiWSClient', () => {
             id: 'sess-1',
             agent: 'copilot',
             state: 'idle',
-            mode: 'discuss',
+            mode: 'auto',
             lastSeq: 50,
             readSeq: 50,
             messageCount: 50,
@@ -1490,7 +1490,7 @@ describe('KrakiWSClient', () => {
       receiveInner({
         type: 'session_list', deviceId: 'dev-t1', seq: 1, timestamp: new Date().toISOString(),
         payload: { sessions: [{
-          id: 'sess-agent', agent: 'pi', state: 'active', mode: 'discuss',
+          id: 'sess-agent', agent: 'pi', state: 'active', mode: 'auto',
           lastSeq: 5, readSeq: 5, messageCount: 5, createdAt: new Date().toISOString(),
           preview: { type: 'question', text: 'Which DB?', timestamp: new Date().toISOString() },
         }] },
@@ -1501,7 +1501,7 @@ describe('KrakiWSClient', () => {
       receiveInner({
         type: 'session_list', deviceId: 'dev-t1', seq: 2, timestamp: new Date().toISOString(),
         payload: { sessions: [{
-          id: 'sess-agent', agent: 'pi', state: 'idle', mode: 'discuss',
+          id: 'sess-agent', agent: 'pi', state: 'idle', mode: 'auto',
           lastSeq: 6, readSeq: 6, messageCount: 6, createdAt: new Date().toISOString(),
           preview: { type: 'agent', text: 'Done.', timestamp: new Date().toISOString() },
         }] },
@@ -1585,13 +1585,13 @@ describe('KrakiWSClient', () => {
         timestamp: now.toISOString(),
         payload: {
           sessions: [
-            { id: 'sess-recent', agent: 'copilot', state: 'idle', mode: 'discuss',
+            { id: 'sess-recent', agent: 'copilot', state: 'idle', mode: 'auto',
               lastSeq: 100, readSeq: 100, messageCount: 100, createdAt: recentTs,
               preview: { text: 'Recent', type: 'agent', timestamp: recentTs } },
-            { id: 'sess-active', agent: 'copilot', state: 'active', mode: 'discuss',
+            { id: 'sess-active', agent: 'copilot', state: 'active', mode: 'auto',
               lastSeq: 50, readSeq: 50, messageCount: 50, createdAt: oldTs,
               preview: { text: 'Active old', type: 'agent', timestamp: oldTs } },
-            { id: 'sess-old', agent: 'copilot', state: 'idle', mode: 'discuss',
+            { id: 'sess-old', agent: 'copilot', state: 'idle', mode: 'auto',
               lastSeq: 200, readSeq: 200, messageCount: 200, createdAt: oldTs,
               preview: { text: 'Very old', type: 'agent', timestamp: oldTs } },
           ],

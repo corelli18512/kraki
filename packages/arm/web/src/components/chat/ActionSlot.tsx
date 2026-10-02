@@ -93,6 +93,16 @@ export function ActionSlot({ action, handlers }: { action: SlotAction; handlers:
   }
 }
 
+/** Diff lines for a file-edit permission (Tentacle puts it in `content`). */
+function diffLines(args?: Record<string, unknown>, max = 14): string[] | null {
+  const content = typeof args?.content === 'string' ? args.content : typeof args?.diff === 'string' ? args.diff : '';
+  if (!content) return null;
+  const lines = content.split('\n').filter((l) => !l.startsWith('---') && !l.startsWith('+++'));
+  const isDiff = lines.some((l) => l.startsWith('+') || l.startsWith('-') || l.startsWith('@@'));
+  const shown = (isDiff ? lines : lines.map((l) => `+${l}`));
+  return shown.length > max ? [...shown.slice(0, max), `… ${shown.length - max} more lines`] : shown;
+}
+
 function PermissionSlot({ action, handlers }: { action: Extract<CardActionState, { type: 'permission' }>; handlers: ActionHandlers }) {
   const p = action.payload as {
     id: string; toolName?: string; description?: string; args?: Record<string, unknown>;
@@ -111,7 +121,13 @@ function PermissionSlot({ action, handlers }: { action: Extract<CardActionState,
             <div className="kslot-permission-title">Approval needed — Safe mode</div>
           )}
           <div className="kslot-permission-desc">{description}</div>
-          {summary && summary !== description && <div className="kslot-permission-args">{summary}</div>}
+          {diffLines(p.args) ? (
+            <pre className="kslot-permission-args" aria-label="Proposed change">
+              {diffLines(p.args)!.map((line, i) => (
+                <div key={i} style={{ color: line.startsWith('+') ? '#16a34a' : line.startsWith('-') ? '#dc2626' : undefined }}>{line || ' '}</div>
+              ))}
+            </pre>
+          ) : summary && summary !== description && <div className="kslot-permission-args">{summary}</div>}
           {p.decision && (
             <div className={`kslot-permission-decision ${denied ? 'is-denied' : ''}`}>
               {denied ? '✗' : '✓'} {p.decision === 'always_allow' ? 'Always allowed' : denied ? 'Denied' : 'Approved'}
@@ -124,7 +140,6 @@ function PermissionSlot({ action, handlers }: { action: Extract<CardActionState,
       {!p.decision && (
         <div className="kslot-permission-buttons">
           <button type="button" className="kperm kperm-approve" onClick={() => decide('approve')}>Approve</button>
-          <button type="button" className="kperm kperm-allow" onClick={() => decide('always_allow')}>Allow in Session</button>
           <button type="button" className="kperm kperm-deny" onClick={() => decide('deny')}>Deny</button>
         </div>
       )}

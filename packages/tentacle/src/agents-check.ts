@@ -176,7 +176,20 @@ export async function runAgentsCheckChild(
         } catch { /* not an event line */ }
       }
     });
-    child.on('close', () => { clearTimeout(timer); resolve(results); });
-    child.on('error', () => { clearTimeout(timer); resolve(results); });
+    // Agents the child never reported (timeout, crash) must not silently
+    // vanish from the list or read as "not installed".
+    const finish = () => {
+      clearTimeout(timer);
+      for (const agent of SETUP_AGENTS) {
+        if (results.some((r) => r.id === agent.id)) continue;
+        results.push({
+          id: agent.id as AgentId, name: agent.name, installUrl: agent.installUrl, models: 0, sampleModels: [],
+          status: 'error', hint: `Checking ${agent.name} took too long. Run \`kraki agents\` to try again.`,
+        });
+      }
+      resolve(results);
+    };
+    child.on('close', finish);
+    child.on('error', finish);
   });
 }

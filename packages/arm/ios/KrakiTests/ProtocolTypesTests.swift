@@ -222,14 +222,14 @@ final class ProtocolEnumTests: XCTestCase {
     }
 
     func testSessionModeAcceptsLegacyNamesAndEmitsWireNames() throws {
-        XCTAssertEqual(SessionMode(rawValue: "discuss"), .auto)
+        XCTAssertNil(SessionMode(rawValue: "discuss"))
         XCTAssertEqual(SessionMode(rawValue: "execute"), .auto)
         XCTAssertNil(SessionMode(rawValue: "unknown"))
         XCTAssertEqual(SessionMode.auto.wireName, "execute")
         XCTAssertEqual(SessionMode.safe.wireName, "safe")
         // Codable: legacy decodes, encode uses the wire name, unknown → default.
-        let decoded = try JSONDecoder().decode([SessionMode].self, from: Data(#"["discuss","execute","safe","delegate","bogus"]"#.utf8))
-        XCTAssertEqual(decoded, [.auto, .auto, .safe, .delegate, .auto])
+        let decoded = try JSONDecoder().decode([SessionMode].self, from: Data(#"["execute","safe","delegate","bogus"]"#.utf8))
+        XCTAssertEqual(decoded, [.auto, .safe, .delegate, .auto])
         let encoded = String(data: try JSONEncoder().encode([SessionMode.auto]), encoding: .utf8)
         XCTAssertEqual(encoded, #"["execute"]"#)
     }

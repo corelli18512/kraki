@@ -9,7 +9,7 @@ import { krakiAutoApproves } from '../adapters/permission-policy.js';
 
 describe('session mode names', () => {
   it('normalizes every legacy and current name; unknown falls back to the default', () => {
-    expect(normalizeSessionMode('discuss')).toBe('auto');
+    expect(normalizeSessionMode('execute')).toBe('auto');
     expect(normalizeSessionMode('execute')).toBe('auto');
     expect(normalizeSessionMode('auto')).toBe('auto');
     expect(normalizeSessionMode('safe')).toBe('safe');
@@ -43,17 +43,16 @@ describe('SessionManager mode migration', () => {
       sm.createSession('pi', 'm', 'fresh');
       expect(sm.getMeta('fresh')!.mode).toBe('auto');
 
-      for (const [id, legacy] of [['d', 'discuss'], ['e', 'execute'], ['s', 'safe']] as const) {
+      for (const [id, legacy] of [['e', 'execute'], ['s', 'safe']] as const) {
         sm.createSession('pi', 'm', id);
         const p = join(dir, id, 'meta.json');
         writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, 'utf8')), mode: legacy }));
       }
-      expect(sm.getMeta('d')!.mode).toBe('auto');
       expect(sm.getMeta('e')!.mode).toBe('auto');
       expect(sm.getMeta('s')!.mode).toBe('safe');
       // Session list carries the wire name.
       const list = Object.fromEntries(sm.getSessionList().map((x) => [x.id, x.mode]));
-      expect(list).toMatchObject({ d: 'execute', e: 'execute', s: 'safe', fresh: 'execute' });
+      expect(list).toMatchObject({ e: 'execute', s: 'safe', fresh: 'execute' });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

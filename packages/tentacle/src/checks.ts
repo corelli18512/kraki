@@ -166,12 +166,12 @@ export function checkAgentCli(bin: string): CliCheckResult & { path?: string } {
   };
   try {
     // execSync (not execFile) so Windows resolves .cmd shims like the other checks.
-    return parse(execSync(`${bin} --version`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000 }));
+    return parse(execSync(`${bin} --version`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 25_000 }));
   } catch { /* not on PATH */ }
   const bundled = findAppBundledCli(bin);
   if (bundled) {
     try {
-      return parse(execFileSync(bundled, ['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000 }), bundled);
+      return parse(execFileSync(bundled, ['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 25_000 }), bundled);
     } catch { /* broken app install */ }
   }
   return { found: false };
@@ -791,12 +791,9 @@ function realpathSafe(p: string): string {
 // `open`-ing them lands the user on the exact pane; they still have to flip
 // the toggle (TCC.db is SIP-protected and cannot be flipped programmatically).
 
-export type TccService =
-  | 'fda'
-  | 'accessibility'
-  | 'inputMonitoring'
-  | 'screenRecording'
-  | 'automation';
+/** Only Full Disk Access: Kraki never uses Accessibility, Input Monitoring,
+ *  Screen Recording or Automation, so it must not ask for them. */
+export type TccService = 'fda';
 
 interface TccServiceInfo {
   /** Stable id used in JSON output. */
@@ -814,31 +811,7 @@ export const TCC_SERVICES: readonly TccServiceInfo[] = [
     id: 'fda',
     label: 'Full Disk Access',
     url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
-    reason: 'read project files, TCC db, Mail/Safari data without per-file prompts',
-  },
-  {
-    id: 'accessibility',
-    label: 'Accessibility',
-    url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
-    reason: 'synthesize input / drive UI via the Accessibility API',
-  },
-  {
-    id: 'inputMonitoring',
-    label: 'Input Monitoring',
-    url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent',
-    reason: 'observe global key events for hotkeys / steering',
-  },
-  {
-    id: 'screenRecording',
-    label: 'Screen Recording',
-    url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
-    reason: 'capture screen contents for vision/preview features',
-  },
-  {
-    id: 'automation',
-    label: 'Automation',
-    url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Automation',
-    reason: 'send AppleEvents to other apps (Terminal, Finder, Safari, ...)',
+    reason: 'let agents read and edit your projects without per-folder macOS prompts',
   },
 ] as const;
 
@@ -867,7 +840,7 @@ export function revealKrakiApp(): boolean {
   }
 }
 
-/** Open every TCC pane kraki wants (used by `kraki permissions --open`). */
+/** Open the TCC pane(s) kraki wants (used by `kraki permissions --open`). */
 export function openAllTccPanes(): void {
   if (platform() !== 'darwin') return;
   for (const s of TCC_SERVICES) openTccPane(s.id);
@@ -905,13 +878,7 @@ export async function probeTccStatus(): Promise<TccStatus> {
       bundled: false,
       registered: false,
       notApplicable: true,
-      services: {
-        fda: 'granted',
-        accessibility: 'granted',
-        inputMonitoring: 'granted',
-        screenRecording: 'granted',
-        automation: 'granted',
-      },
+      services: { fda: 'granted' },
     };
   }
 
@@ -927,10 +894,6 @@ export async function probeTccStatus(): Promise<TccStatus> {
     notApplicable: false,
     services: {
       fda: fda === 'granted' ? 'granted' : fda === 'denied' ? 'denied' : 'unknown',
-      accessibility: 'unknown',
-      inputMonitoring: 'unknown',
-      screenRecording: 'unknown',
-      automation: 'unknown',
     },
   };
 }

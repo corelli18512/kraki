@@ -17,7 +17,7 @@
  * Flags:
  *   --device-name <name>   Device name (default: existing config, else hostname)
  *   --relay <url>          Use this relay (self-hosted); skips relay resolution
- *   --force-login          Ignore gh / saved tokens and run the device flow
+ *   --force-login          Ignore the saved token and run the device flow
  *   --oauth                Sign in through the browser instead of a device code:
  *                          emits {"event":"oauth_url","url":…,"callbackScheme":"kraki"},
  *                          then reads the kraki://auth/callback?… URL the app
@@ -55,7 +55,7 @@ export type SetupJsonEvent =
   | { event: 'done'; configPath: string; relay: string; username: string; deviceName: string }
   | { event: 'error'; code: string; message: string };
 
-type TokenSource = 'gh' | 'saved' | 'device_flow' | 'oauth';
+type TokenSource = 'saved' | 'device_flow' | 'oauth';
 
 /** Where GitHub sends the browser; a sub-path of the registered /auth/callback. */
 export const DESKTOP_OAUTH_CALLBACK_PATH = '/auth/callback/desktop';
@@ -64,7 +64,8 @@ export const DESKTOP_OAUTH_SCHEME = 'kraki';
 export interface SetupJsonDeps {
   emit: (event: SetupJsonEvent) => void;
   fetch: typeof fetch;
-  ghAuthToken: () => string | null;
+  /** @deprecated Ignored: Kraki no longer reuses the GitHub CLI token. */
+  ghAuthToken?: () => string | null;
   sleep: (ms: number) => Promise<void>;
   queryRelayInfo: (url: string) => Promise<{ githubClientId?: string }>;
   resolveRelay: (token: string) => Promise<{ ok: boolean; relayUrl: string; region?: string }>;
@@ -211,12 +212,9 @@ async function resolveToken(
   forceLogin: boolean,
   useBrowser: boolean,
 ): Promise<{ token: string; username: string; source: TokenSource }> {
+  // Never reuse `gh auth token`: its scopes (repo, workflow, …) are far wider
+  // than the read:user Kraki asks for, and it would be handed to the relay.
   if (!forceLogin) {
-    const gh = deps.ghAuthToken();
-    if (gh) {
-      const username = await githubUser(deps, gh);
-      if (username) return { token: gh, username, source: 'gh' };
-    }
     const saved = loadGitHubToken();
     if (saved) {
       const username = await githubUser(deps, saved);
@@ -226,7 +224,7 @@ async function resolveToken(
   const token = useBrowser ? await browserFlow(deps) : await deviceFlow(deps);
   const username = await githubUser(deps, token);
   if (!username) throw new SetupJsonError('token_invalid', 'GitHub did not accept the new sign-in. Try again.');
-  saveGitHubToken(token);
+  // Persisted with the config at the very end, so a cancelled run writes nothing.
   return { token, username, source: useBrowser ? 'oauth' : 'device_flow' };
 }
 
@@ -270,6 +268,7 @@ export async function runSetupJsonWith(args: string[], deps: SetupJsonDeps): Pro
       logging: existing?.logging ?? { verbosity: DEFAULT_LOG_VERBOSITY },
     };
     saveConfig(config);
+    if (source !== 'saved') saveGitHubToken(token);
     deps.emit({ event: 'done', configPath: getConfigPath(), relay, username, deviceName });
     return 0;
   } catch (err) {
@@ -287,15 +286,6 @@ export async function runSetupJson(args: string[]): Promise<number> {
   return runSetupJsonWith(args, {
     emit: (event) => process.stdout.write(JSON.stringify(event) + '\n'),
     fetch,
-    ghAuthToken: () => {
-      try {
-        return execFileSync('gh', ['auth', 'token'], {
-          encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
-        }).trim() || null;
-      } catch {
-        return null;
-      }
-    },
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     queryRelayInfo: (url) => setup.queryRelayInfo(url),
     resolveRelay: (token) => setup.resolveRelay(token),

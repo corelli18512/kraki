@@ -8,7 +8,7 @@
  * Outputs a flat LocalSession[] catalog. The arm groups client-side by gitRoot/cwd.
  */
 
-import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
 import type { LocalSession, LocalSessionSource } from '@kraki/protocol';
@@ -125,10 +125,10 @@ function extractModelFromEvents(sessionDir: string): string | undefined {
 
   try {
     // Read only the first line (session.start event) without loading entire file
-    const fd = require('node:fs').openSync(eventsPath, 'r');
+    const fd = openSync(eventsPath, 'r');
     const buf = Buffer.alloc(2048);
-    const bytesRead = require('node:fs').readSync(fd, buf, 0, 2048, 0);
-    require('node:fs').closeSync(fd);
+    const bytesRead = readSync(fd, buf, 0, 2048, 0);
+    closeSync(fd);
 
     const firstLine = buf.toString('utf8', 0, bytesRead).split('\n')[0];
     if (!firstLine) return undefined;

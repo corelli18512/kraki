@@ -179,3 +179,28 @@ describe('AttachmentStore', () => {
     expect(store.read('sid-A', ref.id)).toBeNull();
   });
 });
+
+describe('pruneToolPayloads (release review F1)', () => {
+  it('removes old tool args/results but keeps images and recent payloads', async () => {
+    const { mkdtempSync, utimesSync, existsSync, readdirSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { AttachmentStore } = await import('../attachment-store.js');
+    const root = mkdtempSync(join(tmpdir(), 'kraki-prune-'));
+    const store = new AttachmentStore(root);
+    const oldArgs = store.put('s1', Buffer.from('{"command":"ls"}'), 'application/json', { name: 'bash.args.json' });
+    const oldResult = store.put('s1', Buffer.from('a\nb'), 'text/plain', { name: 'bash.result.txt' });
+    const image = store.put('s1', Buffer.from([0x89, 0x50, 0x4e, 0x47]), 'image/png', { name: 'shot.png' });
+    const fresh = store.put('s1', Buffer.from('{"x":1}'), 'application/json', { name: 'edit.args.json' });
+    const old = new Date(Date.now() - 20 * 86_400_000);
+    for (const ref of [oldArgs, oldResult, image]) utimesSync(join(root, 's1', 'attachments', `${ref.id}.json`), old, old);
+
+    expect(store.pruneToolPayloads(14 * 86_400_000)).toBe(2);
+    expect(store.has('s1', oldArgs.id)).toBe(false);
+    expect(store.has('s1', oldResult.id)).toBe(false);
+    expect(store.has('s1', image.id)).toBe(true);
+    expect(store.has('s1', fresh.id)).toBe(true);
+    expect(readdirSync(join(root, 's1', 'attachments')).some((n) => n.startsWith(oldArgs.id))).toBe(false);
+    expect(existsSync(root)).toBe(true);
+  });
+});

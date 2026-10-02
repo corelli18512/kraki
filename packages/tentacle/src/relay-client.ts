@@ -7,7 +7,7 @@
  */
 
 import { WebSocket } from 'ws';
-import { normalizeSessionMode, toWireSessionMode } from '@kraki/protocol';
+import { DEFAULT_SESSION_MODE, normalizeSessionMode, toWireSessionMode } from '@kraki/protocol';
 import { appendFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -24,7 +24,7 @@ import { randomUUID } from 'node:crypto';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
 import type { RecipientKey } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
-import { toWellFormedText, type SessionManager, type SessionContext, type PendingHumanAction, type InputLedgerEntry } from './session-manager.js';
+import { isSafeId, toWellFormedText, type SessionManager, type SessionContext, type PendingHumanAction, type InputLedgerEntry } from './session-manager.js';
 import type { KeyManager } from './key-manager.js';
 import type { AccountUsage, UsageHistorySample } from '@kraki/protocol';
 import { scanLocalSessions, filterSessions } from './session-scanner.js';
@@ -36,6 +36,7 @@ import { makeHeadline } from './tool-headline.js';
 import { TentaclePulse, streamForType, type PulseDeliveryTarget } from './tentacle-pulse.js';
 import { CardManager } from './card-manager.js';
 import { AttachmentPacer } from './attachment-pacer.js';
+import { SleepGuard } from './sleep-guard.js';
 
 const logger = createLogger('relay-client');
 /** Pulse-trace is OFF by default. Enable with env `KRAKI_TRACE_PULSE=1`
@@ -50,6 +51,24 @@ const traceLog = {
 };
 
 const GENERIC_TERMINAL_ERROR = 'Agent request failed';
+
+const AGENT_LABELS: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', copilot: 'Copilot', pi: 'Pi' };
+
+/** A session could not be reattached to its agent after a restart/eviction. */
+export class SessionResumeError extends Error {
+  constructor(agent: string, cause: unknown) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    super(`${AGENT_LABELS[agent] ?? agent} couldn't reopen this session: ${reason}`);
+    this.name = 'SessionResumeError';
+  }
+}
+
+/** User-facing text for a failed command: no "Failed to x:" stacking for
+ *  errors that already explain themselves. */
+function describeFailure(prefix: string, err: unknown): string {
+  if (err instanceof SessionResumeError) return err.message;
+  return `${prefix}: ${(err as Error)?.message ?? String(err)}`;
+}
 
 function normalizeTerminalErrorMessage(
   value: unknown,
@@ -98,7 +117,6 @@ export type RelayClientState = 'disconnected' | 'connecting' | 'authenticating' 
  * a burst of stale frames.
  *
  * Only state-covering messages get a key:
- *   - `agent_message_delta` - streaming tokens; only the latest chunk matters.
  *   - `card_action` - the current status-card state; stale actions are noise.
  *   - `compacting` - the current runtime state; stale phases are noise.
  *
@@ -106,9 +124,9 @@ export type RelayClientState = 'disconnected' | 'connecting' | 'authenticating' 
  * `undefined` - every event must be delivered.
  */
 export function coalesceKeyFor(msg: Partial<ProducerMessage>): string | undefined {
-  if (msg.type === 'agent_message_delta' && msg.sessionId) {
-    return `agent_message_delta:${msg.sessionId}`;
-  }
+  // NOT agent_message_delta: deltas are append chunks, so superseding an
+  // unacked chunk with a later one drops text from the middle of the draft.
+  // A reconnecting Arm is re-seeded by its subscription snapshot instead.
   if (msg.type === 'card_action' && msg.sessionId) {
     return `card_action:${msg.sessionId}`;
   }
@@ -610,6 +628,9 @@ export class RelayClient {
    *  tentacle is the sole authority for what the card shows; arms render it
    *  verbatim. Broadcasts route back through {@link send} (which coalesces the
    *  `agent_message_delta` text deltas). */
+  /** Idle-sleep assertion while any turn runs (see sleep-guard.ts). */
+  private readonly sleepGuard = new SleepGuard();
+
   private card = new CardManager((msg) => this.send(msg as Partial<ProducerMessage>));
 
   /** Sessions whose agent runtime is currently compacting context. The reason
@@ -841,7 +862,7 @@ export class RelayClient {
       this.send({ type: 'active', sessionId, payload: {} });
       this.beginAdapterTurn(sessionId, turnId);
       this.sessionManager.markActive(sessionId);
-      await this.adapter.sendMessage(sessionId, recoveryPrompt, answer.attachments);
+      await this.sendToAdapter(sessionId, recoveryPrompt, answer.attachments);
     }
 
     this.removeOpenQuestion(sessionId, pending.questionId);
@@ -965,7 +986,9 @@ export class RelayClient {
     this.intentionalDisconnect = false;
     this.setState('connecting');
 
-    const ws = new WebSocket(this.options.relayUrl);
+    // Bound the TCP/TLS/upgrade phase: a black-holed connect (Wi-Fi switch,
+    // captive portal) otherwise waits for the OS TCP timeout before retrying.
+    const ws = new WebSocket(this.options.relayUrl, { handshakeTimeout: 15_000 });
     this.ws = ws;
 
     ws.on('open', () => {
@@ -1037,6 +1060,7 @@ export class RelayClient {
    */
   disconnect(): void {
     this.intentionalDisconnect = true;
+    this.sleepGuard.stop();
     this.stopStaleCheck();
     this.clearAllDeltaTimers();
     this.compactingSessions.clear();
@@ -1107,6 +1131,13 @@ export class RelayClient {
       if (authError.code === 'unknown_device' && this.preferChallengeAuth && this.options.device.deviceId && this.keyManager) {
         logger.warn('Challenge auth rejected for unknown device; retrying with full auth');
         this.preferChallengeAuth = false;
+        this.ws?.close();
+        return;
+      }
+      // The relay marks account-backend outages as retryable. Treating them
+      // as fatal left a live daemon permanently offline until a manual restart.
+      if (authError.code === 'service_unavailable' || authError.code === 'auth_unavailable') {
+        logger.warn({ code: authError.code }, 'Relay auth temporarily unavailable; reconnecting');
         this.ws?.close();
         return;
       }
@@ -1271,6 +1302,15 @@ export class RelayClient {
 
   private handleConsumerMessage(msg: ConsumerMessage): void {
     this.noteAppAlive(msg.deviceId);
+    // Session/attachment ids become filesystem paths. Reject anything that is
+    // not one of our id shapes before it reaches a handler.
+    const p = (msg as { payload?: Record<string, unknown> }).payload ?? {};
+    const ids = [msg.sessionId, p.sessionId, p.sourceSessionId, p.localSessionId,
+      msg.type === 'request_attachment' ? p.id : undefined];
+    if (ids.some((id) => id !== undefined && id !== null && id !== '' && !isSafeId(id))) {
+      logger.warn({ type: msg.type, deviceId: msg.deviceId }, 'Dropped consumer message with an unsafe id');
+      return;
+    }
     if (msg.type === 'client_features') {
       const features = Array.isArray(msg.payload?.features) ? msg.payload.features.filter((f) => typeof f === 'string') : [];
       this.appFeatures.set(msg.deviceId, new Set(features));
@@ -1457,7 +1497,7 @@ export class RelayClient {
             }).catch((err) => {
               this.updateInputLedger(sessionId, clientId, 'rejected');
               logger.error({ err, sessionId }, 'question answer from composer failed');
-              this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver answer: ${(err as Error).message}` } });
+              this.send({ type: 'error', sessionId, payload: { message: describeFailure('Failed to deliver answer', err) } });
             });
             break;
           }
@@ -1478,7 +1518,7 @@ export class RelayClient {
               this.sessionManager.markActive(sessionId);
               traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-STEER', sessionId, clientId, turnId: reservation.turnId });
               this.updateInputLedger(sessionId, clientId, 'dispatching');
-              const delivery = this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'steer' });
+              const delivery = this.sendToAdapter(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'steer' });
               await delivery;
               this.updateInputLedger(sessionId, clientId, 'delivered');
               traceLog.info({
@@ -1501,7 +1541,7 @@ export class RelayClient {
               this.updateInputLedger(sessionId, clientId, 'rejected');
               this.finishSteerAcceptance(sessionId, false);
               logger.error({ err, sessionId }, 'steer input failed');
-              this.send({ type: 'error', sessionId, payload: { message: `Failed to steer agent: ${(err as Error).message}` } });
+              this.send({ type: 'error', sessionId, payload: { message: describeFailure('Failed to steer agent', err) } });
             });
             break;
           }
@@ -1525,8 +1565,8 @@ export class RelayClient {
                 traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-SEND', sessionId, clientId, queueBehindMaintenance, turnId: reservation.turnId });
                 this.updateInputLedger(sessionId, clientId, 'dispatching');
                 const delivery = queueBehindMaintenance
-                  ? this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'follow_up' })
-                  : this.adapter.sendMessage(sessionId, msg.payload.text, msg.payload.attachments);
+                  ? this.sendToAdapter(sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'follow_up' })
+                  : this.sendToAdapter(sessionId, msg.payload.text, msg.payload.attachments);
                 await delivery;
                 // Abort/process-loss may terminalize this turn while its adapter
                 // submission is still unresolved. Never let a late completion
@@ -1566,7 +1606,7 @@ export class RelayClient {
               this.maintenanceFollowUps.delete(sessionId);
               this.updateInputLedger(sessionId, clientId, 'rejected');
               logger.error({ err, sessionId }, 'send input failed');
-              this.send({ type: 'error', sessionId, payload: { message: `Failed to deliver message: ${(err as Error).message}` } });
+              this.send({ type: 'error', sessionId, payload: { message: describeFailure('Failed to deliver message', err) } });
             })
             .finally(() => {
               if (this.inputChains.get(sessionId) === next) this.inputChains.delete(sessionId);
@@ -1592,20 +1632,24 @@ export class RelayClient {
               this.send({ type: 'error', sessionId, payload: { message: `Failed to approve permission: ${(err as Error).message}` } });
             });
           break;
-        case 'deny':
-          this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'deny')
+        case 'deny': {
+          const reason = typeof msg.payload.reason === 'string' ? msg.payload.reason.trim().slice(0, 2000) : '';
+          (reason
+            ? this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'deny', reason)
+            : this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'deny'))
             .then(() => {
               this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'deny' });
               this.openPermissions.get(sessionId)?.delete(msg.payload.permissionId);
               this.broadcastSessionList();
               this.recordTrace({ type: 'permission', sessionId, payload: { id: msg.payload.permissionId, description: '', toolName: '', args: {}, decision: 'deny' } });
-              this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'denied' } });
+              this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'denied', ...(reason && { reason }) } });
             })
             .catch((err) => {
               logger.error({ err, sessionId }, 'respondToPermission failed');
               this.send({ type: 'error', sessionId, payload: { message: `Failed to deny permission: ${(err as Error).message}` } });
             });
           break;
+        }
         case 'always_allow':
           this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'always_allow')
             .then(() => {
@@ -1671,8 +1715,12 @@ export class RelayClient {
           this.purgeSessionToolState(sessionId);
           this.send({ type: 'session_deleted', sessionId, payload: {} });
           this.eventsWatcher?.unwatch(sessionId);
+          // The agent's last writes (transcript, sidecar) can land after the
+          // first removal; remove again once the process is gone so no
+          // half-session directory is left behind.
           this.adapter.killSession(sessionId)
-            .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'));
+            .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'))
+            .finally(() => this.sessionManager.deleteSession(sessionId));
           break;
         case 'mark_read': {
           const readSeq = this.sessionManager.markRead(sessionId, msg.payload.seq);
@@ -1697,12 +1745,7 @@ export class RelayClient {
           break;
         }
         case 'set_session_mode': {
-          // Clients of any vintage may send legacy names. An explicit choice
-          // of 'discuss' comes from a pre-rename client whose UI will keep
-          // showing Discuss (it ignores its own echo), so fail closed: honour
-          // it as safe rather than silently widening to auto. Persisted
-          // four-mode sessions still migrate discuss → auto on read.
-          const mode = msg.payload.mode === 'discuss' ? 'safe' : normalizeSessionMode(msg.payload.mode);
+          const mode = normalizeSessionMode(msg.payload.mode);
           this.adapter.setSessionMode(sessionId, mode);
           this.sessionManager.setMode(sessionId, mode);
           this.send({
@@ -1759,7 +1802,7 @@ export class RelayClient {
                 this.sessionManager.setModel(sessionId, previousModel, previousReasoningEffort);
               }
               logger.error({ err, sessionId }, 'setSessionModel failed');
-              this.send({ type: 'error', sessionId, payload: { message: `Failed to change model: ${(err as Error).message}` } });
+              this.send({ type: 'error', sessionId, payload: { message: describeFailure('Failed to change model', err) } });
             });
           break;
         }
@@ -1807,11 +1850,12 @@ export class RelayClient {
       }
     } catch (err) {
       this.pendingRequestIds.delete(preSessionId);
-      const errorMsg = `Failed to create session: ${(err as Error).message}`;
+      const errorMsg = `Couldn't create the session: ${(err as Error).message}`;
+      logger.warn({ err, agentId, model }, 'create_session failed');
       this.send({
         type: 'error',
         sessionId: '',
-        payload: { message: errorMsg },
+        payload: { message: errorMsg, ...(requestId && { requestId }) },
       });
     }
   }
@@ -1836,6 +1880,8 @@ export class RelayClient {
       // pending requestId through that callback, publish session_created here
       // so the requesting Arm can clear its pending state and navigate.
       await this.adapter.forkSession(sourceSessionId, newId);
+      const forkedMode = this.sessionManager.getMeta(newId)?.mode;
+      if (forkedMode) this.adapter.setSessionMode(newId, forkedMode);
       const pendingRequestId = this.pendingRequestIds.get(newId);
       if (pendingRequestId) {
         this.pendingRequestIds.delete(newId);
@@ -1848,6 +1894,7 @@ export class RelayClient {
             model: meta?.model,
             requestId: pendingRequestId,
             lastSeq: meta?.lastSeq ?? 0,
+            ...(meta?.mode && { mode: toWireSessionMode(meta.mode) }),
           },
         } as Partial<ProducerMessage>);
       }
@@ -1861,11 +1908,11 @@ export class RelayClient {
         if (pendingId === requestId) this.pendingRequestIds.delete(sessionId);
       }
       logger.error({ err, sourceSessionId }, 'Fork session failed');
-      const errorMsg = `Failed to fork session: ${(err as Error).message}`;
+      const errorMsg = `Couldn't copy the session: ${(err as Error).message}`;
       this.send({
         type: 'error',
         sessionId: '',
-        payload: { message: errorMsg },
+        payload: { message: errorMsg, ...(requestId && { requestId }) },
       });
     }
   }
@@ -1947,7 +1994,7 @@ export class RelayClient {
       this.send({
         type: 'error',
         sessionId: '',
-        payload: { message: `Session already imported as ${existing.krakiSessionId} (requestId: ${requestId})` },
+        payload: { message: `Session already imported as ${existing.krakiSessionId}`, ...(requestId && { requestId }) },
       });
       return;
     }
@@ -2065,7 +2112,7 @@ export class RelayClient {
       this.send({
         type: 'error',
         sessionId: localSessionId,
-        payload: { message: `Failed to import session: ${(err as Error).message} (requestId: ${requestId})` },
+        payload: { message: `Couldn't import the session: ${(err as Error).message}`, ...(requestId && { requestId }) },
       });
     }
   }
@@ -2077,9 +2124,8 @@ export class RelayClient {
 
     this.eventsWatcher = new EventsWatcher(
       (msg) => {
-        // Broadcast external events to all arms + append to SessionManager
-        const sessionId = msg.sessionId;
-        this.sessionManager.appendMessage(sessionId, msg.type, JSON.stringify(msg.payload));
+        // Broadcast external events to all arms; send() persists spine types
+        // itself (appending here too wrote every external event twice).
         this.send({
           ...msg,
           deviceId: this.authInfo?.deviceId ?? '',
@@ -2127,6 +2173,7 @@ export class RelayClient {
           reasoningEffort: event.reasoningEffort ?? meta?.reasoningEffort,
           requestId,
           lastSeq: meta?.lastSeq ?? 0,
+          mode: toWireSessionMode(meta?.mode ?? DEFAULT_SESSION_MODE),
         },
       });
     };
@@ -2285,9 +2332,9 @@ export class RelayClient {
         },
       });
       // Track key files from tool usage
-      if (event.toolName === 'read_file' || event.toolName === 'write_file' || event.toolName === 'view' ||
-          event.toolName === 'edit' || event.toolName === 'create') {
-        const path = (event.args as Record<string, unknown>)?.path as string | undefined;
+      if (/^(?:read_file|write_file|view|edit|create|read|write|multiedit|notebookedit)$/i.test(event.toolName)) {
+        const toolArgs = (event.args ?? {}) as Record<string, unknown>;
+        const path = (typeof toolArgs.path === 'string' ? toolArgs.path : typeof toolArgs.file_path === 'string' ? toolArgs.file_path : undefined);
         if (path) {
           const ctx = this.sessionManager.getContext(sessionId);
           if (ctx) {
@@ -2469,6 +2516,7 @@ export class RelayClient {
     // Keep a sole open question recoverable: Pi deliberately retains that card
     // across process loss so its answer can become a lazy-resume recovery prompt.
     this.adapter.onSessionEvicted = (sessionId) => {
+      this.sleepGuard.release(sessionId);
       const turnId = this.activeInputTurnIds.get(sessionId);
       const hasUnsettledAcceptedTurn = !!turnId
         && this.settledAdapterTurnIds.get(sessionId) !== turnId;
@@ -2552,12 +2600,37 @@ export class RelayClient {
    * Returns true if the session was freshly resumed, false if it was already
    * active/idle (or the resume failed).
    */
+  /** Send to the adapter; if the runtime lost the session while meta still
+   *  says it is loaded (state drift after an agent crash), reattach once and
+   *  retry instead of surfacing "Session not found: <id>". */
+  private async sendToAdapter(
+    sessionId: string,
+    text: string,
+    attachments?: import('@kraki/protocol').Attachment[],
+    options?: import('./adapters/base.js').SendMessageOptions,
+  ): Promise<void> {
+    const send = () => options
+      ? this.adapter.sendMessage(sessionId, text, attachments, options)
+      : this.adapter.sendMessage(sessionId, text, attachments);
+    try {
+      await send();
+    } catch (err) {
+      if (!/Session not found/i.test((err as Error)?.message ?? '')) throw err;
+      logger.warn({ sessionId }, 'Adapter lost a loaded session; reattaching and retrying once');
+      this.sessionManager.markDisconnected(sessionId);
+      await this.ensureSessionResumed(sessionId);
+      await send();
+    }
+  }
+
   private async ensureSessionResumed(sessionId: string, restoreModel = true, active = true): Promise<boolean> {
     const existing = this.resumeInFlight.get(sessionId);
     if (existing) return existing;
 
     const meta = this.sessionManager.getMeta(sessionId);
-    if (!meta || meta.state !== 'disconnected') return false;
+    // `ended` is also recoverable: older adapters marked a crashed agent
+    // process as ended although its transcript is intact.
+    if (!meta || (meta.state !== 'disconnected' && meta.state !== 'ended')) return false;
 
     const promise = (async () => {
       try {
@@ -2595,7 +2668,9 @@ export class RelayClient {
       } catch (err) {
         logger.warn({ err, sessionId }, 'Lazy session resume failed; leaving as disconnected');
         this.sessionManager.markDisconnected(sessionId);
-        return false;
+        // Surface the real cause. Returning false let the caller continue into
+        // the adapter, which then reported an opaque "Session not found: <id>".
+        throw new SessionResumeError(meta.agent, err);
       } finally {
         this.resumeInFlight.delete(sessionId);
       }
@@ -3275,6 +3350,12 @@ export class RelayClient {
     if (msg.type === 'agent_message' && msg.sessionId) {
       const p = msg.payload as { content?: string; question?: unknown } | undefined;
       if (p?.content && !p.question) this.lastAgentContent.set(msg.sessionId, p.content);
+    }
+
+    // Keep the machine awake while any session's turn is running.
+    if (sessionId) {
+      if (type === 'active') this.sleepGuard.hold(sessionId);
+      else if (type === 'idle' || type === 'session_ended' || type === 'session_deleted') this.sleepGuard.release(sessionId);
     }
 
     // Push is a separate Head-bound operation and must happen even when there

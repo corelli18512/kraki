@@ -21,7 +21,7 @@ import {
   getConfigPath,
   loadConfig,
 } from './config.js';
-import { checkGhAuth, SETUP_AGENTS, probeFdaAsApp, pollFda, ensureTccBundleRegistered, openTccPane, revealKrakiApp, getKrakiAppBundlePath } from './checks.js';
+import { SETUP_AGENTS, probeFdaAsApp, pollFda, ensureTccBundleRegistered, openTccPane, revealKrakiApp, getKrakiAppBundlePath } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { termLink } from './term-link.js';
 import { findMacAppWithBuiltIn } from './managed.js';
@@ -253,10 +253,22 @@ export async function resolveRelay(
 
 // ── Box drawing ─────────────────────────────────────────
 
+/** Terminal columns of a string: CJK, full-width and emoji take two. */
+export function displayWidth(s: string): number {
+  let width = 0;
+  for (const ch of s.replace(/\x1B\[[0-9;]*m/g, '')) {
+    const cp = ch.codePointAt(0) ?? 0;
+    const wide = (cp >= 0x1100 && cp <= 0x115f) || (cp >= 0x2e80 && cp <= 0xa4cf) || (cp >= 0xac00 && cp <= 0xd7a3)
+      || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe30 && cp <= 0xfe4f) || (cp >= 0xff00 && cp <= 0xff60)
+      || (cp >= 0xffe0 && cp <= 0xffe6) || (cp >= 0x1f300 && cp <= 0x1faff) || (cp >= 0x20000 && cp <= 0x3fffd);
+    width += wide ? 2 : 1;
+  }
+  return width;
+}
+
 function printBox(lines: string[]): void {
-  const plain = (s: string) => s.replace(/\x1B\[[0-9;]*m/g, '');
-  const maxLen = Math.max(...lines.map((l) => plain(l).length));
-  const pad = (s: string) => s + ' '.repeat(maxLen - plain(s).length);
+  const maxLen = Math.max(...lines.map((l) => displayWidth(l)));
+  const pad = (s: string) => s + ' '.repeat(maxLen - displayWidth(s));
   const border = chalk.dim;
 
   console.log(border(`  ┌${'─'.repeat(maxLen + 2)}┐`));
@@ -297,7 +309,7 @@ async function githubDeviceFlow(clientId: string): Promise<{ token: string; user
   console.log('');
 
   const spinner = ora({ text: 'Waiting for you to approve Kraki on GitHub…', indent: 4 }).start();
-  const interval = (data.interval ?? 5) * 1000;
+  let interval = (data.interval ?? 5) * 1000;
   const deadline = Date.now() + data.expires_in * 1000;
 
   while (Date.now() < deadline) {
@@ -327,7 +339,7 @@ async function githubDeviceFlow(clientId: string): Promise<{ token: string; user
     }
 
     if (tokenData.error === 'slow_down') {
-      await new Promise(r => setTimeout(r, 5000)); // extra backoff
+      interval += 5000; // RFC 8628: add 5 s to the polling interval for good
     } else if (tokenData.error === 'expired_token') {
       spinner.fail('The code expired.');
       throw new Error('The GitHub code expired. Run `kraki` to try again.');
@@ -391,14 +403,32 @@ function openInBrowser(url: string): boolean {
 }
 
 /**
- * GitHub sign-in: reuse a signed-in GitHub CLI (`gh`) when there is one,
- * else a device code.
+ * GitHub sign-in with Kraki's own device code (scope `read:user`).
+ *
+ * Never reuse `gh auth token`: that token carries the GitHub CLI's broad
+ * scopes (repo, workflow, read:org, gist) and would be handed to the relay.
+ * Kraki only needs to prove who the user is.
  */
 async function signInWithGitHub(clientId: () => Promise<string | undefined>): Promise<{ token: string; username: string }> {
-  const gh = checkGhAuth();
-  if (gh.authenticated && gh.token) {
-    console.log(`    ${chalk.green('✔')} Signed in as ${chalk.bold(gh.username ?? 'unknown')} ${chalk.dim('(GitHub CLI)')}`);
-    return { token: gh.token, username: gh.username ?? 'unknown' };
+  // Re-setup: Kraki's own saved token is fine to reuse while GitHub accepts it.
+  const { loadGitHubToken } = await import('./config.js');
+  const saved = loadGitHubToken();
+  if (saved) {
+    let rejected = false;
+    let username: string | null = null;
+    try {
+      const res = await fetch('https://api.github.com/user', {
+        headers: { Authorization: `Bearer ${saved}`, 'User-Agent': 'kraki-tentacle' },
+        signal: AbortSignal.timeout(10_000),
+      });
+      rejected = res.status === 401;
+      const body = await res.json() as { login?: unknown };
+      if (typeof body.login === 'string') username = body.login;
+    } catch { /* offline: keep using the saved token */ }
+    if (!rejected) {
+      console.log(`    ${chalk.green('✔')} Signed in${username ? ` as ${chalk.bold(username)}` : ''}`);
+      return { token: saved, username: username ?? 'unknown' };
+    }
   }
   const id = await clientId();
   if (!id) throw new Error('Could not reach Kraki to start GitHub sign-in. Check your network connection.');
@@ -738,6 +768,26 @@ async function promptRelayUrl(defaultRelay: string): Promise<string> {
 }
 
 /**
+ * The credential this computer presents to the relay for a pairing request.
+ * GitHub: only Kraki's own read:user token (~/.kraki/github-token). Installs
+ * that predate this lived on the GitHub CLI token; when `interactive`, sign
+ * in once with a device code instead, otherwise fail with what to run.
+ */
+export async function relayAuthToken(config: KrakiConfig, interactive: boolean): Promise<string | undefined> {
+  if (config.authMethod === 'open') return 'dev';
+  if (config.authMethod !== 'github_token') return undefined;
+  const { loadGitHubToken } = await import('./config.js');
+  const saved = loadGitHubToken();
+  if (saved) return saved;
+  if (!interactive) throw new Error('Sign in to GitHub again: run `kraki connect` in a terminal (one-time code).');
+  console.log(chalk.dim('    Kraki now signs in with its own GitHub code instead of the GitHub CLI token.'));
+  const apiBase = process.env.KRAKI_API_URL ?? OFFICIAL_API;
+  const { token } = await signInWithGitHub(async () =>
+    (await officialClientId(apiBase)) ?? (await queryRelayInfo(config.relay).catch(() => undefined))?.githubClientId);
+  return token;
+}
+
+/**
  * Generate and display pairing QR code.
  * Called by CLI after daemon is started.
  */
@@ -745,19 +795,9 @@ export async function showPairingQr(config: KrakiConfig): Promise<void> {
   console.log('');
   const pairSpinner = ora({ text: 'Creating a connect code…', indent: 2 }).start();
   try {
-    let token: string | undefined;
-    if (config.authMethod === 'github_token') {
-      try {
-        const { execSync } = await import('node:child_process');
-        token = execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim() || undefined;
-      } catch { /* ignore */ }
-      if (!token) {
-        const { loadGitHubToken } = await import('./config.js');
-        token = loadGitHubToken() ?? undefined;
-      }
-    } else if (config.authMethod === 'open') {
-      token = 'dev';
-    }
+    pairSpinner.stop();
+    const token = await relayAuthToken(config, true);
+    pairSpinner.start();
 
     const { requestPairingToken, buildPairingUrl, renderQrToTerminal } = await import('./pair.js');
     const info = await requestPairingToken(config.relay, token);

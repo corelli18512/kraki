@@ -137,7 +137,9 @@ struct BubbleActionSlot: View {
                         .font(.system(size: 14))
                         .foregroundStyle(Color.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
-                    if let summary = permissionArgsSummary(message),
+                    if let diff = PermissionDiffPreview.diff(message.args) {
+                        PermissionDiffPreview(diff: diff, fontSize: 11)
+                    } else if let summary = permissionArgsSummary(message),
                        summary != message.toolDescription {
                         Text(summary)
                             .font(.system(size: 11, design: .monospaced))
@@ -166,7 +168,6 @@ struct BubbleActionSlot: View {
             if message.payload["decision"]?.stringValue == nil {
                 HStack(spacing: 8) {
                     permissionButton("Approve", message, decision: "approve", foreground: .white, fill: .green, border: .clear)
-                    permissionButton("Allow in Session", message, decision: "always_allow", foreground: .green, fill: .green.opacity(0.12), border: .green.opacity(0.35))
                     permissionButton("Deny", message, decision: "deny", foreground: .red, fill: .red.opacity(0.10), border: .red.opacity(0.35))
                 }
                 .frame(maxWidth: .infinity)

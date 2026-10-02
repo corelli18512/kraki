@@ -55,7 +55,7 @@ describe('handleDataMessage session_mode_set', () => {
     expect(useStore.getState().sessionModes.get('sess-1')).toBe('safe');
   });
 
-  it.each(['execute', 'discuss', 'auto'])('reads %s as auto (clears the entry)', (wire) => {
+  it.each(['execute', 'auto'])('reads %s as auto (clears the entry)', (wire) => {
     seedSession('sess-1');
     useStore.getState().setSessionMode('sess-1', 'safe');
     handleDataMessage(makeModeSetMsg('sess-1', wire) as InnerMessage, {

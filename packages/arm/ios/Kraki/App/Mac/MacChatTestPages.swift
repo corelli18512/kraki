@@ -1546,7 +1546,7 @@ private extension MacChatScenarioHarness {
             ]
         )
 
-        let permissionWriteID = "permission-discuss-write"
+        let permissionWriteID = "permission-pending-write"
         add(
             permissionWriteID,
             category: "Permission",
@@ -1559,7 +1559,7 @@ private extension MacChatScenarioHarness {
                 card: .init(
                     text: "I need permission before editing the file.",
                     action: action(permissionWriteID, "permission", [
-                        "id": "perm-discuss-write",
+                        "id": "perm-pending-write",
                         "toolName": "write_file",
                         "description": "packages/arm/ios/Kraki/Features/Chat/Mac/MacChatView.swift",
                         "args": ["path": "MacChatView.swift"],

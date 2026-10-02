@@ -281,6 +281,7 @@ targets:
       - path: Kraki/Shared/LucideIcon.swift
       - path: Kraki/Shared/NavigationIDs.swift
       - path: Kraki/Shared/ToolStatusIcon.swift
+      - path: Kraki/Shared/PermissionDiffPreview.swift
       # AppState is platformized (push + willTerminate guarded).
       - path: Kraki/App/AppState.swift
       # Mac-only app shell, scenes, commands.

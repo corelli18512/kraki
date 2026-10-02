@@ -85,7 +85,7 @@ function printHelp(): void {
     cmd('kraki config log <normal|verbose>', ''),
     cmd('', 'Set log detail for the next start'),
     cmd('kraki config reset', 'Delete the config and set up again'),
-    cmd('kraki permissions', 'macOS privacy status (--open to open the panes)'),
+    cmd('kraki permissions', 'macOS Full Disk Access status (--open to open the pane)'),
     '',
     `${chalk.dim('  For apps and scripts: setup --json | --headless [--agent …], connect --json | --url-only,')}`,
     `${chalk.dim('  status --json, agents --json, doctor, fda --json | --watch, resolve-relay --json')}`,
@@ -609,19 +609,8 @@ async function cmdConnect(urlOnly = false, jsonOutput = false): Promise<void> {
   }
 
   try {
-    let token: string | undefined;
-    if (config.authMethod === 'github_token') {
-      try {
-        const { execSync } = await import('node:child_process');
-        token = execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim() || undefined;
-      } catch { /* ignore */ }
-      if (!token) {
-        const { loadGitHubToken } = await import('./config.js');
-        token = loadGitHubToken() ?? undefined;
-      }
-    } else if (config.authMethod === 'open') {
-      token = 'dev';
-    }
+    const { relayAuthToken } = await import('./setup.js');
+    const token = await relayAuthToken(config, !urlOnly && !jsonOutput);
 
     const info = await requestPairingToken(config.relay, token);
     const pairingUrl = buildPairingUrl(info);
@@ -753,13 +742,7 @@ async function cmdResolveRelay(args: string[]): Promise<void> {
   const jsonOutput = args.includes('--json');
   let token = getArgValue(args, '--github-token');
 
-  // Fall back to gh CLI / saved token if not provided.
-  if (!token) {
-    try {
-      const { execSync } = await import('node:child_process');
-      token = execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim() || undefined;
-    } catch { /* ignore */ }
-  }
+  // Fall back to Kraki's own saved token (never the GitHub CLI's).
   if (!token) {
     const { loadGitHubToken } = await import('./config.js');
     token = loadGitHubToken() ?? undefined;
@@ -865,9 +848,9 @@ async function cmdPermissions(args: string[]): Promise<void> {
   if (open) {
     openAllTccPanes();
     if (!json) {
-      console.log(chalk.bold('  Opening macOS Privacy & Security panes…'));
+      console.log(chalk.bold('  Opening Full Disk Access in System Settings…'));
       console.log(chalk.dim('  TCC grants cannot be applied automatically (SIP-protected).'));
-      console.log(chalk.dim('  Toggle the switch for Kraki in each pane that opens.'));
+      console.log(chalk.dim('  Turn on the switch for Kraki.'));
       console.log('');
       for (const s of TCC_SERVICES) {
         console.log(`    ${chalk.bold(s.label)}`);
@@ -1067,21 +1050,26 @@ async function cmdAuth(args: string[]): Promise<void> {
   process.stdout.write(JSON.stringify({ phase: 'device_code', user_code: data.user_code, verification_uri: data.verification_uri, expires_in: data.expires_in }) + '\n');
 
   // Step 2: Poll for token
-  const interval = (data.interval ?? 5) * 1000;
+  let interval = (data.interval ?? 5) * 1000;
   const deadline = Date.now() + data.expires_in * 1000;
 
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, interval));
-    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({
-        client_id: clientId,
-        device_code: data.device_code,
-        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-      }),
-    });
-    const tokenData = await tokenRes.json() as Record<string, string>;
+    let tokenData: Record<string, string>;
+    try {
+      const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          client_id: clientId,
+          device_code: data.device_code,
+          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        }),
+      });
+      tokenData = await tokenRes.json() as Record<string, string>;
+    } catch {
+      continue; // transient network error: keep polling until the code expires
+    }
 
     if (tokenData.access_token) {
       let username = 'unknown';
@@ -1111,7 +1099,7 @@ async function cmdAuth(args: string[]): Promise<void> {
       return;
     }
     if (tokenData.error === 'slow_down') {
-      await new Promise(r => setTimeout(r, 5000));
+      interval += 5000;
     }
   }
 

@@ -31,6 +31,14 @@ const PREVIEW_BOUNDARY_TYPES = new Set([
   'system_message',
 ]);
 
+/** Ids from the wire become path segments under ~/.kraki/sessions. Only
+ *  allow the characters our own ids use, so `..` or a slash can never reach
+ *  the filesystem (e.g. delete_session with id `..` removing ~/.kraki). */
+export function isSafeId(id: unknown): id is string {
+  return typeof id === 'string' && id.length > 0 && id.length <= 200
+    && /^[A-Za-z0-9._-]+$/.test(id) && id !== '.' && id !== '..';
+}
+
 /** Replace lone UTF-16 surrogates before serializing text for strict JSON consumers. */
 export function toWellFormedText(text: string): string {
   let result = '';
@@ -433,6 +441,7 @@ export class SessionManager {
    * Delete a session permanently. Removes all files for this session.
    */
   deleteSession(sessionId: string): void {
+    if (!isSafeId(sessionId)) return;
     this.inputLedgerCache.delete(sessionId);
     const dir = this.sessionDir(sessionId);
     if (existsSync(dir)) {
@@ -462,7 +471,11 @@ export class SessionManager {
       title: sourceMeta.title ? `Fork of ${sourceMeta.title}` : undefined,
       autoTitle: sourceMeta.autoTitle,
       state: 'active',
-      mode: DEFAULT_SESSION_MODE,
+      // A fork keeps the source's permission mode: forking a `safe` session
+      // must not silently produce one that runs side effects unasked.
+      mode: sourceMeta.mode ?? DEFAULT_SESSION_MODE,
+      ...(sourceMeta.idleSeqs && { idleSeqs: [...sourceMeta.idleSeqs] }),
+      ...(sourceMeta.currentTurnStartSeq !== undefined && { currentTurnStartSeq: sourceMeta.currentTurnStartSeq }),
       currentRunId: runId,
       totalRuns: 1,
       lastSeq: sourceMeta.lastSeq ?? 0,
@@ -486,6 +499,9 @@ export class SessionManager {
     if (existsSync(srcLog)) {
       cpSync(srcLog, dstLog);
     }
+    // Steps of the copied turns live in trace.jsonl, keyed by the same seqs.
+    const srcTrace = join(this.sessionDir(sourceSessionId), 'trace.jsonl');
+    if (existsSync(srcTrace)) cpSync(srcTrace, join(newDir, 'trace.jsonl'));
 
     return { sessionId: newId, runId };
   }
@@ -1222,6 +1238,7 @@ export class SessionManager {
   // ── File I/O ──────────────────────────────────────────
 
   private sessionDir(sessionId: string): string {
+    if (!isSafeId(sessionId)) throw new Error(`Invalid session id: ${JSON.stringify(sessionId).slice(0, 80)}`);
     return join(this.sessionsDir, sessionId);
   }
 
@@ -1466,7 +1483,7 @@ export class SessionManager {
   private readMeta(sessionId: string): SessionMeta | null {
     try {
       const meta = JSON.parse(readFileSync(join(this.sessionDir(sessionId), 'meta.json'), 'utf8')) as SessionMeta;
-      // Four-mode era sessions (discuss/execute) read as the current modes.
+      // Normalize legacy wire names (`execute`) and unknown values.
       // Rewritten on the next save; nothing else on disk needs migrating.
       meta.mode = normalizeSessionMode(meta.mode);
       return meta;

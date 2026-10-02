@@ -212,7 +212,6 @@ final class TabBarNavigationUITests: XCTestCase {
         collapsed.tap()
         let auto = app.buttons["Auto"]
         XCTAssertTrue(auto.waitForExistence(timeout: 2), "expanded picker shows all modes")
-        XCTAssertFalse(app.buttons["Discuss"].exists)
         XCTAssertFalse(app.buttons["Execute"].exists)
         auto.tap()
         var lastTap: Date

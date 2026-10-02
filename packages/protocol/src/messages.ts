@@ -184,6 +184,8 @@ export interface SessionCreatedMessage extends BaseEnvelope {
     requestId?: string;
     /** Current last message seq (0 for new sessions, >0 for forks) */
     lastSeq?: number;
+    /** Permission mode the session starts in (wire name). */
+    mode?: import('./sessions.js').WireSessionMode;
   };
 }
 
@@ -478,6 +480,10 @@ export interface ErrorMessage extends BaseEnvelope {
   type: 'error';
   payload: {
     message: string;
+    /** Echoed from create_session / fork_session / import_session when the
+     *  error is that request's failure, so the requester can resolve its
+     *  pending placeholder instead of timing out. */
+    requestId?: string;
   };
 }
 
@@ -1033,6 +1039,8 @@ export interface DenyMessage extends BaseEnvelope {
   type: 'deny';
   payload: {
     permissionId: string;
+    /** Optional explanation typed by the operator; relayed to the agent. */
+    reason?: string;
   };
 }
 

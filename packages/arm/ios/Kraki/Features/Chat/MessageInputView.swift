@@ -786,17 +786,6 @@ struct MessageInputView: View {
             .modifier(GlassChoiceButtonModifier(tint: .green))
 
             Button {
-                appState.commandSender?.alwaysAllow(sessionId: sessionId, permissionId: perm.id, toolKind: perm.toolName)
-            } label: {
-                Text("Always Allow")
-                    .font(.subheadline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-            }
-            .modifier(GlassChoiceButtonModifier(tint: .blue))
-
-            Button {
                 appState.commandSender?.deny(sessionId: sessionId, permissionId: perm.id)
             } label: {
                 Text("Deny")

@@ -844,7 +844,7 @@ export class CodexAdapter extends AgentAdapter {
 
   // ── Permissions & questions (Kraki → Codex) ──────────
 
-  async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision): Promise<void> {
+  async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision, reason?: string): Promise<void> {
     const s = this.sessions.get(sessionId);
     const pending = s?.pendingPermissions.get(permissionId);
     if (!s || !pending) {
@@ -854,6 +854,15 @@ export class CodexAdapter extends AgentAdapter {
     s.pendingPermissions.delete(permissionId);
     const allow = decision === 'approve' || decision === 'always_allow';
     this.answerPermission(pending, allow);
+    // Codex's decline carries no text; relay the operator's reason as a steer
+    // into the running turn so the model learns why.
+    if (!allow && reason && s.activeTurnId && s.threadId && this.rpc?.alive) {
+      this.rpc.request('turn/steer', {
+        threadId: s.threadId,
+        expectedTurnId: s.activeTurnId,
+        input: [{ type: 'text', text: `The user denied that request: ${reason}`, text_elements: [] }],
+      }).catch((err) => logger.debug({ sessionId, err: errMessage(err) }, 'codex deny-reason steer failed'));
+    }
 
     if (decision === 'always_allow') {
       s.allowKinds.add(pending.toolKind);

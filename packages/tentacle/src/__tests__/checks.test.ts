@@ -543,7 +543,7 @@ describe('TCC_SERVICES + openTccPane()', () => {
 
   it('covers the five services kraki wants, with deep-link URLs', () => {
     const ids = TCC_SERVICES.map((s) => s.id);
-    expect(ids).toEqual(['fda', 'accessibility', 'inputMonitoring', 'screenRecording', 'automation']);
+    expect(ids).toEqual(['fda']);
     for (const s of TCC_SERVICES) {
       expect(s.url.startsWith('x-apple.systempreferences:')).toBe(true);
       expect(s.label.length).toBeGreaterThan(0);
@@ -589,9 +589,7 @@ describe('probeTccStatus()', () => {
     expect(s.bundled).toBe(true);
     expect(s.registered).toBe(true);
     expect(s.services.fda).toBe('granted');
-    expect(s.services.accessibility).toBe('unknown');
-    expect(s.services.screenRecording).toBe('unknown');
-    expect(s.services.automation).toBe('unknown');
+    expect(Object.keys(s.services)).toEqual(['fda']);
   });
 
   it('reports denied FDA when all probe paths are EPERM', async () => {

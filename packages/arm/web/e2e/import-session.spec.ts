@@ -68,7 +68,7 @@ async function setup(page: Page, server: MockRelayServer): Promise<WebSocket> {
     payload: {
       sessions: [{
         id: 'native-1', agent: 'copilot', model: 'claude-sonnet-4',
-        state: 'idle', mode: 'discuss', lastSeq: 5, readSeq: 5,
+        state: 'idle', mode: 'auto', lastSeq: 5, readSeq: 5,
         messageCount: 5, createdAt: '2026-04-17T00:00:00Z',
       }],
     },
