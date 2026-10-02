@@ -240,7 +240,7 @@ final class PushManager: NSObject {
     }
 
     private static var isAutomatedRun: Bool {
-        NativeTestRuntime.isRunningTests
+        SessionNotifications.isTestHost
             || ProcessInfo.processInfo.environment["KRAKI_LOCAL_RELAY_PORT"] != nil
     }
 

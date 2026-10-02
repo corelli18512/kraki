@@ -43,7 +43,7 @@ final class MacNotifications: NSObject {
     /// After every auth: ask macOS for permission the first time, then
     /// (re)register this Mac with the relay so it receives previews.
     func onAuthenticated(appState: AppState) {
-        guard !NativeTestRuntime.isRunningTests else { return }
+        guard !SessionNotifications.isTestHost else { return }
         guard isEnabled else {
             sendTokenControl(register: false, appState: appState)
             return
@@ -69,7 +69,7 @@ final class MacNotifications: NSObject {
     }
 
     func handleSignOut(appState: AppState) {
-        guard !NativeTestRuntime.isRunningTests else { return }
+        guard !SessionNotifications.isTestHost else { return }
         sendTokenControl(register: false, appState: appState)
         SessionNotifications.removeAllDelivered()
     }

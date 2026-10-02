@@ -5,9 +5,18 @@ import UserNotifications
 /// grouped by Session (`threadIdentifier` = sessionId), which is also the key
 /// used to remove them once the human has seen the Session.
 enum SessionNotifications {
+    /// `NativeTestRuntime` exists only in Debug builds.
+    static var isTestHost: Bool {
+        #if DEBUG
+        NativeTestRuntime.isRunningTests
+        #else
+        false
+        #endif
+    }
+
     /// Remove this Session's delivered notifications.
     static func removeDelivered(forSession sessionId: String) {
-        guard !NativeTestRuntime.isRunningTests else { return }
+        guard !isTestHost else { return }
         let center = UNUserNotificationCenter.current()
         center.getDeliveredNotifications { notifications in
             let ids = notifications
@@ -23,7 +32,7 @@ enum SessionNotifications {
 
     /// Sign-out: nothing from the previous account may stay on screen.
     static func removeAllDelivered() {
-        guard !NativeTestRuntime.isRunningTests else { return }
+        guard !isTestHost else { return }
         let center = UNUserNotificationCenter.current()
         center.removeAllDeliveredNotifications()
         center.setBadgeCount(0)
