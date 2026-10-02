@@ -218,7 +218,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
                     drain(25)
                     try? ingest(fx, ["type": seq % 2 == 1 ? "user_message" : "agent_message", "seq": seq,
                                      "sessionId": sid, "deviceId": dev, "timestamp": "2026-09-01T00:00:05.000Z",
-                                     "payload": ["content": "后台到达 \(seq)"]])
+                                     "payload": ["content": "\u{540E}\u{53F0}\u{5230}\u{8FBE} \(seq)"]])
                     seq += 1
                 }
                 drain(150)
@@ -367,7 +367,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         for _ in 0..<30 { _ = fx.sv.automationPreciseScrollPacket(deltaY: 40); drain(8) }
         drain(900)
         XCTAssertGreaterThan(distanceToBottom(fx), 500)
-        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "新的问题：这个怎么修？")
+        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "\u{65B0}\u{7684}\u{95EE}\u{9898}\u{FF1A}\u{8FD9}\u{4E2A}\u{600E}\u{4E48}\u{4FEE}\u{FF1F}")
         NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
         drain(700)
         XCTAssertLessThanOrEqual(distanceToBottom(fx), 1, "a local send returns the Chat to its newest edge")
@@ -390,7 +390,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
             fx.app.messageStore.applyCardMessage(sid, String(chars[i..<min(i + 30, chars.count)]), reset: false)
             i += 30
             if !sent, i > 900 {
-                _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "先停一下，换个方向。")
+                _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "\u{5148}\u{505C}\u{4E00}\u{4E0B}\u{FF0C}\u{6362}\u{4E2A}\u{65B9}\u{5411}\u{3002}")
                 NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
                 sent = true; sentAt = CACurrentMediaTime()
             }
@@ -408,7 +408,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         let fx = try makeFixture(total: 60)
         drain(1_200)
         fx.app.sessionStore.sessions[sid]?.state = .active
-        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "继续")
+        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "\u{7EE7}\u{7EED}")
         NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
         drain(700)
         try startTurn(fx, seq: 61)
@@ -416,7 +416,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         drain(500)
         let offset = fx.sv.contentView.bounds.minY
         for k in 0..<30 {
-            fx.app.messageStore.applyCardMessage(sid, "第\(k)段：继续补充一些说明文字，让回复变长。", reset: false)
+            fx.app.messageStore.applyCardMessage(sid, "\u{7B2C}\(k)\u{6BB5}\u{FF1A}\u{7EE7}\u{7EED}\u{8865}\u{5145}\u{4E00}\u{4E9B}\u{8BF4}\u{660E}\u{6587}\u{5B57}\u{FF0C}\u{8BA9}\u{56DE}\u{590D}\u{53D8}\u{957F}\u{3002}", reset: false)
             drain(33)
         }
         drain(400)
@@ -434,7 +434,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         for _ in 0..<30 { _ = fx.sv.automationPreciseScrollPacket(deltaY: 40); drain(8) }
         drain(900)
         XCTAssertTrue(fx.sv.automationControlsVisible.down)
-        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "上面那个问题我再补充一下。")
+        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "\u{4E0A}\u{9762}\u{90A3}\u{4E2A}\u{95EE}\u{9898}\u{6211}\u{518D}\u{8865}\u{5145}\u{4E00}\u{4E0B}\u{3002}")
         NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
         XCTAssertFalse(fx.sv.automationControlsVisible.down, "↓ leaves as soon as the send starts")
         XCTAssertFalse(fx.sv.automationControlsVisible.up, "↑ does not cover the message being sent")
@@ -455,7 +455,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         fx.app.messageStore.beginCardTurn(sid)
         try ingest(fx, ["type": "user_message", "seq": 61, "sessionId": sid, "deviceId": dev,
                         "timestamp": "2026-09-01T00:00:05.000Z",
-                        "payload": ["content": "上面那个问题我再补充一下。", "clientId": clientId]])
+                        "payload": ["content": "\u{4E0A}\u{9762}\u{90A3}\u{4E2A}\u{95EE}\u{9898}\u{6211}\u{518D}\u{8865}\u{5145}\u{4E00}\u{4E0B}\u{3002}", "clientId": clientId]])
         drain(400)
         XCTAssertFalse(fx.sv.automationControlsVisible.up, "still the user's message after its echo")
         try land(fx, seq: 62, text: Self.zh)
@@ -498,7 +498,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         drain(1_200)
         XCTAssertTrue(entrances(fx).isEmpty, "session entry has no entrances")
 
-        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "帮我再看一下这个问题")
+        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "\u{5E2E}\u{6211}\u{518D}\u{770B}\u{4E00}\u{4E0B}\u{8FD9}\u{4E2A}\u{95EE}\u{9898}")
         NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
         let back1 = watchGlide(fx, ms: 600)
         XCTAssertEqual(entrances(fx).count, 1)
@@ -511,15 +511,15 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         fx.app.messageStore.beginCardTurn(sid)
         try ingest(fx, ["type": "user_message", "seq": 61, "sessionId": sid, "deviceId": dev,
                         "timestamp": "2026-09-01T00:00:05.000Z",
-                        "payload": ["content": "帮我再看一下这个问题", "clientId": clientId]])
+                        "payload": ["content": "\u{5E2E}\u{6211}\u{518D}\u{770B}\u{4E00}\u{4E0B}\u{8FD9}\u{4E2A}\u{95EE}\u{9898}", "clientId": clientId]])
         drain(500)
         XCTAssertEqual(entrances(fx).count, 1, "the echo replaces the pending bubble without a second entrance")
 
         let before = fx.sv.contentView.bounds.minY
-        fx.app.messageStore.applyCardMessage(sid, "好的，我先看一下相关代码。", reset: false)
+        fx.app.messageStore.applyCardMessage(sid, "\u{597D}\u{7684}\u{FF0C}\u{6211}\u{5148}\u{770B}\u{4E00}\u{4E0B}\u{76F8}\u{5173}\u{4EE3}\u{7801}\u{3002}", reset: false)
         var back2: CGFloat = 0, downShown = false
         for k in 0..<24 {
-            fx.app.messageStore.applyCardMessage(sid, "第\(k)段补充说明，让回复继续变长。", reset: false)
+            fx.app.messageStore.applyCardMessage(sid, "\u{7B2C}\(k)\u{6BB5}\u{8865}\u{5145}\u{8BF4}\u{660E}\u{FF0C}\u{8BA9}\u{56DE}\u{590D}\u{7EE7}\u{7EED}\u{53D8}\u{957F}\u{3002}", reset: false)
             back2 = max(back2, watchGlide(fx, ms: 33))
             downShown = downShown || fx.sv.automationControlsVisible.down
         }
@@ -553,7 +553,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         let fx = try makeFixture(total: 20)
         fx.app.commandSender?.confirmationTimeout = .milliseconds(300)
         drain(1_000)
-        XCTAssertEqual(fx.app.commandSender?.sendInput(sessionId: sid, text: "这条会发送失败"), true)
+        XCTAssertEqual(fx.app.commandSender?.sendInput(sessionId: sid, text: "\u{8FD9}\u{6761}\u{4F1A}\u{53D1}\u{9001}\u{5931}\u{8D25}"), true)
         func pending() -> MacChatBubbleCell? {
             fx.doc.automationVisibleCells.last { $0.cell.content?.pendingClientId != nil }?.cell
         }
@@ -606,8 +606,8 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         let fx = try makeFixture(total: 30)
         drain(1_200)
         let sender = try XCTUnwrap(fx.app.commandSender)
-        let raw = "那个我想说的是就是登录页面那个报错信息现在全是英文的然后用户看不懂所以我们需要把它改成中文然后顺便看一下注册流程里面邮箱校验的那个边界情况还有密码强度提示也一起检查一下"
-        let corrected = "我想说的是：登录页面的报错信息现在全是英文，用户看不懂，所以需要改成中文。另外顺便检查注册流程里邮箱校验的边界情况，以及密码强度提示。"
+        let raw = "\u{90A3}\u{4E2A}\u{6211}\u{60F3}\u{8BF4}\u{7684}\u{662F}\u{5C31}\u{662F}\u{767B}\u{5F55}\u{9875}\u{9762}\u{90A3}\u{4E2A}\u{62A5}\u{9519}\u{4FE1}\u{606F}\u{73B0}\u{5728}\u{5168}\u{662F}\u{82F1}\u{6587}\u{7684}\u{7136}\u{540E}\u{7528}\u{6237}\u{770B}\u{4E0D}\u{61C2}\u{6240}\u{4EE5}\u{6211}\u{4EEC}\u{9700}\u{8981}\u{628A}\u{5B83}\u{6539}\u{6210}\u{4E2D}\u{6587}\u{7136}\u{540E}\u{987A}\u{4FBF}\u{770B}\u{4E00}\u{4E0B}\u{6CE8}\u{518C}\u{6D41}\u{7A0B}\u{91CC}\u{9762}\u{90AE}\u{7BB1}\u{6821}\u{9A8C}\u{7684}\u{90A3}\u{4E2A}\u{8FB9}\u{754C}\u{60C5}\u{51B5}\u{8FD8}\u{6709}\u{5BC6}\u{7801}\u{5F3A}\u{5EA6}\u{63D0}\u{793A}\u{4E5F}\u{4E00}\u{8D77}\u{68C0}\u{67E5}\u{4E00}\u{4E0B}"
+        let corrected = "\u{6211}\u{60F3}\u{8BF4}\u{7684}\u{662F}\u{FF1A}\u{767B}\u{5F55}\u{9875}\u{9762}\u{7684}\u{62A5}\u{9519}\u{4FE1}\u{606F}\u{73B0}\u{5728}\u{5168}\u{662F}\u{82F1}\u{6587}\u{FF0C}\u{7528}\u{6237}\u{770B}\u{4E0D}\u{61C2}\u{FF0C}\u{6240}\u{4EE5}\u{9700}\u{8981}\u{6539}\u{6210}\u{4E2D}\u{6587}\u{3002}\u{53E6}\u{5916}\u{987A}\u{4FBF}\u{68C0}\u{67E5}\u{6CE8}\u{518C}\u{6D41}\u{7A0B}\u{91CC}\u{90AE}\u{7BB1}\u{6821}\u{9A8C}\u{7684}\u{8FB9}\u{754C}\u{60C5}\u{51B5}\u{FF0C}\u{4EE5}\u{53CA}\u{5BC6}\u{7801}\u{5F3A}\u{5EA6}\u{63D0}\u{793A}\u{3002}"
         let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: raw))
         drain(600)
         let fixed = Array(corrected), rawCount = raw.count
@@ -631,7 +631,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         let fx = try makeFixture(total: 30)
         drain(1_200)
         let sender = try XCTUnwrap(fx.app.commandSender)
-        let line = "把登录页的错误提示改成中文，并检查注册流程里邮箱校验的边界情况。"
+        let line = "\u{628A}\u{767B}\u{5F55}\u{9875}\u{7684}\u{9519}\u{8BEF}\u{63D0}\u{793A}\u{6539}\u{6210}\u{4E2D}\u{6587}\u{FF0C}\u{5E76}\u{68C0}\u{67E5}\u{6CE8}\u{518C}\u{6D41}\u{7A0B}\u{91CC}\u{90AE}\u{7BB1}\u{6821}\u{9A8C}\u{7684}\u{8FB9}\u{754C}\u{60C5}\u{51B5}\u{3002}"
         let long = String(repeating: line, count: 3), short = line
         let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: long))
         drain(600)
@@ -821,7 +821,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
             DispatchQueue.global(qos: .userInitiated).async(group: group) {
                 var i = 0
                 while !stop.value {
-                    let rows = (0..<6).map { r in ["指标\(worker)-\(i)-\(r)", "覆盖设备 iOS、Android 以及更多平台 \(r)", "\(i * r)ms"] }
+                    let rows = (0..<6).map { r in ["\u{6307}\u{6807}\(worker)-\(i)-\(r)", "\u{8986}\u{76D6}\u{8BBE}\u{5907} iOS\u{3001}Android \u{4EE5}\u{53CA}\u{66F4}\u{591A}\u{5E73}\u{53F0} \(r)", "\(i * r)ms"] }
                     _ = MacTableLayout(rows: rows, alignments: [.leading, .leading, .trailing])
                     i += 1
                 }
@@ -860,28 +860,28 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         let fx = try makeFixture(total: 20, outbound: { sent.append($0); return true })
         drain(1_000)
         try startTurn(fx, seq: 21)
-        fx.app.messageStore.applyCardMessage(sid, "我看了一下，有两个方案。", reset: true)
+        fx.app.messageStore.applyCardMessage(sid, "\u{6211}\u{770B}\u{4E86}\u{4E00}\u{4E0B}\u{FF0C}\u{6709}\u{4E24}\u{4E2A}\u{65B9}\u{6848}\u{3002}", reset: true)
         drain(300)
         packetInputTotal = -fx.sv.debugWheelAppliedTotal
         var clientId = ""
         let shots = recordFrames(fx) {
             try? ingest(fx, ["type": "agent_message", "seq": 22, "sessionId": sid, "deviceId": dev,
                              "timestamp": "2026-09-01T00:00:03.000Z",
-                             "payload": ["content": "我看了一下，有两个方案。",
-                                         "question": ["id": "q1", "text": "删旧接口吗？", "choices": ["删掉", "保留"]]]])
+                             "payload": ["content": "\u{6211}\u{770B}\u{4E86}\u{4E00}\u{4E0B}\u{FF0C}\u{6709}\u{4E24}\u{4E2A}\u{65B9}\u{6848}\u{3002}",
+                                         "question": ["id": "q1", "text": "\u{5220}\u{65E7}\u{63A5}\u{53E3}\u{5417}\u{FF1F}", "choices": ["\u{5220}\u{6389}", "\u{4FDD}\u{7559}"]]]])
             fx.app.messageStore.endCardTurn(sid)
             drain(500)
             let open = fx.doc.automationVisibleCells.last { $0.key.contains("#q-open") }
             XCTAssertEqual(open?.cell.content?.action?.type, "question", "an open question shows its choices")
             XCTAssertNotNil(open?.cell.content?.body, "lead-in prose and question share one bubble")
-            _ = fx.app.commandSender?.answer(sessionId: sid, questionId: "q1", answer: "删掉")
+            _ = fx.app.commandSender?.answer(sessionId: sid, questionId: "q1", answer: "\u{5220}\u{6389}")
             NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
             drain(500)
             clientId = (sent.last?["payload"] as? [String: Any])?["clientId"] as? String ?? ""
             fx.app.messageStore.beginCardTurn(sid)
             try? ingest(fx, ["type": "user_message", "seq": 23, "sessionId": sid, "deviceId": dev,
                              "timestamp": "2026-09-01T00:00:04.000Z",
-                             "payload": ["content": "删掉", "clientId": clientId, "answerTo": "q1"]])
+                             "payload": ["content": "\u{5220}\u{6389}", "clientId": clientId, "answerTo": "q1"]])
             fx.app.commandSender?.clearPending(sid, clientId: clientId)
             drain(500)
         }
@@ -918,7 +918,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         let fx = try makeFixture(total: 0)
         drain(300)
         try ingest(fx, ["type": "user_message", "seq": 1, "sessionId": sid, "deviceId": dev,
-                        "timestamp": "2026-09-01T00:00:01.000Z", "payload": ["content": "问题"]])
+                        "timestamp": "2026-09-01T00:00:01.000Z", "payload": ["content": "\u{95EE}\u{9898}"]])
         try ingest(fx, ["type": "agent_message", "seq": 2, "sessionId": sid, "deviceId": dev,
                         "timestamp": "2026-09-01T00:00:02.000Z",
                         "payload": ["content": Self.zh + Self.zh, "steps": 3]])

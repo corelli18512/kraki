@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -53,35 +53,35 @@ main{padding:0 14px 50px}.section{scroll-margin-top:64px;margin-top:18px}.sectio
 
 <section class="hero">
   <div class="eyebrow">Kraki Artifact Standard · Draft 01</div>
-  <h1>复杂技术内容，也应该在窄侧栏里清晰可读</h1>
-  <p>这个样例同时展示固定版式、信息层级与多种图形语言。复杂图支持本地缩放和拖动，文字类内容保持纵向阅读节奏。</p>
-  <div class="meta"><span>静态单文件</span><span>无外部依赖</span><span>SVG 可交互</span><span>打印友好</span></div>
+  <h1>Complex technical content should stay readable in a narrow side panel</h1>
+  <p>This sample shows a fixed layout, information hierarchy and several diagram styles together. Complex diagrams support local zoom and drag; text keeps a vertical reading rhythm.</p>
+  <div class="meta"><span>Static single file</span><span>No external dependencies</span><span>Interactive SVG</span><span>Print friendly</span></div>
 </section>
 
 <nav class="quicknav" aria-label="Report sections">
-  <a href="#summary">摘要</a><a href="#architecture">架构 Flow</a><a href="#sequence">Sequence</a><a href="#state">状态机</a><a href="#pipeline">数据管道</a><a href="#data">ER 模型</a><a href="#decision">决策矩阵</a><a href="#roadmap">时间线</a><a href="#template">LLM 规则</a>
+  <a href="#summary">Summary</a><a href="#architecture">Architecture flow</a><a href="#sequence">Sequence</a><a href="#state">State machine</a><a href="#pipeline">Data pipeline</a><a href="#data">ER model</a><a href="#decision">Decision matrix</a><a href="#roadmap">Timeline</a><a href="#template">LLM rules</a>
 </nav>
 
 <main>
 <section class="section" id="summary">
-  <div class="section-head"><span class="num">01</span><div><h2>执行摘要</h2><p>先给结论，再提供证据和细节。</p></div></div>
+  <div class="section-head"><span class="num">01</span><div><h2>Executive summary</h2><p>Conclusion first, then evidence and details.</p></div></div>
   <div class="card">
     <div class="summary-grid">
-      <div class="metric blue"><strong>4</strong><span>核心服务</span></div>
-      <div class="metric green"><strong>99.9%</strong><span>目标可用性</span></div>
-      <div class="metric amber"><strong>180ms</strong><span>P95 延迟</span></div>
-      <div class="metric purple"><strong>3</strong><span>交付阶段</span></div>
+      <div class="metric blue"><strong>4</strong><span>Core services</span></div>
+      <div class="metric green"><strong>99.9%</strong><span>Target availability</span></div>
+      <div class="metric amber"><strong>180ms</strong><span>P95 latency</span></div>
+      <div class="metric purple"><strong>3</strong><span>Delivery phases</span></div>
     </div>
   </div>
-  <div class="callout"><div class="glyph">💡</div><div><strong>推荐结论</strong><p>将报告写成纵向叙事：摘要 → 总图 → 局部流程 → 状态与数据 → 决策和行动项。避免在侧栏中并排放置大段文本。</p></div></div>
+  <div class="callout"><div class="glyph">💡</div><div><strong>Recommendation</strong><p>Write reports as a vertical narrative: summary → overview diagram → detailed flows → state and data → decisions and action items. Avoid placing large blocks of text side by side in a side panel.</p></div></div>
 </section>
 
 <section class="section" id="architecture">
-  <div class="section-head"><span class="num">02</span><div><h2>系统架构 Flow</h2><p>适合系统边界、服务关系和主要请求路径。</p></div></div>
+  <div class="section-head"><span class="num">02</span><div><h2>System architecture flow</h2><p>For system boundaries, service relationships and main request paths.</p></div></div>
   <div class="card">
-    <h3>Marketplace Request Architecture</h3><p>这类复杂总图应使用 SVG，并提供缩放、拖动和 Fit。下方图可直接交互。</p>
+    <h3>Marketplace Request Architecture</h3><p>Complex overview diagrams like this should use SVG with zoom, drag and Fit. The diagram below is interactive.</p>
     <div class="diagram-shell" data-panzoom>
-      <div class="diagram-bar"><strong>Architecture overview</strong><span>拖动画布 · 滚轮缩放</span><button class="zoom-btn" data-action="out">−</button><button class="zoom-btn" data-action="reset">↺</button><button class="zoom-btn" data-action="fit">Fit</button><button class="zoom-btn" data-action="in">＋</button></div>
+      <div class="diagram-bar"><strong>Architecture overview</strong><span>Drag to pan · scroll to zoom</span><button class="zoom-btn" data-action="out">−</button><button class="zoom-btn" data-action="reset">↺</button><button class="zoom-btn" data-action="fit">Fit</button><button class="zoom-btn" data-action="in">+</button></div>
       <div class="diagram-viewport">
         <div class="diagram-canvas">
           <svg viewBox="0 0 720 760" role="img" aria-label="Marketplace architecture flow diagram">
@@ -125,15 +125,15 @@ main{padding:0 14px 50px}.section{scroll-margin-top:64px;margin-top:18px}.sectio
           </svg>
         </div>
       </div>
-      <div class="diagram-note">建议：总图最多 4 个层级、每层 3–5 个节点；边使用单一方向；颜色表达边界，不表达装饰。</div>
+      <div class="diagram-note">Guideline: at most 4 levels in an overview, 3–5 nodes per level; edges flow in one direction; color marks boundaries, not decoration.</div>
     </div>
   </div>
 </section>
 
 <section class="section" id="sequence">
-  <div class="section-head"><span class="num">03</span><div><h2>Sequence Diagram</h2><p>适合展示跨服务时序、同步与异步边界。</p></div></div>
+  <div class="section-head"><span class="num">03</span><div><h2>Sequence Diagram</h2><p>For cross-service timing and sync/async boundaries.</p></div></div>
   <div class="card">
-    <h3>Order placement happy path</h3><p>窄侧栏中允许局部横向滚动，不应压缩到文字不可读。</p>
+    <h3>Order placement happy path</h3><p>Local horizontal scrolling is fine in a narrow side panel; never shrink text until it is unreadable.</p>
     <div class="sequence">
       <div class="sequence-grid">
         <div><div class="actor user">Buyer</div><div class="lifeline"></div></div>
@@ -152,28 +152,28 @@ main{padding:0 14px 50px}.section{scroll-margin-top:64px;margin-top:18px}.sectio
         </div>
       </div>
     </div>
-    <div class="sequence-caption">虚线代表返回；激活条表示服务正在处理。失败分支应拆到独立小节，避免一张图承载所有异常。</div>
+    <div class="sequence-caption">Dashed lines are returns; activation bars mean the service is working. Put failure branches in their own subsections instead of cramming every exception into one diagram.</div>
   </div>
 </section>
 
 <section class="section" id="state">
-  <div class="section-head"><span class="num">04</span><div><h2>状态机</h2><p>适合订单、任务、审批和生命周期说明。</p></div></div>
+  <div class="section-head"><span class="num">04</span><div><h2>State machine</h2><p>For orders, tasks, approvals and lifecycles.</p></div></div>
   <div class="card">
-    <h3>Order lifecycle</h3><p>主路径纵向排列，异常分支并排；每个状态只写进入条件和核心动作。</p>
+    <h3>Order lifecycle</h3><p>The main path runs vertically with exception branches side by side; each state lists only its entry condition and core action.</p>
     <div class="state-flow">
-      <div class="state idle"><strong>Draft</strong><p>用户编辑需求，尚未占用资源。</p></div>
-      <div class="state active"><strong>Reserved</strong><p>锁定预算与候选供给，等待 provisioning。</p></div>
-      <div class="branch"><div class="state done"><strong>Running</strong><p>资源已交付，持续记录 usage。</p></div><div class="state error"><strong>Reservation Failed</strong><p>释放 hold，返回可重试原因。</p></div></div>
-      <div class="state review"><strong>Settling</strong><p>冻结最终 usage，执行双式记账。</p></div>
-      <div class="branch"><div class="state done"><strong>Completed</strong><p>结算完成，可生成 invoice。</p></div><div class="state error"><strong>Disputed</strong><p>冻结 payout，进入人工复核。</p></div></div>
+      <div class="state idle"><strong>Draft</strong><p>The user edits the request; no resources held yet.</p></div>
+      <div class="state active"><strong>Reserved</strong><p>Budget and candidate supply locked, waiting for provisioning.</p></div>
+      <div class="branch"><div class="state done"><strong>Running</strong><p>Resources delivered, usage recorded continuously.</p></div><div class="state error"><strong>Reservation Failed</strong><p>Release the hold and return a retryable reason.</p></div></div>
+      <div class="state review"><strong>Settling</strong><p>Freeze final usage and post double-entry bookkeeping.</p></div>
+      <div class="branch"><div class="state done"><strong>Completed</strong><p>Settled; an invoice can be generated.</p></div><div class="state error"><strong>Disputed</strong><p>Freeze the payout and go to manual review.</p></div></div>
     </div>
   </div>
 </section>
 
 <section class="section" id="pipeline">
-  <div class="section-head"><span class="num">05</span><div><h2>数据管道</h2><p>适合 ETL、事件流、模型推理和批处理。</p></div></div>
+  <div class="section-head"><span class="num">05</span><div><h2>Data pipeline</h2><p>For ETL, event streams, model inference and batch processing.</p></div></div>
   <div class="card">
-    <h3>Usage metering pipeline</h3><p>每阶段突出输入、动作和输出；状态 badge 只表达执行模式。</p>
+    <h3>Usage metering pipeline</h3><p>Each stage highlights input, action and output; status badges only express the execution mode.</p>
     <div class="pipeline">
       <div class="pipe-stage"><div class="pipe-icon" style="background:var(--blue-soft)">📥</div><div><strong>Ingest usage events</strong><small>API gateway + runtime agents</small></div><span class="badge">stream</span></div><div class="connector">↓</div>
       <div class="pipe-stage"><div class="pipe-icon" style="background:var(--purple-soft)">🧹</div><div><strong>Normalize & deduplicate</strong><small>schema validation · idempotency key</small></div><span class="badge">real-time</span></div><div class="connector">↓</div>
@@ -185,57 +185,57 @@ main{padding:0 14px 50px}.section{scroll-margin-top:64px;margin-top:18px}.sectio
 </section>
 
 <section class="section" id="data">
-  <div class="section-head"><span class="num">06</span><div><h2>ER / 数据所有权</h2><p>适合展示关键实体、主外键和边界归属。</p></div></div>
+  <div class="section-head"><span class="num">06</span><div><h2>ER / data ownership</h2><p>For key entities, primary/foreign keys and ownership boundaries.</p></div></div>
   <div class="card">
-    <h3>Core marketplace entities</h3><p>侧栏内优先使用实体卡片，不强求传统横向 ER 图。</p>
+    <h3>Core marketplace entities</h3><p>Prefer entity cards in a side panel rather than forcing a traditional wide ER diagram.</p>
     <div class="entity-grid">
       <div class="entity"><h4>orders</h4><ul><li><strong>id 🔑</strong><code>uuid</code></li><li><span>buyer_org_id</span><code>uuid</code></li><li><span>status</span><code>enum</code></li><li><span>budget_minor</span><code>bigint</code></li></ul></div>
       <div class="entity"><h4>allocations</h4><ul><li><strong>id 🔑</strong><code>uuid</code></li><li><span>order_id ↗</span><code>uuid</code></li><li><span>offer_id ↗</span><code>uuid</code></li><li><span>started_at</span><code>timestamptz</code></li></ul></div>
       <div class="entity"><h4>usage_events</h4><ul><li><strong>event_id 🔑</strong><code>text</code></li><li><span>allocation_id ↗</span><code>uuid</code></li><li><span>quantity</span><code>decimal</code></li><li><span>occurred_at</span><code>timestamptz</code></li></ul></div>
       <div class="entity"><h4>ledger_entries</h4><ul><li><strong>id 🔑</strong><code>uuid</code></li><li><span>usage_event_id ↗</span><code>text</code></li><li><span>account_id</span><code>uuid</code></li><li><span>amount_minor</span><code>bigint</code></li></ul></div>
     </div>
-    <div class="relation-note"><strong>关系：</strong>order 1—N allocation 1—N usage_event 1—N ledger_entry。业务状态归 marketplace；账户余额归 ledger。</div>
+    <div class="relation-note"><strong>Relationships:</strong> order 1—N allocation 1—N usage_event 1—N ledger_entry. Business state belongs to the marketplace; account balances belong to the ledger.</div>
   </div>
 </section>
 
 <section class="section" id="decision">
-  <div class="section-head"><span class="num">07</span><div><h2>决策矩阵</h2><p>适合技术选型、方案比较和 trade-off。</p></div></div>
+  <div class="section-head"><span class="num">07</span><div><h2>Decision matrix</h2><p>For technology choices, option comparisons and trade-offs.</p></div></div>
   <div class="card">
-    <h3>Report delivery options</h3><p>评分只辅助决策，结论必须在表格后明确写出。</p>
-    <div style="overflow:auto"><table class="matrix"><thead><tr><th>方案</th><th>清晰度</th><th>缩放</th><th>远程</th><th>复杂度</th></tr></thead><tbody>
-      <tr><td>PNG 截图</td><td><span class="score mid">2</span></td><td><span class="score bad">1</span></td><td><span class="score good">3</span></td><td><span class="score good">3</span></td></tr>
+    <h3>Report delivery options</h3><p>Scores only support the decision; state the conclusion explicitly after the table.</p>
+    <div style="overflow:auto"><table class="matrix"><thead><tr><th>Option</th><th>Clarity</th><th>Zoom</th><th>Remote</th><th>Complexity</th></tr></thead><tbody>
+      <tr><td>PNG screenshot</td><td><span class="score mid">2</span></td><td><span class="score bad">1</span></td><td><span class="score good">3</span></td><td><span class="score good">3</span></td></tr>
       <tr><td>Screencast</td><td><span class="score mid">2</span></td><td><span class="score bad">1</span></td><td><span class="score good">3</span></td><td><span class="score bad">1</span></td></tr>
       <tr><td>HTML Artifact</td><td><span class="score good">3</span></td><td><span class="score good">3</span></td><td><span class="score good">3</span></td><td><span class="score mid">2</span></td></tr>
     </tbody></table></div>
-    <div class="callout" style="margin-top:11px"><div class="glyph">✓</div><div><strong>Decision</strong><p>文档型内容统一使用 self-contained HTML Artifact；仅在必须操作动态 localhost 应用时考虑其他 transport。</p></div></div>
+    <div class="callout" style="margin-top:11px"><div class="glyph">✓</div><div><strong>Decision</strong><p>Document-style content always uses a self-contained HTML artifact; consider other transports only when a dynamic localhost app must be operated.</p></div></div>
   </div>
 </section>
 
 <section class="section" id="roadmap">
-  <div class="section-head"><span class="num">08</span><div><h2>Roadmap / 时间线</h2><p>适合实施计划、迁移步骤和里程碑。</p></div></div>
+  <div class="section-head"><span class="num">08</span><div><h2>Roadmap / timeline</h2><p>For implementation plans, migration steps and milestones.</p></div></div>
   <div class="card">
     <div class="timeline">
-      <div class="event done"><time>Phase 0 · Complete</time><strong>格式规范与 showcase</strong><p>确定窄侧栏布局、静态安全边界、可交互 SVG 约定。</p></div>
-      <div class="event"><time>Phase 1 · MVP</time><strong>HTML Artifact transport</strong><p>通过 attachment/content-ref 传输单文件 HTML，并在 sandbox iframe 中渲染。</p></div>
-      <div class="event next"><time>Phase 2 · UX</time><strong>Side panel reader controls</strong><p>面板宽度、全屏、页面缩放、目录、下载和更新恢复。</p></div>
-      <div class="event"><time>Phase 3 · Authoring</time><strong>LLM template and validation</strong><p>提供模板、生成提示词和静态检查器，保证报告质量。</p></div>
+      <div class="event done"><time>Phase 0 · Complete</time><strong>Format spec and showcase</strong><p>Settle the narrow side panel layout, static security boundaries and interactive SVG conventions.</p></div>
+      <div class="event"><time>Phase 1 · MVP</time><strong>HTML Artifact transport</strong><p>Transfer single-file HTML via attachment/content-ref and render it in a sandboxed iframe.</p></div>
+      <div class="event next"><time>Phase 2 · UX</time><strong>Side panel reader controls</strong><p>Panel width, full screen, page zoom, table of contents, download and restore on update.</p></div>
+      <div class="event"><time>Phase 3 · Authoring</time><strong>LLM template and validation</strong><p>Provide a template, generation prompt and static checker to ensure report quality.</p></div>
     </div>
   </div>
 </section>
 
 <section class="section" id="template">
-  <div class="section-head"><span class="num">09</span><div><h2>给 LLM 的生成规范</h2><p>固定约束比“做得漂亮”更容易得到稳定质量。</p></div></div>
+  <div class="section-head"><span class="num">09</span><div><h2>Generation rules for LLMs</h2><p>Fixed constraints produce more consistent quality than "make it look nice".</p></div></div>
   <div class="card">
     <h3>Required structure</h3>
     <ol class="rules">
-      <li>输出单个 self-contained HTML 文件；禁止外部 CDN、字体、图片和网络请求。</li>
-      <li>正文按竖向 side panel 设计，目标宽度 420–760px；不要依赖桌面宽屏才能阅读。</li>
-      <li>开头必须有执行摘要、关键指标和明确结论；复杂细节放在后续章节。</li>
-      <li>Flow/Mermaid 最终必须转成内联 SVG；复杂 SVG 必须放入 <code>data-panzoom</code> 容器。</li>
-      <li>一张图只表达一个主题；总图最多 4 层，每层 3–5 个节点，避免交叉连线。</li>
-      <li>颜色用于表达领域或状态，全文保持同一语义；不要使用随机渐变和装饰色。</li>
-      <li>所有表格必须允许横向滚动；所有代码块必须可滚动，不能撑破页面。</li>
-      <li>必须包含结论、风险、未决问题或下一步，不能只给图而没有解释。</li>
+      <li>Output a single self-contained HTML file; no external CDNs, fonts, images or network requests.</li>
+      <li>Design the body for a vertical side panel, target width 420–760px; never require a wide desktop screen to read.</li>
+      <li>Start with an executive summary, key metrics and a clear conclusion; put complex details in later sections.</li>
+      <li>Flow/Mermaid must end up as inline SVG; complex SVG must go in a <code>data-panzoom</code> container.</li>
+      <li>One diagram, one topic; at most 4 levels in an overview, 3–5 nodes per level, avoid crossing edges.</li>
+      <li>Use color for domains or states with consistent meaning throughout; no random gradients or decorative colors.</li>
+      <li>All tables must allow horizontal scrolling; all code blocks must scroll and never overflow the page.</li>
+      <li>Always include conclusions, risks, open questions or next steps; never just diagrams without explanation.</li>
     </ol>
   </div>
   <div class="card">

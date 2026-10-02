@@ -6,7 +6,7 @@ describe('Pi LF-only JSONL framing', () => {
   it('keeps Unicode separators in JSON strings and supports CRLF', () => {
     const stream = new PassThrough(), lines: string[] = [];
     const close = readPiJsonLines(stream, line => lines.push(line));
-    const text = JSON.stringify({ text: '你好\u2028line\u2029😀' });
+    const text = JSON.stringify({ text: '\u4F60\u597D\u2028line\u2029😀' });
     stream.write(text + '\r\n{}\n');
     expect(lines).toEqual([text, '{}']); close();
   });
@@ -14,7 +14,7 @@ describe('Pi LF-only JSONL framing', () => {
   it('decodes multibyte characters split at every byte boundary', () => {
     const stream = new PassThrough(), lines: string[] = [];
     const close = readPiJsonLines(stream, line => lines.push(line));
-    const text = JSON.stringify({ text: '你好😀\u2028' });
+    const text = JSON.stringify({ text: '\u4F60\u597D😀\u2028' });
     for (const byte of Buffer.from(text + '\n')) stream.write(Buffer.from([byte]));
     expect(lines).toEqual([text]); close();
   });

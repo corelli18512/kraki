@@ -62,19 +62,19 @@ describe('Claude AskUserQuestion answers key', () => {
   it('respondToQuestion keys the answer by the question TEXT (not "answer")', async () => {
     const adapter = new ClaudeAdapter();
     let captured: CapturedResult | undefined;
-    const questionText = '关于 primeExpanded 的修复，你想让我按哪个方向动手？';
+    const questionText = '\u5173\u4E8E primeExpanded \u7684\u4FEE\u590D\uFF0C\u4F60\u60F3\u8BA9\u6211\u6309\u54EA\u4E2A\u65B9\u5411\u52A8\u624B\uFF1F';
     const questions = [{ question: questionText, options: [{ label: 'A' }] }];
     const pendingQuestions = new Map<string, PendingLike>([
       ['q1', { resolve: (r) => { captured = r; }, questionId: 'q1', questions }],
     ]);
     asSessions(adapter).set('s1', { pendingPermissions: new Map(), pendingQuestions });
 
-    await adapter.respondToQuestion('s1', 'q1', '你给我做一个详细的带图示的html report', false);
+    await adapter.respondToQuestion('s1', 'q1', '\u4F60\u7ED9\u6211\u505A\u4E00\u4E2A\u8BE6\u7EC6\u7684\u5E26\u56FE\u793A\u7684html report', false);
 
     expect(captured?.behavior).toBe('allow');
     expect(captured?.updatedInput?.questions).toEqual(questions);
     expect(captured?.updatedInput?.answers).toEqual({
-      [questionText]: '你给我做一个详细的带图示的html report',
+      [questionText]: '\u4F60\u7ED9\u6211\u505A\u4E00\u4E2A\u8BE6\u7EC6\u7684\u5E26\u56FE\u793A\u7684html report',
     });
     // The literal-"answer" key that caused the bug must NOT be present.
     expect(Object.keys(captured?.updatedInput?.answers ?? {})).not.toContain('answer');

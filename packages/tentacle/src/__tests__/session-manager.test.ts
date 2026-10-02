@@ -824,7 +824,7 @@ describe('SessionManager', () => {
 
     it('reconstructs a multi-chunk Unicode row when the file has no final newline', () => {
       const { sessionId } = sm.createSession('copilot');
-      const content = `${'界'.repeat(50_000)} final answer`;
+      const content = `${'\u754C'.repeat(50_000)} final answer`;
       sm.appendMessage(sessionId, 'agent_message', JSON.stringify({
         type: 'agent_message', sessionId, payload: { content },
       }));
@@ -836,7 +836,7 @@ describe('SessionManager', () => {
 
       const entry = sm.getSessionList().find(s => s.id === sessionId);
       expect(entry!.preview!.type).toBe('agent');
-      expect(entry!.preview!.text.startsWith('界')).toBe(true);
+      expect(entry!.preview!.text.startsWith('\u754C')).toBe(true);
       expect(entry!.preview!.text).not.toContain('�');
     });
 

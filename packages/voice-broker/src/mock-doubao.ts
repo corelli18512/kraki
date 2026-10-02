@@ -60,16 +60,16 @@ export interface MockDoubaoServer {
 }
 
 const DEFAULT_SCRIPT = [
-  '你好',
-  '这是',
-  '一段',
-  '中英混合',
-  '的',
+  '\u4F60\u597D',
+  '\u8FD9\u662F',
+  '\u4E00\u6BB5',
+  '\u4E2D\u82F1\u6DF7\u5408',
+  '\u7684',
   'dictation',
   'test',
-  '把',
+  '\u628A',
   'useState',
-  '改成',
+  '\u6539\u6210',
   'useReducer',
 ];
 

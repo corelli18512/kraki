@@ -10,7 +10,7 @@ This worktree remains isolated from the main checkout and running Tentacle proce
 
 The authoritative protocol proposal is:
 
-- `docs/session-subscription-protocol-proposal.zh-CN.md`
+- `docs/session-subscription-protocol-proposal.md`
 
 ## Implementation status
 
@@ -310,5 +310,5 @@ Real dev-stack Playwright (`real browser Arm ⇄ real Head ⇄ real Tentacle`):
 - `scripts/pulse-realstack-server.ts`
 - `scripts/validate-e2e-recipient-scaling.ts`
 - `scripts/validate-fanout.ts`
-- `docs/session-subscription-protocol-proposal.zh-CN.md`
+- `docs/session-subscription-protocol-proposal.md`
 - `docs/session-subscription-validation.md`

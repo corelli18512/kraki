@@ -4,8 +4,8 @@ import XCTest
 /// captured transport (see IOSVoiceHoldScenario). Nothing leaves the device.
 final class IOSVoiceComposerUITests: XCTestCase {
     private var app: XCUIApplication!
-    private let spoken = "请把这个功能接入 Kraki 保留原来的输入框"
-    private let corrected = "请把这个功能接入 Kraki，保留原来的输入框。"
+    private let spoken = "\u{8BF7}\u{628A}\u{8FD9}\u{4E2A}\u{529F}\u{80FD}\u{63A5}\u{5165} Kraki \u{4FDD}\u{7559}\u{539F}\u{6765}\u{7684}\u{8F93}\u{5165}\u{6846}"
+    private let corrected = "\u{8BF7}\u{628A}\u{8FD9}\u{4E2A}\u{529F}\u{80FD}\u{63A5}\u{5165} Kraki\u{FF0C}\u{4FDD}\u{7559}\u{539F}\u{6765}\u{7684}\u{8F93}\u{5165}\u{6846}\u{3002}"
 
     override func setUp() {
         continueAfterFailure = false
@@ -56,7 +56,7 @@ final class IOSVoiceComposerUITests: XCTestCase {
         XCTAssertTrue(mic.waitForExistence(timeout: 2))
         XCTAssertEqual(mic.frame.height, resting.height, accuracy: 0.5, "composer back to one row immediately")
         XCTAssertEqual(fieldValue.contains("Kraki"), false, "composer is cleared for the next message")
-        XCTAssertTrue(bubble(containing: "请把这个功能").waitForExistence(timeout: 2), "the sent message shows as a bubble at once")
+        XCTAssertTrue(bubble(containing: "\u{8BF7}\u{628A}\u{8FD9}\u{4E2A}\u{529F}\u{80FD}").waitForExistence(timeout: 2), "the sent message shows as a bubble at once")
         screenshot("bubble-correcting")
         awaitState("staged=1")
         awaitState("staged=0", timeout: 10)
@@ -92,7 +92,7 @@ final class IOSVoiceComposerUITests: XCTestCase {
         field.typeText(" human")
         awaitState("finishing=0", timeout: 8)
         XCTAssertTrue(fieldValue.contains(" human"), fieldValue)
-        XCTAssertFalse(fieldValue.contains("Kraki，"), "late correction must not overwrite typing")
+        XCTAssertFalse(fieldValue.contains("Kraki\u{FF0C}"), "late correction must not overwrite typing")
         awaitState("sent=0")
         screenshot("edit-native-field")
     }
@@ -152,7 +152,7 @@ final class IOSVoiceComposerUITests: XCTestCase {
         let stop = app.buttons["chat-stop"]
         XCTAssertTrue(stop.waitForExistence(timeout: 3))
         let stopFrame = stop.frame
-        field.tap(); field.typeText("先别动注册页")
+        field.tap(); field.typeText("\u{5148}\u{522B}\u{52A8}\u{6CE8}\u{518C}\u{9875}")
         let send = app.buttons["chat-send"]
         XCTAssertTrue(send.waitForExistence(timeout: 2))
         XCTAssertFalse(stop.exists)
@@ -160,7 +160,7 @@ final class IOSVoiceComposerUITests: XCTestCase {
         XCTAssertEqual(send.label, "Steer agent")
         app.buttons["chat-clear"].tap()
         XCTAssertTrue(stop.waitForExistence(timeout: 2), "clearing turns it back into Stop")
-        XCTAssertEqual(fieldValue.contains("先别动"), false)
+        XCTAssertEqual(fieldValue.contains("\u{5148}\u{522B}\u{52A8}"), false)
         stop.tap()
         awaitState("aborts=1")
         screenshot("running-stop")
@@ -203,7 +203,7 @@ final class IOSVoiceComposerUITests: XCTestCase {
         awaitState("staged=1", timeout: 2)
         awaitState("sent=0")
         XCTAssertFalse(fieldValue.contains("Kraki"), "composer cleared at once, like a normal send")
-        XCTAssertTrue(bubble(containing: "请把这个功能").waitForExistence(timeout: 2), "the answer is a correcting bubble")
+        XCTAssertTrue(bubble(containing: "\u{8BF7}\u{628A}\u{8FD9}\u{4E2A}\u{529F}\u{80FD}").waitForExistence(timeout: 2), "the answer is a correcting bubble")
         screenshot("answer-bubble-correcting")
         awaitState("sent=1", timeout: 10)
         XCTAssertEqual(app.staticTexts["voice-test-sent"].label, corrected)

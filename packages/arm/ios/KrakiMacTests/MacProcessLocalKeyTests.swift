@@ -13,7 +13,7 @@ final class MacProcessLocalKeyTests: XCTestCase {
         // it, decrypt with the private key.
         let spki = try crypto.exportPublicKeySPKI(pair.publicKey)
         let imported = try crypto.importPublicKeyFromSPKI(spki)
-        let text = String(repeating: "好的，我来看一下。abc ", count: 80)
+        let text = String(repeating: "\u{597D}\u{7684}\u{FF0C}\u{6211}\u{6765}\u{770B}\u{4E00}\u{4E0B}\u{3002}abc ", count: 80)
         let payload = try crypto.encryptToBlob(text, recipients: [.init(deviceId: "me", publicKey: imported)])
         XCTAssertEqual(try crypto.decryptFromBlob(payload, deviceId: "me", privateKey: pair.privateKey), text)
         let signature = try crypto.signChallenge("nonce-123", privateKey: pair.privateKey)

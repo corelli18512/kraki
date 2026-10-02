@@ -434,7 +434,7 @@ final class TextKitPureSpineTests: XCTestCase {
 
     /// Steps "···" rides the AI bubble's top-leading edge.
     func testStepsButtonSitsAtBubbleTopLeft() throws {
-        let bubble = content("agent_message", seq: 498, body: "一段比较长的回复，用来撑开气泡宽度，确认按钮位置。", steps: 3)
+        let bubble = content("agent_message", seq: 498, body: "\u{4E00}\u{6BB5}\u{6BD4}\u{8F83}\u{957F}\u{7684}\u{56DE}\u{590D}\u{FF0C}\u{7528}\u{6765}\u{6491}\u{5F00}\u{6C14}\u{6CE1}\u{5BBD}\u{5EA6}\u{FF0C}\u{786E}\u{8BA4}\u{6309}\u{94AE}\u{4F4D}\u{7F6E}\u{3002}", steps: 3)
         let cell = TKBubbleCell(frame: CGRect(x: 0, y: 0, width: 390,
                                                height: bubble.cellHeight(cellWidth: 390)))
         cell.configure(bubble, cellWidth: 390)
@@ -1471,7 +1471,7 @@ final class TextKitPureSpineTests: XCTestCase {
 
     /// Trace entries arrive off-spine (seq=0). Before the fix they all shared
     /// ChatMessage.id "session:0", so SwiftUI ForEach collapsed a 5-step turn
-    /// into a single row — the "只有一个 step" bug. After assigning synthetic
+    /// into a single row — the "only one step" bug. After assigning synthetic
     /// seqs, every entry must have a unique id.
     func testTraceEntriesGetUniqueIdsAfterSyntheticSeq() {
         // Simulate 3 tools + 2 narrations = 8 raw entries, all seq=0

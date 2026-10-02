@@ -63,7 +63,7 @@ Source: `packages/tentacle/src/adapters/pi.ts:136,591`.
 
 The adapter and catalog probe use Node readline. On the installed Node 24 runtime it splits U+2028/U+2029 as well as LF. Pi RPC explicitly requires LF-only JSONL framing. A valid JSON record containing these characters becomes multiple unparsable lines, which the adapter discards.
 
-Observed input assistant text `hello\u2028world\u2029你好` disappears; the adapter wrongly injects a finalize round and returns its fallback response instead. A standalone readline reproduction also confirms the split, so this is not a model/SSE fixture issue.
+Observed input assistant text `hello\u2028world\u2029` followed by two CJK characters disappears; the adapter wrongly injects a finalize round and returns its fallback response instead. A standalone readline reproduction also confirms the split, so this is not a model/SSE fixture issue.
 
 Fix direction: use StringDecoder/buffered LF-only splitting, support optional CRLF, and cover both session transport and catalog query.
 

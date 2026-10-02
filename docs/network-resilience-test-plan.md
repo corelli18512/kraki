@@ -1,355 +1,355 @@
-# Kraki 抗网络波动：测试方案（生产级目标）
+# Kraki Network Resilience: Test Plan (Production-Grade Goals)
 
-状态：已实施（2026-09-28），分支 `test/network-resilience`，基于 main `985a310`。结果见第 9 节。
-范围：iOS / Mac 客户端 ↔ Head，Tentacle ↔ Head。Web 端作为第二优先级复用同一套设施。
+Status: implemented (2026-09-28), branch `test/network-resilience`, based on main `985a310`. Results in section 9.
+Scope: iOS / Mac clients ↔ Head, Tentacle ↔ Head. The web client reuses the same infrastructure as a second priority.
 
-## 1. 目标：什么叫“生产级”
+## 1. Goals: what "production-grade" means
 
-用可测量的指标定义，而不是“感觉不掉线”。以下每条都要在自动化测试里有对应断言。
+Defined by measurable metrics, not by "it feels like it doesn't drop". Each item below must have a matching assertion in automated tests.
 
-| # | 指标 | 目标 |
+| # | Metric | Target |
 |---|---|---|
-| G1 | 消息不丢 | 用户看到“已发送/发送中”的输入，在网络最终恢复后 **100%** 送达 agent |
-| G2 | 消息不重 | agent 收到的每个 clientId **恰好一次**（重发靠 clientId 去重） |
-| G3 | 不误报失败 | 断网 ≤ 60 秒、带宽被占满、延迟尖峰：**0 次**“发送失败”，全程无需用户点重试 |
-| G4 | 恢复要快 | 网络恢复后：重连完成 ≤ 5 秒（服务端恢复可达、本机网络无变化时由探测间隔决定）；积压的发送回显 p95 ≤ 5 秒；漏掉的新消息补齐 p95 ≤ 5 秒 |
-| G5 | 死链检测 | 半开连接（对端静默消失）在 ≤ 30 秒内被发现并重连 |
-| G6 | 不误杀 | 链路在传数据（哪怕很慢）时，**0 次**因心跳超时被判死；一次真实断网只产生 **1 次**重连 |
-| G7 | 顺序与完整 | 恢复后消息按 seq 连续显示，无空洞、无乱序、无重复气泡 |
-| G8 | 状态诚实 | “重连中”只在真正断开 ≥ 2 秒时显示；消息状态与事实一致（送达/排队/未确认） |
-| G9 | 资源有界 | 长时间断网（2 小时）期间内存、磁盘、重连频率都有上限，不发热不耗电 |
-| G10 | 进程重启 | App 被杀、Head 重启、Tentacle 重启后，已发出但未确认的输入仍按 G1/G2 送达 |
+| G1 | No lost messages | Input the user sees as "sent/sending" reaches the agent **100%** of the time once the network recovers |
+| G2 | No duplicates | The agent receives each clientId **exactly once** (resends are deduplicated by clientId) |
+| G3 | No false failures | Outages ≤ 60 seconds, saturated bandwidth, latency spikes: **0** "failed to send", no manual retry ever needed |
+| G4 | Fast recovery | After the network recovers: reconnected ≤ 5 seconds (when the server becomes reachable again with no local network change, bounded by the probe interval); backlog send echoes p95 ≤ 5 seconds; missed new messages caught up p95 ≤ 5 seconds |
+| G5 | Dead-link detection | A half-open connection (peer silently gone) is detected and reconnected within ≤ 30 seconds |
+| G6 | No false kills | While the link is carrying data (however slowly), **0** heartbeat-timeout kills; one real outage produces exactly **1** reconnect |
+| G7 | Order and completeness | After recovery, messages are shown in contiguous seq order: no holes, no reordering, no duplicate bubbles |
+| G8 | Honest status | "Reconnecting" is shown only when truly disconnected ≥ 2 seconds; message status matches reality (delivered/queued/unconfirmed) |
+| G9 | Bounded resources | During a long outage (2 hours), memory, disk and reconnect frequency are capped; no heat, no battery drain |
+| G10 | Process restarts | After the app is killed, Head restarts or Tentacle restarts, input that was sent but unconfirmed is still delivered per G1/G2 |
 
-发布门槛：T1 全部场景 + 1000 次随机混沌迭代 0 违例；T2 核心场景全过；T3 8 小时浸泡 0 违例。
+Release gate: all T1 scenarios + 1000 random chaos iterations with 0 violations; all core T2 scenarios pass; T3 8-hour soak with 0 violations.
 
-## 2. 现状：代码里已经能看到的缺口（待测试证实）
+## 2. Current state: gaps visible in the code (to be proven by tests)
 
-来自对 main 的阅读，每条都会有一个“先失败、修后通过”的测试。
+From reading main; each gets a test that "fails first, passes after the fix".
 
-1. **没有自动重试**（对应你观察到的发送失败率高）。`CommandSender` 发出后 20 秒没收到回显就标成“未确认”，只能用户手动点重试。我们在生产诊断里见过 13–52 秒的回显延迟，带宽被占满时 20 秒必然触发。
-2. **Mac 发送被拒时静默无反应**。`sendEncryptedMessage` 在拿不到 agent 设备公钥（例如刚启动/刚重连设备列表还没到）时返回 false，Mac 输入框什么都不做，iOS 弹失败。应该排队而不是拒绝。
-3. **输入在 Head 上不持久**。App→agent 的 `send_input` 在 Head 是非持久转发：agent 离线超过 5 分钟被清理，Head 重启直接丢。
-4. **App 侧 Pulse 发送队列只在内存**。进程被杀后未确认的帧丢失；持久 outbox 会把它恢复成“未确认”，但不会自动重发。
-5. **心跳在拥塞时误判**。Head 30 秒 ping + 固定窗口；链路被大块数据占满时 pong 排不上，连接被当成死的踢掉（本次断线风暴的直接原因）。
-6. **Tentacle 重连固定 3 秒、无退避无抖动**。Head 重启时所有 agent 同时重连（惊群）；长时间断网时每 3 秒一次无意义尝试。
-7. **“重连中”没有去抖**。瞬断也会闪状态。
+1. **No automatic retry** (matching the high send failure rate you observed). `CommandSender` marks a message "unconfirmed" if no echo arrives within 20 seconds after sending, and only a manual retry helps. Production diagnostics have shown echo delays of 13–52 seconds; with saturated bandwidth, 20 seconds is guaranteed to trigger.
+2. **Mac silently does nothing when a send is refused.** `sendEncryptedMessage` returns false when it cannot get the agent device's public key (e.g. right after launch/reconnect before the device list arrives); the Mac composer does nothing while iOS shows a failure. It should queue instead of refusing.
+3. **Input is not persisted on Head.** App→agent `send_input` is a non-persistent forward on Head: dropped if the agent is offline for more than 5 minutes, lost outright when Head restarts.
+4. **The app-side Pulse send queue lives only in memory.** Unacknowledged frames are lost when the process is killed; the persistent outbox restores them as "unconfirmed" but does not resend automatically.
+5. **Heartbeats misjudge under congestion.** Head pings every 30 seconds with a fixed window; when the link is saturated by bulk data the pong cannot get through and the connection is kicked as dead (the direct cause of this reconnect storm).
+6. **Tentacle reconnects every 3 seconds, with no backoff or jitter.** When Head restarts, all agents reconnect at once (thundering herd); during long outages it makes a pointless attempt every 3 seconds.
+7. **"Reconnecting" is not debounced.** Even momentary drops make it flash.
 
-## 3. 测试环境：完全独立，不碰生产
+## 3. Test environment: fully isolated, never touches production
 
 ```
- ┌──────────── 测试宿主（本机 / CI macOS runner）────────────┐
- │                                                            │
- │  客户端（被测）                 故障注入代理           服务端│
- │  ├ 原生无头驱动(Swift)  ──►  ┌──────────────┐        ┌──────┐│
- │  │  真实 WebSocketClient/     │  chaos-proxy │  ──►   │ Head ││
- │  │  PulseManager/CommandSender│  (L4, 可编程) │        │(本地)││
- │  ├ iOS 模拟器 / Kraki Dev ──►│  每条连接独立 │        └──┬───┘│
- │  └ TS mock app（协议级）  ──► │  控制面 HTTP  │           │    │
- │                               └──────▲───────┘           │    │
- │  Tentacle（真实，daemon） ───────────┘ 同一个代理的另一路 ─┘    │
- │     └ Pi CLI + 本地脚本化假模型（不产生任何付费调用）           │
- └────────────────────────────────────────────────────────────┘
+ ┌──────────── Test host (this machine / CI macOS runner) ───────────┐
+ │                                                                    │
+ │  Clients (under test)            Fault-injection proxy     Server  │
+ │  ├ native headless driver (Swift) ──► ┌──────────────┐    ┌──────┐ │
+ │  │  real WebSocketClient/             │  chaos-proxy │──► │ Head │ │
+ │  │  PulseManager/CommandSender        │ (L4, scripted)│   │(local)│ │
+ │  ├ iOS Simulator / Kraki Dev ───────► │ per connection│   └──┬───┘ │
+ │  └ TS mock app (protocol level) ────► │ control HTTP  │      │     │
+ │                                       └──────▲───────┘      │     │
+ │  Tentacle (real daemon) ─────────────────────┘ another leg ─┘     │
+ │     └ Pi CLI + local scripted fake model (no paid calls)          │
+ └────────────────────────────────────────────────────────────────────┘
 ```
 
-- **全部本地**：本地 Head（独立 SQLite）、独立 `KRAKI_HOME`、新建测试账号/设备，不用你的 Kraki 账号、不连 cn/tokyo relay、不读钥匙串里的生产身份（沿用 `scripts/test-native.sh` 的隔离方式）。
-- **agent 用真实 Pi + 假模型**：复用 `pi087-live.integration.test.ts` 的做法，本地 OpenAI 兼容服务按脚本返回（可控制“回复多慢、多长、流式多久、带不带大附件”）。零费用、可重复。
-- **故障注入代理 `chaos-proxy`**（新写，Node，无需 sudo）：夹在每个客户端和 Head 之间、Tentacle 和 Head 之间，逐连接可编程：
-  - 延迟 + 抖动；带宽上限（令牌桶，默认复现 3 Mbps）；单向限速
-  - 黑洞（不关连接、双向静默 = 半开）；单向黑洞
-  - 立即 RST / FIN；在第 N 字节后断开；握手阶段挂起（TCP 已连、TLS/HTTP 升级不回）
-  - 拒绝新连接 N 秒（模拟 relay 不可达）；按时间表切换（“闪断”、“抖动 10 分钟”）
-  - 控制面 HTTP 接口 + 时间线日志（每个故障事件的精确时间戳，供断言对齐）
-- **真实丢包/乱序**（T3）：TCP 代理做不了包级丢包，改用 Linux 容器 `tc netem`（丢包、乱序、重复、突发丢包），以及 macOS Network Link Conditioner 的预设做人工/夜间验证。
+- **Everything local**: a local Head (separate SQLite), a separate `KRAKI_HOME`, freshly created test accounts/devices; never your Kraki account, never the cn/tokyo relays, never the production identity in the keychain (reusing the isolation of `scripts/test-native.sh`).
+- **The agent is real Pi + a fake model**: reusing the approach of `pi087-live.integration.test.ts`, a local OpenAI-compatible service replies from a script (controlling how slow, how long, how long it streams, and whether it includes large attachments). Zero cost, repeatable.
+- **Fault-injection proxy `chaos-proxy`** (new, Node, no sudo needed): sits between every client and Head, and between Tentacle and Head, programmable per connection:
+  - latency + jitter; bandwidth cap (token bucket, reproducing 3 Mbps by default); one-direction throttling
+  - blackhole (connection kept open, silent both ways = half-open); one-direction blackhole
+  - immediate RST / FIN; disconnect after byte N; hang during handshake (TCP connected, TLS/HTTP upgrade never answered)
+  - refuse new connections for N seconds (relay unreachable); switch on a schedule ("blips", "10 minutes of jitter")
+  - a control-plane HTTP API + timeline log (exact timestamps of every fault event, for aligning assertions)
+- **Real packet loss/reordering** (T3): a TCP proxy cannot drop individual packets, so use `tc netem` in a Linux container (loss, reordering, duplication, burst loss), plus macOS Network Link Conditioner presets for manual/nightly verification.
 
-## 4. 观测与判定：不靠肉眼
+## 4. Observation and judgment: not by eye
 
-每次运行产出一份时间线，自动判定 G1–G10：
+Every run produces a timeline that automatically judges G1–G10:
 
-- **账本对账**：驱动端记录每条发送（clientId、发送时间、UI 状态变化）；Tentacle 侧读 `input-client-index.jsonl` 与 `messages.jsonl`；对账得出 丢失 / 重复 / 回显延迟。
-- **入站完整性**：假模型按脚本产出已知序列的 agent 消息；客户端最终消息列表与之逐条比对（seq 连续、无重复、无空洞）。
-- **连接事件**：Head 日志（认证/断开/stale）、客户端 `ws.state`（诊断事件）、代理时间线，三者对齐计算“每次真实故障的重连次数”、“死链发现时间”、“误杀次数”。
-- **UI 状态**（T2）：XCUITest 读取气泡 accessibility 状态与连接指示，记录“失败/未确认/重连中”出现的时刻与时长。
-- 失败时自动保留：代理时间线、三端日志、诊断批次、xcresult。
+- **Ledger reconciliation**: the driver records every send (clientId, send time, UI state changes); on the Tentacle side read `input-client-index.jsonl` and `messages.jsonl`; reconciling them yields losses / duplicates / echo latency.
+- **Inbound completeness**: the fake model produces a known sequence of agent messages from its script; the client's final message list is compared one by one (contiguous seq, no duplicates, no holes).
+- **Connection events**: Head logs (authentication/disconnect/stale), client `ws.state` (diagnostic events) and the proxy timeline are aligned to compute "reconnects per real fault", "dead-link detection time" and "false kills".
+- **UI state** (T2): XCUITest reads bubble accessibility states and the connection indicator, recording when and for how long "failed/unconfirmed/reconnecting" appear.
+- Automatically kept on failure: proxy timeline, logs from all three sides, diagnostic batches, xcresult.
 
-## 5. 场景矩阵
+## 5. Scenario matrix
 
-每个场景：固定步骤 + 明确预期（对应 G#）。两条链路（App↔Head、Tentacle↔Head）分别和同时注入。
+Each scenario: fixed steps + an explicit expectation (mapped to G#). The two links (App↔Head, Tentacle↔Head) are faulted separately and together.
 
-### A. 连接层
-| 场景 | 故障 | 预期 |
+### A. Connection layer
+| Scenario | Fault | Expectation |
 |---|---|---|
-| A1 闪断 | RST，1 秒后恢复 | 1 次重连 ≤3s；发送自动补发；G1 G2 G3 |
-| A2 短断网 | 拒绝连接 15 / 45 / 90 秒 | 期间消息显示“排队中”，恢复后自动送达；90 秒时状态可变为“等待网络”但不是“失败” |
-| A3 半开 | 双向黑洞不关连接 | ≤30s 发现并重连（G5）；期间发出的消息不丢 |
-| A4 单向黑洞 | 仅下行 / 仅上行静默 | 同 A3；不出现“发得出收不到”永久卡死 |
-| A5 握手挂起 | TCP 通、升级/认证不回 | 连接/认证超时后重试（现有 30s/90s），不累积连接 |
-| A6 切网络 | 旧连接变半开 + 新连接立即可用（Wi-Fi→蜂窝） | 立即用新路径，不等旧连接超时；消息不重复 |
-| A7 代理抖动 | 本地代理（xray）重启：所有连接 RST + 3 秒拒绝 | 同 A2 |
-| A8 长断网 | 2 小时 | 退避上限生效，资源有界（G9），恢复后全部送达 |
+| A1 Blip | RST, recovers after 1 second | 1 reconnect ≤3s; sends resent automatically; G1 G2 G3 |
+| A2 Short outage | Refuse connections for 15 / 45 / 90 seconds | Messages show "queued" meanwhile and are delivered automatically after recovery; at 90 seconds the status may become "waiting for network" but never "failed" |
+| A3 Half-open | Blackhole both ways without closing | Detected and reconnected within ≤30s (G5); messages sent meanwhile are not lost |
+| A4 One-way blackhole | Downlink-only / uplink-only silence | Same as A3; never permanently stuck "can send but not receive" |
+| A5 Handshake hang | TCP up, upgrade/authentication never answered | Retry after connect/auth timeout (existing 30s/90s), connections do not pile up |
+| A6 Network switch | Old connection goes half-open + new one immediately available (Wi-Fi→cellular) | Use the new path immediately, without waiting for the old connection to time out; no duplicate messages |
+| A7 Proxy flap | Local proxy (xray) restarts: all connections RST + 3 seconds of refusal | Same as A2 |
+| A8 Long outage | 2 hours | Backoff cap applies, resources bounded (G9), everything delivered after recovery |
 
-### B. 带宽与延迟
-| 场景 | 故障 | 预期 |
+### B. Bandwidth and latency
+| Scenario | Fault | Expectation |
 |---|---|---|
-| B1 窄带 | 3 Mbps + 同时拉 10 MB 附件（复现本次事故） | **0 次误杀**（G6）；聊天消息仍 ≤ 5 秒送达 |
-| B2 延迟尖峰 | RTT 平时 50ms，随机 5–20 秒尖峰 | 不重连、不报失败；回显晚到也正确合并 |
-| B3 高延迟 | 固定 RTT 1.5 秒 + 抖动（卫星/跨境） | 功能全部正常 |
-| B4 极窄带 | 64 kbps（2G） | 小消息可用，心跳不误判 |
-| B5 丢包（netem） | 1% / 5% / 突发 20% | TCP 自己重传，应用层无误报 |
+| B1 Narrow link | 3 Mbps + a concurrent 10 MB attachment pull (reproducing this incident) | **0 false kills** (G6); chat messages still delivered within ≤ 5 seconds |
+| B2 Latency spikes | RTT normally 50ms, random 5–20 second spikes | No reconnects, no failures; late echoes merged correctly |
+| B3 High latency | Fixed 1.5 second RTT + jitter (satellite/cross-border) | Everything works |
+| B4 Very narrow link | 64 kbps (2G) | Small messages usable, heartbeats not misjudged |
+| B5 Packet loss (netem) | 1% / 5% / 20% bursts | TCP retransmits on its own; no false errors at the application layer |
 
-### C. 发送路径（乐观发送）
-| 场景 | 操作 | 预期 |
+### C. Send path (optimistic sending)
+| Scenario | Action | Expectation |
 |---|---|---|
-| C1 断网中发送 | 断开状态连发 5 条 | 立即显示气泡（排队中），恢复后按顺序送达，各一次 |
-| C2 发送瞬间断开 | 帧写出后、ACK 前 RST | 自动重发同一 clientId，agent 去重，恰好一次 |
-| C3 回显丢失 | agent 已收到、回显在路上断 | 重连后回显补到，气泡转为已送达，不重复 |
-| C4 慢回显 | 回显延迟 30 / 60 秒（带宽占满） | 不显示失败；状态保持“发送中/已送达服务器” |
-| C5 发送时设备列表未就绪 | 刚启动/刚重连立即发送 | 排队，不静默丢弃（修复缺口 2） |
-| C6 App 被杀 | 发送后 ACK 前杀进程，重启 | 自动重发，恰好一次（G10） |
-| C7 回答问题 / 权限 / 中止 | 各在断网中操作 | 同 C1，且 answerTo/权限结果语义不变，过期回答不误投 |
-| C8 语音校正中断网 | 校正期间断网 | 校正完成后排队发送，不丢 |
+| C1 Sending while offline | Send 5 messages in a row while disconnected | Bubbles appear immediately (queued), delivered in order after recovery, once each |
+| C2 Disconnect at send time | RST after the frame is written, before the ACK | Automatically resent with the same clientId, deduplicated by the agent, exactly once |
+| C3 Lost echo | Agent received it, the echo is cut on the way back | The echo arrives after reconnecting, the bubble becomes delivered, no duplicate |
+| C4 Slow echo | Echo delayed 30 / 60 seconds (saturated bandwidth) | No failure shown; status stays "sending/delivered to server" |
+| C5 Device list not ready when sending | Send right after launch/reconnect | Queued, not silently dropped (fixes gap 2) |
+| C6 App killed | Kill the process after sending, before the ACK, then restart | Resent automatically, exactly once (G10) |
+| C7 Answers / permissions / abort | Each performed while offline | Same as C1, with answerTo/permission semantics unchanged, and stale answers never misdelivered |
+| C8 Outage during voice correction | Network drops while correcting | Queued and sent after correction finishes, not lost |
 
-### D. 接收路径
-| 场景 | 操作 | 预期 |
+### D. Receive path
+| Scenario | Action | Expectation |
 |---|---|---|
-| D1 流式中断网 | agent 正在流式输出时断 30 秒 | 恢复后状态卡片与最终消息正确，不重复、不缺段（G7） |
-| D2 断网期间 agent 完成多轮 | 断 2 分钟，agent 产出 20 条 | 恢复后补齐，顺序正确 ≤ 5 秒 |
-| D3 后台/前台（iOS） | 进入后台 10 分钟，期间有新消息 | 回前台后补齐；推送通知与消息一致 |
-| D4 多设备 | Mac + iOS 同时，其中一台断网 | 另一台不受影响；恢复端补齐 |
+| D1 Outage while streaming | 30 second outage while the agent is streaming | After recovery the status card and final message are correct, with no duplicates or missing parts (G7) |
+| D2 Agent completes several turns while offline | 2 minute outage, the agent produces 20 messages | Caught up after recovery, in order, within ≤ 5 seconds |
+| D3 Background/foreground (iOS) | 10 minutes in the background with new messages arriving | Caught up after returning to the foreground; push notifications match the messages |
+| D4 Multiple devices | Mac + iOS together, one of them offline | The other is unaffected; the recovered one catches up |
 
-### E. 服务端与 agent 侧
-| 场景 | 操作 | 预期 |
+### E. Server and agent side
+| Scenario | Action | Expectation |
 |---|---|---|
-| E1 Head 重启 | 发送进行中重启 Head | 客户端/agent 带退避重连（无惊群），未确认输入最终送达（修复缺口 3） |
-| E2 Tentacle ↔ Head 断 | agent 链路断 30 秒 / 6 分钟 | App 发送显示“agent 离线，稍后送达”，恢复后送达；6 分钟不因 Head 清理而丢 |
-| E3 Tentacle 重启 | 重启 daemon | 输入不丢不重；会话恢复 |
-| E4 两边同时抖 | 客户端和 agent 链路独立随机故障 | G1–G7 全部成立 |
+| E1 Head restart | Restart Head while sends are in flight | Clients/agents reconnect with backoff (no thundering herd); unconfirmed input is eventually delivered (fixes gap 3) |
+| E2 Tentacle ↔ Head down | Agent link down for 30 seconds / 6 minutes | App sends show "agent offline, will deliver later" and are delivered after recovery; not lost at 6 minutes because of Head cleanup |
+| E3 Tentacle restart | Restart the daemon | No lost or duplicated input; sessions restored |
+| E4 Both sides flapping | Independent random faults on the client and agent links | G1–G7 all hold |
 
-### F. 随机混沌（T1 主体）
-种子化随机故障计划（上述故障类型按分布组合），在其上跑固定工作负载（每 3 秒一条输入、agent 流式回复、偶发附件），每次迭代 5 分钟，**1000 次迭代 0 违例**；失败即给出可复现种子。
+### F. Random chaos (the core of T1)
+A seeded random fault schedule (combining the fault types above by distribution) running a fixed workload (one input every 3 seconds, streaming agent replies, occasional attachments), 5 minutes per iteration, **1000 iterations with 0 violations**; failures report a reproducible seed.
 
-## 6. 分层实施
+## 6. Layered implementation
 
-| 层 | 内容 | 频率 |
+| Layer | Content | Frequency |
 |---|---|---|
-| T0 单元 | 重试状态机、退避、心跳判定（假时钟）；Pulse 端点性质测试补“丢 ACK / 重复 / 乱序”组合 | 每次 CI |
-| T1 协议级混沌 | 本地 Head + 真实 Tentacle(Pi+假模型) + TS mock app + chaos-proxy；场景 A–E 协议版 + F 随机 | 每次 CI（精简集）/ 夜间（1000 次） |
-| T2 原生客户端 | 无头 Swift 驱动（扩展现有 `ReliabilityLoopback`，接真实 Head 而非 mock peer）跑 A–D；iOS 模拟器 + Kraki Dev 的 XCUITest 验证 UI 状态（G8） | 客户端相关 PR / 夜间 |
-| T3 真实网络浸泡 | Linux 容器 netem（丢包/乱序）；Network Link Conditioner 预设；8 小时随机浸泡；回放本次事故剖面（3 Mbps + 大附件） | 发布前 |
-| T4 线上观测 | 诊断数据看板：每设备每小时重连次数、回显延迟分布、未确认比例；作为发布后验收 | 持续 |
+| T0 Unit | Retry state machine, backoff, heartbeat judgment (fake clock); add "lost ACK / duplicate / reorder" combinations to the Pulse endpoint property tests | Every CI run |
+| T1 Protocol-level chaos | Local Head + real Tentacle (Pi + fake model) + TS mock app + chaos-proxy; protocol versions of scenarios A–E + random F | Every CI run (reduced set) / nightly (1000 iterations) |
+| T2 Native clients | Headless Swift driver (extending the existing `ReliabilityLoopback`, connected to a real Head instead of a mock peer) running A–D; XCUITest on iOS Simulator + Kraki Dev verifying UI state (G8) | Client PRs / nightly |
+| T3 Real network soak | netem in a Linux container (loss/reordering); Network Link Conditioner presets; 8-hour random soak; replay of this incident's profile (3 Mbps + large attachment) | Before release |
+| T4 Production observation | Diagnostics dashboard: reconnects per device per hour, echo latency distribution, unconfirmed ratio; used as post-release acceptance | Continuous |
 
-## 7. 实施顺序
+## 7. Implementation order
 
-1. **搭环境**（1）：chaos-proxy + 控制面；本地一键栈（Head + Tentacle + 假模型）；对账器。
-2. **先测出基线**（2）：在未改代码的 main 上跑 A–E，得到每个缺口的“红灯”证据与数字（误杀次数、丢失率、误报失败率）。
-3. **按缺口修复**（3）：优先级 ①自动重试 + 放宽/分级回显超时 ②发送排队不拒绝 ③心跳在有数据流动时不判死 ④Head 持久化 `send_input` ⑤Tentacle 退避+抖动 ⑥状态去抖 ⑦App 侧发送队列持久化。每项修复都以对应场景由红转绿为准。
-4. **接入 CI**（4）：精简集进 PR 门禁（按改动范围触发，遵循现有 `test-scope`），1000 次混沌与浸泡放夜间/发布前，手动触发，不进每次门禁。
+1. **Build the environment** (1): chaos-proxy + control plane; one-command local stack (Head + Tentacle + fake model); reconciler.
+2. **Measure the baseline first** (2): run A–E on unmodified main to get "red" evidence and numbers for every gap (false kills, loss rate, false failure rate).
+3. **Fix gap by gap** (3): priority ① automatic retry + relaxed/tiered echo timeouts ② queue sends instead of refusing ③ heartbeats never kill while data is flowing ④ Head persists `send_input` ⑤ Tentacle backoff + jitter ⑥ status debouncing ⑦ persist the app-side send queue. Each fix is accepted when its scenario turns from red to green.
+4. **Wire into CI** (4): the reduced set becomes a PR gate (triggered by change scope, following the existing `test-scope`); the 1000-iteration chaos run and the soak run nightly/before release, triggered manually, not on every gate.
 
-## 8. 约束
+## 8. Constraints
 
-- 不连生产 relay、不用你的账号与钥匙串身份、不产生付费模型调用、不访问麦克风。
-- 不修改你正在用的客户端与本机 daemon；测试栈使用独立端口与 `KRAKI_HOME`。
-- 本分支只做测试设施与方案；每项产品修复单独提 PR，附带由红转绿的场景证据。
+- Never connect to production relays, never use your account or keychain identity, no paid model calls, no microphone access.
+- Never modify the client you are using or the local daemon; the test stack uses separate ports and `KRAKI_HOME`.
+- This branch contains only test infrastructure and the plan; every product fix gets its own PR with red-to-green scenario evidence.
 
 
-## 9. 结果（2026-09-28）
+## 9. Results (2026-09-28)
 
-测试设施（第 3 节）已落地：
-- `packages/tests/src/chaos/`：故障注入代理、本地服务栈（真实 Head、真实 Tentacle，agent 用确定性的脚本化适配器，零费用）、控制面。
-- `KrakiMacTests/NetworkResilienceTests.swift`：用生产网络栈（AppState/WebSocket/Pulse/CommandSender）跑 21 个场景。
-- `scripts/chaos/run-native.sh`：一键运行，输出每个场景的指标 JSON 和时间线。
+The test infrastructure (section 3) is in place:
+- `packages/tests/src/chaos/`: fault-injection proxy, local service stack (real Head, real Tentacle, with a deterministic scripted adapter as the agent, zero cost), control plane.
+- `KrakiMacTests/NetworkResilienceTests.swift`: runs 21 scenarios on the production networking stack (AppState/WebSocket/Pulse/CommandSender).
+- `scripts/chaos/run-native.sh`: runs everything with one command, outputting per-scenario metrics JSON and timelines.
 
-与计划的差异：agent 用脚本化适配器，没有用真实 Pi 加假模型。网络路径（RelayClient、SessionManager、Head）全部是真实实现，这样更确定、更快。
+Deviation from the plan: the agent is a scripted adapter rather than real Pi with a fake model. The network path (RelayClient, SessionManager, Head) is entirely real, which is more deterministic and faster.
 
-### 基线（main 985a310）→ 修复后
+### Baseline (main 985a310) → after the fixes
 
-| 场景 | 基线 | 修复后 |
+| Scenario | Baseline | After |
 |---|---|---|
-| A2 断网 45 s | 网络恢复后 16 s 才重连 | 0.7 s |
-| A3 半开 | 25 s 发现，但 20 s 已显示“未确认” | 25.6 s 发现，不误报 |
-| A4 仅上行断 | —（新场景）57 s，由 Head 踢掉 | 25.7 s |
-| B1 事故复现（3 Mbps + 旧客户端整份拉 2 MB） | 误杀 4 次，3 条消息 90 s 未确认 | 0 重连，回显 p95 0.88 s |
-| B1b 0.32 Mbps 持续占满 | 误杀、显示“未确认” | 0 重连，最大投递间隔 6.8 s |
-| B2 20 s 延迟尖峰 | 误杀 1 次 | 0 重连 |
-| C6 App 发送后被杀再启动 | 消息丢失 | 1.1 s 送达 |
-| A8 断网 3 min | — | 前 2 min 约 4 s 一次，之后约 15 s 一次（最后一分钟 4 次）|
-| E2b agent 离线 6 min（超过 Head 5 min 清理） | — | 恢复后 21 s 内送达 |
-| F 随机混沌（20 轮） | — | 0 丢、0 重、0 误报 |
+| A2 45 s outage | Reconnected 16 s after the network recovered | 0.7 s |
+| A3 Half-open | Detected at 25 s, but "unconfirmed" already shown at 20 s | Detected at 25.6 s, no false error |
+| A4 Uplink-only outage | — (new scenario) 57 s, kicked by Head | 25.7 s |
+| B1 Incident replay (3 Mbps + old clients pulling 2 MB whole) | 4 false kills, 3 messages unconfirmed for 90 s | 0 reconnects, echo p95 0.88 s |
+| B1b 0.32 Mbps continuously saturated | False kills, "unconfirmed" shown | 0 reconnects, max delivery gap 6.8 s |
+| B2 20 s latency spike | 1 false kill | 0 reconnects |
+| C6 App killed after sending, then relaunched | Message lost | Delivered in 1.1 s |
+| A8 3 min outage | — | About one attempt every 4 s for the first 2 min, then about every 15 s (4 in the last minute) |
+| E2b Agent offline 6 min (beyond Head's 5 min cleanup) | — | Delivered within 21 s after recovery |
+| F Random chaos (20 rounds) | — | 0 lost, 0 duplicated, 0 false errors |
 
-全部 21 个场景通过（合入最新 main 后，种子 329 与 4242 各跑 20 轮随机混沌）：`docs/network-resilience-results/`；基线原始输出：`baseline-main-985a310.txt`。
+All 21 scenarios pass (after merging the latest main, 20 rounds of random chaos each with seeds 329 and 4242): `docs/network-resilience-results/`; raw baseline output: `baseline-main-985a310.txt`.
 
-### 修复（每项都有对应场景由红转绿，另有单元测试）
+### Fixes (each has a scenario that went from red to green, plus unit tests)
 
-1. **Pulse（`@coinfra/pulse` 0.5.1 + vendored Swift）**：对方游标在前进时，不再把在途数据当成丢失整段重发。这是拥塞下断线风暴的放大器：端点模型里 45 s 内旧实现重发 120 帧，新实现为 0。
-2. **Head**：pong 迟到时，如果客户端在 ping 之后还有帧，或者发送缓冲在减少，就不判死链，也不广播 `device_pending`。
-3. **客户端连接**：只有 pong 能了结自己发出的 ping（修复“仅上行断”发现不了的问题）；拥塞时只要仍有真实数据在投递，最多等 300 s；ping 超时 22 s、检查间隔 2 s；重连退避 0.5 s 起步，前 2 min 上限 4 s，然后 15 s，10 min 后 30 s，±20% 抖动；Pulse 某一路流被兄弟流“饿”时容忍到 300 s。
-4. **客户端发送**：重连后、agent 重新上线后、重启后自动重发（同一 `clientId`）；传输层暂时拒绝时排队，不再静默丢弃；“未确认”只按“链路通但 30 s 内没有任何数据投递”计时，满一半时静默重发一次。
-5. **Tentacle**：同一进程内已接收（排队或运行中）的输入被重试时，不再二次派发；重复输入会把已存储的 `user_message` 回显给请求方；重连改为指数退避加抖动（1 s → 30 s），认证成功后才清零；在 `device_greeting.features` 中声明 `idempotent_input`。
-   - 兼容性：客户端只对声明了 `idempotent_input` 的 Tentacle 自动重发已发出过的输入（旧 Tentacle 在输入排队时收到重试可能执行两次）；从未发出过的输入始终可以发送。
-6. **UI**：“重连中”延迟 2 s 显示（`AppState.showsReconnecting`），瞬断不闪。
+1. **Pulse (`@coinfra/pulse` 0.5.1 + vendored Swift)**: while the peer's cursor is advancing, in-flight data is no longer treated as lost and resent wholesale. This was the amplifier of reconnect storms under congestion: in the endpoint model the old implementation resent 120 frames within 45 s, the new one 0.
+2. **Head**: when a pong is late, if the client has sent frames since the ping, or the send buffer is shrinking, the link is not judged dead and `device_pending` is not broadcast.
+3. **Client connection**: only a pong can settle the ping we sent (fixing undetected uplink-only outages); under congestion, wait up to 300 s as long as real data is still being delivered; ping timeout 22 s, check interval 2 s; reconnect backoff starts at 0.5 s, capped at 4 s for the first 2 min, then 15 s, 30 s after 10 min, ±20% jitter; a Pulse stream "starved" by its sibling stream is tolerated up to 300 s.
+4. **Client sending**: automatic resend (same `clientId`) after reconnecting, after the agent comes back online and after restart; transient transport refusals queue instead of being silently dropped; "unconfirmed" is timed only as "link up but no data delivered at all for 30 s", with one silent resend at the halfway point.
+5. **Tentacle**: input already accepted in the same process (queued or running) is not dispatched again when retried; a duplicate input echoes the stored `user_message` back to the requester; reconnects use exponential backoff with jitter (1 s → 30 s), reset only after successful authentication; `idempotent_input` is declared in `device_greeting.features`.
+   - Compatibility: clients only auto-resend already-sent input to Tentacles that declare `idempotent_input` (an old Tentacle that receives a retry while the input is queued may run it twice); input that was never sent can always be sent.
+6. **UI**: "Reconnecting" appears after a 2 s delay (`AppState.showsReconnecting`), so momentary drops do not flash.
 
-### 目标调整（诚实记录）
+### Target adjustments (recorded honestly)
 
-- G4 由“≤3 s”调整为“≤5 s”：服务端恢复可达、本机网络无变化时，由探测间隔决定，最坏约 4.8 s（上限 4 s 加 20% 抖动）。多次实测 0.3–3.9 s。系统网络变化触发立即重连（NWPathMonitor）尚未实现，实现后才能做到秒级。
-- 尾部丢包（连接内、发送端随后空闲）：修复需要 2 个心跳周期（≤30 s）而不是 1 个。这是为了不在拥塞时误重发做的取舍。
+- G4 changed from "≤3 s" to "≤5 s": when the server becomes reachable again with no local network change, it is bounded by the probe interval, worst case about 4.8 s (4 s cap plus 20% jitter). Measured repeatedly at 0.3–3.9 s. Immediate reconnect on system network changes (NWPathMonitor) is not implemented yet; only then can it get to about a second.
+- Tail loss (within a connection, with the sender idle afterwards): the fix takes 2 heartbeat cycles (≤30 s) instead of 1. This trade-off avoids false resends under congestion.
 
-### 尚未覆盖 / 已知限制
+### Not yet covered / known limitations
 
-- ~~URLSession 的 WebSocket 拿不到字节级进度，单个超大帧会被判为死链~~：已由第 10 节的消息切片解决。
-- 上行断但下行持续有数据时，客户端最多等 300 s；这种情况 Head 约 60 s 内会断开。
-- ~~D3 iOS 前后台、D4 多设备~~：见第 11 节。未做：T3 netem 包级丢包/乱序和 8 h 浸泡、Web 客户端、TS mock-app 的协议级混沌。
-- ~~Head 依赖的 `better-sqlite3` 11.x 在较新的 Node 24（24.20/24.21，macOS 和 Linux 都会）上回收语句对象时触发原生断言崩溃~~：第 10 节的改动中已把 Head 升到 13.0.3（与 `tests` 包一致；自带 linux/darwin 预编译二进制，要求 Node ≥ 22）。
-- coinfra 的推送发布会因 crypto/payments 没有配置可信发布而失败（原有问题）；`@coinfra/pulse` 0.5.1 通过新增的单独发布入口发出。
+- ~~URLSession's WebSocket exposes no byte-level progress, so a single very large frame is judged a dead link~~: solved by message fragmentation in section 10.
+- With the uplink down but data still flowing downlink, the client waits up to 300 s; Head disconnects within about 60 s in this case.
+- ~~D3 iOS background/foreground, D4 multiple devices~~: see section 11. Not done: T3 netem packet-level loss/reordering and the 8 h soak, the web client, protocol-level chaos with the TS mock app.
+- ~~Head's `better-sqlite3` 11.x hits a native assertion crash when finalizing statements on newer Node 24 (24.20/24.21, on both macOS and Linux)~~: Head was upgraded to 13.0.3 in the section 10 changes (matching the `tests` package; ships linux/darwin prebuilt binaries, requires Node ≥ 22).
+- coinfra's push release fails because crypto/payments have no trusted publishing configured (pre-existing); `@coinfra/pulse` 0.5.1 was published through a newly added separate release entry point.
 
 ### CI
 
-- PR：`Network resilience (fast)`，约 10 个场景加服务栈冒烟，由 `resilience` 范围触发（Swift 客户端、Head、Tentacle、crypto、protocol、tests、scripts/chaos）。
-- 夜间和手动：`network-resilience.yml` 跑全部 21 个场景加随机混沌（默认 50 轮，种子为运行编号，可复现）。
+- PR: `Network resilience (fast)`, about 10 scenarios plus a service-stack smoke test, triggered by the `resilience` scope (Swift client, Head, Tentacle, crypto, protocol, tests, scripts/chaos).
+- Nightly and manual: `network-resilience.yml` runs all 21 scenarios plus random chaos (50 rounds by default, seeded with the run number, reproducible).
 
 
-## 10. 大消息切片（2026-09-29）
+## 10. Large-message fragmentation (2026-09-29)
 
-问题：原生 WebSocket 看不到“正在接收”的字节进度，一条大消息必须整条收完。0.32 Mbit/s 下约 1 MB 的消息要传 45 s 以上，客户端 22 s 就判死链并重连，重连后再从头传，永远传不完。
+Problem: a native WebSocket exposes no "currently receiving" byte progress, so a large message must be received whole. At 0.32 Mbit/s a message of about 1 MB takes more than 45 s, while the client judges the link dead at 22 s and reconnects, then starts over, and it never finishes.
 
-基线（main 65f64cd）：G1 下行 1 MB，120 s 内未送达，ping 超时重连 4 次；G2 上传约 700 KB 图片，测试进程异常退出。原始输出见 `network-resilience-results/fragments-baseline-main.txt`。
+Baseline (main 65f64cd): G1 1 MB downlink not delivered within 120 s, 4 ping-timeout reconnects; G2 uploading an image of about 700 KB made the test process exit abnormally. Raw output in `network-resilience-results/fragments-baseline-main.txt`.
 
-做法（Head 只做一处小改动，不需要新版 Pulse）：
-- **切片**（`@kraki/protocol` 的 `fragments.ts`，Swift 端 `PayloadFragments.swift`）：超过 64 KB 的 ASCII 载荷切成 32 KB 一片，每片是一条独立的 Pulse 消息；接收端按 id 重组，内存有上限（48 MB，10 分钟过期），对端重启时清空。Head 照常透明转发。
-- **协商**：Tentacle 在问候里声明 `fragments`，App 回一条 `client_features` 表示能重组。Tentacle 只给声明过的 App 发切片（对其他 App 照发整条）；App 也只给声明了 `fragments` 的 Tentacle 发切片。大的可合并消息同样切片，但切片不带合并键。
-- **上传流量控制**：只切片不够，因为系统发送缓冲很大，App 自己的 ping 会排在整段上传之后。所以 App 同时最多有 100 KB 未被 Relay 确认，后续消息在队列里保持顺序。
-- **Relay 及时确认**：Pulse 接收端平时只在自己发数据或 15 s 空闲心跳时才确认。Head 现在每收到 64 KB 就回一个带当前游标的心跳帧，并在 `auth_ok` 里声明 `pulseAckBytes`。只有认证时声明了 `pulseProgressAck` 的设备才会收到这种心跳：旧版 Pulse 看到落后的游标会整段重发。App 只有在 Head 声明了该能力时才启用流量控制，连旧 Head 时照旧把切片一次全部发出。
+Approach (only one small Head change, no new Pulse version needed):
+- **Fragmentation** (`fragments.ts` in `@kraki/protocol`, `PayloadFragments.swift` on the Swift side): ASCII payloads over 64 KB are split into 32 KB fragments, each an independent Pulse message; the receiver reassembles by id with bounded memory (48 MB, 10 minute expiry), cleared when the peer restarts. Head forwards them transparently as usual.
+- **Negotiation**: Tentacle declares `fragments` in its greeting, and the app replies with `client_features` to say it can reassemble. Tentacle only sends fragments to apps that declared it (others still get whole messages); the app likewise only sends fragments to Tentacles that declared `fragments`. Large coalescable messages are fragmented too, but fragments carry no coalescing key.
+- **Upload flow control**: fragmentation alone is not enough, because the system send buffer is large and the app's own ping would queue behind the whole upload. So the app keeps at most 100 KB unacknowledged by the relay at a time; later messages stay in order in the queue.
+- **Timely relay acknowledgement**: a Pulse receiver normally acknowledges only when it sends data itself or on the 15 s idle heartbeat. Head now replies with a heartbeat frame carrying the current cursor for every 64 KB received, and declares `pulseAckBytes` in `auth_ok`. Only devices that declared `pulseProgressAck` at authentication receive these heartbeats: older Pulse versions resend everything when they see a lagging cursor. The app only enables flow control when Head declares the capability; with an old Head it still sends all fragments at once.
 
-结果：G1 零重连，约 87 s 送达（接近链路极限）；G2 零重连，约 86 s 往返；全部 23 个场景通过（种子 777，20 轮随机混沌）：`network-resilience-results/fragments-full-matrix-seed777.txt`。
+Result: G1 zero reconnects, delivered in about 87 s (close to the link limit); G2 zero reconnects, round trip about 86 s; all 23 scenarios pass (seed 777, 20 rounds of random chaos): `network-resilience-results/fragments-full-matrix-seed777.txt`.
 
-另外：CI 上反复出现 Head 测试进程在退出时崩溃（better-sqlite3 11.x + Node 24.21 的回收缺陷，崩溃位置随进程内对象分布而变化）。已把 Head 的 `better-sqlite3` 升到 13.0.3，同时消除了生产隐患。部署新 Head 时，服务器会使用自带的预编译二进制。
+Also: the Head test process repeatedly crashed on exit in CI (a finalization bug in better-sqlite3 11.x + Node 24.21; the crash site varies with the in-process object layout). Head's `better-sqlite3` was upgraded to 13.0.3, which also removes a production risk. When the new Head is deployed, the server uses the bundled prebuilt binary.
 
-已知限制：同一条 TCP 连接上存在队头阻塞。0.32 Mbit/s 下，大消息传输期间发出的聊天回显，要排在这条大消息后面才能到（G1 中约 87 s）。要改善，需要 Relay 在发送时让实时流优先于大块数据，属于后续工作。
+Known limitation: head-of-line blocking on a single TCP connection. At 0.32 Mbit/s, chat echoes sent during a large message transfer only arrive after that message (about 87 s in G1). Improving this needs the relay to prioritize the live stream over bulk data when sending; future work.
 
 
-## 11. 多设备与前后台（2026-09-29）
+## 11. Multiple devices and background/foreground (2026-09-29)
 
-新增场景（第二条 App 链路 `app2`，由独立的故障代理控制）：
-- **D3 前后台**：发出消息后立即进后台（主动断开连接），agent 在这期间继续回复，20 s 后回到前台。
-  - 基线：0.05 s 就重连上了，但界面仍然闪了“重连中”。原因是后台主动断开期间，2 s 去抖计时器照样到点。这很可能就是用户看到“隔一段时间就显示重连中”的来源之一：iOS 每次回到前台都会闪一下。
-  - 修复：`AppState.isInBackground` 期间不算“重连中”，回到前台时重新开始 2 s 计时。修复后不再闪，消息恰好送达一次，补齐 < 0.01 s。
-- **D4 一台断网**：B 断网 30 s，A 继续聊天，零重连，回显 p95 0.17 s。B 恢复后 1.0 s 内补齐 A 的消息和 agent 的回复，没有重复行。
-- **D4 双方同时发、一方链路反复断开**：两台设备的全部输入都恰好送达一次，最终两台设备的会话一致。
+New scenarios (a second app link `app2`, controlled by its own fault proxy):
+- **D3 Background/foreground**: go to the background right after sending (deliberately closing the connection), the agent keeps replying meanwhile, and return to the foreground after 20 s.
+  - Baseline: reconnected in 0.05 s, but the UI still flashed "Reconnecting". The cause: during the deliberate background disconnect, the 2 s debounce timer still fired. This is very likely one source of users seeing "Reconnecting every so often": iOS flashed it every time it returned to the foreground.
+  - Fix: no "Reconnecting" while `AppState.isInBackground`, and the 2 s timer restarts on returning to the foreground. After the fix it no longer flashes, messages are delivered exactly once, catch-up < 0.01 s.
+- **D4 One device offline**: B is offline for 30 s while A keeps chatting, zero reconnects, echo p95 0.17 s. Within 1.0 s after recovering, B catches up on A's messages and the agent's replies, with no duplicate rows.
+- **D4 Both send, one link flapping repeatedly**: all input from both devices is delivered exactly once, and both devices end with identical conversations.
 
-模拟器 / Mac 测试宿主能覆盖 App 自身的前后台逻辑。真机上被系统长时间挂起、后台推送唤醒等行为测不到，仍需真机抽查。
+The Simulator / Mac test host covers the app's own background/foreground logic. Real-device behavior such as long system suspension and background push wake-ups cannot be tested here and still needs on-device spot checks.
 
-## 12. Web 客户端（2026-09-29）
+## 12. Web client (2026-09-29)
 
-运行方式：用真实构建的 Web 客户端（Chromium 无头模式，Playwright），连同一套本地故障栈（Head、真实 Tentacle、故障代理）。
-- 脚本：`scripts/chaos/run-web.sh`
-- 配置：`playwright.resilience.config.ts`
-- 用例：`e2e/resilience/network.spec.ts`
-- CI：新增 Linux 任务“Network resilience (web)”，改动 Web、协议、Tentacle、Head 或故障栈时运行，约 5 分钟。
+How it runs: the real built web client (headless Chromium, Playwright), against the same local fault stack (Head, real Tentacle, fault proxy).
+- Script: `scripts/chaos/run-web.sh`
+- Config: `playwright.resilience.config.ts`
+- Specs: `e2e/resilience/network.spec.ts`
+- CI: a new Linux job "Network resilience (web)", run when web, protocol, Tentacle, Head or the fault stack change, about 5 minutes.
 
-场景和结果如下。“修复前”是 main 4e6ca01 的表现；原始数据见 `network-resilience-results/web-baseline-vs-fix.md`。
+Scenarios and results below. "Before" is the behavior of main 4e6ca01; raw data in `network-resilience-results/web-baseline-vs-fix.md`.
 
-| 场景 | 修复前 | 修复后 |
+| Scenario | Before | After |
 |---|---|---|
-| W0 健康 | 通过 | 通过 |
-| W1 瞬断（1 次 RST） | 闪出“Reconnecting…” | 0.8 s 恢复，不再闪 |
-| W2 断网 60 s | 重连 5 次（约 31 s）后放弃，全屏弹出 “Disconnected / Connect now”，必须手动点击 | 一直自动重连，恢复后 3–5 s 内送达，无弹窗 |
-| W3 半开连接 | 35–52 s 才发现死链；消息被误标为 “Not delivered”，但其实已经送达 | 23.5 s 发现死链；不误标 |
-| W4 1 MB 消息，0.32 Mbit/s | 回显排在大消息后面，20 s 就误标 “Not delivered” | 0 次重连；87 s 送达；不误标 |
-| W5 有未确认消息时刷新页面 | 刷新后消息标为失败，不会送达，只能手动重试 | 自动重发（同一 clientId），恰好送达一次 |
+| W0 Healthy | Pass | Pass |
+| W1 Blip (1 RST) | Flashed "Reconnecting…" | Recovered in 0.8 s, no flash |
+| W2 60 s outage | Gave up after 5 reconnects (about 31 s) and showed a full-screen "Disconnected / Connect now" that required a manual click | Reconnects automatically forever, delivered within 3–5 s after recovery, no modal |
+| W3 Half-open connection | Dead link detected only after 35–52 s; the message was wrongly marked "Not delivered" though it was actually delivered | Dead link detected at 23.5 s; no false mark |
+| W4 1 MB message, 0.32 Mbit/s | Echo queued behind the large message, falsely marked "Not delivered" at 20 s | 0 reconnects; delivered in 87 s; no false mark |
+| W5 Page reload with unconfirmed messages | After reload the message was marked failed, never delivered, manual retry only | Resent automatically (same clientId), delivered exactly once |
 
-修复内容（只改 Web 客户端，协议和服务端不动）：
-- **传输层（`transport.ts`）**
-  - 永不放弃重连。退避策略与原生一致：前 2 分钟从 0.5 s 起翻倍，封顶 4 s；到 5 分钟前每 15 s 一次；之后每 30 s 一次；抖动 ±20%。
-  - 退避只在认证成功后重置。如果中继接受连接后立刻断开，不会每 0.5 s 猛打一次。
-  - 浏览器触发 `online` 或页面回到前台时立即重连。
-  - 已认证的连接 22 s 内没有收到任何帧，就判定为死链并丢弃（每 10 s 发一次 ping）。
-  - 握手 10 s 超时。
-- **界面**
-  - 断线超过 2 s 才显示 “Reconnecting…”（`useShowsReconnecting`）。
-  - 连上过一次之后，不再弹全屏阻断弹窗。首次连接失败时仍然显示 “Connect now”。
-- **大消息切片**：Web 端能重组 `kfrag` 片段，并在 Tentacle 声明支持 `fragments` 时回一条 `client_features`。这样慢链路上一直有帧到达，22 s 的死链判定不会误伤。
-- **待发消息（outbox）**
-  - 确认计时只统计“链路活着，且确实停滞”的时间，上限 30 s。以下情况不计时：链路疑似已死（12 s 没收到帧），或者还有数据在持续到达（回显可能排在后面）。（注：#334 的初版实现并没有真正做到这一点，见 §13 的浸泡测试发现。）
-  - 刷新页面后恢复的消息，以及 Tentacle 重新发来问候时仍未确认的消息，会被标记为待重发。
-    - Tentacle 声明了 `idempotent_input`：自动用同一个 clientId 重发（Tentacle 会去重）。
-    - 旧版 Tentacle：刷新后恢复的消息标为 “Not delivered”，由用户决定；链路上还在途的消息照常等回显，不因 Tentacle 重新问候而被标失败。
+Fixes (web client only; protocol and server unchanged):
+- **Transport (`transport.ts`)**
+  - Never give up reconnecting. Backoff matches native: doubling from 0.5 s for the first 2 minutes, capped at 4 s; every 15 s until 5 minutes; every 30 s after that; ±20% jitter.
+  - Backoff resets only after successful authentication, so a relay that accepts and immediately drops connections is not hammered every 0.5 s.
+  - Reconnect immediately when the browser fires `online` or the page returns to the foreground.
+  - An authenticated connection that receives no frame for 22 s is judged dead and dropped (a ping is sent every 10 s).
+  - 10 s handshake timeout.
+- **UI**
+  - "Reconnecting…" only after more than 2 s disconnected (`useShowsReconnecting`).
+  - After connecting once, the full-screen blocking modal never appears again. "Connect now" is still shown when the first connection fails.
+- **Large-message fragmentation**: the web client can reassemble `kfrag` fragments and replies with `client_features` when Tentacle declares `fragments`. Frames then keep arriving on slow links, so the 22 s dead-link check does not fire falsely.
+- **Pending messages (outbox)**
+  - The confirmation timer only counts time when "the link is alive and genuinely stalled", capped at 30 s. It does not count while the link seems dead (no frame for 12 s) or while data is still arriving (the echo may be queued behind it). (Note: the first implementation in #334 did not actually achieve this; see the soak findings in §13.)
+  - Messages restored after a page reload, and messages still unconfirmed when Tentacle sends a new greeting, are marked for resending.
+    - Tentacle declares `idempotent_input`: resent automatically with the same clientId (Tentacle deduplicates).
+    - Older Tentacles: messages restored after reload are marked "Not delivered" and left to the user; messages still in flight wait for their echo as usual and are not marked failed just because Tentacle greeted again.
 
-尚未覆盖：
-- 无痕模式、Safari 和 Firefox。
-- Service Worker 离线页。
-- 移动端浏览器被系统挂起。
+Not yet covered:
+- Private browsing, Safari and Firefox.
+- A Service Worker offline page.
+- Mobile browsers being suspended by the system.
 
-## 13. 包级故障与长时间浸泡（CI，2026-09-29）
+## 13. Packet-level faults and long soaks (CI, 2026-09-29)
 
-- 本地不使用 sudo。包级故障只在 GitHub 的 Linux runner 上跑：`scripts/chaos/netem.sh` 用 `tc netem` 作用在回环网卡上，按端口过滤，只影响对应的故障链路（App 链路、Tentacle 链路，双向都受影响）。
-- 为了让丢包更接近真实网络，把 MTU 设为 1500，并关闭 TSO/GSO/GRO；否则一个“包”就是整个 WebSocket 帧。
-- 用例在 `e2e/resilience/netem.spec.ts`。PR 的 Web 任务会跑 W0–W5、N1–N4，以及一次 5 分钟的浸泡。夜间任务 `network-resilience.yml`（web-soak）跑 30 分钟浸泡。
+- No sudo locally. Packet-level faults run only on GitHub's Linux runner: `scripts/chaos/netem.sh` applies `tc netem` to the loopback interface, filtered by port so only the corresponding fault links are affected (App link, Tentacle link, both directions).
+- To make loss closer to real networks, the MTU is set to 1500 and TSO/GSO/GRO are disabled; otherwise one "packet" is a whole WebSocket frame.
+- Specs live in `e2e/resilience/netem.spec.ts`. The PR web job runs W0–W5, N1–N4 and one 5-minute soak. The nightly `network-resilience.yml` job (web-soak) runs a 30-minute soak.
 
-| 场景 | 故障 | 结果（CI） |
+| Scenario | Fault | Result (CI) |
 |---|---|---|
-| N1 移动网络 | 延迟 60 ms ±30 ms，丢包 3%，乱序 5% | 回显 p95 0.35 s，0 次重连 |
-| N2 丢包突发 | 30% 丢包，持续 40 s，期间继续发送 | 全部恰好一次送达，p95 17 s，不误标 |
-| N3 两条链路都丢包，外加 300 KB 回复 | App：100 ms，2%；Tentacle：150 ms，2% | 0 次重连，不误标；p50 在 0.7–22 s 之间波动（见下） |
-| N4 很差的链路 | 延迟 300 ms ±100 ms，丢包 10% | p95 1.8 s，0 次重连 |
-| S1 随机浸泡（带种子） | 链路重置、黑洞 5–35 s、断网 5–60 s、限速、netem 配置、agent 大消息、页面刷新 | 5 分钟：69 条消息全部恰好一次送达，从未误标，JS 堆有界 |
+| N1 Mobile network | 60 ms ±30 ms latency, 3% loss, 5% reordering | Echo p95 0.35 s, 0 reconnects |
+| N2 Loss burst | 30% loss for 40 s while sending continues | Everything delivered exactly once, p95 17 s, no false marks |
+| N3 Loss on both links plus a 300 KB reply | App: 100 ms, 2%; Tentacle: 150 ms, 2% | 0 reconnects, no false marks; p50 fluctuates between 0.7–22 s (see below) |
+| N4 Very poor link | 300 ms ±100 ms latency, 10% loss | p95 1.8 s, 0 reconnects |
+| S1 Seeded random soak | Link resets, 5–35 s blackholes, 5–60 s outages, throttling, netem profiles, large agent messages, page reloads | 5 minutes: all 69 messages delivered exactly once, never falsely marked, JS heap bounded |
 
-说明：
-- 内核不允许在树里有多个 netem 时使用 `duplicate`。TCP 会在应用层之前丢掉重复报文段，所以不影响覆盖面。
-- N3 的波动来自已知的队头阻塞：回显排在 300 KB 回复后面，而这条回复要在两条丢包链路上靠 TCP 重传慢慢传完。它不会造成误判，也不丢消息，但会让确认变慢。后续可以考虑让大体积的 agent 输出走 bulk 流，避免挡住聊天回显。
-- 浸泡带种子（`CHAOS_SEED`，默认是运行编号），失败时可以复现：`KRAKI_SOAK_MINUTES=30 CHAOS_SEED=<n>`。本地不开 netem 时只注入代理层故障。
+Notes:
+- The kernel does not allow `duplicate` with multiple netems in the tree. TCP drops duplicate segments before the application layer, so coverage is unaffected.
+- N3's fluctuation comes from the known head-of-line blocking: the echo queues behind the 300 KB reply, which crawls through TCP retransmission over two lossy links. It causes no misjudgments or lost messages, only slower confirmation. Later we could route large agent output over the bulk stream so it does not block chat echoes.
+- The soak is seeded (`CHAOS_SEED`, defaulting to the run number) so failures can be reproduced: `KRAKI_SOAK_MINUTES=30 CHAOS_SEED=<n>`. Without netem locally, only proxy-level faults are injected.
 
-### 13.1 浸泡测试发现并修复的问题
+### 13.1 Problems found by the soak and fixed
 
-前几轮 5 分钟浸泡（种子 1300、2001、2003）出现了误标“Not delivered”，其中一次**真的丢了 9 条消息**。逐个定位后修复如下，每个都有先红后绿的测试：
+The first few 5-minute soaks (seeds 1300, 2001, 2003) produced false "Not delivered" marks, and one of them **actually lost 9 messages**. After locating each one, the fixes are below, each with a red-then-green test:
 
-1. **Web 确认计时是“到点看一眼”，不是累计**（种子 1300）
-   - 现象：消息发进 26 s 的黑洞，重连 3 s 后积压还在补齐，这时到了 30 s 截止时间，而链路“恰好”显示正常，于是被标失败。
-   - 修复：改成和原生一样，按秒累计“停滞时间”，只在链路活着、设备在线、并且没有数据在到达时才计时。每一步最多计 2 s，避免后台标签页定时器被节流时一次跳 1 分钟。计到一半时，对支持 `idempotent_input` 的 Tentacle 静默重发一次。
-   - 测试：`outbox.test.ts` 新增 4 个用例，其中包括与种子 1300 完全相同的时序；旧实现下 3 个失败。
-2. **Web 的“链路忙”窗口是 3 s，原生是 30 s**
-   - 现象：在丢包链路上，TCP 重传退避本身就会造成几秒的空档，Web 计时因此比原生早很多开始累计。
-   - 修复：Web 也改为 30 s。另外把两件事分开：“忙”只暂停失败计时，不再推迟重发。否则刷新后恢复的消息要等 30 s 才会发出，W5 从 0.3 s 退化到了 30 s；拆开后 W5 恢复为 0.26 s。
-3. **Tentacle 重连后的广播问候没有带 `features`**（种子 2003：丢 9 条）。这是根因。
-   - 现象：Tentacle 有两种问候。App 加入时的单播问候带 `features`，Tentacle 自己每次重连后的广播问候却不带。客户端收到广播后，就认为这个 Tentacle 既不去重也不支持切片，结果是：
-     - 未确认的消息不再自动重发；
-     - 刷新后恢复的消息被判为失败，永远不会发出；
-     - Tentacle 重连会清空各 App 声明过的 features，而客户端只在看到 `fragments` 时才重新声明，所以之后不再发切片。
-   - 修复：
-     - Tentacle：两种问候共用同一份 payload。
-     - Web 和原生：问候里没有 `features` 字段时，保留已知的 features（从没见过 features 的设备才视为旧版）。Tentacle 设备重新加入时，Web 也会重新声明 `client_features`（原生原本就会）。
-   - 测试：
-     - 新场景 W6（刷新时有未确认消息，随后 Tentacle 重连）。在 main 上稳定复现丢消息；只修 Web、Tentacle 仍用已发布版本的行为时通过；两边都修也通过。
-     - Tentacle、Web、原生各有一个单元测试，旧代码下都失败。
-   - 发布状态：Tentacle 这个问题已经在 CLI v0.33.4 中发布，但目前已发布的客户端都还不读 `features`，所以暂时没有用户受影响。在发布带 #329/#334 客户端改动的原生或 Web 版本之前，需要先有这个修复。
-4. **测试脚本自身的问题**：某个故障动作不能执行时（已有故障在进行），会顺延成“agent 大消息”，导致大消息占到约 15% 的步骤（5 分钟约 6 MB），和设计的约 3% 不符。已改为按权重选择动作，不适用时就空闲。
+1. **The web confirmation timer "checked at the deadline" instead of accumulating** (seed 1300)
+   - Symptom: a message was sent into a 26 s blackhole; 3 s after reconnecting the backlog was still catching up when the 30 s deadline hit, and the link "happened" to look healthy, so it was marked failed.
+   - Fix: like native, accumulate "stall time" second by second, counting only while the link is alive, the device is online and no data is arriving. Each step counts at most 2 s, so a throttled background-tab timer cannot jump a whole minute at once. At the halfway point, resend once silently to Tentacles that support `idempotent_input`.
+   - Tests: 4 new cases in `outbox.test.ts`, including the exact timing of seed 1300; 3 of them fail on the old implementation.
+2. **The web "link busy" window was 3 s, native's is 30 s**
+   - Symptom: on lossy links, TCP retransmission backoff alone creates gaps of a few seconds, so the web timer started accumulating much earlier than native.
+   - Fix: web uses 30 s too. Two things were also separated: "busy" only pauses the failure timer and no longer delays resending. Otherwise messages restored after a reload waited 30 s before being sent, regressing W5 from 0.3 s to 30 s; after separating them W5 is back to 0.26 s.
+3. **Tentacle's broadcast greeting after reconnecting lacked `features`** (seed 2003: 9 lost). This was the root cause.
+   - Symptom: Tentacle has two greetings. The unicast greeting when an app joins carried `features`, but the broadcast greeting after each Tentacle reconnect did not. On receiving the broadcast, clients concluded the Tentacle neither deduplicated nor supported fragments, so:
+     - unconfirmed messages were no longer resent automatically;
+     - messages restored after a reload were judged failed and never sent;
+     - a Tentacle reconnect cleared the features each app had declared, and clients only re-declare when they see `fragments`, so fragments were no longer sent afterwards.
+   - Fix:
+     - Tentacle: both greetings share the same payload.
+     - Web and native: when a greeting has no `features` field, keep the features already known (only a device never seen with features is treated as old). When a Tentacle device rejoins, web also re-declares `client_features` (native already did).
+   - Tests:
+     - New scenario W6 (reload with unconfirmed messages, followed by a Tentacle reconnect). Reliably reproduced message loss on main; passes with only the web fix and Tentacle behaving like the released version; passes with both fixed.
+     - One unit test each for Tentacle, web and native, all failing on the old code.
+   - Release status: the Tentacle problem had already shipped in CLI v0.33.4, but no released client reads `features` yet, so no users are currently affected. This fix must ship before any native or web release with the #329/#334 client changes.
+4. **A problem in the test script itself**: when a fault action could not run (another fault already in progress), it fell through to a "large agent message", so large messages took about 15% of the steps (about 6 MB in 5 minutes) instead of the designed ~3%. Actions are now chosen by weight, idling when not applicable.
 
-修复后，6 个新种子（2000–2005）全部通过：无误标，恰好一次送达，JS 堆 ≤ 12 MB。回显中位数约 0.3 s，p95 主要来自断网和黑洞期间发出的消息。
+After the fixes, all 6 new seeds (2000–2005) pass: no false marks, exactly-once delivery, JS heap ≤ 12 MB. Median echo about 0.3 s; the p95 comes mostly from messages sent during outages and blackholes.
 
-新增场景 N5：Tentacle 链路 15% 丢包，同时 agent 输出约 1.2 MB。只作为回归场景：用旧的 3 s 窗口也能通过，因为数据一直在断断续续到达。
+New scenario N5: 15% loss on the Tentacle link while the agent outputs about 1.2 MB. Regression only: it also passes with the old 3 s window, because data keeps arriving intermittently.
 
-### 13.2 第一次 30 分钟夜间浸泡的发现（2026-09-29）
+### 13.2 Findings from the first 30-minute nightly soak (2026-09-29)
 
-1. **测试脚本死锁（只改测试）**
-   - 现象：断网期间页面看不到回合结束，输入框一直处于 “Steer the agent…” 模式，而脚本只找 “Send a message…” 输入框，于是一直等，也就永远走不到“恢复网络”那一步。
-   - 修复前的附带问题：5 分钟浸泡里，每次发送其实都在等 agent 空闲，“回复进行中时插话”这条路径从来没被测到。
-   - 修复：脚本在任何模式下都往输入框里打字，并设等待上限。
-   - 新场景 W7：agent 回复进行中时插话。
-2. **Web 的输入消息没有带发送者 `deviceId`**（有追踪数据：种子 4245 中 4 条，第一次 30 分钟浸泡中 14 条）
-   - 背景：Head 原样转发端到端加密的负载，所以 Tentacle 只能从负载内部得知发送者是谁。原生客户端每条消息都会写上自己的 `deviceId`，Web 只在少数几种消息里写。
-   - 现象：链路恢复时，被截留的输入和旧连接的关闭同时到达。Tentacle 执行了输入，但这时页面被视为离线，所以回显没有发给它。页面随后重发，Tentacle 正确识别为重复，却无法回显，因为发送者是 `undefined`，于是静默返回。这些输入就一直“未确认”，最后在安静期被标为 “Not delivered”，而 agent 其实早已收到。
-   - 修复：
-     - Web：`sendEncrypted` 统一写入自己的 `deviceId`。已发布的 Tentacle 同样适用。
-     - Tentacle：`reechoInput` 每一种提前返回都记录原因（例如 `no_consumer_key`），不再静默失败。这条日志正是这次定位问题的依据。
-   - 测试：
-     - 单元测试：每条消费端消息都带发送者；旧代码下失败。
-     - W9（回显在回程中丢失）：断言每个被识别为重复的输入都成功回显。旧代码两次运行都失败（每次 2 次回显失败）；修复后为 0。
-     - W8：链路死掉时发出的输入，同时 Tentacle 重连。
-3. **诊断能力**
-   - 浸泡测试会打开 Web 输入链路追踪，并定期取回；Tentacle 的输入追踪（`KRAKI_TRACE_PULSE`）和日志都上传为 CI 产物。
-   - 夜间任务可以指定浸泡时长和重复次数，并能用 `soak_seed_step=0` 重放同一个种子。
+1. **Test script deadlock (test-only change)**
+   - Symptom: during an outage the page never saw the turn end, so the composer stayed in "Steer the agent…" mode, while the script only looked for the "Send a message…" composer and waited forever, never reaching the "restore network" step.
+   - A side problem before the fix: in the 5-minute soaks every send actually waited for the agent to go idle, so the "steer while a reply is in progress" path was never tested.
+   - Fix: the script types into the composer in any mode, with a wait cap.
+   - New scenario W7: steering while the agent is replying.
+2. **Web input messages lacked the sender `deviceId`** (with trace data: 4 in seed 4245, 14 in the first 30-minute soak)
+   - Background: Head forwards end-to-end encrypted payloads as-is, so Tentacle can only learn the sender from inside the payload. Native clients write their own `deviceId` into every message; web only did so in a few message types.
+   - Symptom: when the link recovered, the withheld input and the close of the old connection arrived at the same time. Tentacle ran the input, but the page was considered offline then, so the echo was not sent to it. The page then resent, Tentacle correctly recognized the duplicate but could not echo it, because the sender was `undefined`, so it returned silently. These inputs stayed "unconfirmed" and were finally marked "Not delivered" during a quiet period, although the agent had received them long before.
+   - Fix:
+     - Web: `sendEncrypted` always writes its own `deviceId`. This also works with released Tentacles.
+     - Tentacle: every early return in `reechoInput` logs its reason (e.g. `no_consumer_key`) instead of failing silently. That log is what located this problem.
+   - Tests:
+     - Unit test: every consumer message carries the sender; fails on the old code.
+     - W9 (echo lost on the way back): asserts every input recognized as a duplicate is echoed successfully. The old code failed both runs (2 echo failures each); 0 after the fix.
+     - W8: input sent while the link is dead, with Tentacle reconnecting at the same time.
+3. **Diagnostics**
+   - The soak enables web input-chain tracing and fetches it periodically; Tentacle's input trace (`KRAKI_TRACE_PULSE`) and logs are uploaded as CI artifacts.
+   - The nightly job can set the soak duration and repeat count, and can replay the same seed with `soak_seed_step=0`.
 
-修复后的结果：
-- 30 分钟浸泡（种子 4242）：407 条消息全部恰好一次送达，从未误标。回显中位数 0.18 s，p95 1.7 s；JS 堆 8 → 12 MB；重复输入回显 103 次，失败 0 次。
-- 另外 4 个 10 分钟种子（5000–5003）：全部通过，回显 105 次，失败 0 次。
+Results after the fixes:
+- 30-minute soak (seed 4242): all 407 messages delivered exactly once, never falsely marked. Median echo 0.18 s, p95 1.7 s; JS heap 8 → 12 MB; 103 duplicate-input echoes, 0 failures.
+- 4 more 10-minute seeds (5000–5003): all pass, 105 echoes, 0 failures.
 
 
-### 13.3 移除 Web 的网络韧性测试（2026-09-30）
-Web 客户端已属遗留，不再投入资源：删除了 PR 检查 “Network resilience (web)”、夜间 web-soak 任务、`scripts/chaos/run-web.sh`、`netem.sh` 和 `e2e/resilience/`。Web 只保留单元测试和编译检查。§12–13.2 中已合并的修复仍然有效；其中 Tentacle 问候带 `features`、原生“缺字段时保留已知 features”这两项对原生客户端仍然必要。
+### 13.3 Removing web network resilience tests (2026-09-30)
+The web client is now legacy and gets no more resources: removed the "Network resilience (web)" PR check, the nightly web-soak job, `scripts/chaos/run-web.sh`, `netem.sh` and `e2e/resilience/`. Web keeps only unit tests and the build check. The fixes already merged in §12–13.2 remain in effect; of these, Tentacle greetings carrying `features` and native "keep known features when the field is missing" are still required by the native clients.

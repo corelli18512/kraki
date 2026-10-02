@@ -801,7 +801,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         let prefixPreserved = descendants(of: host)
             .compactMap { $0 as? MacComposerVoiceTranscriptView }
             .first?.debugAttributedText.string.hasPrefix(existingDraft) == true
-        let chineseStream = Array("现在开始测试中文语音逐字流式显示应该连续保留完整上下文而不是每次只剩最后一个字")
+        let chineseStream = Array("\u{73B0}\u{5728}\u{5F00}\u{59CB}\u{6D4B}\u{8BD5}\u{4E2D}\u{6587}\u{8BED}\u{97F3}\u{9010}\u{5B57}\u{6D41}\u{5F0F}\u{663E}\u{793A}\u{5E94}\u{8BE5}\u{8FDE}\u{7EED}\u{4FDD}\u{7559}\u{5B8C}\u{6574}\u{4E0A}\u{4E0B}\u{6587}\u{800C}\u{4E0D}\u{662F}\u{6BCF}\u{6B21}\u{53EA}\u{5269}\u{6700}\u{540E}\u{4E00}\u{4E2A}\u{5B57}")
         var minimumStreamingWidth = CGFloat.greatestFiniteMagnitude
         var minimumVisibleCharacters = Int.max
         var streamingCollapsed = false

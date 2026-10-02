@@ -1,65 +1,65 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kraki 抗网络波动测试方案</title>
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kraki Network Resilience Test Plan</title>
 <style>body{font:15px/1.65 -apple-system,system-ui,sans-serif;color:#1d2733;max-width:980px;margin:28px auto;padding:0 20px}h1{font-size:26px}h2{font-size:19px;margin-top:32px;border-bottom:1px solid #e3e8ee;padding-bottom:6px}table{border-collapse:collapse;width:100%;font-size:13.5px;margin:8px 0}td,th{border-bottom:1px solid #e6ebf0;padding:6px 8px;text-align:left;vertical-align:top}th{background:#f6f8fa}.gap{background:#fff4f2;border-left:3px solid #d9534f;padding:8px 14px;margin:6px 0}.note{background:#fff8e6;border-left:3px solid #e8b44a;padding:10px 14px}code{font-size:12.5px;background:#f2f4f6;padding:1px 4px;border-radius:3px}pre.mermaid{background:#fafbfc;border:1px solid #e6ebf0;border-radius:8px;padding:12px}</style>
 <body>
-<h1>Kraki 抗网络波动：测试方案</h1>
-<p>分支 <code>test/network-resilience</code>（基于 main 985a310）。目标：iOS/Mac ↔ Head、Tentacle ↔ Head 在各种网络波动下达到可测量的生产级标准。完整版见仓库 <code>docs/network-resilience-test-plan.md</code>。</p>
+<h1>Kraki Network Resilience: Test Plan</h1>
+<p>Branch <code>test/network-resilience</code> (based on main 985a310). Goal: iOS/Mac ↔ Head and Tentacle ↔ Head meet measurable production-grade standards under all kinds of network fluctuation. The full version is <code>docs/network-resilience-test-plan.md</code> in the repo.</p>
 
-<h2>1. “生产级”的量化目标</h2>
-<table><tr><th>#</th><th>指标</th><th>目标</th></tr>
-<tr><td>G1</td><td>消息不丢</td><td>显示为已发送/发送中的输入，网络恢复后 100% 送达</td></tr>
-<tr><td>G2</td><td>消息不重</td><td>agent 收到每个 clientId 恰好一次</td></tr>
-<tr><td>G3</td><td>不误报失败</td><td>断网 ≤60 秒、带宽占满、延迟尖峰：0 次“失败”，无需手动重试</td></tr>
-<tr><td>G4</td><td>恢复快</td><td>重连 p95 ≤3 秒；积压发送回显、漏掉的新消息补齐 p95 ≤5 秒</td></tr>
-<tr><td>G5</td><td>死链检测</td><td>半开连接 ≤30 秒发现</td></tr>
-<tr><td>G6</td><td>不误杀</td><td>链路在传数据时 0 次被判死；一次真实断网只重连 1 次</td></tr>
-<tr><td>G7</td><td>顺序完整</td><td>恢复后按 seq 连续，无空洞、乱序、重复气泡</td></tr>
-<tr><td>G8</td><td>状态诚实</td><td>“重连中”只在断开 ≥2 秒显示；气泡状态与事实一致</td></tr>
-<tr><td>G9</td><td>资源有界</td><td>断网 2 小时，内存/磁盘/重连频率有上限</td></tr>
-<tr><td>G10</td><td>进程重启</td><td>App 被杀、Head/Tentacle 重启后，未确认输入仍恰好一次送达</td></tr></table>
-<p><b>发布门槛：</b>协议级全部场景 + 1000 次随机混沌 0 违例；原生核心场景全过；8 小时浸泡 0 违例。</p>
+<h2>1. Quantified "production-grade" goals</h2>
+<table><tr><th>#</th><th>Metric</th><th>Target</th></tr>
+<tr><td>G1</td><td>No lost messages</td><td>Input shown as sent/sending is delivered 100% of the time after the network recovers</td></tr>
+<tr><td>G2</td><td>No duplicates</td><td>The agent receives each clientId exactly once</td></tr>
+<tr><td>G3</td><td>No false failures</td><td>Outages ≤60 seconds, saturated bandwidth, latency spikes: 0 "failed", no manual retry needed</td></tr>
+<tr><td>G4</td><td>Fast recovery</td><td>Reconnect p95 ≤3 seconds; backlog send echoes and missed new messages caught up p95 ≤5 seconds</td></tr>
+<tr><td>G5</td><td>Dead-link detection</td><td>Half-open connections detected within ≤30 seconds</td></tr>
+<tr><td>G6</td><td>No false kills</td><td>0 dead-link judgments while the link carries data; one real outage reconnects exactly once</td></tr>
+<tr><td>G7</td><td>Order and completeness</td><td>After recovery, contiguous by seq: no holes, reordering or duplicate bubbles</td></tr>
+<tr><td>G8</td><td>Honest status</td><td>"Reconnecting" only after ≥2 seconds disconnected; bubble status matches reality</td></tr>
+<tr><td>G9</td><td>Bounded resources</td><td>During a 2-hour outage, memory/disk/reconnect frequency are capped</td></tr>
+<tr><td>G10</td><td>Process restarts</td><td>After the app is killed or Head/Tentacle restart, unconfirmed input is still delivered exactly once</td></tr></table>
+<p><b>Release gate:</b> all protocol-level scenarios + 1000 random chaos iterations with 0 violations; all native core scenarios pass; 8-hour soak with 0 violations.</p>
 
-<h2>2. 代码里已看到的缺口（先写测试证实，再修）</h2>
-<div class="gap"><b>① 没有自动重试。</b>发出后 20 秒没回显就变“未确认”，只能手动点重试。生产里见过 13–52 秒的回显延迟，带宽一满必然触发——这很可能就是你看到的高失败率。</div>
-<div class="gap"><b>② Mac 发送被拒时静默无反应。</b>刚启动/刚重连时 agent 公钥还没就绪，发送直接被拒，输入框什么都不做（iOS 会弹失败）。应排队而不是拒绝。</div>
-<div class="gap"><b>③ 输入在 Head 上不持久。</b>agent 离线超过 5 分钟被清理，Head 重启直接丢。</div>
-<div class="gap"><b>④ App 侧发送队列只在内存。</b>进程被杀后恢复成“未确认”，但不会自动重发。</div>
-<div class="gap"><b>⑤ 心跳在拥塞时误判。</b>链路被大数据占满时 pong 排不上，被当死链踢掉（本次断线风暴的直接原因）。</div>
-<div class="gap"><b>⑥ Tentacle 重连固定 3 秒，无退避无抖动。</b>Head 重启时惊群；长断网时空转。</div>
-<div class="gap"><b>⑦ “重连中”没有去抖。</b>瞬断也会闪。</div>
+<h2>2. Gaps visible in the code (prove with tests first, then fix)</h2>
+<div class="gap"><b>① No automatic retry.</b> With no echo 20 seconds after sending, a message becomes "unconfirmed" and only a manual retry helps. Production has shown 13–52 second echo delays, so saturated bandwidth always triggers it — very likely the high failure rate you saw.</div>
+<div class="gap"><b>② Mac silently does nothing when a send is refused.</b> Right after launch/reconnect the agent's public key is not ready yet, the send is refused, and the composer does nothing (iOS shows a failure). It should queue instead of refusing.</div>
+<div class="gap"><b>③ Input is not persisted on Head.</b> Dropped when the agent is offline for more than 5 minutes; lost outright when Head restarts.</div>
+<div class="gap"><b>④ The app-side send queue lives only in memory.</b> After the process is killed it comes back as "unconfirmed" but is not resent automatically.</div>
+<div class="gap"><b>⑤ Heartbeats misjudge under congestion.</b> When bulk data saturates the link the pong cannot get through and the connection is kicked as dead (the direct cause of this reconnect storm).</div>
+<div class="gap"><b>⑥ Tentacle reconnects every 3 seconds with no backoff or jitter.</b> Thundering herd when Head restarts; spinning during long outages.</div>
+<div class="gap"><b>⑦ "Reconnecting" is not debounced.</b> Momentary drops make it flash.</div>
 
-<h2>3. 独立测试环境</h2>
+<h2>3. Isolated test environment</h2>
 <pre style="background:#fafbfc;border:1px solid #e6ebf0;border-radius:8px;padding:12px;font-size:12.5px;line-height:1.5">
- 被测客户端                          故障注入                 本地服务端
- ┌───────────────────────────┐
- │ 原生无头驱动（真实网络栈） │──┐
- │ iOS 模拟器 / Kraki Dev     │──┼──►┌──────────────┐     ┌────────────────┐
- │ TS mock app（协议级）      │──┘   │ chaos-proxy  │────►│ Head（独立库） │
- └───────────────────────────┘      │ 延迟 限速 黑洞 │     └────────────────┘
- ┌───────────────────────────┐      │ RST 握手挂起   │            ▲
- │ Tentacle（真实）           │─────►│ 时间表 控制面  │────────────┘
- │ Pi + 本地假模型（零费用）  │      └──────┬───────┘
- └───────────────────────────┘             │ 时间线
-                                            ▼
-                         对账器：发送账本 · agent 账本 · 三端日志 → 判定 G1–G10
+ Clients under test                    Fault injection            Local server
+ ┌──────────────────────────────────┐
+ │ native headless driver (real net) │──┐
+ │ iOS Simulator / Kraki Dev         │──┼──►┌───────────────┐     ┌──────────────────┐
+ │ TS mock app (protocol level)      │──┘   │ chaos-proxy   │────►│ Head (own DB)    │
+ └──────────────────────────────────┘      │ latency, caps │     └──────────────────┘
+ ┌──────────────────────────────────┐      │ blackhole, RST│              ▲
+ │ Tentacle (real)                   │─────►│ hangs, sched. │──────────────┘
+ │ Pi + local fake model (zero cost) │      └──────┬────────┘
+ └──────────────────────────────────┘             │ timeline
+                                                   ▼
+             Reconciler: send ledger · agent ledger · logs from three sides → judge G1–G10
 </pre>
-<p>全部本地：独立端口与 <code>KRAKI_HOME</code>、新建测试账号，不连 cn/东京 relay，不用你的账号和钥匙串，不调用付费模型，不动你在用的客户端与 daemon。真实丢包/乱序用 Linux 容器 <code>tc netem</code> 与 Network Link Conditioner 补充。</p>
+<p>Entirely local: separate ports and <code>KRAKI_HOME</code>, freshly created test accounts, no cn/Tokyo relays, not your account or keychain, no paid model calls, never touching the client and daemon you use. Real packet loss/reordering is added with <code>tc netem</code> in a Linux container and Network Link Conditioner.</p>
 
-<h2>4. 场景矩阵（每个都有明确预期）</h2>
-<table><tr><th>类别</th><th>场景</th></tr>
-<tr><td>A 连接层</td><td>闪断 · 短断网 15/45/90 秒 · 半开（双向/单向黑洞）· 握手挂起 · Wi-Fi→蜂窝切换 · 本地代理重启 · 断网 2 小时</td></tr>
-<tr><td>B 带宽延迟</td><td>3 Mbps + 10 MB 附件（复现本次事故）· 5–20 秒延迟尖峰 · 固定 1.5 秒 RTT · 64 kbps · 1%/5%/突发丢包</td></tr>
-<tr><td>C 发送路径</td><td>断网中连发 · 写出后 ACK 前断开 · 回显丢失 · 回显慢 30/60 秒 · 设备列表未就绪时发送 · 发送后杀 App · 回答/权限/中止 · 语音校正中断网</td></tr>
-<tr><td>D 接收路径</td><td>流式输出中断网 · 断网期间 agent 完成多轮 · iOS 后台 10 分钟 · 多设备一台断网</td></tr>
-<tr><td>E 服务端/agent</td><td>Head 重启 · Tentacle 链路断 30 秒/6 分钟 · Tentacle 重启 · 两条链路同时随机抖</td></tr>
-<tr><td>F 随机混沌</td><td>种子化随机故障 + 固定负载，每次 5 分钟，1000 次 0 违例，失败给出可复现种子</td></tr></table>
+<h2>4. Scenario matrix (each with an explicit expectation)</h2>
+<table><tr><th>Category</th><th>Scenarios</th></tr>
+<tr><td>A Connection layer</td><td>Blip · short outages of 15/45/90 seconds · half-open (two-way/one-way blackhole) · handshake hang · Wi-Fi→cellular switch · local proxy restart · 2-hour outage</td></tr>
+<tr><td>B Bandwidth and latency</td><td>3 Mbps + 10 MB attachment (reproducing this incident) · 5–20 second latency spikes · fixed 1.5 second RTT · 64 kbps · 1%/5%/burst packet loss</td></tr>
+<tr><td>C Send path</td><td>Sending repeatedly while offline · disconnect after write, before ACK · lost echo · echo 30/60 seconds slow · sending before the device list is ready · killing the app after sending · answers/permissions/abort · outage during voice correction</td></tr>
+<tr><td>D Receive path</td><td>Outage while streaming · agent finishes several turns while offline · iOS 10 minutes in background · multiple devices, one offline</td></tr>
+<tr><td>E Server/agent</td><td>Head restart · Tentacle link down for 30 seconds/6 minutes · Tentacle restart · both links flapping randomly</td></tr>
+<tr><td>F Random chaos</td><td>Seeded random faults + a fixed workload, 5 minutes each, 1000 iterations with 0 violations, failures give a reproducible seed</td></tr></table>
 
-<h2>5. 分层与顺序</h2>
-<table><tr><th>层</th><th>内容</th><th>何时跑</th></tr>
-<tr><td>T0</td><td>重试/退避/心跳判定单元测试（假时钟）</td><td>每次 CI</td></tr>
-<tr><td>T1</td><td>本地 Head + 真实 Tentacle + mock app + chaos-proxy，场景 A–F</td><td>PR 精简集；1000 次夜间</td></tr>
-<tr><td>T2</td><td>原生无头驱动 + 模拟器/Kraki Dev UI 状态</td><td>客户端 PR / 夜间</td></tr>
-<tr><td>T3</td><td>netem 丢包乱序、NLC 预设、8 小时浸泡、事故剖面回放</td><td>发布前</td></tr>
-<tr><td>T4</td><td>线上诊断看板：重连次数、回显延迟、未确认比例</td><td>持续</td></tr></table>
-<p><b>顺序：</b>①搭环境（代理、一键本地栈、对账器）→ ②在未改动的 main 上跑出基线红灯与数字 → ③按缺口逐个修，优先级：自动重试与分级超时、发送排队、心跳不误杀、Head 持久化输入、Tentacle 退避抖动、状态去抖、App 队列持久化，每项以场景由红转绿为证 → ④精简集进 PR 门禁（按改动范围触发），混沌与浸泡手动/夜间，不进每次门禁。</p>
-<p class="note">本分支只放测试设施与方案；每个产品修复单独提 PR，附红转绿证据。</p>
+<h2>5. Layers and order</h2>
+<table><tr><th>Layer</th><th>Content</th><th>When it runs</th></tr>
+<tr><td>T0</td><td>Unit tests for retry/backoff/heartbeat judgment (fake clock)</td><td>Every CI run</td></tr>
+<tr><td>T1</td><td>Local Head + real Tentacle + mock app + chaos-proxy, scenarios A–F</td><td>Reduced set on PRs; 1000 iterations nightly</td></tr>
+<tr><td>T2</td><td>Native headless driver + Simulator/Kraki Dev UI state</td><td>Client PRs / nightly</td></tr>
+<tr><td>T3</td><td>netem loss and reordering, NLC presets, 8-hour soak, incident profile replay</td><td>Before release</td></tr>
+<tr><td>T4</td><td>Production diagnostics dashboard: reconnect counts, echo latency, unconfirmed ratio</td><td>Continuous</td></tr></table>
+<p><b>Order:</b> ① build the environment (proxy, one-command local stack, reconciler) → ② get red baseline results and numbers on unmodified main → ③ fix gap by gap, in priority order: automatic retry and tiered timeouts, queued sends, no heartbeat false kills, Head persisting input, Tentacle backoff and jitter, status debouncing, persisting the app queue — each proven by a scenario going from red to green → ④ the reduced set becomes a PR gate (triggered by change scope); chaos and soak run manually/nightly, not on every gate.</p>
+<p class="note">This branch contains only test infrastructure and the plan; every product fix gets its own PR with red-to-green evidence.</p>
 </body></html>

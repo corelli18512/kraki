@@ -86,7 +86,7 @@ import VoiceInputCore
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(100))
                 guard let self, self.generation == id else { return }
-                self.onEvent(.partial("请把这个功能接入 Kraki 保留原来的输入框"))
+                self.onEvent(.partial("\u{8BF7}\u{628A}\u{8FD9}\u{4E2A}\u{529F}\u{80FD}\u{63A5}\u{5165} Kraki \u{4FDD}\u{7559}\u{539F}\u{6765}\u{7684}\u{8F93}\u{5165}\u{6846}"))
                 // Deterministic peaks for the shared native level meter.
                 for level: Float in [0.01, 0.03, 0.08, 0.2, 0.12, 0.06, 0.025, 0.01] {
                     self.onEvent(.level(level))
@@ -98,11 +98,11 @@ import VoiceInputCore
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(100))
                 guard let self, self.generation == id else { return }
-                self.onEvent(.correctionDelta("请把这个功能"))
+                self.onEvent(.correctionDelta("\u{8BF7}\u{628A}\u{8FD9}\u{4E2A}\u{529F}\u{80FD}"))
                 let delay = Int(ProcessInfo.processInfo.environment["KRAKI_VOICE_TEST_FINAL_MS"] ?? "1800") ?? 1800
                 try? await Task.sleep(for: .milliseconds(delay))
                 guard self.generation == id else { return }
-                self.onEvent(.final("请把这个功能接入 Kraki，保留原来的输入框。", rawText: "请把这个功能接入 Kraki 保留原来的输入框"))
+                self.onEvent(.final("\u{8BF7}\u{628A}\u{8FD9}\u{4E2A}\u{529F}\u{80FD}\u{63A5}\u{5165} Kraki\u{FF0C}\u{4FDD}\u{7559}\u{539F}\u{6765}\u{7684}\u{8F93}\u{5165}\u{6846}\u{3002}", rawText: "\u{8BF7}\u{628A}\u{8FD9}\u{4E2A}\u{529F}\u{80FD}\u{63A5}\u{5165} Kraki \u{4FDD}\u{7559}\u{539F}\u{6765}\u{7684}\u{8F93}\u{5165}\u{6846}"))
             }
         }
         func close() { generation = UUID() }
@@ -138,8 +138,8 @@ struct IOSVoiceHoldScenarioView: View {
                     let message: [String: Any] = [
                         "type": "agent_message", "seq": seq, "sessionId": id, "deviceId": "voice-test-device",
                         "timestamp": ISO8601.now(),
-                        "payload": ["content": "我需要确认一下。",
-                                    "question": ["id": "q-\(seq)", "text": "新会话默认用哪个模型？"]],
+                        "payload": ["content": "\u{6211}\u{9700}\u{8981}\u{786E}\u{8BA4}\u{4E00}\u{4E0B}\u{3002}",
+                                    "question": ["id": "q-\(seq)", "text": "\u{65B0}\u{4F1A}\u{8BDD}\u{9ED8}\u{8BA4}\u{7528}\u{54EA}\u{4E2A}\u{6A21}\u{578B}\u{FF1F}"]],
                     ]
                     if let json = try? JSONSerialization.data(withJSONObject: message) {
                         app.messageProvider?.ingestTailCandidate(id, json: json)

@@ -32,15 +32,15 @@ final class ChatUXRegressionTests: XCTestCase {
 
     // MARK: Corpus
 
-    static let zh = "好的，我来帮你看一下这个问题。首先我们需要确认服务端的配置是否正确，然后再检查客户端的网络请求是否带上了正确的鉴权头。如果两边都没有问题，那很可能是缓存导致的，建议先清一下本地缓存再重试。"
+    static let zh = "\u{597D}\u{7684}\u{FF0C}\u{6211}\u{6765}\u{5E2E}\u{4F60}\u{770B}\u{4E00}\u{4E0B}\u{8FD9}\u{4E2A}\u{95EE}\u{9898}\u{3002}\u{9996}\u{5148}\u{6211}\u{4EEC}\u{9700}\u{8981}\u{786E}\u{8BA4}\u{670D}\u{52A1}\u{7AEF}\u{7684}\u{914D}\u{7F6E}\u{662F}\u{5426}\u{6B63}\u{786E}\u{FF0C}\u{7136}\u{540E}\u{518D}\u{68C0}\u{67E5}\u{5BA2}\u{6237}\u{7AEF}\u{7684}\u{7F51}\u{7EDC}\u{8BF7}\u{6C42}\u{662F}\u{5426}\u{5E26}\u{4E0A}\u{4E86}\u{6B63}\u{786E}\u{7684}\u{9274}\u{6743}\u{5934}\u{3002}\u{5982}\u{679C}\u{4E24}\u{8FB9}\u{90FD}\u{6CA1}\u{6709}\u{95EE}\u{9898}\u{FF0C}\u{90A3}\u{5F88}\u{53EF}\u{80FD}\u{662F}\u{7F13}\u{5B58}\u{5BFC}\u{81F4}\u{7684}\u{FF0C}\u{5EFA}\u{8BAE}\u{5148}\u{6E05}\u{4E00}\u{4E0B}\u{672C}\u{5730}\u{7F13}\u{5B58}\u{518D}\u{91CD}\u{8BD5}\u{3002}"
     static let en = "Sure — I checked the relay configuration and the client request path. Both look correct, so the stale state is most likely coming from the local cache layer; clearing it and retrying should confirm."
-    static let code = "这是修改后的代码：\n\n```swift\nfunc load() async throws {\n    let url = URL(string: base)!\n    var req = URLRequest(url: url)\n    req.setValue(token, forHTTPHeaderField: \"Auth\")\n    let (data, _) = try await session.data(for: req)\n    cache.store(data)\n    try decode(data)\n}\n```\n\n改完后重新跑一下测试。"
-    static let list = "主要改动：\n\n1. 修复登录态过期\n2. 优化列表滚动\n3. 新增重试逻辑\n4. 删除旧接口\n5. 更新文档\n\n- 风险：低\n- 需要回归：是"
-    static let table = "| 指标 | 之前 | 之后 |\n|---|---|---|\n| 冷启动 | 1.8s | 0.9s |\n| 首屏 | 620ms | 310ms |\n| 掉帧 | 12% | 2% |"
-    static let user = "帮我看看为什么列表滚动的时候会跳，尤其是往上翻历史消息的时候"
+    static let code = "\u{8FD9}\u{662F}\u{4FEE}\u{6539}\u{540E}\u{7684}\u{4EE3}\u{7801}\u{FF1A}\n\n```swift\nfunc load() async throws {\n    let url = URL(string: base)!\n    var req = URLRequest(url: url)\n    req.setValue(token, forHTTPHeaderField: \"Auth\")\n    let (data, _) = try await session.data(for: req)\n    cache.store(data)\n    try decode(data)\n}\n```\n\n\u{6539}\u{5B8C}\u{540E}\u{91CD}\u{65B0}\u{8DD1}\u{4E00}\u{4E0B}\u{6D4B}\u{8BD5}\u{3002}"
+    static let list = "\u{4E3B}\u{8981}\u{6539}\u{52A8}\u{FF1A}\n\n1. \u{4FEE}\u{590D}\u{767B}\u{5F55}\u{6001}\u{8FC7}\u{671F}\n2. \u{4F18}\u{5316}\u{5217}\u{8868}\u{6EDA}\u{52A8}\n3. \u{65B0}\u{589E}\u{91CD}\u{8BD5}\u{903B}\u{8F91}\n4. \u{5220}\u{9664}\u{65E7}\u{63A5}\u{53E3}\n5. \u{66F4}\u{65B0}\u{6587}\u{6863}\n\n- \u{98CE}\u{9669}\u{FF1A}\u{4F4E}\n- \u{9700}\u{8981}\u{56DE}\u{5F52}\u{FF1A}\u{662F}"
+    static let table = "| \u{6307}\u{6807} | \u{4E4B}\u{524D} | \u{4E4B}\u{540E} |\n|---|---|---|\n| \u{51B7}\u{542F}\u{52A8} | 1.8s | 0.9s |\n| \u{9996}\u{5C4F} | 620ms | 310ms |\n| \u{6389}\u{5E27} | 12% | 2% |"
+    static let user = "\u{5E2E}\u{6211}\u{770B}\u{770B}\u{4E3A}\u{4EC0}\u{4E48}\u{5217}\u{8868}\u{6EDA}\u{52A8}\u{7684}\u{65F6}\u{5019}\u{4F1A}\u{8DF3}\u{FF0C}\u{5C24}\u{5176}\u{662F}\u{5F80}\u{4E0A}\u{7FFB}\u{5386}\u{53F2}\u{6D88}\u{606F}\u{7684}\u{65F6}\u{5019}"
 
     static func body(_ seq: Int) -> (type: String, text: String) {
-        if seq % 2 == 1 { return ("user_message", [user, "好的", "继续", en][seq / 2 % 4]) }
+        if seq % 2 == 1 { return ("user_message", [user, "\u{597D}\u{7684}", "\u{7EE7}\u{7EED}", en][seq / 2 % 4]) }
         let pool = [zh + "\n\n" + zh, code, list, en + " " + en, table, zh + zh + zh, code + "\n\n" + list]
         return ("agent_message", pool[(seq / 2) % pool.count])
     }
@@ -138,7 +138,7 @@ final class ChatUXRegressionTests: XCTestCase {
     private func startTurn(_ fx: Fx, seq: Int) throws {
         let user = try JSONSerialization.data(withJSONObject: [
             "type": "user_message", "seq": seq, "sessionId": sid, "deviceId": dev,
-            "timestamp": "2026-09-01T00:00:01.000Z", "payload": ["content": "继续"],
+            "timestamp": "2026-09-01T00:00:01.000Z", "payload": ["content": "\u{7EE7}\u{7EED}"],
         ])
         fx.app.messageStore.beginCardTurn(sid)
         fx.app.messageProvider?.ingestTailCandidate(sid, json: user)
@@ -203,9 +203,9 @@ final class ChatUXRegressionTests: XCTestCase {
         drain(800)
         try startTurn(fx, seq: 21)
         var rowsText = ""
-        for i in 1...14 { rowsText += "| 指标\(i) | 覆盖设备 iOS、Android 以及更多平台 \(i) |\n" }
-        let full = Self.zh + "\n\n" + Self.zh + "\n\n| 项目 | 说明 |\n|---|---|\n" + rowsText
-            + "\n**H5 和小程序也能做精致。** 最终差异仍是设计与实现质量。\n\n## 为什么偏向原生\n\n" + Self.list + "\n\n" + Self.zh
+        for i in 1...14 { rowsText += "| \u{6307}\u{6807}\(i) | \u{8986}\u{76D6}\u{8BBE}\u{5907} iOS\u{3001}Android \u{4EE5}\u{53CA}\u{66F4}\u{591A}\u{5E73}\u{53F0} \(i) |\n" }
+        let full = Self.zh + "\n\n" + Self.zh + "\n\n| \u{9879}\u{76EE} | \u{8BF4}\u{660E} |\n|---|---|\n" + rowsText
+            + "\n**H5 \u{548C}\u{5C0F}\u{7A0B}\u{5E8F}\u{4E5F}\u{80FD}\u{505A}\u{7CBE}\u{81F4}\u{3002}** \u{6700}\u{7EC8}\u{5DEE}\u{5F02}\u{4ECD}\u{662F}\u{8BBE}\u{8BA1}\u{4E0E}\u{5B9E}\u{73B0}\u{8D28}\u{91CF}\u{3002}\n\n## \u{4E3A}\u{4EC0}\u{4E48}\u{504F}\u{5411}\u{539F}\u{751F}\n\n" + Self.list + "\n\n" + Self.zh
         let chars = Array(full)
         var worst: (hidden: CGFloat, gap: CGFloat, clip: CGFloat, shrink: CGFloat) = (0, 0, 0, 0)
         var previousHeight: CGFloat = 0
@@ -445,7 +445,7 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertTrue(fx.vc.entranceLog.isEmpty, "session entry has no entrances")
 
         let sender = try XCTUnwrap(fx.app.commandSender)
-        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "帮我再看一下这个问题"))
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "\u{5E2E}\u{6211}\u{518D}\u{770B}\u{4E00}\u{4E0B}\u{8FD9}\u{4E2A}\u{95EE}\u{9898}"))
         fx.vc.returnToNewestAfterLocalSubmit()
         let pendingID = try XCTUnwrap(fx.vc.automationItemIDs.last)
         XCTAssertTrue(pendingID.contains(":pending:"))
@@ -478,11 +478,11 @@ final class ChatUXRegressionTests: XCTestCase {
         fx.app.messageStore.beginCardTurn(sid)
         try ingestSpine(fx, ["type": "user_message", "seq": 61, "sessionId": sid, "deviceId": dev,
                              "timestamp": "2026-09-01T00:00:05.000Z",
-                             "payload": ["content": "帮我再看一下这个问题", "clientId": clientId]])
+                             "payload": ["content": "\u{5E2E}\u{6211}\u{518D}\u{770B}\u{4E00}\u{4E0B}\u{8FD9}\u{4E2A}\u{95EE}\u{9898}", "clientId": clientId]])
         drain(300)
         XCTAssertEqual(fx.vc.entranceLog.count, 1, "the echo replaces the pending bubble without a second entrance")
 
-        fx.app.messageStore.applyCardMessage(sid, "好的，我先看一下相关代码。", reset: false)
+        fx.app.messageStore.applyCardMessage(sid, "\u{597D}\u{7684}\u{FF0C}\u{6211}\u{5148}\u{770B}\u{4E00}\u{4E0B}\u{76F8}\u{5173}\u{4EE3}\u{7801}\u{3002}", reset: false)
         fx.vc.syncLiveUpdates()
         XCTAssertEqual(fx.vc.entranceLog.count, 2)
         XCTAssertEqual(fx.vc.entranceLog.last?.id, "__live_card__")
@@ -491,7 +491,7 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(fx.vc.arrivalGlideLog.count, 2)
         var worstHidden: CGFloat = 0, downShown = fx.vc.automationControlsVisible.down
         for k in 0..<20 {
-            fx.app.messageStore.applyCardMessage(sid, "第\(k)段补充说明，让回复继续变长。", reset: false)
+            fx.app.messageStore.applyCardMessage(sid, "\u{7B2C}\(k)\u{6BB5}\u{8865}\u{5145}\u{8BF4}\u{660E}\u{FF0C}\u{8BA9}\u{56DE}\u{590D}\u{7EE7}\u{7EED}\u{53D8}\u{957F}\u{3002}", reset: false)
             fx.vc.syncLiveUpdates()
             drain(33)
             worstHidden = max(worstHidden, hiddenBelowComposer(fx.cv))
@@ -512,7 +512,7 @@ final class ChatUXRegressionTests: XCTestCase {
         let fx = try makeFixture(total: 120)
         drain(1_000)
         let sender = try XCTUnwrap(fx.app.commandSender)
-        for text in ["一", "二", "三"] { XCTAssertTrue(sender.sendInput(sessionId: sid, text: text)) }
+        for text in ["\u{4E00}", "\u{4E8C}", "\u{4E09}"] { XCTAssertTrue(sender.sendInput(sessionId: sid, text: text)) }
         fx.vc.syncLiveUpdates()
         drain(300)
         XCTAssertTrue(fx.vc.entranceLog.isEmpty, "three rows at once are a catch-up, not a conversation beat")
@@ -561,7 +561,7 @@ final class ChatUXRegressionTests: XCTestCase {
             fx.app.messageStore.applyCardMessage(sid, String(chars[i..<min(i + 30, chars.count)]), reset: false)
             i += 30
             fx.vc.syncLiveUpdates()
-            if !sent, i > 900 { submit(fx, "先停一下，换个方向。"); sent = true; sentAt = CACurrentMediaTime() }
+            if !sent, i > 900 { submit(fx, "\u{5148}\u{505C}\u{4E00}\u{4E0B}\u{FF0C}\u{6362}\u{4E2A}\u{65B9}\u{5411}\u{3002}"); sent = true; sentAt = CACurrentMediaTime() }
             drain(33)
             if sent, CACurrentMediaTime() - sentAt > 0.45 { worst = max(worst, distanceToBottom(fx.cv)) }
         }
@@ -575,14 +575,14 @@ final class ChatUXRegressionTests: XCTestCase {
     func testUserScrollAfterSendStopsFollowing() throws {
         let fx = try makeFixture(total: 60)
         drain(1_000)
-        submit(fx, "继续")
+        submit(fx, "\u{7EE7}\u{7EED}")
         drain(700)
         try startTurn(fx, seq: 61)
         scrollUp(fx, by: 600)
         drain(500)
         let offset = fx.cv.contentOffset.y
         for k in 0..<30 {
-            fx.app.messageStore.applyCardMessage(sid, "第\(k)段：继续补充一些说明文字，让回复变长。", reset: false)
+            fx.app.messageStore.applyCardMessage(sid, "\u{7B2C}\(k)\u{6BB5}\u{FF1A}\u{7EE7}\u{7EED}\u{8865}\u{5145}\u{4E00}\u{4E9B}\u{8BF4}\u{660E}\u{6587}\u{5B57}\u{FF0C}\u{8BA9}\u{56DE}\u{590D}\u{53D8}\u{957F}\u{3002}", reset: false)
             fx.vc.syncLiveUpdates()
             drain(33)
         }
@@ -601,7 +601,7 @@ final class ChatUXRegressionTests: XCTestCase {
         scrollUp(fx, by: 2_400)
         drain(900)
         XCTAssertTrue(fx.vc.automationControlsVisible.down)
-        submit(fx, "上面那个问题我再补充一下。")
+        submit(fx, "\u{4E0A}\u{9762}\u{90A3}\u{4E2A}\u{95EE}\u{9898}\u{6211}\u{518D}\u{8865}\u{5145}\u{4E00}\u{4E0B}\u{3002}")
         XCTAssertFalse(fx.vc.automationControlsVisible.down, "↓ leaves as soon as the send starts")
         XCTAssertFalse(fx.vc.automationControlsVisible.up, "↑ does not cover the message being sent")
         var covered = 0
@@ -622,7 +622,7 @@ final class ChatUXRegressionTests: XCTestCase {
         fx.app.messageStore.beginCardTurn(sid)
         try ingestSpine(fx, ["type": "user_message", "seq": 61, "sessionId": sid, "deviceId": dev,
                              "timestamp": "2026-09-01T00:00:05.000Z",
-                             "payload": ["content": "上面那个问题我再补充一下。", "clientId": clientId]])
+                             "payload": ["content": "\u{4E0A}\u{9762}\u{90A3}\u{4E2A}\u{95EE}\u{9898}\u{6211}\u{518D}\u{8865}\u{5145}\u{4E00}\u{4E0B}\u{3002}", "clientId": clientId]])
         drain(400)
         XCTAssertFalse(fx.vc.automationControlsVisible.up, "still the user's message after its echo")
         try land(fx, seq: 62, text: Self.zh)
@@ -649,7 +649,7 @@ final class ChatUXRegressionTests: XCTestCase {
         fx.vc.scrollViewDidEndDragging(fx.cv, willDecelerate: false)
         drain(600)
         XCTAssertGreaterThan(distanceToBottom(fx.cv), 1_000)
-        for text in ["第一条", "第二条", "第三条"] {
+        for text in ["\u{7B2C}\u{4E00}\u{6761}", "\u{7B2C}\u{4E8C}\u{6761}", "\u{7B2C}\u{4E09}\u{6761}"] {
             XCTAssertTrue(fx.app.commandSender?.sendInput(sessionId: sid, text: text) == true)
         }
         NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
@@ -658,7 +658,7 @@ final class ChatUXRegressionTests: XCTestCase {
         let visible = rows(fx.cv).map(\.id).filter { $0.contains(":pending:") }
         XCTAssertEqual(visible.count, 3, "all optimistic messages visible after sending")
         let order = fx.app.commandSender?.pendingInputs(sid).compactMap(\.content)
-        XCTAssertEqual(order, ["第一条", "第二条", "第三条"])
+        XCTAssertEqual(order, ["\u{7B2C}\u{4E00}\u{6761}", "\u{7B2C}\u{4E8C}\u{6761}", "\u{7B2C}\u{4E09}\u{6761}"])
     }
 
     func testPendingDeliveryStateRemainsUnconfirmedRetriesAndDeduplicates() throws {
@@ -760,7 +760,7 @@ final class ChatUXRegressionTests: XCTestCase {
         let fx = try makeFixture(total: 10) { msg in sent.append(msg); return true }
         drain(600)
         let sender = try XCTUnwrap(fx.app.commandSender)
-        let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: "把登录页的报错改成中文"))
+        let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: "\u{628A}\u{767B}\u{5F55}\u{9875}\u{7684}\u{62A5}\u{9519}\u{6539}\u{6210}\u{4E2D}\u{6587}"))
         XCTAssertTrue(sent.isEmpty, "a correcting voice message has not been transmitted")
         XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .correcting)
         fx.vc.syncLiveUpdates(); drain(150)
@@ -768,7 +768,7 @@ final class ChatUXRegressionTests: XCTestCase {
         let before = try XCTUnwrap(rows(fx.cv).first { $0.id.contains(":pending:") })
 
         // Correction streams in and grows the bubble; its row must stay exact.
-        let long = String(repeating: "把登录页的错误提示改成中文，并检查注册流程里邮箱校验的边界情况。", count: 4)
+        let long = String(repeating: "\u{628A}\u{767B}\u{5F55}\u{9875}\u{7684}\u{9519}\u{8BEF}\u{63D0}\u{793A}\u{6539}\u{6210}\u{4E2D}\u{6587}\u{FF0C}\u{5E76}\u{68C0}\u{67E5}\u{6CE8}\u{518C}\u{6D41}\u{7A0B}\u{91CC}\u{90AE}\u{7BB1}\u{6821}\u{9A8C}\u{7684}\u{8FB9}\u{754C}\u{60C5}\u{51B5}\u{3002}", count: 4)
         sender.updateStagedInput(sessionId: sid, clientId: clientId, text: long)
         fx.vc.syncLiveUpdates(); drain(150)
         let after = try XCTUnwrap(rows(fx.cv).first { $0.id.contains(":pending:") })
@@ -776,16 +776,16 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(after.h, after.exact, accuracy: 1, "streamed correction keeps an exact row height")
         XCTAssertLessThanOrEqual(abs(distanceToBottom(fx.cv)), 1, "a growing bubble stays in view")
         // While correcting, the bubble keeps its size: it never shrinks back.
-        sender.updateStagedInput(sessionId: sid, clientId: clientId, text: "短")
+        sender.updateStagedInput(sessionId: sid, clientId: clientId, text: "\u{77ED}")
         fx.vc.syncLiveUpdates(); drain(150)
         let shorter = try XCTUnwrap(rows(fx.cv).first { $0.id.contains(":pending:") })
         XCTAssertEqual(shorter.h, after.h, accuracy: 0.5, "a correcting bubble does not jump smaller")
 
-        XCTAssertTrue(sender.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "改好了。"))
+        XCTAssertTrue(sender.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "\u{6539}\u{597D}\u{4E86}\u{3002}"))
         XCTAssertFalse(sender.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "again"))
         XCTAssertEqual(sent.count, 1)
         let payload = try XCTUnwrap(sent.first?["payload"] as? [String: Any])
-        XCTAssertEqual(payload["text"] as? String, "改好了。")
+        XCTAssertEqual(payload["text"] as? String, "\u{6539}\u{597D}\u{4E86}\u{3002}")
         XCTAssertEqual(payload["clientId"] as? String, clientId)
         XCTAssertEqual(sender.pendingState(try XCTUnwrap(sender.pendingInputs(sid).first)), .sending)
     }
@@ -795,13 +795,13 @@ final class ChatUXRegressionTests: XCTestCase {
         let fx = try makeFixture(total: 4) { msg in sent.append(msg); return true }
         drain(300)
         let sender = try XCTUnwrap(fx.app.commandSender)
-        let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: "选二", answerTo: "q-7"))
+        let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: "\u{9009}\u{4E8C}", answerTo: "q-7"))
         XCTAssertTrue(sent.isEmpty)
         XCTAssertEqual(sender.pendingInputs(sid).first?.payload["answerTo"]?.stringValue, "q-7")
-        XCTAssertTrue(sender.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "选第二个。"))
+        XCTAssertTrue(sender.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "\u{9009}\u{7B2C}\u{4E8C}\u{4E2A}\u{3002}"))
         let payload = try XCTUnwrap(sent.first?["payload"] as? [String: Any])
         XCTAssertEqual(payload["answerTo"] as? String, "q-7")
-        XCTAssertEqual(payload["text"] as? String, "选第二个。")
+        XCTAssertEqual(payload["text"] as? String, "\u{9009}\u{7B2C}\u{4E8C}\u{4E2A}\u{3002}")
         XCTAssertNil(payload["delivery"], "an answer is never a steer")
     }
 
@@ -885,7 +885,7 @@ final class ChatUXRegressionTests: XCTestCase {
         let fx = try makeFixture(total: 6)
         drain(400)
         let sender = try XCTUnwrap(fx.app.commandSender)
-        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "看一下这个报错", attachments: [pngAttachment()]))
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "\u{770B}\u{4E00}\u{4E0B}\u{8FD9}\u{4E2A}\u{62A5}\u{9519}", attachments: [pngAttachment()]))
         let clientId = try XCTUnwrap(sender.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
         fx.vc.syncLiveUpdates(); drain(150)
         let early = try XCTUnwrap(cell(fx, clientId: clientId)?.pendingDimForRegression)
@@ -901,7 +901,7 @@ final class ChatUXRegressionTests: XCTestCase {
 
         let echo = try JSONSerialization.data(withJSONObject: [
             "type": "user_message", "seq": 7, "sessionId": sid, "deviceId": dev,
-            "timestamp": "2026-09-01T00:00:03.000Z", "payload": ["content": "看一下这个报错", "clientId": clientId],
+            "timestamp": "2026-09-01T00:00:03.000Z", "payload": ["content": "\u{770B}\u{4E00}\u{4E0B}\u{8FD9}\u{4E2A}\u{62A5}\u{9519}", "clientId": clientId],
         ])
         fx.app.messageProvider?.ingestTailCandidate(sid, json: echo)
         sender.clearPending(sid, clientId: clientId)
@@ -942,8 +942,8 @@ final class ChatUXRegressionTests: XCTestCase {
         let fx = try makeFixture(total: 6)
         drain(400)
         let sender = try XCTUnwrap(fx.app.commandSender)
-        let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: "把登入页改成中文", attachments: [pngAttachment()]))
-        sender.updateStagedInput(sessionId: sid, clientId: clientId, text: "把登录页改成中文",
+        let clientId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: "\u{628A}\u{767B}\u{5165}\u{9875}\u{6539}\u{6210}\u{4E2D}\u{6587}", attachments: [pngAttachment()]))
+        sender.updateStagedInput(sessionId: sid, clientId: clientId, text: "\u{628A}\u{767B}\u{5F55}\u{9875}\u{6539}\u{6210}\u{4E2D}\u{6587}",
                                  uncorrected: NSRange(location: 4, length: 4))
         fx.vc.syncLiveUpdates(); drain(150)
         let correcting = try XCTUnwrap(cell(fx, clientId: clientId))
@@ -957,7 +957,7 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertEqual(alpha(at: 1), 1, accuracy: 0.01, "corrected words are solid")
         XCTAssertEqual(alpha(at: 5), 0.5, accuracy: 0.01, "words not yet corrected are light")
 
-        XCTAssertTrue(sender.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "把登录页改成中文。"))
+        XCTAssertTrue(sender.dispatchStagedInput(sessionId: sid, clientId: clientId, text: "\u{628A}\u{767B}\u{5F55}\u{9875}\u{6539}\u{6210}\u{4E2D}\u{6587}\u{3002}"))
         fx.vc.syncLiveUpdates(); drain(150)
         let sent = try XCTUnwrap(cell(fx, clientId: clientId)?.contentSnapshot?.body)
         XCTAssertEqual((sent.attribute(.foregroundColor, at: 5, effectiveRange: nil) as? UIColor)?.cgColor.alpha ?? 1, 1,
@@ -1076,12 +1076,12 @@ final class ChatUXRegressionTests: XCTestCase {
 
     /// Tentacle's `ask_user`: an agent_message carrying `question`, lead-in
     /// prose as its content. The router closes the live card on it.
-    private func ask(_ fx: Fx, seq: Int, id: String, lead: String = "我看了一下，有两个方案。",
+    private func ask(_ fx: Fx, seq: Int, id: String, lead: String = "\u{6211}\u{770B}\u{4E86}\u{4E00}\u{4E0B}\u{FF0C}\u{6709}\u{4E24}\u{4E2A}\u{65B9}\u{6848}\u{3002}",
                      choices: [String] = ["A", "B"]) throws {
         let data = try JSONSerialization.data(withJSONObject: [
             "type": "agent_message", "seq": seq, "sessionId": sid, "deviceId": dev,
             "timestamp": "2026-09-01T00:00:03.000Z",
-            "payload": ["content": lead, "question": ["id": id, "text": "选哪个？", "choices": choices]],
+            "payload": ["content": lead, "question": ["id": id, "text": "\u{9009}\u{54EA}\u{4E2A}\u{FF1F}", "choices": choices]],
         ])
         fx.app.messageProvider?.ingestTailCandidate(sid, json: data)
         fx.app.messageStore.endCardTurn(sid)
@@ -1103,7 +1103,7 @@ final class ChatUXRegressionTests: XCTestCase {
         let fx = try makeFixture(total: 10)
         drain(600)
         try startTurn(fx, seq: 11)
-        fx.app.messageStore.applyCardMessage(sid, "我看了一下，有两个方案。", reset: true)
+        fx.app.messageStore.applyCardMessage(sid, "\u{6211}\u{770B}\u{4E86}\u{4E00}\u{4E0B}\u{FF0C}\u{6709}\u{4E24}\u{4E2A}\u{65B9}\u{6848}\u{3002}", reset: true)
         fx.vc.syncLiveUpdates(); drain(80)
         try ask(fx, seq: 12, id: "q1")
         drain(200)
@@ -1113,7 +1113,7 @@ final class ChatUXRegressionTests: XCTestCase {
         vm.refreshMessageCache()
         XCTAssertEqual(vm.questions.map(\.id), ["q1"])
         let bubble = try XCTUnwrap(vm.displayMessages.first { $0.seq == 12 })
-        XCTAssertEqual(bubble.content, "我看了一下，有两个方案。")
+        XCTAssertEqual(bubble.content, "\u{6211}\u{770B}\u{4E86}\u{4E00}\u{4E0B}\u{FF0C}\u{6709}\u{4E24}\u{4E2A}\u{65B9}\u{6848}\u{3002}")
         XCTAssertEqual(bubble.frozenCard?.action?.choices, ["A", "B"])
     }
 
@@ -1196,14 +1196,14 @@ final class ChatUXRegressionTests: XCTestCase {
     func testQuestionTextIsTheSameOpenAndClosed() {
         func m(_ state: QuestionPresentation.State) -> ChatMessage {
             var message = ChatMessage(type: "agent_message", seq: 2, sessionId: sid, deviceId: dev, timestamp: nil,
-                                      payload: ["content": AnyCodable("有两个方案"),
-                                                "question": AnyCodable(["id": "q1", "text": "删旧接口？", "choices": ["删", "留"]])])
+                                      payload: ["content": AnyCodable("\u{6709}\u{4E24}\u{4E2A}\u{65B9}\u{6848}"),
+                                                "question": AnyCodable(["id": "q1", "text": "\u{5220}\u{65E7}\u{63A5}\u{53E3}\u{FF1F}", "choices": ["\u{5220}", "\u{7559}"]])])
             message.questionPresentation = QuestionPresentation(state: state)
             return message
         }
-        XCTAssertEqual(m(.open).frozenCard?.text, "有两个方案\n\n**删旧接口？**")
+        XCTAssertEqual(m(.open).frozenCard?.text, "\u{6709}\u{4E24}\u{4E2A}\u{65B9}\u{6848}\n\n**\u{5220}\u{65E7}\u{63A5}\u{53E3}\u{FF1F}**")
         XCTAssertEqual(m(.answered).frozenCard?.text, m(.open).frozenCard?.text)
-        XCTAssertEqual(m(.open).frozenCard?.action?.choices, ["删", "留"])
+        XCTAssertEqual(m(.open).frozenCard?.action?.choices, ["\u{5220}", "\u{7559}"])
         XCTAssertNil(m(.answered).frozenCard?.action)
         XCTAssertEqual(m(.unanswered).frozenCard?.text, m(.open).frozenCard?.text)
         XCTAssertEqual(m(.answered).id, m(.unanswered).id, "states that draw the same keep one identity")
@@ -1247,8 +1247,8 @@ final class ChatUXRegressionTests: XCTestCase {
                         payload: payload.mapValues(AnyCodable.init))
         }
         let raw = [
-            m("user_message", 1, ["content": "迁移接口"]),
-            m("agent_message", 2, ["content": "有两个方案", "question": ["id": "q1", "text": "删旧接口？"]]),
+            m("user_message", 1, ["content": "\u{8FC1}\u{79FB}\u{63A5}\u{53E3}"]),
+            m("agent_message", 2, ["content": "\u{6709}\u{4E24}\u{4E2A}\u{65B9}\u{6848}", "question": ["id": "q1", "text": "\u{5220}\u{65E7}\u{63A5}\u{53E3}\u{FF1F}"]]),
             m("agent_message", 3, ["content": "partial"]),
             m("turn_status", 4, ["draft": "", "action": ["type": "user_abort", "payload": ["abortedAt": "x"]]]),
             m("idle", 5, [:]),
@@ -1270,8 +1270,8 @@ final class ChatUXRegressionTests: XCTestCase {
                         payload: payload.mapValues(AnyCodable.init))
         }
         let raw = [
-            m("user_message", 1, ["content": "迁移接口"]),
-            m("agent_message", 2, ["content": "有两个方案", "question": ["id": "q1", "text": "删旧接口？", "choices": ["删"]]]),
+            m("user_message", 1, ["content": "\u{8FC1}\u{79FB}\u{63A5}\u{53E3}"]),
+            m("agent_message", 2, ["content": "\u{6709}\u{4E24}\u{4E2A}\u{65B9}\u{6848}", "question": ["id": "q1", "text": "\u{5220}\u{65E7}\u{63A5}\u{53E3}\u{FF1F}", "choices": ["\u{5220}"]]]),
             m("turn_status", 3, ["draft": "", "action": ["type": "user_abort", "payload": ["abortedAt": "x"]]]),
             m("idle", 4, [:]),
         ]
@@ -1280,7 +1280,7 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertNil(projected.first { $0.seq == 3 }, "no separate User aborted bubble")
         let card = projected.first { $0.seq == 2 }?.frozenCard
         XCTAssertEqual(card?.action?.type, "user_abort")
-        XCTAssertEqual(card?.text, "有两个方案\n\n**删旧接口？**")
+        XCTAssertEqual(card?.text, "\u{6709}\u{4E24}\u{4E2A}\u{65B9}\u{6848}\n\n**\u{5220}\u{65E7}\u{63A5}\u{53E3}\u{FF1F}**")
     }
 
     /// The fallback draft of a draft-less terminal status is the turn's last
@@ -1291,9 +1291,9 @@ final class ChatUXRegressionTests: XCTestCase {
                         payload: payload.mapValues(AnyCodable.init))
         }
         let raw = [
-            m("agent_message", 1, ["content": "上一轮的回复"]),
-            m("user_message", 2, ["content": "继续"]),
-            m("agent_message", 3, ["content": "", "question": ["id": "q1", "text": "删？"]]),
+            m("agent_message", 1, ["content": "\u{4E0A}\u{4E00}\u{8F6E}\u{7684}\u{56DE}\u{590D}"]),
+            m("user_message", 2, ["content": "\u{7EE7}\u{7EED}"]),
+            m("agent_message", 3, ["content": "", "question": ["id": "q1", "text": "\u{5220}\u{FF1F}"]]),
             m("turn_status", 4, ["draft": "", "action": ["type": "user_abort", "payload": [String: Any]()]]),
             m("idle", 5, [:]),
         ]
@@ -1320,9 +1320,9 @@ final class ChatUXRegressionTests: XCTestCase {
                         payload: payload.mapValues(AnyCodable.init))
         }
         let raw = [
-            m("agent_message", 1, ["content": "", "question": ["id": "q1", "text": "一？"]]),
-            m("agent_message", 2, ["content": "", "question": ["id": "q2", "text": "二？"]]),
-            m("user_message", 3, ["content": "好", "answerTo": "q2"]),
+            m("agent_message", 1, ["content": "", "question": ["id": "q1", "text": "\u{4E00}\u{FF1F}"]]),
+            m("agent_message", 2, ["content": "", "question": ["id": "q2", "text": "\u{4E8C}\u{FF1F}"]]),
+            m("user_message", 3, ["content": "\u{597D}", "answerTo": "q2"]),
         ]
         let presented = ChatViewModel.presentingQuestions(raw, pending: [], atHead: true)
         XCTAssertEqual(presented[0].questionPresentation?.state, .open)
@@ -1358,7 +1358,7 @@ final class ChatUXRegressionTests: XCTestCase {
         // New content while away is counted on ↓.
         let arrival = try JSONSerialization.data(withJSONObject: [
             "type": "agent_message", "seq": 121, "sessionId": sid, "deviceId": dev,
-            "timestamp": "2026-09-01T00:00:05.000Z", "payload": ["content": "新的回复"],
+            "timestamp": "2026-09-01T00:00:05.000Z", "payload": ["content": "\u{65B0}\u{7684}\u{56DE}\u{590D}"],
         ])
         fx.app.messageProvider?.ingestTailCandidate(sid, json: arrival)
         fx.vc.syncLiveUpdates()

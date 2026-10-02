@@ -22,7 +22,7 @@ describe('title helpers', () => {
   it('cleans model output into a single short title', () => {
     expect(cleanTitle('"Fix flaky stats tests."')).toBe('Fix flaky stats tests');
     expect(cleanTitle('Title: Refactor auth\nextra line')).toBe('Refactor auth');
-    expect(cleanTitle('<think>hmm</think>\n修复 stats.py 测试用例。')).toBe('修复 stats.py 测试用例');
+    expect(cleanTitle('<think>hmm</think>\n\u4FEE\u590D stats.py \u6D4B\u8BD5\u7528\u4F8B\u3002')).toBe('\u4FEE\u590D stats.py \u6D4B\u8BD5\u7528\u4F8B');
     expect(cleanTitle('**Kraki Codex adapter**')).toBe('Kraki Codex adapter');
     expect(cleanTitle('')).toBeNull();
     expect(cleanTitle('x'.repeat(81))).toBeNull();
@@ -117,11 +117,11 @@ describe('PiAdapter title', () => {
   it("runs a one-shot `pi --print` on the session's provider/model with everything off", async () => {
     const argvFile = join(dir, 'argv.json');
     const fakePi = join(dir, 'pi');
-    writeFileSync(fakePi, `#!${process.execPath}\nrequire('fs').writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)));\nprocess.stdout.write('修复 stats.py 测试\\n');\n`);
+    writeFileSync(fakePi, `#!${process.execPath}\nrequire('fs').writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)));\nprocess.stdout.write('\u4FEE\u590D stats.py \u6D4B\u8BD5\\n');\n`);
     chmodSync(fakePi, 0o755);
     const pi = new PiAdapter({ cliPath: fakePi });
-    const title = await pi.generateTitle('s1', { firstUserMessage: '帮我修测试', model: 'deepseek/deepseek-flash' });
-    expect(title).toBe('修复 stats.py 测试');
+    const title = await pi.generateTitle('s1', { firstUserMessage: '\u5E2E\u6211\u4FEE\u6D4B\u8BD5', model: 'deepseek/deepseek-flash' });
+    expect(title).toBe('\u4FEE\u590D stats.py \u6D4B\u8BD5');
     const argv = JSON.parse(readFileSync(argvFile, 'utf8')) as string[];
     for (const flag of ['--print', '--no-session', '--no-tools', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files']) {
       expect(argv).toContain(flag);
@@ -129,7 +129,7 @@ describe('PiAdapter title', () => {
     expect(argv.slice(argv.indexOf('--provider'), argv.indexOf('--provider') + 2)).toEqual(['--provider', 'deepseek']);
     expect(argv.slice(argv.indexOf('--model'), argv.indexOf('--model') + 2)).toEqual(['--model', 'deepseek-flash']);
     expect(argv.slice(argv.indexOf('--thinking'), argv.indexOf('--thinking') + 2)).toEqual(['--thinking', 'off']);
-    expect(argv.at(-1)).toContain('帮我修测试');
+    expect(argv.at(-1)).toContain('\u5E2E\u6211\u4FEE\u6D4B\u8BD5');
   });
 
   it('returns null (no title) when pi fails', async () => {

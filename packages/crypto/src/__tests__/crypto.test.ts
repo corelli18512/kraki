@@ -56,7 +56,7 @@ describe('@kraki/crypto', () => {
     });
 
     it('should encrypt and decrypt unicode content', () => {
-      const msg = '🦑 Kraki says: 你好世界! Ωmega ñoño';
+      const msg = '🦑 Kraki says: \u4F60\u597D\u4E16\u754C! Ωmega ñoño';
       const recipients: RecipientKey[] = [{ deviceId, publicKey: kp.publicKey }];
       const payload = encrypt(msg, recipients);
       expect(decrypt(payload, deviceId, kp.privateKey)).toBe(msg);

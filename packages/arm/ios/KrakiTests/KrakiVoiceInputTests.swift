@@ -1293,7 +1293,7 @@ final class KrakiVoiceInputTests: XCTestCase {
         )
         let context = VoiceSessionContextBuilder.build(session: session, recentMessages: [message], userVocabulary: [])
         XCTAssertTrue(context.vocabulary.contains("KrakiVoiceInputController"))
-        XCTAssertFalse(context.vocabulary.contains { $0.contains("克拉奇") }, "no built-in product vocabulary")
+        XCTAssertFalse(context.vocabulary.contains { $0.contains("\u{514B}\u{62C9}\u{5947}") }, "no built-in product vocabulary")
         XCTAssertFalse(context.vocabulary.contains(secretSentence))
         guard case .object(let sessionFields)? = context.fields["session"],
               case .array(let terms)? = sessionFields["terms"] else {
@@ -1314,9 +1314,9 @@ final class KrakiVoiceInputTests: XCTestCase {
                                   createdAt: Date(), pinned: false)
         let context = VoiceSessionContextBuilder.build(
             session: session, recentMessages: [],
-            userVocabulary: VoiceVocabulary.parse("# mine\nKraki = 克拉奇, 克拉基\n\n  Tentacle  \nkraki = dup\n")
+            userVocabulary: VoiceVocabulary.parse("# mine\nKraki = \u{514B}\u{62C9}\u{5947}, \u{514B}\u{62C9}\u{57FA}\n\n  Tentacle  \nkraki = dup\n")
         )
-        XCTAssertEqual(Array(context.vocabulary.prefix(2)), ["Kraki = 克拉奇, 克拉基", "Tentacle"])
+        XCTAssertEqual(Array(context.vocabulary.prefix(2)), ["Kraki = \u{514B}\u{62C9}\u{5947}, \u{514B}\u{62C9}\u{57FA}", "Tentacle"])
         XCTAssertFalse(context.vocabulary.contains("Tentacle work") && context.vocabulary.filter { $0 == "Tentacle" }.count > 1)
         XCTAssertEqual(VoiceVocabulary.parse("kraki = a\nKRAKI = a\n").count, 1, "case-insensitive duplicates")
         let many = (0..<150).map { "term\($0)" }.joined(separator: "\n")
@@ -1327,21 +1327,21 @@ final class KrakiVoiceInputTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "kraki-vocab-\(UUID().uuidString)"))
         let store = VoiceVocabularyStore(defaults: defaults)
         XCTAssertTrue(store.terms.isEmpty)
-        store.upsert(VoiceTerm(term: "PostgreSQL", heardAs: "post gress，破四格、 "))
+        store.upsert(VoiceTerm(term: "PostgreSQL", heardAs: "post gress\u{FF0C}\u{7834}\u{56DB}\u{683C}\u{3001} "))
         store.upsert(VoiceTerm(term: "Kubernetes"))
         store.upsert(VoiceTerm(term: "  "))                       // a row still being typed
         store.upsert(VoiceTerm(term: "postgresql", heardAs: "x")) // duplicate: first wins
-        XCTAssertEqual(VoiceVocabulary.load(defaults), ["PostgreSQL = post gress, 破四格", "Kubernetes"])
+        XCTAssertEqual(VoiceVocabulary.load(defaults), ["PostgreSQL = post gress, \u{7834}\u{56DB}\u{683C}", "Kubernetes"])
         XCTAssertEqual(store.savedCount, 3)
         XCTAssertTrue(store.isDuplicate("POSTGRESQL", excluding: nil))
 
-        var edited = store.terms[1]; edited.heardAs = "酷伯内提斯"
+        var edited = store.terms[1]; edited.heardAs = "\u{9177}\u{4F2F}\u{5185}\u{63D0}\u{65AF}"
         store.upsert(edited)
         store.remove(store.terms[0].id)
         let reloaded = VoiceVocabularyStore(defaults: defaults)
-        XCTAssertEqual(reloaded.terms.map(\.line), ["Kubernetes = 酷伯内提斯", "postgresql = x"])
+        XCTAssertEqual(reloaded.terms.map(\.line), ["Kubernetes = \u{9177}\u{4F2F}\u{5185}\u{63D0}\u{65AF}", "postgresql = x"])
 
-        XCTAssertEqual(VoiceVocabulary.parse("# note\nFoo ＝ 福欧\n= orphan\n"), ["Foo = 福欧"], "old text format still loads")
+        XCTAssertEqual(VoiceVocabulary.parse("# note\nFoo \u{FF1D} \u{798F}\u{6B27}\n= orphan\n"), ["Foo = \u{798F}\u{6B27}"], "old text format still loads")
     }
 
     func testWithoutConversationContextOnlyCustomWordsLeaveTheDevice() {
@@ -1351,8 +1351,8 @@ final class KrakiVoiceInputTests: XCTestCase {
         let message = ChatMessage(type: "user_message", seq: 1, sessionId: "s", deviceId: "d", timestamp: nil,
                                   payload: ["content": AnyCodable("ship InternalCodename-v2 today")])
         let off = VoiceSessionContextBuilder.build(session: session, recentMessages: [message],
-                                                   userVocabulary: ["Kraki = 克拉奇"], shareConversation: false)
-        XCTAssertEqual(off.vocabulary, ["Kraki = 克拉奇"])
+                                                   userVocabulary: ["Kraki = \u{514B}\u{62C9}\u{5947}"], shareConversation: false)
+        XCTAssertEqual(off.vocabulary, ["Kraki = \u{514B}\u{62C9}\u{5947}"])
         XCTAssertNil(off.fields["session"])
         XCTAssertNil(off.fields["sessionId"])
         let on = VoiceSessionContextBuilder.build(session: session, recentMessages: [message],
@@ -1384,14 +1384,14 @@ final class KrakiVoiceInputTests: XCTestCase {
     func testCustomWordEdgeCasesNeverCorruptStorage() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "kraki-vocab-\(UUID().uuidString)"))
         let store = VoiceVocabularyStore(defaults: defaults)
-        store.upsert(VoiceTerm(term: "Foo", heardAs: "福欧\n富欧"))     // newline in the multi-line field
+        store.upsert(VoiceTerm(term: "Foo", heardAs: "\u{798F}\u{6B27}\n\u{5BCC}\u{6B27}"))     // newline in the multi-line field
         store.upsert(VoiceTerm(term: "a=b", heardAs: "x"))              // '=' in the word
         store.upsert(VoiceTerm(term: "#tag"))                           // would read back as a comment
         store.upsert(VoiceTerm(term: String(repeating: "x", count: 130)))
-        XCTAssertEqual(VoiceVocabulary.load(defaults), ["Foo = 福欧, 富欧"])
+        XCTAssertEqual(VoiceVocabulary.load(defaults), ["Foo = \u{798F}\u{6B27}, \u{5BCC}\u{6B27}"])
         XCTAssertNotNil(store.terms[1].problem)
         XCTAssertNotNil(store.terms[2].problem)
         XCTAssertNotNil(store.terms[3].problem)
-        XCTAssertEqual(VoiceVocabularyStore(defaults: defaults).terms.map(\.line), ["Foo = 福欧, 富欧"])
+        XCTAssertEqual(VoiceVocabularyStore(defaults: defaults).terms.map(\.line), ["Foo = \u{798F}\u{6B27}, \u{5BCC}\u{6B27}"])
     }
 }

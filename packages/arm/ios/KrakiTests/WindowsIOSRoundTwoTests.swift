@@ -6,7 +6,7 @@ import UIKit
 @MainActor
 final class WindowsIOSRoundTwoTests: XCTestCase {
     func testFenceNestedInAListItemIsACodeBlockWithoutItsIndent() {
-        let text = "- **输出**：\n  ```\n  Kraki on Windows OK\n  Node v22\n  ```\n\ndone"
+        let text = "- **\u{8F93}\u{51FA}**\u{FF1A}\n  ```\n  Kraki on Windows OK\n  Node v22\n  ```\n\ndone"
         let segments = splitMessageBody(text)
         let code = segments.compactMap { seg -> String? in
             if case .codeBlock(_, let code) = seg { return code }
@@ -65,7 +65,7 @@ final class MarkdownEmphasisRulesTests: XCTestCase {
     }
 
     func testWindowsPathsKeepTheirBackslashes() {
-        XCTAssertEqual(parseMarkdownInline(#"看一下 C:\kraki-ios\hello.js"#).map(\.text).joined(), #"看一下 C:\kraki-ios\hello.js"#)
+        XCTAssertEqual(parseMarkdownInline(#"\#u{770B}\#u{4E00}\#u{4E0B} C:\kraki-ios\hello.js"#).map(\.text).joined(), #"\#u{770B}\#u{4E00}\#u{4E0B} C:\kraki-ios\hello.js"#)
         XCTAssertEqual(parseMarkdownInline(#"literal \*star\*"#).map(\.text).joined(), "literal *star*")
     }
 

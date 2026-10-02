@@ -161,7 +161,7 @@ enum IOSChatAlignmentPreviewFixture {
                 ChatMessage(
                     type: "user_message", seq: 5, sessionId: sessionID,
                     deviceId: deviceID, timestamp: "2026-08-03T00:00:04Z",
-                    payload: ["content": AnyCodable("写一份完整的发布检查方案，带代码和表格。")]
+                    payload: ["content": AnyCodable("\u{5199}\u{4E00}\u{4EFD}\u{5B8C}\u{6574}\u{7684}\u{53D1}\u{5E03}\u{68C0}\u{67E5}\u{65B9}\u{6848}\u{FF0C}\u{5E26}\u{4EE3}\u{7801}\u{548C}\u{8868}\u{683C}\u{3002}")]
                 ),
             ]
             try database.insert(sessionID, messages)
@@ -235,13 +235,13 @@ struct IOSChatAlignmentPreview: View {
     /// Realistic streamed answer: CJK prose, fenced code, list and table,
     /// long enough to exceed several screens and several render chunks.
     static let streamedAnswer: String = {
-        let zh = "好的，我先梳理发布前需要确认的事项。首先要确认服务端配置和客户端版本一致，然后检查推送证书、数据库迁移和回滚方案。每一步都需要有明确的负责人和验收标准，避免上线后才发现问题。"
+        let zh = "\u{597D}\u{7684}\u{FF0C}\u{6211}\u{5148}\u{68B3}\u{7406}\u{53D1}\u{5E03}\u{524D}\u{9700}\u{8981}\u{786E}\u{8BA4}\u{7684}\u{4E8B}\u{9879}\u{3002}\u{9996}\u{5148}\u{8981}\u{786E}\u{8BA4}\u{670D}\u{52A1}\u{7AEF}\u{914D}\u{7F6E}\u{548C}\u{5BA2}\u{6237}\u{7AEF}\u{7248}\u{672C}\u{4E00}\u{81F4}\u{FF0C}\u{7136}\u{540E}\u{68C0}\u{67E5}\u{63A8}\u{9001}\u{8BC1}\u{4E66}\u{3001}\u{6570}\u{636E}\u{5E93}\u{8FC1}\u{79FB}\u{548C}\u{56DE}\u{6EDA}\u{65B9}\u{6848}\u{3002}\u{6BCF}\u{4E00}\u{6B65}\u{90FD}\u{9700}\u{8981}\u{6709}\u{660E}\u{786E}\u{7684}\u{8D1F}\u{8D23}\u{4EBA}\u{548C}\u{9A8C}\u{6536}\u{6807}\u{51C6}\u{FF0C}\u{907F}\u{514D}\u{4E0A}\u{7EBF}\u{540E}\u{624D}\u{53D1}\u{73B0}\u{95EE}\u{9898}\u{3002}"
         let code = "```swift\nfunc verifyRelease() async throws {\n    let manifest = try await api.fetchManifest()\n    guard manifest.version == Bundle.main.version else {\n        throw ReleaseError.versionMismatch\n    }\n    try await migrations.dryRun()\n}\n```"
-        let list = "检查清单：\n\n1. 版本号与构建号\n2. 证书与签名\n3. 数据迁移演练\n4. 回滚脚本\n5. 监控与告警\n\n- 风险：中\n- 需要灰度：是"
-        let table = "| 项目 | 负责人 | 状态 |\n|---|---|---|\n| 签名 | 张三 | 完成 |\n| 迁移 | 李四 | 进行中 |\n| 监控 | 王五 | 待开始 |"
+        let list = "\u{68C0}\u{67E5}\u{6E05}\u{5355}\u{FF1A}\n\n1. \u{7248}\u{672C}\u{53F7}\u{4E0E}\u{6784}\u{5EFA}\u{53F7}\n2. \u{8BC1}\u{4E66}\u{4E0E}\u{7B7E}\u{540D}\n3. \u{6570}\u{636E}\u{8FC1}\u{79FB}\u{6F14}\u{7EC3}\n4. \u{56DE}\u{6EDA}\u{811A}\u{672C}\n5. \u{76D1}\u{63A7}\u{4E0E}\u{544A}\u{8B66}\n\n- \u{98CE}\u{9669}\u{FF1A}\u{4E2D}\n- \u{9700}\u{8981}\u{7070}\u{5EA6}\u{FF1A}\u{662F}"
+        let table = "| \u{9879}\u{76EE} | \u{8D1F}\u{8D23}\u{4EBA} | \u{72B6}\u{6001} |\n|---|---|---|\n| \u{7B7E}\u{540D} | \u{5F20}\u{4E09} | \u{5B8C}\u{6210} |\n| \u{8FC1}\u{79FB} | \u{674E}\u{56DB} | \u{8FDB}\u{884C}\u{4E2D} |\n| \u{76D1}\u{63A7} | \u{738B}\u{4E94} | \u{5F85}\u{5F00}\u{59CB} |"
         let en = "Once these are green, cut the release branch, tag it, and let the staged rollout run for 24 hours before widening."
         return (0..<4).map { index in
-            "## 第 \(index + 1) 部分\n\n\(zh)\n\n\(code)\n\n\(list)\n\n\(table)\n\n\(en)"
+            "## \u{7B2C} \(index + 1) \u{90E8}\u{5206}\n\n\(zh)\n\n\(code)\n\n\(list)\n\n\(table)\n\n\(en)"
         }.joined(separator: "\n\n")
     }()
 

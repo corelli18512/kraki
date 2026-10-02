@@ -19,8 +19,8 @@ import CryptoKit
     private var sentAnswerIDs: [String?] = []
     private var sentDeliveries: [String?] = []
     private let sid = "voice-a"
-    private let raw = "请把这个功能接入 Kraki 保留原来的输入框"
-    private let corrected = "请把这个功能接入 Kraki，保留原来的输入框。"
+    private let raw = "\u{8BF7}\u{628A}\u{8FD9}\u{4E2A}\u{529F}\u{80FD}\u{63A5}\u{5165} Kraki \u{4FDD}\u{7559}\u{539F}\u{6765}\u{7684}\u{8F93}\u{5165}\u{6846}"
+    private let corrected = "\u{8BF7}\u{628A}\u{8FD9}\u{4E2A}\u{529F}\u{80FD}\u{63A5}\u{5165} Kraki\u{FF0C}\u{4FDD}\u{7559}\u{539F}\u{6765}\u{7684}\u{8F93}\u{5165}\u{6846}\u{3002}"
 
     override func setUp() {
         super.setUp()
@@ -153,15 +153,15 @@ import CryptoKit
             try capture("padding-fixed-" + name)
         }
         let samples: [(String, String, CGFloat)] = [
-            ("one", "第一行文字", 36), ("two", "第一行文字\n第二行文字", 54),
-            ("three", "第一行文字\n第二行文字\n第三行文字", 72),
-            ("overflow", String(repeating: "这是一段自动换行的中文文字。", count: 20), 72)
+            ("one", "\u{7B2C}\u{4E00}\u{884C}\u{6587}\u{5B57}", 36), ("two", "\u{7B2C}\u{4E00}\u{884C}\u{6587}\u{5B57}\n\u{7B2C}\u{4E8C}\u{884C}\u{6587}\u{5B57}", 54),
+            ("three", "\u{7B2C}\u{4E00}\u{884C}\u{6587}\u{5B57}\n\u{7B2C}\u{4E8C}\u{884C}\u{6587}\u{5B57}\n\u{7B2C}\u{4E09}\u{884C}\u{6587}\u{5B57}", 72),
+            ("overflow", String(repeating: "\u{8FD9}\u{662F}\u{4E00}\u{6BB5}\u{81EA}\u{52A8}\u{6362}\u{884C}\u{7684}\u{4E2D}\u{6587}\u{6587}\u{5B57}\u{3002}", count: 20), 72)
         ]
         for (name, text, height) in samples {
             app.sessionStore.setDraft(sid, text)
             try measure("typed-" + name, voice: false, expectedHeight: height)
         }
-        app.sessionStore.setDraft(sid, "第一行文字\n")
+        app.sessionStore.setDraft(sid, "\u{7B2C}\u{4E00}\u{884C}\u{6587}\u{5B57}\n")
         try measure("typed-trailing-newline", voice: false, expectedHeight: 54)
         app.sessionStore.setDraft(sid, "")
         app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
@@ -205,7 +205,7 @@ import CryptoKit
         let question: [String: Any] = [
             "type": "agent_message", "seq": 1, "sessionId": sid, "deviceId": "voice-test-device",
             "timestamp": ISO8601.now(),
-            "payload": ["content": "我看了一下，有两个方案。", "question": ["id": "cold-q", "text": "选哪个？", "choices": ["方案甲", "方案乙"]]]
+            "payload": ["content": "\u{6211}\u{770B}\u{4E86}\u{4E00}\u{4E0B}\u{FF0C}\u{6709}\u{4E24}\u{4E2A}\u{65B9}\u{6848}\u{3002}", "question": ["id": "cold-q", "text": "\u{9009}\u{54EA}\u{4E2A}\u{FF1F}", "choices": ["\u{65B9}\u{6848}\u{7532}", "\u{65B9}\u{6848}\u{4E59}"]]]
         ]
         app.messageProvider?.ingestTailCandidate(sid, json: try JSONSerialization.data(withJSONObject: question))
         drain(700)
@@ -220,7 +220,7 @@ import CryptoKit
         drain(900)
         let after = choices()
         XCTAssertNil(before, "undetermined while the head is unknown")
-        XCTAssertEqual(after, ["方案甲", "方案乙"], "choices must appear once the head is known")
+        XCTAssertEqual(after, ["\u{65B9}\u{6848}\u{7532}", "\u{65B9}\u{6848}\u{4E59}"], "choices must appear once the head is known")
     }
 
     func testNativeSendCorrectsInBubbleAndFreesComposer() throws {
@@ -243,13 +243,13 @@ import CryptoKit
         let color = body.attribute(.foregroundColor, at: body.length - 1, effectiveRange: nil) as? NSColor
         XCTAssertEqual(color?.alphaComponent ?? 0, 0.5, accuracy: 0.01)
         try capture("03-bubble-correcting")
-        app.sessionStore.setDraft(sid, "下一条消息可以继续输入")
+        app.sessionStore.setDraft(sid, "\u{4E0B}\u{4E00}\u{6761}\u{6D88}\u{606F}\u{53EF}\u{4EE5}\u{7EE7}\u{7EED}\u{8F93}\u{5165}")
         drain(80)
         try press("voice-send")
         XCTAssertTrue(sent.isEmpty, "typed follow-up waits for voice correction, preserving send order")
         drain(2100)
         XCTAssertEqual(sent, [corrected])
-        XCTAssertEqual(app.sessionStore.drafts[sid], "下一条消息可以继续输入")
+        XCTAssertEqual(app.sessionStore.drafts[sid], "\u{4E0B}\u{4E00}\u{6761}\u{6D88}\u{606F}\u{53EF}\u{4EE5}\u{7EE7}\u{7EED}\u{8F93}\u{5165}")
         try capture("04-sent")
     }
     private func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { views($0) } }
@@ -258,7 +258,7 @@ import CryptoKit
         for action in ["Send Original", "Delete"] {
             try press("chat-voice-microphone")
             try press("voice-send")
-            app.voiceInputController.debugApplyPartial(raw + " 最后补充")
+            app.voiceInputController.debugApplyPartial(raw + " \u{6700}\u{540E}\u{8865}\u{5145}")
             drain(120)
             let cell = try XCTUnwrap(views(window.contentView!).compactMap { $0 as? MacChatBubbleCell }.first(where: {
                 $0.deliveryStatusForRegression?.contains("Correcting") == true
@@ -271,7 +271,7 @@ import CryptoKit
             XCTAssertGreaterThanOrEqual(index, 0)
             menu.performActionForItem(at: index)
             drain(2100)
-            XCTAssertEqual(sent, [raw + " 最后补充"], "late correction must not resend or resurrect deleted input")
+            XCTAssertEqual(sent, [raw + " \u{6700}\u{540E}\u{8865}\u{5145}"], "late correction must not resend or resurrect deleted input")
             app.commandSender?.clearAllPending(sid)
             drain(100)
         }
@@ -317,7 +317,7 @@ import CryptoKit
         let question: [String: Any] = [
             "type": "agent_message", "seq": 1, "sessionId": sid, "deviceId": "voice-test-device",
             "timestamp": ISO8601.now(),
-            "payload": ["content": "我需要确认一下。", "question": ["id": questionID, "text": "新会话默认用哪个模型？"]]
+            "payload": ["content": "\u{6211}\u{9700}\u{8981}\u{786E}\u{8BA4}\u{4E00}\u{4E0B}\u{3002}", "question": ["id": questionID, "text": "\u{65B0}\u{4F1A}\u{8BDD}\u{9ED8}\u{8BA4}\u{7528}\u{54EA}\u{4E2A}\u{6A21}\u{578B}\u{FF1F}"]]
         ]
         app.messageProvider?.ingestTailCandidate(sid, json: try JSONSerialization.data(withJSONObject: question))
         app.sessionStore.sessions[sid]?.lastSeq = 1
@@ -396,7 +396,7 @@ import CryptoKit
         XCTAssertEqual(transcript.convert(transcript.bounds, to: window.contentView), initialFrame,
                        "background audio animation must not change text layout")
         // Multi-line speech still uses the full native scroll document.
-        app.voiceInputController.debugApplyPartial(String(repeating: "这是一段较长的语音，需要保留最新的文字。", count: 12))
+        app.voiceInputController.debugApplyPartial(String(repeating: "\u{8FD9}\u{662F}\u{4E00}\u{6BB5}\u{8F83}\u{957F}\u{7684}\u{8BED}\u{97F3}\u{FF0C}\u{9700}\u{8981}\u{4FDD}\u{7559}\u{6700}\u{65B0}\u{7684}\u{6587}\u{5B57}\u{3002}", count: 12))
         drain(150)
         XCTAssertGreaterThan(transcript.contentHeight, MacComposerVoiceTranscriptView.lineHeight * 2)
         XCTAssertEqual(transcript.textDrawingRect.minY, 0, accuracy: 0.5)
@@ -416,12 +416,12 @@ import CryptoKit
         XCTAssertEqual(sent, [corrected])
     }
     func testCancelKeepsExistingDraftAndLateResultCannotSend() throws {
-        app.sessionStore.setDraft(sid, "保留的草稿")
+        app.sessionStore.setDraft(sid, "\u{4FDD}\u{7559}\u{7684}\u{8349}\u{7A3F}")
         drain(150)
         try press("chat-voice-microphone")
         try press("voice-cancel")
         drain(2100)
-        XCTAssertEqual(app.sessionStore.drafts[sid], "保留的草稿")
+        XCTAssertEqual(app.sessionStore.drafts[sid], "\u{4FDD}\u{7559}\u{7684}\u{8349}\u{7A3F}")
         XCTAssertTrue(sent.isEmpty)
         XCTAssertTrue(app.commandSender?.pendingInputs(sid).isEmpty == true)
     }

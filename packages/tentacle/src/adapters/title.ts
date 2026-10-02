@@ -60,9 +60,9 @@ export function cleanTitle(raw: string | null | undefined): string | null {
   title = title.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
   title = title.split('\n').map((l) => l.trim()).find((l) => l.length > 0) ?? '';
   title = title
-    .replace(/^(Title|Session)\s*[:：]\s*/i, '')
-    .replace(/^["'“”「」*#\s]+|["'“”「」*\s]+$/g, '')
-    .replace(/[.!。！]+$/, '')
+    .replace(/^(Title|Session)\s*[:\uFF1A]\s*/i, '')
+    .replace(/^["'“”\u300C\u300D*#\s]+|["'“”\u300C\u300D*\s]+$/g, '')
+    .replace(/[.!\u3002\uFF01]+$/, '')
     .trim();
   if (!title || title.length > 80) return null;
   return title;

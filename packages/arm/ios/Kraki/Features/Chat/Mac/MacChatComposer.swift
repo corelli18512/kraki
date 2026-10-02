@@ -1966,11 +1966,11 @@ enum MacComposerPasteFocusRegression {
                     // committed draft must publish while retaining the live
                     // native text view as first responder.
                     coordinator.wasComposing = true
-                    replacement.string = "中文输入"
+                    replacement.string = "\u{4E2D}\u{6587}\u{8F93}\u{5165}"
                     coordinator.textDidChange(
                         Notification(name: NSText.didChangeNotification, object: replacement)
                     )
-                    let imeDraftCommitted = state.text == "中文输入"
+                    let imeDraftCommitted = state.text == "\u{4E2D}\u{6587}\u{8F93}\u{5165}"
                     let imeRequestedFocus = state.focusRequest > 0
 
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {

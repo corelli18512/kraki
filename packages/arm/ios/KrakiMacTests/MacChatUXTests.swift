@@ -39,15 +39,15 @@ class MacChatUXTestCase: XCTestCase {
 
     // MARK: Corpus (same as iOS ChatUXRegressionTests)
 
-    static let zh = "好的，我来帮你看一下这个问题。首先我们需要确认服务端的配置是否正确，然后再检查客户端的网络请求是否带上了正确的鉴权头。如果两边都没有问题，那很可能是缓存导致的，建议先清一下本地缓存再重试。"
+    static let zh = "\u{597D}\u{7684}\u{FF0C}\u{6211}\u{6765}\u{5E2E}\u{4F60}\u{770B}\u{4E00}\u{4E0B}\u{8FD9}\u{4E2A}\u{95EE}\u{9898}\u{3002}\u{9996}\u{5148}\u{6211}\u{4EEC}\u{9700}\u{8981}\u{786E}\u{8BA4}\u{670D}\u{52A1}\u{7AEF}\u{7684}\u{914D}\u{7F6E}\u{662F}\u{5426}\u{6B63}\u{786E}\u{FF0C}\u{7136}\u{540E}\u{518D}\u{68C0}\u{67E5}\u{5BA2}\u{6237}\u{7AEF}\u{7684}\u{7F51}\u{7EDC}\u{8BF7}\u{6C42}\u{662F}\u{5426}\u{5E26}\u{4E0A}\u{4E86}\u{6B63}\u{786E}\u{7684}\u{9274}\u{6743}\u{5934}\u{3002}\u{5982}\u{679C}\u{4E24}\u{8FB9}\u{90FD}\u{6CA1}\u{6709}\u{95EE}\u{9898}\u{FF0C}\u{90A3}\u{5F88}\u{53EF}\u{80FD}\u{662F}\u{7F13}\u{5B58}\u{5BFC}\u{81F4}\u{7684}\u{FF0C}\u{5EFA}\u{8BAE}\u{5148}\u{6E05}\u{4E00}\u{4E0B}\u{672C}\u{5730}\u{7F13}\u{5B58}\u{518D}\u{91CD}\u{8BD5}\u{3002}"
     static let en = "Sure — I checked the relay configuration and the client request path. Both look correct, so the stale state is most likely coming from the local cache layer; clearing it and retrying should confirm."
-    static let code = "这是修改后的代码：\n\n```swift\nfunc load() async throws {\n    let url = URL(string: base)!\n    var req = URLRequest(url: url)\n    req.setValue(token, forHTTPHeaderField: \"Auth\")\n    let (data, _) = try await session.data(for: req)\n    cache.store(data)\n    try decode(data)\n}\n```\n\n改完后重新跑一下测试。"
-    static let list = "主要改动：\n\n1. 修复登录态过期\n2. 优化列表滚动\n3. 新增重试逻辑\n4. 删除旧接口\n5. 更新文档\n\n- 风险：低\n- 需要回归：是"
-    static let table = "| 指标 | 之前 | 之后 |\n|---|---|---|\n| 冷启动 | 1.8s | 0.9s |\n| 首屏 | 620ms | 310ms |\n| 掉帧 | 12% | 2% |"
-    static let user = "帮我看看为什么列表滚动的时候会跳，尤其是往上翻历史消息的时候"
+    static let code = "\u{8FD9}\u{662F}\u{4FEE}\u{6539}\u{540E}\u{7684}\u{4EE3}\u{7801}\u{FF1A}\n\n```swift\nfunc load() async throws {\n    let url = URL(string: base)!\n    var req = URLRequest(url: url)\n    req.setValue(token, forHTTPHeaderField: \"Auth\")\n    let (data, _) = try await session.data(for: req)\n    cache.store(data)\n    try decode(data)\n}\n```\n\n\u{6539}\u{5B8C}\u{540E}\u{91CD}\u{65B0}\u{8DD1}\u{4E00}\u{4E0B}\u{6D4B}\u{8BD5}\u{3002}"
+    static let list = "\u{4E3B}\u{8981}\u{6539}\u{52A8}\u{FF1A}\n\n1. \u{4FEE}\u{590D}\u{767B}\u{5F55}\u{6001}\u{8FC7}\u{671F}\n2. \u{4F18}\u{5316}\u{5217}\u{8868}\u{6EDA}\u{52A8}\n3. \u{65B0}\u{589E}\u{91CD}\u{8BD5}\u{903B}\u{8F91}\n4. \u{5220}\u{9664}\u{65E7}\u{63A5}\u{53E3}\n5. \u{66F4}\u{65B0}\u{6587}\u{6863}\n\n- \u{98CE}\u{9669}\u{FF1A}\u{4F4E}\n- \u{9700}\u{8981}\u{56DE}\u{5F52}\u{FF1A}\u{662F}"
+    static let table = "| \u{6307}\u{6807} | \u{4E4B}\u{524D} | \u{4E4B}\u{540E} |\n|---|---|---|\n| \u{51B7}\u{542F}\u{52A8} | 1.8s | 0.9s |\n| \u{9996}\u{5C4F} | 620ms | 310ms |\n| \u{6389}\u{5E27} | 12% | 2% |"
+    static let user = "\u{5E2E}\u{6211}\u{770B}\u{770B}\u{4E3A}\u{4EC0}\u{4E48}\u{5217}\u{8868}\u{6EDA}\u{52A8}\u{7684}\u{65F6}\u{5019}\u{4F1A}\u{8DF3}\u{FF0C}\u{5C24}\u{5176}\u{662F}\u{5F80}\u{4E0A}\u{7FFB}\u{5386}\u{53F2}\u{6D88}\u{606F}\u{7684}\u{65F6}\u{5019}"
 
     static func body(_ seq: Int) -> (type: String, text: String) {
-        if seq % 2 == 1 { return ("user_message", [user, "好的", "继续", en][seq / 2 % 4]) }
+        if seq % 2 == 1 { return ("user_message", [user, "\u{597D}\u{7684}", "\u{7EE7}\u{7EED}", en][seq / 2 % 4]) }
         let pool = [zh + "\n\n" + zh, code, list, en + " " + en, table, zh + zh + zh, code + "\n\n" + list]
         return ("agent_message", pool[(seq / 2) % pool.count])
     }
@@ -179,12 +179,12 @@ class MacChatUXTestCase: XCTestCase {
     func askQuestion(_ fx: Fx, seq: Int, choices: [String]) throws {
         try ingest(fx, ["type": "agent_message", "seq": seq, "sessionId": sid, "deviceId": dev,
                         "timestamp": "2026-09-01T00:00:03.000Z",
-                        "payload": ["content": "", "question": ["id": "q1", "text": "要不要顺便把旧接口也删掉？",
+                        "payload": ["content": "", "question": ["id": "q1", "text": "\u{8981}\u{4E0D}\u{8981}\u{987A}\u{4FBF}\u{628A}\u{65E7}\u{63A5}\u{53E3}\u{4E5F}\u{5220}\u{6389}\u{FF1F}",
                                                                 "choices": choices]]])
         fx.app.messageStore.endCardTurn(sid)
     }
 
-    func startTurn(_ fx: Fx, seq: Int, text: String = "继续") throws {
+    func startTurn(_ fx: Fx, seq: Int, text: String = "\u{7EE7}\u{7EED}") throws {
         fx.app.messageStore.beginCardTurn(sid)
         try ingest(fx, ["type": "user_message", "seq": seq, "sessionId": sid, "deviceId": dev,
                         "timestamp": "2026-09-01T00:00:01.000Z", "payload": ["content": text]])
@@ -532,7 +532,7 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
         for _ in 0..<30 { _ = fx.sv.automationPreciseScrollPacket(deltaY: 40); drain(8) }
         drain(900)
         print("UXPROBE send before dist=\(distanceToBottom(fx))")
-        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "新的问题：这个怎么修？")
+        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "\u{65B0}\u{7684}\u{95EE}\u{9898}\u{FF1A}\u{8FD9}\u{4E2A}\u{600E}\u{4E48}\u{4FEE}\u{FF1F}")
         NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
         for t in [50, 150, 400, 900] {
             drain(t == 50 ? 50 : t - [50, 150, 400, 900][[50, 150, 400, 900].firstIndex(of: t)! - 1])
@@ -584,7 +584,7 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
         let fx = try makeFixture(total: 20, outbound: { _ in outboundOK })
         fx.app.commandSender?.confirmationTimeout = .milliseconds(400)
         drain(1_000)
-        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "这条会发送失败")
+        _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "\u{8FD9}\u{6761}\u{4F1A}\u{53D1}\u{9001}\u{5931}\u{8D25}")
         func pendingStatus() -> String? {
             fx.doc.automationVisibleCells.last { $0.cell.content?.pendingClientId != nil }?.cell.deliveryStatusForRegression
         }
@@ -657,18 +657,18 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
             // 2. unconfirmed + sending inputs at the bottom, steps on the last reply
             fx.app.commandSender?.confirmationTimeout = .milliseconds(200)
             fx.sv.automationTapDown(); drain(600)
-            _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "这条没有发出去")
+            _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "\u{8FD9}\u{6761}\u{6CA1}\u{6709}\u{53D1}\u{51FA}\u{53BB}")
             drain(600)
             fx.app.commandSender?.confirmationTimeout = .seconds(20)
-            _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "这条正在发送")
+            _ = fx.app.commandSender?.sendInput(sessionId: sid, text: "\u{8FD9}\u{6761}\u{6B63}\u{5728}\u{53D1}\u{9001}")
             NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil, userInfo: ["sessionId": sid])
             drain(1_400)
             render(fx, "\(dir)/\(tag)-pending.png")
             // 3. answered question awaiting confirmation
             try startTurn(fx, seq: 43)
-            try askQuestion(fx, seq: 44, choices: ["删掉", "先保留"])
+            try askQuestion(fx, seq: 44, choices: ["\u{5220}\u{6389}", "\u{5148}\u{4FDD}\u{7559}"])
             drain(600)
-            _ = fx.app.commandSender?.answer(sessionId: sid, questionId: "q1", answer: "删掉")
+            _ = fx.app.commandSender?.answer(sessionId: sid, questionId: "q1", answer: "\u{5220}\u{6389}")
             drain(900)
             render(fx, "\(dir)/\(tag)-answer.png")
             windows.forEach { $0.orderOut(nil) }
@@ -679,9 +679,9 @@ final class MacChatUXProbeTests: MacChatUXTestCase {
         let fx = try makeFixture(total: 30)
         drain(1_000)
         try startTurn(fx, seq: 31)
-        try askQuestion(fx, seq: 32, choices: ["删掉", "先保留", "我自己来决定这个问题，先别动"])
+        try askQuestion(fx, seq: 32, choices: ["\u{5220}\u{6389}", "\u{5148}\u{4FDD}\u{7559}", "\u{6211}\u{81EA}\u{5DF1}\u{6765}\u{51B3}\u{5B9A}\u{8FD9}\u{4E2A}\u{95EE}\u{9898}\u{FF0C}\u{5148}\u{522B}\u{52A8}"])
         for t in 0..<8 { drain(60); print(String(format: "UXPROBE q t=%d dist=%.0f hidden=%.0f down=%@", t*60, distanceToBottom(fx), hiddenBelowComposer(fx), fx.sv.automationControlsVisible.down ? "Y" : "N")) }
-        _ = fx.app.commandSender?.answer(sessionId: sid, questionId: "q1", answer: "删掉")
+        _ = fx.app.commandSender?.answer(sessionId: sid, questionId: "q1", answer: "\u{5220}\u{6389}")
         for t in 0..<12 { drain(60); print(String(format: "UXPROBE a t=%d dist=%.0f hidden=%.0f down=%@ live=%@", t*60, distanceToBottom(fx), hiddenBelowComposer(fx), fx.sv.automationControlsVisible.down ? "Y" : "N", cells(fx).last.map { String(format: "h=%.0f cfg=%.0f", $0.h, $0.configured) } ?? "-")) }
     }
 
