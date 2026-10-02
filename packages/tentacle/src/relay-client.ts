@@ -3581,7 +3581,7 @@ export class RelayClient {
   }
   /** Reads the local quota history file for `request_usage_history`. */
   usageHistoryReader: ((since: number) => UsageHistorySample[]) | null = null;
-  private static readonly USAGE_HISTORY_MAX_SAMPLES = 50_000;
+  private static readonly USAGE_HISTORY_MAX_SAMPLES = 20_000;
 
   /** Latest read-only quota of this machine's subscription accounts; broadcast to online apps. */
   updateAccountUsage(accounts: AccountUsage[]): void {

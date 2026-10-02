@@ -594,7 +594,9 @@ export class AccountUsageMonitor {
     const byKey = new Map<string, Slot>();
     const agentsByKey = new Map<string, Set<string>>();
     for (const slot of this.slots.values()) {
-      if (!slot.account && !slot.error) continue;
+      // Only accounts read successfully at least once: a signed-out Codex home or a login that
+      // expired before the first reading has no identity worth a card.
+      if (!slot.account) continue;
       const key = slot.account?.accountKey ?? `${slot.cred.provider}-slot:${hash(slot.cred.sourceId)}`;
       const agents = agentsByKey.get(key) ?? new Set<string>();
       agents.add(agentForSource(slot.cred.sourceId));

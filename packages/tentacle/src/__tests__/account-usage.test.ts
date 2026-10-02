@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  AccountUsageMonitor, UsageClient, UsageHistory, discoverCredentials, hash, maskEmail,
+  AccountUsageMonitor, UsageAuthError, UsageClient, UsageHistory, discoverCredentials, hash, maskEmail,
   parseClaudeUsage, parseCodexAppServer, parseCodexUsage, retryAt, type FetchLike,
 } from '../account-usage.js';
 
@@ -184,5 +184,15 @@ describe('AccountUsageMonitor', () => {
     status = 200; now += 61_000;
     await monitor.refresh();
     expect(monitor.accounts[0].error).toBeUndefined();
+  });
+
+  it('a source that never produced a reading (signed-out Codex home) shows no card', async () => {
+    const root = tmp(), p = paths(root);
+    mkdirSync(p.codexHome);
+    const appServer = vi.fn(async () => { throw new UsageAuthError('Codex is not signed in'); });
+    const monitor = new AccountUsageMonitor({ paths: p, client: new UsageClient(fakeFetch({}), appServer) });
+    await monitor.refresh();
+    expect(appServer).toHaveBeenCalledTimes(1);
+    expect(monitor.accounts).toEqual([]);
   });
 });
