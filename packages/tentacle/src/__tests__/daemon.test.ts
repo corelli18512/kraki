@@ -55,6 +55,14 @@ vi.mock('node:os', () => ({
   homedir: vi.fn(() => '/tmp/fake-home'),
 }));
 
+// The daemon's lifecycle logic is what's under test here, not the platform's
+// way of ending a process tree (Windows: taskkill; see process-tree.ts).
+// Signal the process directly on every host so these tests mean the same on
+// the Windows release runner as on macOS/Linux.
+vi.mock('../process-tree.js', () => ({
+  killProcessTree: (pid: number, signal: NodeJS.Signals = 'SIGTERM') => { process.kill(pid, signal); },
+}));
+
 vi.mock('node:sea', () => ({
   isSea: (...args: unknown[]) => mockIsSea(...args),
 }));
