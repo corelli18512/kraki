@@ -97,7 +97,7 @@ export function Sidebar() {
           />
         ))}
         {sorted.length === 0 && query && <p className="ksb-noresults">No sessions match “{query}”.</p>}
-        {!query && <ArchivedSessions />}
+        {!query && <ArchivedSessions narrow={narrow} selectedId={sessionId} />}
       </div>
     );
 

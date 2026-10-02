@@ -30,17 +30,20 @@ final class ArchiveE2EUITests: XCTestCase {
         }
         devLogin.tap()
 
-        let archived = app.buttons["session-list-archived"]
-        XCTAssertTrue(archived.waitForExistence(timeout: 30), "Archived (N) row under the session list")
+        let archived = app.cells["session-list-archived"]
+        XCTAssertTrue(archived.waitForExistence(timeout: 30), "collapsed Archived (N) row under the session list")
+        let rowsBefore = app.cells.count
         sleep(1)
-        shot("1-list-footer")
+        shot("1-collapsed")
         archived.tap()
 
-        let row = app.buttons.containing(NSPredicate(format: "label CONTAINS[c] %@", "Reply with exactly")).firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 15), "archived sessions load from the computer")
+        // Expands in place: the archived sessions appear as normal rows.
+        let deadline = Date().addingTimeInterval(15)
+        while app.cells.count <= rowsBefore && Date() < deadline { usleep(200_000) }
+        XCTAssertGreaterThan(app.cells.count, rowsBefore, "archived sessions expand inline")
         sleep(1)
-        shot("2-archived-page")
-        row.tap()
+        shot("2-expanded")
+        app.cells.element(boundBy: app.cells.count - 1).tap()
 
         XCTAssertTrue(app.staticTexts["ok"].waitForExistence(timeout: 20), "opened archived session shows its history")
         sleep(1)

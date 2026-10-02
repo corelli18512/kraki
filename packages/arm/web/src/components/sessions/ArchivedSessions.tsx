@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router';
 import { Archive, ChevronDown, ChevronRight } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
+import type { SessionSummary } from '@kraki/protocol';
+import { SessionRow } from './SessionRow';
 
 /** Total archived sessions across this account's computers. */
 export function useArchivedCount(): number {
@@ -10,26 +11,22 @@ export function useArchivedCount(): number {
   return useMemo(() => [...info.values()].reduce((sum, i) => sum + i.count, 0), [info]);
 }
 
-function relativeDays(iso?: string): string {
-  if (!iso) return '';
-  const days = Math.floor((Date.now() - Date.parse(iso)) / 86_400_000);
-  if (!Number.isFinite(days) || days < 1) return 'today';
-  if (days < 60) return `${days}d ago`;
-  return `${Math.floor(days / 30)}mo ago`;
-}
-
 /**
  * Collapsed "Archived (N)" group at the bottom of the session list (F2).
- * Archived sessions are not sent with the session list; opening the group
- * asks each computer for its archived sessions. Opening one restores it.
+ * Archived sessions are not sent with the session list; expanding the group
+ * asks each computer for them and shows them as normal session rows.
+ * Opening one restores it.
  */
-export function ArchivedSessions() {
+export function ArchivedSessions({ narrow, selectedId }: { narrow: boolean; selectedId?: string }) {
   const count = useArchivedCount();
   const info = useStore((s) => s.archiveInfo);
   const archived = useStore((s) => s.archivedSessions);
   const devices = useStore((s) => s.devices);
   const [open, setOpen] = useState(false);
-  const navigate = useNavigate();
+
+  const rows = useMemo(() => [...archived.entries()]
+    .flatMap(([deviceId, sessions]) => sessions.map((s) => ({ deviceId, digest: s })))
+    .sort((a, b) => (b.digest.lastActivityAt ?? '').localeCompare(a.digest.lastActivityAt ?? '')), [archived]);
 
   if (count === 0) return null;
 
@@ -41,11 +38,6 @@ export function ArchivedSessions() {
     }
   };
 
-  const rows = [...archived.entries()]
-    .flatMap(([deviceId, sessions]) => sessions.map((s) => ({ deviceId, session: s })))
-    .sort((a, b) => (b.session.lastActivityAt ?? '').localeCompare(a.session.lastActivityAt ?? ''));
-  const loading = open && rows.length === 0;
-
   return (
     <div className="ksb-archived">
       <button type="button" className="ksb-archived-toggle" aria-expanded={open} onClick={toggle}>
@@ -53,28 +45,32 @@ export function ArchivedSessions() {
         <Archive />
         <span>Archived ({count})</span>
       </button>
-      {open && (
-        <div className="ksb-archived-list" role="list">
-          {loading && <p className="ksb-archived-hint">Loading…</p>}
-          {rows.map(({ deviceId, session }) => (
-            <button
-              key={session.id}
-              type="button"
-              role="listitem"
-              className="ksb-archived-row"
-              onClick={() => {
-                wsClient.openArchivedSession(deviceId, session);
-                navigate(`/session/${session.id}`);
-              }}
-            >
-              <span className="ksb-archived-title">{session.title || session.autoTitle || 'Untitled session'}</span>
-              <span className="ksb-archived-meta">
-                {devices.size > 1 ? `${devices.get(deviceId)?.name ?? ''} · ` : ''}{relativeDays(session.lastActivityAt)}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
+      {open && rows.length === 0 && <p className="ksb-archived-hint">Loading…</p>}
+      {open && rows.map(({ deviceId, digest }) => (
+        <SessionRow
+          key={digest.id}
+          session={{
+            id: digest.id,
+            deviceId,
+            deviceName: devices.get(deviceId)?.name ?? '',
+            agent: digest.agent,
+            model: digest.model,
+            title: digest.title,
+            autoTitle: digest.autoTitle,
+            state: 'idle',
+            messageCount: digest.messageCount,
+            lastSeq: digest.lastSeq,
+            readSeq: digest.readSeq,
+          } as SessionSummary}
+          selected={digest.id === selectedId}
+          pinned={false}
+          narrow={narrow}
+          archived={{
+            preview: digest.preview,
+            onOpen: () => wsClient.openArchivedSession(deviceId, digest),
+          }}
+        />
+      ))}
     </div>
   );
 }
