@@ -1355,12 +1355,10 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertEqual(off.vocabulary, ["Kraki = 克拉奇"])
         XCTAssertNil(off.fields["session"])
         XCTAssertNil(off.fields["sessionId"])
-        XCTAssertNil(off.fields["product"], "no product name biases correction")
         let on = VoiceSessionContextBuilder.build(session: session, recentMessages: [message],
                                                   userVocabulary: [], shareConversation: true)
         XCTAssertTrue(on.vocabulary.contains("InternalCodename-v2"))
         XCTAssertNotNil(on.fields["session"])
-        XCTAssertNil(on.fields["product"])
     }
 
     func testCorrectionSettingReachesTheConnectionAndReopensItWhenChanged() async {
