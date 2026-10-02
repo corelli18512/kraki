@@ -23,6 +23,11 @@ struct UsagePeekView: View {
         let outdated = appState.deviceStore.devicesNeedingUsageUpdate()
         let layoutKey = accounts.map(\.id).joined(separator: ",") + "|" + outdated.map(\.id).joined(separator: ",")
         GeometryReader { geometry in
+            VStack(spacing: 0) {
+            if !controller.inWindow {
+                UsagePeekTitleBar()
+                    .frame(height: UsagePeekLayout.floatingHeaderHeight)
+            }
             ZStack(alignment: .topTrailing) {
                 if detailed {
                     UsagePeekDetail(accounts: accounts, outdated: outdated, width: controller.detailedSize.width, currentKey: currentKey, ns: ns,
@@ -36,8 +41,10 @@ struct UsagePeekView: View {
                         .transition(.opacity.animation(.easeOut(duration: 0.12)))
                 }
             }
-            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topTrailing)
+            .frame(width: geometry.size.width, height: geometry.size.height - controller.headerHeight, alignment: .topTrailing)
             .clipped()
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: detailed ? 24 : 22, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: detailed ? 24 : 22, style: .continuous)
@@ -56,6 +63,24 @@ struct UsagePeekView: View {
             DispatchQueue.main.async { withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) { shown = true } }
         }
         .onChange(of: layoutKey) { _, _ in controller.contentDidChange() }
+    }
+}
+
+/// Identifies the floating panel as Kraki's when it appears over another app.
+private struct UsagePeekTitleBar: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            Image("KrakiLogo")
+                .resizable().scaledToFit()
+                .frame(width: 16, height: 16)
+            Text("Kraki").font(.system(size: 12, weight: .semibold))
+            Text("Account Usage").font(.system(size: 12)).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Kraki Account Usage")
     }
 }
 
