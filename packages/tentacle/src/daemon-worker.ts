@@ -17,6 +17,7 @@ import { platform } from 'node:os';
 import { getKrakiHome, loadConfig, saveConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady, clearDaemonIdentity } from './config.js';
 import { ensureWindowsSystemPath, probeFda, ensureTccBundleRegistered, cleanupStaleBundleEntries } from './checks.js';
 import { MultiAgentAdapter } from './adapters/multi.js';
+import { hideChildWindowsByDefault } from './windows-hide.js';
 
 // Self-heal PATH on Windows BEFORE any child process is spawned. The
 // daemon may have been started from a context with a minimal PATH
@@ -431,6 +432,7 @@ export async function startWorker(): Promise<WorkerResult> {
 // Auto-run when executed directly (not imported for testing)
 const isDirectRun = process.argv[1]?.endsWith('daemon-worker.js') || process.argv[1]?.endsWith('daemon-worker.ts');
 if (isDirectRun) {
+  hideChildWindowsByDefault();
   startWorker().catch((err) => {
     logger.fatal({ err }, 'Daemon failed to start');
     process.exit(1);
