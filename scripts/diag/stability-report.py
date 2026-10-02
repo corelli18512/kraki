@@ -216,9 +216,10 @@ def report(events, storms):
                          dist(f"{e.get('stage')}/{e.get('cause', '?')}" for e in failed),
                          fmt_ms(pct([e.get('startMs') for e in group], 95)),
                          fmt_ms(pct([e.get('finalizeMs') for e in finals], 50)), flag(pct([e.get('finalizeMs') for e in finals], 95), 4000),
-                         sum(1 for e in finals if not e.get('confirmed'))])
+                         sum(1 for e in finals if not e.get('confirmed') and e.get('correctionOn', True)),
+                         sum(1 for e in group if e.get('correctionOn') is False)])
         parts.append(table(['平台', '次数', '结果', '失败', '失败阶段/原因', '按下→开录 p95', '松手→结果 p50',
-                            '松手→结果 p95', '纠错未确认'], rows))
+                            '松手→结果 p95', '纠错未确认', '纠错已关闭'], rows))
         problems = [e for e in voice if e.get('outcome') in ('failed', 'suspended') or e.get('cause')]
         if problems:
             parts.append('<h3>语音问题</h3>' + table(

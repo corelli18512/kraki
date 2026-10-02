@@ -600,7 +600,7 @@ final class KrakiVoiceInputController {
         #if KRAKI_DIAG
         KrakiDiag.record(.voice, session: sessionID, [.source: .tag("recording.begin")])
         #endif
-        metrics.begin(warm: isConnectionWarm)
+        metrics.begin(warm: isConnectionWarm, correctionEnabled: VoiceInputSettings.correctionEnabled)
         let currentRecording = UUID()
         recordingGeneration = currentRecording
         leaseRolloverAttempt = 0
