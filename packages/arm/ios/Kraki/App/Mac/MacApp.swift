@@ -291,7 +291,7 @@ struct MacApp: App {
 
     @State private var appState: AppState
     @State private var tentacleCLI = TentacleCLIManager()
-    @State private var launchCoordinator = MacLaunchCoordinator()
+    @State private var launchCoordinator: MacLaunchCoordinator
     @AppStorage("colorScheme") private var colorScheme: AppColorScheme = .system
 
     init() {
@@ -360,6 +360,23 @@ struct MacApp: App {
         let state = AppState()
         #endif
         _appState = State(initialValue: state)
+        let coordinator = MacLaunchCoordinator()
+        _launchCoordinator = State(initialValue: coordinator)
+        // Hold-to-peek account usage (default F6). The Session open in Kraki —
+        // or the last one selected while the window is closed — decides which
+        // device is listed first.
+        #if DEBUG
+        let installsUsagePeek = !NativeTestRuntime.isRunningTests && !isolatedChatTest
+        #else
+        let installsUsagePeek = true
+        #endif
+        if installsUsagePeek {
+            Task { @MainActor in
+                UsagePeekController.shared.install(appState: state) { [weak coordinator] in
+                    state.sessionStore.activeSessionId ?? coordinator?.lastSelectedSessionId
+                }
+            }
+        }
         #if DEBUG
         if environment["KRAKI_NATIVE_AUTOMATION_SCENARIO_HOST"] == "1" {
             Task { @MainActor in

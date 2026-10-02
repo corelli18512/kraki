@@ -18,6 +18,9 @@ final class DeviceStore {
     /// (multi-agent device).
     var deviceAgents: [String: [AgentCapabilities]] = [:]
     var deviceVersions: [String: String] = [:]
+    /// Latest subscription account quota per tentacle (`device_usage`).
+    /// In-memory only: a fresh reading arrives on every connect.
+    var deviceUsage: [String: DeviceUsageSnapshot] = [:]
     /// Per-device local-session catalog populated by `local_sessions_list`
     /// responses. Cleared and re-fetched by the import picker on open.
     var localSessions: [String: [LocalSessionSummary]] = [:]
@@ -359,5 +362,65 @@ final class DeviceStore {
     func setDeviceVersion(_ id: String, version: String) {
         deviceVersions[id] = version
         scheduleSave()
+    }
+
+    func setDeviceUsage(_ id: String, accounts: [AccountUsage], receivedAt: Date = Date()) {
+        deviceUsage[id] = DeviceUsageSnapshot(accounts: accounts, receivedAt: receivedAt)
+    }
+
+    /// Online tentacles whose greeting says they predate account usage, so the app
+    /// can name them instead of silently showing nothing for them.
+    func devicesNeedingUsageUpdate() -> [DeviceSummary] {
+        devices.values
+            .filter { $0.role == .tentacle && $0.online && !pendingGreetingIds.contains($0.id) }
+            .filter { device in
+                guard let features = deviceFeatures[device.id] else { return false }
+                return !features.contains("account_usage") && deviceUsage[device.id] == nil
+            }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// Every reported account merged across devices (quota is per account, not
+    /// per device). Readings from devices that went offline stay listed and
+    /// age into "stale" on their own.
+    func mergedUsage() -> [MergedAccountUsage] {
+        var byKey: [String: MergedAccountUsage] = [:]
+        for (deviceId, snapshot) in deviceUsage {
+            guard let device = devices[deviceId], device.role == .tentacle else { continue }
+            for account in snapshot.accounts {
+                if var merged = byKey[account.accountKey] {
+                    merged.devices.append(device)
+                    let newer = (account.fetchedDate ?? .distantPast) > (merged.account.fetchedDate ?? .distantPast)
+                    // A fresh successful reading beats a newer failed one.
+                    if (newer && (account.error == nil || merged.account.error != nil))
+                        || (merged.account.error != nil && account.error == nil) {
+                        merged.account = account
+                    }
+                    byKey[account.accountKey] = merged
+                } else {
+                    byKey[account.accountKey] = MergedAccountUsage(account: account, devices: [device])
+                }
+            }
+        }
+        return byKey.values.map { m in
+            var m = m
+            m.devices.sort { ($0.online ? 0 : 1, $0.name) < ($1.online ? 0 : 1, $1.name) }
+            return m
+        }
+        .filter { !$0.allOffline || !$0.account.windows.isEmpty }
+        .sorted { a, b in
+            (a.allOffline ? 1 : 0, a.account.provider, a.account.label ?? "") < (b.allOffline ? 1 : 0, b.account.provider, b.account.label ?? "")
+        }
+    }
+
+    /// The account a Session is spending: the one on its device signed in by its
+    /// agent (and, for Pi, matching its model's provider). Nil when ambiguous.
+    func accountKey(forSessionOn deviceId: String, agent: String, model: String?) -> String? {
+        guard let accounts = deviceUsage[deviceId]?.accounts else { return nil }
+        var candidates = accounts.filter { $0.agents?.contains(agent) ?? false }
+        if let provider = AccountUsage.provider(forModel: model) {
+            candidates = candidates.filter { $0.provider == provider }
+        }
+        return candidates.count == 1 ? candidates[0].accountKey : nil
     }
 }

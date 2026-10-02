@@ -8,6 +8,7 @@ struct GeneralPane: View {
     @AppStorage("colorScheme") private var colorScheme: AppColorScheme = .system
     @AppStorage("mac.keepRunningInMenuBar") private var keepRunningInMenuBar: Bool = true
     @AppStorage("mac.openAtLogin") private var openAtLogin: Bool = false
+    @ObservedObject private var usagePeek = UsagePeekController.shared
 
     var body: some View {
         Form {
@@ -31,6 +32,23 @@ struct GeneralPane: View {
                     Text("Brand palette preview")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color.textMuted)
+                }
+            }
+
+            Section("Account Usage") {
+                Toggle("Hold a shortcut to peek at account usage", isOn: Binding(
+                    get: { usagePeek.hotkey.enabled },
+                    set: { usagePeek.hotkey.setEnabled($0) }))
+                if usagePeek.hotkey.enabled {
+                    LabeledContent("Shortcut") {
+                        UsageShortcutRecorder(manager: usagePeek.hotkey)
+                            .frame(width: 230, height: 26)
+                    }
+                }
+                Text("Shows the Claude and Codex quota of every account on your devices. \"Account Usage\" in the menu bar opens it any time.")
+                    .font(.system(size: 11)).foregroundStyle(Color.textMuted)
+                if let error = usagePeek.hotkey.error {
+                    Text(error).font(.system(size: 11)).foregroundStyle(.orange)
                 }
             }
 

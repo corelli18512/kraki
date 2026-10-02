@@ -15,7 +15,7 @@
 
 import { execSync } from 'node:child_process';
 import { platform } from 'node:os';
-import { loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady, clearDaemonIdentity } from './config.js';
+import { getKrakiHome, loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady, clearDaemonIdentity } from './config.js';
 import { ensureWindowsSystemPath, probeFda, ensureTccBundleRegistered, cleanupStaleBundleEntries } from './checks.js';
 import { MultiAgentAdapter } from './adapters/multi.js';
 
@@ -40,6 +40,8 @@ process.on('unhandledRejection', () => {
   // Specific errors are already logged where they originate.
 });
 import { RelayClient } from './relay-client.js';
+import { AccountUsageMonitor, UsageHistory } from './account-usage.js';
+import { join } from 'node:path';
 import { SessionManager } from './session-manager.js';
 import { KeyManager } from './key-manager.js';
 import { AttachmentStore } from './attachment-store.js';
@@ -322,6 +324,24 @@ export async function startWorker(): Promise<WorkerResult> {
   );
 
   relayRef = relay;
+
+  // Read-only subscription quota of this machine's Claude / Codex accounts.
+  // Off with `accountUsage.enabled: false` in config.json or KRAKI_ACCOUNT_USAGE=0.
+  let usageMonitor: AccountUsageMonitor | null = null;
+  const usageConfig = config.accountUsage ?? {};
+  if (process.env.KRAKI_ACCOUNT_USAGE !== '0' && usageConfig.enabled !== false) {
+    const history = new UsageHistory(join(getKrakiHome(), 'usage-history.jsonl'));
+    const minutes = Math.min(120, Math.max(10, usageConfig.intervalMinutes ?? 15));
+    usageMonitor = new AccountUsageMonitor({
+      history,
+      intervalMs: minutes * 60_000,
+      ...(usageConfig.renewPiLogins === false && { renewPi: async () => false }),
+    });
+    relay.setAccountUsageEnabled(true);
+    usageMonitor.onChange = (accounts) => relay.updateAccountUsage(accounts);
+    relay.usageHistoryReader = (since) => history.load(since);
+    usageMonitor.start();
+  }
   // Capabilities may have been rebuilt while the relay client was constructed.
   if (agentCapabilities?.length) relay.updateAgentCapabilities(agentCapabilities);
 
@@ -364,6 +384,7 @@ export async function startWorker(): Promise<WorkerResult> {
     clearDaemonReady();
     clearDaemonIdentity();
     if (fdaMonitor) clearInterval(fdaMonitor);
+    usageMonitor?.stop();
     clearStatusFile();
     relay.disconnect();
     await adapter.stop();

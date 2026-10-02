@@ -590,6 +590,79 @@ export interface DeviceGreetingMessage extends BaseEnvelope {
   };
 }
 
+// ── Subscription account usage (read-only, per tentacle) ─────
+
+/** Which quota window this is. Providers change their windows; `other` keeps
+ *  unknown ones visible instead of dropping them. */
+export type AccountUsageWindowKind = 'five_hour' | 'weekly' | 'other';
+
+export interface AccountUsageWindow {
+  /** Provider window id, stable per account (e.g. `five_hour`, `seven_day`, `primary_window`). */
+  id: string;
+  kind: AccountUsageWindowKind;
+  /** Human label for `other` windows (e.g. a model-scoped weekly limit). */
+  title?: string;
+  /** 0–100, already clamped. Never invented: a missing window is omitted. */
+  remainingPercent: number;
+  /** ISO timestamp of the scheduled reset, when the provider reports one. */
+  resetsAt?: string;
+  durationSeconds?: number;
+}
+
+export interface AccountUsage {
+  /** Opaque, hashed provider account identity. Same account on two machines → same key. */
+  accountKey: string;
+  provider: 'claude' | 'codex';
+  /** Masked account label (e.g. `co•••ai@gmail.com`). */
+  label?: string;
+  /** Raw provider plan id (e.g. `default_claude_max_20x`, `prolite`). */
+  plan?: string;
+  windows: AccountUsageWindow[];
+  /** When the provider reported these numbers. */
+  fetchedAt: string;
+  /** Present when the last attempt failed; windows then hold the last good reading (possibly none). */
+  error?: string;
+  /** Agents on this machine signed in with this account (`pi`, `claude`, `codex`), so an app can tell
+   *  which account a Session is spending. One account may be shared by several machines and agents. */
+  agents?: string[];
+}
+
+/** The subscription accounts this tentacle can read and their remaining quota.
+ *  Sent to each app on join and broadcast whenever a reading changes. */
+export interface DeviceUsageMessage extends BaseEnvelope {
+  type: 'device_usage';
+  payload: {
+    accounts: AccountUsage[];
+    updatedAt: string;
+  };
+}
+
+/** One recorded quota reading (local history, used for heatmaps later). */
+export interface UsageHistorySample {
+  /** Measurement time, epoch seconds. */
+  t: number;
+  /** accountKey */
+  k: string;
+  /** window id */
+  w: string;
+  /** window length in seconds */
+  d?: number;
+  /** used percent */
+  u: number;
+  /** scheduled reset, epoch seconds */
+  r?: number;
+}
+
+/** Tentacle → app reply to `request_usage_history`. */
+export interface UsageHistoryMessage extends BaseEnvelope {
+  type: 'usage_history';
+  payload: {
+    samples: UsageHistorySample[];
+    /** True when older samples exist beyond the returned range. */
+    truncated?: boolean;
+  };
+}
+
 /**
  * Sent by tentacle to a device after replaying all buffered messages for a session.
  * @deprecated Use `request_session_messages` / `session_messages_batch` instead.
@@ -920,7 +993,9 @@ export type ProducerMessage =
   | SessionListMessage
   | PermissionResolvedMessage
   | LocalSessionsListMessage
-  | AttachmentDataMessage;
+  | AttachmentDataMessage
+  | DeviceUsageMessage
+  | UsageHistoryMessage;
 
 // ============================================================
 // Consumer messages (app → tentacle, inside encrypted blob)
@@ -1134,6 +1209,15 @@ export interface RequestAttachmentMessage extends BaseEnvelope {
   };
 }
 
+/** App → tentacle: fetch locally recorded quota readings (for heatmaps). */
+export interface RequestUsageHistoryMessage extends BaseEnvelope {
+  type: 'request_usage_history';
+  payload: {
+    /** Epoch seconds; defaults to 60 days ago. */
+    since?: number;
+  };
+}
+
 export type ConsumerMessage =
   | SendInputMessage
   | ApproveMessage
@@ -1159,7 +1243,8 @@ export type ConsumerMessage =
   | ImportSessionMessage
   | RequestAttachmentMessage
   | SetSessionSubscriptionMessage
-  | ClientFeaturesMessage;
+  | ClientFeaturesMessage
+  | RequestUsageHistoryMessage;
 
 // ============================================================
 // Auth credentials — discriminated union by method

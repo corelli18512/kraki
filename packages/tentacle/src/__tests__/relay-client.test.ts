@@ -1387,6 +1387,55 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
+  it('sends account usage to apps: broadcast on update, unicast to a joining app, never before any reading', () => {
+    const { ws, client, cleanup } = buildClientWithStore();
+    try {
+      expect(decodePulseSends(ws.sent).filter((m) => m.type === 'device_usage')).toHaveLength(0);
+      const accounts = [{ accountKey: 'codex:abc', provider: 'codex' as const, label: 'co•••ai@gmail.com', plan: 'prolite',
+        windows: [{ id: 'primary_window', kind: 'weekly' as const, remainingPercent: 12, resetsAt: '2026-10-01T00:00:00.000Z' }],
+        fetchedAt: '2026-09-28T00:00:00.000Z' }];
+      ws.sent.length = 0;
+      client.updateAccountUsage(accounts);
+      const broadcast = decodePulseSends(ws.sent).filter((m) => m.type === 'device_usage');
+      expect(broadcast).toHaveLength(1);
+      expect((broadcast[0].payload as { accounts: unknown[] }).accounts).toEqual(accounts);
+
+      ws.sent.length = 0;
+      (ws as unknown as { emit(e: string, d: Buffer): void }).emit('message', Buffer.from(JSON.stringify({
+        type: 'device_joined', device: { id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub' },
+      })));
+      expect(decodePulseSends(ws.sent).filter((m) => m.type === 'device_usage')).toHaveLength(1);
+      expect(pulsePayloads(ws.sent).every((p) => p.to === 'consumer-dev')).toBe(true);
+    } finally { cleanup(); }
+  });
+
+  it('advertises account_usage only when the monitor is enabled', () => {
+    const { ws, client, cleanup } = buildClientWithStore();
+    try {
+      const first = decodePulseSends(ws.sent).find((m) => m.type === 'device_greeting');
+      expect((first?.payload as { features: string[] }).features).not.toContain('account_usage');
+      ws.sent.length = 0;
+      client.setAccountUsageEnabled(true);
+      const again = decodePulseSends(ws.sent).find((m) => m.type === 'device_greeting');
+      expect((again?.payload as { features: string[] }).features).toContain('account_usage');
+    } finally { cleanup(); }
+  });
+
+  it('answers request_usage_history from the local history reader', () => {
+    const { ws, client, cleanup } = buildClientWithStore();
+    try {
+      const reader = vi.fn(() => [{ t: 100, k: 'codex:abc', w: 'primary_window', d: 604800, u: 40, r: 900 }]);
+      client.usageHistoryReader = reader;
+      ws.sent.length = 0;
+      (ws as unknown as { emit(e: string, d: Buffer): void }).emit('message', Buffer.from(JSON.stringify({
+        type: 'request_usage_history', deviceId: 'consumer-dev', payload: { since: 50 },
+      })));
+      expect(reader).toHaveBeenCalledWith(50);
+      const reply = decodePulseSends(ws.sent).find((m) => m.type === 'usage_history');
+      expect(reply?.payload).toEqual({ samples: [{ t: 100, k: 'codex:abc', w: 'primary_window', d: 604800, u: 40, r: 900 }] });
+    } finally { cleanup(); }
+  });
+
   it('advertises idempotent_input in its greeting so apps may re-send automatically', () => {
     const { ws, cleanup } = buildClientWithStore();
     try {

@@ -26,6 +26,7 @@ import type { RecipientKey } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
 import { toWellFormedText, type SessionManager, type SessionContext, type PendingHumanAction, type InputLedgerEntry } from './session-manager.js';
 import type { KeyManager } from './key-manager.js';
+import type { AccountUsage, UsageHistorySample } from '@kraki/protocol';
 import { scanLocalSessions, filterSessions } from './session-scanner.js';
 import { parseSessionHistory } from './history-parser.js';
 import { EventsWatcher } from './events-watcher.js';
@@ -1090,6 +1091,7 @@ export class RelayClient {
       this.restorePendingHumanActions();
       this.resumeDisconnectedSessions();
       this.sendGreetingBroadcast();
+      this.broadcastAccountUsage();
       this.broadcastSessionList();
       return;
     }
@@ -1159,6 +1161,7 @@ export class RelayClient {
           this.currentSessionByArm.set(device.id, null);
           // Send a greeting unicast so the app learns our capabilities
           this.sendGreetingTo(device.id, key);
+          this.sendAccountUsageTo(device.id, key);
           // Send session list so the app can sync and establish its reconnect barrier.
           this.sendSessionListTo(device.id, key);
         }
@@ -1346,6 +1349,11 @@ export class RelayClient {
     }
     if (msg.type === 'import_session') {
       this.handleImportSession(msg);
+      return;
+    }
+
+    if (msg.type === 'request_usage_history') {
+      this.handleRequestUsageHistory(msg.deviceId, msg.payload?.since);
       return;
     }
 
@@ -3561,6 +3569,62 @@ export class RelayClient {
     }
   }
 
+  // ── Subscription account usage ───────────────────────
+
+  private accountUsage: AccountUsage[] | null = null;
+  /** Advertised as the `account_usage` feature so apps can tell "no accounts" from "too old". */
+  private accountUsageEnabled = false;
+  setAccountUsageEnabled(enabled: boolean): void {
+    if (this.accountUsageEnabled === enabled) return;
+    this.accountUsageEnabled = enabled;
+    if (this.state === 'connected') this.sendGreetingBroadcast();
+  }
+  /** Reads the local quota history file for `request_usage_history`. */
+  usageHistoryReader: ((since: number) => UsageHistorySample[]) | null = null;
+  private static readonly USAGE_HISTORY_MAX_SAMPLES = 20_000;
+
+  /** Latest read-only quota of this machine's subscription accounts; broadcast to online apps. */
+  updateAccountUsage(accounts: AccountUsage[]): void {
+    this.accountUsage = accounts;
+    if (this.state === 'connected') this.broadcastAccountUsage();
+  }
+
+  private accountUsageMessage() {
+    return {
+      type: 'device_usage' as const,
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: { accounts: this.accountUsage ?? [], updatedAt: new Date().toISOString() },
+    };
+  }
+
+  private broadcastAccountUsage(): void {
+    if (!this.accountUsage) return;
+    this.sendEncrypted(this.accountUsageMessage() as Partial<ProducerMessage>);
+  }
+
+  private sendAccountUsageTo(targetDeviceId: string, compactPubKey: string): void {
+    if (!this.accountUsage) return;
+    this.sendReliableUnicastTo(targetDeviceId, compactPubKey, this.accountUsageMessage());
+  }
+
+  private handleRequestUsageHistory(requesterDeviceId: string, since?: number): void {
+    const key = this.consumerKeys.get(requesterDeviceId);
+    if (!key) return;
+    const floor = typeof since === 'number' && Number.isFinite(since) ? since : Date.now() / 1000 - 60 * 86400;
+    let samples = this.usageHistoryReader?.(floor) ?? [];
+    const truncated = samples.length > RelayClient.USAGE_HISTORY_MAX_SAMPLES;
+    if (truncated) samples = samples.slice(-RelayClient.USAGE_HISTORY_MAX_SAMPLES);
+    this.sendReliableUnicastTo(requesterDeviceId, key, {
+      type: 'usage_history',
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: { samples, ...(truncated && { truncated: true }) },
+    });
+  }
+
   /** Replace the advertised agent capabilities (e.g. a model list that was
    *  unavailable at startup) and re-greet connected apps. Apps replace a
    *  device's agents on every greeting, so no new message type is needed; the
@@ -3591,7 +3655,7 @@ export class RelayClient {
       kind: this.options.device.kind,
       agents: this.options.device.capabilities?.agents,
       version: this.options.version,
-      features: ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE],
+      features: ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE, ...(this.accountUsageEnabled ? ['account_usage'] : [])],
     };
   }
 

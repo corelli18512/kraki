@@ -71,6 +71,11 @@ struct MainTabView: View {
                 try? await Task.sleep(for: .milliseconds(100))
             }
         }
+        .task(id: allowsInitialNavigation) {
+            // Automation: start on the Devices tab.
+            guard allowsInitialNavigation, ProcessInfo.processInfo.environment["KRAKI_OPEN_DEVICES_TAB"] == "1" else { return }
+            selectedTab = 1
+        }
         #endif
     }
 

@@ -20,6 +20,10 @@ struct DeviceListView: View {
         tentacles.filter { !$0.online }
     }
 
+    private var accountsSectionShown: Bool {
+        !appState.deviceStore.mergedUsage().isEmpty || !appState.deviceStore.devicesNeedingUsageUpdate().isEmpty
+    }
+
     var body: some View {
         Group {
             if tentacles.isEmpty {
@@ -42,8 +46,27 @@ struct DeviceListView: View {
 
     private var deviceList: some View {
         List {
+            // Quota belongs to the account, so accounts come first, merged across devices.
+            let accounts = appState.deviceStore.mergedUsage()
+            let outdated = appState.deviceStore.devicesNeedingUsageUpdate()
+            if !accounts.isEmpty || !outdated.isEmpty {
+                Section {
+                    ForEach(Array(accounts.enumerated()), id: \.element.id) { index, merged in
+                        AccountUsageRow(merged: merged, delay: 0.05 + Double(index) * 0.04)
+                    }
+                } header: {
+                    Text("Accounts")
+                } footer: {
+                    if outdated.isEmpty {
+                        Text("Claude and Codex subscriptions signed in on your devices. An account shared by several devices is shown once.")
+                    } else {
+                        Label(UsageUpdateHint.text(outdated), systemImage: "arrow.down.circle")
+                    }
+                }
+            }
+
             if !onlineDevices.isEmpty {
-                Section("Online") {
+                Section(accountsSectionShown ? "Online devices" : "Online") {
                     ForEach(onlineDevices) { device in
                         NavigationLink(value: DeviceNavID(id: device.id)) {
                             DeviceRow(
@@ -57,7 +80,7 @@ struct DeviceListView: View {
             }
 
             if !offlineDevices.isEmpty {
-                Section("Offline") {
+                Section(accountsSectionShown ? "Offline devices" : "Offline") {
                     ForEach(offlineDevices) { device in
                         NavigationLink(value: DeviceNavID(id: device.id)) {
                             DeviceRow(
