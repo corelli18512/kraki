@@ -6,6 +6,7 @@
  * This is the tentacle's local intelligence layer.
  */
 
+import { atomicWriteFile, renameWithRetry } from './fs-retry.js';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync, appendFileSync, openSync, readSync, closeSync, cpSync, fstatSync, statSync } from 'node:fs';
 import { DEFAULT_SESSION_MODE, normalizeSessionMode, toWireSessionMode } from '@kraki/protocol';
 import { join } from 'node:path';
@@ -765,7 +766,7 @@ export class SessionManager {
     const path = this.pendingActionPath(sessionId);
     const tmp = `${path}.tmp`;
     writeFileSync(tmp, JSON.stringify(pending), 'utf8');
-    renameSync(tmp, path);
+    renameWithRetry(tmp, path);
   }
 
   getPendingHumanAction(sessionId: string): PendingHumanAction | null {
@@ -1668,7 +1669,5 @@ export interface SessionLink {
 
 /** Atomic write: write to temp file, then rename (prevents corruption on crash). */
 function atomicWrite(path: string, data: string): void {
-  const tmp = path + '.tmp';
-  writeFileSync(tmp, data);
-  renameSync(tmp, path);
+  atomicWriteFile(path, data);
 }

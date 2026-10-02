@@ -11,6 +11,7 @@
  *  - Claude:  `@anthropic-ai/claude-agent-sdk` importable + `claude` CLI on PATH
  */
 
+import { claudeSdkExecutable } from '../cli-launch.js';
 import { findAppBundledCli } from '../agent-paths.js';
 import { execSync } from 'node:child_process';
 import { platform } from 'node:os';
@@ -164,7 +165,7 @@ export async function createAgentAdapter(
     // resolution fails (no node_modules next to the executable), so we
     // resolve the system-installed `claude` path up-front and hand it to
     // the adapter via pathToClaudeCodeExecutable.
-    return new ClaudeAdapter({ ...adapterOpts, claudeExecutablePath: resolveCliPath('claude') });
+    return new ClaudeAdapter({ ...adapterOpts, claudeExecutablePath: claudeSdkExecutable(resolveCliPath('claude')) });
   }
   if (id === 'pi') {
     const { PiAdapter } = await import('./pi.js');

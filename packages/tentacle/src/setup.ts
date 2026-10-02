@@ -21,7 +21,7 @@ import {
   getConfigPath,
   loadConfig,
 } from './config.js';
-import { SETUP_AGENTS, probeFdaAsApp, pollFda, ensureTccBundleRegistered, openTccPane, revealKrakiApp, getKrakiAppBundlePath } from './checks.js';
+import { SETUP_AGENTS, probeFdaAsApp, pollFda, ensureTccBundleRegistered, openTccPane, revealKrakiApp, getKrakiAppBundlePath, refreshPathOnWindows } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { termLink } from './term-link.js';
 import { findMacAppWithBuiltIn } from './managed.js';
@@ -468,6 +468,7 @@ async function runAgentStep(): Promise<AgentCheckResult[]> {
       theme: promptTheme,
       choices,
     });
+    if (action === 'again') refreshPathOnWindows();
     if (action === 'continue') {
       if (ready.length === 0) {
         console.log(chalk.dim(`    Kraki starts without one. After setting one up, run ${chalk.bold('kraki restart')}.`));

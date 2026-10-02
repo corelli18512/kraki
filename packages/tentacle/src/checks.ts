@@ -74,26 +74,38 @@ export function ensureWindowsSystemPath(): string[] {
   return missing;
 }
 
+/** The value of a `reg query … /v Path` answer; `%VAR%` expanded from env. */
+export function parseRegPath(output: string, env: NodeJS.ProcessEnv = process.env): string {
+  const line = output.split(/\r?\n/).find((l) => /\sREG_(?:EXPAND_)?SZ\s/i.test(l));
+  const value = line?.replace(/^.*?\sREG_(?:EXPAND_)?SZ\s+/i, '').trim() ?? '';
+  return value.replace(/%([^%]+)%/g, (whole, name: string) => {
+    const key = Object.keys(env).find((k) => k.toLowerCase() === name.toLowerCase());
+    return key ? env[key] ?? whole : whole;
+  });
+}
+
 /**
- * On Windows, refresh process.env.PATH from the registry so that
- * newly-installed tools are visible without opening a new terminal.
- * No-op on other platforms.
+ * On Windows, refresh process.env.PATH from the registry so that tools
+ * installed in another window (e.g. an agent, during setup) are found without
+ * restarting Kraki. Entries already on PATH are kept. No-op elsewhere.
  */
-function refreshPathOnWindows(): void {
-  if (platform() !== 'win32') return;
-  try {
-    const machinePath = execSync(
-      'reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment" /v Path',
-      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
-    ).replace(/.*REG_(?:EXPAND_)?SZ\s+/i, '').trim();
-
-    const userPath = execSync(
-      'reg query "HKCU\\Environment" /v Path',
-      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
-    ).replace(/.*REG_(?:EXPAND_)?SZ\s+/i, '').trim();
-
-    process.env.PATH = `${machinePath};${userPath}`;
-  } catch { /* best effort — fall through to stale PATH */ }
+export function refreshPathOnWindows(run: (cmd: string) => string = (cmd) => execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }), os = platform()): void {
+  if (os !== 'win32') return;
+  const read = (key: string) => {
+    try { return parseRegPath(run(`reg query "${key}" /v Path`)); } catch { return ''; }
+  };
+  const machine = read('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment');
+  const user = read('HKCU\\Environment');
+  const pathKey = Object.keys(process.env).find((k) => k.toLowerCase() === 'path') ?? 'Path';
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const dir of [machine, user, process.env[pathKey] ?? ''].join(';').split(';')) {
+    const d = dir.trim();
+    if (!d || seen.has(d.toLowerCase())) continue;
+    seen.add(d.toLowerCase());
+    merged.push(d);
+  }
+  process.env[pathKey] = merged.join(';');
 }
 
 // ── Check results ───────────────────────────────────────

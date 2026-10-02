@@ -20,6 +20,7 @@
  * `request_attachment`.
  */
 
+import { renameWithRetry } from './fs-retry.js';
 import {
   createHash,
   randomBytes,
@@ -208,7 +209,7 @@ export class AttachmentStore {
       // Atomic write of data file via tmp + rename
       const tmpData = `${dataPath}.${randomBytes(4).toString('hex')}.tmp`;
       writeFileSync(tmpData, bytes);
-      renameSync(tmpData, dataPath);
+      renameWithRetry(tmpData, dataPath);
 
       const dims = readImageDimensions(bytes, mimeType);
       meta = {
@@ -220,7 +221,7 @@ export class AttachmentStore {
 
       const tmpMeta = `${metaPath}.${randomBytes(4).toString('hex')}.tmp`;
       writeFileSync(tmpMeta, JSON.stringify(meta));
-      renameSync(tmpMeta, metaPath);
+      renameWithRetry(tmpMeta, metaPath);
 
       logger.debug({ sessionId, id, mimeType, size: bytes.length, width: meta.width, height: meta.height }, 'stored');
     }

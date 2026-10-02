@@ -101,6 +101,7 @@ const mockSavedToken = vi.fn<() => string | null>().mockReturnValue('fake-token'
 
 let mockExistingConfig: unknown = null;
 
+const mockRefreshPath = vi.fn();
 vi.mock("../checks.js", () => ({
   SETUP_AGENTS: [
     { id: 'claude', name: 'Claude Code', bin: 'claude', installUrl: 'https://code.claude.com/docs/en/setup' },
@@ -109,6 +110,7 @@ vi.mock("../checks.js", () => ({
     { id: 'pi', name: 'Pi', bin: 'pi', installUrl: 'https://github.com/earendil-works/pi#readme' },
   ],
   probeFda: vi.fn().mockResolvedValue('granted'),
+  refreshPathOnWindows: (...a: unknown[]) => mockRefreshPath(...a),
   probeFdaAsApp: vi.fn().mockResolvedValue('granted'),
   pollFda: vi.fn().mockResolvedValue('granted'),
   ensureTccBundleRegistered: vi.fn(),
@@ -253,6 +255,8 @@ describe("runSetup — coding agents", () => {
     mockSelect.mockResolvedValueOnce('again');
     await runSetup();
     expect(mockAgentsCheck).toHaveBeenCalledTimes(2);
+    // C7: a PATH refresh before re-checking finds agents installed meanwhile.
+    expect(mockRefreshPath).toHaveBeenCalledTimes(1);
     expect(mockSelect).toHaveBeenCalledTimes(1);
     expect((mockSelect.mock.calls[0][0] as { choices: { value: string }[] }).choices[0].value).toBe('again');
   });

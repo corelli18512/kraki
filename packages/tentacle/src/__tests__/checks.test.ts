@@ -205,7 +205,8 @@ describe('withRetry()', () => {
 
     const origPath = process.env.PATH;
     await withRetry(check, 'Test', 'install hint');
-    expect(process.env.PATH).toBe('C:\\Windows\\system32;C:\\Users\\me\\bin');
+    // Registry entries first; what was already on PATH is kept after them.
+    expect(process.env.PATH!.startsWith('C:\\Windows\\system32;C:\\Users\\me\\bin;')).toBe(true);
     process.env.PATH = origPath; // restore
   });
 

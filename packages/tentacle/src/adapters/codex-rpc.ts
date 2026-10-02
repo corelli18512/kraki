@@ -13,6 +13,7 @@
  *   codex app-server generate-ts --experimental --out <dir>
  */
 
+import { killProcessTree } from '../process-tree.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { createLogger } from '../logger.js';
@@ -153,7 +154,9 @@ export class CodexRpcProcess {
     if (!child || this.exited) return;
     const done = new Promise<void>((r) => child.once('exit', () => r()));
     try { child.stdin.end(); } catch { /* ignore */ }
-    child.kill('SIGTERM');
+    // On Windows the child may be npm's cmd.exe wrapper; end codex with it.
+    if (process.platform === 'win32' && child.pid) killProcessTree(child.pid);
+    else child.kill('SIGTERM');
     const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ } }, graceMs);
     await done;
     clearTimeout(timer);
