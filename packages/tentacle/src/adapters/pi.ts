@@ -150,6 +150,7 @@ class PiRpcProcess {
     if (this.opts.extensionPath) args.push('--extension', this.opts.extensionPath);
 
     this.child = spawn(...cliSpawnArgs(this.opts.cliPath, args), {
+      windowsHide: true,
       cwd: this.opts.cwd ?? process.cwd(),
       env: this.opts.env ?? process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -509,7 +510,7 @@ export function summarizeCrash(stderr: string): string | undefined {
  *  start is diagnosable instead of a bare `ETIMEDOUT`. */
 export function runPiListModels(cliPath: string, timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(...cliSpawnArgs(cliPath, ['--list-models']), { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(...cliSpawnArgs(cliPath, ['--list-models']), { env: process.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -633,6 +634,7 @@ export function queryPiCatalog(cliPath: string, timeoutMs = 15_000): Promise<PiC
     // --no-session: this process only answers one question, it must not leave a
     // session file behind next to the user's real ones.
     const child = spawn(...cliSpawnArgs(cliPath, ['--mode', 'rpc', '--no-session']), {
+      windowsHide: true,
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -1860,7 +1862,7 @@ export class PiAdapter extends AgentAdapter {
       let err = '';
       let done = false;
       const finish = (value: string | null) => { if (!done) { done = true; clearTimeout(timer); resolve(value); } };
-      const child = spawn(...cliSpawnArgs(this.cliPath, args), { cwd: tmpdir(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(...cliSpawnArgs(this.cliPath, args), { cwd: tmpdir(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       const timer = setTimeout(() => { child.kill(); logger.warn({ sessionId }, 'pi title generation timed out'); finish(null); }, 45_000);
       child.stdout.on('data', (d) => { out += d.toString(); });
       child.stderr.on('data', (d) => { err += d.toString(); });

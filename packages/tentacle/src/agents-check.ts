@@ -18,6 +18,7 @@
 
 import type { AgentId } from '@kraki/protocol';
 import { SETUP_AGENTS, checkAgentCli } from './checks.js';
+import { piHasShellOnWindows, GIT_FOR_WINDOWS_URL } from './windows-shell.js';
 import type { AgentAdapter } from './adapters/base.js';
 
 export type AgentCheckStatus = 'ready' | 'needs_login' | 'not_installed' | 'error';
@@ -55,6 +56,8 @@ export interface AgentsCheckDeps {
   checkCli: (bin: string) => { found: boolean; version?: string };
   createAdapter: (id: AgentId) => Promise<AgentAdapter | null>;
   timeoutMs: number;
+  platform?: NodeJS.Platform;
+  piHasShell?: () => boolean;
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
@@ -77,6 +80,12 @@ export async function checkAgent(
     return { ...base, status: 'not_installed', hint: `Install ${agent.name}, then check again.` };
   }
   const version = cli.version;
+  if (agent.id === 'pi' && (deps.platform ?? process.platform) === 'win32' && !(deps.piHasShell ?? piHasShellOnWindows)()) {
+    return {
+      ...base, version, status: 'error', detail: 'no_bash',
+      hint: `Pi needs Git for Windows to run commands. Install it (${GIT_FOR_WINDOWS_URL}), then check again.`,
+    };
+  }
   let adapter: AgentAdapter | null = null;
   try {
     adapter = await deps.createAdapter(agent.id as AgentId);
@@ -157,7 +166,7 @@ export async function runAgentsCheckChild(
   const args = isSea() ? ['agents', '--json'] : [process.argv[1], 'agents', '--json'];
   return new Promise((resolve) => {
     const results: AgentCheckResult[] = [];
-    const child = spawn(process.execPath, args, { stdio: ['ignore', 'pipe', 'ignore'], env: process.env });
+    const child = spawn(process.execPath, args, { stdio: ['ignore', 'pipe', 'ignore'], env: process.env, windowsHide: true });
     const timer = setTimeout(() => child.kill(), timeoutMs);
     let buf = '';
     child.stdout.on('data', (chunk: Buffer) => {

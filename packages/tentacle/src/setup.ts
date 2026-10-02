@@ -491,7 +491,7 @@ function printAgentRow(agent: (typeof SETUP_AGENTS)[number], r: AgentCheckResult
       console.log(`    ${chalk.yellow('!')} ${agent.name}${version}  ${chalk.yellow('not signed in')}${r.hint ? chalk.dim(` — ${r.hint}`) : ''}`);
       break;
     case 'error':
-      console.log(`    ${chalk.yellow('!')} ${agent.name}${version}  ${chalk.yellow("didn't start")}${r.hint ? chalk.dim(` — ${r.hint}`) : ''}`);
+      console.log(`    ${chalk.yellow('!')} ${agent.name}${version}  ${chalk.yellow(r.detail === 'no_bash' ? 'needs Git for Windows' : "didn't start")}${r.hint ? chalk.dim(` — ${r.hint}`) : ''}`);
       break;
     default:
       console.log(chalk.dim(`    – ${agent.name}  not installed · ${link('how to install', agent.installUrl)}`));

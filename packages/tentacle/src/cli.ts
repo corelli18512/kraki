@@ -27,6 +27,7 @@ import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
 import { printStaticBanner } from './banner.js';
 import { disableWindowsAutostart } from './windows-autostart.js';
+import { hideChildWindowsByDefault } from './windows-hide.js';
 import { readStatusFile } from './status-file.js';
 import { ensureWindowsSystemPath } from './checks.js';
 import type { AgentId } from '@kraki/protocol';
@@ -285,8 +286,23 @@ async function cmdStart(atLogin = false): Promise<void> {
 
   // Windows login autostart: no prompts and no output, just start if needed.
   if (atLogin) {
-    if (!config || isDaemonRunning() || loadManagedBy()) return;
-    await startDaemon(config);
+    const { appendLoginLog, clearPidFromBeforeBoot } = await import('./login-start.js');
+    // A PID recorded before this boot belongs to a process that no longer
+    // exists — or to whatever reused the number. Checking it right after login
+    // is slow (the process lookup can time out), and an inconclusive check is
+    // treated as "running", so the daemon silently never came back after a
+    // reboot (seen in a clean Windows 11 VM). Drop it first.
+    if (clearPidFromBeforeBoot()) appendLoginLog('dropped a daemon.pid from before this boot');
+    if (!config) { appendLoginLog('no config; not starting'); return; }
+    if (loadManagedBy()) { appendLoginLog('managed by Kraki for Mac; not starting'); return; }
+    if (isDaemonRunning()) { appendLoginLog('already running'); return; }
+    try {
+      const pid = await startDaemon(config);
+      appendLoginLog(`started daemon pid=${pid}`);
+    } catch (err) {
+      appendLoginLog(`start failed: ${(err as Error).message}`);
+      throw err;
+    }
     return;
   }
 
@@ -1123,6 +1139,8 @@ async function cmdAuth(args: string[]): Promise<void> {
 // ── Arg parsing ─────────────────────────────────────────
 
 async function main(): Promise<void> {
+  // Windows: no console window for any child process (see windows-hide.ts).
+  hideChildWindowsByDefault();
   const args = process.argv.slice(2);
   const cmd = args[0];
 

@@ -88,6 +88,7 @@ export class CodexRpcProcess {
     const shell = process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(this.opts.command);
     const command = shell ? `"${this.opts.command}"` : this.opts.command;
     const child = spawn(command, this.opts.args ?? ['app-server'], {
+      windowsHide: true,
       cwd: this.opts.cwd,
       env: this.opts.env ?? process.env,
       stdio: ['pipe', 'pipe', 'pipe'],

@@ -62,3 +62,33 @@ describe('kraki agents --json', () => {
     expect(results.find((r) => r.id === 'pi')).toMatchObject({ status: 'error', detail: 'spawn EINVAL' });
   });
 });
+
+import { piHasShellOnWindows } from '../windows-shell.js';
+
+describe('Pi on Windows needs a bash', () => {
+  const deps = (o: Partial<Parameters<typeof piHasShellOnWindows>[0]>) => ({
+    env: { ProgramFiles: 'C:\\Program Files' }, exists: () => false, piSettings: () => undefined, whereBash: () => [], ...o,
+  });
+  it('finds Git Bash, a configured shellPath, or bash on PATH', () => {
+    expect(piHasShellOnWindows(deps({}))).toBe(false);
+    expect(piHasShellOnWindows(deps({ exists: (p) => p === 'C:\\Program Files\\Git\\bin\\bash.exe' }))).toBe(true);
+    expect(piHasShellOnWindows(deps({ piSettings: () => '{"shellPath":"D:/msys/bash.exe"}', exists: (p) => p === 'D:/msys/bash.exe' }))).toBe(true);
+    expect(piHasShellOnWindows(deps({ whereBash: () => ['C:\\cygwin\\bin\\bash.exe'], exists: (p) => p.startsWith('C:\\cygwin') }))).toBe(true);
+  });
+});
+
+import { checkAgent } from '../agents-check.js';
+import { SETUP_AGENTS } from '../checks.js';
+
+describe('kraki agents on Windows without bash', () => {
+  it('reports Pi as needing Git for Windows instead of ready', async () => {
+    const pi = SETUP_AGENTS.find((a) => a.id === 'pi')!;
+    const createAdapter = vi.fn();
+    const r = await checkAgent(pi, {
+      checkCli: () => ({ found: true, version: '0.87.1' }), createAdapter, timeoutMs: 1000,
+      platform: 'win32', piHasShell: () => false,
+    });
+    expect(r).toMatchObject({ status: 'error', detail: 'no_bash', hint: expect.stringContaining('Git for Windows') });
+    expect(createAdapter).not.toHaveBeenCalled();
+  });
+});
