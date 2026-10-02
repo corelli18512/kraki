@@ -1270,6 +1270,33 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     app.close();
   });
 
+  it("an online device with a local token gets the encrypted preview over its connection", async () => {
+    const app = await connectApp(env.port);
+    app.send({ type: "register_push_token", payload: { provider: "local", token: app.deviceId } });
+    await app.waitFor("push_token_registered");
+    await connectTentacle();
+
+    const { sessionId } = await adapter.createSession();
+    await app.waitFor("session_created");
+    await subscribeApp(app, sessionId);
+
+    adapter.onPermissionRequest?.(sessionId, {
+      id: "perm-local",
+      toolArgs: { type: "shell", command: "npm test" },
+      description: "Run shell command: npm test",
+    });
+
+    const msg = await app.waitFor("notification_preview");
+    const payload = msg.payload as { blob: string; key: string };
+    const parsed = JSON.parse(decryptFromBlob(
+      { blob: payload.blob, keys: { [app.deviceId]: payload.key } },
+      app.deviceId, app.keyPair.privateKey,
+    ));
+    expect(parsed).toMatchObject({ type: "permission", sessionId, summary: "Run shell command: npm test" });
+
+    app.close();
+  });
+
   it("pushPreview summary is byte-bounded and the APNs payload stays under 4 KB", async () => {
     const app = await connectApp(env.port);
     await connectTentacle();

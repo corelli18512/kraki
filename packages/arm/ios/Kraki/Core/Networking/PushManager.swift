@@ -30,6 +30,7 @@ final class PushManager: NSObject {
 
     private static let enabledKey = "kraki.pushNotificationsEnabled"
     private static let pendingUnregisterKey = "kraki.pushPendingUnregister"
+    private static let firstSignInPromptKey = "kraki.pushFirstSignInPrompted"
     #if KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY
     private static let appGroup = "group.chat.kraki.ios.diag"
     #else
@@ -87,18 +88,12 @@ final class PushManager: NSObject {
     /// picks the category per preview type. No actions: approvals happen in
     /// the app.
     private static func registerNotificationCategories() {
-        let placeholders: [(String, String)] = [
-            ("kraki.reply", "New reply"),
-            ("kraki.permission", "Needs your approval"),
-            ("kraki.question", "Has a question for you"),
-            ("kraki.failed", "A turn failed"),
-        ]
-        let categories = Set(placeholders.map { id, placeholder in
+        let categories = Set(PushPreviewFormat.lockedPlaceholders.map { item in
             UNNotificationCategory(
-                identifier: id,
+                identifier: item.category,
                 actions: [],
                 intentIdentifiers: [],
-                hiddenPreviewsBodyPlaceholder: placeholder,
+                hiddenPreviewsBodyPlaceholder: item.placeholder,
                 options: []
             )
         })
@@ -107,20 +102,8 @@ final class PushManager: NSObject {
 
     /// Remove this Session's notifications from Notification Center once the
     /// human is looking at it, so read Sessions do not pile up there.
-    /// Notifications are grouped by Session (`threadIdentifier`, set by the
-    /// Notification Service Extension), which is also the match key here.
     func removeDeliveredNotifications(forSession sessionId: String) {
-        let center = UNUserNotificationCenter.current()
-        center.getDeliveredNotifications { notifications in
-            let ids = notifications
-                .filter {
-                    $0.request.content.threadIdentifier == sessionId
-                        || ($0.request.content.userInfo["sessionId"] as? String) == sessionId
-                }
-                .map(\.request.identifier)
-            guard !ids.isEmpty else { return }
-            center.removeDeliveredNotifications(withIdentifiers: ids)
-        }
+        SessionNotifications.removeDelivered(forSession: sessionId)
     }
 
     // MARK: - Public API
@@ -215,6 +198,20 @@ final class PushManager: NSObject {
             sendUnregister()
         }
 
+        // First sign-in on this install: ask for notification permission right
+        // away instead of leaving push off until the human finds Settings.
+        // Only while iOS has never asked; a human who later switches Kraki's
+        // toggle off (or denies in iOS) is never asked again.
+        if !UserDefaults.standard.bool(forKey: Self.firstSignInPromptKey), !Self.isAutomatedRun {
+            UserDefaults.standard.set(true, forKey: Self.firstSignInPromptKey)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.refreshPermissionStatus()
+                guard self.permissionStatus == .notDetermined else { return }
+                await self.enable()
+            }
+        }
+
         guard userEnabled else { return }
         // If the system already granted us a token, send it now. Otherwise
         // request one — AppDelegate will route the result back here.
@@ -225,6 +222,26 @@ final class PushManager: NSObject {
                 UIApplication.shared.registerForRemoteNotifications()
             }
         }
+    }
+
+    /// Sign-out: tell the relay to stop pushing to this device and clear
+    /// everything the previous account left in Notification Center. The relay
+    /// also drops a token when another device re-registers it, so a sign-out
+    /// that cannot reach the relay does not cause duplicate pushes later.
+    /// The human's "notifications on" preference is kept for the next sign-in.
+    func handleSignOut() {
+        if let appState, appState.connectionStatus == .connected {
+            sendControl(["type": "unregister_push_token", "payload": ["provider": "apns"]])
+        }
+        deviceToken = nil
+        registered = false
+        SessionNotifications.removeAllDelivered()
+        UserDefaults(suiteName: Self.appGroup)?.removeObject(forKey: Self.unreadSessionIDsKey)
+    }
+
+    private static var isAutomatedRun: Bool {
+        NativeTestRuntime.isRunningTests
+            || ProcessInfo.processInfo.environment["KRAKI_LOCAL_RELAY_PORT"] != nil
     }
 
     /// Keep the Home Screen icon badge aligned with the same authoritative

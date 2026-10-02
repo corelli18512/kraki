@@ -1534,6 +1534,13 @@ export interface PushTokenRegisteredMessage {
   };
 }
 
+/** Head → online `local`-provider device: the encrypted preview the relay
+ *  would push to an offline phone. `key` is wrapped for the receiving device. */
+export interface NotificationPreviewMessage {
+  type: 'notification_preview';
+  payload: { blob: string; key: string };
+}
+
 /** Remove the push token for this device. */
 export interface UnregisterPushTokenMessage {
   type: 'unregister_push_token';
@@ -1571,6 +1578,7 @@ export type ControlMessage =
   | PreferencesUpdatedMessage
   | RegisterPushTokenMessage
   | PushTokenRegisteredMessage
+  | NotificationPreviewMessage
   | UnregisterPushTokenMessage
   | DispatchPushMessage;
 

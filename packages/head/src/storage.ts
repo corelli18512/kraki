@@ -676,6 +676,13 @@ export class Storage {
   // --- Push tokens ---
 
   upsertPushToken(deviceId: string, provider: string, token: string, environment?: string, bundleId?: string): void {
+    // One push address belongs to one device. A phone that signs out and in
+    // again (or switches account) re-registers the same token under a new
+    // device; drop the old rows so it is not notified twice, once of them
+    // with a preview it can no longer decrypt.
+    this.db.prepare(
+      'DELETE FROM push_tokens WHERE provider = ? AND token = ? AND device_id != ?'
+    ).run(provider, token, deviceId);
     this.db.prepare(`
       INSERT INTO push_tokens (device_id, provider, token, environment, bundle_id)
       VALUES (?, ?, ?, ?, ?)

@@ -73,7 +73,7 @@ class NotificationService: UNNotificationServiceExtension {
 
         do {
             let decrypted = try decryptPreview(blob: blob, wrappedKey: key)
-            let preview = parsePreview(decrypted)
+            let preview = PushPreviewFormat.content(fromJSON: decrypted)
             content.title = preview.title
             content.subtitle = ""
             content.body = preview.body
@@ -178,70 +178,4 @@ class NotificationService: UNNotificationServiceExtension {
         return bridgeToSecKey(ref)
     }
 
-    // MARK: - Preview Parsing
-
-    private struct Preview {
-        let title: String
-        let body: String
-        let category: String
-        let sessionId: String?
-    }
-
-    /// Notification layout (agreed 2026-10-02):
-    /// - title: the Session name, like a chat app uses the contact name; the
-    ///   app icon already says "Kraki", so the app name is not repeated.
-    /// - no subtitle.
-    /// - body: the reply itself; when the human must act, a short label
-    ///   leads the body ("Needs approval: …", "Question: …", "Failed: …").
-    /// - category: selects the locked-screen placeholder registered by the
-    ///   app (`PushManager.registerNotificationCategories`).
-    private func parsePreview(_ json: String) -> Preview {
-        guard let data = json.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return Preview(title: "Kraki", body: "Open Kraki to view the update.", category: "", sessionId: nil)
-        }
-
-        let messageType = obj["type"] as? String
-        let sessionId = obj["sessionId"] as? String
-        let sessionTitle = normalized(obj["title"] as? String)
-        let summary = normalized(obj["summary"] as? String)
-        let steps = obj["steps"] as? Int ?? 0
-
-        let body: String
-        let category: String
-        switch messageType {
-        case "permission":
-            body = "Needs approval: " + (summary ?? "Review the requested action.")
-            category = "kraki.permission"
-        case "question":
-            body = "Question: " + (summary ?? "Open the Session to respond.")
-            category = "kraki.question"
-        case "error":
-            body = "Failed: " + (summary ?? "The turn did not finish.")
-            category = "kraki.failed"
-        case "idle":
-            if let summary {
-                body = summary
-            } else if steps > 0 {
-                body = "Finished with \(steps) step\(steps == 1 ? "" : "s") and no reply."
-            } else {
-                body = "Finished with no reply."
-            }
-            category = "kraki.reply"
-        default:
-            body = summary ?? "Open Kraki to view the update."
-            category = ""
-        }
-
-        return Preview(title: sessionTitle ?? "Kraki", body: body, category: category, sessionId: sessionId)
-    }
-
-    private func normalized(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let text = value
-            .components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        return text.isEmpty ? nil : text
-    }
 }

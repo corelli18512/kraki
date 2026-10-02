@@ -153,6 +153,24 @@ describe('Storage', () => {
       expect(tokens[0].token).toBe('new_token');
     });
 
+    it('moves a push address to the device that registers it last', () => {
+      // Same phone signed out and back in: a new device row, the same APNs token.
+      storage.upsertDevice('dev-3', 'u1', 'Phone again', 'app', 'ios');
+      storage.upsertPushToken('dev-1', 'apns', 'same_token');
+      storage.upsertPushToken('dev-3', 'apns', 'same_token');
+      const tokens = storage.getPushTokensForOfflineDevices('u1', []);
+      expect(tokens.map((t) => t.deviceId)).toEqual(['dev-3']);
+    });
+
+    it('moves a push address across accounts too', () => {
+      storage.upsertUser('u2', 'bob');
+      storage.upsertDevice('dev-b', 'u2', 'Phone', 'app', 'ios');
+      storage.upsertPushToken('dev-1', 'apns', 'same_token');
+      storage.upsertPushToken('dev-b', 'apns', 'same_token');
+      expect(storage.getPushTokensForOfflineDevices('u1', [])).toHaveLength(0);
+      expect(storage.getPushTokensForOfflineDevices('u2', [])).toHaveLength(1);
+    });
+
     it('supports multiple providers per device', () => {
       storage.upsertPushToken('dev-1', 'apns', 'apns_token');
       storage.upsertPushToken('dev-1', 'fcm', 'fcm_token');

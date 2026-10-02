@@ -252,7 +252,23 @@ final class AppState {
             )
         }
         sessionStore.activeSessionId = sessionId
+        if isAppForeground && isConversationWindowVisible {
+            SessionNotifications.removeDelivered(forSession: sessionId)
+        }
     }
+
+    #if os(macOS)
+    /// Auth and sign-out run on the main thread; run MacNotifications work
+    /// synchronously there so a sign-out unregister goes out before the
+    /// socket closes, and hop to the main actor otherwise.
+    private static func onMacNotificationsMain(_ work: @escaping @MainActor (MacNotifications) -> Void) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { work(MacNotifications.shared) }
+        } else {
+            Task { @MainActor in work(MacNotifications.shared) }
+        }
+    }
+    #endif
 
     func endViewingSession(_ sessionId: String) {
         sessionStore.allowAutoRead(sessionId)
@@ -268,9 +284,7 @@ final class AppState {
         isConversationWindowVisible = conversationVisible
         guard becameReadable, let sessionId = sessionStore.activeSessionId else { return }
         markSessionReadIfVisible(sessionId)
-        #if os(iOS)
-        pushManager?.removeDeliveredNotifications(forSession: sessionId)
-        #endif
+        SessionNotifications.removeDelivered(forSession: sessionId)
     }
 
     /// macOS dev-local mode: connected to a local `pnpm dev` relay with no
@@ -888,6 +902,13 @@ final class AppState {
         #if KRAKI_DIAG
         KrakiDiag.phase("logout")
         #endif
+        #if os(iOS)
+        // Before the socket closes: stop pushes to this device, clear its
+        // notifications (C2 of the 2026-10-01 review).
+        pushManager?.handleSignOut()
+        #elseif os(macOS)
+        Self.onMacNotificationsMain { $0.handleSignOut(appState: self) }
+        #endif
         wsClient?.disconnect()
         pulseManager?.resetForIdentityChange()
         // The old decrypt pipeline may already have queued main-actor work.
@@ -1079,6 +1100,8 @@ final class AppState {
         // Re-register push token if user has it enabled
         #if os(iOS)
         pushManager?.onAuthenticated()
+        #elseif os(macOS)
+        Self.onMacNotificationsMain { $0.onAuthenticated(appState: self) }
         #endif
         voiceInputController.prepare()
     }

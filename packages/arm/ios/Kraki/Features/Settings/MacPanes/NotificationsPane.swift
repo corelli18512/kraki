@@ -9,6 +9,7 @@ import SwiftUI
 import UserNotifications
 
 struct NotificationsPane: View {
+    @Environment(AppState.self) private var appState
     @State private var authStatus: UNAuthorizationStatus = .notDetermined
     @AppStorage("notifications.enabled") private var enabled: Bool = true
 
@@ -28,8 +29,11 @@ struct NotificationsPane: View {
             }
 
             Section("In-app") {
-                Toggle("Show notifications for new messages", isOn: $enabled)
-                Text("Notifications appear only when the window is hidden or another session is selected.")
+                Toggle("Notify me when an agent replies or needs me", isOn: $enabled)
+                    .onChange(of: enabled) { _, newValue in
+                        MacNotifications.shared.setEnabled(newValue, appState: appState)
+                    }
+                Text("Shown while Kraki is running (also from the menu bar), except for the Session you are looking at.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

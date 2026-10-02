@@ -323,3 +323,15 @@ describe('isConnectionError', () => {
     expect(isConnectionError(undefined)).toBe(false);
   });
 });
+
+describe('isPermanentTokenFailure', () => {
+  it('drops tokens APNs will never accept again', async () => {
+    const { isPermanentTokenFailure } = await import('../push/apns.js');
+    for (const reason of ['BadDeviceToken', 'Unregistered', 'DeviceTokenNotForTopic']) {
+      expect(isPermanentTokenFailure(reason)).toBe(true);
+    }
+    for (const reason of ['TooManyRequests', 'InternalServerError', 'ExpiredProviderToken', undefined]) {
+      expect(isPermanentTokenFailure(reason)).toBe(false);
+    }
+  });
+});

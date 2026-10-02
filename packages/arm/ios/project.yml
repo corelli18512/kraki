@@ -177,6 +177,7 @@ targets:
       - path: KrakiNotification
         excludes:
           - "**/.DS_Store"
+      - path: Kraki/Core/Notifications/PushPreviewFormat.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.ios.notification
@@ -226,6 +227,7 @@ targets:
       - path: KrakiTests/ForegroundTestGate.swift
       - path: KrakiTests/IOSVoiceComposerTests.swift
       - path: KrakiTests/AccountUsageTests.swift
+      - path: KrakiTests/PushPreviewFormatTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.tests

@@ -19,6 +19,14 @@ export function isConnectionError(error: string | undefined): boolean {
   return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|GOAWAY|socket hang up/i.test(error);
 }
 
+/** APNs reasons meaning this token will never work for this topic again.
+ *  Retrying them on every push only burns requests; drop the token and let
+ *  the device re-register on its next connection. */
+const PERMANENT_TOKEN_REASONS = new Set(['BadDeviceToken', 'Unregistered', 'DeviceTokenNotForTopic']);
+export function isPermanentTokenFailure(reason: string | undefined): boolean {
+  return !!reason && PERMANENT_TOKEN_REASONS.has(reason);
+}
+
 export function buildApnsPayload(payload?: PushPayload): string {
   return JSON.stringify({
     aps: {
@@ -143,6 +151,11 @@ export class ApnsProvider implements PushProvider {
             const parsed = JSON.parse(responseData);
             if (parsed.reason) errorReason = parsed.reason;
           } catch { /* ignore parse errors */ }
+          if (isPermanentTokenFailure(errorReason)) {
+            logger.info('APNs token rejected, marking for removal', { status: statusCode, reason: errorReason, tokenSuffix: token.slice(-8) });
+            resolve({ success: false, gone: true, error: errorReason });
+            return;
+          }
           logger.warn('APNs send failed', { status: statusCode, reason: errorReason, tokenSuffix: token.slice(-8) });
           resolve({ success: false, error: errorReason });
         }

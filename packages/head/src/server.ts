@@ -902,8 +902,22 @@ export class HeadServer {
   private firePushPreview(state: ClientState, pushPreview: BlobPayload | undefined): void {
     const senderUserId = state.userId;
     const senderDeviceId = state.deviceId;
-    if (!senderUserId || !senderDeviceId || !pushPreview || !this.options.pushManager) {
-      trace('PUSH-SKIP', { reason: !senderUserId ? 'no-user' : !senderDeviceId ? 'no-device' : !pushPreview ? 'no-preview' : 'no-pushmgr' });
+    if (!senderUserId || !senderDeviceId || !pushPreview) {
+      trace('PUSH-SKIP', { reason: !senderUserId ? 'no-user' : !senderDeviceId ? 'no-device' : 'no-preview' });
+      return;
+    }
+    // Online native clients that post their own notifications (macOS) get the
+    // same encrypted preview over their live connection.
+    for (const token of this.storage.getPushTokensForOfflineDevices(senderUserId, [])) {
+      if (token.provider !== 'local' || token.deviceId === senderDeviceId) continue;
+      if (!this.connections.has(token.deviceId)) continue;
+      const key = pushPreview.keys[token.deviceId];
+      if (!key) continue;
+      this.sendControlToDevice(token.deviceId, { type: 'notification_preview', payload: { blob: pushPreview.blob, key } });
+      trace('PUSH-LOCAL', { deviceId: token.deviceId });
+    }
+    if (!this.options.pushManager) {
+      trace('PUSH-SKIP', { reason: 'no-pushmgr' });
       return;
     }
     const onlineDeviceIds: string[] = [senderDeviceId];
