@@ -31,9 +31,11 @@ function StatusGlyph({ status, draft }: { status: SessionCardStatus; draft: bool
 }
 
 export const SessionRow = memo(function SessionRow({
-  session, selected, pinned, narrow, openSwipeId, setOpenSwipeId,
+  session, selected, pinned, narrow, openSwipeId, setOpenSwipeId, archived,
 }: {
   session: SessionSummary;
+  /** Archived row (F2): preview from the archive listing; opening restores it. */
+  archived?: { preview?: { text: string; type: string; timestamp: string }; onOpen: () => void };
   selected: boolean;
   pinned: boolean;
   narrow: boolean;
@@ -42,7 +44,8 @@ export const SessionRow = memo(function SessionRow({
 }) {
   const navigate = useNavigate();
   const device = useStore((s) => s.devices.get(session.deviceId));
-  const preview = useStore((s) => s.sessionPreviews.get(session.id));
+  const livePreview = useStore((s) => s.sessionPreviews.get(session.id));
+  const preview = livePreview ?? archived?.preview;
   const draft = useStore((s) => s.drafts.get(session.id));
   const unread = useStore((s) => !selected && (s.unreadCount.get(session.id) ?? 0) > 0);
   const compacting = useStore((s) => s.runtimeStatuses.get(session.id)?.status === 'compacting');
@@ -61,7 +64,7 @@ export const SessionRow = memo(function SessionRow({
   const toggleRead = () => (unread ? wsClient.markRead(session.id) : wsClient.markUnread(session.id));
 
   const onContextMenu = useCallback((e: React.MouseEvent) => {
-    if (narrow) return;
+    if (narrow || archived) return;
     e.preventDefault();
     setMenu({ x: e.clientX, y: e.clientY });
     const close = () => { setMenu(null); window.removeEventListener('click', close); };
@@ -72,7 +75,7 @@ export const SessionRow = memo(function SessionRow({
     <button
       type="button"
       className={`ksr ${narrow ? 'is-narrow' : 'is-wide'} ${selected ? 'is-selected' : ''}`}
-      onClick={() => navigate(`/session/${session.id}`)}
+      onClick={() => { archived?.onOpen(); navigate(`/session/${session.id}`); }}
       onContextMenu={onContextMenu}
       aria-current={selected ? 'page' : undefined}
     >
@@ -110,7 +113,7 @@ export const SessionRow = memo(function SessionRow({
 
   return (
     <>
-      {narrow ? (
+      {narrow && !archived ? (
         <SwipeableCard
           actions={[
             { icon: pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />, label: pinned ? 'Unpin' : 'Pin', bgClass: 'bg-teal-500', onClick: () => { togglePin(); setOpenSwipeId?.(null); } },
