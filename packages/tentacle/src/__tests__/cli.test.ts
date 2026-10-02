@@ -76,6 +76,7 @@ vi.mock('../managed.js', () => ({
   loadManagedBy: () => mockLoadManagedBy(),
   kickstartManagedDaemon: (...args: unknown[]) => mockKickstart(...args),
   isManagedDaemonLoaded: (...args: unknown[]) => mockIsManagedLoaded(...args),
+  isMacAppManagedWorker: () => false,
 }));
 
 vi.mock('../daemon-worker.js', () => ({
