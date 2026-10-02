@@ -148,7 +148,6 @@ async function runFullDiskAccess(): Promise<void> {
   } else {
     spinner.warn('Skipped. macOS may ask for permission during sessions; allow it later in System Settings.');
   }
-  console.log(chalk.dim(`    Agents that click, type or look at the screen also need Accessibility and Screen Recording: ${chalk.bold('kraki permissions --open')}`));
 }
 
 // Align inquirer prefix (✔/?) with ora spinners (4-space indent)

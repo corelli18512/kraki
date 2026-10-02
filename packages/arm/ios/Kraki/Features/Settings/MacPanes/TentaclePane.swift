@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct TentaclePane: View {
+    @State private var agentAccessibility: Bool?
     @Environment(TentacleCLIManager.self) private var tentacleCLI
     @Environment(\.openWindow) private var openWindow
     @AppStorage(BuiltInTentacle.thisMacRoleKey) private var runsAgentsHere = ""
@@ -46,29 +47,7 @@ struct TentaclePane: View {
             if tentacleCLI.mode == .builtIn {
                 Section("Permissions") {
                     fdaContent
-                }
-                Section {
-                    ForEach(BuiltInTentacle.agentPrivacyPanes, id: \.anchor) { pane in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(pane.title)
-                                Text(pane.detail)
-                                    .font(.caption)
-                                    .foregroundStyle(Color.textSecondary)
-                            }
-                            Spacer()
-                            Button("Open") { BuiltInTentacle.openPrivacyPane(pane.anchor) }
-                        }
-                    }
-                    Button("Show Kraki's Background Service in Finder") {
-                        BuiltInTentacle.revealHelperInFinder()
-                    }
-                } header: {
-                    Text("For Agents That Operate the Computer")
-                } footer: {
-                    Text("Optional. Agents run under Kraki's background service, so turn these on for \"Kraki\" if you want agents to click, type, see the screen or control apps. If Kraki isn't in a list yet, drag it in from the Finder window.")
-                        .font(.caption)
-                        .foregroundStyle(Color.textSecondary)
+                    accessibilityContent
                 }
             }
 
@@ -244,6 +223,35 @@ struct TentaclePane: View {
             }
             Spacer()
             Button("Open System Settings") { BuiltInTentacle.openFullDiskAccessSettings() }
+        }
+    }
+
+    /// Optional: macOS never asks for this one, so offer it here.
+    @ViewBuilder
+    private var accessibilityContent: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Let agents control the mouse and keyboard")
+                Text("Optional. Only for agents that click and type for you.")
+                    .font(.caption)
+                    .foregroundStyle(Color.textSecondary)
+            }
+            Spacer()
+            if agentAccessibility == true {
+                Label("Allowed", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(Color(hex: 0x34D399))
+            } else {
+                Button("Allow…") {
+                    Task {
+                        _ = await BuiltInTentacle.agentAccessibility(prompt: true)
+                        BuiltInTentacle.openPrivacyPane("Privacy_Accessibility")
+                    }
+                }
+            }
+        }
+        .task { agentAccessibility = await BuiltInTentacle.agentAccessibility(prompt: false) }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { agentAccessibility = await BuiltInTentacle.agentAccessibility(prompt: false) }
         }
     }
 

@@ -439,6 +439,26 @@ export async function probeFdaAsApp(): Promise<FdaStatus> {
   return probeFda();
 }
 
+/**
+ * Whether this process (and the agents it starts) may click and type, via
+ * AXIsProcessTrusted in JXA. With `prompt`, macOS shows its "would like to
+ * control this computer" notice and lists Kraki under Accessibility, so the
+ * user only has to flip the switch. Run from Kraki.app (see
+ * probeAccessibilityAsApp) so the answer is about Kraki, not a terminal.
+ */
+export function probeAccessibility(prompt = false): 'granted' | 'denied' | 'unknown' {
+  if (platform() !== 'darwin') return 'granted';
+  const script = prompt
+    ? "ObjC.import('ApplicationServices'); String($.AXIsProcessTrustedWithOptions($({AXTrustedCheckOptionPrompt: true})))"
+    : "ObjC.import('ApplicationServices'); String($.AXIsProcessTrusted())";
+  try {
+    const out = execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }).trim();
+    return out === 'true' ? 'granted' : out === 'false' ? 'denied' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 export async function pollFda(
   intervalMs = 2000,
   signal?: AbortSignal,
@@ -810,17 +830,12 @@ function realpathSafe(p: string): string {
 // the toggle (TCC.db is SIP-protected and cannot be flipped programmatically).
 
 /**
- * macOS privacy panes that matter to coding agents. Full Disk Access is the
- * one Kraki needs (agents read and edit projects); the others are for agents
- * that operate the computer — click and type, see the screen, drive other
- * apps. Granted to Kraki, they apply to every agent it runs.
+ * macOS privacy panes Kraki points to. Full Disk Access: agents read and edit
+ * projects. Accessibility: optional, for agents that click and type — macOS
+ * never asks for it, it silently denies, so it has to be turned on here.
+ * (Screen Recording, Automation, … are asked for when first used.)
  */
-export type TccService =
-  | 'fda'
-  | 'accessibility'
-  | 'screenRecording'
-  | 'automation'
-  | 'inputMonitoring';
+export type TccService = 'fda' | 'accessibility';
 
 interface TccServiceInfo {
   /** Stable id used in JSON output. */
@@ -844,25 +859,7 @@ export const TCC_SERVICES: readonly TccServiceInfo[] = [
     id: 'accessibility',
     label: 'Accessibility',
     url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
-    reason: 'let agents click, type and operate apps for you',
-  },
-  {
-    id: 'screenRecording',
-    label: 'Screen Recording',
-    url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
-    reason: 'let agents take screenshots and see what is on the screen',
-  },
-  {
-    id: 'automation',
-    label: 'Automation',
-    url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Automation',
-    reason: 'let agents control other apps (Terminal, Finder, Safari, …) — macOS asks per app',
-  },
-  {
-    id: 'inputMonitoring',
-    label: 'Input Monitoring',
-    url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent',
-    reason: 'let agents watch keyboard and mouse input (rarely needed)',
+    reason: 'optional: let agents click and type for you',
   },
 ] as const;
 
@@ -932,9 +929,6 @@ export async function probeTccStatus(): Promise<TccStatus> {
       services: {
         fda: 'granted',
         accessibility: 'granted',
-        screenRecording: 'granted',
-        automation: 'granted',
-        inputMonitoring: 'granted',
       },
     };
   }
@@ -951,12 +945,7 @@ export async function probeTccStatus(): Promise<TccStatus> {
     notApplicable: false,
     services: {
       fda: fda === 'granted' ? 'granted' : fda === 'denied' ? 'denied' : 'unknown',
-      // No side-effect-free probe for these from the daemon's process; they
-      // show up once an agent uses them (and are then listed in Settings).
-      accessibility: 'unknown',
-      screenRecording: 'unknown',
-      automation: 'unknown',
-      inputMonitoring: 'unknown',
+      accessibility: probeAccessibility(),
     },
   };
 }
