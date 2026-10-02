@@ -175,6 +175,60 @@ final class SessionStore {
 
     var archivedCount: Int { archiveInfo.values.reduce(0) { $0 + $1.count } }
 
+    func archivedCount(deviceId: String?) -> Int {
+        guard let deviceId else { return archivedCount }
+        return archiveInfo[deviceId]?.count ?? 0
+    }
+
+    /// Loaded archived sessions as list rows, newest activity first.
+    func archivedSessionInfos(deviceId: String? = nil) -> [SessionInfo] {
+        archivedSessions
+            .filter { deviceId == nil || $0.key == deviceId }
+            .flatMap { id, list in list.map { (id, $0) } }
+            .sorted { ($0.1.lastActivityAt ?? "") > ($1.1.lastActivityAt ?? "") }
+            .map { Self.sessionInfo(fromArchived: $0.1, deviceId: $0.0) }
+    }
+
+    /// Lets the normal session rows render an archived session (F2).
+    func archivedSessionInfo(_ id: String) -> SessionInfo? {
+        for (deviceId, list) in archivedSessions {
+            if let digest = list.first(where: { $0.id == id }) {
+                return Self.sessionInfo(fromArchived: digest, deviceId: deviceId)
+            }
+        }
+        return nil
+    }
+
+    func archivedPreview(_ id: String) -> SessionPreview? {
+        for list in archivedSessions.values {
+            if let digest = list.first(where: { $0.id == id }) { return digest.preview }
+        }
+        return nil
+    }
+
+    private static func sessionInfo(fromArchived digest: SessionDigest, deviceId: String) -> SessionInfo {
+        SessionInfo(
+            id: digest.id,
+            deviceId: deviceId,
+            deviceName: "",
+            agent: digest.agent,
+            model: digest.model,
+            reasoningEffort: digest.reasoningEffort,
+            title: digest.title,
+            autoTitle: digest.autoTitle,
+            state: .idle,
+            mode: digest.mode,
+            lastSeq: max(0, digest.lastSeq),
+            readSeq: min(max(0, digest.readSeq), max(0, digest.lastSeq)),
+            messageCount: digest.messageCount,
+            createdAt: ISO8601.parse(digest.createdAt) ?? Date(),
+            usage: digest.usage,
+            pinned: false,
+            currentToolName: nil,
+            currentToolHeadline: nil
+        )
+    }
+
     var sessions: [String: SessionInfo] = [:]
     var activeSessionId: String?
     /// Ephemeral UI guard for a manual Mark Unread on the currently open Chat.

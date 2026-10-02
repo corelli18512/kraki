@@ -377,6 +377,3 @@ struct ContentRef: Codable, Equatable, Sendable {
         )
     }
 }
-
-/// Navigation value for the archived-sessions page (iOS, F2).
-struct ArchivedNavID: Hashable {}

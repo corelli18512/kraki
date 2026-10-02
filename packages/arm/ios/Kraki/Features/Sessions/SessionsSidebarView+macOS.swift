@@ -246,7 +246,7 @@ struct SessionsSidebarView: View {
                 Divider().foregroundStyle(Color.borderPrimary)
             }
 
-            if filteredSessions.isEmpty && !(showsArchived && appState.sessionStore.archivedCount > 0) {
+            if filteredSessions.isEmpty && !(showsArchived && appState.sessionStore.archivedCount(deviceId: selectedDeviceFilter) > 0) {
                 emptyState
             } else {
                 sessionList
@@ -307,9 +307,9 @@ struct SessionsSidebarView: View {
 
     // MARK: - Session list
 
-    /// The archived group only makes sense for the unfiltered list.
+    /// The archived group follows the device filter; hidden while searching.
     private var showsArchived: Bool {
-        selectedDeviceFilter == nil && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var filteredSessionIDs: [String] {
@@ -325,9 +325,7 @@ struct SessionsSidebarView: View {
                             .id(session.id)
                     }
                     if showsArchived {
-                        ArchivedSessionsSection { sessionId in
-                            selectedSessionId = sessionId
-                        }
+                        ArchivedSessionsSection(selectedSessionId: $selectedSessionId, deviceFilter: selectedDeviceFilter)
                     }
                 }
                 .padding(.vertical, 4)
@@ -506,6 +504,7 @@ struct MacSidebarSessionRow: View {
 
     private var preview: SessionPreview? {
         appState.sessionStore.sessionPreviews[session.id]
+            ?? appState.sessionStore.archivedPreview(session.id)
     }
 
     private var projection: SessionCardProjection {

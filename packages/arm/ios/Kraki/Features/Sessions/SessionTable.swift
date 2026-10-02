@@ -19,9 +19,10 @@ import Observation
 struct SessionTable: UIViewControllerRepresentable {
     let appState: AppState
     let deviceFilter: String?  // nil = all devices
-    /// Archived sessions on all computers; shown as a footer row (F2).
+    /// Archived sessions (F2): a collapsed group after the list. Passed in
+    /// so SwiftUI re-runs `updateUIViewController` when they change.
     var archivedCount: Int = 0
-    var onArchivedTapped: () -> Void = {}
+    var archivedIds: [String] = []
     let onCellTapped: (String) -> Void
 
     func makeUIViewController(context: Context) -> SessionTableController {
@@ -29,8 +30,8 @@ struct SessionTable: UIViewControllerRepresentable {
         vc.appState = appState
         vc.deviceFilter = deviceFilter
         vc.onCellTapped = onCellTapped
-        vc.onArchivedTapped = onArchivedTapped
         vc.archivedCount = archivedCount
+        vc.archivedIds = archivedIds
         return vc
     }
 
@@ -38,8 +39,8 @@ struct SessionTable: UIViewControllerRepresentable {
         vc.appState = appState
         vc.deviceFilter = deviceFilter
         vc.onCellTapped = onCellTapped
-        vc.onArchivedTapped = onArchivedTapped
         vc.archivedCount = archivedCount
+        vc.archivedIds = archivedIds
         KLog.d("📂 [snapshot] SessionTable.updateUIViewController → applySnapshot")
         vc.applySnapshot(animated: true)
     }
@@ -51,37 +52,19 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     weak var appState: AppState?
     var deviceFilter: String?
     var onCellTapped: ((String) -> Void)?
-    var onArchivedTapped: (() -> Void)?
-    var archivedCount = 0 {
-        didSet { if archivedCount != oldValue, isViewLoaded { updateArchivedFooter() } }
-    }
+    var archivedCount = 0
+    var archivedIds: [String] = []
+    /// Collapsed every time the list is created.
+    private var archivedExpanded = false
 
-    /// "Archived (N)" row under the last session (F2).
-    private func updateArchivedFooter() {
-        guard archivedCount > 0 else {
-            tableView.tableFooterView = nil
-            return
-        }
-        var config = UIButton.Configuration.plain()
-        config.title = "Archived (\(archivedCount))"
-        config.image = UIImage(systemName: "archivebox")
-        config.imagePadding = 6
-        config.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 13)
-        config.baseForegroundColor = .secondaryLabel
-        config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attrs in
-            var a = attrs
-            a.font = UIFont.systemFont(ofSize: 14)
-            return a
-        }
-        let button = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in
-            self?.onArchivedTapped?()
-        })
-        button.accessibilityIdentifier = "session-list-archived"
-        let footer = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 56))
-        button.frame = footer.bounds
-        button.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        footer.addSubview(button)
-        tableView.tableFooterView = footer
+    static let archivedHeaderId = "__archived_header__"
+    static let archivedPrefix = "archived:"
+
+    private func toggleArchived() {
+        archivedExpanded.toggle()
+        if archivedExpanded { appState?.loadArchivedSessions() }
+        lastAppliedIds = []
+        applySnapshot(animated: true)
     }
 
     private var tableView: UITableView!
@@ -166,7 +149,6 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "session")
         view.addSubview(tableView)
         view.backgroundColor = UIColor(Color.surfacePrimary)
-        updateArchivedFooter()
     }
 
     private func setupDataSource() {
@@ -176,8 +158,23 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
             }
             let cell = tableView.dequeueReusableCell(withIdentifier: "session", for: indexPath)
             let snapshot = self.dataSource.snapshot()
-            let total = snapshot.numberOfItems(inSection: 0)
+            let total = snapshot.numberOfItems(inSection: snapshot.sectionIdentifiers[indexPath.section])
             let isLast = indexPath.row == total - 1
+            if sessionId == Self.archivedHeaderId {
+                let count = self.archivedCount
+                let expanded = self.archivedExpanded
+                cell.contentConfiguration = UIHostingConfiguration {
+                    ArchivedHeaderRow(count: count, expanded: expanded)
+                }
+                .margins(.all, 0)
+                cell.accessibilityIdentifier = "session-list-archived"
+                cell.backgroundColor = UIColor(Color.surfacePrimary)
+                cell.selectedBackgroundView = nil
+                return cell
+            }
+            cell.accessibilityIdentifier = nil
+            let rowSessionId = sessionId.hasPrefix(Self.archivedPrefix)
+                ? String(sessionId.dropFirst(Self.archivedPrefix.count)) : sessionId
             cell.contentConfiguration = UIHostingConfiguration {
                 // Pass only the sessionId so the SwiftUI subtree
                 // re-fetches the current SessionInfo from the
@@ -185,7 +182,7 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
                 // SessionInfo struct here would freeze it at cell
                 // configuration time and miss in-place updates from
                 // the store (e.g. unread / readSeq mutations).
-                SessionRowContent(sessionId: sessionId, isLast: isLast)
+                SessionRowContent(sessionId: rowSessionId, isLast: isLast)
                     .environment(appState)
             }
             .margins(.all, 0)
@@ -238,8 +235,19 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         } else {
             filtered = allSessions
         }
-        let ids = filtered.map(\.id)
+        var ids = filtered.map(\.id)
         snapshot.appendItems(ids)
+        if archivedCount > 0 {
+            snapshot.appendSections([1])
+            var archivedItems = [Self.archivedHeaderId]
+            if archivedExpanded {
+                archivedItems += archivedIds.map { Self.archivedPrefix + $0 }
+            }
+            snapshot.appendItems(archivedItems, toSection: 1)
+            // Header text/chevron live in the cell; reconfigure on change.
+            snapshot.reconfigureItems([Self.archivedHeaderId])
+            ids += archivedItems + ["\(archivedCount):\(archivedExpanded)"]
+        }
 
         // Reconfigure only cells whose underlying SessionInfo changed
         // since the previous apply. With 100+ sessions, reconfiguring
@@ -363,10 +371,21 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        if let id = dataSource.itemIdentifier(for: indexPath) {
-            KLog.chat("👆 [session-list] tap session=\(id.prefix(12))")
-            onCellTapped?(id)
+        guard let id = dataSource.itemIdentifier(for: indexPath) else { return }
+        if id == Self.archivedHeaderId {
+            toggleArchived()
+            return
         }
+        if id.hasPrefix(Self.archivedPrefix) {
+            let sessionId = String(id.dropFirst(Self.archivedPrefix.count))
+            if let appState, let entry = appState.archivedEntries.first(where: { $0.id == sessionId }) {
+                appState.commandSender?.openArchivedSession(entry.digest, deviceId: entry.deviceId)
+            }
+            onCellTapped?(sessionId)
+            return
+        }
+        KLog.chat("👆 [session-list] tap session=\(id.prefix(12))")
+        onCellTapped?(id)
     }
 
     func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
@@ -413,6 +432,29 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
 }
 
 // MARK: - Cell content (SwiftUI inside UIHostingConfiguration)
+
+/// "Archived (N)" toggle row between the list and the archived sessions.
+struct ArchivedHeaderRow: View {
+    let count: Int
+    let expanded: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .rotationEffect(.degrees(expanded ? 90 : 0))
+            Image(systemName: "archivebox")
+                .font(.system(size: 14))
+            Text("Archived (\(count))")
+                .font(.system(size: 15))
+            Spacer()
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .contentShape(Rectangle())
+    }
+}
 
 struct SessionRowContent: View {
     @Environment(AppState.self) private var appState

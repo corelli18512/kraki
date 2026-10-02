@@ -12,7 +12,8 @@ struct SessionCardView: View {
     let sessionId: String
 
     var body: some View {
-        if let session = appState.sessionStore.sessions[sessionId] {
+        if let session = appState.sessionStore.sessions[sessionId]
+            ?? appState.sessionStore.archivedSessionInfo(sessionId) {
             SessionCardBody(session: session)
                 .environment(appState)
         }
@@ -27,7 +28,8 @@ private struct SessionCardBody: View {
         SessionCardProjection.make(
             session: session,
             device: appState.deviceStore.devices[session.deviceId],
-            preview: appState.sessionStore.sessionPreviews[session.id],
+            preview: appState.sessionStore.sessionPreviews[session.id]
+                ?? appState.sessionStore.archivedPreview(session.id),
             draft: appState.sessionStore.drafts[session.id],
             isCompacting: {
                 if case .compacting = appState.messageStore.runtimeStatus(session.id) { return true }

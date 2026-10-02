@@ -28,100 +28,28 @@ extension AppState {
     }
 }
 
-struct ArchivedSessionRow: View {
-    @Environment(AppState.self) private var appState
-    let entry: ArchivedEntry
-
-    private var title: String {
-        let t = entry.digest.title ?? entry.digest.autoTitle ?? ""
-        return t.isEmpty ? "Untitled session" : t
-    }
-
-    private var subtitle: String {
-        var parts: [String] = []
-        if appState.deviceStore.tentacleDevices.count > 1,
-           let name = appState.deviceStore.device(for: entry.deviceId)?.name {
-            parts.append(name)
-        }
-        if let iso = entry.digest.lastActivityAt, let date = ISO8601.parse(iso) {
-            parts.append(date.formatted(.relative(presentation: .named)))
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.system(size: 14))
-                .foregroundStyle(Color.textPrimary)
-                .lineLimit(1)
-            if !subtitle.isEmpty {
-                Text(subtitle)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.textMuted)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-    }
-}
-
-#if os(iOS)
-/// Pushed from the bottom of the session list.
-struct ArchivedSessionsView: View {
-    @Environment(AppState.self) private var appState
-    let onOpen: (String) -> Void
-
-    var body: some View {
-        let entries = appState.archivedEntries
-        List {
-            if entries.isEmpty {
-                HStack {
-                    Spacer()
-                    if appState.sessionStore.archivedCount > 0 { ProgressView() } else { Text("No archived sessions").foregroundStyle(.secondary) }
-                    Spacer()
-                }
-                .listRowBackground(Color.clear)
-            } else {
-                Section {
-                    ForEach(entries) { entry in
-                        Button {
-                            appState.commandSender?.openArchivedSession(entry.digest, deviceId: entry.deviceId)
-                            onOpen(entry.id)
-                        } label: {
-                            ArchivedSessionRow(entry: entry)
-                        }
-                    }
-                } footer: {
-                    Text("Opening a session moves it back to your list.")
-                }
-            }
-        }
-        .navigationTitle("Archived")
-        .navigationBarTitleDisplayMode(.inline)
-        .onAppear { appState.loadArchivedSessions() }
-    }
-}
-#endif
-
 #if os(macOS)
-/// Inline, collapsed group at the bottom of the Mac sidebar.
+/// Collapsed "Archived (N)" group at the bottom of the Mac sidebar. Expanded,
+/// it shows the archived sessions with the normal sidebar rows; opening one
+/// restores it.
 struct ArchivedSessionsSection: View {
     @Environment(AppState.self) private var appState
-    let onOpen: (String) -> Void
+    @Binding var selectedSessionId: String?
+    var deviceFilter: String?
     @State private var expanded = false
 
     var body: some View {
-        let count = appState.sessionStore.archivedCount
+        let count = appState.sessionStore.archivedCount(deviceId: deviceFilter)
         if count > 0 {
             VStack(alignment: .leading, spacing: 0) {
                 Button {
-                    expanded.toggle()
+                    withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
                     if expanded { appState.loadArchivedSessions() }
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        Image(systemName: "chevron.right")
                             .font(.system(size: 9, weight: .semibold))
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
                         Image(systemName: "archivebox")
                             .font(.system(size: 11))
                         Text("Archived (\(count))")
@@ -134,28 +62,29 @@ struct ArchivedSessionsSection: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("sidebar-archived")
 
                 if expanded {
-                    let entries = appState.archivedEntries
-                    if entries.isEmpty {
+                    let sessions = appState.sessionStore.archivedSessionInfos(deviceId: deviceFilter)
+                    if sessions.isEmpty {
                         ProgressView().controlSize(.small).padding(.leading, 34).padding(.vertical, 6)
                     }
-                    ForEach(entries) { entry in
-                        Button {
-                            appState.commandSender?.openArchivedSession(entry.digest, deviceId: entry.deviceId)
-                            onOpen(entry.id)
-                        } label: {
-                            ArchivedSessionRow(entry: entry)
-                                .padding(.leading, 34)
-                                .padding(.trailing, 14)
-                                .padding(.vertical, 6)
-                        }
-                        .buttonStyle(.plain)
+                    ForEach(sessions) { session in
+                        MacSidebarSessionRow(session: session, isSelected: selectedSessionId == session.id)
+                            .contentShape(Rectangle())
+                            .onTapGesture { open(session.id) }
                     }
                 }
             }
             .padding(.top, 6)
         }
+    }
+
+    private func open(_ sessionId: String) {
+        if let entry = appState.archivedEntries.first(where: { $0.id == sessionId }) {
+            appState.commandSender?.openArchivedSession(entry.digest, deviceId: entry.deviceId)
+        }
+        selectedSessionId = sessionId
     }
 }
 #endif
