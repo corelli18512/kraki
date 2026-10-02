@@ -85,6 +85,7 @@ final class TentacleCLIManager {
     @ObservationIgnored let builtIn = BuiltInTentacle()
     @ObservationIgnored private var restartedForVersion: String?
     @ObservationIgnored private var notRunningSince: Date?
+    @ObservationIgnored private var kickstartedThisLaunch = false
     @ObservationIgnored private var reRegisteredThisLaunch = false
     @ObservationIgnored private var checkedLegacyHelperPath = false
 
@@ -332,6 +333,17 @@ final class TentacleCLIManager {
            BuiltInTentacle.thisMacRole != .remoteOnly,
            builtIn.service.status == .enabled, !reRegisteredThisLaunch {
             if notRunningSince == nil { notRunningSince = Date() }
+            // First, ask launchd to start it. A registered RunAtLoad/KeepAlive
+            // job is never spawned while the user's launchd domain is stuck in
+            // on-demand-only mode (e.g. after macOS's scheduled-update restart
+            // was interrupted) — only an explicit kickstart starts it. Seen on
+            // a real Mac: "pending spawn, domain in on-demand-only mode", the
+            // app sat on "Starting Kraki in background" forever.
+            if let since = notRunningSince, Date().timeIntervalSince(since) > 6, !kickstartedThisLaunch {
+                kickstartedThisLaunch = true
+                KLog.diag("[Tentacle] built-in daemon registered but not running; kickstarting")
+                builtIn.kickstart()
+            }
             if let since = notRunningSince, Date().timeIntervalSince(since) > 20 {
                 reRegisteredThisLaunch = true
                 KLog.diag("[Tentacle] built-in daemon registered but not running for 20s; re-registering")
@@ -468,6 +480,9 @@ final class TentacleCLIManager {
         try? await Task.sleep(nanoseconds: 1_000_000_000)
         do {
             _ = try builtIn.enable()
+            // Registration alone does not spawn the job in on-demand-only mode.
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            builtIn.kickstart()
         } catch {
             daemonState = .error("Could not restart Kraki in the background: \(error.localizedDescription)")
         }
