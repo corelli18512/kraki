@@ -32,7 +32,7 @@ import { createLogger } from './logger.js';
 export interface DoubaoClientOptions {
   /**
    * Legacy "old-console" App ID. If present we send both
-   * `X-Api-App-Key` and `X-Api-Access-Key` (Volcengine 旧版控制台 scheme).
+   * `X-Api-App-Key` and `X-Api-Access-Key` (Volcengine legacy console scheme).
    * If empty / omitted we send only `X-Api-Key: <accessKey>` — that's the
    * new-console scheme documented at https://www.volcengine.com/docs/6561/1354869
    */

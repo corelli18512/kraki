@@ -1,4 +1,4 @@
-#if os(iOS)
+#if os(iOS) && DEBUG
 //  LiveBubbleTestView.swift
 //  Simulator harness for the pure-spine render model's LIVE piece — the
 //  card-driven `LiveAgentBubbleView` (draft + action slot). WS is locked so the

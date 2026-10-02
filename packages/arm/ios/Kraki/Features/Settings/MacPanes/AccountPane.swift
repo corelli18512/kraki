@@ -74,7 +74,6 @@ struct AccountPane: View {
             }
         }
         .formStyle(.grouped)
-        .padding()
     }
 
     private func initials(for user: UserInfo) -> String {

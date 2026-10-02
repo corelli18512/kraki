@@ -1,5 +1,5 @@
 /**
- * Doubao / Volcengine streaming ASR (大模型版) protocol client.
+ * Doubao / Volcengine streaming ASR (large-model edition) protocol client.
  *
  * Wire format reverse-engineered from the official protocol notes + the
  * production references cited in the handover doc (proma-ai/Proma's

@@ -240,7 +240,7 @@ private struct VoiceTermEditor: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("e.g. PostgreSQL, 张三丰", text: $term.term)
+                    TextField("e.g. PostgreSQL", text: $term.term)
                         .focused($focus)
                         .autocorrectionDisabled().textInputAutocapitalization(.never)
                 } header: { Text("Word or name") } footer: {
@@ -249,7 +249,7 @@ private struct VoiceTermEditor: View {
                     else { Text(VoiceVocabularyCopy.termFooter) }
                 }
                 Section {
-                    TextField("e.g. 破四格, post gress", text: $term.heardAs, axis: .vertical)
+                    TextField("e.g. post gress, postgres Q L", text: $term.heardAs, axis: .vertical)
                         .autocorrectionDisabled().textInputAutocapitalization(.never)
                 } header: { Text(VoiceVocabularyCopy.recognizedAs + " (optional)") } footer: {
                     Text(VoiceVocabularyCopy.recognizedAsFooter)
@@ -303,7 +303,7 @@ struct VoiceVocabularyMacSection: View {
                         .frame(width: 180)
                         .focused($focused, equals: term.id)
                     TextField(VoiceVocabularyCopy.recognizedAs, text: $term.heardAs,
-                              prompt: Text("Optional, e.g. 破四格, post gress"))
+                              prompt: Text("Optional, e.g. post gress, postgres Q L"))
                         .labelsHidden()
                         .multilineTextAlignment(.leading)
                         .textFieldStyle(.roundedBorder)
@@ -415,7 +415,6 @@ struct VoiceInputPane: View {
                 .disabled(!correction)
         }
         .formStyle(.grouped)
-        .padding()
         .onChange(of: correction) { _, _ in appState.voiceInputController.applySettings() }
     }
 }
