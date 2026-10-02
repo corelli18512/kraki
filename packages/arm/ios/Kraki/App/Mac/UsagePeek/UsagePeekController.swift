@@ -62,6 +62,8 @@ private final class UsagePanelVisibilityAnimator {
     private var timer: Timer?
     private var generation = 0
     private(set) var isHiding = false
+    /// Called once the window is ordered out (so a child window can be detached).
+    var onHidden: (() -> Void)?
     init(window: NSWindow) { self.window = window }
     func cancel() { generation += 1; timer?.invalidate(); timer = nil; isHiding = false }
     func show(takeFocus: Bool) {
@@ -76,6 +78,7 @@ private final class UsagePanelVisibilityAnimator {
         guard let window else { return }
         if !animated {
             cancel(); window.orderOut(nil); window.alphaValue = 1; window.ignoresMouseEvents = false
+            onHidden?()
             return
         }
         guard window.isVisible, !isHiding else { return }
@@ -94,7 +97,7 @@ private final class UsagePanelVisibilityAnimator {
                 window.alphaValue = from + (target - from) * CGFloat(p * p * (3 - 2 * p))
                 if p >= 1 {
                     self.cancel()
-                    if target == 0 { window.orderOut(nil); window.alphaValue = 1; window.ignoresMouseEvents = false }
+                    if target == 0 { window.orderOut(nil); window.alphaValue = 1; window.ignoresMouseEvents = false; self.onHidden?() }
                 }
             }
         }
@@ -124,6 +127,10 @@ enum UsagePeekLayout {
     static let compactLimit = 6
     /// Footer line under the detail cards naming devices on an older Kraki.
     static let updateHintHeight: CGFloat = 22
+    /// "Kraki · Account Usage" title bar shown when the panel floats over another app.
+    static let floatingHeaderHeight: CGFloat = 30
+    /// Inset from the Kraki window's content edges when shown inside it.
+    static let windowInset: CGFloat = 12
 
     static func padding(_ m: Mode) -> CGFloat { m == .compact ? 9 : 18 }
     static func gap(_ m: Mode) -> CGFloat { m == .compact ? 6 : 12 }
@@ -205,6 +212,11 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
     @Published private(set) var closing = false
     @Published private(set) var compactSize = NSSize(width: UsagePeekLayout.compactMaxWidth, height: 160)
     @Published private(set) var detailedSize = NSSize(width: UsagePeekLayout.detailMaxWidth, height: 300)
+    /// True while the panel sits inside Kraki's main window (Kraki in front); false
+    /// when it floats over another app and carries a Kraki title bar.
+    @Published private(set) var inWindow = false
+    var headerHeight: CGFloat { inWindow ? 0 : UsagePeekLayout.floatingHeaderHeight }
+    private weak var hostWindow: NSWindow?
     private(set) var entranceUntil = Date.distantPast
 
     private(set) weak var appState: AppState?
@@ -268,6 +280,8 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
         self.panel = panel
         frameAnimator = UsagePanelFrameAnimator(window: panel)
         visibilityAnimator = UsagePanelVisibilityAnimator(window: panel)
+        // A hidden child window would be re-shown with its parent: detach once hidden.
+        visibilityAnimator?.onHidden = { [weak self] in self?.detachFromHost() }
 
         hotkey.onPress = { [weak self] in
             guard let self, !self.keyPhysicallyHeld else { return }
@@ -292,6 +306,18 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
         // Screenshot/automation affordance: KRAKI_USAGE_PEEK_SHOW=compact|detail
         // opens the panel a few seconds after launch (as if F6 were held / the
         // menu entry clicked).
+        if ProcessInfo.processInfo.environment["KRAKI_LOGIN_ITEM_CHECK"] == "1" {
+            // Automation: register and unregister this build's real login item once, then report.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                let setting = LoginItemSetting()
+                let before = setting.enabled
+                setting.set(true)
+                let on = "enabled=\(setting.enabled) approval=\(setting.needsApproval) error=\(setting.error ?? "-")"
+                setting.set(false)
+                KLog.diag("[LoginItem] before=\(before) on: \(on) off: enabled=\(setting.enabled) error=\(setting.error ?? "-")")
+                if before { setting.set(true) }
+            }
+        }
         if let mode = ProcessInfo.processInfo.environment["KRAKI_USAGE_PEEK_SHOW"] {
             if let session = ProcessInfo.processInfo.environment["KRAKI_USAGE_PEEK_SESSION"] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
@@ -300,6 +326,12 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
                 guard let self else { return }
+                if ProcessInfo.processInfo.environment["KRAKI_USAGE_PEEK_IN_WINDOW"] == "1",
+                   let main = NSApp.windows.first(where: { $0.title == "Kraki" && $0.styleMask.contains(.titled) }) {
+                    main.setFrame(NSRect(x: 200, y: 200, width: 1100, height: 720), display: true)
+                    NSApp.activate(ignoringOtherApps: true)
+                    main.makeKeyAndOrderFront(nil)
+                }
                 KLog.diag("[UsagePeek] current account=\(self.currentAccountKey?.prefix(12) ?? "none")")
                 if mode == "detail" { self.peek.click() } else { self.peek.press() }
                 self.present(takeFocus: false)
@@ -329,7 +361,7 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
     /// The content changed (accounts / devices); keep the window fitted to it.
     func contentDidChange() {
         guard let panel, panel.isVisible, !(visibilityAnimator?.isHiding ?? false) else { return }
-        computeFrames(screen: panel.screen)
+        computeFrames()
         frameAnimator?.move(to: displayedPresentation == .detailed ? detailedFrame : compactFrame, animated: true)
     }
 
@@ -343,31 +375,81 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
     private func present(takeFocus: Bool) {
         guard let panel, let visibilityAnimator else { return }
         let alreadyVisible = panel.isVisible && !visibilityAnimator.isHiding
-        if !panel.isVisible {
-            let mouse = NSEvent.mouseLocation
-            computeFrames(screen: NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main)
+        if !panel.isVisible || visibilityAnimator.isHiding {
+            attach(to: frontKrakiWindow())
+            computeFrames()
             entranceUntil = Date().addingTimeInterval(0.15)
             entranceSerial += 1
         }
         closing = false
         resize(animated: alreadyVisible)
+        // Inside Kraki's own window, Kraki is already the active app: let the panel take keys
+        // (Esc) only when opened from the menu. Floating over another app it never steals focus.
         visibilityAnimator.show(takeFocus: takeFocus)
         if peek.held && !peek.pinned { startHoverTracking() } else { stopHoverTracking() }
     }
 
-    private func computeFrames(screen: NSScreen?) {
-        guard let visible = (screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame else { return }
+    /// Kraki's main window when Kraki is the frontmost app and the window is on screen.
+    private func frontKrakiWindow() -> NSWindow? {
+        guard NSApp.isActive else { return nil }
+        let candidates = [NSApp.keyWindow, NSApp.mainWindow] + NSApp.orderedWindows.map(Optional.some)
+        return candidates.compactMap { $0 }.first { w in
+            w !== panel && w.isVisible && !w.isMiniaturized && w.styleMask.contains(.titled)
+                && w.title == "Kraki" && w.contentLayoutRect.width >= 360 && w.contentLayoutRect.height >= 260
+        }
+    }
+
+    private func attach(to host: NSWindow?) {
+        guard let panel else { return }
+        if hostWindow !== host { detachFromHost() }
+        if let host {
+            panel.level = .normal
+            if panel.parent !== host { host.addChildWindow(panel, ordered: .above) }
+            hostWindow = host
+        } else {
+            panel.level = .floating
+        }
+        if inWindow != (host != nil) {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { inWindow = host != nil }
+        }
+    }
+
+    private func detachFromHost() {
+        guard let panel else { return }
+        if let parent = panel.parent { parent.removeChildWindow(panel) }
+        hostWindow = nil
+        panel.level = .floating
+    }
+
+    /// Sizes and anchors both presentations. Inside Kraki's window they hang from the
+    /// window's top-right content corner and stay within it; floating, from the menu bar.
+    private func computeFrames() {
+        let bounds: NSRect
+        let inset: CGFloat
+        if let host = hostWindow {
+            bounds = host.convertToScreen(host.contentLayoutRect)
+            inset = UsagePeekLayout.windowInset
+        } else {
+            let mouse = NSEvent.mouseLocation
+            let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main ?? NSScreen.screens.first
+            guard let visible = screen?.visibleFrame else { return }
+            bounds = visible
+            inset = 10
+        }
+        let header = headerHeight
         let rings = orderedAccounts().map(\.ringCount)
-        maxHeight = min(640, visible.height - 28)
-        let compact = UsagePeekLayout.plan(rings: rings, .compact, maxWidth: min(UsagePeekLayout.compactMaxWidth, visible.width - 28))
-        let detail = UsagePeekLayout.plan(rings: rings, .detail, maxWidth: min(UsagePeekLayout.detailMaxWidth, visible.width - 28))
-        compactSize = NSSize(width: compact.size.width, height: min(compact.size.height, maxHeight))
+        maxHeight = min(640, bounds.height - inset * 2)
+        let maxWidth = bounds.width - inset * 2
+        let compact = UsagePeekLayout.plan(rings: rings, .compact, maxWidth: min(UsagePeekLayout.compactMaxWidth, maxWidth))
+        let detail = UsagePeekLayout.plan(rings: rings, .detail, maxWidth: min(UsagePeekLayout.detailMaxWidth, maxWidth))
+        compactSize = NSSize(width: compact.size.width, height: min(compact.size.height + header, maxHeight))
         let hint = rings.isEmpty || (appState?.deviceStore.devicesNeedingUsageUpdate().isEmpty ?? true) ? 0 : UsagePeekLayout.updateHintHeight
         // The detail frame contains the compact one, so hovering can't flicker at an edge.
         detailedSize = NSSize(width: max(detail.size.width, compact.size.width),
-                              height: max(min(detail.size.height + hint, maxHeight), compactSize.height))
-        // Anchored under the right end of the menu bar; both sizes share the top-right corner.
-        anchor = NSPoint(x: visible.maxX - 12, y: visible.maxY - 8)
+                              height: max(min(detail.size.height + hint + header, maxHeight), compactSize.height))
+        // Both sizes share the top-right corner.
+        anchor = NSPoint(x: bounds.maxX - inset, y: bounds.maxY - (hostWindow == nil ? 8 : inset))
         compactFrame = NSRect(x: anchor.x - compactSize.width, y: anchor.y - compactSize.height,
                               width: compactSize.width, height: compactSize.height)
         detailedFrame = NSRect(x: anchor.x - detailedSize.width, y: anchor.y - detailedSize.height,

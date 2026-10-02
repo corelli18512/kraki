@@ -1,13 +1,14 @@
 /// GeneralPane — App-wide appearance + window behavior preferences.
 
 #if os(macOS)
+import ServiceManagement
 import SwiftUI
 
 struct GeneralPane: View {
     @Environment(AppState.self) private var appState
     @AppStorage("colorScheme") private var colorScheme: AppColorScheme = .system
     @AppStorage("mac.keepRunningInMenuBar") private var keepRunningInMenuBar: Bool = true
-    @AppStorage("mac.openAtLogin") private var openAtLogin: Bool = false
+    @State private var loginItem = LoginItemSetting()
     @ObservedObject private var usagePeek = UsagePeekController.shared
 
     var body: some View {
@@ -36,16 +37,14 @@ struct GeneralPane: View {
             }
 
             Section("Account Usage") {
-                Toggle("Hold a shortcut to peek at account usage", isOn: Binding(
+                Toggle("Hold \(usagePeek.hotkey.shortcut.display) to peek at account usage", isOn: Binding(
                     get: { usagePeek.hotkey.enabled },
                     set: { usagePeek.hotkey.setEnabled($0) }))
-                if usagePeek.hotkey.enabled {
-                    LabeledContent("Shortcut") {
-                        UsageShortcutRecorder(manager: usagePeek.hotkey)
-                            .frame(width: 230, height: 26)
-                    }
+                LabeledContent("Shortcut") {
+                    UsageShortcutRecorder(manager: usagePeek.hotkey)
+                        .frame(width: 230, height: 26)
                 }
-                Text("Shows the Claude and Codex quota of every account on your devices. \"Account Usage\" in the menu bar opens it any time.")
+                Text("Click the shortcut to choose another key: F1–F20, or a combination with ⌘, ⌃ or ⌥. With Kraki in front the panel opens inside its window; over other apps it floats. \"Account Usage\" in the menu bar opens it any time.")
                     .font(.system(size: 11)).foregroundStyle(Color.textMuted)
                 if let error = usagePeek.hotkey.error {
                     Text(error).font(.system(size: 11)).foregroundStyle(.orange)
@@ -56,9 +55,21 @@ struct GeneralPane: View {
 
             Section("Behavior") {
                 Toggle("Keep running in menu bar when window closes", isOn: $keepRunningInMenuBar)
-                Toggle("Open Kraki at login", isOn: $openAtLogin)
+                Toggle("Open Kraki at login", isOn: Binding(
+                    get: { loginItem.enabled },
+                    set: { loginItem.set($0) }))
                     .help("Adds Kraki to your login items.")
-                    .disabled(true) // TODO: SMAppService integration
+                if loginItem.needsApproval {
+                    HStack(spacing: 6) {
+                        Text("Allow Kraki in System Settings › General › Login Items.")
+                            .font(.system(size: 11)).foregroundStyle(.orange)
+                        Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
+                            .controlSize(.small)
+                    }
+                }
+                if let error = loginItem.error {
+                    Text(error).font(.system(size: 11)).foregroundStyle(.orange)
+                }
             }
         }
         .formStyle(.grouped)
@@ -67,6 +78,34 @@ struct GeneralPane: View {
             guard appState.preferencesManager?.isApplyingRemote != true else { return }
             appState.preferencesManager?.sendTheme(newValue)
         }
+    }
+}
+
+/// "Open Kraki at login" backed by the system's own login item for this app.
+@Observable
+@MainActor
+final class LoginItemSetting {
+    private(set) var enabled: Bool
+    private(set) var needsApproval: Bool
+    private(set) var error: String?
+
+    init() {
+        let status = SMAppService.mainApp.status
+        enabled = status == .enabled || status == .requiresApproval
+        needsApproval = status == .requiresApproval
+    }
+
+    func set(_ on: Bool) {
+        error = nil
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+        } catch {
+            self.error = on ? "Couldn't add Kraki to login items: \(error.localizedDescription)"
+                            : "Couldn't remove Kraki from login items: \(error.localizedDescription)"
+        }
+        let status = SMAppService.mainApp.status
+        enabled = status == .enabled || status == .requiresApproval
+        needsApproval = status == .requiresApproval
     }
 }
 
