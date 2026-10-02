@@ -120,7 +120,7 @@ protocol IOSVoiceComposerHost: AnyObject {
         let before = ns.substring(to: range.location), after = ns.substring(from: range.location + range.length)
         // Latin-script neighbours need a word separator; CJK, whitespace and
         // punctuation boundaries do not ("Hello" + "world" -> "Hello world",
-        // "前文" + "新话" -> "前文新话"). The caret lands after the spoken text.
+        // "before" + "spoken" -> "beforespoken" in CJK). The caret lands after the spoken text.
         let leading = needsSeparator(before.last, text.first) ? " " : ""
         let trailing = needsSeparator(text.last, after.first) ? " " : ""
         let replacement = leading + text + trailing

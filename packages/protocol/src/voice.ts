@@ -1,51 +1,51 @@
 // ============================================================
 // Voice broker — lease auth types
 // ============================================================
-// head 签发 lease, voice-broker 离线验证。
-// 这里只放类型。canonical 序列化在 @kraki/crypto，运行时校验在使用方。
+// Head issues leases; the voice broker verifies them offline.
+// Types only. Canonical serialization lives in @kraki/crypto; runtime validation in the consumers.
 // ============================================================
 
-/** lease payload schema 版本。head 和 broker 同时 pin 这个 literal。 */
+/** Lease payload schema version. Head and broker both pin this literal. */
 export type VoiceLeaseVersion = 1;
 
-/** lease 授权访问的后端服务。未来加新后端时扩成 union。 */
+/** Backend service the lease grants access to. Becomes a union when more backends are added. */
 export type VoiceResource = 'voice/doubao';
 
-/** 签发方身份。目前只有 head。 */
+/** Issuer identity. Currently only Head. */
 export type VoiceLeaseIssuer = 'kraki-head';
 
-/** lease 拒发原因。 */
+/** Why a lease request was denied. */
 export type VoiceLeaseDeniedReason =
   | 'quota_exhausted'
   | 'not_entitled'
   | 'invalid_request';
 
-/** lease 的签名 payload。一张 lease 授权一个短期 warm voice connection。 */
+/** Signed lease payload. One lease authorizes one short-lived warm voice connection. */
 export interface VoiceLeasePayload {
   /** Schema version. */
   ver: VoiceLeaseVersion;
-  /** Issuer — 目前固定 'kraki-head'。 */
+  /** Issuer — currently always 'kraki-head'. */
   iss: VoiceLeaseIssuer;
-  /** Subject — 拥有该 lease 的用户 id。 */
+  /** Subject — id of the user who owns the lease. */
   sub: string;
-  /** Device id — lease 绑定到的具体设备。 */
+  /** Device id — the device the lease is bound to. */
   did: string;
   /** Issued-at, unix seconds. */
   iat: number;
   /** Expires-at, unix seconds. */
   exp: number;
-  /** 本 lease 生命周期内所有顺序录音共享的累计音频秒数上限。 */
+  /** Cumulative audio seconds shared by all sequential recordings during this lease's lifetime. */
   quota_seconds: number;
-  /** 授权访问的后端服务。 */
+  /** Backend service being authorized. */
   resource: VoiceResource;
-  /** lease 唯一 id (uuid)。未来撤销列表的 key。 */
+  /** Unique lease id (uuid); the key for a future revocation list. */
   jti: string;
 }
 
-/** 签好的 lease wire 格式。 */
+/** Signed lease wire format. */
 export interface VoiceLease {
   payload: VoiceLeasePayload;
-  /** Base64 RSA-SHA256 (PKCS#1 v1.5) 签名，对 payload 的 canonical JSON。 */
+  /** Base64 RSA-SHA256 (PKCS#1 v1.5) signature over the payload's canonical JSON. */
   signature: string;
   /**
    * Signing algorithm identifier. Today always `'RSA-SHA256'` — future
@@ -88,26 +88,26 @@ export interface VoiceCapability {
 // WebSocket messages — arm ↔ head
 // ============================================================
 
-/** arm → head: 取一张新 lease。走的是已认证的 head WS。 */
+/** arm → head: request a new lease over the authenticated Head WebSocket. */
 export interface RequestVoiceLeaseMessage {
   type: 'request_voice_lease';
-  /** 请求方设备 id。lease 会绑到这个 id。 */
+  /** Requesting device id; the lease is bound to it. */
   deviceId: string;
-  /** 用于哪个后端。 */
+  /** Which backend it is for. */
   resource: VoiceResource;
 }
 
-/** head → arm: 成功 — 一张新签的 lease。 */
+/** head → arm: success — a freshly signed lease. */
 export interface VoiceLeaseGrantMessage {
   type: 'voice_lease_grant';
   lease: VoiceLease;
 }
 
-/** head → arm: 拒绝 — 超额、无权限等。 */
+/** head → arm: denied — over quota, not entitled, etc. */
 export interface VoiceLeaseDeniedMessage {
   type: 'voice_lease_denied';
   reason: VoiceLeaseDeniedReason;
-  /** 给日志/UI 看的可读细节。 */
+  /** Human-readable detail for logs/UI. */
   detail?: string;
 }
 
@@ -115,7 +115,7 @@ export interface VoiceLeaseDeniedMessage {
 // arm ↔ voice-broker — warm connection + sequential recordings
 // ============================================================
 
-/** WebSocket 建立后先完成一次连接级授权，成功后可重复 start/finish。 */
+/** Connection-level authorization right after the WebSocket opens; then start/finish may repeat. */
 export interface VoiceAuthorizeMessage {
   type: 'authorize';
   /** User/device fields are checked against the signed lease for diagnostics. */
@@ -125,18 +125,18 @@ export interface VoiceAuthorizeMessage {
   authorization: VoiceLease;
 }
 
-/** broker 对连接级授权的确认。 */
+/** Broker acknowledgement of connection-level authorization. */
 export interface VoiceAuthorizedMessage {
   type: 'authorized';
 }
 
-/** 单段录音开始；lease 已由同一 WebSocket 上的 authorize 验证。 */
+/** Start of one recording; the lease was already verified by `authorize` on this WebSocket. */
 export interface VoiceStartMessage {
   type: 'start';
   /** User id (informational; truth comes from the authorized lease). */
   uid?: string;
   /** Arm device id (informational; truth comes from the authorized lease). */
   deviceId?: string;
-  /** PCM 流采样率。默认 16000。 */
+  /** PCM stream sample rate. Default 16000. */
   sampleRate?: number;
 }

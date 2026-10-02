@@ -63,7 +63,6 @@ struct TentaclePane: View {
             }
         }
         .formStyle(.grouped)
-        .padding()
     }
 
     // MARK: - Mode section

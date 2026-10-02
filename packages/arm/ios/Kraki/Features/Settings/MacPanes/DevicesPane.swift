@@ -29,7 +29,6 @@ struct DevicesPane: View {
             }
         }
         .formStyle(.grouped)
-        .padding()
     }
 }
 

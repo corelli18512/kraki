@@ -10,27 +10,27 @@ struct DiagSettingsSection: View {
     @AppStorage("kraki.diag.uploadState") private var uploadState = "waiting"
     @State private var marked = false
     var body: some View {
-        Section("诊断日志 · 中间测试版") {
-            Toggle("记录并发送诊断日志", isOn: $enabled)
+        Section("Diagnostics · Test Build") {
+            Toggle("Record and Send Diagnostics", isOn: $enabled)
             if lastSuccess > 0 {
-                LabeledContent("最近上传", value: Date(timeIntervalSince1970: lastSuccess).formatted(date: .abbreviated, time: .standard))
+                LabeledContent("Last Upload", value: Date(timeIntervalSince1970: lastSuccess).formatted(date: .abbreviated, time: .standard))
             } else {
-                Text("尚未上传，前台非计费网络下自动重试").font(.caption).foregroundStyle(.secondary)
+                Text("Not uploaded yet. Retries automatically in the foreground on an unmetered network.").font(.caption).foregroundStyle(.secondary)
             }
-            LabeledContent("等待发送", value: ByteCountFormatter.string(fromByteCount: Int64(pendingBytes), countStyle: .file))
-            LabeledContent("待发送批次", value: String(pendingBatches))
+            LabeledContent("Pending", value: ByteCountFormatter.string(fromByteCount: Int64(pendingBytes), countStyle: .file))
+            LabeledContent("Pending Batches", value: String(pendingBatches))
             if oldestBatch > 0 {
-                LabeledContent("最早待发送批次", value: Date(timeIntervalSince1970: oldestBatch).formatted(date: .abbreviated, time: .standard))
+                LabeledContent("Oldest Pending Batch", value: Date(timeIntervalSince1970: oldestBatch).formatted(date: .abbreviated, time: .standard))
             }
-            LabeledContent("上传状态", value: uploadState)
-            Text("仅前台、非计费网络且未开启低电量模式时上传；切换应用或持续操作可能推迟发送。")
+            LabeledContent("Upload Status", value: uploadState)
+            Text("Uploads only in the foreground, on an unmetered network and outside Low Power Mode; switching apps or continuous use may delay it.")
                 .font(.caption).foregroundStyle(.secondary)
-            Button(marked ? "已标记" : "标记：刚才出现卡顿或显示异常") {
+            Button(marked ? "Marked" : "Mark: Something Just Stuttered or Looked Wrong") {
                 KrakiDiag.record(.marker)
                 marked = true
             }
             .disabled(!enabled)
-            Text("不含消息正文、草稿、语音或附件内容。仅在前台通过非计费网络低优先级上传，最多 20 MB/天；本地最多 50 MB。关闭会停止上传并清除尚未发送的诊断文件。")
+            Text("Never includes message text, drafts, voice or attachments. Uploaded at low priority in the foreground on unmetered networks, up to 20 MB a day; at most 50 MB kept locally. Turning this off stops uploads and deletes unsent diagnostics.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
