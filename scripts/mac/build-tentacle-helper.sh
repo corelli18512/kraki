@@ -101,6 +101,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <true/>
     <key>LSBackgroundOnly</key>
     <true/>
+    <!-- Agents run under this helper. Without a usage string macOS Local
+         Network privacy silently denies them every LAN host (NAS, a dev
+         server on another machine, ssh) with "No route to host". -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Coding agents started by Kraki can reach computers and servers on your local network, such as a dev server or a NAS.</string>
 </dict>
 </plist>
 PLIST

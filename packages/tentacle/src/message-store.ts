@@ -8,6 +8,7 @@
  * The in-memory index maps seq → file offset for fast getAfterSeq lookups.
  */
 
+import { renameWithRetry } from './fs-retry.js';
 import { appendFileSync, readFileSync, writeFileSync, existsSync, renameSync, mkdirSync, openSync, readSync, closeSync } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -232,7 +233,7 @@ export class MessageStore {
     const content = messages.map((m) => JSON.stringify(m)).join('\n') + (messages.length > 0 ? '\n' : '');
     const tmp = this.filePath + '.tmp';
     writeFileSync(tmp, content, 'utf8');
-    renameSync(tmp, this.filePath);
+    renameWithRetry(tmp, this.filePath);
     this.rebuildIndex();
   }
 }

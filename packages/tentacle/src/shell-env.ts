@@ -111,8 +111,12 @@ export interface ShellEnvResult {
  */
 export function hydrateLoginShellEnv(
   env: NodeJS.ProcessEnv = process.env,
-  opts: { timeoutMs?: number; run?: typeof spawnSync } = {},
+  opts: { timeoutMs?: number; run?: typeof spawnSync; os?: NodeJS.Platform } = {},
 ): ShellEnvResult {
+  // Windows has no login shell to ask, and PATH is `;`-separated there:
+  // merging with `:` broke its last entry (often npm's global bin), so the
+  // setup wizard reported installed agents as missing.
+  if ((opts.os ?? process.platform) === 'win32') return { source: 'fallback', shell: '', addedKeys: [] };
   const shell = resolveUserShell(env);
   const run = opts.run ?? spawnSync;
   let shellEnv: Record<string, string> | null = null;
