@@ -125,6 +125,8 @@ export class RelayClient {
   private keyManager: KeyManager | null;
   private options: RelayClientOptions;
   private state: RelayClientState = 'disconnected';
+  /** Set after the first auth_ok of this process (see resumeDisconnectedSessions). */
+  private startupSessionsNormalised = false;
   private reconnectAttempts = 0;
   /** Inputs (session + clientId) this process has admitted. Bounded by the
    *  process lifetime's input count (small strings). */
@@ -2517,6 +2519,15 @@ export class RelayClient {
    */
   private async resumeDisconnectedSessions(): Promise<void> {
     const resumable = this.sessionManager.getResumableSessions();
+    // Normalising is for leftovers of a PREVIOUS daemon process. This runs on
+    // every auth_ok, i.e. also after a relay reconnect, when active/idle
+    // sessions are genuinely loaded and possibly mid-turn: marking those
+    // disconnected made every running session look stopped to the apps after
+    // a Head restart (and turned the next message into a fresh prompt instead
+    // of a steer). So only the first authentication of this process
+    // normalises.
+    const normalise = !this.startupSessionsNormalised;
+    this.startupSessionsNormalised = true;
     let normalised = 0;
     for (const meta of resumable) {
       // Pre-register agent mapping so message routing works BEFORE the session
@@ -2528,7 +2539,7 @@ export class RelayClient {
       // with "Session not found" for claude/pi sessions. registerSessionAgent
       // is a no-op on single-agent adapters and idempotent on the multi one.
       this.adapter.registerSessionAgent(meta.id, meta.agent);
-      if (meta.state === 'active' || meta.state === 'idle') {
+      if (normalise && (meta.state === 'active' || meta.state === 'idle')) {
         this.sessionManager.markDisconnected(meta.id);
         normalised++;
       }
