@@ -5,10 +5,14 @@ import { wsClient } from '../../lib/ws-client';
 import { isPushSupported, isPushSubscribed, subscribeToPush, unsubscribeFromPush, getPushPermission } from '../../lib/push';
 import { getCurrentChannel, setChannel } from '../../lib/auth';
 import { version } from '../../../package.json';
+import { ArchiveSettings } from '../sessions/ArchivedSessions';
 
 export function SettingsPanel({ open, onClose, inline, className }: { open: boolean; onClose: () => void; inline?: boolean; className?: string }) {
   const { isDark, toggleDark } = useTheme();
   const relayVersion = useStore((s) => s.relayVersion);
+  const devices = useStore((s) => s.devices);
+  const deviceVersions = useStore((s) => s.deviceVersions);
+  const [diagCopied, setDiagCopied] = useState(false);
   const vapidPublicKey = useStore((s) => s.vapidPublicKey);
   const isInternal = useStore((s) => s.user?.preferences?.internal === true);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -34,6 +38,14 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
   }, [open, onClose, inline]);
 
   const wsUrl = wsClient.url;
+  const clientVersion = `${version}${isBeta ? '-beta' : ''}${typeof __GIT_HASH__ === 'string' ? ` (${__GIT_HASH__})` : ''}`;
+  const computers = [...devices.values()].filter((d) => d.role === 'tentacle').sort((a, b) => a.name.localeCompare(b.name));
+  const diagnosticsLines = [
+    `Kraki web: ${clientVersion}`,
+    ...computers.map((d) => `${d.name}: Kraki ${deviceVersions.get(d.id) ?? 'unknown'}${d.online ? '' : ' · offline'}`),
+    `Relay: ${wsUrl.replace(/^wss?:\/\//, '')} · ${relayVersion ?? '—'}`,
+  ];
+
 
   const content = (
     <div className="space-y-6">
@@ -165,11 +177,26 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
 
       <section>
         <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+          Sessions
+        </h3>
+        <ArchiveSettings />
+      </section>
+
+      <section>
+        <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
           About
         </h3>
         <div className="space-y-1 text-xs text-text-secondary">
-          <p>Client version: {version}{isBeta ? '-beta' : ''}{typeof __GIT_HASH__ === 'string' ? ` (${__GIT_HASH__})` : ''}</p>
-          {relayVersion && <p>Relay version: {relayVersion}</p>}
+          {diagnosticsLines.map((line) => <p key={line}>{line}</p>)}
+          <button
+            type="button"
+            className="mt-1 rounded-md border border-border-primary px-2 py-1 text-xs text-text-secondary hover:bg-surface-secondary"
+            onClick={() => {
+              void navigator.clipboard?.writeText(diagnosticsLines.join('\n')).then(() => setDiagCopied(true));
+            }}
+          >
+            {diagCopied ? 'Copied' : 'Copy diagnostics'}
+          </button>
           <p>Agent-agnostic relay for AI coding agents</p>
         </div>
       </section>

@@ -75,7 +75,7 @@ vi.mock('@kraki/crypto', async () => {
   };
 });
 
-import { RelayClient } from '../relay-client.js';
+import { SessionResumeError, RelayClient } from '../relay-client.js';
 import { AttachmentStore } from '../attachment-store.js';
 import { createHash } from 'node:crypto';
 import { PayloadAssembler, isPayloadFragment, fragmentPayload } from '@kraki/protocol';
@@ -209,6 +209,9 @@ function createSessionManager(): Record<string, unknown> {
     markRead: vi.fn((_sessionId: string, seq: number) => seq),
     markUnread: vi.fn(() => 41),
     getSessionList: vi.fn(() => []),
+    countArchived: vi.fn(() => 0),
+    setArchived: vi.fn(() => false),
+    autoArchive: vi.fn(() => []),
     getPendingHumanAction: vi.fn(() => null),
     savePendingHumanAction: vi.fn(),
     clearPendingHumanAction: vi.fn(),
@@ -258,6 +261,59 @@ describe('RelayClient auth negotiation', () => {
   beforeEach(() => {
     sockets.length = 0;
     vi.useFakeTimers();
+  });
+
+  it.each(['service_unavailable', 'auth_unavailable'])('reconnects (never goes fatal) on a transient %s auth error', async (code) => {
+    const client = new RelayClient(
+      createAdapter(),
+      createSessionManager(),
+      {
+        relayUrl: 'ws://localhost:4000',
+        authMethod: 'open',
+        device: { name: 'Local Mac', role: 'tentacle', deviceId: 'dev_123' },
+        reconnectDelay: 10,
+      },
+      createKeyManager(),
+    );
+    const fatal = vi.fn();
+    client.onFatalError = fatal;
+
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_error', code, message: 'Authentication service unavailable',
+    })));
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(fatal).not.toHaveBeenCalled();
+    expect(sockets.length).toBeGreaterThanOrEqual(2);
+    // Still challenge auth: the device identity is kept for the retry.
+    sockets.at(-1)!.emit('open');
+    expect(JSON.parse(sockets.at(-1)!.sent[0]).auth).toEqual({ method: 'challenge', deviceId: 'dev_123' });
+  });
+
+  it('stays fatal on a deterministic auth rejection', async () => {
+    const client = new RelayClient(
+      createAdapter(),
+      createSessionManager(),
+      {
+        relayUrl: 'ws://localhost:4000',
+        authMethod: 'open',
+        device: { name: 'Local Mac', role: 'tentacle' },
+        reconnectDelay: 10,
+      },
+      createKeyManager(),
+    );
+    const fatal = vi.fn();
+    client.onFatalError = fatal;
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_error', code: 'auth_rejected', message: 'nope',
+    })));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(fatal).toHaveBeenCalledWith('nope');
+    expect(sockets).toHaveLength(1);
   });
 
   it('falls back from challenge to open auth when the relay does not know the device yet', async () => {
@@ -777,8 +833,8 @@ describe('RelayClient set_session_model', () => {
   }
 
   it.each([
-    ['discuss', 'safe'], ['execute', 'auto'], ['auto', 'auto'], ['safe', 'safe'], ['delegate', 'delegate'],
-  ])('set_session_mode %s is applied as %s (legacy names accepted; explicit discuss fails closed)', (wire, mode) => {
+    ['execute', 'auto'], ['auto', 'auto'], ['safe', 'safe'], ['delegate', 'delegate'],
+  ])('set_session_mode %s is applied as %s (legacy wire name accepted)', (wire, mode) => {
     const { adapter, sm } = buildConnectedClient();
     sockets[0].emit('message', Buffer.from(JSON.stringify({
       type: 'set_session_mode', sessionId: 'sess_1', deviceId: 'dev_1', seq: 1,
@@ -1056,6 +1112,81 @@ describe('RelayClient set_session_model', () => {
     await vi.runAllTimersAsync();
   });
 
+  function crashRecoveryHarness(initialState: string, sendImpl: (...args: unknown[]) => Promise<void>, resumeImpl?: () => Promise<{ sessionId: string }>) {
+    let state = initialState;
+    const adapter = {
+      onSessionEnded: undefined,
+      sendMessage: vi.fn(sendImpl),
+      respondToPermission: vi.fn(() => Promise.resolve()),
+      respondToQuestion: vi.fn(() => Promise.resolve()),
+      killSession: vi.fn(() => Promise.resolve()),
+      abortSession: vi.fn(() => Promise.resolve()),
+      resumeSession: vi.fn(resumeImpl ?? (() => Promise.resolve({ sessionId: 'sess_c' }))),
+      createSession: vi.fn(() => Promise.resolve({ sessionId: 'sess_c' })),
+      forkSession: vi.fn(() => Promise.resolve({ sessionId: 'sess_c' })),
+      listSessions: vi.fn(() => Promise.resolve([])),
+      listModels: vi.fn(() => Promise.resolve([])),
+      listModelDetails: vi.fn(() => Promise.resolve([])),
+      start: vi.fn(() => Promise.resolve()),
+      stop: vi.fn(() => Promise.resolve()),
+      setSessionMode: vi.fn(),
+      setSessionUsage: vi.fn(),
+      setSessionModel: vi.fn(() => Promise.resolve()),
+      registerSessionAgent: vi.fn(),
+      getSessionUsage: vi.fn(() => null),
+    };
+    const sm = {
+      ...createSessionManager(),
+      getMeta: vi.fn(() => ({ id: 'sess_c', agent: 'claude', state })),
+      resumeSession: vi.fn(() => { state = 'active'; return { runId: 'run_002', context: { summary: '', keyFiles: [], lastUserMessage: '', updatedAt: '' } }; }),
+      markDisconnected: vi.fn(() => { state = 'disconnected'; }),
+      markActive: vi.fn(() => { state = 'active'; }),
+      markIdle: vi.fn(() => { state = 'idle'; }),
+    };
+    const client = new RelayClient(adapter as unknown as Parameters<typeof RelayClient>[0], sm as unknown as Parameters<typeof RelayClient>[1], {
+      relayUrl: 'ws://localhost:4000', authMethod: 'open', device: { name: 'Test', role: 'tentacle' }, reconnectDelay: 10,
+    });
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_1', authMethod: 'open', user: { id: 'u1', login: 'test', provider: 'open' }, devices: [],
+    })));
+    const send = (text: string) => sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'send_input', sessionId: 'sess_c', deviceId: 'dev_1', seq: 1, timestamp: new Date().toISOString(), payload: { text },
+    })));
+    return { adapter, sm, send };
+  }
+
+  it('resumes a session left `ended` by an older crashed adapter instead of treating it as a dead end', async () => {
+    const { adapter, send } = crashRecoveryHarness('ended', () => Promise.resolve());
+    send('are you there');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(adapter.resumeSession).toHaveBeenCalledWith('sess_c', expect.anything());
+    expect(adapter.sendMessage).toHaveBeenCalledWith('sess_c', 'are you there', undefined);
+  });
+
+  it('reattaches once and retries when the adapter lost a session meta still calls loaded', async () => {
+    let calls = 0;
+    const { adapter, sm, send } = crashRecoveryHarness('idle', () => {
+      calls += 1;
+      return calls === 1 ? Promise.reject(new Error('Session not found: sess_c')) : Promise.resolve();
+    });
+    send('retry me');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sm.markDisconnected).toHaveBeenCalledWith('sess_c');
+    expect(adapter.resumeSession).toHaveBeenCalledTimes(1);
+    expect(adapter.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops at a failed resume with the real cause instead of sending into a missing session', async () => {
+    const { adapter, send } = crashRecoveryHarness('disconnected', () => Promise.resolve(), () => Promise.reject(new Error('transcript missing')));
+    send('hello');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(adapter.sendMessage).not.toHaveBeenCalled();
+    expect(new SessionResumeError('claude', new Error('transcript missing')).message)
+      .toBe("Claude Code couldn't reopen this session: transcript missing");
+  });
+
   it('send_input on disconnected session: ensureSessionResumed runs BEFORE markActive (regression for v0.21.1 state-race)', async () => {
     // Before the fix, markActive was called before ensureSessionResumed.
     // That flipped meta state from `disconnected` → `active`, defeating the
@@ -1141,6 +1272,49 @@ describe('RelayClient set_session_model', () => {
     expect(pinned).toBeDefined();
     expect(pinned.payload.pinned).toBe(true);
     expect(pinned.sessionId).toBe('sess_1');
+  });
+
+  it('archives, lists and restores sessions (F2)', () => {
+    const { sm } = buildConnectedClient();
+    const ws = sockets[0];
+    (sm.setArchived as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (sm.countArchived as ReturnType<typeof vi.fn>).mockReturnValue(1);
+    (sm.getSessionList as ReturnType<typeof vi.fn>).mockImplementation((opts?: { archived?: boolean }) =>
+      opts?.archived ? [{ id: 'sess_old', archived: true, state: 'idle' }] : []);
+    const inbound = (msg: Record<string, unknown>) => ws.emit('message', Buffer.from(JSON.stringify({
+      deviceId: 'dev_1', seq: 1, timestamp: new Date().toISOString(), ...msg,
+    })));
+
+    ws.sent.length = 0;
+    inbound({ type: 'archive_session', sessionId: 'sess_1', payload: { archived: true } });
+    expect(sm.setArchived).toHaveBeenCalledWith('sess_1', true);
+    const list = decodePulseSends(ws.sent).find(m => m.type === 'session_list');
+    expect(list.payload).toMatchObject({ archivedCount: 1, autoArchiveDays: 14 });
+
+    ws.sent.length = 0;
+    inbound({ type: 'request_archived_sessions', payload: { requestId: 'r1' } });
+    const archived = decodePulseSends(ws.sent).find(m => m.type === 'archived_session_list');
+    expect(archived.payload).toEqual({ sessions: [{ id: 'sess_old', archived: true, state: 'idle' }], requestId: 'r1' });
+
+    // Opening an archived session brings it back.
+    (sm.setArchived as ReturnType<typeof vi.fn>).mockClear();
+    inbound({ type: 'set_session_subscription', payload: { sessionId: 'sess_old' } });
+    expect(sm.setArchived).toHaveBeenCalledWith('sess_old', false);
+  });
+
+  it('applies an auto-archive days change from an app (F2)', () => {
+    const { sm } = buildConnectedClient();
+    const ws = sockets[0];
+    ws.sent.length = 0;
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'set_auto_archive_days', deviceId: 'dev_1', seq: 1, timestamp: new Date().toISOString(), payload: { days: 30 },
+    })));
+    expect(sm.autoArchive).toHaveBeenLastCalledWith(30, expect.any(Function), expect.any(Number));
+    expect(decodePulseSends(ws.sent).find(m => m.type === 'session_list').payload.autoArchiveDays).toBe(30);
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'set_auto_archive_days', deviceId: 'dev_1', seq: 2, timestamp: new Date().toISOString(), payload: { days: -1 },
+    })));
+    expect(sm.autoArchive).toHaveBeenLastCalledWith(30, expect.any(Function), expect.any(Number));
   });
 
   it('broadcasts session_read on mark_read', () => {

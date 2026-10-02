@@ -39,7 +39,7 @@ That is all. The following are **not** visible to the relay:
 - User input and approval decisions
 - Sequence numbers (assigned by tentacle, inside the encrypted payload)
 
-Kraki protects content fully, not just partially. The relay is an encrypted forwarder with no ability to inspect payloads.
+The relay is an encrypted forwarder and cannot inspect payloads. See "How devices learn each other's keys" for what it could still attempt and how the apps detect it.
 
 ## What the relay stores
 
@@ -98,6 +98,25 @@ This makes raw key export harder, but it does not make the browser magically inv
 
 This is local-machine trust, not hardware-backed security.
 
+## How devices learn each other's keys
+
+The relay distributes device public keys, so a malicious or compromised relay
+could try to hand out its own key instead and read what is encrypted to it.
+Kraki limits this:
+
+- The pairing QR code carries a short fingerprint of the computer's key. After
+  scanning, the iPhone/Mac app pins the computer whose key matches the QR — the
+  QR, not the relay, vouches for it.
+- Computers the app first sees without a QR (for example a second computer on
+  the same account) are pinned on first use.
+- If the relay later reports a different key for a pinned computer, the app
+  keeps encrypting to the pinned key and warns the user; nothing is encrypted to
+  the new key until the computer is re-paired with a fresh QR code.
+
+Remaining limits: the computer currently trusts phone keys as reported by the
+relay, and the web app does not pin keys yet. Both are addressed by the
+upcoming key upgrade (E2E v2).
+
 ## New devices and old history
 
 A newly added device cannot automatically decrypt old messages that were encrypted for earlier devices.
@@ -110,7 +129,7 @@ That behavior is a normal consequence of per-device encryption.
 
 | Question | Answer |
 |----------|--------|
-| Can the relay read message bodies? | No |
+| Can the relay read message bodies? | No — not passively; key substitution is detected for pinned computers (see above) |
 | Can the relay see routing metadata? | Yes — envelope type, device IDs, payload size |
 | Can the relay see session IDs, message types, or content? | No — all inside encrypted payload |
 | Do endpoints see plaintext? | Yes |
@@ -123,6 +142,8 @@ Push notifications use the same E2E encryption model. When an agent event requir
 
 1. The tentacle encrypts a small preview (`pushPreview`) with the offline device's public key — the same RSA-OAEP wrapping used for WebSocket messages.
 2. The relay forwards the opaque encrypted preview through the push service (APNs or Web Push/VAPID).
+
+Voice input is different: dictated audio is sent to Kraki's cloud speech service for transcription and is not end-to-end encrypted.
 3. The device's service worker decrypts the preview locally and shows the notification content.
 
 The relay sees the encrypted payload size and the push token — never the notification content. This extends the same trust boundary from WebSocket delivery to push delivery.

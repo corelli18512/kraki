@@ -53,7 +53,7 @@ final class AppStateSessionSubscriptionSnapshotTests: XCTestCase {
                 "id": "sess-1",
                 "agent": "pi",
                 "state": "active",
-                "mode": "discuss",
+                "mode": "execute",
                 "lastSeq": 0,
                 "readSeq": 0,
                 "messageCount": 0,

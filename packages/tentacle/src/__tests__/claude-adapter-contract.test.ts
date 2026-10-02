@@ -273,6 +273,25 @@ describe('ClaudeAdapter — turn lifecycle', () => {
     expect(claude.onSessionEnded).not.toHaveBeenCalled();
   });
 
+  it('an agent process crash settles the turn and evicts (resumable), never a terminal end', async () => {
+    sdk.query.mockImplementation(() => ({
+      [Symbol.asyncIterator]: async function* () {
+        throw new Error('Claude Code process exited with code 1');
+      },
+    }));
+    await createClaude();
+    claude.onError = vi.fn(); claude.onIdle = vi.fn(); claude.onSessionEnded = vi.fn(); claude.onSessionEvicted = vi.fn();
+    claude.setTurnIdentity('s', 'rt-crash');
+    await claude.sendMessage('s', 'hello');
+    await nextTick(); await nextTick();
+    expect(claude.onError).toHaveBeenCalledWith('s', expect.objectContaining({ message: expect.stringContaining('exited with code 1') }));
+    expect(claude.onIdle).toHaveBeenCalledWith('s', { turnId: 'rt-crash' });
+    expect(claude.onSessionEvicted).toHaveBeenCalledWith('s');
+    expect(claude.onSessionEnded).not.toHaveBeenCalled();
+    // The dead entry is dropped so the next message goes through lazy resume.
+    expect(cc().sessions.has('s')).toBe(false);
+  });
+
   it('a tool-only turn with no closing prose just idles (RelayClient anchors it)', async () => {
     await createClaude(); claude.onMessage = vi.fn(); claude.onSystemMessage = vi.fn(); claude.onIdle = vi.fn();
     cc().sessions.get('s')!.query = {};
@@ -297,6 +316,27 @@ describe('ClaudeAdapter — permissions', () => {
     await nextTick();
     await claude.respondToPermission('s', permId, 'approve');
     await expect(decision).resolves.toEqual({ behavior: 'allow', updatedInput: input });
+  });
+
+  it('a deny with a reason tells the agent why', async () => {
+    await createClaude(); claude.setSessionMode('s', 'safe'); await claude.sendMessage('s', 'first');
+    const canUseTool = sdk.query.mock.calls[0][0].options.canUseTool;
+    let permId = '';
+    claude.onPermissionRequest = (_s, e) => { permId = e.id; };
+    const decision = canUseTool('Bash', { command: 'rm -rf dist' }, { signal: new AbortController().signal, toolUseID: 't1' });
+    await nextTick();
+    await claude.respondToPermission('s', permId, 'deny', 'dist has my manual edits');
+    await expect(decision).resolves.toEqual({ behavior: 'deny', message: 'Denied by user: dist has my manual edits' });
+  });
+
+  it('an Edit approval card carries the change as a diff, not a bare path', async () => {
+    await createClaude(); claude.setSessionMode('s', 'safe'); await claude.sendMessage('s', 'first');
+    const canUseTool = sdk.query.mock.calls[0][0].options.canUseTool;
+    let card: { toolArgs: { args: Record<string, unknown> } } | undefined;
+    claude.onPermissionRequest = (_s, e) => { card = e as typeof card; };
+    void canUseTool('Edit', { file_path: '/repo/a.ts', old_string: 'const a = 1;', new_string: 'const a = 2;' }, { signal: new AbortController().signal, toolUseID: 't1' });
+    await nextTick();
+    expect(card?.toolArgs.args.content).toBe('--- /repo/a.ts\n+++ /repo/a.ts\n@@\n-const a = 1;\n+const a = 2;');
   });
 });
 
@@ -363,5 +403,22 @@ describe('ClaudeAdapter — title side-call', () => {
     expect(opts.permissionMode).not.toBe('bypassPermissions');
     expect(opts.allowDangerouslySkipPermissions).toBeUndefined();
     await expect(opts.canUseTool('Bash', {}, {})).resolves.toMatchObject({ behavior: 'deny' });
+  });
+
+  it('tries the account\'s own Haiku first and falls back to the session model', async () => {
+    let call = 0;
+    sdk.query.mockImplementation(() => ({
+      [Symbol.asyncIterator]: async function* () {
+        call += 1;
+        if (call === 1) throw new Error('model unavailable');
+        yield { type: 'result', result: 'Fallback title' };
+      },
+    }));
+    await createClaude();
+    (claude as unknown as { modelAliasMap: Map<string, string> }).modelAliasMap.set('claude-haiku-5', 'haiku');
+    const title = await claude.generateTitle('s', { firstUserMessage: 'x', model: 'opus' });
+    expect(sdk.query.mock.calls[0][0].options.model).toBe('haiku');
+    expect(sdk.query.mock.calls[1][0].options.model).toBe('opus');
+    expect(title).toBe('Fallback title');
   });
 });

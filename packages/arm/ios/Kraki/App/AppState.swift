@@ -356,6 +356,23 @@ final class AppState {
     /// handshake completes.
     var hasStoredCredentials: Bool = false
 
+    /// A scanned/opened pairing link waiting for the user's decision
+    /// (untrusted relay, or this phone is already connected).
+    var pendingPairingPrompt: PairingLinkPrompt?
+    /// Key-mismatch warnings the user has already dismissed.
+    var acknowledgedKeyWarnings: Set<String> = []
+
+    /// A computer-key warning to show (D4), if any is unacknowledged.
+    var keyWarning: (ids: Set<String>, message: String)? {
+        let open = deviceStore.keyMismatchDeviceIds.subtracting(acknowledgedKeyWarnings)
+        guard !open.isEmpty else { return nil }
+        if open.contains(DeviceStore.unmatchedQRMarker) {
+            return (open, "The relay did not report the computer whose code you scanned with a matching key. Messages are only encrypted to keys Kraki trusts. If this keeps happening, contact support.")
+        }
+        let names = open.compactMap { deviceStore.devices[$0]?.name }.sorted().joined(separator: ", ")
+        return (open, "The relay reported a new encryption key for \(names.isEmpty ? "a computer" : names). Kraki keeps using the key it trusted, so messages to that computer won't go through. If you reinstalled Kraki there, run `kraki connect` on it and scan the new code.")
+    }
+
     /// True from the moment the user taps "Sign in with GitHub" until
     /// `ASWebAuthenticationSession`'s completion handler fires (success,
     /// error, or user cancel). Drives the LoginView's spinner so the

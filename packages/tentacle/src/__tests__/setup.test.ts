@@ -95,13 +95,13 @@ vi.mock("../config.js", () => ({
   loadChannelKey: () => null,
   loadConfig: () => mockExistingConfig,
   saveGitHubToken: vi.fn(),
+  loadGitHubToken: () => mockSavedToken(),
 }));
+const mockSavedToken = vi.fn<() => string | null>().mockReturnValue('fake-token');
 
 let mockExistingConfig: unknown = null;
 
-const mockCheckGhAuth = vi.fn().mockReturnValue({ authenticated: true, username: 'testuser', token: 'fake-token' });
 vi.mock("../checks.js", () => ({
-  checkGhAuth: (...args: unknown[]) => mockCheckGhAuth(...args),
   SETUP_AGENTS: [
     { id: 'claude', name: 'Claude Code', bin: 'claude', installUrl: 'https://code.claude.com/docs/en/setup' },
     { id: 'codex', name: 'Codex', bin: 'codex', installUrl: 'https://developers.openai.com/codex/cli' },
@@ -154,6 +154,7 @@ afterEach(() => {
   delete process.env.KRAKI_API_URL;
 });
 
+let signInOrder: string[] | undefined;
 function mockOfficialApi(region = 'us', relayUrl = 'wss://kraki-us.corelli.cloud') {
   globalThis.fetch = vi.fn().mockImplementation((url: string) => {
     if (typeof url === 'string' && url.includes('/api/login/resolve')) {
@@ -161,6 +162,10 @@ function mockOfficialApi(region = 'us', relayUrl = 'wss://kraki-us.corelli.cloud
     }
     if (typeof url === 'string' && url.includes('/api/config')) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ githubClientId: 'test-client-id' }) });
+    }
+    if (typeof url === 'string' && url.includes('api.github.com/user')) {
+      signInOrder?.push('signin');
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ login: 'testuser' }) });
     }
     return Promise.reject(new Error(`unmocked fetch: ${url}`));
   }) as typeof fetch;
@@ -185,10 +190,11 @@ describe("runSetup — official service (same steps as Kraki for Mac)", () => {
   it("checks agents before signing in", async () => {
     mockOfficialApi();
     const order: string[] = [];
+    signInOrder = order;
     mockAgentsCheck.mockImplementationOnce(async () => { order.push('agents'); return [agent('codex', 'ready')]; });
-    mockCheckGhAuth.mockImplementationOnce(() => { order.push('signin'); return { authenticated: true, username: 'u', token: 't' }; });
     await runSetup();
-    expect(order).toEqual(['agents', 'signin']);
+    signInOrder = undefined;
+    expect(order.slice(0, 2)).toEqual(['agents', 'signin']);
   });
 
   it("keeps the device name of an existing setup", async () => {
@@ -218,7 +224,7 @@ describe("runSetup — GitHub device code", () => {
   it("copies the code, opens GitHub and signs in once approved", async () => {
     delete process.env.SSH_CONNECTION; delete process.env.SSH_TTY;
     mockPlatform = 'darwin';
-    mockCheckGhAuth.mockReturnValueOnce({ authenticated: false });
+    mockSavedToken.mockReturnValueOnce(null);
     let polls = 0;
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       const ok = (body: unknown) => Promise.resolve({ ok: true, json: () => Promise.resolve(body) });

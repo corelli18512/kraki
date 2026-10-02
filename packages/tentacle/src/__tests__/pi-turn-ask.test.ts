@@ -1371,7 +1371,7 @@ describe('PI_KRAKI_TOOLS_SOURCE extension shape', () => {
         details: { mode: 'auto' },
       });
       // A sidecar written before the three-mode rename reads as the new name.
-      writeFileSync(metaPath, JSON.stringify({ mode: 'discuss' }));
+      writeFileSync(metaPath, JSON.stringify({ mode: 'execute' }));
       await expect(execute()).resolves.toMatchObject({ details: { mode: 'auto' } });
     } finally {
       if (previousMetaFile === undefined) delete process.env.KRAKI_META_FILE;

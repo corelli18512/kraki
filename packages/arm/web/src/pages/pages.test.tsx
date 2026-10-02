@@ -123,7 +123,7 @@ describe('SessionPage', () => {
     withSession();
     renderWithRoute('/session/s1', <SessionPage />);
     await userEvent.click(screen.getByRole('button', { name: /Auto/ }));
-    expect(screen.queryByRole('menuitemradio', { name: /Discuss|Execute/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitemradio', { name: /Execute/ })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('menuitemradio', { name: /Safe/ }));
     expect(wsClient.setSessionMode).toHaveBeenCalledWith('s1', 'safe');
   });

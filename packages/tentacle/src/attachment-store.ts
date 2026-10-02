@@ -40,6 +40,7 @@ import { join } from 'node:path';
 import type { ContentRef } from '@kraki/protocol';
 
 import { createLogger } from './logger.js';
+import { isSafeId } from './session-manager.js';
 
 const logger = createLogger('attachment-store');
 
@@ -161,14 +162,17 @@ export class AttachmentStore {
 
   /** Directory holding attachments for a session. */
   private dir(sessionId: string): string {
+    if (!isSafeId(sessionId)) throw new Error('Invalid session id');
     return join(this.sessionsDir, sessionId, 'attachments');
   }
 
   private filePath(sessionId: string, id: string, ext: string): string {
+    if (!isSafeId(id)) throw new Error('Invalid attachment id');
     return join(this.dir(sessionId), `${id}.${ext}`);
   }
 
   private metaPath(sessionId: string, id: string): string {
+    if (!isSafeId(id)) throw new Error('Invalid attachment id');
     return join(this.dir(sessionId), `${id}.json`);
   }
 
@@ -235,11 +239,13 @@ export class AttachmentStore {
 
   /** Whether an attachment id exists for the session. */
   has(sessionId: string, id: string): boolean {
+    if (!isSafeId(sessionId) || !isSafeId(id)) return false;
     return existsSync(this.metaPath(sessionId, id));
   }
 
   /** Read the full bytes + metadata. Returns null if absent. */
   read(sessionId: string, id: string): { bytes: Buffer; meta: AttachmentMetaSidecar } | null {
+    if (!isSafeId(sessionId) || !isSafeId(id)) return null;
     const metaPath = this.metaPath(sessionId, id);
     if (!existsSync(metaPath)) return null;
     let meta: AttachmentMetaSidecar;
@@ -274,6 +280,7 @@ export class AttachmentStore {
 
   /** Read the sidecar metadata only. */
   readMeta(sessionId: string, id: string): AttachmentMetaSidecar | null {
+    if (!isSafeId(sessionId) || !isSafeId(id)) return null;
     const metaPath = this.metaPath(sessionId, id);
     if (!existsSync(metaPath)) return null;
     try {
@@ -332,6 +339,40 @@ export class AttachmentStore {
     if (removed > 0) {
       logger.info({ sessionId, removed }, 'gc removed orphan attachments');
     }
+    return removed;
+  }
+
+  /**
+   * Delete tool-call payload attachments (offloaded `<tool>.args.json` /
+   * `<tool>.result.txt`) older than `maxAgeMs`, across every session. Images
+   * and reports the user was shown are kept. Old Steps then show their
+   * headline without the expandable body. Returns the number of payloads
+   * removed.
+   */
+  pruneToolPayloads(maxAgeMs: number, now = Date.now()): number {
+    let removed = 0;
+    let sessions: string[];
+    try { sessions = readdirSync(this.sessionsDir); } catch { return 0; }
+    for (const sessionId of sessions) {
+      if (!isSafeId(sessionId)) continue;
+      const dir = join(this.sessionsDir, sessionId, 'attachments');
+      let names: string[];
+      try { names = readdirSync(dir); } catch { continue; }
+      for (const name of names) {
+        if (!name.endsWith('.json')) continue;
+        const sidecar = join(dir, name);
+        let meta: AttachmentMetaSidecar;
+        try {
+          if (now - statSync(sidecar).mtimeMs < maxAgeMs) continue;
+          meta = JSON.parse(readFileSync(sidecar, 'utf8')) as AttachmentMetaSidecar;
+        } catch { continue; }
+        if (!meta.name || !/\.(?:args\.json|result\.txt)$/.test(meta.name)) continue;
+        const id = name.slice(0, -'.json'.length);
+        try { unlinkSync(join(dir, `${id}.${extForMime(meta.mimeType)}`)); } catch { /* already gone */ }
+        try { unlinkSync(sidecar); removed++; } catch { /* ignore */ }
+      }
+    }
+    if (removed > 0) logger.info({ removed, maxAgeDays: Math.round(maxAgeMs / 86_400_000) }, 'pruned old tool payload attachments');
     return removed;
   }
 

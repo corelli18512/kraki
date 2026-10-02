@@ -68,16 +68,6 @@ struct PermissionCardView: View {
                 .tint(.green)
 
                 Button {
-                    appState.commandSender?.alwaysAllow(sessionId: permission.sessionId, permissionId: permission.id, toolKind: permission.toolName)
-                } label: {
-                    Text("Allow in Session")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                }
-                .buttonStyle(.bordered)
-                .tint(.blue)
-                Button {
                     appState.commandSender?.deny(sessionId: permission.sessionId, permissionId: permission.id)
                 } label: {
                     Text("Deny")

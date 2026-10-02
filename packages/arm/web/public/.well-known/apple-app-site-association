@@ -1,0 +1,14 @@
+{
+  "applinks": {
+    "details": [{
+      "appIDs": ["3A83X5JZ3S.chat.kraki.ios"],
+      "components": [
+        { "/": "/auth/callback*" },
+        { "/": "/", "?": { "token": "?*" }, "comment": "Pairing QR codes open the app and pair it." }
+      ]
+    }]
+  },
+  "webcredentials": {
+    "apps": ["3A83X5JZ3S.chat.kraki.ios"]
+  }
+}

@@ -70,3 +70,23 @@ describe('makeHeadline', () => {
     expect(makeHeadline('view', { path: null })).toBe('');
   });
 });
+
+describe('makeHeadline across agents (release review A4)', () => {
+  it('handles Claude Code tool names and file_path', () => {
+    expect(makeHeadline('Bash', { command: 'npm test' })).toBe('$ npm test');
+    expect(makeHeadline('Read', { file_path: '/repo/src/app.ts' })).toBe('/repo/src/app.ts');
+    expect(makeHeadline('Edit', { file_path: 'src/app.ts', old_string: 'a', new_string: 'b' })).toBe('src/app.ts');
+    expect(makeHeadline('MultiEdit', { file_path: 'a.ts', edits: [] })).toBe('a.ts');
+    expect(makeHeadline('Write', { file_path: 'b.ts', content: 'x' })).toBe('b.ts');
+    expect(makeHeadline('Grep', { pattern: 'TODO' })).toBe('/TODO/');
+    expect(makeHeadline('Glob', { pattern: '**/*.ts' })).toBe('**/*.ts');
+    expect(makeHeadline('WebFetch', { url: 'https://x.dev' })).toBe('https://x.dev');
+    expect(makeHeadline('WebSearch', { query: 'pulse' })).toBe('pulse');
+  });
+
+  it('handles Pi tool names', () => {
+    expect(makeHeadline('read', { path: 'README.md' })).toBe('README.md');
+    expect(makeHeadline('ls', { path: 'src' })).toBe('src');
+    expect(makeHeadline('find', { pattern: '*.json' })).toBe('*.json');
+  });
+});

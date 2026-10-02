@@ -118,6 +118,15 @@ jobs:
             packages/arm/web/dist/ \
             "$WEB_DEPLOY_USER@$WEB_DEPLOY_HOST:$WEB_DEPLOY_PATH/"
 
+          # Universal links: ship apple-app-site-association from the repo.
+          # Only this file — the rest of .well-known (e.g. ACME challenges)
+          # stays server-managed and excluded from --delete above.
+          ssh -p "$WEB_DEPLOY_PORT" -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes \
+            "$WEB_DEPLOY_USER@$WEB_DEPLOY_HOST" "install -d '$WEB_DEPLOY_PATH/.well-known'"
+          rsync -az -e "$SSH_RSYNC" \
+            packages/arm/web/dist/.well-known/apple-app-site-association \
+            "$WEB_DEPLOY_USER@$WEB_DEPLOY_HOST:$WEB_DEPLOY_PATH/.well-known/apple-app-site-association"
+
           ssh -p "$WEB_DEPLOY_PORT" -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes \
             "$WEB_DEPLOY_USER@$WEB_DEPLOY_HOST" "test -f '$WEB_DEPLOY_PATH/index.html'"
 
@@ -190,6 +199,15 @@ jobs:
           rsync -az --delete --exclude='.well-known/' -e "$SSH_RSYNC" \
             packages/arm/web/dist/ \
             "$WEB_DEPLOY_USER@$WEB_DEPLOY_HOST:$WEB_DEPLOY_PATH/"
+
+          # Universal links: ship apple-app-site-association from the repo.
+          # Only this file — the rest of .well-known (e.g. ACME challenges)
+          # stays server-managed and excluded from --delete above.
+          ssh -p "$WEB_DEPLOY_PORT" -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes \
+            "$WEB_DEPLOY_USER@$WEB_DEPLOY_HOST" "install -d '$WEB_DEPLOY_PATH/.well-known'"
+          rsync -az -e "$SSH_RSYNC" \
+            packages/arm/web/dist/.well-known/apple-app-site-association \
+            "$WEB_DEPLOY_USER@$WEB_DEPLOY_HOST:$WEB_DEPLOY_PATH/.well-known/apple-app-site-association"
 
           ssh -p "$WEB_DEPLOY_PORT" -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes \
             "$WEB_DEPLOY_USER@$WEB_DEPLOY_HOST" "test -f '$WEB_DEPLOY_PATH/index.html'"

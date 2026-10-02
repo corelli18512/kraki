@@ -258,23 +258,19 @@ must toggle each switch once. After this fix, **once is enough forever**.
 kraki permissions --open
 ```
 
-opens every relevant pane in System Settings:
-
-- **Full Disk Access** — read project files, TCC db, Mail/Safari data
-- **Accessibility** — synthesize input / drive UI via the Accessibility API
-- **Input Monitoring** — observe global key events
-- **Screen Recording** — capture screen contents
-- **Automation** — send AppleEvents to other apps
+opens **Full Disk Access** in System Settings — the only privacy permission
+Kraki asks for (agents read and edit your projects). Kraki does not use
+Accessibility, Input Monitoring, Screen Recording or Automation and never asks
+for them.
 
 The setup wizard (`kraki`) runs this step automatically and polls FDA as
-its "done" signal (FDA is the only service with a reliable non-intrusive
-probe — the others report `unknown` until exercised at runtime).
+its "done" signal.
 
 ## CLI surface
 
 ```
 kraki permissions            # JSON: bundle registration + per-service status
-kraki permissions --open     # open every TCC pane
+kraki permissions --open     # open the Full Disk Access pane
 kraki doctor                 # now includes a `tcc` block (bundled/registered/path)
 kraki fda [--json|--watch]   # unchanged, retained for compatibility
 ```

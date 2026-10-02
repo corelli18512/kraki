@@ -76,7 +76,9 @@ extension SessionDigest {
             usage: usage,
             pinned: json["pinned"] as? Bool,
             source: json["source"] as? String,
-            preview: preview
+            preview: preview,
+            archived: json["archived"] as? Bool,
+            lastActivityAt: json["lastActivityAt"] as? String
         )
     }
 }
@@ -337,6 +339,15 @@ final class MessageRouter {
 
         if type == "local_sessions_list" {
             handleLocalSessionsList(dict)
+            return
+        }
+
+        if type == "archived_session_list" {
+            if let deviceId = dict["deviceId"] as? String {
+                let payload = dict["payload"] as? [String: Any]
+                let sessions = (payload?["sessions"] as? [[String: Any]] ?? []).compactMap { SessionDigest(json: $0) }
+                appState.sessionStore.archivedSessions[deviceId] = sessions
+            }
             return
         }
 
@@ -643,6 +654,13 @@ final class MessageRouter {
 
         let tentacleDeviceId = dict["deviceId"] as? String ?? ""
         let snapshotTimestamp = dict["timestamp"] as? String
+        if let count = payload?["archivedCount"] as? Int {
+            let days = payload?["autoArchiveDays"] as? Int ?? 14
+            let info = ArchiveInfo(count: count, days: days)
+            if appState.sessionStore.archiveInfo[tentacleDeviceId] != info {
+                appState.sessionStore.archiveInfo[tentacleDeviceId] = info
+            }
+        }
         guard appState.sessionStore.acceptsSessionListSnapshot(
             deviceId: tentacleDeviceId,
             timestamp: snapshotTimestamp
@@ -817,7 +835,9 @@ final class MessageRouter {
         let deviceId = dict["deviceId"] as? String ?? ""
         let device = appState.deviceStore.device(for: deviceId)
 
-        let modeStr = payload?["mode"] as? String ?? "safe"
+        // Older Tentacles omit `mode`; their sessions start in the protocol
+        // default (auto). Never show Safe for a session that is not.
+        let modeStr = payload?["mode"] as? String ?? SessionMode.default.rawValue
         // `session_created` has no separate payload createdAt field; its
         // envelope timestamp is the producer's creation acknowledgement.
         // Use it instead of the receiver's wall clock so ordering remains
@@ -834,7 +854,7 @@ final class MessageRouter {
             title: nil,
             autoTitle: nil,
             state: .active,
-            mode: SessionMode(rawValue: modeStr) ?? .safe,
+            mode: SessionMode(rawValue: modeStr) ?? .default,
             lastSeq: 0,
             readSeq: 0,
             messageCount: 0,

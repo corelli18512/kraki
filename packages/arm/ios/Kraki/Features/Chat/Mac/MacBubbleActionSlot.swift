@@ -205,7 +205,9 @@ struct MacBubbleActionSlot: View {
                         .font(.system(size: 14))
                         .foregroundStyle(Color.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
-                    if let summary = permissionArgsSummary(message),
+                    if let diff = PermissionDiffPreview.diff(message.args) {
+                        PermissionDiffPreview(diff: diff, fontSize: 11)
+                    } else if let summary = permissionArgsSummary(message),
                        summary != message.toolDescription {
                         Text(summary)
                             .font(.system(size: 11, design: .monospaced))
@@ -240,14 +242,6 @@ struct MacBubbleActionSlot: View {
                         foreground: .white,
                         fill: .green,
                         border: .clear
-                    )
-                    permissionButton(
-                        "Allow in Session",
-                        message,
-                        decision: "always_allow",
-                        foreground: .green,
-                        fill: .green.opacity(0.12),
-                        border: .green.opacity(0.35)
                     )
                     permissionButton(
                         "Deny",

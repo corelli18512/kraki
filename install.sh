@@ -49,6 +49,24 @@ fetch_latest_version() {
   fi
 }
 
+# ── Stop a running daemon before replacing it ────────────
+#
+# An upgrade over a running daemon left the old version running (and the
+# new binary unused) until the next reboot; on Windows the running .exe
+# cannot even be overwritten. Stop it first; main() starts it again.
+# Kraki for Mac owns its own daemon, so it is left alone.
+
+stop_running_daemon() {
+  [ "$MAC_APP_MANAGED" = 1 ] && return 0
+  EXISTING=$(command -v "$BINARY_NAME" 2>/dev/null || true)
+  [ -n "$EXISTING" ] || EXISTING="${INSTALL_DIR}/${BINARY_NAME}"
+  [ -x "$EXISTING" ] || return 0
+  if "$EXISTING" status --json 2>/dev/null | grep -q '"running": *true'; then
+    echo "  Stopping the running Kraki daemon for the upgrade..."
+    "$EXISTING" stop >/dev/null 2>&1 || true
+  fi
+}
+
 # ── Download and install ─────────────────────────────────
 
 install() {
@@ -62,6 +80,8 @@ install() {
     rm -rf "$TMP"
     exit 1
   fi
+
+  stop_running_daemon
 
   # macOS: install as .app bundle with a symlink in $INSTALL_DIR
   if [ "${APP_BUNDLE:-}" = "1" ]; then

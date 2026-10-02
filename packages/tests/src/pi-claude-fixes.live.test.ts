@@ -164,7 +164,7 @@ describe("claude: AskUserQuestion answer reaches the model", () => {
   it("delivers a freeform answer keyed by question text", async () => {
     await withSession("claude", async (sid, app) => {
       // Not delegate mode, so AskUserQuestion is surfaced (not auto-answered).
-      sendToTentacle(app, { type: "set_session_mode", sessionId: sid, payload: { mode: "discuss" } });
+      sendToTentacle(app, { type: "set_session_mode", sessionId: sid, payload: { mode: "safe" } });
       await waitMs(300);
 
       const MARKER = "ZOTZ-4917";

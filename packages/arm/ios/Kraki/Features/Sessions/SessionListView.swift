@@ -188,7 +188,9 @@ struct SessionListView: View {
         // scroll-reachable.
         SessionTable(
             appState: appState,
-            deviceFilter: selectedDeviceFilter
+            deviceFilter: selectedDeviceFilter,
+            archivedCount: selectedDeviceFilter == nil ? sessionStore.archivedCount : 0,
+            onArchivedTapped: { navigationPath.append(ArchivedNavID()) }
         ) { sessionId in
             navigationPath.append(SessionNavID(id: sessionId))
         }
@@ -247,6 +249,15 @@ struct SessionListView: View {
                         .foregroundStyle(Color(.tertiarySystemBackground), .secondary.opacity(0.55))
                         .symbolRenderingMode(.palette)
                         .offset(x: -2, y: -6)
+                }
+                if sessionStore.archivedCount > 0 {
+                    Button {
+                        navigationPath.append(ArchivedNavID())
+                    } label: {
+                        Label("Archived (\(sessionStore.archivedCount))", systemImage: "archivebox")
+                            .font(.subheadline)
+                    }
+                    .foregroundStyle(.secondary)
                 }
                 Spacer()
             }

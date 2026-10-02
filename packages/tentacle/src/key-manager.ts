@@ -7,6 +7,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { createPublicKey } from 'node:crypto';
 import { generateKeyPair, exportPublicKey, importPublicKey, encrypt, decrypt } from '@kraki/crypto';
 import type { KeyPair, EncryptedPayload, RecipientKey } from '@kraki/crypto';
 import { getConfigDir } from './config.js';
@@ -38,6 +39,13 @@ export class KeyManager {
         privateKey: readFileSync(privPath, 'utf8'),
         publicKey: readFileSync(pubPath, 'utf8'),
       };
+    } else if (existsSync(privPath)) {
+      // public.pem lost: derive it rather than minting a new identity, which
+      // would orphan this device on the relay and every paired app.
+      const privateKey = readFileSync(privPath, 'utf8');
+      const publicKey = createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }).toString();
+      writeFileSync(pubPath, publicKey, { mode: 0o644 });
+      this.keyPair = { privateKey, publicKey };
     } else {
       this.keyPair = generateKeyPair();
       writeFileSync(privPath, this.keyPair.privateKey, { mode: 0o600 });

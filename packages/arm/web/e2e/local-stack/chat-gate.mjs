@@ -44,7 +44,7 @@ if (scenario === 'answer') {
   r.log.forEach((l) => console.log('  ', l));
   if (process.env.DBG) { const m = r.log.map((l) => Number(/#(\d+)/.exec(l)?.[1])).filter(Boolean)[0]; if (m) for (let i = m - 5; i <= m; i++) console.log('DBG', i, JSON.stringify(frames[i].dbg), frames[i].rows.map((x) => x.key + '@' + x.top).join(',')); }
 } else if (scenario === 'permission') {
-  await page.getByRole('button', { name: /Discuss|Safe|Execute|Delegate/ }).first().click();
+  await page.getByRole('button', { name: /Safe|Auto|Delegate/ }).first().click();
   await page.getByRole('menuitemradio', { name: /Safe/ }).click();
   await page.waitForTimeout(800);
   await page.locator('.kcomposer textarea').fill('Use the bash tool to run exactly: ls / — then tell me how many entries there are in one sentence.');
@@ -61,7 +61,7 @@ if (scenario === 'answer') {
   await shot('3-done');
   console.log('distance to bottom', await distance());
   await page.getByRole('button', { name: /Safe/ }).first().click();
-  await page.getByRole('menuitemradio', { name: /Discuss/ }).click();
+  await page.getByRole('menuitemradio', { name: /Safe/ }).click();
   const frames = await page.evaluate(() => window.__kprobe.stop());
   const r = analyze(frames, { topInset: mobile ? 64 : 56 });
   console.log('PROBE', JSON.stringify({ frames: r.frames, blanks: r.blanks, flashes: r.flashes, jumps: r.jumps }));

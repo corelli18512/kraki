@@ -41,6 +41,9 @@ export interface KrakiConfig {
     /** Let Pi renew its own expired login (`pi auth check`). Default true. */
     renewPiLogins?: boolean;
   };
+  /** Days without messages before an unpinned session is archived; 0 = never.
+   *  Default 14. Set from the apps' settings. */
+  autoArchiveDays?: number;
 }
 
 export const DEFAULT_LOG_VERBOSITY: KrakiLogVerbosity = 'normal';

@@ -33,7 +33,7 @@ Reports `fixed-live.json` and `fixed-unit.json` supplement the original before-f
 2. Ordinary multilingual text streaming, prompt acceptance independent of completion, authoritative settlement and turn identity.
 3. Live model/thinking switching; model and thinking restoration after process eviction.
 4. Real read/write/edit/bash execution; tool callbacks and usage/cost mapping.
-5. Discuss write approval and denial; safe-mode gating; live mode change without respawn; kraki_get_mode.
+5. Safe-mode write approval and denial; live mode change without respawn; kraki_get_mode.
 6. ask_user select and input, free-form text and image answer envelopes.
 7. Image input normalization; show_image/show_html results into persisted attachment refs.
 8. Finalize fallback returns the final reply and settles once (streaming exception below).

@@ -121,6 +121,11 @@ export interface AppState {
   // Local session import picker
   localSessions: LocalSession[];
   localSessionsLoading: boolean;
+
+  /** Per computer: how many sessions are archived and the auto-archive days (F2). */
+  archiveInfo: Map<string, { count: number; days: number }>;
+  /** Per computer: archived sessions, loaded when the user opens the section. */
+  archivedSessions: Map<string, import('@kraki/protocol').SessionDigest[]>;
 }
 
 export interface AppActions {
@@ -166,6 +171,8 @@ export interface AppActions {
   removePendingSession: (sessionId: string) => void;
   setLocalSessions: (sessions: LocalSession[]) => void;
   setLocalSessionsLoading: (loading: boolean) => void;
+  setArchiveInfo: (deviceId: string, info: { count: number; days: number }) => void;
+  setArchivedSessions: (deviceId: string, sessions: import('@kraki/protocol').SessionDigest[]) => void;
   clearTransientState: () => void;
   reset: () => void;
 

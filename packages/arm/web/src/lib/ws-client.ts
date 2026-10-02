@@ -498,6 +498,48 @@ export class KrakiWSClient {
     commands.pinSession(sessionId, pinned, (msg) => this.sendEncrypted(msg));
   }
 
+  archiveSession(sessionId: string, archived: boolean) {
+    commands.archiveSession(sessionId, archived, (msg) => this.sendEncrypted(msg));
+  }
+
+  requestArchivedSessions(targetDeviceId: string) {
+    commands.requestArchivedSessions(targetDeviceId, (msg) => this.sendEncrypted(msg));
+  }
+
+  deleteArchivedSessions(targetDeviceId: string) {
+    commands.deleteArchivedSessions(targetDeviceId, (msg) => this.sendEncrypted(msg));
+    getStore().setArchivedSessions(targetDeviceId, []);
+  }
+
+  setAutoArchiveDays(targetDeviceId: string, days: number) {
+    commands.setAutoArchiveDays(targetDeviceId, days, (msg) => this.sendEncrypted(msg));
+  }
+
+  /**
+   * Open an archived session: restore it on its computer and show it now.
+   * The computer's next session_list confirms it.
+   */
+  openArchivedSession(deviceId: string, digest: import('@kraki/protocol').SessionDigest) {
+    const store = getStore();
+    const device = store.devices.get(deviceId);
+    store.upsertSession({
+      id: digest.id,
+      deviceId,
+      deviceName: device?.name ?? deviceId,
+      agent: digest.agent,
+      model: digest.model,
+      title: digest.title,
+      autoTitle: digest.autoTitle,
+      state: digest.state as SessionState,
+      messageCount: digest.messageCount,
+      lastSeq: digest.lastSeq,
+      readSeq: digest.readSeq,
+    });
+    const remaining = (store.archivedSessions.get(deviceId) ?? []).filter((s) => s.id !== digest.id);
+    store.setArchivedSessions(deviceId, remaining);
+    this.archiveSession(digest.id, false);
+  }
+
   requestLocalSessions(targetDeviceId: string, filter?: { search?: string; liveOnly?: boolean; includeLinked?: boolean }) {
     return commands.requestLocalSessions(targetDeviceId, (msg) => this.sendEncrypted(msg), filter);
   }
@@ -572,6 +614,13 @@ export class KrakiWSClient {
     const tentacleIds = new Set(tentacleSessions.map(s => s.id));
 
     logger.info('session_list received', { tentacleDeviceId, sessionCount: tentacleSessions.length });
+
+    if (typeof msg.payload?.archivedCount === 'number') {
+      store.setArchiveInfo(tentacleDeviceId, {
+        count: msg.payload.archivedCount,
+        days: msg.payload.autoArchiveDays ?? 14,
+      });
+    }
 
     // Remove local sessions from this tentacle that are no longer in the list
     for (const [sid, session] of store.sessions) {

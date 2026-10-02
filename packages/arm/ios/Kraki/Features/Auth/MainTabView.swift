@@ -120,6 +120,13 @@ struct MainTabView: View {
     private var sessionsContent: some View {
         NavigationStack(path: $sessionPath) {
             SessionListView(navigationPath: $sessionPath)
+                .navigationDestination(for: ArchivedNavID.self) { _ in
+                    ArchivedSessionsView { sessionId in
+                        sessionPath.removeLast()
+                        sessionPath.append(SessionNavID(id: sessionId))
+                    }
+                    .environment(appState)
+                }
                 .navigationDestination(for: SessionNavID.self) { nav in
                     // Identity per Session: when a route's id changes (pending
                     // placeholder → created Session) the page must disappear

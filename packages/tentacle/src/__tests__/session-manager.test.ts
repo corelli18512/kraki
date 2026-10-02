@@ -244,6 +244,20 @@ describe('SessionManager', () => {
       expect(forkedMeta.title).toBe('Fork of Manual title');
       expect(forkedMeta.reasoningEffort).toBe('high');
     });
+
+    it('keeps the source permission mode and turn index when forking', () => {
+      const { sessionId } = sm.createSession('claude');
+      sm.setMode(sessionId, 'safe');
+      sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', payload: { content: 'hi' } }));
+      sm.appendTrace(sessionId, 'tool_start', JSON.stringify({ type: 'tool_start', payload: { toolName: 'Bash' } }));
+      sm.appendMessage(sessionId, 'idle', JSON.stringify({ type: 'idle', payload: {} }));
+
+      const forked = sm.forkSession(sessionId)!;
+      const meta = sm.getMeta(forked.sessionId)!;
+      expect(meta.mode).toBe('safe');
+      expect(meta.idleSeqs).toEqual([2]);
+      expect(sm.readTurnTrace(forked.sessionId, 2).entries).toHaveLength(1);
+    });
   });
 
   // ── Model ──────────────────────────────────────────────
@@ -1485,5 +1499,17 @@ describe('SessionManager', () => {
       appendFileSync(join(dir, sessionId, 'trace.jsonl'), '{bad json\n');
       expect(sm.readCurrentTurnArtifacts(sessionId)).toEqual([]);
     });
+  });
+});
+
+describe('isSafeId (release review D6)', () => {
+  it('accepts our id shapes and rejects path tricks', async () => {
+    const { isSafeId } = await import('../session-manager.js');
+    for (const ok of ['mui5o1gz-a1b2c3d4', 'sess_1a2b3c', 'claude-1700000000-abc', '3f0e782f-1234-5678-9abc-def012345678']) {
+      expect(isSafeId(ok)).toBe(true);
+    }
+    for (const bad of ['..', '.', '../keys', 'a/b', 'a\\b', '', 'x'.repeat(201), 42, null]) {
+      expect(isSafeId(bad)).toBe(false);
+    }
   });
 });

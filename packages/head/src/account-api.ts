@@ -11,19 +11,24 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import type { LocalAuthBackend } from './local-auth-backend.js';
 import { safeEqual } from './auth.js';
 import { getLogger } from './logger.js';
+import { clientIp } from './client-ip.js';
 
 export interface AccountApiOptions {
   authBackend: LocalAuthBackend;
   serviceKey?: string;
+  /** Requests per minute per IP on the public routes. Default 60. */
+  publicRateLimit?: number;
 }
 
 export class AccountApi {
   private backend: LocalAuthBackend;
   private serviceKey?: string;
+  private publicLimiter: IpRateLimiter;
 
   constructor(options: AccountApiOptions) {
     this.backend = options.authBackend;
     this.serviceKey = options.serviceKey;
+    this.publicLimiter = new IpRateLimiter(options.publicRateLimit ?? 60);
   }
 
   /**
@@ -52,6 +57,11 @@ export class AccountApi {
       || (path === '/api/edge/join' && req.method === 'POST');
 
     if (!publicRoute && !this.checkServiceKey(req, res)) return true;
+    if (publicRoute && !this.publicLimiter.take(clientIp(req))) {
+      res.setHeader('Retry-After', '60');
+      this.json(res, 429, { ok: false, code: 'rate_limited', message: 'Too many requests' });
+      return true;
+    }
 
     try {
       switch (path) {
@@ -93,6 +103,10 @@ export class AccountApi {
           break;
       }
     } catch (err) {
+      if (err instanceof BodyTooLargeError) {
+        this.json(res, 413, { ok: false, code: 'payload_too_large', message: 'Request body too large' });
+        return true;
+      }
       getLogger().error('Account API error', { path, error: (err as Error).message });
       this.json(res, 500, { ok: false, code: 'internal_error', message: 'Internal server error' });
       return true;
@@ -119,13 +133,12 @@ export class AccountApi {
       return true;
     }
 
-    const clientIp = req.headers['x-forwarded-for']?.toString().split(',')[0].trim()
-      ?? req.socket?.remoteAddress;
+    const ip = clientIp(req);
 
     const result = await this.backend.resolveLogin(
       body.auth as import('@kraki/protocol').AuthMethod,
       body.preferredRegion as string | undefined,
-      clientIp,
+      ip === 'unknown' ? undefined : ip,
     );
 
     if (!result.ok) {
@@ -363,17 +376,46 @@ export class AccountApi {
   }
 
   private json(res: ServerResponse, status: number, data: unknown): void {
+    if (res.headersSent) return;
+    // An identity-provider outage is not a rejected credential (G4).
+    if (status === 401 && (data as { code?: string } | null)?.code === 'service_unavailable') status = 503;
     res.writeHead(status, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(data));
   }
 }
 
-/** Read JSON body from request. */
+/** Largest JSON body the account API reads (G3). Real requests are < 8 KB. */
+export const MAX_BODY_BYTES = 64 * 1024;
+
+class BodyTooLargeError extends Error {}
+
+/** Read JSON body from request; rejects with BodyTooLargeError past MAX_BODY_BYTES. */
 function readBody(req: IncomingMessage): Promise<Record<string, unknown> | null> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+      req.resume();
+      reject(new BodyTooLargeError());
+      return;
+    }
     const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    let size = 0;
+    let done = false;
+    req.on('data', (chunk: Buffer) => {
+      if (done) return;
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        done = true;
+        chunks.length = 0;
+        req.resume();
+        reject(new BodyTooLargeError());
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on('end', () => {
+      if (done) return;
+      done = true;
       try {
         const text = Buffer.concat(chunks).toString();
         resolve(text ? JSON.parse(text) : null);
@@ -381,6 +423,36 @@ function readBody(req: IncomingMessage): Promise<Record<string, unknown> | null>
         resolve(null);
       }
     });
-    req.on('error', () => resolve(null));
+    req.on('error', () => { if (!done) { done = true; resolve(null); } });
   });
+}
+
+/**
+ * Fixed-window request counter per client IP for the public routes (G3).
+ * Service-key routes are not limited: every user of a regional relay reaches
+ * them from that relay's single address.
+ */
+export class IpRateLimiter {
+  private windows = new Map<string, { start: number; count: number }>();
+
+  constructor(private readonly limit = 60, private readonly windowMs = 60_000, private readonly now = () => Date.now()) {}
+
+  /** Count one request; false when the IP is over its limit. */
+  take(ip: string): boolean {
+    const now = this.now();
+    if (this.windows.size > 10_000) this.prune(now);
+    const entry = this.windows.get(ip);
+    if (!entry || now - entry.start >= this.windowMs) {
+      this.windows.set(ip, { start: now, count: 1 });
+      return true;
+    }
+    entry.count += 1;
+    return entry.count <= this.limit;
+  }
+
+  private prune(now: number): void {
+    for (const [ip, entry] of this.windows) {
+      if (now - entry.start >= this.windowMs) this.windows.delete(ip);
+    }
+  }
 }

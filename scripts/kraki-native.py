@@ -99,7 +99,7 @@ def parser() -> argparse.ArgumentParser:
 
     mode = sub.add_parser("set-mode")
     mode.add_argument("session_id")
-    mode.add_argument("mode", choices=["safe", "discuss", "execute", "delegate"])
+    mode.add_argument("mode", choices=["safe", "auto", "delegate"])
 
     abort = sub.add_parser("abort")
     abort.add_argument("session_id")

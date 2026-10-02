@@ -84,3 +84,24 @@ describe('createLogger()', () => {
     expect(typeof logger.info).toBe('function');
   });
 });
+
+describe('rotateLogFile (release review F3)', () => {
+  it('rotates past the size limit and keeps a bounded number of files', async () => {
+    const { mkdtempSync, writeFileSync, existsSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { rotateLogFile } = await import('../logger.js');
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-logrot-'));
+    const file = join(dir, 'relay-client.log');
+    writeFileSync(file, 'small');
+    expect(rotateLogFile(file, 100, 3)).toBe(false);
+    for (let round = 1; round <= 5; round++) {
+      writeFileSync(file, `round-${round}`.padEnd(200, '.'));
+      expect(rotateLogFile(file, 100, 3)).toBe(true);
+    }
+    expect(existsSync(file)).toBe(false);
+    expect(readFileSync(`${file}.1`, 'utf8').startsWith('round-5')).toBe(true);
+    expect(readFileSync(`${file}.3`, 'utf8').startsWith('round-3')).toBe(true);
+    expect(existsSync(`${file}.4`)).toBe(false);
+  });
+});

@@ -206,14 +206,17 @@ export class LocalAuthBackend implements AuthBackend {
     ip?: string,
   ): Promise<{ ok: true; userId: string; pairingToken: string; expiresIn: number } | { ok: false; code: string; message: string }> {
     // Try all providers
+    let unavailable: string | undefined;
     for (const provider of this.authProviders.values()) {
       const result = await provider.authenticate({ token, ip });
+      if (!result.ok && result.retryable) unavailable = result.message;
       if (result.ok) {
         this.storage.upsertUser(result.user.id, result.user.login, result.user.provider, result.user.email);
         const pairing = this.createPairingToken(result.user.id);
         return { ok: true, userId: result.user.id, pairingToken: pairing.token, expiresIn: pairing.expiresIn };
       }
     }
+    if (unavailable) return { ok: false, code: 'service_unavailable', message: unavailable };
     return { ok: false, code: 'auth_rejected', message: 'No auth provider accepted the token' };
   }
 
@@ -529,7 +532,7 @@ export class LocalAuthBackend implements AuthBackend {
 
     const result = await provider.authenticate(credentials);
     if (!result.ok) {
-      return { ok: false, code: 'auth_rejected', message: result.message };
+      return { ok: false, code: result.retryable ? 'service_unavailable' : 'auth_rejected', message: result.message };
     }
     return result.user;
   }

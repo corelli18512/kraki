@@ -175,10 +175,13 @@ export class EventsWatcher {
     } finally {
       closeSync(fd);
     }
-    entry.offset = fileSize;
+    // Consume only complete lines: a writer mid-line must not lose its event.
+    const lastNewline = buf.lastIndexOf(0x0a);
+    if (lastNewline < 0) return;
+    entry.offset += lastNewline + 1;
 
     // Parse new lines into SDK events
-    const newContent = buf.toString('utf8');
+    const newContent = buf.subarray(0, lastNewline + 1).toString('utf8');
     const lines = newContent.split('\n').filter(l => l.trim());
     const meta = {}; // don't need metadata extraction for live events
 

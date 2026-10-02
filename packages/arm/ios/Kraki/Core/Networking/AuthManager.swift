@@ -136,13 +136,9 @@ final class AuthManager {
     /// Reuse the locally-installed `kraki` CLI's login so the Mac app can
     /// sign in without a separate pairing/OAuth dance. Returns the relay
     /// URL + GitHub token when the CLI is installed and logged in.
-    /// Mirrors the kraki daemon's own token resolution order: `gh auth token`
-    /// (gh CLI) first, then the saved device-flow token at ~/.kraki/github-token.
-    /// The Mac app is not sandboxed, so `~/.kraki` is readable and `gh` spawnable.
-    /// `ghDeadline` bounds only the `gh auth token` probe: the launch gate uses
-    /// a short one so a broken `gh` never holds the window, background
-    /// recovery a long one (a cold `gh` right after a macOS update can take
-    /// several seconds, which previously left the Mac unable to sign in).
+    /// Mirrors the kraki daemon: only Kraki's own saved token at
+    /// ~/.kraki/github-token (the GitHub CLI token is never used).
+    /// `ghDeadline` is kept for call-site compatibility and is unused.
     static func loadCLICredentials(ghDeadline: TimeInterval = launchGhDeadline) async -> (relay: String, token: String)? {
         #if DEBUG
         if let loader = debugCLICredentialLoader { return await loader(ghDeadline) }
@@ -161,13 +157,9 @@ final class AuthManager {
             return nil
         }
 
-        // 1. gh CLI token — the daemon's primary path (used whenever `gh` is
-        //    authenticated, which is the common case on a dev machine).
-        if let ghToken = await runGhAuthToken(deadline: ghDeadline), !ghToken.isEmpty {
-            KLog.diag("Mac CLI login resolved a GitHub token")
-            return (relay, ghToken)
-        }
-        // 2. Saved device-flow token (~/.kraki/github-token).
+        // Kraki's own saved token (~/.kraki/github-token, scope read:user).
+        // Never the GitHub CLI's `gh auth token`: its scopes (repo, workflow,
+        // …) are far wider than Kraki needs and it would be sent to the relay.
         if let raw = try? String(contentsOfFile: krakiHome + "/github-token", encoding: .utf8) {
             let saved = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if !saved.isEmpty {
@@ -190,61 +182,6 @@ final class AuthManager {
     static var debugCLICredentialLoader: ((TimeInterval) async -> (relay: String, token: String)?)?
     #endif
 
-    private static func runGhAuthToken(deadline seconds: TimeInterval) async -> String? {
-        let environment = ProcessInfo.processInfo.environment
-        let home = NSHomeDirectory()
-        var candidates = environment["PATH"]?
-            .split(separator: ":")
-            .map { String($0) + "/gh" } ?? []
-        candidates.append(contentsOf: [
-            "/opt/local/bin/gh",
-            "/opt/homebrew/bin/gh",
-            "/usr/local/bin/gh",
-            "/usr/bin/gh",
-            home + "/.local/bin/gh",
-        ])
-        var seen: Set<String> = []
-        let executables = candidates.filter {
-            seen.insert($0).inserted && FileManager.default.isExecutableFile(atPath: $0)
-        }
-
-        return await Task.detached(priority: .userInitiated) {
-            // CLI discovery is part of the Mac launch gate. A broken shell/gh
-            // installation must not hold the entire window indefinitely.
-            let deadline = Date().addingTimeInterval(seconds)
-            for executable in executables {
-                guard Date() < deadline else { break }
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: executable)
-                process.arguments = ["auth", "token"]
-                process.standardInput = FileHandle.nullDevice
-                let pipe = Pipe()
-                process.standardOutput = pipe
-                process.standardError = FileHandle.nullDevice
-                do {
-                    try process.run()
-                    _ = waitForProcessExit(process, until: deadline)
-                    if process.isRunning {
-                        KLog.diag("Mac CLI login timed out while executing gh")
-                        process.terminate()
-                        break
-                    }
-                    guard process.terminationStatus == 0 else { continue }
-                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                    let token = String(data: data, encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    if let token, !token.isEmpty {
-                        KLog.diag("Mac CLI login executed gh from \(executable)")
-                        return token
-                    }
-                } catch {
-                    continue
-                }
-            }
-            KLog.diag("Mac CLI login could not execute gh (candidates=\(executables.count))")
-            return nil
-        }.value
-    }
 
     /// Synchronous process polling intentionally runs only inside the detached
     /// CLI worker above. Keeping it out of the async closure avoids blocking an

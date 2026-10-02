@@ -15,9 +15,9 @@ export type SessionState = 'active' | 'idle' | 'compacting';
  */
 export type SessionMode = 'safe' | 'auto' | 'delegate';
 
-/** Names from the four-mode era (safe/discuss/execute/delegate). Accepted
- *  everywhere; `discuss` and `execute` both mean `auto`. */
-export type LegacySessionMode = 'discuss' | 'execute';
+/** The pre-rename wire name for `auto`, still emitted while
+ *  EMIT_LEGACY_MODE_NAMES is on. */
+export type LegacySessionMode = 'execute';
 
 /** Anything that may arrive on the wire during the rename transition. */
 export type WireSessionMode = SessionMode | LegacySessionMode;
@@ -39,7 +39,6 @@ export function normalizeSessionMode(mode: unknown): SessionMode {
     case 'delegate': return 'delegate';
     case 'auto':
     case 'execute':
-    case 'discuss':
       return 'auto';
     default:
       return DEFAULT_SESSION_MODE;
@@ -114,6 +113,11 @@ export interface SessionDigest {
   createdAt: string;
   usage?: SessionUsage;
   pinned?: boolean;
+  /** Set only in `archived_session_list`: the session is archived and left
+   *  out of `session_list`. */
+  archived?: boolean;
+  /** When the last message was written (ISO). Used for archive listings. */
+  lastActivityAt?: string;
   /** Origin of this session. Absent for sessions created natively in Kraki. */
   source?: LocalSessionSource | 'imported';
   /** Sidebar preview computed by tentacle from the last few messages. An open

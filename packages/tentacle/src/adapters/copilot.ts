@@ -1096,7 +1096,7 @@ export class CopilotAdapter extends AgentAdapter {
       for (const att of attachments) {
         if (att.type === 'image') {
           const ext = att.mimeType === 'image/png' ? '.png' : att.mimeType === 'image/webp' ? '.webp' : '.jpg';
-          const fileName = `kraki-img-${Date.now()}${ext}`;
+          const fileName = `kraki-img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
           const filePath = join(sdkFilesDir, fileName);
           mkdirSync(sdkFilesDir, { recursive: true });
           writeFileSync(filePath, Buffer.from(att.data, 'base64'));
@@ -1179,6 +1179,7 @@ export class CopilotAdapter extends AgentAdapter {
     sessionId: string,
     permissionId: string,
     decision: PermissionDecision,
+    reason?: string,
   ): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
@@ -1216,7 +1217,10 @@ export class CopilotAdapter extends AgentAdapter {
       always_allow: { kind: 'approve-once' },
     };
 
-    pending.resolve(kindMap[decision] ?? { kind: 'reject' });
+    const result = decision === 'deny' && reason
+      ? { kind: 'reject' as const, feedback: `Denied by user: ${reason}` }
+      : kindMap[decision] ?? { kind: 'reject' };
+    pending.resolve(result as PermissionRequestResult);
     entry.pendingPermissions.delete(permissionId);
     this.touchSession(sessionId);
     logger.debug({ permissionId, sessionId, decision }, 'permission resolved');
@@ -1563,9 +1567,12 @@ export class CopilotAdapter extends AgentAdapter {
 
     this.cleanupSessionPermissions(sessionId);
     logger.warn({ err, sessionId }, 'Session became unavailable');
-    this.emitError(sessionId, 'Session is no longer active in Copilot. Please start a new session.');
+    this.emitError(sessionId, `Copilot could not reopen this session: ${getErrorMessage(err)}`);
     this.sessions.delete(sessionId);
-    this.onSessionEnded?.(sessionId, { reason: 'session unavailable' });
+    // Not terminal: the on-disk session may still be resumable (runtime
+    // restart, transient corruption fixed by sanitize). Mark it evicted so the
+    // next message retries a lazy resume instead of hitting a zombie.
+    this.onSessionEvicted?.(sessionId);
   }
 
   /**

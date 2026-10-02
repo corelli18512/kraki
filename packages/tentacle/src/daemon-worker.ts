@@ -13,9 +13,8 @@
  * (Copilot CLI, Claude Code CLI) and starts all that are found.
  */
 
-import { execSync } from 'node:child_process';
 import { platform } from 'node:os';
-import { getKrakiHome, loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady, clearDaemonIdentity } from './config.js';
+import { getKrakiHome, loadConfig, saveConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady, clearDaemonIdentity } from './config.js';
 import { ensureWindowsSystemPath, probeFda, ensureTccBundleRegistered, cleanupStaleBundleEntries } from './checks.js';
 import { MultiAgentAdapter } from './adapters/multi.js';
 
@@ -35,9 +34,10 @@ process.on('SIGHUP', () => {});
 
 // Prevent unhandled promise rejections from crashing the daemon.
 // Node v15+ exits on unhandled rejections by default; we want the daemon to survive.
-process.on('unhandledRejection', () => {
-  // Intentionally swallowed — the daemon must stay alive.
-  // Specific errors are already logged where they originate.
+process.on('unhandledRejection', (reason) => {
+  // The daemon must stay alive, but a silently swallowed rejection hides real
+  // bugs. `logger` is defined below; the handler only runs after module init.
+  try { logger.warn({ err: reason }, 'Unhandled promise rejection'); } catch { /* logger not ready */ }
 });
 import { RelayClient } from './relay-client.js';
 import { AccountUsageMonitor, UsageHistory } from './account-usage.js';
@@ -188,18 +188,13 @@ export async function startWorker(): Promise<WorkerResult> {
   let token: string | undefined;
 
   if (config.authMethod === 'github_token') {
-    try {
-      token = execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim() || undefined;
-      if (token) logger.debug('Resolved GitHub token from `gh auth token`');
-    } catch {
-      // gh CLI not available — try saved device flow token
-    }
-    if (!token) {
-      const { loadGitHubToken } = await import('./config.js');
-      token = loadGitHubToken() ?? undefined;
-      if (token) logger.debug('Resolved GitHub token from saved device flow token');
-      else logger.warn('No GitHub token found (neither gh CLI nor device flow)');
-    }
+    // Only Kraki's own read:user token; the GitHub CLI token is never sent to
+    // the relay. A registered device authenticates by challenge anyway; the
+    // token is only needed to register a brand-new device.
+    const { loadGitHubToken } = await import('./config.js');
+    token = loadGitHubToken() ?? undefined;
+    if (token) logger.debug('Resolved GitHub token from saved device flow token');
+    else logger.info('No saved GitHub token; relying on device challenge auth');
   } else {
     const channelKey = loadChannelKey();
     if (channelKey) {
@@ -211,6 +206,11 @@ export async function startWorker(): Promise<WorkerResult> {
   // 3. Initialize components
   const sessionManager = new SessionManager();
   const attachmentStore = new AttachmentStore(sessionManager.getSessionsRoot());
+  // Offloaded tool args/results accumulate a few files per tool call. Keep
+  // them for the archive window, then reclaim them (images/reports stay).
+  const TOOL_PAYLOAD_TTL_MS = 14 * 24 * 3600_000;
+  setTimeout(() => { try { attachmentStore.pruneToolPayloads(TOOL_PAYLOAD_TTL_MS); } catch { /* best effort */ } }, 60_000).unref();
+  setInterval(() => { try { attachmentStore.pruneToolPayloads(TOOL_PAYLOAD_TTL_MS); } catch { /* best effort */ } }, 24 * 3600_000).unref();
 
   // 3b. Start Kraki MCP server (in-process HTTP, loopback only). If bind
   //     fails, log and continue without it — daemon stays up.
@@ -249,9 +249,9 @@ export async function startWorker(): Promise<WorkerResult> {
   const deviceId = getOrCreateDeviceId();
 
   // 4. Start agent adapters (auto-detection + startup)
-  if (token) {
-    process.env.GITHUB_TOKEN = token;
-  }
+  // Do NOT export the relay token as GITHUB_TOKEN: every agent child and every
+  // command it runs would inherit it. Copilot authenticates with its own
+  // logged-in user (useLoggedInUser), the others never needed it.
   let adapterReady = false;
   try {
     await adapter.start();
@@ -318,6 +318,11 @@ export async function startWorker(): Promise<WorkerResult> {
       token,
       reconnectDelay: 1000,
       version: getVersion(),
+      autoArchiveDays: config.autoArchiveDays,
+      saveAutoArchiveDays: (days) => {
+        const latest = loadConfig();
+        if (latest) saveConfig({ ...latest, autoArchiveDays: days });
+      },
     },
     keyManager,
     attachmentStore,
@@ -363,7 +368,12 @@ export async function startWorker(): Promise<WorkerResult> {
   };
 
   relay.onFatalError = (message) => {
-    logger.fatal({ message }, 'Relay fatal error');
+    logger.fatal({ message }, 'Relay fatal error — exiting so the supervisor can restart');
+    // A dead relay client inside a live process looks "running" to every
+    // supervisor while the device stays offline forever. Exit non-zero:
+    // launchd KeepAlive / the Mac app restart us, and `kraki status` tells
+    // the truth.
+    shutdown().catch(() => {}).finally(() => process.exit(1));
   };
 
   relay.connect();

@@ -162,6 +162,19 @@ class PiRpcProcess {
       this.stderrTail = (this.stderrTail + '\n' + d.toString()).slice(-4000);
       rpcLogger.debug({ stderr }, 'pi stderr');
     });
+    // A spawn failure (pi removed, nvm switched, EACCES) is emitted as an
+    // 'error' event. Without a listener Node rethrows it as an uncaught
+    // exception and the daemon shuts down every agent. Treat it as an exit.
+    const child = this.child;
+    let exited = false;
+    child.once('exit', () => { exited = true; });
+    child.on('error', (err) => {
+      this.lastStderr = err.message;
+      rpcLogger.warn({ err: err.message }, 'pi process error');
+      // A process that never started emits no 'exit' of its own.
+      setImmediate(() => { if (!exited && child.pid === undefined) child.emit('exit', null, null); });
+    });
+    this.child.stdin.on('error', (err) => rpcLogger.debug({ err: err.message }, 'pi stdin error'));
     this.child.on('exit', (code) => {
       const detail = this.lastStderr ? `: ${this.lastStderr}` : '';
       for (const p of this.pending.values()) {
@@ -767,7 +780,7 @@ export class PiAdapter extends AgentAdapter {
       if (!existsSync(p)) continue;
       try {
         const meta = JSON.parse(readFileSync(p, 'utf8'));
-        // Sidecars written before the three-mode rename (discuss/execute).
+        // Sidecars may still carry the legacy wire name `execute`.
         if (meta && typeof meta === 'object' && 'mode' in meta) meta.mode = normalizeSessionMode(meta.mode);
         return meta;
       } catch {
@@ -1666,7 +1679,7 @@ export class PiAdapter extends AgentAdapter {
     }
   }
 
-  async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision): Promise<void> {
+  async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision, reason?: string): Promise<void> {
     const s = this.sessions.get(sessionId);
     if (!s) { logger.warn({ sessionId }, 'respondToPermission: session not found'); return; }
     if (!s.pendingPerms.delete(permissionId)) {
@@ -1678,6 +1691,12 @@ export class PiAdapter extends AgentAdapter {
     // like a one-off approve.
     const confirmed = decision !== 'deny';
     s.proc.sendRaw({ type: 'extension_ui_response', id: permissionId, confirmed });
+    // pi's confirm channel is boolean; relay the reason as a steer into the
+    // active run so the model learns why the tool was blocked.
+    if (!confirmed && reason && s.proc.alive) {
+      s.proc.request('prompt', { message: `The user denied that request: ${reason}`, streamingBehavior: 'steer' }, { timeoutMs: null })
+        .catch((err) => logger.debug({ sessionId, err: (err as Error).message }, 'pi deny-reason steer failed'));
+    }
     logger.debug({ sessionId, permissionId, confirmed }, 'pi permission answered');
   }
 

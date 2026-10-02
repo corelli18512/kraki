@@ -125,6 +125,13 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     return;
   }
 
+  // archived_session_list — response to request_archived_sessions (F2)
+  if (msg.type === 'archived_session_list') {
+    const payload = (msg as { payload: { sessions?: import('@kraki/protocol').SessionDigest[] } }).payload;
+    store.setArchivedSessions(msg.deviceId, payload?.sessions ?? []);
+    return;
+  }
+
   // Handle local_sessions_list — response to import picker request
   if (msg.type === 'local_sessions_list') {
     const payload = (msg as { payload: { sessions: unknown[]; requestId?: string } }).payload;
@@ -142,6 +149,17 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     }
     if (greeting?.version) {
       store.setDeviceVersion(msg.deviceId, greeting.version);
+    }
+    return;
+  }
+
+  // A create/fork/import failure has no session yet; it is correlated by the
+  // requestId the app sent. Show it instead of failing silently.
+  if (msg.type === 'error' && !msg.sessionId) {
+    const reqId = (msg.payload as { requestId?: string }).requestId;
+    if (reqId && ctx.cmdState.pendingCreateRequests.delete(reqId)) {
+      ctx.cmdState.pendingPrompts.delete(reqId);
+      store.setLastError(msg.payload.message);
     }
     return;
   }

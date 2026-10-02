@@ -9,6 +9,10 @@ import Observation
 @Observable
 final class DeviceStore {
     var devices: [String: DeviceSummary] = [:]
+    /// Pinned computer keys (see DeviceKeyPins). Not observed.
+    @ObservationIgnored let keyPins = DeviceKeyPins()
+    /// Computers whose key changed since they were pinned (UI warning).
+    var keyMismatchDeviceIds: Set<String> = []
     /// Per-device list of agent capability slices. Each entry carries
     /// its own `models` / `modelDetails`. Tentacles can advertise
     /// multiple agents (e.g. Copilot + Claude). UI that wants a flat
@@ -132,6 +136,9 @@ final class DeviceStore {
 
     /// Wipe the on-disk file. Logout / reset.
     func clearPersistentSnapshot() {
+        // Pinned computer keys are persisted device state too.
+        keyPins.reset()
+        keyMismatchDeviceIds.removeAll()
         guard persistenceEnabled else { return }
         saveTask?.cancel()
         saveTask = nil
@@ -231,7 +238,9 @@ final class DeviceStore {
     // MARK: - Device CRUD
 
     func setDevices(_ list: [DeviceSummary]) {
-        devices = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
+        let qrVerified = keyPins.verifyPendingQR(against: list)
+        devices = Dictionary(uniqueKeysWithValues: list.map { ($0.id, keyPins.apply($0)) })
+        keyMismatchDeviceIds = keyPins.mismatched.union(qrVerified ? [] : [Self.unmatchedQRMarker])
         // Refresh greeting freshness — every online device in the fresh
         // list is "connecting" until its `device_greeting` lands in this
         // session. Offline devices don't need to be tracked because
@@ -241,7 +250,8 @@ final class DeviceStore {
     }
 
     func addDevice(_ device: DeviceSummary) {
-        devices[device.id] = device
+        devices[device.id] = keyPins.apply(device)
+        keyMismatchDeviceIds = keyPins.mismatched
         if device.online {
             pendingGreetingIds.insert(device.id)
         }
@@ -249,6 +259,8 @@ final class DeviceStore {
     }
 
     func removeDevice(_ id: String) {
+        keyPins.forget(id)
+        keyMismatchDeviceIds.remove(id)
         devices.removeValue(forKey: id)
         deviceAgents.removeValue(forKey: id)
         deviceVersions.removeValue(forKey: id)
@@ -304,6 +316,9 @@ final class DeviceStore {
     }
 
     // MARK: - Reset
+
+    /// Marker in `keyMismatchDeviceIds` when the scanned QR matched no computer.
+    static let unmatchedQRMarker = "__qr_unmatched__"
 
     func reset() {
         devices.removeAll()

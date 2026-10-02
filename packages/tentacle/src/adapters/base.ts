@@ -236,11 +236,13 @@ export abstract class AgentAdapter {
     options?: SendMessageOptions,
   ): Promise<void>;
 
-  /** Respond to a pending permission request. */
+  /** Respond to a pending permission request. `reason` (deny only) is the
+   *  operator's explanation; adapters relay it to the agent. */
   abstract respondToPermission(
     sessionId: string,
     permissionId: string,
     decision: PermissionDecision,
+    reason?: string,
   ): Promise<void>;
 
   /** Respond to a pending agent question. Returns whether the live runtime

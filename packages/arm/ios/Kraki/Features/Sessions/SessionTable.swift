@@ -19,6 +19,9 @@ import Observation
 struct SessionTable: UIViewControllerRepresentable {
     let appState: AppState
     let deviceFilter: String?  // nil = all devices
+    /// Archived sessions on all computers; shown as a footer row (F2).
+    var archivedCount: Int = 0
+    var onArchivedTapped: () -> Void = {}
     let onCellTapped: (String) -> Void
 
     func makeUIViewController(context: Context) -> SessionTableController {
@@ -26,6 +29,8 @@ struct SessionTable: UIViewControllerRepresentable {
         vc.appState = appState
         vc.deviceFilter = deviceFilter
         vc.onCellTapped = onCellTapped
+        vc.onArchivedTapped = onArchivedTapped
+        vc.archivedCount = archivedCount
         return vc
     }
 
@@ -33,6 +38,8 @@ struct SessionTable: UIViewControllerRepresentable {
         vc.appState = appState
         vc.deviceFilter = deviceFilter
         vc.onCellTapped = onCellTapped
+        vc.onArchivedTapped = onArchivedTapped
+        vc.archivedCount = archivedCount
         KLog.d("📂 [snapshot] SessionTable.updateUIViewController → applySnapshot")
         vc.applySnapshot(animated: true)
     }
@@ -44,6 +51,38 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     weak var appState: AppState?
     var deviceFilter: String?
     var onCellTapped: ((String) -> Void)?
+    var onArchivedTapped: (() -> Void)?
+    var archivedCount = 0 {
+        didSet { if archivedCount != oldValue, isViewLoaded { updateArchivedFooter() } }
+    }
+
+    /// "Archived (N)" row under the last session (F2).
+    private func updateArchivedFooter() {
+        guard archivedCount > 0 else {
+            tableView.tableFooterView = nil
+            return
+        }
+        var config = UIButton.Configuration.plain()
+        config.title = "Archived (\(archivedCount))"
+        config.image = UIImage(systemName: "archivebox")
+        config.imagePadding = 6
+        config.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 13)
+        config.baseForegroundColor = .secondaryLabel
+        config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attrs in
+            var a = attrs
+            a.font = UIFont.systemFont(ofSize: 14)
+            return a
+        }
+        let button = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in
+            self?.onArchivedTapped?()
+        })
+        button.accessibilityIdentifier = "session-list-archived"
+        let footer = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 56))
+        button.frame = footer.bounds
+        button.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        footer.addSubview(button)
+        tableView.tableFooterView = footer
+    }
 
     private var tableView: UITableView!
     private var dataSource: UITableViewDiffableDataSource<Int, String>!
@@ -127,6 +166,7 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "session")
         view.addSubview(tableView)
         view.backgroundColor = UIColor(Color.surfacePrimary)
+        updateArchivedFooter()
     }
 
     private func setupDataSource() {

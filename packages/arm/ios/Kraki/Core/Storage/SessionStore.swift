@@ -160,8 +160,21 @@ enum SessionActivity: Equatable {
 
 // MARK: - SessionStore
 
+/// Per computer: archived session count and auto-archive days (F2).
+struct ArchiveInfo: Equatable {
+    var count: Int
+    var days: Int
+}
+
 @Observable
 final class SessionStore {
+    /// Archived sessions per computer, from `session_list` (F2).
+    var archiveInfo: [String: ArchiveInfo] = [:]
+    /// Archived sessions per computer, loaded when the user opens them.
+    var archivedSessions: [String: [SessionDigest]] = [:]
+
+    var archivedCount: Int { archiveInfo.values.reduce(0) { $0 + $1.count } }
+
     var sessions: [String: SessionInfo] = [:]
     var activeSessionId: String?
     /// Ephemeral UI guard for a manual Mark Unread on the currently open Chat.

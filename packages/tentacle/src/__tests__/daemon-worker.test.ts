@@ -119,7 +119,7 @@ const mockClearDaemonIdentity = vi.fn();
 vi.mock('../config.js', () => ({
   loadConfig: vi.fn(() => mockConfig),
   loadChannelKey: vi.fn(() => mockChannelKey),
-  loadGitHubToken: vi.fn(() => null),
+  loadGitHubToken: vi.fn(() => mockSavedGitHubToken),
   getOrCreateDeviceId: vi.fn(() => 'dev_test123'),
   getConfigPath: vi.fn(() => '/tmp/fake-kraki/config.json'),
   getChannelKeyPath: vi.fn(() => '/tmp/fake-kraki/channel.key'),
@@ -132,7 +132,8 @@ vi.mock('../config.js', () => ({
   clearDaemonIdentity: (...args: unknown[]) => mockClearDaemonIdentity(...args),
 }));
 
-let mockExecSyncReturn = 'fake-token\n';
+let mockSavedGitHubToken: string | null = 'fake-token';
+let mockExecSyncReturn = 'gho_broad_gh_token\n';
 let mockExecSyncThrow = false;
 
 vi.mock('node:child_process', () => ({
@@ -259,7 +260,7 @@ describe('daemon-worker: startWorker()', () => {
     await shutdown();
   });
 
-  it('loads config, resolves gh token, starts adapter, connects relay', async () => {
+  it('loads config, resolves the saved Kraki token, starts adapter, connects relay', async () => {
     const { adapter, relay, shutdown } = await startWorker();
 
     expect(mockLoggerFns.info).toHaveBeenCalledWith(expect.stringContaining('Daemon starting'));
@@ -267,7 +268,8 @@ describe('daemon-worker: startWorker()', () => {
     expect(mockAdapter.start).toHaveBeenCalled();
     expect(mockRelay.connect).toHaveBeenCalled();
     expect(mockSaveDaemonReady).toHaveBeenCalledWith(process.pid);
-    expect(process.env.GITHUB_TOKEN).toBe('fake-token');
+    // The relay token is never exported to agent children.
+    expect(process.env.GITHUB_TOKEN).toBeUndefined();
 
     await shutdown();
     expect(mockClearDaemonReady).toHaveBeenCalled();
@@ -325,17 +327,16 @@ describe('daemon-worker: startWorker()', () => {
     expect(mockExit).toHaveBeenCalledWith(1);
   });
 
-  it('warns when gh auth token fails and no saved token (github auth)', async () => {
-    mockExecSyncThrow = true;
-    await startWorker();
-    expect(mockLoggerFns.warn).toHaveBeenCalledWith(expect.stringContaining('No GitHub token found'));
-  });
-
-  it('handles empty gh token by falling back to saved token', async () => {
-    mockExecSyncReturn = '';
-    await startWorker();
-    // Falls through to loadGitHubToken which also returns null in tests
-    expect(mockLoggerFns.warn).toHaveBeenCalledWith(expect.stringContaining('No GitHub token found'));
+  it('never uses the GitHub CLI token; relies on challenge auth without a saved token', async () => {
+    mockSavedGitHubToken = null;
+    try {
+      await startWorker();
+      expect(mockLoggerFns.info).toHaveBeenCalledWith(expect.stringContaining('No saved GitHub token'));
+      const { execSync } = await import('node:child_process');
+      expect(vi.mocked(execSync).mock.calls.some(([cmd]) => String(cmd).includes('gh auth token'))).toBe(false);
+    } finally {
+      mockSavedGitHubToken = 'fake-token';
+    }
   });
 
   it('loads channel key for non-github auth', async () => {

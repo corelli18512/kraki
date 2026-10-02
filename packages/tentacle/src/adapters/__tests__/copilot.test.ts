@@ -390,20 +390,24 @@ describe('CopilotAdapter', () => {
       await expect(adapter.createSession({})).rejects.toThrow('not started');
     });
 
-    it('sendMessage on unknown session attempts to resume and reports session_ended if resume fails', async () => {
+    it('sendMessage on unknown session attempts to resume and reports eviction (not a terminal end) if resume fails', async () => {
       // Previously: sendMessage threw "Session not found" as a guard.
       // After v0.21.1+ fix: sendMessage tries to resume from disk (self-heal
       // for state-drift cases). If the SDK has no record either, we fall
-      // through to handleUnavailableSession → arm sees session_ended.
+      // through to handleUnavailableSession → evicted, so the next message
+      // retries a lazy resume instead of hitting a terminal zombie.
       const endedSpy = vi.fn();
+      const evictedSpy = vi.fn();
       const errorSpy = vi.fn();
       adapter.onSessionEnded = endedSpy;
+      adapter.onSessionEvicted = evictedSpy;
       adapter.onError = errorSpy;
       await adapter.start();
       mockResumeSessionError = new Error('Session file is missing');
 
       await expect(adapter.sendMessage('nonexistent', 'hi')).rejects.toThrow();
-      expect(endedSpy).toHaveBeenCalledWith('nonexistent', { reason: 'session unavailable' });
+      expect(evictedSpy).toHaveBeenCalledWith('nonexistent');
+      expect(endedSpy).not.toHaveBeenCalled();
     });
 
     it('respondToPermission returns silently for unknown session', async () => {
@@ -565,11 +569,13 @@ describe('CopilotAdapter', () => {
       expect(mockSessions[1].send).toHaveBeenCalledWith({ prompt: 'retry after reconnect' });
     });
 
-    it('emits error and session_ended when recovery resume fails', async () => {
+    it('emits the real error and evicts when recovery resume fails', async () => {
       const errorSpy = vi.fn();
       const endedSpy = vi.fn();
+      const evictedSpy = vi.fn();
       adapter.onError = errorSpy;
       adapter.onSessionEnded = endedSpy;
+      adapter.onSessionEvicted = evictedSpy;
       await adapter.start();
       const { sessionId } = await adapter.createSession({});
       mockSessions[0].send.mockRejectedValueOnce(new Error(`Request session.send failed with message: Session not found: ${sessionId}`));
@@ -578,9 +584,10 @@ describe('CopilotAdapter', () => {
       await expect(adapter.sendMessage(sessionId, 'retry me')).rejects.toThrow('resume blew up');
 
       expect(errorSpy).toHaveBeenCalledWith(sessionId, {
-        message: 'Session is no longer active in Copilot. Please start a new session.',
+        message: 'Copilot could not reopen this session: resume blew up',
       });
-      expect(endedSpy).toHaveBeenCalledWith(sessionId, { reason: 'session unavailable' });
+      expect(evictedSpy).toHaveBeenCalledWith(sessionId);
+      expect(endedSpy).not.toHaveBeenCalled();
     });
 
     it('fires onError with descriptive auth message for auth errors on send', async () => {

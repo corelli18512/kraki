@@ -43,16 +43,35 @@ $installDir = Join-Path $env:LOCALAPPDATA "Kraki"
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 $target = Join-Path $installDir $binaryName
 
+# Download next to the target first: a running kraki.exe cannot be
+# overwritten, and replacing it under a running daemon kept the old version
+# running. Stop the daemon only once the new binary is here; the setup run
+# below starts it again.
+$download = "$target.download"
 try {
-    Invoke-WebRequest -Uri $url -OutFile $target @web
+    Invoke-WebRequest -Uri $url -OutFile $download @web
 } catch {
     Write-Host "  Could not download $url" -ForegroundColor Red
     Write-Host "  $($_.Exception.Message)"
     if (-not $proxy) {
         Write-Host "  If this network reaches GitHub only through a proxy, set HTTPS_PROXY and run the installer again."
     }
+    Remove-Item -Force -ErrorAction SilentlyContinue $download
     throw
 }
+if (Test-Path $target) {
+    $wasRunning = $false
+    try { $wasRunning = ((& $target status --json 2>$null | Out-String) -match '"running":\s*true') } catch {}
+    if ($wasRunning) {
+        Write-Host "  Stopping the running Kraki daemon for the upgrade..."
+        try { & $target stop *> $null } catch {}
+        # Give the process a moment to release the executable.
+        for ($i = 0; $i -lt 20; $i++) {
+            try { [IO.File]::Open($target, 'Open', 'ReadWrite', 'None').Close(); break } catch { Start-Sleep -Milliseconds 250 }
+        }
+    }
+}
+Move-Item -Force $download $target
 Write-Host "  Downloaded to $target"
 
 # Add to user PATH if not already there
