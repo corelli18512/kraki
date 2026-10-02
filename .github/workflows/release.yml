@@ -315,11 +315,12 @@ jobs:
               <true/>
               <key>LSBackgroundOnly</key>
               <true/>
-              <key>NSLocalNetworkUsageDescription</key>
-              <string>Coding agents started by Kraki can reach computers and servers on your local network, such as a dev server or a NAS.</string>
           </dict>
           </plist>
           PLIST
+          # Agents run under this bundle; without usage strings macOS silently
+          # denies their privacy requests (local network, Apple events, ...).
+          /usr/libexec/PlistBuddy -c "Merge packages/tentacle/agent-privacy.plist" "$APP_DIR/Contents/Info.plist" >/dev/null
 
           # Sign inside-out: the nested executable first, then the bundle.
           # --deep is deprecated for signing and applies the OUTER entitlements to
