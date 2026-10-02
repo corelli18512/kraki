@@ -1118,6 +1118,22 @@ async function main(): Promise<void> {
   const cmd = args[0];
 
   if (cmd === INTERNAL_DAEMON_WORKER_COMMAND) {
+    // Kraki for Mac's job: run as a supervisor of the real worker, which
+    // restarts it after a crash without relying on launchd (see
+    // daemon-supervisor.ts: launchd's KeepAlive is dead while the user's
+    // domain is stuck in on-demand-only mode).
+    const { isMacAppManagedWorker } = await import('./managed.js');
+    const { SUPERVISED_ENV, runSupervisor } = await import('./daemon-supervisor.js');
+    if (process.platform === 'darwin' && isMacAppManagedWorker() && !process.env[SUPERVISED_ENV]) {
+      const { getLogsDir } = await import('./config.js');
+      const { join } = await import('node:path');
+      const code = await runSupervisor({
+        command: process.execPath,
+        args: _isSEA ? [cmd] : [...process.execArgv, process.argv[1], cmd],
+        logFile: join(getLogsDir(), 'daemon-supervisor.log'),
+      });
+      process.exit(code);
+    }
     // Must run before importing daemon-worker/adapters: capture the initial
     // PID-bound Launch Services identity while it is still stable, then scrub
     // private LS bootstrap state from the child-process environment.

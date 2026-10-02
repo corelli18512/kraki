@@ -305,6 +305,7 @@
 		CA61E77D7E02A6D5D69C31C9 /* VoiceVocabulary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 939E23179F74FF6BEBCB911A /* VoiceVocabulary.swift */; };
 		CB2D37D2D7F4BB782B250DDF /* MessageInputView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 102ABECDD210B084B5B19319 /* MessageInputView.swift */; };
 		CB5335A6F0129A9A21088A72 /* LocalSessionSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13466FFA7CC929AF90E4097E /* LocalSessionSummary.swift */; };
+		CC81A758A1BF637D7B8C9172 /* LaunchdOnDemandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 694EAD21A42351FD2CD77CD8 /* LaunchdOnDemandTests.swift */; };
 		CDD3FC5A96DCC43FE52A4BCA /* MessageDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2E016C4ACE0484D7DB04166 /* MessageDatabase.swift */; };
 		CECE9A56D0EB248D3802DABF /* StepsSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 536629FAE2D87965671B981F /* StepsSheetView.swift */; };
 		CFD8991B865BC90CE1602AAD /* TextKitBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E1835259EEC5A49437359FA /* TextKitBubble.swift */; };
@@ -525,6 +526,7 @@
 		6685F600391FC66B987E12ED /* Kraki.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Kraki.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6812354F72EF32686A7E98C6 /* DiagRunLoop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagRunLoop.swift; sourceTree = "<group>"; };
 		6813B385E0446BBC371C8AD3 /* MacAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAppDelegate.swift; sourceTree = "<group>"; };
+		694EAD21A42351FD2CD77CD8 /* LaunchdOnDemandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchdOnDemandTests.swift; sourceTree = "<group>"; };
 		69B9A691EAC2476B0D3210AC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6A71A19399881C78EF628F94 /* KrakiMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KrakiMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6AD698C5DD0F8DDB4A3D6CFE /* KrakiApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiApp.swift; sourceTree = "<group>"; };
@@ -1147,6 +1149,7 @@
 				6E83544E423901DC3D8E07FB /* BuiltInTentacleTests.swift */,
 				813D862554B016FC9E0B527E /* FailedTurnVisibilityTests.swift */,
 				8503ADABDC719A637FA3C5F6 /* HTMLReportMermaidTests.swift */,
+				694EAD21A42351FD2CD77CD8 /* LaunchdOnDemandTests.swift */,
 				C103BC836F016769C5E1F10E /* MacAuthRecoveryTests.swift */,
 				C78E9D20D8646B35FBEBB79E /* MacChatUXRegressionTests.swift */,
 				5C6438C6608D2C3B47BA0AE2 /* MacChatUXTests.swift */,
@@ -1508,6 +1511,7 @@
 				ECD0B5973DEEEEBEFD39ACAA /* ForegroundTestGate.swift in Sources */,
 				442E00FDBE32C44255B6C4B8 /* HTMLReportMermaidTests.swift in Sources */,
 				E0100C295B7D75341380EEAB /* IOSVoiceComposerTests.swift in Sources */,
+				CC81A758A1BF637D7B8C9172 /* LaunchdOnDemandTests.swift in Sources */,
 				2205FA9CAD968A53A45DD693 /* MacAuthRecoveryTests.swift in Sources */,
 				231D593C8DB79D41E54AE803 /* MacChatUXRegressionTests.swift in Sources */,
 				0B0FC6D115637A972DEF0E3C /* MacChatUXTests.swift in Sources */,
@@ -2526,7 +2530,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 61;
+				CURRENT_PROJECT_VERSION = 62;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -2537,7 +2541,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.59;
+				MARKETING_VERSION = 0.2.60;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.dev;
 				PRODUCT_NAME = "Kraki Dev";
 				SDKROOT = macosx;
@@ -2640,7 +2644,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 61;
+				CURRENT_PROJECT_VERSION = 62;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -2650,7 +2654,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.59;
+				MARKETING_VERSION = 0.2.60;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.diag;
 				PRODUCT_NAME = "Kraki Diag";
 				SDKROOT = macosx;
@@ -2665,7 +2669,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 61;
+				CURRENT_PROJECT_VERSION = 62;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -2676,7 +2680,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.59;
+				MARKETING_VERSION = 0.2.60;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac;
 				PRODUCT_NAME = Kraki;
 				SDKROOT = macosx;
@@ -2691,7 +2695,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 61;
+				CURRENT_PROJECT_VERSION = 62;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -2702,7 +2706,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.59;
+				MARKETING_VERSION = 0.2.60;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac;
 				PRODUCT_NAME = Kraki;
 				SDKROOT = macosx;
