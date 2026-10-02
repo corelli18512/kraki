@@ -544,8 +544,8 @@ describe('TCC_SERVICES + openTccPane()', () => {
 
   it('covers the five services kraki wants, with deep-link URLs', () => {
     const ids = TCC_SERVICES.map((s) => s.id);
-    // Full Disk Access plus the panes agents need to operate the computer.
-    expect(ids).toEqual(['fda', 'accessibility', 'screenRecording', 'automation', 'inputMonitoring']);
+    // Full Disk Access, plus Accessibility (macOS never prompts for it).
+    expect(ids).toEqual(['fda', 'accessibility']);
     for (const s of TCC_SERVICES) {
       expect(s.url.startsWith('x-apple.systempreferences:')).toBe(true);
       expect(s.label.length).toBeGreaterThan(0);
@@ -591,9 +591,7 @@ describe('probeTccStatus()', () => {
     expect(s.bundled).toBe(true);
     expect(s.registered).toBe(true);
     expect(s.services.fda).toBe('granted');
-    expect(s.services.accessibility).toBe('unknown');
-    expect(s.services.screenRecording).toBe('unknown');
-    expect(s.services.automation).toBe('unknown');
+    expect(Object.keys(s.services)).toEqual(['fda', 'accessibility']);
   });
 
   it('reports denied FDA when all probe paths are EPERM', async () => {

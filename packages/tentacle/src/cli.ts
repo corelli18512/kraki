@@ -863,8 +863,7 @@ async function cmdPermissions(args: string[]): Promise<void> {
     openAllTccPanes();
     if (!json) {
       console.log(chalk.bold('  Opening the privacy panes in System Settings…'));
-      console.log(chalk.dim('  macOS only lets you grant these yourself. Turn on Kraki in each one you want:'));
-      console.log(chalk.dim('  Full Disk Access is needed; the others only for agents that operate the computer.'));
+      console.log(chalk.dim('  macOS only lets you grant these yourself. Turn on Kraki:'));
       console.log('');
       for (const s of TCC_SERVICES) {
         console.log(`    ${chalk.bold(s.label)}`);
@@ -1249,6 +1248,15 @@ async function main(): Promise<void> {
 
   if (cmd === 'fda') {
     await cmdFda(args);
+    return;
+  }
+
+  if (cmd === 'accessibility') {
+    // Machine-readable for Kraki for Mac, which runs it as the helper app so
+    // the answer (and the macOS prompt) is about Kraki.
+    const { probeAccessibility } = await import('./checks.js');
+    const status = process.platform === 'darwin' ? probeAccessibility(args.includes('--prompt')) : 'not_applicable';
+    process.stdout.write(JSON.stringify({ ok: true, status }) + '\n');
     return;
   }
 
