@@ -6,6 +6,25 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.56</title>
+            <pubDate>Fri, 02 Oct 2026 03:10:18 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.56</sparkle:fullReleaseNotesLink>
+            <sparkle:version>58</sparkle:version>
+            <sparkle:shortVersionString>0.2.56</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* iOS: readable crash reason, backslashes in paths, intro after first message (Mac 0.2.55) by @corelli18512 in https://github.com/corelli18512/kraki/pull/364
+* polish(voice vocabulary): placeholder, ignored-line hints, cleaner layout by @corelli18512 in https://github.com/corelli18512/kraki/pull/356
+* diag: voice.summary correctionOn flag by @corelli18512 in https://github.com/corelli18512/kraki/pull/365
+* chore(release): Mac 0.2.56 (58) by @corelli18512 in https://github.com/corelli18512/kraki/pull/367
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.54...mac-v0.2.56
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.56/Kraki.app.zip" length="91640105" type="application/octet-stream" sparkle:edSignature="KSE8GDmDdYIMy8wi1J8aAg1tph9NrAYWHsCU9ApmCas+I+wsJnQXgUJQ/BK2cJNN5cD97tWNzxjU2TZssi/aAA=="/>
+        </item>
+        <item>
             <title>0.2.55</title>
             <pubDate>Thu, 01 Oct 2026 16:30:09 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -38,30 +57,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.54/Kraki.app.zip" length="91595093" type="application/octet-stream" sparkle:edSignature="J361UsrxZ4D+XamRFcTIW2HRoQqekO0x/W2dxXyRFOcRTWW6/1oAohkF/ThnFBaRfk5p2LBfs23CgqZ+laK4Bw=="/>
         </item>
-        <item>
-            <title>0.2.53</title>
-            <pubDate>Thu, 01 Oct 2026 14:12:33 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.53</sparkle:fullReleaseNotesLink>
-            <sparkle:version>55</sparkle:version>
-            <sparkle:shortVersionString>0.2.53</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* chore(mac): prepare 0.2.51 (53) for a diagnostics delivery by @corelli18512 in https://github.com/corelli18512/kraki/pull/355
-* fix(presence): stale device_left after a Tentacle restart stopped live updates to the App by @corelli18512 in https://github.com/corelli18512/kraki/pull/357
-* fix(mac): no permission prompts from Debug builds; helper and UI say "Kraki", never "Tentacle" by @corelli18512 in https://github.com/corelli18512/kraki/pull/358
-* ci(tentacle): release smoke tolerates a transient unknown process probe by @corelli18512 in https://github.com/corelli18512/kraki/pull/360
-* Setup: never wait on the browser when opening GitHub sign-in by @corelli18512 in https://github.com/corelli18512/kraki/pull/359
-* chore(release): Tentacle 0.35.3, Mac 0.2.53 (55) by @corelli18512 in https://github.com/corelli18512/kraki/pull/361
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.51-diag...mac-v0.2.53
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.53/Kraki.app.zip" length="91590524" type="application/octet-stream" sparkle:edSignature="xXbh8GXSvnw6A2V6sDyw8Ye5FKeuzNl4F5xY3qBg/u/aEWOGrYFK18VNweyWxq/qu3ea6tC2v+4Id0hPWOd8BA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: 1n+OPT9JhXAkxToN9bPUQvuHxB6r0cWTB1Je7uv/7/aiSqfcher14DfLBh2seBrjk9rUopFnENSwqTELPMRyDA==
-length: 4644
+edSignature: MbG8xQ/jLyT4NFJIqpTV3X7Fky3kGHTntDxQltTTuCiiDKtgcC5BO8xBMSFpNn0MIteQRkq9o9K9+LcyNlkdCw==
+length: 4308
 -->
