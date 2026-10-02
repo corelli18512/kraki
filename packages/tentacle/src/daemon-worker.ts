@@ -403,6 +403,13 @@ export async function startWorker(): Promise<WorkerResult> {
     }
   };
 
+  // Supervised (Kraki for Mac): leave if the supervisor is gone, so a killed
+  // job never leaves this worker running next to a newly started one.
+  const { watchSupervisor } = await import('./daemon-supervisor.js');
+  watchSupervisor(() => {
+    logger.warn('Supervisor is gone — shutting down');
+    shutdown().catch(() => {}).finally(() => process.exit(0));
+  });
   process.on('SIGTERM', () => { shutdown().catch(() => {}).finally(() => process.exit(0)); });
   process.on('SIGINT', () => { shutdown().catch(() => {}).finally(() => process.exit(0)); });
   // On an uncaught exception, attempt the same graceful shutdown so the
