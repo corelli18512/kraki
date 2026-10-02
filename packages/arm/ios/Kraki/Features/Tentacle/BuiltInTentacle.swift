@@ -280,25 +280,32 @@ struct BuiltInTentacle {
         openPrivacyPane("Privacy_AllFiles")
     }
 
-    /// Privacy panes for agents that operate the computer. The grant belongs
-    /// to the helper (agents run under it), not to this app.
-    static let agentPrivacyPanes: [(title: String, detail: String, anchor: String)] = [
-        ("Accessibility", "Click, type and operate apps", "Privacy_Accessibility"),
-        ("Screen Recording", "Take screenshots and see the screen", "Privacy_ScreenCapture"),
-        ("Automation", "Control other apps (macOS asks per app)", "Privacy_Automation"),
-        ("Input Monitoring", "Watch keyboard and mouse input", "Privacy_ListenEvent"),
-    ]
-
     static func openPrivacyPane(_ anchor: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") {
             NSWorkspace.shared.open(url)
         }
     }
 
-    /// Select the helper in Finder so it can be dragged into a privacy list:
-    /// it lives inside Kraki.app, where the "+" file picker doesn't look.
-    static func revealHelperInFinder() {
-        NSWorkspace.shared.activateFileViewerSelecting([BuiltInTentacle().helperURL])
+    /// Whether agents (which run under the helper) may click and type. Asked
+    /// of the helper launched as its own app, so macOS answers for it — and,
+    /// with `prompt`, lists it under Accessibility and shows its notice.
+    static func agentAccessibility(prompt: Bool) async -> Bool? {
+        let helper = BuiltInTentacle().helperURL.path
+        return await Task.detached { () -> Bool? in
+            let out = FileManager.default.temporaryDirectory
+                .appendingPathComponent("kraki-ax-\(UUID().uuidString).json")
+            defer { try? FileManager.default.removeItem(at: out) }
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            p.arguments = ["-W", "-n", "-g", "-a", helper, "--stdout", out.path, "--stderr", "/dev/null",
+                           "--args", "accessibility"] + (prompt ? ["--prompt"] : [])
+            do { try p.run() } catch { return nil }
+            p.waitUntilExit()
+            guard let text = try? String(contentsOf: out, encoding: .utf8) else { return nil }
+            if text.contains("\"granted\"") { return true }
+            if text.contains("\"denied\"") { return false }
+            return nil
+        }.value
     }
 
     static func revealAppInFinder() {

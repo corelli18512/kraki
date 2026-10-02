@@ -261,10 +261,10 @@ kraki permissions --open
 opens the privacy panes that matter to coding agents:
 
 - **Full Disk Access** — needed: agents read and edit your projects
-- **Accessibility** — optional: agents that click, type and operate apps
-- **Screen Recording** — optional: agents that take screenshots / see the screen
-- **Automation** — optional: agents that control other apps (macOS asks per app)
-- **Input Monitoring** — optional, rarely needed
+- **Accessibility** — optional: agents that click and type. macOS never asks
+  for it (it silently denies), so Kraki for Mac offers it under Settings →
+  Background Service → Permissions. Screen Recording, Automation, camera,
+  microphone, … are asked for by macOS the first time an agent uses them.
 
 Agents run as children of Kraki's app bundle (the CLI's `Kraki.app`, or the
 built-in helper inside Kraki for Mac), so macOS attributes their requests to
