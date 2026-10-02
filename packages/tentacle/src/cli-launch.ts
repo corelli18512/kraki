@@ -39,6 +39,34 @@ function nodeFor(shimDir: string): string | undefined {
   }
 }
 
+/**
+ * What an npm `.cmd` shim actually runs: a script (`cli.js`) or a native
+ * `.exe` it wraps (never the `node.exe` it uses to run scripts).
+ */
+export function shimTarget(shim: string): string | undefined {
+  const all = [...shim.matchAll(/"%(?:~)?dp0%?\\([^"]+\.(?:js|mjs|cjs|exe))"/gi)]
+    .map((m) => m[1])
+    .filter((p) => !/(^|\\)node\.exe$/i.test(p));
+  return all.at(-1);
+}
+
+/**
+ * Path for the Claude Agent SDK's `pathToClaudeCodeExecutable`. The SDK runs
+ * `.js` paths with node and spawns anything else directly — without a shell,
+ * so npm's `claude.cmd` fails on Windows (EINVAL). Hand it the script or exe
+ * the shim wraps instead. Other platforms and native installs: unchanged.
+ */
+export function claudeSdkExecutable(cliPath: string | undefined, os = platform(), read = (p: string) => readFileSync(p, 'utf8')): string | undefined {
+  if (!cliPath || os !== 'win32' || !/\.(?:cmd|bat)$/i.test(cliPath)) return cliPath;
+  try {
+    const target = shimTarget(read(cliPath));
+    if (!target) return cliPath;
+    return join(dirname(cliPath), ...target.split(/[\\/]/));
+  } catch {
+    return cliPath;
+  }
+}
+
 const cache = new Map<string, CliLaunch>();
 
 export function cliLaunch(cliPath: string, os = platform()): CliLaunch {

@@ -197,7 +197,7 @@ describe('withRetry()', () => {
       .mockReturnValueOnce({ found: true, version: '1.0' });
 
     // Mock reg query calls that refreshPathOnWindows() makes
-    mockExecSync
+    mockExecFileSync
       .mockReturnValueOnce('    Path    REG_EXPAND_SZ    C:\\Windows\\system32')
       .mockReturnValueOnce('    Path    REG_EXPAND_SZ    C:\\Users\\me\\bin');
 
@@ -205,7 +205,8 @@ describe('withRetry()', () => {
 
     const origPath = process.env.PATH;
     await withRetry(check, 'Test', 'install hint');
-    expect(process.env.PATH).toBe('C:\\Windows\\system32;C:\\Users\\me\\bin');
+    // Registry entries first; what was already on PATH is kept after them.
+    expect(process.env.PATH!.startsWith('C:\\Windows\\system32;C:\\Users\\me\\bin;')).toBe(true);
     process.env.PATH = origPath; // restore
   });
 

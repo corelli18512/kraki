@@ -14,6 +14,7 @@
  *   kraki --version     Show version
  */
 
+import { launchedFromExplorer } from './windows-console.js';
 import chalk from 'chalk';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -43,13 +44,22 @@ ensureWindowsSystemPath();
 // Detect Node.js SEA (Single Executable Application)
 const _isSEA = (() => { try { return require('node:sea').isSea(); } catch { return false; } })();
 
-// Detect double-click on Windows: stdin is TTY but parent is explorer
-const _isWindowsDoubleClick = process.platform === 'win32' && _isSEA && process.stdin.isTTY;
+// Double-clicked kraki.exe gets its own console that closes on exit, hiding
+// the output; pause there. Run from a terminal (cmd, PowerShell, Windows
+// Terminal) it must not wait for a key.
+let _doubleClickCache: boolean | undefined;
+function _isWindowsDoubleClick(): boolean {
+  if (_doubleClickCache === undefined) {
+    _doubleClickCache = process.platform === 'win32' && _isSEA && !!process.stdin.isTTY
+      && launchedFromExplorer(process.env, process.ppid);
+  }
+  return _doubleClickCache === true;
+}
 
 // Graceful exit: on Windows SEA, avoid process.exit() after async work.
 // Instead, schedule exit and let libuv drain.
 function gracefulExit(code: number): void {
-  if (_isWindowsDoubleClick) {
+  if (_isWindowsDoubleClick()) {
     const readline = require('node:readline');
     const rl = readline.createInterface({ input: process.stdin });
     process.stdout.write('\nPress any key to exit...');

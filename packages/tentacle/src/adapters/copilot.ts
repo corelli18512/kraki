@@ -545,6 +545,9 @@ export class CopilotAdapter extends AgentAdapter {
     this.onMessage?.(sessionId, { content, ...this.lifecycleEvent(sessionId) });
   }
 
+  /** session.error reports still deciding whether it is a sign-out. */
+  private pendingErrorReports = new Map<string, Promise<void>>();
+
   private emitError(sessionId: string, message: string): void {
     this.onError?.(sessionId, { message, ...this.lifecycleEvent(sessionId) });
   }
@@ -1820,10 +1823,16 @@ export class CopilotAdapter extends AgentAdapter {
       }
 
       // Flush any buffered prose as the turn's single conclusion bubble
-      // before going idle (draft-bubble model).
-      this.flushConclusion(sessionId);
-      this.emitIdle(sessionId);
-      this.signalFlushComplete(sessionId);
+      // before going idle (draft-bubble model). An error still being
+      // classified must be reported first, or the turn ends looking clean.
+      const finish = () => {
+        this.flushConclusion(sessionId);
+        this.emitIdle(sessionId);
+        this.signalFlushComplete(sessionId);
+      };
+      const pendingError = this.pendingErrorReports.get(sessionId);
+      if (pendingError) void pendingError.finally(finish);
+      else finish();
     });
 
     session.on('assistant.turn_start', () => {
@@ -1844,10 +1853,20 @@ export class CopilotAdapter extends AgentAdapter {
       logger.error({ sessionId, errorType, statusCode: data.statusCode }, `session.error: ${message}`);
       if (!this.turnErrorReported.get(sessionId)) {
         this.turnErrorReported.set(sessionId, true);
-        if (await this.probeRuntime() === 'auth_error') {
-          this.fireAuthError(sessionId, message);
-        } else {
+        const status = typeof data.statusCode === 'number' ? data.statusCode : undefined;
+        // A request the service answered (bad model, rate limit, outage) is
+        // reported as is, at once. Only a possible sign-out needs the probe.
+        if (status !== undefined && status !== 401 && status !== 403) {
           this.emitError(sessionId, message);
+          return;
+        }
+        const report = (async () => {
+          if (await this.probeRuntime() === 'auth_error') this.fireAuthError(sessionId, message);
+          else this.emitError(sessionId, message);
+        })();
+        this.pendingErrorReports.set(sessionId, report);
+        try { await report; } finally {
+          if (this.pendingErrorReports.get(sessionId) === report) this.pendingErrorReports.delete(sessionId);
         }
       }
     });

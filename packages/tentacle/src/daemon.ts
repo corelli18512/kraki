@@ -12,6 +12,7 @@
  * daemon inside the interactive CLI process.
  */
 
+import { killProcessTree } from './process-tree.js';
 import { enableWindowsAutostart } from './windows-autostart.js';
 import { spawn, execSync, execFileSync, type ChildProcess } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, writeFileSync, existsSync, unlinkSync, chmodSync } from 'node:fs';
@@ -383,7 +384,7 @@ async function terminateFailedDaemon(pid: number): Promise<boolean> {
   if (initialIdentity !== 'daemon') return false;
 
   try {
-    process.kill(pid, 'SIGTERM');
+    killProcessTree(pid, 'SIGTERM');
   } catch {
     return true;
   }
@@ -902,7 +903,8 @@ export function stopDaemon(
   };
 
   try {
-    process.kill(pid, 'SIGTERM');
+    // Windows: no catchable signal — end the daemon with its agents at once.
+    killProcessTree(pid, 'SIGTERM');
   } catch {
     // Process already gone.
     clearDaemonPid();
