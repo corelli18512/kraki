@@ -1095,6 +1095,35 @@ final class CommandSender {
         send(["type": "rename_session", "payload": ["title": title]], sessionId: sessionId)
     }
 
+    // MARK: - Archive (F2)
+
+    func archiveSession(sessionId: String, archived: Bool) {
+        send(["type": "archive_session", "payload": ["archived": archived]], sessionId: sessionId)
+    }
+
+    func requestArchivedSessions(targetDeviceId: String) {
+        send(["type": "request_archived_sessions", "targetDeviceId": targetDeviceId, "payload": [:] as [String: Any]])
+    }
+
+    func setAutoArchiveDays(targetDeviceId: String, days: Int) {
+        send(["type": "set_auto_archive_days", "targetDeviceId": targetDeviceId, "payload": ["days": days]])
+    }
+
+    func deleteArchivedSessions(targetDeviceId: String) {
+        appState?.sessionStore.archivedSessions[targetDeviceId] = []
+        send(["type": "delete_archived_sessions", "targetDeviceId": targetDeviceId, "payload": [:] as [String: Any]])
+    }
+
+    /// Restore an archived session and show it right away; the computer's
+    /// next session_list confirms it.
+    func openArchivedSession(_ digest: SessionDigest, deviceId: String) {
+        guard let appState else { return }
+        let name = appState.deviceStore.device(for: deviceId)?.name ?? deviceId
+        appState.sessionStore.upsertSession(digest, deviceId: deviceId, deviceName: name)
+        appState.sessionStore.archivedSessions[deviceId]?.removeAll { $0.id == digest.id }
+        archiveSession(sessionId: digest.id, archived: false)
+    }
+
     func pinSession(sessionId: String, pinned: Bool) {
         guard let appState else { return }
         // Optimistic

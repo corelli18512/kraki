@@ -7,6 +7,7 @@ import { useNarrow } from '../../hooks/useNarrow';
 import { SessionRow } from '../sessions/SessionRow';
 import { NewSessionDialog } from '../sessions/NewSessionDialog';
 import { ImportSessionDialog } from '../sessions/ImportSessionDialog';
+import { ArchivedSessions, useArchivedCount } from '../sessions/ArchivedSessions';
 import { DeviceGrid } from '../devices/DeviceGrid';
 import { SettingsPanel } from './SettingsPanel';
 import { ProfileBar } from './ProfileBar';
@@ -78,8 +79,9 @@ export function Sidebar() {
   const navigate = useNavigate();
   const sorted = useSortedSessions(query);
   const total = useStore((s) => s.sessions.size);
+  const archivedCount = useArchivedCount();
 
-  const list = total === 0
+  const list = total === 0 && archivedCount === 0
     ? <EmptySessions onNew={() => setNewOpen(true)} onImport={() => setImportOpen(true)} />
     : (
       <div className="ksb-list" role="list">
@@ -94,7 +96,8 @@ export function Sidebar() {
             setOpenSwipeId={setOpenSwipeId}
           />
         ))}
-        {sorted.length === 0 && <p className="ksb-noresults">No sessions match “{query}”.</p>}
+        {sorted.length === 0 && query && <p className="ksb-noresults">No sessions match “{query}”.</p>}
+        {!query && <ArchivedSessions />}
       </div>
     );
 

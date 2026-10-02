@@ -56,6 +56,14 @@ struct KrakiApp: App {
         return selectedScheme.colorScheme
     }
 
+    private var pairingPromptTitle: String {
+        switch appState.pendingPairingPrompt {
+        case .confirmRelay: return "Connect to a Self-Hosted Server?"
+        case .alreadyConnected: return "Already Connected"
+        case nil: return ""
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             Group {
@@ -127,6 +135,52 @@ struct KrakiApp: App {
             }
             .environment(appState)
             .preferredColorScheme(effectiveColorScheme)
+            // Pairing QR scanned with the iPhone Camera (universal link) or
+            // any other way the app is opened with a pairing URL.
+            .onOpenURL { url in
+                if let link = PairingLink(url: url) { appState.openPairingLink(link) }
+            }
+            .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                if let url = activity.webpageURL, let link = PairingLink(url: url) {
+                    appState.openPairingLink(link)
+                }
+            }
+            .alert(
+                "Computer Key Changed",
+                isPresented: Binding(
+                    get: { appState.keyWarning != nil && appState.pendingPairingPrompt == nil },
+                    set: { if !$0, let ids = appState.keyWarning?.ids { appState.acknowledgedKeyWarnings.formUnion(ids) } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(appState.keyWarning?.message ?? "")
+            }
+            .alert(
+                pairingPromptTitle,
+                isPresented: Binding(
+                    get: { appState.pendingPairingPrompt != nil },
+                    set: { if !$0 { appState.pendingPairingPrompt = nil } }
+                ),
+                presenting: appState.pendingPairingPrompt
+            ) { prompt in
+                switch prompt {
+                case .confirmRelay(let link):
+                    Button("Connect") { appState.openPairingLink(link, relayConfirmed: true) }
+                    Button("Cancel", role: .cancel) { appState.pendingPairingPrompt = nil }
+                case .alreadyConnected(let link, _):
+                    Button("Log Out and Connect", role: .destructive) { appState.logoutAndPair(link) }
+                    Button("Keep Current", role: .cancel) { appState.pendingPairingPrompt = nil }
+                }
+            } message: { prompt in
+                switch prompt {
+                case .confirmRelay(let link):
+                    Text("This code connects to \(link.relayHost), which is not a Kraki server. Continue only if you set up this server yourself.")
+                case .alreadyConnected(_, let login):
+                    Text(login.map { "This iPhone is already connected as \($0). To connect a different account, log out first." }
+                        ?? "This iPhone is already connected. To connect a different account, log out first.")
+                }
+            }
         }
     }
 }

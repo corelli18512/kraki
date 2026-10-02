@@ -932,14 +932,21 @@ struct MessageInputView: View {
             return
         }
 
-        let maxDimension: CGFloat = 1024
+        // Pixels, not points: the default renderer format uses the screen
+        // scale (3x), which turned a "1024" limit into 3072 px images.
+        // 1568 px is the long side vision models use without downscaling.
+        let maxDimension: CGFloat = 1568
         let maxSize = 3 * 1024 * 1024
 
         var targetImage = uiImage
-        if uiImage.size.width > maxDimension || uiImage.size.height > maxDimension {
-            let scale = maxDimension / max(uiImage.size.width, uiImage.size.height)
-            let newSize = CGSize(width: uiImage.size.width * scale, height: uiImage.size.height * scale)
-            let renderer = UIGraphicsImageRenderer(size: newSize)
+        let pixelWidth = uiImage.size.width * uiImage.scale
+        let pixelHeight = uiImage.size.height * uiImage.scale
+        if pixelWidth > maxDimension || pixelHeight > maxDimension {
+            let ratio = maxDimension / max(pixelWidth, pixelHeight)
+            let newSize = CGSize(width: (pixelWidth * ratio).rounded(), height: (pixelHeight * ratio).rounded())
+            let format = UIGraphicsImageRendererFormat.default()
+            format.scale = 1
+            let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
             targetImage = renderer.image { _ in uiImage.draw(in: CGRect(origin: .zero, size: newSize)) }
         }
 

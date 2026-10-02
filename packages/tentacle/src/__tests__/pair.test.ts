@@ -44,3 +44,14 @@ describe('Pairing', () => {
     });
   });
 });
+
+describe('pairing QR key fingerprint (release review D4)', () => {
+  it('adds a short fingerprint of the computer key', async () => {
+    const { buildPairingUrl, keyFingerprint } = await import('../pair.js');
+    const url = new URL(buildPairingUrl({ relay: 'wss://relay.kraki.chat', pairingToken: 'pt_1', publicKey: 'MIIBIjANBgkq', expiresIn: 300 }, 'https://app.kraki.chat'));
+    expect(url.searchParams.get('fp')).toBe(keyFingerprint('MIIBIjANBgkq'));
+    expect(keyFingerprint('MIIBIjANBgkq')).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    // Same algorithm as iOS DeviceKeyPins.fingerprint.
+    expect(keyFingerprint('abc')).toBe('ungWv48Bz-pBQUDeXa4iIw');
+  });
+});

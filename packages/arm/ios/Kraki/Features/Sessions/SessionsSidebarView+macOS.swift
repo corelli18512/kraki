@@ -246,7 +246,7 @@ struct SessionsSidebarView: View {
                 Divider().foregroundStyle(Color.borderPrimary)
             }
 
-            if filteredSessions.isEmpty {
+            if filteredSessions.isEmpty && !(showsArchived && appState.sessionStore.archivedCount > 0) {
                 emptyState
             } else {
                 sessionList
@@ -307,6 +307,11 @@ struct SessionsSidebarView: View {
 
     // MARK: - Session list
 
+    /// The archived group only makes sense for the unfiltered list.
+    private var showsArchived: Bool {
+        selectedDeviceFilter == nil && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var filteredSessionIDs: [String] {
         filteredSessions.map(\.id)
     }
@@ -318,6 +323,11 @@ struct SessionsSidebarView: View {
                     ForEach(filteredSessions) { session in
                         sidebarRow(for: session)
                             .id(session.id)
+                    }
+                    if showsArchived {
+                        ArchivedSessionsSection { sessionId in
+                            selectedSessionId = sessionId
+                        }
                     }
                 }
                 .padding(.vertical, 4)

@@ -282,6 +282,7 @@ targets:
       - path: Kraki/Shared/NavigationIDs.swift
       - path: Kraki/Shared/ToolStatusIcon.swift
       - path: Kraki/Shared/PermissionDiffPreview.swift
+      - path: Kraki/Shared/DiagnosticsSummary.swift
       # AppState is platformized (push + willTerminate guarded).
       - path: Kraki/App/AppState.swift
       # Mac-only app shell, scenes, commands.
@@ -293,6 +294,7 @@ targets:
       # chat placeholder, pairing). Their iOS analogues stay iOS-only — the
       # macOS chat surface will be rewritten against the pure-spine model.
       - path: Kraki/Features/Sessions/SessionsSidebarView+macOS.swift
+      - path: Kraki/Features/Sessions/ArchivedSessionsView.swift
       - path: Kraki/Features/Sessions/NewSessionSheet+macOS.swift
       - path: Kraki/Features/Sessions/NoAgentsGuide.swift
       - path: Kraki/Features/Sessions/SessionCardView.swift
@@ -316,6 +318,7 @@ targets:
       - path: Kraki/Features/Usage
       - path: Kraki/Features/Chat/ChatPlaceholderView+macOS.swift
       - path: Kraki/Features/Pairing/PairingSheet+macOS.swift
+      - path: Kraki/Features/Pairing/PairingLink.swift
       # Asset catalog (iOS universal icon + macOS icon sizes).
       - path: Kraki/Resources/Assets.xcassets
       # Client-side Mermaid runtime for show_report (MIT; see LICENSE-mermaid.txt).

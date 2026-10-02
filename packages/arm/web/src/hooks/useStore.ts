@@ -70,6 +70,8 @@ const initialState = {
   pendingSessions: new Set<string>(),
   localSessions: [],
   localSessionsLoading: false,
+  archiveInfo: new Map<string, { count: number; days: number }>(),
+  archivedSessions: new Map<string, import('@kraki/protocol').SessionDigest[]>(),
 };
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -421,6 +423,18 @@ export const useStore = create<Store>()(persist((set) => ({
   setLocalSessions: (sessions) => set({ localSessions: sessions }),
 
   setLocalSessionsLoading: (loading) => set({ localSessionsLoading: loading }),
+  setArchiveInfo: (deviceId, info) => set((state) => {
+    const prev = state.archiveInfo.get(deviceId);
+    if (prev && prev.count === info.count && prev.days === info.days) return {};
+    const next = new Map(state.archiveInfo);
+    next.set(deviceId, info);
+    return { archiveInfo: next };
+  }),
+  setArchivedSessions: (deviceId, sessions) => set((state) => {
+    const next = new Map(state.archivedSessions);
+    next.set(deviceId, sessions);
+    return { archivedSessions: next };
+  }),
 
   prependMessages: (sessionId, older) => {
     // Range batches are authoritative for their session seqs. Besides normal

@@ -14,7 +14,7 @@
  */
 
 import { platform } from 'node:os';
-import { getKrakiHome, loadConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady, clearDaemonIdentity } from './config.js';
+import { getKrakiHome, loadConfig, saveConfig, loadChannelKey, getOrCreateDeviceId, getConfigPath, getChannelKeyPath, getVersion, saveDaemonPid, saveDaemonReady, clearDaemonReady, clearDaemonIdentity } from './config.js';
 import { ensureWindowsSystemPath, probeFda, ensureTccBundleRegistered, cleanupStaleBundleEntries } from './checks.js';
 import { MultiAgentAdapter } from './adapters/multi.js';
 
@@ -318,6 +318,11 @@ export async function startWorker(): Promise<WorkerResult> {
       token,
       reconnectDelay: 1000,
       version: getVersion(),
+      autoArchiveDays: config.autoArchiveDays,
+      saveAutoArchiveDays: (days) => {
+        const latest = loadConfig();
+        if (latest) saveConfig({ ...latest, autoArchiveDays: days });
+      },
     },
     keyManager,
     attachmentStore,

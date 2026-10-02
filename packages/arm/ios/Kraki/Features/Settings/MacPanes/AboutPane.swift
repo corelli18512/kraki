@@ -5,6 +5,8 @@ import SwiftUI
 
 struct AboutPane: View {
     @Environment(TentacleCLIManager.self) private var tentacleCLI
+    @Environment(AppState.self) private var appState
+    @State private var copied = false
 
     private var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -43,18 +45,27 @@ struct AboutPane: View {
             }
 
             VStack(spacing: 3) {
-                versionRow("Mac App",  value: "\(version) (\(build))")
                 versionRow("Background Service", value: tentacleVersion)
-                versionRow("Relay",    value: "kraki.chat")
+                ForEach(DiagnosticsSummary.rows(appState: appState), id: \.label) { row in
+                    versionRow(row.label, value: row.value)
+                }
             }
             .padding(.top, 6)
+
+            Button(copied ? "Copied" : "Copy Diagnostics") {
+                let text = "Background Service: \(tentacleVersion)\n" + DiagnosticsSummary.text(appState: appState)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                copied = true
+            }
+            .controlSize(.small)
 
             Divider().frame(width: 220).padding(.vertical, 6)
 
             HStack(spacing: 16) {
                 Link("Website",       destination: URL(string: "https://kraki.chat")!)
                 Link("Documentation", destination: URL(string: "https://kraki.chat/docs")!)
-                Link("GitHub",        destination: URL(string: "https://github.com/kraki/kraki")!)
+                Link("GitHub",        destination: URL(string: "https://github.com/corelli18512/kraki")!)
             }
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(Color.krakiPrimary)
@@ -76,7 +87,8 @@ struct AboutPane: View {
                 .font(.system(size: 9, weight: .heavy, design: .monospaced))
                 .tracking(0.5)
                 .foregroundStyle(Color.textMuted)
-                .frame(width: 70, alignment: .trailing)
+                .lineLimit(1)
+                .frame(width: 150, alignment: .trailing)
             Text(value)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(Color.textSecondary)

@@ -292,6 +292,10 @@ struct SessionDigest: Codable, Identifiable, Sendable {
     /// meaningful message's text, type, and timestamp so the arm can
     /// paint the sidebar with zero replay round-trips.
     var preview: SessionPreview? = nil
+    /// Only set in `archived_session_list` (F2).
+    var archived: Bool? = nil
+    /// When the last message was written (ISO 8601).
+    var lastActivityAt: String? = nil
 }
 
 // MARK: - Device Types
@@ -373,3 +377,6 @@ struct ContentRef: Codable, Equatable, Sendable {
         )
     }
 }
+
+/// Navigation value for the archived-sessions page (iOS, F2).
+struct ArchivedNavID: Hashable {}

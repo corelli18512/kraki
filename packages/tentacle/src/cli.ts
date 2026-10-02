@@ -437,6 +437,10 @@ function cmdStatus(jsonOutput = false): void {
     const link = relay === 'connected' ? chalk.green(', connected')
       : relay ? chalk.yellow(`, ${relay}`) : '';
     console.log(`  Status:  ${chalk.green('running')}${link} ${chalk.dim(`(PID ${status.pid}${owner})`)}`);
+    const daemonVersion = statusFile?.version;
+    if (daemonVersion && daemonVersion !== getVersion()) {
+      console.log(chalk.yellow(`  Running: ${daemonVersion} (installed ${getVersion()}; run \`kraki restart\` to switch)`));
+    }
   } else {
     console.log(`  Status:  ${chalk.yellow('stopped')}${owner}`);
   }

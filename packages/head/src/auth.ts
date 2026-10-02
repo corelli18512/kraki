@@ -26,9 +26,20 @@ export interface AuthSuccess {
 export interface AuthFailure {
   ok: false;
   message: string;
+  /**
+   * The credential was not judged — the identity provider was unreachable or
+   * failing (network error, 5xx, rate limit). Clients should retry, not treat
+   * it as a rejected login.
+   */
+  retryable?: boolean;
 }
 
 export type AuthOutcome = AuthSuccess | AuthFailure;
+
+/** GitHub answered, but not about the token: outage or rate limit. */
+function isRetryableStatus(status: number): boolean {
+  return status >= 500 || status === 429;
+}
 
 /**
  * Abstract auth provider. Extend this to support different auth methods.
@@ -106,7 +117,7 @@ export class GitHubAuthProvider implements AuthProvider {
   async exchangeCode(
     code: string,
     opts?: { codeVerifier?: string; redirectUri?: string },
-  ): Promise<{ ok: true; token: string } | { ok: false; message: string }> {
+  ): Promise<{ ok: true; token: string } | { ok: false; message: string; retryable?: boolean }> {
     if (!this.clientId || !this.clientSecret) {
       return { ok: false, message: 'GitHub OAuth not configured (missing client_id/client_secret)' };
     }
@@ -130,7 +141,7 @@ export class GitHubAuthProvider implements AuthProvider {
       });
 
       if (!res.ok) {
-        return { ok: false, message: `GitHub OAuth token exchange returned ${res.status}` };
+        return { ok: false, message: `GitHub OAuth token exchange returned ${res.status}`, retryable: isRetryableStatus(res.status) };
       }
 
       const data = await res.json() as Record<string, unknown>;
@@ -143,7 +154,7 @@ export class GitHubAuthProvider implements AuthProvider {
 
       return { ok: true, token: data.access_token };
     } catch (err) {
-      return { ok: false, message: `GitHub OAuth exchange failed: ${(err as Error).message}` };
+      return { ok: false, message: `GitHub OAuth exchange failed: ${(err as Error).message}`, retryable: true };
     }
   }
 
@@ -157,7 +168,7 @@ export class GitHubAuthProvider implements AuthProvider {
         redirectUri: credentials.redirectUri,
       });
       if (!exchange.ok) {
-        return { ok: false, message: exchange.message };
+        return { ok: false, message: exchange.message, retryable: exchange.retryable };
       }
       token = exchange.token;
     }
@@ -177,7 +188,7 @@ export class GitHubAuthProvider implements AuthProvider {
 
       if (!res.ok) {
         getLogger().warn('GitHub auth failed', { status: res.status, ip: credentials.ip });
-        return { ok: false, message: `GitHub API returned ${res.status}` };
+        return { ok: false, message: `GitHub API returned ${res.status}`, retryable: isRetryableStatus(res.status) };
       }
 
       const data = await res.json() as Record<string, unknown>;
@@ -189,7 +200,7 @@ export class GitHubAuthProvider implements AuthProvider {
         user: { id: String(data.id), login: String(data.login), provider: 'github', email: typeof data.email === 'string' ? data.email : undefined },
       };
     } catch (err) {
-      return { ok: false, message: `GitHub API request failed: ${(err as Error).message}` };
+      return { ok: false, message: `GitHub API request failed: ${(err as Error).message}`, retryable: true };
     }
   }
 }

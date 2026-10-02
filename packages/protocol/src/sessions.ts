@@ -113,6 +113,11 @@ export interface SessionDigest {
   createdAt: string;
   usage?: SessionUsage;
   pinned?: boolean;
+  /** Set only in `archived_session_list`: the session is archived and left
+   *  out of `session_list`. */
+  archived?: boolean;
+  /** When the last message was written (ISO). Used for archive listings. */
+  lastActivityAt?: string;
   /** Origin of this session. Absent for sessions created natively in Kraki. */
   source?: LocalSessionSource | 'imported';
   /** Sidebar preview computed by tentacle from the last few messages. An open

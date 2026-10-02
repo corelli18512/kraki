@@ -8,6 +8,7 @@ import { DevicesPage } from './pages/DevicesPage';
 import { useTheme } from './hooks/useTheme';
 import { trackVisualViewport } from './lib/visual-viewport';
 import './index.css';
+import { decidePairingLink, renderPairingInterstitial } from './lib/pairing-link';
 
 // Self-service channel switch: ?channel=beta or ?channel=stable
 // Sets cookie and reloads before React mounts.
@@ -41,8 +42,14 @@ function Root() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <Root />
-  </StrictMode>,
-);
+const rootElement = document.getElementById('root')!;
+// Pairing QR opened in a browser: on iPhone offer the app first (don't spend
+// the single-use token), and confirm any non-Kraki relay before connecting.
+const pairingDecision = decidePairingLink(window.location.search, navigator.userAgent, navigator.maxTouchPoints);
+if (!renderPairingInterstitial(pairingDecision, rootElement)) {
+  createRoot(rootElement).render(
+    <StrictMode>
+      <Root />
+    </StrictMode>,
+  );
+}

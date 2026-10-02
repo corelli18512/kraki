@@ -105,7 +105,15 @@ export interface RelayClientOptions {
   maxReconnects?: number;
   /** Tentacle version string (included in device_greeting) */
   version?: string;
+  /** Days without messages before an unpinned session is archived; 0 = never.
+   *  Default 14 (F2). */
+  autoArchiveDays?: number;
+  /** Persist a new auto-archive setting chosen from an app. */
+  saveAutoArchiveDays?: (days: number) => void;
 }
+
+export const DEFAULT_AUTO_ARCHIVE_DAYS = 14;
+const AUTO_ARCHIVE_SWEEP_MS = 6 * 3600_000;
 
 export type RelayClientState = 'disconnected' | 'connecting' | 'authenticating' | 'connected';
 
@@ -823,7 +831,7 @@ export class RelayClient {
 
   /** Rehydrate open questions (answer routing) before session-list snapshots. */
   private restorePendingHumanActions(): void {
-    for (const meta of this.sessionManager.getSessionList()) {
+    for (const meta of this.sessionManager.getSessionList({ all: true })) {
       const pending = this.sessionManager.getPendingHumanAction(meta.id);
       if (!pending) continue;
       let map = this.openQuestions.get(meta.id);
@@ -1058,6 +1066,19 @@ export class RelayClient {
   /**
    * Disconnect from the relay. No reconnect.
    */
+  private lastAutoArchiveAt = 0;
+
+  /** Called from the 5s stale-check tick; sweeps at most every 6 hours. */
+  private maybeAutoArchive(now: number): void {
+    if (now - this.lastAutoArchiveAt < AUTO_ARCHIVE_SWEEP_MS) return;
+    this.lastAutoArchiveAt = now;
+    try {
+      if (this.runAutoArchive(now)) this.broadcastSessionList();
+    } catch (err) {
+      logger.warn({ err }, 'Auto-archive sweep failed');
+    }
+  }
+
   disconnect(): void {
     this.intentionalDisconnect = true;
     this.sleepGuard.stop();
@@ -1116,6 +1137,8 @@ export class RelayClient {
       this.resumeDisconnectedSessions();
       this.sendGreetingBroadcast();
       this.broadcastAccountUsage();
+      this.runAutoArchive();
+      this.lastAutoArchiveAt = Date.now();
       this.broadcastSessionList();
       return;
     }
@@ -1352,6 +1375,7 @@ export class RelayClient {
     // set_session_subscription — atomically replace this Arm's one current
     // session and return the bounded live-ready snapshot in the ACK.
     if (msg.type === 'set_session_subscription') {
+      if (msg.payload.sessionId && isSafeId(msg.payload.sessionId)) this.unarchiveOnUse(msg.payload.sessionId);
       this.handleSetSessionSubscription(msg.deviceId, msg.payload.sessionId);
       return;
     }
@@ -1382,6 +1406,20 @@ export class RelayClient {
       return;
     }
 
+    // ── Archive (no sessionId) ───────────────────────────
+    if (msg.type === 'request_archived_sessions') {
+      this.handleRequestArchivedSessions(msg.deviceId, msg.payload?.requestId);
+      return;
+    }
+    if (msg.type === 'set_auto_archive_days') {
+      this.handleSetAutoArchiveDays(msg.payload?.days);
+      return;
+    }
+    if (msg.type === 'delete_archived_sessions') {
+      this.handleDeleteArchivedSessions();
+      return;
+    }
+
     // ── Local session sync (no sessionId) ────────────────
     if (msg.type === 'request_local_sessions') {
       this.handleRequestLocalSessions(msg);
@@ -1408,7 +1446,15 @@ export class RelayClient {
     if (!sessionId) return;
 
     try {
+      if (msg.type === 'send_input' && isSafeId(sessionId)) this.unarchiveOnUse(sessionId);
       switch (msg.type) {
+        case 'archive_session': {
+          const archived = msg.payload.archived === true;
+          // A running session stays in the list.
+          if (archived && this.sessionManager.getSessionList({ all: true }).find((s) => s.id === sessionId)?.state === 'active') break;
+          if (this.sessionManager.setArchived(sessionId, archived)) this.broadcastSessionList();
+          break;
+        }
         case 'send_input': {
           const clientId = msg.payload.clientId as string | undefined;
           const requestedDelivery = msg.payload.delivery === 'steer' ? 'steer' as const : 'prompt' as const;
@@ -1701,26 +1747,7 @@ export class RelayClient {
           break;
         }
         case 'delete_session':
-          // Remove from local session state SYNCHRONOUSLY. The adapter's
-          // killSession runs async and may take a while to talk to the
-          // Copilot SDK; we don't want broadcastSessionList to see
-          // the still-tracked session and broadcast it back to arms.
-          this.sessionManager.removeLinkByKrakiId(sessionId);
-          this.sessionManager.deleteSession(sessionId);
-          this.lastAgentContent.delete(sessionId);
-          this.pendingTerminalErrors.delete(sessionId);
-          this.settledAdapterTurnIds.delete(sessionId);
-          this.activeInputTurnIds.delete(sessionId);
-          this.nextInputTurnAnchors.delete(sessionId);
-          this.purgeSessionToolState(sessionId);
-          this.send({ type: 'session_deleted', sessionId, payload: {} });
-          this.eventsWatcher?.unwatch(sessionId);
-          // The agent's last writes (transcript, sidecar) can land after the
-          // first removal; remove again once the process is gone so no
-          // half-session directory is left behind.
-          this.adapter.killSession(sessionId)
-            .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'))
-            .finally(() => this.sessionManager.deleteSession(sessionId));
+          this.deleteSessionEverywhere(sessionId);
           break;
         case 'mark_read': {
           const readSeq = this.sessionManager.markRead(sessionId, msg.payload.seq);
@@ -1937,7 +1964,7 @@ export class RelayClient {
       }
 
       // Exclude sessions that Kraki manages (natively created or imported)
-      const krakiSessionIds = new Set(this.sessionManager.getSessionList().map(s => s.id));
+      const krakiSessionIds = new Set(this.sessionManager.getSessionList({ all: true }).map(s => s.id));
       sessions = sessions.filter(s => !krakiSessionIds.has(s.sessionId) || s.linkedKrakiSessionId);
 
       // Apply filters
@@ -2691,7 +2718,7 @@ export class RelayClient {
       deviceId: this.authInfo?.deviceId ?? '',
       seq: ++this.seqCounter,
       timestamp: new Date().toISOString(),
-      payload: { sessions },
+      payload: this.sessionListPayload(sessions),
     };
     this.sendReliableUnicastTo(targetDeviceId, compactPubKey, msg);
   }
@@ -2706,8 +2733,92 @@ export class RelayClient {
       deviceId: this.authInfo?.deviceId ?? '',
       seq: ++this.seqCounter,
       timestamp: new Date().toISOString(),
-      payload: { sessions },
+      payload: this.sessionListPayload(sessions),
     } as ProducerMessage);
+  }
+
+  private sessionListPayload<T>(sessions: T[]): { sessions: T[]; archivedCount: number; autoArchiveDays: number } {
+    return {
+      sessions,
+      archivedCount: this.sessionManager.countArchived(),
+      autoArchiveDays: this.autoArchiveDays,
+    };
+  }
+
+  // ── Archive (F2) ────────────────────────────────────
+
+  private get autoArchiveDays(): number {
+    return this.options.autoArchiveDays ?? DEFAULT_AUTO_ARCHIVE_DAYS;
+  }
+
+  /** Archive sessions idle past the configured days; true if any changed. */
+  runAutoArchive(now = Date.now()): boolean {
+    const keep = (id: string) =>
+      this.openPermissions.get(id)?.size ? true
+        : this.openQuestions.get(id)?.size ? true
+          : this.compactingSessions.has(id);
+    const archived = this.sessionManager.autoArchive(this.autoArchiveDays, keep, now);
+    if (archived.length) logger.info({ count: archived.length, days: this.autoArchiveDays }, 'Auto-archived inactive sessions');
+    return archived.length > 0;
+  }
+
+  /** Opening or writing to an archived session brings it back (F2). */
+  private unarchiveOnUse(sessionId: string): void {
+    if (this.sessionManager.setArchived(sessionId, false)) this.broadcastSessionList();
+  }
+
+  private handleRequestArchivedSessions(requesterDeviceId: string, requestId?: string): void {
+    const sessions = this.sessionManager.getSessionList({ archived: true });
+    const response = {
+      type: 'archived_session_list',
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: { sessions, ...(requestId && { requestId }) },
+    };
+    const requesterKey = this.consumerKeys.get(requesterDeviceId);
+    if (requesterKey) this.sendReliableUnicastTo(requesterDeviceId, requesterKey, response);
+    else this.send(response as Partial<ProducerMessage>);
+  }
+
+  /** Delete a session's files, live state and agent process. */
+  private deleteSessionEverywhere(sessionId: string): void {
+    // Remove from local session state SYNCHRONOUSLY. The adapter's
+    // killSession runs async and may take a while to talk to the
+    // Copilot SDK; we don't want broadcastSessionList to see
+    // the still-tracked session and broadcast it back to arms.
+    this.sessionManager.removeLinkByKrakiId(sessionId);
+    this.sessionManager.deleteSession(sessionId);
+    this.lastAgentContent.delete(sessionId);
+    this.pendingTerminalErrors.delete(sessionId);
+    this.settledAdapterTurnIds.delete(sessionId);
+    this.activeInputTurnIds.delete(sessionId);
+    this.nextInputTurnAnchors.delete(sessionId);
+    this.purgeSessionToolState(sessionId);
+    this.send({ type: 'session_deleted', sessionId, payload: {} });
+    this.eventsWatcher?.unwatch(sessionId);
+    // The agent's last writes (transcript, sidecar) can land after the
+    // first removal; remove again once the process is gone so no
+    // half-session directory is left behind.
+    this.adapter.killSession(sessionId)
+      .catch((err) => logger.error({ err, sessionId }, 'killSession on delete failed'))
+      .finally(() => this.sessionManager.deleteSession(sessionId));
+  }
+
+  /** Delete every archived session (Settings → Delete archived sessions). */
+  private handleDeleteArchivedSessions(): void {
+    const ids = this.sessionManager.getSessionList({ archived: true }).map((s) => s.id);
+    for (const id of ids) this.deleteSessionEverywhere(id);
+    logger.info({ count: ids.length }, 'Deleted archived sessions');
+    this.broadcastSessionList();
+  }
+
+  private handleSetAutoArchiveDays(days: unknown): void {
+    if (typeof days !== 'number' || !Number.isInteger(days) || days < 0 || days > 3650) return;
+    this.options.autoArchiveDays = days;
+    try { this.options.saveAutoArchiveDays?.(days); } catch (err) { logger.warn({ err }, 'Could not save auto-archive setting'); }
+    this.runAutoArchive();
+    this.broadcastSessionList();
   }
 
   /** Override each digest's `preview` with the live open question (if any) so a
@@ -3866,6 +3977,7 @@ export class RelayClient {
       const now = Date.now();
       // Drive pulse heartbeat + liveness (5s tick, finer than 15s heartbeat).
       this.pulse.tick();
+      this.maybeAutoArchive(now);
       // Tick instrumentation: detect timer drift / event-loop block
       if (this.staleCheckLastTickAt > 0) {
         const tickDrift = now - this.staleCheckLastTickAt - RelayClient.STALE_CHECK_INTERVAL;

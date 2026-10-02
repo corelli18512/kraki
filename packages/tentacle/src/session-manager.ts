@@ -6,7 +6,7 @@
  * This is the tentacle's local intelligence layer.
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync, appendFileSync, openSync, readSync, closeSync, cpSync, fstatSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync, appendFileSync, openSync, readSync, closeSync, cpSync, fstatSync, statSync } from 'node:fs';
 import { DEFAULT_SESSION_MODE, normalizeSessionMode, toWireSessionMode } from '@kraki/protocol';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -121,6 +121,28 @@ export interface SessionContext {
 
 export type SessionMode = import('@kraki/protocol').SessionMode;
 
+/** One session_list entry (a SessionDigest without live overlays). */
+export interface SessionListEntry {
+  id: string;
+  agent: string;
+  model?: string;
+  reasoningEffort?: import('@kraki/protocol').ReasoningEffort;
+  title?: string;
+  autoTitle?: string;
+  state: 'active' | 'idle';
+  mode: import('@kraki/protocol').WireSessionMode;
+  pinned?: boolean;
+  archived?: boolean;
+  lastSeq: number;
+  readSeq: number;
+  messageCount: number;
+  createdAt: string;
+  lastActivityAt?: string;
+  usage?: import('@kraki/protocol').SessionUsage;
+  source?: import('@kraki/protocol').LocalSessionSource | 'imported';
+  preview?: import('@kraki/protocol').SessionPreviewDigest;
+}
+
 export interface SessionMeta {
   id: string;
   agent: string;
@@ -131,6 +153,8 @@ export interface SessionMeta {
   state: 'active' | 'idle' | 'ended' | 'disconnected';
   mode: SessionMode;
   pinned?: boolean;
+  /** Archived: left out of session_list until opened or written to (F2). */
+  archived?: boolean;
   currentRunId: string;
   totalRuns: number;
   lastSeq: number;
@@ -583,6 +607,49 @@ export class SessionManager {
     meta.pinned = pinned || undefined;
     meta.updatedAt = new Date().toISOString();
     this.writeMeta(sessionId, meta);
+  }
+
+  /** Archive or unarchive a session. Returns true when the flag changed. */
+  setArchived(sessionId: string, archived: boolean): boolean {
+    const meta = this.readMeta(sessionId);
+    if (!meta || !!meta.archived === archived) return false;
+    meta.archived = archived || undefined;
+    meta.updatedAt = new Date().toISOString();
+    this.writeMeta(sessionId, meta);
+    return true;
+  }
+
+  isArchived(sessionId: string): boolean {
+    return this.readMeta(sessionId)?.archived === true;
+  }
+
+  /**
+   * Archive sessions with no new messages for `days` days (F2). Pinned,
+   * running and `keep` sessions are left alone. Returns the archived ids.
+   */
+  autoArchive(days: number, keep: (sessionId: string) => boolean = () => false, now = Date.now()): string[] {
+    if (!(days > 0) || !existsSync(this.sessionsDir)) return [];
+    const cutoff = now - days * 24 * 3600_000;
+    const archived: string[] = [];
+    for (const dir of readdirSync(this.sessionsDir)) {
+      if (!isSafeId(dir)) continue;
+      const meta = this.readMeta(dir);
+      if (!meta || meta.archived || meta.pinned || meta.state === 'active') continue;
+      if (this.lastActivityMs(dir, meta) >= cutoff || keep(dir)) continue;
+      meta.archived = true;
+      this.writeMeta(dir, meta);
+      archived.push(dir);
+    }
+    return archived;
+  }
+
+  /** Last time a message was written (log mtime), else creation time. */
+  private lastActivityMs(sessionId: string, meta: SessionMeta): number {
+    try {
+      return statSync(join(this.sessionDir(sessionId), 'messages.jsonl')).mtimeMs;
+    } catch {
+      return Date.parse(meta.createdAt) || 0;
+    }
   }
 
   /**
@@ -1180,59 +1247,80 @@ export class SessionManager {
   }
 
   /**
-   * Get digests for all existing sessions (for session_list sync).
+   * Digests for session_list sync. Archived sessions are left out unless
+   * `archived: true` asks for only them (F2). Digests are cached per session
+   * and rebuilt only when its meta or message log changes, so a session list
+   * no longer re-reads every session's history each time.
    */
-  getSessionList(): Array<{
-    id: string;
-    agent: string;
-    model?: string;
-    reasoningEffort?: import('@kraki/protocol').ReasoningEffort;
-    title?: string;
-    autoTitle?: string;
-    state: 'active' | 'idle';
-    mode: import('@kraki/protocol').WireSessionMode;
-    pinned?: boolean;
-    lastSeq: number;
-    readSeq: number;
-    messageCount: number;
-    createdAt: string;
-    usage?: import('@kraki/protocol').SessionUsage;
-    source?: import('@kraki/protocol').LocalSessionSource | 'imported';
-    preview?: import('@kraki/protocol').SessionPreviewDigest;
-  }> {
-    const result: ReturnType<SessionManager['getSessionList']> = [];
+  getSessionList(opts: { archived?: boolean; all?: boolean } = {}): SessionListEntry[] {
+    const result: SessionListEntry[] = [];
     if (!existsSync(this.sessionsDir)) return result;
+    const seen = new Set<string>();
 
     for (const dir of readdirSync(this.sessionsDir)) {
-      const meta = this.readMeta(dir);
-      if (!meta) continue;
-
-      // Map 'disconnected' to 'idle' for external consumers
-      const state: 'active' | 'idle' = meta.state === 'active' ? 'active' : 'idle';
-
-      result.push({
-        id: meta.id,
-        agent: meta.agent,
-        model: meta.model ? toWellFormedText(meta.model) : undefined,
-        reasoningEffort: meta.reasoningEffort,
-        title: meta.title ? toWellFormedText(meta.title) : undefined,
-        autoTitle: meta.autoTitle ? toWellFormedText(meta.autoTitle) : undefined,
-        state,
-        mode: toWireSessionMode(meta.mode),
-        pinned: meta.pinned || undefined,
-        lastSeq: meta.lastSeq ?? 0,
-        readSeq: meta.readSeq ?? 0,
-        messageCount: meta.lastSeq ?? 0,
-        createdAt: meta.createdAt,
-        usage: meta.usage,
-        source: meta.source,
-        preview: (() => {
-          const preview = this.getSessionPreview(meta.id);
-          return preview ? { ...preview, text: toWellFormedText(preview.text) } : undefined;
-        })(),
-      });
+      if (!isSafeId(dir)) continue;
+      const stamp = this.digestStamp(dir);
+      if (!stamp) continue;
+      seen.add(dir);
+      let cached = this.digestCache.get(dir);
+      if (!cached || cached.stamp !== stamp) {
+        const meta = this.readMeta(dir);
+        if (!meta) { this.digestCache.delete(dir); continue; }
+        cached = { stamp, archived: meta.archived === true, entry: this.buildDigest(meta) };
+        this.digestCache.set(dir, cached);
+      }
+      if (!opts.all && cached.archived !== (opts.archived === true)) continue;
+      result.push(opts.archived ? { ...cached.entry, archived: true } : cached.entry);
     }
+    for (const id of this.digestCache.keys()) if (!seen.has(id)) this.digestCache.delete(id);
     return result;
+  }
+
+  /** Number of archived sessions (cheap after a getSessionList call). */
+  countArchived(): number {
+    return this.getSessionList({ archived: true }).length;
+  }
+
+  private digestCache = new Map<string, { stamp: string; archived: boolean; entry: SessionListEntry }>();
+
+  private digestStamp(sessionId: string): string | null {
+    const dir = join(this.sessionsDir, sessionId);
+    try {
+      const meta = statSync(join(dir, 'meta.json'));
+      let log = '0:0';
+      try {
+        const st = statSync(join(dir, 'messages.jsonl'));
+        log = `${st.mtimeMs}:${st.size}`;
+      } catch { /* no messages yet */ }
+      return `${meta.ino}:${meta.mtimeMs}:${meta.size}:${log}`;
+    } catch {
+      return null;
+    }
+  }
+
+  private buildDigest(meta: SessionMeta): SessionListEntry {
+    // Map 'disconnected' to 'idle' for external consumers
+    const state: 'active' | 'idle' = meta.state === 'active' ? 'active' : 'idle';
+    const preview = this.getSessionPreview(meta.id);
+    return {
+      id: meta.id,
+      agent: meta.agent,
+      model: meta.model ? toWellFormedText(meta.model) : undefined,
+      reasoningEffort: meta.reasoningEffort,
+      title: meta.title ? toWellFormedText(meta.title) : undefined,
+      autoTitle: meta.autoTitle ? toWellFormedText(meta.autoTitle) : undefined,
+      state,
+      mode: toWireSessionMode(meta.mode),
+      pinned: meta.pinned || undefined,
+      lastSeq: meta.lastSeq ?? 0,
+      readSeq: meta.readSeq ?? 0,
+      messageCount: meta.lastSeq ?? 0,
+      createdAt: meta.createdAt,
+      lastActivityAt: new Date(this.lastActivityMs(meta.id, meta)).toISOString(),
+      usage: meta.usage,
+      source: meta.source,
+      preview: preview ? { ...preview, text: toWellFormedText(preview.text) } : undefined,
+    };
   }
 
   // ── File I/O ──────────────────────────────────────────

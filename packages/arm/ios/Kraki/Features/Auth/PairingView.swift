@@ -151,7 +151,7 @@ struct PairingView: View {
                     Button("Connect") {
                         if let info = extractPairingInfo(from: manualURL) {
                             showManualEntry = false
-                            completePairing(token: info.token, relay: info.relay)
+                            completePairing(info)
                         } else {
                             errorMessage = "Invalid pairing URL"
                         }
@@ -181,7 +181,7 @@ struct PairingView: View {
         switch result {
         case .success(let code):
             if let info = extractPairingInfo(from: code) {
-                completePairing(token: info.token, relay: info.relay)
+                completePairing(info)
             } else {
                 withAnimation {
                     errorMessage = "Not a valid Kraki pairing code"
@@ -197,46 +197,15 @@ struct PairingView: View {
         }
     }
 
-    /// Parsed contents of a Kraki pairing URL.
-    ///
-    /// `relay` is the WS URL the issuing daemon is connected to. It MUST
-    /// be honored because pairing tokens live on a single regional relay
-    /// (e.g. `cn.relay.kraki.chat`) — sending the token to the global
-    /// dispatcher `relay.kraki.chat` would fail since that host has no
-    /// record of it.
-    private struct PairingInfo {
-        let token: String
-        let relay: String?
+    private func extractPairingInfo(from urlString: String) -> PairingLink? {
+        PairingLink(string: urlString)
     }
 
-    private func extractPairingInfo(from urlString: String) -> PairingInfo? {
-        guard let url = URL(string: urlString),
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
-              !token.isEmpty else {
-            return nil
-        }
-        let relay = components.queryItems?.first(where: { $0.name == "relay" })?.value
-        let relayValue = (relay?.isEmpty ?? true) ? nil : relay
-        return PairingInfo(token: token, relay: relayValue)
-    }
-
-    private func completePairing(token: String, relay: String?) {
-        let currentRelay = appState.relayURL
-        scannedToken = token
-        if let relay, relay != appState.relayURL {
-            // The pairing token was issued by a daemon on a specific
-            // regional relay; we must connect to THAT relay before
-            // sending pairing auth. Stash the token first so the WS
-            // client's reconnect → bootstrapAuth path picks it up and
-            // sends `method: "pairing"` against the right host.
-            KLog.d("🔀 pair: relay mismatch — stashing token + redirecting \(currentRelay) → \(relay)")
-            appState.authManager?.pairingToken = token
-            appState.connectionStatus = .authenticating
-            appState.redirectToRelay(relay)
-        } else {
-            appState.authManager?.authenticateWithPairingToken(token)
-        }
+    private func completePairing(_ link: PairingLink) {
+        // One code per scan session: the camera keeps reporting the same QR.
+        guard scannedToken == nil else { return }
+        scannedToken = link.token
+        appState.openPairingLink(link)
         dismiss()
     }
 }

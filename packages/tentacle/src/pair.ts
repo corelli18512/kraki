@@ -8,8 +8,8 @@
  * - tentacle's public key (for E2E)
  */
 
-import { termLink } from './term-link.js';
 import { WebSocket } from 'ws';
+import { createHash } from 'node:crypto';
 import { execSync } from 'node:child_process';
 import chalk from 'chalk';
 import { loadConfig } from './config.js';
@@ -84,9 +84,15 @@ export function buildPairingUrl(info: PairingInfo, appBaseUrl?: string): string 
   const params = new URLSearchParams();
   params.set('relay', info.relay);
   params.set('token', info.pairingToken);
-  // Don't include public key in URL — it makes the QR code too large.
-  // The app will exchange keys through the relay after pairing.
+  // The full key would make the QR too large; a 16-byte fingerprint lets the
+  // phone verify the key the relay later hands it (the relay cannot swap it).
+  if (info.publicKey) params.set('fp', keyFingerprint(info.publicKey));
   return `${base}?${params.toString()}`;
+}
+
+/** base64url(sha256(compactKey))[first 16 bytes] — must match iOS DeviceKeyPins. */
+export function keyFingerprint(compactKey: string): string {
+  return createHash('sha256').update(compactKey, 'utf8').digest().subarray(0, 16).toString('base64url');
 }
 
 /**
@@ -129,8 +135,6 @@ export async function renderQrToTerminal(url: string): Promise<string> {
 
   const clipLine = copied ? '\n  Link copied to clipboard.' : '';
 
-  const appBase = process.env.KRAKI_APP_URL ?? 'https://app.kraki.chat';
-  const appLink = termLink(appBase.replace(/^https?:\/\//, ''), appBase);
 
   try {
     const qr = await import('qrcode-terminal');
@@ -140,7 +144,7 @@ export async function renderQrToTerminal(url: string): Promise<string> {
         const indented = qrString.split('\n').map(line => '    ' + line).join('\n');
         resolve([
           '',
-          `  Scan with your phone camera, or visit ${appLink} and sign in with GitHub.${clipLine}`,
+          `  Scan with your phone's camera to connect it.${clipLine}`,
           '',
           indented,
         ].join('\n'));
@@ -149,7 +153,7 @@ export async function renderQrToTerminal(url: string): Promise<string> {
   } catch {
     return [
       '',
-      `  Open on your phone, or visit ${appLink} and sign in with GitHub.${clipLine}`,
+      `  Open this link on your phone to connect it.${clipLine}`,
       '',
       `  ${url}`,
       '',

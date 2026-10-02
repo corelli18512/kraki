@@ -17,6 +17,7 @@ import type { AuthProvider, AuthUser, AuthOutcome as ProviderAuthOutcome } from 
 import { GitHubAuthProvider } from './auth.js';
 import { getLogger } from './logger.js';
 import { trace, fp } from './trace.js';
+import { clientIp } from './client-ip.js';
 import type { PushManager } from './push/index.js';
 import type { AuthBackend, AuthOutcome, ChallengeOutcome } from './auth-backend.js';
 
@@ -42,6 +43,8 @@ interface ClientState {
   pendingDeviceId?: string;
   pendingDeviceInfo?: { encryptionKey?: string };
   pendingAuthMethod?: string;
+  /** Closes the socket if it never authenticates (G1). */
+  authTimer?: ReturnType<typeof setTimeout>;
 
   // ── Liveness uncertainty (device_pending broadcast) ──
   /** Timestamp when pong grace period expires (null = no pending ping). */
@@ -97,6 +100,14 @@ export interface HeadServerOptions {
    *     to actually use the leases they're being issued.
    */
   voiceBrokerUrl?: string;
+  /**
+   * Close sockets that have not authenticated within this time (ms).
+   * Default 15s. A socket that asked for `auth_info` (an app on its login
+   * screen, waiting for the user to finish signing in) gets
+   * `loginScreenAuthTimeoutMs` instead (default 10 min).
+   */
+  authTimeoutMs?: number;
+  loginScreenAuthTimeoutMs?: number;
 }
 
 const DEFAULT_VOICE_LEASE_TTL_SEC = 86_400;
@@ -105,6 +116,8 @@ const MIN_VOICE_LEASE_GRANT_SEC = 1;
 const VALID_VOICE_RESOURCES = new Set<VoiceResource>(['voice/doubao']);
 
 const DEFAULT_MAX_PAYLOAD = 10 * 1024 * 1024;
+const DEFAULT_AUTH_TIMEOUT_MS = 15_000;
+const DEFAULT_LOGIN_SCREEN_AUTH_TIMEOUT_MS = 10 * 60_000;
 const MAX_MULTICAST_TARGETS = 64;
 
 /** How often the liveness sweep runs (ms). Faster than the 30s ping timer so
@@ -364,8 +377,20 @@ export class HeadServer {
     this.onConnection(ws);
   }
 
+  /** (Re)start the deadline for this socket to authenticate (G1). */
+  private armAuthTimer(ws: WebSocket, state: ClientState, ms: number): void {
+    if (state.authTimer) clearTimeout(state.authTimer);
+    state.authTimer = setTimeout(() => {
+      state.authTimer = undefined;
+      if (state.authenticated) return;
+      getLogger().debug('Closing unauthenticated socket', { ip: state.ip, afterMs: ms });
+      ws.close(4008, 'Authentication timeout');
+    }, ms);
+    state.authTimer.unref?.();
+  }
+
   private onConnection(ws: WebSocket, req?: HttpIncomingMessage): void {
-    const ip = req?.socket?.remoteAddress ?? req?.headers['x-forwarded-for']?.toString() ?? 'unknown';
+    const ip = clientIp(req);
     const state: ClientState = {
       authenticated: false,
       isAlive: true,
@@ -376,6 +401,7 @@ export class HeadServer {
     const logger = getLogger();
 
     this.clients.set(ws, state);
+    this.armAuthTimer(ws, state, this.options.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS);
     logger.debug('WebSocket connected', { ip });
 
     ws.on('pong', () => { this.onPongReceived(state); });
@@ -398,6 +424,7 @@ export class HeadServer {
     });
 
     ws.on('close', (code: number, reason: Buffer) => {
+      if (state.authTimer) clearTimeout(state.authTimer);
       const reasonStr = reason?.toString?.() || '';
       if (state.deviceId) {
         const disconnectedDeviceId = state.deviceId;
@@ -454,6 +481,7 @@ export class HeadServer {
     // Pre-auth: auth_info, auth, auth_response
     if (!state.authenticated) {
       if (msg.type === 'auth_info') {
+        this.armAuthTimer(ws, state, this.options.loginScreenAuthTimeoutMs ?? DEFAULT_LOGIN_SCREEN_AUTH_TIMEOUT_MS);
         if (this.options.authBackend) {
           const info = this.options.authBackend.getAuthInfo();
           ws.send(JSON.stringify({
@@ -989,7 +1017,8 @@ export class HeadServer {
         const result = await provider.authenticate({ token: auth.token, ip: state.ip });
         if (!result.ok) {
           logger.warn('Auth rejected', { method: 'github_token', ip: state.ip, reason: result.message });
-          this.sendAuthError(ws, 'auth_rejected', result.message);
+          // A GitHub outage or network error is not a bad credential (G4).
+          this.sendAuthError(ws, result.retryable ? 'service_unavailable' : 'auth_rejected', result.message);
           return;
         }
         this.completeAuth(ws, state, result.user, msg, 'github_token');
@@ -1007,7 +1036,8 @@ export class HeadServer {
         });
         if (!result.ok) {
           logger.warn('Auth rejected', { method: 'github_oauth', ip: state.ip, reason: result.message });
-          this.sendAuthError(ws, 'auth_rejected', result.message);
+          // A GitHub outage or network error is not a bad credential (G4).
+          this.sendAuthError(ws, result.retryable ? 'service_unavailable' : 'auth_rejected', result.message);
           return;
         }
         this.completeAuth(ws, state, result.user, msg, 'github_oauth');
@@ -1019,7 +1049,8 @@ export class HeadServer {
         const result = await provider.authenticate({ token: auth.key, ip: state.ip });
         if (!result.ok) {
           logger.warn('Auth rejected', { method: 'apikey', ip: state.ip, reason: result.message });
-          this.sendAuthError(ws, 'auth_rejected', result.message);
+          // A GitHub outage or network error is not a bad credential (G4).
+          this.sendAuthError(ws, result.retryable ? 'service_unavailable' : 'auth_rejected', result.message);
           return;
         }
         this.completeAuth(ws, state, result.user, msg, 'apikey');
@@ -1031,7 +1062,8 @@ export class HeadServer {
         const result = await provider.authenticate({ token: auth.sharedKey, ip: state.ip });
         if (!result.ok) {
           logger.warn('Auth rejected', { method: 'open', ip: state.ip, reason: result.message });
-          this.sendAuthError(ws, 'auth_rejected', result.message);
+          // A GitHub outage or network error is not a bad credential (G4).
+          this.sendAuthError(ws, result.retryable ? 'service_unavailable' : 'auth_rejected', result.message);
           return;
         }
         this.completeAuth(ws, state, result.user, msg, 'open');
@@ -1144,6 +1176,7 @@ export class HeadServer {
     // Register connection
     state.authenticated = true;
     state.authenticatedAt = Date.now();
+    if (state.authTimer) { clearTimeout(state.authTimer); state.authTimer = undefined; }
     state.deviceId = deviceId;
     state.userId = user.userId;
     this.evictPreviousConnection(deviceId, ws);
@@ -1183,6 +1216,7 @@ export class HeadServer {
     // Register connection
     state.authenticated = true;
     state.authenticatedAt = Date.now();
+    if (state.authTimer) { clearTimeout(state.authTimer); state.authTimer = undefined; }
     state.deviceId = result.deviceId;
     state.userId = result.userId;
     this.evictPreviousConnection(result.deviceId, ws);
@@ -1381,6 +1415,7 @@ export class HeadServer {
 
     state.authenticated = true;
     state.authenticatedAt = Date.now();
+    if (state.authTimer) { clearTimeout(state.authTimer); state.authTimer = undefined; }
     state.deviceId = deviceId;
     state.userId = user.id;
     this.evictPreviousConnection(deviceId, ws);

@@ -238,6 +238,40 @@ export function pinSession(
   });
 }
 
+/** Archive or restore a session (F2). */
+export function archiveSession(
+  sessionId: string,
+  archived: boolean,
+  send: (msg: Record<string, unknown>) => void,
+): void {
+  send({ type: 'archive_session', sessionId, payload: { archived } });
+}
+
+/** Ask a computer for its archived sessions (answered by archived_session_list). */
+export function requestArchivedSessions(
+  targetDeviceId: string,
+  send: (msg: Record<string, unknown>) => void,
+): void {
+  send({ type: 'request_archived_sessions', payload: { targetDeviceId } });
+}
+
+/** Delete every archived session on a computer. */
+export function deleteArchivedSessions(
+  targetDeviceId: string,
+  send: (msg: Record<string, unknown>) => void,
+): void {
+  send({ type: 'delete_archived_sessions', payload: { targetDeviceId } });
+}
+
+/** Days without messages before a computer archives a session; 0 = never. */
+export function setAutoArchiveDays(
+  targetDeviceId: string,
+  days: number,
+  send: (msg: Record<string, unknown>) => void,
+): void {
+  send({ type: 'set_auto_archive_days', payload: { targetDeviceId, days } });
+}
+
 export function requestLocalSessions(
   targetDeviceId: string,
   send: (msg: Record<string, unknown>) => void,

@@ -76,7 +76,9 @@ extension SessionDigest {
             usage: usage,
             pinned: json["pinned"] as? Bool,
             source: json["source"] as? String,
-            preview: preview
+            preview: preview,
+            archived: json["archived"] as? Bool,
+            lastActivityAt: json["lastActivityAt"] as? String
         )
     }
 }
@@ -337,6 +339,15 @@ final class MessageRouter {
 
         if type == "local_sessions_list" {
             handleLocalSessionsList(dict)
+            return
+        }
+
+        if type == "archived_session_list" {
+            if let deviceId = dict["deviceId"] as? String {
+                let payload = dict["payload"] as? [String: Any]
+                let sessions = (payload?["sessions"] as? [[String: Any]] ?? []).compactMap { SessionDigest(json: $0) }
+                appState.sessionStore.archivedSessions[deviceId] = sessions
+            }
             return
         }
 
@@ -643,6 +654,13 @@ final class MessageRouter {
 
         let tentacleDeviceId = dict["deviceId"] as? String ?? ""
         let snapshotTimestamp = dict["timestamp"] as? String
+        if let count = payload?["archivedCount"] as? Int {
+            let days = payload?["autoArchiveDays"] as? Int ?? 14
+            let info = ArchiveInfo(count: count, days: days)
+            if appState.sessionStore.archiveInfo[tentacleDeviceId] != info {
+                appState.sessionStore.archiveInfo[tentacleDeviceId] = info
+            }
+        }
         guard appState.sessionStore.acceptsSessionListSnapshot(
             deviceId: tentacleDeviceId,
             timestamp: snapshotTimestamp

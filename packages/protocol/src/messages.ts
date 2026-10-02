@@ -893,11 +893,26 @@ export interface SessionSubscriptionSetMessage extends BaseEnvelope {
       };
 }
 
-/** Sent by tentacle to app with metadata for all active sessions. */
+/** Sent by tentacle to app with metadata for all active sessions.
+ *  Archived sessions are left out; `archivedCount` says how many there are
+ *  (fetch them with `request_archived_sessions`). */
 export interface SessionListMessage extends BaseEnvelope {
   type: 'session_list';
   payload: {
     sessions: import('./sessions.js').SessionDigest[];
+    /** Number of archived sessions on this computer. Absent from old tentacles. */
+    archivedCount?: number;
+    /** Days without messages before an unpinned session is archived; 0 = never. */
+    autoArchiveDays?: number;
+  };
+}
+
+/** Response to `request_archived_sessions`. Unicast to the requester. */
+export interface ArchivedSessionListMessage extends BaseEnvelope {
+  type: 'archived_session_list';
+  payload: {
+    sessions: import('./sessions.js').SessionDigest[];
+    requestId?: string;
   };
 }
 
@@ -999,6 +1014,7 @@ export type ProducerMessage =
   | SessionListMessage
   | PermissionResolvedMessage
   | LocalSessionsListMessage
+  | ArchivedSessionListMessage
   | AttachmentDataMessage
   | DeviceUsageMessage
   | UsageHistoryMessage;
@@ -1156,6 +1172,34 @@ export interface PinSessionMessage extends BaseEnvelope {
   };
 }
 
+/** Archive or unarchive a session. Tentacle answers with a fresh `session_list`.
+ *  Opening or sending to an archived session also unarchives it. */
+export interface ArchiveSessionMessage extends BaseEnvelope {
+  type: 'archive_session';
+  payload: {
+    archived: boolean;
+  };
+}
+
+/** Ask a computer for its archived sessions (answered by `archived_session_list`). */
+export interface RequestArchivedSessionsMessage extends BaseEnvelope {
+  type: 'request_archived_sessions';
+  payload: { requestId?: string };
+}
+
+/** Delete every archived session on the target computer. */
+export interface DeleteArchivedSessionsMessage extends BaseEnvelope {
+  type: 'delete_archived_sessions';
+  payload: Record<string, never>;
+}
+
+/** Change how many days without messages before a session is archived
+ *  (0 = never). Tentacle answers with a fresh `session_list`. */
+export interface SetAutoArchiveDaysMessage extends BaseEnvelope {
+  type: 'set_auto_archive_days';
+  payload: { days: number };
+}
+
 /** Mark a session as unread. Tentacle rolls back readSeq. */
 export interface MarkUnreadMessage extends BaseEnvelope {
   type: 'mark_unread';
@@ -1247,6 +1291,10 @@ export type ConsumerMessage =
   | RequestCardMessage
   | RenameSessionMessage
   | PinSessionMessage
+  | ArchiveSessionMessage
+  | RequestArchivedSessionsMessage
+  | SetAutoArchiveDaysMessage
+  | DeleteArchivedSessionsMessage
   | RequestLocalSessionsMessage
   | ImportSessionMessage
   | RequestAttachmentMessage

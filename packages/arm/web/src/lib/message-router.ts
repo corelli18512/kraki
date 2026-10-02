@@ -125,6 +125,13 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     return;
   }
 
+  // archived_session_list — response to request_archived_sessions (F2)
+  if (msg.type === 'archived_session_list') {
+    const payload = (msg as { payload: { sessions?: import('@kraki/protocol').SessionDigest[] } }).payload;
+    store.setArchivedSessions(msg.deviceId, payload?.sessions ?? []);
+    return;
+  }
+
   // Handle local_sessions_list — response to import picker request
   if (msg.type === 'local_sessions_list') {
     const payload = (msg as { payload: { sessions: unknown[]; requestId?: string } }).payload;

@@ -6,6 +6,7 @@ import StoreKit
 import UserNotifications
 
 struct SettingsView: View {
+    @State private var diagnosticsCopied = false
     @Environment(AppState.self) private var appState
 
     @AppStorage("colorScheme") private var selectedScheme: AppColorScheme = .system
@@ -20,6 +21,7 @@ struct SettingsView: View {
             #endif
             accountSection
             preferencesSection
+            ArchiveSettingsSection()
             aboutSection
             rateSection
             #if DEBUG
@@ -244,13 +246,18 @@ struct SettingsView: View {
 
     private var aboutSection: some View {
         Section {
-            LabeledContent("Relay version") {
-                Text(appState.relayVersion ?? "—")
-                    .foregroundStyle(.secondary)
+            ForEach(DiagnosticsSummary.rows(appState: appState), id: \.label) { row in
+                LabeledContent(row.label) {
+                    Text(row.value)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
             }
-            LabeledContent("Client version") {
-                Text(appVersion)
-                    .foregroundStyle(.secondary)
+            Button {
+                UIPasteboard.general.string = DiagnosticsSummary.text(appState: appState)
+                diagnosticsCopied = true
+            } label: {
+                Label(diagnosticsCopied ? "Copied" : "Copy Diagnostics", systemImage: diagnosticsCopied ? "checkmark" : "doc.on.doc")
             }
         } header: {
             HStack(spacing: 8) {

@@ -251,3 +251,22 @@
 .kdialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .kdialog-buttons button { padding: 7px 14px; border: none; border-radius: 8px; background: var(--s-fill, rgba(0,0,0,.06)); color: var(--s-text, #0f172a); font-size: 13px; font-weight: 500; cursor: pointer; }
 .kdialog-buttons .is-destructive { background: #dc2626; color: #fff; }
+
+/* Archived sessions (F2) */
+.ksb-archived { margin: 8px 8px 16px; }
+.ksb-archived-toggle {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 8px; border-radius: 8px; font-size: 13px;
+  color: var(--s-text-2); background: transparent;
+}
+.ksb-archived-toggle:hover { background: var(--s-fill); }
+.ksb-archived-toggle svg { width: 14px; height: 14px; }
+.ksb-archived-list { display: flex; flex-direction: column; }
+.ksb-archived-row {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 8px 8px 8px 28px; border-radius: 8px; text-align: left; background: transparent;
+}
+.ksb-archived-row:hover { background: var(--s-fill); }
+.ksb-archived-title { font-size: 13px; color: var(--s-text); }
+.ksb-archived-meta, .ksb-archived-hint { font-size: 11px; color: var(--s-text-3); }
+.ksb-archived-hint { padding: 6px 28px; }

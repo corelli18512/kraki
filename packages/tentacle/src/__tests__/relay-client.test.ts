@@ -209,6 +209,9 @@ function createSessionManager(): Record<string, unknown> {
     markRead: vi.fn((_sessionId: string, seq: number) => seq),
     markUnread: vi.fn(() => 41),
     getSessionList: vi.fn(() => []),
+    countArchived: vi.fn(() => 0),
+    setArchived: vi.fn(() => false),
+    autoArchive: vi.fn(() => []),
     getPendingHumanAction: vi.fn(() => null),
     savePendingHumanAction: vi.fn(),
     clearPendingHumanAction: vi.fn(),
@@ -1241,6 +1244,49 @@ describe('RelayClient set_session_model', () => {
     expect(pinned).toBeDefined();
     expect(pinned.payload.pinned).toBe(true);
     expect(pinned.sessionId).toBe('sess_1');
+  });
+
+  it('archives, lists and restores sessions (F2)', () => {
+    const { sm } = buildConnectedClient();
+    const ws = sockets[0];
+    (sm.setArchived as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (sm.countArchived as ReturnType<typeof vi.fn>).mockReturnValue(1);
+    (sm.getSessionList as ReturnType<typeof vi.fn>).mockImplementation((opts?: { archived?: boolean }) =>
+      opts?.archived ? [{ id: 'sess_old', archived: true, state: 'idle' }] : []);
+    const inbound = (msg: Record<string, unknown>) => ws.emit('message', Buffer.from(JSON.stringify({
+      deviceId: 'dev_1', seq: 1, timestamp: new Date().toISOString(), ...msg,
+    })));
+
+    ws.sent.length = 0;
+    inbound({ type: 'archive_session', sessionId: 'sess_1', payload: { archived: true } });
+    expect(sm.setArchived).toHaveBeenCalledWith('sess_1', true);
+    const list = decodePulseSends(ws.sent).find(m => m.type === 'session_list');
+    expect(list.payload).toMatchObject({ archivedCount: 1, autoArchiveDays: 14 });
+
+    ws.sent.length = 0;
+    inbound({ type: 'request_archived_sessions', payload: { requestId: 'r1' } });
+    const archived = decodePulseSends(ws.sent).find(m => m.type === 'archived_session_list');
+    expect(archived.payload).toEqual({ sessions: [{ id: 'sess_old', archived: true, state: 'idle' }], requestId: 'r1' });
+
+    // Opening an archived session brings it back.
+    (sm.setArchived as ReturnType<typeof vi.fn>).mockClear();
+    inbound({ type: 'set_session_subscription', payload: { sessionId: 'sess_old' } });
+    expect(sm.setArchived).toHaveBeenCalledWith('sess_old', false);
+  });
+
+  it('applies an auto-archive days change from an app (F2)', () => {
+    const { sm } = buildConnectedClient();
+    const ws = sockets[0];
+    ws.sent.length = 0;
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'set_auto_archive_days', deviceId: 'dev_1', seq: 1, timestamp: new Date().toISOString(), payload: { days: 30 },
+    })));
+    expect(sm.autoArchive).toHaveBeenLastCalledWith(30, expect.any(Function), expect.any(Number));
+    expect(decodePulseSends(ws.sent).find(m => m.type === 'session_list').payload.autoArchiveDays).toBe(30);
+    ws.emit('message', Buffer.from(JSON.stringify({
+      type: 'set_auto_archive_days', deviceId: 'dev_1', seq: 2, timestamp: new Date().toISOString(), payload: { days: -1 },
+    })));
+    expect(sm.autoArchive).toHaveBeenLastCalledWith(30, expect.any(Function), expect.any(Number));
   });
 
   it('broadcasts session_read on mark_read', () => {
