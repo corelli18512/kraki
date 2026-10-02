@@ -48,6 +48,12 @@ struct AccountUsage: Codable, Hashable, Sendable, Identifiable {
 
     var providerTitle: String { provider == "codex" ? "GPT" : "Claude" }
 
+    /// Masked local part only (`co•••ai`) for tight spaces; the full label is in the tooltip.
+    var shortLabel: String {
+        guard let label, let at = label.firstIndex(of: "@") else { return label ?? providerTitle }
+        return String(label[..<at])
+    }
+
     var planTitle: String? {
         switch plan {
         case "default_claude_max_20x": return "Max 20×"

@@ -30,6 +30,17 @@ export interface KrakiConfig {
   logging?: {
     verbosity?: KrakiLogVerbosity;
   };
+  /**
+   * Read-only subscription quota of the Claude / Codex logins on this machine,
+   * shown in Kraki apps. On unless `enabled: false` (or KRAKI_ACCOUNT_USAGE=0).
+   */
+  accountUsage?: {
+    enabled?: boolean;
+    /** Minutes between readings; clamped to 10–120. Default 15. */
+    intervalMinutes?: number;
+    /** Let Pi renew its own expired login (`pi auth check`). Default true. */
+    renewPiLogins?: boolean;
+  };
 }
 
 export const DEFAULT_LOG_VERBOSITY: KrakiLogVerbosity = 'normal';

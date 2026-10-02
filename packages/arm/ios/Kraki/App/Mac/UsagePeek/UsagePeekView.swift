@@ -20,16 +20,17 @@ struct UsagePeekView: View {
         let _ = appState.deviceStore.deviceUsage
         let accounts = controller.orderedAccounts()
         let currentKey = controller.currentAccountKey
-        let layoutKey = accounts.map(\.id).joined(separator: ",")
+        let outdated = appState.deviceStore.devicesNeedingUsageUpdate()
+        let layoutKey = accounts.map(\.id).joined(separator: ",") + "|" + outdated.map(\.id).joined(separator: ",")
         GeometryReader { geometry in
             ZStack(alignment: .topTrailing) {
                 if detailed {
-                    UsagePeekDetail(accounts: accounts, width: controller.detailedSize.width, currentKey: currentKey, ns: ns,
+                    UsagePeekDetail(accounts: accounts, outdated: outdated, width: controller.detailedSize.width, currentKey: currentKey, ns: ns,
                                     entering: Date() < controller.entranceUntil)
                         .frame(width: controller.detailedSize.width, height: controller.detailedSize.height)
                         .transition(.opacity.animation(.easeOut(duration: 0.2).delay(0.05)))
                 } else {
-                    UsagePeekCompact(accounts: accounts, width: controller.compactSize.width, currentKey: currentKey, ns: ns,
+                    UsagePeekCompact(accounts: accounts, outdated: outdated, width: controller.compactSize.width, currentKey: currentKey, ns: ns,
                                      entering: Date() < controller.entranceUntil)
                         .frame(width: controller.compactSize.width, height: controller.compactSize.height)
                         .transition(.opacity.animation(.easeOut(duration: 0.12)))
@@ -59,14 +60,18 @@ struct UsagePeekView: View {
 }
 
 private struct UsagePeekEmpty: View {
+    var outdated: [DeviceSummary] = []
     var body: some View {
         VStack(spacing: 6) {
             Image(systemName: "gauge.with.dots.needle.33percent").font(.system(size: 20)).foregroundStyle(.tertiary)
-            Text("No account usage reported yet").font(.callout).foregroundStyle(.secondary)
+            Text(outdated.isEmpty ? "No Claude or Codex accounts found on your devices" : UsageUpdateHint.text(outdated))
+                .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
+        .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+
 
 /// "Current session" badge for the account the open Session is spending.
 private struct UsageCurrentBadge: View {
@@ -112,6 +117,7 @@ private struct UsageDeviceLine: View {
 
 struct UsagePeekCompact: View {
     let accounts: [MergedAccountUsage]
+    var outdated: [DeviceSummary] = []
     /// Panel width the layout plans for.
     var width: CGFloat = UsagePeekLayout.compactMaxWidth
     let currentKey: String?
@@ -120,7 +126,7 @@ struct UsagePeekCompact: View {
 
     var body: some View {
         if accounts.isEmpty {
-            UsagePeekEmpty()
+            UsagePeekEmpty(outdated: outdated)
         } else {
             let shown = Array(accounts.prefix(UsagePeekLayout.compactLimit))
             let plan = UsagePeekLayout.plan(rings: shown.map(\.ringCount), .compact, maxWidth: width)
@@ -130,7 +136,7 @@ struct UsagePeekCompact: View {
                         ForEach(row, id: \.self) { i in
                             let merged = shown[i]
                             let isCurrent = merged.id == currentKey
-                            AccountUsageTile(account: merged.account, ringSize: 48, lineWidth: 5, animateIn: entering,
+                            AccountUsageTile(account: merged.account, ringSize: 48, lineWidth: 5, shortName: true, animateIn: entering,
                                              delay: 0.14 + Double(i) * 0.035, geometry: ns)
                                 .padding(.horizontal, 10).padding(.top, 9).padding(.bottom, 8)
                                 .frame(width: plan.widths[i], height: UsagePeekLayout.cardHeight(.compact), alignment: .top)
@@ -172,6 +178,7 @@ private struct UsageStaggerIn: ViewModifier {
 
 struct UsagePeekDetail: View {
     let accounts: [MergedAccountUsage]
+    var outdated: [DeviceSummary] = []
     var width: CGFloat = UsagePeekLayout.detailMaxWidth
     let currentKey: String?
     let ns: Namespace.ID
@@ -179,7 +186,7 @@ struct UsagePeekDetail: View {
 
     var body: some View {
         if accounts.isEmpty {
-            UsagePeekEmpty()
+            UsagePeekEmpty(outdated: outdated)
         } else {
             ScrollView(.vertical, showsIndicators: false) {
                 let plan = UsagePeekLayout.plan(rings: accounts.map(\.ringCount), .detail, maxWidth: width)
@@ -195,6 +202,14 @@ struct UsagePeekDetail: View {
                     }
                 }
                 .padding(UsagePeekLayout.padding(.detail))
+                if !outdated.isEmpty {
+                    Label(UsageUpdateHint.text(outdated), systemImage: "arrow.down.circle")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, UsagePeekLayout.padding(.detail))
+                        .padding(.top, -6)
+                        .frame(height: UsagePeekLayout.updateHintHeight, alignment: .top)
+                }
             }
         }
     }

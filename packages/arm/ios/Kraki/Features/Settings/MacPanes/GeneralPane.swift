@@ -36,16 +36,20 @@ struct GeneralPane: View {
             }
 
             Section("Account Usage") {
-                LabeledContent("Hold to peek") {
-                    UsageShortcutRecorder(manager: usagePeek.hotkey)
-                        .frame(width: 230, height: 26)
+                Toggle("Hold a shortcut to peek at account usage", isOn: Binding(
+                    get: { usagePeek.hotkey.enabled },
+                    set: { usagePeek.hotkey.setEnabled($0) }))
+                if usagePeek.hotkey.enabled {
+                    LabeledContent("Shortcut") {
+                        UsageShortcutRecorder(manager: usagePeek.hotkey)
+                            .frame(width: 230, height: 26)
+                    }
                 }
-                Text("Hold the shortcut to see every online device's Claude and Codex quota; move the pointer in for details. \"Account Usage\" in the menu bar opens it too.")
+                Text("Shows the Claude and Codex quota of every account on your devices. \"Account Usage\" in the menu bar opens it any time.")
                     .font(.system(size: 11)).foregroundStyle(Color.textMuted)
                 if let error = usagePeek.hotkey.error {
                     Text(error).font(.system(size: 11)).foregroundStyle(.orange)
                 }
-                Button("Reset to F6") { usagePeek.hotkey.update(.initial) }
             }
 
             Section("Behavior") {

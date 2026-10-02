@@ -60,6 +60,8 @@ final class UsagePeekHotKey: ObservableObject {
     @Published private(set) var shortcut: UsageShortcut
     @Published private(set) var error: String?
     @Published private(set) var recording = false
+    /// Off by default: a global F6 must not be taken from users who didn't ask for it.
+    @Published private(set) var enabled: Bool
     var onPress: (() -> Void)?
     var onRelease: (() -> Void)?
     var onRecording: (() -> Void)?
@@ -67,6 +69,7 @@ final class UsagePeekHotKey: ObservableObject {
     private var handler: EventHandlerRef?
     private let defaults: UserDefaults
     private static let defaultsKey = "mac.usagePeekShortcut"
+    private static let enabledKey = "mac.usagePeekShortcutEnabled"
     private static let signature: OSType = 0x4B555347 // 'KUSG'
 
     init(defaults: UserDefaults = .standard) {
@@ -77,6 +80,19 @@ final class UsagePeekHotKey: ObservableObject {
         } else {
             shortcut = .initial
         }
+        enabled = defaults.bool(forKey: Self.enabledKey)
+    }
+
+    func setEnabled(_ on: Bool) {
+        guard on != enabled else { return }
+        enabled = on
+        defaults.set(on, forKey: Self.enabledKey)
+        if on { error = nil; registerSaved() }
+        else { unregister(); error = nil }
+    }
+
+    private func unregister() {
+        if let reference { UnregisterEventHotKey(reference); self.reference = nil }
     }
 
     /// Installs the Carbon handler and registers the saved shortcut.
@@ -101,7 +117,7 @@ final class UsagePeekHotKey: ObservableObject {
         }, eventTypes.count, &eventTypes, Unmanaged.passUnretained(self).toOpaque(), &handler)
         if status != noErr { error = "Couldn't install the global shortcut handler (\(status))." }
         else { registerSaved() }
-        KLog.diag("[UsagePeek] hotkey \(shortcut.display) handler=\(status) registered=\(reference != nil)")
+        KLog.diag("[UsagePeek] hotkey \(shortcut.display) enabled=\(enabled) handler=\(status) registered=\(reference != nil)")
     }
 
     deinit {
@@ -115,7 +131,7 @@ final class UsagePeekHotKey: ObservableObject {
     }
 
     private func registerSaved() {
-        guard reference == nil, handler != nil else { return }
+        guard enabled, reference == nil, handler != nil else { return }
         let status = register(shortcut, output: &reference)
         if status != noErr { error = "\(shortcut.display) is already in use (\(status)). Choose another shortcut." }
     }
@@ -142,6 +158,14 @@ final class UsagePeekHotKey: ObservableObject {
         }
         let wasRecording = recording
         if !wasRecording { beginRecording() }
+        guard enabled else {
+            // Not active: just remember the choice for when it is turned on.
+            shortcut = spec
+            recording = false
+            error = nil
+            if let data = try? JSONEncoder().encode(spec) { defaults.set(data, forKey: Self.defaultsKey) }
+            return true
+        }
         var candidate: EventHotKeyRef?
         let status = register(spec, output: &candidate)
         guard status == noErr else {

@@ -24,6 +24,21 @@ final class UsagePeekTests: XCTestCase {
         s.click(); XCTAssertEqual(s.presentation, .hidden)
     }
 
+    func testGlobalShortcutIsOffUntilTurnedOnAndRemembersItsKey() throws {
+        let suite = "usage-peek-test-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let hotkey = UsagePeekHotKey(defaults: defaults)
+        XCTAssertFalse(hotkey.enabled, "an upgrade must not take F6 by itself")
+        let f7 = UsageShortcut(keyCode: 98, modifiers: 0, keyName: "F7")
+        XCTAssertTrue(hotkey.update(f7), "choosing a key while off just remembers it")
+        XCTAssertEqual(UsagePeekHotKey(defaults: defaults).shortcut, f7)
+        hotkey.setEnabled(true)
+        XCTAssertTrue(UsagePeekHotKey(defaults: defaults).enabled)
+        hotkey.setEnabled(false)
+        XCTAssertFalse(UsagePeekHotKey(defaults: defaults).enabled)
+    }
+
     func testShortcutsMustNotHijackTyping() {
         XCTAssertEqual(UsageShortcut.initial.display, "F6")
         XCTAssertTrue(UsageShortcut.initial.isSafeToRegister)

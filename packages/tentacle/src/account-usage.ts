@@ -554,7 +554,7 @@ export interface AccountUsageMonitorOptions {
 export class AccountUsageMonitor {
   onChange?: (accounts: AccountUsage[]) => void;
   private slots = new Map<string, Slot>();
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
   private running: Promise<void> | null = null;
   private lastPayload = '';
   private readonly paths: UsagePaths;
@@ -569,13 +569,26 @@ export class AccountUsageMonitor {
     this.now = opts.now ?? Date.now;
   }
 
+  /**
+   * First reading right away, then every `intervalMs` (default 15 min) with ±10% jitter,
+   * so several machines sharing an account don't hit the provider in lockstep. Anthropic's
+   * usage endpoint rate-limits hard; a 429 backs that source off for its Retry-After.
+   */
   start(): void {
-    if (this.timer) return;
+    if (this.timer || this.stopped === false) return;
+    this.stopped = false;
     void this.refresh();
-    this.timer = setInterval(() => void this.refresh(), this.opts.intervalMs ?? 300_000);
+    this.schedule();
+  }
+  stop(): void { this.stopped = true; if (this.timer) clearTimeout(this.timer); this.timer = null; }
+  private stopped: boolean | null = null;
+  private schedule(): void {
+    if (this.stopped) return;
+    const base = this.opts.intervalMs ?? 900_000;
+    this.timer = setTimeout(() => { this.timer = null; void this.refresh().finally(() => this.schedule()); },
+      base * (0.9 + Math.random() * 0.2));
     this.timer.unref?.();
   }
-  stop(): void { if (this.timer) clearInterval(this.timer); this.timer = null; }
 
   get accounts(): AccountUsage[] {
     const byKey = new Map<string, Slot>();

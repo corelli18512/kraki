@@ -87,6 +87,32 @@ final class AccountUsageTests: XCTestCase {
         XCTAssertNil(store.accountKey(forSessionOn: "zzz", agent: "pi", model: "anthropic/x"))
     }
 
+    func testOnlyGreetedTentaclesWithoutTheFeatureNeedAnUpdate() throws {
+        let (app, root) = try makeApp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = app.deviceStore
+        store.setDevices([device("old", "Old Mac"), device("new", "New Mac"), device("quiet", "Quiet Mac"),
+                          device("pending", "Pending Mac"), device("off", "Off Mac", online: false)])
+        for id in ["old", "new", "quiet", "off"] { store.markGreeted(id) }
+        store.setDeviceFeatures("old", features: ["idempotent_input"])
+        store.setDeviceFeatures("new", features: ["idempotent_input", "account_usage"])
+        store.setDeviceFeatures("pending", features: ["idempotent_input"])
+        store.setDeviceFeatures("off", features: ["idempotent_input"])
+        // "quiet" sent no features at all: unknown, so not called out.
+        XCTAssertEqual(store.devicesNeedingUsageUpdate().map(\.id), ["old"])
+        // A device that did report usage is never called outdated.
+        store.setDeviceUsage("old", accounts: [])
+        XCTAssertTrue(store.devicesNeedingUsageUpdate().isEmpty)
+    }
+
+    func testShortLabelKeepsTheMaskedLocalPart() {
+        var a = account("k", weekly: 50)
+        a.label = "co•••ai@gmail.com"
+        XCTAssertEqual(a.shortLabel, "co•••ai")
+        a.label = nil
+        XCTAssertEqual(a.shortLabel, "Claude")
+    }
+
     func testRingsAreFiveHourThenWeeklyAndRingStateColors() {
         let a = account("k", five: 98, weekly: 9)
         XCTAssertEqual(a.ringWindows.map(\.kind), ["five_hour", "weekly"])

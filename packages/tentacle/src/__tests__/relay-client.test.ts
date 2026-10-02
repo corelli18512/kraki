@@ -1409,6 +1409,18 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
+  it('advertises account_usage only when the monitor is enabled', () => {
+    const { ws, client, cleanup } = buildClientWithStore();
+    try {
+      const first = decodePulseSends(ws.sent).find((m) => m.type === 'device_greeting');
+      expect((first?.payload as { features: string[] }).features).not.toContain('account_usage');
+      ws.sent.length = 0;
+      client.setAccountUsageEnabled(true);
+      const again = decodePulseSends(ws.sent).find((m) => m.type === 'device_greeting');
+      expect((again?.payload as { features: string[] }).features).toContain('account_usage');
+    } finally { cleanup(); }
+  });
+
   it('answers request_usage_history from the local history reader', () => {
     const { ws, client, cleanup } = buildClientWithStore();
     try {

@@ -368,6 +368,18 @@ final class DeviceStore {
         deviceUsage[id] = DeviceUsageSnapshot(accounts: accounts, receivedAt: receivedAt)
     }
 
+    /// Online tentacles whose greeting says they predate account usage, so the app
+    /// can name them instead of silently showing nothing for them.
+    func devicesNeedingUsageUpdate() -> [DeviceSummary] {
+        devices.values
+            .filter { $0.role == .tentacle && $0.online && !pendingGreetingIds.contains($0.id) }
+            .filter { device in
+                guard let features = deviceFeatures[device.id] else { return false }
+                return !features.contains("account_usage") && deviceUsage[device.id] == nil
+            }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
     /// Every reported account merged across devices (quota is per account, not
     /// per device). Readings from devices that went offline stay listed and
     /// age into "stale" on their own.

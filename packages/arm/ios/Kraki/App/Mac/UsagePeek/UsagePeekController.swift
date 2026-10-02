@@ -122,6 +122,8 @@ enum UsagePeekLayout {
     static let compactMaxWidth: CGFloat = 460
     static let detailMaxWidth: CGFloat = 790
     static let compactLimit = 6
+    /// Footer line under the detail cards naming devices on an older Kraki.
+    static let updateHintHeight: CGFloat = 22
 
     static func padding(_ m: Mode) -> CGFloat { m == .compact ? 9 : 18 }
     static func gap(_ m: Mode) -> CGFloat { m == .compact ? 6 : 12 }
@@ -351,9 +353,10 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
         let compact = UsagePeekLayout.plan(rings: rings, .compact, maxWidth: min(UsagePeekLayout.compactMaxWidth, visible.width - 28))
         let detail = UsagePeekLayout.plan(rings: rings, .detail, maxWidth: min(UsagePeekLayout.detailMaxWidth, visible.width - 28))
         compactSize = NSSize(width: compact.size.width, height: min(compact.size.height, maxHeight))
+        let hint = rings.isEmpty || (appState?.deviceStore.devicesNeedingUsageUpdate().isEmpty ?? true) ? 0 : UsagePeekLayout.updateHintHeight
         // The detail frame contains the compact one, so hovering can't flicker at an edge.
         detailedSize = NSSize(width: max(detail.size.width, compact.size.width),
-                              height: max(min(detail.size.height, maxHeight), compactSize.height))
+                              height: max(min(detail.size.height + hint, maxHeight), compactSize.height))
         // Anchored under the right end of the menu bar; both sizes share the top-right corner.
         anchor = NSPoint(x: visible.maxX - 12, y: visible.maxY - 8)
         compactFrame = NSRect(x: anchor.x - compactSize.width, y: anchor.y - compactSize.height,

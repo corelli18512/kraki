@@ -42,6 +42,7 @@ const mockRelay = {
   onFatalError: null as ((message: string) => void) | null,
   updateAgentCapabilities: vi.fn(),
   updateAccountUsage: vi.fn(),
+  setAccountUsageEnabled: vi.fn(),
   usageHistoryReader: null as unknown,
 };
 
@@ -281,6 +282,15 @@ describe('daemon-worker: startWorker()', () => {
     (mockUsageMonitor.onChange as (a: unknown[]) => void)([{ accountKey: 'k' }]);
     expect(mockRelay.updateAccountUsage).toHaveBeenCalledWith([{ accountKey: 'k' }]);
     expect(typeof mockRelay.usageHistoryReader).toBe('function');
+    expect(mockRelay.setAccountUsageEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it('does not start the usage monitor when accountUsage.enabled is false', async () => {
+    const { AccountUsageMonitor } = await import('../account-usage.js');
+    (AccountUsageMonitor as unknown as ReturnType<typeof vi.fn>).mockClear();
+    mockConfig = { ...(mockConfig ?? {}), accountUsage: { enabled: false } };
+    await startWorker();
+    expect(AccountUsageMonitor).not.toHaveBeenCalled();
   });
 
   it('re-greets apps when an agent reports its model list recovered after startup', async () => {

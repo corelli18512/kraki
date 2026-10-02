@@ -326,11 +326,18 @@ export async function startWorker(): Promise<WorkerResult> {
   relayRef = relay;
 
   // Read-only subscription quota of this machine's Claude / Codex accounts.
-  // Disabled with KRAKI_ACCOUNT_USAGE=0.
+  // Off with `accountUsage.enabled: false` in config.json or KRAKI_ACCOUNT_USAGE=0.
   let usageMonitor: AccountUsageMonitor | null = null;
-  if (process.env.KRAKI_ACCOUNT_USAGE !== '0') {
+  const usageConfig = config.accountUsage ?? {};
+  if (process.env.KRAKI_ACCOUNT_USAGE !== '0' && usageConfig.enabled !== false) {
     const history = new UsageHistory(join(getKrakiHome(), 'usage-history.jsonl'));
-    usageMonitor = new AccountUsageMonitor({ history });
+    const minutes = Math.min(120, Math.max(10, usageConfig.intervalMinutes ?? 15));
+    usageMonitor = new AccountUsageMonitor({
+      history,
+      intervalMs: minutes * 60_000,
+      ...(usageConfig.renewPiLogins === false && { renewPi: async () => false }),
+    });
+    relay.setAccountUsageEnabled(true);
     usageMonitor.onChange = (accounts) => relay.updateAccountUsage(accounts);
     relay.usageHistoryReader = (since) => history.load(since);
     usageMonitor.start();

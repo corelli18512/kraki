@@ -183,6 +183,8 @@ struct AccountUsageTile: View {
     let ringSize: CGFloat
     let lineWidth: CGFloat
     var showsPlan = false
+    /// Compact cards show only the masked local part of the address.
+    var shortName = false
     var animateIn = true
     var delay: Double = 0
     var geometry: Namespace.ID? = nil
@@ -192,9 +194,10 @@ struct AccountUsageTile: View {
         VStack(spacing: ringSize > 70 ? 10 : 8) {
             HStack(alignment: .top, spacing: 5) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(account.label ?? account.providerTitle)
+                    Text(shortName ? account.shortLabel : (account.label ?? account.providerTitle))
                         .font(.system(size: ringSize > 70 ? 14 : 12, weight: .semibold))
                         .lineLimit(1).truncationMode(.middle)
+                        .help(account.label ?? account.providerTitle)
                     if showsPlan, let plan = account.planTitle {
                         Text(plan).font(.system(size: 10.5)).foregroundStyle(.secondary)
                     }
@@ -261,5 +264,14 @@ struct AccountUsageRow: View {
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Names online devices running a Kraki too old to report account usage.
+enum UsageUpdateHint {
+    static func text(_ devices: [DeviceSummary]) -> String {
+        let names = devices.map(\.name)
+        let list = names.count > 2 ? "\(names[0]) and \(names.count - 1) more" : names.joined(separator: " and ")
+        return "Update Kraki on \(list) to see \(devices.count == 1 ? "its" : "their") accounts"
     }
 }

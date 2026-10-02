@@ -3572,6 +3572,13 @@ export class RelayClient {
   // ── Subscription account usage ───────────────────────
 
   private accountUsage: AccountUsage[] | null = null;
+  /** Advertised as the `account_usage` feature so apps can tell "no accounts" from "too old". */
+  private accountUsageEnabled = false;
+  setAccountUsageEnabled(enabled: boolean): void {
+    if (this.accountUsageEnabled === enabled) return;
+    this.accountUsageEnabled = enabled;
+    if (this.state === 'connected') this.sendGreetingBroadcast();
+  }
   /** Reads the local quota history file for `request_usage_history`. */
   usageHistoryReader: ((since: number) => UsageHistorySample[]) | null = null;
   private static readonly USAGE_HISTORY_MAX_SAMPLES = 50_000;
@@ -3648,7 +3655,7 @@ export class RelayClient {
       kind: this.options.device.kind,
       agents: this.options.device.capabilities?.agents,
       version: this.options.version,
-      features: ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE],
+      features: ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE, ...(this.accountUsageEnabled ? ['account_usage'] : [])],
     };
   }
 
