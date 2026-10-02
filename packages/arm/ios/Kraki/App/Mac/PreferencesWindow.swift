@@ -30,7 +30,9 @@ struct PreferencesWindow: View {
             AboutPane()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .scenePadding()
+        // Each pane is a grouped Form that scrolls itself and brings its own
+        // margins; extra padding here would inset the scroll view (and its
+        // scroller) away from the window edge.
     }
 }
 

@@ -6,7 +6,7 @@ import os
 // =====================================================================
 // Production flat-spine scroll/windowing engine.
 //
-// Purpose: prove that a NORMAL-ORDER (正序, newest-at-bottom) chat list
+// Purpose: prove that a NORMAL-ORDER (newest-at-bottom) chat list
 // can scroll smoothly AND paginate jump-free, with ZERO dependence on
 // the real ChatView list stack. Everything
 // here is self-contained:
@@ -26,7 +26,7 @@ import os
 // rich cell) instead of a trivial label. Heights come from the same
 // offscreen self-size path the real app uses, pre-warmed off the critical
 // frame by the production `HeightMeasurementScheduler`. Goal: measure how
-// much scroll jank real markdown adds on a 正序 (newest-at-bottom) list, and
+// much scroll jank real markdown adds on a normal-order (newest-at-bottom) list, and
 // validate that measure-ahead keeps the scroll frames clean.
 //
 // Reached from: Settings → Diagnostics → "Scroll Perf Test".

@@ -128,20 +128,20 @@ def report(events, storms):
                      fmt_ms(pct(vc, 50)), flag(pct(vc, 95), TARGETS.get((kind, 'viewCurrentMs'))),
                      sum(1 for e in group if e.get('attempt', 0) > 0),
                      sum(1 for e in group if e.get('previousExit') == 'unclean')])
-    parts.append('<h2>打开 App → 看到最新消息</h2>' + table(
-        ['平台', '类型', '次数', '结果', '认证 p50', '认证 p95', '看到最新 p50', '看到最新 p95', '有失败重试', '上次非正常退出'], rows))
+    parts.append('<h2>App opening → latest messages on screen</h2>' + table(
+        ['Platform', 'Kind', 'Count', 'Outcome', 'Auth p50', 'Auth p95', 'Current p50', 'Current p95', 'With retries', 'Unclean previous exit'], rows))
     slow = [e for e in ready if e.get('outcome') != 'ready'
             or (e.get('viewCurrentMs') or 0) > TARGETS.get((e['kind'], 'viewCurrentMs'), 1e12)]
     if slow:
-        parts.append('<h3>慢或未完成的打开</h3>' + table(
-            ['时间', '平台', '类型', '结果', '后台时长', '连上', '认证', '列表', '看到最新', '重试', '缺消息', '网络'],
+        parts.append('<h3>Slow or unfinished openings</h3>' + table(
+            ['Time', 'Platform', 'Kind', 'Outcome', 'Background', 'Connected', 'Auth', 'List', 'Current', 'Retries', 'Gap', 'Network'],
             [[e['when'].strftime('%m-%d %H:%M:%S'), e['platform'], e['kind'], e['outcome'], fmt_ms(e.get('backgroundMs')),
               fmt_ms(e.get('wsOpenMs')), fmt_ms(e.get('authedMs')), fmt_ms(e.get('listFreshMs')),
               fmt_ms(e.get('viewCurrentMs')), e.get('attempt', 0), e.get('gap', 0), e.get('path')] for e in slow[-40:]]))
 
     # Outages
     outages = by['outage.summary']
-    parts.append('<h2>断线（前台）</h2>')
+    parts.append('<h2>Outages (foreground)</h2>')
     if outages:
         rows = []
         for plat in sorted({e['platform'] for e in outages}):
@@ -151,13 +151,13 @@ def report(events, storms):
                          fmt_ms(pct([e.get('detectMs') for e in group], 95)),
                          sum(1 for e in group if e.get('visibleMs', 0) > 0),
                          sum(1 for e in group if e.get('pathChanged')), sum(1 for e in group if e.get('afterWake'))])
-        parts.append(table(['平台', '次数', '原因', '结果', '影响 p50', '影响 p95', '发现 p95', '显示了重连中', '网络切换', '唤醒后'], rows))
-        parts.append('<h3>每次断线</h3>' + table(
-            ['时间', '平台', '原因', '码', '结果', '发现', '重连', '补齐', '影响', '显示重连中', '重试', '网络'],
+        parts.append(table(['Platform', 'Count', 'Cause', 'Outcome', 'Impact p50', 'Impact p95', 'Detect p95', 'Showed Reconnecting', 'Path change', 'After wake'], rows))
+        parts.append('<h3>Each outage</h3>' + table(
+            ['Time', 'Platform', 'Cause', 'Code', 'Outcome', 'Detect', 'Reconnect', 'Catch-up', 'Impact', 'Reconnecting shown', 'Retries', 'Network'],
             [[e['when'].strftime('%m-%d %H:%M:%S'), e['platform'], e.get('source'), e.get('code', ''), e.get('outcome'),
               fmt_ms(e.get('detectMs')), fmt_ms(e.get('reconnectMs')), fmt_ms(e.get('catchupMs')),
               flag(e.get('impactMs'), 8000), fmt_ms(e.get('visibleMs')), e.get('attempt', 0),
-              e.get('path', '') + (' (切换)' if e.get('pathChanged') else '') + (' 唤醒后' if e.get('afterWake') else '')]
+              e.get('path', '') + (' (changed)' if e.get('pathChanged') else '') + (' after wake' if e.get('afterWake') else '')]
              for e in outages[-60:]]))
         bursts = []
         for plat in {e['platform'] for e in outages}:
@@ -166,17 +166,17 @@ def report(events, storms):
                 if (ts[i + 2] - ts[i]).total_seconds() <= 120:
                     bursts.append(f'{plat} {ts[i]:%m-%d %H:%M}')
         if bursts:
-            parts.append('<p class="bad">客户端侧风暴（2 分钟内 ≥3 次断线）：' + html.escape(', '.join(sorted(set(bursts)))) + '</p>')
+            parts.append('<p class="bad">Client-side storms (≥3 outages within 2 minutes): ' + html.escape(', '.join(sorted(set(bursts)))) + '</p>')
     else:
-        parts.append('<p>没有前台断线记录。</p>')
+        parts.append('<p>No foreground outages.</p>')
     if storms is not None:
-        parts.append('<h3>服务器侧重连风暴（Head 日志：2 分钟内 ≥3 次认证）</h3>' + (table(
-            ['开始', '设备', '次数', '持续'], [[t.strftime('%m-%d %H:%M:%S'), d, n, f'{s:.0f} s'] for t, d, n, s in storms[-60:]])
-            if storms else '<p>无。</p>'))
+        parts.append('<h3>Server-side reconnect storms (Head log: ≥3 authentications within 2 minutes)</h3>' + (table(
+            ['Start', 'Device', 'Count', 'Duration'], [[t.strftime('%m-%d %H:%M:%S'), d, n, f'{s:.0f} s'] for t, d, n, s in storms[-60:]])
+            if storms else '<p>None.</p>'))
 
     # Sending
     sends = by['send.summary']
-    parts.append('<h2>发消息</h2>')
+    parts.append('<h2>Sending</h2>')
     if sends:
         rows = []
         for (plat, kind) in sorted({(e['platform'], e['kind']) for e in sends}):
@@ -189,22 +189,22 @@ def report(events, storms):
                          dist(e.get('cause') for e in shown), sum(e.get('manualRetries', 0) for e in group),
                          sum(e.get('autoResends', 0) for e in group),
                          fmt_ms(pct([e.get('correctionMs') for e in group], 95)) if kind == 'voice' else '–'])
-        parts.append(table(['平台', '类型', '条数', '结果', '确认 p50', '确认 p95', '显示过问题', '其中误报', '问题原因',
-                            '手动重试', '自动补发', '语音整理 p95'], rows))
+        parts.append(table(['Platform', 'Kind', 'Messages', 'Outcome', 'Confirm p50', 'Confirm p95', 'Shown a problem', 'False alarms', 'Cause',
+                            'Manual retries', 'Auto resends', 'Voice correction p95'], rows))
         bad = [e for e in sends if e.get('shown') != 'none' or e.get('outcome') != 'delivered']
         if bad:
-            parts.append('<h3>显示过问题或没送达的消息</h3>' + table(
-                ['时间', '平台', '类型', '结果', '显示', '显示时长', '原因', '后台', '手动', '自动', '重启恢复', '离线发送', '确认'],
+            parts.append('<h3>Messages shown as a problem or not delivered</h3>' + table(
+                ['Time', 'Platform', 'Kind', 'Outcome', 'Shown', 'Shown for', 'Cause', 'Background', 'Manual', 'Auto', 'Restored', 'Sent offline', 'Confirm'],
                 [[e['when'].strftime('%m-%d %H:%M:%S'), e['platform'], e['kind'], e.get('outcome'), e.get('shown'),
-                  fmt_ms(e.get('shownMs')), e.get('cause', ''), '是' if e.get('background') else '',
-                  e.get('manualRetries', 0), e.get('autoResends', 0), '是' if e.get('restored') else '',
-                  '是' if e.get('offline') else '', fmt_ms(e.get('confirmMs'))] for e in bad[-60:]]))
+                  fmt_ms(e.get('shownMs')), e.get('cause', ''), 'Yes' if e.get('background') else '',
+                  e.get('manualRetries', 0), e.get('autoResends', 0), 'Yes' if e.get('restored') else '',
+                  'Yes' if e.get('offline') else '', fmt_ms(e.get('confirmMs'))] for e in bad[-60:]]))
     else:
-        parts.append('<p>没有记录。</p>')
+        parts.append('<p>No records.</p>')
 
     # Voice
     voice = by['voice.summary']
-    parts.append('<h2>语音</h2>')
+    parts.append('<h2>Voice</h2>')
     if voice:
         rows = []
         for plat in sorted({e['platform'] for e in voice}):
@@ -218,33 +218,33 @@ def report(events, storms):
                          fmt_ms(pct([e.get('finalizeMs') for e in finals], 50)), flag(pct([e.get('finalizeMs') for e in finals], 95), 4000),
                          sum(1 for e in finals if not e.get('confirmed') and e.get('correctionOn', True)),
                          sum(1 for e in group if e.get('correctionOn') is False)])
-        parts.append(table(['平台', '次数', '结果', '失败', '失败阶段/原因', '按下→开录 p95', '松手→结果 p50',
-                            '松手→结果 p95', '纠错未确认', '纠错已关闭'], rows))
+        parts.append(table(['Platform', 'Count', 'Outcome', 'Failed', 'Failed stage/cause', 'Press→capture p95', 'Release→result p50',
+                            'Release→result p95', 'Correction unconfirmed', 'Correction off'], rows))
         problems = [e for e in voice if e.get('outcome') in ('failed', 'suspended') or e.get('cause')]
         if problems:
-            parts.append('<h3>语音问题</h3>' + table(
-                ['时间', '平台', '结果', '阶段', '原因', '连接已预热', '录音', '收尾'],
+            parts.append('<h3>Voice problems</h3>' + table(
+                ['Time', 'Platform', 'Outcome', 'Stage', 'Cause', 'Warm', 'Recording', 'Finalize'],
                 [[e['when'].strftime('%m-%d %H:%M:%S'), e['platform'], e.get('outcome'), e.get('stage'), e.get('cause', ''),
-                  '是' if e.get('warm') else '否', fmt_ms(e.get('recordMs')), fmt_ms(e.get('finalizeMs'))] for e in problems[-60:]]))
+                  'Yes' if e.get('warm') else 'No', fmt_ms(e.get('recordMs')), fmt_ms(e.get('finalizeMs'))] for e in problems[-60:]]))
     else:
-        parts.append('<p>没有记录。</p>')
+        parts.append('<p>No records.</p>')
 
     # Conversation opens
     opens = by['open.summary']
     if opens:
         vc = [e.get('viewCurrentMs') for e in opens if e.get('outcome') == 'current']
-        parts.append('<h2>点开会话 → 看到最新</h2>' + table(
-            ['次数', '结果', '看到最新 p50', 'p95', '需要补拉的比例'],
+        parts.append('<h2>Opening a conversation → latest on screen</h2>' + table(
+            ['Count', 'Outcome', 'Current p50', 'p95', 'Needed catch-up'],
             [[len(opens), dist(e.get('outcome') for e in opens), fmt_ms(pct(vc, 50)), flag(pct(vc, 95), 1500),
               f"{sum(1 for e in opens if e.get('gap', 0) > 0) / len(opens):.0%}"]]))
 
     versions = dist(f"{e['platform']} {e['version']}" for e in events)
-    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>Kraki 稳定性报告</title>
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Kraki Stability Report</title>
 <style>body{{font:14px/1.55 -apple-system,system-ui,sans-serif;max-width:1100px;margin:20px auto;padding:0 16px;color:#1d2330}}
 table{{border-collapse:collapse;margin:8px 0 18px;font-size:13px}}th,td{{border:1px solid #dde1e8;padding:4px 7px;text-align:left}}
 th{{background:#f4f6f9}}.bad{{color:#c0262d}}h2{{margin-top:28px;border-bottom:1px solid #e3e6ec}}</style></head><body>
-<h1>Kraki 稳定性报告</h1><p>{len(events)} 条汇总记录；版本：{versions}；生成于 {dt.datetime.now():%Y-%m-%d %H:%M}。
-红色 = 超出目标（docs/stability-metrics.md）。</p>{''.join(parts)}</body></html>"""
+<h1>Kraki Stability Report</h1><p>{len(events)} summaries; versions: {versions}; generated {dt.datetime.now():%Y-%m-%d %H:%M}.
+Red = over target (docs/stability-metrics.md).</p>{''.join(parts)}</body></html>"""
 
 
 def main():

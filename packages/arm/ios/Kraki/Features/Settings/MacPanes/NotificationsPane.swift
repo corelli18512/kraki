@@ -35,7 +35,6 @@ struct NotificationsPane: View {
             }
         }
         .formStyle(.grouped)
-        .padding()
         .task { await refreshStatus() }
     }
 

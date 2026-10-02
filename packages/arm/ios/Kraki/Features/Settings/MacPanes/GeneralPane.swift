@@ -73,7 +73,6 @@ struct GeneralPane: View {
             }
         }
         .formStyle(.grouped)
-        .padding()
         .onChange(of: colorScheme) { _, newValue in
             guard appState.preferencesManager?.isApplyingRemote != true else { return }
             appState.preferencesManager?.sendTheme(newValue)
