@@ -6,6 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.62</title>
+            <pubDate>Fri, 02 Oct 2026 18:30:49 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.62</sparkle:fullReleaseNotesLink>
+            <sparkle:version>64</sparkle:version>
+            <sparkle:shortVersionString>0.2.62</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* fix(apple): notification test-host guard compiles in Release by @corelli18512 in https://github.com/corelli18512/kraki/pull/390
+* Windows fixes from a clean Windows 11 VM E2E (Tentacle 0.35.9, Mac 0.2.62) by @corelli18512 in https://github.com/corelli18512/kraki/pull/391
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.35.8...mac-v0.2.62
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.62/Kraki.app.zip" length="92050361" type="application/octet-stream" sparkle:edSignature="cNbUUix117pDB/dlRPl1H9Y8SqZUdHqf1NtarhkeVe+qxyLYnvleM0sBZ9o2cKHUscJd0dWt89dwpLXZBBanCQ=="/>
+        </item>
+        <item>
             <title>0.2.60</title>
             <pubDate>Fri, 02 Oct 2026 09:46:37 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -44,33 +61,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.59/Kraki.app.zip" length="91993044" type="application/octet-stream" sparkle:edSignature="+iBJySZQInWTkOiVLFX14Qakoo7oUzLXFji5eK7eSd3qZAVNRACMzHw4PItLvpwy3f6atocU8moPXo/MSQ7bDA=="/>
         </item>
-        <item>
-            <title>0.2.58</title>
-            <pubDate>Fri, 02 Oct 2026 04:35:55 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.58</sparkle:fullReleaseNotesLink>
-            <sparkle:version>60</sparkle:version>
-            <sparkle:shortVersionString>0.2.58</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* iOS: readable crash reason, backslashes in paths, intro after first message (Mac 0.2.55) by @corelli18512 in https://github.com/corelli18512/kraki/pull/364
-* polish(voice vocabulary): placeholder, ignored-line hints, cleaner layout by @corelli18512 in https://github.com/corelli18512/kraki/pull/356
-* diag: voice.summary correctionOn flag by @corelli18512 in https://github.com/corelli18512/kraki/pull/365
-* chore(release): Mac 0.2.56 (58) by @corelli18512 in https://github.com/corelli18512/kraki/pull/367
-* feat: Claude / Codex subscription usage per account (tentacle + iOS + Mac) by @corelli18512 in https://github.com/corelli18512/kraki/pull/366
-* chore(release): Tentacle 0.35.5, Mac 0.2.57 (59) — account usage by @corelli18512 in https://github.com/corelli18512/kraki/pull/368
-* Relay reconnect no longer marks running sessions as disconnected (seen at head restart) by @corelli18512 in https://github.com/corelli18512/kraki/pull/369
-* Release review fixes (stability, safety, pairing, archive, relay hardening) by @corelli18512 in https://github.com/corelli18512/kraki/pull/370
-* Release Tentacle 0.35.6, Mac 0.2.58 (60) with #369 by @corelli18512 in https://github.com/corelli18512/kraki/pull/371
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.54...mac-v0.2.58
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.58/Kraki.app.zip" length="91967819" type="application/octet-stream" sparkle:edSignature="JXP6OZY+vo5OhYnXYmqG5ZldIl4SAMxF5xjUuuder4MqdwQsQckzp/Hg/m8VqGadhmCP2vOCDm3jOxoThMk2BA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: RP10JqWvwwk96XRyXjyYK6NhvMvqJeJsde2AaPOfWWDAEzUjpk+EsKMaD3puJAFGRvQeaP3+wScTG/E0qk1qBQ==
-length: 5740
+edSignature: OAQZzhvI7oD/7Igejjad7VEKMLXgNBH1n2dVSKa0X2Ir3nHFm9vSAtrNDvNcJ7xijifvUXI+Ko8npe8MbyrcBA==
+length: 4799
 -->
