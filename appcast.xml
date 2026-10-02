@@ -6,6 +6,27 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.57</title>
+            <pubDate>Fri, 02 Oct 2026 03:52:32 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.57</sparkle:fullReleaseNotesLink>
+            <sparkle:version>59</sparkle:version>
+            <sparkle:shortVersionString>0.2.57</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* iOS: readable crash reason, backslashes in paths, intro after first message (Mac 0.2.55) by @corelli18512 in https://github.com/corelli18512/kraki/pull/364
+* polish(voice vocabulary): placeholder, ignored-line hints, cleaner layout by @corelli18512 in https://github.com/corelli18512/kraki/pull/356
+* diag: voice.summary correctionOn flag by @corelli18512 in https://github.com/corelli18512/kraki/pull/365
+* chore(release): Mac 0.2.56 (58) by @corelli18512 in https://github.com/corelli18512/kraki/pull/367
+* feat: Claude / Codex subscription usage per account (tentacle + iOS + Mac) by @corelli18512 in https://github.com/corelli18512/kraki/pull/366
+* chore(release): Tentacle 0.35.5, Mac 0.2.57 (59) — account usage by @corelli18512 in https://github.com/corelli18512/kraki/pull/368
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.54...mac-v0.2.57
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.57/Kraki.app.zip" length="91884095" type="application/octet-stream" sparkle:edSignature="krq7e7ZTUcIVC7bOVw4kYAx/tSCL6HUuk/5snQpXQg5Rv+63B8CBk0zuZQyZy0n3lW03BbWtldzrKBQKqTIWBw=="/>
+        </item>
+        <item>
             <title>0.2.56</title>
             <pubDate>Fri, 02 Oct 2026 03:10:18 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -40,26 +61,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.55/Kraki.app.zip" length="91594956" type="application/octet-stream" sparkle:edSignature="VUitfLQ1ZqZmznJelS+8hSzoblpKikJhsWHnsnWaRoG+pQ+Aizx8zl8o+oO0IytAkJf9Bsb9XwRJKWNQ8RRGBQ=="/>
         </item>
-        <item>
-            <title>0.2.54</title>
-            <pubDate>Thu, 01 Oct 2026 15:08:56 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.54</sparkle:fullReleaseNotesLink>
-            <sparkle:version>56</sparkle:version>
-            <sparkle:shortVersionString>0.2.54</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* Fixes from the Windows CLI → iPhone E2E (Tentacle 0.35.3, head 0.19.2, Mac 0.2.53) by @corelli18512 in https://github.com/corelli18512/kraki/pull/362
-* Release Tentacle 0.35.4, Mac 0.2.54 (56) with the #362 fixes by @corelli18512 in https://github.com/corelli18512/kraki/pull/363
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.53...mac-v0.2.54
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.54/Kraki.app.zip" length="91595093" type="application/octet-stream" sparkle:edSignature="J361UsrxZ4D+XamRFcTIW2HRoQqekO0x/W2dxXyRFOcRTWW6/1oAohkF/ThnFBaRfk5p2LBfs23CgqZ+laK4Bw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: MbG8xQ/jLyT4NFJIqpTV3X7Fky3kGHTntDxQltTTuCiiDKtgcC5BO8xBMSFpNn0MIteQRkq9o9K9+LcyNlkdCw==
-length: 4308
+edSignature: BiN4+6VV8bY2NOd9onrCsH6ZspT+clRMN2Baj5DE9n+ko3LGSgGJqj0nusvD5GADNjyIP4H+sAspldl2+t0CAg==
+length: 4813
 -->
