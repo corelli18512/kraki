@@ -154,7 +154,7 @@ struct WelcomeView: View {
             icon: "exclamationmark.triangle.fill",
             iconColor: Color(hex: 0xFBBF24),
             title: "Kraki CLI not found",
-            subtitle: "This build of Kraki has no built-in tentacle. Install the kraki command-line tool in Terminal, then come back here."
+            subtitle: "This build of Kraki can't run agents by itself. Install the kraki command-line tool in Terminal, then come back here."
         ) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
@@ -200,7 +200,7 @@ struct WelcomeView: View {
     private var installedContent: some View {
         switch tentacleCLI.daemonState {
         case .unknown, .starting, .stopping:
-            ProgressView("Talking to tentacle…")
+            ProgressView("Checking this Mac…")
                 .controlSize(.small)
         case .needsApproval:
             loginItemsCard
@@ -221,14 +221,14 @@ struct WelcomeView: View {
         WelcomeCard(
             icon: "moon.zzz.fill",
             iconColor: Color.textMuted,
-            title: "Tentacle is stopped",
-            subtitle: "Start the local kraki daemon to connect this Mac as a tentacle."
+            title: "Kraki isn't running on this Mac",
+            subtitle: "Start the background service so agents on this Mac can be used from Kraki."
         ) {
             HStack {
                 Button {
                     Task { await tentacleCLI.startDaemon() }
                 } label: {
-                    Label("Start tentacle", systemImage: "play.fill")
+                    Label("Start", systemImage: "play.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Color.krakiPrimary)
@@ -244,7 +244,7 @@ struct WelcomeView: View {
         WelcomeCard(
             icon: "xmark.octagon.fill",
             iconColor: Color(hex: 0xF4836E),
-            title: "Tentacle error",
+            title: "Kraki couldn't run on this Mac",
             subtitle: msg
         ) {
             HStack {

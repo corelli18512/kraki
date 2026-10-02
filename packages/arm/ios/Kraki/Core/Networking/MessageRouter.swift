@@ -441,7 +441,7 @@ final class MessageRouter {
             let failed = (action?["type"] as? String) == "failed"
             let draft = payload?["draft"] as? String ?? ""
             updatePreview(sessionId,
-                          text: draft.isEmpty ? (failed ? "Turn failed" : "User aborted") : draft,
+                          text: draft.isEmpty ? (failed ? "Turn failed" : "Stopped") : draft,
                           type: failed ? "error" : "agent",
                           timestamp: timestamp)
 
@@ -450,7 +450,7 @@ final class MessageRouter {
             appState.messageStore.clearRuntimeStatusIfCompacting(sessionId)
             appState.messageStore.endCardTurn(sessionId)
             let draft = payload?["draft"] as? String ?? ""
-            updatePreview(sessionId, text: draft.isEmpty ? "Turn aborted" : draft,
+            updatePreview(sessionId, text: draft.isEmpty ? "Stopped" : draft,
                           type: "agent", timestamp: timestamp)
 
         case "system_message":

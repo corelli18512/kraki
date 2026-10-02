@@ -117,7 +117,7 @@ final class TentacleSetupRunner {
             self.stdin = input.fileHandleForWriting
         } catch {
             out.fileHandleForReading.readabilityHandler = nil
-            phase = .failed(message: "Could not start Kraki's built-in tentacle: \(error.localizedDescription)")
+            phase = .failed(message: "Could not start Kraki on this Mac: \(error.localizedDescription)")
         }
     }
 

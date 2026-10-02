@@ -106,7 +106,7 @@ struct NewSessionSheet: View {
             Image(systemName: "antenna.radiowaves.left.and.right.slash")
                 .font(.system(size: 32, weight: .light))
                 .foregroundStyle(Color.textMuted)
-            Text("No Tentacle Devices Online")
+            Text("No Computers Online")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Color.textPrimary)
             Text("Open Kraki on a computer and sign in to create a session there.")

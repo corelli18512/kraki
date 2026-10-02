@@ -67,6 +67,11 @@ export class RemoteAuthBackend implements AuthBackend {
     return result;
   }
 
+  async removeDevice(userId: string, deviceId: string): Promise<boolean> {
+    const result = await this.post<{ ok: boolean }>('/api/devices/remove', { userId, deviceId });
+    return result.ok === true;
+  }
+
   async requestPairingToken(
     token: string,
     ip?: string,

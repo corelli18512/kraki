@@ -193,6 +193,14 @@ export class LocalAuthBackend implements AuthBackend {
     return { token, expiresIn: this.pairingTtl };
   }
 
+  async removeDevice(userId: string, deviceId: string): Promise<boolean> {
+    const device = this.storage.getDevice(deviceId);
+    if (!device || device.userId !== userId) return false;
+    this.storage.deleteDevice(deviceId);
+    this.storage.deletePushTokensForDevice(deviceId);
+    return true;
+  }
+
   async requestPairingToken(
     token: string,
     ip?: string,

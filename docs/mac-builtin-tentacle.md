@@ -5,10 +5,12 @@ Kraki for Mac ships its own tentacle. A new user downloads `Kraki.dmg`, drags Kr
 ## Layout
 
 ```
-Kraki.app/Contents/Library/Helpers/Kraki Tentacle.app      tentacle SEA (universal), bundle id chat.kraki.mac.tentacle
+Kraki.app/Contents/Library/Helpers/Kraki.app              tentacle SEA (universal), bundle id chat.kraki.mac.tentacle
 Kraki.app/Contents/Library/LaunchAgents/chat.kraki.mac.tentacle.plist
 Kraki.app/Contents/Info.plist → KrakiTentacleVersion        tentacle version shipped in this app
 ```
+
+The helper is named "Kraki" and carries the Mac app's icon: users never see "tentacle". macOS shows the helper's name in privacy prompts the daemon's own work triggers (see below). Older app versions named it `Kraki Tentacle.app`; launchd records the bundle-relative program path at registration, so the app re-registers the job as soon as it sees the old path. The bundle id stays `chat.kraki.mac.tentacle` because TCC records grants against it.
 
 `scripts/mac/build-tentacle-helper.sh` builds the helper (lipo of the native SEA and the cross-built slice from `packages/tentacle/scripts/build-sea-darwin-cross.mjs`); the KrakiMac post-build phase `scripts/mac/embed-tentacle-helper.sh` copies it in and writes the launch agent. Local builds without a staged helper simply build without it and fall back to an external CLI. Debug builds use an embedded helper only with `KRAKI_MAC_ALLOW_BUILTIN_TENTACLE=1`, because they would share `~/.kraki` with a production daemon.
 
@@ -18,7 +20,8 @@ The app registers the launch agent with `SMAppService.agent(plistName:)`. launch
 
 Verified on a clean macOS VM with a notarized build:
 
-- TCC attributes the daemon and every process it spawns to the outer app (`chat.kraki.mac`). Full Disk Access is granted once to "Kraki" and survives updates; the app appears in the FDA list automatically once the daemon has probed a protected path.
+- TCC attributes the daemon and every process it spawns to the outer app (`chat.kraki.mac`) for file access. Full Disk Access is granted once to "Kraki" and survives updates; the app appears in the FDA list automatically once the daemon has probed a protected path.
+- Screen Recording is the exception (seen on macOS 27 when an agent ran `screencapture`): the prompt and the grant belong to the helper bundle (`chat.kraki.mac.tentacle`). That is why the helper is named "Kraki" with the app's icon.
 - Login Items shows "Kraki" with its icon (the CLI's `open`-based job shows "open — unidentified developer").
 - The registration survives reboot and in-place replacement of the app.
 - Registering from a translocated app (opened from Downloads without moving it) works until the next reboot, then the job points at a vanished path. The app refuses to start the service unless it runs from a stable location; the DMG's Applications alias is the intended install path. Moving with `mv` does not end translocation, a Finder move does.

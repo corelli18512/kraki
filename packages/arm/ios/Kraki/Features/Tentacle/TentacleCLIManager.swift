@@ -86,6 +86,7 @@ final class TentacleCLIManager {
     @ObservationIgnored private var restartedForVersion: String?
     @ObservationIgnored private var notRunningSince: Date?
     @ObservationIgnored private var reRegisteredThisLaunch = false
+    @ObservationIgnored private var checkedLegacyHelperPath = false
 
     var isBuiltInAvailable: Bool { builtIn.isAvailable }
 
@@ -233,7 +234,7 @@ final class TentacleCLIManager {
         }
     }
 
-    /// Settings → Tentacle "Run agents on this Mac": turn the built-in daemon
+    /// Settings → This Mac "Run agents on this Mac": turn the built-in daemon
     /// on (and remember it) or off (only control other computers from here).
     func setRunsAgentsOnThisMac(_ on: Bool) async {
         UserDefaults.standard.set(
@@ -291,6 +292,26 @@ final class TentacleCLIManager {
             if builtIn.service.status == .requiresApproval {
                 daemonState = .needsApproval
                 return
+            }
+            // An app updated from a version whose helper was "Kraki Tentacle.app"
+            // still has a launchd job naming that path. Re-register at once so
+            // launchd records "Kraki.app", instead of waiting out the
+            // not-running self-heal below. Checked once per launch, and only
+            // the known legacy path triggers it (re-registering restarts the
+            // daemon, so a parse surprise must never cause it).
+            if !checkedLegacyHelperPath, builtIn.ownershipMarkerExists,
+               builtIn.service.status == .enabled {
+                checkedLegacyHelperPath = true
+                if !reRegisteredThisLaunch,
+                   let program = await registeredProgramIdentifier(),
+                   Self.isLegacyHelperProgram(program) {
+                    reRegisteredThisLaunch = true
+                    restartedForVersion = builtIn.version
+                    KLog.diag("[Tentacle] built-in job points at \(program); re-registering")
+                    Task { await self.reRegisterBuiltIn() }
+                    daemonState = .starting
+                    return
+                }
             }
             // After a Sparkle update the old daemon keeps running from memory.
             // Restart it once onto the tentacle this app now ships.
@@ -432,11 +453,6 @@ final class TentacleCLIManager {
         await startDaemon()
     }
 
-    /// Register the built-in daemon with SMAppService.
-    ///
-    /// Refuses from a translocated/disk-image location (the registration would
-    /// point at a path that vanishes on reboot) and never runs beside a daemon
-    /// owned by an external CLI.
     /// Remove the job from launchd and register it again (keeps ownership).
     /// SMAppService.unregister alone leaves launchd's recorded launch
     /// constraint in place (verified in a VM: the job kept failing with
@@ -457,6 +473,35 @@ final class TentacleCLIManager {
         }
     }
 
+    /// The bundle-relative program launchd recorded for the built-in job
+    /// (`program identifier = …` in `launchctl print`), or nil if unknown.
+    private func registeredProgramIdentifier() async -> String? {
+        guard let result = await runCapturing(
+            binary: "/bin/launchctl", args: ["print", "gui/\(getuid())/\(builtIn.label)"]
+        ), result.exitCode == 0 else { return nil }
+        return Self.programIdentifier(fromLaunchctlPrint: result.stdout)
+    }
+
+    nonisolated static func programIdentifier(fromLaunchctlPrint output: String) -> String? {
+        for line in output.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("program identifier = ") else { continue }
+            var value = String(trimmed.dropFirst("program identifier = ".count))
+            if let mode = value.range(of: " (mode:") { value = String(value[..<mode.lowerBound]) }
+            return value
+        }
+        return nil
+    }
+
+    nonisolated static func isLegacyHelperProgram(_ program: String) -> Bool {
+        program.hasPrefix("Contents/Library/Helpers/Kraki Tentacle.app/")
+    }
+
+    /// Register the built-in daemon with SMAppService.
+    ///
+    /// Refuses from a translocated/disk-image location (the registration would
+    /// point at a path that vanishes on reboot) and never runs beside a daemon
+    /// owned by an external CLI.
     private func startBuiltIn() async {
         switch installLocation {
         case .translocated, .diskImage:

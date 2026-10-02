@@ -235,6 +235,7 @@ export class ChaosStack {
             app: { live: this.appProxy.liveConnections, total: this.appProxy.totalConnections, bytes: this.appProxy.bytesForwarded },
             app2: { live: this.app2Proxy.liveConnections, total: this.app2Proxy.totalConnections },
             tentacle: { live: this.tentacleProxy.liveConnections, total: this.tentacleProxy.totalConnections },
+            onlineConsumers: [...((this.relay as unknown as { onlineConsumers: Set<string> }).onlineConsumers ?? [])],
           };
           break;
         default: res.writeHead(404); res.end(); return;

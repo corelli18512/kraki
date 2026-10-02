@@ -17,7 +17,7 @@
 import chalk from 'chalk';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { readFileSync, existsSync, unlinkSync } from 'node:fs';
+import { readFileSync, existsSync, unlinkSync, readdirSync, statSync } from 'node:fs';
 import { select } from '@inquirer/prompts';
 
 import { loadConfig, saveConfig, getConfigPath, getKrakiHome, getLogVerbosity, getVersion, loadChannelKey, type KrakiConfig } from './config.js';
@@ -25,6 +25,7 @@ import { getCliLaunchdJobState, INTERNAL_DAEMON_WORKER_COMMAND, INTERNAL_DAEMON_
 import { runSetup } from './setup.js';
 import { requestPairingToken, buildPairingUrl, renderQrToTerminal } from './pair.js';
 import { printStaticBanner } from './banner.js';
+import { disableWindowsAutostart } from './windows-autostart.js';
 import { readStatusFile } from './status-file.js';
 import { ensureWindowsSystemPath } from './checks.js';
 import type { AgentId } from '@kraki/protocol';
@@ -123,10 +124,10 @@ function printManagedNotice(managed: ManagedByMarker): void {
 function refuseManaged(action: 'start' | 'stop' | 'update' | 'setup', managed: ManagedByMarker): void {
   printManagedNotice(managed);
   const hint: Record<typeof action, string> = {
-    start: 'Open Kraki for Mac to start it (Settings → Tentacle).',
-    stop: 'Stop it from Kraki for Mac (Settings → Tentacle) or turn Kraki off in System Settings → General → Login Items.',
+    start: 'Open Kraki for Mac to start it (Settings → This Mac).',
+    stop: 'Stop it from Kraki for Mac (Settings → This Mac) or turn Kraki off in System Settings → General → Login Items.',
     update: 'Kraki for Mac updates its built-in tentacle together with the app (Kraki → Check for Updates…).',
-    setup: 'Reconfigure from Kraki for Mac, or switch it to "Use external CLI" in Settings → Tentacle first.',
+    setup: 'Reconfigure from Kraki for Mac, or switch it to "Use external CLI" in Settings → This Mac first.',
   };
   console.log(chalk.dim(`  ${hint[action]}`));
   process.exitCode = 1;
@@ -269,8 +270,15 @@ async function cmdDefault(): Promise<void> {
 
 // ── kraki start — silent start from config ──────────────
 
-async function cmdStart(): Promise<void> {
+async function cmdStart(atLogin = false): Promise<void> {
   let config = loadConfig();
+
+  // Windows login autostart: no prompts and no output, just start if needed.
+  if (atLogin) {
+    if (!config || isDaemonRunning() || loadManagedBy()) return;
+    await startDaemon(config);
+    return;
+  }
 
   if (!config) {
     const { confirm } = await import('@inquirer/prompts');
@@ -329,6 +337,8 @@ function cmdStop(): void {
     refuseManaged('stop', managed);
     return;
   }
+  // Stopped on purpose: don't come back at the next Windows login either.
+  disableWindowsAutostart();
   if (!isDaemonRunning()) {
     console.log(chalk.yellow('Kraki is not running.'));
     return;
@@ -336,7 +346,7 @@ function cmdStop(): void {
 
   const stopped = stopDaemon();
   if (stopped) {
-    console.log(chalk.green(`${chalk.hex('#ea6046')('◈')} Kraki stopped.`));
+    console.log(`  ${chalk.green('✔')} Kraki stopped.`);
   } else {
     console.log(chalk.red('Failed to stop.'));
   }
@@ -417,13 +427,16 @@ function cmdStatus(jsonOutput = false): void {
   }
 
   console.log('');
-  console.log(chalk.bold(`${chalk.hex('#ea6046')('◈')} Kraki Status`));
+  console.log(`  ${chalk.hex('#2384d4').bold('Kraki')} ${chalk.dim(getVersion())}`);
   console.log('');
 
   const managedBy = loadManagedBy();
   const owner = managedBy ? ', managed by Kraki for Mac' : '';
   if (status.running) {
-    console.log(`  Status:  ${chalk.green('running')} (PID ${status.pid}${owner})`);
+    const relay = statusFile?.relayState;
+    const link = relay === 'connected' ? chalk.green(', connected')
+      : relay ? chalk.yellow(`, ${relay}`) : '';
+    console.log(`  Status:  ${chalk.green('running')}${link} ${chalk.dim(`(PID ${status.pid}${owner})`)}`);
   } else {
     console.log(`  Status:  ${chalk.yellow('stopped')}${owner}`);
   }
@@ -443,11 +456,48 @@ function cmdStatus(jsonOutput = false): void {
   console.log('');
 }
 
+/** `tail -n 50 [-f] *.log` without `tail`: last lines of each log, then
+ *  (with follow) print whatever is appended, polling once a second. */
+export function tailLogsPortable(logDir: string, follow: boolean, lines = 50): void {
+  const files = () => readdirSync(logDir).filter((f) => f.endsWith('.log')).map((f) => join(logDir, f));
+  const sizes = new Map<string, number>();
+  for (const file of files().sort((a, b) => statSync(a).mtimeMs - statSync(b).mtimeMs)) {
+    const text = readFileSync(file, 'utf8');
+    sizes.set(file, Buffer.byteLength(text));
+    const tail = text.split(/\r?\n/).filter(Boolean).slice(-lines);
+    if (tail.length === 0) continue;
+    console.log(chalk.dim(`==> ${file} <==`));
+    console.log(tail.join('\n'));
+  }
+  if (!follow) return;
+  let last: string | undefined;
+  setInterval(() => {
+    for (const file of files()) {
+      let size: number;
+      try { size = statSync(file).size; } catch { continue; }
+      const prev = sizes.get(file) ?? 0;
+      if (size === prev) continue;
+      const buf = readFileSync(file);
+      const chunk = buf.subarray(size < prev ? 0 : prev).toString('utf8');
+      sizes.set(file, size);
+      if (!chunk.trim()) continue;
+      if (last !== file) { console.log(chalk.dim(`==> ${file} <==`)); last = file; }
+      process.stdout.write(chunk.endsWith('\n') ? chunk : `${chunk}\n`);
+    }
+  }, 1000);
+}
+
 function cmdLogs(follow: boolean): void {
   const logDir = join(getKrakiHome(), 'logs');
 
   if (!existsSync(logDir)) {
     console.log(chalk.yellow(`No log directory found at ${logDir}`));
+    return;
+  }
+
+  if (process.platform === 'win32') {
+    // No `tail` on Windows.
+    tailLogsPortable(logDir, follow);
     return;
   }
 
@@ -1135,7 +1185,7 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'start') {
-    await cmdStart();
+    await cmdStart(args.includes('--login'));
     return;
   }
 

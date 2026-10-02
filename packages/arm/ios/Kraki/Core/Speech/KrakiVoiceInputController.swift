@@ -64,13 +64,38 @@ final class InMemoryVoiceLeaseStore: VoiceLeaseStore {
 /// The lease is a device-bound bearer credential (about a day long); keep it
 /// in the Keychain, never synced or backed up.
 final class KeychainVoiceLeaseStore: VoiceLeaseStore {
+    /// Production apps keep the historical service name. Any other bundle
+    /// (Dev, Diag, test scopes) gets its own item: a lease is bound to the
+    /// Head that issued it, and reading another app's item makes macOS ask
+    /// for the login keychain password because its ACL names that app.
+    static let service: String = {
+        let bundleID = Bundle.main.bundleIdentifier ?? ""
+        switch bundleID {
+        case "", "chat.kraki.ios", "chat.kraki.mac":
+            return "chat.kraki.voice-lease"
+        default:
+            return "chat.kraki.voice-lease.\(bundleID)"
+        }
+    }()
+
     private let query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: "chat.kraki.voice-lease",
+        kSecAttrService as String: KeychainVoiceLeaseStore.service,
         kSecAttrAccount as String: "current",
     ]
 
+    #if os(macOS) && DEBUG
+    // Ad-hoc signed Debug builds: see DevSecretFileStore.
+    private static let devFileName = "voice-lease.json"
+    #endif
+
     func load() -> StoredVoiceLease? {
+        #if os(macOS) && DEBUG
+        if DevSecretFileStore.isEnabled {
+            guard let data = DevSecretFileStore.read(Self.devFileName) else { return nil }
+            return try? JSONDecoder().decode(StoredVoiceLease.self, from: data)
+        }
+        #endif
         var request = query
         request[kSecReturnData as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -82,6 +107,12 @@ final class KeychainVoiceLeaseStore: VoiceLeaseStore {
 
     func save(_ lease: StoredVoiceLease) {
         guard let data = try? JSONEncoder().encode(lease) else { return }
+        #if os(macOS) && DEBUG
+        if DevSecretFileStore.isEnabled {
+            DevSecretFileStore.write(data, name: Self.devFileName)
+            return
+        }
+        #endif
         let update: [String: Any] = [kSecValueData as String: data]
         if SecItemUpdate(query as CFDictionary, update as CFDictionary) == errSecItemNotFound {
             var add = query
@@ -92,6 +123,12 @@ final class KeychainVoiceLeaseStore: VoiceLeaseStore {
     }
 
     func clear() {
+        #if os(macOS) && DEBUG
+        if DevSecretFileStore.isEnabled {
+            DevSecretFileStore.delete(Self.devFileName)
+            return
+        }
+        #endif
         SecItemDelete(query as CFDictionary)
     }
 }

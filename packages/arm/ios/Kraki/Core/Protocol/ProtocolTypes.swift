@@ -219,6 +219,15 @@ enum SessionMode: RawRepresentable, Codable, Sendable, CaseIterable, Hashable {
 enum DeviceRole: String, Codable, Sendable {
     case tentacle
     case app
+
+    /// What users see. "tentacle" is a protocol term only: to users it is a
+    /// computer that runs their agents.
+    var displayName: String {
+        switch self {
+        case .tentacle: return "Computer"
+        case .app: return "App"
+        }
+    }
 }
 
 enum DeviceKind: String, Codable, Sendable {

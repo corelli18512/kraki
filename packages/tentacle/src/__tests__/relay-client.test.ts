@@ -654,6 +654,17 @@ describe('RelayClient title generation', () => {
     expect(adapter.generateTitle).toHaveBeenCalledTimes(1);
   });
 
+  it('does not retitle an already-titled session on its first turn after a daemon restart', () => {
+    const { adapter, sm } = connectClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 's1', state: 'idle', autoTitle: 'Fix login bug' });
+    smMock.getMessagesAfterSeq.mockReturnValue([
+      { seq: 1, type: 'user_message', payload: JSON.stringify({ type: 'user_message', payload: { content: 'hello' } }), ts: '' },
+    ]);
+    (adapter.onIdle as (sessionId: string) => void)('s1');
+    expect(adapter.generateTitle).not.toHaveBeenCalled();
+  });
+
   it('handles rename_session consumer message', () => {
     const { sm } = connectClient();
     const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
@@ -1543,16 +1554,20 @@ describe('RelayClient tool message lazy-load shape', () => {
     try {
       const ref = store.put('sess_1', Buffer.alloc(300 * 1024, 0x63), 'application/octet-stream');
       ws.sent.length = 0;
-      ws.emit('message', Buffer.from(JSON.stringify({ type: 'device_left', deviceId: 'consumer-dev' })));
+      // The app leaves mid-transfer (Pulse delivers its request before its
+      // device_left; any later message from it would prove it is back).
       ws.emit('message', Buffer.from(JSON.stringify({
         type: 'request_attachment',
         deviceId: 'consumer-dev',
         sessionId: 'sess_1',
         payload: { id: ref.id, sessionId: 'sess_1' },
       })));
-      vi.advanceTimersByTime(20_000);
+      ws.emit('message', Buffer.from(JSON.stringify({ type: 'device_left', deviceId: 'consumer-dev' })));
       const chunks = () => decodePulseSends(ws.sent).filter(m => m.type === 'attachment_data');
-      expect(chunks()).toHaveLength(0);
+      const beforePause = chunks().length;
+      vi.advanceTimersByTime(20_000);
+      expect(beforePause).toBeLessThanOrEqual(1);
+      expect(chunks()).toHaveLength(beforePause);
       ws.emit('message', Buffer.from(JSON.stringify({
         type: 'device_joined',
         device: { id: 'consumer-dev', role: 'app', encryptionKey: 'consumer-pub' },
@@ -1560,6 +1575,32 @@ describe('RelayClient tool message lazy-load shape', () => {
       vi.advanceTimersByTime(20_000);
       expect(chunks().map(c => c.payload.index)).toEqual([0, 1, 2]);
     } finally { cleanup(); vi.useRealTimers(); }
+  });
+
+  it('an App sending after a stale device_left is broadcast to again', () => {
+    const { ws, adapter, cleanup } = buildClientWithStore();
+    try {
+      // Replayed by Pulse resume after a Tentacle restart: the App is online.
+      ws.emit('message', Buffer.from(JSON.stringify({ type: 'device_left', deviceId: 'consumer-dev' })));
+      ws.sent.length = 0;
+      (adapter.onMessage as (sid: string, e: { content: string }) => void)('sess_1', { content: 'lost' });
+      expect(decodePulseSends(ws.sent).filter((m) => m.type === 'agent_message')).toHaveLength(0);
+
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'client_features', deviceId: 'consumer-dev', payload: { features: ['fragments'] },
+      })));
+      ws.sent.length = 0;
+      (adapter.onMessage as (sid: string, e: { content: string }) => void)('sess_1', { content: 'delivered' });
+      expect(decodePulseSends(ws.sent).find((m) => m.type === 'agent_message')).toMatchObject({ payload: { content: 'delivered' } });
+
+      // An App we never had a key for is not invented.
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'client_features', deviceId: 'unknown-dev', payload: { features: [] },
+      })));
+      ws.sent.length = 0;
+      (adapter.onMessage as (sid: string, e: { content: string }) => void)('sess_1', { content: 'x' });
+      expect(pulsePayloads(ws.sent).every((p) => p.to !== 'unknown-dev' && !(Array.isArray(p.to) && p.to.includes('unknown-dev')))).toBe(true);
+    } finally { cleanup(); }
   });
 
   it('tool_complete with no result has no resultRef', () => {

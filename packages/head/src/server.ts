@@ -1,3 +1,4 @@
+import { RemoteAuthBackend } from './remote-auth-backend.js';
 import { WebSocketServer, WebSocket } from 'ws';
 import { randomBytes, createVerify } from 'crypto';
 import { v4 as uuid } from 'uuid';
@@ -767,6 +768,14 @@ export class HeadServer {
     this.pulseHub.sendToDevice(deviceId, new Uint8Array(payload));
   }
 
+  /** Presence (device_joined/left/removed/pending): the destination's next
+   *  `auth_ok` device list supersedes it, so it is never replayed across a
+   *  reconnect (a stale device_left would hide an online peer). */
+  private sendPresenceToDevice(deviceId: string, msg: Record<string, unknown>): void {
+    const payload = Buffer.from(JSON.stringify({ from: HEAD_PULSE_TARGET, msg }), 'utf8');
+    this.pulseHub.sendPresenceToDevice(deviceId, new Uint8Array(payload));
+  }
+
   /** A pulse frame addressed to HEAD_PULSE_TARGET was delivered in-order by the
    *  source device's endpoint. The payload is PLAINTEXT control JSON. Resolve the
    *  originating authenticated connection and route it through the SAME control
@@ -1534,6 +1543,19 @@ export class HeadServer {
     this.pulseHub.forgetDevice(targetDeviceId);
     logger.info('Device removed', { deviceId: targetDeviceId, byDevice: state.deviceId });
 
+    // Edge mode: the account service owns the device list and every auth
+    // mirrors it back here, so the removal must reach it too (otherwise the
+    // device reappears after the next reconnect).
+    const remote = this.options.authBackend;
+    if (remote instanceof RemoteAuthBackend) {
+      const userId = state.userId;
+      remote.removeDevice(userId, targetDeviceId).then((ok) => {
+        if (!ok) logger.warn('Account service did not remove device', { deviceId: targetDeviceId });
+      }).catch((err) => {
+        logger.warn('Failed to remove device at account service', { deviceId: targetDeviceId, error: (err as Error).message });
+      });
+    }
+
     // Broadcast removal to all remaining user devices
     this.broadcastDeviceRemoved(state.userId, targetDeviceId);
   }
@@ -1600,7 +1622,7 @@ export class HeadServer {
     for (const d of userDevices) {
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      this.sendControlToDevice(d.id, { type: 'device_removed', deviceId: removedDeviceId });
+      this.sendPresenceToDevice(d.id, { type: 'device_removed', deviceId: removedDeviceId });
     }
   }
 
@@ -1631,7 +1653,7 @@ export class HeadServer {
       if (d.id === newDeviceId) continue;
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      this.sendControlToDevice(d.id, { type: 'device_joined', device: summary });
+      this.sendPresenceToDevice(d.id, { type: 'device_joined', device: summary });
     }
   }
 
@@ -1644,7 +1666,7 @@ export class HeadServer {
       if (d.id === leftDeviceId) continue;
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      this.sendControlToDevice(d.id, { type: 'device_left', deviceId: leftDeviceId });
+      this.sendPresenceToDevice(d.id, { type: 'device_left', deviceId: leftDeviceId });
     }
   }
 
@@ -1657,7 +1679,7 @@ export class HeadServer {
       if (d.id === pendingDeviceId) continue;
       const ws = this.connections.get(d.id);
       if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      this.sendControlToDevice(d.id, { type: 'device_pending', deviceId: pendingDeviceId });
+      this.sendPresenceToDevice(d.id, { type: 'device_pending', deviceId: pendingDeviceId });
     }
   }
 

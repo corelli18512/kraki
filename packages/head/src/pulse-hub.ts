@@ -123,6 +123,11 @@ interface PerDevice {
 
 export class PulseHub {
   private readonly devices = new Map<string, PerDevice>();
+  /** Live-stream seqs of presence frames (device_joined/left/…) still possibly
+   *  unacked, per destination. The `auth_ok` device list a device receives on
+   *  connect supersedes them, so `onDeviceConnected` purges them before resume:
+   *  a replayed stale `device_left` would otherwise remove a peer that is online. */
+  private readonly presenceSeqs = new Map<string, Set<bigint>>();
   /** Capability is tracked both historically and for the concrete connection.
    *  While offline, a previously-v2 device keeps bulk in stream 1. On reconnect,
    *  current capability must be re-advertised, allowing a rolled-back/cached v1
@@ -274,6 +279,7 @@ export class PulseHub {
    *  reconnect. */
   forgetDevice(deviceId: string): void {
     this.devices.delete(deviceId);
+    this.presenceSeqs.delete(deviceId);
     this.connectedDevices.delete(deviceId);
     this.bulkCapableEver.delete(deviceId);
     this.bulkCapableNow.delete(deviceId);
@@ -293,6 +299,7 @@ export class PulseHub {
     this.bulkCapableNow.delete(deviceId);
     this.pulseSeenNow.delete(deviceId);
     const d = this.ep(deviceId);
+    this.purgeSupersededPresence(deviceId, d);
     if (options?.discardPreviousProcessNonDurable) {
       this.previousProcessFenceBounds.set(deviceId, new Map([
         [STREAM_LIVE, d.live.sendSeqValue],
@@ -527,7 +534,7 @@ export class PulseHub {
    *  given stream. If the destination is offline, that stream's endpoint keeps
    *  it in its outbox (durable → also persisted to SQLite via the store effect)
    *  and resends on reconnect. */
-  private forward(destDevice: string, payload: Uint8Array, durable: boolean, coalesceKey: string | undefined, stream: number): void {
+  private forward(destDevice: string, payload: Uint8Array, durable: boolean, coalesceKey: string | undefined, stream: number): { seq: bigint; stream: number } {
     const d = this.ep(destDevice);
     // Compatibility during rolling deploys and for stale cached Web clients:
     // v1 peers do not understand stream-1 frames. Default to stream 0 until
@@ -536,7 +543,7 @@ export class PulseHub {
       ? this.bulkCapableNow.has(destDevice)
       : this.bulkCapableEver.has(destDevice);
     const actualStream = stream === STREAM_BULK && !supportsBulk ? STREAM_LIVE : stream;
-    const { effects } = d.streams.send(actualStream, payload, { durable, coalesceKey });
+    const { seq: lastSeq, effects } = d.streams.send(actualStream, payload, { durable, coalesceKey });
     trace('FWD-SEND', { dest: destDevice, stream: actualStream, requestedStream: stream, fp: fp(payload), len: payload.length, durable, coalesceKey, effects: effects.map((e) => e.t) });
     // The destination endpoint's transmits go to the destination device; its
     // deliveries would bridge back (not used in one-way flows). No secondary
@@ -549,6 +556,7 @@ export class PulseHub {
     // was the root cause of the 2026-07-09 head OOM: JSON.stringify +
     // SQLite INSERT per streaming delta × N online arms saturated V8 heap.
     if (willSnapshot) this.saveSnapshot(destDevice);
+    return { seq: lastSeq, stream: actualStream };
   }
 
   /** Head-ORIGINATED reliable send to a device (presence / preferences / voice
@@ -560,6 +568,29 @@ export class PulseHub {
     // Head-originated control (presence, preferences, voice) is live traffic —
     // it must never queue behind bulk on the downlink.
     this.forward(destDevice, payload, opts?.durable ?? false, opts?.coalesceKey, STREAM_LIVE);
+  }
+
+  /** Presence about another device. Superseded by the destination's next
+   *  `auth_ok` device list, so never replayed into a later connection. */
+  sendPresenceToDevice(destDevice: string, payload: Uint8Array): void {
+    const { seq, stream } = this.forward(destDevice, payload, false, undefined, STREAM_LIVE);
+    if (stream !== STREAM_LIVE) return;
+    let seqs = this.presenceSeqs.get(destDevice);
+    if (!seqs) { seqs = new Set(); this.presenceSeqs.set(destDevice, seqs); }
+    seqs.add(seq);
+    // Bounded: acked entries are gone from the outbox anyway; keep the newest.
+    if (seqs.size > 1024) seqs.delete(seqs.values().next().value!);
+  }
+
+  private purgeSupersededPresence(deviceId: string, d: PerDevice): void {
+    const seqs = this.presenceSeqs.get(deviceId);
+    if (!seqs) return;
+    this.presenceSeqs.delete(deviceId);
+    const result = d.live.purge((entry) => seqs.has(entry.seq), 'presence-superseded-by-auth');
+    this.run(deviceId, result.effects);
+    if (result.droppedSeqs.length > 0) {
+      trace('PRESENCE-SUPERSEDED', { device: deviceId, dropped: result.droppedSeqs.length });
+    }
   }
 
   // ── SQLite persistence ──────────────────────────────────────────────────────
@@ -689,6 +720,8 @@ export class PulseHub {
         trace('GC-EVICT', { device: deviceId, offlineMs });
         this.devices.delete(deviceId);
         this.peerEpochs.delete(deviceId);
+        // Seqs belong to the evicted endpoint; never match a successor's entries.
+        this.presenceSeqs.delete(deviceId);
         this.previousProcessFenceBounds.delete(deviceId);
         evicted += 1;
         continue;

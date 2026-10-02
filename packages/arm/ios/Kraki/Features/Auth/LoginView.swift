@@ -123,8 +123,12 @@ struct LoginView: View {
         .environment(\.colorScheme, .dark)
         .task { await runIntroAnimations() }
         .fullScreenCover(isPresented: $showPairing) {
+            // Same dark look as the welcome screen it opens from (the camera
+            // page used to flash a white, system-light screen).
             PairingView()
                 .environment(appState)
+                .preferredColorScheme(.dark)
+                .environment(\.colorScheme, .dark)
         }
     }
 

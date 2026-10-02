@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 # Xcode build phase for KrakiMac: embed the built-in tentacle.
 #
-# Copies a prebuilt, already-signed "Kraki Tentacle.app" into
+# Copies a prebuilt, already-signed helper "Kraki.app" into
 #   Kraki.app/Contents/Library/Helpers/
 # and writes the SMAppService launch agent plist into
 #   Kraki.app/Contents/Library/LaunchAgents/<bundle id>.tentacle.plist
 #
 # Source of the helper, in order:
 #   1. $KRAKI_TENTACLE_HELPER (build setting or environment)
-#   2. packages/arm/ios/build/embedded-tentacle/Kraki Tentacle.app
+#   2. packages/arm/ios/build/embedded-tentacle/Kraki.app
 #
 # With no helper available the app is built without a built-in tentacle and
 # falls back to an external `kraki` CLI at runtime. Release builds that must
 # ship it set KRAKI_REQUIRE_TENTACLE=1 so a missing helper fails the build.
 set -euo pipefail
 
-HELPER="${KRAKI_TENTACLE_HELPER:-${SRCROOT}/build/embedded-tentacle/Kraki Tentacle.app}"
+HELPER="${KRAKI_TENTACLE_HELPER:-${SRCROOT}/build/embedded-tentacle/Kraki.app}"
 CONTENTS="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}"
 DEST_HELPERS="$CONTENTS/Library/Helpers"
 DEST_AGENTS="$CONTENTS/Library/LaunchAgents"
 LABEL="${PRODUCT_BUNDLE_IDENTIFIER}.tentacle"
 
-rm -rf "$DEST_HELPERS/Kraki Tentacle.app" "$DEST_AGENTS/$LABEL.plist"
+rm -rf "$DEST_HELPERS/Kraki.app" "$DEST_HELPERS/Kraki Tentacle.app" "$DEST_AGENTS/$LABEL.plist"
 
 if [ ! -x "$HELPER/Contents/MacOS/kraki" ]; then
   if [ "${KRAKI_REQUIRE_TENTACLE:-0}" = "1" ]; then
@@ -33,7 +33,7 @@ if [ ! -x "$HELPER/Contents/MacOS/kraki" ]; then
 fi
 
 mkdir -p "$DEST_HELPERS" "$DEST_AGENTS"
-ditto "$HELPER" "$DEST_HELPERS/Kraki Tentacle.app"
+ditto "$HELPER" "$DEST_HELPERS/Kraki.app"
 
 # KeepAlive: launchd restarts the daemon if it exits for any reason.
 # ThrottleInterval bounds a crash loop. AssociatedBundleIdentifiers attributes
@@ -47,7 +47,7 @@ cat > "$DEST_AGENTS/$LABEL.plist" <<PLIST
     <key>Label</key>
     <string>${LABEL}</string>
     <key>BundleProgram</key>
-    <string>Contents/Library/Helpers/Kraki Tentacle.app/Contents/MacOS/kraki</string>
+    <string>Contents/Library/Helpers/Kraki.app/Contents/MacOS/kraki</string>
     <key>ProgramArguments</key>
     <array>
         <string>kraki</string>

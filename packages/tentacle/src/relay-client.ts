@@ -1254,7 +1254,20 @@ export class RelayClient {
     }
   }
 
+  /** An App that is sending to us is online. Presence frames from the Head can
+   *  arrive stale (a `device_left` from before our last `auth_ok`, replayed by
+   *  Pulse resume after a Tentacle restart), which would silently stop every
+   *  broadcast to a connected App until it reconnects. */
+  private noteAppAlive(deviceId: string | undefined): void {
+    if (!deviceId || this.onlineConsumers.has(deviceId) || !this.consumerKeys.has(deviceId)) return;
+    this.onlineConsumers.add(deviceId);
+    if (!this.currentSessionByArm.has(deviceId)) this.currentSessionByArm.set(deviceId, null);
+    this.attachmentPacer.notifyOnline(deviceId);
+    logger.warn({ deviceId }, 'App marked offline is sending; restored as online');
+  }
+
   private handleConsumerMessage(msg: ConsumerMessage): void {
+    this.noteAppAlive(msg.deviceId);
     if (msg.type === 'client_features') {
       const features = Array.isArray(msg.payload?.features) ? msg.payload.features.filter((f) => typeof f === 'string') : [];
       this.appFeatures.set(msg.deviceId, new Set(features));
@@ -3619,10 +3632,14 @@ export class RelayClient {
   // ── Title generation scheduling ──────────────────────
 
   private maybeGenerateTitle(sessionId: string): void {
-    const turns = (this.turnCounts.get(sessionId) ?? 0) + 1;
+    const meta = this.sessionManager.getMeta(sessionId);
+    // The turn counter is in memory. After a daemon restart a session that
+    // already has a title must not count from 1 again (that retitled it on
+    // every restart): resume past the early refinements.
+    const known = this.turnCounts.get(sessionId) ?? (meta?.autoTitle ? 5 : 0);
+    const turns = known + 1;
     this.turnCounts.set(sessionId, turns);
 
-    const meta = this.sessionManager.getMeta(sessionId);
     if (!meta) return;
 
     // Manual title set — skip auto-generation

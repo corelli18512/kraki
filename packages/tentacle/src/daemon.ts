@@ -12,6 +12,7 @@
  * daemon inside the interactive CLI process.
  */
 
+import { enableWindowsAutostart } from './windows-autostart.js';
 import { spawn, execSync, execFileSync, type ChildProcess } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, writeFileSync, existsSync, unlinkSync, chmodSync } from 'node:fs';
 import { delimiter, join, dirname, resolve } from 'node:path';
@@ -744,6 +745,7 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
 
   const child = spawn(launch.runtime, launch.args, {
     detached: true,
+    windowsHide: true,
     stdio: ['ignore', bootstrapFd, bootstrapFd],
     cwd: launch.cwd,
     env: launch.env,
@@ -774,6 +776,7 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
 
   child.unref();
   saveDaemonPid(child.pid);
+  if (process.platform === 'win32') enableWindowsAutostart();
   return child.pid;
 }
 
@@ -788,6 +791,10 @@ export async function runDaemonReleaseSmoke(config: KrakiConfig): Promise<number
     pid = await startDaemon(config);
     const appBundle = getKrakiAppBundlePath();
     const stabilityDeadline = Date.now() + 15_000;
+    // A process probe can fail transiently (PowerShell/CIM on a busy Windows
+    // runner times out) and reports `unknown`. Only a definite answer — or a
+    // probe that never succeeds — may fail the smoke.
+    let unknownStreak = 0;
 
     // v0.31.10 reached readiness and connected to Relay, then lost its runtime
     // Launch Services identity after adapter child processes started. A smoke
@@ -797,7 +804,9 @@ export async function runDaemonReleaseSmoke(config: KrakiConfig): Promise<number
     while (Date.now() < stabilityDeadline) {
       const readyPid = loadDaemonReady();
       const status = getDaemonStatus();
-      const workerIdentity = inspectDaemonProcess(pid);
+      let workerIdentity = inspectDaemonProcess(pid);
+      unknownStreak = workerIdentity === 'unknown' ? unknownStreak + 1 : 0;
+      if (workerIdentity === 'unknown' && unknownStreak < 5) workerIdentity = 'daemon';
       const identityProof = loadDaemonIdentity();
       const bundleIdentity = appBundle === null ? null : (
         identityProof?.pid === pid ? identityProof.bundleId : null

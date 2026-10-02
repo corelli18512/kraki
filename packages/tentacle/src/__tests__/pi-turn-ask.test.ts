@@ -17,7 +17,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { KRAKI_SYSTEM_PROMPT, PiAdapter } from '../adapters/pi.js';
+import { KRAKI_SYSTEM_PROMPT, PiAdapter, summarizeCrash } from '../adapters/pi.js';
 import { PI_KRAKI_TOOLS_SOURCE } from '../adapters/pi-kraki-tools.js';
 
 interface StubProc {
@@ -991,6 +991,31 @@ describe('pi turn conclusion (relayed as-is, no injected rounds)', () => {
     ]);
     expect(session.pendingError).toBeUndefined();
     expect(session.exitObserved).toBe(true);
+  });
+
+  it('reports a mid-turn crash with the reason instead of ending the turn silently', () => {
+    const { adapter, sid, session } = makeAdapter();
+    const onError = vi.fn();
+    const onIdle = vi.fn();
+    adapter.onError = onError;
+    adapter.onIdle = onIdle;
+    adapter.setTurnIdentity(sid, 's1:turn-crash');
+    (session as unknown as { settledTurn: number | undefined; logicalTurn: number }).settledTurn = undefined;
+    (session.proc as unknown as { crashReason: () => string }).crashReason = () => 'TypeError: zlib.createZstdDecompress is not a function';
+
+    (adapter as unknown as { handleProcessExit: (sessionId: string, value: typeof session, code: number) => void })
+      .handleProcessExit(sid, session, 1);
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0]?.[1].message).toBe('Pi stopped unexpectedly (exit code 1): TypeError: zlib.createZstdDecompress is not a function');
+    expect(onIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it('picks the error line from a Node crash dump', () => {
+    const dump = "node:events:502\r\n      throw er; // Unhandled 'error' event\r\n      ^\r\n\r\nTypeError: zlib.createZstdDecompress is not a function\r\n    at Object.onResponseStart (file:///C:/x.js:1:1)\r\n\nNode.js v22.13.1";
+    expect(summarizeCrash(dump)).toBe('TypeError: zlib.createZstdDecompress is not a function');
+    expect(summarizeCrash('fatal: something broke\nNode.js v22.13.1')).toBe('fatal: something broke');
+    expect(summarizeCrash('')).toBeUndefined();
   });
 
   it('aborted stopReason → just idle', () => {

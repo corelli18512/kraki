@@ -21,18 +21,19 @@ enum BubbleActionMetrics {
     static let outcomeLabelFont = UIFont.systemFont(ofSize: 13, weight: .medium)
     static let outcomeDetailFont = UIFont.systemFont(ofSize: 12)
     static func outcomeSymbol(failed: Bool) -> String { failed ? "xmark.octagon.fill" : "stop.circle.fill" }
-    static func outcomeLabel(failed: Bool) -> String { failed ? "Turn failed" : "User aborted" }
+    static func outcomeLabel(failed: Bool) -> String { failed ? "Turn failed" : "Stopped" }
 
     static let choiceFont = UIFont.systemFont(ofSize: 14, weight: .medium)
     static let choicePaddingH: CGFloat = 14
 
-    /// Natural width of the "User aborted" / "Turn failed" row.
+    /// Natural width of the "Stopped" / "Turn failed" row.
     static func outcomeWidth(failed: Bool, detail: String?) -> CGFloat {
         let symbol = UIImage(systemName: outcomeSymbol(failed: failed),
                              withConfiguration: UIImage.SymbolConfiguration(font: .systemFont(ofSize: outcomeIconSize)))
         var width = ceil(symbol?.size.width ?? outcomeIconSize) + outcomeSpacing
             + textWidth(outcomeLabel(failed: failed), outcomeLabelFont)
-        if let detail, !detail.isEmpty { width += outcomeSpacing + textWidth(detail, outcomeDetailFont) }
+        // The detail sits on its own line(s) below; the bubble clamps it.
+        if let detail, !detail.isEmpty { width = max(width, textWidth(detail, outcomeDetailFont)) }
         return width
     }
 
@@ -77,21 +78,27 @@ struct BubbleActionSlot: View {
     }
 
     private func terminalOutcome(_ m: ChatMessage, failed: Bool) -> some View {
-        HStack(spacing: BubbleActionMetrics.outcomeSpacing) {
-            Image(systemName: BubbleActionMetrics.outcomeSymbol(failed: failed))
-                .font(.system(size: BubbleActionMetrics.outcomeIconSize))
-                .foregroundStyle(failed ? Color.red : Color.textMuted)
-            Text(BubbleActionMetrics.outcomeLabel(failed: failed))
-                .font(Font(BubbleActionMetrics.outcomeLabelFont))
-                .foregroundStyle(failed ? Color.red : Color.textSecondary)
+        // The reason gets its own lines under the status: on a phone a
+        // one-line, middle-truncated reason hid exactly the part that says
+        // what went wrong ("…is not a function").
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: BubbleActionMetrics.outcomeSpacing) {
+                Image(systemName: BubbleActionMetrics.outcomeSymbol(failed: failed))
+                    .font(.system(size: BubbleActionMetrics.outcomeIconSize))
+                    .foregroundStyle(failed ? Color.red : Color.textMuted)
+                Text(BubbleActionMetrics.outcomeLabel(failed: failed))
+                    .font(Font(BubbleActionMetrics.outcomeLabelFont))
+                    .foregroundStyle(failed ? Color.red : Color.textSecondary)
+            }
             if let msg = m.payload["message"]?.stringValue, !msg.isEmpty {
                 Text(msg).font(Font(BubbleActionMetrics.outcomeDetailFont)).foregroundStyle(Color.textMuted)
-                    .lineLimit(1).truncationMode(.middle)
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             }
         }
-        // Leading-aligned without a trailing Spacer: in an HStack a Spacer
-        // also takes the 8pt spacing, which the natural-width measurement
-        // (`outcomeWidth`) would not know about.
+        // Leading-aligned without a trailing Spacer (natural-width
+        // measurement in `outcomeWidth` would not know about it).
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 

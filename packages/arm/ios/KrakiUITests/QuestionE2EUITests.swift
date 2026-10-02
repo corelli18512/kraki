@@ -69,10 +69,10 @@ final class QuestionE2EUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Answer: Red"].waitForExistence(timeout: 40))
         // The driver script aborts the turn now.
         try "ready".write(toFile: "/tmp/kraki-e2e-abort-go", atomically: true, encoding: .utf8)
-        let notAnswered = text(app, "User aborted").waitForExistence(timeout: 30)
+        let notAnswered = text(app, "Stopped").waitForExistence(timeout: 30)
         shot("a1-after-abort")
         XCTAssertTrue(notAnswered, "abort shows User aborted")
-        let bubbles = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "User aborted")).count
+        let bubbles = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Stopped")).count
         XCTAssertEqual(bubbles, 1)
         XCTAssertFalse(app.buttons["Answer: Red"].exists)
         sleep(1)

@@ -80,7 +80,7 @@ struct SessionInfoSheet: View {
             sectionHeader("Session")
 
             titleRow
-            infoRow("Agent", value: session.agent)
+            infoRow("Agent", value: AgentInfo.from(session.agent).label)
             modelRow
             infoRow("Created", value: session.createdAt.formatted(date: .abbreviated, time: .shortened))
         }
@@ -181,7 +181,9 @@ struct SessionInfoSheet: View {
                 Divider()
 
                 infoRow("Total cost", value: formatCost(usage.totalCost))
-                infoRow("Duration", value: formatDuration(usage.totalDurationMs))
+                if usage.totalDurationMs > 0 {
+                    infoRow("Duration", value: formatDuration(usage.totalDurationMs))
+                }
             }
         }
     }
