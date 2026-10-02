@@ -260,7 +260,7 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
         panel.backgroundColor = .clear
         panel.animationBehavior = .none
         panel.delegate = self
-        panel.onDismiss = { [weak self] in self?.dismiss() }
+        panel.onDismiss = { [weak self] in self?.dismiss(reason: "esc") }
         let hosting = NSHostingView(rootView: UsagePeekView(controller: self).environment(appState))
         hosting.sizingOptions = []
         hosting.autoresizingMask = [.width, .height]
@@ -282,7 +282,7 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
             self.stopHoverTracking()
             if !self.peek.isVisible { self.hide() }
         }
-        hotkey.onRecording = { [weak self] in self?.keyPhysicallyHeld = false; self?.dismiss(animated: false) }
+        hotkey.onRecording = { [weak self] in self?.keyPhysicallyHeld = false; self?.dismiss(animated: false, reason: "recording") }
         hotkey.start()
 
         let outside: (NSEvent) -> Void = { [weak self] _ in Task { @MainActor in self?.outsideClick() } }
@@ -293,8 +293,14 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
         // opens the panel a few seconds after launch (as if F6 were held / the
         // menu entry clicked).
         if let mode = ProcessInfo.processInfo.environment["KRAKI_USAGE_PEEK_SHOW"] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            if let session = ProcessInfo.processInfo.environment["KRAKI_USAGE_PEEK_SESSION"] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    NotificationCenter.default.post(name: .macSelectSession, object: nil, userInfo: ["sessionId": session])
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
                 guard let self else { return }
+                KLog.diag("[UsagePeek] current account=\(self.currentAccountKey?.prefix(12) ?? "none")")
                 if mode == "detail" { self.peek.click() } else { self.peek.press() }
                 self.present(takeFocus: false)
             }
@@ -303,7 +309,7 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification,
                      NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.activeSpaceDidChangeNotification] {
             observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.keyPhysicallyHeld = false; self?.dismiss(animated: false) }
+                Task { @MainActor in self?.keyPhysicallyHeld = false; self?.dismiss(animated: false, reason: name.rawValue) }
             })
         }
     }
@@ -315,7 +321,10 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
         if peek.isVisible { present(takeFocus: true) } else { hide() }
     }
 
-    func dismiss(animated: Bool = true) { peek.dismiss(); hide(animated: animated) }
+    func dismiss(animated: Bool = true, reason: String = "") {
+        KLog.diag("[UsagePeek] dismiss \(reason)")
+        peek.dismiss(); hide(animated: animated)
+    }
 
     /// The content changed (accounts / devices); keep the window fitted to it.
     func contentDidChange() {
@@ -379,13 +388,13 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
     private func outsideClick() {
         guard let panel, peek.pinned, !peek.held, panel.isVisible else { return }
         if panel.frame.contains(NSEvent.mouseLocation) { return }
-        dismiss()
+        dismiss(reason: "outside click")
     }
 
     nonisolated func windowDidResignKey(_ notification: Notification) {
         Task { @MainActor in
             guard notification.object as? NSWindow === self.panel, self.peek.isVisible, !self.peek.held else { return }
-            self.dismiss()
+            self.dismiss(reason: "resign key")
         }
     }
 
