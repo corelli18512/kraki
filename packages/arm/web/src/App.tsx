@@ -1,3 +1,4 @@
+import { KrakiLogo } from './components/KrakiLogo';
 import { useEffect, useRef } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import { Sidebar } from './components/layout/Sidebar';
@@ -29,7 +30,7 @@ function RelayBlockingOverlay({
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/10 p-4 backdrop-blur-[1.5px]"
     >
       <div className="w-full max-w-md rounded-2xl border border-border-primary bg-surface-primary/95 p-8 text-center shadow-2xl">
-        <img src="/logo.png" alt="Kraki" className="mx-auto h-16 w-16 object-contain" />
+        <KrakiLogo className="mx-auto h-16 w-16 object-contain" />
         <h2 id="relay-status-title" className="mt-4 text-lg font-semibold text-text-primary">
           {title}
         </h2>

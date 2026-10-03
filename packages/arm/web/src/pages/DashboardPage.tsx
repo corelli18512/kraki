@@ -1,3 +1,4 @@
+import { KrakiLogo } from '../components/KrakiLogo';
 import { useState, useCallback, useEffect } from 'react';
 import { useStore } from '../hooks/useStore';
 import { wsClient } from '../lib/ws-client';
@@ -61,7 +62,7 @@ export function DashboardPage() {
             </div>
           </div>
         )}
-        <img src="/logo.png" alt="Kraki" className="mx-auto mb-4 h-40 w-40 object-contain animate-logo-reveal" />
+        <KrakiLogo className="mx-auto mb-4 h-40 w-40 object-contain animate-logo-reveal" />
         <h2 className="text-lg font-semibold text-text-primary animate-fade-up">Welcome to Kraki</h2>
         {oauthAvailable && (
           <p className="mt-2 max-w-sm text-sm text-text-secondary animate-fade-up">
@@ -133,7 +134,7 @@ export function DashboardPage() {
     <div className="flex flex-1 flex-col">
       <div className="hidden flex-1 items-center justify-center md:flex">
         <div className="text-center">
-          <img src="/logo.png" alt="Kraki" className="mx-auto mb-4 h-40 w-40 object-contain animate-logo-reveal" />
+          <KrakiLogo className="mx-auto mb-4 h-40 w-40 object-contain animate-logo-reveal" />
           <p className="text-sm font-medium text-text-primary animate-fade-up">
             Welcome to Kraki
           </p>
