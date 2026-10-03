@@ -18,6 +18,7 @@ import { getKrakiHome, loadConfig, saveConfig, loadChannelKey, getOrCreateDevice
 import { ensureWindowsSystemPath, probeFda, ensureTccBundleRegistered, cleanupStaleBundleEntries } from './checks.js';
 import { MultiAgentAdapter } from './adapters/multi.js';
 import { hideChildWindowsByDefault } from './windows-hide.js';
+import { applyProcessProxy } from './proxy.js';
 
 // Self-heal PATH on Windows BEFORE any child process is spawned. The
 // daemon may have been started from a context with a minimal PATH
@@ -379,6 +380,11 @@ export async function startWorker(): Promise<WorkerResult> {
 
   relay.connect();
   logger.info({ relay: config.relay, device: config.device.name }, 'Daemon running');
+  {
+    const { detectProxy } = await import('./proxy.js');
+    const p = detectProxy();
+    if (p) logger.info({ proxy: p.https ?? p.http, source: p.source }, 'Using proxy');
+  }
 
   // Write initial status file so toolbar can detect the daemon. Readiness is
   // published only after the lifecycle handlers below are installed.
@@ -433,6 +439,7 @@ export async function startWorker(): Promise<WorkerResult> {
 const isDirectRun = process.argv[1]?.endsWith('daemon-worker.js') || process.argv[1]?.endsWith('daemon-worker.ts');
 if (isDirectRun) {
   hideChildWindowsByDefault();
+  applyProcessProxy();
   startWorker().catch((err) => {
     logger.fatal({ err }, 'Daemon failed to start');
     process.exit(1);

@@ -5,6 +5,7 @@
  * device naming, and agent verification.
  */
 
+import { wsProxyOptions } from './proxy.js';
 import { select, input, confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -180,7 +181,7 @@ export function queryRelayInfo(url: string, timeoutMs = 5000): Promise<RelayInfo
       reject(new Error('Connection timed out'));
     }, timeoutMs);
 
-    const ws = new WebSocket(url);
+    const ws = new WebSocket(url, wsProxyOptions(url));
     ws.on('open', () => {
       ws.send(JSON.stringify({ type: 'auth_info' }));
     });

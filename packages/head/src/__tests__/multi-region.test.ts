@@ -298,6 +298,12 @@ describe('AccountApi', () => {
     expect(data.methods).toContain('challenge');
   });
 
+  it('serves the public sign-in config without a service key', async () => {
+    const { status, data } = await apiGetPublic('/api/config');
+    expect(status).toBe(200);
+    expect(data.methods).toContain('challenge');
+  });
+
   it('should return the public region directory', async () => {
     const { status, data } = await apiGetPublic('/api/regions');
     expect(status).toBe(200);
