@@ -6,6 +6,7 @@
  * Handles auth, E2E encryption, reconnection, and session lifecycle.
  */
 
+import { wsProxyOptions } from './proxy.js';
 import { WebSocket } from 'ws';
 import { DEFAULT_SESSION_MODE, normalizeSessionMode, toWireSessionMode } from '@kraki/protocol';
 import { appendFileSync } from 'node:fs';
@@ -1012,7 +1013,7 @@ export class RelayClient {
 
     // Bound the TCP/TLS/upgrade phase: a black-holed connect (Wi-Fi switch,
     // captive portal) otherwise waits for the OS TCP timeout before retrying.
-    const ws = new WebSocket(this.options.relayUrl, { handshakeTimeout: 15_000 });
+    const ws = new WebSocket(this.options.relayUrl, { handshakeTimeout: 15_000, ...wsProxyOptions(this.options.relayUrl) });
     this.ws = ws;
 
     ws.on('open', () => {

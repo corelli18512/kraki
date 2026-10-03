@@ -54,6 +54,10 @@ export class AccountApi {
       (path === '/api/regions' && req.method === 'GET')
       || (path === '/api/login/resolve' && req.method === 'POST')
       || (path === '/api/auth/github/token' && req.method === 'POST')
+      // Public sign-in info (methods + GitHub OAuth client id), the same the
+      // WebSocket auth_info exposes. Clients behind an HTTP proxy can't use
+      // that WebSocket probe before they are set up, so they read it here.
+      || (path === '/api/config' && req.method === 'GET')
       || (path === '/api/edge/join' && req.method === 'POST');
 
     if (!publicRoute && !this.checkServiceKey(req, res)) return true;

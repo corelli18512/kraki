@@ -8,6 +8,7 @@
  * - tentacle's public key (for E2E)
  */
 
+import { wsProxyOptions } from './proxy.js';
 import { WebSocket } from 'ws';
 import { createHash } from 'node:crypto';
 import { execSync } from 'node:child_process';
@@ -30,7 +31,7 @@ export async function requestPairingToken(
   authToken?: string,
 ): Promise<PairingInfo> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(relayUrl);
+    const ws = new WebSocket(relayUrl, wsProxyOptions(relayUrl));
     const timeout = setTimeout(() => {
       ws.close();
       reject(new Error('Pairing request timed out'));

@@ -14,6 +14,7 @@
  *   kraki --version     Show version
  */
 
+import { wsProxyOptions, applyProcessProxy } from './proxy.js';
 import { launchedFromExplorer } from './windows-console.js';
 import chalk from 'chalk';
 import { join } from 'node:path';
@@ -1023,7 +1024,7 @@ async function cmdRelayInfo(args: string[]): Promise<void> {
       reject(new Error('Connection timed out'));
     }, 5000);
 
-    const ws = new WebSocket(url);
+    const ws = new WebSocket(url, wsProxyOptions(url));
     ws.on('open', () => {
       ws.send(JSON.stringify({ type: 'auth_info' }));
     });
@@ -1141,6 +1142,8 @@ async function cmdAuth(args: string[]): Promise<void> {
 async function main(): Promise<void> {
   // Windows: no console window for any child process (see windows-hide.ts).
   hideChildWindowsByDefault();
+  // Networks that need a proxy (env or the macOS system proxy): see proxy.ts.
+  applyProcessProxy();
   const args = process.argv.slice(2);
   const cmd = args[0];
 
