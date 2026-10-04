@@ -301,7 +301,6 @@ targets:
       - path: Kraki/Features/Sessions/NoAgentsGuide.swift
       - path: Kraki/Features/Sessions/SessionCardView.swift
       - path: Kraki/Features/Sessions/ActivityRow.swift
-      - path: Kraki/Features/Auth/ConnectionStatusChip.swift
       - path: Kraki/Features/Auth/LoginView+macOS.swift
       - path: Kraki/Features/Auth/GitHubMark.swift
       - path: Kraki/Features/Auth/MacSetupIntro.swift

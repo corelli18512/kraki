@@ -102,7 +102,7 @@ enum VoiceInputError: LocalizedError, Equatable {
         case .invalidBrokerURL:
             return "The voice service address is invalid."
         case .offline:
-            return "Reconnect to Kraki before starting voice input."
+            return "Couldn't connect to Kraki. Check your connection and try again."
         case .microphoneDenied:
             #if os(iOS)
             return "Microphone access is required. Enable it in Settings → Privacy & Security → Microphone."

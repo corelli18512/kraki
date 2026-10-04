@@ -176,6 +176,9 @@ struct MacChatView: View {
 
     @Environment(AppState.self) private var appState
     @State private var hasMaterializedLatest = false
+    /// "Syncing…" in the title once a catch-up has lasted a moment. (The
+    /// connection itself is reported once, in the sidebar header.)
+    @State private var showsSyncing = false
     @State private var stepsTarget: StepsTarget?
     @State private var showInfo = false
     @State private var modePickerExpanded = MacChatModePicker.startsExpanded
@@ -328,6 +331,11 @@ struct MacChatView: View {
         .task {
             MacMarkdown.prewarmSyntaxHighlighter()
         }
+        .task(id: viewModel.isCatchingUp) {
+            guard viewModel.isCatchingUp else { showsSyncing = false; return }
+            try? await Task.sleep(for: .seconds(1))
+            if !Task.isCancelled, viewModel.isCatchingUp { showsSyncing = true }
+        }
         .onChange(of: entryGeneration, initial: true) { _, _ in
             hasMaterializedLatest = hasLocalPresentation || !providerWaitingForLatest
             stepsTarget = nil
@@ -438,9 +446,9 @@ struct MacChatView: View {
                 Button {
                     showInfo = true
                 } label: {
-                    Text(session.displayTitle)
+                    Text(showsSyncing ? "Syncing…" : session.displayTitle)
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color.textTitle)
+                        .foregroundStyle(showsSyncing ? Color.textSecondary : Color.textTitle)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .padding(.horizontal, 15)
@@ -502,6 +510,7 @@ struct MacChatView: View {
                 bottomContentInset: effectiveBottomInputHeight,
                 isLoadingOlder: viewModel.isLoadingOlder,
                 isLoadingNewer: viewModel.isFillingTail,
+                hasNewerLocalRows: viewModel.hasNewerLocalRows,
                 atOldest: viewModel.atHistoryStart,
                 atNewest: viewModel.atHead,
                 onJumpToLatest: {

@@ -21,7 +21,7 @@ import { randomBytes } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { ChaosProxy, type FaultProfile } from './proxy.js';
 import { ScriptedAdapter } from './scripted-adapter.js';
-import { connectApp, type MockApp } from '../helpers.js';
+import { connectApp, sendToTentacle, type MockApp } from '../helpers.js';
 
 export interface StackOptions { controlPort?: number; headPort?: number }
 
@@ -45,6 +45,10 @@ export class ChaosStack {
   private tentacleDeviceId = '';
   private control: Server | null = null;
   private admin: MockApp | null = null;
+  /** A second, unproxied app device ("the Mac") that talks in the session. */
+  private peer: MockApp | null = null;
+  /** Drop the next N `session_messages_batch` replies (sent, never delivered). */
+  dropBatches = 0;
   readonly events: Array<{ t: number; event: string; detail?: Record<string, unknown> }> = [];
 
   private log(event: string, detail?: Record<string, unknown>): void {
@@ -100,6 +104,18 @@ export class ChaosStack {
       authMethod: 'open',
     }, this.keys, this.attachments);
     this.relay.onStateChange = (state) => this.log('tentacle_state', { state });
+    const relayAny = this.relay as unknown as { sendReliableUnicastTo: (...a: unknown[]) => void };
+    const original = relayAny.sendReliableUnicastTo.bind(this.relay);
+    relayAny.sendReliableUnicastTo = (target: unknown, key: unknown, msg: unknown, ...rest: unknown[]) => {
+      const type = (msg as { type?: string }).type;
+      if (type === 'session_messages_batch' && this.dropBatches > 0) {
+        this.dropBatches--;
+        this.log('batch_dropped', { target });
+        return;
+      }
+      if (type === 'session_messages_batch') this.log('batch_sent', { target });
+      original(target, key, msg, ...rest);
+    };
     this.relay.onAuthenticated = (info) => {
       if (!this.tentacleDeviceId) this.tentacleDeviceId = info.deviceId;
       device.deviceId = this.tentacleDeviceId;
@@ -221,6 +237,9 @@ export class ChaosStack {
           this.adapter.burst(String(body.sessionId ?? this.sessionId), Number(body.count ?? 1), String(body.prefix ?? 'burst'), Number(body.bytes ?? 0));
           break;
         case 'POST /agent/options': Object.assign(this.adapter.options, body); break;
+        case 'POST /tentacle/drop-batches': this.dropBatches = Number(body.count ?? 1); break;
+        case 'GET /events': out = this.events.slice(-Number(url.searchParams.get('n') ?? 50)); break;
+        case 'POST /peer/input': out = await this.peerInput(String(body.text ?? 'ok'), String(body.sessionId ?? this.sessionId)); break;
         case 'POST /session': out = { sessionId: await this.createSession() }; break;
         case 'POST /pairing-token': out = { token: await this.pairingToken() }; break;
         case 'POST /attachment': out = this.putAttachment(Number(body.bytes ?? 1_000_000), String(body.sessionId ?? this.sessionId)); break;
@@ -248,6 +267,16 @@ export class ChaosStack {
     }
   }
 
+  /** Another device sends input (like replying from the Mac). */
+  async peerInput(text: string, sessionId: string): Promise<Record<string, unknown>> {
+    if (!this.peer) this.peer = await connectApp(this.headPort, 'Chaos Mac');
+    const clientId = `peer_${Date.now()}`;
+    sendToTentacle(this.peer, { type: 'send_input', sessionId, deviceId: this.peer.deviceId, seq: 0,
+      timestamp: new Date().toISOString(), payload: { text, clientId } });
+    this.log('peer_input', { sessionId, text });
+    return { clientId };
+  }
+
   info(): Record<string, unknown> {
     return {
       controlPort: this.controlPort, appPort: this.appProxy.port, app2Port: this.app2Proxy.port, headPort: this.headPort,
@@ -258,6 +287,7 @@ export class ChaosStack {
   async stop(): Promise<void> {
     this.relay?.disconnect();
     this.admin?.close();
+    this.peer?.close();
     this.legacyApps.forEach((a) => a.close());
     await this.appProxy.close();
     await this.app2Proxy.close();
