@@ -693,92 +693,37 @@ enum MacCTText {
     }
 }
 
-final class MacTableLayout {
-    let rows: [[String]]
-    let alignments: [TableAlignment]
-    let columnWidths: [CGFloat]
-    let rowHeights: [CGFloat]
-    let rowOrigins: [CGFloat]
-    let contentSize: NSSize
-    let bubbleVisibleRowCount: Int
-    let bubbleRowsHeight: CGFloat
-    let bubbleViewportHeight: CGFloat
-    let hiddenRowCount: Int
+typealias MacTableLayout = ChatTable
 
-    /// Identity of the table's visible content (for view reuse).
-    private(set) lazy var contentKey: String = {
-        var hasher = Hasher()
-        for row in rows { hasher.combine(row) }
-        hasher.combine(alignments.map { "\($0)" })
-        return "\(rows.count)x\(rows.first?.count ?? 0):\(hasher.finalize())"
-    }()
+enum MacTableSpacing {
+    /// Breathing room below a table (carried by its attachment line).
+    static let below: CGFloat = 6
+}
 
-    static let showMoreHeight: CGFloat = 40
-    static let cellPadH: CGFloat = 10
-    static let cellPadV: CGFloat = 8
-    private static let headerFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .bold)
-    private static let bodyFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-
-    init(rows: [[String]], alignments: [TableAlignment]) {
-        self.rows = rows
-        self.alignments = alignments
-        let columnCount = rows.first?.count ?? 0
-        var widths = Array(repeating: CGFloat(72), count: columnCount)
-        for (rowIndex, row) in rows.enumerated() {
-            let font = rowIndex == 0 ? Self.headerFont : Self.bodyFont
-            for column in 0..<columnCount {
-                let value = column < row.count ? row[column] : ""
-                let measured = MacCTText.width(value, font: font)
-                widths[column] = max(widths[column], min(220, measured + Self.cellPadH * 2))
-            }
+extension ChatTablePaint {
+    static func current(surface: NSColor, appearance: NSAppearance) -> ChatTablePaint {
+        var paint = ChatTablePaint(hairline: NSColor.clear.cgColor, headerFill: NSColor.clear.cgColor,
+                                   codeFill: NSColor.clear.cgColor, surface: NSColor.clear.cgColor,
+                                   highlight: NSColor.clear.cgColor, accent: NSColor.clear.cgColor)
+        appearance.performAsCurrentDrawingAppearance {
+            paint = ChatTablePaint(
+                hairline: NSColor.labelColor.withAlphaComponent(0.13).cgColor,
+                headerFill: NSColor.labelColor.withAlphaComponent(0.05).cgColor,
+                codeFill: NSColor.labelColor.withAlphaComponent(0.08).cgColor,
+                surface: surface.cgColor,
+                highlight: NSColor.systemYellow.withAlphaComponent(0.22).cgColor,
+                accent: NSColor.systemYellow.withAlphaComponent(0.48).cgColor
+            )
         }
-        columnWidths = widths
-
-        var heights: [CGFloat] = []
-        var origins: [CGFloat] = []
-        var y: CGFloat = 0
-        for (rowIndex, row) in rows.enumerated() {
-            origins.append(y)
-            let font = rowIndex == 0 ? Self.headerFont : Self.bodyFont
-            var rowHeight: CGFloat = 36
-            for column in 0..<columnCount {
-                let value = column < row.count ? row[column] : ""
-                let available = max(1, widths[column] - Self.cellPadH * 2)
-                let height = MacCTText.height(value, font: font, width: available)
-                rowHeight = max(rowHeight, height + Self.cellPadV * 2)
-            }
-            heights.append(rowHeight)
-            y += rowHeight
-        }
-        rowHeights = heights
-        rowOrigins = origins
-        contentSize = NSSize(width: max(1, widths.reduce(0, +)), height: max(1, y))
-
-        let previewBudget: CGFloat = 280
-        var visibleCount = 0
-        var visibleHeight: CGFloat = 0
-        for height in heights {
-            let needsFooter = visibleCount + 1 < heights.count
-            let projected = visibleHeight + height + (needsFooter ? Self.showMoreHeight : 0)
-            if visibleCount >= 2, projected > previewBudget { break }
-            visibleHeight += height
-            visibleCount += 1
-        }
-        bubbleVisibleRowCount = visibleCount
-        bubbleRowsHeight = visibleHeight
-        hiddenRowCount = max(0, rows.count - visibleCount)
-        bubbleViewportHeight = visibleHeight + (hiddenRowCount > 0 ? Self.showMoreHeight : 0)
+        return paint
     }
-
-    func font(for row: Int) -> NSFont { row == 0 ? Self.headerFont : Self.bodyFont }
-    func semanticText() -> String { rows.map { $0.joined(separator: "\t") }.joined(separator: "\n") }
 }
 
 private final class MacTableAttachmentCell: NSTextAttachmentCell {
-    let tableLayout: MacTableLayout
+    let tableLayout: ChatTable
     var viewportWidth: CGFloat = 1
 
-    init(layout: MacTableLayout) {
+    init(layout: ChatTable) {
         tableLayout = layout
         super.init(textCell: "")
     }
@@ -786,18 +731,19 @@ private final class MacTableAttachmentCell: NSTextAttachmentCell {
     required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override var cellSize: NSSize {
-        NSSize(width: max(1, viewportWidth), height: tableLayout.bubbleViewportHeight)
+        NSSize(width: max(1, viewportWidth),
+               height: tableLayout.bubbleHeight(width: max(1, viewportWidth)) + MacTableSpacing.below)
     }
 
     override func draw(withFrame cellFrame: NSRect, in controlView: NSView?) {}
 }
 
 final class MacTableAttachment: NSTextAttachment {
-    let tableLayout: MacTableLayout
+    let tableLayout: ChatTable
     private let sizingCell: MacTableAttachmentCell
 
     init(rows: [[String]], alignments: [TableAlignment]) {
-        let layout = MacTableLayout(rows: rows, alignments: alignments)
+        let layout = ChatTable(rows: rows, alignments: alignments)
         tableLayout = layout
         sizingCell = MacTableAttachmentCell(layout: layout)
         super.init(data: nil, ofType: nil)
@@ -812,156 +758,328 @@ final class MacTableAttachment: NSTextAttachment {
     }
 }
 
+/// Draws the visible part of the table at the scroll view's viewport, so the
+/// pinned first column and sticky header are simply drawn at its edges.
 private final class MacTableCanvasView: NSView {
+    weak var host: MacTableScrollView?
     override var isFlipped: Bool { true }
-    let tableLayout: MacTableLayout
-    let fullTable: Bool
-
-    init(layout: MacTableLayout, fullTable: Bool) {
-        tableLayout = layout
-        self.fullTable = fullTable
-        super.init(frame: NSRect(origin: .zero, size: layout.contentSize))
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.clear.cgColor
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
-        let line = NSColor.labelColor.withAlphaComponent(0.16)
-        let headerLine = NSColor.labelColor.withAlphaComponent(0.34)
-        let rowLimit = fullTable ? tableLayout.rows.count : tableLayout.bubbleVisibleRowCount
-        for row in 0..<rowLimit {
-            let y = tableLayout.rowOrigins[row]
-            let height = tableLayout.rowHeights[row]
-            guard y <= dirtyRect.maxY, y + height >= dirtyRect.minY else { continue }
-            var x: CGFloat = 0
-            for column in tableLayout.columnWidths.indices {
-                let width = tableLayout.columnWidths[column]
-                let value = column < tableLayout.rows[row].count ? tableLayout.rows[row][column] : ""
-                let paragraph = NSMutableParagraphStyle()
-                switch column < tableLayout.alignments.count ? tableLayout.alignments[column] : .leading {
-                case .leading: paragraph.alignment = .left
-                case .center: paragraph.alignment = .center
-                case .trailing: paragraph.alignment = .right
-                }
-                MacCTText.drawWrapped(
-                    value,
-                    attributes: [
-                        .font: tableLayout.font(for: row),
-                        .foregroundColor: NSColor.labelColor,
-                        .paragraphStyle: paragraph,
-                    ],
-                    in: NSRect(
-                        x: x + MacTableLayout.cellPadH,
-                        y: y + MacTableLayout.cellPadV,
-                        width: width - MacTableLayout.cellPadH * 2,
-                        height: height - MacTableLayout.cellPadV * 2
-                    )
-                )
-                x += width
-                if column < tableLayout.columnWidths.count - 1 {
-                    line.setFill()
-                    NSRect(x: x - 0.5, y: y, width: 0.5, height: height).fill()
-                }
-            }
-            (row == 0 ? headerLine : line).setFill()
-            let ruleHeight: CGFloat = row == 0 ? 1 : 0.5
-            NSRect(x: 0, y: y + height - ruleHeight,
-                   width: tableLayout.contentSize.width, height: ruleHeight).fill()
+        guard let host, let geometry = host.geometry, let context = NSGraphicsContext.current?.cgContext else { return }
+        let paint = ChatTablePaint.current(surface: host.surfaceColor, appearance: effectiveAppearance)
+        if geometry.mode == .cards {
+            geometry.drawCards(in: context, paint: paint)
+            return
+        }
+        let visible = host.contentView.bounds
+        geometry.drawGrid(in: context, viewport: CGRect(x: visible.minX, y: visible.minY, width: bounds.width, height: bounds.height),
+                          rowLimit: host.fullTable ? geometry.rowHeights.count : geometry.previewRowCount,
+                          stickyHeader: host.fullTable, paint: paint,
+                          highlightedRows: host.highlightedRows, currentRow: host.currentRow)
+    }
+}
+
+/// Sized like the table content; receives clicks in content coordinates.
+private final class MacTableDocumentView: NSView {
+    weak var host: MacTableScrollView?
+    override var isFlipped: Bool { true }
+    private var resizing: (column: Int, startX: CGFloat, startWidth: CGFloat)?
+
+    override func resetCursorRects() {
+        guard let host, host.fullTable, let geometry = host.geometry, geometry.mode == .grid else { return }
+        let visible = host.contentView.bounds
+        for column in geometry.columnOrigins.indices {
+            let edge = geometry.columnOrigins[column] + geometry.columnWidths[column]
+            addCursorRect(NSRect(x: edge - 3, y: visible.minY, width: 6, height: geometry.headerHeight), cursor: .resizeLeftRight)
+        }
+    }
+
+    private func resizeColumn(at point: NSPoint) -> Int? {
+        guard let host, host.fullTable, let geometry = host.geometry, geometry.mode == .grid else { return nil }
+        let visible = host.contentView.bounds
+        guard point.y >= visible.minY, point.y < visible.minY + geometry.headerHeight else { return nil }
+        return geometry.columnOrigins.indices.first { column in
+            abs(point.x - (geometry.columnOrigins[column] + geometry.columnWidths[column])) <= 3
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if let column = resizeColumn(at: point), let geometry = host?.geometry {
+            resizing = (column, point.x, geometry.columnWidths[column])
+            return
+        }
+        if event.clickCount == 2, let host, !host.fullTable {
+            host.openFullTable()
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let resizing, let host else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        host.setColumnWidth(resizing.column, width: resizing.startWidth + point.x - resizing.startX)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if resizing != nil {
+            resizing = nil
+            window?.invalidateCursorRects(for: self)
+            return
+        }
+        guard event.clickCount == 1, let host, let geometry = host.geometry else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let visible = host.contentView.bounds
+        if geometry.mode == .grid, host.fullTable,
+           let hit = geometry.gridCell(at: point, viewportMinX: visible.minX, viewportMinY: visible.minY, stickyHeader: true),
+           hit.row < 0 {
+            host.sort(by: hit.column)
+            return
+        }
+        if let url = geometry.link(at: point, viewportMinX: visible.minX, viewportMinY: visible.minY, stickyHeader: host.fullTable) {
+            NSWorkspace.shared.open(url)
+        } else if geometry.mode == .cards, geometry.hiddenCardFields > 0 {
+            host.openFullTable()
         }
     }
 }
 
-final class MacTableScrollView: NSScrollView {
-    private enum WheelAxis { case horizontal, vertical }
+private final class MacTableFooterView: NSView {
+    let label = NSTextField(labelWithString: "")
+    let button = NSButton(title: "Open table", target: nil, action: nil)
+    override var isFlipped: Bool { true }
 
-    #if DEBUG
-    private(set) var debugLastWheelRoute = "none"
-    var debugHasEnclosingChatScrollView: Bool { enclosingChatScrollView != nil }
-    #endif
-
-    private let tableLayout: MacTableLayout
-    private let fullTable: Bool
-    private var wheelAxis: WheelAxis?
-    private let container = NSView()
-    private let canvas: MacTableCanvasView
-    private let showMoreButton = NSButton()
-    private let overflowHint = NSImageView()
-
-    #if DEBUG
-    static var debugInstanceCount = 0
-    #endif
-
-    init(layout: MacTableLayout, fullTable: Bool = false) {
-        #if DEBUG
-        Self.debugInstanceCount += 1
-        #endif
-        tableLayout = layout
-        self.fullTable = fullTable
-        canvas = MacTableCanvasView(layout: layout, fullTable: fullTable)
-        super.init(frame: .zero)
-        drawsBackground = false
-        borderType = .noBorder
-        hasHorizontalScroller = layout.contentSize.width > 1
-        hasVerticalScroller = fullTable
-        autohidesScrollers = true
-        horizontalScrollElasticity = .none
-        verticalScrollElasticity = fullTable ? .automatic : .none
-
-        let rowsHeight = fullTable ? layout.contentSize.height : layout.bubbleRowsHeight
-        let viewportHeight = fullTable ? layout.contentSize.height : layout.bubbleViewportHeight
-        let documentWidth = max(layout.contentSize.width, 1)
-        container.frame = NSRect(x: 0, y: 0, width: documentWidth, height: viewportHeight)
-        container.addSubview(canvas)
-        canvas.frame = NSRect(x: 0, y: 0, width: documentWidth, height: rowsHeight)
-
-        if !fullTable, layout.hiddenRowCount > 0 {
-            showMoreButton.title = "Show \(layout.hiddenRowCount) more rows"
-            showMoreButton.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)
-            showMoreButton.imagePosition = .imageTrailing
-            showMoreButton.isBordered = false
-            showMoreButton.contentTintColor = .secondaryLabelColor
-            showMoreButton.target = self
-            showMoreButton.action = #selector(showAllRows)
-            showMoreButton.frame = NSRect(x: 0, y: rowsHeight, width: documentWidth,
-                                          height: MacTableLayout.showMoreHeight)
-            container.addSubview(showMoreButton)
-        }
-        documentView = container
-
-        overflowHint.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)
-        overflowHint.imageScaling = .scaleProportionallyDown
-        overflowHint.contentTintColor = .secondaryLabelColor
-        overflowHint.wantsLayer = true
-        overflowHint.layer?.cornerRadius = 10
-        overflowHint.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.72).cgColor
-        addSubview(overflowHint)
-        setAccessibilityElement(true)
-        setAccessibilityLabel("Markdown table")
-        setAccessibilityValue(layout.semanticText())
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        label.font = .systemFont(ofSize: 12)
+        label.textColor = .secondaryLabelColor
+        label.lineBreakMode = .byTruncatingTail
+        button.isBordered = false
+        button.font = .systemFont(ofSize: 12, weight: .semibold)
+        button.contentTintColor = .linkColor
+        button.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+        button.imagePosition = .imageTrailing
+        addSubview(label)
+        addSubview(button)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func layout() {
         super.layout()
-        let documentWidth = max(tableLayout.contentSize.width, contentSize.width)
-        container.frame.size.width = documentWidth
-        canvas.frame.size.width = tableLayout.contentSize.width
-        if !fullTable, tableLayout.hiddenRowCount > 0 {
-            showMoreButton.frame.size.width = documentWidth
+        button.sizeToFit()
+        button.frame.origin = NSPoint(x: bounds.width - button.frame.width - ChatTableStyle.padH,
+                                      y: (bounds.height - button.frame.height) / 2)
+        label.sizeToFit()
+        label.frame = NSRect(x: ChatTableStyle.padH, y: (bounds.height - label.frame.height) / 2,
+                             width: max(0, button.frame.minX - ChatTableStyle.padH - 6), height: label.frame.height)
+    }
+
+    override func updateLayer() {
+        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.04).cgColor
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.labelColor.withAlphaComponent(0.13).setFill()
+        NSRect(x: 0, y: 0, width: bounds.width, height: 0.5).fill()
+    }
+    override var wantsUpdateLayer: Bool { false }
+}
+
+/// One table in a bubble (preview) or in the table window (full). Grid
+/// previews scroll sideways with the first column pinned; vertical wheel
+/// gestures go to the conversation. The full table scrolls both ways with a
+/// sticky header, sorts by header click and resizes columns by dragging.
+final class MacTableScrollView: NSScrollView, NSMenuItemValidation {
+    private enum WheelAxis { case horizontal, vertical }
+
+    #if DEBUG
+    private(set) var debugLastWheelRoute = "none"
+    var debugHasEnclosingChatScrollView: Bool { enclosingChatScrollView != nil }
+    static var debugInstanceCount = 0
+    #endif
+
+    private(set) var tableLayout: ChatTable
+    let fullTable: Bool
+    var surfaceColor: NSColor = .windowBackgroundColor { didSet { canvas.needsDisplay = true } }
+    var highlightedRows: Set<Int> = [] { didSet { canvas.needsDisplay = true } }
+    var currentRow: Int? { didSet { canvas.needsDisplay = true } }
+    var onSort: ((ChatTable) -> Void)?
+    private(set) var geometry: ChatTableGeometry?
+    private var columnOverrides: [Int: CGFloat] = [:]
+    private var wheelAxis: WheelAxis?
+    private let document = MacTableDocumentView()
+    private let canvas = MacTableCanvasView()
+    private let footer = MacTableFooterView()
+    private let fadeView = NSView()
+    private let fade = CAGradientLayer()
+
+    init(layout: ChatTable, fullTable: Bool = false) {
+        #if DEBUG
+        Self.debugInstanceCount += 1
+        #endif
+        tableLayout = layout
+        self.fullTable = fullTable
+        super.init(frame: .zero)
+        drawsBackground = false
+        borderType = .noBorder
+        hasHorizontalScroller = true
+        hasVerticalScroller = fullTable
+        autohidesScrollers = true
+        scrollerStyle = .overlay
+        horizontalScrollElasticity = .none
+        verticalScrollElasticity = fullTable ? .automatic : .none
+        contentView.postsBoundsChangedNotifications = true
+        document.host = self
+        canvas.host = self
+        documentView = document
+        addSubview(canvas)
+        fadeView.wantsLayer = true
+        fadeView.layer?.addSublayer(fade)
+        fade.startPoint = CGPoint(x: 0, y: 0.5)
+        fade.endPoint = CGPoint(x: 1, y: 0.5)
+        addSubview(fadeView)
+        footer.button.target = self
+        footer.button.action = #selector(showAllRows)
+        addSubview(footer)
+        wantsLayer = true
+        if !fullTable {
+            layer?.cornerRadius = ChatTableStyle.cornerRadius
+            layer?.cornerCurve = .continuous
+            layer?.masksToBounds = true
+            layer?.borderWidth = 1
         }
-        overflowHint.frame = NSRect(x: bounds.width - 24, y: max(6, (bounds.height - 20) / 2),
-                                    width: 20, height: 20)
-        let needsScroller = tableLayout.contentSize.width > contentSize.width + 1
+        setAccessibilityElement(true)
+        setAccessibilityRole(.table)
+        setAccessibilityLabel("Table, \(layout.bodyRowCount) rows, \(layout.columnCount) columns")
+        setAccessibilityValue(layout.semanticText())
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func replaceTable(_ table: ChatTable) {
+        tableLayout = table
+        geometry = nil
+        setAccessibilityValue(table.semanticText())
+        needsLayout = true
+        canvas.needsDisplay = true
+    }
+
+    func setColumnWidth(_ column: Int, width: CGFloat) {
+        columnOverrides[column] = width
+        geometry = nil
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        canvas.needsDisplay = true
+    }
+
+    func sort(by column: Int) {
+        let next: ChatTable
+        if tableLayout.sortColumn == column {
+            next = tableLayout.sortAscending ? tableLayout.sorted(by: column, ascending: false)
+                : tableLayout.sorted(by: nil, ascending: true)
+        } else {
+            next = tableLayout.sorted(by: column, ascending: !tableLayout.numeric[column])
+        }
+        replaceTable(next)
+        onSort?(next)
+    }
+
+    func scrollToRow(_ row: Int) {
+        guard let geometry, row < geometry.rowOrigins.count else { return }
+        let visible = contentView.bounds
+        let top = geometry.rowOrigins[row] - geometry.headerHeight
+        let bottom = geometry.rowOrigins[row] + geometry.rowHeights[row]
+        guard top < visible.minY || bottom > visible.maxY else { return }
+        contentView.scroll(to: NSPoint(x: visible.minX, y: max(0, top - visible.height / 3)))
+        reflectScrolledClipView(contentView)
+    }
+
+    override func layout() {
+        super.layout()
+        guard bounds.width > 1 else { return }
+        if geometry?.width != bounds.width {
+            geometry = tableLayout.geometry(width: bounds.width, full: fullTable, columnOverrides: columnOverrides)
+            canvas.needsDisplay = true
+        }
+        guard let geometry else { return }
+        let cards = geometry.mode == .cards
+        let gridHeight = fullTable ? bounds.height : (cards ? geometry.bubbleHeight - 2 : geometry.previewGridHeight)
+        let documentSize = NSSize(width: cards ? bounds.width : geometry.contentWidth,
+                                  height: fullTable ? geometry.fullHeight : gridHeight)
+        if document.frame.size != documentSize { document.setFrameSize(documentSize) }
+        footer.isHidden = !geometry.showsFooter
+        footer.label.stringValue = geometry.footerText
+        let needsScroller = documentSize.width > bounds.width + 1
         if hasHorizontalScroller != needsScroller { hasHorizontalScroller = needsScroller }
-        updateOverflowHint()
+        tile()
+        window?.invalidateCursorRects(for: document)
+    }
+
+    private var isTiling = false
+
+    override func tile() {
+        guard !isTiling else { return }
+        isTiling = true
+        defer { isTiling = false }
+        super.tile()
+        guard let geometry else { return }
+        let footerHeight = geometry.showsFooter ? ChatTableStyle.footerHeight : 0
+        // NSScrollView is flipped: the grid sits on top, the footer below it.
+        let gridHeight = max(0, bounds.height - footerHeight)
+        let gridFrame = NSRect(x: 0, y: 0, width: bounds.width, height: gridHeight)
+        contentView.frame = gridFrame
+        canvas.frame = gridFrame
+        footer.frame = NSRect(x: 0, y: gridHeight, width: bounds.width, height: footerHeight)
+        if let scroller = horizontalScroller {
+            scroller.frame.origin.y = gridHeight - scroller.frame.height
+        }
+        updateFade()
+    }
+
+    private func updateFade() {
+        guard let geometry else { return }
+        let maximum = max(0, document.frame.width - contentView.bounds.width)
+        let shows = geometry.mode == .grid && maximum > 1 && contentView.bounds.minX < maximum - 1
+        fadeView.isHidden = !shows
+        guard shows else { return }
+        fadeView.frame = NSRect(x: bounds.width - 28, y: contentView.frame.minY, width: 28, height: contentView.frame.height)
+        fade.frame = fadeView.bounds
+        var surface = surfaceColor.cgColor
+        var clear = surfaceColor.withAlphaComponent(0).cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            surface = surfaceColor.cgColor
+            clear = surfaceColor.withAlphaComponent(0).cgColor
+        }
+        fade.colors = [clear, surface]
+    }
+
+    override func updateLayer() {
+        super.updateLayer()
+        if !fullTable { layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.16).cgColor }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.16).cgColor
+        }
+        updateFade()
+        canvas.needsDisplay = true
+        footer.needsDisplay = true
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        viewDidChangeEffectiveAppearance()
     }
 
     override func reflectScrolledClipView(_ clipView: NSClipView) {
         super.reflectScrolledClipView(clipView)
-        updateOverflowHint()
+        canvas.needsDisplay = true
+        updateFade()
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -1015,70 +1133,196 @@ final class MacTableScrollView: NSScrollView {
         return nil
     }
 
-    private func updateOverflowHint() {
-        let maximum = max(0, tableLayout.contentSize.width - contentSize.width)
-        overflowHint.isHidden = maximum <= 1 || contentView.bounds.minX >= maximum - 1
+    // MARK: Menu / copy
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        let markdown = NSMenuItem(title: "Copy Table", action: #selector(copyMarkdown), keyEquivalent: "")
+        markdown.target = self
+        let tsv = NSMenuItem(title: "Copy as TSV", action: #selector(copyTSV), keyEquivalent: "")
+        tsv.target = self
+        menu.addItem(markdown)
+        menu.addItem(tsv)
+        if !fullTable {
+            menu.addItem(.separator())
+            let open = NSMenuItem(title: "Open Table in Window", action: #selector(showAllRows), keyEquivalent: "")
+            open.target = self
+            menu.addItem(open)
+        }
+        return menu
     }
 
-    @objc private func showAllRows() {
-        guard let window else { return }
-        let controller = MacTableSheetViewController(layout: tableLayout)
-        window.contentViewController?.presentAsSheet(controller)
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool { true }
+
+    @objc func copyMarkdown() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(tableLayout.markdown(), forType: .string)
+    }
+
+    @objc func copyTSV() {
+        NSPasteboard.general.clearContents()
+        let tsv = tableLayout.tsv()
+        NSPasteboard.general.setString(tsv, forType: .string)
+        NSPasteboard.general.setString(tsv, forType: NSPasteboard.PasteboardType("public.utf8-tab-separated-values-text"))
+    }
+
+    @objc private func showAllRows() { openFullTable() }
+
+    func openFullTable() {
+        MacTableWindowController.show(tableLayout)
     }
 }
 
-private final class MacTableSheetViewController: NSViewController {
-    private let tableLayout: MacTableLayout
+/// The full table in its own resizable window, beside the conversation.
+final class MacTableWindowController: NSWindowController, NSWindowDelegate, NSSearchFieldDelegate {
+    private static var open: [MacTableWindowController] = []
+    private var table: ChatTable
+    private let scrollView: MacTableScrollView
+    private let search = NSSearchField()
+    private let matchLabel = NSTextField(labelWithString: "")
+    private var matches: [Int] = []
+    private var matchIndex = 0
 
-    init(layout: MacTableLayout) {
-        tableLayout = layout
-        super.init(nibName: nil, bundle: nil)
-        preferredContentSize = NSSize(
-            width: min(max(layout.contentSize.width, 520), 900),
-            height: 560
-        )
+    static func show(_ table: ChatTable) {
+        if let existing = open.first(where: { $0.table.contentKey == table.contentKey }) {
+            existing.window?.makeKeyAndOrderFront(nil)
+            return
+        }
+        let controller = MacTableWindowController(table: table)
+        open.append(controller)
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+    }
+
+    private init(table: ChatTable) {
+        self.table = table
+        scrollView = MacTableScrollView(layout: table, fullTable: true)
+        let natural = min(max(table.naturalWidth + 2, 560), 1_200)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: natural, height: 600),
+                              styleMask: [.titled, .closable, .resizable, .miniaturizable],
+                              backing: .buffered, defer: false)
+        window.title = "Table"
+        window.minSize = NSSize(width: 420, height: 260)
+        window.isReleasedWhenClosed = false
+        window.center()
+        super.init(window: window)
+        window.delegate = self
+        buildContent()
+        updateSubtitle()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override func loadView() {
+    private func buildContent() {
+        guard let window else { return }
         let root = NSView()
-        root.wantsLayer = true
-        root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-        view = root
-    }
+        search.placeholderString = "Search"
+        search.delegate = self
+        search.target = self
+        search.action = #selector(searchSubmitted)
+        search.sendsWholeSearchString = false
+        matchLabel.font = .systemFont(ofSize: 12)
+        matchLabel.textColor = .secondaryLabelColor
+        let copyMarkdown = NSButton(title: "Copy Markdown", target: scrollView, action: #selector(MacTableScrollView.copyMarkdown))
+        let copyTSV = NSButton(title: "Copy TSV", target: scrollView, action: #selector(MacTableScrollView.copyTSV))
+        [copyMarkdown, copyTSV].forEach { $0.bezelStyle = .rounded; $0.controlSize = .regular }
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let bar = NSStackView(views: [search, matchLabel, spacer, copyMarkdown, copyTSV])
+        bar.orientation = .horizontal
+        bar.spacing = 8
+        bar.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        search.widthAnchor.constraint(equalToConstant: 220).isActive = true
 
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        let title = NSTextField(labelWithString: "Table")
-        title.font = .systemFont(ofSize: 15, weight: .semibold)
-        title.translatesAutoresizingMaskIntoConstraints = false
+        let hint = NSTextField(labelWithString: "Click a header to sort · Drag a column edge to resize · ⌘C copies the table")
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .tertiaryLabelColor
 
-        let done = NSButton(title: "Done", target: self, action: #selector(closeSheet))
-        done.bezelStyle = .rounded
-        done.keyEquivalent = "\u{1b}"
-        done.translatesAutoresizingMaskIntoConstraints = false
-
-        let table = MacTableScrollView(layout: tableLayout, fullTable: true)
-        table.translatesAutoresizingMaskIntoConstraints = false
-
-        view.addSubview(title)
-        view.addSubview(done)
-        view.addSubview(table)
+        let separator = NSBox()
+        separator.boxType = .separator
+        scrollView.surfaceColor = .windowBackgroundColor
+        scrollView.onSort = { [weak self] sorted in
+            self?.table = sorted
+            self?.updateSubtitle()
+            self?.runSearch(scroll: false)
+        }
+        for view in [bar, separator, scrollView, hint] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            root.addSubview(view)
+        }
         NSLayoutConstraint.activate([
-            title.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            title.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
-            done.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            done.centerYAnchor.constraint(equalTo: title.centerYAnchor),
-            table.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            table.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            table.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 12),
-            table.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            bar.topAnchor.constraint(equalTo: root.topAnchor),
+            bar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            separator.topAnchor.constraint(equalTo: bar.bottomAnchor),
+            separator.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: separator.bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -26),
+            hint.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            hint.centerYAnchor.constraint(equalTo: root.bottomAnchor, constant: -13),
         ])
+        window.contentView = root
     }
 
-    @objc private func closeSheet() { dismiss(self) }
+    private func updateSubtitle() {
+        var text = "\(table.bodyRowCount) rows × \(table.columnCount) columns"
+        if let column = table.sortColumn { text += " · sorted by \(table.plainHeader[column])" }
+        window?.subtitle = text
+    }
+
+    func controlTextDidChange(_ obj: Notification) { runSearch(scroll: true) }
+
+    @objc private func searchSubmitted() {
+        guard !matches.isEmpty else { return }
+        matchIndex = (matchIndex + 1) % matches.count
+        showMatch()
+    }
+
+    private func runSearch(scroll: Bool) {
+        let query = search.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else {
+            matches = []
+            scrollView.highlightedRows = []
+            scrollView.currentRow = nil
+            matchLabel.stringValue = ""
+            return
+        }
+        matches = table.plainBody.indices.filter { row in
+            table.plainBody[row].contains { $0.localizedCaseInsensitiveContains(query) }
+        }
+        matchIndex = 0
+        scrollView.highlightedRows = Set(matches)
+        showMatch(scroll: scroll)
+    }
+
+    private func showMatch(scroll: Bool = true) {
+        guard !matches.isEmpty else {
+            scrollView.currentRow = nil
+            matchLabel.stringValue = "No matches"
+            return
+        }
+        scrollView.currentRow = matches[matchIndex]
+        matchLabel.stringValue = "\(matchIndex + 1) of \(matches.count)"
+        if scroll { scrollView.scrollToRow(matches[matchIndex]) }
+    }
+
+    /// ⌘C copies the whole table (TSV pastes as columns in spreadsheets).
+    @objc func copy(_ sender: Any?) {
+        if let editor = window?.firstResponder as? NSText, editor.selectedRange.length > 0 {
+            editor.copy(sender)
+            return
+        }
+        scrollView.copyTSV()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        Self.open.removeAll { $0 === self }
+    }
 }
+
 
 enum MacMarkdown {
     static func highlightGeneration() -> Int {
@@ -1412,7 +1656,7 @@ final class MacBubbleTextView: NSTextView {
             var frame = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
             frame.origin.x = 0
             frame.size.width = bounds.width
-            frame.size.height = attachment.tableLayout.bubbleViewportHeight
+            frame.size.height = attachment.tableLayout.bubbleHeight(width: bounds.width)
             placements.append(TablePlacement(attachment: attachment, frame: frame))
         }
         return placements

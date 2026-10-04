@@ -298,94 +298,34 @@ private extension UIFont {
     var tkItalic: UIFont { withTraits(.traitItalic) }
 }
 
-final class TKTableLayout {
-    let rows: [[String]]
-    let alignments: [TableAlignment]
-    let columnWidths: [CGFloat]
-    let rowHeights: [CGFloat]
-    let rowOrigins: [CGFloat]
-    let contentSize: CGSize
-    let bubbleVisibleRowCount: Int
-    let bubbleRowsHeight: CGFloat
-    let bubbleViewportHeight: CGFloat
-    let hiddenRowCount: Int
+typealias TKTableLayout = ChatTable
 
-    static let showMoreHeight: CGFloat = 40
-
-    private static let headerFont = UIFont.monospacedSystemFont(ofSize: 12, weight: .bold)
-    private static let bodyFont = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-    static let cellPadH: CGFloat = 10
-    static let cellPadV: CGFloat = 8
-
-    init(rows: [[String]], alignments: [TableAlignment]) {
-        self.rows = rows
-        self.alignments = alignments
-        let columnCount = rows.first?.count ?? 0
-        var widths = Array(repeating: CGFloat(72), count: columnCount)
-        for (rowIndex, row) in rows.enumerated() {
-            let font = rowIndex == 0 ? Self.headerFont : Self.bodyFont
-            for column in 0..<columnCount {
-                let value = column < row.count ? row[column] : ""
-                let measured = ceil((value as NSString).size(withAttributes: [.font: font]).width)
-                widths[column] = max(widths[column], min(220, measured + Self.cellPadH * 2))
-            }
-        }
-        columnWidths = widths
-
-        var heights: [CGFloat] = []
-        var origins: [CGFloat] = []
-        var y: CGFloat = 0
-        for (rowIndex, row) in rows.enumerated() {
-            origins.append(y)
-            let font = rowIndex == 0 ? Self.headerFont : Self.bodyFont
-            var rowHeight: CGFloat = 36
-            for column in 0..<columnCount {
-                let value = column < row.count ? row[column] : ""
-                let available = max(1, widths[column] - Self.cellPadH * 2)
-                let rect = (value as NSString).boundingRect(
-                    with: CGSize(width: available, height: .greatestFiniteMagnitude),
-                    options: [.usesLineFragmentOrigin, .usesFontLeading],
-                    attributes: [.font: font], context: nil)
-                rowHeight = max(rowHeight, ceil(rect.height) + Self.cellPadV * 2)
-            }
-            heights.append(rowHeight)
-            y += rowHeight
-        }
-        rowHeights = heights
-        rowOrigins = origins
-        contentSize = CGSize(width: max(1, widths.reduce(0, +)), height: max(1, y))
-
-        let previewBudget: CGFloat = 280
-        var visibleCount = 0
-        var visibleHeight: CGFloat = 0
-        for height in heights {
-            let needsFooter = visibleCount + 1 < heights.count
-            let projected = visibleHeight + height + (needsFooter ? Self.showMoreHeight : 0)
-            if visibleCount >= 2, projected > previewBudget { break }
-            visibleHeight += height
-            visibleCount += 1
-        }
-        bubbleVisibleRowCount = visibleCount
-        bubbleRowsHeight = visibleHeight
-        hiddenRowCount = max(0, rows.count - visibleCount)
-        bubbleViewportHeight = visibleHeight + (hiddenRowCount > 0 ? Self.showMoreHeight : 0)
+extension ChatTablePaint {
+    static func current(surface: UIColor, traits: UITraitCollection) -> ChatTablePaint {
+        func resolve(_ color: UIColor) -> CGColor { color.resolvedColor(with: traits).cgColor }
+        return ChatTablePaint(
+            hairline: resolve(UIColor.label.withAlphaComponent(0.13)),
+            headerFill: resolve(UIColor.label.withAlphaComponent(0.05)),
+            codeFill: resolve(UIColor.label.withAlphaComponent(0.08)),
+            surface: resolve(surface),
+            highlight: resolve(UIColor.systemYellow.withAlphaComponent(0.22)),
+            accent: resolve(UIColor.systemYellow.withAlphaComponent(0.45))
+        )
     }
-
-    func semanticText() -> String {
-        rows.map { $0.joined(separator: "\t") }.joined(separator: "\n")
-    }
-
-    func font(for row: Int) -> UIFont { row == 0 ? Self.headerFont : Self.bodyFont }
 }
 
+/// Draws the part of a table currently on screen. Lives at the scroll view's
+/// visible bounds (it does not scroll), so pinned first column and sticky
+/// header are simply drawn at the viewport edge.
 private final class TKTableCanvasView: UIView {
-    let layout: TKTableLayout
+    weak var host: TKTableScrollView?
 
-    init(layout: TKTableLayout) {
-        self.layout = layout
-        super.init(frame: CGRect(origin: .zero, size: layout.contentSize))
+    override init(frame: CGRect) {
+        super.init(frame: frame)
         isOpaque = false
         backgroundColor = .clear
+        isUserInteractionEnabled = false
+        contentMode = .redraw
         isAccessibilityElement = false
         accessibilityElementsHidden = true
     }
@@ -393,149 +333,223 @@ private final class TKTableCanvasView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     override func draw(_ rect: CGRect) {
-        guard let context = UIGraphicsGetCurrentContext() else { return }
-        let line = UIColor.label.withAlphaComponent(0.16)
-        let headerLine = UIColor.label.withAlphaComponent(0.34)
-        var firstVisible = 0
-        while firstVisible + 1 < layout.rowOrigins.count,
-              layout.rowOrigins[firstVisible] + layout.rowHeights[firstVisible] < rect.minY {
-            firstVisible += 1
+        guard let host, let geometry = host.geometry, let context = UIGraphicsGetCurrentContext() else { return }
+        let paint = ChatTablePaint.current(surface: host.surfaceColor, traits: traitCollection)
+        if geometry.mode == .cards {
+            geometry.drawCards(in: context, paint: paint)
+            return
         }
-        for row in firstVisible..<layout.rows.count {
-            let y = layout.rowOrigins[row]
-            let height = layout.rowHeights[row]
-            if y > rect.maxY { break }
-            var x: CGFloat = 0
-            for column in layout.columnWidths.indices {
-                let width = layout.columnWidths[column]
-                let value = column < layout.rows[row].count ? layout.rows[row][column] : ""
-                let paragraph = NSMutableParagraphStyle()
-                switch column < layout.alignments.count ? layout.alignments[column] : .leading {
-                case .leading: paragraph.alignment = .left
-                case .center: paragraph.alignment = .center
-                case .trailing: paragraph.alignment = .right
-                }
-                let textRect = CGRect(x: x + TKTableLayout.cellPadH,
-                                      y: y + TKTableLayout.cellPadV,
-                                      width: width - TKTableLayout.cellPadH * 2,
-                                      height: height - TKTableLayout.cellPadV * 2)
-                (value as NSString).draw(
-                    with: textRect,
-                    options: [.usesLineFragmentOrigin, .usesFontLeading],
-                    attributes: [
-                        .font: layout.font(for: row),
-                        .foregroundColor: UIColor.label,
-                        .paragraphStyle: paragraph,
-                    ], context: nil)
-                x += width
-                if column < layout.columnWidths.count - 1 {
-                    line.setFill()
-                    context.fill(CGRect(x: x - 0.5, y: y, width: 0.5, height: height))
-                }
-            }
-            (row == 0 ? headerLine : line).setFill()
-            let ruleHeight: CGFloat = row == 0 ? 1 : 0.5
-            context.fill(CGRect(x: 0, y: y + height - ruleHeight,
-                                width: layout.contentSize.width, height: ruleHeight))
-        }
+        let viewport = CGRect(x: host.contentOffset.x, y: host.full ? host.contentOffset.y : 0,
+                              width: bounds.width, height: bounds.height)
+        geometry.drawGrid(in: context, viewport: viewport,
+                          rowLimit: host.full ? geometry.rowHeights.count : geometry.previewRowCount,
+                          stickyHeader: host.full, paint: paint)
     }
 }
 
-final class TKTableScrollView: UIScrollView, UIScrollViewDelegate {
-    private let overflowHint = UIImageView(image: UIImage(systemName: "chevron.right"))
-    private let showMoreButton = UIButton(type: .system)
-    let tableLayout: TKTableLayout
+/// One table in a bubble (preview) or full screen. Grid previews scroll
+/// sideways with the first column pinned; full screen scrolls both ways with
+/// a sticky header and first column. Cards never scroll.
+final class TKTableScrollView: UIScrollView, UIScrollViewDelegate, UIContextMenuInteractionDelegate {
+    private(set) var tableLayout: ChatTable
+    let full: Bool
     var onShowAll: (() -> Void)?
+    /// Full screen: header taps sort; the new table is reported here.
+    var onSort: ((ChatTable) -> Void)?
+    /// Opaque color behind pinned/sticky cells (the bubble or page).
+    var surfaceColor: UIColor = .systemBackground { didSet { canvas.setNeedsDisplay() } }
+    private(set) var geometry: ChatTableGeometry?
 
-    init(layout: TKTableLayout, fullTable: Bool = false) {
+    private let canvas = TKTableCanvasView()
+    private let footer = UIView()
+    private let footerLabel = UILabel()
+    private let footerButton = UIButton(type: .system)
+    private let fade = CAGradientLayer()
+    private let fadeView = UIView()
+
+    init(layout: ChatTable, fullTable: Bool = false) {
         tableLayout = layout
-        let viewportHeight = fullTable ? layout.contentSize.height : layout.bubbleViewportHeight
-        super.init(frame: CGRect(origin: .zero,
-                                 size: CGSize(width: layout.contentSize.width,
-                                              height: viewportHeight)))
+        full = fullTable
+        super.init(frame: .zero)
         delegate = self
         backgroundColor = .clear
-        showsHorizontalScrollIndicator = layout.contentSize.width > bounds.width
-        showsVerticalScrollIndicator = fullTable && layout.contentSize.height > bounds.height
+        showsVerticalScrollIndicator = fullTable
+        showsHorizontalScrollIndicator = true
         alwaysBounceHorizontal = false
-        alwaysBounceVertical = false
+        alwaysBounceVertical = fullTable
         isDirectionalLockEnabled = true
         delaysContentTouches = false
-        contentSize = CGSize(width: layout.contentSize.width, height: viewportHeight)
-        isAccessibilityElement = true
-        accessibilityLabel = "Markdown table"
-        accessibilityValue = layout.semanticText()
-        accessibilityHint = layout.hiddenRowCount > 0
-            ? "Swipe horizontally for more columns. Activate Show more rows for the complete table."
-            : "Swipe horizontally to view more columns"
-        accessibilityTraits = [.adjustable]
-        if layout.hiddenRowCount > 0 {
-            accessibilityCustomActions = [
-                UIAccessibilityCustomAction(name: "Show all rows", target: self,
-                                            selector: #selector(accessibilityShowAllRows))
-            ]
+        clipsToBounds = true
+        if !fullTable {
+            layer.cornerRadius = ChatTableStyle.cornerRadius
+            layer.cornerCurve = .continuous
+            layer.borderWidth = 1
         }
-
-        let canvas = TKTableCanvasView(layout: layout)
-        canvas.frame = CGRect(x: 0, y: 0, width: layout.contentSize.width,
-                              height: fullTable ? layout.contentSize.height : layout.bubbleRowsHeight)
+        canvas.host = self
         addSubview(canvas)
 
-        if !fullTable, layout.hiddenRowCount > 0 {
-            var config = UIButton.Configuration.plain()
-            config.title = "Show \(layout.hiddenRowCount) more rows"
-            config.image = UIImage(systemName: "chevron.down")
-            config.imagePlacement = .trailing
-            config.imagePadding = 6
-            config.baseForegroundColor = .secondaryLabel
-            showMoreButton.configuration = config
-            showMoreButton.titleLabel?.font = .preferredFont(forTextStyle: .footnote)
-            showMoreButton.addTarget(self, action: #selector(showAllRows), for: .touchUpInside)
-            showMoreButton.frame = CGRect(x: 0, y: layout.bubbleRowsHeight,
-                                          width: layout.contentSize.width,
-                                          height: TKTableLayout.showMoreHeight)
-            addSubview(showMoreButton)
-        }
+        fadeView.isUserInteractionEnabled = false
+        fadeView.layer.addSublayer(fade)
+        fade.startPoint = CGPoint(x: 0, y: 0.5)
+        fade.endPoint = CGPoint(x: 1, y: 0.5)
+        addSubview(fadeView)
 
-        overflowHint.tintColor = .secondaryLabel
-        overflowHint.contentMode = .center
-        overflowHint.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.72)
-        overflowHint.layer.cornerRadius = 10
-        overflowHint.isAccessibilityElement = false
-        addSubview(overflowHint)
+        footerLabel.font = .systemFont(ofSize: 12.5)
+        footerLabel.textColor = .secondaryLabel
+        footerLabel.lineBreakMode = .byTruncatingTail
+        var config = UIButton.Configuration.plain()
+        config.title = "Open table"
+        config.image = UIImage(systemName: "chevron.right", withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
+        config.imagePlacement = .trailing
+        config.imagePadding = 3
+        config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 0)
+        config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
+            var updated = attributes
+            updated.font = .systemFont(ofSize: 12.5, weight: .semibold)
+            return updated
+        }
+        footerButton.configuration = config
+        footerButton.addTarget(self, action: #selector(showAllRows), for: .touchUpInside)
+        footer.addSubview(footerLabel)
+        footer.addSubview(footerButton)
+        addSubview(footer)
+
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped(_:))))
+        addInteraction(UIContextMenuInteraction(delegate: self))
+
+        isAccessibilityElement = true
+        accessibilityLabel = "Table, \(layout.bodyRowCount) rows, \(layout.columnCount) columns"
+        accessibilityValue = layout.semanticText()
+        accessibilityTraits = [.adjustable]
+        accessibilityCustomActions = [
+            UIAccessibilityCustomAction(name: "Open table", target: self, selector: #selector(accessibilityShowAllRows)),
+            UIAccessibilityCustomAction(name: "Copy table", target: self, selector: #selector(accessibilityCopy)),
+        ]
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    @objc private func showAllRows() {
-        onShowAll?()
-    }
-
-    @objc private func accessibilityShowAllRows() -> Bool {
-        onShowAll?()
-        return true
+    func replaceTable(_ table: ChatTable) {
+        tableLayout = table
+        geometry = nil
+        accessibilityValue = table.semanticText()
+        setNeedsLayout()
+        canvas.setNeedsDisplay()
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        overflowHint.frame = CGRect(x: contentOffset.x + bounds.width - 24,
-                                    y: contentOffset.y + max(6, (bounds.height - 20) / 2),
-                                    width: 20, height: 20)
-        bringSubviewToFront(overflowHint)
-        updateOverflowHint()
+        guard bounds.width > 1 else { return }
+        if geometry?.width != bounds.width {
+            geometry = tableLayout.geometry(width: bounds.width, full: full)
+            canvas.setNeedsDisplay()
+        }
+        guard let geometry else { return }
+        layer.borderColor = UIColor.label.withAlphaComponent(0.16).resolvedColor(with: traitCollection).cgColor
+        let cards = geometry.mode == .cards
+        let gridHeight = full ? bounds.height : (cards ? geometry.bubbleHeight - 2 : geometry.previewGridHeight)
+        let contentHeight = full ? geometry.fullHeight : gridHeight
+        let newContentSize = CGSize(width: cards ? bounds.width : geometry.contentWidth, height: contentHeight)
+        if contentSize != newContentSize { contentSize = newContentSize }
+        canvas.frame = CGRect(x: contentOffset.x, y: full ? contentOffset.y : 0,
+                              width: bounds.width, height: gridHeight)
+        canvas.setNeedsDisplay()
+
+        footer.isHidden = !geometry.showsFooter
+        if geometry.showsFooter {
+            footer.frame = CGRect(x: contentOffset.x, y: geometry.previewGridHeight,
+                                  width: bounds.width, height: ChatTableStyle.footerHeight)
+            footer.backgroundColor = UIColor.label.withAlphaComponent(0.04)
+            footerLabel.text = geometry.footerText
+            let buttonWidth = footerButton.intrinsicContentSize.width
+            footerButton.frame = CGRect(x: bounds.width - buttonWidth - 6, y: 0, width: buttonWidth, height: ChatTableStyle.footerHeight)
+            footerLabel.frame = CGRect(x: ChatTableStyle.padH, y: 0,
+                                       width: max(0, footerButton.frame.minX - ChatTableStyle.padH - 4),
+                                       height: ChatTableStyle.footerHeight)
+            let line = footer.layer.sublayers?.first(where: { $0.name == "rule" }) ?? {
+                let rule = CALayer(); rule.name = "rule"; footer.layer.addSublayer(rule); return rule
+            }()
+            line.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 0.5)
+            line.backgroundColor = UIColor.label.withAlphaComponent(0.13).resolvedColor(with: traitCollection).cgColor
+        }
+
+        let maxOffset = max(0, contentSize.width - bounds.width)
+        let showsFade = !cards && maxOffset > 1 && contentOffset.x < maxOffset - 1
+        fadeView.isHidden = !showsFade
+        if showsFade {
+            fadeView.frame = CGRect(x: contentOffset.x + bounds.width - 28, y: full ? contentOffset.y : 0,
+                                    width: 28, height: gridHeight)
+            fade.frame = fadeView.bounds
+            let surface = surfaceColor.resolvedColor(with: traitCollection)
+            fade.colors = [surface.withAlphaComponent(0).cgColor, surface.cgColor]
+        }
+        bringSubviewToFront(fadeView)
+        bringSubviewToFront(footer)
+        showsHorizontalScrollIndicator = maxOffset > 1
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         setNeedsLayout()
     }
 
-    override func accessibilityIncrement() {
-        scrollHorizontally(direction: 1)
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        setNeedsLayout()
+        canvas.setNeedsDisplay()
     }
 
-    override func accessibilityDecrement() {
-        scrollHorizontally(direction: -1)
+    // MARK: Interaction
+
+    @objc private func tapped(_ gesture: UITapGestureRecognizer) {
+        guard let geometry else { return }
+        let point = gesture.location(in: self)
+        if !footer.isHidden, footer.frame.contains(point) { return }
+        if geometry.mode == .cards {
+            if let url = geometry.link(at: CGPoint(x: point.x, y: point.y)) { open(url) }
+            else if geometry.hiddenCardFields > 0 { onShowAll?() }
+            return
+        }
+        let viewportY = full ? contentOffset.y : 0
+        if full, let hit = geometry.gridCell(at: point, viewportMinX: contentOffset.x, viewportMinY: viewportY,
+                                             stickyHeader: true), hit.row < 0 {
+            sort(by: hit.column)
+            return
+        }
+        if let url = geometry.link(at: point, viewportMinX: contentOffset.x, viewportMinY: viewportY, stickyHeader: full) {
+            open(url)
+        }
     }
+
+    private func sort(by column: Int) {
+        let next: ChatTable
+        if tableLayout.sortColumn == column {
+            next = tableLayout.sortAscending ? tableLayout.sorted(by: column, ascending: false)
+                : tableLayout.sorted(by: nil, ascending: true)
+        } else {
+            next = tableLayout.sorted(by: column, ascending: !tableLayout.numeric[column])
+        }
+        replaceTable(next)
+        onSort?(next)
+    }
+
+    private func open(_ url: URL) {
+        UIApplication.shared.open(url)
+    }
+
+    @objc private func showAllRows() { onShowAll?() }
+
+    @objc private func accessibilityShowAllRows() -> Bool {
+        onShowAll?()
+        return true
+    }
+
+    @objc private func accessibilityCopy() -> Bool {
+        UIPasteboard.general.string = tableLayout.markdown()
+        return true
+    }
+
+    override func accessibilityIncrement() { scrollHorizontally(direction: 1) }
+    override func accessibilityDecrement() { scrollHorizontally(direction: -1) }
 
     private func scrollHorizontally(direction: CGFloat) {
         let maximum = max(0, contentSize.width - bounds.width)
@@ -543,17 +557,33 @@ final class TKTableScrollView: UIScrollView, UIScrollViewDelegate {
         setContentOffset(CGPoint(x: target, y: contentOffset.y), animated: true)
     }
 
-    private func updateOverflowHint() {
-        let maximum = max(0, contentSize.width - bounds.width)
-        overflowHint.isHidden = maximum <= 1 || contentOffset.x >= maximum - 1
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+        UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+            guard let self else { return nil }
+            var actions: [UIMenuElement] = [
+                UIAction(title: "Copy Table", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+                    UIPasteboard.general.string = self?.tableLayout.markdown()
+                },
+                UIAction(title: "Copy as TSV", image: UIImage(systemName: "tablecells")) { [weak self] _ in
+                    UIPasteboard.general.string = self?.tableLayout.tsv()
+                },
+            ]
+            if !self.full, self.onShowAll != nil {
+                actions.append(UIAction(title: "Open Table", image: UIImage(systemName: "arrow.up.left.and.arrow.down.right")) { [weak self] _ in
+                    self?.onShowAll?()
+                })
+            }
+            return UIMenu(children: actions)
+        }
     }
 }
 
 final class TKTableAttachment: NSTextAttachment {
-    let tableLayout: TKTableLayout
+    let tableLayout: ChatTable
 
     init(rows: [[String]], alignments: [TableAlignment]) {
-        tableLayout = TKTableLayout(rows: rows, alignments: alignments)
+        tableLayout = ChatTable(rows: rows, alignments: alignments)
         super.init(data: nil, ofType: nil)
         allowsTextAttachmentView = false
         image = Self.transparentPixel
@@ -574,8 +604,11 @@ final class TKTableAttachment: NSTextAttachment {
         position: CGPoint
     ) -> CGRect {
         CGRect(x: 0, y: 0, width: proposedLineFragment.width,
-               height: tableLayout.bubbleViewportHeight)
+               height: tableLayout.bubbleHeight(width: proposedLineFragment.width) + Self.verticalSpacing)
     }
+
+    /// Breathing room below a table (the attachment line carries it).
+    static let verticalSpacing: CGFloat = 6
 }
 
 enum TKMarkdown {
@@ -1511,7 +1544,7 @@ final class TKBodyTextView: UITextView {
             var frame = fragment.layoutFragmentFrame
             frame.origin.x = 0
             frame.size.width = bounds.width
-            frame.size.height = attachment.tableLayout.bubbleViewportHeight
+            frame.size.height = attachment.tableLayout.bubbleHeight(width: bounds.width)
             placements.append(TablePlacement(attachment: attachment, frame: frame))
         }
         return placements
@@ -1620,12 +1653,13 @@ private final class TKPillLabel: UILabel {
 }
 
 final class TKTableSheetViewController: UIViewController {
-    private let tableLayout: TKTableLayout
+    private var tableLayout: ChatTable
+    private let titleLabel = UILabel()
+    private let subtitleLabel = UILabel()
 
-    init(layout: TKTableLayout) {
+    init(layout: ChatTable) {
         tableLayout = layout
         super.init(nibName: nil, bundle: nil)
-        title = "Table"
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -1636,12 +1670,35 @@ final class TKTableSheetViewController: UIViewController {
         let close = UIBarButtonItem(systemItem: .close)
         close.target = self
         close.action = #selector(dismissSheet)
-        navigationItem.rightBarButtonItem = close
+        navigationItem.leftBarButtonItem = close
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            title: "Copy", image: nil, primaryAction: nil,
+            menu: UIMenu(children: [
+                UIAction(title: "Copy Table", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+                    UIPasteboard.general.string = self?.tableLayout.markdown()
+                },
+                UIAction(title: "Copy as TSV", image: UIImage(systemName: "tablecells")) { [weak self] _ in
+                    UIPasteboard.general.string = self?.tableLayout.tsv()
+                },
+            ]))
+
+        titleLabel.text = "Table"
+        titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        subtitleLabel.font = .systemFont(ofSize: 12)
+        subtitleLabel.textColor = .secondaryLabel
+        let titleStack = UIStackView(arrangedSubviews: [titleLabel, subtitleLabel])
+        titleStack.axis = .vertical
+        titleStack.alignment = .center
+        navigationItem.titleView = titleStack
+        updateSubtitle()
 
         let table = TKTableScrollView(layout: tableLayout, fullTable: true)
+        table.surfaceColor = .systemBackground
+        table.onSort = { [weak self] sorted in
+            self?.tableLayout = sorted
+            self?.updateSubtitle()
+        }
         table.translatesAutoresizingMaskIntoConstraints = false
-        table.alwaysBounceVertical = true
-        table.contentSize = tableLayout.contentSize
         view.addSubview(table)
         NSLayoutConstraint.activate([
             table.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
@@ -1649,6 +1706,14 @@ final class TKTableSheetViewController: UIViewController {
             table.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             table.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+    }
+
+    private func updateSubtitle() {
+        var text = "\(tableLayout.bodyRowCount) rows × \(tableLayout.columnCount) columns"
+        if let column = tableLayout.sortColumn {
+            text += " · sorted by \(tableLayout.plainHeader[column])"
+        }
+        subtitleLabel.text = text
     }
 
     @objc private func dismissSheet() { dismiss(animated: true) }
@@ -2355,6 +2420,12 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         setNeedsLayout()
     }
 
+    /// Opaque surface behind a table's pinned column (the bubble fill).
+    private var tableSurfaceColor: UIColor {
+        let fill = bubbleBG.fillColor
+        return fill == .clear ? .systemBackground : fill
+    }
+
     private func syncTableViews() {
         var placements: [TKBodyTextView.TablePlacement] = []
         for (index, view) in bodyViews.enumerated() where !view.isHidden && bodyChunkHasTable[index] {
@@ -2386,8 +2457,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             let frame = placement.frame
             let view = tableViews[index]
             view.frame = frame
-            view.showsHorizontalScrollIndicator = placement.attachment.tableLayout.contentSize.width > frame.width
-            view.showsVerticalScrollIndicator = placement.attachment.tableLayout.contentSize.height > frame.height
+            view.surfaceColor = tableSurfaceColor
             renderClipView.bringSubviewToFront(view)
         }
     }

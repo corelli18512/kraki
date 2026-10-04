@@ -679,9 +679,9 @@ final class TextKitPureSpineTests: XCTestCase {
             attachment = value as? TKTableAttachment
         }
         let table = try! XCTUnwrap(attachment)
-        XCTAssertGreaterThan(table.tableLayout.contentSize.width, 320)
+        XCTAssertGreaterThan(table.tableLayout.naturalWidth, 320)
         XCTAssertFalse(table.usesTextAttachmentView)
-        XCTAssertLessThanOrEqual(table.tableLayout.bubbleViewportHeight, 280)
+        XCTAssertLessThanOrEqual(table.tableLayout.bubbleHeight(width: 330), 280)
         let semantic = TKMarkdown.plainText(rendered) ?? ""
         XCTAssertTrue(semantic.contains("production-session-with-a-long-name"))
         XCTAssertTrue(semantic.contains("Output Tokens"))
@@ -696,7 +696,8 @@ final class TextKitPureSpineTests: XCTestCase {
         ]
         let layout = TKTableLayout(rows: rows, alignments: Array(repeating: .leading, count: 8))
         let view = TKTableScrollView(layout: layout)
-        view.frame = CGRect(x: 0, y: 0, width: 330, height: layout.bubbleViewportHeight)
+        view.frame = CGRect(x: 0, y: 0, width: 330, height: layout.bubbleHeight(width: 330))
+        view.layoutIfNeeded()
         let maxOffset = max(0, view.contentSize.width - view.bounds.width)
         XCTAssertGreaterThan(maxOffset, 0)
         view.setContentOffset(CGPoint(x: maxOffset, y: 0), animated: false)
@@ -715,22 +716,28 @@ final class TextKitPureSpineTests: XCTestCase {
             attachment = value as? TKTableAttachment
         }
         let table = try! XCTUnwrap(attachment)
-        XCTAssertLessThanOrEqual(table.tableLayout.bubbleViewportHeight, 280)
-        XCTAssertGreaterThan(table.tableLayout.hiddenRowCount, 0)
-        XCTAssertGreaterThan(table.tableLayout.contentSize.height, table.tableLayout.bubbleRowsHeight)
-        XCTAssertGreaterThanOrEqual(TKMeasure.height(rendered, width: 280),
-                                    table.tableLayout.bubbleViewportHeight)
+        let geometry = table.tableLayout.geometry(width: 280)
+        XCTAssertEqual(geometry.previewRowCount, ChatTableStyle.previewRowLimit)
+        XCTAssertGreaterThan(geometry.hiddenRowCount, 0)
+        XCTAssertTrue(geometry.showsFooter)
+        XCTAssertGreaterThan(geometry.fullHeight, geometry.previewGridHeight)
+        XCTAssertGreaterThanOrEqual(TKMeasure.height(rendered, width: 280), geometry.bubbleHeight)
 
         let preview = TKTableScrollView(layout: table.tableLayout)
-        XCTAssertEqual(preview.contentSize.height, table.tableLayout.bubbleViewportHeight)
+        preview.frame = CGRect(x: 0, y: 0, width: 280, height: geometry.bubbleHeight)
+        preview.layoutIfNeeded()
+        XCTAssertEqual(preview.contentSize.height, geometry.previewGridHeight, accuracy: 0.5)
         XCTAssertFalse(preview.alwaysBounceVertical)
         var opened = false
         preview.onShowAll = { opened = true }
-        preview.subviews.compactMap { $0 as? UIButton }.first?.sendActions(for: .touchUpInside)
+        func buttons(_ view: UIView) -> [UIButton] { view.subviews.flatMap { ($0 as? UIButton).map { [$0] } ?? buttons($0) } }
+        buttons(preview).first?.sendActions(for: .touchUpInside)
         XCTAssertTrue(opened)
 
         let full = TKTableScrollView(layout: table.tableLayout, fullTable: true)
-        XCTAssertEqual(full.contentSize.height, table.tableLayout.contentSize.height)
+        full.frame = CGRect(x: 0, y: 0, width: 280, height: 500)
+        full.layoutIfNeeded()
+        XCTAssertEqual(full.contentSize.height, table.tableLayout.geometry(width: 280, full: true).fullHeight, accuracy: 0.5)
     }
 
     func testRepeatedEmptyQuoteMarkersAreCollapsed() {
