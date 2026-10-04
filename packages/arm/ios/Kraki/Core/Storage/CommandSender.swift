@@ -940,7 +940,10 @@ final class CommandSender {
             "model": model,
         ]
         if let reasoningEffort { payload["reasoningEffort"] = reasoningEffort.rawValue }
-        if let prompt { payload["prompt"] = prompt }
+        // The first message is NOT sent with create_session: Tentacle would
+        // hand it straight to the agent without recording it (no user bubble)
+        // and resolveCreateRequest sends it again. It is kept here and sent as
+        // ordinary input once the session exists.
         if let cwd { payload["cwd"] = cwd }
 
         send(["type": "create_session", "payload": payload])
