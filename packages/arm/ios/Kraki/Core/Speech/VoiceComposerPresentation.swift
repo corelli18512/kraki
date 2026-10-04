@@ -46,6 +46,8 @@ enum VoiceComposerPresentation {
         switch state {
         case .idle:
             return ""
+        case .waitingForConnection:
+            return "Connecting…"
         case .requestingPermission:
             return "Requesting microphone access…"
         case .obtainingLease:
@@ -86,6 +88,8 @@ enum VoiceComposerPresentation {
         }
 
         switch state {
+        case .waitingForConnection:
+            appendVoice("Connecting…", opacity: 0.45)
         case .requestingPermission:
             appendVoice("Requesting microphone access…", opacity: 0.45)
         case .obtainingLease:
@@ -195,7 +199,7 @@ struct VoiceComposerStatusModule: View {
     var body: some View {
         Group {
             switch state {
-            case .requestingPermission, .obtainingLease:
+            case .waitingForConnection, .requestingPermission, .obtainingLease:
                 ProgressView().controlSize(.small)
             case .recording:
                 ZStack {

@@ -1805,6 +1805,7 @@ final class MacAutomationDriver {
         case .idle: state = "idle"; error = NSNull()
         case .requestingPermission: state = "requestingPermission"; error = NSNull()
         case .obtainingLease: state = "obtainingLease"; error = NSNull()
+        case .waitingForConnection: state = "waitingForConnection"; error = NSNull()
         case .recording: state = "recording"; error = NSNull()
         case .finishing: state = "finishing"; error = NSNull()
         case .failed(let message): state = "failed"; error = message

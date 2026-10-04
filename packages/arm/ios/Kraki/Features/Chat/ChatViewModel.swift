@@ -179,13 +179,29 @@ final class ChatViewModel {
 
     /// Live draft text (card narration), nil when empty.
     var streaming: String? {
-        let text = appState?.messageStore.cards[sessionId]?.text
+        let text = card?.text
         return (text?.isEmpty ?? true) ? nil : text
     }
 
     /// The live card (draft + action slot) for the in-progress turn, if any.
     var card: MessageStore.SessionCard? {
-        appState?.messageStore.cards[sessionId]
+        appState?.messageStore.visibleCard(sessionId)
+    }
+
+    /// Rows newer than the window already stored on this device (local
+    /// pagination). Network catch-up is not this: it lands silently.
+    var hasNewerLocalRows: Bool {
+        guard let store = appState?.messageStore else { return false }
+        let bottom = windowBottomSeq
+        return bottom > 0 && bottom < store.persistedHead(sessionId)
+    }
+
+    /// Connected, but this device has not yet stored the session's newest
+    /// message. Drives the title's "Syncing…" (never a list spinner).
+    var isCatchingUp: Bool {
+        guard let appState, appState.connectionStatus == .connected else { return false }
+        let expected = max(session?.lastSeq ?? 0, sessionLastSeq)
+        return expected > appState.messageStore.persistedHead(sessionId)
     }
 
     /// Orthogonal session-runtime activity. Never contributes a spine item,

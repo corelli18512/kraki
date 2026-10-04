@@ -154,16 +154,15 @@ struct MacChatComposer: View {
     }
 
     private var unreachableHint: String? {
-        // Not signed in yet: device presence is unknown, so say that rather
-        // than blaming the device.
-        if !appState.hasCompletedInitialConnect, let notice = appState.connectionNotice { return notice }
-        guard let deviceId = session?.deviceId else { return nil }
+        // Connection state belongs to the title area, never above the input:
+        // reconnecting is silent and messages queue until it is back. Only a
+        // computer that really can't receive right now is worth a note here.
+        guard appState.hasCompletedInitialConnect, let deviceId = session?.deviceId else { return nil }
         let device = appState.deviceStore.devices[deviceId]
         if device?.online != true {
             let name = device?.name ?? session?.deviceName ?? "Device"
             return "\(name) is offline — message will deliver when it reconnects."
         }
-        if appState.showsReconnecting { return "Reconnecting…" }
         return nil
     }
 
@@ -1249,7 +1248,13 @@ private struct MacComposerVoiceSurface: View {
     }
 
     private var displayedPieces: [(text: String, opacity: Double)] {
-        [(preview.prefix, 1), (preview.spoken, 0.5), (preview.suffix, 1)]
+        // Pressed while Kraki is reconnecting: say so at the caret until the
+        // connection is back and recording starts by itself.
+        if preview.spoken.isEmpty, controller.state == .waitingForConnection {
+            let separator = preview.prefix.isEmpty || preview.prefix.last?.isWhitespace == true ? "" : " "
+            return [(preview.prefix, 1), (separator + "Connecting…", 0.45), (preview.suffix, 1)]
+        }
+        return [(preview.prefix, 1), (preview.spoken, 0.5), (preview.suffix, 1)]
     }
 }
 
