@@ -17,8 +17,11 @@ export interface DaemonStatusFile {
   /** macOS Full Disk Access as observed by the daemon process itself. */
   fda?: 'granted' | 'denied' | 'missing';
   fdaCheckedAt?: number;
-  /** Who supervises this daemon: the Mac app's launchd job or the CLI. */
-  managedBy?: 'kraki-mac' | 'cli';
+  /** Who supervises this daemon: Kraki for Mac / Windows, or the CLI. */
+  managedBy?: 'kraki-mac' | 'kraki-windows' | 'cli';
+  /** The in-process supervisor's PID, when supervised (stopping it stops the
+   *  daemon for good; killing only the worker makes it restart). */
+  supervisorPid?: number;
   version?: string;
   pid?: number;
   updatedAt: number;
@@ -57,7 +60,7 @@ export function updateFdaStatus(fda: NonNullable<DaemonStatusFile['fda']>): void
   writeStatus();
 }
 
-export function updateDaemonIdentity(identity: Pick<DaemonStatusFile, 'managedBy' | 'version' | 'pid'>): void {
+export function updateDaemonIdentity(identity: Pick<DaemonStatusFile, 'managedBy' | 'version' | 'pid' | 'supervisorPid'>): void {
   _current = { ..._current, ...identity, updatedAt: Date.now() };
   writeStatus();
 }

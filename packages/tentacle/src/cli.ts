@@ -14,6 +14,7 @@
  *   kraki --version     Show version
  */
 
+import { execFileSync } from 'node:child_process';
 import { wsProxyOptions, applyProcessProxy } from './proxy.js';
 import { launchedFromExplorer } from './windows-console.js';
 import chalk from 'chalk';
@@ -33,7 +34,7 @@ import { readStatusFile } from './status-file.js';
 import { ensureWindowsSystemPath } from './checks.js';
 import type { AgentId } from '@kraki/protocol';
 import { SELF_MANAGEMENT_DENIAL_REASON } from './self-management-guard.js';
-import { loadManagedBy, kickstartManagedDaemon, isManagedDaemonLoaded, type ManagedByMarker } from './managed.js';
+import { loadManagedBy, kickstartManagedDaemon, isManagedDaemonLoaded, ownerName, WINDOWS_APP_OWNER, type ManagedByMarker } from './managed.js';
 
 // Self-heal PATH on Windows BEFORE any setup/check spawns a child
 // process. If kraki is launched from a context with a minimal PATH
@@ -125,16 +126,28 @@ export function isEmbeddedMacHelper(execPath = process.execPath): boolean {
 
 function printManagedNotice(managed: ManagedByMarker): void {
   const status = getDaemonStatus();
+  const app = ownerName(managed.by);
   if (status.running) {
-    console.log(chalk.green(`  🦑 Kraki is running${status.pid ? ` (PID ${status.pid})` : ''}, managed by Kraki for Mac.`));
+    console.log(chalk.green(`  🦑 Kraki is running${status.pid ? ` (PID ${status.pid})` : ''}, managed by ${app}.`));
   } else {
-    console.log(chalk.yellow('  Kraki is managed by Kraki for Mac and is not running right now.'));
+    console.log(chalk.yellow(`  Kraki is managed by ${app} and is not running right now.`));
   }
   if (managed.appPath) console.log(chalk.dim(`  App: ${managed.appPath}`));
 }
 
 function refuseManaged(action: 'start' | 'stop' | 'update' | 'setup', managed: ManagedByMarker): void {
   printManagedNotice(managed);
+  if (managed.by === WINDOWS_APP_OWNER) {
+    const winHint: Record<typeof action, string> = {
+      start: 'Open Kraki for Windows to start it (Settings → This PC).',
+      stop: 'Stop it from Kraki for Windows (Settings → This PC).',
+      update: 'Kraki for Windows updates its built-in Kraki together with the app.',
+      setup: 'Reconfigure from Kraki for Windows, or switch it to "Use external CLI" in Settings → This PC first.',
+    };
+    console.log(chalk.dim(`  ${winHint[action]}`));
+    process.exitCode = 1;
+    return;
+  }
   const hint: Record<typeof action, string> = {
     start: 'Open Kraki for Mac to start it (Settings → This Mac).',
     stop: 'Stop it from Kraki for Mac (Settings → This Mac) or turn Kraki off in System Settings → General → Login Items.',
@@ -152,6 +165,16 @@ function refuseEmbeddedHelper(): void {
 }
 
 async function restartManaged(managed: ManagedByMarker): Promise<void> {
+  if (managed.by === WINDOWS_APP_OWNER) {
+    // Kraki for Windows' supervisor restarts a worker that exits abnormally.
+    const before = getDaemonStatus().pid;
+    if (before === null || !killWorkerForRestart(before)) {
+      refuseManaged('start', managed);
+      return;
+    }
+    await waitForNewReady(before, 'Kraki for Windows');
+    return;
+  }
   if (!isManagedDaemonLoaded(managed.label)) {
     refuseManaged('start', managed);
     return;
@@ -162,12 +185,26 @@ async function restartManaged(managed: ManagedByMarker): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  await waitForNewReady(before, 'Kraki for Mac');
+}
+
+/** Kill only the worker (not its supervisor): the supervisor restarts it. */
+function killWorkerForRestart(pid: number): boolean {
+  try {
+    execFileSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore', windowsHide: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForNewReady(before: number | null, app: string): Promise<void> {
   const { loadDaemonReady } = await import('./config.js');
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     const ready = loadDaemonReady();
     if (ready !== null && ready !== before) {
-      console.log(chalk.green(`  🦑 Kraki restarted (PID ${ready}), managed by Kraki for Mac.`));
+      console.log(chalk.green(`  🦑 Kraki restarted (PID ${ready}), managed by ${app}.`));
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -429,7 +466,8 @@ function cmdStatus(jsonOutput = false): void {
         running: status.running,
         pid: status.pid,
         // Additive fields for Kraki for Mac's onboarding and ownership logic.
-        owner: managed ? 'kraki-mac' : (cliJob.plistExists ? 'cli' : null),
+        owner: managed ? managed.by : (cliJob.plistExists ? 'cli' : null),
+        supervisorPid: status.running ? (statusFile?.supervisorPid ?? null) : null,
         managedLabel: managed?.label ?? null,
         cliLaunchdJob: cliJob,
         relayState: status.running ? (statusFile?.relayState ?? null) : null,
@@ -458,7 +496,7 @@ function cmdStatus(jsonOutput = false): void {
   console.log('');
 
   const managedBy = loadManagedBy();
-  const owner = managedBy ? ', managed by Kraki for Mac' : '';
+  const owner = managedBy ? `, managed by ${ownerName(managedBy.by)}` : '';
   if (status.running) {
     const relay = statusFile?.relayState;
     const link = relay === 'connected' ? chalk.green(', connected')
@@ -1152,9 +1190,14 @@ async function main(): Promise<void> {
     // restarts it after a crash without relying on launchd (see
     // daemon-supervisor.ts: launchd's KeepAlive is dead while the user's
     // domain is stuck in on-demand-only mode).
-    const { isMacAppManagedWorker } = await import('./managed.js');
+    const { isMacAppManagedWorker, isWindowsAppManagedWorker } = await import('./managed.js');
     const { SUPERVISED_ENV, runSupervisor } = await import('./daemon-supervisor.js');
-    if (process.platform === 'darwin' && isMacAppManagedWorker() && !process.env[SUPERVISED_ENV]) {
+    // Kraki for Windows' Run entry cannot set environment variables; it passes
+    // the owner as a flag instead.
+    if (args.includes(`--managed-by=${WINDOWS_APP_OWNER}`)) process.env.KRAKI_MANAGED_BY = WINDOWS_APP_OWNER;
+    const appManaged = (process.platform === 'darwin' && isMacAppManagedWorker())
+      || (process.platform === 'win32' && isWindowsAppManagedWorker());
+    if (appManaged && !process.env[SUPERVISED_ENV]) {
       const { getLogsDir } = await import('./config.js');
       const { join } = await import('node:path');
       const code = await runSupervisor({

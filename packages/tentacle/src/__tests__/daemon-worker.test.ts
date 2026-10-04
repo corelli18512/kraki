@@ -164,6 +164,8 @@ vi.mock('../shell-env.js', () => ({
 let mockManagedBy: unknown = null;
 vi.mock('../managed.js', () => ({
   isMacAppManagedWorker: (env: NodeJS.ProcessEnv = process.env) => env.KRAKI_MANAGED_BY === 'kraki-mac',
+  appManagedWorkerOwner: (env: NodeJS.ProcessEnv = process.env) =>
+    env.KRAKI_MANAGED_BY === 'kraki-mac' || env.KRAKI_MANAGED_BY === 'kraki-windows' ? env.KRAKI_MANAGED_BY : null,
   loadManagedBy: () => mockManagedBy,
 }));
 
