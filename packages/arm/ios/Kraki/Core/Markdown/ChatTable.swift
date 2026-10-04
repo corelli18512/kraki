@@ -242,10 +242,12 @@ final class ChatTable {
         lock.unlock()
         let built = ChatTableGeometry(table: self, width: width, full: full, overrides: [:])
         lock.lock()
+        defer { lock.unlock() }
+        // Another thread may have built the same width meanwhile: keep one.
+        if let raced = geometries[key] { return raced }
         geometries[key] = built
         geometryOrder.append(key)
         if geometryOrder.count > 6 { geometries.removeValue(forKey: geometryOrder.removeFirst()) }
-        lock.unlock()
         return built
     }
 
