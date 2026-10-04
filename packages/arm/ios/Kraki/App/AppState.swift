@@ -430,7 +430,16 @@ final class AppState {
     /// User-facing connection notice for the Mac window (nil when online).
     var connectionNotice: String? {
         guard showsReconnecting, connectionStatus != .connected else { return nil }
-        return hasCompletedInitialConnect ? "Reconnecting…" : "Signing in…"
+        return hasCompletedInitialConnect ? "Connecting…" : "Signing in…"
+    }
+
+    /// Title-area status for an open conversation (nil = show its title).
+    /// Reconnecting and catching up are silent elsewhere; this is the only
+    /// place they surface, and only after they have lasted a moment.
+    func conversationTitleStatus(syncing: Bool) -> String? {
+        if showsReconnecting { return hasCompletedInitialConnect ? "Connecting…" : "Signing in…" }
+        if syncing { return "Syncing…" }
+        return nil
     }
 
     /// What the UI shows: reconnecting only after it has lasted
@@ -1292,6 +1301,9 @@ extension AppState: SessionSubscriptionHost {
         )
 
         let spineHeadSeq = snapshot["spineHeadSeq"] as? Int ?? digest.lastSeq
+        // The card belongs to the turn after `spineHeadSeq`: show it only once
+        // this device has the messages up to there (catch-up comes next).
+        messageStore.holdCard(sessionId, untilSeq: spineHeadSeq)
         messageProvider?.setTentacleInfo(
             sessionId: sessionId,
             lastSeq: spineHeadSeq,

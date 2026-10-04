@@ -89,7 +89,11 @@ final class AuthManager {
     /// Dev open-auth deliberately has no persisted relay identity: the local
     /// relay mints an ephemeral device without replacing production credentials.
     private var activeDeviceId: String? {
-        guard !usesEphemeralOpenAuth else { return nil }
+        // Local dev keeps the relay-minted id across reconnects for the rest of
+        // this process, exactly like a real device keeps its stored id. A new
+        // id per reconnect made replies to in-flight requests go to a device
+        // that no longer exists.
+        if usesEphemeralOpenAuth { return pendingRegionDeviceId }
         return pendingRegionDeviceId ?? storedDeviceId
     }
 

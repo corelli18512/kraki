@@ -310,8 +310,14 @@ struct VoiceInputCompletion {
 
 @Observable
 final class KrakiVoiceInputController {
+    /// How long a press waits for Kraki to reconnect before giving up.
+    static var connectionWaitTimeout: TimeInterval = 20
+
     enum State: Equatable {
         case idle
+        /// Pressed while Kraki is (re)connecting: the voice UI is shown and
+        /// recording starts by itself once the connection is back.
+        case waitingForConnection
         case requestingPermission
         case obtainingLease
         case recording
@@ -340,7 +346,7 @@ final class KrakiVoiceInputController {
     var isRecording: Bool { state == .recording }
     var isBusy: Bool {
         switch state {
-        case .requestingPermission, .obtainingLease, .recording, .finishing:
+        case .waitingForConnection, .requestingPermission, .obtainingLease, .recording, .finishing:
             return true
         case .idle, .failed:
             return false
@@ -530,7 +536,7 @@ final class KrakiVoiceInputController {
     private func adoptNextLeaseIfIdle() {
         guard let next = nextLease else { return }
         switch state {
-        case .recording, .finishing, .requestingPermission, .obtainingLease:
+        case .recording, .finishing, .waitingForConnection, .requestingPermission, .obtainingLease:
             return
         case .idle, .failed:
             break
@@ -616,13 +622,26 @@ final class KrakiVoiceInputController {
         completionHandler = onCompletion
 
         // An open broker connection needs nothing from Head; only a missing
-        // one has to wait for Head to issue a lease.
+        // one has to wait for Head to issue a lease. Like a phone call app,
+        // a press while Kraki is reconnecting is not an error: show the
+        // voice UI as "Connecting…" and start once the connection is back.
+        if session == nil, host?.voiceTransportReady != true {
+            state = .waitingForConnection
+            KLog.d("🎙️ [voice] stage=wait-connection session=\(sessionID.prefix(12))")
+            let deadline = Date().addingTimeInterval(Self.connectionWaitTimeout)
+            while self.host?.voiceTransportReady != true {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard recordingGeneration == currentRecording else { return }
+                if Date() >= deadline {
+                    failRecording(VoiceInputError.offline, closeTransport: false)
+                    return
+                }
+            }
+            // A warm connection may have opened while waiting.
+            KLog.d("🎙️ [voice] stage=connected-after-wait session=\(sessionID.prefix(12))")
+        }
         guard let host, host.voiceCapability != nil || session != nil else {
             failRecording(VoiceInputError.unavailable, closeTransport: false)
-            return
-        }
-        guard host.voiceTransportReady || session != nil else {
-            failRecording(VoiceInputError.offline, closeTransport: false)
             return
         }
 
@@ -722,7 +741,7 @@ final class KrakiVoiceInputController {
             finish()
         case .finishing:
             preserveDraftOnDeparture = true
-        case .requestingPermission, .obtainingLease:
+        case .waitingForConnection, .requestingPermission, .obtainingLease:
             // Do not start the microphone later in an invisible conversation.
             // Lease rollover may already hold speech from the prior segment.
             let recoveredText = rawText
@@ -1013,7 +1032,7 @@ final class KrakiVoiceInputController {
             if warmConnectionDesired { scheduleReconnect(immediate: true) }
             return true
 
-        case .requestingPermission:
+        case .waitingForConnection, .requestingPermission:
             closeConnection(keepLease: false)
             if warmConnectionDesired { scheduleReconnect(immediate: true) }
             return true
@@ -1343,6 +1362,7 @@ private extension KrakiVoiceInputController.State {
     var metricTag: String {
         switch self {
         case .idle: return "idle"
+        case .waitingForConnection: return "waitingForConnection"
         case .requestingPermission: return "requestingPermission"
         case .obtainingLease: return "obtainingLease"
         case .recording: return "recording"

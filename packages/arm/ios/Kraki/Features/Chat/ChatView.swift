@@ -67,8 +67,12 @@ struct ChatView: View {
         let _ = viewModel?.card
         let _ = viewModel?.runtimeStatus
         let _ = viewModel?.pendingSignature
+        // Show what this device already has at once; newer messages land at
+        // the tail silently. Only a conversation with nothing stored waits
+        // behind the spinner.
+        let hasCachedHistory = viewModel.map { !$0.filteredMessages.isEmpty } ?? false
         let providerWaitingForLatest = viewModel == nil
-            || viewModel?.isWaitingForLatestBubble == true
+            || (viewModel?.isWaitingForLatestBubble == true && !hasCachedHistory)
         let waitingForInitialConnection = ChatEntryLoading.isInitialConnectionGateActive(
             hasStoredCredentials: appState.hasStoredCredentials,
             hasCompletedInitialConnect: appState.hasCompletedInitialConnect,
@@ -78,7 +82,6 @@ struct ChatView: View {
         // show cached history immediately (newer messages append at the tail
         // when they arrive) instead of hiding it behind a spinner. The
         // spinner remains only when there is nothing cached to show.
-        let hasCachedHistory = viewModel.map { !$0.filteredMessages.isEmpty } ?? false
         let entrySourceWaiting = providerWaitingForLatest
             || (waitingForInitialConnection && !hasCachedHistory)
         let waitingForLatest = ChatEntryLoading.isEntryGateActive(

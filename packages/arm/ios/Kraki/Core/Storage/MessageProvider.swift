@@ -720,6 +720,9 @@ final class MessageProvider {
         // drives the iOS card's authoritative unread boolean; without this a
         // replay can populate SQLite while the card still shows old cursors.
         let batchHead = max(totalLastSeq, messages.map(\.seq).max() ?? 0)
+        if containsHead == true {
+            appState.messageStore.markCaughtUp(sessionId, through: batchHead)
+        }
         if batchHead > (tentacleLastSeq[sessionId] ?? 0) {
             tentacleLastSeq[sessionId] = batchHead
         }
@@ -1007,7 +1010,13 @@ final class MessageProvider {
 
     // MARK: - Private
 
-    private func requestFromTentacle(sessionId: String, beforeSeq: Int?, reason: String = "?") {
+    /// A head (catch-up) reply can be lost on a network change or reconnect:
+    /// it is not durable. While the Session is open and connected, ask again
+    /// instead of leaving the conversation behind until the next live push.
+    static let headRequestTimeout: TimeInterval = 5
+    static let headRequestRetries = 4
+
+    private func requestFromTentacle(sessionId: String, beforeSeq: Int?, reason: String = "?", attempt: Int = 0) {
         guard let appState else { return }
         guard let tentacleDeviceId = appState.sessionStore.sessions[sessionId]?.deviceId,
               !tentacleDeviceId.isEmpty else { return }
@@ -1022,8 +1031,20 @@ final class MessageProvider {
         // retry affordance instead of leaving an empty/stale view.
         // Captures slotKind so it removes exactly the slot it added.
         let work = DispatchWorkItem { [weak self, weak appState] in
-            self?.removeFirstSlot(sessionId) { $0 == slotKind }
-            KLog.d("⏱ session messages timeout — session=\(sessionId.prefix(12)) kind=\(kind)")
+            guard let self else { return }
+            self.removeFirstSlot(sessionId) { $0 == slotKind }
+            KLog.diag("⏱ session messages timeout — session=\(sessionId.prefix(12)) kind=\(kind) attempt=\(attempt)")
+            if beforeSeq == nil, attempt < Self.headRequestRetries, let appState,
+               appState.connectionStatus == .connected,
+               appState.sessionSubscriptionController.desiredSessionId == sessionId,
+               appState.messageStore.persistedHead(sessionId) < (self.tentacleLastSeq[sessionId] ?? 0),
+               !self.isLoadingHead(sessionId) {
+                self.requestFromTentacle(sessionId: sessionId, beforeSeq: nil, reason: "retry", attempt: attempt + 1)
+                return
+            }
+            // Out of retries: never keep the live card hidden behind a
+            // catch-up that is not coming.
+            if beforeSeq == nil { appState?.messageStore.releaseCardHold(sessionId) }
             appState?.sessionStore.markLoadFailed(sessionId)
         }
         addSlot(sessionId, RequestSlot(kind: slotKind, timeout: work))
@@ -1033,7 +1054,7 @@ final class MessageProvider {
             beforeSeq: beforeSeq
         )
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + (beforeSeq == nil ? Self.headRequestTimeout : 10), execute: work)
     }
 
     // MARK: - Trace + card (ephemeral pass-through)

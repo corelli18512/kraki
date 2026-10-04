@@ -123,7 +123,8 @@ struct MessageInputView: View {
     private var isDeviceReachable: Bool {
         guard let deviceId = session?.deviceId,
               let device = appState.deviceStore.devices[deviceId] else { return false }
-        return device.online && appState.isFullyOnline
+        // A sub-second foreground reconnect must not dim the controls.
+        return device.online && !appState.showsReconnecting
     }
 
     /// Short banner text to surface above the input row when sending
@@ -136,9 +137,8 @@ struct MessageInputView: View {
             let name = device?.name ?? session?.deviceName ?? "Device"
             return "\(name) is offline — message will deliver when it reconnects."
         }
-        if !appState.isFullyOnline {
-            return "Reconnecting…"
-        }
+        // Reconnecting is silent here (the title says "Connecting…"); input
+        // keeps working and queues until the connection is back.
         return nil
     }
 
@@ -396,7 +396,11 @@ struct MessageInputView: View {
         return Group {
             if parts.prefix.isEmpty && parts.suffix.isEmpty && !hasSpeech {
                 HStack(spacing: 7) {
-                    Circle().fill(.red).frame(width: 7, height: 7)
+                    if voiceController.state == .waitingForConnection {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Circle().fill(.red).frame(width: 7, height: 7)
+                    }
                     Text(voiceListeningStatus).foregroundStyle(.secondary)
                 }
             } else {
@@ -409,6 +413,7 @@ struct MessageInputView: View {
 
     private var voiceListeningStatus: String {
         switch voiceController.state {
+        case .waitingForConnection: return "Connecting…"
         case .requestingPermission: return "Allow microphone access…"
         case .recording: return "Listening…"
         default: return "Starting…"
