@@ -3,8 +3,53 @@
  * exposes `window.krakiDesktop`; in a normal browser it is undefined and every
  * helper here is a no-op, so the Web app runs unchanged in both.
  */
+export interface BuiltInState {
+  available: boolean;
+  version: string | null;
+  configured: boolean;
+  signedIn: boolean;
+  deviceName: string;
+  relay: string | null;
+  owned: boolean;
+  running: boolean;
+  relayState: string | null;
+  cliDaemon: boolean;
+  cliLogin: boolean;
+}
+
+export type AgentCheckEvent =
+  | { event: 'checking'; id: string; name: string }
+  | { event: 'agent'; id: string; name: string; status: 'ready' | 'needs_login' | 'not_installed' | 'error'; version?: string; models: number; sampleModels: string[]; hint?: string; installUrl: string }
+  | { event: 'done'; ready: string[] };
+
+export type SetupEvent =
+  | { event: 'start'; version: string }
+  | { event: 'oauth_url'; url: string }
+  | { event: 'device_code'; userCode: string; verificationUri: string }
+  | { event: 'authenticated'; username: string }
+  | { event: 'relay'; relay: string }
+  | { event: 'done'; username: string; deviceName: string; relay: string }
+  | { event: 'error'; code: string; message: string };
+
+/** The Kraki built into the desktop app (Windows), like Kraki for Mac's. */
+export interface BuiltInBridge {
+  state: () => Promise<BuiltInState>;
+  checkAgents: (onEvent: (e: AgentCheckEvent) => void) => Promise<{ ok: boolean }>;
+  setup: (opts: { deviceName?: string; forceLogin?: boolean }, onEvent: (e: SetupEvent) => void) => Promise<{ ok: boolean; username?: string; code?: string }>;
+  cancelSetup: () => void;
+  enable: () => Promise<{ ok: boolean; error?: string }>;
+  disable: () => Promise<{ ok: boolean; error?: string }>;
+  restart: () => Promise<{ ok: boolean; error?: string }>;
+  /** The relay + GitHub token the app signs in with (same account). */
+  credentials: () => { relay: string; token: string } | null;
+  openLogs: () => void;
+}
+
 export interface KrakiDesktopBridge {
   platform: string;
+  /** Device name shown to other devices ("Kraki Windows"). */
+  deviceName: string;
+  builtIn?: BuiltInBridge;
   version: string;
   /** Origin GitHub redirects back to after OAuth (the shell intercepts it). */
   oauthRedirectOrigin: string;

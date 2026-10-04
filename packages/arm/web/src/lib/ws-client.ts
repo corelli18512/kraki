@@ -70,6 +70,15 @@ export class KrakiWSClient {
     this.transport.pairWithToken(relay, token);
   }
 
+  /** Connect with the account of the Kraki built into the desktop app. */
+  connectWithDesktopCredentials(): boolean {
+    const creds = window.krakiDesktop?.builtIn?.credentials();
+    if (!creds) return false;
+    getStore().setStatus('connecting');
+    this.transport.redirectToRelay(creds.relay);
+    return true;
+  }
+
   constructor(url?: string) {
     outbox.configure({
       send: (msg) => this.transmit(msg),
@@ -841,7 +850,8 @@ export class KrakiWSClient {
   // --- Internal ---
 
   private async authenticate(): Promise<void> {
-    const hasCredentials = this.transport.pairingToken || this.transport.storedDeviceId || this.transport.githubCode;
+    const hasCredentials = this.transport.pairingToken || this.transport.storedDeviceId || this.transport.githubCode
+      || window.krakiDesktop?.builtIn?.credentials();
 
     if (!hasCredentials) {
       // No credentials — query server capabilities so the UI can show login options

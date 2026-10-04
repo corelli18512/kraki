@@ -17,7 +17,11 @@ export async function sendAuth(
   githubCode: string | undefined,
   githubOAuthExtras?: { codeVerifier?: string; redirectUri?: string },
 ): Promise<boolean> {
-  const deviceName = `Web ${navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Browser'}`;
+  const desktopBridge = window.krakiDesktop;
+  const deviceName = desktopBridge?.deviceName ?? `Web ${navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Browser'}`;
+  // The desktop app signs in with the token of the Kraki built into it (as
+  // Kraki for Mac does with its tentacle's), keeping its device id.
+  const desktopToken = desktopBridge?.builtIn?.credentials()?.token;
 
   // Wait for key store if not ready
   if (!keyStore.isReady()) {
@@ -28,9 +32,15 @@ export async function sendAuth(
   const encryptionKey = keyStore.isReady() ? await keyStore.getPublicKey() : undefined;
 
   const usedToken = !!pairingToken;
-  const device = { name: deviceName, role: 'app', kind: 'web', deviceId: storedDeviceId, publicKey, encryptionKey };
+  const device = { name: deviceName, role: 'app', kind: desktopBridge ? 'desktop' : 'web', deviceId: storedDeviceId, publicKey, encryptionKey };
 
-  if (pairingToken) {
+  if (desktopToken && !pairingToken && !githubCode) {
+    send({
+      type: 'auth',
+      auth: { method: 'github_token', token: desktopToken },
+      device,
+    });
+  } else if (pairingToken) {
     send({
       type: 'auth',
       auth: { method: 'pairing', token: pairingToken },

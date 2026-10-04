@@ -1,3 +1,5 @@
+import { desktop } from '../../lib/desktop';
+import { ThisPCSettings } from '../desktop/ThisPCSettings';
 import { useEffect, useState } from 'react';
 import { useTheme } from '../../hooks/useTheme';
 import { useStore } from '../../hooks/useStore';
@@ -49,6 +51,7 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
 
   const content = (
     <div className="space-y-6">
+      {desktop?.builtIn && <ThisPCSettings builtIn={desktop.builtIn} />}
       <section>
         <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
           Appearance

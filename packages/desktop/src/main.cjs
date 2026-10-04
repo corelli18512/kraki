@@ -9,6 +9,8 @@ const {
 const { existsSync, readFileSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const os = require('node:os');
+const { BuiltInKraki } = require('./tentacle.cjs');
 
 const SCHEME = 'app';
 const HOST = 'kraki';
@@ -42,6 +44,8 @@ let win = null;
 let tray = null;
 let quitting = false;
 let unread = 0;
+/** @type {BuiltInKraki | null} */
+let builtIn = null;
 
 // ── Window state ──
 const stateFile = () => path.join(app.getPath('userData'), 'window-state.json');
@@ -118,7 +122,13 @@ function createWindow() {
       spellcheck: true,
       // Local testing against a plain ws:// relay on the LAN only.
       allowRunningInsecureContent: process.env.KRAKI_DESKTOP_ALLOW_INSECURE === '1',
-      additionalArguments: [`--kraki-version=${app.getVersion()}`, `--kraki-oauth-origin=${OAUTH_REDIRECT_ORIGIN}`],
+      additionalArguments: [
+        `--kraki-version=${app.getVersion()}`,
+        `--kraki-oauth-origin=${OAUTH_REDIRECT_ORIGIN}`,
+        `--kraki-device-name=Kraki ${process.platform === 'win32' ? 'Windows' : 'Linux'}`,
+        `--kraki-builtin=${builtIn?.available() ? '1' : '0'}`,
+        `--kraki-host=${os.hostname()}`,
+      ],
     },
   });
   if (bounds?.maximized) win.maximize();
@@ -206,6 +216,66 @@ ipcMain.on('kraki:badge', (_e, count) => {
   updateTray();
 });
 
+// ── The built-in Kraki (see tentacle.cjs) ──
+
+/** GitHub sign-in in a window of our own; resolves with kraki://auth/callback?… */
+function openSignInWindow(url) {
+  return new Promise((resolve) => {
+    const child = new BrowserWindow({
+      parent: win ?? undefined,
+      modal: !!win,
+      width: 520,
+      height: 720,
+      title: 'Sign in with GitHub',
+      autoHideMenuBar: true,
+      webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, partition: 'persist:github-signin' },
+    });
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+      if (!child.isDestroyed()) child.close();
+    };
+    const intercept = (event, target) => {
+      let parsed;
+      try { parsed = new URL(target); } catch { return; }
+      const desktopCallback = parsed.pathname === '/auth/callback/desktop' || parsed.protocol === 'kraki:';
+      if (!desktopCallback) return;
+      event.preventDefault();
+      finish(`kraki://auth/callback${parsed.search}`);
+    };
+    child.webContents.on('will-redirect', intercept);
+    child.webContents.on('will-navigate', intercept);
+    child.webContents.setWindowOpenHandler(({ url: u }) => { void shell.openExternal(u); return { action: 'deny' }; });
+    child.on('closed', () => finish(null));
+    void child.loadURL(url);
+  });
+}
+
+function send(channel, payload) {
+  if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+const safely = (fn) => async (...args) => {
+  try { return { ok: true, ...(await fn(...args)) }; } catch (err) { return { ok: false, error: String(err?.message ?? err) }; }
+};
+
+ipcMain.handle('kraki:builtin-state', () => builtIn?.state() ?? null);
+ipcMain.handle('kraki:builtin-agents', async () => builtIn.checkAgents((e) => send('kraki:builtin-agent-event', e)));
+ipcMain.handle('kraki:builtin-setup', async (_e, opts) => builtIn.setup({
+  deviceName: opts?.deviceName,
+  forceLogin: !!opts?.forceLogin,
+  onEvent: (e) => send('kraki:builtin-setup-event', e),
+  openSignIn: openSignInWindow,
+}));
+ipcMain.on('kraki:builtin-cancel-setup', () => builtIn?.cancelSetup());
+ipcMain.handle('kraki:builtin-enable', safely(() => builtIn.enable()));
+ipcMain.handle('kraki:builtin-disable', safely(() => builtIn.disable()));
+ipcMain.handle('kraki:builtin-restart', safely(() => builtIn.restart()));
+ipcMain.on('kraki:builtin-credentials', (e) => { e.returnValue = builtIn?.credentials() ?? null; });
+ipcMain.on('kraki:builtin-open-logs', () => { if (builtIn) void shell.openPath(path.join(builtIn.home(), 'logs')); });
+
 ipcMain.on('kraki:notify', (_e, n) => {
   if (!Notification.isSupported() || !n || typeof n.title !== 'string') return;
   const note = new Notification({
@@ -229,7 +299,13 @@ app.on('second-instance', showWindow);
 app.on('before-quit', () => { quitting = true; });
 app.on('activate', showWindow);
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  builtIn = new BuiltInKraki({ resourcesPath: process.resourcesPath, appPath: process.execPath, appVersion: app.getVersion() });
+  // An owned daemon that is not running (a crash loop gave up, or it was
+  // stopped by an update) starts again with the app.
+  if (builtIn.available()) {
+    builtIn.state().then((s) => { if (s.owned && !s.running) return builtIn.start(); }).catch(() => {});
+  }
   serveApp();
   createWindow();
   createTray();

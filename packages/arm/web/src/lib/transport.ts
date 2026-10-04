@@ -239,7 +239,9 @@ export class KrakiTransport {
     const params = getUrlParams();
     const stored = loadStoredDevice();
 
-    this._url = url ?? params.relay ?? stored?.relay ?? import.meta.env.VITE_WS_URL ?? DEFAULT_RELAY;
+    // The desktop app connects to the relay its built-in Kraki was set up with.
+    const desktopRelay = typeof window !== 'undefined' ? window.krakiDesktop?.builtIn?.credentials()?.relay : undefined;
+    this._url = url ?? params.relay ?? desktopRelay ?? stored?.relay ?? import.meta.env.VITE_WS_URL ?? DEFAULT_RELAY;
     this.pairingToken = params.token;
     this.storedDeviceId = stored?.deviceId;
     this.callbacks = callbacks;

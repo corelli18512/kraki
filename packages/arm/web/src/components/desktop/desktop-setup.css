@@ -1,0 +1,256 @@
+/* Kraki for Windows setup — the Kraki for Mac entry gate (LoginView+macOS,
+   BuiltInSetupView, ThisMacSetupStep, LocalAgentsPanel) in CSS. Sizes follow
+   the SwiftUI points one to one. */
+
+.ds-page {
+  --ds-font: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+  --ds-mono: "Cascadia Mono", Consolas, ui-monospace, "SF Mono", monospace;
+  --ds-primary: #0b5b9c;
+  --ds-title: #0f172a;
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-surface-primary);
+  font-family: var(--ds-font);
+  color: var(--color-text-primary);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.dark .ds-page { --ds-primary: #5ea0d7; --ds-title: #f8fafc; }
+
+.ds-backdrop { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.ds-glow { position: absolute; left: 50%; top: 50%; border-radius: 50%; }
+.ds-glow-a {
+  width: 520px; height: 520px; margin: -260px 0 0 -260px;
+  transform: translate(220px, -210px);
+  background: color-mix(in srgb, var(--ds-primary) 9%, transparent);
+  filter: blur(80px);
+}
+.ds-glow-b {
+  width: 440px; height: 440px; margin: -220px 0 0 -220px;
+  transform: translate(-260px, 240px);
+  background: rgba(6, 182, 212, 0.055);
+  filter: blur(90px);
+}
+
+.ds-scroll {
+  position: relative;
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 48px;
+}
+.ds-card {
+  width: 100%;
+  max-width: 480px;
+  min-height: 210px;
+  margin: auto 0;
+  box-sizing: border-box;
+  padding: 16px 22px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--color-surface-secondary) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border-primary) 80%, transparent);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Intro (MacSetupIntro) */
+.ds-intro {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.45s ease-in-out, transform 0.45s ease-in-out;
+  cursor: default;
+}
+.ds-intro-leaving { opacity: 0; transform: translateY(-24px) scale(0.96); }
+.ds-intro-logo { width: 160px; height: 160px; object-fit: contain; margin-bottom: 18px; }
+.ds-wordmark {
+  font-family: var(--ds-mono);
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 4.6px;
+  color: var(--ds-title);
+}
+.ds-tagline { margin-top: 6px; font-size: 13px; font-weight: 500; color: var(--color-text-secondary); }
+
+/* StepCard */
+.ds-step { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.ds-step-head { display: flex; flex-direction: column; align-items: center; gap: 7px; text-align: center; }
+.ds-step-label { font-size: 10px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; color: var(--ds-primary); }
+.ds-step-title { font-size: 14px; font-weight: 600; color: var(--color-text-primary); }
+.ds-step-detail { font-size: 11.5px; line-height: 1.4; color: var(--color-text-muted); }
+
+.ds-stack { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.ds-actions { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.ds-row { display: flex; gap: 10px; align-items: center; justify-content: center; }
+.ds-progress { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--color-text-secondary); }
+.ds-muted { font-size: 10.5px; color: var(--color-text-muted); text-align: center; }
+.ds-strong { font-size: 12px; font-weight: 500; color: var(--color-text-primary); }
+.ds-warning { font-size: 11px; color: #f97316; text-align: center; }
+.ds-ok { color: #22c55e !important; }
+.ds-spacer { flex: 1; }
+
+.ds-section { width: 100%; max-width: 460px; display: flex; flex-direction: column; gap: 4px; }
+.ds-section-title { font-size: 9.5px; font-weight: 600; letter-spacing: 0.7px; text-transform: uppercase; color: var(--color-text-muted); }
+.ds-section-body {
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-surface-secondary) 70%, transparent);
+}
+.dark .ds-section-body, .dark .ds-card { background: color-mix(in srgb, var(--color-surface-secondary) 45%, transparent); }
+
+/* Controls: macOS push buttons, small & regular */
+.ds-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 11px;
+  border-radius: 6px;
+  border: 0;
+  background: rgba(0, 0, 0, 0.085);
+  color: var(--color-text-primary);
+  font: 400 12.5px var(--ds-font);
+  cursor: default;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.dark .ds-button { background: rgba(255, 255, 255, 0.14); }
+.ds-button:hover:not(:disabled) { filter: brightness(0.97); }
+.ds-button:active:not(:disabled) { filter: brightness(0.92); }
+.ds-button:disabled { opacity: 0.45; }
+.ds-button-small { height: 20px; padding: 0 8px; font-size: 11px; border-radius: 5px; }
+.ds-button-primary { background: var(--ds-primary); color: #fff; font-weight: 500; }
+.dark .ds-button-primary { background: #0b5b9c; }
+.ds-button-wide { min-width: 184px; height: 30px; font-size: 13px; }
+.ds-link {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: 10.5px var(--ds-font);
+  color: var(--ds-primary);
+  cursor: pointer;
+}
+.ds-link:hover { text-decoration: underline; }
+.ds-github {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 200px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: #24292f;
+  color: #fff;
+  font: 500 13px var(--ds-font);
+  cursor: pointer;
+}
+.ds-github:hover { background: #32383f; }
+.ds-github svg { width: 16px; height: 16px; }
+.ds-device-code { font: 700 26px var(--ds-mono); letter-spacing: 3px; color: var(--ds-title); user-select: text; }
+
+.ds-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--color-text-muted) 35%, transparent);
+  border-top-color: var(--color-text-secondary);
+  animation: ds-spin 0.8s linear infinite;
+  flex: none;
+}
+.ds-spinner-mini { width: 10px; height: 10px; border-width: 1.5px; }
+@keyframes ds-spin { to { transform: rotate(360deg); } }
+
+/* Agents (LocalAgentsPanel) */
+.ds-agents { display: flex; flex-direction: column; }
+.ds-agents-loading { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 12px; color: var(--color-text-secondary); }
+.ds-agents-none { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 6px 0; }
+.ds-agents-none .ds-muted { text-align: left; font-size: 11px; }
+.ds-agents-footer { display: flex; align-items: center; gap: 12px; padding-top: 6px; }
+.ds-divider { height: 1px; background: color-mix(in srgb, var(--color-border-primary) 50%, transparent); }
+.ds-agent { display: flex; align-items: flex-start; gap: 9px; padding: 4px 0; }
+.ds-agent > .ds-icon, .ds-agent > .ds-spinner, .ds-catalog-row > .ds-icon, .ds-catalog-row > .ds-spinner { margin-top: 2px; }
+.ds-agent-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ds-agent-name { font-size: 12px; font-weight: 500; color: var(--color-text-primary); }
+.ds-agent-version { margin-left: 6px; font-size: 10.5px; color: var(--color-text-muted); }
+.ds-agent-detail { font-size: 10.5px; color: var(--color-text-muted); user-select: text; }
+.ds-agent-detail-ready { color: var(--color-text-secondary); }
+.ds-icon { width: 14px; height: 14px; flex: none; }
+.ds-icon-ready circle { fill: #22c55e; }
+.ds-icon-warn circle:first-child { fill: #f97316; }
+.ds-icon-dashed circle { fill: none; stroke: var(--color-text-muted); stroke-width: 1.4; stroke-dasharray: 2 2; }
+
+/* Supported agents sheet */
+.ds-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 40px;
+  background: rgba(0, 0, 0, 0.18);
+}
+.ds-sheet {
+  width: 520px;
+  max-width: calc(100vw - 32px);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  border-radius: 12px;
+  background: var(--color-surface-primary);
+  border: 1px solid color-mix(in srgb, var(--color-border-primary) 70%, transparent);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
+  font-family: var(--ds-font);
+  user-select: none;
+}
+.ds-sheet-title { font-size: 15px; font-weight: 600; color: var(--color-text-primary); }
+.ds-sheet-detail { text-align: left; font-size: 11.5px; margin-top: -10px; }
+.ds-catalog-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; }
+.ds-catalog-row .ds-agent-name { font-size: 12.5px; }
+.ds-catalog-row .ds-agent-detail { font-size: 11px; }
+.ds-sheet-actions { display: flex; align-items: center; gap: 8px; }
+
+/* Which Kraki (ExistingCLIChoiceView) */
+.ds-option {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  text-align: left;
+  background: color-mix(in srgb, var(--color-surface-secondary) 60%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border-primary) 80%, transparent);
+  font-family: var(--ds-font);
+  color: inherit;
+  cursor: pointer;
+}
+.ds-option-primary { border-color: color-mix(in srgb, var(--ds-primary) 70%, transparent); }
+.ds-option:hover:not(:disabled) { background: color-mix(in srgb, var(--color-surface-secondary) 90%, transparent); }
+.ds-option-text { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.ds-option-title { font-size: 13px; font-weight: 600; color: var(--color-text-primary); }
+.ds-option-detail { font-size: 11px; line-height: 1.4; color: var(--color-text-muted); }
+.ds-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--ds-primary);
+  background: color-mix(in srgb, var(--ds-primary) 18%, transparent);
+}
+.ds-chevron { font-size: 18px; line-height: 16px; color: var(--color-text-muted); }

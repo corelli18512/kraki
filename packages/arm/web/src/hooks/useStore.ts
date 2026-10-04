@@ -35,7 +35,7 @@ function reviver(_key: string, value: unknown): unknown {
 function getInitialStatus(): ConnectionStatus {
   const stored = loadStoredDevice();
   const params = getUrlParams();
-  if (stored?.deviceId || params.token || params.githubCode) {
+  if (stored?.deviceId || params.token || params.githubCode || window.krakiDesktop?.builtIn?.credentials()) {
     return 'connecting';
   }
   return 'awaiting_login';

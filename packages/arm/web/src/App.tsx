@@ -104,7 +104,11 @@ export function App() {
     }
   }, [navigateToSession, navigate, setNavigateToSession]);
 
-  if (status === 'awaiting_login') {
+  // Kraki for Windows before its built-in Kraki is signed in: the setup owns
+  // the whole window, like Kraki for Mac's entry gate.
+  const desktopSetupGate = !!desktop?.builtIn && !desktop.builtIn.credentials();
+
+  if (status === 'awaiting_login' || desktopSetupGate) {
     return (
       <div className="app-viewport flex overflow-hidden bg-surface-primary">
         <ErrorBanner />

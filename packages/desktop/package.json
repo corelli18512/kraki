@@ -10,7 +10,8 @@
     "web": "node scripts/prepare-web.mjs",
     "start": "electron .",
     "dist:win": "electron-builder --win nsis --x64 --publish never",
-    "dist:dir": "electron-builder --dir --publish never"
+    "dist:dir": "electron-builder --dir --publish never",
+    "kraki": "node scripts/prepare-kraki.mjs"
   },
   "devDependencies": {
     "electron": "^38.1.2",
@@ -19,12 +20,36 @@
   "build": {
     "appId": "chat.kraki.desktop",
     "productName": "Kraki",
-    "directories": { "output": "release", "buildResources": "build" },
-    "files": ["src/**", "app/**", "build/icon.png", "build/tray.png", "build/badge.png", "package.json"],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**",
+      "app/**",
+      "build/icon.png",
+      "build/tray.png",
+      "build/badge.png",
+      "package.json"
+    ],
     "asar": true,
-    "protocols": [{ "name": "Kraki", "schemes": ["kraki"] }],
+    "protocols": [
+      {
+        "name": "Kraki",
+        "schemes": [
+          "kraki"
+        ]
+      }
+    ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "build/icon.png"
     },
     "nsis": {
@@ -34,6 +59,21 @@
       "shortcutName": "Kraki",
       "artifactName": "Kraki-Setup-${version}-x64.${ext}"
     },
-    "linux": { "target": ["AppImage"], "category": "Development", "icon": "build/icon.png" }
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development",
+      "icon": "build/icon.png"
+    },
+    "extraResources": [
+      {
+        "from": "kraki",
+        "to": "kraki",
+        "filter": [
+          "kraki.exe"
+        ]
+      }
+    ]
   }
 }

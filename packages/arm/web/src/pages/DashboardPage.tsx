@@ -6,6 +6,8 @@ import { startOAuthFlow, loadStoredDevice } from '../lib/transport';
 import { getOAuthClientId, supportsOAuthLogin } from '../lib/oauth';
 import { ScanQrCode } from 'lucide-react';
 import { QrScanner } from '../components/common/QrScanner';
+import { desktop } from '../lib/desktop';
+import { DesktopSetup } from '../components/desktop/DesktopSetup';
 import { MAC_RELEASES_PAGE, isMacBrowser, resolveMacDmgUrl } from '../lib/macDownload';
 
 /** GitHub mark SVG for the sign-in button */
@@ -49,6 +51,11 @@ export function DashboardPage() {
     void resolveMacDmgUrl().then((url) => { if (!cancelled) setMacDmgUrl(url); });
     return () => { cancelled = true; };
   }, [onMac]);
+
+  // Kraki for Windows: set up the Kraki built into the app (like Kraki for Mac).
+  if (desktop?.builtIn && (status === 'awaiting_login' || !desktop.builtIn.credentials())) {
+    return <DesktopSetup builtIn={desktop.builtIn} />;
+  }
 
   if (status === 'awaiting_login' || (status === 'connecting' && !hasCredentials)) {
     const isAuthenticating = status === 'connecting';
