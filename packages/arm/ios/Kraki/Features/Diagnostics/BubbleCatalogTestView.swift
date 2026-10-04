@@ -271,14 +271,4 @@ private struct BubbleCatalogCell: UIViewRepresentable {
         cell.layoutIfNeeded()
     }
 }
-private extension UIView {
-    var nearestViewController: UIViewController? {
-        var responder: UIResponder? = self
-        while let current = responder {
-            if let controller = current as? UIViewController { return controller }
-            responder = current.next
-        }
-        return nil
-    }
-}
 #endif
