@@ -1900,19 +1900,19 @@ struct MacChatItem {
 final class MacTransientOverlayScrollerController {
     private weak var scrollView: NSScrollView?
     private weak var observedVerticalScroller: NSScroller?
-    private var hideWorkItem: DispatchWorkItem?
-    private var finishFadeWorkItem: DispatchWorkItem?
-    private var fadeGeneration = 0
-    private var interactionActive = false
-    private var requestedVisible = false
+    let visibility = TransientScrollIndicatorVisibility()
     private var liveScrollStartObserver: NSObjectProtocol?
     private var liveScrollObserver: NSObjectProtocol?
     private var liveScrollEndObserver: NSObjectProtocol?
     private var preferredStyleObserver: NSObjectProtocol?
 
+    init() {
+        visibility.onVisibilityChanged = { [weak self] visible, duration in
+            self?.setVisible(visible, duration: duration)
+        }
+    }
+
     deinit {
-        hideWorkItem?.cancel()
-        finishFadeWorkItem?.cancel()
         for observer in [
             liveScrollStartObserver,
             liveScrollObserver,
@@ -1928,6 +1928,7 @@ final class MacTransientOverlayScrollerController {
             applyConfiguration()
             return
         }
+        visibility.reset()
         detachObservers()
         self.scrollView = scrollView
         observedVerticalScroller = nil
@@ -1940,23 +1941,21 @@ final class MacTransientOverlayScrollerController {
             object: scrollView,
             queue: .main
         ) { [weak self] _ in
-            self?.interactionActive = true
-            self?.reveal(scheduleHide: false)
+            self?.visibility.setActive(true, for: .scroll)
         }
         liveScrollObserver = center.addObserver(
             forName: NSScrollView.didLiveScrollNotification,
             object: scrollView,
             queue: .main
         ) { [weak self] _ in
-            self?.reveal(scheduleHide: false)
+            self?.visibility.setActive(true, for: .scroll)
         }
         liveScrollEndObserver = center.addObserver(
             forName: NSScrollView.didEndLiveScrollNotification,
             object: scrollView,
             queue: .main
         ) { [weak self] _ in
-            self?.interactionActive = false
-            self?.scheduleHide()
+            self?.visibility.setActive(false, for: .scroll)
         }
         preferredStyleObserver = center.addObserver(
             forName: NSScroller.preferredScrollerStyleDidChangeNotification,
@@ -1969,64 +1968,28 @@ final class MacTransientOverlayScrollerController {
 
     func noteScrollEvent(_ event: NSEvent) {
         guard abs(event.scrollingDeltaY) > 0.01 || abs(event.scrollingDeltaX) > 0.01 else { return }
-        reveal(scheduleHide: !interactionActive)
+        visibility.pulse()
     }
 
-    func hideImmediately() {
-        hideWorkItem?.cancel()
-        finishFadeWorkItem?.cancel()
-        fadeGeneration += 1
-        requestedVisible = false
-        guard let scroller = scrollView?.verticalScroller else { return }
-        scroller.layer?.removeAllAnimations()
-        scroller.alphaValue = 0
-        scroller.isEnabled = false
-    }
+    func setWheelGlideActive(_ active: Bool) { visibility.setActive(active, for: .wheelGlide) }
+    func hideImmediately() { visibility.reset() }
 
-    private func reveal(scheduleHide: Bool) {
-        requestedVisible = true
+    private func setVisible(_ visible: Bool, duration: TimeInterval) {
         applyConfiguration()
-        hideWorkItem?.cancel()
-        finishFadeWorkItem?.cancel()
-        fadeGeneration += 1
         guard let scroller = scrollView?.verticalScroller else { return }
         scroller.layer?.removeAllAnimations()
         scroller.isHidden = false
         scroller.isEnabled = true
-        scroller.alphaValue = 1
-        scrollView?.flashScrollers()
-        if scheduleHide { self.scheduleHide() }
-    }
-
-    private func scheduleHide() {
-        guard !interactionActive else { return }
-        hideWorkItem?.cancel()
-        let generation = fadeGeneration + 1
-        fadeGeneration = generation
-        let work = DispatchWorkItem { [weak self] in
-            guard let self,
-                  generation == self.fadeGeneration,
-                  !self.interactionActive,
-                  let scroller = self.scrollView?.verticalScroller else { return }
-            self.requestedVisible = false
-            scroller.isEnabled = false
+        (scroller as? MacTransientScroller)?.invalidateKnob()
+        if duration > 0, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.22
+                context.duration = duration
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                scroller.animator().alphaValue = 0
+                scroller.animator().alphaValue = visible ? 1 : 0
             }
-            let finish = DispatchWorkItem { [weak self] in
-                guard let self,
-                      generation == self.fadeGeneration,
-                      !self.interactionActive else { return }
-                self.scrollView?.verticalScroller?.alphaValue = 0
-                self.scrollView?.verticalScroller?.isEnabled = false
-            }
-            self.finishFadeWorkItem = finish
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.24, execute: finish)
+        } else {
+            scroller.alphaValue = visible ? 1 : 0
         }
-        hideWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55, execute: work)
     }
 
     private func applyConfiguration() {
@@ -2041,19 +2004,28 @@ final class MacTransientOverlayScrollerController {
         }
         scrollView.autohidesScrollers = false
         if !scrollView.hasVerticalScroller { scrollView.hasVerticalScroller = true }
+        if !(scrollView.verticalScroller is MacTransientScroller) {
+            let old = scrollView.verticalScroller
+            let replacement = MacTransientScroller()
+            replacement.controlSize = old?.controlSize ?? .regular
+            replacement.doubleValue = old?.doubleValue ?? 0
+            replacement.knobProportion = old?.knobProportion ?? 1
+            scrollView.verticalScroller = replacement
+            if let old { replacement.target = old.target; replacement.action = old.action }
+        }
+        if let scroller = scrollView.verticalScroller as? MacTransientScroller {
+            scroller.onHoverChanged = { [weak self] in self?.visibility.setActive($0, for: .hover) }
+            scroller.onTrackingChanged = { [weak self] in self?.visibility.setActive($0, for: .knob) }
+            scroller.onDetached = { [weak self] in self?.hideImmediately() }
+        }
         scrollView.verticalScroller?.scrollerStyle = .overlay
         scrollView.verticalScroller?.wantsLayer = true
         if let scroller = scrollView.verticalScroller {
             if scroller !== observedVerticalScroller {
                 observedVerticalScroller = scroller
-            }
-            if requestedVisible {
                 scroller.isHidden = false
-                scroller.alphaValue = 1
+                scroller.alphaValue = visibility.isVisible ? 1 : 0
                 scroller.isEnabled = true
-            } else {
-                scroller.alphaValue = 0
-                scroller.isEnabled = false
             }
         }
     }
@@ -2073,6 +2045,11 @@ final class MacTransientOverlayScrollerController {
     }
 
     private func detachObservers() {
+        if let old = observedVerticalScroller as? MacTransientScroller {
+            old.onHoverChanged = nil
+            old.onTrackingChanged = nil
+            old.onDetached = nil
+        }
         let center = NotificationCenter.default
         for observer in [
             liveScrollStartObserver,
@@ -2259,7 +2236,7 @@ final class MacSmoothWheelController: NSObject {
     }
 }
 
-private final class MacChatScroller: NSScroller {
+private final class MacChatScroller: MacTransientScroller {
     var onKnobTrackingChanged: ((Bool) -> Void)?
 
     override class var isCompatibleWithOverlayScrollers: Bool {
@@ -2278,7 +2255,7 @@ class MacSmoothScrollView: NSScrollView {
     private let transientScrollerController = MacTransientOverlayScrollerController()
 
     var onSmoothWheelActivityChanged: ((Bool) -> Void)? {
-        didSet { smoothWheelController.onActivityChanged = onSmoothWheelActivityChanged }
+        didSet { configureWheelActivity() }
     }
     var onSmoothWheelTargetChanged: ((CGFloat) -> Void)? {
         didSet { smoothWheelController.onTargetChanged = onSmoothWheelTargetChanged }
@@ -2288,7 +2265,15 @@ class MacSmoothScrollView: NSScrollView {
     func smoothWheelWillMove() {}
 
     func configureTransientOverlayScroller() {
+        configureWheelActivity()
         transientScrollerController.attach(to: self)
+    }
+
+    private func configureWheelActivity() {
+        smoothWheelController.onActivityChanged = { [weak self] active in
+            self?.transientScrollerController.setWheelGlideActive(active)
+            self?.onSmoothWheelActivityChanged?(active)
+        }
     }
 
     #if DEBUG
@@ -3240,12 +3225,11 @@ final class MacChatScrollView: MacSmoothScrollView {
         bottomContentInset = max(0, inset)
         // The Chat viewport and scrollbar remain full-height. The Composer is a
         // completely independent overlay; a fixed document footer reserves its
-        // base footprint (MacChatView.effectiveBottomInputHeight) plus breathing room.
+        // resting clearance (MacChatView.effectiveBottomInputHeight), which
+        // already accounts for the visible gap and the last cell's padding.
         contentInsets.bottom = 0
         scrollerInsets.bottom = 0
-        // Add one point of rounding tolerance so a 24pt visible gap remains
-        // at least 24pt after CoreText/backing-scale pixel quantization.
-        chatDocumentView.setBottomSafeArea(bottomContentInset + 25)
+        chatDocumentView.setBottomSafeArea(bottomContentInset)
         needsLayout = true
         if wasPinned { scrollToBottom(animated: false) }
         updateJumpButtonVisibility(animated: false)

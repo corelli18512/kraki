@@ -32,6 +32,8 @@ enum MessageComposerPolicy {
 enum IOSComposerMetrics {
     /// One-line capsule height (buttons keep >= 44pt touch targets).
     static let height: CGFloat = 48
+    /// Capsule spacing to the keyboard / home-indicator safe-area edge.
+    static let verticalPadding: CGFloat = 6
     /// Primary (send / stop) circle — same as the chat's jump controls.
     static let control: CGFloat = 44
     /// Gap between the capsule and the primary button, and between stacked
@@ -57,7 +59,6 @@ struct MessageInputView: View {
     var pendingQuestion: PendingQuestion? = nil
     var isCompacting: Bool = false
     var hasLiveCard: Bool = false
-    var onHeightChange: (CGFloat) -> Void = { _ in }
 
     @Environment(AppState.self) private var appState
     @State private var selectedPhoto: PhotosPickerItem?
@@ -163,12 +164,6 @@ struct MessageInputView: View {
 
     var body: some View {
         composeCard
-            .onGeometryChange(for: CGFloat.self) { proxy in
-                proxy.size.height
-            } action: { height in
-                guard height > 0 else { return }
-                onHeightChange(height)
-            }
             .overlay(alignment: .top) {
                 // Offline / reconnecting hint pill. Sits a few points
                 // above the input row, full-width centered, low-key
@@ -247,8 +242,7 @@ struct MessageInputView: View {
             inputRow
         }
         .padding(.horizontal, 16)
-        .padding(.top, 6)
-        .padding(.bottom, 6)
+        .padding(.vertical, IOSComposerMetrics.verticalPadding)
         .frame(maxWidth: .infinity)
     }
 
@@ -269,7 +263,7 @@ struct MessageInputView: View {
 
     private static let boxShape = RoundedRectangle(cornerRadius: IOSComposerMetrics.height / 2, style: .continuous)
 
-    /// Shared by the composer expand/collapse and the chat list's inset.
+    /// Only the glass surface expands/collapses; the chat's clearance is fixed.
     static let expandAnimation = Animation.spring(response: 0.34, dampingFraction: 0.9)
 
     /// The same box throughout: dictation inserts the transcript row above

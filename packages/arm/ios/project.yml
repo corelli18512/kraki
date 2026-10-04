@@ -224,6 +224,8 @@ targets:
     sources:
       - path: KrakiMacTests
       - path: KrakiTests/NativeSessionPreviewGlyphTests.swift
+      - path: KrakiTests/NativeStyleTests.swift
+      - path: KrakiTests/ComposerGeometryProbeTests.swift
       - path: KrakiTests/ForegroundTestGate.swift
       - path: KrakiTests/IOSVoiceComposerTests.swift
       - path: KrakiTests/AccountUsageTests.swift
@@ -329,8 +331,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac
         PRODUCT_NAME: Kraki
-        MARKETING_VERSION: "0.2.64"
-        CURRENT_PROJECT_VERSION: 66
+        MARKETING_VERSION: "0.2.65"
+        CURRENT_PROJECT_VERSION: 67
         GENERATE_INFOPLIST_FILE: false
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
