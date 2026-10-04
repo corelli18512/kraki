@@ -38,6 +38,47 @@ final class LocalAgentsCheck {
         Agent(id: "pi", name: "Pi", status: .checking),
     ]
 
+    /// What every supported agent is, how Kraki finds it, and where to get it.
+    /// Shown in the "Supported agents" sheet; the main list only shows what
+    /// is installed. Add new agents here (and in the CLI's SETUP_AGENTS).
+    struct CatalogEntry: Identifiable {
+        let id: String
+        let name: String
+        let maker: String
+        let blurb: String
+        let detect: String
+        let installURL: URL
+    }
+
+    static let catalog: [CatalogEntry] = [
+        CatalogEntry(id: "claude", name: "Claude Code", maker: "Anthropic",
+                     blurb: "Anthropic's coding agent.",
+                     detect: "Found as `claude` in Terminal, or inside the Claude desktop app.",
+                     installURL: URL(string: "https://code.claude.com/docs/en/setup")!),
+        CatalogEntry(id: "codex", name: "Codex", maker: "OpenAI",
+                     blurb: "OpenAI's coding agent.",
+                     detect: "Found as `codex` in Terminal, or inside the ChatGPT desktop app.",
+                     installURL: URL(string: "https://developers.openai.com/codex/cli")!),
+        CatalogEntry(id: "copilot", name: "GitHub Copilot CLI", maker: "GitHub",
+                     blurb: "GitHub Copilot in the terminal. Needs a Copilot plan.",
+                     detect: "Found as `copilot` in Terminal.",
+                     installURL: URL(string: "https://github.com/features/copilot/cli")!),
+        CatalogEntry(id: "pi", name: "Pi", maker: "Earendil",
+                     blurb: "An open coding agent that works with many model providers and your own API keys.",
+                     detect: "Found as `pi` in Terminal.",
+                     installURL: URL(string: "https://github.com/earendil-works/pi#readme")!),
+    ]
+
+    /// Installed agents (ready, not signed in, or failing to start) — the
+    /// only ones the main list shows. Not-installed agents live in the
+    /// "Supported agents" sheet.
+    var installedAgents: [Agent] {
+        displayedAgents.filter { $0.status != .notInstalled && $0.status != .checking }
+    }
+
+    /// True once every agent has a result.
+    var hasResults: Bool { !displayedAgents.contains { $0.status == .checking } }
+
     private(set) var agents: [Agent] = LocalAgentsCheck.placeholders
     private(set) var isRunning = false
     private(set) var failure: String?
