@@ -1,4 +1,4 @@
-import { CircleCheck, CircleStop, CircleX, Lock, OctagonX } from 'lucide-react';
+import { Check, CircleCheck, CircleStop, CircleX, Lock, OctagonX, X } from 'lucide-react';
 import type { CardActionState } from '@kraki/protocol';
 import type { CardAction } from '../../lib/chat/spine';
 
@@ -108,39 +108,42 @@ function PermissionSlot({ action, handlers }: { action: Extract<CardActionState,
     id: string; toolName?: string; description?: string; args?: Record<string, unknown>;
     decision?: string; localPending?: boolean; localError?: string;
   };
-  const description = p.description || `Run ${p.toolName ?? 'tool'}`;
+  const description = (p.description || `Run ${p.toolName ?? 'tool'}`).trim();
+  // Written like a question (Mac/iOS PermissionPromptCopy).
+  const title = p.decision || description.endsWith('?') ? description : `${description}?`;
   const summary = argsSummary(p.toolName, p.args);
   const decide = (decision: PermissionDecision) => handlers.onPermission?.(p.id, p.toolName, decision);
   const denied = p.decision === 'deny';
+  const diff = diffLines(p.args);
   return (
     <div className="kslot-permission">
       <div className="kslot-permission-head">
-        <Lock className="kslot-icon text-orange-500" aria-hidden />
-        <div className="min-w-0 flex-1">
-          {!p.decision && (
-            <div className="kslot-permission-title">Approval needed — Safe mode</div>
-          )}
-          <div className="kslot-permission-desc">{description}</div>
-          {diffLines(p.args) ? (
-            <pre className="kslot-permission-args" aria-label="Proposed change">
-              {diffLines(p.args)!.map((line, i) => (
-                <div key={i} style={{ color: line.startsWith('+') ? '#16a34a' : line.startsWith('-') ? '#dc2626' : undefined }}>{line || ' '}</div>
-              ))}
-            </pre>
-          ) : summary && summary !== description && <div className="kslot-permission-args">{summary}</div>}
-          {p.decision && (
-            <div className={`kslot-permission-decision ${denied ? 'is-denied' : ''}`}>
-              {denied ? '✗' : '✓'} {p.decision === 'always_allow' ? 'Always allowed' : denied ? 'Denied' : 'Approved'}
-              {p.localPending && <span className="kslot-muted"> · Sending…</span>}
-            </div>
-          )}
-          {p.localError && <div className="kslot-permission-error">{p.localError}</div>}
-        </div>
+        <div className="kslot-permission-q">{title}</div>
+        {!p.decision && (
+          <div className="kslot-permission-caption"><Lock className="kslot-lock" aria-hidden />Needs your approval · Safe mode</div>
+        )}
       </div>
+      {diff ? (
+        <pre className="kslot-permission-args is-diff" aria-label="Proposed change">
+          {diff.map((line, i) => (
+            <div key={i} style={{ color: line.startsWith('+') ? '#16a34a' : line.startsWith('-') ? '#dc2626' : undefined }}>{line || ' '}</div>
+          ))}
+        </pre>
+      ) : summary && summary !== description && <div className="kslot-permission-args">{summary}</div>}
+      {p.decision && (
+        <div className="kslot-permission-outcome">
+          <span className={`kperm-outcome ${denied ? 'is-denied' : ''}`}>
+            {denied ? <X aria-hidden /> : <Check aria-hidden />}
+            {p.decision === 'always_allow' ? 'Always allowed' : denied ? 'Denied' : 'Approved'}
+          </span>
+          {p.localPending && <span className="kslot-muted">Sending…</span>}
+        </div>
+      )}
+      {p.localError && <div className="kslot-permission-error">{p.localError}</div>}
       {!p.decision && (
         <div className="kslot-permission-buttons">
-          <button type="button" className="kperm kperm-approve" onClick={() => decide('approve')}>Approve</button>
-          <button type="button" className="kperm kperm-deny" onClick={() => decide('deny')}>Deny</button>
+          <button type="button" className="kchoice kperm-approve" aria-label="Approve permission" onClick={() => decide('approve')}><Check aria-hidden />Approve</button>
+          <button type="button" className="kchoice kperm-deny" aria-label="Deny permission" onClick={() => decide('deny')}><X aria-hidden />Deny</button>
         </div>
       )}
     </div>
