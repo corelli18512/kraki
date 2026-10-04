@@ -738,6 +738,38 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertEqual(finals, ["authoritative"])
     }
 
+    func testRuntimeVoiceFailuresKeepRawDraftAndExplainTheFailingStage() async {
+        let cases = [
+            ("audio capture stalled", "microphone stopped", "capture_stalled"),
+            ("audio input changed during recording", "audio input changed", "capture_interrupted"),
+            ("audio input format changed or is invalid", "audio input changed", "capture_interrupted"),
+            ("voice upload stalled", "couldn't be uploaded", "upload_stalled"),
+            ("ASR closed without final transcript", "recognition ended", "asr_final_missing"),
+        ]
+        for (reason, expected, cause) in cases {
+            let host = FakeVoiceHost()
+            let factory = FakeVoiceFactory()
+            let controller = KrakiVoiceInputController(host: host, sessionFactory: factory,
+                                                       audioPolicy: FakeVoiceAudioPolicy())
+            var results: [VoiceInputCompletion] = []
+            await controller.begin(sessionID: "session-1", context: context(), onCompletion: { results.append($0) }) { _ in }
+            controller.receiveLease(lease())
+            factory.sessions[0].emit(.connectionAuthorized)
+            await Task.yield()
+            factory.sessions[0].emit(.partial("keep every received word"))
+            await Task.yield()
+            factory.sessions[0].emit(.failed(reason))
+            await Task.yield()
+            guard case .failed(let message) = controller.state else { XCTFail(reason); continue }
+            XCTAssertTrue(message.lowercased().contains(expected.lowercased()))
+            XCTAssertEqual(results.count, 1)
+            XCTAssertEqual(results.first?.rawText, "keep every received word")
+            XCTAssertEqual(results.first?.completed, false)
+            XCTAssertEqual(VoiceTracker.classify(gatewayReason: reason), cause)
+            controller.suspendWarmConnection()
+        }
+    }
+
     func testPartialSegmentResetAppendsInsteadOfErasingEarlierSpeech() async {
         let host = FakeVoiceHost()
         let factory = FakeVoiceFactory()

@@ -28,7 +28,9 @@ struct LiveVoiceInputSessionFactory: VoiceInputSessionFactory {
         VoiceInputSession(
             configuration: configuration,
             onEvent: onEvent,
-            log: { KLog.d("🎙️ [voice-core] \($0)") },
+            // VoiceInputCore emits bounded, metadata-only diagnostics. Keep
+            // these in ordinary Release too; never log transcript/provider text.
+            log: { KLog.diag("🎙️ [voice-core] \($0)") },
             onMetric: onMetric
         )
     }
@@ -921,7 +923,7 @@ final class KrakiVoiceInputController {
     }
 
     private func handleConnectionFailure(_ reason: String) {
-        KLog.d("🎙️ [voice] stage=connection-failed reason=\(reason)")
+        KLog.diag("🎙️ [voice] stage=connection-failed cause=\(VoiceTracker.classify(gatewayReason: reason))")
         let quotaExhausted = reason.localizedCaseInsensitiveContains("quota_exhausted")
         let leaseDayChanged = reason.localizedCaseInsensitiveContains("wrong_day")
         let leaseRejected = Self.isLeaseRejection(reason) || leaseDayChanged
@@ -1266,7 +1268,7 @@ final class KrakiVoiceInputController {
     }
 
     private func failRecording(_ error: VoiceInputError, closeTransport: Bool) {
-        KLog.d("🎙️ [voice] stage=failed reason=\(error.localizedDescription)")
+        KLog.diag("🎙️ [voice] stage=failed cause=\(error.metricCause)")
         if closeTransport { closeConnection(keepLease: true) }
         let owner = activeSessionID
         let completion = completionHandler
@@ -1317,6 +1319,18 @@ final class KrakiVoiceInputController {
         if lower.contains("permission") { return VoiceInputError.microphoneDenied.localizedDescription }
         if lower.contains("audio input unavailable") {
             return VoiceInputError.microphoneUnavailable.localizedDescription
+        }
+        if lower.contains("audio capture stalled") {
+            return "The microphone stopped providing audio. Please try again."
+        }
+        if lower.contains("audio input changed") || lower.contains("audio input format") {
+            return "The audio input changed during recording. Please try again."
+        }
+        if lower.contains("voice upload") {
+            return "Voice audio couldn't be uploaded. Check your connection and try again."
+        }
+        if lower.contains("asr closed without final") || lower.contains("asr_closed_without_final") {
+            return "Speech recognition ended before returning a transcript. Please try again."
         }
         if lower.contains("quota") {
             return "The voice session couldn't be renewed. Please try again."

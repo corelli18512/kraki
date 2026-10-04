@@ -214,6 +214,10 @@ final class VoiceTracker {
         let lower = reason.lowercased()
         if lower.contains("permission") { return "permission" }
         if lower.contains("audio input unavailable") { return "mic_unavailable" }
+        if lower.contains("audio capture stalled") { return "capture_stalled" }
+        if lower.contains("audio input changed") || lower.contains("audio input format") { return "capture_interrupted" }
+        if lower.contains("voice upload") { return "upload_stalled" }
+        if lower.contains("asr closed without final") || lower.contains("asr_closed_without_final") { return "asr_final_missing" }
         if lower.contains("quota") { return "quota" }
         if lower.contains("lease") || lower.contains("denied") || lower.contains("authorization")
             || lower.contains("signature") || lower.contains("wrong_") { return "lease_rejected" }

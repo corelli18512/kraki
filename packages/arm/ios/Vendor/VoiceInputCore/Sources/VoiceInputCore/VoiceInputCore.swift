@@ -49,6 +49,10 @@ public struct VoiceInputConfiguration: Sendable {
     public var readyTimeout: TimeInterval
     public var finishTimeout: TimeInterval
     public var pingInterval: TimeInterval
+    /// No PCM callbacks (not silence) during active capture is a local failure.
+    public var captureStallTimeout: TimeInterval
+    public var sendTimeout: TimeInterval
+    public var maxBufferedAudioBytes: Int
     public var pcmDumpPath: String?
 
     public init(
@@ -65,6 +69,9 @@ public struct VoiceInputConfiguration: Sendable {
         readyTimeout: TimeInterval = 10,
         finishTimeout: TimeInterval = 25,
         pingInterval: TimeInterval = 25,
+        captureStallTimeout: TimeInterval = 3,
+        sendTimeout: TimeInterval = 5,
+        maxBufferedAudioBytes: Int = 384_000,
         pcmDumpPath: String? = nil
     ) {
         self.gatewayURL = gatewayURL
@@ -80,6 +87,9 @@ public struct VoiceInputConfiguration: Sendable {
         self.readyTimeout = readyTimeout
         self.finishTimeout = finishTimeout
         self.pingInterval = pingInterval
+        self.captureStallTimeout = captureStallTimeout
+        self.sendTimeout = sendTimeout
+        self.maxBufferedAudioBytes = maxBufferedAudioBytes
         self.pcmDumpPath = pcmDumpPath
     }
 
@@ -124,7 +134,8 @@ public enum VoicePCMConverter {
         sourceRate: Double,
         targetRate: Double
     ) -> (data: Data, peak: Float)? {
-        guard frameLength > 0, sourceRate >= targetRate, targetRate > 0 else { return nil }
+        guard frameLength > 0, sourceRate.isFinite, targetRate.isFinite,
+              sourceRate >= targetRate, targetRate > 0 else { return nil }
         let ratio = sourceRate / targetRate
         let outputLength = Int(Double(frameLength) / ratio)
         guard outputLength > 0 else { return nil }
@@ -141,6 +152,7 @@ public enum VoicePCMConverter {
                 count += 1
             }
             let sample = count > 0 ? accumulator / Float(count) : 0
+            guard sample.isFinite else { return nil }
             peak = max(peak, abs(sample))
             let clamped = max(-1.0, min(1.0, Double(sample)))
             output[index] = Int16(clamped * 32767)
@@ -185,25 +197,6 @@ public protocol VoiceInputSessionProtocol: AnyObject {
     func close()
 }
 
-private enum VoiceCaptureAuthorization {
-    static var isAuthorized: Bool {
-        #if os(iOS)
-        return AVAudioApplication.shared.recordPermission == .granted
-        #else
-        return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        #endif
-    }
-
-    static var failureDescription: String {
-        #if os(iOS)
-        return "microphone permission not granted; enable Microphone access in Settings"
-        #else
-        let status = AVCaptureDevice.authorizationStatus(for: .audio)
-        return "microphone permission not granted (status=\(status.rawValue)); enable in System Settings → Privacy → Microphone"
-        #endif
-    }
-}
-
 /// Long-lived native voice connection: one authorized WebSocket, many capture
 /// cycles. Audio remains strictly sequential and each `startCapture` gets fresh
 /// product context.
@@ -221,9 +214,37 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
     private let logger: Logger
     private let metricHandler: MetricHandler
     private let partialObserved: PartialObservedHandler
-    private let task: URLSessionWebSocketTask
-    private let engine = AVAudioEngine()
+    private let task: VoiceInputTransport
+    private let capture: VoiceInputCapture
+    // All mutable state is serialized independently of the UI.
+    private let queue: DispatchQueue
+    private let callbackQueue: DispatchQueue
+    private let queueKey = DispatchSpecificKey<Bool>()
+    private let cancellationLock = NSLock()
+    private var closeRequested = false
+    private var isCloseRequested: Bool {
+        cancellationLock.lock(); defer { cancellationLock.unlock() }
+        return closeRequested
+    }
+    private let connectionID = UUID().uuidString
+    private var recordingID = UUID().uuidString
     private var inputTapInstalled = false
+    private var captureWatchdog: DispatchSourceTimer?
+    private var lastAudioAt: TimeInterval = 0
+    private var lastLevelAt: TimeInterval = 0
+    private var sentBytes = 0
+    private var bufferedBytes = 0
+    private var upstreamClosed = false
+    private var upstreamFinalReceived = false
+    private struct Write {
+        let id = UUID()
+        let message: URLSessionWebSocketTask.Message
+        let audioBytes: Int
+        let recordingID: String
+    }
+    private var writes: [Write] = []
+    private var activeWrite: Write?
+    private var sendTimeoutWork: DispatchWorkItem?
 
     private var receiveLoopRunning = true
     private var connectionAuthorized = false
@@ -236,7 +257,6 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
     private var markedFirstAudio = false
     private var markedFirstPartial = false
     private var markedCorrectionFirstToken = false
-    private var lastPartial = ""
     private var captureEnded = false
     private var finishSent = false
     private var gatewayReady = false
@@ -246,19 +266,32 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
     private var pendingStart: (context: [String: VoiceInputJSONValue], vocabulary: [String])?
 
     private var dumpHandle: FileHandle?
-    private var peakSample = 0
     private var totalBytes = 0
-    private var chunkCount = 0
-    private var firstSendTimestamp: Date?
-    private var lastStatTimestamp = Date()
 
-    public init(
+    public convenience init(
         configuration: VoiceInputConfiguration,
         onEvent: @escaping EventHandler,
         log: @escaping Logger = { _ in },
         onMetric: @escaping MetricHandler = { _ in },
         onPartialObserved: @escaping PartialObservedHandler = {}
     ) {
+        self.init(configuration: configuration,
+                  transport: LiveVoiceInputTransport(url: configuration.gatewayURL),
+                  capture: LiveVoiceInputCapture(), onEvent: onEvent, log: log,
+                  onMetric: onMetric, onPartialObserved: onPartialObserved)
+    }
+
+    init(configuration: VoiceInputConfiguration, transport: VoiceInputTransport,
+         capture: VoiceInputCapture,
+         queue: DispatchQueue = DispatchQueue(label: "voice-input.transport", qos: .userInitiated),
+         callbackQueue: DispatchQueue = .main,
+         onEvent: @escaping EventHandler, log: @escaping Logger = { _ in },
+         onMetric: @escaping MetricHandler = { _ in },
+         onPartialObserved: @escaping PartialObservedHandler = {}) {
+        self.task = transport
+        self.capture = capture
+        self.queue = queue
+        self.callbackQueue = callbackQueue
         self.configuration = configuration
         self.correctionEnabled = configuration.correctionEnabled
         self.eventHandler = onEvent
@@ -267,17 +300,31 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         self.partialObserved = onPartialObserved
         self.pcmDumpPath = configuration.pcmDumpPath
 
-        task = URLSession.shared.webSocketTask(with: configuration.gatewayURL)
-        task.resume()
-        metricHandler(.webSocketOpened)
-        receiveLoop()
-        send(json: configuration.gatewayAuthorizeMessage())
-        scheduleAuthorizationTimeout()
-        schedulePing()
+        queue.setSpecific(key: queueKey, value: true)
+        queue.async { [self] in
+            guard !isCloseRequested else { return }
+            task.resume()
+            metric(.webSocketOpened)
+            diagnostic("connection_open")
+            receiveLoop()
+            send(json: configuration.gatewayAuthorizeMessage())
+            scheduleAuthorizationTimeout()
+            schedulePing()
+        }
     }
 
     private func emit(_ event: VoiceInputEvent) {
-        eventHandler(event)
+        callbackQueue.async { [eventHandler] in eventHandler(event) }
+    }
+
+    private func metric(_ value: VoiceInputMetric) {
+        callbackQueue.async { [metricHandler] in metricHandler(value) }
+    }
+
+    /// Metadata only: never provider messages, transcripts, context, URLs or credentials.
+    private func diagnostic(_ event: String, code: Int = 0) {
+        let audioAgeMs = markedFirstAudio ? Int((ProcessInfo.processInfo.systemUptime - lastAudioAt) * 1000) : -1
+        logger("event=\(event) connection=\(connectionID) recording=\(recordingID) code=\(code) capturedBytes=\(totalBytes) sentBytes=\(sentBytes) bufferedBytes=\(bufferedBytes) audioAgeMs=\(audioAgeMs)")
     }
 
     private func send(json dictionary: [String: Any]) {
@@ -287,19 +334,42 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
             fail("invalid gateway control message")
             return
         }
-        task.send(.string(string)) { [weak self] error in
-            guard let error else { return }
-            DispatchQueue.main.async {
-                self?.fail("ws send error: \(error.localizedDescription)")
-            }
-        }
+        enqueue(.string(string))
     }
 
-    private func sendPCM(_ data: Data) {
-        task.send(.data(data)) { [weak self] error in
-            guard let error else { return }
-            DispatchQueue.main.async {
-                self?.fail("ws send error: \(error.localizedDescription)")
+    private func sendPCM(_ data: Data) { enqueue(.data(data), audioBytes: data.count) }
+
+    private func enqueue(_ message: URLSessionWebSocketTask.Message, audioBytes: Int = 0) {
+        guard receiveLoopRunning else { return }
+        writes.append(Write(message: message, audioBytes: audioBytes, recordingID: recordingID))
+        pumpWrites()
+    }
+
+    private func pumpWrites() {
+        guard receiveLoopRunning, activeWrite == nil, !writes.isEmpty else { return }
+        let write = writes.removeFirst()
+        activeWrite = write
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self, self.activeWrite?.id == write.id else { return }
+            self.fail("voice upload stalled", tag: "send_stalled")
+        }
+        sendTimeoutWork = timeout
+        queue.asyncAfter(deadline: .now() + configuration.sendTimeout, execute: timeout)
+        task.send(write.message) { [weak self] error in
+            self?.queue.async { [weak self] in
+                guard let self, self.receiveLoopRunning, self.activeWrite?.id == write.id else { return }
+                self.sendTimeoutWork?.cancel()
+                self.sendTimeoutWork = nil
+                self.activeWrite = nil
+                if let error {
+                    self.fail("ws send error: \(error.localizedDescription)", tag: "send_error", code: (error as NSError).code)
+                    return
+                }
+                if self.recordingID == write.recordingID {
+                    self.bufferedBytes -= write.audioBytes
+                    self.sentBytes += write.audioBytes
+                }
+                self.pumpWrites()
             }
         }
     }
@@ -308,21 +378,21 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         let timeout = configuration.authorizationTimeout
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.connectionAuthorized else { return }
-            self.fail("gateway authorization not ready after \(Int(timeout))s")
+            self.fail("gateway authorization not ready after \(Int(timeout))s", tag: "authorization_timeout")
         }
         authorizationTimeoutWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: work)
+        queue.asyncAfter(deadline: .now() + timeout, execute: work)
     }
 
     private func schedulePing() {
         guard configuration.pingInterval > 0, receiveLoopRunning else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.receiveLoopRunning else { return }
-            self.task.sendPing { [weak self] error in
-                DispatchQueue.main.async {
-                    guard let self else { return }
+            self.task.ping { [weak self] error in
+                self?.queue.async { [weak self] in
+                    guard let self, self.receiveLoopRunning else { return }
                     if let error {
-                        self.fail("ws ping error: \(error.localizedDescription)")
+                        self.fail("ws ping error: \(error.localizedDescription)", tag: "ping_error", code: (error as NSError).code)
                     } else {
                         self.schedulePing()
                     }
@@ -330,41 +400,50 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
             }
         }
         pingWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + configuration.pingInterval, execute: work)
+        queue.asyncAfter(deadline: .now() + configuration.pingInterval, execute: work)
     }
 
     public func startCapture(
         context: [String: VoiceInputJSONValue],
         vocabulary: [String]
     ) {
+        queue.async { [self] in startRecording(context: context, vocabulary: vocabulary) }
+    }
+
+    private func sendStart(context: [String: VoiceInputJSONValue], vocabulary: [String]) {
+        var message = configuration.gatewayStartMessage(context: context, vocabulary: vocabulary)
+        message["recordingId"] = recordingID
+        send(json: message)
+    }
+
+    private func startRecording(context: [String: VoiceInputJSONValue], vocabulary: [String]) {
+        guard !isCloseRequested else { return }
         guard receiveLoopRunning, !recordingActive else {
             fail("voice connection is not ready for a new recording")
             return
         }
-        guard VoiceCaptureAuthorization.isAuthorized else {
-            fail(VoiceCaptureAuthorization.failureDescription)
-            return
-        }
-
-        guard VoiceAudioInputAvailability.isAvailable else {
-            fail("audio input unavailable; connect a microphone and select it as the input device, then try again")
-            return
-        }
         resetRecordingState()
         recordingActive = true
+        diagnostic("recording_start")
         if connectionAuthorized {
-            send(json: configuration.gatewayStartMessage(context: context, vocabulary: vocabulary))
+            sendStart(context: context, vocabulary: vocabulary)
             scheduleReadyTimeout()
         } else {
             // Never make the user wait for authorization: capture now, send
             // the buffered audio as soon as the connection is authorized.
             pendingStart = (context, vocabulary)
-            logger("recording started before authorization; buffering")
+            diagnostic("capture_before_authorization")
         }
         startEngine()
     }
 
     private func resetRecordingState() {
+        recordingID = UUID().uuidString
+        upstreamClosed = false
+        upstreamFinalReceived = false
+        sentBytes = 0
+        bufferedBytes = 0
+        lastLevelAt = 0
         timeoutWork?.cancel()
         timeoutWork = nil
         readyTimeoutWork?.cancel()
@@ -373,17 +452,13 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         markedFirstAudio = false
         markedFirstPartial = false
         markedCorrectionFirstToken = false
-        lastPartial = ""
         captureEnded = false
         finishSent = false
         gatewayReady = false
         pendingAudio.removeAll()
         pendingStart = nil
-        peakSample = 0
         totalBytes = 0
-        chunkCount = 0
-        firstSendTimestamp = nil
-        lastStatTimestamp = Date()
+        lastAudioAt = 0
         dumpHandle?.closeFile()
         dumpHandle = nil
     }
@@ -392,10 +467,10 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         let timeout = configuration.readyTimeout
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.recordingActive, !self.gatewayReady else { return }
-            self.fail("gateway not ready after \(Int(timeout))s")
+            self.fail("gateway not ready after \(Int(timeout))s", tag: "ready_timeout")
         }
         readyTimeoutWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: work)
+        queue.asyncAfter(deadline: .now() + timeout, execute: work)
     }
 
     private func startEngine() {
@@ -404,102 +479,143 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
             dumpHandle = FileHandle(forWritingAtPath: path)
         }
 
-        // Device availability can change after preflight. AVAudioEngine's
-        // graph setup can throw NSException, which Swift do/catch cannot catch.
-        var error: NSError?
-        let started = VICStartAudioEngine(engine, configuration.targetSampleRate, { [weak self] buffer, _ in
-            self?.handleBuffer(buffer)
-        }, &error)
-        guard started else {
-            fail(error?.localizedDescription ?? "audio input unavailable; check your microphone")
+        let generation = recordingID
+        do {
+            try capture.start(sampleRate: configuration.targetSampleRate, onBuffer: { [weak self] buffer in
+                self?.handleBuffer(buffer, generation: generation)
+            }, onInterruption: { [weak self] in
+                self?.queue.async { [weak self] in
+                    guard let self, self.recordingID == generation, self.recordingActive, !self.captureEnded else { return }
+                    self.fail("audio input changed during recording", tag: "capture_interrupted")
+                }
+            })
+        } catch {
+            capture.stop()
+            fail(error.localizedDescription, tag: "capture_start_failed", code: (error as NSError).code)
             return
         }
         inputTapInstalled = true
-        firstSendTimestamp = Date()
-        lastStatTimestamp = Date()
-        metricHandler(.engineStarted)
-        logger("audio engine started (buffering until recording ready)")
+        lastAudioAt = ProcessInfo.processInfo.systemUptime
+        metric(.engineStarted)
+        diagnostic("engine_started")
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        let interval = max(0.01, min(0.25, configuration.captureStallTimeout / 2))
+        timer.schedule(deadline: .now() + interval, repeating: interval)
+        timer.setEventHandler { [weak self] in
+            guard let self, self.recordingActive, !self.captureEnded,
+                  self.recordingID == generation else { return }
+            if ProcessInfo.processInfo.systemUptime - self.lastAudioAt >= self.configuration.captureStallTimeout {
+                self.fail("audio capture stalled", tag: "capture_stalled")
+            }
+        }
+        captureWatchdog = timer
+        timer.resume()
     }
 
     private func stopEngine() {
+        captureWatchdog?.cancel()
+        captureWatchdog = nil
         guard inputTapInstalled else { return }
         inputTapInstalled = false
-        // A lost device can stop the engine while leaving a tap attached.
-        // Cleanup follows tap ownership, not engine.isRunning.
-        VICStopAudioEngine(engine)
+        capture.stop()
     }
 
     private func flushPending() {
         guard !pendingAudio.isEmpty else { return }
-        metricHandler(.bufferFlushed)
+        metric(.bufferFlushed)
         for chunk in pendingAudio { sendPCM(chunk) }
         pendingAudio.removeAll()
     }
 
-    private func handleBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard let channelData = buffer.floatChannelData?[0] else { return }
-        guard let converted = VoicePCMConverter.convert(
-            samples: channelData,
-            frameLength: Int(buffer.frameLength),
-            sourceRate: buffer.format.sampleRate,
-            targetRate: configuration.targetSampleRate
-        ) else { return }
-        DispatchQueue.main.async { [weak self] in
-            self?.ingest(converted.data, peak: converted.peak)
+    private func handleBuffer(_ buffer: AVAudioPCMBuffer, generation: String) {
+        // Copy/convert during the tap callback: AVAudioPCMBuffer is borrowed.
+        let converted = buffer.floatChannelData.flatMap { channels in
+            VoicePCMConverter.convert(samples: channels[0], frameLength: Int(buffer.frameLength),
+                                      sourceRate: buffer.format.sampleRate, targetRate: configuration.targetSampleRate)
+        }
+        queue.async { [weak self] in
+            guard let self, self.receiveLoopRunning, !self.isCloseRequested, self.recordingActive,
+                  !self.captureEnded, self.recordingID == generation else { return }
+            guard let converted else {
+                self.fail("audio input format changed or is invalid", tag: "capture_invalid_format")
+                return
+            }
+            self.ingest(converted.data, peak: converted.peak)
         }
     }
 
     private func ingest(_ data: Data, peak: Float) {
         guard receiveLoopRunning, recordingActive, !captureEnded else { return }
+        lastAudioAt = ProcessInfo.processInfo.systemUptime
+        guard bufferedBytes + data.count <= configuration.maxBufferedAudioBytes else {
+            fail("voice upload buffer exhausted", tag: "send_buffer_exhausted")
+            return
+        }
+        bufferedBytes += data.count
+        totalBytes += data.count
         dumpHandle?.write(data)
         if !markedFirstAudio {
             markedFirstAudio = true
-            metricHandler(.firstAudio)
+            metric(.firstAudio)
+            diagnostic("first_audio")
         }
-        chunkCount += 1
-        totalBytes += data.count
-        peakSample = max(peakSample, Int(peak * 32768))
-        emit(.level(peak))
+        if lastAudioAt - lastLevelAt >= 1.0 / 30 {
+            lastLevelAt = lastAudioAt
+            emit(.level(peak))
+        }
         if gatewayReady { sendPCM(data) } else { pendingAudio.append(data) }
-
-        let now = Date()
-        if now.timeIntervalSince(lastStatTimestamp) > 1 {
-            lastStatTimestamp = now
-            logger("capture: chunks=\(chunkCount) bytes=\(totalBytes) peak=\(peakSample)/32768\(gatewayReady ? "" : " (buffering)")")
-        }
     }
 
     public func stopCapture() {
-        guard recordingActive else { return }
-        stopEngine()
-        DispatchQueue.main.async { [weak self] in self?.onCaptureEOF() }
+        queue.async { [self] in
+            guard receiveLoopRunning, recordingActive, !captureEnded else { return }
+            stopEngine()
+            // Drain buffers already copied by the tap before queuing finish.
+            let generation = recordingID
+            queue.async { [weak self] in
+                guard let self, self.recordingID == generation else { return }
+                self.onCaptureEOF()
+            }
+        }
     }
 
     private func onCaptureEOF() {
         guard receiveLoopRunning, recordingActive, !captureEnded else { return }
         captureEnded = true
-        let duration = firstSendTimestamp.map { Date().timeIntervalSince($0) } ?? 0
-        logger("capture end: chunks=\(chunkCount) bytes=\(totalBytes) peak=\(peakSample)/32768 dur=\(String(format: "%.2f", duration))s")
+        diagnostic("capture_end")
+        scheduleFinalTimeout()
+        if gatewayReady && !upstreamClosed { sendFinish() }
+    }
 
+    private func scheduleFinalTimeout() {
+        guard timeoutWork == nil else { return }
+        let generation = recordingID
         let work = DispatchWorkItem { [weak self] in
-            self?.fail("timed out waiting for transcript")
+            guard let self, self.recordingActive, self.recordingID == generation else { return }
+            if self.upstreamClosed && !self.upstreamFinalReceived {
+                self.fail("ASR closed without final transcript", tag: "asr_final_missing")
+            } else if self.upstreamFinalReceived {
+                self.fail("timed out waiting for final transcript after ASR completed", tag: "post_asr_final_timeout")
+            } else {
+                self.fail("timed out waiting for transcript", tag: "final_timeout")
+            }
         }
         timeoutWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + configuration.finishTimeout, execute: work)
-        if gatewayReady { sendFinish() }
+        queue.asyncAfter(deadline: .now() + configuration.finishTimeout, execute: work)
     }
 
     private func sendFinish() {
         guard !finishSent else { return }
         finishSent = true
-        metricHandler(.finishSent)
+        metric(.finishSent)
+        diagnostic("finish_sent")
         send(json: ["type": "finish"])
     }
 
     private func receiveLoop() {
         guard receiveLoopRunning else { return }
         task.receive { [weak self] result in
-            DispatchQueue.main.async {
+            self?.queue.async { [weak self] in
                 guard let self, self.receiveLoopRunning else { return }
                 switch result {
                 case .success(.string(let string)):
@@ -508,7 +624,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
                 case .success:
                     self.receiveLoop()
                 case .failure(let error):
-                    self.fail("ws error: \(error.localizedDescription)")
+                    self.fail("ws error: \(error.localizedDescription)", tag: "receive_error", code: (error as NSError).code)
                 }
             }
         }
@@ -518,6 +634,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         guard let data = raw.data(using: .utf8),
               let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = message["type"] as? String else { return }
+        if let id = message["recordingId"] as? String, id != recordingID { return }
 
         switch type {
         case "authorized":
@@ -525,32 +642,31 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
             connectionAuthorized = true
             authorizationTimeoutWork?.cancel()
             authorizationTimeoutWork = nil
-            metricHandler(.connectionAuthorized)
+            metric(.connectionAuthorized)
+            diagnostic("authorized")
             emit(.connectionAuthorized)
             if recordingActive, let pending = pendingStart {
                 pendingStart = nil
-                send(json: configuration.gatewayStartMessage(
-                    context: pending.context,
-                    vocabulary: pending.vocabulary
-                ))
+                sendStart(context: pending.context, vocabulary: pending.vocabulary)
                 scheduleReadyTimeout()
             }
         case "ready":
             guard recordingActive else { return }
-            metricHandler(.gatewayReady)
+            metric(.gatewayReady)
+            diagnostic("ready")
             readyTimeoutWork?.cancel()
             readyTimeoutWork = nil
             gatewayReady = true
             flushPending()
             emit(.gatewayReady)
-            if captureEnded { sendFinish() }
+            if captureEnded && !upstreamClosed { sendFinish() }
         case "correction_delta":
             guard correctionEnabled, recordingActive else { return }
             let text = message["text"] as? String ?? ""
             guard !text.isEmpty else { return }
             if !markedCorrectionFirstToken {
                 markedCorrectionFirstToken = true
-                metricHandler(.correctionFirstToken)
+                metric(.correctionFirstToken)
             }
             emit(.correctionDelta(text))
         case "transcript":
@@ -561,18 +677,33 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
             } else {
                 if !markedFirstPartial {
                     markedFirstPartial = true
-                    metricHandler(.firstPartial)
+                    metric(.firstPartial)
                 }
-                lastPartial = text
-                partialObserved()
+                callbackQueue.async { [partialObserved] in partialObserved() }
                 emit(.partial(text))
             }
         case "session_denied":
             fail("denied: \(message["reason"] ?? "?")")
         case "error":
-            fail("gateway error: \(message["message"] ?? "?")")
+            fail("gateway error: \(message["message"] ?? "?")", tag: "gateway_error",
+                 code: message["providerCode"] as? Int ?? 0)
         case "closed":
-            metricHandler(.asrClosed)
+            guard recordingActive else { return }
+            metric(.asrClosed)
+            diagnostic("asr_closed", code: message["code"] as? Int ?? 0)
+            upstreamClosed = true
+            // New brokers distinguish missing-final from normal ASR shutdown
+            // while correction is pending. Legacy closed frames are ambiguous:
+            // keep waiting, but report the actual missing-final stage on timeout.
+            if let finalReceived = message["finalReceived"] as? Bool {
+                upstreamFinalReceived = finalReceived
+                if !finalReceived {
+                    fail("ASR closed without final transcript", tag: "asr_final_missing")
+                } else {
+                    stopEngine()
+                    onCaptureEOF()
+                }
+            }
         default:
             break
         }
@@ -581,7 +712,8 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
     private func complete(_ text: String, rawText: String?) {
         guard recordingActive, !terminalDelivered else { return }
         terminalDelivered = true
-        metricHandler(correctionEnabled ? .final : .rawFinal)
+        metric(correctionEnabled ? .final : .rawFinal)
+        diagnostic("final")
         finishRecordingLocally()
         emit(.final(text, rawText: rawText))
     }
@@ -594,6 +726,9 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         dumpHandle?.closeFile()
         dumpHandle = nil
         stopEngine()
+        // An unsolicited final may arrive before the user releases. Never send
+        // queued audio/finish frames outside the now-completed recording.
+        writes.removeAll { $0.recordingID == recordingID }
         recordingActive = false
         gatewayReady = false
         captureEnded = false
@@ -602,10 +737,11 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         pendingStart = nil
     }
 
-    private func fail(_ reason: String) {
-        guard receiveLoopRunning else { return }
+    private func fail(_ reason: String, tag: String = "session_error", code: Int = 0) {
+        guard receiveLoopRunning, !isCloseRequested else { return }
+        diagnostic(tag, code: code)
         closeConnection(with: .goingAway)
-        DispatchQueue.main.async { [eventHandler] in eventHandler(.failed(reason)) }
+        emit(.failed(reason))
     }
 
     private func closeConnection(with closeCode: URLSessionWebSocketTask.CloseCode) {
@@ -621,15 +757,40 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         dumpHandle?.closeFile()
         dumpHandle = nil
         stopEngine()
-        task.cancel(with: closeCode, reason: nil)
+        sendTimeoutWork?.cancel()
+        sendTimeoutWork = nil
+        writes.removeAll()
+        activeWrite = nil
+        pendingAudio.removeAll()
+        task.cancel(with: closeCode)
     }
 
     public func close() {
-        guard receiveLoopRunning else { return }
-        closeConnection(with: .normalClosure)
+        // Preserve the host's existing teardown contract: on return hardware is
+        // stopped, so iOS may deactivate AVAudioSession or begin a replacement.
+        // Mark intent before the barrier to fence a not-yet-executed start.
+        cancellationLock.lock()
+        closeRequested = true
+        cancellationLock.unlock()
+        let teardown = { [self] in
+            guard receiveLoopRunning else { return }
+            closeConnection(with: .normalClosure)
+            diagnostic("connection_close")
+        }
+        if DispatchQueue.getSpecific(key: queueKey) == true { teardown() }
+        else { queue.sync(execute: teardown) }
     }
 
     deinit {
-        close()
+        // No callback retains the session. If a host drops it without close(),
+        // deinit has exclusive ownership and must still release hardware/timers.
+        captureWatchdog?.cancel()
+        authorizationTimeoutWork?.cancel()
+        readyTimeoutWork?.cancel()
+        timeoutWork?.cancel()
+        sendTimeoutWork?.cancel()
+        pingWork?.cancel()
+        capture.stop()
+        task.cancel(with: .normalClosure)
     }
 }
