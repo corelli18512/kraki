@@ -6,8 +6,9 @@ account signed in on several devices is shown once.
 
 ## Where it shows
 
-- **iOS / iPadOS:** Devices tab → **Accounts** (top). A device's detail page lists
-  the accounts signed in on that device.
+- **iOS:** Devices tab → **Accounts** (top) merges readings across devices. A
+  device's detail page shows that device's own readings and errors, so a healthy
+  replica cannot hide a login that needs attention on the selected device.
 - **macOS:** menu bar → **Account Usage**, or hold a shortcut (off by default; turn it on
   in Settings → General → Account Usage, default F6). Hold to see an overview, move
   the pointer in for detail, release to dismiss. The account the open session is
@@ -46,8 +47,11 @@ resets**, not refresh times or rate-limit retry deadlines.
 
 Refresh is enabled only for online devices advertising the new capability.
 Older/disabled workers show a hint instead of an indefinite spinner. Requests are
-connection-scoped (not replayed on reconnect); disconnects and a two-minute UI
-timeout end pending requests. Provider exception bodies and credentials are never
+non-durable and connection-scoped on the app: the app does not retain them for
+reconnect replay. Head may still forward an already accepted in-memory request
+after the worker reconnects, subject to the same provider cooldowns. Disconnects
+and a two-minute UI timeout end pending UI requests; a superseded request ID
+cannot clear a newer request. Provider exception bodies and credentials are never
 sent to the UI.
 
 ## How it is read (tentacle)

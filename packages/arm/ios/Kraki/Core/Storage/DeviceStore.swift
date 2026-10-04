@@ -484,6 +484,15 @@ final class DeviceStore {
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    /// Device details must show the selected device's readings and login errors,
+    /// not hide them behind a healthy replica used by the global account list.
+    func usageForDevice(_ id: String) -> [MergedAccountUsage] {
+        guard let device = devices[id], device.role == .tentacle else { return [] }
+        return (deviceUsage[id]?.accounts ?? []).map {
+            MergedAccountUsage(account: $0, devices: [device])
+        }
+    }
+
     /// Every reported account merged across devices (quota is per account, not
     /// per device). Readings from devices that went offline stay listed and
     /// age into "stale" on their own.

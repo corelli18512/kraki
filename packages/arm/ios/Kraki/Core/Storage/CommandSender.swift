@@ -1105,8 +1105,9 @@ final class CommandSender {
         send(["type": "archive_session", "payload": ["archived": archived]], sessionId: sessionId)
     }
 
-    /// Connection-scoped: never replay quota reads after reconnect. The worker
-    /// coalesces requests and owns the provider's real cooldown/Retry-After.
+    /// App-side connection-scoped: not retained for app reconnect replay. A
+    /// request already accepted by Head may still be forwarded after reconnect;
+    /// the worker coalesces reads and owns the provider cooldown/Retry-After.
     @discardableResult
     func refreshAccountUsage(deviceIds: Set<String>? = nil, automatic: Bool = false,
                              now: Date = Date()) -> Int {

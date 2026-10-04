@@ -73,6 +73,27 @@ final class AccountUsageTests: XCTestCase {
         XCTAssertFalse(shared.allOffline)
     }
 
+    func testDeviceDetailPreservesItsOwnReadErrorInsteadOfUsingAHealthyReplica() throws {
+        let (app, root) = try makeApp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = app.deviceStore
+        store.setDevices([device("a", "Alpha"), device("b", "Beta")])
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        var failed = account("shared", weekly: 60, at: now.addingTimeInterval(-300))
+        failed.error = "auth"
+        let healthy = account("shared", weekly: 55, at: now)
+        store.setDeviceUsage("a", accounts: [failed])
+        store.setDeviceUsage("b", accounts: [healthy])
+
+        let detail = try XCTUnwrap(store.usageForDevice("a").first)
+        XCTAssertEqual(detail.account, failed)
+        XCTAssertEqual(detail.account.readStatus(now: now), "Sign-in needed")
+        XCTAssertEqual(detail.devices.map(\.id), ["a"])
+        XCTAssertEqual(store.usageForDevice("b").first?.account, healthy)
+        XCTAssertEqual(store.mergedUsage().first?.account, healthy, "global accounts still use the healthy replica")
+        XCTAssertTrue(store.usageForDevice("missing").isEmpty)
+    }
+
     func testTheSessionsAccountIsMatchedByDeviceAgentAndModel() throws {
         let (app, root) = try makeApp()
         defer { try? FileManager.default.removeItem(at: root) }
