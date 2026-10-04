@@ -6,6 +6,31 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.68</title>
+            <pubDate>Sun, 04 Oct 2026 10:15:26 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.68</sparkle:fullReleaseNotesLink>
+            <sparkle:version>70</sparkle:version>
+            <sparkle:shortVersionString>0.2.68</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## Account Usage: refresh when you need it
+
+- Add **Refresh** to the Account Usage detail panel; opening the panel also refreshes older or failed readings when permitted.
+- Fix normal 15-minute polling gaps incorrectly appearing as **Stale**. Freshness now follows the reporting worker's cadence (34 minutes by default); actual read failures still mark data stale immediately.
+- Show the last successful update time and actionable sign-in, read-failure and rate-limit status. Failed reads keep the last known numbers; quota-reset times remain distinct from refresh/retry timing.
+- Prefer healthy replicas when an account is shared by several computers, without querying every duplicate device. Explicit device details retain that device's own status.
+- Keep concurrent-request coalescing, one-minute cooldowns and provider `Retry-After`. Refresh can return cached data during backoff; it does not bypass provider limits.
+
+Includes **Tentacle 0.35.12**. Standalone computers also need Tentacle 0.35.12 for the new refresh capability; older workers continue to display cached readings. No Head update is required.
+
+The shared native implementation covers Mac and iOS. This build also retains the chat-table and voice-composer updates already integrated in main.
+
+Implementation and validation: https://github.com/corelli18512/kraki/pull/404
+
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.68/Kraki.app.zip" length="92430654" type="application/octet-stream" sparkle:edSignature="MBp4/diurlArNx5i0+PjfCHvgp9SvBGujwRE84SwEEUDtHX65VVHKTQH8qm96EClnHax+ozV0F+C5Kzif3iGAw=="/>
+        </item>
+        <item>
             <title>0.2.67</title>
             <pubDate>Sun, 04 Oct 2026 09:46:06 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -47,39 +72,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.66/Kraki.app.zip" length="92257892" type="application/octet-stream" sparkle:edSignature="e599UQXFSugXHQ/jk0c8U+0tROW6Vm04c9E88v3bVpGOEe+80Vcn+3YIDz9Gcs2jhXxXajA0zqXfIN1VUPgdBw=="/>
         </item>
-        <item>
-            <title>0.2.65</title>
-            <pubDate>Sun, 04 Oct 2026 06:50:42 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.65</sparkle:fullReleaseNotesLink>
-            <sparkle:version>67</sparkle:version>
-            <sparkle:shortVersionString>0.2.65</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## Native UI polish — macOS and iOS
-
-- Refined session-preview icons while preserving alignment and compacting animation timing.
-- Long model names truncate from the beginning, preserving the useful suffix. Device names and thinking levels remain readable.
-- Session and Chat scroll indicators stay visible throughout scrolling, then hold for 1.2 seconds before fading.
-- Tighter, balanced spacing above and below the resting composer: 12pt on Mac, 6pt on iOS excluding the system safe area.
-- Voice transcription and multiline input expand as native Liquid Glass overlays without pushing chat bubbles upward. Existing composer controls and bottom placement are preserved.
-- Approval prompts now share the question card’s typography and capsule-button style (upstream #400).
-
-Includes native regression coverage for glyphs, metadata, indicators, composer geometry, history reading, voice behavior and chat follow-tail. Style batch: [#399](https://github.com/corelli18512/kraki/pull/399).
-
-### Updating
-
-- Existing Mac users: **Kraki → Check for Updates…**
-- New Mac installations: download **Kraki.dmg** and drag Kraki to Applications.
-- Companion iOS build: **0.1.20**, delivered through TestFlight after Apple processing.
-
-Mac **0.2.65 (67)** — signed, universal (Apple Silicon + Intel) and notarized. Built-in Tentacle remains version-locked to the release commit.
-
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.65/Kraki.app.zip" length="92145995" type="application/octet-stream" sparkle:edSignature="eR7XJQb4fVIQLQGLrO/DvneSrfDdUrgzhtxxepM3VD5th0FOEeJ3rtVeykGSb09zUjYxxE4ERUXttWMZAkiGBg=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: i+man6AFQAdumFWDyrEDENdId+uhIlW2iWHH9dMyPSobjHN81hA0M193KdNjx8/PCWkooAxSh76u5ThEyTo+Bg==
-length: 6381
+edSignature: mgsy4dDxlxMzghiUetOUE3UZ/06NWQ90X05lc+699ZsTRNQ9vxZP+z2ksio7rfiTc+AUbo77KBLGCuDb732yCQ==
+length: 6342
 -->
