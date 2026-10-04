@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('krakiDesktop', {
       try { return await ipcRenderer.invoke('kraki:builtin-setup', opts ?? {}); } finally { ipcRenderer.removeListener('kraki:builtin-setup-event', listener); }
     },
     cancelSetup: () => ipcRenderer.send('kraki:builtin-cancel-setup'),
+    connectPhone: () => ipcRenderer.invoke('kraki:builtin-connect'),
     enable: () => ipcRenderer.invoke('kraki:builtin-enable'),
     disable: () => ipcRenderer.invoke('kraki:builtin-disable'),
     restart: () => ipcRenderer.invoke('kraki:builtin-restart'),

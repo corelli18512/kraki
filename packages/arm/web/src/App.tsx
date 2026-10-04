@@ -8,7 +8,8 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { useStore } from './hooks/useStore';
 import { useSessionShortcuts } from './hooks/useSessionShortcuts';
 import { wsClient } from './lib/ws-client';
-import { desktop } from './lib/desktop';
+import { desktop, desktopCredentials } from './lib/desktop';
+import { ConnectPhoneHost } from './components/devices/ConnectPhoneCard';
 
 function RelayBlockingOverlay({
   status,
@@ -106,7 +107,7 @@ export function App() {
 
   // Kraki for Windows before its built-in Kraki is signed in: the setup owns
   // the whole window, like Kraki for Mac's entry gate.
-  const desktopSetupGate = !!desktop?.builtIn && !desktop.builtIn.credentials();
+  const desktopSetupGate = !!desktop?.builtIn && !desktopCredentials();
 
   if (status === 'awaiting_login' || desktopSetupGate) {
     return (
@@ -135,6 +136,7 @@ export function App() {
           <Outlet />
         </ErrorBoundary>
       </main>
+      <ConnectPhoneHost />
       {showBlockingOverlay && (
         <RelayBlockingOverlay
           status={status}

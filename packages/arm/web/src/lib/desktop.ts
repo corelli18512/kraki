@@ -9,6 +9,8 @@ export interface BuiltInState {
   configured: boolean;
   signedIn: boolean;
   deviceName: string;
+  /** This PC's id as a Kraki computer (its tentacle device id). */
+  deviceId: string | null;
   relay: string | null;
   owned: boolean;
   running: boolean;
@@ -37,6 +39,8 @@ export interface BuiltInBridge {
   checkAgents: (onEvent: (e: AgentCheckEvent) => void) => Promise<{ ok: boolean }>;
   setup: (opts: { deviceName?: string; forceLogin?: boolean }, onEvent: (e: SetupEvent) => void) => Promise<{ ok: boolean; username?: string; code?: string }>;
   cancelSetup: () => void;
+  /** `kraki connect --json`: a pairing link for a phone (needs the daemon). */
+  connectPhone: () => Promise<{ ok: boolean; url?: string; token?: string; expiresAt?: string; error?: string }>;
   enable: () => Promise<{ ok: boolean; error?: string }>;
   disable: () => Promise<{ ok: boolean; error?: string }>;
   restart: () => Promise<{ ok: boolean; error?: string }>;
@@ -84,4 +88,25 @@ export function notifyDesktop(sessionId: string, title: string, body: string): v
   if ((recent.get(sessionId) ?? 0) > now - 3_000) return;
   recent.set(sessionId, now);
   desktop.notify({ title, body: body.replace(/\s+/g, ' ').trim().slice(0, 180), sessionId });
+}
+
+const SIGNED_OUT_KEY = 'kraki-desktop.signedOut';
+
+/**
+ * The account of the Kraki built into the desktop app, unless the user signed
+ * the app out (then setup asks to sign in again, like Kraki for Mac).
+ */
+export function desktopCredentials(): { relay: string; token: string } | null {
+  if (!desktop?.builtIn) return null;
+  if (localStorage.getItem(SIGNED_OUT_KEY) === '1') return null;
+  return desktop.builtIn.credentials();
+}
+
+export function setDesktopSignedOut(signedOut: boolean): void {
+  if (signedOut) localStorage.setItem(SIGNED_OUT_KEY, '1');
+  else localStorage.removeItem(SIGNED_OUT_KEY);
+}
+
+export function isDesktopSignedOut(): boolean {
+  return localStorage.getItem(SIGNED_OUT_KEY) === '1';
 }

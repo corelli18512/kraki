@@ -1,0 +1,71 @@
+/* "Connect your phone" — Kraki for Mac's PairingSheet glass card. */
+.cp-backdrop {
+  position: fixed; inset: 0; z-index: 90;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(15, 23, 42, 0.16);
+  animation: cp-fade 0.18s ease-out;
+  font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+}
+.dark .cp-backdrop { background: rgba(0, 0, 0, 0.35); }
+@keyframes cp-fade { from { opacity: 0; } to { opacity: 1; } }
+.cp-card {
+  position: relative;
+  width: 340px;
+  box-sizing: border-box;
+  padding: 30px 28px 24px;
+  border-radius: 26px;
+  background: rgba(246, 248, 251, 0.82);
+  -webkit-backdrop-filter: blur(30px) saturate(1.6);
+  backdrop-filter: blur(30px) saturate(1.6);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28), 0 2px 8px rgba(15, 23, 42, 0.08);
+  animation: cp-pop 0.24s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+.dark .cp-card { background: rgba(30, 41, 66, 0.82); border-color: rgba(255, 255, 255, 0.08); box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55); }
+@keyframes cp-pop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
+.cp-close {
+  position: absolute; top: 12px; right: 12px;
+  width: 22px; height: 22px; border: 0; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+  color: var(--color-text-muted); cursor: pointer;
+}
+.cp-close svg { width: 10px; height: 10px; }
+.cp-content { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.cp-head { display: flex; flex-direction: column; align-items: center; gap: 5px; text-align: center; }
+.cp-title { font-size: 17px; font-weight: 600; color: var(--color-text-primary); }
+.cp-detail { font-size: 12px; line-height: 1.4; color: var(--color-text-secondary); text-align: center; }
+.cp-qr {
+  position: relative; width: 212px; height: 212px; border-radius: 18px; background: #fff;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.12);
+}
+.cp-qr-code { transition: opacity 0.25s ease-in-out; display: flex; }
+.cp-dim { opacity: 0.15; }
+.cp-spinner {
+  position: absolute; width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid rgba(0, 0, 0, 0.15); border-top-color: rgba(0, 0, 0, 0.6);
+  animation: cp-spin 0.8s linear infinite;
+}
+.cp-spinner-mini {
+  position: static; width: 10px; height: 10px; border-width: 1.5px;
+  border-color: color-mix(in srgb, var(--color-text-muted) 35%, transparent);
+  border-top-color: var(--color-text-secondary);
+}
+@keyframes cp-spin { to { transform: rotate(360deg); } }
+.cp-error { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.cp-error-icon { width: 20px; height: 20px; color: #C2410C; }
+.cp-retry { height: 20px; padding: 0 8px; border: 0; border-radius: 5px; background: rgba(0, 0, 0, 0.085); color: #0f172a; font: 11px inherit; font-family: inherit; cursor: pointer; }
+.cp-error-text { font-size: 11px; color: var(--color-text-muted); text-align: center; }
+.cp-footer { display: flex; align-items: center; gap: 14px; font-size: 11.5px; }
+.cp-waiting { display: inline-flex; align-items: center; gap: 5px; color: var(--color-text-muted); }
+.cp-copy {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: 0; background: none; padding: 0; cursor: pointer;
+  font: 11.5px inherit; font-family: inherit; color: #0b5b9c;
+}
+.dark .cp-copy { color: #5ea0d7; }
+.cp-copy svg { width: 12px; height: 12px; }
+.cp-copy:disabled { opacity: 0.5; cursor: default; }
+.cp-success { height: 300px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; text-align: center; animation: cp-pop 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.2); }
+.cp-success-icon { width: 54px; height: 54px; color: #fff; fill: #34D399; stroke-width: 1.6; }

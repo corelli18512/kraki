@@ -15,7 +15,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { KrakiLogo } from '../KrakiLogo';
-import type { BuiltInBridge, BuiltInState, SetupEvent } from '../../lib/desktop';
+import { isDesktopSignedOut, setDesktopSignedOut, type BuiltInBridge, type BuiltInState, type SetupEvent } from '../../lib/desktop';
 import { wsClient } from '../../lib/ws-client';
 import { AgentsPanel, useAgentsCheck } from './AgentsPanel';
 import './desktop-setup.css';
@@ -58,7 +58,10 @@ export function DesktopSetup({ builtIn }: { builtIn: BuiltInBridge }) {
   const [moved, setMoved] = useStored<'0' | '1'>(MOVED_KEY, '0');
   const [introDone, setIntroDone] = useState(() => localStorage.getItem(INTRO_KEY) === '1'
     || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
-  const [signInAgain] = useState(() => triedCredentials);
+  // Signed out of the app, or the relay refused the built-in Kraki's sign-in.
+  const [again, setAgain] = useState<'expired' | 'signedOut' | null>(
+    () => (isDesktopSignedOut() ? 'signedOut' : triedCredentials ? 'expired' : null));
+  const signInAgain = again !== null;
 
   const refresh = useCallback(async () => { setState(await builtIn.state()); }, [builtIn]);
   useEffect(() => {
@@ -107,7 +110,11 @@ export function DesktopSetup({ builtIn }: { builtIn: BuiltInBridge }) {
             />
           )}
           {step === 'signIn' && (
-            <SignInStep builtIn={builtIn} forceLogin={signInAgain} onDone={() => { triedCredentials = false; void refresh(); }} />
+            <SignInStep
+              builtIn={builtIn}
+              again={again}
+              onDone={() => { triedCredentials = false; setDesktopSignedOut(false); setAgain(null); void refresh(); }}
+            />
           )}
           {step === 'background' && <BackgroundStep builtIn={builtIn} onStarted={refresh} />}
           {step === 'done' && <Progress label="Connecting…" />}
@@ -212,7 +219,8 @@ type SignInPhase =
   | { kind: 'configuring'; username: string }
   | { kind: 'failed'; message: string };
 
-function SignInStep({ builtIn, forceLogin, onDone }: { builtIn: BuiltInBridge; forceLogin: boolean; onDone: () => void }) {
+function SignInStep({ builtIn, again, onDone }: { builtIn: BuiltInBridge; again: 'expired' | 'signedOut' | null; onDone: () => void }) {
+  const forceLogin = again !== null;
   const [phase, setPhase] = useState<SignInPhase>({ kind: 'idle' });
   useEffect(() => () => builtIn.cancelSetup(), [builtIn]);
 
@@ -258,9 +266,9 @@ function SignInStep({ builtIn, forceLogin, onDone }: { builtIn: BuiltInBridge; f
   }
   return (
     <StepCard
-      step="Step 2 of 2"
-      title={forceLogin ? 'Sign in again' : 'Sign in'}
-      detail={forceLogin
+      step={again ? null : 'Step 2 of 2'}
+      title={again === 'expired' ? 'Sign in again' : 'Sign in'}
+      detail={again === 'expired'
         ? 'Your sign-in has expired or was revoked. Sign in with GitHub to reconnect this PC.'
         : 'Sign in with GitHub. The coding agents on this PC become available here, on your phone and on your other computers.'}
     >

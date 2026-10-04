@@ -1,3 +1,4 @@
+import { desktopCredentials } from './desktop';
 import type { AuthOkMessage } from '@kraki/protocol';
 import type { AppKeyStore } from './e2e';
 import { createLogger, setDebugLogging } from './logger';
@@ -21,7 +22,7 @@ export async function sendAuth(
   const deviceName = desktopBridge?.deviceName ?? `Web ${navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Browser'}`;
   // The desktop app signs in with the token of the Kraki built into it (as
   // Kraki for Mac does with its tentacle's), keeping its device id.
-  const desktopToken = desktopBridge?.builtIn?.credentials()?.token;
+  const desktopToken = desktopCredentials()?.token;
 
   // Wait for key store if not ready
   if (!keyStore.isReady()) {

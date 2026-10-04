@@ -38,6 +38,9 @@ importers:
       lucide-react:
         specifier: ^0.577.0
         version: 0.577.0(react@19.2.4)
+      qrcode-generator:
+        specifier: ^1.5.2
+        version: 1.5.2
       react:
         specifier: ^19.0.0
         version: 19.2.4
@@ -3468,6 +3471,9 @@ packages:
   punycode@2.3.1:
     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
     engines: {node: '>=6'}
+
+  qrcode-generator@1.5.2:
+    resolution: {integrity: sha512-pItrW0Z9HnDBnFmgiNrY1uxRdri32Uh9EjNYLPVC2zZ3ZRIIEqBoDgm4DkvDwNNDHTK7FNkmr8zAa77BYc9xNw==}
 
   qrcode-terminal@0.12.0:
     resolution: {integrity: sha512-EXtzRZmC+YGmGlDFbXKxQiMZNwCLEO6BANKXG4iCtSIM0yqc/pappSx3RIKr4r0uh5JsBckOXeKrB3Iz7mdQpQ==}
@@ -7270,6 +7276,8 @@ snapshots:
   proxy-agent-negotiate@1.1.0: {}
 
   punycode@2.3.1: {}
+
+  qrcode-generator@1.5.2: {}
 
   qrcode-terminal@0.12.0: {}
 

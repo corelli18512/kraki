@@ -77,20 +77,40 @@ describe('DashboardPage', () => {
     expect(screen.getByText('Connecting to relay…')).toBeInTheDocument();
   });
 
-  it('shows welcome state when connected on mobile viewport', () => {
+  it('shows the new-session composer when connected (Mac idle pane)', () => {
     useStore.getState().setStatus('connected');
     useStore.getState().setSessions([
       { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'copilot', messageCount: 2 },
     ]);
     renderWithRoute('/', <DashboardPage />);
-    expect(screen.getByText('Welcome to Kraki')).toBeInTheDocument();
+    expect(screen.getByText("What's next?")).toBeInTheDocument();
+    expect(screen.getByTestId('new-session-text')).toBeInTheDocument();
   });
 
-  it('shows empty state when connected with no sessions', () => {
+  it('asks what to work on first when there are no sessions yet', () => {
     useStore.getState().setStatus('connected');
     renderWithRoute('/', <DashboardPage />);
-    expect(screen.getByText('Welcome to Kraki')).toBeInTheDocument();
-    expect(screen.getByText('Select a session from the sidebar to get started')).toBeInTheDocument();
+    expect(screen.getByText('What should we work on first?')).toBeInTheDocument();
+    expect(screen.getByText('No computer is online. Open Kraki on a computer to start a session there.')).toBeInTheDocument();
+  });
+
+  it('starts a session with the typed task on the remembered computer, agent and model', () => {
+    useStore.getState().setStatus('connected');
+    useStore.getState().setDevices([{ id: 'd1', name: 'Office PC', role: 'tentacle', online: true }]);
+    useStore.setState({ deviceAgents: new Map([['d1', [
+      { type: 'copilot', id: 'copilot', models: ['gpt-6', 'claude-5'], modelDetails: [{ id: 'gpt-6', name: 'GPT-6', supportsReasoningEffort: true, supportedReasoningEfforts: ['low', 'medium', 'high'] }] },
+    ]]]) } as never);
+    const create = vi.spyOn(wsClient, 'createSession').mockImplementation(() => {});
+    renderWithRoute('/', <DashboardPage />);
+    expect(screen.getByTestId('new-session-device')).toHaveTextContent('Office PC');
+    expect(screen.getByTestId('new-session-model')).toHaveTextContent('GPT-6');
+    expect(screen.getByTestId('new-session-effort')).toHaveTextContent('Medium thinking');
+    const box = screen.getByTestId('new-session-text');
+    expect(screen.getByTestId('new-session-create')).toBeDisabled();
+    fireEvent.change(box, { target: { value: 'Fix the flaky test' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(create).toHaveBeenCalledWith({ targetDeviceId: 'd1', agentId: 'copilot', model: 'gpt-6', reasoningEffort: 'medium', prompt: 'Fix the flaky test' });
+    create.mockRestore();
   });
 });
 

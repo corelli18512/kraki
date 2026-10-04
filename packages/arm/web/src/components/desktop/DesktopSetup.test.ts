@@ -3,7 +3,7 @@ import { setupStep } from './DesktopSetup';
 import type { BuiltInState } from '../../lib/desktop';
 
 const base: BuiltInState = {
-  available: true, version: '0.35.12', configured: false, signedIn: false, deviceName: 'PC', relay: null,
+  available: true, version: '0.35.12', configured: false, signedIn: false, deviceName: 'PC', deviceId: null, relay: null,
   owned: false, running: false, relayState: null, cliDaemon: false, cliLogin: false,
 };
 const s = (over: Partial<BuiltInState>) => ({ ...base, ...over });

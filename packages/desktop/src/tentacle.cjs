@@ -116,6 +116,7 @@ class BuiltInKraki {
       configured: !!config,
       signedIn: existsSync(path.join(home, 'github-token')),
       deviceName: config?.device?.name ?? os.hostname(),
+      deviceId: config?.device?.id ?? null,
       relay: config?.relay ?? null,
       owned,
       running: !!daemon.running,
@@ -134,6 +135,12 @@ class BuiltInKraki {
     let token = null;
     try { token = readFileSync(path.join(home, 'github-token'), 'utf8').trim() || null; } catch { /* none */ }
     return config?.relay && token ? { relay: config.relay, token } : null;
+  }
+
+  /** A pairing link for a phone (`kraki connect --json`), as Kraki for Mac does. */
+  async connectPhone() {
+    if (!this.available()) return { ok: false, error: 'not_available' };
+    return runJson(this.bin, ['connect', '--json'], 30_000);
   }
 
   checkAgents(onEvent) {

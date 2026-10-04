@@ -1,3 +1,4 @@
+import { desktopCredentials } from '../lib/desktop';
 import { create } from 'zustand';
 import { DEFAULT_SESSION_MODE, normalizeSessionMode } from '@kraki/protocol';
 import { persist, createJSONStorage } from 'zustand/middleware';
@@ -35,7 +36,7 @@ function reviver(_key: string, value: unknown): unknown {
 function getInitialStatus(): ConnectionStatus {
   const stored = loadStoredDevice();
   const params = getUrlParams();
-  if (stored?.deviceId || params.token || params.githubCode || window.krakiDesktop?.builtIn?.credentials()) {
+  if (stored?.deviceId || params.token || params.githubCode || desktopCredentials()) {
     return 'connecting';
   }
   return 'awaiting_login';

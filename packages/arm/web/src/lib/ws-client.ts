@@ -1,3 +1,4 @@
+import { desktopCredentials, setDesktopSignedOut } from './desktop';
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
 import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, type SessionMode } from '@kraki/protocol';
@@ -72,7 +73,8 @@ export class KrakiWSClient {
 
   /** Connect with the account of the Kraki built into the desktop app. */
   connectWithDesktopCredentials(): boolean {
-    const creds = window.krakiDesktop?.builtIn?.credentials();
+    setDesktopSignedOut(false);
+    const creds = desktopCredentials();
     if (!creds) return false;
     getStore().setStatus('connecting');
     this.transport.redirectToRelay(creds.relay);
@@ -851,7 +853,7 @@ export class KrakiWSClient {
 
   private async authenticate(): Promise<void> {
     const hasCredentials = this.transport.pairingToken || this.transport.storedDeviceId || this.transport.githubCode
-      || window.krakiDesktop?.builtIn?.credentials();
+      || desktopCredentials();
 
     if (!hasCredentials) {
       // No credentials — query server capabilities so the UI can show login options

@@ -269,6 +269,7 @@ ipcMain.handle('kraki:builtin-setup', async (_e, opts) => builtIn.setup({
   onEvent: (e) => send('kraki:builtin-setup-event', e),
   openSignIn: openSignInWindow,
 }));
+ipcMain.handle('kraki:builtin-connect', () => builtIn?.connectPhone() ?? { ok: false, error: 'not_available' });
 ipcMain.on('kraki:builtin-cancel-setup', () => builtIn?.cancelSetup());
 ipcMain.handle('kraki:builtin-enable', safely(() => builtIn.enable()));
 ipcMain.handle('kraki:builtin-disable', safely(() => builtIn.disable()));

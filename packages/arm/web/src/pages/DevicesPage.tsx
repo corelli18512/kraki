@@ -1,5 +1,8 @@
 import { useNavigate } from 'react-router';
+import { Smartphone } from 'lucide-react';
 import { DeviceGrid } from '../components/devices/DeviceGrid';
+import { desktop } from '../lib/desktop';
+import { CONNECT_PHONE_EVENT } from '../components/devices/ConnectPhoneCard';
 
 export function DevicesPage() {
   const navigate = useNavigate();
@@ -25,6 +28,22 @@ export function DevicesPage() {
       {/* Content */}
       <div className="flex min-h-0 flex-1 flex-col">
         <DeviceGrid />
+        {desktop?.builtIn && (
+          <div className="mx-4 mb-6 flex items-center gap-3 rounded-xl bg-surface-secondary px-4 py-3" data-testid="devices-phone-entry">
+            <Smartphone className="h-5 w-5 shrink-0 text-kraki-500 dark:text-kraki-300" strokeWidth={1.6} />
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] font-medium text-text-primary">Use Kraki on your phone</p>
+              <p className="text-[11px] text-text-muted">Scan a code with your phone to see and run your sessions there.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new Event(CONNECT_PHONE_EVENT))}
+              className="shrink-0 rounded-md bg-black/[0.085] px-2.5 py-1 text-xs text-text-primary hover:bg-black/[0.12] dark:bg-white/[0.14]"
+            >
+              Show Code…
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

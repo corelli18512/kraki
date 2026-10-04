@@ -1,3 +1,4 @@
+import { desktopCredentials } from './desktop';
 import type { Message } from '@kraki/protocol';
 import { createLogger } from './logger';
 import { getStore } from './store-adapter';
@@ -240,7 +241,7 @@ export class KrakiTransport {
     const stored = loadStoredDevice();
 
     // The desktop app connects to the relay its built-in Kraki was set up with.
-    const desktopRelay = typeof window !== 'undefined' ? window.krakiDesktop?.builtIn?.credentials()?.relay : undefined;
+    const desktopRelay = typeof window !== 'undefined' ? desktopCredentials()?.relay : undefined;
     this._url = url ?? params.relay ?? desktopRelay ?? stored?.relay ?? import.meta.env.VITE_WS_URL ?? DEFAULT_RELAY;
     this.pairingToken = params.token;
     this.storedDeviceId = stored?.deviceId;
