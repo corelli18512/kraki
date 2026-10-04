@@ -1,10 +1,9 @@
-/// PairingSheet — Mac pairing sheet driven by `kraki connect --json`.
+/// PairingSheet — "Connect your phone", driven by `kraki connect --json`.
 ///
-/// Flow:
-///   1. User taps "Pair a device" (sidebar, welcome card, or menu).
-///   2. Sheet calls TentacleCLIManager.requestPairingPayload().
-///   3. Sheet renders the resulting URL + QR code + countdown timer.
-///   4. User scans on the other device OR clicks "Copy URL" + paste.
+/// One glass card: the QR code, one line of instructions, a quiet "copy link".
+/// The code renews itself before it expires, and when a phone (or browser)
+/// joins the account while the card is open it turns into a check mark and
+/// closes on its own.
 
 #if os(macOS)
 import SwiftUI
@@ -12,167 +11,200 @@ import CoreImage.CIFilterBuiltins
 import AppKit
 
 struct PairingSheet: View {
+    @Environment(AppState.self) private var appState
     @Environment(TentacleCLIManager.self) private var tentacleCLI
     @Environment(\.dismiss) private var dismiss
 
     @State private var payload: TentacleCLIManager.PairingPayload?
     @State private var error: String?
-    @State private var loading: Bool = false
-    @State private var now: Date = Date()
+    @State private var loading = false
     @State private var copied = false
+    @State private var connected: DeviceSummary?
+    /// App devices already online when the card opened; anything new is "the phone".
+    @State private var baseline: Set<String> = []
     private var previewPayload: TentacleCLIManager.PairingPayload?
+    private var previewConnected: DeviceSummary?
 
     init() {}
     #if DEBUG
-    init(preview: TentacleCLIManager.PairingPayload) {
+    init(preview: TentacleCLIManager.PairingPayload, connected: DeviceSummary? = nil) {
         previewPayload = preview
+        previewConnected = connected
         _payload = State(initialValue: preview)
+        _connected = State(initialValue: connected)
     }
     #endif
 
+    private static let width: CGFloat = 340
+
+    private var onlineApps: [DeviceSummary] {
+        appState.deviceStore.devices.values.filter { $0.role == .app && $0.online && $0.id != appState.deviceId }
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            header
-
-            Divider()
-                .overlay(Color.borderPrimary)
-
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 20)
-
-            Divider()
-                .overlay(Color.borderPrimary)
-
-            footer
-        }
-        .frame(width: 440, height: 540)
-        .background(Color.surfacePrimary)
-        .task { if previewPayload == nil { await load() } }
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now = $0 }
-    }
-
-    private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "iphone")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.krakiPrimary)
-            Text("Use Kraki on your phone")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Color.textPrimary)
-            Spacer()
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .background(Color.surfaceSecondary)
-    }
-
-    private var footer: some View {
-        HStack {
-            Button("New code") {
-                copied = false
-                Task { await load() }
+        ZStack(alignment: .topTrailing) {
+            VStack(spacing: 0) {
+                if let connected {
+                    success(connected)
+                } else {
+                    content
+                }
             }
-            .disabled(loading)
-            Spacer()
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.cancelAction)
+            .padding(.horizontal, 28)
+            .padding(.top, 30)
+            .padding(.bottom, 24)
+            .frame(width: Self.width)
+
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Color.textMuted)
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(Color.textPrimary.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+            .padding(12)
+            .help("Close (Esc)")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(Color.surfaceSecondary)
+        .background { cardBackground }
+        .presentationBackground(.clear)
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: connected?.id)
+        .task {
+            baseline = Set(onlineApps.map(\.id))
+            if previewPayload == nil { await renewLoop() }
+        }
+        .onChange(of: onlineApps.map(\.id).sorted()) { _, ids in
+            guard connected == nil, previewPayload == nil,
+                  let newId = ids.first(where: { !baseline.contains($0) }),
+                  let device = appState.deviceStore.devices[newId] else { return }
+            connected = device
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { dismiss() }
+        }
     }
 
     @ViewBuilder
+    private var cardBackground: some View {
+        let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
+        if #available(macOS 26.0, *) {
+            Color.clear.glassEffect(.regular, in: shape)
+        } else {
+            shape.fill(.regularMaterial)
+        }
+    }
+
+    // MARK: States
+
+    @ViewBuilder
     private var content: some View {
-        if let error {
-            VStack(spacing: 12) {
-                Image(systemName: "xmark.octagon.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(Color(hex: 0xF4836E))
-                Text(error)
+        VStack(spacing: 18) {
+            VStack(spacing: 5) {
+                Text("Connect your phone")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.textPrimary)
+                Text("Scan with your phone’s camera. Your sessions show up there — no sign-in needed.")
                     .font(.system(size: 12))
                     .foregroundStyle(Color.textSecondary)
                     .multilineTextAlignment(.center)
-                Button("Try again") { Task { await load() } }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.krakiPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-        } else if loading || payload == nil {
-            VStack(spacing: 10) {
-                ProgressView()
-                    .controlSize(.regular)
-                Text("Requesting pairing code…")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.textSecondary)
-            }
-        } else if let p = payload {
-            VStack(spacing: 16) {
-                if let img = qrImage(for: p.url) {
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.white)
+                    .frame(width: 212, height: 212)
+                if let p = payload, let img = qrImage(for: p.url) {
                     Image(nsImage: img)
                         .resizable()
                         .interpolation(.none)
-                        .frame(width: 220, height: 220)
-                        .padding(12)
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .strokeBorder(Color.borderPrimary, lineWidth: 1)
-                        )
+                        .frame(width: 184, height: 184)
+                        .opacity(loading ? 0.15 : 1)
+                        .transition(.opacity)
                 }
-
-                VStack(spacing: 6) {
-                    Text("Point your phone’s camera at this code")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.textPrimary)
-                    Text("Your sessions open on the phone right away — no sign-in needed. Works with the Kraki iPhone app or in the phone’s browser.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.textSecondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
+                if loading {
+                    ProgressView().controlSize(.small).tint(.black)
+                } else if error != nil {
+                    VStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 20))
+                            .foregroundStyle(Color(hex: 0xC2410C))
+                        Button("Try again") { Task { await load() } }
+                            .controlSize(.small)
+                    }
                 }
-
-                Button {
-                    KrakiPasteboard.setString(p.url)
-                    copied = true
-                } label: {
-                    Label(copied ? "Link copied" : "Copy link instead", systemImage: copied ? "checkmark" : "link")
-                        .font(.system(size: 11.5))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.krakiPrimary)
-                .help(p.url)
-
-                HStack(spacing: 6) {
-                    Image(systemName: "clock.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text(expiryString(for: p))
-                        .font(.system(size: 11, weight: .medium).monospacedDigit())
-                }
-                .foregroundStyle(p.expiresAt.timeIntervalSince(now) < 60 ? Color(hex: 0xFBBF24) : Color.textMuted)
             }
+            .animation(.easeInOut(duration: 0.25), value: payload?.token)
+            .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
+
+            if let error {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.textMuted)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+            } else {
+                HStack(spacing: 14) {
+                    HStack(spacing: 5) {
+                        ProgressView().controlSize(.mini)
+                        Text("Waiting for your phone")
+                    }
+                    .foregroundStyle(Color.textMuted)
+                    Button {
+                        if let p = payload { KrakiPasteboard.setString(p.url); copied = true }
+                    } label: {
+                        Label(copied ? "Copied" : "Copy link", systemImage: copied ? "checkmark" : "link")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.krakiPrimary)
+                    .disabled(payload == nil)
+                    .help(payload?.url ?? "")
+                }
+                .font(.system(size: 11.5))
+            }
+        }
+    }
+
+    private func success(_ device: DeviceSummary) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 54))
+                .foregroundStyle(Color(hex: 0x34D399))
+                .symbolEffect(.bounce, value: device.id)
+            Text("Connected")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Color.textPrimary)
+            Text("\(device.name) can now see and run your sessions.")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(height: 300)
+        .transition(.scale(scale: 0.9).combined(with: .opacity))
+    }
+
+    // MARK: Code lifecycle
+
+    /// Fetch a code, and fetch a fresh one shortly before each expires, for
+    /// as long as the card is open and nothing has connected.
+    private func renewLoop() async {
+        while !Task.isCancelled, connected == nil {
+            await load()
+            guard let p = payload else { return } // error: wait for "Try again"
+            let wait = max(5, p.expiresAt.timeIntervalSinceNow - 10)
+            try? await Task.sleep(for: .seconds(wait))
         }
     }
 
     private func load() async {
         loading = true
         error = nil
-        payload = nil
+        copied = false
         do {
             payload = try await tentacleCLI.requestPairingPayload()
         } catch {
             self.error = error.localizedDescription
         }
         loading = false
-    }
-
-    private func expiryString(for p: TentacleCLIManager.PairingPayload) -> String {
-        let remaining = max(0, Int(p.expiresAt.timeIntervalSince(now)))
-        let m = remaining / 60
-        let s = remaining % 60
-        return remaining > 0 ? String(format: "Expires in %d:%02d", m, s) : "Expired"
     }
 
     private func qrImage(for string: String) -> NSImage? {

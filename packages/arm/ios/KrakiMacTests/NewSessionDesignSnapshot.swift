@@ -90,8 +90,14 @@ final class NewSessionDesignSnapshot: XCTestCase {
                            size: CGSize(width: 300, height: 170), dark: dark, to: "menu-effort-\(suffix)")
                 let pairing = PairingSheet(preview: .init(url: "https://app.kraki.chat?relay=wss%3A%2F%2Fcn.relay.kraki.chat&token=pt_8f2c1d9a4b7e6f30a5c2",
                                                           token: "t", relay: "r", expiresAt: Date().addingTimeInterval(272)))
-                    .environment(TentacleCLIManager())
-                try render(pairing, size: CGSize(width: 440, height: 540), dark: dark, to: "pairing-\(suffix)")
+                    .environment(a).environment(TentacleCLIManager())
+                    .padding(30).background(LinearGradient(colors: [Color(hex: 0x1E3A5F), Color(hex: 0x0B1220)], startPoint: .top, endPoint: .bottom))
+                try render(pairing, size: CGSize(width: 400, height: 520), dark: dark, to: "pairing-\(suffix)")
+                let phone = DeviceSummary(id: "iph", name: "Alex’s iPhone", role: .app, kind: .ios, publicKey: nil, encryptionKey: nil, online: true, lastSeen: nil, createdAt: nil)
+                let done = PairingSheet(preview: .init(url: "x", token: "t", relay: "r", expiresAt: Date()), connected: phone)
+                    .environment(a).environment(TentacleCLIManager())
+                    .padding(30).background(LinearGradient(colors: [Color(hex: 0x1E3A5F), Color(hex: 0x0B1220)], startPoint: .top, endPoint: .bottom))
+                try render(done, size: CGSize(width: 400, height: 420), dark: dark, to: "pairing-done-\(suffix)")
             }
             let a = try app(sessions: 3)
             try render(DevicesPane().environment(a).environment(TentacleCLIManager()),
