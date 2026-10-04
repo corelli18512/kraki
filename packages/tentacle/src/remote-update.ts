@@ -25,6 +25,7 @@ import {
   realpathSync, renameSync, rmSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { isSea } from 'node:sea';
 import { getKrakiHome, getLogsDir, getVersion } from './config.js';
 
@@ -126,6 +127,8 @@ let polling = false;
 export function watchForUpdateRequests(intervalMs = 3000): void {
   if (polling) return;
   polling = true;
+  const install = detectInstall();
+  if (install && install.kind !== 'mac-app') cleanupBackup(install.target);
   const path = join(getKrakiHome(), REQUEST_FILE);
   let busy = false;
   const timer = setInterval(() => {
@@ -216,12 +219,26 @@ export async function startRemoteUpdate(req: UpdateRequest): Promise<void> {
 
   // Double spawn: the launcher starts the applier detached and exits at once,
   // so the applier's parent is gone and it is not in this daemon's tree.
-  const self = isSea() ? [process.execPath] : [process.execPath, process.argv[1]];
+  // The applier must not run from the install it replaces: Windows locks a
+  // running .exe against deletion and a process's directory against rename.
+  // SEA: run it from a copy in the work dir. npm: from a working directory
+  // outside the package (deps resolve from the package itself, which npm
+  // replaces only after we are already running).
+  let self: string[];
+  if (isSea()) {
+    const copy = join(work, process.platform === 'win32' ? 'applier.exe' : 'applier');
+    rmSync(copy, { force: true });
+    copyFileSync(process.execPath, copy);
+    if (process.platform !== 'win32') chmodSync(copy, 0o755);
+    self = [copy];
+  } else {
+    self = [process.execPath, process.argv[1]];
+  }
   const env = { ...process.env };
   delete env.KRAKI_META_FILE;           // the self-management guard is for agents, not this
   delete env.KRAKI_SUPERVISED;
   const child = spawn(self[0], [...self.slice(1), APPLY_UPDATE_COMMAND, '--launch', planPath], {
-    detached: true, stdio: 'ignore', windowsHide: true, env,
+    detached: true, stdio: 'ignore', windowsHide: true, env, cwd: tmpdir(),
   });
   child.unref();
 }
@@ -257,6 +274,14 @@ async function waitOnline(cli: string[], version: string, seconds: number): Prom
     await sleep(2000);
   }
   return false;
+}
+
+/** Remove `<target>.old`; a locked leftover is retried by the next daemon start. */
+export function cleanupBackup(target: string): void {
+  const old = `${target}.old`;
+  if (!existsSync(old)) return;
+  try { rmSync(old, { recursive: true, force: true }); log(`  removed ${old}`); }
+  catch (err) { log(`  could not remove ${old} yet: ${(err as Error).message}`); }
 }
 
 function backupPath(plan: UpdatePlan): string {
@@ -302,12 +327,13 @@ export async function runApplier(args: string[]): Promise<void> {
     // Stage 1: re-spawn detached and leave, breaking the parent link.
     const self = isSea() ? [process.execPath] : [process.execPath, process.argv[1]];
     const child = spawn(self[0], [...self.slice(1), APPLY_UPDATE_COMMAND, args[i + 1]], {
-      detached: true, stdio: 'ignore', windowsHide: true, env: process.env,
+      detached: true, stdio: 'ignore', windowsHide: true, env: process.env, cwd: tmpdir(),
     });
     child.unref();
     log(`launcher: applier pid=${child.pid}`);
     return;
   }
+  try { process.chdir(tmpdir()); } catch { /* keep */ }
   const planPath = args[0];
   const plan = JSON.parse(readFileSync(planPath, 'utf8')) as UpdatePlan;
   const deadline = plan.deadlineSeconds ?? 90;
@@ -332,7 +358,7 @@ export async function runApplier(args: string[]): Promise<void> {
     if (await waitOnline(plan.cli, plan.expectVersion, deadline)) {
       const offline = ((Date.now() - offlineAt) / 1000).toFixed(1);
       log(`✔ updated to ${plan.expectVersion}; offline ${offline}s, total ${elapsed()}`);
-      rmSync(backupPath(plan), { recursive: true, force: true });
+      cleanupBackup(plan.target);
       writeResult({ ok: true, from: plan.fromVersion, to: plan.expectVersion, kind: plan.kind, offlineSeconds: Number(offline) });
       return;
     }
