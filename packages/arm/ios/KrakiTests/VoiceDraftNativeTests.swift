@@ -63,6 +63,17 @@ import UIKit
         XCTAssertEqual((editor.textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor)?.cgColor.alpha ?? -1, 1, accuracy: 0.01)
         XCTAssertEqual((editor.textStorage.attribute(.foregroundColor, at: pending.location, effectiveRange: nil) as? UIColor)?.cgColor.alpha ?? -1, 0.5, accuracy: 0.01)
         XCTAssertEqual(editor.font, font)
+        // SwiftUI can reapply native foreground attributes after the marker's
+        // layout callback (for example during initial focus/appearance work).
+        // Attribute-only updates must restore tint without claiming ownership.
+        let beforeRestyle = editor.selectedRange
+        editor.textStorage.addAttribute(.foregroundColor, value: UIColor.label,
+                                        range: NSRange(location: 0, length: editor.textStorage.length))
+        drain(0.2)
+        XCTAssertEqual((editor.textStorage.attribute(.foregroundColor, at: pending.location, effectiveRange: nil) as? UIColor)?.cgColor.alpha ?? -1, 0.5, accuracy: 0.01)
+        XCTAssertEqual(editor.selectedRange, beforeRestyle)
+        XCTAssertEqual(editor.font, font)
+        XCTAssertFalse(app.iosVoiceComposer.operation?.dirty ?? true)
         try capture("progress")
         switch takeover {
         case "typing": editor.insertText(" human")

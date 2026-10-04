@@ -59,6 +59,7 @@ struct IOSVoiceDraftDecoration: UIViewRepresentable {
         private var scheduled = false
         private var applying = false
         private var observers: [NSObjectProtocol] = []
+        private var storageObserver: NSObjectProtocol?
 
         init() {
             super.init(frame: .zero)
@@ -76,7 +77,10 @@ struct IOSVoiceDraftDecoration: UIViewRepresentable {
             }
         }
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-        deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+        deinit {
+            observers.forEach(NotificationCenter.default.removeObserver)
+            if let storageObserver { NotificationCenter.default.removeObserver(storageObserver) }
+        }
         override func didMoveToWindow() { super.didMoveToWindow(); schedule() }
         override func layoutSubviews() { super.layoutSubviews(); schedule() }
 
@@ -99,12 +103,32 @@ struct IOSVoiceDraftDecoration: UIViewRepresentable {
             return nil
         }
 
+        private func trackInput(_ view: UIView?) {
+            if let storageObserver { NotificationCenter.default.removeObserver(storageObserver) }
+            storageObserver = nil
+            input = view
+            guard let view = view as? UITextView else { return }
+            // SwiftUI may reset foreground attributes AFTER our layout pass.
+            // Observe only this editor's storage, without replacing its delegate.
+            // Defer until the native edit ends; our idempotent attribute writes
+            // are guarded so they neither loop nor look like human input.
+            storageObserver = NotificationCenter.default.addObserver(
+                forName: NSTextStorage.didProcessEditingNotification, object: view.textStorage, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, !self.applying, self.pending != nil || self.hadTint else { return }
+                    self.schedule()
+                }
+            }
+        }
+
         private func applyIfReady() {
             guard window != nil else { return }
             if input?.window !== window || input == nil {
+                trackInput(nil)
                 var root = superview
                 while let candidate = root {
-                    if let found = findInput(in: candidate) { input = found; break }
+                    if let found = findInput(in: candidate) { trackInput(found); break }
                     root = candidate.superview
                 }
             }
