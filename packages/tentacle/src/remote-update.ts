@@ -31,7 +31,7 @@ import { getKrakiHome, getLogsDir, getVersion } from './config.js';
 export const APPLY_UPDATE_COMMAND = '__apply-update';
 const REQUEST_FILE = 'remote-update-request.json';
 
-export type InstallKind = 'binary' | 'app-bundle' | 'npm';
+export type InstallKind = 'binary' | 'app-bundle' | 'npm' | 'mac-app';
 
 export interface UpdateRequest {
   /** Where the new version comes from: a URL or a local path (binary / .app.tar.gz), or an npm spec. */
@@ -75,6 +75,17 @@ function writeResult(result: Record<string, unknown>): void {
 
 /** How this daemon was installed, and what an update replaces. */
 export function detectInstall(): { kind: InstallKind; target: string; cli: string[] } | null {
+  // Kraki for Mac's built-in helper: …/Kraki.app/Contents/Library/Helpers/Kraki.app/Contents/MacOS/kraki.
+  // The whole signed app is the unit of update; the helper path stays the same.
+  if (process.env.KRAKI_MANAGED_BY === 'kraki-mac') {
+    const exe = realpathSync(process.execPath);
+    const parts = exe.split('/');
+    const idx = parts.lastIndexOf('Library');
+    if (idx > 2 && parts[idx - 1] === 'Contents') {
+      return { kind: 'mac-app', target: parts.slice(0, idx - 1).join('/'), cli: [exe] };
+    }
+    return null;
+  }
   if (isSea()) {
     const exe = realpathSync(process.execPath);
     if (process.platform === 'darwin') {
@@ -165,7 +176,21 @@ export async function startRemoteUpdate(req: UpdateRequest): Promise<void> {
       const got = hashFile(artifact);
       if (got !== req.sha256) throw new Error(`checksum mismatch: ${got}`);
     }
-    if (install.kind === 'binary') {
+    if (install.kind === 'mac-app') {
+      const out = `${install.target}.new`;
+      rmSync(out, { recursive: true, force: true });
+      mkdirSync(out, { recursive: true });
+      const r = spawnSync('ditto', ['-x', '-k', artifact, out], { encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`unzip failed: ${r.stderr}`);
+      const app = join(out, 'Kraki.app');
+      if (!existsSync(app)) throw new Error('no Kraki.app in archive');
+      const sig = spawnSync('codesign', ['--verify', '--deep', '--strict', app], { encoding: 'utf8' });
+      const gk = spawnSync('spctl', ['-a', '-t', 'exec', app], { encoding: 'utf8' });
+      log(`  codesign=${sig.status} spctl=${gk.status} ${(gk.stderr ?? '').trim()}`);
+      if (sig.status !== 0 || gk.status !== 0) throw new Error('new app is not validly signed/notarized');
+      spawnSync('xattr', ['-dr', 'com.apple.quarantine', app]);
+      plan.staged = app;
+    } else if (install.kind === 'binary') {
       plan.staged = `${install.target}.new`;
       copyFileSync(artifact, plan.staged);
       if (process.platform !== 'win32') chmodSync(plan.staged, 0o755);
@@ -289,6 +314,7 @@ export async function runApplier(args: string[]): Promise<void> {
   log(`applier start: ${plan.kind} ${plan.fromVersion} → ${plan.expectVersion} target=${plan.target}`);
   const t0 = Date.now();
   const elapsed = () => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
+  if (plan.kind === 'mac-app') return applyMacApp(plan, deadline, t0);
   let phase = 'stop';
   try {
     const stop = run(plan.cli, ['stop']);
@@ -319,6 +345,75 @@ export async function runApplier(args: string[]): Promise<void> {
       if (phase !== 'stop') swapBack(plan);
       const start = run(plan.cli, ['start', '--login'], 120_000);
       log(`  rollback start → ${start.code} ${start.out.split('\n').slice(-2).join(' | ')}`);
+      const back = await waitOnline(plan.cli, plan.fromVersion, deadline);
+      log(back ? `↺ rolled back to ${plan.fromVersion}, online (${elapsed()})` : '✘ rollback did not come online');
+      writeResult({ ok: false, rolledBack: back, phase, error: reason, from: plan.fromVersion, kind: plan.kind });
+    } catch (e2) {
+      log(`✘ rollback failed: ${(e2 as Error).message}`);
+      writeResult({ ok: false, rolledBack: false, phase, error: reason, rollbackError: (e2 as Error).message, kind: plan.kind });
+    }
+  }
+}
+
+// ── Kraki for Mac (built-in helper) ─────────────────────
+
+function uid(): number { return process.getuid?.() ?? 501; }
+
+function macAppRunning(): boolean {
+  return spawnSync('pgrep', ['-x', 'Kraki']).status === 0;
+}
+
+function restartHelper(): void {
+  const r = spawnSync('launchctl', ['kickstart', '-k', `gui/${uid()}/chat.kraki.mac.tentacle`], { encoding: 'utf8' });
+  log(`  kickstart -k → ${r.status} ${(r.stderr ?? '').trim()}`);
+}
+
+function openApp(target: string, wasRunning: boolean): void {
+  // Hidden launch lets the app run its own checks (re-register the helper
+  // after an update, restart it onto the version it ships).
+  const r = spawnSync('open', wasRunning ? ['-g', target] : ['-g', '-j', target], { encoding: 'utf8' });
+  log(`  open ${wasRunning ? '-g' : '-g -j'} → ${r.status} ${(r.stderr ?? '').trim()}`);
+}
+
+async function applyMacApp(plan: UpdatePlan, deadline: number, t0: number): Promise<void> {
+  const elapsed = () => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
+  const old = `${plan.target}.old`;
+  const wasRunning = macAppRunning();
+  log(`  app running=${wasRunning}`);
+  let phase = 'swap';
+  try {
+    if (wasRunning) { spawnSync('pkill', ['-x', 'Kraki']); for (let k = 0; k < 20 && macAppRunning(); k++) await sleep(250); }
+    rmSync(old, { recursive: true, force: true });
+    renameSync(plan.target, old);
+    renameSync(plan.staged as string, plan.target);
+    rmSync(dirname(plan.staged as string), { recursive: true, force: true });
+    log(`  swapped app (${elapsed()})`);
+    const offlineAt = Date.now();
+    phase = 'start';
+    restartHelper();            // ends this applier's old daemon; launchd starts the new helper
+    await sleep(3000);
+    openApp(plan.target, wasRunning);
+    phase = 'verify';
+    if (await waitOnline(plan.cli, plan.expectVersion, deadline)) {
+      const offline = ((Date.now() - offlineAt) / 1000).toFixed(1);
+      log(`✔ app updated; helper ${plan.expectVersion} online; offline ${offline}s, total ${elapsed()}`);
+      rmSync(old, { recursive: true, force: true });
+      writeResult({ ok: true, from: plan.fromVersion, to: plan.expectVersion, kind: plan.kind, offlineSeconds: Number(offline), appWasRunning: wasRunning });
+      return;
+    }
+    throw new Error(`new helper not online within ${deadline}s`);
+  } catch (err) {
+    const reason = (err as Error).message;
+    log(`✘ ${phase} failed: ${reason}; rolling back`);
+    try {
+      if (existsSync(old)) {
+        if (macAppRunning()) spawnSync('pkill', ['-x', 'Kraki']);
+        rmSync(plan.target, { recursive: true, force: true });
+        renameSync(old, plan.target);
+      }
+      restartHelper();
+      await sleep(3000);
+      openApp(plan.target, wasRunning);
       const back = await waitOnline(plan.cli, plan.fromVersion, deadline);
       log(back ? `↺ rolled back to ${plan.fromVersion}, online (${elapsed()})` : '✘ rollback did not come online');
       writeResult({ ok: false, rolledBack: back, phase, error: reason, from: plan.fromVersion, kind: plan.kind });
