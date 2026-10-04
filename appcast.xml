@@ -6,6 +6,36 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.65</title>
+            <pubDate>Sun, 04 Oct 2026 06:50:42 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.65</sparkle:fullReleaseNotesLink>
+            <sparkle:version>67</sparkle:version>
+            <sparkle:shortVersionString>0.2.65</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## Native UI polish — macOS and iOS
+
+- Refined session-preview icons while preserving alignment and compacting animation timing.
+- Long model names truncate from the beginning, preserving the useful suffix. Device names and thinking levels remain readable.
+- Session and Chat scroll indicators stay visible throughout scrolling, then hold for 1.2 seconds before fading.
+- Tighter, balanced spacing above and below the resting composer: 12pt on Mac, 6pt on iOS excluding the system safe area.
+- Voice transcription and multiline input expand as native Liquid Glass overlays without pushing chat bubbles upward. Existing composer controls and bottom placement are preserved.
+- Approval prompts now share the question card’s typography and capsule-button style (upstream #400).
+
+Includes native regression coverage for glyphs, metadata, indicators, composer geometry, history reading, voice behavior and chat follow-tail. Style batch: [#399](https://github.com/corelli18512/kraki/pull/399).
+
+### Updating
+
+- Existing Mac users: **Kraki → Check for Updates…**
+- New Mac installations: download **Kraki.dmg** and drag Kraki to Applications.
+- Companion iOS build: **0.1.20**, delivered through TestFlight after Apple processing.
+
+Mac **0.2.65 (67)** — signed, universal (Apple Silicon + Intel) and notarized. Built-in Tentacle remains version-locked to the release commit.
+
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.65/Kraki.app.zip" length="92145995" type="application/octet-stream" sparkle:edSignature="eR7XJQb4fVIQLQGLrO/DvneSrfDdUrgzhtxxepM3VD5th0FOEeJ3rtVeykGSb09zUjYxxE4ERUXttWMZAkiGBg=="/>
+        </item>
+        <item>
             <title>0.2.64</title>
             <pubDate>Sun, 04 Oct 2026 06:28:07 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -57,26 +87,9 @@ These changes fix verified code defects; they do not establish the trigger of th
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.63/Kraki.app.zip" length="92075227" type="application/octet-stream" sparkle:edSignature="wQrRodXhM7IB3Fr4oFivcHqiGQLvrlGX9Ji9xxS7vEsZzvSpI5d7CvBlUmvfXf5X/wVA4/p7oYZg1hAl+FOEDA=="/>
         </item>
-        <item>
-            <title>0.2.62</title>
-            <pubDate>Fri, 02 Oct 2026 18:30:49 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.62</sparkle:fullReleaseNotesLink>
-            <sparkle:version>64</sparkle:version>
-            <sparkle:shortVersionString>0.2.62</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(apple): notification test-host guard compiles in Release by @corelli18512 in https://github.com/corelli18512/kraki/pull/390
-* Windows fixes from a clean Windows 11 VM E2E (Tentacle 0.35.9, Mac 0.2.62) by @corelli18512 in https://github.com/corelli18512/kraki/pull/391
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.35.8...mac-v0.2.62
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.62/Kraki.app.zip" length="92050361" type="application/octet-stream" sparkle:edSignature="cNbUUix117pDB/dlRPl1H9Y8SqZUdHqf1NtarhkeVe+qxyLYnvleM0sBZ9o2cKHUscJd0dWt89dwpLXZBBanCQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: l53+Hf9NLEL+PfBnTlVZ69NXo8HLDCBPis7Pl36QYJB8UHXGhCFWQGZqtAR4S7UZ1ZaHOpsun+O9mdLZUP4BDQ==
-length: 5587
+edSignature: /gGOED4UAka2VJoSj0k24vseXefg9VN4+iadFk/BaW7dpf3YzVePT7f20cCH0XJHJm9kL0iJqkopZ732LL9CBg==
+length: 6584
 -->
