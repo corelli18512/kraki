@@ -3255,12 +3255,16 @@ final class MacChatScrollView: MacSmoothScrollView {
         older: Bool,
         newer: Bool,
         fetchingOlder: Bool,
-        fetchingNewer: Bool
+        fetchingNewer: Bool,
+        newerIsLocal: Bool = true
     ) {
         loadingOlder = fetchingOlder
         loadingNewer = fetchingNewer
         hasUnloadedNewer = newer
-        chatDocumentView.setEdgeSpinners(older: older, newer: newer)
+        // Newer rows still on their way from the network land silently at the
+        // tail (like any chat app); only rows paged from this device's own
+        // history get a bottom spinner.
+        chatDocumentView.setEdgeSpinners(older: older, newer: newer && newerIsLocal)
         updateJumpButtonVisibility(animated: false)
     }
 
@@ -3933,6 +3937,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
     let bottomContentInset: CGFloat
     let isLoadingOlder: Bool
     let isLoadingNewer: Bool
+    var hasNewerLocalRows: Bool = true
     let atOldest: Bool
     let atNewest: Bool
     let onJumpToLatest: () -> Void
@@ -4128,7 +4133,8 @@ struct MacChatListRepresentable: NSViewRepresentable {
                 older: hasPageableContent && !atOldest,
                 newer: hasPageableContent && !atNewest,
                 fetchingOlder: isLoadingOlder,
-                fetchingNewer: isLoadingNewer
+                fetchingNewer: isLoadingNewer,
+                newerIsLocal: hasNewerLocalRows
             )
 
             scrollView.canTrimTailWindow = atNewest

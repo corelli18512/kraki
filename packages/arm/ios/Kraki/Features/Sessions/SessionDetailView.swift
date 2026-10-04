@@ -16,6 +16,15 @@ struct SessionDetailView: View {
     let sessionId: String
 
     @State private var showInfoSheet = false
+    /// "Syncing…" in the title once a catch-up has lasted a moment.
+    @State private var showsSyncing = false
+
+    /// Connected, but this device has not stored the newest message yet.
+    private var isCatchingUp: Bool {
+        guard appState.connectionStatus == .connected, let session else { return false }
+        let expected = max(session.lastSeq, appState.messageProvider?.tentacleLastKnownSeq(sessionId) ?? 0)
+        return expected > appState.messageStore.persistedHead(sessionId)
+    }
     @State private var modePickerExpanded = HeaderModePicker.startsExpanded
     /// Tracks whether we've ever observed a live `SessionInfo` for
     /// this id. Used to distinguish the brand-new pending state
@@ -34,6 +43,11 @@ struct SessionDetailView: View {
         Group {
             if let session {
                 sessionContent(session)
+                    .task(id: isCatchingUp) {
+                        guard isCatchingUp else { showsSyncing = false; return }
+                        try? await Task.sleep(for: .seconds(1))
+                        if !Task.isCancelled, isCatchingUp { showsSyncing = true }
+                    }
             } else if sessionStore.isPending(sessionId) {
                 pageWithHeader(title: "New Session", opensInfo: false) { pendingView }
             } else {
@@ -65,7 +79,9 @@ struct SessionDetailView: View {
             // Bootstrap the in-memory window from the DB so ChatView
             // has something to render before the (possibly delayed)
             // tentacle replay lands. Cold-launch idempotent.
-            appState.messageProvider?.openSession(sessionId)
+            // Entering a conversation shows its newest messages (as on Mac),
+            // not a history position left over from an earlier visit.
+            appState.messageProvider?.openSession(sessionId, reanchorLatest: true)
             // Ensure tentacle's view of the latest turn(s) is loaded —
             // no-op if warm-up already covered this session or if the
             // disk cache already reaches head.
@@ -127,7 +143,7 @@ struct SessionDetailView: View {
         // "Reconnecting…" so the user knows the chat is currently in a
         // stale-read state. Wording matches the ambient indicator on the
         // brand header.
-        let title = appState.showsReconnecting ? "Reconnecting…" : session.displayTitle
+        let title = appState.conversationTitleStatus(syncing: showsSyncing) ?? session.displayTitle
         return pageWithHeader(title: title, opensInfo: true) {
             ChatView(sessionId: sessionId)
         }
