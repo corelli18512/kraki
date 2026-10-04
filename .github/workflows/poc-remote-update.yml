@@ -7,6 +7,8 @@ name: POC remote update
 on:
   push:
     branches: [poc/remote-update]
+    paths-ignore: ['packages/arm/**']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,8 +22,8 @@ jobs:
         include:
           - { label: "Linux binary",    runner: ubuntu-latest,  kind: binary }
           - { label: "Linux npm",       runner: ubuntu-latest,  kind: npm }
-          - { label: "Windows binary",  runner: windows-latest, kind: binary }
-          - { label: "Windows npm",     runner: windows-latest, kind: npm }
+          - { label: "Windows binary",  runner: windows-latest, kind: binary, node: 22 }
+          - { label: "Windows npm",     runner: windows-latest, kind: npm, node: 22 }
           - { label: "macOS CLI app",   runner: macos-14,       kind: app }
           - { label: "macOS npm",       runner: macos-14,       kind: npm }
     runs-on: ${{ matrix.runner }}
@@ -37,7 +39,7 @@ jobs:
       - run: corepack enable
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version: ${{ matrix.node || 24 }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Build protocol, crypto, head, tentacle
