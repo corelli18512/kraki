@@ -720,6 +720,9 @@ final class MessageProvider {
         // drives the iOS card's authoritative unread boolean; without this a
         // replay can populate SQLite while the card still shows old cursors.
         let batchHead = max(totalLastSeq, messages.map(\.seq).max() ?? 0)
+        if containsHead == true {
+            appState.messageStore.markCaughtUp(sessionId, through: batchHead)
+        }
         if batchHead > (tentacleLastSeq[sessionId] ?? 0) {
             tentacleLastSeq[sessionId] = batchHead
         }
@@ -1034,11 +1037,14 @@ final class MessageProvider {
             if beforeSeq == nil, attempt < Self.headRequestRetries, let appState,
                appState.connectionStatus == .connected,
                appState.sessionSubscriptionController.desiredSessionId == sessionId,
-               appState.messageStore.dbLastSeq(sessionId) < (self.tentacleLastSeq[sessionId] ?? 0),
+               appState.messageStore.persistedHead(sessionId) < (self.tentacleLastSeq[sessionId] ?? 0),
                !self.isLoadingHead(sessionId) {
                 self.requestFromTentacle(sessionId: sessionId, beforeSeq: nil, reason: "retry", attempt: attempt + 1)
                 return
             }
+            // Out of retries: never keep the live card hidden behind a
+            // catch-up that is not coming.
+            if beforeSeq == nil { appState?.messageStore.releaseCardHold(sessionId) }
             appState?.sessionStore.markLoadFailed(sessionId)
         }
         addSlot(sessionId, RequestSlot(kind: slotKind, timeout: work))

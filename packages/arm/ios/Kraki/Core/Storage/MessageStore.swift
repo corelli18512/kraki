@@ -301,6 +301,19 @@ final class MessageStore {
         persistedHeads[sessionId] ?? dbLastSeq(sessionId)
     }
 
+    /// The Tentacle answered a head request: everything it has through `seq`
+    /// is on this device, even when the last seqs are ones clients never store
+    /// (legacy sessions counted tool events). Without this, such a session
+    /// would read "Syncing…" and hold its card forever.
+    func markCaughtUp(_ sessionId: String, through seq: Int) {
+        guard seq > 0 else { return }
+        persistedHeads[sessionId] = max(persistedHead(sessionId), seq)
+    }
+
+    func releaseCardHold(_ sessionId: String) {
+        cardHoldUntil.removeValue(forKey: sessionId)
+    }
+
     private func notePersisted(_ sessionId: String, upTo seq: Int) {
         let current = persistedHeads[sessionId] ?? dbLastSeq(sessionId)
         if seq > current || persistedHeads[sessionId] == nil {
