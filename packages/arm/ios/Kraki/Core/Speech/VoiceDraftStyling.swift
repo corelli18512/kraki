@@ -60,6 +60,9 @@ struct IOSVoiceDraftDecoration: UIViewRepresentable {
         private var applying = false
         private var observers: [NSObjectProtocol] = []
         private var storageObserver: NSObjectProtocol?
+        #if DEBUG
+        var debugTrackedInput: UIView? { input }
+        #endif
 
         init() {
             super.init(frame: .zero)

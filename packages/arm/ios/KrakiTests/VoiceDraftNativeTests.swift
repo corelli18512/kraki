@@ -51,7 +51,25 @@ import UIKit
         XCTAssertTrue(editor.isFirstResponder)
         XCTAssertFalse(app.iosVoiceComposer.operation?.dirty ?? true, "programmatic focus/selection must not claim human ownership")
         let font = editor.font
+        func awaitPendingPresentation(_ range: NSRange) {
+            // Binding delivery and the background decorator are separate native
+            // run-loop turns. A cold CI keyboard can delay that second turn;
+            // wait for presentation rather than assuming 150/500ms is enough.
+            // The exact alpha assertion below remains the acceptance condition.
+            func alpha() -> CGFloat {
+                guard range.location < editor.textStorage.length else { return -1 }
+                return (editor.textStorage.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? UIColor)?.cgColor.alpha ?? -1
+            }
+            let start = Date(), initial = alpha()
+            while abs(alpha() - 0.5) > 0.01, Date().timeIntervalSince(start) < 2 { drain(0.02) }
+            let markers = all(host.view).compactMap { $0 as? IOSVoiceDraftDecoration.Marker }
+            if abs(initial - 0.5) > 0.01 {
+                print("VOICE_PRESENTATION style=\(style.rawValue) initial=\(initial) final=\(alpha()) wait=\(Date().timeIntervalSince(start)) markers=\(markers.count) tracked=\(markers.map { $0.debugTrackedInput === editor }) pending=\(markers.map { String(describing: $0.pending) })")
+            }
+            XCTAssertTrue(markers.contains { $0.debugTrackedInput === editor }, "decorate the actual native editor only")
+        }
         var pending = try XCTUnwrap(app.iosVoiceComposer.uncorrectedRange(in: sid))
+        awaitPendingPresentation(pending)
         XCTAssertEqual((editor.textStorage.attribute(.foregroundColor, at: pending.location, effectiveRange: nil) as? UIColor)?.cgColor.alpha ?? -1, 0.5, accuracy: 0.01)
         try capture("pending")
         driver.emit(.correctionDelta("请将这个功能接入 Kraki，")); drain(0.15)
@@ -60,6 +78,7 @@ import UIKit
         pending = try XCTUnwrap(app.iosVoiceComposer.uncorrectedRange(in: sid))
         XCTAssertGreaterThan(pending.location, 0)
         XCTAssertTrue(editor.text.hasPrefix("请将这个功能接入 Kraki，"))
+        awaitPendingPresentation(pending)
         XCTAssertEqual((editor.textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor)?.cgColor.alpha ?? -1, 1, accuracy: 0.01)
         XCTAssertEqual((editor.textStorage.attribute(.foregroundColor, at: pending.location, effectiveRange: nil) as? UIColor)?.cgColor.alpha ?? -1, 0.5, accuracy: 0.01)
         XCTAssertEqual(editor.font, font)
