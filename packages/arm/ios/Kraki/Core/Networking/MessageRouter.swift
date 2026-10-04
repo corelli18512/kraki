@@ -255,6 +255,12 @@ final class MessageRouter {
                 appState?.voiceInputController.receiveLeaseDenied(reason: reason, detail: detail)
             }
 
+        case "voice_vocabulary_updated":
+            Task { @MainActor [weak self] in
+                guard let self, !self.retired else { return }
+                self.appState?.preferencesManager?.receiveVocabulary(json)
+            }
+
         case "preferences_updated":
             // Live sync from another device (or echo of our own update).
             // PreferencesManager's echo-loop guard prevents the resulting

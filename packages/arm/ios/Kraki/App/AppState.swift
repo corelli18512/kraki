@@ -34,6 +34,7 @@ final class AppState {
     #if os(iOS)
     private(set) var pushManager: PushManager?
     #endif
+    let voiceVocabularyStore = VoiceVocabularyStore()
     private(set) var preferencesManager: PreferencesManager?
     private(set) var pulseManager: PulseManager?
     private(set) var sessionSubscriptionController: SessionSubscriptionController!
@@ -929,6 +930,7 @@ final class AppState {
         messageRouter = router
         wsClient?.onMessage = { [weak router] data in router?.handleRawMessage(data) }
         authManager?.clearStoredCredentials()
+        preferencesManager?.resetVocabulary()
         clearStoredRelayURL()
         deviceId = nil
         user = nil

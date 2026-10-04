@@ -502,6 +502,14 @@ final class AuthManager {
             githubClientId: githubClientId,
             relayVersion: relayVersion
         )
+        let vocabulary = VoiceVocabularySnapshot.decode(message["voiceVocabulary"])
+        let relay = appState.relayURL
+        if let userID = user?.id {
+            Task { @MainActor [weak appState] in
+                guard let appState, appState.user?.id == userID, appState.relayURL == relay else { return }
+                appState.preferencesManager?.authenticateVocabulary(userID: userID, relay: relay, snapshot: vocabulary)
+            }
+        }
     }
 
     /// Process an `auth_error` from the relay.

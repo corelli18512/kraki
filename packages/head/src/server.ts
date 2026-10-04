@@ -11,6 +11,7 @@ import type {
 } from '@kraki/protocol';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { Storage } from './storage.js';
+import { parseVocabularyUpdate } from './voice-vocabulary.js';
 import { PulseHub, PULSE_ACK_EVERY_BYTES } from './pulse-hub.js';
 import { LeaseIssuer } from './lease-issuer.js';
 import type { AuthProvider, AuthUser, AuthOutcome as ProviderAuthOutcome } from './auth.js';
@@ -833,6 +834,7 @@ export class HeadServer {
   private handleControlMessage(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): boolean {
     switch (msg.type) {
       case 'update_preferences':    this.handleUpdatePreferences(ws, state, msg); return true;
+      case 'update_voice_vocabulary': this.handleUpdateVoiceVocabulary(state, msg); return true;
       case 'remove_device':         this.handleRemoveDevice(ws, state, msg.deviceId as string); return true;
       case 'register_push_token':   this.handleRegisterPushToken(ws, state, msg); return true;
       case 'unregister_push_token': this.handleUnregisterPushToken(ws, state, msg); return true;
@@ -868,6 +870,28 @@ export class HeadServer {
       const other = this.connections.get(d.id);
       if (!other || other.readyState !== WebSocket.OPEN) continue;
       this.sendControlToDevice(d.id, confirmation);
+    }
+  }
+
+  /** Account data, not session data: no tentacle is involved. */
+  private handleUpdateVoiceVocabulary(state: ClientState, msg: Record<string, unknown>): void {
+    if (!state.userId || !state.deviceId) return;
+    const update = parseVocabularyUpdate(msg);
+    if (!update) {
+      this.sendControlToDevice(state.deviceId, {
+        type: 'voice_vocabulary_updated', error: 'invalid_update',
+        requestId: typeof msg.requestId === 'string' ? msg.requestId.slice(0, 64) : undefined,
+      });
+      return;
+    }
+    const result = this.storage.updateVoiceVocabulary(state.userId, update);
+    this.sendControlToDevice(state.deviceId, {
+      type: 'voice_vocabulary_updated', requestId: update.requestId, ...result,
+    });
+    for (const d of this.storage.getDevicesByUser(state.userId)) {
+      if (d.id !== state.deviceId && d.role === 'app' && this.connections.get(d.id)?.readyState === WebSocket.OPEN) {
+        this.sendControlToDevice(d.id, { type: 'voice_vocabulary_updated', vocabulary: result.vocabulary });
+      }
     }
   }
 
@@ -1357,6 +1381,7 @@ export class HeadServer {
       vapidPublicKey: params.vapidPublicKey ?? this.getVapidPublicKey(),
       relayVersion: this.options.version,
       pulseAckBytes: PULSE_ACK_EVERY_BYTES,
+      voiceVocabulary: this.storage.getVoiceVocabulary(params.userId),
       ...(this.getVoiceCapability() && { voice: this.getVoiceCapability() }),
     }));
 

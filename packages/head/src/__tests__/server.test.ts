@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
-import { generateKeyPairSync, createSign } from 'crypto';
+import { generateKeyPairSync, createSign, randomUUID } from 'crypto';
 import { decodeFrame, Endpoint } from '@coinfra/pulse';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { HeadServer } from '../server.js';
@@ -850,6 +850,52 @@ describe('HeadServer (thin relay)', () => {
       const user2 = authOk2.user as Record<string, unknown>;
       expect(user2.preferences).toEqual(expect.objectContaining({ debugLogging: true }));
       ws2.close();
+    });
+  });
+
+  describe('account vocabulary sync', () => {
+    it('syncs two app clients live and hydrates a reconnect without any tentacle', async () => {
+      head = await createHead();
+      const { ws: a, authOk } = await authConnect(head.port, 'Phone', 'app', { deviceId: 'words-phone' });
+      expect(authOk.voiceVocabulary).toEqual({ version: 1, revision: 0, entries: [] });
+      const joined = waitForMessageOfType(a, 'device_joined');
+      const { ws: b } = await authConnect(head.port, 'Mac', 'app', { deviceId: 'words-mac' });
+      await joined;
+      const change = { id: randomUUID(), changeId: randomUUID(), baseRevision: 0, action: 'upsert', term: 'Kraki', heardAs: 'cracky' };
+      const requestId = randomUUID();
+      const ack = waitForMessageOfType(a, 'voice_vocabulary_updated');
+      const live = waitForMessageOfType(b, 'voice_vocabulary_updated');
+      a.send(JSON.stringify({ type: 'update_voice_vocabulary', requestId, changes: [change] }));
+      const response = await ack;
+      expect(response.requestId).toBe(requestId);
+      expect(response.results).toEqual([{ changeId: change.changeId, status: 'applied' }]);
+      expect((await live).vocabulary).toEqual(response.vocabulary);
+      a.close(); b.close();
+      const { ws: c, authOk: reconnected } = await authConnect(head.port, 'New App', 'app', { deviceId: 'words-new' });
+      expect(reconnected.voiceVocabulary).toEqual(response.vocabulary);
+      c.close();
+    });
+
+    it('does not fan out another account’s words and rejects malformed batches', async () => {
+      head = await createHead({ authProvider: new GitHubAuthProvider({ fetcher: mockGitHubFetcher({
+        alice: { id: 101, login: 'alice' }, bob: { id: 102, login: 'bob' },
+      }) }) });
+      const { ws: a } = await authConnect(head.port, 'Alice', 'app', { token: 'alice', deviceId: 'words-alice' });
+      const { ws: b } = await authConnect(head.port, 'Bob', 'app', { token: 'bob', deviceId: 'words-bob' });
+      const received: unknown[] = [];
+      b.on('message', data => { const msg = unwrapControlFrame(JSON.parse(data.toString())); if (msg?.type === 'voice_vocabulary_updated') received.push(msg); });
+      const bad = waitForMessageOfType(a, 'voice_vocabulary_updated');
+      a.send(JSON.stringify({ type: 'update_voice_vocabulary', requestId: randomUUID(), changes: [{ term: 'invalid' }] }));
+      expect((await bad).error).toBe('invalid_update');
+      const good = waitForMessageOfType(a, 'voice_vocabulary_updated');
+      a.send(JSON.stringify({ type: 'update_voice_vocabulary', requestId: randomUUID(), changes: [{
+        id: randomUUID(), changeId: randomUUID(), baseRevision: 0, action: 'upsert', term: 'Private', heardAs: '',
+      }] }));
+      await good;
+      const { ws: c, authOk } = await authConnect(head.port, 'Bob New', 'app', { token: 'bob', deviceId: 'words-bob-new' });
+      expect(authOk.voiceVocabulary).toEqual({ version: 1, revision: 0, entries: [] });
+      expect(received).toEqual([]);
+      a.close(); b.close(); c.close();
     });
   });
 

@@ -1446,6 +1446,8 @@ export interface AuthOkMessage {
   /** The auth method that was used */
   authMethod: AuthMethod['method'];
   user: { id: string; login: string; provider: string; email?: string; preferences?: Record<string, unknown>; region?: string };
+  /** Presence advertises account Custom Words sync support. Not E2E encrypted. */
+  voiceVocabulary?: VoiceVocabularySnapshot;
   devices: DeviceSummary[];
   /** GitHub OAuth client ID (present when GitHub OAuth is configured for web login) */
   githubClientId?: string;
@@ -1587,6 +1589,32 @@ export interface PreferencesUpdatedMessage {
   preferences: Record<string, unknown>;
 }
 
+/** Account-owned custom words. Deleted entries retain their ID/revision so a
+ * stale offline client cannot resurrect them. All IDs are lowercase UUIDs. */
+export interface VoiceVocabularySnapshot {
+  version: 1;
+  revision: number;
+  entries: Array<{
+    id: string; revision: number; term: string; heardAs: string;
+    deleted: boolean; changeId: string;
+  }>;
+}
+export interface UpdateVoiceVocabularyMessage {
+  type: 'update_voice_vocabulary';
+  requestId: string;
+  changes: Array<{
+    changeId: string; id: string; baseRevision: number;
+    action: 'upsert' | 'delete' | 'import'; term?: string; heardAs?: string;
+  }>;
+}
+export interface VoiceVocabularyUpdatedMessage {
+  type: 'voice_vocabulary_updated';
+  vocabulary?: VoiceVocabularySnapshot;
+  requestId?: string;
+  results?: Array<{ changeId: string; status: 'applied' | 'conflict' | 'duplicate' | 'full' }>;
+  error?: 'invalid_update';
+}
+
 // ── Push notification token management ──────────────────
 
 /** Register a push notification token for this device. */
@@ -1654,6 +1682,8 @@ export type ControlMessage =
   | DeviceRemovedMessage
   | UpdatePreferencesMessage
   | PreferencesUpdatedMessage
+  | UpdateVoiceVocabularyMessage
+  | VoiceVocabularyUpdatedMessage
   | RegisterPushTokenMessage
   | PushTokenRegisteredMessage
   | NotificationPreviewMessage

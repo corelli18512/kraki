@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'crypto';
 import Database from 'better-sqlite3';
+import { emptyVocabulary, mergeVocabulary, type VocabularySnapshot, type VocabularyUpdate } from './voice-vocabulary.js';
 
 // --- Row types for SQLite result mapping ---
 
@@ -454,9 +455,27 @@ export class Storage {
   updatePreferences(userId: string, preferences: Record<string, unknown>): void {
     const existing = this.getUser(userId);
     if (!existing) return;
-    const merged = { ...(existing.preferences ?? {}), ...preferences };
+    // Vocabulary has its own validated, revisioned update path. Generic/old
+    // preference clients must never replace it with a stale snapshot.
+    const { voiceVocabulary: _reserved, ...patch } = preferences;
+    const merged = { ...(existing.preferences ?? {}), ...patch };
     this.db.prepare('UPDATE users SET preferences = ? WHERE user_id = ?')
       .run(JSON.stringify(merged), userId);
+  }
+
+  getVoiceVocabulary(userId: string): VocabularySnapshot {
+    return (this.getUser(userId)?.preferences?.voiceVocabulary as VocabularySnapshot | undefined) ?? emptyVocabulary();
+  }
+
+  updateVoiceVocabulary(userId: string, update: VocabularyUpdate) {
+    return this.db.transaction(() => {
+      const user = this.getUser(userId);
+      if (!user) throw new Error('Unknown vocabulary owner');
+      const result = mergeVocabulary(this.getVoiceVocabulary(userId), update.changes);
+      const preferences = { ...user.preferences, voiceVocabulary: result.vocabulary };
+      this.db.prepare('UPDATE users SET preferences = ? WHERE user_id = ?').run(JSON.stringify(preferences), userId);
+      return result;
+    })();
   }
 
   // --- Region registry ---
