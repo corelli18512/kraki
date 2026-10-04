@@ -6,6 +6,26 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.64</title>
+            <pubDate>Sun, 04 Oct 2026 06:28:07 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.64</sparkle:fullReleaseNotesLink>
+            <sparkle:version>66</sparkle:version>
+            <sparkle:shortVersionString>0.2.64</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* fix(apple): notification test-host guard compiles in Release by @corelli18512 in https://github.com/corelli18512/kraki/pull/390
+* Windows fixes from a clean Windows 11 VM E2E (Tentacle 0.35.9, Mac 0.2.62) by @corelli18512 in https://github.com/corelli18512/kraki/pull/391
+* Proxy support: sign-in and relay connection through HTTPS_PROXY or the macOS system proxy (Tentacle 0.35.10, head 0.19.4, Mac 0.2.63) by @corelli18512 in https://github.com/corelli18512/kraki/pull/392
+* Web: new Kraki logo and icons by @corelli18512 in https://github.com/corelli18512/kraki/pull/393
+* fix(clients): quiet reconnect and catch-up; voice waits for the connection by @corelli18512 in https://github.com/corelli18512/kraki/pull/396
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.35.8...mac-v0.2.64
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.64/Kraki.app.zip" length="92122289" type="application/octet-stream" sparkle:edSignature="/TDvQMfxggzC59liRGoHazhIns1+JkTVW8darv8v9dnAiBS1iwdC9FbkztZynXnFg+bsx3dqDmCCYxCUXzgQDw=="/>
+        </item>
+        <item>
             <title>0.2.63</title>
             <pubDate>Sat, 03 Oct 2026 18:45:46 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -40,29 +60,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.62/Kraki.app.zip" length="92050361" type="application/octet-stream" sparkle:edSignature="cNbUUix117pDB/dlRPl1H9Y8SqZUdHqf1NtarhkeVe+qxyLYnvleM0sBZ9o2cKHUscJd0dWt89dwpLXZBBanCQ=="/>
         </item>
-        <item>
-            <title>0.2.60</title>
-            <pubDate>Fri, 02 Oct 2026 09:46:37 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.60</sparkle:fullReleaseNotesLink>
-            <sparkle:version>62</sparkle:version>
-            <sparkle:shortVersionString>0.2.60</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(voice): no hard-coded product name in correction context by @corelli18512 in https://github.com/corelli18512/kraki/pull/374
-* fix(voice): keep sending product field; gateway hides it from the model by @corelli18512 in https://github.com/corelli18512/kraki/pull/378
-* fix: Mac settings scrolling; English-only product strings by @corelli18512 in https://github.com/corelli18512/kraki/pull/379
-* fix(windows): release review C-group by @corelli18512 in https://github.com/corelli18512/kraki/pull/377
-* Kraki keeps running when launchd stops restarting it (Tentacle 0.35.7, Mac 0.2.60) by @corelli18512 in https://github.com/corelli18512/kraki/pull/380
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.59...mac-v0.2.60
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.60/Kraki.app.zip" length="92016038" type="application/octet-stream" sparkle:edSignature="oLo/EQyZE3rFSadgL7/Sudkz6f0S374W8Mfo7MkfPY1S815GLOVCov7iAQM3iTCej7AELnmPlzrM0IB5AjBQBQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: s0vO0KrOovrKh5s2iT+RpDy4ijs6XJsq3tYwDoZZ+fCBsPxFEArPyKY3K/ukKLbrg3xY6cdIC8DXN26rrC+5Aw==
-length: 4756
+edSignature: B27XkCbNOHo8PnPV8aELXwj7WpEHCDcwhfQlrcgOqktOGTyKNcZ+Q1zN7ybEJA5sb9Pz3UUQVsND2RKqqCxpCw==
+length: 4816
 -->
