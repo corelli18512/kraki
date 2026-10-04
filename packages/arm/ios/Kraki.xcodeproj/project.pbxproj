@@ -180,6 +180,7 @@
 		6006EB03F1FC303FC76A1531 /* ThisMacSetupStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACF9B7682A158350E82AECB6 /* ThisMacSetupStep.swift */; };
 		60226FAD058DC1FCB64B3A31 /* ActivityRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E85D17DFC304688DBB3F729 /* ActivityRow.swift */; };
 		6088B1B7B0692F4375FF68BC /* GitHubMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09D60ADBFACD8E9746EF968 /* GitHubMark.swift */; };
+		61101BD1FEE91B7F2A3F5385 /* VoiceDraftNativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C10009D1B5CB5519426BB52 /* VoiceDraftNativeTests.swift */; };
 		613A478009D713D6D8D81F36 /* DiagSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7209F58C4D298C8764042569 /* DiagSettingsSection.swift */; };
 		61DE330DBE66144398A6F8D4 /* MacBubbleTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D15C4DAE8AB0534C9C6226 /* MacBubbleTestView.swift */; };
 		6310305F2F3A95D6D92254CC /* AccountUsageViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 653D042B0A60468230A5F1F3 /* AccountUsageViews.swift */; };
@@ -195,6 +196,7 @@
 		6AA16838C7627EDD7F6BF334 /* UsagePeekController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AC679062E3ABAECE586C024 /* UsagePeekController.swift */; };
 		6B74B16DDD9D6292517C76DC /* NewSessionJourneyUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20350221F5A369C6D4F3440F /* NewSessionJourneyUITests.swift */; };
 		6C10D025CEF9E531C568960A /* SessionCardEffortTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDCB4B5308B56C1588901815 /* SessionCardEffortTests.swift */; };
+		6E0AE013EC3604CF39785A1C /* VoiceDraftStyling.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14DE4C914007046BE9F67973 /* VoiceDraftStyling.swift */; };
 		6E1808A6EEB532CAB95FB4D5 /* MacChatBubbleContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA4B2EA2532F558EBA4F7D16 /* MacChatBubbleContent.swift */; };
 		6F355E1177288E02FB77EFDD /* Messages.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BC3B39CCEB12DE1DD65808 /* Messages.swift */; };
 		6F7C13F76FDD7E9103905674 /* MacMockData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63302839C21EFDE37CC56C13 /* MacMockData.swift */; };
@@ -237,6 +239,7 @@
 		8C74A12E6D7EA7794FCB3FAA /* Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */; };
 		8DD4AE2E5880121FF778CCD3 /* KrakiPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACA594C1B063D6133CF3BC50 /* KrakiPlatform.swift */; };
 		8F1503601B654CE252D93F35 /* AccountUsageRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A85ACE885B44CA61B0513FC /* AccountUsageRenderTests.swift */; };
+		8F51D496B6815109A20FE70C /* VoiceDraftStyling.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14DE4C914007046BE9F67973 /* VoiceDraftStyling.swift */; };
 		8F6280E0F252F3D0E4DEA9D7 /* SessionCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F98323AAD3C8D23F7A63AAC9 /* SessionCardView.swift */; };
 		905C91DB5410CEEDA060E7A1 /* SessionsSidebarView+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DEFD8A1D19846132D2AE32A /* SessionsSidebarView+macOS.swift */; };
 		90CB99F531524D18FF2BD990 /* BuiltInTentacle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EBD5FFCF0E54067B287536A /* BuiltInTentacle.swift */; };
@@ -459,6 +462,7 @@
 		11A7EB4EC1634A535D5A90D5 /* PayloadFragments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PayloadFragments.swift; sourceTree = "<group>"; };
 		11B2053230A2F15EC2518979 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		13466FFA7CC929AF90E4097E /* LocalSessionSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSessionSummary.swift; sourceTree = "<group>"; };
+		14DE4C914007046BE9F67973 /* VoiceDraftStyling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceDraftStyling.swift; sourceTree = "<group>"; };
 		174ADE7BF077A13AD4CB362E /* DiagnosticsSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsSummary.swift; sourceTree = "<group>"; };
 		179780D06C1EF0B6ED5E0C38 /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		1A85ACE885B44CA61B0513FC /* AccountUsageRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountUsageRenderTests.swift; sourceTree = "<group>"; };
@@ -552,6 +556,7 @@
 		6AD698C5DD0F8DDB4A3D6CFE /* KrakiApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KrakiApp.swift; sourceTree = "<group>"; };
 		6B52AA4B3D7FFBB698F94CE9 /* TurnSpineProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnSpineProjection.swift; sourceTree = "<group>"; };
 		6B54EBE3BC7263D7BB438142 /* IOSNewSessionScenario.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSNewSessionScenario.swift; sourceTree = "<group>"; };
+		6C10009D1B5CB5519426BB52 /* VoiceDraftNativeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceDraftNativeTests.swift; sourceTree = "<group>"; };
 		6D80A4B531EA5EBD081A0626 /* MacLaunchActivityIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLaunchActivityIndicator.swift; sourceTree = "<group>"; };
 		6DF461DDEA102ED1927719DE /* SessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStoreTests.swift; sourceTree = "<group>"; };
 		6E83544E423901DC3D8E07FB /* BuiltInTentacleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInTentacleTests.swift; sourceTree = "<group>"; };
@@ -896,6 +901,7 @@
 				341940FBEAD0F36C8E7F510C /* KrakiVoiceInputController.swift */,
 				1BF3123CD705AB984A21AD16 /* SpeechRecognizer.swift */,
 				B88D48670B859C4CA3FFFA48 /* VoiceComposerPresentation.swift */,
+				14DE4C914007046BE9F67973 /* VoiceDraftStyling.swift */,
 				83BE65A70DC511EA8DBC81A3 /* VoiceProtocol.swift */,
 				939E23179F74FF6BEBCB911A /* VoiceVocabulary.swift */,
 			);
@@ -1258,6 +1264,7 @@
 				0BEDEAE0119875B478A984D6 /* SessionSubscriptionControllerTests.swift */,
 				50E35AD5263921130DD1A18D /* StabilityTrackerTests.swift */,
 				09D438FF41D78B8547E66208 /* TextKitPureSpineTests.swift */,
+				6C10009D1B5CB5519426BB52 /* VoiceDraftNativeTests.swift */,
 				41F42292103BF36F0260439B /* WindowsIOSRoundTwoTests.swift */,
 			);
 			path = KrakiTests;
@@ -1608,6 +1615,7 @@
 				A1202BE92B11878D6FBCC712 /* SessionSubscriptionControllerTests.swift in Sources */,
 				0313E21470C38A392FB20B51 /* StabilityTrackerTests.swift in Sources */,
 				D27A7F9B6B70581836E99C91 /* TextKitPureSpineTests.swift in Sources */,
+				61101BD1FEE91B7F2A3F5385 /* VoiceDraftNativeTests.swift in Sources */,
 				5F9CBA1C5F3D4B58484EEA6B /* WindowsIOSRoundTwoTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1780,6 +1788,7 @@
 				5DB28A4F984B48C07D1B790A /* UsagePeekHotKey.swift in Sources */,
 				35ADC1BC8EA7345CC3FE8CD6 /* UsagePeekView.swift in Sources */,
 				6742E2AA142D4519E566CB64 /* VoiceComposerPresentation.swift in Sources */,
+				8F51D496B6815109A20FE70C /* VoiceDraftStyling.swift in Sources */,
 				CFF3BDD72B3AEA4A63805911 /* VoiceProtocol.swift in Sources */,
 				8140B91F1E6E01B545A34DCA /* VoiceVocabulary.swift in Sources */,
 				96DFC48663EC74A860A90722 /* WebSocketClient.swift in Sources */,
@@ -1928,6 +1937,7 @@
 				20244E41A261DC881CCEDA17 /* UsagePeekHotKey.swift in Sources */,
 				A8FCE5708D96AB7C17D82C61 /* UsagePeekView.swift in Sources */,
 				2D394695172D2AD0857650A2 /* VoiceComposerPresentation.swift in Sources */,
+				6E0AE013EC3604CF39785A1C /* VoiceDraftStyling.swift in Sources */,
 				558691CB66E19DD90F699001 /* VoiceProtocol.swift in Sources */,
 				CA61E77D7E02A6D5D69C31C9 /* VoiceVocabulary.swift in Sources */,
 				ADFE4925FD96D710B7599863 /* WebSocketClient.swift in Sources */,

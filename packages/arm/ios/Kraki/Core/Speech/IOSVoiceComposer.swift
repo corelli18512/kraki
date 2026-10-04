@@ -49,6 +49,8 @@ protocol IOSVoiceComposerHost: AnyObject {
         /// Characters of the raw utterance already covered by the streamed
         /// correction (monotonic, so the bubble never jumps backwards).
         var correctedRawPrefix = 0
+        var correctedText = ""
+        var uncorrectedDraftRange: NSRange?
         var delivery: CommandSender.InputDelivery = .prompt
     }
 
@@ -72,6 +74,14 @@ protocol IOSVoiceComposerHost: AnyObject {
         guard let operation, operation.sessionID == sessionID else { return false }
         return operation.phase != .recording
     }
+    /// Presentation only: never persist correction styling into the draft.
+    /// Revision checks also remove the tint for edits made outside this view.
+    func uncorrectedRange(in sessionID: String) -> NSRange? {
+        guard let op = operation, op.sessionID == sessionID, op.phase == .toDraft,
+              op.focusEditor, !op.dirty, matches(op) else { return nil }
+        return op.uncorrectedDraftRange
+    }
+
     var rawText: String { operation?.raw ?? "" }
     var recordingStartedAt: Date? { operation?.startedAt }
 
@@ -186,7 +196,7 @@ protocol IOSVoiceComposerHost: AnyObject {
         op.phase = .toDraft
         op.focusEditor = focusEditor
         operation = op
-        commit(op.raw)
+        updateDraftCorrection()
         if focusEditor { requestEditor(op.sessionID) }
         finishSpeech(op)
     }
@@ -238,7 +248,7 @@ protocol IOSVoiceComposerHost: AnyObject {
         operation = op
         switch op.phase {
         case .recording: break
-        case .toDraft: commit(text)
+        case .toDraft: updateDraftCorrection()
         case .staged(let clientID):
             let (full, uncorrected) = Self.staged(corrected: "", raw: text, covered: 0, base: op.base, range: op.range)
             host?.updateVoiceInput(sessionID: op.sessionID, clientID: clientID, text: full, original: full,
@@ -246,20 +256,35 @@ protocol IOSVoiceComposerHost: AnyObject {
         }
     }
 
-    /// Streaming correction is shown only on a staged bubble, never typed into
-    /// the editable field. The correction is applied over the transcript in
-    /// place: corrected text so far + the not-yet-corrected rest of what was
-    /// said, so the bubble keeps its words and its size while it updates.
+    /// Correct in place, retaining the raw tail. Edit opts the real draft into
+    /// the same progressive presentation, but only until the user takes over.
+    /// Departure without Edit keeps its existing final-only behavior.
     func corrected(_ text: String, id: UUID) {
-        guard var op = operation, op.id == id, case .staged(let clientID) = op.phase else { return }
+        guard var op = operation, op.id == id, op.phase != .recording else { return }
+        if op.phase == .toDraft && (!op.focusEditor || op.dirty || !matches(op)) { return }
+        op.correctedText = text
         op.correctedRawPrefix = max(op.correctedRawPrefix,
                                     KrakiVoiceInputController.alignedRawPrefixLength(corrected: text, raw: op.raw))
         operation = op
-        let (full, uncorrected) = Self.staged(corrected: text, raw: op.raw, covered: op.correctedRawPrefix,
-                                              base: op.base, range: op.range)
-        host?.updateVoiceInput(sessionID: op.sessionID, clientID: clientID, text: full,
-                               original: Self.insert(op.raw, into: op.base, range: op.range).0,
-                               uncorrected: uncorrected)
+        switch op.phase {
+        case .toDraft:
+            updateDraftCorrection()
+        case .staged(let clientID):
+            let (full, uncorrected) = Self.staged(corrected: text, raw: op.raw, covered: op.correctedRawPrefix,
+                                                  base: op.base, range: op.range)
+            host?.updateVoiceInput(sessionID: op.sessionID, clientID: clientID, text: full,
+                                   original: Self.insert(op.raw, into: op.base, range: op.range).0,
+                                   uncorrected: uncorrected)
+        case .recording: break
+        }
+    }
+
+    private func updateDraftCorrection() {
+        guard let op = operation, op.phase == .toDraft else { return }
+        let spoken = Self.overlay(corrected: op.correctedText, onto: op.raw, coveredPrefix: op.correctedRawPrefix)
+        let (_, pending) = Self.staged(corrected: op.correctedText, raw: op.raw, covered: op.correctedRawPrefix,
+                                       base: op.base, range: op.range)
+        commit(spoken, uncorrected: op.focusEditor ? pending : nil)
     }
 
     /// Bubble text while correcting, and the UTF-16 range of the part the
@@ -332,7 +357,7 @@ protocol IOSVoiceComposerHost: AnyObject {
         return (store.draftRevisions[op.sessionID] ?? 0) == op.revision && (store.drafts[op.sessionID] ?? "") == op.expectedDraft
     }
     /// Write the utterance into the draft unless the user has taken over.
-    private func commit(_ text: String) {
+    private func commit(_ text: String, uncorrected: NSRange? = nil) {
         guard var op = operation, let store = host?.sessionStore else { return }
         guard !op.dirty, matches(op) else { op.dirty = true; operation = op; return }
         // No text received means no replacement of a selected range.
@@ -342,6 +367,7 @@ protocol IOSVoiceComposerHost: AnyObject {
         op.expectedDraft = updated
         op.revision = store.draftRevisions[op.sessionID] ?? 0
         op.committed = true
+        op.uncorrectedDraftRange = uncorrected
         operation = op
         selectionRequest = caret
     }
@@ -351,6 +377,9 @@ protocol IOSVoiceComposerHost: AnyObject {
         guard var op = operation, op.sessionID == sessionID, op.phase == .toDraft else { return }
         op.dirty = true
         operation = op
+        // A queued native update must not restore an old automatic caret after
+        // a real selection / IME / typing event has claimed this draft.
+        selectionRequest = nil
     }
     private func requestEditor(_ sessionID: String) {
         editorSessionID = sessionID
@@ -379,7 +408,8 @@ protocol IOSVoiceComposerHost: AnyObject {
     func retireKeepingDraft() {
         guard let op = operation, let host else { return }
         switch op.phase {
-        case .recording, .toDraft: commit(op.raw)
+        case .recording: commit(op.raw)
+        case .toDraft: break // Keep the visible progressive correction, not the old raw text.
         case .staged(let clientID):
             let original = Self.insert(op.raw, into: op.base, range: op.range).0
             if op.raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !op.hasAttachment

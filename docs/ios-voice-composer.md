@@ -29,15 +29,20 @@ Send (grey/active), Stop and dictation Send (fill + symbol replace).
 
 Tap the mic: the keyboard is dismissed and the capsule expands in place into
 two rows — a read-only live transcript (existing draft shown around the new,
-dimmed speech at the caret) above `[Cancel] level time … [Edit]`, with the
+high-contrast, normal-color speech at the caret) above `[Cancel] level time … [Edit]`, with the
 send circle beside the capsule.
 
 - **Cancel**: discard the utterance. The draft was never touched while
   recording, so nothing needs restoring.
 - **Edit**: collapse at once; the raw utterance is inserted at the caret
   (replacing a selection) in the real field, which is focused. The correction
-  replaces only that utterance, and only if the user has not typed, moved the
-  caret or refocused (draft revision + content fence, ABA-safe).
+  streams into only that utterance: corrected words turn solid while the raw
+  remainder stays at 50% opacity. Existing prefix/suffix text remains normal.
+  Typing, native IME composition, selection or caret movement immediately
+  stops both progressive and final replacement and clears the pending tint
+  (draft revision + content fence, ABA-safe). The real native editor remains
+  editable throughout; Edit never sends automatically. Retiring/superseding
+  the operation keeps the visible correction instead of restoring old raw text.
 - **↑ Send** (prompt / steer): collapse and clear at once. The whole message
   (draft with the utterance inserted, plus image) appears immediately as an
   optimistic bubble in state `correcting`; the correction is applied over the
@@ -116,7 +121,9 @@ failure → original, relaunch). `KrakiVoiceUITests` drives the real composer.
 for `onFinal` to fill a draft. While recording the primary control sends voice
 including free-form answers through main PR #317's `answerTo` path. Only
 permission denial returns to the editor for review. Recording Send never
-aborts the agent. Cancel and Edit remain inside the capsule, bottom-aligned.
+aborts the agent. Cancel and Edit remain inside the capsule: side-by-side for
+one line, Cancel above Edit in one right-hand column for multiple lines.
+The stacked buttons are both 70 pt wide, with matching left and right edges.
 Send immediately frees the editor and stages a bubble; typed follow-ups can be
 composed but cannot overtake the correcting message. The mic shows progress.
 
@@ -139,11 +146,16 @@ Both horizontal edges fade to transparent over 12% of its width. Interpolated
 microphone levels drive its spring animation (using iPhone's shared dB loudness
 mapping, not a canned animation). The background does not participate in
 layout or hit testing. The single-line capsule and primary/jump circles are
-36 pt. Both typed and voice text expand upward to a three-line cap (36 / 54 /
-72 pt for the tested 15 pt font), then scroll inside their viewport. The same
-8 pt vertical padding stays OUTSIDE the viewport, including during overflow;
-TextKit additionally retains its 1 pt caret inset on every line. Image and
-Cancel/Edit controls stay at the bottom row. Short transcripts remain centered.
+36 pt. Typed text expands upward to a three-line cap (36 / 54 / 72 pt for the
+tested 15 pt font). Voice uses 36 / 70 / 72 pt: two-line mode accommodates two
+30 pt action buttons plus their gap and outer padding. Stacking recovers 70 pt
+of transcript width; the wrap decision uses the unchanged horizontal candidate
+width so gaining space cannot trigger a stack/unstack feedback loop. Both
+surfaces then scroll inside their viewport. The same 8 pt vertical padding
+stays OUTSIDE the viewport, including during overflow; TextKit additionally
+retains its 1 pt caret inset. Image/thumbnail and short transcripts are centered
+vertically; the separate primary/jump controls retain their bottom placement.
+Composer expansion remains an overlay, not a changing chat-list obstruction.
 iPhone retains its two-row layout, compact meter and timer.
 
 Mac's start cue is the user-selected original D1 warm single tone: 520 Hz,
@@ -159,7 +171,7 @@ free-form answer behavior is preserved, not reimplemented. A Mac native test
 checks question ID on both the correcting bubble and the final transport
 payload, with no steer flag even when the agent is active.
 
-`KrakiMacTests` also runs all 28 shared transaction tests. Its thirteen
+`KrakiMacTests` also runs the shared transaction tests.
 `MacVoiceComposerTests` use the production chat in an isolated native window,
 real mouse events and native bubble menus, with synthetic speech/captured
 transport. They cover recording send, steer, cancel, edit/caret, latest-original
@@ -168,8 +180,11 @@ thumbnails, free-form voice answers, and real level-event updates without
 moving the centered text or intercepting controls. They also verify exact D1
 asset bytes/playability, single-row size stability, and actual viewport/text
 padding for one/two/three lines, trailing newline, natural wrapping and overflow.
-Screenshots are not a
-physical microphone or live-network acceptance test.
+`VoiceDraftNativeTests` also verifies iPhone's real SwiftUI-backed native input:
+light/dark tint, progressive changes without replacing the editor, selection,
+typing, and marked-IME takeover. Mac checks matching native behavior, control
+hit targets, light/dark colors, and multi-line image/action geometry.
+Screenshots are not a physical microphone or live-network acceptance test.
 
 ## Physical acceptance before publication
 
