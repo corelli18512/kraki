@@ -93,14 +93,15 @@ private final class Fixture {
     let events = Locked<[VoiceInputEvent]>([])
     let logs = Locked<[String]>([])
     var session: VoiceInputSession!
-    init(configure: (inout VoiceInputConfiguration) -> Void = { _ in }) {
+    init(monotonicTime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+         configure: (inout VoiceInputConfiguration) -> Void = { _ in }) {
         var config = VoiceInputConfiguration(gatewayURL: URL(string: "wss://unused.invalid")!, userID: "private-user",
                                              authorizationTimeout: 2, readyTimeout: 2, finishTimeout: 0.3,
                                              pingInterval: 0, captureStallTimeout: 2, sendTimeout: 2)
         configure(&config)
         session = VoiceInputSession(configuration: config, transport: transport, capture: capture,
                                     queue: worker, callbackQueue: DispatchQueue(label: "voice-test.events"),
-                                    onEvent: { [events] event in events.with { $0.append(event) } },
+                                    monotonicTime: monotonicTime, onEvent: { [events] event in events.with { $0.append(event) } },
                                     log: { [logs] line in logs.with { $0.append(line) } })
     }
     func start(authorized: Bool = true, ready: Bool = true) {
@@ -140,11 +141,26 @@ final class VoiceInputSessionTests: XCTestCase {
     }
 
     func testSilentPCMIsNotMistakenForMissingAudio() {
-        let f = Fixture { $0.captureStallTimeout = 0.12 }; f.start()
+        let clock = Locked<TimeInterval>(1)
+        let f = Fixture(monotonicTime: { clock.snapshot }) { $0.captureStallTimeout = 0.12 }
+        f.start()
         eventually { f.capture.state.snapshot.starts == 1 }
-        for _ in 0..<8 { f.capture.audio(sample: 0); Thread.sleep(forTimeInterval: 0.03) }
+        // Advance audio time explicitly: CI descheduling the producer must not
+        // turn this silence test into an accidental real missing-audio test.
+        for index in 0..<8 {
+            clock.with { $0 += 0.08 }
+            f.capture.audio(sample: 0)
+            eventually { f.transport.audio.count == index + 1 }
+        }
         XCTAssertTrue(f.failures.isEmpty)
-        XCTAssertFalse(f.transport.audio.isEmpty)
+        // The live watchdog still runs. A genuine gap now fails, with its age
+        // measured from the last silent PCM, not the start of the recording.
+        clock.with { $0 += 0.2 }
+        eventually { f.failures == ["audio capture stalled"] }
+        let failure = f.logs.snapshot.first { $0.contains("event=capture_stalled") } ?? ""
+        let age = failure.split(separator: " ").first { $0.hasPrefix("audioAgeMs=") }
+            .flatMap { Int($0.dropFirst("audioAgeMs=".count)) } ?? -1
+        XCTAssertTrue((190...210).contains(age), failure)
     }
 
     func testInputChangeFailsOnceAndRetiresCapture() {

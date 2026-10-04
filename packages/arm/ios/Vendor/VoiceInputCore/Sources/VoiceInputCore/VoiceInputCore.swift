@@ -219,6 +219,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
     // All mutable state is serialized independently of the UI.
     private let queue: DispatchQueue
     private let callbackQueue: DispatchQueue
+    private let monotonicTime: () -> TimeInterval
     private let queueKey = DispatchSpecificKey<Bool>()
     private let cancellationLock = NSLock()
     private var closeRequested = false
@@ -285,6 +286,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
          capture: VoiceInputCapture,
          queue: DispatchQueue = DispatchQueue(label: "voice-input.transport", qos: .userInitiated),
          callbackQueue: DispatchQueue = .main,
+         monotonicTime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          onEvent: @escaping EventHandler, log: @escaping Logger = { _ in },
          onMetric: @escaping MetricHandler = { _ in },
          onPartialObserved: @escaping PartialObservedHandler = {}) {
@@ -292,6 +294,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         self.capture = capture
         self.queue = queue
         self.callbackQueue = callbackQueue
+        self.monotonicTime = monotonicTime
         self.configuration = configuration
         self.correctionEnabled = configuration.correctionEnabled
         self.eventHandler = onEvent
@@ -323,7 +326,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
 
     /// Metadata only: never provider messages, transcripts, context, URLs or credentials.
     private func diagnostic(_ event: String, code: Int = 0) {
-        let audioAgeMs = markedFirstAudio ? Int((ProcessInfo.processInfo.systemUptime - lastAudioAt) * 1000) : -1
+        let audioAgeMs = markedFirstAudio ? Int((monotonicTime() - lastAudioAt) * 1000) : -1
         logger("event=\(event) connection=\(connectionID) recording=\(recordingID) code=\(code) capturedBytes=\(totalBytes) sentBytes=\(sentBytes) bufferedBytes=\(bufferedBytes) audioAgeMs=\(audioAgeMs)")
     }
 
@@ -495,7 +498,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
             return
         }
         inputTapInstalled = true
-        lastAudioAt = ProcessInfo.processInfo.systemUptime
+        lastAudioAt = monotonicTime()
         metric(.engineStarted)
         diagnostic("engine_started")
         let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -504,7 +507,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
         timer.setEventHandler { [weak self] in
             guard let self, self.recordingActive, !self.captureEnded,
                   self.recordingID == generation else { return }
-            if ProcessInfo.processInfo.systemUptime - self.lastAudioAt >= self.configuration.captureStallTimeout {
+            if self.monotonicTime() - self.lastAudioAt >= self.configuration.captureStallTimeout {
                 self.fail("audio capture stalled", tag: "capture_stalled")
             }
         }
@@ -546,7 +549,7 @@ public final class VoiceInputSession: VoiceInputSessionProtocol {
 
     private func ingest(_ data: Data, peak: Float) {
         guard receiveLoopRunning, recordingActive, !captureEnded else { return }
-        lastAudioAt = ProcessInfo.processInfo.systemUptime
+        lastAudioAt = monotonicTime()
         guard bufferedBytes + data.count <= configuration.maxBufferedAudioBytes else {
             fail("voice upload buffer exhausted", tag: "send_buffer_exhausted")
             return
