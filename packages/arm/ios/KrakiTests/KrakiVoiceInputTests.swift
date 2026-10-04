@@ -302,6 +302,9 @@ final class KrakiVoiceInputTests: XCTestCase {
     }
 
     func testSynchronousPreflightFailureBelongsToInitiatingConversation() async {
+        let savedWait = KrakiVoiceInputController.connectionWaitTimeout
+        KrakiVoiceInputController.connectionWaitTimeout = 0.2
+        defer { KrakiVoiceInputController.connectionWaitTimeout = savedWait }
         for unavailable in [false, true] {
             let host = FakeVoiceHost()
             if unavailable { host.voiceCapability = nil }
@@ -317,6 +320,66 @@ final class KrakiVoiceInputTests: XCTestCase {
             XCTAssertEqual(audio.activationCount, 0)
             XCTAssertTrue(factory.sessions.isEmpty)
         }
+    }
+
+    // MARK: Pressed while Kraki is reconnecting
+
+    private func waitFor(_ timeout: TimeInterval = 3, _ condition: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline { try? await Task.sleep(for: .milliseconds(20)) }
+    }
+
+    func testPressWhileReconnectingWaitsThenStartsWhenConnected() async {
+        let host = FakeVoiceHost()
+        host.voiceTransportReady = false
+        let factory = FakeVoiceFactory()
+        let audio = FakeVoiceAudioPolicy()
+        let controller = KrakiVoiceInputController(host: host, sessionFactory: factory, audioPolicy: audio)
+        let start = Task { await controller.begin(sessionID: "session-1", context: context()) { _ in } }
+        await waitFor { controller.state == .waitingForConnection }
+        XCTAssertEqual(controller.state, .waitingForConnection, "the voice UI shows Connecting…, not an error")
+        XCTAssertTrue(controller.isBusy)
+        XCTAssertFalse(controller.hasFailure(for: "session-1"))
+        XCTAssertEqual(audio.activationCount, 0, "no microphone before the connection is back")
+        XCTAssertEqual(VoiceComposerPresentation.statusText(state: controller.state, rawText: "", displayText: ""), "Connecting…")
+
+        host.voiceTransportReady = true
+        await start.value
+        XCTAssertEqual(controller.state, .obtainingLease, "continues by itself once connected")
+        XCTAssertEqual(audio.activationCount, 1)
+        XCTAssertEqual(host.requestedResources, ["voice/doubao"])
+        controller.cancel()
+    }
+
+    func testReleaseWhileWaitingForConnectionNeverOpensTheMicrophone() async {
+        let host = FakeVoiceHost()
+        host.voiceTransportReady = false
+        let factory = FakeVoiceFactory()
+        let audio = FakeVoiceAudioPolicy()
+        let controller = KrakiVoiceInputController(host: host, sessionFactory: factory, audioPolicy: audio)
+        let start = Task { await controller.begin(sessionID: "session-1", context: context()) { _ in } }
+        await waitFor { controller.state == .waitingForConnection }
+        controller.cancel()
+        host.voiceTransportReady = true
+        await start.value
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(audio.activationCount, 0)
+        XCTAssertTrue(factory.sessions.isEmpty)
+        XCTAssertTrue(host.requestedResources.isEmpty)
+    }
+
+    func testWaitingForConnectionGivesUpWithAClearMessage() async {
+        let savedWait = KrakiVoiceInputController.connectionWaitTimeout
+        KrakiVoiceInputController.connectionWaitTimeout = 0.3
+        defer { KrakiVoiceInputController.connectionWaitTimeout = savedWait }
+        let host = FakeVoiceHost()
+        host.voiceTransportReady = false
+        let audio = FakeVoiceAudioPolicy()
+        let controller = KrakiVoiceInputController(host: host, sessionFactory: FakeVoiceFactory(), audioPolicy: audio)
+        await controller.begin(sessionID: "session-1", context: context()) { _ in }
+        XCTAssertTrue(controller.hasFailure(for: "session-1"))
+        XCTAssertEqual(controller.state, .failed("Couldn't connect to Kraki. Check your connection and try again."))
+        XCTAssertEqual(audio.activationCount, 0)
     }
 
     func testFailureOwnershipResetsForNextConversation() async {
@@ -736,6 +799,38 @@ final class KrakiVoiceInputTests: XCTestCase {
         session.emit(.final("late duplicate", rawText: nil))
         await Task.yield()
         XCTAssertEqual(finals, ["authoritative"])
+    }
+
+    func testRuntimeVoiceFailuresKeepRawDraftAndExplainTheFailingStage() async {
+        let cases = [
+            ("audio capture stalled", "microphone stopped", "capture_stalled"),
+            ("audio input changed during recording", "audio input changed", "capture_interrupted"),
+            ("audio input format changed or is invalid", "audio input changed", "capture_interrupted"),
+            ("voice upload stalled", "couldn't be uploaded", "upload_stalled"),
+            ("ASR closed without final transcript", "recognition ended", "asr_final_missing"),
+        ]
+        for (reason, expected, cause) in cases {
+            let host = FakeVoiceHost()
+            let factory = FakeVoiceFactory()
+            let controller = KrakiVoiceInputController(host: host, sessionFactory: factory,
+                                                       audioPolicy: FakeVoiceAudioPolicy())
+            var results: [VoiceInputCompletion] = []
+            await controller.begin(sessionID: "session-1", context: context(), onCompletion: { results.append($0) }) { _ in }
+            controller.receiveLease(lease())
+            factory.sessions[0].emit(.connectionAuthorized)
+            await Task.yield()
+            factory.sessions[0].emit(.partial("keep every received word"))
+            await Task.yield()
+            factory.sessions[0].emit(.failed(reason))
+            await Task.yield()
+            guard case .failed(let message) = controller.state else { XCTFail(reason); continue }
+            XCTAssertTrue(message.lowercased().contains(expected.lowercased()))
+            XCTAssertEqual(results.count, 1)
+            XCTAssertEqual(results.first?.rawText, "keep every received word")
+            XCTAssertEqual(results.first?.completed, false)
+            XCTAssertEqual(VoiceTracker.classify(gatewayReason: reason), cause)
+            controller.suspendWarmConnection()
+        }
     }
 
     func testPartialSegmentResetAppendsInsteadOfErasingEarlierSpeech() async {

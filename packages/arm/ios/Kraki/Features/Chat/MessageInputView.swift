@@ -32,6 +32,8 @@ enum MessageComposerPolicy {
 enum IOSComposerMetrics {
     /// One-line capsule height (buttons keep >= 44pt touch targets).
     static let height: CGFloat = 48
+    /// Capsule spacing to the keyboard / home-indicator safe-area edge.
+    static let verticalPadding: CGFloat = 6
     /// Primary (send / stop) circle — same as the chat's jump controls.
     static let control: CGFloat = 44
     /// Gap between the capsule and the primary button, and between stacked
@@ -57,7 +59,6 @@ struct MessageInputView: View {
     var pendingQuestion: PendingQuestion? = nil
     var isCompacting: Bool = false
     var hasLiveCard: Bool = false
-    var onHeightChange: (CGFloat) -> Void = { _ in }
 
     @Environment(AppState.self) private var appState
     @State private var selectedPhoto: PhotosPickerItem?
@@ -122,7 +123,8 @@ struct MessageInputView: View {
     private var isDeviceReachable: Bool {
         guard let deviceId = session?.deviceId,
               let device = appState.deviceStore.devices[deviceId] else { return false }
-        return device.online && appState.isFullyOnline
+        // A sub-second foreground reconnect must not dim the controls.
+        return device.online && !appState.showsReconnecting
     }
 
     /// Short banner text to surface above the input row when sending
@@ -135,9 +137,8 @@ struct MessageInputView: View {
             let name = device?.name ?? session?.deviceName ?? "Device"
             return "\(name) is offline — message will deliver when it reconnects."
         }
-        if !appState.isFullyOnline {
-            return "Reconnecting…"
-        }
+        // Reconnecting is silent here (the title says "Connecting…"); input
+        // keeps working and queues until the connection is back.
         return nil
     }
 
@@ -163,12 +164,6 @@ struct MessageInputView: View {
 
     var body: some View {
         composeCard
-            .onGeometryChange(for: CGFloat.self) { proxy in
-                proxy.size.height
-            } action: { height in
-                guard height > 0 else { return }
-                onHeightChange(height)
-            }
             .overlay(alignment: .top) {
                 // Offline / reconnecting hint pill. Sits a few points
                 // above the input row, full-width centered, low-key
@@ -247,8 +242,7 @@ struct MessageInputView: View {
             inputRow
         }
         .padding(.horizontal, 16)
-        .padding(.top, 6)
-        .padding(.bottom, 6)
+        .padding(.vertical, IOSComposerMetrics.verticalPadding)
         .frame(maxWidth: .infinity)
     }
 
@@ -269,7 +263,7 @@ struct MessageInputView: View {
 
     private static let boxShape = RoundedRectangle(cornerRadius: IOSComposerMetrics.height / 2, style: .continuous)
 
-    /// Shared by the composer expand/collapse and the chat list's inset.
+    /// Only the glass surface expands/collapses; the chat's clearance is fixed.
     static let expandAnimation = Animation.spring(response: 0.34, dampingFraction: 0.9)
 
     /// The same box throughout: dictation inserts the transcript row above
@@ -402,7 +396,11 @@ struct MessageInputView: View {
         return Group {
             if parts.prefix.isEmpty && parts.suffix.isEmpty && !hasSpeech {
                 HStack(spacing: 7) {
-                    Circle().fill(.red).frame(width: 7, height: 7)
+                    if voiceController.state == .waitingForConnection {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Circle().fill(.red).frame(width: 7, height: 7)
+                    }
                     Text(voiceListeningStatus).foregroundStyle(.secondary)
                 }
             } else {
@@ -415,6 +413,7 @@ struct MessageInputView: View {
 
     private var voiceListeningStatus: String {
         switch voiceController.state {
+        case .waitingForConnection: return "Connecting…"
         case .requestingPermission: return "Allow microphone access…"
         case .recording: return "Listening…"
         default: return "Starting…"

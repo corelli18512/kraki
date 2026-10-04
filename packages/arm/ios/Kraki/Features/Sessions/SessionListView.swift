@@ -79,10 +79,15 @@ struct SessionListView: View {
 
     private var brandHeader: some View {
         HStack(spacing: 6) {
-            Text("KRAKI")
-                .font(.system(size: 22, weight: .heavy, design: .monospaced))
-                .tracking(2.5)
-                .foregroundColor(.krakiPrimary)
+            // While the relay link has been down for a moment the product name
+            // reads "Connecting…"; it returns to the name once connected.
+            Text(appState.showsReconnecting ? "Connecting…" : "KRAKI")
+                .font(.system(size: appState.showsReconnecting ? 17 : 22,
+                              weight: appState.showsReconnecting ? .semibold : .heavy,
+                              design: appState.showsReconnecting ? .default : .monospaced))
+                .tracking(appState.showsReconnecting ? 0 : 2.5)
+                .foregroundColor(appState.showsReconnecting ? Color.textSecondary : .krakiPrimary)
+                .animation(.easeInOut(duration: 0.2), value: appState.showsReconnecting)
                 #if DEBUG
                 .onLongPressGesture(minimumDuration: 0.6) {
                     showToolIconGallery = true
@@ -95,11 +100,6 @@ struct SessionListView: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(Color.krakiPrimary.opacity(0.15), in: Capsule())
-
-            // Ambient connection status — only visible while we're
-            // away from `.connected`. Mirrors the WhatsApp / Telegram
-            // pattern: small inline pill, not a blocking dialog.
-            ConnectionStatusChip()
 
             Spacer()
 

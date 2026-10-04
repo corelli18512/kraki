@@ -22,16 +22,6 @@ struct ChatView: View {
     @State private var selectedImagePreview: IOSImagePreviewSelection?
     @State private var selectedHTMLArtifact: IOSSelectedHTMLArtifact?
 
-    /// Measured height of the floating input capsule (incl. its own
-    /// vertical padding and any pending-permission row). Drives the
-    /// collection view's `contentInset.bottom` so the last cell sits
-    /// above the capsule instead of behind it. We use
-    /// `onGeometryChange` on the `safeAreaInset` content, NOT a
-    /// fixed `safeAreaInset` height, because the surrounding
-    /// `.ignoresSafeArea(.container, edges: .bottom)` swallows the
-    /// safe-area path; routing via `contentInset` instead bypasses
-    /// that entirely.
-    @State private var bottomInputHeight: CGFloat = 0
     // MARK: - View-model passthroughs
 
     private var session: SessionInfo? { viewModel?.session }
@@ -50,14 +40,16 @@ struct ChatView: View {
     #else
     private var forceComposerForDiagnostics: Bool { false }
     #endif
-    /// Deterministic obstruction floor. The production composer is a 42pt
-    /// capsule plus 6pt top/bottom padding = 54pt. iOS adds the home-indicator
-    /// safe area separately through `adjustedContentInset.bottom`. Geometry
-    /// callbacks may raise this for multiline/status content, but a visible
-    /// composer must never transiently report zero and leave the tail under it.
+    /// Stable resting clearance, like Mac. Dictation and multiline text grow
+    /// upward over the list, never changing its inset/scroll position. UIKit
+    /// adds the home-indicator safe area via `adjustedContentInset.bottom`.
     private var effectiveBottomInputHeight: CGFloat {
         ChatBottomObstruction.height(
-            measuredComposerHeight: bottomInputHeight,
+            composerClearance: ChatBottomObstruction.composerClearance(
+                capsuleHeight: IOSComposerMetrics.height,
+                bottomPadding: IOSComposerMetrics.verticalPadding,
+                bubbleBottomPadding: TKMetrics.outerV
+            ),
             composerVisible: isDeviceOnline || forceComposerForDiagnostics,
             compacting: viewModel?.isCompacting == true
         )
@@ -75,8 +67,12 @@ struct ChatView: View {
         let _ = viewModel?.card
         let _ = viewModel?.runtimeStatus
         let _ = viewModel?.pendingSignature
+        // Show what this device already has at once; newer messages land at
+        // the tail silently. Only a conversation with nothing stored waits
+        // behind the spinner.
+        let hasCachedHistory = viewModel.map { !$0.filteredMessages.isEmpty } ?? false
         let providerWaitingForLatest = viewModel == nil
-            || viewModel?.isWaitingForLatestBubble == true
+            || (viewModel?.isWaitingForLatestBubble == true && !hasCachedHistory)
         let waitingForInitialConnection = ChatEntryLoading.isInitialConnectionGateActive(
             hasStoredCredentials: appState.hasStoredCredentials,
             hasCompletedInitialConnect: appState.hasCompletedInitialConnect,
@@ -86,7 +82,6 @@ struct ChatView: View {
         // show cached history immediately (newer messages append at the tail
         // when they arrive) instead of hiding it behind a spinner. The
         // spinner remains only when there is nothing cached to show.
-        let hasCachedHistory = viewModel.map { !$0.filteredMessages.isEmpty } ?? false
         let entrySourceWaiting = providerWaitingForLatest
             || (waitingForInitialConnection && !hasCachedHistory)
         let waitingForLatest = ChatEntryLoading.isEntryGateActive(
@@ -308,13 +303,7 @@ struct ChatView: View {
                     pendingPermission: viewModel?.permissions.first,
                     pendingQuestion: viewModel?.questions.last,
                     isCompacting: viewModel?.isCompacting == true,
-                    hasLiveCard: viewModel?.card != nil,
-                    onHeightChange: { newHeight in
-                        if abs(newHeight - bottomInputHeight) > 0.5 {
-                            KLog.d("[chat-bottom] composer height \(bottomInputHeight)→\(newHeight)")
-                            bottomInputHeight = newHeight
-                        }
-                    }
+                    hasLiveCard: viewModel?.card != nil
                 )
             }
         }

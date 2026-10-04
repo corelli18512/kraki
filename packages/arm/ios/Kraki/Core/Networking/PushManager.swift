@@ -240,7 +240,11 @@ final class PushManager: NSObject {
     }
 
     private static var isAutomatedRun: Bool {
-        SessionNotifications.isTestHost
+        #if DEBUG
+        // Notification-tap journeys against a local stack need the real prompt.
+        if ProcessInfo.processInfo.environment["KRAKI_E2E_ALLOW_PUSH_PROMPT"] == "1" { return false }
+        #endif
+        return SessionNotifications.isTestHost
             || ProcessInfo.processInfo.environment["KRAKI_LOCAL_RELAY_PORT"] != nil
     }
 

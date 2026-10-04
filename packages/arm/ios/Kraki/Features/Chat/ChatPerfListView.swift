@@ -375,6 +375,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private let vm: ChatViewModel
     private let appState: AppState
     private var collectionView: UICollectionView!
+    private let scrollIndicator = IOSTransientScrollIndicator()
 
     /// The shared message store (window data layer). Held so the view can inject
     /// its rendered-height oracle for the PX-based window cap (`heightForSeq` /
@@ -452,10 +453,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// They must stay off during the empty initial bootstrap; otherwise the
     /// unknown window is rendered as two permanent loading states.
     private var hasLoadedWindow: Bool { !items.isEmpty && vm.windowTopSeq > 0 }
-    private var hasAuthoritativeHead: Bool { vm.sessionLastSeq > 0 }
     private func message(_ id: String) -> ChatMessage? { byId[id] }
     private var atOldest: Bool { vm.atHistoryStart }
     private var atNewest: Bool { vm.atHead }
+    /// The bottom spinner means "newer rows from this device's own history
+    /// are being paged in". Messages still arriving from the network land at
+    /// the tail silently, as in any chat app, so they never show it.
+    private var showsNewerSpinner: Bool { hasLoadedWindow && vm.hasNewerLocalRows }
 
     /// Refresh the flat message snapshot at rest, never on a scroll frame.
     private func refreshSpineSnapshot() {
@@ -751,6 +755,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     override func viewWillDisappear(_ animated: Bool) {
+        scrollIndicator.hide()
         isLeavingView = true
         warmKickWork?.cancel()
         warmKickWork = nil
@@ -767,6 +772,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        scrollIndicator.updateGeometry()
         // A hidden/zero-width page may have deferred starting a barrier. Retry
         // after layout, never re-enter a collection batch from inside layout.
         if !isLeavingView, view.window != nil, collectionView.bounds.width > 0,
@@ -832,7 +838,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // shorter than the screen (a new Session's first message otherwise
         // sits flush against the bar).
         collectionView.contentInset.top = Self.topContentPadding
+        collectionView.verticalScrollIndicatorInsets.top = Self.topContentPadding
         view.addSubview(collectionView)
+        scrollIndicator.attach(to: collectionView)
 
         // Install the offscreen sizer container so its trait environment
         // (Dynamic Type, interface style) matches the live list — otherwise
@@ -1638,7 +1646,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         fetchingOlder = false
         fetchingNewer = false
         loadingOlder = hasLoadedWindow && !atOldest
-        loadingNewer = hasLoadedWindow && hasAuthoritativeHead && !atNewest
+        loadingNewer = showsNewerSpinner
         collectionView.reloadData()
         primeTailViewport()
         warmWindow()
@@ -1817,7 +1825,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // content - we anchor at the bottom, so the off-screen top header needs
         // no front-shift, and the footer is usually hidden on open (at head).
         loadingOlder = hasLoadedWindow && !atOldest
-        loadingNewer = hasLoadedWindow && hasAuthoritativeHead && !atNewest
+        loadingNewer = showsNewerSpinner
         collectionView.reloadData()
         if !items.isEmpty {
             // Position the first layout at the tail. Laying out at offset zero
@@ -2191,9 +2199,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// last sync. Called from the SwiftUI representable's `updateUIViewController`
     /// (which fires on every `@Observable` store change) so live arrivals render.
     /// No-op when nothing changed.
-    /// Keep the last bubble and jump control above the live card/composer. If
-    /// the user is already at the newest edge, preserve that bottom anchor as
-    /// the input changes height; otherwise leave their reading position alone.
+    /// Keep the newest edge anchored when the fixed composer/status clearance
+    /// changes (e.g. device availability). Expansion of the floating composer
+    /// never reaches this path; older-history reading remains independent.
     private var shouldFollowLiveTail: Bool {
         scrollPolicy.shouldFollowTail(distanceToBottom: distanceToBottom())
     }
@@ -2215,8 +2223,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
                 self.pinToBottom(reason: "composer-inset")
             }
         }
-        // A large change (dictation expanding/collapsing the composer) moves
-        // with the composer's own spring instead of jumping ahead of it.
+        // Animate genuine obstruction changes (e.g. the compaction status row).
+        // Recording/multiline growth never changes this resting clearance.
         if delta > 30, view.window != nil {
             UIView.animate(withDuration: 0.34, delay: 0, usingSpringWithDamping: 0.9,
                            initialSpringVelocity: 0, options: [.allowUserInteraction, .beginFromCurrentState],
@@ -2362,7 +2370,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // an initially unknown head does not leave a permanent newer spinner.
         let newIds = ids
         let showOlderSpinner = hasLoadedWindow && !atOldest
-        let showNewerSpinner = hasLoadedWindow && hasAuthoritativeHead && !atNewest
+        // Network catch-up lands silently; the bottom spinner is only for
+        // newer rows paged back in from this device's own history.
+        let showNewerSpinner = showsNewerSpinner
         let edgeStateChanged = loadingOlder != showOlderSpinner || loadingNewer != showNewerSpinner
         loadingOlder = showOlderSpinner
         loadingNewer = showNewerSpinner
@@ -2694,7 +2704,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             chatPerfLog.log("[apply] \(reason) NO-COMMON reload old=\(oldCount) new=\(newIds.count)")
             UIView.performWithoutAnimation {
                 loadingOlder = hasLoadedWindow && !atOldest
-                loadingNewer = hasLoadedWindow && hasAuthoritativeHead && !atNewest
+                loadingNewer = showsNewerSpinner
                 items = newIds
                 paginationSnapshotDeferred = false
                 collectionView.reloadData()
@@ -2742,7 +2752,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // the instant we trim back into unloaded history on its side and
         // disappears the instant that side's true boundary lands.
         let showOlderSpinner = !atOldest
-        let showNewerSpinner = !atNewest
+        let showNewerSpinner = showsNewerSpinner
         let olderSpinnerChanged = showOlderSpinner != loadingOlder
         let newerSpinnerChanged = showNewerSpinner != loadingNewer
         if olderSpinnerChanged {
@@ -2876,6 +2886,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        scrollIndicator.didScroll()
         // Finger drag AND its momentum are the user's scroll (momentum toward
         // older keeps loading history); our own anchor compensation is not.
         var userDriven = scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating
@@ -2912,6 +2923,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     // the instant the natural slide settles, so the window grows without
     // ever interrupting the user's momentum.
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        scrollIndicator.endScrolling()
         KLog.chat("📜 [scroll] settle session=\(sessionId.prefix(12)) off=\(Int(scrollView.contentOffset.y)) distBottom=\(Int(distanceToBottom())) following=\(followingBottom) items=\(items.count)")
         scheduleCodeHighlightRefreshIfNeeded()
         flushPendingApply()
@@ -2928,6 +2940,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        scrollIndicator.endDragging(willDecelerate: decelerate)
         KLog.chat("📜 [scroll] drag-end session=\(sessionId.prefix(12)) decelerate=\(decelerate) off=\(Int(scrollView.contentOffset.y)) distBottom=\(Int(distanceToBottom())) following=\(followingBottom)")
         // Finger lifted with no momentum → settle immediately (no
         // didEndDecelerating will follow).
@@ -2961,6 +2974,15 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// Unit tests: treat offset changes as a user drag (isDragging is not settable).
     var automationUserScrollActive = false
     var automationPolicy: ChatScrollPolicy { scrollPolicy }
+
+    /// Read-only barrier for geometry tests: initial offscreen height upgrades
+    /// legitimately change contentSize/offset while preserving screen anchors.
+    /// Wait for them before attributing any later geometry change to a composer.
+    var automationHeightMeasurementsSettled: Bool {
+        !items.isEmpty && warmKickWork == nil && warmer.pendingCount == 0
+            && !heightRefreshScheduled && pendingHeightRefreshIDs.isEmpty
+            && items.allSatisfy { $0 == Self.liveCardID || (sizer.cached($0) != nil && appliedHeightIDs.contains($0)) }
+    }
 
     func automationMarkUserScrolledAway() {
         scrollPolicy.beginUserInteraction(
@@ -3057,6 +3079,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     #endif
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        scrollIndicator.beginScrolling()
         KLog.chat("📜 [scroll] drag-begin session=\(sessionId.prefix(12)) off=\(Int(scrollView.contentOffset.y)) content=\(Int(scrollView.contentSize.height)) following=\(followingBottom)")
         scrollPolicy.beginUserInteraction(
             offset: scrollView.contentOffset.y,
@@ -3097,6 +3120,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     // it glides to the top of the loaded content instead of triggering an
     // endless prepend cascade as the animation chases contentOffset 0.
     func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+        scrollIndicator.beginScrolling()
         scrollPolicy.beginUserInteraction(
             offset: scrollView.contentOffset.y,
             distanceToBottom: distanceToBottom()
@@ -3111,6 +3135,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
+        scrollIndicator.endScrolling()
         scrollingToTop = false
         scrollPolicy.endUserInteraction()
         updateJumpButtonVisibility()
@@ -3270,7 +3295,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         let txn = newTxn("newer")
         let winBefore = vm.windowBottomSeq
         // The bottom spinner is persistent while newer history remains
-        // (auto-managed in applyEdges from !atNewest), so nothing to toggle.
+        // (auto-managed in applyEdges via showsNewerSpinner), so nothing to toggle.
         chatPerfLog.log("[txn \(txn.id) fetch] newer y=\(String(format: "%.0f", collectionView.contentOffset.y)) buf=\(bufferedNewerCount()) drag=\(yn(collectionView.isDragging)) decel=\(yn(collectionView.isDecelerating))")
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -3333,13 +3358,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// Reveal the buffered newer turns into `items` in one anchored batch update
     /// (deferred to rest by `applyWhenStable`). The far-edge front-trim is
     /// pinned jump-free by the geometry anchor in `applyEdges`; the bottom
-    /// spinner is auto-managed there from `!atNewest`. Mirror of `flushOlder`.
+    /// spinner is auto-managed there (`showsNewerSpinner`). Mirror of `flushOlder`.
     private func flushNewer(reason: String) {
         let old = items
         let new = ids
         guard let e = reconcileEdges(old: old, new: new) else {
             chatPerfLog.log("[flush \(reason)] NO-COMMON reload old=\(old.count) new=\(new.count)")
-            loadingNewer = !atNewest
+            loadingNewer = showsNewerSpinner
             items = new
             paginationSnapshotDeferred = false
             collectionView.reloadData()
@@ -3352,7 +3377,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         guard survOld == survNew else {
             let mm = firstMismatch(survOld, survNew)
             chatPerfLog.log("[flush \(reason)] midInvalid mismatch=\(mm.idx) → reload")
-            loadingNewer = !atNewest
+            loadingNewer = showsNewerSpinner
             items = new
             paginationSnapshotDeferred = false
             collectionView.reloadData()

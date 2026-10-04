@@ -6,14 +6,22 @@
  */
 import type { AgentAdapter, CreateSessionConfig, SessionInfo, SessionContext } from '@kraki/tentacle';
 
-export interface ScriptedOptions { replyDelayMs: number; deltas: number; deltaIntervalMs: number }
+export interface ScriptedOptions {
+  replyDelayMs: number; deltas: number; deltaIntervalMs: number;
+  /** Tool steps before the reply (a real running turn shows these on the card). */
+  tools?: number; toolIntervalMs?: number;
+  /** Extra words appended to each reply so it streams for longer. */
+  padWords?: number;
+}
 
 export class ScriptedAdapter {
   onSessionCreated: ((event: { sessionId: string; agent: string; model?: string }) => void) | null = null;
   onMessage: ((sessionId: string, event: { content: string }) => void) | null = null;
   onMessageDelta: ((sessionId: string, event: { content: string }) => void) | null = null;
   onNarration = null; onNarrationTrace = null; onPermissionRequest = null; onPermissionAutoResolved = null;
-  onQuestionAutoResolved = null; onQuestionRequest = null; onToolStart = null; onToolComplete = null;
+  onQuestionAutoResolved = null; onQuestionRequest = null;
+  onToolStart: ((sessionId: string, event: { toolName: string; args: Record<string, unknown>; toolCallId?: string }) => void) | null = null;
+  onToolComplete: ((sessionId: string, event: { toolName: string; result: string; toolCallId?: string; success?: boolean }) => void) | null = null;
   onAttachmentBytes = null; onFlushComplete = null; onCompaction = null; onSystemMessage = null;
   onSessionEvicted = null; onTitleChanged = null; onUsageUpdate = null;
   onIdle: ((sessionId: string) => void) | null = null;
@@ -72,6 +80,13 @@ export class ScriptedAdapter {
   private async turn(sessionId: string, content: string): Promise<void> {
     const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
     await wait(this.options.replyDelayMs);
+    for (let t = 0; t < (this.options.tools ?? 0); t++) {
+      const toolCallId = `tool_${++this.counter}`;
+      this.onToolStart?.(sessionId, { toolName: 'bash', args: { command: `step ${t + 1}` }, toolCallId });
+      await wait(this.options.toolIntervalMs ?? 500);
+      this.onToolComplete?.(sessionId, { toolName: 'bash', result: `ok ${t + 1}`, toolCallId, success: true });
+    }
+    if (this.options.padWords) content = `${content} ${Array.from({ length: this.options.padWords }, (_, i) => `w${i + 1}`).join(' ')}`;
     const words = content.split(' ');
     const step = Math.max(1, Math.ceil(words.length / Math.max(1, this.options.deltas)));
     for (let i = 0; i < words.length; i += step) {

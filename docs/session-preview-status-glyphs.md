@@ -4,8 +4,9 @@ Scope: iOS/macOS **session-list preview rows only**. No new composer or chat-bub
 
 ## Approved designs
 
+- Shared iOS/macOS message glyph sizing (`SessionStatusGlyphMetrics`): assistant `botMessageSquare` is 15.6 pt (13 × 1.20); user `circleUser` is 14.3 pt (13 × 1.10). Lucide's SVG-space stroke stays 1.9, so the rendered strokes scale proportionally with the geometry. Authorization `shieldQuestion` is 15.4 pt (14 × 1.10), retaining SVG-space stroke 2.2. All remain centered in the existing 16 pt slot on both clients. The draft keyboard is unchanged.
 - Delivery: option B, native SF `tray.and.arrow.up`, 11.5 pt medium, centered in the existing 16 pt slot. Correcting uses a 1.8 s opacity breath (0.52–0.80); sending a 1.3 s breath (0.78–1.00) and up to 0.65 pt upward travel. Failed is the same red/static symbol; queued is gray/static.
-- Compacting: shared B3 rounded plane with only the front rims on lower layers. Rim endpoints align with the rounded top's actual bounds, not the original sharp tips. Whole geometry/stroke/travel is centered at 98%; outer layout remains 16 pt. B3's 2 s cycle is 640 ms press, 560 ms hold, 260 ms release, 180 ms settle, 360 ms rest. The 0.28 pt overshoot per outer layer is scaled to 0.2744 pt. Lower-rim alignment and the top's 12.5×6 pt / 0.85 pt rounded geometry are retained.
+- Compacting: shared B3 rounded plane with only the front rims on lower layers. Rim endpoints align with the rounded top's actual bounds, not the original sharp tips. On both clients, whole geometry/stroke/travel first shrinks to 80% of the original 98%-centered design, then scales horizontally by 1.20 and vertically by 1.10 relative to that smaller preview (net 96% width / 88% height of the original). The centered parent sublayer transform includes strokes and animated spacing, and resets to identity for delivery glyphs. Outer layout remains 16 pt on both platforms. B3's 2 s cycle is 640 ms press, 560 ms hold, 260 ms release, 180 ms settle, 360 ms rest. The 0.28 pt overshoot per outer layer is scaled to 0.241472 pt on both clients. Lower-rim alignment and the top's 12.5×6 pt / 0.85 pt rounded geometry are retained.
 
 ## Projection and ownership
 
@@ -32,7 +33,7 @@ The native host reconciles visibility on layout/window changes and at 4 Hz **onl
 - atomic optimistic text/icon projection, draft/correction distinction, multiple pending/failed records, stable ordering, offline/online, attachment-only text and restoration of runtime state;
 - real CommandSender stage/correction/failure/retry/dispatch/duplicate-late-ACK sequences;
 - history/range confirmation, foreign-session/type fencing, cached confirmed messages during durable restoration;
-- B3 bounds/overshoot, aligned lower paths, 98% stroke, loop endpoints and timing;
+- B3 bounds/overshoot, aligned lower paths, shared third-revision geometry/stroke/travel and aspect scale, unchanged 16 pt slot, loop endpoints and timing;
 - layer identity/phase across theme/display changes and animation cleanup/reuse;
 - actual native host hide/offscreen/detach/reattach/static lifecycle;
 - **real production session-row observation** through iOS SessionTable/UIHostingConfiguration and macOS MacSidebarSessionRow, without manually reconfiguring between outbox/connection transitions;
@@ -50,4 +51,4 @@ xcodebuild -project Kraki.xcodeproj -scheme KrakiMacTests -destination 'platform
 
 Mac tests use the existing isolated scenario-host scheme; do not launch or replace the user's production app. The host-lifecycle unit test controls NSWindow's occlusion input (and explicitly toggles visible/occluded) so screen lock or the human's active Space cannot invalidate the fixture; native attachment, bounds and clipping remain real. The production-row observation test uses an ordinary NSWindow. iOS SwiftUI-host tests attach their test window to a real simulator UIWindowScene (a frameless scene-less window cannot validate SwiftUI rendering).
 
-An independent local design-parity harness compares 20,001 curve samples with the approved B3 study and rasterizes every aligned path at 2×/3×/8× after centered98% transformation; byte-identical images are required. This is geometry/motion parity, not a claim of constant 60/120 fps. Native recordings or a 60 fps export are not production-list performance benchmarks.
+The original 98% approval used an independent local design-parity harness that compares 20,001 curve samples with the approved B3 study and rasterizes every aligned path at 2×/3×/8× after centered98% transformation; byte-identical images are required. This is geometry/motion parity, not a claim of constant 60/120 fps. Native recordings or a 60 fps export are not production-list performance benchmarks.
