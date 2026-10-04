@@ -63,6 +63,7 @@ final class CommandSender {
     /// How long an input may stay unconfirmed while the transport and target
     /// device are online before its status becomes explicitly unconfirmed.
     @ObservationIgnored var confirmationTimeout: Duration = .seconds(30)
+    @ObservationIgnored var usageRefreshTimeout: Duration = .seconds(120)
     /// Inputs accepted from the user but not yet handed to transport (the
     /// path was down or the Tentacle's key unknown). Dispatched on reconnect.
     @ObservationIgnored private var undispatched = Set<String>()
@@ -1102,6 +1103,33 @@ final class CommandSender {
 
     func archiveSession(sessionId: String, archived: Bool) {
         send(["type": "archive_session", "payload": ["archived": archived]], sessionId: sessionId)
+    }
+
+    /// App-side connection-scoped: not retained for app reconnect replay. A
+    /// request already accepted by Head may still be forwarded after reconnect;
+    /// the worker coalesces reads and owns the provider cooldown/Retry-After.
+    @discardableResult
+    func refreshAccountUsage(deviceIds: Set<String>? = nil, automatic: Bool = false,
+                             now: Date = Date()) -> Int {
+        guard let appState, appState.connectionStatus == .connected else { return 0 }
+        let store = appState.deviceStore
+        var sent = 0
+        for id in store.usageRefreshTargets(deviceIds: deviceIds) where store.canRefreshUsage(id, automatic: automatic, now: now) {
+            let requestId = UUID().uuidString
+            store.beginUsageRefresh(id, requestId: requestId, now: now)
+            guard send(["type": "refresh_account_usage", "targetDeviceId": id,
+                        "payload": ["requestId": requestId]], connectionScoped: true) else {
+                store.finishUsageRefresh(id, requestId: requestId, error: "connection")
+                continue
+            }
+            sent += 1
+            let timeout = usageRefreshTimeout
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: timeout)
+                self?.appState?.deviceStore.finishUsageRefresh(id, requestId: requestId, error: "timeout")
+            }
+        }
+        return sent
     }
 
     func requestArchivedSessions(targetDeviceId: String) {

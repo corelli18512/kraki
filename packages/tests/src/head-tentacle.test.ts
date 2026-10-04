@@ -7,6 +7,7 @@
  * Apps send encrypted UnicastEnvelopes to specific tentacles.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { decodeFrame } from "@coinfra/pulse";
 import { generateKeyPair, exportPublicKey, importPublicKey, encryptToBlob, decryptFromBlob } from "@kraki/crypto";
 import {
   createTestEnv, connectApp, connectAppWithCrypto, createRelayClient,
@@ -1004,6 +1005,54 @@ describe("Thin Relay Integration: Head + Tentacle + App", () => {
     const update = await app.waitFor("device_usage");
     expect((update.payload as { accounts: Array<{ windows: Array<{ remainingPercent: number }> }> }).accounts[0].windows[0].remainingPercent).toBe(12);
     app.close();
+  });
+
+  it("manual account refresh round-trips encrypted through head, with a targeted completion even when unchanged", async () => {
+    await connectTentacle();
+    const accounts = [{
+      accountKey: "claude:test", provider: "claude" as const, label: "te•••st@example.test",
+      windows: [{ id: "seven_day", kind: "weekly" as const, remainingPercent: 37 }],
+      fetchedAt: new Date().toISOString(), staleAfterSeconds: 2040,
+    }];
+    let reads = 0;
+    relay.setAccountUsageEnabled(true);
+    relay.setAccountUsageRefresher(async () => {
+      reads += 1;
+      if (reads === 1) relay.updateAccountUsage(accounts); // monitor's onChange callback
+      return accounts;
+    });
+    const app = await connectApp(env.port);
+    const observer = await connectApp(env.port, "Observer");
+    const encryptedPayloads: string[] = [];
+    app.ws.on("message", data => {
+      const envelope = JSON.parse(data.toString());
+      if (typeof envelope.pulse !== "string") return;
+      const frame = decodeFrame(new Uint8Array(Buffer.from(envelope.pulse, "base64")));
+      if (frame?.t !== "data") return;
+      const payload = new TextDecoder().decode(frame.payload);
+      if (typeof JSON.parse(payload).blob === "string") encryptedPayloads.push(payload);
+    });
+    try {
+      const greeting = await app.waitFor("device_greeting");
+      expect((greeting.payload as { features: string[] }).features).toContain("account_usage_refresh");
+      await observer.waitFor("device_greeting");
+      const request = (requestId: string) => app.sendUnicast(relay.getAuthInfo()!.deviceId, {
+        type: "refresh_account_usage", deviceId: app.deviceId, seq: 0, timestamp: new Date().toISOString(), payload: { requestId },
+      }, km.getCompactPublicKey());
+      request("refresh-first");
+      const replies = await app.waitForN("device_usage", 2);
+      expect(replies.map(r => r.payload)).toContainEqual(expect.objectContaining({ requestId: "refresh-first", accounts }));
+      const broadcast = await observer.waitFor("device_usage");
+      expect(broadcast.payload).toMatchObject({ accounts });
+      expect((broadcast.payload as { requestId?: string }).requestId).toBeUndefined();
+      request("refresh-unchanged");
+      const unchanged = await app.waitFor("device_usage");
+      expect(unchanged.payload).toMatchObject({ requestId: "refresh-unchanged", accounts });
+      expect(reads).toBe(2);
+      expect(encryptedPayloads.length).toBeGreaterThanOrEqual(3);
+      expect(encryptedPayloads.join("\n")).not.toContain("te•••st@example.test");
+      expect(observer.messages.filter(m => m.type === "device_usage")).toEqual([broadcast]);
+    } finally { app.close(); observer.close(); }
   });
 
   // ── Extra: server_error echoes ref from unicast envelope ──

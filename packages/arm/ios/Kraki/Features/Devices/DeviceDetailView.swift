@@ -84,13 +84,12 @@ struct DeviceDetailView: View {
 
             // Subscription accounts signed in on this device. Each account's card in
             // Devices › Accounts merges it across every device that shares it.
-            if device.online, let usage = appState.deviceStore.deviceUsage[device.id], !usage.accounts.isEmpty {
-                let merged = appState.deviceStore.mergedUsage()
+            if device.online, appState.deviceStore.deviceFeatures[device.id]?.contains("account_usage") == true
+                || appState.deviceStore.deviceUsage[device.id]?.accounts.isEmpty == false {
                 Section {
-                    ForEach(usage.accounts) { account in
-                        if let m = merged.first(where: { $0.id == account.id }) {
-                            AccountUsageRow(merged: m)
-                        }
+                    AccountUsageRefreshControls(deviceIds: [device.id])
+                    ForEach(appState.deviceStore.usageForDevice(device.id)) { reading in
+                        AccountUsageRow(merged: reading)
                     }
                 } header: {
                     Text("Accounts")

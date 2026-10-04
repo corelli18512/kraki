@@ -28,20 +28,28 @@ struct UsagePeekView: View {
                 UsagePeekTitleBar()
                     .frame(height: UsagePeekLayout.floatingHeaderHeight)
             }
+            if detailed {
+                AccountUsageRefreshControls()
+                    .padding(.horizontal, 14)
+                    .frame(height: UsagePeekLayout.refreshControlsHeight)
+            }
             ZStack(alignment: .topTrailing) {
                 if detailed {
                     UsagePeekDetail(accounts: accounts, outdated: outdated, width: controller.detailedSize.width, currentKey: currentKey, ns: ns,
                                     entering: Date() < controller.entranceUntil)
-                        .frame(width: controller.detailedSize.width, height: controller.detailedSize.height)
+                        .frame(width: controller.detailedSize.width,
+                               height: max(0, controller.detailedSize.height - controller.headerHeight - UsagePeekLayout.refreshControlsHeight))
                         .transition(.opacity.animation(.easeOut(duration: 0.2).delay(0.05)))
                 } else {
                     UsagePeekCompact(accounts: accounts, outdated: outdated, width: controller.compactSize.width, currentKey: currentKey, ns: ns,
                                      entering: Date() < controller.entranceUntil)
-                        .frame(width: controller.compactSize.width, height: controller.compactSize.height)
+                        .frame(width: controller.compactSize.width, height: max(0, controller.compactSize.height - controller.headerHeight))
                         .transition(.opacity.animation(.easeOut(duration: 0.12)))
                 }
             }
-            .frame(width: geometry.size.width, height: geometry.size.height - controller.headerHeight, alignment: .topTrailing)
+            .frame(width: geometry.size.width,
+                   height: max(0, geometry.size.height - controller.headerHeight - (detailed ? UsagePeekLayout.refreshControlsHeight : 0)),
+                   alignment: .topTrailing)
             .clipped()
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
@@ -63,6 +71,12 @@ struct UsagePeekView: View {
             DispatchQueue.main.async { withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) { shown = true } }
         }
         .onChange(of: layoutKey) { _, _ in controller.contentDidChange() }
+        .onChange(of: appState.deviceStore.usageRefreshTargets()) { _, _ in
+            if controller.peek.isVisible { appState.commandSender?.refreshAccountUsage(automatic: true) }
+        }
+        .onChange(of: appState.connectionStatus) { _, _ in
+            if controller.peek.isVisible { appState.commandSender?.refreshAccountUsage(automatic: true) }
+        }
     }
 }
 
@@ -258,6 +272,8 @@ private struct UsagePeekCard: View {
         VStack(spacing: 0) {
             AccountUsageTile(account: merged.account, ringSize: 88, lineWidth: 8, showsPlan: true, animateIn: entering,
                              delay: 0.14 + Double(index) * 0.035, geometry: ns)
+            AccountUsageReadStatus(account: merged.account, offline: merged.allOffline)
+                .padding(.top, 8)
             Spacer(minLength: 6)
             HStack(spacing: 6) {
                 UsageDeviceLine(devices: merged.devices)
