@@ -181,7 +181,7 @@ struct AgentAvatar: View {
 
 /// The GitHub Copilot logo — used as the avatar icon for all agents.
 /// Exact SVG path from the web AgentAvatar.tsx CopilotIcon component.
-private struct CopilotIcon: Shape {
+struct CopilotIcon: Shape {
     func path(in rect: CGRect) -> Path {
         let scale = min(rect.width, rect.height) / 24
         var path = Path()
@@ -205,7 +205,7 @@ private struct CopilotIcon: Shape {
 ///
 /// Uses even-odd fill via the caller's `FillStyle(eoFill: true)` to
 /// punch the two eye rectangles out of the body donut.
-private struct ClaudeIcon: Shape {
+struct ClaudeIcon: Shape {
     private static let viewBox = (x: CGFloat(-1), y: CGFloat(1.5), w: CGFloat(26), h: CGFloat(20.5))
 
     func path(in rect: CGRect) -> Path {
@@ -234,7 +234,7 @@ private struct ClaudeIcon: Shape {
 /// The first subpath (the "P") is drawn with even-odd fill (via the caller's
 /// `FillStyle(eoFill: true)`) so the inner square reads as a hole. The second
 /// subpath (the "i" dot, bottom-right) is a separate solid square.
-private struct PiIcon: Shape {
+struct PiIcon: Shape {
     private static let viewBox = (x: CGFloat(120.29), y: CGFloat(120.29), w: CGFloat(559.43), h: CGFloat(559.43))
 
     func path(in rect: CGRect) -> Path {
@@ -379,5 +379,24 @@ struct AgentInfo {
         case "pi": return AgentInfo(label: "Pi")
         default: return AgentInfo(label: agent.capitalized)
         }
+    }
+}
+
+
+/// The agent's mark alone — no tile, no session hue — tinted with the theme
+/// color, for compact controls (pills, choice lists).
+struct AgentGlyph: View {
+    let agent: String
+    var size: CGFloat = 14
+    var color: Color = .krakiPrimary
+    var body: some View {
+        Group {
+            switch agent.lowercased() {
+            case "claude": ClaudeIcon().fill(color, style: FillStyle(eoFill: true))
+            case "pi": PiIcon().fill(color, style: FillStyle(eoFill: true))
+            default: CopilotIcon().fill(color)
+            }
+        }
+        .frame(width: size, height: size)
     }
 }

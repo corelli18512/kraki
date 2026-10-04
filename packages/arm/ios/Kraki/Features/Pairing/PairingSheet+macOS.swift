@@ -19,6 +19,7 @@ struct PairingSheet: View {
     @State private var error: String?
     @State private var loading: Bool = false
     @State private var now: Date = Date()
+    @State private var copied = false
     private var previewPayload: TentacleCLIManager.PairingPayload?
 
     init() {}
@@ -54,10 +55,10 @@ struct PairingSheet: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "qrcode")
+            Image(systemName: "iphone")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Color.krakiPrimary)
-            Text("Pair a Device")
+            Text("Use Kraki on your phone")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Color.textPrimary)
             Spacer()
@@ -69,7 +70,8 @@ struct PairingSheet: View {
 
     private var footer: some View {
         HStack {
-            Button("Refresh") {
+            Button("New code") {
+                copied = false
                 Task { await load() }
             }
             .disabled(loading)
@@ -121,35 +123,27 @@ struct PairingSheet: View {
                         )
                 }
 
-                Text("Scan with Kraki on another device, or copy the URL below.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.textSecondary)
-                    .multilineTextAlignment(.center)
-
-                HStack(spacing: 8) {
-                    Text(p.url)
-                        .font(.system(size: 11, design: .monospaced))
+                VStack(spacing: 6) {
+                    Text("Point your phone’s camera at this code")
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Color.textPrimary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Button {
-                        KrakiPasteboard.setString(p.url)
-                    } label: {
-                        Image(systemName: "doc.on.doc")
-                            .foregroundStyle(Color.krakiPrimary)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Copy URL")
+                    Text("Your sessions open on the phone right away — no sign-in needed. Works with the Kraki iPhone app or in the phone’s browser.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(10)
-                .background(Color.surfaceSecondary)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.borderPrimary, lineWidth: 1)
-                )
+
+                Button {
+                    KrakiPasteboard.setString(p.url)
+                    copied = true
+                } label: {
+                    Label(copied ? "Link copied" : "Copy link instead", systemImage: copied ? "checkmark" : "link")
+                        .font(.system(size: 11.5))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.krakiPrimary)
+                .help(p.url)
 
                 HStack(spacing: 6) {
                     Image(systemName: "clock.fill")

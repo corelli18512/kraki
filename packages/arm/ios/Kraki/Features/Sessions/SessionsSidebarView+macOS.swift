@@ -203,6 +203,10 @@ struct SessionsSidebarView: View {
     /// authoritative Preview without introducing a second sidebar header.
     var searchText: String = ""
 
+    /// A new session is being written in the detail pane: show it as the
+    /// selected top row until it's sent or discarded.
+    var draftingNewSession = false
+
     /// Triggered from the rail's "+" button.
     var onNewSession: () -> Void = {}
 
@@ -246,7 +250,12 @@ struct SessionsSidebarView: View {
                 Divider().foregroundStyle(Color.borderPrimary)
             }
 
-            if filteredSessions.isEmpty && !(showsArchived && appState.sessionStore.archivedCount(deviceId: selectedDeviceFilter) > 0) {
+            if draftingNewSession {
+                MacDraftSessionRow().padding(.horizontal, 0).padding(.top, 4)
+            }
+            if filteredSessions.isEmpty && draftingNewSession {
+                Spacer()
+            } else if filteredSessions.isEmpty && !(showsArchived && appState.sessionStore.archivedCount(deviceId: selectedDeviceFilter) > 0) {
                 emptyState
             } else {
                 sessionList
@@ -1079,4 +1088,29 @@ struct MacSessionSpeakerGlyphRegressionView: View {
 }
 #endif
 
+#endif
+
+
+#if os(macOS)
+/// The not-yet-started session at the top of the list.
+struct MacDraftSessionRow: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Color.krakiPrimary.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                .frame(width: 28, height: 28)
+                .overlay(Image(systemName: "plus").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.krakiPrimary))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("New session").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.textPrimary)
+                Text("Not started yet").font(.system(size: 11)).foregroundStyle(Color.textMuted)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.krakiPrimary.opacity(0.15)))
+        .padding(.horizontal, 6)
+        .accessibilityIdentifier("mac.sidebar.draftRow")
+    }
+}
 #endif

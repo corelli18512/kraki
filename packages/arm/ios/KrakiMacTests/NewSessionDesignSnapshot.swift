@@ -56,15 +56,22 @@ final class NewSessionDesignSnapshot: XCTestCase {
     func testRenderNewSessionDesign() throws {
         for dark in [true, false] {
             let suffix = dark ? "dark" : "light"
-            for (label, count) in [("first", 0), ("next", 3)] {
+            for (label, count, draft) in [("first", 0, false), ("idle", 3, false), ("draft", 3, true)] {
                 let a = try app(sessions: count)
                 var sel: String?
                 let window = HStack(spacing: 0) {
-                    SessionsSidebarView(selectedSessionId: Binding(get: { sel }, set: { sel = $0 }))
-                        .frame(width: 300)
+                    VStack(spacing: 0) {
+                        SessionsSidebarView(selectedSessionId: Binding(get: { sel }, set: { sel = $0 }), draftingNewSession: draft)
+                        HStack { PhoneLink(); Spacer() }.padding(.horizontal, 16).frame(height: 36)
+                    }
+                    .frame(width: 280)
                     Divider()
-                    MacStartSessionView(firstTime: count == 0)
-                        .background(Color.surfacePrimary)
+                    Group {
+                        if draft { MacNewSessionDraftView(onCancel: {}) }
+                        else if count == 0 { MacStartSessionView(firstTime: true) }
+                        else { MacIdleView() }
+                    }
+                    .background(Color.surfacePrimary)
                 }
                 .environment(a).environment(TentacleCLIManager())
                 try render(window, size: CGSize(width: 1180, height: 740), dark: dark, to: "window-\(label)-\(suffix)")
@@ -93,10 +100,6 @@ final class NewSessionDesignSnapshot: XCTestCase {
                     .environment(TentacleCLIManager())
                 try render(pairing, size: CGSize(width: 440, height: 540), dark: dark, to: "pairing-\(suffix)")
             }
-            let a = try app(sessions: 3)
-            let sheet = NewSessionSheet(isPresented: .constant(true))
-                .environment(a).environment(TentacleCLIManager())
-            try render(sheet, size: CGSize(width: 620, height: 260), dark: dark, to: "sheet-\(suffix)")
         }
     }
 }

@@ -19,6 +19,9 @@ struct NewSessionComposer: View {
 
     var placeholder = "Describe a task, e.g. “Fix the failing tests in my-app”"
     var minLines = 3
+    /// Docked at the bottom of a draft session: the pills sit above the box,
+    /// the box itself looks like the chat composer.
+    var docked = false
     var onCreated: () -> Void = {}
 
     @State private var text = ""
@@ -44,51 +47,75 @@ struct NewSessionComposer: View {
         guard let d = modelDetails.first(where: { $0.id == selectedModel }), d.supportsReasoningEffort else { return nil }
         return d.supportedReasoningEfforts
     }
-    private var canSubmit: Bool {
-        availability == .ready && !selectedDeviceId.isEmpty && !selectedAgentId.isEmpty && !selectedModel.isEmpty
-    }
     private var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var canSubmit: Bool {
+        hasText && availability == .ready && !selectedDeviceId.isEmpty && !selectedAgentId.isEmpty && !selectedModel.isEmpty
+    }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 10) {
-                TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(Color.textMuted), axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 14))
-                    .lineLimit(minLines...10)
-                    .focused($focused)
-                    .onKeyPress(.return, phases: .down) { press in
-                        if press.modifiers.contains(.shift) || press.modifiers.contains(.option) {
-                            text += "\n"
-                        } else {
-                            submit()
-                        }
-                        return .handled
-                    }
-                    .accessibilityIdentifier("mac.newSession.text")
-                HStack(spacing: 6) {
-                    devicePill
-                    if availability == .ready {
-                        agentPill
-                        modelPill
-                        if let efforts = supportedEfforts, !efforts.isEmpty { effortPill(efforts) }
-                    }
-                    Spacer(minLength: 8)
-                    sendButton
+    private var textField: some View {
+        TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(Color.textMuted), axis: .vertical)
+            .textFieldStyle(.plain)
+            .font(.system(size: 14))
+            .lineLimit(minLines...10)
+            .focused($focused)
+            .onKeyPress(.return, phases: .down) { press in
+                if press.modifiers.contains(.shift) || press.modifiers.contains(.option) {
+                    text += "\n"
+                } else {
+                    submit()
                 }
+                return .handled
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
-            .background(composerBackground)
+            .accessibilityIdentifier("mac.newSession.text")
+    }
+
+    @ViewBuilder
+    private var pills: some View {
+        devicePill
+        if availability == .ready {
+            agentPill
+            modelPill
+            if let efforts = supportedEfforts, !efforts.isEmpty { effortPill(efforts) }
+        }
+    }
+
+    private func box<C: View>(radius: CGFloat, @ViewBuilder _ content: () -> C) -> some View {
+        content()
+            .background(composerBackground(radius))
             .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .strokeBorder(focused ? Color.krakiPrimary.opacity(0.45) : Color.borderPrimary.opacity(0.6), lineWidth: 1)
             )
             .contentShape(Rectangle())
             .onTapGesture { focused = true }
+    }
 
-            statusLine
+    var body: some View {
+        Group {
+            if docked {
+                VStack(alignment: .leading, spacing: 8) {
+                    statusLine
+                    HStack(spacing: 6) { pills; Spacer(minLength: 0) }
+                    box(radius: 20) {
+                        HStack(alignment: .bottom, spacing: 8) {
+                            textField.padding(.vertical, 4)
+                            sendButton
+                        }
+                        .padding(.leading, 16).padding(.trailing, 6).padding(.vertical, 6)
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    box(radius: 18) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            textField
+                            HStack(spacing: 6) { pills; Spacer(minLength: 8); sendButton }
+                        }
+                        .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 10)
+                    }
+                    statusLine
+                }
+            }
         }
         .onAppear { selectDefaults(); focused = true }
         .onReceive(NotificationCenter.default.publisher(for: .macFocusNewSessionComposer)) { _ in focused = true }
@@ -103,8 +130,8 @@ struct NewSessionComposer: View {
     }
 
     @ViewBuilder
-    private var composerBackground: some View {
-        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+    private func composerBackground(_ radius: CGFloat) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         if #available(macOS 26.0, *) {
             Color.clear.glassEffect(.regular, in: shape)
         } else {
@@ -179,11 +206,11 @@ struct NewSessionComposer: View {
                 .foregroundStyle(.white)
                 .frame(width: 30, height: 30)
                 .background(Circle().fill(Color.krakiPrimary))
-                .opacity(canSubmit ? (hasText ? 1 : 0.75) : 0.3)
+                .opacity(canSubmit ? 1 : 0.3)
         }
         .buttonStyle(.plain)
         .disabled(!canSubmit)
-        .help(hasText ? "Start session (Return)" : "Start an empty session (Return)")
+        .help("Start session (Return)")
         .accessibilityIdentifier("mac.newSession.create")
     }
 
@@ -232,7 +259,7 @@ struct NewSessionComposer: View {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         appState.commandSender?.createSession(
             targetDeviceId: selectedDeviceId, agentId: selectedAgentId, model: selectedModel,
-            reasoningEffort: reasoningEffort, prompt: prompt.isEmpty ? nil : prompt, cwd: nil, title: nil
+            reasoningEffort: reasoningEffort, prompt: prompt, cwd: nil, title: nil
         )
         text = ""
         onCreated()
@@ -322,7 +349,7 @@ struct PillLabel: View {
             if let dot {
                 Circle().fill(dot).frame(width: 6, height: 6)
             } else if let agent, !agent.isEmpty {
-                AgentAvatar(agent: agent, size: .xs).frame(width: 15, height: 15).scaleEffect(15.0 / 18.0)
+                AgentGlyph(agent: agent, size: 13)
             } else if let symbol {
                 Image(systemName: symbol).font(.system(size: 11, weight: .medium))
             }
@@ -438,7 +465,7 @@ struct AgentChoiceList: View {
                 let n = a.models?.count ?? 0
                 ChoiceRow(title: AgentInfo.from(a.id).label, detail: "\(n) \(n == 1 ? "model" : "models")",
                           selected: a.id == selected,
-                          mark: { AgentAvatar(agent: a.id, size: .xs) },
+                          mark: { AgentGlyph(agent: a.id, size: 15) },
                           action: { choose(a.id) })
             }
         }
@@ -492,77 +519,100 @@ struct EffortChoiceList: View {
 
 // MARK: - Idle pane
 
-/// What the main window shows when no session is selected and Kraki is
-/// ready: a heading, the composer, and a quiet way to add the phone.
+/// New account, nothing selected: heading + composer, centered as one block.
 struct MacStartSessionView: View {
-    @Environment(AppState.self) private var appState
     var firstTime: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
-            VStack(spacing: 22) {
-                VStack(spacing: 8) {
-                    Text(firstTime ? "What should we work on first?" : "What's next?")
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(Color.textTitle)
-                }
-                NewSessionComposer()
-                    .frame(maxWidth: 640)
-                if firstTime {
-                    Button {
-                        NotificationCenter.default.post(name: .macOpenPairing, object: nil)
-                    } label: {
-                        Label("Use Kraki on your phone too", systemImage: "iphone")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(Color.textMuted)
-                    }
-                    .buttonStyle(.plain)
-                    .onHover { inside in if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
-                }
+        VStack(spacing: 22) {
+            Text("What should we work on first?")
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(Color.textTitle)
+            NewSessionComposer()
+                .frame(maxWidth: 640)
+        }
+        .padding(.horizontal, 40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Existing account, nothing selected: a quiet pointer, not a home page.
+struct MacIdleView: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            Text("Pick a session on the left, or start a new one.")
+                .font(.system(size: 13))
+                .foregroundStyle(Color.textMuted)
+            Button {
+                NotificationCenter.default.post(name: .macOpenNewSession, object: nil)
+            } label: {
+                Label("New session", systemImage: "plus")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .padding(.horizontal, 6).padding(.vertical, 2)
             }
-            .padding(.horizontal, 40)
-            Spacer()
-            Spacer()
+            .buttonStyle(.borderedProminent)
+            .tint(Color.krakiPrimary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-// MARK: - Sheet
-
-struct NewSessionSheet: View {
-    @Binding var isPresented: Bool
-    var onCreated: (String) -> Void = { _ in }
-
+/// "Use Kraki on your phone" — opens the pairing sheet.
+struct PhoneLink: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("New session")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color.textPrimary)
-                Spacer()
-                Button { isPresented = false } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(Color.textMuted)
-                        .frame(width: 22, height: 22)
-                        .background(Circle().fill(Color.textPrimary.opacity(0.07)))
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.cancelAction)
-                .help("Cancel (Esc)")
-            }
-            NewSessionComposer(placeholder: "Describe a task, or just press Return for an empty session", minLines: 4) {
-                isPresented = false
-            }
-            Text("Return to start · Shift-Return for a new line · Esc to cancel")
-                .font(.system(size: 10.5))
+        Button {
+            NotificationCenter.default.post(name: .macOpenPairing, object: nil)
+        } label: {
+            Label("Use Kraki on your phone", systemImage: "iphone")
+                .font(.system(size: 11.5))
                 .foregroundStyle(Color.textMuted)
         }
-        .padding(20)
-        .frame(width: 620)
-        .background(Color.surfacePrimary)
+        .buttonStyle(.plain)
+        .onHover { inside in if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
+        .accessibilityIdentifier("mac.phoneLink")
     }
 }
+
+/// A new session that hasn't started yet: an empty chat with the composer
+/// docked at the bottom, like any session. Sending the first message turns it
+/// into a real session; Esc or picking another session discards it.
+struct MacNewSessionDraftView: View {
+    var onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("New session")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.textPrimary)
+                Spacer()
+                Button(action: onCancel) {
+                    Text("Cancel").font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.textMuted)
+                .keyboardShortcut(.cancelAction)
+                .help("Discard (Esc)")
+            }
+            .padding(.horizontal, 20)
+            .frame(height: 40)
+            Spacer()
+            VStack(spacing: 6) {
+                Image(systemName: "bubble.left.and.text.bubble.right")
+                    .font(.system(size: 22, weight: .light))
+                    .foregroundStyle(Color.textMuted.opacity(0.6))
+                Text("Choose where it runs, then describe the task.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.textMuted)
+            }
+            Spacer()
+            NewSessionComposer(placeholder: "Describe a task…", minLines: 1, docked: true)
+                .frame(maxWidth: 760)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
 #endif

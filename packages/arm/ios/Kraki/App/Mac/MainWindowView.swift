@@ -294,8 +294,11 @@ struct MainWindowView: View {
 
     /// New session = the composer in the idle pane (like a "new chat"):
     /// leave the current session and put the cursor in the composer.
+    @State private var draftingNewSession = false
+
     private func startNewSession() {
         selectedSessionId = nil
+        draftingNewSession = true
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .macFocusNewSessionComposer, object: nil)
         }
@@ -319,8 +322,10 @@ struct MainWindowView: View {
                     SessionsSidebarView(
                         selectedSessionId: $selectedSessionId,
                         searchText: sidebarSearchText,
+                        draftingNewSession: draftingNewSession,
                         onNewSession: { startNewSession() }
                     )
+                    sidebarFooter
                 }
                 .frame(width: sidebarWidth)
                 .background(Color.surfacePrimary)
@@ -442,6 +447,7 @@ struct MainWindowView: View {
             Button("Cancel", role: .cancel) { pendingDeleteSessionId = nil }
         }
         .onChange(of: selectedSessionId) { oldValue, newValue in
+            if newValue != nil { draftingNewSession = false }
             onSelectedSessionChanged(newValue)
             if let oldValue, oldValue != newValue {
                 appState.endViewingSession(oldValue)
@@ -531,6 +537,19 @@ struct MainWindowView: View {
         }
     }
 
+    /// Always-there way to get a phone onto this account.
+    private var sidebarFooter: some View {
+        HStack {
+            PhoneLink()
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 36)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Color.borderPrimary.opacity(0.45)).frame(height: 1).padding(.horizontal, 12)
+        }
+    }
+
     private var sidebarSectionHeader: some View {
         HStack(spacing: 8) {
             // The real AppKit traffic lights occupy this fixed leading region.
@@ -615,7 +634,9 @@ struct MainWindowView: View {
 
     @ViewBuilder
     private var detailPane: some View {
-        if let id = selectedSessionId,
+        if draftingNewSession && selectedSessionId == nil {
+            MacNewSessionDraftView(onCancel: { draftingNewSession = false })
+        } else if let id = selectedSessionId,
            appState.sessionStore.isPending(id) {
             MacPendingSessionView(sessionId: id)
         } else if let presentation = chatPresentation {
