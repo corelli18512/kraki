@@ -6,7 +6,7 @@ import VoiceInputCore
 /// to a deterministic engine and temporary stores for native gesture acceptance.
 @MainActor enum IOSVoiceHoldScenarioFixture {
     static let driver = IOSVoiceHoldScenarioDriver()
-    static func makeAppState() -> AppState {
+    static func makeAppState(driver: IOSVoiceHoldScenarioDriver = IOSVoiceHoldScenarioFixture.driver) -> AppState {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("voice-hold-\(UUID().uuidString)")
         let app = AppState(testDatabase: try! MessageDatabase(databaseURL: root.appendingPathComponent("test.sqlite")), voiceController: driver.voice)
         app.connectionStatus = .connected
@@ -46,7 +46,10 @@ import VoiceInputCore
     var aborts = 0
     var lastAnswerTo = ""
     @ObservationIgnored private var latestEvent: ((VoiceInputEvent) -> Void)?
-    func emitLevel(_ level: Float) { latestEvent?(.level(level)) }
+    private let automaticCorrections: Bool
+    init(automaticCorrections: Bool = true) { self.automaticCorrections = automaticCorrections }
+    func emit(_ event: VoiceInputEvent) { latestEvent?(event) }
+    func emitLevel(_ level: Float) { emit(.level(level)) }
     @ObservationIgnored lazy var voice = KrakiVoiceInputController(host: self, sessionFactory: self, audioPolicy: ScenarioAudio())
     func requestVoiceLease(resource: String) -> Bool {
         Task { @MainActor [weak self] in
@@ -59,7 +62,7 @@ import VoiceInputCore
     }
     func makeSession(configuration: VoiceInputConfiguration, onEvent: @escaping (VoiceInputEvent) -> Void, onMetric: @escaping (VoiceInputMetric) -> Void) -> VoiceInputSessionProtocol {
         latestEvent = onEvent
-        let session = ScenarioSession(onEvent: onEvent, onStart: { [weak self] in self?.starts += 1 })
+        let session = ScenarioSession(onEvent: onEvent, onStart: { [weak self] in self?.starts += 1 }, automaticCorrections: automaticCorrections)
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(40))
             onEvent(.connectionAuthorized)
@@ -79,7 +82,10 @@ import VoiceInputCore
         let onEvent: (VoiceInputEvent) -> Void
         let onStart: () -> Void
         var generation = UUID()
-        init(onEvent: @escaping (VoiceInputEvent) -> Void, onStart: @escaping () -> Void) { self.onEvent = onEvent; self.onStart = onStart }
+        let automaticCorrections: Bool
+        init(onEvent: @escaping (VoiceInputEvent) -> Void, onStart: @escaping () -> Void, automaticCorrections: Bool) {
+            self.onEvent = onEvent; self.onStart = onStart; self.automaticCorrections = automaticCorrections
+        }
         func startCapture(context: [String: VoiceInputJSONValue], vocabulary: [String]) {
             onStart()
             let id = UUID(); generation = id
@@ -94,6 +100,7 @@ import VoiceInputCore
             }
         }
         func stopCapture() {
+            guard automaticCorrections else { return }
             let id = generation
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(100))

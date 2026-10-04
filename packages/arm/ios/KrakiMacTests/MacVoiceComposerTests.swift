@@ -58,23 +58,28 @@ import CryptoKit
     private func drain(_ ms: Int) { RunLoop.main.run(until: Date().addingTimeInterval(Double(ms) / 1000)) }
     private func press(_ id: String) throws {
         // Exercise the production floating composer's actual hit testing.
-        let x: CGFloat
-        switch id {
-        case "chat-voice-microphone": x = 738
-        case "voice-to-text": x = 723
-        case "voice-send": x = 786
-        case "voice-cancel": x = 649
-        case "image": x = 40
-        default: XCTFail("unknown control"); return
+        let point: CGPoint
+        if id == "chat-voice-microphone" || id == "voice-send" {
+            point = CGPoint(x: id == "voice-send" ? 786 : 738,
+                            y: MacComposerMetrics.bottomPadding + MacComposerMetrics.capsuleHeight / 2)
+        } else {
+            let frame = try controlFrame(id == "image" ? "chat-attach-image" : id)
+            point = CGPoint(x: frame.midX, y: frame.midY)
         }
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: MacComposerMetrics.bottomPadding + MacComposerMetrics.capsuleHeight / 2), modifierFlags: [],
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                 context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
             window.sendEvent(event)
         }
         drain(350)
     }
+    private func controlFrame(_ id: String) throws -> CGRect {
+        let marker = try XCTUnwrap(views(window.contentView!).first { $0.identifier?.rawValue == id },
+                                   "missing production control geometry: \(id)")
+        return marker.convert(marker.bounds, to: nil)
+    }
+
     private func capture(_ name: String) throws {
         let view = try XCTUnwrap(window.contentView)
         view.layoutSubtreeIfNeeded(); view.displayIfNeeded()
@@ -88,7 +93,7 @@ import CryptoKit
         // Optional external WindowServer capture preserves Liquid Glass's
         // composited layers (cacheDisplay cannot render them). A local runner
         // may watch these requests; tests themselves need no capture access.
-        let request = ["window": String(window.windowNumber), "name": "mac-\(name)"]
+        let request = ["window": String(window.windowNumber), "name": "mac-\(name)", "pid": String(ProcessInfo.processInfo.processIdentifier)]
         try JSONSerialization.data(withJSONObject: request).write(to: dir.appendingPathComponent("capture-request.json"), options: .atomic)
         drain(500)
         let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
@@ -145,8 +150,11 @@ import CryptoKit
             let topText = MacComposerMetrics.bottomPadding + height - visible.maxY
             let bottomText = visible.minY - MacComposerMetrics.bottomPadding
             if !name.contains("overflow") && !name.contains("trailing") {
-                XCTAssertEqual(topText, voice ? 8 : 9, accuracy: 0.5, name)
-                XCTAssertEqual(bottomText, voice ? 8 : 9, accuracy: 0.5, name)
+                // Two-line voice now accommodates a 64pt action column:
+                // text remains centered, with the same 8pt outer viewport inset.
+                let expectedTextPadding = (height - visible.height) / 2
+                XCTAssertEqual(topText, expectedTextPadding, accuracy: 0.5, name)
+                XCTAssertEqual(bottomText, expectedTextPadding, accuracy: 0.5, name)
             }
             measurements.append(["state": name, "capsuleHeight": height, "topSpace": topText,
                                  "bottomSpace": bottomText, "viewportTopPadding": top, "viewportBottomPadding": bottom])
@@ -169,10 +177,132 @@ import CryptoKit
         XCTAssertTrue(app.iosVoiceComposer.isRecording)
         for (name, text, height) in samples {
             app.voiceInputController.debugApplyPartial(text)
-            try measure("voice-" + name, voice: true, expectedHeight: height)
+            try measure("voice-" + name, voice: true, expectedHeight: name == "two" ? 70 : height)
         }
         try JSONSerialization.data(withJSONObject: measurements, options: [.prettyPrinted, .sortedKeys])
             .write(to: URL(fileURLWithPath: "/tmp/kraki-voice-parity-evidence/padding-fixed.json"))
+    }
+
+    func testMultilineActionsShareRightColumnAndImageIsCentered() throws {
+        app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
+        drain(400)
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            window.appearance = NSAppearance(named: appearance)
+            for (name, speech) in [("one", "Short speech"), ("two", "First line\nSecond line"),
+                                   ("long", String(repeating: "More space for a high-contrast live transcript. ", count: 12))] {
+                // Independent layout samples, not successive ASR segments.
+                app.iosVoiceComposer.receive(speech, id: try XCTUnwrap(app.iosVoiceComposer.operation).id)
+                drain(220)
+                let transcript = try XCTUnwrap(views(window.contentView!).compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
+                let scroll = try XCTUnwrap(transcript.enclosingScrollView)
+                let viewport = scroll.convert(scroll.bounds, to: nil)
+                let cancel = try controlFrame("voice-cancel"), edit = try controlFrame("voice-to-text")
+                let image = try controlFrame("chat-attach-image")
+                XCTAssertEqual(image.midY, viewport.midY, accuracy: 0.5)
+                if name == "one" {
+                    XCTAssertEqual(cancel.midY, edit.midY, accuracy: 0.5)
+                    XCTAssertLessThan(cancel.maxX, edit.minX)
+                    XCTAssertEqual(viewport.height, 20, accuracy: 0.5)
+                    XCTAssertEqual(cancel.width, 70, accuracy: 0.5)
+                    XCTAssertEqual(edit.width, 62, accuracy: 0.5, "single-row footprint stays unchanged")
+                } else {
+                    XCTAssertEqual(cancel.width, 70, accuracy: 0.5)
+                    XCTAssertEqual(edit.width, cancel.width, accuracy: 0.5)
+                    XCTAssertEqual(cancel.minX, edit.minX, accuracy: 0.5)
+                    XCTAssertEqual(cancel.maxX, edit.maxX, accuracy: 0.5)
+                    XCTAssertEqual(cancel.midX, edit.midX, accuracy: 0.5)
+                    XCTAssertGreaterThan(cancel.minY, edit.maxY, "Cancel above Edit in AppKit coordinates")
+                    XCTAssertGreaterThan(viewport.width, 600, "stacking recovers the old second button's width")
+                    XCTAssertLessThan(viewport.maxX, cancel.minX)
+                }
+                transcript.debugAttributedText.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: transcript.debugAttributedText.length)) { color, _, _ in
+                    XCTAssertEqual((color as? NSColor)?.alphaComponent ?? -1, 1, accuracy: 0.01)
+                }
+                try capture("polish-\(appearance == .aqua ? "light" : "dark")-\(name)")
+            }
+        }
+        try press("voice-cancel")
+        XCTAssertFalse(app.iosVoiceComposer.isRecording, "stacked Cancel remains a real hit target")
+        app.sessionStore.setDraft(sid, "Typed first line\nTyped second line\nTyped third line")
+        drain(250)
+        let editor = try XCTUnwrap(views(window.contentView!).compactMap { $0 as? NSTextView }.first(where: \.isEditable))
+        let scroll = try XCTUnwrap(editor.enclosingScrollView)
+        XCTAssertEqual(try controlFrame("chat-attach-image").midY, scroll.convert(scroll.bounds, to: nil).midY, accuracy: 0.5)
+        try capture("polish-typed-multiline")
+    }
+
+    func testWrapDecisionIsStableWhenStackingFreesAWholeLine() {
+        let speech = "A sentence close to the single-row wrapping boundary."
+        let pieces = [(text: speech, opacity: 1.0)]
+        for width in stride(from: CGFloat(210), through: 700, by: 5) {
+            let layout = MacVoiceSurfaceLayout(pieces: pieces)
+            let a = layout.geometry(width: width), b = layout.geometry(width: width)
+            XCTAssertEqual(a.stacked, b.stacked)
+            XCTAssertEqual(a.transcript, b.transcript)
+            XCTAssertEqual(a.height, b.height)
+            if a.stacked {
+                XCTAssertEqual(a.cancel.width, a.edit.width)
+                XCTAssertEqual(a.cancel.minX, a.edit.minX)
+                XCTAssertEqual(a.cancel.maxX, a.edit.maxX)
+                XCTAssertEqual(a.cancel.midX, a.edit.midX)
+                XCTAssertLessThan(a.cancel.maxY, a.edit.minY)
+            }
+        }
+    }
+
+    func testEditProgressTintAndNativeSelectionTakeover() throws { try assertEditTakeover(markedIME: false) }
+    func testEditProgressStopsBeforeMarkedIMECommits() throws { try assertEditTakeover(markedIME: true) }
+
+    private func assertEditTakeover(markedIME: Bool) throws {
+        app.voiceInputController.forgetLease()
+        let driver = IOSVoiceHoldScenarioDriver(automaticCorrections: false)
+        app = IOSVoiceHoldScenarioFixture.makeAppState(driver: driver)
+        window.contentView = NSHostingView(rootView: MacChatView(sessionId: sid, prebuiltViewModel: ChatViewModel(sessionId: sid, appState: app)).environment(app))
+        drain(300)
+        app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
+        drain(400)
+        app.voiceInputController.debugApplyPartial(raw + "\nKeep this second line while correcting.")
+        drain(150)
+        try press("voice-to-text")
+        let editor = try XCTUnwrap(views(window.contentView!).compactMap { $0 as? NSTextView }.first(where: \.isEditable))
+        XCTAssertFalse(app.iosVoiceComposer.operation?.dirty ?? true, "automatic focus must not look like human takeover")
+        var pending = try XCTUnwrap(app.iosVoiceComposer.uncorrectedRange(in: sid))
+        XCTAssertEqual((editor.textStorage?.attribute(.foregroundColor, at: pending.location, effectiveRange: nil) as? NSColor)?.alphaComponent ?? -1, 0.5, accuracy: 0.01)
+        try capture("polish-edit-pending")
+        driver.emit(.correctionDelta("请将这个功能接入 Kraki，"))
+        drain(120)
+        pending = try XCTUnwrap(app.iosVoiceComposer.uncorrectedRange(in: sid))
+        XCTAssertGreaterThan(pending.location, 0)
+        XCTAssertTrue(editor.string.hasPrefix("请将这个功能接入 Kraki，"))
+        XCTAssertEqual((editor.textStorage?.attribute(.foregroundColor, at: pending.location, effectiveRange: nil) as? NSColor)?.alphaComponent ?? -1, 0.5, accuracy: 0.01)
+        XCTAssertEqual((editor.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?.alphaComponent ?? -1, NSColor.labelColor.alphaComponent, accuracy: 0.01)
+        try capture("polish-edit-progress")
+        for appearance in [NSAppearance.Name.darkAqua, .aqua] {
+            window.appearance = NSAppearance(named: appearance)
+            drain(120)
+            let color = try XCTUnwrap((editor.textStorage?.attribute(.foregroundColor, at: pending.location, effectiveRange: nil) as? NSColor)?.usingColorSpace(.deviceRGB))
+            XCTAssertEqual(color.alphaComponent, 0.5, accuracy: 0.01)
+            if appearance == .aqua { XCTAssertLessThan(color.redComponent, 0.2) }
+            else { XCTAssertGreaterThan(color.redComponent, 0.8) }
+        }
+        window.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        XCTAssertTrue(window.firstResponder === editor)
+        if markedIME {
+            editor.setMarkedText("正在输入", selectedRange: NSRange(location: 4, length: 0), replacementRange: editor.selectedRange())
+        } else {
+            editor.setSelectedRange(NSRange(location: 0, length: 1))
+        }
+        drain(50)
+        let visible = editor.string, selection = editor.selectedRange()
+        XCTAssertTrue(app.iosVoiceComposer.operation?.dirty == true)
+        XCTAssertNil(app.iosVoiceComposer.uncorrectedRange(in: sid))
+        driver.emit(.correctionDelta("LATE")); driver.emit(.final("LATE FINAL", rawText: raw))
+        drain(150)
+        XCTAssertEqual(editor.string, visible)
+        XCTAssertEqual(editor.selectedRange(), selection)
+        if markedIME { XCTAssertTrue(editor.hasMarkedText()); editor.unmarkText() }
+        XCTAssertEqual(driver.sentCount, 0)
     }
 
     func testSingleLineAndRecordingCapsulesMatchPrimaryHeight() throws {
