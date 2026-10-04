@@ -6,6 +6,32 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.66</title>
+            <pubDate>Sun, 04 Oct 2026 09:06:13 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.66</sparkle:fullReleaseNotesLink>
+            <sparkle:version>68</sparkle:version>
+            <sparkle:shortVersionString>0.2.66</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* fix(apple): notification test-host guard compiles in Release by @corelli18512 in https://github.com/corelli18512/kraki/pull/390
+* Windows fixes from a clean Windows 11 VM E2E (Tentacle 0.35.9, Mac 0.2.62) by @corelli18512 in https://github.com/corelli18512/kraki/pull/391
+* Proxy support: sign-in and relay connection through HTTPS_PROXY or the macOS system proxy (Tentacle 0.35.10, head 0.19.4, Mac 0.2.63) by @corelli18512 in https://github.com/corelli18512/kraki/pull/392
+* Web: new Kraki logo and icons by @corelli18512 in https://github.com/corelli18512/kraki/pull/393
+* fix(clients): quiet reconnect and catch-up; voice waits for the connection by @corelli18512 in https://github.com/corelli18512/kraki/pull/396
+* fix(voice): harden shared Mac/iOS capture and transport by @corelli18512 in https://github.com/corelli18512/kraki/pull/397
+* design(native): permission prompt matches the question style by @corelli18512 in https://github.com/corelli18512/kraki/pull/400
+* fix(native): session styling, persistent indicators and floating voice composer by @corelli18512 in https://github.com/corelli18512/kraki/pull/399
+* Agents: show only what's installed; all supported agents in a separate view (Mac + CLI) by @corelli18512 in https://github.com/corelli18512/kraki/pull/394
+* Mac: start sessions from a composer (idle pane + New Session sheet redesign) by @corelli18512 in https://github.com/corelli18512/kraki/pull/395
+* Release: Tentacle 0.35.11, Mac 0.2.66 — agents list shows what's installed; new-session composer; Connect your phone by @corelli18512 in https://github.com/corelli18512/kraki/pull/403
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.35.8...mac-v0.2.66
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.66/Kraki.app.zip" length="92257892" type="application/octet-stream" sparkle:edSignature="e599UQXFSugXHQ/jk0c8U+0tROW6Vm04c9E88v3bVpGOEe+80Vcn+3YIDz9Gcs2jhXxXajA0zqXfIN1VUPgdBw=="/>
+        </item>
+        <item>
             <title>0.2.65</title>
             <pubDate>Sun, 04 Oct 2026 06:50:42 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -69,27 +95,9 @@ These changes fix verified code defects; they do not establish the trigger of th
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.64/Kraki.app.zip" length="92122289" type="application/octet-stream" sparkle:edSignature="/TDvQMfxggzC59liRGoHazhIns1+JkTVW8darv8v9dnAiBS1iwdC9FbkztZynXnFg+bsx3dqDmCCYxCUXzgQDw=="/>
         </item>
-        <item>
-            <title>0.2.63</title>
-            <pubDate>Sat, 03 Oct 2026 18:45:46 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.63</sparkle:fullReleaseNotesLink>
-            <sparkle:version>65</sparkle:version>
-            <sparkle:shortVersionString>0.2.63</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(apple): notification test-host guard compiles in Release by @corelli18512 in https://github.com/corelli18512/kraki/pull/390
-* Windows fixes from a clean Windows 11 VM E2E (Tentacle 0.35.9, Mac 0.2.62) by @corelli18512 in https://github.com/corelli18512/kraki/pull/391
-* Proxy support: sign-in and relay connection through HTTPS_PROXY or the macOS system proxy (Tentacle 0.35.10, head 0.19.4, Mac 0.2.63) by @corelli18512 in https://github.com/corelli18512/kraki/pull/392
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.35.8...mac-v0.2.63
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.63/Kraki.app.zip" length="92075227" type="application/octet-stream" sparkle:edSignature="wQrRodXhM7IB3Fr4oFivcHqiGQLvrlGX9Ji9xxS7vEsZzvSpI5d7CvBlUmvfXf5X/wVA4/p7oYZg1hAl+FOEDA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: /gGOED4UAka2VJoSj0k24vseXefg9VN4+iadFk/BaW7dpf3YzVePT7f20cCH0XJHJm9kL0iJqkopZ732LL9CBg==
-length: 6584
+edSignature: Txlpbsh+0t3QZzESvMp9h2e0CoOYwvTRrWfowJ+3ojP/W4D3zOuc9tTNAHop8bEntZVzkj18p8S/FlMnunRoDw==
+length: 7722
 -->
