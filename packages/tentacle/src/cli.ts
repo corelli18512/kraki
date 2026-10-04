@@ -1283,7 +1283,7 @@ async function main(): Promise<void> {
 
   if (cmd === 'agents' && !args.includes('--json')) {
     const { printAgentsCheck } = await import('./setup.js');
-    await printAgentsCheck();
+    await printAgentsCheck(args.includes('--all'));
     return;
   }
 
