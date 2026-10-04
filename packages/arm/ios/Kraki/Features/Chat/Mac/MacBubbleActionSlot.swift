@@ -188,71 +188,50 @@ struct MacBubbleActionSlot: View {
         }
     }
 
+    /// Permission prompt, written like a question (see iOS `BubbleActionSlot`).
     private func permissionInput(_ message: ChatMessage) -> some View {
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.orange)
-                    .padding(.top, 1)
-                VStack(alignment: .leading, spacing: 3) {
-                    if message.payload["decision"]?.stringValue == nil {
-                        Text("Approval needed — Safe mode")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.orange)
-                    }
-                    Text(message.toolDescription ?? "Run \(message.toolName ?? "tool")")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let diff = PermissionDiffPreview.diff(message.args) {
-                        PermissionDiffPreview(diff: diff, fontSize: 11)
-                    } else if let summary = permissionArgsSummary(message),
-                       summary != message.toolDescription {
-                        Text(summary)
-                            .font(.system(size: 11, design: .monospaced))
+        let decision = message.payload["decision"]?.stringValue
+        return VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(PermissionPromptCopy.title(message))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if decision == nil {
+                    HStack(spacing: 5) {
+                        Image(systemName: "lock.fill").font(.system(size: 10, weight: .semibold)).foregroundStyle(.orange)
+                        Text(PermissionPromptCopy.caption)
+                            .font(.system(size: 12))
                             .foregroundStyle(Color.textSecondary)
-                            .lineLimit(3)
-                            .truncationMode(.middle)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.surfaceTertiary, in: RoundedRectangle(cornerRadius: 5))
                     }
-                    if let decision = message.payload["decision"]?.stringValue {
-                        let denied = decision == "deny"
-                        HStack(spacing: 6) {
-                            Text("\(denied ? "✗" : "✓") \(decision == "always_allow" ? "Always allowed" : denied ? "Denied" : "Approved")")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(denied ? .red : .green)
-                            localPendingLabel(message)
-                        }
-                        .padding(.top, 2)
-                    }
-                    localErrorLabel(message)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if message.payload["decision"]?.stringValue == nil {
-                HStack(spacing: 8) {
-                    permissionButton(
-                        "Approve",
-                        message,
-                        decision: "approve",
-                        foreground: .white,
-                        fill: .green,
-                        border: .clear
-                    )
-                    permissionButton(
-                        "Deny",
-                        message,
-                        decision: "deny",
-                        foreground: .red,
-                        fill: .red.opacity(0.10),
-                        border: .red.opacity(0.35)
-                    )
+            if let diff = PermissionDiffPreview.diff(message.args) {
+                PermissionDiffPreview(diff: diff, fontSize: 11)
+            } else if let summary = permissionArgsSummary(message),
+               summary != message.toolDescription {
+                Text(summary)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Color.textSecondary)
+                    .lineLimit(3)
+                    .truncationMode(.middle)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.surfaceTertiary, in: RoundedRectangle(cornerRadius: 5))
+            }
+            if let decision {
+                HStack(spacing: 6) {
+                    PermissionOutcomeCapsule(decision: decision)
+                    localPendingLabel(message)
                 }
-                .frame(maxWidth: .infinity)
+            }
+            localErrorLabel(message)
+            if decision == nil {
+                HStack(spacing: 6) {
+                    permissionButton("Approve", symbol: "checkmark", message, decision: "approve", primary: true)
+                    permissionButton("Deny", symbol: "xmark", message, decision: "deny", primary: false)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -260,29 +239,33 @@ struct MacBubbleActionSlot: View {
 
     private func permissionButton(
         _ label: String,
+        symbol: String,
         _ message: ChatMessage,
         decision: String,
-        foreground: Color,
-        fill: Color,
-        border: Color
+        primary: Bool
     ) -> some View {
         MacChatActionButton(
             action: {
                 guard let permissionId = message.permissionId else { return }
                 onResolvePermission(permissionId, message.toolName, decision)
             },
-            foreground: foreground,
-            fill: fill,
-            border: border,
-            accent: decision == "deny" ? .red : .green
+            foreground: primary ? .white : Color.textPrimary,
+            fill: primary ? Color.krakiPrimary : Color.surfacePrimary.opacity(0.75),
+            border: primary ? .clear : Color.borderPrimary,
+            accent: primary ? Color.krakiPrimary : .red,
+            capsule: true
         ) {
-            Text(label)
-                .font(.system(size: 12, weight: .semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
-                .frame(maxWidth: .infinity, minHeight: 32)
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(primary ? Color.white : Color.red)
+                Text(label)
+                    .font(Font(MacBubbleActionMetrics.choiceFont))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, MacBubbleActionMetrics.choicePaddingH)
+            .padding(.vertical, 6)
         }
-        .frame(maxWidth: .infinity)
         .accessibilityLabel("\(label) permission")
         .background {
             GeometryReader { proxy in

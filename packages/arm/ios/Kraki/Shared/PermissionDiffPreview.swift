@@ -61,3 +61,31 @@ struct PermissionDiffPreview: View {
         return .clear
     }
 }
+
+/// Shared permission prompt copy (iOS and macOS).
+enum PermissionPromptCopy {
+    static func title(_ message: ChatMessage) -> String {
+        let base = (message.toolDescription ?? "Run \(message.toolName ?? "tool")")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard message.payload["decision"]?.stringValue == nil else { return base }
+        return base.hasSuffix("?") ? base : base + "?"
+    }
+    static let caption = "Needs your approval · Safe mode"
+}
+
+/// Resolved state: a small capsule, the same shape as the buttons it replaced.
+struct PermissionOutcomeCapsule: View {
+    let decision: String
+    var body: some View {
+        let denied = decision == "deny"
+        HStack(spacing: 5) {
+            Image(systemName: denied ? "xmark" : "checkmark").font(.system(size: 10, weight: .bold))
+            Text(decision == "always_allow" ? "Always allowed" : denied ? "Denied" : "Approved")
+                .font(.system(size: 12, weight: .semibold))
+        }
+        .foregroundStyle(denied ? Color.red : Color.green)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background((denied ? Color.red : Color.green).opacity(0.12), in: Capsule())
+    }
+}

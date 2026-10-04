@@ -235,8 +235,8 @@ enum MacChatBubbleContentBuilder {
                 .joined(separator: "  ")
             return textWidth(label, font: .monospacedSystemFont(ofSize: 12, weight: .regular)) + 30
         case "permission":
-            let description = action.toolDescription ?? "Run \(action.toolName ?? "tool")"
-            let descriptionWidth = textWidth(description, font: .systemFont(ofSize: 14)) + 24
+            let descriptionWidth = textWidth(PermissionPromptCopy.title(action),
+                                             font: .systemFont(ofSize: 15, weight: .semibold)) + 24
             let argsWidth = action.args?.values.compactMap(\.stringValue).map {
                 textWidth($0, font: .monospacedSystemFont(ofSize: 11, weight: .regular))
             }.max() ?? 0
