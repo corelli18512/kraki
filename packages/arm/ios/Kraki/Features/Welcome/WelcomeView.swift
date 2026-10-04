@@ -20,37 +20,37 @@ struct WelcomeView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        VStack(spacing: 18) {
-            Spacer()
-
-            Image("KrakiLogo")
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 120, height: 120)
-                .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-                .shadow(color: Color.black.opacity(0.18), radius: 22, y: 10)
-
-            VStack(spacing: 6) {
-                Text("KRAKI")
-                    .font(.system(size: 22, weight: .heavy, design: .monospaced))
-                    .tracking(4)
-                    .foregroundStyle(Color.textTitle)
-                Text("Multi-device · Multi-agent · Coding")
-                    .font(.system(size: 11, weight: .medium))
-                    .tracking(0.3)
-                    .foregroundStyle(Color.textMuted)
-                    .textCase(.uppercase)
+        if let firstTime = startSession {
+            MacStartSessionView(firstTime: firstTime)
+                .background(Color.surfacePrimary)
+        } else {
+            VStack(spacing: 22) {
+                Spacer()
+                Image("KrakiLogo")
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 56, height: 56)
+                content
+                    .frame(maxWidth: 460)
+                Spacer()
+                Spacer()
             }
-
-            content
-                .frame(maxWidth: 460)
-                .padding(.top, 12)
-
-            Spacer()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(40)
+            .background(Color.surfacePrimary)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(40)
-        .background(Color.surfacePrimary)
+    }
+
+    /// The idle pane is the new-session composer whenever Kraki is ready to
+    /// start one (nil otherwise: setup/attention states keep their cards).
+    /// Value: true for an account with no sessions yet.
+    private var startSession: Bool? {
+        if appState.devLocalActive { return nil }
+        if builtInAttentionCard != nil { return nil }
+        if !appState.sessionStore.sessions.isEmpty { return false }
+        guard appState.connectionStatus == .connected else { return nil }
+        if let local = localDeviceId, appState.deviceStore.agentAvailability(for: local) == .noAgents { return nil }
+        return true
     }
 
     @ViewBuilder

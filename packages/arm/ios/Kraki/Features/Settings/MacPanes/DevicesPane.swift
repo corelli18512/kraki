@@ -9,6 +9,7 @@ import SwiftUI
 
 struct DevicesPane: View {
     @Environment(AppState.self) private var appState
+    @State private var showingPairing = false
 
     private var devices: [DeviceSummary] {
         appState.deviceStore.devices.values
@@ -27,8 +28,28 @@ struct DevicesPane: View {
                     }
                 }
             }
+            Section {
+                HStack(spacing: 12) {
+                    Image(systemName: "iphone")
+                        .font(.system(size: 20))
+                        .foregroundStyle(Color.krakiPrimary)
+                        .frame(width: 26)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Use Kraki on your phone")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("Scan a code with your phone to see and run your sessions there.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Show Code…") { showingPairing = true }
+                    .accessibilityIdentifier("prefs.devices.addPhone")
+                }
+                .padding(.vertical, 4)
+            }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $showingPairing) { PairingSheet() }
     }
 }
 
