@@ -282,7 +282,6 @@ struct MainWindowView: View {
     private var inspectorShown: Bool = false
 
     @State private var pairingPresented: Bool = false
-    @State private var newSessionPresented: Bool = false
     @State private var pendingDeleteSessionId: String? = nil
     @State private var sidebarSearchText = ""
     @State private var chatPresentation: ChatPresentation?
@@ -292,6 +291,16 @@ struct MainWindowView: View {
     private let sidebarWidth: CGFloat = 280
     private let inspectorWidth: CGFloat = 320
     private let desktopRailHeight: CGFloat = 40
+
+    /// New session = the composer in the idle pane (like a "new chat"):
+    /// leave the current session and put the cursor in the composer.
+    private func startNewSession() {
+        NewSessionComposer.nudgeRequestedAt = Date()
+        selectedSessionId = nil
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .macFocusNewSessionComposer, object: nil)
+        }
+    }
 
     var body: some View {
         // Authentication and cold-launch routing live above this view in
@@ -311,7 +320,7 @@ struct MainWindowView: View {
                     SessionsSidebarView(
                         selectedSessionId: $selectedSessionId,
                         searchText: sidebarSearchText,
-                        onNewSession: { newSessionPresented = true }
+                        onNewSession: { startNewSession() }
                     )
                 }
                 .frame(width: sidebarWidth)
@@ -357,11 +366,6 @@ struct MainWindowView: View {
         .sheet(isPresented: $pairingPresented) {
             PairingSheet()
         }
-        .sheet(isPresented: $newSessionPresented) {
-            NewSessionSheet(isPresented: $newSessionPresented) { newId in
-                selectedSessionId = newId
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: .macToggleSidebar)) { _ in
             withAnimation(.easeInOut(duration: 0.22)) { sidebarVisible.toggle() }
         }
@@ -369,7 +373,7 @@ struct MainWindowView: View {
             pairingPresented = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .macOpenNewSession)) { _ in
-            newSessionPresented = true
+            startNewSession()
         }
         .onReceive(NotificationCenter.default.publisher(for: .macSelectSession)) { note in
             let scope = note.userInfo?["scope"] as? String
@@ -548,13 +552,18 @@ struct MainWindowView: View {
                 RoundedRectangle(cornerRadius: 9)
                     .stroke(Color.borderPrimary.opacity(0.65), lineWidth: 1)
             )
-            Button { newSessionPresented = true } label: {
+            // Lit while the new-session composer is what's on the right,
+            // so it's clear the right side is "a new session".
+            let composing = selectedSessionId == nil
+            Button { startNewSession() } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 13, weight: .semibold))
                     .frame(width: 26, height: 26)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(composing ? Color.krakiPrimary.opacity(0.18) : .clear))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(Color.textSecondary)
+            .foregroundStyle(composing ? Color.krakiPrimary : Color.textSecondary)
             .help("New Session (⌘N)")
         }
         .padding(.leading, 4)

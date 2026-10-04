@@ -466,16 +466,18 @@ struct SessionsSidebarView: View {
                 }
                 .buttonStyle(.link)
             } else {
-                Image(systemName: "ellipsis.bubble")
-                    .font(.system(size: 32, weight: .light))
-                    .foregroundStyle(Color.krakiPrimary.opacity(0.55))
+                Image("KrakiLogo")
+                    .resizable().interpolation(.high)
+                    .frame(width: 52, height: 52)
+                    .padding(.bottom, 2)
                 Text("No sessions yet")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(Color.textSecondary)
-                Text("Click + to start a session.")
+                Text("Sessions you start here, on your phone or on the web show up in this list.")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.textMuted)
                     .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
         }

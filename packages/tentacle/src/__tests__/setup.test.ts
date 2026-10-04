@@ -276,14 +276,24 @@ describe("runSetup — coding agents", () => {
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Run `codex login` in Terminal.'));
   });
 
-  it("lists every supported agent, installed or not", async () => {
-    agentRounds = [[agent('codex', 'ready', 7)]];
+  it("lists only the installed agent, and names the other supported ones on one line", async () => {
+    agentRounds = [[agent('codex', 'ready', 7), agent('claude', 'not_installed', 0), agent('copilot', 'not_installed', 0), agent('pi', 'not_installed', 0)]];
     await runSetup();
     const lines = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.includes('Codex') && l.includes('7 models'))).toBe(true);
+    expect(lines.some((l) => l.includes('Claude Code') && l.includes('not installed'))).toBe(false);
+    expect(lines.some((l) => l.includes('Also supported: Claude Code, GitHub Copilot CLI, Pi'))).toBe(true);
+  });
+
+  it("with no agent installed, lists every supported agent with its install guide", async () => {
+    agentRounds = [[agent('claude', 'not_installed', 0), agent('codex', 'not_installed', 0), agent('copilot', 'not_installed', 0), agent('pi', 'not_installed', 0)]];
+    mockSelect.mockResolvedValueOnce('continue');
+    await runSetup();
+    const lines = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.includes('No coding agent found'))).toBe(true);
     for (const name of ['Claude Code', 'Codex', 'GitHub Copilot CLI', 'Pi']) {
-      expect(lines.some((l) => l.includes(name))).toBe(true);
+      expect(lines.some((l) => l.includes(name) && l.includes('not installed'))).toBe(true);
     }
-    expect(lines.some((l) => l.includes('7 models'))).toBe(true);
   });
 });
 

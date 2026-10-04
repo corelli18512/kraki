@@ -19,7 +19,13 @@ final class ThisMacSetupSnapshot: XCTestCase {
         ]
         let checking = LocalAgentsCheck.placeholders
         let none: [A] = mixed.map { var a = $0; a.status = .notInstalled; a.version = nil; return a }
-        for (name, agents, fda) in [("mixed", mixed, false), ("checking", checking, false), ("all-granted", mixed, true), ("none", none, false)] {
+        let onlyCopilot: [A] = [
+            A(id: "claude", name: "Claude Code", status: .notInstalled),
+            A(id: "codex", name: "Codex", status: .notInstalled),
+            A(id: "copilot", name: "GitHub Copilot CLI", status: .ready, version: "1.0.91", models: 1),
+            A(id: "pi", name: "Pi", status: .notInstalled),
+        ]
+        for (name, agents, fda) in [("mixed", mixed, false), ("checking", checking, false), ("all-granted", mixed, true), ("none", none, false), ("only-copilot", onlyCopilot, true)] {
             let view = ThisMacSetupStep(preview: agents, fullDiskAccess: fda)
                 .padding(.horizontal, 22).padding(.vertical, 20)
                 .frame(width: 520)
@@ -31,6 +37,12 @@ final class ThisMacSetupSnapshot: XCTestCase {
             try XCTUnwrap(rep.representation(using: .png, properties: [:]))
                 .write(to: URL(fileURLWithPath: dir).appendingPathComponent("this-mac-\(name).png"))
         }
+        let sheet = SupportedAgentsSheet(check: LocalAgentsCheck.preview(onlyCopilot), binaryPath: "")
+            .background(Color(nsColor: .windowBackgroundColor))
+        let r3 = ImageRenderer(content: sheet); r3.scale = 2
+        let rep3 = try XCTUnwrap(NSBitmapImageRep(data: XCTUnwrap(XCTUnwrap(r3.nsImage).tiffRepresentation)))
+        try XCTUnwrap(rep3.representation(using: .png, properties: [:]))
+            .write(to: URL(fileURLWithPath: dir).appendingPathComponent("supported-agents.png"))
         let choice = VStack(spacing: 14) {
             ExistingCLIChoiceView(embedded: true)
         }
