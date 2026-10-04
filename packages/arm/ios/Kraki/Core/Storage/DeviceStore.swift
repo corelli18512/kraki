@@ -403,14 +403,20 @@ final class DeviceStore {
                 && (deviceIds == nil || deviceIds!.contains($0.id))
         }.map(\.id).sorted()
         if deviceIds != nil { return candidates }
+        let healthyByDevice = Dictionary(uniqueKeysWithValues: candidates.map { id in
+            let failedAt = usageRefreshes[id].flatMap { $0.error == nil ? nil : $0.startedAt } ?? .distantPast
+            return (id, (deviceUsage[id]?.accounts ?? []).filter {
+                $0.error == nil && ($0.fetchedDate ?? .distantPast) > failedAt
+            })
+        })
+        let healthySomewhere = Set(healthyByDevice.values.flatMap { $0.map(\.id) })
         var remaining = Set(candidates.flatMap { deviceUsage[$0]?.accounts.map(\.id) ?? [] })
         var selected = candidates.filter { deviceUsage[$0]?.accounts.isEmpty ?? true }
         var pool = candidates.filter { !selected.contains($0) }
         while !remaining.isEmpty, !pool.isEmpty {
             func score(_ id: String) -> (Int, Int, TimeInterval) {
                 let accounts = (deviceUsage[id]?.accounts ?? []).filter { remaining.contains($0.id) }
-                let failedAt = usageRefreshes[id].flatMap { $0.error == nil ? nil : $0.startedAt } ?? .distantPast
-                let healthy = accounts.filter { $0.error == nil && ($0.fetchedDate ?? .distantPast) > failedAt }
+                let healthy = (healthyByDevice[id] ?? []).filter { remaining.contains($0.id) }
                 return (healthy.count, accounts.count, healthy.compactMap(\.fetchedDate).max()?.timeIntervalSince1970 ?? 0)
             }
             // Prefer working replicas over an expired login (or a failed RPC).
@@ -420,7 +426,11 @@ final class DeviceStore {
                 return ac == bc ? a > b : ac < bc
             }!
             selected.append(best)
-            remaining.subtract(deviceUsage[best]?.accounts.map(\.id) ?? [])
+            // An expired account on this otherwise healthy device is not
+            // covered when another device can read that account successfully.
+            let covered = Set(deviceUsage[best]?.accounts.map(\.id) ?? []).subtracting(healthySomewhere)
+                .union(healthyByDevice[best]?.map(\.id) ?? [])
+            remaining.subtract(covered)
             pool.removeAll { $0 == best }
         }
         return selected.sorted()

@@ -203,6 +203,49 @@ final class AccountUsageTests: XCTestCase {
         XCTAssertEqual(store.usageRefreshTargets(), ["a"], "later successful data restores eligibility")
     }
 
+    func testMixedHealthCoverageStillSelectsAHealthyReplicaForEachAccount() throws {
+        let (app, root) = try makeApp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = app.deviceStore
+        store.setDevices([device("a", "A"), device("b", "B")])
+        for id in ["a", "b"] {
+            store.markGreeted(id)
+            store.setDeviceFeatures(id, features: ["account_usage_refresh"])
+        }
+        let good = account("shared", weekly: 70)
+        let unique = account("only-a", weekly: 50)
+        var expired = good
+        expired.error = "auth"
+        store.setDeviceUsage("a", accounts: [unique, expired])
+        store.setDeviceUsage("b", accounts: [good])
+        XCTAssertEqual(store.usageRefreshTargets(), ["a", "b"], "A covers its unique account, not its expired copy of B's account")
+        store.setDeviceUsage("a", accounts: [unique, good])
+        XCTAssertEqual(store.usageRefreshTargets(), ["a"], "once healthy, one device covers both accounts")
+
+        // All absent/healthy/expired combinations for two accounts on two
+        // devices: whenever a healthy replica exists, at least one is selected.
+        for pattern in 0..<81 {
+            var digits = pattern
+            var healthy: [String: Set<String>] = [:]
+            for id in ["a", "b"] {
+                var readings: [AccountUsage] = []
+                for key in ["x", "y"] {
+                    let state = digits % 3
+                    digits /= 3
+                    guard state != 0 else { continue }
+                    var reading = account(key, weekly: 50)
+                    if state == 2 { reading.error = "auth" } else { healthy[key, default: []].insert(id) }
+                    readings.append(reading)
+                }
+                store.setDeviceUsage(id, accounts: readings)
+            }
+            let selected = Set(store.usageRefreshTargets())
+            for (_, replicas) in healthy {
+                XCTAssertFalse(selected.isDisjoint(with: replicas), "missed healthy replica in pattern \(pattern)")
+            }
+        }
+    }
+
     #if os(iOS)
     func testDevicesPageRefreshesWhenConnectionAndGreetingArriveAfterAppearance() async throws {
         try requireForegroundUITests()
