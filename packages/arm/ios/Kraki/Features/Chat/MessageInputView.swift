@@ -388,8 +388,8 @@ struct MessageInputView: View {
             .frame(height: Self.inputBoxHeight)
     }
 
-    /// Existing draft text in the primary color, the live utterance dimmed
-    /// (not editable yet) at the caret.
+    /// Speech stays high-contrast over chat. Only Edit's pending correction
+    /// range is dimmed, in the real native editor.
     private var liveTranscript: some View {
         let parts = voice.preview
         let hasSpeech = !parts.spoken.isEmpty
@@ -404,7 +404,7 @@ struct MessageInputView: View {
                     Text(voiceListeningStatus).foregroundStyle(.secondary)
                 }
             } else {
-                Text(parts.prefix) + Text(parts.spoken).foregroundColor(.secondary) + Text(parts.suffix)
+                Text(parts.prefix + parts.spoken + parts.suffix).foregroundStyle(.primary)
             }
         }
         .font(.body)
@@ -764,6 +764,12 @@ struct MessageInputView: View {
         .padding(.trailing, 4)
         .padding(.vertical, 12)
         .focused($isFocused)
+        .background {
+            IOSVoiceDraftDecoration(text: text, pending: voice.uncorrectedRange(in: sessionId),
+                                    onTakeOver: { voice.takeOver(sessionID: sessionId) })
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
         .accessibilityIdentifier("chat-composer-text")
         .submitLabel(.send)
         .onSubmit { handleModeSubmit() }

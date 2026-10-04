@@ -1,8 +1,11 @@
 import XCTest
 import VoiceInputCore
+import SwiftUI
 #if os(iOS)
+import UIKit
 @testable import Kraki
 #else
+import AppKit
 @testable import Kraki_Dev
 #endif
 
@@ -365,6 +368,83 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
         XCTAssertEqual(host.sessionStore.drafts["a"], "\u{524D}🙂\u{65B0}\u{8BCD}\u{540E}")
         XCTAssertEqual(voice.selectionRequest, NSRange(location: 5, length: 0))
         XCTAssertTrue(host.staged.isEmpty && host.transmitted.isEmpty)
+    }
+
+    func testEditStreamsSolidCorrectionOverOnlyTheGreyUtterance() async throws {
+        let (host, voice) = make()
+        host.sessionStore.setDraft("a", "前🙂旧后")
+        let session = await start(host, voice, range: NSRange(location: 3, length: 1))
+        await partial("请修改登入页面", session)
+        XCTAssertNil(voice.uncorrectedRange(in: "a"), "recording is solid")
+        voice.finishToDraft()
+        XCTAssertEqual(voice.uncorrectedRange(in: "a"), NSRange(location: 3, length: 7))
+        XCTAssertNil(voice.uncorrectedRange(in: "b"))
+        session.event(.correctionDelta("请修改登录")); await settle(40)
+        XCTAssertEqual(host.sessionStore.drafts["a"], "前🙂请修改登录页面后")
+        let pending = try XCTUnwrap(voice.uncorrectedRange(in: "a"))
+        XCTAssertEqual((host.sessionStore.drafts["a"]! as NSString).substring(with: pending), "页面")
+        let styled = NSMutableAttributedString(string: host.sessionStore.drafts["a"]!)
+        VoiceDraftStyling.apply(to: styled, pending: pending)
+        #if os(iOS)
+        typealias NativeColor = UIColor
+        let primaryAlpha = UIColor.label.cgColor.alpha
+        #else
+        typealias NativeColor = NSColor
+        let primaryAlpha = NSColor.labelColor.cgColor.alpha
+        #endif
+        XCTAssertEqual((styled.attribute(.foregroundColor, at: pending.location, effectiveRange: nil) as? NativeColor)?.cgColor.alpha ?? -1, 0.5, accuracy: 0.01)
+        for index in [0, 3, styled.length - 1] {
+            XCTAssertEqual((styled.attribute(.foregroundColor, at: index, effectiveRange: nil) as? NativeColor)?.cgColor.alpha ?? -1, primaryAlpha, accuracy: 0.01)
+        }
+        await final("请修改登录页面。", session)
+        XCTAssertEqual(host.sessionStore.drafts["a"], "前🙂请修改登录页面。后")
+        XCTAssertNil(voice.uncorrectedRange(in: "a"))
+        XCTAssertTrue(host.staged.isEmpty && host.transmitted.isEmpty)
+    }
+
+    func testHumanTakeoverFencesBothStreamingAndFinalAndClearsTint() async {
+        for externalEdit in [false, true] {
+            let (host, voice) = make()
+            let session = await start(host, voice)
+            await partial("please fix the page", session)
+            voice.finishToDraft()
+            session.event(.correctionDelta("Please fix")); await settle(40)
+            let visible = host.sessionStore.drafts["a"]
+            if externalEdit { host.sessionStore.setDraft("a", "human text") }
+            else { voice.takeOver(sessionID: "a") } // caret/selection/IME without a String change
+            if !externalEdit { XCTAssertNil(voice.selectionRequest, "discard queued automatic caret restoration") }
+            XCTAssertNil(voice.uncorrectedRange(in: "a"))
+            session.event(.correctionDelta("Replacement")); await settle(40)
+            await final("Late replacement.", session)
+            XCTAssertEqual(host.sessionStore.drafts["a"], externalEdit ? "human text" : visible)
+            XCTAssertTrue(host.transmitted.isEmpty)
+        }
+    }
+
+    func testRetiringDraftKeepsVisibleProgressInsteadOfRestoringRaw() async {
+        let (host, voice) = make()
+        let session = await start(host, voice)
+        await partial("please fix the page", session)
+        voice.finishToDraft()
+        session.event(.correctionDelta("Please fix")); await settle(40)
+        let visible = host.sessionStore.drafts["a"]
+        XCTAssertTrue(visible?.hasPrefix("Please") == true)
+        voice.retireKeepingDraft()
+        XCTAssertEqual(host.sessionStore.drafts["a"], visible)
+        XCTAssertNil(voice.uncorrectedRange(in: "a"))
+        await final("late", session)
+        XCTAssertEqual(host.sessionStore.drafts["a"], visible)
+    }
+
+    func testLateASRDoesNotRollBackAnEditCorrection() async {
+        let (host, voice) = make()
+        let session = await start(host, voice)
+        await partial("please fix", session)
+        voice.finishToDraft()
+        session.event(.correctionDelta("Please")); await settle(40)
+        await partial("please fix the page", session)
+        XCTAssertEqual(host.sessionStore.drafts["a"], "Please fix the page")
+        XCTAssertNotNil(voice.uncorrectedRange(in: "a"))
     }
 
     func testTypingOrABAFencesLateCorrection() async {

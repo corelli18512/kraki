@@ -22,7 +22,7 @@ enum MacComposerPlaceholderPolicy {
 /// Same structure as iOS: one glass capsule [image | thumbnail] text
 /// [clear] [mic], and beside it one round primary control (the size and
 /// column of the chat's jump controls) that morphs Send / Stop / Steer.
-/// Dictation stays a single row on macOS (the capsule is wide enough).
+/// Dictation keeps one row until it wraps; multi-line actions share a column.
 /// Session mode is chosen in the chat header, not on the composer.
 /// Permission/question controls remain in the live bubble.
 enum MacComposerMetrics {
@@ -282,7 +282,7 @@ struct MacChatComposer: View {
     private var inputBox: some View {
         Group {
             if voiceOwnsComposer {
-                HStack(alignment: .bottom, spacing: 0) {
+                HStack(alignment: .center, spacing: 0) {
                     imageSlot
                     MacComposerVoiceSurface(
                         controller: voiceController,
@@ -292,11 +292,13 @@ struct MacChatComposer: View {
                     )
                 }
             } else {
-                HStack(alignment: .bottom, spacing: 0) {
+                HStack(alignment: .center, spacing: 0) {
                     imageSlot
-                    textFieldForMode
-                    if hasText || hasImage { clearButton }
-                    if canShowVoice { inlineVoiceButton }
+                    HStack(alignment: .bottom, spacing: 0) {
+                        textFieldForMode
+                        if hasText || hasImage { clearButton }
+                        if canShowVoice { inlineVoiceButton }
+                    }
                 }
                 .padding(.trailing, 5)
             }
@@ -354,6 +356,7 @@ struct MacChatComposer: View {
                 enabled: !voiceOwnsComposer,
                 focusRequest: composerFocusRequest,
                 selectionRequest: voiceComposer.editorSessionID == sessionId ? voiceComposer.selectionRequest : nil,
+                uncorrectedRange: voiceComposer.uncorrectedRange(in: sessionId),
                 onRequestFocus: requestComposerFocus,
                 onSubmit: handleModeSubmit,
                 onSelection: { selection = $0 },
@@ -574,6 +577,12 @@ struct MacChatComposer: View {
         .padding(.leading, 6)
         .disabled(!isIdle || voiceOwnsComposer)
         .opacity(isIdle && !voiceOwnsComposer ? 1 : 0.4)
+        .background {
+            #if DEBUG
+            MacComposerControlGeometryProbe(identifier: "chat-attach-image")
+            #endif
+        }
+        .accessibilityIdentifier("chat-attach-image")
         .accessibilityLabel("Attach image")
         .accessibilityValue(previewImage == nil ? "No image selected" : "Image selected")
     }
@@ -821,6 +830,22 @@ private final class MacComposerTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onPasteCompleted: (() -> Void)?
     var onTakeOver: (() -> Void)?
+    var voicePendingRange: NSRange?
+
+    func refreshVoiceStyling() {
+        guard !hasMarkedText(), let storage = textStorage else { return }
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            // NSColor.withAlphaComponent resolves dynamic colors. Resolve in
+            // THIS window, not the app's possibly opposite system appearance.
+            let primary = NSColor.labelColor.usingColorSpace(.deviceRGB) ?? .labelColor
+            VoiceDraftStyling.apply(to: storage, pending: voicePendingRange, primaryColor: primary)
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshVoiceStyling()
+    }
 
     override func mouseDown(with event: NSEvent) {
         onTakeOver?()
@@ -839,7 +864,13 @@ private final class MacComposerTextView: NSTextView {
         super.keyDown(with: event)
     }
 
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        onTakeOver?()
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+    }
+
     override func paste(_ sender: Any?) {
+        onTakeOver?()
         super.paste(sender)
         onPasteCompleted?()
         DispatchQueue.main.async { [weak self] in
@@ -859,6 +890,7 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
     let enabled: Bool
     let focusRequest: Int
     var selectionRequest: NSRange? = nil
+    var uncorrectedRange: NSRange? = nil
     let onRequestFocus: () -> Void
     let onSubmit: () -> Void
     let onSelection: (NSRange) -> Void
@@ -907,6 +939,7 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
             guard !isApplying, let textView = notification.object as? MacComposerTextView,
                   textView.window?.firstResponder === textView else { return }
             parent.onSelection(textView.selectedRange())
+            if textView.selectedRange() != parent.selectionRequest { parent.onTakeOver() }
         }
 
         func textDidChange(_ notification: Notification) {
@@ -1073,6 +1106,11 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
             // programmatic selection as the user taking over correction.
             DispatchQueue.main.async { onSelection(range) }
         }
+        context.coordinator.isApplying = true
+        textView.voicePendingRange = uncorrectedRange
+        textView.refreshVoiceStyling()
+        if !textView.hasMarkedText() { textView.typingAttributes[.foregroundColor] = NSColor.labelColor }
+        context.coordinator.isApplying = false
         context.coordinator.reportVisualTextPresence(of: textView, deferred: true)
         let layoutText = textView.hasMarkedText() ? textView.string : text
         let measuredHeight = Self.measuredHeight(layoutText, width: max(1, scrollView.contentSize.width))
@@ -1097,7 +1135,9 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
             guard let scrollView, let textView, let window = scrollView.window else { return }
             if focused {
                 if window.isKeyWindow, window.firstResponder !== textView {
+                    coordinator?.isApplying = true
                     window.makeFirstResponder(textView)
+                    coordinator?.isApplying = false
                 }
                 if hasExplicitFocusRequest, window.firstResponder !== textView {
                     coordinator?.restoreCurrentTextViewFocus(attemptsRemaining: 3)
@@ -1178,27 +1218,69 @@ struct MacVoiceBackgroundWaveform: View {
     }
 }
 
+/// Measure wrapping against the unchanged single-row arrangement. Deciding
+/// from the *expanded* transcript width would flip back and forth at the wrap
+/// boundary (stacking frees width, unwrapping would then unstack the buttons).
+struct MacVoiceSurfaceLayout: Layout {
+    let pieces: [MacComposerVoiceTranscriptView.Piece]
+
+    struct Geometry {
+        let stacked: Bool
+        let height: CGFloat
+        let transcript: CGRect
+        let cancel: CGRect
+        let edit: CGRect
+    }
+
+    func geometry(width: CGFloat) -> Geometry {
+        let width = max(1, width)
+        let gap: CGFloat = 8, cancelWidth: CGFloat = 70, editWidth: CGFloat = 62, buttonHeight: CGFloat = 30
+        let padding = MacComposerMetrics.textVerticalPadding
+        let horizontalTextWidth = max(1, width - cancelWidth - editWidth - gap * 2)
+        let stacked = MacComposerVoiceTranscriptView.measure(pieces, width: horizontalTextWidth)
+            > MacComposerMetrics.minimumTextHeight + 0.5
+        let textWidth = stacked ? max(1, width - cancelWidth - gap) : horizontalTextWidth
+        let textHeight = min(
+            max(MacComposerMetrics.minimumTextHeight, MacComposerVoiceTranscriptView.measure(pieces, width: textWidth)),
+            MacComposerMetrics.minimumTextHeight + MacComposerVoiceTranscriptView.lineHeight * (MacComposerMetrics.maxVisibleTextLines - 1)
+        )
+        let actionsHeight = stacked ? buttonHeight * 2 + 4 : buttonHeight
+        let height = max(textHeight + padding * 2, actionsHeight + 6)
+        let actionTop = (height - actionsHeight) / 2
+        let cancelX = stacked ? width - cancelWidth : textWidth + gap
+        let placedEditWidth = stacked ? cancelWidth : editWidth
+        return Geometry(stacked: stacked, height: height,
+                        transcript: CGRect(x: 0, y: padding, width: textWidth, height: height - padding * 2),
+                        cancel: CGRect(x: cancelX, y: actionTop, width: cancelWidth, height: buttonHeight),
+                        edit: CGRect(x: width - placedEditWidth,
+                                     y: stacked ? actionTop + buttonHeight + 4 : actionTop,
+                                     width: placedEditWidth, height: buttonHeight))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 600
+        return CGSize(width: width, height: geometry(width: width).height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 3 else { return }
+        let layout = geometry(width: bounds.width)
+        for (view, frame) in zip(subviews, [layout.transcript, layout.cancel, layout.edit]) {
+            view.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                       anchor: .topLeading, proposal: ProposedViewSize(frame.size))
+        }
+    }
+}
+
 private struct MacComposerVoiceSurface: View {
     let controller: KrakiVoiceInputController
     let preview: (prefix: String, spoken: String, suffix: String)
     let onFinish: () -> Void
     let onCancel: () -> Void
-    @State private var transcriptWidth: CGFloat = 0
-
-    private var viewportHeight: CGFloat {
-        guard transcriptWidth > 1 else { return MacComposerMetrics.minimumTextHeight }
-        return min(
-            max(MacComposerMetrics.minimumTextHeight, MacComposerVoiceTranscriptView.measure(displayedPieces, width: transcriptWidth)),
-            MacComposerMetrics.minimumTextHeight + MacComposerVoiceTranscriptView.lineHeight * (MacComposerMetrics.maxVisibleTextLines - 1)
-        )
-    }
-
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        MacVoiceSurfaceLayout(pieces: displayedPieces) {
             MacComposerScrollableVoiceTranscript(pieces: displayedPieces, revision: revision)
-                .frame(maxWidth: .infinity)
-                .frame(height: viewportHeight)
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { transcriptWidth = $0 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background {
                     MacVoiceBackgroundWaveform(levels: controller.levels)
                         .mask {
@@ -1213,7 +1295,6 @@ private struct MacComposerVoiceSurface: View {
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
-                .padding(.vertical, MacComposerMetrics.textVerticalPadding)
             Button(action: onCancel) {
                 Label("Cancel", systemImage: "xmark")
                     .font(.system(size: 12, weight: .medium))
@@ -1224,19 +1305,28 @@ private struct MacComposerVoiceSurface: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Cancel voice input")
             .accessibilityIdentifier("voice-cancel")
-            .padding(.bottom, (MacComposerMetrics.control - 30) / 2)
+            .background {
+                #if DEBUG
+                MacComposerControlGeometryProbe(identifier: "voice-cancel")
+                #endif
+            }
             Button(action: onFinish) {
                 Label("Edit", systemImage: "character.cursor.ibeam")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Color.krakiPrimary)
-                    .frame(width: 62, height: 30)
+                    .frame(minWidth: 62, maxWidth: .infinity)
+                    .frame(height: 30)
                     .background(Color.krakiPrimary.opacity(0.10), in: Capsule())
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Edit voice text")
             .accessibilityIdentifier("voice-to-text")
-            .padding(.bottom, (MacComposerMetrics.control - 30) / 2)
+            .background {
+                #if DEBUG
+                MacComposerControlGeometryProbe(identifier: "voice-to-text")
+                #endif
+            }
         }
         .padding(.leading, 4)
         .padding(.trailing, 5)
@@ -1254,7 +1344,7 @@ private struct MacComposerVoiceSurface: View {
             let separator = preview.prefix.isEmpty || preview.prefix.last?.isWhitespace == true ? "" : " "
             return [(preview.prefix, 1), (separator + "Connecting…", 0.45), (preview.suffix, 1)]
         }
-        return [(preview.prefix, 1), (preview.spoken, 0.5), (preview.suffix, 1)]
+        return [(preview.prefix, 1), (preview.spoken, 1), (preview.suffix, 1)]
     }
 }
 
@@ -1615,7 +1705,7 @@ private struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
         return CGSize(
             width: width,
             height: min(
-                max(MacComposerMetrics.minimumTextHeight, MacComposerVoiceTranscriptView.measure(pieces, width: width)),
+                max(MacComposerMetrics.minimumTextHeight, proposal.height ?? MacComposerVoiceTranscriptView.measure(pieces, width: width)),
                 MacComposerMetrics.minimumTextHeight + MacComposerVoiceTranscriptView.lineHeight * (MacComposerMetrics.maxVisibleTextLines - 1)
             )
         )
@@ -1623,6 +1713,19 @@ private struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
 }
 
 #if DEBUG
+/// Passive markers on the actual controls, for geometry and real hit-test
+/// regression checks without relying on SwiftUI's lazily-created AX tree.
+private struct MacComposerControlGeometryProbe: NSViewRepresentable {
+    let identifier: String
+    final class Probe: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+    func makeNSView(context: Context) -> Probe { Probe() }
+    func updateNSView(_ view: Probe, context: Context) {
+        view.identifier = NSUserInterfaceItemIdentifier(identifier)
+    }
+}
+
 /// Debug-only fixed-height stress probe for the native voice transcript
 /// scroll surface (the production composer now grows to a three-line cap). It is intentionally isolated from Relay and AppState.
 enum MacComposerVoiceScrollRegression {
