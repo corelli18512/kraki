@@ -1385,7 +1385,7 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertFalse(button?.isHidden ?? true)
         button?.sendActions(for: .touchUpInside)
         XCTAssertEqual(openedSeq, 302)
-        XCTAssertEqual(cell.messageActions().map(\.title), ["Copy", "Show Steps"])
+        XCTAssertEqual(cell.messageActions().map(\.title), ["Copy", "Select Text", "Show Steps"])
     }
 
     func testPlainBubbleHidesStepsButtonButStillSupportsLongPressCopy() {
@@ -1395,7 +1395,7 @@ final class TextKitPureSpineTests: XCTestCase {
 
         let button = cell.contentView.subviews.compactMap { $0 as? UIButton }.first
         XCTAssertTrue(button?.isHidden ?? false)
-        XCTAssertEqual(cell.messageActions().map(\.title), ["Copy"])
+        XCTAssertEqual(cell.messageActions().map(\.title), ["Copy", "Select Text"])
     }
 
     func testTerminalTurnUsesUnifiedTextKitPathSafely() {

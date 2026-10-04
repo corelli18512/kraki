@@ -126,3 +126,26 @@ final class ChatTableTests: XCTestCase {
         XCTAssertTrue(sawLink)
     }
 }
+
+#if os(iOS)
+@MainActor final class SelectTextTests: XCTestCase {
+    func testSelectTextKeepsWordsCodeAndTablesAsTSV() {
+        let source = "Intro **bold** and `code`.\n\n| A | B |\n|---|---|\n| one | two |\n\nAfter."
+        let body = TKMarkdown.attributed(source, cacheKey: "select-text-\(UUID())")
+        let text = TKTextSelectionViewController.selectable(body).string
+        XCTAssertTrue(text.contains("Intro bold and code."), text)
+        XCTAssertTrue(text.contains("A\tB\none\ttwo"), text)
+        XCTAssertTrue(text.contains("After."), text)
+        XCTAssertFalse(text.contains("\u{FFFC}"), "no attachment placeholder")
+    }
+
+    func testMessageMenuOffersSelectText() {
+        let message = ChatMessage(type: "agent_message", seq: 1, sessionId: "s", deviceId: "d", timestamp: nil,
+                                  payload: ["content": AnyCodable("hello world")])
+        let content = TKBubbleContent.make(message: message, sessionId: "s", agent: "pi")
+        let cell = TKBubbleCell(frame: CGRect(x: 0, y: 0, width: 390, height: content.cellHeight(cellWidth: 390)))
+        cell.configure(content, cellWidth: 390)
+        XCTAssertEqual(cell.messageActions().map(\.title).prefix(2), ["Copy", "Select Text"])
+    }
+}
+#endif

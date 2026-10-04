@@ -1652,6 +1652,98 @@ private final class TKPillLabel: UILabel {
     }
 }
 
+extension UIView {
+    var nearestViewController: UIViewController? {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let controller = current as? UIViewController { return controller }
+            responder = current.next
+        }
+        return nil
+    }
+}
+
+/// "Select Text": the message as readable, selectable text. Tables become
+/// tab-separated lines (so a selection pastes into spreadsheets) and code
+/// keeps its monospaced font.
+final class TKTextSelectionViewController: UIViewController {
+    let textView = UITextView()
+    private let body: NSAttributedString
+
+    init(body: NSAttributedString) {
+        self.body = body
+        super.init(nibName: nil, bundle: nil)
+        title = "Select Text"
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    static func selectable(_ body: NSAttributedString) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        let base: [NSAttributedString.Key: Any] = [
+            .font: UIFont.preferredFont(forTextStyle: .body),
+            .foregroundColor: UIColor.label,
+        ]
+        body.enumerateAttributes(in: NSRange(location: 0, length: body.length)) { attributes, range, _ in
+            if attributes[.tkDecorativeSpacer] != nil { return }
+            if let table = attributes[.attachment] as? TKTableAttachment {
+                result.append(NSAttributedString(string: table.tableLayout.tsv() + "\n", attributes: [
+                    .font: UIFont.monospacedSystemFont(ofSize: 14, weight: .regular),
+                    .foregroundColor: UIColor.label,
+                ]))
+                return
+            }
+            if attributes[.attachment] != nil { return }
+            var kept = base
+            if let font = attributes[.font] as? UIFont { kept[.font] = font }
+            if let link = attributes[.link] { kept[.link] = link }
+            if attributes[.link] == nil, let color = attributes[.foregroundColor] as? UIColor,
+               attributes[.tkBlockKind] as? String == TKBlockKind.code.rawValue {
+                kept[.foregroundColor] = color
+            }
+            result.append(NSAttributedString(string: body.attributedSubstring(from: range).string, attributes: kept))
+        }
+        return result
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in
+            self?.dismiss(animated: true)
+        })
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Copy All", primaryAction: UIAction { [weak self] _ in
+            guard let self else { return }
+            UIPasteboard.general.string = self.textView.text
+            self.dismiss(animated: true)
+        })
+        textView.attributedText = Self.selectable(body)
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.alwaysBounceVertical = true
+        textView.adjustsFontForContentSizeCategory = true
+        textView.backgroundColor = .clear
+        textView.textContainerInset = UIEdgeInsets(top: 16, left: 14, bottom: 32, right: 14)
+        textView.dataDetectorTypes = []
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(textView)
+        NSLayoutConstraint.activate([
+            textView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            textView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            textView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            textView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // Start with everything selected, like Messages' "Select": adjust the
+        // handles or tap Copy.
+        textView.becomeFirstResponder()
+        textView.selectAll(nil)
+    }
+}
+
 final class TKTableSheetViewController: UIViewController {
     private var tableLayout: ChatTable
     private let titleLabel = UILabel()
@@ -2486,6 +2578,11 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             actions.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
                 UIPasteboard.general.string = text
             })
+            if let body = content.body {
+                actions.append(UIAction(title: "Select Text", image: UIImage(systemName: "selection.pin.in.out")) { [weak self] _ in
+                    self?.presentTextSelection(body)
+                })
+            }
         }
         if content.canShowSteps {
             actions.append(UIAction(title: "Show Steps", image: UIImage(systemName: "list.bullet.indent")) { [weak self] _ in
@@ -2504,6 +2601,20 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             })
         }
         return actions
+    }
+
+    /// Whole message in a sheet where any part can be selected and copied.
+    /// Selection stays out of the chat list (cell reuse, streaming, chunked
+    /// bodies and the long-press menu would all fight an in-place selection).
+    private func presentTextSelection(_ body: NSAttributedString) {
+        guard let presenter = nearestViewController else { return }
+        let navigation = UINavigationController(rootViewController: TKTextSelectionViewController(body: body))
+        navigation.modalPresentationStyle = .pageSheet
+        if let sheet = navigation.sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.prefersGrabberVisible = true
+        }
+        presenter.present(navigation, animated: true)
     }
 
     /// Voice input still being corrected: don't wait (send the original

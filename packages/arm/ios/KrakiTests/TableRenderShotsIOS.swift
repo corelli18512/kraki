@@ -164,6 +164,23 @@ Error rate is highest on `/api/voice/lease`.
         }
     }
 
+    func testRenderSelectTextIOS() throws {
+        let body = TKMarkdown.attributed("三种方案的对比如下：\n\n| 方案 | 工作量 |\n|---|---:|\n| **A 客户端改顺序** | 2 天 |\n| B Tentacle 补齐 | 5 天 |\n\nRun `pnpm test` and see https://kraki.chat/docs for details.", cacheKey: "select-shot")
+        let nav = UINavigationController(rootViewController: TKTextSelectionViewController(body: body))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.windowLevel = .alert + 1
+        window.rootViewController = nav
+        window.makeKeyAndVisible()
+        RunLoop.main.run(until: Date().addingTimeInterval(1.2))
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        try image.pngData()!.write(to: Self.shotsDir.appendingPathComponent("ios-select-text.png"))
+        window.isHidden = true
+    }
+
     func testRenderFullTableIOS() throws {
         let rendered = TKMarkdown.attributed(Self.sample, cacheKey: "full-table-shot")
         var tables: [ChatTable] = []
