@@ -200,12 +200,6 @@ struct MacCommands: Commands {
             Button("Refresh Status") {
                 Task { await tentacleCLI.refreshDaemonState() }
             }
-
-            Divider()
-
-            Button("Pair a Device…") {
-                NotificationCenter.default.post(name: .macOpenPairing, object: nil)
-            }
         }
 
         // App menu — Sparkle owns the standard update dialog and installation
@@ -213,6 +207,10 @@ struct MacCommands: Commands {
         CommandGroup(after: .appInfo) {
             Button("Check for Updates…") {
                 NotificationCenter.default.post(name: .macCheckForUpdates, object: nil)
+            }
+            Divider()
+            Button("Connect Your Phone…") {
+                NotificationCenter.default.post(name: .macOpenPairing, object: nil)
             }
         }
 
@@ -255,6 +253,7 @@ extension Notification.Name {
     static let macOpenLogs        = Notification.Name("mac.openLogs")
     static let macOpenPairing     = Notification.Name("mac.openPairing")
     static let macOpenNewSession  = Notification.Name("mac.openNewSession")
+    static let macFocusNewSessionComposer = Notification.Name("mac.focusNewSessionComposer")
     static let macOpenSessionInfo = Notification.Name("mac.openSessionInfo")
     static let macToggleSidebar   = Notification.Name("mac.toggleSidebar")
     static let macNavigateSession  = Notification.Name("mac.navigateSession")
