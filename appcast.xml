@@ -13,15 +13,29 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <sparkle:version>66</sparkle:version>
             <sparkle:shortVersionString>0.2.64</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* fix(apple): notification test-host guard compiles in Release by @corelli18512 in https://github.com/corelli18512/kraki/pull/390
-* Windows fixes from a clean Windows 11 VM E2E (Tentacle 0.35.9, Mac 0.2.62) by @corelli18512 in https://github.com/corelli18512/kraki/pull/391
-* Proxy support: sign-in and relay connection through HTTPS_PROXY or the macOS system proxy (Tentacle 0.35.10, head 0.19.4, Mac 0.2.63) by @corelli18512 in https://github.com/corelli18512/kraki/pull/392
-* Web: new Kraki logo and icons by @corelli18512 in https://github.com/corelli18512/kraki/pull/393
-* fix(clients): quiet reconnect and catch-up; voice waits for the connection by @corelli18512 in https://github.com/corelli18512/kraki/pull/396
+            <description sparkle:format="markdown"><![CDATA[## Mac 0.2.64 (66)
 
+### Voice input reliability — #397
+- Capture lifecycle and audio transport no longer depend on the UI queue.
+- Detect missing microphone data, input changes, invalid conversion and stalled uploads instead of silently waiting.
+- Keep audio and finish messages ordered, bound queued audio, and fence callbacks from older recordings.
+- Preserve received text as an incomplete draft on failure. Distinguish an ASR ending without a final from normal correction still in progress.
+- Add release-safe diagnostic metadata without recording audio, transcripts, provider messages or credentials.
 
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.35.8...mac-v0.2.64
+The same client fix ships on iOS 0.1.19. The companion voice gateway 0.3.6 is deployed with compatible terminal handling and authorization-race fixes: https://github.com/corelli18512/coinfra/pull/26.
+
+### Quiet reconnect and catch-up — #396
+- Cached conversations stay visible while reconnecting; connection/catch-up status stays in the title rather than interrupting the composer.
+- Retry missed catch-up requests and keep a running card behind the message it belongs to.
+- Voice input pressed while disconnected shows Connecting and starts after reconnection; cancellation never starts a hidden recording.
+
+### Distribution
+Universal arm64/x86_64, Developer ID signed and notarized. Built-in Tentacle remains 0.35.10. Mac auto-update, ZIP, tar and DMG assets are available below.
+
+These changes fix verified code defects; they do not establish the trigger of the originally reported timeout.
+
+**Full changelog:** https://github.com/corelli18512/kraki/compare/mac-v0.2.63...mac-v0.2.64
+
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.64/Kraki.app.zip" length="92122289" type="application/octet-stream" sparkle:edSignature="/TDvQMfxggzC59liRGoHazhIns1+JkTVW8darv8v9dnAiBS1iwdC9FbkztZynXnFg+bsx3dqDmCCYxCUXzgQDw=="/>
         </item>
@@ -63,6 +77,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: B27XkCbNOHo8PnPV8aELXwj7WpEHCDcwhfQlrcgOqktOGTyKNcZ+Q1zN7ybEJA5sb9Pz3UUQVsND2RKqqCxpCw==
-length: 4816
+edSignature: l53+Hf9NLEL+PfBnTlVZ69NXo8HLDCBPis7Pl36QYJB8UHXGhCFWQGZqtAR4S7UZ1ZaHOpsun+O9mdLZUP4BDQ==
+length: 5587
 -->
