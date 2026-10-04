@@ -907,7 +907,7 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         let content = MacChatBubbleContentBuilder.make(message: message, sessionId: sid, agent: "claude", documentWidth: 820)
         var tableWidth: CGFloat = 0
         content.body?.enumerateAttribute(.attachment, in: NSRange(location: 0, length: content.body?.length ?? 0)) { value, _, _ in
-            if let table = value as? MacTableAttachment { tableWidth = table.tableLayout.contentSize.width }
+            if let table = value as? MacTableAttachment { tableWidth = table.tableLayout.naturalWidth }
         }
         XCTAssertGreaterThan(tableWidth, 100)
         XCTAssertGreaterThanOrEqual(content.bodyTextWidth, min(tableWidth, content.attachmentWidth - 28) - 1,

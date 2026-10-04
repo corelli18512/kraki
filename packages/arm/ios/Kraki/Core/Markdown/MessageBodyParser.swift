@@ -147,6 +147,31 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
                 continue
             }
 
+            // Autolinks: <https://…> and bare http(s) URLs (GFM). Inside a
+            // link label the label already is the link.
+            if link == nil, fragment[index] == "<",
+               let close = fragment[next...].firstIndex(of: ">"),
+               let url = autolinkURL(String(fragment[next..<close])) {
+                flushPlain(until: index)
+                append(String(fragment[next..<close]), overrideLink: url)
+                index = fragment.index(after: close)
+                plainStart = index
+                continue
+            }
+            if link == nil, fragment[index] == "h",
+               fragment[index...].hasPrefix("https://") || fragment[index...].hasPrefix("http://"),
+               index == fragment.startIndex || !(fragment[fragment.index(before: index)].isASCII
+                    && isWordChar(fragment[fragment.index(before: index)])) {
+                let end = bareURLEnd(in: fragment, from: index)
+                if let url = autolinkURL(String(fragment[index..<end])) {
+                    flushPlain(until: index)
+                    append(String(fragment[index..<end]), overrideLink: url)
+                    index = end
+                    plainStart = index
+                    continue
+                }
+            }
+
             if fragment[index...].hasPrefix("**") || fragment[index...].hasPrefix("__") {
                 let marker = String(fragment[index...].prefix(2))
                 let contentStart = fragment.index(index, offsetBy: 2)
@@ -204,6 +229,45 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
     }
 
     return parse(text, bold: false, italic: false, strikethrough: false, link: nil)
+}
+
+/// A URL only when it is a complete http(s) address (no spaces).
+func autolinkURL(_ text: String) -> URL? {
+    guard text.hasPrefix("https://") || text.hasPrefix("http://"),
+          !text.contains(where: \.isWhitespace),
+          let url = URL(string: text), let host = url.host, !host.isEmpty else { return nil }
+    return url
+}
+
+/// End of a bare URL: stops at whitespace, `<`, quotes, or CJK text, and drops
+/// trailing punctuation and unbalanced closing brackets (GFM extended autolink).
+func bareURLEnd(in text: String, from start: String.Index) -> String.Index {
+    var end = start
+    while end < text.endIndex {
+        let character = text[end]
+        if character.isWhitespace || "<>\"`".contains(character) { break }
+        if let scalar = character.unicodeScalars.first,
+           (0x2E80...0x9FFF).contains(scalar.value) || (0x3000...0x303F).contains(scalar.value)
+            || (0xFF00...0xFFEF).contains(scalar.value) { break }
+        end = text.index(after: end)
+    }
+    while end > start {
+        let last = text[text.index(before: end)]
+        if ".,;:!?'*_~".contains(last) {
+            end = text.index(before: end)
+            continue
+        }
+        if last == ")" || last == "]" {
+            let opener: Character = last == ")" ? "(" : "["
+            let candidate = text[start..<end]
+            if candidate.filter({ $0 == last }).count > candidate.filter({ $0 == opener }).count {
+                end = text.index(before: end)
+                continue
+            }
+        }
+        break
+    }
+    return end
 }
 
 func parseMarkdownInlineLine(_ line: String) -> MarkdownInlineLine {
@@ -527,9 +591,31 @@ func parseTableSeparator(_ line: String) -> [TableAlignment]? {
 /// Splits one table row into trimmed cells. Strips the optional
 /// leading/trailing pipe wrappers GFM allows.
 func parseTableRow(_ line: String) -> [String] {
-    var s = Substring(line)
+    var s = Substring(line.trimmingCharacters(in: .whitespaces))
     if s.first == "|" { s = s.dropFirst() }
-    if s.last == "|" { s = s.dropLast() }
-    return s.split(separator: "|", omittingEmptySubsequences: false)
-        .map { $0.trimmingCharacters(in: .whitespaces) }
+    if s.last == "|", !s.hasSuffix("\\|") { s = s.dropLast() }
+    // A pipe separates cells unless escaped (`\|`) or inside a code span.
+    var cells: [String] = []
+    var current = ""
+    var inCode = false
+    var index = s.startIndex
+    while index < s.endIndex {
+        let character = s[index]
+        let next = s.index(after: index)
+        if character == "\\", next < s.endIndex, s[next] == "|" {
+            current += inCode ? "|" : "\\|"
+            index = s.index(after: next)
+            continue
+        }
+        if character == "`" { inCode.toggle() }
+        if character == "|", !inCode {
+            cells.append(current)
+            current = ""
+        } else {
+            current.append(character)
+        }
+        index = next
+    }
+    cells.append(current)
+    return cells.map { $0.trimmingCharacters(in: .whitespaces) }
 }
