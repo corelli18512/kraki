@@ -331,11 +331,11 @@ final class DeviceStore {
         devices.removeAll()
         deviceAgents.removeAll()
         deviceVersions.removeAll()
+        pendingGreetingIds.removeAll()
+        clearPersistentSnapshot()
         deviceUsage.removeAll()
         usageRefreshes.removeAll()
         deviceFeatures.removeAll()
-        pendingGreetingIds.removeAll()
-        clearPersistentSnapshot()
     }
 
     // MARK: - Convenience Methods (called by MessageRouter)
