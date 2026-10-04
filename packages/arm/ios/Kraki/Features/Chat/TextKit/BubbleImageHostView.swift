@@ -402,11 +402,20 @@ struct IOSImagePreviewGallery: View {
                 .contentShape(Rectangle())
                 .onTapGesture { dismiss() }
 
-            IOSZoomableImageCanvas(image: item.image, onBackdropTap: { dismiss() })
-                .id(item.id)
-                .padding(.top, 52)
-                .padding(.bottom, selection.items.count > 1 ? 54 : 18)
-                .padding(.horizontal, 12)
+            // Swipe between images like Photos; each page zooms on its own
+            // (a zoomed image pans first, then the page turns at its edge).
+            TabView(selection: $index) {
+                ForEach(Array(selection.items.enumerated()), id: \.offset) { offset, page in
+                    IOSZoomableImageCanvas(image: page.image, onBackdropTap: { dismiss() })
+                        .padding(.top, 52)
+                        .padding(.bottom, selection.items.count > 1 ? 54 : 18)
+                        .padding(.horizontal, 12)
+                        .tag(offset)
+                        .accessibilityLabel(page.title)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .ignoresSafeArea()
 
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
@@ -462,7 +471,7 @@ struct IOSImagePreviewGallery: View {
 
     private func show(_ nextIndex: Int) {
         guard selection.items.indices.contains(nextIndex) else { return }
-        index = nextIndex
+        withAnimation(.easeInOut(duration: 0.25)) { index = nextIndex }
     }
 
     private func navigationButton(
