@@ -66,7 +66,7 @@ private struct SessionCardBody: View {
                 titleRow
                     .frame(height: 20)
                 metadataRow
-                    .frame(height: 18)
+                    .frame(minHeight: 18)
                 previewRow
                     .frame(height: 18)
             }
@@ -118,49 +118,10 @@ private struct SessionCardBody: View {
     }
 
     private var metadataRow: some View {
-        HStack(spacing: 6) {
-            if let machineName = projection.machineName {
-                Circle()
-                    .fill(deviceStatusColor)
-                    .frame(width: 6, height: 6)
-
-                Text(machineName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-
-            if projection.machineName != nil,
-               let model = projection.model,
-               !model.isEmpty {
-                Rectangle()
-                    .fill(Color.borderPrimary)
-                    .frame(width: 1, height: 9)
-            }
-
-            if let model = projection.model, !model.isEmpty {
-                Text(model)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-
-            if let effort = projection.effortLabel {
-                Text("· \(effort)")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(1)
-                    .accessibilityLabel("Reasoning effort: \(effort)")
-                    .accessibilityIdentifier("session-effort-\(session.id)")
-            }
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        SessionCardMetadataRow(machineName: projection.machineName, model: projection.model,
+                               effort: projection.effortLabel, sessionId: session.id,
+                               font: .caption, deviceColor: .secondary, modelColor: Color(.tertiaryLabel),
+                               statusColor: deviceStatusColor)
     }
 
     private var previewRow: some View {

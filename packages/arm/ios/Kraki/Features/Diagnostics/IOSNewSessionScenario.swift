@@ -308,7 +308,10 @@ struct IOSNewSessionScenarioView: View {
                 vc.scrollViewWillBeginDragging(chat)
                 vc.automationMarkUserScrolledAway()
                 for _ in 0..<8 {
-                    chat.contentOffset.y -= 30
+                    // This synthetic drag has no UIKit rubber-band gesture to
+                    // settle. Stay inside the real scroll range so the test
+                    // checks reading stability, not normal overscroll recovery.
+                    chat.contentOffset.y = max(-chat.adjustedContentInset.top, chat.contentOffset.y - 30)
                     vc.scrollViewDidScroll(chat)
                     await pause(16)
                 }

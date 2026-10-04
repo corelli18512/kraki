@@ -147,7 +147,7 @@ struct SessionCardStatusGlyph: View {
             case .waiting:
                 LucideIcon(.messageCircleQuestion, size: 14, strokeWidth: 2.2, color: Color(hex: 0xD97706))
             case .approval:
-                LucideIcon(.shieldQuestion, size: 14, strokeWidth: 2.2, color: Color(hex: 0xD97706))
+                LucideIcon(.shieldQuestion, size: SessionStatusGlyphMetrics.approvalSize, strokeWidth: 2.2, color: Color(hex: 0xD97706))
             case .error:
                 LucideIcon(.circleSlash, size: 14, strokeWidth: 2.2, color: .red)
             case .offline:
@@ -155,7 +155,7 @@ struct SessionCardStatusGlyph: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
             case .agentMessage:
-                LucideIcon(.botMessageSquare, size: 13, strokeWidth: 1.9, color: .krakiPrimary)
+                LucideIcon(.botMessageSquare, size: SessionStatusGlyphMetrics.agentSize, strokeWidth: 1.9, color: .krakiPrimary)
             case .humanMessage:
                 if hasDraft {
                     LucideIcon(.keyboard,
@@ -163,7 +163,7 @@ struct SessionCardStatusGlyph: View {
                                strokeWidth: 2,
                                color: Color(hex: 0x4F8C86))
                 } else {
-                    LucideIcon(.circleUser, size: 13, strokeWidth: 1.9, color: .secondary)
+                    LucideIcon(.circleUser, size: SessionStatusGlyphMetrics.humanSize, strokeWidth: 1.9, color: .secondary)
                 }
             case .idle:
                 Color.clear

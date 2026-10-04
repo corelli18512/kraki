@@ -48,6 +48,9 @@ final class MacSessionSmoothScrollProbeView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = false
+        controller.onActivityChanged = { [weak self] active in
+            self?.transientScrollerController.setWheelGlideActive(active)
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -58,6 +61,7 @@ final class MacSessionSmoothScrollProbeView: NSView {
         super.viewDidMoveToWindow()
         attachGeneration += 1
         attachRetryCount = 0
+        if window == nil { transientScrollerController.hideImmediately() }
         attachToEnclosingScrollView()
     }
 
@@ -546,7 +550,7 @@ struct MacSidebarSessionRow: View {
                 titleRow
                     .frame(height: 17)
                 metadataRow
-                    .frame(height: 15)
+                    .frame(minHeight: 15)
                 previewRow
                     .frame(height: 17)
             }
@@ -594,43 +598,9 @@ struct MacSidebarSessionRow: View {
     }
 
     private var metadataRow: some View {
-        HStack(spacing: 6) {
-            if let machineName = projection.machineName {
-                Text(machineName)
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-
-            if projection.machineName != nil, let model = projection.model, !model.isEmpty {
-                Rectangle()
-                    .fill(Color.borderPrimary)
-                    .frame(width: 1, height: 9)
-            }
-
-            if let model = projection.model, !model.isEmpty {
-                Text(model)
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.textMuted)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-
-            if let effort = projection.effortLabel {
-                Text("· \(effort)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.textMuted)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(1)
-                    .accessibilityLabel("Reasoning effort: \(effort)")
-                    .accessibilityIdentifier("session-effort-\(session.id)")
-            }
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        SessionCardMetadataRow(machineName: projection.machineName, model: projection.model,
+                               effort: projection.effortLabel, sessionId: session.id,
+                               font: .system(size: 10), deviceColor: .textSecondary, modelColor: .textMuted)
     }
 
     @ViewBuilder
@@ -689,7 +659,7 @@ private struct MacSessionStatusGlyph: View {
                            color: Color(hex: 0xD97706))
             case .approval:
                 LucideIcon(.shieldQuestion,
-                           size: 14,
+                           size: SessionStatusGlyphMetrics.approvalSize,
                            strokeWidth: 2.2,
                            color: Color(hex: 0xD97706))
             case .error:
@@ -703,7 +673,7 @@ private struct MacSessionStatusGlyph: View {
                     .foregroundStyle(Color.textMuted)
             case .agentMessage:
                 LucideIcon(.botMessageSquare,
-                           size: 13,
+                           size: SessionStatusGlyphMetrics.agentSize,
                            strokeWidth: 1.9,
                            color: Color.krakiPrimary)
             case .humanMessage:
@@ -714,7 +684,7 @@ private struct MacSessionStatusGlyph: View {
                                color: macDraftAccent)
                 } else {
                     LucideIcon(.circleUser,
-                               size: 13,
+                               size: SessionStatusGlyphMetrics.humanSize,
                                strokeWidth: 1.9,
                                color: Color.textSecondary)
                 }

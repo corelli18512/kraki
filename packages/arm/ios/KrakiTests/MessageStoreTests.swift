@@ -208,6 +208,49 @@ final class MessageStoreTests: XCTestCase {
         XCTAssertEqual(store.cards[sid]?.text, "next turn")
     }
 
+    // MARK: Catch-up card hold
+
+    private func spine(_ type: String, _ seq: Int, _ sid: String) -> ChatMessage {
+        ChatMessage(type: type, seq: seq, sessionId: sid, deviceId: nil, timestamp: nil,
+                    payload: ["content": AnyCodable("m\(seq)")])
+    }
+
+    func testSubscriptionCardWaitsForItsUserMessage() {
+        let sid = "card-hold"
+        store.persist(sid, [spine("user_message", 1, sid), spine("agent_message", 2, sid)])
+        store.beginCardTurn(sid)
+        store.replaceCardFromSubscription(sid, draft: "", action: ChatMessage(
+            type: "tool", seq: 0, sessionId: nil, deviceId: nil, timestamp: nil,
+            payload: ["toolName": AnyCodable("bash")]), state: .active)
+        store.holdCard(sid, untilSeq: 3)
+        XCTAssertNotNil(store.cards[sid])
+        XCTAssertNil(store.visibleCard(sid), "the user's message (seq 3) is not here yet")
+        store.persist(sid, [spine("user_message", 3, sid)])
+        XCTAssertNotNil(store.visibleCard(sid), "shown once the catch-up stored its message")
+        XCTAssertEqual(store.persistedHead(sid), 3)
+    }
+
+    func testLegacyHeadThatIsNeverStoredStillCountsAsCaughtUp() {
+        let sid = "legacy-head"
+        store.persist(sid, [spine("user_message", 1, sid), spine("agent_message", 2, sid)])
+        store.replaceCardFromSubscription(sid, draft: "working", action: nil, state: .active)
+        // Tentacle reports lastSeq 9: seqs 3…9 were tool events clients never store.
+        store.holdCard(sid, untilSeq: 9)
+        XCTAssertNil(store.visibleCard(sid))
+        store.markCaughtUp(sid, through: 9)
+        XCTAssertEqual(store.persistedHead(sid), 9)
+        XCTAssertNotNil(store.visibleCard(sid))
+    }
+
+    func testReleasedHoldShowsTheCard() {
+        let sid = "released-hold"
+        store.replaceCardFromSubscription(sid, draft: "working", action: nil, state: .active)
+        store.holdCard(sid, untilSeq: 5)
+        XCTAssertNil(store.visibleCard(sid))
+        store.releaseCardHold(sid)
+        XCTAssertNotNil(store.visibleCard(sid))
+    }
+
     func testRestoreCardGateUsesLatestPersistedConversationBoundary() {
         let sid = "restored-card-turn"
         let user = ChatMessage(type: "user_message", seq: 1, sessionId: sid, deviceId: nil,

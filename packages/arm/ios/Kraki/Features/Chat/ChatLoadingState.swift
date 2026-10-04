@@ -49,15 +49,26 @@ enum ChatEntryLoading {
 }
 
 enum ChatBottomObstruction {
+    /// Reserve the resting capsule, not its expanding glass surface. The visible
+    /// gap above the capsule equals its bottom padding; the last cell already
+    /// contributes `bubbleBottomPadding` to that gap. System safe area is added
+    /// separately by the platform and must not be counted a second time.
+    static func composerClearance(
+        capsuleHeight: CGFloat,
+        bottomPadding: CGFloat,
+        bubbleBottomPadding: CGFloat
+    ) -> CGFloat {
+        max(0, capsuleHeight + bottomPadding * 2 - bubbleBottomPadding)
+    }
+
     static func height(
-        measuredComposerHeight: CGFloat,
+        composerClearance: CGFloat,
         composerVisible: Bool,
         compacting: Bool
     ) -> CGFloat {
-        // 48pt capsule + 6pt top/bottom composer padding.
-        let composerFloor: CGFloat = composerVisible ? 60 : 0
+        let composerFloor: CGFloat = composerVisible ? composerClearance : 0
         let compactionFloor: CGFloat = compacting ? 40 : 0
         let spacing: CGFloat = composerVisible && compacting ? 8 : 0
-        return max(measuredComposerHeight, composerFloor + compactionFloor + spacing)
+        return composerFloor + compactionFloor + spacing
     }
 }

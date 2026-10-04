@@ -127,7 +127,7 @@ export function Sidebar() {
             )}
           </div>
         </div>
-        {reconnecting && <div className="ksb-status"><span className="kspinner ksb-spin" /> Reconnecting…</div>}
+        {reconnecting && <div className="ksb-status"><span className="kspinner ksb-spin" /> Connecting…</div>}
         {status === 'connecting' && !reconnecting && total === 0 && <div className="ksb-status"><span className="kspinner ksb-spin" /> Connecting…</div>}
         <div className="ksb-scroll">{list}</div>
         <div className="ksb-footer">
@@ -147,7 +147,7 @@ export function Sidebar() {
         <>
           <div className="ksb-hero">
             <Brand />
-            {reconnecting && <span className="kspinner ksb-spin" aria-label="Reconnecting" />}
+            {reconnecting && <span className="kspinner ksb-spin" aria-label="Connecting" />}
           </div>
           <div className="ksb-scroll">{list}<div className="ksb-tabbar-space" /></div>
         </>

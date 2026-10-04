@@ -133,7 +133,8 @@ export function SessionPage() {
   return (
     <div className="kchat-page">
       <ChatHeader
-        title={displayTitle}
+        // Reconnecting is silent in the conversation; only the title says so.
+        title={isReconnecting ? 'Connecting…' : displayTitle}
         mode={sessionMode}
         narrow={narrow}
         backBadge={totalOtherUnread}
@@ -144,9 +145,9 @@ export function SessionPage() {
         }}
         onMode={(mode) => wsClient.setSessionMode(sessionId!, mode)}
       />
-      {(isReconnecting || !isDeviceOnline) && (
+      {!isReconnecting && !isDeviceOnline && (
         <div className="kchat-banner" style={{ top: topInset }}>
-          {isReconnecting ? 'Reconnecting…' : `${session.deviceName ?? 'Device'} is offline — messages will be sent when it reconnects`}
+          {`${session.deviceName ?? 'Device'} is offline — messages will be sent when it reconnects`}
         </div>
       )}
 

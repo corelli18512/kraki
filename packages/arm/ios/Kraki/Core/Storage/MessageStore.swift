@@ -157,6 +157,7 @@ final class MessageStore {
     func append(_ sessionId: String, _ message: ChatMessage) {
         if Self.isPersistent(message) {
             try? db.insert(sessionId, [message])
+            notePersisted(sessionId, upTo: message.seq)
         }
 
         guard let state = windows[sessionId] else { return }
@@ -285,6 +286,39 @@ final class MessageStore {
         #endif
 
         try? db.insert(sessionId, batch)
+        notePersisted(sessionId, upTo: batch.last?.seq ?? 0)
+    }
+
+    // MARK: - Local head
+
+    /// Newest persisted spine seq per session, observable so views can tell
+    /// local pagination ("older/newer rows already on this device") apart
+    /// from network catch-up without querying SQLite in every render. Filled
+    /// on write; sessions not written in this process fall back to the DB.
+    private(set) var persistedHeads: [String: Int] = [:]
+
+    func persistedHead(_ sessionId: String) -> Int {
+        persistedHeads[sessionId] ?? dbLastSeq(sessionId)
+    }
+
+    /// The Tentacle answered a head request: everything it has through `seq`
+    /// is on this device, even when the last seqs are ones clients never store
+    /// (legacy sessions counted tool events). Without this, such a session
+    /// would read "Syncing…" and hold its card forever.
+    func markCaughtUp(_ sessionId: String, through seq: Int) {
+        guard seq > 0 else { return }
+        persistedHeads[sessionId] = max(persistedHead(sessionId), seq)
+    }
+
+    func releaseCardHold(_ sessionId: String) {
+        cardHoldUntil.removeValue(forKey: sessionId)
+    }
+
+    private func notePersisted(_ sessionId: String, upTo seq: Int) {
+        let current = persistedHeads[sessionId] ?? dbLastSeq(sessionId)
+        if seq > current || persistedHeads[sessionId] == nil {
+            persistedHeads[sessionId] = max(current, seq)
+        }
     }
 
     /// Prepend a page selected by persistent-spine row order. Unlike the live
@@ -766,6 +800,8 @@ final class MessageStore {
         runtimeStatusBySession.removeValue(forKey: sessionId)
         cards.removeValue(forKey: sessionId)
         traces.removeValue(forKey: sessionId)
+        cardHoldUntil.removeValue(forKey: sessionId)
+        persistedHeads.removeValue(forKey: sessionId)
         try? db.deleteSession(sessionId)
     }
 
@@ -775,6 +811,7 @@ final class MessageStore {
     /// incarnation.
     func dropMessagesAboveSeq(_ sessionId: String, seq: Int) {
         try? db.dropAboveSeq(sessionId, seq: seq)
+        persistedHeads.removeValue(forKey: sessionId)
         if var state = windows[sessionId] {
             if state.bottomSeq > seq {
                 // Trim window in memory too.
@@ -1009,6 +1046,24 @@ final class MessageStore {
         cards[sessionId] = SessionCard(text: draft, action: action)
     }
 
+    /// A subscription snapshot describes the turn after `seq`. Until this
+    /// device has caught up to it (the user's message is in the list), the
+    /// card would float under older history, so it is held back; live card
+    /// events keep updating it meanwhile.
+    private(set) var cardHoldUntil: [String: Int] = [:]
+
+    func holdCard(_ sessionId: String, untilSeq seq: Int) {
+        guard seq > 0 else { cardHoldUntil.removeValue(forKey: sessionId); return }
+        cardHoldUntil[sessionId] = seq
+    }
+
+    /// The card as the conversation may show it.
+    func visibleCard(_ sessionId: String) -> SessionCard? {
+        guard let card = cards[sessionId] else { return nil }
+        if let until = cardHoldUntil[sessionId], persistedHead(sessionId) < until { return nil }
+        return card
+    }
+
     /// Land-and-clear: the concluding bubble landed on the spine, drop the card.
     func clearCard(_ sessionId: String) {
         cards.removeValue(forKey: sessionId)
@@ -1038,6 +1093,8 @@ final class MessageStore {
         traces.removeAll()
         messages.removeAll()
         windows.removeAll()
+        cardHoldUntil.removeAll()
+        persistedHeads.removeAll()
         try? db.deleteAll()
     }
 }
