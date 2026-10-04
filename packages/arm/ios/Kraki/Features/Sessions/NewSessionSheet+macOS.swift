@@ -25,6 +25,13 @@ struct NewSessionComposer: View {
     /// after (switching away from a session) still plays the nudge.
     static var nudgeRequestedAt: Date?
     @State private var nudged = false
+    /// The user chose a computer by hand; stop re-picking the default.
+    @State private var userPickedDevice = false
+
+    private var thisMacOnline: Bool {
+        guard let id = localDeviceId else { return false }
+        return onlineTentacles.contains { $0.id == id }
+    }
 
     private func nudge() {
         Self.nudgeRequestedAt = nil
@@ -118,6 +125,14 @@ struct NewSessionComposer: View {
             nudge()
         }
         .onChange(of: selectedDeviceId) { _, _ in onDeviceChanged() }
+        // The composer can appear before this Mac's background service is
+        // online (first launch, after a restart). Prefer This Mac once it is,
+        // unless the user already picked or last used another online computer.
+        .onChange(of: thisMacOnline) { _, online in
+            guard online, !userPickedDevice,
+                  !onlineTentacles.contains(where: { $0.id == SessionPrefs.lastDeviceId() }) else { return }
+            selectDefaults()
+        }
         .onChange(of: selectedAgentId) { _, _ in onAgentChanged() }
         .onChange(of: selectedModel) { _, _ in onModelChanged() }
         .onChange(of: agents.map(\.id)) { _, _ in onDeviceChanged() }
@@ -159,7 +174,7 @@ struct NewSessionComposer: View {
                       dot: selectedDevice?.online == true ? Color(hex: 0x34D399) : Color.textMuted)
         } content: {
             DeviceChoiceList(online: onlineTentacles, offline: offlineTentacles, localId: localDeviceId,
-                             selected: selectedDeviceId) { selectedDeviceId = $0; openPill = nil }
+                             selected: selectedDeviceId) { selectedDeviceId = $0; userPickedDevice = true; openPill = nil }
         }
         .help(selectedDevice?.name ?? "")
         .accessibilityIdentifier("mac.newSession.device")
