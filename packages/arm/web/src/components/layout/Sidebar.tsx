@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { BotMessageSquare, Download, MonitorCloud, Plus, Search, Settings, UserCog, X } from 'lucide-react';
+import { BotMessageSquare, Download, Gauge, MonitorCloud, Plus, Search, Settings, UserCog, X } from 'lucide-react';
+import { OPEN_USAGE_EVENT, USAGE_SHORTCUT } from '../usage/UsagePanel';
 import { useStore } from '../../hooks/useStore';
 import { useShowsReconnecting } from '../../hooks/useShowsReconnecting';
 import { useNarrow } from '../../hooks/useNarrow';
@@ -158,6 +159,7 @@ export function Sidebar() {
         <div className="ksb-footer">
           <ProfileBar compact />
           <button type="button" className="ksb-icon" aria-label="Devices" title="Devices" onClick={() => navigate('/devices')}><MonitorCloud /></button>
+          <button type="button" className="ksb-icon" aria-label="Account Usage" title={`Account Usage (hold ${USAGE_SHORTCUT})`} onClick={() => window.dispatchEvent(new Event(OPEN_USAGE_EVENT))} data-testid="sidebar-usage"><Gauge /></button>
           <button type="button" className="ksb-icon" aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}><Settings /></button>
         </div>
         <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />

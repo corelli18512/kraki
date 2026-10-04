@@ -17,7 +17,7 @@
 .ns-phone-link {
   display: inline-flex; align-items: center; gap: 5px;
   border: 0; background: none; padding: 0; cursor: pointer;
-  font: 11.5px inherit; font-family: inherit; color: var(--color-text-muted);
+  font-size: 11.5px; font-family: inherit; color: var(--color-text-muted);
 }
 .ns-phone-link:hover { color: var(--color-text-secondary); }
 
@@ -48,7 +48,7 @@
   outline: none;
   background: transparent;
   padding: 0;
-  font: 14px/20px inherit;
+  font-size: 14px; line-height: 20px;
   font-family: inherit;
   color: var(--color-text-primary);
   overflow-y: auto;
@@ -68,7 +68,7 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
   color: var(--color-text-secondary);
-  font: 500 11.5px inherit;
+  font-weight: 500; font-size: 11.5px;
   font-family: inherit;
   white-space: nowrap;
   cursor: pointer;
@@ -165,7 +165,7 @@
   align-self: flex-start;
   height: 22px; padding: 0 10px; border: 0; border-radius: 6px;
   background: rgba(0, 0, 0, 0.085); color: var(--color-text-primary);
-  font: 12px inherit; font-family: inherit; cursor: pointer;
+  font-size: 12px; font-family: inherit; cursor: pointer;
 }
 .dark .ns-check { background: rgba(255, 255, 255, 0.14); }
 .ns-check:disabled { opacity: 0.5; }

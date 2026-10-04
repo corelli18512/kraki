@@ -10,6 +10,7 @@ import { useSessionShortcuts } from './hooks/useSessionShortcuts';
 import { wsClient } from './lib/ws-client';
 import { desktop, desktopCredentials } from './lib/desktop';
 import { ConnectPhoneHost } from './components/devices/ConnectPhoneCard';
+import { UsagePanel } from './components/usage/UsagePanel';
 
 function RelayBlockingOverlay({
   status,
@@ -137,6 +138,7 @@ export function App() {
         </ErrorBoundary>
       </main>
       <ConnectPhoneHost />
+      <UsagePanel />
       {showBlockingOverlay && (
         <RelayBlockingOverlay
           status={status}

@@ -109,6 +109,10 @@ export interface AppState {
   deviceAgents: Map<string, AgentCapabilities[]>;
   deviceVersions: Map<string, string>;
 
+  // Subscription account usage per tentacle (device_usage), and refreshes in flight
+  deviceUsage: Map<string, import('../lib/usage').DeviceUsageSnapshot>;
+  usageRefreshes: Map<string, import('../lib/usage').UsageRefreshState>;
+
   // Per-session cumulative token usage
   sessionUsage: Map<string, SessionUsage>;
 
@@ -173,6 +177,9 @@ export interface AppActions {
   setLocalSessionsLoading: (loading: boolean) => void;
   setArchiveInfo: (deviceId: string, info: { count: number; days: number }) => void;
   setArchivedSessions: (deviceId: string, sessions: import('@kraki/protocol').SessionDigest[]) => void;
+  receiveDeviceUsage: (deviceId: string, payload: { accounts: import('@kraki/protocol').AccountUsage[]; requestId?: string; refreshError?: string }) => void;
+  beginUsageRefresh: (deviceId: string, requestId: string) => void;
+  finishUsageRefresh: (deviceId: string, requestId: string, error?: string) => void;
   clearTransientState: () => void;
   reset: () => void;
 

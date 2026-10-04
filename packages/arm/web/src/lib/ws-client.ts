@@ -1,3 +1,4 @@
+import { canRefreshUsage } from './usage';
 import { desktopCredentials, setDesktopSignedOut } from './desktop';
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
@@ -511,6 +512,35 @@ export class KrakiWSClient {
 
   archiveSession(sessionId: string, archived: boolean) {
     commands.archiveSession(sessionId, archived, (msg) => this.sendEncrypted(msg));
+  }
+
+  /** True when the tentacle's greeting lists this feature. */
+  deviceHasFeature(deviceId: string, feature: string): boolean | undefined {
+    const f = this.deviceFeatures.get(deviceId);
+    return f ? f.has(feature) : undefined;
+  }
+
+  /**
+   * Ask tentacles for a fresh account usage reading (CommandSender
+   * .refreshAccountUsage on Mac/iOS): online ones that support it, at most
+   * once a minute each; provider cooldowns still apply on the tentacle.
+   */
+  refreshAccountUsage(opts: { automatic?: boolean; deviceIds?: string[] } = {}): number {
+    const store = getStore();
+    if (store.status !== 'connected') return 0;
+    let sent = 0;
+    for (const d of store.devices.values()) {
+      if (d.role !== 'tentacle' || !d.online) continue;
+      if (opts.deviceIds && !opts.deviceIds.includes(d.id)) continue;
+      if (!this.deviceHasFeature(d.id, 'account_usage_refresh')) continue;
+      if (!canRefreshUsage(store.usageRefreshes.get(d.id), store.deviceUsage.get(d.id), !!opts.automatic)) continue;
+      const requestId = crypto.randomUUID();
+      store.beginUsageRefresh(d.id, requestId);
+      this.sendEncryptedTo(d.id, { type: 'refresh_account_usage', deviceId: store.deviceId ?? undefined, payload: { requestId } });
+      setTimeout(() => getStore().finishUsageRefresh(d.id, requestId, 'timeout'), 120_000);
+      sent++;
+    }
+    return sent;
   }
 
   requestArchivedSessions(targetDeviceId: string) {

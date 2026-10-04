@@ -135,6 +135,13 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     return;
   }
 
+  // device_usage — subscription accounts and remaining quota from a tentacle
+  if (msg.type === 'device_usage') {
+    const payload = (msg as { payload?: { accounts?: import('@kraki/protocol').AccountUsage[]; requestId?: string; refreshError?: string } }).payload;
+    if (msg.deviceId && payload) store.receiveDeviceUsage(msg.deviceId, { accounts: payload.accounts ?? [], requestId: payload.requestId, refreshError: payload.refreshError });
+    return;
+  }
+
   // archived_session_list — response to request_archived_sessions (F2)
   if (msg.type === 'archived_session_list') {
     const payload = (msg as { payload: { sessions?: import('@kraki/protocol').SessionDigest[] } }).payload;
