@@ -7,7 +7,7 @@
 // The app owns the daemon (managed-by.json, by "kraki-windows"): it starts it
 // now and at every login (HKCU Run, through conhost --headless so no console
 // appears), and a separately installed CLI then defers to it.
-const { execFile, spawn } = require('node:child_process');
+const { execFile, execFileSync, spawn } = require('node:child_process');
 const { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -29,11 +29,41 @@ function binaryPath(resourcesPath) {
   return path.join(resourcesPath, 'kraki', exe);
 }
 
+/** One PATH value from the registry (REG_EXPAND_SZ expanded), or ''. */
+function registryPath(key) {
+  try {
+    const out = execFileSync('reg', ['query', key, '/v', 'Path'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+    const m = /\s+Path\s+REG_(?:EXPAND_)?SZ\s+(.*)/i.exec(out);
+    return m ? m[1].trim().replace(/%([^%]+)%/g, (all, name) => process.env[name] ?? all) : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * PATH as a new process would get it now: this process's PATH plus whatever
+ * the system and user PATH in the registry gained since the app started
+ * (an agent, Node or Git installed while Kraki is open). Windows' version of
+ * Kraki for Mac reading the login shell's environment.
+ */
+function currentPath(own) {
+  if (process.platform !== 'win32') return own;
+  const parts = [own,
+    registryPath('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment'),
+    registryPath('HKCU\\Environment')].join(';').split(';').map((p) => p.trim()).filter(Boolean);
+  const seen = new Set();
+  return parts.filter((p) => { const k = p.toLowerCase().replace(/\\+$/, ''); if (seen.has(k)) return false; seen.add(k); return true; }).join(';');
+}
+
 /** Environment for every tentacle child: never inherit a supervisor's marks. */
 function childEnv(extra = {}) {
   const env = { ...process.env, ...extra };
   delete env.KRAKI_SUPERVISED;
   delete env.ELECTRON_RUN_AS_NODE;
+  const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'Path';
+  const value = currentPath(env[pathKey] ?? '');
+  for (const k of Object.keys(env)) if (k.toLowerCase() === 'path') delete env[k];
+  env.Path = value;
   return env;
 }
 
@@ -134,7 +164,10 @@ class BuiltInKraki {
     const config = readJson(path.join(home, 'config.json'));
     let token = null;
     try { token = readFileSync(path.join(home, 'github-token'), 'utf8').trim() || null; } catch { /* none */ }
-    return config?.relay && token ? { relay: config.relay, token } : null;
+    if (!config?.relay) return null;
+    // A self-hosted relay without accounts (`--auth open`) needs no token.
+    if (config.authMethod === 'open') return { relay: config.relay, token: null };
+    return token ? { relay: config.relay, token } : null;
   }
 
   /** A pairing link for a phone (`kraki connect --json`), as Kraki for Mac does. */
@@ -243,4 +276,4 @@ class BuiltInKraki {
   }
 }
 
-module.exports = { BuiltInKraki, OWNER };
+module.exports = { BuiltInKraki, OWNER, currentPath };

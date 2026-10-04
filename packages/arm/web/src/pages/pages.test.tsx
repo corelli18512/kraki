@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { useStore } from '../hooks/useStore';
@@ -207,5 +207,18 @@ describe('Composer', () => {
   it('Stop is disabled while the device is unreachable', () => {
     render(<Composer {...baseProps} canAbort reachable={false} intent="steer" />);
     expect(screen.getByRole('button', { name: 'Stop agent' })).toBeDisabled();
+  });
+});
+
+describe('New session composer default computer', () => {
+  it('switches to the last-used computer when it comes online after the composer appeared', () => {
+    localStorage.setItem('kraki:last-device', 'pc');
+    useStore.getState().setStatus('connected');
+    useStore.getState().setDevices([{ id: 'mac', name: 'Local Mac', role: 'tentacle', online: true }, { id: 'pc', name: 'Alex-PC', role: 'tentacle', online: false }]);
+    renderWithRoute('/', <DashboardPage />);
+    expect(screen.getByTestId('new-session-device')).toHaveTextContent('Local Mac');
+    act(() => useStore.getState().setDevices([{ id: 'mac', name: 'Local Mac', role: 'tentacle', online: true }, { id: 'pc', name: 'Alex-PC', role: 'tentacle', online: true }]));
+    expect(screen.getByTestId('new-session-device')).toHaveTextContent('Alex-PC');
+    localStorage.removeItem('kraki:last-device');
   });
 });

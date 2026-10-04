@@ -63,7 +63,10 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
   const [error, setError] = useState<string | null>(null);
   const [agentsOpen, setAgentsOpen] = useState(false);
 
-  const refresh = useCallback(async () => setState(await builtIn.state()), [builtIn]);
+  const refresh = useCallback(async () => {
+    const next = await builtIn.state();
+    setState((prev) => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+  }, [builtIn]);
   useEffect(() => {
     void refresh();
     const t = setInterval(() => { void refresh(); }, 3000);

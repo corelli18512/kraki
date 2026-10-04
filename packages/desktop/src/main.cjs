@@ -218,9 +218,13 @@ ipcMain.on('kraki:badge', (_e, count) => {
 
 // ── The built-in Kraki (see tentacle.cjs) ──
 
+/** The open GitHub sign-in window, closed again when setup is cancelled. */
+let signInWindow = null;
+
 /** GitHub sign-in in a window of our own; resolves with kraki://auth/callback?… */
 function openSignInWindow(url) {
   return new Promise((resolve) => {
+    if (signInWindow && !signInWindow.isDestroyed()) signInWindow.close();
     const child = new BrowserWindow({
       parent: win ?? undefined,
       modal: !!win,
@@ -248,7 +252,8 @@ function openSignInWindow(url) {
     child.webContents.on('will-redirect', intercept);
     child.webContents.on('will-navigate', intercept);
     child.webContents.setWindowOpenHandler(({ url: u }) => { void shell.openExternal(u); return { action: 'deny' }; });
-    child.on('closed', () => finish(null));
+    child.on('closed', () => { if (signInWindow === child) signInWindow = null; finish(null); });
+    signInWindow = child;
     void child.loadURL(url);
   });
 }
@@ -270,7 +275,10 @@ ipcMain.handle('kraki:builtin-setup', async (_e, opts) => builtIn.setup({
   openSignIn: openSignInWindow,
 }));
 ipcMain.handle('kraki:builtin-connect', () => builtIn?.connectPhone() ?? { ok: false, error: 'not_available' });
-ipcMain.on('kraki:builtin-cancel-setup', () => builtIn?.cancelSetup());
+ipcMain.on('kraki:builtin-cancel-setup', () => {
+  builtIn?.cancelSetup();
+  if (signInWindow && !signInWindow.isDestroyed()) signInWindow.close();
+});
 ipcMain.handle('kraki:builtin-enable', safely(() => builtIn.enable()));
 ipcMain.handle('kraki:builtin-disable', safely(() => builtIn.disable()));
 ipcMain.handle('kraki:builtin-restart', safely(() => builtIn.restart()));

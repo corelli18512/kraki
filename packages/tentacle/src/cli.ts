@@ -142,7 +142,7 @@ function refuseManaged(action: 'start' | 'stop' | 'update' | 'setup', managed: M
       start: 'Open Kraki for Windows to start it (Settings → This PC).',
       stop: 'Stop it from Kraki for Windows (Settings → This PC).',
       update: 'Kraki for Windows updates its built-in Kraki together with the app.',
-      setup: 'Reconfigure from Kraki for Windows, or switch it to "Use external CLI" in Settings → This PC first.',
+      setup: 'Reconfigure from Kraki for Windows, or turn off "Run agents on this PC" in its Settings → This PC first.',
     };
     console.log(chalk.dim(`  ${winHint[action]}`));
     process.exitCode = 1;
@@ -332,7 +332,7 @@ async function cmdStart(atLogin = false): Promise<void> {
     // reboot (seen in a clean Windows 11 VM). Drop it first.
     if (clearPidFromBeforeBoot()) appendLoginLog('dropped a daemon.pid from before this boot');
     if (!config) { appendLoginLog('no config; not starting'); return; }
-    if (loadManagedBy()) { appendLoginLog('managed by Kraki for Mac; not starting'); return; }
+    { const m = loadManagedBy(); if (m) { appendLoginLog(`managed by ${ownerName(m.by)}; not starting`); return; } }
     if (isDaemonRunning()) { appendLoginLog('already running'); return; }
     try {
       const pid = await startDaemon(config);

@@ -177,16 +177,14 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
     setDeviceId(next);
   }, [online, tentacles, localId]);
 
-  useEffect(() => { if (!device?.online) selectDefaults(); }, [online.map((d) => d.id).join(','), selectDefaults]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // This PC comes online after the composer appeared (first launch, restart):
-  // prefer it unless the user picked, or last used, another online computer.
-  const localOnline = !!localId && online.some((d) => d.id === localId);
+  // Computers come online after the composer appeared (first launch, a
+  // restart, an update): until the user picks one by hand, keep the default
+  // — last used, else this PC, else any online one — current.
+  const onlineKey = online.map((d) => d.id).join(',');
   useEffect(() => {
-    if (!localOnline || userPickedDevice.current) return;
-    if (online.some((d) => d.id === localStorage.getItem(LAST_DEVICE_KEY))) return;
+    if (userPickedDevice.current && device?.online) return;
     selectDefaults();
-  }, [localOnline]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [onlineKey, localId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Device → agent (remembered per computer).
   const agentIds = agentList.map((a) => a.id).join(',');

@@ -45,7 +45,7 @@ export interface BuiltInBridge {
   disable: () => Promise<{ ok: boolean; error?: string }>;
   restart: () => Promise<{ ok: boolean; error?: string }>;
   /** The relay + GitHub token the app signs in with (same account). */
-  credentials: () => { relay: string; token: string } | null;
+  credentials: () => { relay: string; token: string | null } | null;
   openLogs: () => void;
 }
 
@@ -96,7 +96,7 @@ const SIGNED_OUT_KEY = 'kraki-desktop.signedOut';
  * The account of the Kraki built into the desktop app, unless the user signed
  * the app out (then setup asks to sign in again, like Kraki for Mac).
  */
-export function desktopCredentials(): { relay: string; token: string } | null {
+export function desktopCredentials(): { relay: string; token: string | null } | null {
   if (!desktop?.builtIn) return null;
   if (localStorage.getItem(SIGNED_OUT_KEY) === '1') return null;
   return desktop.builtIn.credentials();

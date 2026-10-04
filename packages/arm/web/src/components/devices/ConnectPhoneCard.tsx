@@ -52,11 +52,16 @@ function Card({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     if (connected) return;
     const joined = onlineApps.find((d) => !baseline.current!.has(d.id));
-    if (!joined) return;
-    setConnected(joined.name);
+    if (joined) setConnected(joined.name);
+  }, [onlineApps, connected]);
+
+  // Close on its own once connected. Its own effect: later device-list
+  // updates must not cancel the timer.
+  useEffect(() => {
+    if (!connected) return;
     const t = setTimeout(onClose, 2200);
     return () => clearTimeout(t);
-  }, [onlineApps, connected, onClose]);
+  }, [connected, onClose]);
 
   const load = useCallback(async () => {
     setLoading(true);

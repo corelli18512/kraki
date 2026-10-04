@@ -30,7 +30,8 @@
       "build/icon.png",
       "build/tray.png",
       "build/badge.png",
-      "package.json"
+      "package.json",
+      "build/icon.ico"
     ],
     "asar": true,
     "protocols": [
@@ -50,14 +51,19 @@
           ]
         }
       ],
-      "icon": "build/icon.png"
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "shortcutName": "Kraki",
-      "artifactName": "Kraki-Setup-${version}-x64.${ext}"
+      "artifactName": "Kraki-Setup-${version}-x64.${ext}",
+      "installerLanguages": [
+        "en_US"
+      ],
+      "multiLanguageInstaller": false,
+      "include": "build/installer.nsh"
     },
     "linux": {
       "target": [

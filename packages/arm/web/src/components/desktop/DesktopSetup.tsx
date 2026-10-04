@@ -63,7 +63,12 @@ export function DesktopSetup({ builtIn }: { builtIn: BuiltInBridge }) {
     () => (isDesktopSignedOut() ? 'signedOut' : triedCredentials ? 'expired' : null));
   const signInAgain = again !== null;
 
-  const refresh = useCallback(async () => { setState(await builtIn.state()); }, [builtIn]);
+  // Keep the same object while nothing changed: the poll must not re-render
+  // (and restart timers in) the page every few seconds.
+  const refresh = useCallback(async () => {
+    const next = await builtIn.state();
+    setState((prev) => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+  }, [builtIn]);
   useEffect(() => {
     void refresh();
     const t = setInterval(() => { void refresh(); }, 3000);
@@ -136,10 +141,16 @@ function Backdrop() {
 /** Kraki for Mac's MacSetupIntro: circle-clip logo reveal, wordmark, tagline. */
 function Intro({ onFinished }: { onFinished: () => void }) {
   const [leaving, setLeaving] = useState(false);
+  const done = useRef(onFinished);
+  done.current = onFinished;
+  const leftRef = useRef(false);
   const finish = useCallback(() => {
+    if (leftRef.current) return;
+    leftRef.current = true;
     setLeaving(true);
-    setTimeout(onFinished, 450);
-  }, [onFinished]);
+    setTimeout(() => done.current(), 450);
+  }, []);
+  // Runs once: a re-render of the page must not restart the intro.
   useEffect(() => {
     const t = setTimeout(finish, 3200);
     return () => clearTimeout(t);
