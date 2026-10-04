@@ -56,22 +56,15 @@ final class NewSessionDesignSnapshot: XCTestCase {
     func testRenderNewSessionDesign() throws {
         for dark in [true, false] {
             let suffix = dark ? "dark" : "light"
-            for (label, count, draft) in [("first", 0, false), ("idle", 3, false), ("draft", 3, true)] {
+            for (label, count) in [("first", 0), ("next", 3)] {
                 let a = try app(sessions: count)
                 var sel: String?
                 let window = HStack(spacing: 0) {
-                    VStack(spacing: 0) {
-                        SessionsSidebarView(selectedSessionId: Binding(get: { sel }, set: { sel = $0 }), draftingNewSession: draft)
-                        HStack { PhoneLink(); Spacer() }.padding(.horizontal, 16).frame(height: 36)
-                    }
-                    .frame(width: 280)
+                    SessionsSidebarView(selectedSessionId: Binding(get: { sel }, set: { sel = $0 }))
+                        .frame(width: 300)
                     Divider()
-                    Group {
-                        if draft { MacNewSessionDraftView(onCancel: {}) }
-                        else if count == 0 { MacStartSessionView(firstTime: true) }
-                        else { MacIdleView() }
-                    }
-                    .background(Color.surfacePrimary)
+                    MacStartSessionView(firstTime: count == 0)
+                        .background(Color.surfacePrimary)
                 }
                 .environment(a).environment(TentacleCLIManager())
                 try render(window, size: CGSize(width: 1180, height: 740), dark: dark, to: "window-\(label)-\(suffix)")
@@ -100,6 +93,14 @@ final class NewSessionDesignSnapshot: XCTestCase {
                     .environment(TentacleCLIManager())
                 try render(pairing, size: CGSize(width: 440, height: 540), dark: dark, to: "pairing-\(suffix)")
             }
+            let a = try app(sessions: 3)
+            try render(DevicesPane().environment(a).environment(TentacleCLIManager()),
+                       size: CGSize(width: 560, height: 360), dark: dark, to: "prefs-devices-\(suffix)")
+            try render(HStack(spacing: 18) {
+                ForEach(["copilot", "claude", "codex", "pi"], id: \.self) { id in
+                    PillLabel(text: AgentInfo.from(id).label, agent: id)
+                }
+            }.padding(14), size: CGSize(width: 440, height: 60), dark: dark, to: "agent-pills-\(suffix)")
         }
     }
 }

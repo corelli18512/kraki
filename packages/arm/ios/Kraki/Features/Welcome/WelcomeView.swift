@@ -21,10 +21,8 @@ struct WelcomeView: View {
 
     var body: some View {
         if let firstTime = startSession {
-            Group {
-                if firstTime { MacStartSessionView(firstTime: true) } else { MacIdleView() }
-            }
-            .background(Color.surfacePrimary)
+            MacStartSessionView(firstTime: firstTime)
+                .background(Color.surfacePrimary)
         } else {
             VStack(spacing: 22) {
                 Spacer()

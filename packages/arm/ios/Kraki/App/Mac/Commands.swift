@@ -203,7 +203,7 @@ struct MacCommands: Commands {
 
             Divider()
 
-            Button("Pair a Device…") {
+            Button("Use Kraki on Your Phone…") {
                 NotificationCenter.default.post(name: .macOpenPairing, object: nil)
             }
         }
