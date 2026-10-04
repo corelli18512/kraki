@@ -28,9 +28,9 @@ struct NewSessionComposer: View {
 
     private func nudge() {
         Self.nudgeRequestedAt = nil
-        withAnimation(.spring(response: 0.22, dampingFraction: 0.55)) { nudged = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) { nudged = false }
+        withAnimation(.easeOut(duration: 0.12)) { nudged = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            withAnimation(.easeInOut(duration: 0.6)) { nudged = false }
         }
     }
 
@@ -100,9 +100,12 @@ struct NewSessionComposer: View {
             )
             .contentShape(Rectangle())
             .onTapGesture { focused = true }
-            // "+" / ⌘N: a short lift and glow so the eye lands on the box.
-            .shadow(color: Color.krakiPrimary.opacity(nudged ? 0.35 : 0), radius: nudged ? 18 : 0)
-            .scaleEffect(nudged ? 1.02 : 1)
+            // "+" / ⌘N: the border briefly brightens, then settles — no glow.
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.krakiPrimary.opacity(nudged ? 0.9 : 0), lineWidth: 1.5)
+                    .allowsHitTesting(false)
+            )
 
             statusLine
         }
