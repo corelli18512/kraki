@@ -19,6 +19,7 @@
   "dependencies": {
     "@coinfra/pulse": "^0.5.1",
     "@kraki/protocol": "workspace:*",
+    "hast-util-to-jsx-runtime": "^2.3.6",
     "highlight.js": "^11.10.0",
     "idb": "^8.0.3",
     "jsqr": "^1.4.0",
@@ -40,6 +41,7 @@
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.0",
+    "@types/hast": "^3.0.4",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/ws": "^8.5.0",

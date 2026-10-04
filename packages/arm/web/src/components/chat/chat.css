@@ -5,7 +5,8 @@
  */
 
 .kchat-page,
-.kchat {
+.kchat,
+.ktable-window-backdrop {
   --k-bg: #ffffff;
   --k-text: #0f172a;           /* slate-900 */
   --k-text-2: #64748b;         /* slate-500 */
@@ -37,7 +38,8 @@
 
 .dark .kchat-page,
 .dark .kchat,
-.dark .ksheet {
+.dark .ksheet,
+.dark .ktable-window-backdrop {
   --k-bg: #020617;             /* slate-950 */
   --k-text: #f1f5f9;           /* slate-100 */
   --k-text-2: #94a3b8;
@@ -554,18 +556,87 @@
 .kmd-code pre code.hljs { padding: 0; background: transparent; }
 .kmd-code code { font-size: 13px; }
 
-.kmd-table { margin: 0 0 8px; max-width: 100%; overflow-x: auto; }
-.kmd-table table { border-collapse: collapse; font: 12px/16px var(--k-mono); }
-.kmd-table th, .kmd-table td {
-  padding: 13px 12px;
-  border-bottom: 0.5px solid color-mix(in srgb, var(--k-text-3) 45%, transparent);
+/* Chat tables — Mac/iOS ChatTable (13.5 / 12.5 pt, 10 radius, 7×10 padding,
+   hairline = label 13%, header tint = label 5%). */
+.ktable {
+  --kt-hair: color-mix(in srgb, var(--k-text) 13%, transparent);
+  --kt-head: color-mix(in srgb, var(--k-text) 5%, transparent);
+  margin: 2px 0 8px;
+  max-width: 100%;
+  border: 1px solid var(--kt-hair);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--k-bubble-bg, transparent);
+}
+.ktable-scroll { position: relative; }
+.ktable-scroller { overflow-x: auto; overscroll-behavior-x: contain; }
+.ktable-scroll::before, .ktable-scroll::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 18px; pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 2;
+}
+.ktable-scroll::after { right: 0; background: linear-gradient(to right, transparent, color-mix(in srgb, var(--k-text) 10%, transparent)); }
+.ktable-scroll.fade-right::after { opacity: 1; }
+.ktable-grid { border-collapse: separate; border-spacing: 0; min-width: 100%; font: 13.5px/18px var(--k-font); font-variant-numeric: tabular-nums; }
+.ktable-grid th, .ktable-grid td { padding: 7px 10px; vertical-align: top; max-width: 420px; overflow-wrap: anywhere; }
+.ktable-grid th {
+  background: var(--kt-head);
+  color: var(--k-text-2);
+  font-size: 12.5px;
+  font-weight: 600;
   text-align: left;
   white-space: nowrap;
 }
-.kmd-table td + td, .kmd-table th + th {
-  border-left: 0.5px solid color-mix(in srgb, var(--k-text-3) 45%, transparent);
+.ktable-grid tbody td { border-top: 1px solid var(--kt-hair); color: var(--k-text); }
+.ktable-grid td.is-num { white-space: nowrap; }
+.ktable-grid code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--k-text) 8%, transparent); font: 12.5px var(--k-mono); }
+.ktable-grid a { color: #0056a8; }
+.dark .ktable-grid a { color: #8fd5ff; }
+/* Pinned first column while the grid scrolls sideways. */
+.ktable-grid.is-sticky th:first-child, .ktable-grid.is-sticky td:first-child {
+  position: sticky; left: 0; z-index: 1;
+  background: hsl(var(--hue, 210) var(--k-agent-s) var(--k-agent-l));
+  box-shadow: 1px 0 0 var(--kt-hair);
 }
-.kmd-table th { font-weight: 700; }
+.ktable-grid.is-sticky th:first-child { background-image: linear-gradient(var(--kt-head), var(--kt-head)); }
+.ktable-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  height: 34px; padding: 0 10px;
+  border-top: 1px solid var(--kt-hair);
+  color: var(--k-text-2); font-size: 12px;
+}
+.ktable-open { border: 0; background: none; padding: 0; color: var(--k-link); font: 500 12px var(--k-font); cursor: pointer; white-space: nowrap; }
+.ktable-open:hover { text-decoration: underline; }
+
+.ktable-window-backdrop { position: fixed; inset: 0; z-index: 95; display: flex; align-items: center; justify-content: center; padding: 32px; background: rgba(15, 23, 42, 0.25); }
+.ktable-window {
+  --kt-hair: color-mix(in srgb, var(--k-text) 13%, transparent);
+  --kt-head: color-mix(in srgb, var(--k-text) 5%, transparent);
+  display: flex; flex-direction: column;
+  width: min(1100px, 100%); max-height: 100%;
+  border-radius: 12px; overflow: hidden;
+  border: 1px solid var(--kt-hair);
+  background: var(--k-bg); color: var(--k-text);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.3);
+  font-family: var(--k-font);
+}
+.ktable-window-bar { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--kt-hair); }
+.ktable-search { display: flex; align-items: center; gap: 6px; height: 28px; width: 260px; padding: 0 9px; border-radius: 8px; background: var(--k-fill); }
+.ktable-search svg { width: 13px; height: 13px; color: var(--k-text-3); flex: none; }
+.ktable-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--k-text); font: 12.5px var(--k-font); }
+.ktable-count { color: var(--k-text-3); font-size: 11px; white-space: nowrap; }
+.ktable-spacer { flex: 1; }
+.ktable-meta { color: var(--k-text-3); font-size: 11.5px; }
+.ktable-btn { height: 24px; padding: 0 10px; border: 0; border-radius: 6px; background: var(--k-fill); color: var(--k-text); font: 12px var(--k-font); cursor: pointer; }
+.ktable-close { width: 24px; height: 24px; border: 0; border-radius: 50%; background: var(--k-fill); color: var(--k-text-2); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.ktable-close svg { width: 13px; height: 13px; }
+.ktable-window-body { overflow: auto; min-height: 0; }
+.ktable-window-body .ktable-grid thead th { position: sticky; top: 0; z-index: 2; background: var(--k-bg); background-image: linear-gradient(var(--kt-head), var(--kt-head)); box-shadow: 0 1px 0 var(--kt-hair); }
+.ktable-window-body .ktable-grid.is-sticky th:first-child { z-index: 3; }
+.ktable-window-body .ktable-grid.is-sticky td:first-child { background: var(--k-bg); }
+.ktable-grid th.is-sortable { cursor: pointer; user-select: none; }
+.ktable-grid th.is-sortable:hover { color: var(--k-text); }
+.ktable-arrow { margin-left: 4px; }
+.ktable-grid td.is-hit { background: rgba(250, 204, 21, 0.22) !important; }
+.ktable-grid td.is-current { box-shadow: inset 0 0 0 2px rgba(250, 204, 21, 0.48); }
 .kmd-check { margin-right: 4px; }
 
 /* ── Round controls (↑ / ↓) ─────────────────────────────────────── */
