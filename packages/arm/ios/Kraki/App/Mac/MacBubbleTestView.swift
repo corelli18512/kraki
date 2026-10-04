@@ -1246,7 +1246,9 @@ final class MacTableWindowController: NSWindowController, NSWindowDelegate, NSSe
             self?.updateSubtitle()
             self?.runSearch(scroll: false)
         }
-        for view in [bar, separator, scrollView, hint] as [NSView] {
+        let bottomSeparator = NSBox()
+        bottomSeparator.boxType = .separator
+        for view in [bar, separator, scrollView, bottomSeparator, hint] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
@@ -1261,6 +1263,9 @@ final class MacTableWindowController: NSWindowController, NSWindowDelegate, NSSe
             scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -26),
+            bottomSeparator.topAnchor.constraint(equalTo: scrollView.bottomAnchor),
+            bottomSeparator.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            bottomSeparator.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             hint.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             hint.centerYAnchor.constraint(equalTo: root.bottomAnchor, constant: -13),
         ])
