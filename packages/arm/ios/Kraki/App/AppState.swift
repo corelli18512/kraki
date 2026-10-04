@@ -197,6 +197,8 @@ final class AppState {
                 // Anything still waiting for its echo is re-sent on the new
                 // connection (idempotent by clientId in Tentacle).
                 commandSender?.resendPendingInputs(reason: "reconnected")
+            } else {
+                deviceStore.interruptUsageRefreshes()
             }
             updateReconnectingIndicator()
             guard let store = attachmentStore else { return }

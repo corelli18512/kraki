@@ -1447,6 +1447,11 @@ export class RelayClient {
       return;
     }
 
+    if (msg.type === 'refresh_account_usage') {
+      void this.handleRefreshAccountUsage(msg.deviceId, msg.payload?.requestId);
+      return;
+    }
+
     if (msg.type === 'request_usage_history') {
       this.handleRequestUsageHistory(msg.deviceId, msg.payload?.since);
       return;
@@ -3805,6 +3810,15 @@ export class RelayClient {
     this.accountUsageEnabled = enabled;
     if (this.state === 'connected') this.sendGreetingBroadcast();
   }
+  private accountUsageRefresher: (() => Promise<AccountUsage[]>) | null = null;
+  private usageRefreshInFlight: Promise<AccountUsage[]> | null = null;
+  private usageRefreshRequests = new Map<string, string>();
+
+  setAccountUsageRefresher(refresh: (() => Promise<AccountUsage[]>) | null): void {
+    this.accountUsageRefresher = refresh;
+    if (this.state === 'connected') this.sendGreetingBroadcast();
+  }
+
   /** Reads the local quota history file for `request_usage_history`. */
   usageHistoryReader: ((since: number) => UsageHistorySample[]) | null = null;
   private static readonly USAGE_HISTORY_MAX_SAMPLES = 20_000;
@@ -3833,6 +3847,34 @@ export class RelayClient {
   private sendAccountUsageTo(targetDeviceId: string, compactPubKey: string): void {
     if (!this.accountUsage) return;
     this.sendReliableUnicastTo(targetDeviceId, compactPubKey, this.accountUsageMessage());
+  }
+
+  private async handleRefreshAccountUsage(requesterDeviceId: string, requestId: unknown): Promise<void> {
+    const key = this.consumerKeys.get(requesterDeviceId);
+    if (!key || typeof requestId !== 'string' || !/^[a-zA-Z0-9-]{1,128}$/.test(requestId)) return;
+    const reply = (error?: 'unavailable' | 'disabled' | 'busy') => {
+      if (this.state !== 'connected' || !this.onlineConsumers.has(requesterDeviceId)
+        || this.consumerKeys.get(requesterDeviceId) !== key) return;
+      const message = this.accountUsageMessage();
+      this.sendReliableUnicastTo(requesterDeviceId, key, {
+        ...message, payload: { ...message.payload, requestId, ...(error && { refreshError: error }) },
+      });
+    };
+    if (!this.accountUsageEnabled || !this.accountUsageRefresher) { reply('disabled'); return; }
+    // Bound pending replies to one per authenticated device, and share the
+    // actual read across devices. The monitor also enforces provider cooldowns.
+    if (this.usageRefreshRequests.has(requesterDeviceId)) { reply('busy'); return; }
+    this.usageRefreshRequests.set(requesterDeviceId, requestId);
+    try {
+      this.usageRefreshInFlight ??= Promise.resolve().then(() => this.accountUsageRefresher!())
+        .finally(() => { this.usageRefreshInFlight = null; });
+      this.accountUsage = await this.usageRefreshInFlight;
+      reply(); // Even an unchanged/throttled read must complete the UI request.
+    } catch {
+      reply('unavailable'); // Never forward provider exception bodies or credentials.
+    } finally {
+      this.usageRefreshRequests.delete(requesterDeviceId);
+    }
   }
 
   private handleRequestUsageHistory(requesterDeviceId: string, since?: number): void {
@@ -3881,7 +3923,8 @@ export class RelayClient {
       kind: this.options.device.kind,
       agents: this.options.device.capabilities?.agents,
       version: this.options.version,
-      features: ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE, ...(this.accountUsageEnabled ? ['account_usage'] : [])],
+      features: ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE, ...(this.accountUsageEnabled ? ['account_usage'] : []),
+        ...(this.accountUsageEnabled && this.accountUsageRefresher ? ['account_usage_refresh'] : [])],
     };
   }
 

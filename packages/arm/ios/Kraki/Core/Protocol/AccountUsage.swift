@@ -29,6 +29,10 @@ struct AccountUsage: Codable, Hashable, Sendable, Identifiable {
     var error: String?
     /// Agents on the reporting machine signed in with this account.
     var agents: [String]?
+    /// Derived from the reporting worker's configured polling cadence.
+    var staleAfterSeconds: Double?
+    /// Provider retry deadline, distinct from a quota window's reset date.
+    var retryAt: String?
 
     var id: String { accountKey }
 
@@ -39,11 +43,45 @@ struct AccountUsage: Codable, Hashable, Sendable, Identifiable {
         return main.isEmpty ? Array(windows.prefix(2)) : main
     }
 
-    var fetchedDate: Date? { ISO8601.parse(fetchedAt) }
+    var fetchedDate: Date? {
+        // Older workers timestamp even a failed first read. With no quota
+        // windows, that does not establish a last successful quota reading.
+        guard error == nil || !windows.isEmpty else { return nil }
+        return ISO8601.parse(fetchedAt)
+    }
 
-    /// Older than two polls, or the last attempt failed.
+    /// Two worst-case polls plus grace. Older workers use 15m ±10%, not 5m.
+    var freshnessLifetime: TimeInterval {
+        guard let seconds = staleAfterSeconds, seconds.isFinite, seconds > 0 else { return 2040 }
+        return min(15_900, max(60, seconds)) // configured polling is at most 120m
+    }
+
     func isStale(now: Date = Date()) -> Bool {
-        error != nil || (fetchedDate.map { now.timeIntervalSince($0) > 660 } ?? true)
+        error != nil || (fetchedDate.map { now.timeIntervalSince($0) > freshnessLifetime } ?? true)
+    }
+
+    var retryDate: Date? { retryAt.flatMap(ISO8601.parse) }
+
+    func readStatus(now: Date = Date()) -> String? {
+        switch error {
+        case "auth": return "Sign-in needed"
+        case "rate_limited":
+            if let retry = retryDate, retry > now {
+                return "Rate limited · retry in \(max(1, Int(ceil(retry.timeIntervalSince(now) / 60))))m"
+            }
+            return "Rate limited · try refreshing"
+        case .some: return "Couldn't refresh"
+        case .none: return isStale(now: now) ? "Update overdue" : nil
+        }
+    }
+
+    func lastUpdatedText(now: Date = Date()) -> String {
+        guard let date = fetchedDate else { return "Not updated yet" }
+        let age = max(0, now.timeIntervalSince(date))
+        if age < 60 { return "Updated just now" }
+        if age < 3600 { return "Updated \(Int(age / 60))m ago" }
+        if age < 86400 { return "Updated \(Int(age / 3600))h ago" }
+        return "Updated \(Int(age / 86400))d ago"
     }
 
     var providerTitle: String { provider == "codex" ? "GPT" : "Claude" }
@@ -71,12 +109,22 @@ struct AccountUsage: Codable, Hashable, Sendable, Identifiable {
 struct DeviceUsagePayload: Codable, Sendable {
     let accounts: [AccountUsage]
     var updatedAt: String?
+    var requestId: String?
+    var refreshError: String?
 }
 
 /// Latest `device_usage` from one tentacle.
 struct DeviceUsageSnapshot: Equatable, Sendable {
     var accounts: [AccountUsage]
     var receivedAt: Date
+}
+
+/// Ephemeral per-device request state. Never persisted or replayed on reconnect.
+struct AccountUsageRefreshState: Equatable {
+    let requestId: String
+    let startedAt: Date
+    var finished = false
+    var error: String?
 }
 
 /// One subscription account across every device that reports it. Quota is

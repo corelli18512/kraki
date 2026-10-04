@@ -43,10 +43,11 @@ const mockRelay = {
   updateAgentCapabilities: vi.fn(),
   updateAccountUsage: vi.fn(),
   setAccountUsageEnabled: vi.fn(),
+  setAccountUsageRefresher: vi.fn(),
   usageHistoryReader: null as unknown,
 };
 
-const mockUsageMonitor = { start: vi.fn(), stop: vi.fn(), onChange: null as unknown };
+const mockUsageMonitor = { start: vi.fn(), stop: vi.fn(), refresh: vi.fn(async () => {}), accounts: [], onChange: null as unknown };
 vi.mock('../account-usage.js', () => ({
   AccountUsageMonitor: vi.fn().mockImplementation(() => mockUsageMonitor),
   UsageHistory: vi.fn().mockImplementation((path: string) => ({ path, load: vi.fn(() => []) })),
@@ -285,6 +286,9 @@ describe('daemon-worker: startWorker()', () => {
     expect(mockRelay.updateAccountUsage).toHaveBeenCalledWith([{ accountKey: 'k' }]);
     expect(typeof mockRelay.usageHistoryReader).toBe('function');
     expect(mockRelay.setAccountUsageEnabled).toHaveBeenCalledWith(true);
+    const refresh = mockRelay.setAccountUsageRefresher.mock.calls.at(-1)?.[0];
+    expect(await refresh()).toEqual(mockUsageMonitor.accounts);
+    expect(mockUsageMonitor.refresh).toHaveBeenCalledOnce();
   });
 
   it('does not start the usage monitor when accountUsage.enabled is false', async () => {
@@ -293,6 +297,7 @@ describe('daemon-worker: startWorker()', () => {
     mockConfig = { ...(mockConfig ?? {}), accountUsage: { enabled: false } };
     await startWorker();
     expect(AccountUsageMonitor).not.toHaveBeenCalled();
+    expect(mockRelay.setAccountUsageRefresher).not.toHaveBeenCalled();
   });
 
   it('re-greets apps when an agent reports its model list recovered after startup', async () => {

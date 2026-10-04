@@ -93,15 +93,26 @@ final class UsagePeekRenderTests: XCTestCase {
                            resetsAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(hours * 3600)),
                            durationSeconds: kind == "five_hour" ? 18000 : 604800)
     }
-    private func account(_ key: String, _ provider: String, _ label: String, _ plan: String, _ windows: [AccountUsageWindow]) -> AccountUsage {
+    private func account(_ key: String, _ provider: String, _ label: String, _ plan: String, _ windows: [AccountUsageWindow],
+                         error: String? = nil, age: TimeInterval = 0) -> AccountUsage {
         AccountUsage(accountKey: key, provider: provider, label: label, plan: plan, windows: windows,
-                     fetchedAt: ISO8601DateFormatter().string(from: Date()))
+                     fetchedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-age)), error: error)
     }
 
     func testRenderPanels() throws {
         let mac = device("mac", "MacBook Pro")
         let server = device("srv", "build-server", kind: .server)
         let mac2 = device("mac2", "Mac mini")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("usage-render-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite")))
+        app.connectionStatus = .connected
+        app.deviceStore.setDevices([mac, server, mac2])
+        for id in [mac.id, server.id, mac2.id] {
+            app.deviceStore.markGreeted(id)
+            app.deviceStore.setDeviceFeatures(id, features: ["account_usage", "account_usage_refresh"])
+        }
+        app.testOutboundMessageHandler = { _, _, _ in XCTFail("rendering must not query providers"); return false }
         let claudeMain = account("claude:1", "claude", "co•••ai@gmail.com", "default_claude_max_20x", [window("five_hour", 80, hours: 2.3), window("weekly", 12, hours: 52)])
         // The current Session is a Pi session on the server spending the shared Max 20× account.
         let accounts = [
@@ -118,7 +129,13 @@ final class UsagePeekRenderTests: XCTestCase {
             let acc: AccountUsage = account("codex:x\(n)", "codex", "te•••m\(n)@corp.dev", "pro", [five, weekly])
             extraGPT.append(MergedAccountUsage(account: acc, devices: [mac]))
         }
+        var limited = account("claude:limited", "claude", "te•••st@example.test", "max", [window("five_hour", 42, hours: 2)],
+                              error: "rate_limited", age: 900)
+        limited.retryAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(300))
+        let expired = account("codex:expired", "codex", "te•••st@example.test", "pro", [window("weekly", 30, hours: 90)],
+                              error: "auth", age: 3600)
         let scenarios: [(String, [MergedAccountUsage])] = [
+            ("errors", [MergedAccountUsage(account: limited, devices: [mac]), MergedAccountUsage(account: expired, devices: [server])]),
             ("n1", Array(accounts.prefix(1))),
             ("n2", [accounts[0], accounts[2]]),
             ("n3", Array(accounts.prefix(3))),
@@ -127,13 +144,18 @@ final class UsagePeekRenderTests: XCTestCase {
             ("n6", accounts + Array(extraGPT.prefix(2))),
         ]
         for (tag, list) in scenarios {
+            app.deviceStore.setDeviceUsage(mac.id, accounts: list.map(\.account))
             let schemes: [ColorScheme] = tag == "n4" ? [.light, .dark] : [.dark]
             for scheme in schemes {
                 let compactPlan = UsagePeekLayout.plan(rings: list.map(\.ringCount), .compact)
                 let detailPlan = UsagePeekLayout.plan(rings: list.map(\.ringCount), .detail)
                 let compactView: AnyView = AnyView(UsagePeekCompact(accounts: list, width: compactPlan.size.width, currentKey: "claude:1", ns: Namespace().wrappedValue, entering: false))
-                let detailView: AnyView = AnyView(UsagePeekDetail(accounts: list, width: detailPlan.size.width, currentKey: "claude:1", ns: Namespace().wrappedValue, entering: false))
-                let items: [(String, AnyView, CGSize)] = [("compact", compactView, compactPlan.size), ("detail", detailView, detailPlan.size)]
+                let detailView = AnyView(VStack(spacing: 0) {
+                    AccountUsageRefreshControls().padding(.horizontal, 14).frame(height: UsagePeekLayout.refreshControlsHeight)
+                    UsagePeekDetail(accounts: list, width: detailPlan.size.width, currentKey: "claude:1", ns: Namespace().wrappedValue, entering: false)
+                }.environment(app))
+                let detailSize = CGSize(width: detailPlan.size.width, height: detailPlan.size.height + UsagePeekLayout.refreshControlsHeight)
+                let items: [(String, AnyView, CGSize)] = [("compact", compactView, compactPlan.size), ("detail", detailView, detailSize)]
                 for (name, view, size) in items {
                     let content = view
                         .frame(width: size.width, height: size.height)

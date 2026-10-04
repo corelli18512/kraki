@@ -9,7 +9,7 @@ import {
 
 const dirs: string[] = [];
 function tmp(): string { const d = mkdtempSync(join(tmpdir(), 'kraki-usage-')); dirs.push(d); return d; }
-afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 
 const jwt = (claims: object) => `x.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.y`;
 
@@ -184,6 +184,95 @@ describe('AccountUsageMonitor', () => {
     status = 200; now += 61_000;
     await monitor.refresh();
     expect(monitor.accounts[0].error).toBeUndefined();
+  });
+
+  it.each([[undefined, 2040], [10 * 60_000, 1380], [120 * 60_000, 15900], [NaN, 2040]])(
+    'publishes a freshness lifetime matching cadence %s', async (intervalMs, expected) => {
+      const p = paths(tmp());
+      mkdirSync(join(p.piAuth, '..'), { recursive: true });
+      writeFileSync(p.piAuth, JSON.stringify({ 'openai-codex': { type: 'oauth', access: 'a', accountId: 'same' } }));
+      const fetch = fakeFetch({ 'https://chatgpt.com/backend-api/wham/usage': { body: {
+        rate_limit: { primary_window: { used_percent: 30, limit_window_seconds: 604800 } } } } });
+      const monitor = new AccountUsageMonitor({ paths: p, client: new UsageClient(fetch), intervalMs });
+      await monitor.refresh();
+      expect(monitor.accounts[0].staleAfterSeconds).toBe(expected);
+    },
+  );
+
+  it('startup, simultaneous manual reads and scheduled reads share a flight and the one-minute cooldown', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_790_000_000_000);
+    const random = vi.spyOn(Math, 'random').mockReturnValue(1);
+    const p = paths(tmp());
+    mkdirSync(join(p.piAuth, '..'), { recursive: true });
+    writeFileSync(p.piAuth, JSON.stringify({ 'openai-codex': { type: 'oauth', access: 'a', accountId: 'same' } }));
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const fetch = vi.fn(async () => {
+      await gate;
+      return { status: 200, headers: { get: () => null }, json: async () => ({
+        rate_limit: { primary_window: { used_percent: 30, limit_window_seconds: 604800 } },
+      }) };
+    });
+    const monitor = new AccountUsageMonitor({ paths: p, client: new UsageClient(fetch) });
+    try {
+      monitor.start();
+      const first = monitor.refresh();
+      expect(monitor.refresh()).toBe(first);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      release();
+      await first;
+      await monitor.refresh();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(990_000 - 1);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fetch).toHaveBeenCalledTimes(2); // 15m + 10% jitter
+      monitor.stop();
+      await vi.advanceTimersByTimeAsync(2_000_000);
+      expect(fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      release();
+      monitor.stop();
+      random.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('manual reads and token rotation respect Retry-After, retaining the last success and its timestamp', async () => {
+    const p = paths(tmp());
+    mkdirSync(join(p.piAuth, '..'), { recursive: true });
+    const writeToken = (access: string) => writeFileSync(p.piAuth, JSON.stringify({
+      'openai-codex': { type: 'oauth', access, accountId: 'same' },
+    }));
+    writeToken('first-token');
+    let now = 1_790_000_000_000, status = 200;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const fetch = vi.fn(async () => ({ status, headers: { get: () => '600' }, json: async () => ({
+      rate_limit: { primary_window: { used_percent: 30, limit_window_seconds: 604800 } },
+    }) }));
+    const monitor = new AccountUsageMonitor({ paths: p, client: new UsageClient(fetch), now: () => now });
+    await monitor.refresh();
+    const successful = monitor.accounts[0];
+    now += 61_000; status = 429;
+    await monitor.refresh();
+    const retry = now + 600_000;
+    expect(monitor.accounts[0]).toMatchObject({
+      error: 'rate_limited', retryAt: new Date(retry).toISOString(),
+      fetchedAt: successful.fetchedAt, windows: successful.windows,
+    });
+    now += 61_000;
+    await Promise.all([monitor.refresh(), monitor.refresh()]);
+    writeToken('rotated-token');
+    await monitor.refresh();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(monitor.accounts[0].retryAt).toBe(new Date(retry).toISOString());
+    now = retry; status = 200;
+    await monitor.refresh();
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(monitor.accounts[0]).toMatchObject({ fetchedAt: new Date(now).toISOString(), windows: successful.windows });
+    expect(monitor.accounts[0].error).toBeUndefined();
+    expect(monitor.accounts[0].retryAt).toBeUndefined();
   });
 
   it('a source that never produced a reading (signed-out Codex home) shows no card', async () => {

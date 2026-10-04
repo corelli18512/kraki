@@ -925,7 +925,7 @@ final class MessageRouter {
               let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
         do {
             let usage = try JSONDecoder().decode(DeviceUsagePayload.self, from: data)
-            appState.deviceStore.setDeviceUsage(deviceId, accounts: usage.accounts)
+            appState.deviceStore.receiveDeviceUsage(deviceId, payload: usage)
         } catch {
             KLog.diag("[device_usage] undecodable payload from \(deviceId): \(error)")
         }
