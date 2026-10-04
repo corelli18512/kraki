@@ -176,7 +176,12 @@ import UIKit
         XCTAssertEqual(project(restored.pendingInputs(sid)).status, .delivery(.failed))
     }
 
-    func testB3Aligned98GeometryAndOvershootStayInSlot() {
+    func testB3AlignedGeometryAndOvershootStayInSlot() {
+        let expectedScale = 0.98 * 0.80
+        XCTAssertEqual(SessionStatusGlyphMetrics.agentSize, 15.6, accuracy: 0.0001)
+        XCTAssertEqual(SessionStatusGlyphMetrics.humanSize, 14.3, accuracy: 0.0001)
+        XCTAssertEqual(SessionStatusGlyphMetrics.approvalSize, 15.4, accuracy: 0.0001)
+        XCTAssertEqual(SessionCompactingGeometry.scale, expectedScale, accuracy: 0.0001)
         let top = SessionCompactingGeometry.path(index: 0).boundingBoxOfPath
         for i in 1...2 {
             let path = SessionCompactingGeometry.path(index: i)
@@ -184,20 +189,56 @@ import UIKit
             XCTAssertEqual(path.boundingBoxOfPath.maxX, top.maxX, accuracy: 0.0001)
         }
         let layer = SessionPreviewGlyphLayer()
+        layer.configure(kind: .compacting, color: CGColor(gray: 0.5, alpha: 1), image: nil, displayScale: 2, animate: false)
+        let aspect = CGAffineTransform(translationX: 8, y: 8)
+            .scaledBy(x: layer.sublayerTransform.m11, y: layer.sublayerTransform.m22)
+            .translatedBy(x: -8, y: -8)
         for t in 0...2000 {
             let c = SessionCompactingGeometry.compression(Double(t)/2000)
             XCTAssertGreaterThanOrEqual(c, -0.1600001); XCTAssertLessThanOrEqual(c, 1.0000001)
             for i in 0..<3 {
-                let bounds = layer.planes[i].path!.copy(strokingWithWidth: 1.05*0.98, lineCap: .round, lineJoin: .round, miterLimit: 10).boundingBoxOfPath
-                let positioned = bounds.offsetBy(dx: 0, dy: CGFloat(i-1)*(3.6-1.75*c)*0.98)
-                XCTAssertTrue(CGRect(x: 0, y: 0, width: 16, height: 16).contains(positioned))
+                let bounds = layer.planes[i].path!.copy(strokingWithWidth: 1.05*expectedScale, lineCap: .round, lineJoin: .round, miterLimit: 10).boundingBoxOfPath
+                let positioned = bounds.offsetBy(dx: 0, dy: CGFloat(i-1)*(3.6-1.75*c)*expectedScale)
+                XCTAssertTrue(CGRect(x: 0, y: 0, width: 16, height: 16).contains(positioned.applying(aspect)))
             }
         }
         XCTAssertEqual(SessionCompactingGeometry.compression(0), 0)
         XCTAssertEqual(SessionCompactingGeometry.compression(1), 0)
         XCTAssertEqual(SessionCompactingGeometry.compression(0.4), 1)
         XCTAssertEqual(SessionCompactingGeometry.compression(0.73), -0.16, accuracy: 0.0001)
-        XCTAssertEqual(layer.planes[0].lineWidth, 1.029, accuracy: 0.0001)
+        XCTAssertEqual(layer.planes[0].lineWidth, 1.05*expectedScale, accuracy: 0.0001)
+        XCTAssertEqual(layer.bounds, CGRect(x: 0, y: 0, width: 16, height: 16))
+    }
+    func testCompactingAnimationUsesSameScaleAsGeometry() throws {
+        let layer = SessionPreviewGlyphLayer()
+        layer.configure(kind: .compacting, color: CGColor(gray: 0.5, alpha: 1), image: nil, displayScale: 2, animate: true)
+        for i in [0, 2] {
+            let animation = try XCTUnwrap(layer.planes[i].animation(forKey: "compression") as? CAKeyframeAnimation)
+            let values = try XCTUnwrap(animation.values as? [Double])
+            XCTAssertEqual(animation.duration, 2)
+            XCTAssertEqual(values.count, SessionCompactingGeometry.keyTimes.count)
+            for (time, value) in zip(SessionCompactingGeometry.keyTimes, values) {
+                let expected = Double(i-1)*(3.6-1.75*SessionCompactingGeometry.compression(time))*Double(SessionCompactingGeometry.scale)
+                XCTAssertEqual(value, expected, accuracy: 0.000001)
+            }
+            XCTAssertEqual(layer.planes[i].transform.m42, CGFloat(i-1)*3.6*SessionCompactingGeometry.scale, accuracy: 0.000001)
+        }
+    }
+    func testCompactingAspectScaleResetsForDeliveryReuse() {
+        let layer = SessionPreviewGlyphLayer(), color = CGColor(gray: 0.5, alpha: 1)
+        let expected = CGSize(width: 1.20, height: 1.10)
+        XCTAssertEqual(SessionCompactingGeometry.aspectScale, expected)
+        for animate in [false, true] {
+            layer.configure(kind: .compacting, color: color, image: nil, displayScale: 2, animate: animate)
+            XCTAssertEqual(layer.sublayerTransform.m11, expected.width)
+            XCTAssertEqual(layer.sublayerTransform.m22, expected.height)
+            XCTAssertEqual(layer.anchorPoint, CGPoint(x: 0.5, y: 0.5))
+            XCTAssertEqual(layer.bounds, CGRect(x: 0, y: 0, width: 16, height: 16))
+            for status: SessionDeliveryStatus in [.sending, .correcting, .failed, .queued, .unconfirmed] {
+                layer.configure(kind: .delivery(status), color: color, image: nil, displayScale: 2, animate: animate)
+                XCTAssertTrue(CATransform3DIsIdentity(layer.sublayerTransform))
+            }
+        }
     }
     func testLayerIdentityAndPhaseSurviveThemeAndDisplayScaleChanges() throws {
         let layer = SessionPreviewGlyphLayer(), blue = CGColor(red: 0, green: 0, blue: 1, alpha: 1)

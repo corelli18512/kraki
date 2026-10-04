@@ -1,18 +1,14 @@
 import SwiftUI
 import QuartzCore
 
-/// Approved third revision, shared by iOS and Mac in the same 16pt slot.
-enum SessionStatusGlyphMetrics {
-    static let agentSize: CGFloat = 13 * 1.20
-    static let humanSize: CGFloat = 13 * 1.10
-    static let approvalSize: CGFloat = 14 * 1.10
-}
-
-/// B3 rounded/aligned rims: 80% of the original size, then 20% wider and
-/// 10% taller. Both clients retain the same paths, cadence and 16pt slot.
+/// Approved B3, rounded/aligned rims. Mac is 80% of the previous size;
+/// iOS stays at 98%. Both retain the same paths, cadence and 16pt slot.
 enum SessionCompactingGeometry {
+    #if os(macOS)
     static let scale: CGFloat = 0.98 * 0.80
-    static let aspectScale = CGSize(width: 1.20, height: 1.10)
+    #else
+    static let scale: CGFloat = 0.98
+    #endif
     static let duration = 2.0
     static let keyTimes: [Double] = Array(Set((0...240).map { Double($0)/240 } + [0, 0.32, 0.60, 0.73, 0.82, 1])).sorted()
 
@@ -99,11 +95,6 @@ final class SessionPreviewGlyphLayer: CALayer {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         let kindChanged = self.kind != kind
         self.kind = kind
-        // Scale around the 16pt slot's center, including strokes and animated
-        // spacing. Reset on reuse so delivery symbols keep their original size.
-        sublayerTransform = kind == .compacting
-            ? CATransform3DMakeScale(SessionCompactingGeometry.aspectScale.width, SessionCompactingGeometry.aspectScale.height, 1)
-            : CATransform3DIdentity
         for plane in planes { plane.strokeColor = color; plane.contentsScale = displayScale; plane.isHidden = kind != .compacting }
         delivery.isHidden = kind == .compacting
         delivery.contentsScale = displayScale

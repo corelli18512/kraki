@@ -224,6 +224,8 @@ targets:
     sources:
       - path: KrakiMacTests
       - path: KrakiTests/NativeSessionPreviewGlyphTests.swift
+      - path: KrakiTests/NativeStyleTests.swift
+      - path: KrakiTests/ComposerGeometryProbeTests.swift
       - path: KrakiTests/ForegroundTestGate.swift
       - path: KrakiTests/IOSVoiceComposerTests.swift
       - path: KrakiTests/AccountUsageTests.swift

@@ -68,6 +68,7 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     }
 
     private var tableView: UITableView!
+    private let scrollIndicator = IOSTransientScrollIndicator()
     private var dataSource: UITableViewDiffableDataSource<Int, String>!
     private var didApplyInitialSnapshot = false
     /// Set to `true` when `applySnapshot` is invoked while the table
@@ -140,6 +141,28 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         applySnapshot(animated: false)
     }
 
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        scrollIndicator.updateGeometry()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        scrollIndicator.hide()
+    }
+
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { scrollIndicator.beginScrolling() }
+    func scrollViewDidScroll(_ scrollView: UIScrollView) { scrollIndicator.didScroll() }
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        scrollIndicator.endDragging(willDecelerate: decelerate)
+    }
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { scrollIndicator.endScrolling() }
+    func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+        scrollIndicator.beginScrolling()
+        return true
+    }
+    func scrollViewDidScrollToTop(_ scrollView: UIScrollView) { scrollIndicator.endScrolling() }
+
     private func setupTableView() {
         tableView = UITableView(frame: view.bounds, style: .plain)
         tableView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -148,6 +171,7 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         tableView.delegate = self
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "session")
         view.addSubview(tableView)
+        scrollIndicator.attach(to: tableView)
         view.backgroundColor = UIColor(Color.surfacePrimary)
     }
 

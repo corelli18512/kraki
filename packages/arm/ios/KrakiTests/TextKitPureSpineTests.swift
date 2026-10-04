@@ -1412,29 +1412,23 @@ final class TextKitPureSpineTests: XCTestCase {
     }
 
     func testVisibleComposerHasDeterministicBottomObstructionFloor() {
+        let clearance = ChatBottomObstruction.composerClearance(
+            capsuleHeight: IOSComposerMetrics.height,
+            bottomPadding: IOSComposerMetrics.verticalPadding,
+            bubbleBottomPadding: TKMetrics.outerV
+        )
+        XCTAssertEqual(clearance, 54)
         XCTAssertEqual(
-            ChatBottomObstruction.height(
-                measuredComposerHeight: 0,
-                composerVisible: true,
-                compacting: false
-            ),
-            60
+            ChatBottomObstruction.height(composerClearance: clearance, composerVisible: true, compacting: false), 54
         )
         XCTAssertEqual(
-            ChatBottomObstruction.height(
-                measuredComposerHeight: 76,
-                composerVisible: true,
-                compacting: false
-            ),
-            76
+            ChatBottomObstruction.height(composerClearance: clearance, composerVisible: true, compacting: true), 102
         )
         XCTAssertEqual(
-            ChatBottomObstruction.height(
-                measuredComposerHeight: 0,
-                composerVisible: true,
-                compacting: true
-            ),
-            108
+            ChatBottomObstruction.height(composerClearance: clearance, composerVisible: false, compacting: true), 40
+        )
+        XCTAssertEqual(
+            ChatBottomObstruction.height(composerClearance: clearance, composerVisible: false, compacting: false), 0
         )
     }
 

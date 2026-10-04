@@ -375,6 +375,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     private let vm: ChatViewModel
     private let appState: AppState
     private var collectionView: UICollectionView!
+    private let scrollIndicator = IOSTransientScrollIndicator()
 
     /// The shared message store (window data layer). Held so the view can inject
     /// its rendered-height oracle for the PX-based window cap (`heightForSeq` /
@@ -751,6 +752,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     override func viewWillDisappear(_ animated: Bool) {
+        scrollIndicator.hide()
         isLeavingView = true
         warmKickWork?.cancel()
         warmKickWork = nil
@@ -767,6 +769,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        scrollIndicator.updateGeometry()
         // A hidden/zero-width page may have deferred starting a barrier. Retry
         // after layout, never re-enter a collection batch from inside layout.
         if !isLeavingView, view.window != nil, collectionView.bounds.width > 0,
@@ -832,7 +835,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // shorter than the screen (a new Session's first message otherwise
         // sits flush against the bar).
         collectionView.contentInset.top = Self.topContentPadding
+        collectionView.verticalScrollIndicatorInsets.top = Self.topContentPadding
         view.addSubview(collectionView)
+        scrollIndicator.attach(to: collectionView)
 
         // Install the offscreen sizer container so its trait environment
         // (Dynamic Type, interface style) matches the live list — otherwise
@@ -2191,9 +2196,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// last sync. Called from the SwiftUI representable's `updateUIViewController`
     /// (which fires on every `@Observable` store change) so live arrivals render.
     /// No-op when nothing changed.
-    /// Keep the last bubble and jump control above the live card/composer. If
-    /// the user is already at the newest edge, preserve that bottom anchor as
-    /// the input changes height; otherwise leave their reading position alone.
+    /// Keep the newest edge anchored when the fixed composer/status clearance
+    /// changes (e.g. device availability). Expansion of the floating composer
+    /// never reaches this path; older-history reading remains independent.
     private var shouldFollowLiveTail: Bool {
         scrollPolicy.shouldFollowTail(distanceToBottom: distanceToBottom())
     }
@@ -2215,8 +2220,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
                 self.pinToBottom(reason: "composer-inset")
             }
         }
-        // A large change (dictation expanding/collapsing the composer) moves
-        // with the composer's own spring instead of jumping ahead of it.
+        // Animate genuine obstruction changes (e.g. the compaction status row).
+        // Recording/multiline growth never changes this resting clearance.
         if delta > 30, view.window != nil {
             UIView.animate(withDuration: 0.34, delay: 0, usingSpringWithDamping: 0.9,
                            initialSpringVelocity: 0, options: [.allowUserInteraction, .beginFromCurrentState],
@@ -2876,6 +2881,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        scrollIndicator.didScroll()
         // Finger drag AND its momentum are the user's scroll (momentum toward
         // older keeps loading history); our own anchor compensation is not.
         var userDriven = scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating
@@ -2912,6 +2918,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     // the instant the natural slide settles, so the window grows without
     // ever interrupting the user's momentum.
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        scrollIndicator.endScrolling()
         KLog.chat("📜 [scroll] settle session=\(sessionId.prefix(12)) off=\(Int(scrollView.contentOffset.y)) distBottom=\(Int(distanceToBottom())) following=\(followingBottom) items=\(items.count)")
         scheduleCodeHighlightRefreshIfNeeded()
         flushPendingApply()
@@ -2928,6 +2935,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        scrollIndicator.endDragging(willDecelerate: decelerate)
         KLog.chat("📜 [scroll] drag-end session=\(sessionId.prefix(12)) decelerate=\(decelerate) off=\(Int(scrollView.contentOffset.y)) distBottom=\(Int(distanceToBottom())) following=\(followingBottom)")
         // Finger lifted with no momentum → settle immediately (no
         // didEndDecelerating will follow).
@@ -3057,6 +3065,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     #endif
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        scrollIndicator.beginScrolling()
         KLog.chat("📜 [scroll] drag-begin session=\(sessionId.prefix(12)) off=\(Int(scrollView.contentOffset.y)) content=\(Int(scrollView.contentSize.height)) following=\(followingBottom)")
         scrollPolicy.beginUserInteraction(
             offset: scrollView.contentOffset.y,
@@ -3097,6 +3106,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     // it glides to the top of the loaded content instead of triggering an
     // endless prepend cascade as the animation chases contentOffset 0.
     func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+        scrollIndicator.beginScrolling()
         scrollPolicy.beginUserInteraction(
             offset: scrollView.contentOffset.y,
             distanceToBottom: distanceToBottom()
@@ -3111,6 +3121,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
+        scrollIndicator.endScrolling()
         scrollingToTop = false
         scrollPolicy.endUserInteraction()
         updateJumpButtonVisibility()
