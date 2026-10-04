@@ -453,12 +453,10 @@ async function runAgentStep(): Promise<AgentCheckResult[]> {
     const spinner = ora({ text: 'Checking the coding agents on this computer…', prefixText: '   ' }).start();
     const results = await setupDeps.checkAgents();
     spinner.stop();
-    const byId = new Map(results.map((r) => [r.id, r]));
-    for (const agent of SETUP_AGENTS) printAgentRow(agent, byId.get(agent.id));
+    printAgentList(results);
     const ready = results.filter((r) => r.status === 'ready');
     const fixable = results.filter((r) => r.status === 'needs_login' || r.status === 'error');
     console.log('');
-    console.log(chalk.dim(`    ${ready.length === 0 ? 'No agent is ready yet.' : ready.length === 1 ? '1 agent is ready.' : `${ready.length} agents are ready.`}`));
 
     if (ready.length > 0 && fixable.length === 0) return results;
     const choices = ready.length > 0
@@ -500,14 +498,41 @@ function printAgentRow(agent: (typeof SETUP_AGENTS)[number], r: AgentCheckResult
 }
 
 /** `kraki agents`: the setup check as a standalone report. */
-export async function printAgentsCheck(): Promise<void> {
+export async function printAgentsCheck(all = false): Promise<void> {
   console.log('');
   const spinner = ora({ text: 'Checking the coding agents on this computer…', prefixText: '   ' }).start();
   const results = await setupDeps.checkAgents();
   spinner.stop();
-  const byId = new Map(results.map((r) => [r.id, r]));
-  for (const agent of SETUP_AGENTS) printAgentRow(agent, byId.get(agent.id));
+  printAgentList(results, all);
   console.log('');
+}
+
+/**
+ * Like Kraki for Mac: list only the agents installed here (someone with one
+ * agent sees one line). With none installed, list every supported agent with
+ * its install guide. Otherwise one quiet line names the others;
+ * `kraki agents --all` shows all of them.
+ */
+function printAgentList(results: AgentCheckResult[], all = false): void {
+  const byId = new Map(results.map((r) => [r.id, r]));
+  const installed = SETUP_AGENTS.filter((a) => {
+    const st = byId.get(a.id)?.status;
+    return st !== undefined && st !== 'not_installed';
+  });
+  if (all) {
+    for (const agent of SETUP_AGENTS) printAgentRow(agent, byId.get(agent.id));
+    return;
+  }
+  if (installed.length === 0) {
+    console.log(`    ${chalk.yellow('!')} No coding agent found on this computer yet. Install one and sign in to it:`);
+    for (const agent of SETUP_AGENTS) printAgentRow(agent, byId.get(agent.id));
+    return;
+  }
+  for (const agent of installed) printAgentRow(agent, byId.get(agent.id));
+  const others = SETUP_AGENTS.filter((a) => !installed.includes(a)).map((a) => a.name);
+  if (others.length > 0) {
+    console.log(chalk.dim(`    Also supported: ${others.join(', ')} (${chalk.bold('kraki agents --all')} for install guides)`));
+  }
 }
 
 /** Overridable in tests. */
