@@ -1518,7 +1518,26 @@ private final class TKRoundedView: UIView {
 /// behind otherwise plain text. Links and embedded tables remain interactive
 /// through their existing tap/host paths.
 final class TKBodyTextView: UITextView {
-    override var canBecomeFirstResponder: Bool { false }
+    /// In-bubble text selection ("Select Text" in the message menu). Off by
+    /// default so ordinary taps, long-press menus and scrolling stay cheap.
+    var selectionModeEnabled = false
+    var onResignSelection: (() -> Void)?
+    override var canBecomeFirstResponder: Bool { selectionModeEnabled }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned, selectionModeEnabled { onResignSelection?() }
+        return resigned
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        guard selectionModeEnabled else { return super.canPerformAction(action, withSender: sender) }
+        // A read-only message: copy, look up, share — never edit.
+        return [#selector(copy(_:)), #selector(selectAll(_:)),
+                NSSelectorFromString("_lookup:"), NSSelectorFromString("_share:"),
+                NSSelectorFromString("_translate:")].contains(action)
+            && super.canPerformAction(action, withSender: sender)
+    }
 
     private struct RichBlock {
         let kind: TKBlockKind
@@ -1660,87 +1679,6 @@ extension UIView {
             responder = current.next
         }
         return nil
-    }
-}
-
-/// "Select Text": the message as readable, selectable text. Tables become
-/// tab-separated lines (so a selection pastes into spreadsheets) and code
-/// keeps its monospaced font.
-final class TKTextSelectionViewController: UIViewController {
-    let textView = UITextView()
-    private let body: NSAttributedString
-
-    init(body: NSAttributedString) {
-        self.body = body
-        super.init(nibName: nil, bundle: nil)
-        title = "Select Text"
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    static func selectable(_ body: NSAttributedString) -> NSAttributedString {
-        let result = NSMutableAttributedString()
-        let base: [NSAttributedString.Key: Any] = [
-            .font: UIFont.preferredFont(forTextStyle: .body),
-            .foregroundColor: UIColor.label,
-        ]
-        body.enumerateAttributes(in: NSRange(location: 0, length: body.length)) { attributes, range, _ in
-            if attributes[.tkDecorativeSpacer] != nil { return }
-            if let table = attributes[.attachment] as? TKTableAttachment {
-                result.append(NSAttributedString(string: table.tableLayout.tsv() + "\n", attributes: [
-                    .font: UIFont.monospacedSystemFont(ofSize: 14, weight: .regular),
-                    .foregroundColor: UIColor.label,
-                ]))
-                return
-            }
-            if attributes[.attachment] != nil { return }
-            var kept = base
-            if let font = attributes[.font] as? UIFont { kept[.font] = font }
-            if let link = attributes[.link] { kept[.link] = link }
-            if attributes[.link] == nil, let color = attributes[.foregroundColor] as? UIColor,
-               attributes[.tkBlockKind] as? String == TKBlockKind.code.rawValue {
-                kept[.foregroundColor] = color
-            }
-            result.append(NSAttributedString(string: body.attributedSubstring(from: range).string, attributes: kept))
-        }
-        return result
-    }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = .systemBackground
-        navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in
-            self?.dismiss(animated: true)
-        })
-        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Copy All", primaryAction: UIAction { [weak self] _ in
-            guard let self else { return }
-            UIPasteboard.general.string = self.textView.text
-            self.dismiss(animated: true)
-        })
-        textView.attributedText = Self.selectable(body)
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.alwaysBounceVertical = true
-        textView.adjustsFontForContentSizeCategory = true
-        textView.backgroundColor = .clear
-        textView.textContainerInset = UIEdgeInsets(top: 16, left: 14, bottom: 32, right: 14)
-        textView.dataDetectorTypes = []
-        textView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(textView)
-        NSLayoutConstraint.activate([
-            textView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-            textView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-            textView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            textView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
-    }
-
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        // Start with everything selected, like Messages' "Select": adjust the
-        // handles or tap Copy.
-        textView.becomeFirstResponder()
-        textView.selectAll(nil)
     }
 }
 
@@ -2190,6 +2128,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        endTextSelection()
         reuseGeneration &+= 1
         actionHeightNotificationScheduled = false
         content = nil
@@ -2376,6 +2315,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
     }
 
     func setBodyInteractive(_ enabled: Bool) {
+        if isSelectingText { return }
         // Plain text never needs UITextView selection: whole-message Copy and
         // Steps are provided by the cell context menu. Only link-bearing text
         // receives UITextView touches, which prevents iOS selection highlights
@@ -2407,6 +2347,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             configureLiveFastPath(content, cellWidth: cellWidth)
             return
         }
+        endTextSelection()
         bodyViews.forEach { $0.resignFirstResponder() }
         bodyHasLinks = false
         if let body = content.body, body.length > 0 {
@@ -2578,9 +2519,10 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
             actions.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
                 UIPasteboard.general.string = text
             })
-            if let body = content.body {
+            if content.liveBody == nil {
                 actions.append(UIAction(title: "Select Text", image: UIImage(systemName: "selection.pin.in.out")) { [weak self] _ in
-                    self?.presentTextSelection(body)
+                    // After the context menu finishes dismissing.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self?.beginTextSelection() }
                 })
             }
         }
@@ -2603,18 +2545,67 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         return actions
     }
 
-    /// Whole message in a sheet where any part can be selected and copied.
-    /// Selection stays out of the chat list (cell reuse, streaming, chunked
-    /// bodies and the long-press menu would all fight an in-place selection).
-    private func presentTextSelection(_ body: NSAttributedString) {
-        guard let presenter = nearestViewController else { return }
-        let navigation = UINavigationController(rootViewController: TKTextSelectionViewController(body: body))
-        navigation.modalPresentationStyle = .pageSheet
-        if let sheet = navigation.sheetPresentationController {
-            sheet.detents = [.medium(), .large()]
-            sheet.prefersGrabberVisible = true
+    // MARK: In-bubble text selection
+
+    /// The bubble whose text is being selected (at most one).
+    private static weak var activeSelection: TKBubbleCell?
+    private var lastMenuLocation: CGPoint?
+    private(set) var isSelectingText = false
+
+    /// Select the pressed paragraph block (whole message for most replies)
+    /// in place, with standard handles and the system Copy menu.
+    func beginTextSelection() {
+        guard content != nil, content?.liveBody == nil else { return }
+        if let other = Self.activeSelection, other !== self { other.endTextSelection() }
+        let point = lastMenuLocation ?? bubbleBG.frame.origin
+        let target = bodyViews.first { !$0.isHidden && $0.frame.contains(point) }
+            ?? bodyViews.first { !$0.isHidden && ($0.attributedText?.length ?? 0) > 0 }
+        guard let target, let length = target.attributedText?.length, length > 0 else { return }
+        isSelectingText = true
+        Self.activeSelection = self
+        for view in bodyViews {
+            view.selectionModeEnabled = view === target
+            view.isSelectable = view === target || bodyHasLinks
+            view.isUserInteractionEnabled = view === target || bodyHasLinks
         }
-        presenter.present(navigation, animated: true)
+        target.tintColor = content?.kind == .user ? .white : .systemBlue
+        target.onResignSelection = { [weak self] in self?.endTextSelection() }
+        guard target.becomeFirstResponder() else { endTextSelection(); return }
+        target.selectedRange = NSRange(location: 0, length: length)
+        presentEditMenu(for: target)
+    }
+
+    private func presentEditMenu(for view: TKBodyTextView) {
+        // UITextView's own edit menu (Copy · Look Up · Translate · Share),
+        // shown once the selection is on screen.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self, weak view] in
+            guard let self, let view, self.isSelectingText, view.isFirstResponder else { return }
+            let rect = view.selectedTextRange.map { view.firstRect(for: $0) } ?? view.bounds
+            UIMenuController.shared.showMenu(from: view, rect: rect.intersection(view.bounds))
+        }
+    }
+
+    func endTextSelection() {
+        guard isSelectingText else { return }
+        isSelectingText = false
+        if Self.activeSelection === self { Self.activeSelection = nil }
+        for view in bodyViews where view.selectionModeEnabled {
+            view.onResignSelection = nil
+            view.selectionModeEnabled = false
+            view.selectedRange = NSRange(location: 0, length: 0)
+            _ = view.resignFirstResponder()
+            view.tintColor = .clear
+            view.setNeedsDisplay()
+        }
+        setBodyInteractive(true)
+    }
+
+    /// End any in-bubble selection unless `point` (window space) is inside it.
+    static func endActiveTextSelection(unlessAt point: CGPoint? = nil) {
+        guard let cell = activeSelection else { return }
+        if let point, let view = cell.bodyViews.first(where: \.selectionModeEnabled),
+           view.bounds.contains(view.convert(point, from: nil)) { return }
+        cell.endTextSelection()
     }
 
     /// Voice input still being corrected: don't wait (send the original
@@ -2635,6 +2626,7 @@ final class TKBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate
         configurationForMenuAtLocation location: CGPoint
     ) -> UIContextMenuConfiguration? {
         guard bubbleBG.frame.contains(location), !messageActions().isEmpty else { return nil }
+        lastMenuLocation = location
         return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
             UIMenu(children: self?.messageActions() ?? [])
         }

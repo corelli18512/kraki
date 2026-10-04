@@ -693,6 +693,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         chatPerfLog.log("[cfg] renderer=textkit localSeamless=\(localSeamless)")
         chatPerfLog.log("[diag] viewDidLoad turns=\(messages.count) ids=\(items.count) winTop=\(vm.windowTopSeq) winBot=\(vm.windowBottomSeq) sessionLast=\(vm.sessionLastSeq) filtered=\(vm.filteredMessages.count)")
         setupCollectionView()
+        let endSelection = UITapGestureRecognizer(target: self, action: #selector(endTextSelectionTap(_:)))
+        endSelection.cancelsTouchesInView = false
+        endSelection.delegate = textSelectionTapDelegate
+        collectionView.addGestureRecognizer(endSelection)
         codeHighlightObserver = NotificationCenter.default.addObserver(
             forName: .tkCodeHighlightReady,
             object: nil,
@@ -894,6 +898,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             )
         }
         return TKBubbleContent.make(message: message, sessionId: sessionId, agent: agentName)
+    }
+
+    private let textSelectionTapDelegate = SimultaneousTapDelegate()
+
+    /// A tap outside the selected text ends an in-bubble selection.
+    @objc private func endTextSelectionTap(_ gesture: UITapGestureRecognizer) {
+        TKBubbleCell.endActiveTextSelection(unlessAt: gesture.location(in: nil))
     }
 
     /// Toggle body text selection/links on visible TextKit cells. Off during
@@ -3726,4 +3737,10 @@ final class ChatFlowLayout: UICollectionViewFlowLayout {
     }
 }
 
+
+/// Lets the "end selection" tap observe touches without blocking anything.
+private final class SimultaneousTapDelegate: NSObject, UIGestureRecognizerDelegate {
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+}
 #endif

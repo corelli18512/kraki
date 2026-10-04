@@ -129,23 +129,90 @@ final class ChatTableTests: XCTestCase {
 
 #if os(iOS)
 @MainActor final class SelectTextTests: XCTestCase {
-    func testSelectTextKeepsWordsCodeAndTablesAsTSV() {
-        let source = "Intro **bold** and `code`.\n\n| A | B |\n|---|---|\n| one | two |\n\nAfter."
-        let body = TKMarkdown.attributed(source, cacheKey: "select-text-\(UUID())")
-        let text = TKTextSelectionViewController.selectable(body).string
-        XCTAssertTrue(text.contains("Intro bold and code."), text)
-        XCTAssertTrue(text.contains("A\tB\none\ttwo"), text)
-        XCTAssertTrue(text.contains("After."), text)
-        XCTAssertFalse(text.contains("\u{FFFC}"), "no attachment placeholder")
-    }
-
-    func testMessageMenuOffersSelectText() {
+    private func cell(_ text: String) throws -> (TKBubbleCell, UIWindow) {
         let message = ChatMessage(type: "agent_message", seq: 1, sessionId: "s", deviceId: "d", timestamp: nil,
-                                  payload: ["content": AnyCodable("hello world")])
+                                  payload: ["content": AnyCodable(text)])
         let content = TKBubbleContent.make(message: message, sessionId: "s", agent: "pi")
         let cell = TKBubbleCell(frame: CGRect(x: 0, y: 0, width: 390, height: content.cellHeight(cellWidth: 390)))
         cell.configure(content, cellWidth: 390)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let host = UIViewController()
+        window.rootViewController = host
+        host.view.addSubview(cell)
+        window.makeKeyAndVisible()
+        cell.layoutIfNeeded()
+        return (cell, window)
+    }
+
+    private func bodies(_ view: UIView) -> [TKBodyTextView] {
+        (view as? TKBodyTextView).map { [$0] } ?? view.subviews.flatMap(bodies)
+    }
+
+    func testMessageMenuOffersSelectText() throws {
+        let (cell, window) = try cell("hello world")
+        defer { window.isHidden = true }
         XCTAssertEqual(cell.messageActions().map(\.title).prefix(2), ["Copy", "Select Text"])
+    }
+
+    func testSelectTextSelectsInsideTheBubbleAndEndsOnTapElsewhere() throws {
+        let (cell, window) = try cell("Intro **bold** and `code`. Some more words to select.")
+        defer { window.isHidden = true }
+        let body = try XCTUnwrap(bodies(cell).first { ($0.attributedText?.length ?? 0) > 0 })
+        XCTAssertFalse(body.canBecomeFirstResponder, "plain bubbles are not selectable until asked")
+
+        cell.beginTextSelection()
+        XCTAssertTrue(cell.isSelectingText)
+        XCTAssertTrue(body.isFirstResponder)
+        XCTAssertEqual(body.selectedRange.length, body.attributedText?.length)
+        XCTAssertTrue(body.canPerformAction(#selector(UIResponderStandardEditActions.copy(_:)), withSender: nil))
+        XCTAssertFalse(body.canPerformAction(#selector(UIResponderStandardEditActions.cut(_:)), withSender: nil))
+        XCTAssertNotEqual(body.tintColor, .clear, "selection is visible")
+
+        cell.setBodyInteractive(false)  // scrolling must not drop the selection
+        XCTAssertTrue(body.isFirstResponder)
+
+        TKBubbleCell.endActiveTextSelection(unlessAt: CGPoint(x: 5, y: 800))
+        XCTAssertFalse(cell.isSelectingText)
+        XCTAssertFalse(body.isFirstResponder)
+        XCTAssertEqual(body.selectedRange.length, 0)
+        XCTAssertFalse(body.canBecomeFirstResponder)
+    }
+
+    func testSelectionShotForReview() throws {
+        try requireForegroundUITests()
+        let text = "三种方案的对比如下：方案 A 不改协议，对所有版本的 Tentacle 都有效。Run `pnpm test` and see https://kraki.chat/docs for details."
+        let message = ChatMessage(type: "agent_message", seq: 1, sessionId: "s", deviceId: "d", timestamp: nil,
+                                  payload: ["content": AnyCodable(text)])
+        let content = TKBubbleContent.make(message: message, sessionId: "s", agent: "pi")
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.screen.bounds
+        window.windowLevel = .alert + 1
+        let host = UIViewController()
+        host.view.backgroundColor = .systemBackground
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        let cell = TKBubbleCell(frame: CGRect(x: 0, y: 260, width: window.bounds.width, height: content.cellHeight(cellWidth: window.bounds.width)))
+        cell.configure(content, cellWidth: window.bounds.width)
+        cell.setBodyInteractive(true)
+        host.view.addSubview(cell)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+        cell.beginTextSelection()
+        try? "go".write(toFile: NSTemporaryDirectory() + "kraki-select-shot-go", atomically: true, encoding: .utf8)
+        print("SELECT-SHOT-READY")
+        RunLoop.main.run(until: Date().addingTimeInterval(5))
+        window.isHidden = true
+    }
+
+    func testReuseEndsSelection() throws {
+        let (cell, window) = try cell("Some text")
+        defer { window.isHidden = true }
+        cell.beginTextSelection()
+        XCTAssertTrue(cell.isSelectingText)
+        cell.prepareForReuse()
+        XCTAssertFalse(cell.isSelectingText)
     }
 }
 #endif
