@@ -224,7 +224,7 @@ enum TKBodyChunks {
         var attachments = ""
         chunk.enumerateAttribute(.attachment, in: NSRange(location: 0, length: chunk.length)) { value, range, _ in
             if let table = value as? TKTableAttachment {
-                attachments += "\(range.location):\(table.tableLayout.bubbleViewportHeight),"
+                attachments += "\(range.location):\(table.tableLayout.contentKey),"
             }
         }
         let key = "\(Int(width * 2))\u{1F}\(chunk.length)\u{1F}\(attachments)\u{1F}\(chunk.string)" as NSString

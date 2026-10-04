@@ -203,7 +203,7 @@ enum MacChatBubbleContentBuilder {
             if let body {
                 body.enumerateAttribute(.attachment, in: NSRange(location: 0, length: body.length)) { value, _, _ in
                     if let table = value as? MacTableAttachment {
-                        tableNatural = max(tableNatural, table.tableLayout.contentSize.width)
+                        tableNatural = max(tableNatural, table.tableLayout.naturalWidth)
                     }
                 }
             }

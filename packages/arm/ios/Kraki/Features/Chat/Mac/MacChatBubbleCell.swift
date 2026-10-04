@@ -237,7 +237,7 @@ final class MacCoreTextLayoutArtifact: NSObject {
             guard let attachment = value as? MacTableAttachment else { return }
             let metrics = MacCoreTextRunMetrics(
                 width: width,
-                ascent: attachment.tableLayout.bubbleViewportHeight
+                ascent: attachment.tableLayout.bubbleHeight(width: width) + MacTableSpacing.below
             )
             let retained = Unmanaged.passRetained(metrics).toOpaque()
             var callbacks = CTRunDelegateCallbacks(
@@ -383,7 +383,7 @@ final class MacCoreTextLayoutArtifact: NSObject {
                     x: 0,
                     y: info.rect.minY,
                     width: width,
-                    height: attachment.tableLayout.bubbleViewportHeight
+                    height: attachment.tableLayout.bubbleHeight(width: width)
                 )
             )
         }
@@ -1680,7 +1680,10 @@ final class MacChatBubbleCell: NSView {
             anchor = bodyView
         }
         reconcileTableViews(placements.map(\.layout), above: anchor)
+        let surface = content.map { $0.bubbleColor == .clear ? NSColor.windowBackgroundColor : $0.bubbleColor }
+            ?? .windowBackgroundColor
         for (index, placement) in placements.enumerated() where index < tableViews.count {
+            if tableViews[index].surfaceColor != surface { tableViews[index].surfaceColor = surface }
             var frame = placement.frame
             frame.origin.x += bodyOrigin.x
             frame.origin.y += bodyOrigin.y
