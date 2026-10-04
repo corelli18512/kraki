@@ -1173,6 +1173,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === '__apply-update') {
+    const { runApplier } = await import('./remote-update.js');
+    await runApplier(args.slice(1));
+    return;
+  }
+
   if (cmd === INTERNAL_DAEMON_SMOKE_COMMAND) {
     const config = loadConfig();
     if (!config) throw new Error(`No release smoke config found at ${getConfigPath()}`);

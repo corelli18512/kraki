@@ -437,6 +437,12 @@ export async function startWorker(): Promise<WorkerResult> {
   // this point.
   saveDaemonReady(process.pid);
 
+  // POC: remote self-update (see remote-update.ts). Not for the Mac app's helper.
+  if (!managedByMacApp) {
+    const { watchForUpdateRequests } = await import('./remote-update.js');
+    watchForUpdateRequests();
+  }
+
   return { adapter, relay, sessionManager, shutdown };
 }
 

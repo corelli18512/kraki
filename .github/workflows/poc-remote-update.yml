@@ -1,0 +1,162 @@
+name: POC remote update
+
+# Proves that a running daemon can update itself (no one at the computer) and
+# come back online, for each install method, and that a broken update rolls
+# back. See packages/tentacle/src/remote-update.ts.
+
+on:
+  push:
+    branches: [poc/remote-update]
+
+permissions:
+  contents: read
+
+jobs:
+  poc:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: "Linux binary",    runner: ubuntu-latest,  kind: binary }
+          - { label: "Linux npm",       runner: ubuntu-latest,  kind: npm }
+          - { label: "Windows binary",  runner: windows-latest, kind: binary }
+          - { label: "Windows npm",     runner: windows-latest, kind: npm }
+          - { label: "macOS CLI app",   runner: macos-14,       kind: app }
+          - { label: "macOS npm",       runner: macos-14,       kind: npm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    env:
+      NEW_VERSION: "0.35.12"
+      POC_KIND: ${{ matrix.kind }}
+    steps:
+      - uses: actions/checkout@v6
+      - run: corepack enable
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build protocol, crypto, head, tentacle
+        run: |
+          pnpm --filter @kraki/protocol --filter @kraki/crypto run build
+          pnpm --filter @kraki/head run build
+          pnpm --filter @kraki/tentacle run build
+
+      - name: Start a local relay (open auth)
+        run: |
+          mkdir -p "$RUNNER_TEMP/head"
+          (cd "$RUNNER_TEMP/head" && AUTH_MODE=open PORT=4000 DB_PATH="$RUNNER_TEMP/head/h.db" nohup node "$GITHUB_WORKSPACE/packages/head/dist/cli.js" > "$RUNNER_TEMP/head/head.log" 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:4000/ >/dev/null 2>&1 && break; curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/ | grep -qE '^[1-5]' && break; sleep 1; done
+          tail -5 "$RUNNER_TEMP/head/head.log"
+
+      - name: Prepare install (POC build = 0.35.10-poc)
+        run: |
+          set -euo pipefail
+          case "$POC_KIND" in
+            binary)
+              pnpm --filter @kraki/tentacle run build:binary:local
+              mkdir -p "$HOME/kraki-bin"
+              if [ "$RUNNER_OS" = Windows ]; then
+                SRC=$(ls packages/tentacle/dist/sea/kraki-cli-windows-*.exe | head -1); DEST="$HOME/kraki-bin/kraki.exe"
+                ASSET=kraki-cli-windows-x64.exe
+              else
+                SRC=$(ls packages/tentacle/dist/sea/kraki-cli-linux-* | head -1); DEST="$HOME/kraki-bin/kraki"
+                ASSET=kraki-cli-linux-x64
+              fi
+              cp "$SRC" "$HOME/kraki-bin/poc-build"; cp "$SRC" "$DEST"; chmod +x "$DEST" || true
+              echo "KRAKI=$DEST" >> "$GITHUB_ENV"
+              echo "POC_ARTIFACT=$HOME/kraki-bin/poc-build" >> "$GITHUB_ENV"
+              echo "NEW_SOURCE=https://github.com/corelli18512/kraki/releases/download/v$NEW_VERSION/$ASSET" >> "$GITHUB_ENV"
+              # Broken "new version": not an executable at all.
+              echo "not a kraki binary" > "$HOME/broken-kraki"; echo "BROKEN_SOURCE=$HOME/broken-kraki" >> "$GITHUB_ENV"
+              ;;
+            app)
+              pnpm --filter @kraki/tentacle run build:binary:local
+              BIN=packages/tentacle/dist/sea/kraki-cli-macos-arm64
+              APP="$HOME/.kraki-app/Kraki.app"
+              mkdir -p "$APP/Contents/MacOS"
+              cp "$BIN" "$APP/Contents/MacOS/kraki"
+              cat > "$APP/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+          <key>CFBundleExecutable</key><string>kraki</string>
+          <key>CFBundleIdentifier</key><string>chat.kraki.cli</string>
+          <key>CFBundleName</key><string>Kraki</string>
+          <key>CFBundlePackageType</key><string>APPL</string>
+          <key>CFBundleVersion</key><string>poc</string>
+          <key>LSBackgroundOnly</key><true/>
+          </dict></plist>
+          PLIST
+              codesign --force --sign - "$APP/Contents/MacOS/kraki"; codesign --force --sign - "$APP"
+              mkdir -p "$HOME/.local/bin"; ln -sf "$APP/Contents/MacOS/kraki" "$HOME/.local/bin/kraki"
+              tar -czf "$HOME/poc-app.tar.gz" -C "$HOME/.kraki-app" Kraki.app
+              echo "KRAKI=$HOME/.local/bin/kraki" >> "$GITHUB_ENV"
+              echo "POC_ARTIFACT=$HOME/poc-app.tar.gz" >> "$GITHUB_ENV"
+              echo "NEW_SOURCE=https://github.com/corelli18512/kraki/releases/download/v$NEW_VERSION/kraki-macos-arm64.app.tar.gz" >> "$GITHUB_ENV"
+              # Broken "new version": a signed bundle whose executable exits at once.
+              B="$RUNNER_TEMP/broken/Kraki.app"; mkdir -p "$B/Contents/MacOS"; cp "$APP/Contents/Info.plist" "$B/Contents/"
+              printf '#!/bin/sh\nexit 3\n' > "$B/Contents/MacOS/kraki"; chmod +x "$B/Contents/MacOS/kraki"
+              tar -czf "$HOME/broken-app.tar.gz" -C "$RUNNER_TEMP/broken" Kraki.app
+              echo "BROKEN_SOURCE=$HOME/broken-app.tar.gz" >> "$GITHUB_ENV"
+              ;;
+            npm)
+              (cd packages/tentacle && pnpm pack --pack-destination "$HOME")
+              TGZ=$(ls "$HOME"/kraki-tentacle-*.tgz | head -1)
+              npm install -g "$TGZ"
+              echo "npm prefix: $(npm prefix -g)"
+              ls -la "$(npm prefix -g)" | head -5
+              echo "KRAKI=kraki" >> "$GITHUB_ENV"; which kraki
+              echo "POC_ARTIFACT=$TGZ" >> "$GITHUB_ENV"
+              echo "NEW_SOURCE=@kraki/tentacle@$NEW_VERSION" >> "$GITHUB_ENV"
+              echo "BROKEN_SOURCE=@kraki/tentacle@0.0.0-does-not-exist" >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      - name: Configure and start the daemon
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.kraki"
+          cat > "$HOME/.kraki/config.json" <<JSON
+          {"relay":"ws://127.0.0.1:4000","authMethod":"open","device":{"name":"poc-${{ matrix.kind }}-$RUNNER_OS","id":"poc-$RUNNER_OS-${{ matrix.kind }}"},"logging":{"verbosity":"verbose"}}
+          JSON
+          "$KRAKI" --version
+          "$KRAKI" start --login || true
+          node scripts/poc/wait-online.mjs "$KRAKI" 0.35.10-poc 90
+
+      - name: "A: update to the new version"
+        run: |
+          node scripts/poc/request-update.mjs "$NEW_SOURCE" "$NEW_VERSION"
+          node scripts/poc/wait-result.mjs 360
+          node scripts/poc/wait-online.mjs "$KRAKI" "$NEW_VERSION" 30
+
+      - name: "B: a broken update rolls back"
+        run: |
+          set -euo pipefail
+          # Back to the POC build (the new release has no POC code).
+          "$KRAKI" stop || true
+          case "$POC_KIND" in
+            binary) cp "$POC_ARTIFACT" "$KRAKI" ;;
+            app) rm -rf "$HOME/.kraki-app/Kraki.app"; tar -xzf "$POC_ARTIFACT" -C "$HOME/.kraki-app" ;;
+            npm) npm install -g "$POC_ARTIFACT" ;;
+          esac
+          rm -f "$HOME/.kraki/remote-update/result.json"
+          "$KRAKI" start --login || true
+          node scripts/poc/wait-online.mjs "$KRAKI" 0.35.10-poc 90
+          node scripts/poc/request-update.mjs "$BROKEN_SOURCE" 9.9.9 45
+          node scripts/poc/wait-result.mjs 400 --expect-rollback
+          node scripts/poc/wait-online.mjs "$KRAKI" 0.35.10-poc 30
+
+      - name: Logs
+        if: always()
+        run: |
+          echo "── remote-update.log"; cat "$HOME/.kraki/logs/remote-update.log" 2>/dev/null || true
+          echo "── result"; cat "$HOME/.kraki/remote-update/result.json" 2>/dev/null || true
+          echo "── login-start.log"; cat "$HOME/.kraki/logs/login-start.log" 2>/dev/null || true
+          echo "── bootstrap"; tail -40 "$HOME/.kraki/logs/daemon-bootstrap.log" 2>/dev/null || true
+          echo "── daemon.log"; ls "$HOME/.kraki/logs"; tail -60 "$HOME"/.kraki/logs/daemon*.log 2>/dev/null | tail -80 || true
+          echo "── head"; tail -30 "$RUNNER_TEMP/head/head.log" || true

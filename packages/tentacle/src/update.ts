@@ -498,7 +498,7 @@ function getPlatformAssetName(): string {
  *
  * Expected layout: <prefix>/Kraki.app/Contents/MacOS/kraki
  */
-function detectAppBundle(): string | null {
+export function detectAppBundle(): string | null {
   const realPath = realpathSync(process.execPath);
   const macosDir = dirname(realPath);
   const contentsDir = dirname(macosDir);
@@ -775,7 +775,7 @@ function stripProvenance(filePath: string): void {
   } catch { /* best-effort — xattr may not exist or may fail */ }
 }
 
-function hashFile(path: string): string {
+export function hashFile(path: string): string {
   const data = readFileSync(path);
   return createHash('sha256').update(data).digest('hex');
 }
@@ -799,7 +799,7 @@ function fetchText(url: string): Promise<string> {
   });
 }
 
-async function downloadFile(
+export async function downloadFile(
   url: string,
   dest: string,
   onProgress?: (received: number, total: number) => void,
