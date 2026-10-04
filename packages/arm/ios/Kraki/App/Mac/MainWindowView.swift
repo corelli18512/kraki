@@ -295,6 +295,7 @@ struct MainWindowView: View {
     /// New session = the composer in the idle pane (like a "new chat"):
     /// leave the current session and put the cursor in the composer.
     private func startNewSession() {
+        NewSessionComposer.nudgeRequestedAt = Date()
         selectedSessionId = nil
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .macFocusNewSessionComposer, object: nil)

@@ -21,6 +21,19 @@ struct NewSessionComposer: View {
     var minLines = 3
     var onCreated: () -> Void = {}
 
+    /// Set when "+" / ⌘N asks for the composer; a composer that mounts right
+    /// after (switching away from a session) still plays the nudge.
+    static var nudgeRequestedAt: Date?
+    @State private var nudged = false
+
+    private func nudge() {
+        Self.nudgeRequestedAt = nil
+        withAnimation(.spring(response: 0.22, dampingFraction: 0.55)) { nudged = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) { nudged = false }
+        }
+    }
+
     @State private var text = ""
     @State private var selectedDeviceId = ""
     @State private var selectedAgentId: AgentId = ""
@@ -87,11 +100,20 @@ struct NewSessionComposer: View {
             )
             .contentShape(Rectangle())
             .onTapGesture { focused = true }
+            // "+" / ⌘N: a short lift and glow so the eye lands on the box.
+            .shadow(color: Color.krakiPrimary.opacity(nudged ? 0.35 : 0), radius: nudged ? 18 : 0)
+            .scaleEffect(nudged ? 1.02 : 1)
 
             statusLine
         }
-        .onAppear { selectDefaults(); focused = true }
-        .onReceive(NotificationCenter.default.publisher(for: .macFocusNewSessionComposer)) { _ in focused = true }
+        .onAppear {
+            selectDefaults(); focused = true
+            if let t = Self.nudgeRequestedAt, Date().timeIntervalSince(t) < 1 { nudge() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .macFocusNewSessionComposer)) { _ in
+            focused = true
+            nudge()
+        }
         .onChange(of: selectedDeviceId) { _, _ in onDeviceChanged() }
         .onChange(of: selectedAgentId) { _, _ in onAgentChanged() }
         .onChange(of: selectedModel) { _, _ in onModelChanged() }

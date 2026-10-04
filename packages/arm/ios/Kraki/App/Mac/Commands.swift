@@ -200,12 +200,6 @@ struct MacCommands: Commands {
             Button("Refresh Status") {
                 Task { await tentacleCLI.refreshDaemonState() }
             }
-
-            Divider()
-
-            Button("Use Kraki on Your Phone…") {
-                NotificationCenter.default.post(name: .macOpenPairing, object: nil)
-            }
         }
 
         // App menu — Sparkle owns the standard update dialog and installation
@@ -213,6 +207,10 @@ struct MacCommands: Commands {
         CommandGroup(after: .appInfo) {
             Button("Check for Updates…") {
                 NotificationCenter.default.post(name: .macCheckForUpdates, object: nil)
+            }
+            Divider()
+            Button("Connect Your Phone…") {
+                NotificationCenter.default.post(name: .macOpenPairing, object: nil)
             }
         }
 
