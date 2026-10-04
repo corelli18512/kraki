@@ -38,3 +38,14 @@ describe('Kraki for Windows setup steps (BuiltInSetupView.step)', () => {
     expect(setupStep(s({ configured: true }), 'undecided', 'external', false, true)).toBe('signIn');
   });
 });
+
+import { needsOwnerChoice } from './OwnerChoiceHost';
+describe('CLI choice over the signed-in window', () => {
+  it('asks only when the CLI runs Kraki here and nothing was chosen', () => {
+    expect(needsOwnerChoice(s({ configured: true, cliDaemon: true, running: true }), null)).toBe(true);
+    expect(needsOwnerChoice(s({ configured: true, cliLogin: true }), 'undecided')).toBe(true);
+    expect(needsOwnerChoice(s({ configured: true, cliDaemon: true }), 'external')).toBe(false);
+    expect(needsOwnerChoice(s({ configured: true, owned: true, running: true }), null)).toBe(false);
+    expect(needsOwnerChoice(s({ configured: true }), null)).toBe(false);
+  });
+});

@@ -2,11 +2,13 @@
    BuiltInSetupView, ThisMacSetupStep, LocalAgentsPanel) in CSS. Sizes follow
    the SwiftUI points one to one. */
 
-.ds-page {
+.ds-page, .ds-sheet {
   --ds-font: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
   --ds-mono: "Cascadia Mono", Consolas, ui-monospace, "SF Mono", monospace;
   --ds-primary: #0b5b9c;
   --ds-title: #0f172a;
+}
+.ds-page {
   position: relative;
   display: flex;
   flex: 1;
@@ -18,7 +20,7 @@
   -webkit-user-select: none;
   user-select: none;
 }
-.dark .ds-page { --ds-primary: #5ea0d7; --ds-title: #f8fafc; }
+.dark .ds-page, .dark .ds-sheet { --ds-primary: #5ea0d7; --ds-title: #f8fafc; }
 
 .ds-backdrop { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .ds-glow { position: absolute; left: 50%; top: 50%; border-radius: 50%; }
@@ -254,3 +256,7 @@
   background: color-mix(in srgb, var(--ds-primary) 18%, transparent);
 }
 .ds-chevron { font-size: 18px; line-height: 16px; color: var(--color-text-muted); }
+
+/* The CLI choice over the signed-in window (ExistingCLIChoicePresenter). */
+.ds-owner-backdrop { align-items: center; padding-top: 0; font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif; }
+.ds-owner-sheet { width: 460px; padding: 26px 24px 20px; }

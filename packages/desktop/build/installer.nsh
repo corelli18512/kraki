@@ -16,5 +16,8 @@
 !macro customUnInstall
   ${ifNot} ${isUpdated}
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Kraki Background"
+    ; Give the background service back to a separately installed CLI.
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "$$h = if ($$env:KRAKI_HOME) { $$env:KRAKI_HOME } else { Join-Path $$env:USERPROFILE '.kraki' }; $$p = Join-Path $$h 'managed-by.json'; if ((Get-Content -Raw $$p -ErrorAction SilentlyContinue) -match '\"by\":\s*\"kraki-windows\"') { Remove-Item $$p }"`
+    Pop $0
   ${endIf}
 !macroend

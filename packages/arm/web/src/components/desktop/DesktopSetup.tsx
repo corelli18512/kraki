@@ -21,7 +21,7 @@ import { AgentsPanel, useAgentsCheck } from './AgentsPanel';
 import './desktop-setup.css';
 
 const ROLE_KEY = 'kraki-desktop.role';
-const OWNER_KEY = 'kraki-desktop.owner';
+export const OWNER_KEY = 'kraki-desktop.owner';
 const MOVED_KEY = 'kraki-desktop.movedFromCLI';
 const INTRO_KEY = 'kraki-desktop.introShown';
 
@@ -318,7 +318,7 @@ function BackgroundStep({ builtIn, onStarted }: { builtIn: BuiltInBridge; onStar
   );
 }
 
-function ChooseOwner({ builtIn, version, onChosen }: { builtIn: BuiltInBridge; version: string | null; onChosen: (o: Owner) => void }) {
+export function ChooseOwner({ builtIn, version, onChosen }: { builtIn: BuiltInBridge; version: string | null; onChosen: (o: Owner) => void }) {
   const [switching, setSwitching] = useState<Owner | null>(null);
   const [error, setError] = useState<string | null>(null);
   const choose = async (o: Owner) => {

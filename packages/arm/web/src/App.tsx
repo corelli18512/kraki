@@ -11,6 +11,7 @@ import { wsClient } from './lib/ws-client';
 import { desktop, desktopCredentials } from './lib/desktop';
 import { ConnectPhoneHost } from './components/devices/ConnectPhoneCard';
 import { UsagePanel } from './components/usage/UsagePanel';
+import { OwnerChoiceHost } from './components/desktop/OwnerChoiceHost';
 
 function RelayBlockingOverlay({
   status,
@@ -139,6 +140,7 @@ export function App() {
       </main>
       <ConnectPhoneHost />
       <UsagePanel />
+      <OwnerChoiceHost />
       {showBlockingOverlay && (
         <RelayBlockingOverlay
           status={status}
