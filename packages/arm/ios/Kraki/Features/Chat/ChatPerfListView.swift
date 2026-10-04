@@ -2975,6 +2975,15 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     var automationUserScrollActive = false
     var automationPolicy: ChatScrollPolicy { scrollPolicy }
 
+    /// Read-only barrier for geometry tests: initial offscreen height upgrades
+    /// legitimately change contentSize/offset while preserving screen anchors.
+    /// Wait for them before attributing any later geometry change to a composer.
+    var automationHeightMeasurementsSettled: Bool {
+        !items.isEmpty && warmKickWork == nil && warmer.pendingCount == 0
+            && !heightRefreshScheduled && pendingHeightRefreshIDs.isEmpty
+            && items.allSatisfy { $0 == Self.liveCardID || (sizer.cached($0) != nil && appliedHeightIDs.contains($0)) }
+    }
+
     func automationMarkUserScrolledAway() {
         scrollPolicy.beginUserInteraction(
             offset: collectionView?.contentOffset.y ?? 0,

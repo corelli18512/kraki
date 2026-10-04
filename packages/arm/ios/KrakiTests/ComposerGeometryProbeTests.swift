@@ -181,6 +181,17 @@ import UIKit
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         drain(1.5)
         if readingHistory { try scrollIntoHistory(); drain(0.9) }
+        #if os(iOS)
+        // CI's first native render can outlast a fixed sleep. Finish actual
+        // production height warming before taking the scroll/content baseline;
+        // keep every assertion for the recording phases unchanged.
+        let list = try XCTUnwrap(all(host.view).compactMap { $0 as? UICollectionView }.first)
+        let controller = try XCTUnwrap(list.delegate as? ChatPerfListVC)
+        let deadline = Date().addingTimeInterval(15)
+        while !controller.automationHeightMeasurementsSettled && Date() < deadline { drain(0.05) }
+        XCTAssertTrue(controller.automationHeightMeasurementsSettled, "initial exact-height layout must finish before the voice experiment")
+        host.view.layoutIfNeeded()
+        #endif
         var rows: [[String: Any]] = []
         rows.append(try snapshot("idle"))
         app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
