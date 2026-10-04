@@ -624,13 +624,17 @@ export interface AccountUsage {
   /** Raw provider plan id (e.g. `default_claude_max_20x`, `prolite`). */
   plan?: string;
   windows: AccountUsageWindow[];
-  /** When the provider reported these numbers. */
+  /** Last successful read (UTC ISO); empty before the first success. */
   fetchedAt: string;
   /** Present when the last attempt failed; windows then hold the last good reading (possibly none). */
   error?: string;
   /** Agents on this machine signed in with this account (`pi`, `claude`, `codex`), so an app can tell
    *  which account a Session is spending. One account may be shared by several machines and agents. */
   agents?: string[];
+  /** Two worst-case polling intervals plus a grace period, in seconds. */
+  staleAfterSeconds?: number;
+  /** Earliest provider-permitted retry after a rate limit, not a quota reset. */
+  retryAt?: string;
 }
 
 /** The subscription accounts this tentacle can read and their remaining quota.
@@ -640,6 +644,9 @@ export interface DeviceUsageMessage extends BaseEnvelope {
   payload: {
     accounts: AccountUsage[];
     updatedAt: string;
+    /** Present only on a targeted reply to refresh_account_usage. */
+    requestId?: string;
+    refreshError?: 'unavailable' | 'disabled' | 'busy';
   };
 }
 
@@ -657,6 +664,13 @@ export interface UsageHistorySample {
   u: number;
   /** scheduled reset, epoch seconds */
   r?: number;
+}
+
+/** Request an immediate, coalesced read. Provider cooldowns still apply.
+ * Only send to devices advertising account_usage_refresh. Never durable. */
+export interface RefreshAccountUsageMessage extends BaseEnvelope {
+  type: 'refresh_account_usage';
+  payload: { requestId: string };
 }
 
 /** Tentacle → app reply to `request_usage_history`. */
@@ -1300,7 +1314,8 @@ export type ConsumerMessage =
   | RequestAttachmentMessage
   | SetSessionSubscriptionMessage
   | ClientFeaturesMessage
-  | RequestUsageHistoryMessage;
+  | RequestUsageHistoryMessage
+  | RefreshAccountUsageMessage;
 
 // ============================================================
 // Auth credentials — discriminated union by method

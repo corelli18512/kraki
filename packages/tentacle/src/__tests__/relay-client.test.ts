@@ -1623,6 +1623,113 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
+  it('advertises refresh only with an enabled monitor and a refresh handler', () => {
+    const { ws, client, cleanup } = buildClientWithStore();
+    try {
+      const features = () => (decodePulseSends(ws.sent).filter(m => m.type === 'device_greeting').at(-1)?.payload as { features: string[] }).features;
+      client.setAccountUsageEnabled(true);
+      expect(features()).not.toContain('account_usage_refresh');
+      client.setAccountUsageRefresher(async () => []);
+      expect(features()).toContain('account_usage_refresh');
+      client.setAccountUsageEnabled(false);
+      expect(features()).not.toContain('account_usage_refresh');
+    } finally { cleanup(); }
+  });
+
+  it('coalesces refreshes across apps, bounds duplicate requests and acknowledges unchanged readings by request id', async () => {
+    const { ws, client, cleanup } = buildClientWithStore();
+    let release!: (accounts: []) => void;
+    const refresher = vi.fn(() => new Promise<[]>(resolve => { release = resolve; }));
+    try {
+      client.setAccountUsageEnabled(true);
+      client.setAccountUsageRefresher(refresher);
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'device_joined', device: { id: 'other-app', role: 'app', encryptionKey: 'other-key' },
+      })));
+      ws.sent.length = 0;
+      const request = (deviceId: string, requestId: string) => ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'refresh_account_usage', deviceId, payload: { requestId },
+      })));
+      request('consumer-dev', 'first');
+      request('consumer-dev', 'duplicate');
+      request('other-app', 'second');
+      await vi.waitFor(() => expect(refresher).toHaveBeenCalledOnce());
+      expect(decodePulseSends(ws.sent)).toContainEqual(expect.objectContaining({
+        type: 'device_usage', payload: expect.objectContaining({ requestId: 'duplicate', refreshError: 'busy' }),
+      }));
+      release([]);
+      await vi.waitFor(() => expect(decodePulseSends(ws.sent).filter(m => m.type === 'device_usage')).toHaveLength(3));
+      expect(decodePulseSends(ws.sent)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'device_usage', payload: expect.objectContaining({ requestId: 'first', accounts: [] }) }),
+        expect.objectContaining({ type: 'device_usage', payload: expect.objectContaining({ requestId: 'second', accounts: [] }) }),
+      ]));
+      expect(pulsePayloads(ws.sent).map(p => p.to)).toEqual(['consumer-dev', 'consumer-dev', 'other-app']);
+      expect(refresher).toHaveBeenCalledOnce();
+    } finally { release?.([]); cleanup(); }
+  });
+
+  it('rejects unknown requesters, invalid ids and disabled refresh without provider calls', async () => {
+    const { ws, client, cleanup } = buildClientWithStore();
+    const refresher = vi.fn(async () => []);
+    try {
+      client.setAccountUsageRefresher(refresher);
+      ws.sent.length = 0;
+      const request = (deviceId: string, requestId: unknown) => ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'refresh_account_usage', deviceId, payload: { requestId },
+      })));
+      request('stranger', 'valid');
+      for (const id of ['', 'a'.repeat(129), 'with space', {}, null]) request('consumer-dev', id);
+      expect(decodePulseSends(ws.sent)).toHaveLength(0);
+      request('consumer-dev', 'disabled');
+      expect(decodePulseSends(ws.sent)).toContainEqual(expect.objectContaining({
+        type: 'device_usage', payload: expect.objectContaining({ requestId: 'disabled', refreshError: 'disabled' }),
+      }));
+      await Promise.resolve();
+      expect(refresher).not.toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+
+  it('finishes failed refreshes without leaking exception text and permits a subsequent read', async () => {
+    const { ws, client, cleanup } = buildClientWithStore();
+    const refresher = vi.fn().mockRejectedValueOnce(new Error('private-provider-body')).mockResolvedValueOnce([]);
+    try {
+      client.setAccountUsageEnabled(true);
+      client.setAccountUsageRefresher(refresher);
+      ws.sent.length = 0;
+      const request = (requestId: string) => ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'refresh_account_usage', deviceId: 'consumer-dev', payload: { requestId },
+      })));
+      request('failed');
+      await vi.waitFor(() => expect(decodePulseSends(ws.sent)).toContainEqual(expect.objectContaining({
+        type: 'device_usage', payload: expect.objectContaining({ requestId: 'failed', refreshError: 'unavailable' }),
+      })));
+      expect(JSON.stringify(decodePulseSends(ws.sent))).not.toContain('private-provider-body');
+      request('retry');
+      await vi.waitFor(() => expect(decodePulseSends(ws.sent)).toContainEqual(expect.objectContaining({
+        type: 'device_usage', payload: expect.objectContaining({ requestId: 'retry', accounts: [] }),
+      })));
+      expect(refresher).toHaveBeenCalledTimes(2);
+    } finally { cleanup(); }
+  });
+
+  it('does not send a pending refresh result to a departed app', async () => {
+    const { ws, client, cleanup } = buildClientWithStore();
+    let release!: (accounts: []) => void;
+    try {
+      client.setAccountUsageEnabled(true);
+      client.setAccountUsageRefresher(() => new Promise<[]>(resolve => { release = resolve; }));
+      ws.emit('message', Buffer.from(JSON.stringify({
+        type: 'refresh_account_usage', deviceId: 'consumer-dev', payload: { requestId: 'departed' },
+      })));
+      await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+      ws.emit('message', Buffer.from(JSON.stringify({ type: 'device_left', deviceId: 'consumer-dev' })));
+      ws.sent.length = 0;
+      release([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(decodePulseSends(ws.sent).filter(m => m.type === 'device_usage')).toHaveLength(0);
+    } finally { release?.([]); cleanup(); }
+  });
+
   it('answers request_usage_history from the local history reader', () => {
     const { ws, client, cleanup } = buildClientWithStore();
     try {

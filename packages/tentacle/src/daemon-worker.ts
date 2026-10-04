@@ -346,6 +346,11 @@ export async function startWorker(): Promise<WorkerResult> {
     });
     relay.setAccountUsageEnabled(true);
     usageMonitor.onChange = (accounts) => relay.updateAccountUsage(accounts);
+    const monitor = usageMonitor;
+    relay.setAccountUsageRefresher(async () => {
+      await monitor.refresh();
+      return monitor.accounts;
+    });
     relay.usageHistoryReader = (since) => history.load(since);
     usageMonitor.start();
   }

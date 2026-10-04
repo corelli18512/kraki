@@ -550,7 +550,7 @@ export interface AccountUsageMonitorOptions {
   renewPi?: (provider: UsageProvider, agentDir: string) => Promise<boolean>;
 }
 
-/** Polls every 5 minutes and reports the deduplicated account list on change. */
+/** Polls every 15 minutes by default; manual reads share the same cooldowns. */
 export class AccountUsageMonitor {
   onChange?: (accounts: AccountUsage[]) => void;
   private slots = new Map<string, Slot>();
@@ -584,10 +584,15 @@ export class AccountUsageMonitor {
   private stopped: boolean | null = null;
   private schedule(): void {
     if (this.stopped) return;
-    const base = this.opts.intervalMs ?? 900_000;
+    const base = this.pollIntervalMs;
     this.timer = setTimeout(() => { this.timer = null; void this.refresh().finally(() => this.schedule()); },
       base * (0.9 + Math.random() * 0.2));
     this.timer.unref?.();
+  }
+
+  private get pollIntervalMs(): number {
+    const value = this.opts.intervalMs ?? 900_000;
+    return Number.isFinite(value) && value > 0 ? value : 900_000;
   }
 
   get accounts(): AccountUsage[] {
@@ -611,8 +616,10 @@ export class AccountUsageMonitor {
       ...(maskEmail(slot.account?.email ?? slot.cred.email) && { label: maskEmail(slot.account?.email ?? slot.cred.email) }),
       ...(slot.account?.plan && { plan: slot.account.plan }),
       windows: slot.account?.windows ?? [],
-      fetchedAt: new Date(slot.account?.fetchedAt ?? this.now()).toISOString(),
+      fetchedAt: slot.account ? new Date(slot.account.fetchedAt).toISOString() : '',
+      staleAfterSeconds: Math.ceil(this.pollIntervalMs * 22 / 10_000) + 60,
       ...(slot.error && { error: slot.error }),
+      ...(slot.error === 'rate_limited' && { retryAt: new Date(slot.nextAllowed).toISOString() }),
       agents: [...(agentsByKey.get(accountKey) ?? [])].sort(),
     })).sort((a, b) => a.provider.localeCompare(b.provider) || (a.label ?? '').localeCompare(b.label ?? ''));
   }
@@ -635,7 +642,10 @@ export class AccountUsageMonitor {
       const sameAccount = prev && prev.cred.provider === cred.provider
         && !(prev.cred.accountId && cred.accountId && prev.cred.accountId !== cred.accountId);
       this.slots.set(cred.sourceId, sameAccount
-        ? { cred, account: prev.account, error: prev.error, nextAllowed: 0, lastRenewal: prev.lastRenewal }
+        ? { cred, account: prev.account, error: prev.error,
+            // A token rotation must not bypass the provider's Retry-After.
+            nextAllowed: prev.error === 'rate_limited' ? prev.nextAllowed : 0,
+            lastRenewal: prev.lastRenewal }
         : { cred, nextAllowed: 0 });
     }
     for (const id of [...this.slots.keys()]) if (!seen.has(id)) this.slots.delete(id);

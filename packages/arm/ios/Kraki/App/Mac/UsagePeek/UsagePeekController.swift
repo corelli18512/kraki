@@ -127,6 +127,7 @@ enum UsagePeekLayout {
     static let compactLimit = 6
     /// Footer line under the detail cards naming devices on an older Kraki.
     static let updateHintHeight: CGFloat = 22
+    static let refreshControlsHeight: CGFloat = 42
     /// "Kraki · Account Usage" title bar shown when the panel floats over another app.
     static let floatingHeaderHeight: CGFloat = 30
     /// Inset from the Kraki window's content edges when shown inside it.
@@ -134,7 +135,7 @@ enum UsagePeekLayout {
 
     static func padding(_ m: Mode) -> CGFloat { m == .compact ? 9 : 18 }
     static func gap(_ m: Mode) -> CGFloat { m == .compact ? 6 : 12 }
-    static func cardHeight(_ m: Mode) -> CGFloat { m == .compact ? 124 : 232 }
+    static func cardHeight(_ m: Mode) -> CGFloat { m == .compact ? 124 : 272 }
     static func maxWidth(_ m: Mode) -> CGFloat { m == .compact ? compactMaxWidth : detailMaxWidth }
 
     /// Narrowest a card can be and still fit its rings, tags and header.
@@ -375,6 +376,7 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
     private func present(takeFocus: Bool) {
         guard let panel, let visibilityAnimator else { return }
         let alreadyVisible = panel.isVisible && !visibilityAnimator.isHiding
+        if !alreadyVisible { appState?.commandSender?.refreshAccountUsage(automatic: true) }
         if !panel.isVisible || visibilityAnimator.isHiding {
             attach(to: frontKrakiWindow())
             computeFrames()
@@ -447,7 +449,7 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
         let hint = rings.isEmpty || (appState?.deviceStore.devicesNeedingUsageUpdate().isEmpty ?? true) ? 0 : UsagePeekLayout.updateHintHeight
         // The detail frame contains the compact one, so hovering can't flicker at an edge.
         detailedSize = NSSize(width: max(detail.size.width, compact.size.width),
-                              height: max(min(detail.size.height + hint + header, maxHeight), compactSize.height))
+                              height: max(min(detail.size.height + hint + header + UsagePeekLayout.refreshControlsHeight, maxHeight), compactSize.height))
         // Both sizes share the top-right corner.
         anchor = NSPoint(x: bounds.maxX - inset, y: bounds.maxY - (hostWindow == nil ? 8 : inset))
         compactFrame = NSRect(x: anchor.x - compactSize.width, y: anchor.y - compactSize.height,

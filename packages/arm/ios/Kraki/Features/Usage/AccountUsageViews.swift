@@ -116,6 +116,7 @@ struct AccountUsageRings: View {
     let size: CGFloat
     let lineWidth: CGFloat
     let spacing: CGFloat
+    var now = Date()
     var animateIn = true
     var delay: Double = 0
     /// When set, each ring flies between layouts sharing this namespace.
@@ -124,7 +125,7 @@ struct AccountUsageRings: View {
 
     var body: some View {
         let windows = account.ringWindows
-        let stale = account.isStale()
+        let stale = account.isStale(now: now)
         let small = size < 70
         HStack(alignment: .top, spacing: spacing) {
             if windows.isEmpty {
@@ -145,7 +146,7 @@ struct AccountUsageRings: View {
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 6).padding(.vertical, 1.5)
                             .background(Color.primary.opacity(0.08), in: Capsule())
-                        Text("↻ " + UsageFormat.shortReset(w.resetDate))
+                        Text("↻ " + UsageFormat.shortReset(w.resetDate, now: now))
                             .font(.system(size: small ? 9.5 : 10.5)).foregroundStyle(.secondary).monospacedDigit()
                     }
                     .fixedSize()
@@ -191,6 +192,10 @@ struct AccountUsageTile: View {
     var geometryScope = ""
 
     var body: some View {
+        TimelineView(.periodic(from: .now, by: 15)) { context in content(now: context.date) }
+    }
+
+    private func content(now: Date) -> some View {
         VStack(spacing: ringSize > 70 ? 10 : 8) {
             HStack(alignment: .top, spacing: 5) {
                 VStack(alignment: .leading, spacing: 1) {
@@ -205,7 +210,7 @@ struct AccountUsageTile: View {
                 Spacer(minLength: 0)
                 VStack(alignment: .trailing, spacing: 3) {
                     UsageProviderChip(provider: account.provider)
-                    if account.isStale() && !account.windows.isEmpty {
+                    if account.isStale(now: now) && !account.windows.isEmpty {
                         Text("Stale").font(.system(size: 8.5, weight: .semibold)).foregroundStyle(.white)
                             .padding(.horizontal, 4).padding(.vertical, 1.5)
                             .background(Color.gray, in: RoundedRectangle(cornerRadius: 4))
@@ -213,7 +218,7 @@ struct AccountUsageTile: View {
                 }
             }
             AccountUsageRings(account: account, size: ringSize, lineWidth: lineWidth,
-                              spacing: ringSize > 70 ? 18 : 14, animateIn: animateIn, delay: delay,
+                              spacing: ringSize > 70 ? 18 : 14, now: now, animateIn: animateIn, delay: delay,
                               geometry: geometry, geometryScope: geometryScope)
                 .frame(maxWidth: .infinity)
         }
@@ -234,8 +239,12 @@ struct AccountUsageRow: View {
     }
 
     var body: some View {
+        TimelineView(.periodic(from: .now, by: 15)) { context in content(now: context.date) }
+    }
+
+    private func content(now: Date) -> some View {
         let account = merged.account
-        HStack(alignment: .center, spacing: 12) {
+        return HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(account.label ?? account.providerTitle)
@@ -247,7 +256,7 @@ struct AccountUsageRow: View {
                     if let plan = account.planTitle {
                         Text(plan).font(.system(size: 12)).foregroundStyle(.secondary)
                     }
-                    if account.isStale() && !account.windows.isEmpty {
+                    if account.isStale(now: now) && !account.windows.isEmpty {
                         Text("Stale").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(.white)
                             .padding(.horizontal, 4).padding(.vertical, 1.5)
                             .background(Color.gray, in: RoundedRectangle(cornerRadius: 4))
@@ -258,12 +267,90 @@ struct AccountUsageRow: View {
                     .labelStyle(.titleAndIcon)
                     .lineLimit(1)
                     .opacity(merged.allOffline ? 0.6 : 1)
+                AccountUsageReadStatus(account: account, offline: merged.allOffline)
             }
             Spacer(minLength: 4)
-            AccountUsageRings(account: account, size: 50, lineWidth: 5, spacing: 10, animateIn: animateIn, delay: delay)
+            AccountUsageRings(account: account, size: 50, lineWidth: 5, spacing: 10, now: now, animateIn: animateIn, delay: delay)
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Last successful read, not the quota reset or the last failed attempt.
+struct AccountUsageReadStatus: View {
+    let account: AccountUsage
+    var offline = false
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 15)) { context in
+            VStack(alignment: .leading, spacing: 3) {
+                Text(account.lastUpdatedText(now: context.date))
+                    .help(account.fetchedDate?.formatted(date: .abbreviated, time: .standard) ?? "No successful reading")
+                if let status = offline ? "Device offline" : account.readStatus(now: context.date) {
+                    Text(status).foregroundStyle(.orange)
+                }
+            }
+            .font(.system(size: 10.5)).foregroundStyle(.secondary)
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// Shared request UI. All provider calls are owned/throttled by the Tentacle.
+struct AccountUsageRefreshControls: View {
+    @Environment(AppState.self) private var appState
+    var deviceIds: Set<String>? = nil
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let store = appState.deviceStore
+            let ids = store.usageRefreshTargets(deviceIds: deviceIds)
+            let connected = appState.connectionStatus == .connected
+            let busy = connected && ids.contains { store.usageRefreshes[$0]?.finished == false }
+            let ready = connected && ids.contains { store.canRefreshUsage($0, now: context.date) }
+            HStack(spacing: 8) {
+                if busy { ProgressView().controlSize(.small) }
+                Text(status(ids: ids, connected: connected, busy: busy, ready: ready))
+                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button {
+                    appState.commandSender?.refreshAccountUsage(deviceIds: deviceIds)
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+                .disabled(!ready || busy)
+                .help("Refresh readings without bypassing provider rate limits")
+                .accessibilityIdentifier("account-usage-refresh")
+            }
+        }
+    }
+
+    private func status(ids: [String], connected: Bool, busy: Bool, ready: Bool) -> String {
+        if !connected { return "Connect to refresh" }
+        if busy { return "Refreshing…" }
+        let store = appState.deviceStore
+        if ids.isEmpty {
+            let online = store.devices.values.contains {
+                $0.role == .tentacle && $0.online && (deviceIds == nil || deviceIds!.contains($0.id))
+            }
+            return online ? "Update or enable account usage on your device to refresh" : "No device online"
+        }
+        if let error = ids.compactMap({ store.usageRefreshes[$0]?.error }).first {
+            switch error {
+            case "timeout": return "Refresh timed out. Try again."
+            case "offline", "connection": return "Connection lost. Try again."
+            case "disabled": return "Enable account usage on the device."
+            case "busy": return "Device is already refreshing. Try again shortly."
+            default: return "Couldn't refresh. Try again."
+            }
+        }
+        if ids.contains(where: { store.deviceUsage[$0]?.accounts.contains(where: { $0.error != nil }) == true }) {
+            return "Some accounts couldn't be updated"
+        }
+        return ready ? "Provider rate limits apply" : "Refreshed recently · wait a moment"
     }
 }
 

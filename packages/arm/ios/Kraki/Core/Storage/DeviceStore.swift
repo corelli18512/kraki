@@ -25,6 +25,7 @@ final class DeviceStore {
     /// Latest subscription account quota per tentacle (`device_usage`).
     /// In-memory only: a fresh reading arrives on every connect.
     var deviceUsage: [String: DeviceUsageSnapshot] = [:]
+    var usageRefreshes: [String: AccountUsageRefreshState] = [:]
     /// Per-device local-session catalog populated by `local_sessions_list`
     /// responses. Cleared and re-fetched by the import picker on open.
     var localSessions: [String: [LocalSessionSummary]] = [:]
@@ -262,6 +263,9 @@ final class DeviceStore {
         keyPins.forget(id)
         keyMismatchDeviceIds.remove(id)
         devices.removeValue(forKey: id)
+        deviceUsage.removeValue(forKey: id)
+        usageRefreshes.removeValue(forKey: id)
+        deviceFeatures.removeValue(forKey: id)
         deviceAgents.removeValue(forKey: id)
         deviceVersions.removeValue(forKey: id)
         pendingGreetingIds.remove(id)
@@ -277,6 +281,9 @@ final class DeviceStore {
         } else {
             // Going offline → not connecting, just gray.
             pendingGreetingIds.remove(id)
+            if let request = usageRefreshes[id] {
+                finishUsageRefresh(id, requestId: request.requestId, error: "offline")
+            }
         }
         scheduleSave()
     }
@@ -324,6 +331,9 @@ final class DeviceStore {
         devices.removeAll()
         deviceAgents.removeAll()
         deviceVersions.removeAll()
+        deviceUsage.removeAll()
+        usageRefreshes.removeAll()
+        deviceFeatures.removeAll()
         pendingGreetingIds.removeAll()
         clearPersistentSnapshot()
     }
@@ -381,6 +391,75 @@ final class DeviceStore {
 
     func setDeviceUsage(_ id: String, accounts: [AccountUsage], receivedAt: Date = Date()) {
         deviceUsage[id] = DeviceUsageSnapshot(accounts: accounts, receivedAt: receivedAt)
+    }
+
+    /// Pick a small set of online, refresh-capable devices covering the accounts.
+    /// Replicated accounts do not cause a request to every machine. Devices with
+    /// no snapshot are still queried so a newly signed-in account can appear.
+    func usageRefreshTargets(deviceIds: Set<String>? = nil) -> [String] {
+        let candidates = devices.values.filter {
+            $0.role == .tentacle && $0.online && !pendingGreetingIds.contains($0.id)
+                && deviceFeatures[$0.id]?.contains("account_usage_refresh") == true
+                && (deviceIds == nil || deviceIds!.contains($0.id))
+        }.map(\.id).sorted()
+        if deviceIds != nil { return candidates }
+        var remaining = Set(candidates.flatMap { deviceUsage[$0]?.accounts.map(\.id) ?? [] })
+        var selected = candidates.filter { deviceUsage[$0]?.accounts.isEmpty ?? true }
+        var pool = candidates.filter { !selected.contains($0) }
+        while !remaining.isEmpty, !pool.isEmpty {
+            func score(_ id: String) -> (Int, Int, TimeInterval) {
+                let accounts = (deviceUsage[id]?.accounts ?? []).filter { remaining.contains($0.id) }
+                let failedAt = usageRefreshes[id].flatMap { $0.error == nil ? nil : $0.startedAt } ?? .distantPast
+                let healthy = accounts.filter { $0.error == nil && ($0.fetchedDate ?? .distantPast) > failedAt }
+                return (healthy.count, accounts.count, healthy.compactMap(\.fetchedDate).max()?.timeIntervalSince1970 ?? 0)
+            }
+            // Prefer working replicas over an expired login (or a failed RPC).
+            // Coverage then minimizes requests; freshness and ID break ties.
+            let best = pool.max { a, b in
+                let ac = score(a), bc = score(b)
+                return ac == bc ? a > b : ac < bc
+            }!
+            selected.append(best)
+            remaining.subtract(deviceUsage[best]?.accounts.map(\.id) ?? [])
+            pool.removeAll { $0 == best }
+        }
+        return selected.sorted()
+    }
+
+    func canRefreshUsage(_ id: String, automatic: Bool = false, now: Date = Date()) -> Bool {
+        if let state = usageRefreshes[id], !state.finished || now.timeIntervalSince(state.startedAt) < 60 { return false }
+        guard automatic, let snapshot = deviceUsage[id], !snapshot.accounts.isEmpty else { return true }
+        return snapshot.accounts.contains { account in
+            if account.error == "rate_limited", let retry = account.retryDate, retry > now { return false }
+            return account.error != nil || (account.fetchedDate.map { now.timeIntervalSince($0) >= 60 } ?? true)
+        }
+    }
+
+    func beginUsageRefresh(_ id: String, requestId: String, now: Date = Date()) {
+        usageRefreshes[id] = AccountUsageRefreshState(requestId: requestId, startedAt: now)
+    }
+
+    func finishUsageRefresh(_ id: String, requestId: String, error: String? = nil) {
+        guard var state = usageRefreshes[id], state.requestId == requestId, !state.finished else { return }
+        state.finished = true
+        state.error = error
+        usageRefreshes[id] = state
+    }
+
+    func interruptUsageRefreshes() {
+        for (id, state) in usageRefreshes where !state.finished {
+            finishUsageRefresh(id, requestId: state.requestId, error: "connection")
+        }
+    }
+
+    /// Old targeted replies may not overwrite a newer request or clear its spinner.
+    func receiveDeviceUsage(_ id: String, payload: DeviceUsagePayload) {
+        if let requestId = payload.requestId {
+            if let pending = usageRefreshes[id], pending.requestId != requestId { return }
+            finishUsageRefresh(id, requestId: requestId, error: payload.refreshError)
+        }
+        // A transport/disabled error carries a cache, not a new successful reading.
+        if payload.refreshError == nil { setDeviceUsage(id, accounts: payload.accounts) }
     }
 
     /// Online tentacles whose greeting says they predate account usage, so the app

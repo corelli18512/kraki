@@ -22,6 +22,7 @@ struct DeviceListView: View {
 
     private var accountsSectionShown: Bool {
         !appState.deviceStore.mergedUsage().isEmpty || !appState.deviceStore.devicesNeedingUsageUpdate().isEmpty
+            || !appState.deviceStore.usageRefreshTargets().isEmpty
     }
 
     var body: some View {
@@ -49,8 +50,9 @@ struct DeviceListView: View {
             // Quota belongs to the account, so accounts come first, merged across devices.
             let accounts = appState.deviceStore.mergedUsage()
             let outdated = appState.deviceStore.devicesNeedingUsageUpdate()
-            if !accounts.isEmpty || !outdated.isEmpty {
+            if accountsSectionShown {
                 Section {
+                    AccountUsageRefreshControls()
                     ForEach(Array(accounts.enumerated()), id: \.element.id) { index, merged in
                         AccountUsageRow(merged: merged, delay: 0.05 + Double(index) * 0.04)
                     }
@@ -96,6 +98,12 @@ struct DeviceListView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .contentMargins(.top, 0)
+        .task(id: appState.connectionStatus == .connected ? appState.deviceStore.usageRefreshTargets() : []) {
+            // Retry when a greeting/connection arrives after appearance. SwiftUI
+            // cancels this task when the page leaves the screen.
+            guard !Task.isCancelled else { return }
+            appState.commandSender?.refreshAccountUsage(automatic: true)
+        }
     }
 
     // MARK: - Empty State
