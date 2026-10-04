@@ -22,8 +22,8 @@ jobs:
         include:
           - { label: "Linux binary",    runner: ubuntu-latest,  kind: binary }
           - { label: "Linux npm",       runner: ubuntu-latest,  kind: npm }
-          - { label: "Windows binary",  runner: windows-latest, kind: binary, node: 22 }
-          - { label: "Windows npm",     runner: windows-latest, kind: npm, node: 22 }
+          - { label: "Windows binary",  runner: windows-latest, kind: binary, mock: true }
+          - { label: "Windows npm",     runner: windows-latest, kind: npm, mock: true }
           - { label: "macOS CLI app",   runner: macos-14,       kind: app }
           - { label: "macOS npm",       runner: macos-14,       kind: npm }
     runs-on: ${{ matrix.runner }}
@@ -41,14 +41,26 @@ jobs:
         with:
           node-version: ${{ matrix.node || 24 }}
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Build protocol, crypto, head, tentacle
+      - name: Install and build
         run: |
+          if [ "${{ matrix.mock }}" = true ]; then
+            pnpm install --frozen-lockfile --filter @kraki/tentacle...
+          else
+            pnpm install --frozen-lockfile
+          fi
           pnpm --filter @kraki/protocol --filter @kraki/crypto run build
-          pnpm --filter @kraki/head run build
+          [ "${{ matrix.mock }}" = true ] || pnpm --filter @kraki/head run build
           pnpm --filter @kraki/tentacle run build
 
+      - name: Start a local relay (mock — the real head needs better-sqlite3, which does not build here)
+        if: matrix.mock
+        run: |
+          mkdir -p "$RUNNER_TEMP/head"
+          nohup node scripts/poc/mock-relay.mjs > "$RUNNER_TEMP/head/head.log" 2>&1 &
+          sleep 2; cat "$RUNNER_TEMP/head/head.log"
+
       - name: Start a local relay (open auth)
+        if: ${{ !matrix.mock }}
         run: |
           mkdir -p "$RUNNER_TEMP/head"
           (cd "$RUNNER_TEMP/head" && AUTH_MODE=open PORT=4000 DB_PATH="$RUNNER_TEMP/head/h.db" nohup node "$GITHUB_WORKSPACE/packages/head/dist/cli.js" > "$RUNNER_TEMP/head/head.log" 2>&1 &)
