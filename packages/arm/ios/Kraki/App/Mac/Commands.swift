@@ -255,6 +255,7 @@ extension Notification.Name {
     static let macOpenLogs        = Notification.Name("mac.openLogs")
     static let macOpenPairing     = Notification.Name("mac.openPairing")
     static let macOpenNewSession  = Notification.Name("mac.openNewSession")
+    static let macFocusNewSessionComposer = Notification.Name("mac.focusNewSessionComposer")
     static let macOpenSessionInfo = Notification.Name("mac.openSessionInfo")
     static let macToggleSidebar   = Notification.Name("mac.toggleSidebar")
     static let macNavigateSession  = Notification.Name("mac.navigateSession")

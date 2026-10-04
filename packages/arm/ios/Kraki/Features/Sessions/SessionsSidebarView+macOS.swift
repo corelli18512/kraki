@@ -462,9 +462,10 @@ struct SessionsSidebarView: View {
                 }
                 .buttonStyle(.link)
             } else {
-                Image(systemName: "bubble.left.and.text.bubble.right")
-                    .font(.system(size: 22, weight: .light))
-                    .foregroundStyle(Color.textMuted.opacity(0.7))
+                Image("KrakiLogo")
+                    .resizable().interpolation(.high)
+                    .frame(width: 52, height: 52)
+                    .padding(.bottom, 2)
                 Text("No sessions yet")
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(Color.textSecondary)

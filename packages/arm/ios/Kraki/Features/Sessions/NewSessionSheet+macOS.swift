@@ -91,6 +91,7 @@ struct NewSessionComposer: View {
             statusLine
         }
         .onAppear { selectDefaults(); focused = true }
+        .onReceive(NotificationCenter.default.publisher(for: .macFocusNewSessionComposer)) { _ in focused = true }
         .onChange(of: selectedDeviceId) { _, _ in onDeviceChanged() }
         .onChange(of: selectedAgentId) { _, _ in onAgentChanged() }
         .onChange(of: selectedModel) { _, _ in onModelChanged() }
@@ -113,45 +114,38 @@ struct NewSessionComposer: View {
 
     // MARK: Pills
 
+    @State private var openPill: Pill?
+    enum Pill: Hashable { case device, agent, model, effort }
+
+    private func pill<Content: View>(_ which: Pill, enabled: Bool = true, @ViewBuilder label: () -> PillLabel,
+                                     @ViewBuilder content: @escaping () -> Content) -> some View {
+        Button { openPill = which } label: { label() }
+            .buttonStyle(.plain)
+            .disabled(!enabled)
+            .popover(isPresented: Binding(get: { openPill == which }, set: { if !$0 { openPill = nil } }),
+                     arrowEdge: .bottom) {
+                content().frame(width: 280)
+            }
+    }
+
     private var devicePill: some View {
-        Menu {
-            if !onlineTentacles.isEmpty {
-                Section("Online") {
-                    ForEach(onlineTentacles, id: \.id) { d in
-                        Toggle(isOn: Binding(get: { d.id == selectedDeviceId }, set: { if $0 { selectedDeviceId = d.id } })) {
-                            Text(d.id == localDeviceId ? "\(d.name) (this Mac)" : d.name)
-                        }
-                    }
-                }
-            }
-            if !offlineTentacles.isEmpty {
-                Section("Offline") {
-                    ForEach(offlineTentacles, id: \.id) { d in Text(d.name) }
-                }
-                .disabled(true)
-            }
-        } label: {
-            PillLabel(icon: selectedIsThisMac ? "laptopcomputer" : "desktopcomputer",
-                      text: selectedDevice.map { $0.id == localDeviceId ? "This Mac" : $0.name } ?? "Choose a computer",
+        pill(.device) {
+            PillLabel(text: selectedDevice.map { $0.id == localDeviceId ? "This Mac" : $0.name } ?? "Choose a computer",
                       dot: selectedDevice?.online == true ? Color(hex: 0x34D399) : Color.textMuted)
+        } content: {
+            DeviceChoiceList(online: onlineTentacles, offline: offlineTentacles, localId: localDeviceId,
+                             selected: selectedDeviceId) { selectedDeviceId = $0; openPill = nil }
         }
-        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
         .help(selectedDevice?.name ?? "")
         .accessibilityIdentifier("mac.newSession.device")
     }
 
     private var agentPill: some View {
-        Menu {
-            ForEach(agents, id: \.id) { a in
-                Toggle(isOn: Binding(get: { a.id == selectedAgentId }, set: { if $0 { selectedAgentId = a.id } })) {
-                    Text(AgentInfo.from(a.id).label)
-                }
-            }
-        } label: {
-            PillLabel(icon: "sparkle", text: AgentInfo.from(selectedAgentId).label)
+        pill(.agent, enabled: agents.count > 1) {
+            PillLabel(text: AgentInfo.from(selectedAgentId).label, agent: selectedAgentId, showsChevron: agents.count > 1)
+        } content: {
+            AgentChoiceList(agents: agents, selected: selectedAgentId) { selectedAgentId = $0; openPill = nil }
         }
-        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-        .disabled(agents.count < 2)
         .accessibilityIdentifier("mac.newSession.agent")
     }
 
@@ -160,31 +154,21 @@ struct NewSessionComposer: View {
     }
 
     private var modelPill: some View {
-        Menu {
-            ForEach(models, id: \.self) { m in
-                Toggle(isOn: Binding(get: { m == selectedModel }, set: { if $0 { selectedModel = m } })) {
-                    Text(modelName(m))
-                }
-            }
-        } label: {
-            PillLabel(icon: "cpu", text: selectedModel.isEmpty ? "Model" : modelName(selectedModel))
+        pill(.model, enabled: models.count > 1) {
+            PillLabel(text: selectedModel.isEmpty ? "Model" : modelName(selectedModel), showsChevron: models.count > 1)
+        } content: {
+            ModelChoiceList(models: models, name: modelName, selected: selectedModel) { selectedModel = $0; openPill = nil }
         }
-        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-        .disabled(models.count < 2)
         .accessibilityIdentifier("mac.newSession.model")
     }
 
     private func effortPill(_ efforts: [ReasoningEffort]) -> some View {
-        Menu {
-            ForEach(efforts, id: \.rawValue) { e in
-                Toggle(isOn: Binding(get: { e == reasoningEffort }, set: { if $0 { reasoningEffort = e } })) {
-                    Text(effortLabel(e))
-                }
-            }
-        } label: {
-            PillLabel(icon: "brain", text: reasoningEffort.map(effortLabel) ?? "Reasoning")
+        pill(.effort) {
+            PillLabel(text: reasoningEffort.map { "\(Self.effortLabel($0)) thinking" } ?? "Thinking",
+                      symbol: Self.effortSymbol(reasoningEffort))
+        } content: {
+            EffortChoiceList(efforts: efforts, selected: reasoningEffort) { reasoningEffort = $0; openPill = nil }
         }
-        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
         .accessibilityIdentifier("mac.newSession.effort")
     }
 
@@ -302,7 +286,7 @@ struct NewSessionComposer: View {
         }
     }
 
-    private func effortLabel(_ effort: ReasoningEffort) -> String {
+    static func effortLabel(_ effort: ReasoningEffort) -> String {
         switch effort {
         case .low: return "Low"
         case .medium: return "Medium"
@@ -311,31 +295,198 @@ struct NewSessionComposer: View {
         case .max: return "Max"
         }
     }
+
+    /// A gauge that fills with the level.
+    static func effortSymbol(_ effort: ReasoningEffort?) -> String {
+        switch effort {
+        case .low: return "gauge.with.dots.needle.0percent"
+        case .medium, .none: return "gauge.with.dots.needle.33percent"
+        case .high: return "gauge.with.dots.needle.67percent"
+        case .xhigh, .max: return "gauge.with.dots.needle.100percent"
+        }
+    }
 }
 
-/// A compact rounded pill: icon, value, small chevron.
-private struct PillLabel: View {
-    let icon: String
+/// A compact rounded pill: an optional mark (status dot, the agent's own
+/// logo, or a symbol), the value, and a chevron when there is a choice.
+struct PillLabel: View {
     let text: String
     var dot: Color?
+    var agent: String?
+    var symbol: String?
+    var showsChevron = true
     @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 5) {
             if let dot {
                 Circle().fill(dot).frame(width: 6, height: 6)
-            } else {
-                Image(systemName: icon).font(.system(size: 10.5, weight: .medium))
+            } else if let agent, !agent.isEmpty {
+                AgentAvatar(agent: agent, size: .xs).frame(width: 15, height: 15).scaleEffect(15.0 / 18.0)
+            } else if let symbol {
+                Image(systemName: symbol).font(.system(size: 11, weight: .medium))
             }
             Text(text).font(.system(size: 11.5, weight: .medium)).lineLimit(1)
-            Image(systemName: "chevron.down").font(.system(size: 7.5, weight: .bold)).opacity(0.6)
+            if showsChevron {
+                Image(systemName: "chevron.down").font(.system(size: 7.5, weight: .bold)).opacity(0.6)
+            }
         }
         .foregroundStyle(Color.textSecondary)
         .padding(.horizontal, 9)
         .padding(.vertical, 5)
-        .background(Capsule(style: .continuous).fill(Color.textPrimary.opacity(hovering ? 0.12 : 0.07)))
+        .background(Capsule(style: .continuous).fill(Color.textPrimary.opacity(hovering && showsChevron ? 0.12 : 0.07)))
         .contentShape(Capsule())
         .onHover { hovering = $0 }
+    }
+}
+
+// MARK: - Choice lists (popover contents)
+
+/// One row in a pill's popover: mark, title, optional detail, checkmark.
+struct ChoiceRow<Mark: View>: View {
+    let title: String
+    var detail: String?
+    var selected = false
+    var enabled = true
+    @ViewBuilder var mark: () -> Mark
+    var action: () -> Void = {}
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                mark().frame(width: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.system(size: 12.5, weight: .medium)).foregroundStyle(enabled ? Color.textPrimary : Color.textMuted)
+                    if let detail {
+                        Text(detail).font(.system(size: 10.5)).foregroundStyle(Color.textMuted).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 6)
+                if selected {
+                    Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.krakiPrimary)
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(hovering && enabled ? Color.textPrimary.opacity(0.08) : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .onHover { hovering = $0 }
+    }
+}
+
+private struct ChoiceSection<Content: View>: View {
+    let title: String?
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let title {
+                Text(title.uppercased()).font(.system(size: 9.5, weight: .semibold)).tracking(0.6)
+                    .foregroundStyle(Color.textMuted).padding(.horizontal, 10).padding(.top, 4).padding(.bottom, 2)
+            }
+            content()
+        }
+    }
+}
+
+struct DeviceChoiceList: View {
+    let online: [DeviceSummary]
+    let offline: [DeviceSummary]
+    let localId: String?
+    let selected: String
+    let choose: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ChoiceSection(title: "Online") {
+                ForEach(online, id: \.id) { d in
+                    ChoiceRow(title: d.id == localId ? "This Mac" : d.name,
+                              detail: d.id == localId ? d.name : nil,
+                              selected: d.id == selected,
+                              mark: { Image(systemName: d.id == localId ? "laptopcomputer" : "desktopcomputer")
+                                        .foregroundStyle(Color(hex: 0x34D399)) },
+                              action: { choose(d.id) })
+                }
+            }
+            if !offline.isEmpty {
+                ChoiceSection(title: "Offline") {
+                    ForEach(offline.prefix(6), id: \.id) { d in
+                        ChoiceRow(title: d.name, detail: "Open Kraki on it to use it", enabled: false,
+                                  mark: { Image(systemName: "desktopcomputer").foregroundStyle(Color.textMuted) })
+                    }
+                    if offline.count > 6 {
+                        Text("and \(offline.count - 6) more offline").font(.system(size: 10.5))
+                            .foregroundStyle(Color.textMuted).padding(.horizontal, 10).padding(.top, 2)
+                    }
+                }
+            }
+        }
+        .padding(8)
+    }
+}
+
+struct AgentChoiceList: View {
+    let agents: [AgentCapabilities]
+    let selected: String
+    let choose: (String) -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(agents, id: \.id) { a in
+                let n = a.models?.count ?? 0
+                ChoiceRow(title: AgentInfo.from(a.id).label, detail: "\(n) \(n == 1 ? "model" : "models")",
+                          selected: a.id == selected,
+                          mark: { AgentAvatar(agent: a.id, size: .xs) },
+                          action: { choose(a.id) })
+            }
+        }
+        .padding(8)
+    }
+}
+
+struct ModelChoiceList: View {
+    let models: [String]
+    let name: (String) -> String
+    let selected: String
+    let choose: (String) -> Void
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(models, id: \.self) { m in
+                    ChoiceRow(title: name(m), detail: name(m) == m ? nil : m, selected: m == selected,
+                              mark: { EmptyView() }, action: { choose(m) })
+                }
+            }
+            .padding(8)
+        }
+        .frame(maxHeight: 320)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+struct EffortChoiceList: View {
+    let efforts: [ReasoningEffort]
+    let selected: ReasoningEffort?
+    let choose: (ReasoningEffort) -> Void
+    private func detail(_ e: ReasoningEffort) -> String {
+        switch e {
+        case .low: return "Fastest replies"
+        case .medium: return "Balanced"
+        case .high: return "Thinks longer on hard problems"
+        case .xhigh, .max: return "Most thorough, slowest"
+        }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(efforts, id: \.rawValue) { e in
+                ChoiceRow(title: NewSessionComposer.effortLabel(e), detail: detail(e), selected: e == selected,
+                          mark: { Image(systemName: NewSessionComposer.effortSymbol(e)).foregroundStyle(Color.textSecondary) },
+                          action: { choose(e) })
+            }
+        }
+        .padding(8)
     }
 }
 
@@ -352,9 +503,6 @@ struct MacStartSessionView: View {
             Spacer()
             VStack(spacing: 22) {
                 VStack(spacing: 8) {
-                    Image("KrakiLogo")
-                        .resizable().interpolation(.high)
-                        .frame(width: 44, height: 44)
                     Text(firstTime ? "What should we work on first?" : "What's next?")
                         .font(.system(size: 24, weight: .semibold))
                         .foregroundStyle(Color.textTitle)

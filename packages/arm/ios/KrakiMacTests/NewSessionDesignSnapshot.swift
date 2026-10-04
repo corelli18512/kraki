@@ -12,10 +12,18 @@ final class NewSessionDesignSnapshot: XCTestCase {
     private func app(sessions: Int) throws -> AppState {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("design-\(UUID().uuidString)")
         let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
+        for (id, name) in [("pc", "WindowsPC"), ("ubuntu", "office-ubuntu")] {
+            app.deviceStore.devices[id] = DeviceSummary(id: id, name: name, role: .tentacle, kind: .desktop,
+                                                        publicKey: nil, encryptionKey: nil, online: false, lastSeen: nil, createdAt: nil)
+        }
         app.deviceStore.devices["mac"] = DeviceSummary(id: "mac", name: "Alex's MacBook Pro", role: .tentacle, kind: .desktop,
                                                        publicKey: nil, encryptionKey: nil, online: true, lastSeen: nil, createdAt: nil)
         app.deviceStore.setDeviceAgents("mac", agents: [
-            AgentCapabilities(type: "code", id: "copilot", models: ["auto", "gpt-6-luna", "claude-sonnet-5"], modelDetails: nil),
+            AgentCapabilities(type: "code", id: "copilot", models: ["auto", "gpt-6-luna", "claude-sonnet-5"], modelDetails: [
+                ModelDetail(id: "auto", name: "Auto", supportsReasoningEffort: false),
+                ModelDetail(id: "gpt-6-luna", name: "GPT-6 Luna", supportsReasoningEffort: true, supportedReasoningEfforts: [.low, .medium, .high], defaultReasoningEffort: .medium),
+                ModelDetail(id: "claude-sonnet-5", name: "Claude Sonnet 5", supportsReasoningEffort: false),
+            ]),
             AgentCapabilities(type: "code", id: "claude", models: ["claude-opus-5-5", "claude-sonnet-5"], modelDetails: nil),
         ])
         for i in 0..<sessions {
@@ -60,6 +68,30 @@ final class NewSessionDesignSnapshot: XCTestCase {
                 }
                 .environment(a).environment(TentacleCLIManager())
                 try render(window, size: CGSize(width: 1180, height: 740), dark: dark, to: "window-\(label)-\(suffix)")
+            }
+            do {
+                let a = try app(sessions: 3)
+                let online = a.deviceStore.tentacleDevices.filter(\.online)
+                let offline = a.deviceStore.tentacleDevices.filter { !$0.online }
+                let agents = a.deviceStore.agents(for: "mac")
+                func pop<V: View>(_ v: V) -> some View {
+                    v.frame(width: 280).background(RoundedRectangle(cornerRadius: 12).fill(Color.surfaceSecondary))
+                        .padding(10).environment(a)
+                }
+                try render(pop(DeviceChoiceList(online: online, offline: offline, localId: "mac", selected: "mac") { _ in }),
+                           size: CGSize(width: 300, height: 260), dark: dark, to: "menu-device-\(suffix)")
+                try render(pop(AgentChoiceList(agents: agents, selected: "copilot") { _ in }),
+                           size: CGSize(width: 300, height: 130), dark: dark, to: "menu-agent-\(suffix)")
+                try render(pop(ModelChoiceList(models: ["auto", "gpt-6-luna", "claude-sonnet-5"],
+                                               name: { ["auto": "Auto", "gpt-6-luna": "GPT-6 Luna", "claude-sonnet-5": "Claude Sonnet 5"][$0] ?? $0 },
+                                               selected: "gpt-6-luna") { _ in }),
+                           size: CGSize(width: 300, height: 170), dark: dark, to: "menu-model-\(suffix)")
+                try render(pop(EffortChoiceList(efforts: [.low, .medium, .high], selected: .medium) { _ in }),
+                           size: CGSize(width: 300, height: 170), dark: dark, to: "menu-effort-\(suffix)")
+                let pairing = PairingSheet(preview: .init(url: "https://app.kraki.chat?relay=wss%3A%2F%2Fcn.relay.kraki.chat&token=pt_8f2c1d9a4b7e6f30a5c2",
+                                                          token: "t", relay: "r", expiresAt: Date().addingTimeInterval(272)))
+                    .environment(TentacleCLIManager())
+                try render(pairing, size: CGSize(width: 440, height: 540), dark: dark, to: "pairing-\(suffix)")
             }
             let a = try app(sessions: 3)
             let sheet = NewSessionSheet(isPresented: .constant(true))

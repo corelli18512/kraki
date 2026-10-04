@@ -19,6 +19,15 @@ struct PairingSheet: View {
     @State private var error: String?
     @State private var loading: Bool = false
     @State private var now: Date = Date()
+    private var previewPayload: TentacleCLIManager.PairingPayload?
+
+    init() {}
+    #if DEBUG
+    init(preview: TentacleCLIManager.PairingPayload) {
+        previewPayload = preview
+        _payload = State(initialValue: preview)
+    }
+    #endif
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,7 +48,7 @@ struct PairingSheet: View {
         }
         .frame(width: 440, height: 540)
         .background(Color.surfacePrimary)
-        .task { await load() }
+        .task { if previewPayload == nil { await load() } }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now = $0 }
     }
 
