@@ -242,15 +242,18 @@ export function launchApplier(plan: UpdatePlan): void {
   const work = workDir();
   const planPath = join(work, 'plan.json');
   writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`);
+  // Windows can't delete a running .exe, so run the applier from a copy
+  // there. Not on macOS: only Kraki's own signed binary (in place) may
+  // replace Kraki in /Applications (App Management protection).
   let self: string[];
-  if (isSea()) {
+  if (isSea() && process.platform === 'win32') {
     const copy = join(work, process.platform === 'win32' ? 'applier.exe' : 'applier');
     rmSync(copy, { force: true });
     copyFileSync(process.execPath, copy);
     if (process.platform !== 'win32') chmodSync(copy, 0o755);
     self = [copy];
   } else {
-    self = [process.execPath, process.argv[1]];
+    self = isSea() ? [process.execPath] : [process.execPath, process.argv[1]];
   }
   const child = spawn(self[0], [...self.slice(1), APPLY_UPDATE_COMMAND, '--launch', planPath], {
     detached: true, stdio: 'ignore', windowsHide: true, env: applierEnv(), cwd: tmpdir(),
