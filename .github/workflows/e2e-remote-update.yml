@@ -92,6 +92,10 @@ jobs:
               echo "KRAKI=kraki" >> "$GITHUB_ENV"; echo "OLD_ARTIFACT=$TGZ" >> "$GITHUB_ENV"
               ;;
           esac
+
+      - name: Start the old version
+        run: |
+          set -euo pipefail
           mkdir -p "$HOME/.kraki"
           printf '{"relay":"ws://127.0.0.1:4000","authMethod":"open","device":{"name":"e2e-%s-%s","id":"e2e-%s-%s"},"logging":{"verbosity":"verbose"}}\n' "$KIND" "$RUNNER_OS" "$KIND" "$RUNNER_OS" > "$HOME/.kraki/config.json"
           "$KRAKI" --version
