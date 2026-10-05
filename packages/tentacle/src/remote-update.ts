@@ -230,6 +230,30 @@ export async function stageUpdate(
   }
 }
 
+async function rmRetry(p: string): Promise<void> {
+  for (let i = 1; ; i++) {
+    try { rmSync(p, { recursive: true, force: true }); return; } catch (err) {
+      if (i >= 40) throw err;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+}
+
+/** Windows keeps a just-exited .exe (or a scanned file) locked for a moment:
+ *  retry a rename that fails with EBUSY/EPERM/EACCES for up to ~20 s. */
+export async function renameRetry(
+  from: string, to: string, attempts = 40, delayMs = 500, rename: (a: string, b: string) => void = renameSync,
+): Promise<void> {
+  for (let i = 1; ; i++) {
+    try { rename(from, to); return; } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (i >= attempts || !['EBUSY', 'EPERM', 'EACCES'].includes(code ?? '')) throw err;
+      if (i === 1) log(`  ${code} renaming ${from}; retrying`);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+}
+
 function moveOrCopy(from: string, to: string): void {
   try { renameSync(from, to); } catch {
     cpSync(from, to, { recursive: true });
@@ -374,8 +398,8 @@ export async function runApplier(args: string[]): Promise<void> {
     const offlineAt = Date.now();
     phase = 'swap';
     rmSync(old, { recursive: true, force: true });
-    renameSync(plan.target, old);
-    try { moveOrCopy(plan.staged, plan.target); } catch (err) { renameSync(old, plan.target); throw err; }
+    await renameRetry(plan.target, old);
+    try { moveOrCopy(plan.staged, plan.target); } catch (err) { await renameRetry(old, plan.target); throw err; }
     phase = 'start';
     const start = runCli(plan.cli, ['start', '--login'], 120_000);
     log(`  start → ${start.code}`);
@@ -395,8 +419,9 @@ export async function runApplier(args: string[]): Promise<void> {
     try {
       if (phase !== 'stop' && phase !== 'swap') {
         runCli(plan.cli, ['stop']);
-        rmSync(plan.target, { recursive: true, force: true });
-        renameSync(old, plan.target);
+        for (let k = 0; k < 20 && status(plan.cli).running; k++) await sleep(500);
+        await rmRetry(plan.target);
+        await renameRetry(old, plan.target);
       }
       runCli(plan.cli, ['start', '--login'], 120_000);
       back = await waitOnline(plan.cli, plan.from, plan.deadlineSeconds);

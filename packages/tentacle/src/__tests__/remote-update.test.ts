@@ -182,3 +182,19 @@ describe('result handoff', () => {
     expect(takeUnannouncedResult()).toBeNull();
   });
 });
+
+describe('renameRetry', () => {
+  it('retries a locked file and gives up on other errors', async () => {
+    const { renameRetry } = await import('../remote-update.js');
+    let calls = 0;
+    const done: string[][] = [];
+    await renameRetry('a', 'b', 5, 1, (x, y) => {
+      if (++calls < 3) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      done.push([x, y]);
+    });
+    expect(calls).toBe(3);
+    expect(done).toEqual([['a', 'b']]);
+    await expect(renameRetry('a', 'b', 5, 1, () => { throw Object.assign(new Error('gone'), { code: 'ENOENT' }); })).rejects.toThrow('gone');
+    await expect(renameRetry('a', 'b', 3, 1, () => { throw Object.assign(new Error('busy'), { code: 'EBUSY' }); })).rejects.toThrow('busy');
+  });
+});
