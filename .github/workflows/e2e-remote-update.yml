@@ -1,0 +1,144 @@
+name: E2E remote update
+
+# A computer running a build with remote update (versioned 0.35.99) receives
+# `update_device` from the relay and must, by itself, update to the newest
+# published release and come back online; then, with a "new version" that
+# never comes online, it must restore the old one. Every CLI install method.
+# (Kraki for Mac's built-in tentacle is verified in a macOS VM.)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - packages/tentacle/src/remote-update.ts
+      - packages/tentacle/src/update-status.ts
+      - scripts/e2e/remote-update/**
+      - .github/workflows/e2e-remote-update.yml
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: "Linux binary",   runner: ubuntu-latest,  kind: binary }
+          - { label: "Linux npm",      runner: ubuntu-latest,  kind: npm }
+          - { label: "Windows binary", runner: windows-latest, kind: binary }
+          - { label: "Windows npm",    runner: windows-latest, kind: npm }
+          - { label: "macOS CLI app",  runner: macos-14,       kind: app }
+          - { label: "macOS npm",      runner: macos-14,       kind: npm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      KIND: ${{ matrix.kind }}
+      OLD: "0.35.99"
+      RELAY_DIR: ${{ github.workspace }}/.relay
+    steps:
+      - uses: actions/checkout@v6
+      - run: corepack enable
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install and build (as 0.35.99)
+        run: |
+          pnpm install --frozen-lockfile --filter @kraki/tentacle...
+          node -e "const f='packages/tentacle/package.json';const p=require('./'+f);p.version=process.env.OLD;require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
+          pnpm --filter @kraki/protocol --filter @kraki/crypto run build
+          pnpm --filter @kraki/tentacle run build
+          echo "NEW=$(gh release view --repo corelli18512/kraki --json tagName -q .tagName | sed 's/^v//')" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Start the mock relay
+        run: |
+          mkdir -p "$RELAY_DIR"
+          nohup node scripts/e2e/remote-update/mock-relay.mjs "$RELAY_DIR" > "$RELAY_DIR/relay.log" 2>&1 &
+          sleep 2; cat "$RELAY_DIR/relay.log"
+
+      - name: Install the old version
+        run: |
+          set -euo pipefail
+          case "$KIND" in
+            binary)
+              pnpm --filter @kraki/tentacle run build:binary:local
+              mkdir -p "$HOME/kraki-bin"
+              if [ "$RUNNER_OS" = Windows ]; then SRC=$(ls packages/tentacle/dist/sea/kraki-cli-windows-*.exe | head -1); DEST="$HOME/kraki-bin/kraki.exe";
+              else SRC=$(ls packages/tentacle/dist/sea/kraki-cli-linux-* | head -1); DEST="$HOME/kraki-bin/kraki"; fi
+              cp "$SRC" "$HOME/old-build"; cp "$SRC" "$DEST"; chmod +x "$DEST" || true
+              echo "KRAKI=$DEST" >> "$GITHUB_ENV"; echo "OLD_ARTIFACT=$HOME/old-build" >> "$GITHUB_ENV"
+              ;;
+            app)
+              pnpm --filter @kraki/tentacle run build:binary:local
+              APP="$HOME/.kraki-app/Kraki.app"; mkdir -p "$APP/Contents/MacOS"
+              cp packages/tentacle/dist/sea/kraki-cli-macos-arm64 "$APP/Contents/MacOS/kraki"
+              printf '%s' '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>kraki</string><key>CFBundleIdentifier</key><string>chat.kraki.cli</string><key>CFBundleName</key><string>Kraki</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>e2e</string><key>LSBackgroundOnly</key><true/></dict></plist>' > "$APP/Contents/Info.plist"
+              codesign --force --sign - "$APP/Contents/MacOS/kraki"; codesign --force --sign - "$APP"
+              mkdir -p "$HOME/.local/bin"; ln -sf "$APP/Contents/MacOS/kraki" "$HOME/.local/bin/kraki"
+              tar -czf "$HOME/old-app.tar.gz" -C "$HOME/.kraki-app" Kraki.app
+              echo "KRAKI=$HOME/.local/bin/kraki" >> "$GITHUB_ENV"; echo "OLD_ARTIFACT=$HOME/old-app.tar.gz" >> "$GITHUB_ENV"
+              ;;
+            npm)
+              (cd packages/tentacle && pnpm pack --pack-destination "$HOME")
+              TGZ=$(ls "$HOME"/kraki-tentacle-*.tgz | head -1)
+              npm install -g "$TGZ"
+              echo "KRAKI=kraki" >> "$GITHUB_ENV"; echo "OLD_ARTIFACT=$TGZ" >> "$GITHUB_ENV"
+              ;;
+          esac
+          mkdir -p "$HOME/.kraki"
+          printf '{"relay":"ws://127.0.0.1:4000","authMethod":"open","device":{"name":"e2e-%s-%s","id":"e2e-%s-%s"},"logging":{"verbosity":"verbose"}}\n' "$KIND" "$RUNNER_OS" "$KIND" "$RUNNER_OS" > "$HOME/.kraki/config.json"
+          "$KRAKI" --version
+          "$KRAKI" config remote-update
+          "$KRAKI" start --login || true
+          node scripts/e2e/remote-update/wait-online.mjs "$KRAKI" "$OLD" 90
+
+      - name: "A: update from an app"
+        run: |
+          echo '{"requestId":"e2e-a","when":"now"}' > "$RELAY_DIR/send.json"
+          node scripts/e2e/remote-update/wait-result.mjs 420 updated
+          node scripts/e2e/remote-update/wait-online.mjs "$KRAKI" "$NEW" 30
+
+      - name: "B: a new version that never comes online is rolled back"
+        run: |
+          set -euo pipefail
+          "$KRAKI" stop || true
+          case "$KIND" in
+            binary) cp "$OLD_ARTIFACT" "$KRAKI" ;;
+            app) rm -rf "$HOME/.kraki-app/Kraki.app"; tar -xzf "$OLD_ARTIFACT" -C "$HOME/.kraki-app" ;;
+            npm) npm install -g "$OLD_ARTIFACT" ;;
+          esac
+          rm -f "$HOME/.kraki/remote-update/result.json"
+          "$KRAKI" start --login || true
+          node scripts/e2e/remote-update/wait-online.mjs "$KRAKI" "$OLD" 90
+          echo hang > "$RELAY_DIR/mode"
+          echo '{"requestId":"e2e-b","when":"now"}' > "$RELAY_DIR/send.json"
+          # The applier gives the new version 120 s; let the old one in after that.
+          ( sleep 150; echo normal > "$RELAY_DIR/mode" ) &
+          node scripts/e2e/remote-update/wait-result.mjs 600 rolled_back
+          node scripts/e2e/remote-update/wait-online.mjs "$KRAKI" "$OLD" 60
+
+      - name: "C: switched off locally, nothing happens"
+        run: |
+          "$KRAKI" config remote-update off
+          rm -f "$HOME/.kraki/remote-update/result.json"
+          echo '{"requestId":"e2e-c","when":"now"}' > "$RELAY_DIR/send.json"
+          sleep 30
+          test ! -f "$HOME/.kraki/remote-update/result.json"
+          node scripts/e2e/remote-update/wait-online.mjs "$KRAKI" "$OLD" 30
+          grep -q "\"remoteUpdate\": false" "$HOME/.kraki/config.json"
+
+      - name: Logs
+        if: always()
+        run: |
+          echo "── remote-update.log"; cat "$HOME/.kraki/logs/remote-update.log" 2>/dev/null || true
+          echo "── result"; cat "$HOME/.kraki/remote-update/result.json" 2>/dev/null || true
+          echo "── login-start.log"; cat "$HOME/.kraki/logs/login-start.log" 2>/dev/null || true
+          echo "── relay"; cat "$RELAY_DIR/relay.log" || true
+          echo "── daemon.log"; tail -60 "$HOME/.kraki/logs/daemon.log" 2>/dev/null || true
