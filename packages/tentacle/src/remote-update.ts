@@ -354,7 +354,13 @@ export async function runApplier(args: string[]): Promise<void> {
     return;
   }
   try { process.chdir(tmpdir()); } catch { /* keep */ }
-  const plan = JSON.parse(readFileSync(args[0], 'utf8')) as UpdatePlan;
+  let plan: UpdatePlan;
+  try {
+    plan = JSON.parse(readFileSync(args[0], 'utf8')) as UpdatePlan;
+  } catch (err) {
+    log(`applier: can't read the plan ${args[0]}: ${(err as Error).message}`);
+    return;
+  }
   if (plan.method === 'mac-app') return applyMacApp(plan);
   const expect = plan.to;
   const old = `${plan.target}.old`;

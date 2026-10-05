@@ -426,6 +426,14 @@ export async function startWorker(): Promise<WorkerResult> {
     const r = remoteUpdate.takeUnannouncedResult();
     if (r) relay.sendUpdateStatus({ phase: r.phase, requestId: r.requestId, from: r.from, to: r.to, error: r.error });
   };
+  // The applier writes the outcome only after this (new) daemon is online,
+  // so look for it for a few minutes after start, not just once.
+  let resultChecks = 0;
+  const resultWatch = setInterval(() => {
+    if (++resultChecks > 36) { clearInterval(resultWatch); return; }
+    if (relay.getState() === 'connected') announceUpdateResult();
+  }, 5000);
+  resultWatch.unref();
   relay.connect();
   logger.info({ relay: config.relay, device: config.device.name }, 'Daemon running');
   {
