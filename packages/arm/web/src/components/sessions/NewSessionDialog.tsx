@@ -3,6 +3,7 @@ import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import type { ReasoningEffort, ContextTier } from '@kraki/protocol';
 import { useEscape } from '../../hooks/useEscape';
+import { availableUpdate } from '../../lib/device-update';
 
 interface Props {
   open: boolean;
@@ -59,6 +60,8 @@ export function NewSessionDialog({ open, onClose }: Props) {
   const deviceAgents = useStore((s) => s.deviceAgents);
 
   const tentacles = [...devices.values()].filter((d) => d.role === 'tentacle' && d.online);
+  const deviceVersions = useStore((s) => s.deviceVersions);
+  const deviceUpdates = useStore((s) => s.deviceUpdates);
   const [selectedDevice, setSelectedDevice] = useState('');
   const [selectedAgent, setSelectedAgent] = useState('');
   const [model, setModel] = useState('');
@@ -245,6 +248,9 @@ export function NewSessionDialog({ open, onClose }: Props) {
                   >
                     <span className={`h-1.5 w-1.5 rounded-full ${d.online ? 'bg-emerald-400' : 'bg-slate-400'}`} />
                     {d.name}
+                    {availableUpdate(d, deviceUpdates, deviceVersions) && (
+                      <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-kraki-400 ring-1 ring-white/70" title="A newer Kraki is available on this computer" aria-label="Update available" />
+                    )}
                   </button>
                 ))}
               </div>

@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { DEFAULT_SESSION_MODE, normalizeSessionMode } from '@kraki/protocol';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Store, ChatMessage, ConnectionStatus, SessionCard, WebSessionSummary } from '../types/store';
-import type { DeviceSummary } from '@kraki/protocol';
+import type { DeviceSummary, DeviceUpdateInfo } from '@kraki/protocol';
 import { loadStoredDevice, getUrlParams } from '../lib/transport';
 import { outbox } from '../lib/chat/outbox';
 
@@ -64,6 +64,7 @@ const initialState = {
   relayVersion: null,
   deviceAgents: new Map<string, import('@kraki/protocol').AgentCapabilities[]>(),
   deviceVersions: new Map<string, string>(),
+  deviceUpdates: new Map<string, DeviceUpdateInfo>(),
   sessionUsage: new Map<string, import('@kraki/protocol').SessionUsage>(),
   sessionPreviews: new Map<string, import('../types/store').SessionPreview>(),
   loadingSessions: new Set<string>(),
@@ -386,6 +387,13 @@ export const useStore = create<Store>()(persist((set) => ({
       const next = new Map(state.deviceVersions);
       next.set(deviceId, version);
       return { deviceVersions: next };
+    }),
+
+  setDeviceUpdate: (deviceId, update) =>
+    set((state) => {
+      const next = new Map(state.deviceUpdates);
+      next.set(deviceId, update);
+      return { deviceUpdates: next };
     }),
 
   setSessionUsage: (sessionId, usage) =>

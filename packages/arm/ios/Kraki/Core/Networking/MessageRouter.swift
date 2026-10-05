@@ -948,6 +948,9 @@ final class MessageRouter {
         if let version = payload?["version"] as? String {
             appState.deviceStore.setDeviceVersion(deviceId, version: version)
         }
+        if let raw = payload?["update"] as? [String: Any], let update = DeviceUpdateInfo(json: raw) {
+            appState.deviceStore.setDeviceUpdate(deviceId, update: update)
+        }
         // A greeting without `features` says nothing about them (some Tentacle
         // builds omit them from the broadcast after their own reconnect):
         // keep what this Tentacle already told us. Never seen any → older.

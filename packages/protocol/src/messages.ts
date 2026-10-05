@@ -593,7 +593,32 @@ export interface DeviceGreetingMessage extends BaseEnvelope {
      *  `fragments`: accepts and (to apps that reply with `client_features`)
      *  sends large payloads as fragments (see fragments.ts). */
     features?: string[];
+    /** Whether a newer Kraki is available for this computer (absent from
+     *  tentacles older than 0.36). */
+    update?: DeviceUpdateInfo;
   };
+}
+
+/** How Kraki is installed on a computer, which decides how it is updated:
+ *  `mac-app` = built into Kraki for Mac (the app is the unit of update),
+ *  `app-bundle` = the CLI's macOS Kraki.app, `binary` = single executable,
+ *  `npm` = `npm i -g @kraki/tentacle`. */
+export type KrakiInstallMethod = 'mac-app' | 'app-bundle' | 'binary' | 'npm' | 'unknown';
+
+export interface DeviceUpdateInfo {
+  installedVia: KrakiInstallMethod;
+  /** Version of what an update replaces: the Mac app's version for
+   *  `mac-app`, otherwise the tentacle's. */
+  current: string;
+  /** Set only when a newer version than `current` is available. */
+  latest?: string;
+  /** Newest published tentacle, so apps can tell computers that predate
+   *  this field that they are out of date. */
+  latestTentacle?: string;
+  /** True once this computer accepts an update request from an app. */
+  remote?: boolean;
+  /** ISO time of the last successful check. */
+  checkedAt?: string;
 }
 
 // ── Subscription account usage (read-only, per tentacle) ─────

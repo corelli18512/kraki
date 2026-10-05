@@ -1,4 +1,5 @@
 import type {
+  DeviceUpdateInfo,
   SessionSummary,
   DeviceSummary,
   ProducerMessage,
@@ -108,6 +109,8 @@ export interface AppState {
   // Live capabilities from tentacle greetings
   deviceAgents: Map<string, AgentCapabilities[]>;
   deviceVersions: Map<string, string>;
+  /** device_greeting.update per computer (tentacles ≥ 0.36). */
+  deviceUpdates: Map<string, DeviceUpdateInfo>;
 
   // Per-session cumulative token usage
   sessionUsage: Map<string, SessionUsage>;
@@ -165,6 +168,7 @@ export interface AppActions {
   setDeviceAgents: (deviceId: string, agents: AgentCapabilities[]) => void;
   clearDeviceAgents: (deviceId: string) => void;
   setDeviceVersion: (deviceId: string, version: string) => void;
+  setDeviceUpdate: (deviceId: string, update: DeviceUpdateInfo) => void;
   setSessionUsage: (sessionId: string, usage: SessionUsage) => void;
   setSessionLoading: (sessionId: string, loading: boolean) => void;
   addPendingSession: (sessionId: string) => void;

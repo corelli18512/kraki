@@ -150,6 +150,9 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     if (greeting?.version) {
       store.setDeviceVersion(msg.deviceId, greeting.version);
     }
+    if (greeting?.update?.installedVia && greeting.update.current) {
+      store.setDeviceUpdate(msg.deviceId, greeting.update);
+    }
     return;
   }
 

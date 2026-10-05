@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import type { DeviceSummary, AgentCapabilities } from '@kraki/protocol';
+import { availableUpdate, displayVersion, updateHowTo, updateTitle } from '../../lib/device-update';
 
 function formatDate(iso?: string): string {
   if (!iso) return '—';
@@ -30,6 +31,11 @@ export function DevicePanel({
   onSelectSession: (id: string) => void;
   onClose: () => void;
 }) {
+  const deviceUpdates = useStore((s) => s.deviceUpdates);
+  const deviceVersions = useStore((s) => s.deviceVersions);
+  const update = availableUpdate(device, deviceUpdates, deviceVersions);
+  const shownVersion = displayVersion(device.id, deviceUpdates, deviceVersions) ?? version;
+
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [showTooltip, setShowTooltip] = useState(false);
   const sessions = useStore((s) => s.sessions);
@@ -107,13 +113,23 @@ export function DevicePanel({
             <span className="text-text-muted">Last online</span>
             <span className="text-text-secondary">{device.online ? 'Now' : formatDate(device.lastSeen)}</span>
           </div>
-          {version && (
+          {shownVersion && (
             <div className="flex justify-between text-[11px]">
               <span className="text-text-muted">Version</span>
-              <span className="text-text-secondary">{version}</span>
+              <span className="text-text-secondary">{shownVersion}</span>
             </div>
           )}
         </div>
+
+        {update && (
+          <div className="flex gap-2 rounded-lg border border-kraki-500/30 bg-kraki-500/10 px-3 py-2" data-testid="device-update">
+            <span aria-hidden className="mt-0.5 text-kraki-600 dark:text-kraki-400">⬇</span>
+            <div className="min-w-0">
+              <div className="text-xs font-medium text-text-primary">{updateTitle(update)}</div>
+              <div className="mt-0.5 text-[11px] text-text-secondary">{updateHowTo(update)}</div>
+            </div>
+          </div>
+        )}
 
         {/* Agents & Models */}
         {agents && agents.length > 0 ? (

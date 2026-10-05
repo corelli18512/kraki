@@ -295,8 +295,11 @@ struct NewSessionSheet: View {
                                 .fill(device.online ? Color.green : Color.gray)
                                 .frame(width: 7, height: 7)
                             VStack(alignment: .leading, spacing: 1) {
-                                Text(device.name)
-                                    .foregroundStyle(device.online ? Color.primary : Color.secondary)
+                                HStack(spacing: 6) {
+                                    Text(device.name)
+                                        .foregroundStyle(device.online ? Color.primary : Color.secondary)
+                                    if appState.deviceStore.availableUpdate(for: device.id) != nil { UpdateAvailableDot() }
+                                }
                                 if !device.online, let seen = DeviceDates.relative(device.lastSeen) {
                                     Text("Last online \(seen)")
                                         .font(.caption)
