@@ -446,6 +446,7 @@ function cmdStatus(jsonOutput = false): void {
             agents: config.agents ?? null,
             region: statusFile?.region ?? null,
             logVerbosity: getLogVerbosity(config),
+            remoteUpdate: config.remoteUpdate !== false,
           }
         : { exists: false },
     };
@@ -553,6 +554,28 @@ function cmdConfig(): void {
     return;
   }
   console.log(JSON.stringify(config, null, 2));
+}
+
+function cmdConfigRemoteUpdate(value?: string): void {
+  const config = loadConfig();
+  if (!config) {
+    console.log(chalk.yellow('No config found. Run `kraki` to set up.'));
+    return;
+  }
+  if (!value) {
+    console.log(`Remote update: ${config.remoteUpdate === false ? 'off' : 'on'}`);
+    return;
+  }
+  if (value !== 'on' && value !== 'off') {
+    console.log(chalk.red(`Invalid value: ${value}`));
+    console.log(chalk.dim('Use `kraki config remote-update on` or `kraki config remote-update off`.'));
+    gracefulExit(1);
+    return;
+  }
+  saveConfig({ ...config, remoteUpdate: value === 'on' });
+  console.log(value === 'on'
+    ? chalk.green('Your apps can now update Kraki on this computer.')
+    : chalk.green('Remote update is off. Update Kraki here with `kraki update`.'));
 }
 
 function cmdConfigLog(verbosity?: string): void {
@@ -1173,6 +1196,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === '__apply-update') {
+    const { runApplier } = await import('./remote-update.js');
+    await runApplier(args.slice(1));
+    return;
+  }
+
   if (cmd === INTERNAL_DAEMON_SMOKE_COMMAND) {
     const config = loadConfig();
     if (!config) throw new Error(`No release smoke config found at ${getConfigPath()}`);
@@ -1323,6 +1352,10 @@ async function main(): Promise<void> {
     }
     if (args[1] === 'log') {
       cmdConfigLog(args[2]);
+      return;
+    }
+    if (args[1] === 'remote-update') {
+      cmdConfigRemoteUpdate(args[2]);
       return;
     }
     cmdConfig();

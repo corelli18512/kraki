@@ -44,6 +44,18 @@ struct TentaclePane: View {
                 }
             }
 
+            if tentacleCLI.configInfo?.exists == true {
+                Section("Updates") {
+                    Toggle("Let my other devices update Kraki on this Mac", isOn: Binding(
+                        get: { tentacleCLI.configInfo?.remoteUpdate ?? true },
+                        set: { on in Task { await tentacleCLI.setRemoteUpdate(on) } }
+                    ))
+                    Text("From your phone or another computer, you can update Kraki here when a new version is out. Kraki restarts for a few seconds; running sessions are only stopped if you choose to.")
+                        .font(.caption)
+                        .foregroundStyle(Color.textSecondary)
+                }
+            }
+
             if tentacleCLI.mode == .builtIn {
                 Section("Permissions") {
                     fdaContent

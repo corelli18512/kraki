@@ -31,7 +31,7 @@ export interface InstallInfo {
   appVersion?: string;
 }
 
-function readPlistString(plistPath: string, key: string): string | undefined {
+export function readPlistString(plistPath: string, key: string): string | undefined {
   try {
     const xml = readFileSync(plistPath, 'utf8');
     const m = xml.match(new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`));
@@ -112,7 +112,15 @@ export interface CheckDeps {
 
 async function defaultDeps(): Promise<CheckDeps> {
   const u = await import('./update.js');
-  return { fetchLatestTentacle: u.fetchLatestVersion, fetchText: u.fetchText, isNewer: u.isNewer };
+  return {
+    // The GitHub API allows 60 unauthenticated requests an hour per IP, which
+    // shared networks (offices, CI) run out of; npm publishes the same version
+    // in the same release job, without such a limit.
+    fetchLatestTentacle: async () => (await u.fetchLatestVersion())
+      ?? (await u.fetchJson<{ version?: string }>('https://registry.npmjs.org/@kraki/tentacle/latest').then((j) => j.version ?? null, () => null)),
+    fetchText: u.fetchText,
+    isNewer: u.isNewer,
+  };
 }
 
 /**
@@ -124,6 +132,7 @@ export async function checkUpdateStatus(
   tentacleVersion: string = getVersion(),
   deps?: CheckDeps,
   now: () => Date = () => new Date(),
+  remote: Pick<DeviceUpdateInfo, 'remote' | 'remoteBlock'> = {},
 ): Promise<DeviceUpdateInfo | null> {
   const d = deps ?? await defaultDeps();
   const latestTentacle = (await d.fetchLatestTentacle().catch(() => null)) ?? undefined;
@@ -138,6 +147,7 @@ export async function checkUpdateStatus(
       current,
       ...(latestApp && d.isNewer(latestApp, current) ? { latest: latestApp } : {}),
       ...(latestTentacle ? { latestTentacle } : {}),
+      ...remote,
       checkedAt: now().toISOString(),
     };
   }
@@ -147,17 +157,21 @@ export async function checkUpdateStatus(
     current: tentacleVersion,
     ...(d.isNewer(latestTentacle, tentacleVersion) ? { latest: latestTentacle } : {}),
     latestTentacle,
+    ...remote,
     checkedAt: now().toISOString(),
   };
 }
 
 /** Check now-ish and then periodically; call `onChange` when the answer changes. */
-export function watchUpdateStatus(onChange: (info: DeviceUpdateInfo) => void): () => void {
+export function watchUpdateStatus(
+  onChange: (info: DeviceUpdateInfo) => void,
+  install: InstallInfo = detectInstall(),
+  remote: () => Pick<DeviceUpdateInfo, 'remote' | 'remoteBlock'> = () => ({}),
+): { stop: () => void; checkNow: () => Promise<void> } {
   let last = '';
-  const install = detectInstall();
   const run = async () => {
     try {
-      const info = await checkUpdateStatus(install);
+      const info = await checkUpdateStatus(install, getVersion(), undefined, undefined, remote());
       if (!info) return;
       if (info.latestTentacle) {
         const { writeCache } = await import('./update.js');
@@ -176,5 +190,5 @@ export function watchUpdateStatus(onChange: (info: DeviceUpdateInfo) => void): (
   const first = setTimeout(run, UPDATE_CHECK_FIRST_DELAY_MS);
   const every = setInterval(run, UPDATE_CHECK_INTERVAL_MS);
   first.unref(); every.unref();
-  return () => { clearTimeout(first); clearInterval(every); };
+  return { stop: () => { clearTimeout(first); clearInterval(every); }, checkNow: run };
 }

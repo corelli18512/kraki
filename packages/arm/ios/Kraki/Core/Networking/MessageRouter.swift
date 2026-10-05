@@ -355,6 +355,11 @@ final class MessageRouter {
             return
         }
 
+        if type == "device_update_status" {
+            handleDeviceUpdateStatus(dict)
+            return
+        }
+
         if type == "local_sessions_list" {
             handleLocalSessionsList(dict)
             return
@@ -929,6 +934,24 @@ final class MessageRouter {
         } catch {
             KLog.diag("[device_usage] undecodable payload from \(deviceId): \(error)")
         }
+    }
+
+    private func handleDeviceUpdateStatus(_ dict: [String: Any]) {
+        guard let appState,
+              let deviceId = dict["deviceId"] as? String,
+              let payload = dict["payload"] as? [String: Any],
+              let raw = payload["phase"] as? String,
+              let phase = DeviceUpdateProgress.Phase(rawValue: raw) else { return }
+        let previous = appState.deviceStore.updateProgress[deviceId]
+        appState.deviceStore.setUpdateProgress(deviceId, DeviceUpdateProgress(
+            phase: phase,
+            requestId: payload["requestId"] as? String ?? previous?.requestId,
+            from: payload["from"] as? String ?? previous?.from,
+            to: payload["to"] as? String ?? previous?.to,
+            progress: (payload["progress"] as? NSNumber)?.doubleValue,
+            runningSessions: (payload["runningSessions"] as? NSNumber)?.intValue,
+            error: payload["error"] as? String
+        ))
     }
 
     private func handleDeviceGreeting(_ dict: [String: Any]) {

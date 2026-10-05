@@ -615,8 +615,12 @@ export interface DeviceUpdateInfo {
   /** Newest published tentacle, so apps can tell computers that predate
    *  this field that they are out of date. */
   latestTentacle?: string;
-  /** True once this computer accepts an update request from an app. */
+  /** This computer accepts `update_device` from apps. */
   remote?: boolean;
+  /** Why it doesn't: turned off on the computer, the install isn't writable
+   *  by the user Kraki runs as (e.g. npm under a root-owned prefix), or an
+   *  install method that can't be updated in place. */
+  remoteBlock?: 'disabled' | 'not_writable' | 'unsupported';
   /** ISO time of the last successful check. */
   checkedAt?: string;
 }
@@ -696,6 +700,38 @@ export interface UsageHistorySample {
 export interface RefreshAccountUsageMessage extends BaseEnvelope {
   type: 'refresh_account_usage';
   payload: { requestId: string };
+}
+
+/** App → tentacle: update Kraki on this computer to the newest release.
+ *  Only send to computers whose greeting has `update.remote`. Without
+ *  `when`, a computer with running sessions answers `busy` and does nothing;
+ *  `now` stops them, `idle` waits until none is running. */
+export interface UpdateDeviceMessage extends BaseEnvelope {
+  type: 'update_device';
+  payload: { requestId: string; when?: 'now' | 'idle' };
+}
+
+export type DeviceUpdatePhase =
+  | 'busy'            // sessions are running; ask the user (runningSessions)
+  | 'waiting_idle'    // will start once no session is running
+  | 'downloading'     // progress 0…1 when known
+  | 'installing'      // the computer goes offline for a few seconds next
+  | 'updated'         // sent by the new version once it is online
+  | 'failed'          // nothing changed (error says why)
+  | 'rolled_back';    // the new version didn't come up; the old one is back
+
+/** Tentacle → apps: progress and outcome of an update (broadcast). */
+export interface DeviceUpdateStatusMessage extends BaseEnvelope {
+  type: 'device_update_status';
+  payload: {
+    requestId?: string;
+    phase: DeviceUpdatePhase;
+    from?: string;
+    to?: string;
+    progress?: number;
+    runningSessions?: number;
+    error?: string;
+  };
 }
 
 /** Tentacle → app reply to `request_usage_history`. */
@@ -1056,7 +1092,8 @@ export type ProducerMessage =
   | ArchivedSessionListMessage
   | AttachmentDataMessage
   | DeviceUsageMessage
-  | UsageHistoryMessage;
+  | UsageHistoryMessage
+  | DeviceUpdateStatusMessage;
 
 // ============================================================
 // Consumer messages (app → tentacle, inside encrypted blob)
@@ -1340,7 +1377,8 @@ export type ConsumerMessage =
   | SetSessionSubscriptionMessage
   | ClientFeaturesMessage
   | RequestUsageHistoryMessage
-  | RefreshAccountUsageMessage;
+  | RefreshAccountUsageMessage
+  | UpdateDeviceMessage;
 
 // ============================================================
 // Auth credentials — discriminated union by method

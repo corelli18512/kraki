@@ -511,6 +511,14 @@ export class KrakiWSClient {
     getStore().setArchivedSessions(targetDeviceId, []);
   }
 
+  updateDevice(targetDeviceId: string, when?: 'now' | 'idle') {
+    const store = getStore();
+    const requestId = crypto.randomUUID();
+    const info = store.deviceUpdates.get(targetDeviceId);
+    store.setUpdateProgress(targetDeviceId, { phase: 'requested', requestId, from: info?.current, to: info?.latest, at: Date.now() });
+    commands.updateDevice(targetDeviceId, requestId, when, (msg) => this.sendEncrypted(msg));
+  }
+
   setAutoArchiveDays(targetDeviceId: string, days: number) {
     commands.setAutoArchiveDays(targetDeviceId, days, (msg) => this.sendEncrypted(msg));
   }

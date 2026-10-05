@@ -227,7 +227,7 @@ function readResponseText(res: IncomingMessage): Promise<string> {
   });
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
+export async function fetchJson<T>(url: string): Promise<T> {
   const res = await sendRequest(url);
   if (res.statusCode !== 200) {
     throw new Error(`HTTP ${res.statusCode}`);
@@ -483,7 +483,7 @@ async function updateViaNpm(version: string): Promise<void> {
 
 // ── SEA binary update ───────────────────────────────────
 
-function getPlatformAssetName(): string {
+export function getPlatformAssetName(): string {
   const platform = process.platform === 'darwin' ? 'macos'
     : process.platform === 'win32' ? 'windows'
     : process.platform;
@@ -519,7 +519,7 @@ function detectAppBundle(): string | null {
  * Get the .app bundle asset name for macOS.
  * e.g. "kraki-macos-arm64.app.tar.gz"
  */
-function getAppBundleAssetName(): string {
+export function getAppBundleAssetName(): string {
   return `kraki-macos-${process.arch}.app.tar.gz`;
 }
 
@@ -775,12 +775,12 @@ function stripProvenance(filePath: string): void {
   } catch { /* best-effort — xattr may not exist or may fail */ }
 }
 
-function hashFile(path: string): string {
+export function hashFile(path: string): string {
   const data = readFileSync(path);
   return createHash('sha256').update(data).digest('hex');
 }
 
-function parseChecksum(checksumData: string, assetName: string): string | null {
+export function parseChecksum(checksumData: string, assetName: string): string | null {
   for (const line of checksumData.split('\n')) {
     const parts = line.trim().split(/\s+/);
     if (parts.length >= 2 && parts[1] === assetName) {
@@ -799,7 +799,7 @@ export function fetchText(url: string): Promise<string> {
   });
 }
 
-async function downloadFile(
+export async function downloadFile(
   url: string,
   dest: string,
   onProgress?: (received: number, total: number) => void,

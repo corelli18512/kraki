@@ -24,6 +24,8 @@ final class DeviceStore {
     var deviceVersions: [String: String] = [:]
     /// `device_greeting.update` per computer (tentacles ≥ 0.36).
     var deviceUpdates: [String: DeviceUpdateInfo] = [:]
+    /// Remote updates in flight or just finished (not persisted).
+    var updateProgress: [String: DeviceUpdateProgress] = [:]
     /// Latest subscription account quota per tentacle (`device_usage`).
     /// In-memory only: a fresh reading arrives on every connect.
     var deviceUsage: [String: DeviceUsageSnapshot] = [:]
@@ -397,9 +399,18 @@ final class DeviceStore {
     }
 
     func setDeviceUpdate(_ id: String, update: DeviceUpdateInfo) {
+        // The new version greeting us is the update having landed, even if
+        // its own "updated" announcement didn't reach this app.
+        if let p = updateProgress[id], p.isActive, let to = p.to, update.current == to {
+            updateProgress[id] = DeviceUpdateProgress(phase: .updated, requestId: p.requestId, from: p.from, to: to)
+        }
         guard deviceUpdates[id] != update else { return }
         deviceUpdates[id] = update
         scheduleSave()
+    }
+
+    func setUpdateProgress(_ id: String, _ progress: DeviceUpdateProgress?) {
+        updateProgress[id] = progress
     }
 
     /// The version a user recognises: Kraki for Mac's own version for its

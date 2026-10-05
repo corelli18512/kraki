@@ -111,6 +111,8 @@ export interface AppState {
   deviceVersions: Map<string, string>;
   /** device_greeting.update per computer (tentacles ≥ 0.36). */
   deviceUpdates: Map<string, DeviceUpdateInfo>;
+  /** Remote updates in flight or just finished. */
+  updateProgress: Map<string, import('../lib/device-update').UpdateProgress>;
 
   // Per-session cumulative token usage
   sessionUsage: Map<string, SessionUsage>;
@@ -169,6 +171,7 @@ export interface AppActions {
   clearDeviceAgents: (deviceId: string) => void;
   setDeviceVersion: (deviceId: string, version: string) => void;
   setDeviceUpdate: (deviceId: string, update: DeviceUpdateInfo) => void;
+  setUpdateProgress: (deviceId: string, progress: import('../lib/device-update').UpdateProgress | null) => void;
   setSessionUsage: (sessionId: string, usage: SessionUsage) => void;
   setSessionLoading: (sessionId: string, loading: boolean) => void;
   addPendingSession: (sessionId: string) => void;

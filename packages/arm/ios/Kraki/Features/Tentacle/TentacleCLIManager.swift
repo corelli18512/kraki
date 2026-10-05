@@ -110,6 +110,15 @@ final class TentacleCLIManager {
         let deviceId: String?
         let region: String?
         let logVerbosity: String?
+        /// Apps may update Kraki here (`kraki config remote-update`).
+        var remoteUpdate: Bool = true
+    }
+
+    /// Turn remote update (from the user's other devices) on or off here.
+    func setRemoteUpdate(_ on: Bool) async {
+        guard case .available(let path, _) = installState else { return }
+        _ = await runCapturing(binary: path, args: ["config", "remote-update", on ? "on" : "off"])
+        await refreshDaemonState()
     }
 
     // MARK: - Persistence
@@ -400,7 +409,8 @@ final class TentacleCLIManager {
                 deviceName: device?["name"] as? String,
                 deviceId: device?["id"] as? String,
                 region: cfg["region"] as? String,
-                logVerbosity: cfg["logVerbosity"] as? String
+                logVerbosity: cfg["logVerbosity"] as? String,
+                remoteUpdate: cfg["remoteUpdate"] as? Bool ?? true
             )
         } else {
             configInfo = nil
