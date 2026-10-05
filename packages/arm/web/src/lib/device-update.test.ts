@@ -28,3 +28,13 @@ describe('device-update', () => {
     expect(updateHowTo(availableUpdate(t('m'), u, new Map())!)).toContain('Check for Updates');
   });
 });
+
+describe('remote update progress', () => {
+  it('a greeting from the new version marks the update done', async () => {
+    const { useStore } = await import('../hooks/useStore');
+    const s = useStore.getState();
+    s.setUpdateProgress('pc', { phase: 'installing', from: '0.35.12', to: '0.36.0', at: Date.now() });
+    s.setDeviceUpdate('pc', { installedVia: 'binary', current: '0.36.0', latestTentacle: '0.36.0' });
+    expect(useStore.getState().updateProgress.get('pc')?.phase).toBe('updated');
+  });
+});

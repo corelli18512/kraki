@@ -20,7 +20,7 @@ import type {
   BroadcastEnvelope, UnicastEnvelope, MulticastEnvelope, CardActionState,
   SessionLiveSnapshot, SessionDigest, IdleMessage,
 } from '@kraki/protocol';
-import type { DeviceUpdateInfo } from '@kraki/protocol';
+import type { DeviceUpdateInfo, DeviceUpdatePhase } from '@kraki/protocol';
 import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment } from '@kraki/protocol';
 import { randomUUID } from 'node:crypto';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
@@ -1445,6 +1445,15 @@ export class RelayClient {
     }
     if (msg.type === 'import_session') {
       this.handleImportSession(msg);
+      return;
+    }
+
+    if (msg.type === 'update_device') {
+      const p = msg.payload as { requestId?: unknown; when?: unknown } | undefined;
+      const requestId = typeof p?.requestId === 'string' && /^[a-zA-Z0-9-]{1,128}$/.test(p.requestId) ? p.requestId : '';
+      const when = p?.when === 'now' || p?.when === 'idle' ? p.when : undefined;
+      if (this.onUpdateRequest) void this.onUpdateRequest(requestId, when);
+      else this.sendUpdateStatus({ phase: 'failed', requestId, error: 'This computer can’t be updated remotely.' });
       return;
     }
 
@@ -3894,7 +3903,28 @@ export class RelayClient {
     });
   }
 
+  /** Set by the daemon when remote update is wired (remote-update.ts). */
+  onUpdateRequest: ((requestId: string, when?: 'now' | 'idle') => Promise<void>) | null = null;
+
+  /** Progress/outcome of a remote update, to every online app. */
+  sendUpdateStatus(payload: { phase: DeviceUpdatePhase; requestId?: string; from?: string; to?: string; progress?: number; runningSessions?: number; error?: string }): void {
+    if (this.state !== 'connected') return;
+    this.sendEncrypted({
+      type: 'device_update_status',
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload,
+    } as ProducerMessage);
+  }
+
+  /** Sessions with a turn running right now (asked before an update). */
+  runningSessionCount(): number {
+    return this.sessionManager.getSessionList({ all: true }).filter((s) => s.state === 'active').length;
+  }
+
   private updateInfo: DeviceUpdateInfo | null = null;
+  get currentUpdateInfo(): DeviceUpdateInfo | null { return this.updateInfo; }
   /** Latest answer to "is a newer Kraki available here" (update-status.ts); re-greets apps. */
   setUpdateInfo(info: DeviceUpdateInfo): void {
     this.updateInfo = info;

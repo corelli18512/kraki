@@ -1,4 +1,4 @@
-import type { InnerMessage, SessionListMessage, SessionMessagesRangeBatchMessage, DeviceGreetingMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, ProducerMessage, AgentMessageDelta, CardAction, CompactingMessage, SessionState } from '@kraki/protocol';
+import type { InnerMessage, SessionListMessage, SessionMessagesRangeBatchMessage, DeviceGreetingMessage, DeviceUpdateStatusMessage, SessionModeSetMessage, SessionModelSetMessage, SessionTitleUpdatedMessage, SessionPinnedMessage, SessionReadMessage, IdleMessage, ProducerMessage, AgentMessageDelta, CardAction, CompactingMessage, SessionState } from '@kraki/protocol';
 import { normalizeSessionMode } from '@kraki/protocol';
 import { getStore } from './store-adapter';
 import { isViewingSession } from './replay';
@@ -153,6 +153,22 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     if (greeting?.update?.installedVia && greeting.update.current) {
       store.setDeviceUpdate(msg.deviceId, greeting.update);
     }
+    return;
+  }
+
+  if (msg.type === 'device_update_status') {
+    const p = (msg as DeviceUpdateStatusMessage).payload;
+    const prev = store.updateProgress.get(msg.deviceId);
+    store.setUpdateProgress(msg.deviceId, {
+      phase: p.phase,
+      requestId: p.requestId ?? prev?.requestId,
+      from: p.from ?? prev?.from,
+      to: p.to ?? prev?.to,
+      progress: p.progress,
+      runningSessions: p.runningSessions,
+      error: p.error,
+      at: Date.now(),
+    });
     return;
   }
 

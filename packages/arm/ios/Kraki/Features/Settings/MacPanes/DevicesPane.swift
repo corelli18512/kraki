@@ -28,6 +28,7 @@ struct DevicesPane: View {
                         DeviceRow(device: device,
                                   version: appState.deviceStore.displayVersion(for: device.id),
                                   update: appState.deviceStore.availableUpdate(for: device.id),
+                                  hasProgress: appState.deviceStore.updateProgress[device.id] != nil,
                                   isThisMac: device.id == tentacleCLI.configInfo?.deviceId)
                     }
                 }
@@ -61,6 +62,7 @@ private struct DeviceRow: View {
     let device: DeviceSummary
     var version: String?
     var update: AvailableUpdate?
+    var hasProgress = false
     var isThisMac = false
     var body: some View {
       VStack(alignment: .leading, spacing: 8) {
@@ -89,13 +91,9 @@ private struct DeviceRow: View {
                 .foregroundStyle(Color.textMuted)
                 .help(device.id)
         }
-        if let update {
-            AvailableUpdateNotice(
-                update: update,
-                checkForUpdates: isThisMac && update.installedVia == "mac-app"
-                    ? { NotificationCenter.default.post(name: .macCheckForUpdates, object: nil) } : nil
-            )
-            .padding(.leading, 18)
+        if update != nil || hasProgress {
+            DeviceUpdateControl(device: device, isThisMac: isThisMac)
+                .padding(.leading, 18)
         }
       }
         .padding(.vertical, 4)

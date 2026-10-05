@@ -30,6 +30,9 @@ export interface KrakiConfig {
   logging?: {
     verbosity?: KrakiLogVerbosity;
   };
+  /** Let your apps update Kraki on this computer. On unless false
+   *  (`kraki config remote-update off`, or the switch in Kraki for Mac). */
+  remoteUpdate?: boolean;
   /**
    * Read-only subscription quota of the Claude / Codex logins on this machine,
    * shown in Kraki apps. On unless `enabled: false` (or KRAKI_ACCOUNT_USAGE=0).

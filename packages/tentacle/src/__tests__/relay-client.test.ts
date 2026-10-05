@@ -1649,6 +1649,23 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
+  it('routes update_device to the updater and reports when there is none', async () => {
+    const { ws, client, cleanup } = buildClientWithStore();
+    try {
+      ws.sent.length = 0;
+      const send = (payload: unknown) => ws.emit('message', Buffer.from(JSON.stringify({ type: 'update_device', deviceId: 'consumer-dev', payload })));
+      send({ requestId: 'r1' });
+      expect(decodePulseSends(ws.sent)).toContainEqual(expect.objectContaining({
+        type: 'device_update_status', payload: expect.objectContaining({ phase: 'failed', requestId: 'r1' }),
+      }));
+      const calls: unknown[][] = [];
+      client.onUpdateRequest = async (...args) => { calls.push(args); };
+      send({ requestId: 'r2', when: 'idle' });
+      send({ requestId: 'bad id!', when: 'whenever' });
+      expect(calls).toEqual([['r2', 'idle'], ['', undefined]]);
+    } finally { cleanup(); }
+  });
+
   it('coalesces refreshes across apps, bounds duplicate requests and acknowledges unchanged readings by request id', async () => {
     const { ws, client, cleanup } = buildClientWithStore();
     let release!: (accounts: []) => void;

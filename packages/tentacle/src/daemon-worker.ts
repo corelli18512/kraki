@@ -372,6 +372,7 @@ export async function startWorker(): Promise<WorkerResult> {
     if (info.user?.region) {
       updateRegion(info.user.region);
     }
+    announceUpdateResult();
   };
 
   relay.onFatalError = (message) => {
@@ -383,10 +384,49 @@ export async function startWorker(): Promise<WorkerResult> {
     shutdown().catch(() => {}).finally(() => process.exit(1));
   };
 
+  // "Is a newer Kraki available here?" — shown on this computer in every app —
+  // and updating it from an app (remote-update.ts).
+  const { watchUpdateStatus, detectInstall } = await import('./update-status.js');
+  const remoteUpdate = await import('./remote-update.js');
+  const install = detectInstall();
+  remoteUpdate.cleanupAfterUpdate(install.target);
+  const remoteState = () => {
+    const block = remoteUpdate.remoteUpdateBlock(install, loadConfig());
+    return block ? { remote: false, remoteBlock: block } : { remote: true };
+  };
+  const updateWatch = watchUpdateStatus((info) => relay.setUpdateInfo(info), install, remoteState);
+  // The switch (`kraki config remote-update`, Kraki for Mac's setting) is
+  // read locally; re-announce within a minute when it changes.
+  const remoteRecheck = setInterval(() => {
+    const cur = relay.currentUpdateInfo;
+    if (!cur) return;
+    const r = remoteState();
+    if (cur.remote === r.remote && cur.remoteBlock === (r as { remoteBlock?: string }).remoteBlock) return;
+    const { remoteBlock: _old, ...rest } = cur;
+    relay.setUpdateInfo({ ...rest, ...r });
+  }, 60_000);
+  remoteRecheck.unref();
+  const stopUpdateWatch = () => { updateWatch.stop(); clearInterval(remoteRecheck); };
+  const updater = new remoteUpdate.RemoteUpdater({
+    install,
+    currentVersion: getVersion(),
+    status: () => {
+      const info = relay.currentUpdateInfo;
+      return info ? { ...info, ...remoteState() } : null;
+    },
+    runningSessions: () => relay.runningSessionCount(),
+    emit: (p) => relay.sendUpdateStatus(p),
+  });
+  relay.onUpdateRequest = async (requestId, when) => {
+    // A stale "no update" answer must not block a release published since.
+    if (!relay.currentUpdateInfo?.latest) await updateWatch.checkNow();
+    await updater.request(requestId, when);
+  };
+  const announceUpdateResult = () => {
+    const r = remoteUpdate.takeUnannouncedResult();
+    if (r) relay.sendUpdateStatus({ phase: r.phase, requestId: r.requestId, from: r.from, to: r.to, error: r.error });
+  };
   relay.connect();
-  // "Is a newer Kraki available here?" — shown on this computer in every app.
-  const { watchUpdateStatus } = await import('./update-status.js');
-  const stopUpdateWatch = watchUpdateStatus((info) => relay.setUpdateInfo(info));
   logger.info({ relay: config.relay, device: config.device.name }, 'Daemon running');
   {
     const { detectProxy } = await import('./proxy.js');

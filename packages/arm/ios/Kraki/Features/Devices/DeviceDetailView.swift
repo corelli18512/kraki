@@ -82,8 +82,9 @@ struct DeviceDetailView: View {
                 }
             }
 
-            if let update = appState.deviceStore.availableUpdate(for: device.id) {
-                Section { AvailableUpdateNotice(update: update).padding(.vertical, 2) }
+            if appState.deviceStore.availableUpdate(for: device.id) != nil
+                || appState.deviceStore.updateProgress[device.id] != nil {
+                Section { DeviceUpdateControl(device: device).padding(.vertical, 2) }
             }
 
             // Subscription accounts signed in on this device. Each account's card in

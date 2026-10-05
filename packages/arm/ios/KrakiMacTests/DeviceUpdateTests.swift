@@ -51,4 +51,20 @@ final class DeviceUpdateTests: XCTestCase {
         XCTAssertEqual(info?.latest, "0.36.0")
         XCTAssertNil(DeviceUpdateInfo(json: ["current": "1"]))
     }
+
+    func testNewVersionGreetingCompletesTheUpdate() {
+        let store = DeviceStore(persistenceEnabled: false)
+        store.devices["a"] = tentacle("a")
+        store.setUpdateProgress("a", DeviceUpdateProgress(phase: .installing, from: "0.35.12", to: "0.36.0"))
+        store.setDeviceUpdate("a", update: DeviceUpdateInfo(installedVia: "binary", current: "0.35.12", latest: "0.36.0"))
+        XCTAssertEqual(store.updateProgress["a"]?.phase, .installing, "still the old version")
+        store.setDeviceUpdate("a", update: DeviceUpdateInfo(installedVia: "binary", current: "0.36.0"))
+        XCTAssertEqual(store.updateProgress["a"]?.phase, .updated)
+    }
+
+    func testRemoteFieldsParse() {
+        let info = DeviceUpdateInfo(json: ["installedVia": "npm", "current": "1", "remote": false, "remoteBlock": "not_writable"])
+        XCTAssertEqual(info?.remoteBlock, "not_writable")
+        XCTAssertEqual(info?.remote, false)
+    }
 }

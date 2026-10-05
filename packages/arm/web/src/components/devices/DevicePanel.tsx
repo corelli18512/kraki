@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import type { DeviceSummary, AgentCapabilities } from '@kraki/protocol';
-import { availableUpdate, displayVersion, updateHowTo, updateTitle } from '../../lib/device-update';
+import { displayVersion } from '../../lib/device-update';
+import { DeviceUpdateBox } from './DeviceUpdateBox';
 
 function formatDate(iso?: string): string {
   if (!iso) return '—';
@@ -33,7 +34,6 @@ export function DevicePanel({
 }) {
   const deviceUpdates = useStore((s) => s.deviceUpdates);
   const deviceVersions = useStore((s) => s.deviceVersions);
-  const update = availableUpdate(device, deviceUpdates, deviceVersions);
   const shownVersion = displayVersion(device.id, deviceUpdates, deviceVersions) ?? version;
 
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -121,15 +121,7 @@ export function DevicePanel({
           )}
         </div>
 
-        {update && (
-          <div className="flex gap-2 rounded-lg border border-kraki-500/30 bg-kraki-500/10 px-3 py-2" data-testid="device-update">
-            <span aria-hidden className="mt-0.5 text-kraki-600 dark:text-kraki-400">⬇</span>
-            <div className="min-w-0">
-              <div className="text-xs font-medium text-text-primary">{updateTitle(update)}</div>
-              <div className="mt-0.5 text-[11px] text-text-secondary">{updateHowTo(update)}</div>
-            </div>
-          </div>
-        )}
+        <DeviceUpdateBox device={device} />
 
         {/* Agents & Models */}
         {agents && agents.length > 0 ? (

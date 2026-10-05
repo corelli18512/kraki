@@ -1132,6 +1132,24 @@ final class CommandSender {
         return sent
     }
 
+    /// Ask a computer to update Kraki (remote update). `when`: nil asks first
+    /// if sessions are running; "now" stops them; "idle" waits for them.
+    @discardableResult
+    func updateDevice(_ deviceId: String, when: String? = nil) -> Bool {
+        guard let appState else { return false }
+        let store = appState.deviceStore
+        let requestId = UUID().uuidString
+        var payload: [String: Any] = ["requestId": requestId]
+        if let when { payload["when"] = when }
+        let info = store.deviceUpdates[deviceId]
+        store.setUpdateProgress(deviceId, DeviceUpdateProgress(phase: .requested, requestId: requestId, from: info?.current, to: info?.latest))
+        guard send(["type": "update_device", "targetDeviceId": deviceId, "payload": payload], connectionScoped: true) else {
+            store.setUpdateProgress(deviceId, DeviceUpdateProgress(phase: .failed, requestId: requestId, error: "Not connected."))
+            return false
+        }
+        return true
+    }
+
     func requestArchivedSessions(targetDeviceId: String) {
         send(["type": "request_archived_sessions", "targetDeviceId": targetDeviceId, "payload": [:] as [String: Any]])
     }

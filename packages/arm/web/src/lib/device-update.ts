@@ -68,3 +68,21 @@ export function updateHowTo(u: AvailableUpdate): string {
   if (u.installedVia === 'legacy') return 'Update Kraki on that computer: Check for Updates in Kraki for Mac, or run `kraki update`.';
   return 'Run `kraki update` on that computer.';
 }
+
+export type UpdatePhase = 'requested' | import('@kraki/protocol').DeviceUpdatePhase;
+
+/** A remote update in flight or just finished (not persisted). */
+export interface UpdateProgress {
+  phase: UpdatePhase;
+  requestId?: string;
+  from?: string;
+  to?: string;
+  progress?: number;
+  runningSessions?: number;
+  error?: string;
+  at: number;
+}
+
+export function isActivePhase(p: UpdatePhase): boolean {
+  return p === 'requested' || p === 'waiting_idle' || p === 'downloading' || p === 'installing';
+}
