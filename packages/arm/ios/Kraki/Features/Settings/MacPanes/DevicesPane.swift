@@ -9,6 +9,7 @@ import SwiftUI
 
 struct DevicesPane: View {
     @Environment(AppState.self) private var appState
+    @Environment(TentacleCLIManager.self) private var tentacleCLI
     @State private var showingPairing = false
 
     private var devices: [DeviceSummary] {
@@ -24,7 +25,10 @@ struct DevicesPane: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(devices) { device in
-                        DeviceRow(device: device)
+                        DeviceRow(device: device,
+                                  version: appState.deviceStore.displayVersion(for: device.id),
+                                  update: appState.deviceStore.availableUpdate(for: device.id),
+                                  isThisMac: device.id == tentacleCLI.configInfo?.deviceId)
                     }
                 }
             }
@@ -55,7 +59,11 @@ struct DevicesPane: View {
 
 private struct DeviceRow: View {
     let device: DeviceSummary
+    var version: String?
+    var update: AvailableUpdate?
+    var isThisMac = false
     var body: some View {
+      VStack(alignment: .leading, spacing: 8) {
         HStack(spacing: 10) {
             Circle()
                 .fill(device.online ? Color(hex: 0x34D399) : Color.textMuted.opacity(0.5))
@@ -64,11 +72,16 @@ private struct DeviceRow: View {
                 Text(device.name)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Color.textPrimary)
-                Text(device.role.displayName)
-                    .font(.system(size: 10, weight: .semibold))
-                    .tracking(0.4)
-                    .textCase(.uppercase)
-                    .foregroundStyle(Color.textMuted)
+                HStack(spacing: 6) {
+                    Text(device.role.displayName)
+                        .font(.system(size: 10, weight: .semibold))
+                        .tracking(0.4)
+                        .textCase(.uppercase)
+                    if let version, device.role == .tentacle {
+                        Text(version).font(.system(size: 10.5))
+                    }
+                }
+                .foregroundStyle(Color.textMuted)
             }
             Spacer()
             Text(String(device.id.prefix(10)) + "…")
@@ -76,6 +89,15 @@ private struct DeviceRow: View {
                 .foregroundStyle(Color.textMuted)
                 .help(device.id)
         }
+        if let update {
+            AvailableUpdateNotice(
+                update: update,
+                checkForUpdates: isThisMac && update.installedVia == "mac-app"
+                    ? { NotificationCenter.default.post(name: .macCheckForUpdates, object: nil) } : nil
+            )
+            .padding(.leading, 18)
+        }
+      }
         .padding(.vertical, 4)
     }
 }

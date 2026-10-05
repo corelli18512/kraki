@@ -65,6 +65,7 @@
 		20B41687BB12DE58A87BCDB0 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96154D6C2A9CDBEB4E0EE2F7 /* RootView.swift */; };
 		20BA6B1455F6632AA7D2C682 /* MacChatBubbleCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D720ACC636683293D505371 /* MacChatBubbleCell.swift */; };
 		2205FA9CAD968A53A45DD693 /* MacAuthRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C103BC836F016769C5E1F10E /* MacAuthRecoveryTests.swift */; };
+		22BE330C81BC2B0040415007 /* DeviceUpdate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74DB58BA45935DD4AAE77C45 /* DeviceUpdate.swift */; };
 		231D593C8DB79D41E54AE803 /* MacChatUXRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C78E9D20D8646B35FBEBB79E /* MacChatUXRegressionTests.swift */; };
 		236085337A1CC490BAC5BB56 /* SessionsSidebarView+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DEFD8A1D19846132D2AE32A /* SessionsSidebarView+macOS.swift */; };
 		23B61F1BCE6CD4B7ABCFDA79 /* PKCE.swift in Sources */ = {isa = PBXBuildFile; fileRef = B25E8CC25E0F72D13A5394C5 /* PKCE.swift */; };
@@ -112,6 +113,7 @@
 		3C4A11273BA4926B1804BD90 /* MacSessionSidebarRevealTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B60DD3157710F226FB5EF0DC /* MacSessionSidebarRevealTests.swift */; };
 		3C7F7695CD5685A48330A3D5 /* GitHubMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09D60ADBFACD8E9746EF968 /* GitHubMark.swift */; };
 		3D41352AEBFC0FFDA4E57F36 /* AvatarTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 830D9504C54F439410E9F9CD /* AvatarTestView.swift */; };
+		3D638B1F84CF8CD3D9E622FC /* DeviceUpdate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74DB58BA45935DD4AAE77C45 /* DeviceUpdate.swift */; };
 		3D9E42E6CB81D0C1A79E9B77 /* IOSVoiceComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAEABA66C53A4169697F5D6A /* IOSVoiceComposer.swift */; };
 		3DA91B6874FF2006730C2C30 /* LICENSE-mermaid.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0B49EB7064E3E13899D443B5 /* LICENSE-mermaid.txt */; };
 		3E437588025F139129368109 /* ForegroundTestGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49BC47F1AAD6F888FD15878C /* ForegroundTestGate.swift */; };
@@ -204,6 +206,7 @@
 		6F7C13F76FDD7E9103905674 /* MacMockData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63302839C21EFDE37CC56C13 /* MacMockData.swift */; };
 		70666EBE60A847EF864AF2C1 /* CryptoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B5C9B91D8E0CF8C6D63E91D /* CryptoTests.swift */; };
 		7072CE0B000723DAD5D771C6 /* TentaclePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4A34822755FED065BFDA075 /* TentaclePane.swift */; };
+		711BB85D939B9CCF17DAEB0B /* DeviceUpdateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B08A6C619269A5DD0E185DE /* DeviceUpdateTests.swift */; };
 		71AB0F5DFBF3366EAC49D05D /* ChatLoadingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63003A2D28B352ABAB064761 /* ChatLoadingState.swift */; };
 		73D5BFF158132CA4867AE293 /* SessionPreviewStatusGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = F55032B437F50C6E8B1CCA24 /* SessionPreviewStatusGlyph.swift */; };
 		740A60CC9415FB46D2D73787 /* KrakiDiag.swift in Sources */ = {isa = PBXBuildFile; fileRef = D345DB389B2A4F5A8E198058 /* KrakiDiag.swift */; };
@@ -473,6 +476,7 @@
 		174ADE7BF077A13AD4CB362E /* DiagnosticsSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsSummary.swift; sourceTree = "<group>"; };
 		179780D06C1EF0B6ED5E0C38 /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		1A85ACE885B44CA61B0513FC /* AccountUsageRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountUsageRenderTests.swift; sourceTree = "<group>"; };
+		1B08A6C619269A5DD0E185DE /* DeviceUpdateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceUpdateTests.swift; sourceTree = "<group>"; };
 		1B40607F268A8BCEBF58C6D7 /* MacBubbleActionSlot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBubbleActionSlot.swift; sourceTree = "<group>"; };
 		1B7DBD1AD1C67E1CFB6ED036 /* MacChatComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatComposer.swift; sourceTree = "<group>"; };
 		1BF3123CD705AB984A21AD16 /* SpeechRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognizer.swift; sourceTree = "<group>"; };
@@ -576,6 +580,7 @@
 		7209F58C4D298C8764042569 /* DiagSettingsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagSettingsSection.swift; sourceTree = "<group>"; };
 		735BA6282777D61A4335E5F5 /* MenuBarExtraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarExtraView.swift; sourceTree = "<group>"; };
 		74D308174966E96925EB69B8 /* mermaid-complex-report.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "mermaid-complex-report.html"; sourceTree = "<group>"; };
+		74DB58BA45935DD4AAE77C45 /* DeviceUpdate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceUpdate.swift; sourceTree = "<group>"; };
 		76E84B41258D35243F545BDB /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		77E056700BA106FD1E130382 /* AttachmentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentStore.swift; sourceTree = "<group>"; };
 		788DB31948E59B27C4328EFE /* NewSessionSheet+macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NewSessionSheet+macOS.swift"; sourceTree = "<group>"; };
@@ -1149,6 +1154,7 @@
 			isa = PBXGroup;
 			children = (
 				30796AF51B916DF00057AAC1 /* AccountUsage.swift */,
+				74DB58BA45935DD4AAE77C45 /* DeviceUpdate.swift */,
 				13466FFA7CC929AF90E4097E /* LocalSessionSummary.swift */,
 				F1BC3B39CCEB12DE1DD65808 /* Messages.swift */,
 				3C8B3E613E598F2D688BE4DE /* ProtocolTypes.swift */,
@@ -1206,6 +1212,7 @@
 			isa = PBXGroup;
 			children = (
 				6E83544E423901DC3D8E07FB /* BuiltInTentacleTests.swift */,
+				1B08A6C619269A5DD0E185DE /* DeviceUpdateTests.swift */,
 				813D862554B016FC9E0B527E /* FailedTurnVisibilityTests.swift */,
 				8503ADABDC719A637FA3C5F6 /* HTMLReportMermaidTests.swift */,
 				694EAD21A42351FD2CD77CD8 /* LaunchdOnDemandTests.swift */,
@@ -1577,6 +1584,7 @@
 				AE121F727A9D55311683C105 /* AccountUsageTests.swift in Sources */,
 				1B01E117986AF227249E2056 /* BuiltInTentacleTests.swift in Sources */,
 				367589ADA07E8E0D001A10C7 /* ComposerGeometryProbeTests.swift in Sources */,
+				711BB85D939B9CCF17DAEB0B /* DeviceUpdateTests.swift in Sources */,
 				52731419E058315E90679796 /* FailedTurnVisibilityTests.swift in Sources */,
 				ECD0B5973DEEEEBEFD39ACAA /* ForegroundTestGate.swift in Sources */,
 				442E00FDBE32C44255B6C4B8 /* HTMLReportMermaidTests.swift in Sources */,
@@ -1683,6 +1691,7 @@
 				1B42793DBF367956483611AD /* DeviceKeyPins.swift in Sources */,
 				07009971363AD7EBB365BAF8 /* DeviceListView.swift in Sources */,
 				50081F6ED81CAC7430B9230F /* DeviceStore.swift in Sources */,
+				22BE330C81BC2B0040415007 /* DeviceUpdate.swift in Sources */,
 				1FA04773E415B708A7C36B46 /* DevicesPane.swift in Sources */,
 				E28B775963A2EDAC7D4F166E /* DiagRecorder.swift in Sources */,
 				B9904E6233735C93F73DEC6F /* DiagRunLoop.swift in Sources */,
@@ -1864,6 +1873,7 @@
 				4550B0DBED564B557D6AF038 /* CryptoManager.swift in Sources */,
 				66DF9008513F4B3A31CC4D9A /* DeviceKeyPins.swift in Sources */,
 				B7C46A0BC08656D1F5C64D5E /* DeviceStore.swift in Sources */,
+				3D638B1F84CF8CD3D9E622FC /* DeviceUpdate.swift in Sources */,
 				4BD6FA3628CFB971ABDA5DA8 /* DevicesPane.swift in Sources */,
 				C90E77716E24E622BAB738CF /* DiagRecorder.swift in Sources */,
 				4BD2A0DCBADF5436E42767AA /* DiagRunLoop.swift in Sources */,

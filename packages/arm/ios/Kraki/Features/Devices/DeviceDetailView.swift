@@ -27,7 +27,7 @@ struct DeviceDetailView: View {
     }
 
     private var version: String? {
-        appState.deviceStore.deviceVersions[device.id]
+        appState.deviceStore.displayVersion(for: device.id)
     }
 
     private var deviceSessions: [SessionInfo] {
@@ -80,6 +80,10 @@ struct DeviceDetailView: View {
                 if isCurrentDevice {
                     infoRow("This device", value: "Yes", valueColor: Color.krakiPrimary)
                 }
+            }
+
+            if let update = appState.deviceStore.availableUpdate(for: device.id) {
+                Section { AvailableUpdateNotice(update: update).padding(.vertical, 2) }
             }
 
             // Subscription accounts signed in on this device. Each account's card in

@@ -1,0 +1,54 @@
+import XCTest
+@testable import Kraki_Dev
+
+@MainActor
+final class DeviceUpdateTests: XCTestCase {
+    private func tentacle(_ id: String) -> DeviceSummary {
+        DeviceSummary(id: id, name: id, role: .tentacle, kind: .desktop, publicKey: nil, encryptionKey: nil,
+                      online: true, lastSeen: nil, createdAt: nil)
+    }
+
+    func testVersionCompare() {
+        XCTAssertTrue(KrakiVersion.isNewer("0.36.0", than: "0.35.12"))
+        XCTAssertTrue(KrakiVersion.isNewer("0.35.12", than: "0.35.10-poc"))
+        XCTAssertFalse(KrakiVersion.isNewer("0.35.12", than: "0.35.12"))
+        XCTAssertFalse(KrakiVersion.isNewer("0.2.9", than: "0.2.10"))
+    }
+
+    func testReportedUpdate() {
+        let store = DeviceStore(persistenceEnabled: false)
+        store.devices["a"] = tentacle("a")
+        store.setDeviceUpdate("a", update: DeviceUpdateInfo(installedVia: "binary", current: "0.35.12", latest: "0.36.0", latestTentacle: "0.36.0"))
+        XCTAssertEqual(store.availableUpdate(for: "a"), AvailableUpdate(latest: "0.36.0", installedVia: "binary", remote: false))
+        store.setDeviceUpdate("a", update: DeviceUpdateInfo(installedVia: "binary", current: "0.36.0", latestTentacle: "0.36.0"))
+        XCTAssertNil(store.availableUpdate(for: "a"))
+    }
+
+    func testMacAppComparesAppVersions() {
+        let store = DeviceStore(persistenceEnabled: false)
+        store.devices["mac"] = tentacle("mac")
+        store.setDeviceVersion("mac", version: "0.35.12")
+        store.setDeviceUpdate("mac", update: DeviceUpdateInfo(installedVia: "mac-app", current: "0.2.68", latest: "0.2.70", latestTentacle: "0.36.0"))
+        XCTAssertEqual(store.availableUpdate(for: "mac")?.latest, "0.2.70")
+        XCTAssertTrue(store.availableUpdate(for: "mac")?.isMacApp == true)
+    }
+
+    func testOlderComputerInferredFromTheNewestSeenTentacle() {
+        let store = DeviceStore(persistenceEnabled: false)
+        store.devices["new"] = tentacle("new")
+        store.devices["old"] = tentacle("old")
+        store.setDeviceVersion("old", version: "0.35.9")
+        XCTAssertNil(store.availableUpdate(for: "old"), "nothing known yet")
+        store.setDeviceUpdate("new", update: DeviceUpdateInfo(installedVia: "npm", current: "0.36.0", latestTentacle: "0.36.0"))
+        XCTAssertEqual(store.availableUpdate(for: "old"), AvailableUpdate(latest: "0.36.0", installedVia: "legacy", remote: false))
+        store.setDeviceVersion("old", version: "0.36.0")
+        XCTAssertNil(store.availableUpdate(for: "old"))
+    }
+
+    func testGreetingJSONParses() {
+        let info = DeviceUpdateInfo(json: ["installedVia": "app-bundle", "current": "0.35.12", "latest": "0.36.0", "remote": false])
+        XCTAssertEqual(info?.installedVia, "app-bundle")
+        XCTAssertEqual(info?.latest, "0.36.0")
+        XCTAssertNil(DeviceUpdateInfo(json: ["current": "1"]))
+    }
+}

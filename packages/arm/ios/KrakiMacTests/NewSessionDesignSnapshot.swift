@@ -100,8 +100,11 @@ final class NewSessionDesignSnapshot: XCTestCase {
                 try render(done, size: CGSize(width: 400, height: 420), dark: dark, to: "pairing-done-\(suffix)")
             }
             let a = try app(sessions: 3)
+            a.deviceStore.setDeviceVersion("pc", version: "0.35.9")
+            a.deviceStore.setDeviceVersion("mac", version: "0.35.12")
+            a.deviceStore.setDeviceUpdate("mac", update: DeviceUpdateInfo(installedVia: "mac-app", current: "0.2.68", latest: "0.2.70", latestTentacle: "0.36.0"))
             try render(DevicesPane().environment(a).environment(TentacleCLIManager()),
-                       size: CGSize(width: 560, height: 360), dark: dark, to: "prefs-devices-\(suffix)")
+                       size: CGSize(width: 560, height: 520), dark: dark, to: "prefs-devices-\(suffix)")
             try render(HStack(spacing: 18) {
                 ForEach(["copilot", "claude", "codex", "pi"], id: \.self) { id in
                     PillLabel(text: AgentInfo.from(id).label, agent: id)

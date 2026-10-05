@@ -384,6 +384,9 @@ export async function startWorker(): Promise<WorkerResult> {
   };
 
   relay.connect();
+  // "Is a newer Kraki available here?" — shown on this computer in every app.
+  const { watchUpdateStatus } = await import('./update-status.js');
+  const stopUpdateWatch = watchUpdateStatus((info) => relay.setUpdateInfo(info));
   logger.info({ relay: config.relay, device: config.device.name }, 'Daemon running');
   {
     const { detectProxy } = await import('./proxy.js');
@@ -407,6 +410,7 @@ export async function startWorker(): Promise<WorkerResult> {
     clearDaemonIdentity();
     if (fdaMonitor) clearInterval(fdaMonitor);
     usageMonitor?.stop();
+    stopUpdateWatch();
     clearStatusFile();
     relay.disconnect();
     await adapter.stop();

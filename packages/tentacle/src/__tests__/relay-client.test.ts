@@ -1623,6 +1623,19 @@ describe('RelayClient tool message lazy-load shape', () => {
     } finally { cleanup(); }
   });
 
+  it('re-greets apps with the update status, and keeps it in later greetings', () => {
+    const { ws, client, cleanup } = buildClientWithStore();
+    try {
+      const greeting = () => decodePulseSends(ws.sent).filter(m => m.type === 'device_greeting').at(-1)?.payload as { update?: unknown };
+      expect(greeting().update).toBeUndefined();
+      const info = { installedVia: 'binary' as const, current: '0.35.12', latest: '0.36.0', latestTentacle: '0.36.0' };
+      client.setUpdateInfo(info);
+      expect(greeting().update).toEqual(info);
+      client.setAccountUsageEnabled(true);
+      expect(greeting().update).toEqual(info);
+    } finally { cleanup(); }
+  });
+
   it('advertises refresh only with an enabled monitor and a refresh handler', () => {
     const { ws, client, cleanup } = buildClientWithStore();
     try {

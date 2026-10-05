@@ -20,6 +20,7 @@ import type {
   BroadcastEnvelope, UnicastEnvelope, MulticastEnvelope, CardActionState,
   SessionLiveSnapshot, SessionDigest, IdleMessage,
 } from '@kraki/protocol';
+import type { DeviceUpdateInfo } from '@kraki/protocol';
 import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment } from '@kraki/protocol';
 import { randomUUID } from 'node:crypto';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
@@ -3893,6 +3894,13 @@ export class RelayClient {
     });
   }
 
+  private updateInfo: DeviceUpdateInfo | null = null;
+  /** Latest answer to "is a newer Kraki available here" (update-status.ts); re-greets apps. */
+  setUpdateInfo(info: DeviceUpdateInfo): void {
+    this.updateInfo = info;
+    if (this.state === 'connected') this.sendGreetingBroadcast();
+  }
+
   /** Replace the advertised agent capabilities (e.g. a model list that was
    *  unavailable at startup) and re-greet connected apps. Apps replace a
    *  device's agents on every greeting, so no new message type is needed; the
@@ -3925,6 +3933,7 @@ export class RelayClient {
       version: this.options.version,
       features: ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE, ...(this.accountUsageEnabled ? ['account_usage'] : []),
         ...(this.accountUsageEnabled && this.accountUsageRefresher ? ['account_usage_refresh'] : [])],
+      ...(this.updateInfo ? { update: this.updateInfo } : {}),
     };
   }
 

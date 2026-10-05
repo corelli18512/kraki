@@ -286,7 +286,7 @@ function readCache(): UpdateCheckCache | null {
   return null;
 }
 
-function writeCache(latestVersion: string): void {
+export function writeCache(latestVersion: string): void {
   try {
     mkdirSync(getKrakiHome(), { recursive: true });
     writeFileSync(getCachePath(), JSON.stringify({ latestVersion, checkedAt: Date.now() }));
@@ -318,7 +318,7 @@ export async function checkForUpdate(currentVersion: string, timeoutMs = 2000): 
   return null;
 }
 
-function isNewer(latest: string, current: string): boolean {
+export function isNewer(latest: string, current: string): boolean {
   const l = latest.split('.').map(Number);
   const c = current.split('.').map(Number);
   for (let i = 0; i < 3; i++) {
@@ -790,7 +790,7 @@ function parseChecksum(checksumData: string, assetName: string): string | null {
   return null;
 }
 
-function fetchText(url: string): Promise<string> {
+export function fetchText(url: string): Promise<string> {
   return sendRequest(url).then(async (res) => {
     if (res.statusCode !== 200) {
       throw new Error(`HTTP ${res.statusCode}`);

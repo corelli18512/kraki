@@ -174,7 +174,8 @@ struct NewSessionComposer: View {
                       dot: selectedDevice?.online == true ? Color(hex: 0x34D399) : Color.textMuted)
         } content: {
             DeviceChoiceList(online: onlineTentacles, offline: offlineTentacles, localId: localDeviceId,
-                             selected: selectedDeviceId) { selectedDeviceId = $0; userPickedDevice = true; openPill = nil }
+                             selected: selectedDeviceId,
+                             updates: Set(tentacles.map(\.id).filter { appState.deviceStore.availableUpdate(for: $0) != nil })) { selectedDeviceId = $0; userPickedDevice = true; openPill = nil }
         }
         .help(selectedDevice?.name ?? "")
         .accessibilityIdentifier("mac.newSession.device")
@@ -437,6 +438,8 @@ struct DeviceChoiceList: View {
     let offline: [DeviceSummary]
     let localId: String?
     let selected: String
+    /// Computers with a newer Kraki available.
+    var updates: Set<String> = []
     let choose: (String) -> Void
 
     var body: some View {
@@ -444,7 +447,7 @@ struct DeviceChoiceList: View {
             ChoiceSection(title: "Online") {
                 ForEach(online, id: \.id) { d in
                     ChoiceRow(title: d.id == localId ? "This Mac" : d.name,
-                              detail: d.id == localId ? d.name : nil,
+                              detail: updates.contains(d.id) ? "Update available" : (d.id == localId ? d.name : nil),
                               selected: d.id == selected,
                               mark: { Image(systemName: d.id == localId ? "laptopcomputer" : "desktopcomputer")
                                         .foregroundStyle(Color(hex: 0x34D399)) },

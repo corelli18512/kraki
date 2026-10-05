@@ -22,6 +22,8 @@ final class DeviceStore {
     /// (multi-agent device).
     var deviceAgents: [String: [AgentCapabilities]] = [:]
     var deviceVersions: [String: String] = [:]
+    /// `device_greeting.update` per computer (tentacles ≥ 0.36).
+    var deviceUpdates: [String: DeviceUpdateInfo] = [:]
     /// Latest subscription account quota per tentacle (`device_usage`).
     /// In-memory only: a fresh reading arrives on every connect.
     var deviceUsage: [String: DeviceUsageSnapshot] = [:]
@@ -71,6 +73,8 @@ final class DeviceStore {
         var devices: [String: DeviceSummary]
         var deviceAgents: [String: [AgentCapabilities]]
         var deviceVersions: [String: String]
+        /// Added after v2; optional so older snapshots still load.
+        var deviceUpdates: [String: DeviceUpdateInfo]?
     }
 
     private static let snapshotSchemaVersion = 2
@@ -106,6 +110,7 @@ final class DeviceStore {
         self.devices = snapshot.devices
         self.deviceAgents = snapshot.deviceAgents
         self.deviceVersions = snapshot.deviceVersions
+        self.deviceUpdates = snapshot.deviceUpdates ?? [:]
     }
 
     /// Debounced write of the current persistable state to disk.
@@ -116,7 +121,8 @@ final class DeviceStore {
             schemaVersion: Self.snapshotSchemaVersion,
             devices: devices,
             deviceAgents: deviceAgents,
-            deviceVersions: deviceVersions
+            deviceVersions: deviceVersions,
+            deviceUpdates: deviceUpdates
         )
         saveTask?.cancel()
         let task = DispatchWorkItem { [weak self] in self?.flushCache() }
@@ -268,6 +274,7 @@ final class DeviceStore {
         deviceFeatures.removeValue(forKey: id)
         deviceAgents.removeValue(forKey: id)
         deviceVersions.removeValue(forKey: id)
+        deviceUpdates.removeValue(forKey: id)
         pendingGreetingIds.remove(id)
         scheduleSave()
     }
@@ -387,6 +394,38 @@ final class DeviceStore {
     func setDeviceVersion(_ id: String, version: String) {
         deviceVersions[id] = version
         scheduleSave()
+    }
+
+    func setDeviceUpdate(_ id: String, update: DeviceUpdateInfo) {
+        guard deviceUpdates[id] != update else { return }
+        deviceUpdates[id] = update
+        scheduleSave()
+    }
+
+    /// The version a user recognises: Kraki for Mac's own version for its
+    /// built-in tentacle, the tentacle version otherwise.
+    func displayVersion(for id: String) -> String? {
+        if let u = deviceUpdates[id], u.installedVia == "mac-app" { return "Kraki for Mac \(u.current)" }
+        return deviceVersions[id].map { "Kraki \($0)" }
+    }
+
+    /// Newest published tentacle any computer on the account has reported.
+    var knownLatestTentacle: String? {
+        deviceUpdates.values.compactMap(\.latestTentacle)
+            .max { KrakiVersion.isNewer($1, than: $0) }
+    }
+
+    /// A newer Kraki for this computer, if any. Computers that predate update
+    /// reporting are compared with the newest tentacle seen on the account.
+    func availableUpdate(for id: String) -> AvailableUpdate? {
+        if let info = deviceUpdates[id] {
+            guard let latest = info.latest, KrakiVersion.isNewer(latest, than: info.current) else { return nil }
+            return AvailableUpdate(latest: latest, installedVia: info.installedVia, remote: info.remote == true)
+        }
+        guard devices[id]?.role == .tentacle,
+              let version = deviceVersions[id], let newest = knownLatestTentacle,
+              KrakiVersion.isNewer(newest, than: version) else { return nil }
+        return AvailableUpdate(latest: newest, installedVia: "legacy", remote: false)
     }
 
     func setDeviceUsage(_ id: String, accounts: [AccountUsage], receivedAt: Date = Date()) {
