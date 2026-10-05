@@ -112,7 +112,15 @@ export interface CheckDeps {
 
 async function defaultDeps(): Promise<CheckDeps> {
   const u = await import('./update.js');
-  return { fetchLatestTentacle: u.fetchLatestVersion, fetchText: u.fetchText, isNewer: u.isNewer };
+  return {
+    // The GitHub API allows 60 unauthenticated requests an hour per IP, which
+    // shared networks (offices, CI) run out of; npm publishes the same version
+    // in the same release job, without such a limit.
+    fetchLatestTentacle: async () => (await u.fetchLatestVersion())
+      ?? (await u.fetchJson<{ version?: string }>('https://registry.npmjs.org/@kraki/tentacle/latest').then((j) => j.version ?? null, () => null)),
+    fetchText: u.fetchText,
+    isNewer: u.isNewer,
+  };
 }
 
 /**

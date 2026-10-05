@@ -487,11 +487,12 @@ export class RemoteUpdater {
 
   async request(requestId: string, when?: 'now' | 'idle'): Promise<void> {
     const s = this.o.status();
-    const fail = (error: string) => this.o.emit({ phase: 'failed', requestId, error });
+    const fail = (error: string) => { log(`request ${requestId}: ${error}`); this.o.emit({ phase: 'failed', requestId, error }); };
     if (this.busy) { fail('An update is already in progress.'); return; }
     if (!s?.remote) { fail('This computer can’t be updated remotely.'); return; }
     if (!s.latest) { fail('Already up to date.'); return; }
     const running = this.o.runningSessions();
+    log(`request ${requestId}: ${s.current} → ${s.latest} (${when ?? 'ask'}, ${running} running)`);
     if (running > 0 && !when) { this.o.emit({ phase: 'busy', requestId, runningSessions: running, from: s.current, to: s.latest }); return; }
     this.busy = true;
     try {

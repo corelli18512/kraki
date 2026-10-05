@@ -124,10 +124,14 @@ jobs:
           rm -f "$HOME/.kraki/remote-update/result.json"
           "$KRAKI" start --login || true
           node scripts/e2e/remote-update/wait-online.mjs "$KRAKI" "$OLD" 90
+          LOG="$HOME/.kraki/logs/remote-update.log"
+          before=$(grep -c "launched applier" "$LOG" || true)
           echo hang > "$RELAY_DIR/mode"
           echo '{"requestId":"e2e-b","when":"now"}' > "$RELAY_DIR/send.json"
-          # The applier gives the new version 120 s; let the old one in after that.
-          ( sleep 150; echo normal > "$RELAY_DIR/mode" ) &
+          # Once the applier runs, it gives the new version 120 s; let the
+          # old one in after that (staging, e.g. npm on Windows, takes minutes).
+          ( until [ "$(grep -c "launched applier" "$LOG" || true)" -gt "$before" ]; do sleep 2; done
+            sleep 150; echo normal > "$RELAY_DIR/mode" ) &
           node scripts/e2e/remote-update/wait-result.mjs 600 rolled_back
           node scripts/e2e/remote-update/wait-online.mjs "$KRAKI" "$OLD" 60
 
