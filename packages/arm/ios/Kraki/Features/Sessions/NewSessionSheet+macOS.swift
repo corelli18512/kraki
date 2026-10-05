@@ -20,6 +20,8 @@ struct NewSessionComposer: View {
     var placeholder = "Describe a task, e.g. “Fix the failing tests in my-app”"
     var minLines = 3
     var onCreated: () -> Void = {}
+    /// Tests observe which computer the composer picked.
+    var onDeviceSelected: (String) -> Void = { _ in }
 
     /// Set when "+" / ⌘N asks for the composer; a composer that mounts right
     /// after (switching away from a session) still plays the nudge.
@@ -27,11 +29,6 @@ struct NewSessionComposer: View {
     @State private var nudged = false
     /// The user chose a computer by hand; stop re-picking the default.
     @State private var userPickedDevice = false
-
-    private var thisMacOnline: Bool {
-        guard let id = localDeviceId else { return false }
-        return onlineTentacles.contains { $0.id == id }
-    }
 
     private func nudge() {
         Self.nudgeRequestedAt = nil
@@ -124,19 +121,17 @@ struct NewSessionComposer: View {
             focused = true
             nudge()
         }
-        .onChange(of: selectedDeviceId) { _, _ in onDeviceChanged() }
-        // The composer can appear before this Mac's background service is
-        // online (first launch, after a restart). Prefer This Mac once it is,
-        // unless the user already picked or last used another online computer.
-        .onChange(of: thisMacOnline) { _, online in
-            guard online, !userPickedDevice,
-                  !onlineTentacles.contains(where: { $0.id == SessionPrefs.lastDeviceId() }) else { return }
-            selectDefaults()
-        }
+        .onChange(of: selectedDeviceId) { _, id in onDeviceChanged(); onDeviceSelected(id) }
+        // Computers come online after the composer appeared (first launch, a
+        // restart or update of this Mac's service): until the user picks one
+        // by hand, keep the default current — last used, else This Mac, else
+        // any online one. (Before, a last-used This Mac coming online second
+        // was never picked: it counted as "the user last used another one".)
+        .onChange(of: localDeviceId) { _, _ in followDefault() }
         .onChange(of: selectedAgentId) { _, _ in onAgentChanged() }
         .onChange(of: selectedModel) { _, _ in onModelChanged() }
         .onChange(of: agents.map(\.id)) { _, _ in onDeviceChanged() }
-        .onChange(of: onlineTentacles.map(\.id)) { _, _ in if selectedDevice?.online != true { selectDefaults() } }
+        .onChange(of: onlineTentacles.map(\.id)) { _, _ in followDefault() }
         .onChange(of: reasoningEffort) { _, effort in
             if let effort, !selectedModel.isEmpty { SessionPrefs.saveLastEffort(model: selectedModel, effort: effort) }
         }
@@ -285,6 +280,16 @@ struct NewSessionComposer: View {
             try? await Task.sleep(nanoseconds: 250_000_000)
             if !agents.isEmpty { return }
         }
+    }
+
+    private func followDefault() {
+        if Self.followsDefault(userPicked: userPickedDevice, selectedOnline: selectedDevice?.online == true) { selectDefaults() }
+    }
+
+    /// The default keeps following the online computers until the user picks
+    /// one; a picked computer that goes offline falls back to the default.
+    static func followsDefault(userPicked: Bool, selectedOnline: Bool) -> Bool {
+        !userPicked || !selectedOnline
     }
 
     /// Last-used computer if online; else this Mac if online; else any online one.

@@ -256,6 +256,7 @@
 		945558DB880907D741553F0E /* MacLaunchActivityIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D80A4B531EA5EBD081A0626 /* MacLaunchActivityIndicator.swift */; };
 		94C4BA9361E319CC750EAA19 /* MacBubbleImageGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716CF510D83856B445C94DA7 /* MacBubbleImageGrid.swift */; };
 		94F2F6AF6ADD79CED56E906E /* MacChatComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B7DBD1AD1C67E1CFB6ED036 /* MacChatComposer.swift */; };
+		952DB3D33A2696851B6D68C1 /* NewSessionComposerDefaultDeviceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6353A0E87A0D7AC8DBD5AAB0 /* NewSessionComposerDefaultDeviceTests.swift */; };
 		96DFC48663EC74A860A90722 /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83C975C5AAEF1EF5B8FBC6DA /* WebSocketClient.swift */; };
 		97B4D1DF70CC145EFCFAA78F /* PairingLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E8BC58D7E2F9C1B09549F72 /* PairingLinkTests.swift */; };
 		9CB69808BCDB09D486B23717 /* MacBubbleTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D15C4DAE8AB0534C9C6226 /* MacBubbleTestView.swift */; };
@@ -552,6 +553,7 @@
 		61AC5E0472D90CCB91CC0778 /* ToolActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolActivityView.swift; sourceTree = "<group>"; };
 		63003A2D28B352ABAB064761 /* ChatLoadingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatLoadingState.swift; sourceTree = "<group>"; };
 		63302839C21EFDE37CC56C13 /* MacMockData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMockData.swift; sourceTree = "<group>"; };
+		6353A0E87A0D7AC8DBD5AAB0 /* NewSessionComposerDefaultDeviceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionComposerDefaultDeviceTests.swift; sourceTree = "<group>"; };
 		63613BBDA6BD9F86BB1965EE /* SessionPreviewGlyphLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionPreviewGlyphLayer.swift; sourceTree = "<group>"; };
 		645235464E5F1E95452AE7C0 /* DeviceKeyPins.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyPins.swift; sourceTree = "<group>"; };
 		6463492D6BEB410FD49FF787 /* DeviceDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceDetailView.swift; sourceTree = "<group>"; };
@@ -1226,6 +1228,7 @@
 				B60DD3157710F226FB5EF0DC /* MacSessionSidebarRevealTests.swift */,
 				5B840BBE9C2E72331DE8CD87 /* MacVoiceComposerTests.swift */,
 				A12AD389B30F05A2599BF32A /* NetworkResilienceTests.swift */,
+				6353A0E87A0D7AC8DBD5AAB0 /* NewSessionComposerDefaultDeviceTests.swift */,
 				DFA6CA4F591045440EE22FEE /* NewSessionDesignSnapshot.swift */,
 				C4E4873CEEEF25B24B5E8035 /* TableRenderShots.swift */,
 				593F51D017203A91FAB57F80 /* ThisMacSetupSnapshot.swift */,
@@ -1602,6 +1605,7 @@
 				329CD52FB10EFC078920E6E5 /* NativeSessionPreviewGlyphTests.swift in Sources */,
 				84954F7CDDC34A4F2B61CF3C /* NativeStyleTests.swift in Sources */,
 				D949AA3B93675BB246AE7565 /* NetworkResilienceTests.swift in Sources */,
+				952DB3D33A2696851B6D68C1 /* NewSessionComposerDefaultDeviceTests.swift in Sources */,
 				35C98167F7A82C01A4797610 /* NewSessionDesignSnapshot.swift in Sources */,
 				9D6E1F2B6F68CD94D1463993 /* PushPreviewFormatTests.swift in Sources */,
 				42DC9831156547666EE02D51 /* TableRenderShots.swift in Sources */,
