@@ -86,6 +86,9 @@ jobs:
               echo "KRAKI=$HOME/.local/bin/kraki" >> "$GITHUB_ENV"; echo "OLD_ARTIFACT=$HOME/old-app.tar.gz" >> "$GITHUB_ENV"
               ;;
             npm)
+              # The protocol bump in this branch isn't on npm yet; its runtime
+              # is unchanged, so depend on the published one.
+              node -e "const f='packages/protocol/package.json';const p=require('./'+f);p.version=require('child_process').execSync('npm view @kraki/protocol version').toString().trim();require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
               (cd packages/tentacle && pnpm pack --pack-destination "$HOME")
               TGZ=$(ls "$HOME"/kraki-tentacle-*.tgz | head -1)
               npm install -g "$TGZ"
