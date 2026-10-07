@@ -271,6 +271,38 @@ describe('RelayClient auth negotiation', () => {
     vi.useFakeTimers();
   });
 
+  it.each([
+    ['auth_error code account_deleted', (ws: { emit: (e: string, ...a: unknown[]) => void }) => ws.emit('message', Buffer.from(JSON.stringify({ type: 'auth_error', code: 'account_deleted', message: 'deleted' })))],
+    ['raw account_deleted', (ws: { emit: (e: string, ...a: unknown[]) => void }) => ws.emit('message', Buffer.from(JSON.stringify({ type: 'account_deleted' })))],
+    ['close code 4005', (ws: { emit: (e: string, ...a: unknown[]) => void }) => ws.emit('close', 4005, Buffer.from('account_deleted'))],
+  ])('stops for good after %s', async (_label, deliver) => {
+    const client = new RelayClient(
+      createAdapter(),
+      createSessionManager(),
+      {
+        relayUrl: 'ws://localhost:4000',
+        authMethod: 'open',
+        device: { name: 'Local Mac', role: 'tentacle', deviceId: 'dev_123' },
+        reconnectDelay: 10,
+      },
+      createKeyManager(),
+    );
+    const deleted = vi.fn();
+    const fatal = vi.fn();
+    client.onAccountDeleted = deleted;
+    client.onFatalError = fatal;
+
+    client.connect();
+    sockets[0].emit('open');
+    deliver(sockets[0]);
+    sockets[0].emit('close', 4005, Buffer.from('account_deleted'));
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deleted).toHaveBeenCalledTimes(1);
+    expect(fatal).not.toHaveBeenCalled();
+    expect(sockets).toHaveLength(1);
+  });
+
   it.each(['service_unavailable', 'auth_unavailable'])('reconnects (never goes fatal) on a transient %s auth error', async (code) => {
     const client = new RelayClient(
       createAdapter(),

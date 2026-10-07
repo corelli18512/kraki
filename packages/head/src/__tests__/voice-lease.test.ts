@@ -120,7 +120,7 @@ describe('Storage voice_leases', () => {
 
     const migrated = new Storage(dbPath);
     try {
-      expect(migrated.rawDb.pragma('user_version', { simple: true })).toBe(12);
+      expect(migrated.rawDb.pragma('user_version', { simple: true })).toBe(13);
       expect(migrated.getVoiceLease('legacy-lease')).toMatchObject({
         activationId: 'legacy:legacy-lease',
         activatedAt: '2026-06-15T10:00:00.000Z',

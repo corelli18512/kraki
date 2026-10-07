@@ -104,6 +104,7 @@ struct MacEntryGateView: View {
                 .transition(.opacity.combined(with: .offset(y: 12)))
             }
         }
+        .overlay(alignment: .top) { AccountDeletedNotice() }
     }
 
     /// First open of the setup flow: the logo entrance before the steps.

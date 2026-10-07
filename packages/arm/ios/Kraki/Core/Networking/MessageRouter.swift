@@ -206,7 +206,12 @@ final class MessageRouter {
         // ── Server messages ──────────────────────────────────────────────
         case "server_error":
             let message = json["message"] as? String ?? "Unknown server error"
-            appState?.lastError = message
+            if appState?.accountDeletionFailedIfPending(message) != true {
+                appState?.lastError = message
+            }
+
+        case "account_deleted":
+            appState?.accountWasDeleted()
 
         case "pong":
             break

@@ -61,6 +61,11 @@ final class MacLaunchCoordinator {
     ) async {
         guard !hasStarted else { return }
         hasStarted = true
+        // The local Kraki belongs to the deleted account too: stop it (it
+        // has already forgotten its sign-in, or AppState just removed it).
+        appState.onAccountDeleted = { [weak tentacleCLI] in
+            Task { @MainActor in await tentacleCLI?.stopDaemon() }
+        }
 
         if bypassProductionLaunch {
             phase = .authenticated

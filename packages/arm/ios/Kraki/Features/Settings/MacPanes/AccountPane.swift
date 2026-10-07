@@ -69,6 +69,8 @@ struct AccountPane: View {
                         Text("Conversations cached on this Mac are removed. Your computers keep all sessions; sign in again to see them.")
                     }
                 }
+
+                DeleteAccountSection()
             } else {
                 Section {
                     VStack(spacing: 8) {

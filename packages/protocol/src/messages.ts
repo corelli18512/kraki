@@ -1546,6 +1546,7 @@ export type AuthErrorCode =
   | 'invalid_signature'
   | 'user_not_found'
   | 'device_registration_failed'
+  | 'account_deleted'
   | 'wrong_region';
 
 export interface AuthErrorMessage {
@@ -1634,6 +1635,29 @@ export interface RemoveDeviceMessage {
   type: 'remove_device';
   deviceId: string;
 }
+
+/**
+ * App → head: permanently delete this Kraki account (App Store 5.1.1(v)).
+ * The relay deletes the user, every device, push tokens, preferences, custom
+ * words and voice usage, then sends `account_deleted` to every connected
+ * device and closes it. Only devices with role `app` may ask.
+ */
+export interface DeleteAccountMessage {
+  type: 'delete_account';
+}
+
+/**
+ * Head → every device of a deleted account (raw WebSocket, right before the
+ * relay closes the socket with `ACCOUNT_DELETED_CLOSE_CODE`). A device that
+ * was offline learns it from `auth_error` code `account_deleted` instead.
+ * Clients sign out, forget their credentials and stop reconnecting.
+ */
+export interface AccountDeletedMessage {
+  type: 'account_deleted';
+}
+
+/** WebSocket close code the relay uses after deleting the account. */
+export const ACCOUNT_DELETED_CLOSE_CODE = 4005;
 
 /** Broadcast confirmation that a device was removed. */
 export interface DeviceRemovedMessage {
@@ -1743,6 +1767,8 @@ export type ControlMessage =
   | DevicePendingMessage
   | RemoveDeviceMessage
   | DeviceRemovedMessage
+  | DeleteAccountMessage
+  | AccountDeletedMessage
   | UpdatePreferencesMessage
   | PreferencesUpdatedMessage
   | UpdateVoiceVocabularyMessage

@@ -100,6 +100,14 @@ export interface AuthBackend {
   removeDevice?(userId: string, deviceId: string): Promise<boolean>;
 
   /**
+   * Delete an account at the account store (users, devices, push tokens,
+   * voice usage) and tombstone its device ids. Returns the deleted device ids.
+   * Must throw when the store could not be reached, so the relay never
+   * reports a deletion that did not happen.
+   */
+  deleteAccount?(userId: string): Promise<string[]>;
+
+  /**
    * Create a pairing token for an authenticated user.
    * Returns the token string and TTL.
    */

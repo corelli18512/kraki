@@ -105,6 +105,9 @@ export class AccountApi {
         case '/api/devices/remove':
           if (req.method === 'POST') return await this.handleRemoveDevice(req, res, caller!);
           break;
+        case '/api/account/delete':
+          if (req.method === 'POST') return await this.handleDeleteAccount(req, res, caller!);
+          break;
         case '/api/edge/join':
           if (req.method === 'POST') return await this.handleEdgeJoin(req, res);
           break;
@@ -244,6 +247,24 @@ export class AccountApi {
     if (!this.mayActForUser(caller, body.userId, res)) return true;
     const removed = await this.backend.removeDevice(body.userId, body.deviceId);
     this.json(res, removed ? 200 : 404, removed ? { ok: true } : { ok: false, code: 'not_found', message: 'Device not found' });
+    return true;
+  }
+
+  /** Service-key route: an edge forwards a user's account deletion here. */
+  private async handleDeleteAccount(req: IncomingMessage, res: ServerResponse, caller: ServiceCaller): Promise<boolean> {
+    const body = await readBody(req);
+    if (typeof body?.userId !== 'string' || !body.userId) {
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'userId required' });
+      return true;
+    }
+    if (!this.mayActForUser(caller, body.userId, res)) return true;
+    if (!this.backend.deleteAccount) {
+      this.json(res, 501, { ok: false, code: 'not_supported', message: 'Account deletion is not supported' });
+      return true;
+    }
+    const deviceIds = await this.backend.deleteAccount(body.userId);
+    getLogger().info('Account deleted via account API', { userId: body.userId, devices: deviceIds.length });
+    this.json(res, 200, { ok: true, deviceIds });
     return true;
   }
 

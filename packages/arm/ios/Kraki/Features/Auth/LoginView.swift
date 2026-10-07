@@ -35,6 +35,8 @@ struct LoginView: View {
             Color.kraki950.ignoresSafeArea()
 
             VStack(spacing: 0) {
+                AccountDeletedNotice()
+
                 Spacer()
 
                 // Logo — 160×160, circle-clip reveal + blur animation
