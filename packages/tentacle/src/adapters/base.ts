@@ -147,6 +147,8 @@ export interface SendMessageOptions {
 }
 
 export type QuestionResponseResult = 'accepted' | 'not_found' | 'session_gone';
+/** Whether a permission decision reached a live pending request. */
+export type PermissionResponseResult = QuestionResponseResult;
 
 // ── The adapter interface ───────────────────────────────
 
@@ -248,13 +250,15 @@ export abstract class AgentAdapter {
   ): Promise<void>;
 
   /** Respond to a pending permission request. `reason` (deny only) is the
-   *  operator's explanation; adapters relay it to the agent. */
+   *  operator's explanation; adapters relay it to the agent. Returns whether a
+   *  live pending request took the decision; callers must not announce a
+   *  resolution otherwise. */
   abstract respondToPermission(
     sessionId: string,
     permissionId: string,
     decision: PermissionDecision,
     reason?: string,
-  ): Promise<void>;
+  ): Promise<PermissionResponseResult>;
 
   /** Respond to a pending agent question. Returns whether the live runtime
    *  actually accepted the answer; callers must not resolve UI state earlier. */

@@ -4183,3 +4183,62 @@ describe('RelayClient rejects unauthenticated consumer input', () => {
     await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalled());
   });
 });
+
+describe('RelayClient permission decisions', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+  });
+
+  function connected(results: Array<'accepted' | 'not_found' | undefined>) {
+    const respond = vi.fn();
+    for (const r of results) respond.mockImplementationOnce(() => Promise.resolve(r));
+    const adapter = { ...createAdapter(), respondToPermission: respond };
+    const sm = { ...createSessionManager(), getMeta: vi.fn(() => ({ id: 'sess_1', state: 'active', mode: 'safe' })) };
+    const client = new RelayClient(adapter as unknown as Parameters<typeof RelayClient>[0], sm as unknown as Parameters<typeof RelayClient>[1], {
+      relayUrl: 'ws://localhost:4000', authMethod: 'open', device: { name: 'Test', role: 'tentacle' }, reconnectDelay: 10,
+    }, createKeyManager());
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_1', authMethod: 'open', user: { id: 'u1', login: 't', provider: 'open' }, devices: [],
+    })));
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'device_joined', device: { id: 'app_1', role: 'app', encryptionKey: 'k' },
+    })));
+    (adapter as unknown as { onPermissionRequest(s: string, e: unknown): void }).onPermissionRequest('sess_1', {
+      id: 'perm_1', description: 'Run rm', toolArgs: { toolName: 'shell', args: {} },
+    });
+    sockets[0].sent.length = 0;
+    // Consumer messages arrive as E2E envelopes (the crypto mock returns the blob).
+    const decide = () => sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'unicast', to: 'tentacle-dev', keys: {},
+      blob: JSON.stringify({ type: 'approve', sessionId: 'sess_1', deviceId: 'app_1', seq: 1, timestamp: '', payload: { permissionId: 'perm_1' } }),
+    })));
+    const resolutions = () => decodePulseSends(sockets[0].sent)
+      .filter((m) => m.type === 'permission_resolved')
+      .map((m) => (m.payload as { resolution: string }).resolution);
+    return { decide, resolutions, respond };
+  }
+
+  it('announces a decision the agent accepted', async () => {
+    const { decide, resolutions } = connected(['accepted']);
+    decide();
+    await vi.waitFor(() => expect(resolutions()).toEqual(['approved']));
+  });
+
+  it('closes a prompt that expired at the agent as cancelled, not approved', async () => {
+    const { decide, resolutions } = connected(['not_found']);
+    decide();
+    await vi.waitFor(() => expect(resolutions()).toEqual(['cancelled']));
+  });
+
+  it('ignores a duplicate decision after the first was accepted', async () => {
+    const { decide, resolutions, respond } = connected(['accepted', 'not_found']);
+    decide();
+    await vi.waitFor(() => expect(resolutions()).toEqual(['approved']));
+    decide(); // a Pulse resend of the same decision
+    await vi.waitFor(() => expect(respond).toHaveBeenCalledTimes(2));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(resolutions()).toEqual(['approved']);
+  });
+});

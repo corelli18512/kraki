@@ -20,6 +20,7 @@ import {
   type PermissionDecision,
   type QuestionAnswer,
   type QuestionResponseResult,
+  type PermissionResponseResult,
   type SendMessageOptions,
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
@@ -79,44 +80,9 @@ export function loadClaudeSettingsEnv(configDir: string): Record<string, string>
   return out;
 }
 
-/**
- * Make `src` available at `dest` inside a shadow Claude home. Symlinks need
- * admin or Developer Mode on Windows, so there directories become junctions
- * and files hard links (copies across volumes). Returns false on failure.
- */
-export function linkIntoShadow(src: string, dest: string, os: NodeJS.Platform = process.platform): boolean {
-  removeShadowEntry(dest);
-  try {
-    if (os !== 'win32') {
-      symlinkSync(src, dest);
-      return true;
-    }
-    if (statSync(src).isDirectory()) {
-      symlinkSync(src, dest, 'junction');
-    } else {
-      try { linkSync(src, dest); } catch { copyFileSync(src, dest); }
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
+import { linkIntoShadow } from './shadow-link.js';
 
-/** Remove a previous link (or a real file/dir Claude wrote) at `dest` —
- *  never what a link points to. Windows junctions are directories to rm(). */
-function removeShadowEntry(dest: string): void {
-  let st;
-  try { st = lstatSync(dest); } catch { return; }
-  try {
-    if (st.isSymbolicLink()) {
-      try { unlinkSync(dest); } catch { rmdirSync(dest); }
-    } else if (st.isDirectory()) {
-      rmSync(dest, { recursive: true, force: true });
-    } else {
-      unlinkSync(dest);
-    }
-  } catch { /* linking reports the failure */ }
-}
+export { linkIntoShadow };
 
 /** The user's real Claude Code config root: an explicit CLAUDE_CONFIG_DIR,
  *  otherwise ~/.claude. Kraki's per-session shadow homes are built FROM this. */
@@ -560,7 +526,7 @@ export class ClaudeAdapter extends AgentAdapter {
   private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
   private readonly krakiMcp?: {
     urlForSession: (sessionId: string) => string;
-    bearerToken: string;
+    tokenForSession: (sessionId: string) => string;
   };
   /**
    * Absolute path to the `claude` binary, set by the multi-adapter via
@@ -575,7 +541,7 @@ export class ClaudeAdapter extends AgentAdapter {
     attachmentStore?: import('../attachment-store.js').AttachmentStore;
     krakiMcp?: {
       urlForSession: (sessionId: string) => string;
-      bearerToken: string;
+      tokenForSession: (sessionId: string) => string;
     };
     claudeExecutablePath?: string;
   } = {}) {
@@ -1064,7 +1030,7 @@ export class ClaudeAdapter extends AgentAdapter {
         kraki: {
           type: 'http' as const,
           url: this.krakiMcp.urlForSession(sessionId),
-          headers: { Authorization: `Bearer ${this.krakiMcp.bearerToken}` },
+          headers: { Authorization: `Bearer ${this.krakiMcp.tokenForSession(sessionId)}` },
         },
       };
       logger.info({ sessionId }, 'wired kraki MCP into session');
@@ -1131,16 +1097,16 @@ export class ClaudeAdapter extends AgentAdapter {
     permissionId: string,
     decision: PermissionDecision,
     reason?: string,
-  ): Promise<void> {
+  ): Promise<PermissionResponseResult> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       logger.warn({ sessionId }, 'respondToPermission: session not found');
-      return;
+      return 'session_gone';
     }
     const pending = entry.pendingPermissions.get(permissionId);
     if (!pending) {
       logger.warn({ permissionId }, 'respondToPermission: no pending permission');
-      return;
+      return 'not_found';
     }
 
     // For always_allow: add tool kind to session-scope allow set
@@ -1168,6 +1134,7 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     entry.pendingPermissions.delete(permissionId);
     logger.debug({ permissionId, sessionId, decision }, 'permission resolved');
+    return 'accepted';
   }
 
   async respondToQuestion(
@@ -1381,12 +1348,17 @@ export class ClaudeAdapter extends AgentAdapter {
 
   private async runTitleQuery(sessionId: string, context: TitleContext, model?: string): Promise<string | null> {
     const supportsEffort = model ? this.cachedModels.find((m) => m.id === model)?.supportsReasoningEffort : false;
+    // A hung side-call must not pin the session's "title in flight" state.
+    const abortController = new AbortController();
+    const timer = setTimeout(() => abortController.abort(), 60_000);
+    timer.unref?.();
     try {
       const { query: queryFn } = await import('@anthropic-ai/claude-agent-sdk');
       let raw = '';
       const q = queryFn({
         prompt: buildTitlePrompt(context),
         options: {
+          abortController,
           ...(this.claudeExecutablePath && { pathToClaudeCodeExecutable: this.claudeExecutablePath }),
           env: this.claudeEnv(secureStorageEnv()),
           systemPrompt: TITLE_SYSTEM_PROMPT,
@@ -1409,6 +1381,8 @@ export class ClaudeAdapter extends AgentAdapter {
     } catch (err) {
       logger.warn({ err: (err as Error).message, sessionId, model }, 'Title generation failed');
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -1443,6 +1417,16 @@ export class ClaudeAdapter extends AgentAdapter {
         } else {
           this.onIdle?.(sessionId);
         }
+      }
+      // Input is a long-lived stream, so a normal end means the CLI process
+      // exited (killSession removes its entry first). Keeping the entry would
+      // push the next message into a channel nobody reads; evict it so the
+      // next message resumes the session, as the error path does.
+      if (entry && this.sessions.get(sessionId) === entry && !abortController?.signal.aborted) {
+        this.broadcastPendingResolutions(sessionId);
+        try { entry.inputChannel.end(); } catch { /* already closed */ }
+        this.sessions.delete(sessionId);
+        this.onSessionEvicted?.(sessionId);
       }
     } catch (err) {
       // stop()/killSession() abort the controller on purpose; the SDK surfaces

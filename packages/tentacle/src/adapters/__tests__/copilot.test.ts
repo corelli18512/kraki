@@ -154,9 +154,7 @@ const mockedExecSync = realExecSync as unknown as Mock;
 import { CopilotAdapter, AgentAdapter } from '../index.js';
 import {
   installCopilotSdkImportCompatibility,
-  patchCopilotSdkSessionImport,
   resolveCopilotCliPath,
-  resolveCopilotSdkSessionPath,
 } from '../copilot.js';
 
 // ── Tests ───────────────────────────────────────────────
@@ -240,18 +238,6 @@ describe('CopilotAdapter', () => {
       expect(capturedClientOptions[0]).not.toHaveProperty('gitHubToken');
     });
 
-    it('patches the SDK import when the installed session file is incompatible', () => {
-      mockReadFileSync.mockReturnValue('import { x } from "vscode-jsonrpc/node";\n');
-
-      expect(patchCopilotSdkSessionImport(fakeAdapterUrl)).toBe(true);
-
-      expect(mockWriteFileSync).toHaveBeenCalledWith(
-        fakeSdkSessionPath,
-        'import { x } from "vscode-jsonrpc/node.js";\n',
-        'utf8',
-      );
-    });
-
     it('stop() clears client and sessions', async () => {
       await adapter.start();
       await adapter.createSession({ model: 'gpt-5' });
@@ -306,15 +292,6 @@ describe('CopilotAdapter', () => {
     });
   });
 
-  describe('patchCopilotSdkSessionImport', () => {
-    it('returns false when no patch is needed', () => {
-      mockReadFileSync.mockReturnValue('import "vscode-jsonrpc/node.js";\n');
-
-      expect(patchCopilotSdkSessionImport(fakeAdapterUrl)).toBe(false);
-      expect(mockWriteFileSync).not.toHaveBeenCalled();
-    });
-  });
-
   describe('installCopilotSdkImportCompatibility', () => {
     it('uses registerHooks when available', () => {
       expect(installCopilotSdkImportCompatibility(fakeAdapterUrl))
@@ -337,33 +314,6 @@ describe('CopilotAdapter', () => {
       expect(mockWriteFileSync).not.toHaveBeenCalled();
     });
 
-    it('falls back to patching when module hooks are unavailable', () => {
-      mockRegisterHooks = undefined;
-      mockRegister = undefined;
-      mockReadFileSync.mockReturnValue('import { x } from "vscode-jsonrpc/node";\n');
-
-      expect(installCopilotSdkImportCompatibility(fakeAdapterUrl))
-        .toBe('patch');
-      expect(mockWriteFileSync).toHaveBeenCalledWith(
-        fakeSdkSessionPath,
-        'import { x } from "vscode-jsonrpc/node.js";\n',
-        'utf8',
-      );
-    });
-  });
-
-  describe('resolveCopilotSdkSessionPath', () => {
-    it('finds the sdk session file by walking up to node_modules', () => {
-      expect(resolveCopilotSdkSessionPath(fakeAdapterUrl))
-        .toBe(fakeSdkSessionPath);
-    });
-
-    it('returns null when no sdk session file exists', () => {
-      mockExistsSync.mockReturnValue(false);
-
-      expect(resolveCopilotSdkSessionPath(fakeAdapterUrl))
-        .toBeNull();
-    });
   });
 
   describe('resolveCopilotCliPath', () => {
@@ -410,10 +360,10 @@ describe('CopilotAdapter', () => {
       expect(endedSpy).not.toHaveBeenCalled();
     });
 
-    it('respondToPermission returns silently for unknown session', async () => {
+    it('respondToPermission reports an unknown session', async () => {
       await adapter.start();
       await expect(adapter.respondToPermission('nonexistent', 'p1', 'approve'))
-        .resolves.toBeUndefined();
+        .resolves.toBe('session_gone');
     });
 
     it('respondToQuestion reports an unknown session', async () => {
@@ -422,11 +372,11 @@ describe('CopilotAdapter', () => {
         .resolves.toBe('session_gone');
     });
 
-    it('respondToPermission returns silently for unknown permissionId', async () => {
+    it('respondToPermission reports an unknown permissionId', async () => {
       await adapter.start();
       const { sessionId } = await adapter.createSession({});
       await expect(adapter.respondToPermission(sessionId, 'nonexistent', 'approve'))
-        .resolves.toBeUndefined();
+        .resolves.toBe('not_found');
     });
 
     it('respondToQuestion reports an unknown questionId', async () => {

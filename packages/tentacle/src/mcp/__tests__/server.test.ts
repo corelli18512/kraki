@@ -14,6 +14,7 @@ interface Fixture {
   server: KrakiMcpServer;
   baseUrl: string;
   token: string;
+  tokenForSession: (sid: string) => string;
   urlForSession: (s: string) => string;
   activeSessions: Set<string>;
 }
@@ -28,7 +29,8 @@ async function start(initialSessions: string[] = []): Promise<Fixture> {
   return {
     server,
     baseUrl: info.baseUrl,
-    token: info.bearerToken,
+    token: server.bearerToken,
+    tokenForSession: info.tokenForSession,
     urlForSession: info.urlForSession,
     activeSessions,
   };
@@ -167,7 +169,7 @@ describe('KrakiMcpServer — initialize and tools/list', () => {
   });
 
   it('initialize and tools/list work on both /mcp and /mcp/<sessionId>', async () => {
-    const onScoped = await rpc(fx.urlForSession('any-sid'), fx.token, {
+    const onScoped = await rpc(fx.urlForSession('any-sid'), fx.tokenForSession('any-sid'), {
       jsonrpc: '2.0',
       id: 4,
       method: 'tools/list',
@@ -196,7 +198,7 @@ describe('KrakiMcpServer — tools/call session routing', () => {
   });
 
   it('rejects tools/call for unknown sessionId', async () => {
-    const r = await rpc(fx.urlForSession('not-active'), fx.token, {
+    const r = await rpc(fx.urlForSession('not-active'), fx.tokenForSession('not-active'), {
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
@@ -208,7 +210,7 @@ describe('KrakiMcpServer — tools/call session routing', () => {
   });
 
   it('accepts tools/call for active sessionId and routes to handler', async () => {
-    const r = await rpc(fx.urlForSession('valid-session'), fx.token, {
+    const r = await rpc(fx.urlForSession('valid-session'), fx.tokenForSession('valid-session'), {
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
@@ -223,7 +225,7 @@ describe('KrakiMcpServer — tools/call session routing', () => {
   });
 
   it('rejects unknown tool name with method_not_found', async () => {
-    const r = await rpc(fx.urlForSession('valid-session'), fx.token, {
+    const r = await rpc(fx.urlForSession('valid-session'), fx.tokenForSession('valid-session'), {
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
@@ -233,12 +235,19 @@ describe('KrakiMcpServer — tools/call session routing', () => {
   });
 
   it('rejects malformed params (missing name)', async () => {
-    const r = await rpc(fx.urlForSession('valid-session'), fx.token, {
+    const r = await rpc(fx.urlForSession('valid-session'), fx.tokenForSession('valid-session'), {
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
       params: {},
     });
     expect(r.json).toMatchObject({ error: { code: JSON_RPC_INVALID_PARAMS } });
+  });
+
+  it('a session token cannot call tools in another session', async () => {
+    const r = await rpc(fx.urlForSession('valid-session'), fx.tokenForSession('other-session'), {
+      jsonrpc: '2.0', id: 1, method: 'tools/list',
+    });
+    expect(r.status).toBe(401);
   });
 });

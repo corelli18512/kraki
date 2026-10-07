@@ -2,7 +2,8 @@
  * AccountUsage — read-only subscription quota for the Claude / Codex accounts
  * already signed in on this machine.
  *
- * Sources (all read-only; tokens are never refreshed, copied, logged or sent):
+ * Sources (read-only; tokens are never copied, logged or sent anywhere but the
+ * provider's own API):
  *  - Pi:          $PI_CODING_AGENT_DIR/auth.json or ~/.pi/agent/auth.json
  *                 (`anthropic` and `openai-codex` OAuth entries; API keys ignored)
  *  - Codex:       $CODEX_HOME/auth.json or ~/.codex/auth.json. Without a usable
@@ -21,7 +22,7 @@
 
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AccountUsage, AccountUsageWindow, UsageHistorySample } from '@kraki/protocol';
@@ -440,6 +441,9 @@ export function runCodexAppServer(codexHome: string, timeoutMs = 25_000): Promis
     };
     const timer = setTimeout(() => finish(new Error('Codex app-server timed out')), timeoutMs);
     child.on('error', () => finish(new Error('Codex is not installed')));
+    // A missing or crashing codex closes its stdin: the resulting EPIPE must be
+    // handled here, or it becomes an uncaught exception that stops the daemon.
+    child.stdin.on('error', () => finish(new Error('Codex app-server exited')));
     child.on('exit', () => finish(responses.size >= 2 ? undefined : new Error('Codex app-server exited')));
     child.stdout.on('data', (chunk: Buffer) => {
       buffer += chunk.toString('utf8');
@@ -495,9 +499,32 @@ export function renewPiLogin(provider: UsageProvider, agentDir: string, timeoutM
 
 /** Append-only JSON Lines file (0600). No credentials, no emails. */
 export class UsageHistory {
+  /** Samples older than this are dropped (seconds; samples use epoch seconds). */
+  static readonly RETENTION_SEC = 90 * 24 * 3600;
   private last = new Map<string, number>();
   private loaded = false;
-  constructor(readonly path: string) {}
+  private lastCompactedAt = 0;
+  constructor(readonly path: string, private readonly nowSec: () => number = () => Math.floor(Date.now() / 1000)) {}
+
+  /** Rewrite the file without samples past the retention window (at most
+   *  daily). Without this the file grew forever and every history request
+   *  re-parsed all of it. */
+  private compact(): void {
+    const now = this.nowSec();
+    if (now - this.lastCompactedAt < 24 * 3600) return;
+    this.lastCompactedAt = now;
+    const all = this.load();
+    const cutoff = now - UsageHistory.RETENTION_SEC;
+    const kept = all.filter((s) => s.t >= cutoff);
+    if (kept.length === all.length) return;
+    try {
+      const tmp = `${this.path}.${process.pid}.tmp`;
+      writeFileSync(tmp, kept.map((s) => JSON.stringify(s)).join('\n') + (kept.length ? '\n' : ''), { mode: 0o600 });
+      renameSync(tmp, this.path);
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, 'usage history compaction failed');
+    }
+  }
 
   load(since = 0): UsageHistorySample[] {
     let text = '';
@@ -511,6 +538,7 @@ export class UsageHistory {
   }
 
   append(samples: UsageHistorySample[]): void {
+    this.compact();
     if (!this.loaded) {
       for (const s of this.load()) this.last.set(`${s.k}|${s.w}`, Math.max(this.last.get(`${s.k}|${s.w}`) ?? 0, s.t));
       this.loaded = true;

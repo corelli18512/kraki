@@ -60,7 +60,9 @@ function installToPath(): void {
         if (!currentPath.toLowerCase().includes(appDir.toLowerCase())) {
           const pathValue = currentPath.match(/REG_(?:EXPAND_)?SZ\s+(.*)/)?.[1]?.trim() ?? '';
           const newPath = pathValue ? `${pathValue};${appDir}` : appDir;
-          execSync(`reg add "HKCU\\Environment" /v Path /t REG_EXPAND_SZ /d "${newPath}" /f`, { stdio: 'ignore' });
+          // Arguments, not a command string: a PATH containing quotes or `%`
+          // must not be re-parsed by the shell.
+          require('node:child_process').execFileSync('reg', ['add', 'HKCU\\Environment', '/v', 'Path', '/t', 'REG_EXPAND_SZ', '/d', newPath, '/f'], { stdio: 'ignore' });
           // Broadcast change so new terminals pick it up
           execSync('setx KRAKI_PATH_SET 1', { stdio: 'ignore' });
         }
@@ -72,6 +74,12 @@ function installToPath(): void {
 
       let dest = dest2;
       try {
+        // A symlink there is another install (npm, Homebrew): never replace it.
+        try {
+          if (require('node:fs').lstatSync(dest1).isSymbolicLink()) throw new Error('kraki already installed by a package manager');
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        }
         copyFileSync(src, dest1);
         chmodSync(dest1, 0o755);
         dest = dest1;
