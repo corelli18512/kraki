@@ -17,6 +17,8 @@ struct StepsSheetView: View {
     let store: MessageStore
 
     @Environment(AppState.self) private var appState
+    /// Subagent pages pushed on top of the turn's Steps (dispatch toolCallIds).
+    @State private var subagentPath: [String] = []
 
     private var steps: [ChatMessage] {
         store.turnSteps(sessionId, bubbleSeq: targetSeq) ?? []
@@ -37,7 +39,7 @@ struct StepsSheetView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $subagentPath) {
             ScrollViewReader { proxy in
                 Group {
                     if steps.isEmpty {
@@ -55,8 +57,12 @@ struct StepsSheetView: View {
                                 // ChatMessage.id collides on "session:0". Use the
                                 // array offset as ForEach identity — without this,
                                 // SwiftUI collapses every step into a single row.
-                                ForEach(Array(mergedSteps.enumerated()), id: \.offset) { _, step in
-                                    stepView(step)
+                                ForEach(Array(SubagentSteps.steps(mergedSteps, under: nil).enumerated()), id: \.offset) { _, step in
+                                    if SubagentSteps.isSubagentStep(mergedSteps, step) {
+                                        SubagentCardRow(message: step, merged: mergedSteps) { subagentPath.append($0) }
+                                    } else {
+                                        stepView(step)
+                                    }
                                 }
                                 Color.clear
                                     .frame(height: 1)
@@ -89,6 +95,18 @@ struct StepsSheetView: View {
             }
             .navigationTitle("Steps")
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: String.self) { id in
+                SubagentPageView(
+                    sessionId: sessionId,
+                    dispatchId: id,
+                    merged: mergedSteps,
+                    onOpen: { subagentPath.append($0) },
+                    stepView: { stepView($0) }
+                )
+                .navigationTitle(mergedSteps.first { $0.toolCallId == id }.flatMap { SubagentSteps.info(of: $0)?.name } ?? "Subagent")
+                .navigationBarTitleDisplayMode(.inline)
+                .background(Color.surfacePrimary)
+            }
         }
     }
 
@@ -113,25 +131,10 @@ struct StepsSheetView: View {
     }
 
     /// Collapse matching tool_start/tool_complete entries into the terminal
-    /// entry, matching the web StepsList contract.
+    /// entry (a later completion of the same call wins), matching the web
+    /// StepsList contract; subagent steps keep their dispatch link.
     private var mergedSteps: [ChatMessage] {
-        var output: [ChatMessage] = []
-        var starts: [String: Int] = [:]
-        for message in steps.sorted(by: { $0.seq < $1.seq }) {
-            guard let callId = message.toolCallId, !callId.isEmpty else {
-                output.append(message)
-                continue
-            }
-            if message.type == "tool_start" {
-                starts[callId] = output.count
-                output.append(message)
-            } else if message.type == "tool_complete", let index = starts.removeValue(forKey: callId) {
-                output[index] = message
-            } else {
-                output.append(message)
-            }
-        }
-        return output
+        SubagentSteps.merge(steps)
     }
 
     @ViewBuilder

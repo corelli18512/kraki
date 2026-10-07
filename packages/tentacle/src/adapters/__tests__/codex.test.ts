@@ -209,6 +209,24 @@ describe('CodexAdapter (fake app-server child process)', () => {
     expect(h.of('error')).toHaveLength(0);
   });
 
+  it('subagent steps nest under a dispatch step that completes with the report', async () => {
+    await started();
+    const sid = await session('auto');
+    await turn(sid, 'SUBAGENT', 'rt-1');
+    await h.idleCount(1);
+    const dispatch = h.of('tool_start').find((e) => e.toolName === 'spawn_agent')!;
+    expect(dispatch).toMatchObject({ args: { agent: 'find_codeword' }, subagent: { name: 'find_codeword', status: 'running' }, turnId: 'rt-1' });
+    expect(dispatch.parentToolCallId).toBeUndefined();
+    const id = dispatch.toolCallId as string;
+    expect(h.of('tool_start').find((e) => e.toolName === 'shell')).toMatchObject({ parentToolCallId: id, args: { command: 'rg -n CODEWORD .' } });
+    expect(h.of('tool_complete').find((e) => e.toolName === 'shell')).toMatchObject({ parentToolCallId: id, success: true });
+    expect(h.of('tool_complete').find((e) => e.toolCallId === id)).toMatchObject({
+      result: 'CHILD REPORT (accept)', success: true, subagent: { name: 'find_codeword', status: 'completed' },
+    });
+    // The child's final message is its report, not a narration step.
+    expect(h.of('narration_trace').map((e) => e.content)).toEqual(['Delegating to a subagent.']);
+  });
+
   it('safe mode raises a labelled card for a subagent command; deny declines', async () => {
     await started();
     const sid = await session('safe');

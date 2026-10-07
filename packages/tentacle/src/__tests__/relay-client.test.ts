@@ -2743,6 +2743,32 @@ describe('RelayClient trace mirroring (off-spine)', () => {
       expect(last.payload.success).not.toBe(false);
     } finally { cleanup(); }
   });
+
+  it('keeps subagent attribution on trace entries, including a stopped turn\'s synthetic completion', () => {
+    const { adapter, sm, client, cleanup } = buildClient();
+    try {
+      const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+      const subagent = { name: 'scout', task: 'Find it', status: 'running' };
+      (adapter.onToolStart as (sid: string, e: Record<string, unknown>) => void)('sess_1', {
+        toolName: 'Agent', args: { description: 'Find it' }, toolCallId: 'D', subagent,
+      });
+      (adapter.onToolStart as (sid: string, e: Record<string, unknown>) => void)('sess_1', {
+        toolName: 'Bash', args: { command: 'ls' }, toolCallId: 'b1', parentToolCallId: 'D',
+      });
+      (adapter.onNarrationTrace as (sid: string, e: Record<string, unknown>) => void)('sess_1', { content: 'looking', parentToolCallId: 'D' });
+      const entries = () => smMock.appendTrace.mock.calls.map(c => JSON.parse(c[2] as string));
+      expect(entries().map(e => [e.type, e.payload.toolCallId, e.payload.parentToolCallId, e.payload.subagent?.name])).toEqual([
+        ['tool_start', 'D', undefined, 'scout'],
+        ['tool_start', 'b1', 'D', undefined],
+        ['agent_narration', undefined, 'D', undefined],
+      ]);
+      (client as unknown as { finishTurnWithStatus: (sid: string, a: unknown) => void })
+        .finishTurnWithStatus('sess_1', { type: 'user_abort', payload: { abortedAt: new Date().toISOString() } });
+      const synthetic = entries().filter(e => e.type === 'tool_complete');
+      expect(synthetic.find(e => e.payload.toolCallId === 'D').payload).toMatchObject({ termination: 'cancelled', subagent: { name: 'scout', status: 'stopped' } });
+      expect(synthetic.find(e => e.payload.toolCallId === 'b1').payload).toMatchObject({ termination: 'cancelled', parentToolCallId: 'D' });
+    } finally { cleanup(); }
+  });
 });
 
 describe('RelayClient pending-question digest', () => {

@@ -18,7 +18,7 @@ import { spawn, type ChildProcessWithoutNullStreams, execSync } from 'node:child
 import { cliSpawnArgs } from '../cli-launch.js';
 import { readPiJsonLines } from './pi-jsonl.js';
 import { readPiModelScope, scopePiModels } from './pi-model-scope.js';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync, appendFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync, appendFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   AgentAdapter,
@@ -299,8 +299,20 @@ export function piToolKind(toolName: string): ToolKind {
 
 /** Kraki's shared permission policy for a pi tool call. Returns true when the
  *  call should run silently (no card). */
-export function shouldAutoApprove(mode: Mode, toolName: string, _input: Record<string, unknown> = {}): boolean {
-  return krakiAutoApproves(mode, piToolKind(toolName));
+export function shouldAutoApprove(mode: Mode, toolName: string, input: Record<string, unknown> = {}): boolean {
+  return krakiAutoApproves(mode, piSubagentToolKind(toolName, input) ?? piToolKind(toolName));
+}
+
+/** Read-only `subagent` management actions (pi-subagents). */
+const PI_SUBAGENT_READ_ACTIONS = new Set(['list', 'status', 'guide', 'doctor', 'cost', 'inspect']);
+
+/** Subagent extension bookkeeping that has no side effects. Launching a
+ *  subagent stays a side effect: Kraki cannot ask before each of the child's
+ *  own steps, so the launch itself is what `safe` asks about. */
+function piSubagentToolKind(toolName: string, input: Record<string, unknown>): ToolKind | undefined {
+  if (toolName === 'subagents_enable') return 'meta';
+  if (toolName === 'subagent' && typeof input.action === 'string' && PI_SUBAGENT_READ_ACTIONS.has(input.action)) return 'read';
+  return undefined;
 }
 
 function toolsForMode(_mode: Mode): string[] | undefined {
@@ -338,6 +350,16 @@ export function parsePiPermission(toolName: string, inputJson: string): { toolAr
     case 'edit': {
       const path = str(input.path);
       return { toolArgs: { toolName, args: input }, description: path ? `Edit ${path}` : 'Edit a file' };
+    }
+    case 'subagent': {
+      const tasks = Array.isArray(input.tasks) ? input.tasks : Array.isArray(input.chain) ? input.chain : null;
+      const what = tasks
+        ? `${tasks.length} subagents`
+        : [str(input.agent), str(input.task).split('\n')[0]].filter(Boolean).join(': ') || 'a subagent';
+      return {
+        toolArgs: { toolName, args: input },
+        description: `Start ${what} — its own commands and edits will not ask again`,
+      };
     }
     default:
       return { toolArgs: { toolName, args: input }, description: toolName };
@@ -425,6 +447,25 @@ interface PiSession {
   /** True from sending an abort RPC until pi acknowledges that the agent is idle.
    *  Lets abortSession own the aborted turn's terminal boundary. */
   aborting: boolean;
+  /** The run settled while background subagents (pi-subagents async runs)
+   *  still work. Pi wakes the agent when they finish; the Kraki turn stays
+   *  open for that answer. */
+  awaitingSubagents?: boolean;
+  /** Fallback settle when background runs finished but no wake run came. */
+  subagentGrace?: ReturnType<typeof setTimeout>;
+}
+
+import { PiSubagentTracker, PI_SUBAGENT_TOOL, type PiSubagentEmit } from './pi-subagent.js';
+
+/** A subagent's saved output file (pi-subagents notifications point at it):
+ *  small text files only — it is shown as the subagent's report. */
+function readSubagentOutput(path: string): string | undefined {
+  try {
+    if (!path.startsWith('/') || statSync(path).size > 64 * 1024) return undefined;
+    return readFileSync(path, 'utf8');
+  } catch {
+    return undefined;
+  }
 }
 
 // ── Dynamic model discovery via `pi --list-models` ────────────────
@@ -692,6 +733,8 @@ export class PiAdapter extends AgentAdapter {
   private sessions = new Map<string, PiSession>();
   /** Keep the start owner until maintenance ends, even across a queued turn. */
   private compactingSessions = new Map<string, { turnId?: string }>();
+  /** Subagent progress per session (pi subagent extensions). */
+  private subagentTrackers = new Map<string, PiSubagentTracker>();
   private evictTimer: ReturnType<typeof setInterval> | null = null;
   /** Lazily-materialized path to the always-loaded Kraki tools extension. */
   private toolsExtPath: string | null = null;
@@ -982,10 +1025,64 @@ export class PiAdapter extends AgentAdapter {
    * Compaction remains a separate maintenance callback and can continue after
    * this idle.
    */
+  private subagentTracker(sessionId: string): PiSubagentTracker {
+    let t = this.subagentTrackers.get(sessionId);
+    if (!t) { t = new PiSubagentTracker(readSubagentOutput); this.subagentTrackers.set(sessionId, t); }
+    return t;
+  }
+
+  /** Forward subagent steps from the tracker to Kraki's trace. */
+  private emitSubagentSteps(sessionId: string, s: PiSession | undefined, emits: PiSubagentEmit[]): void {
+    for (const em of emits) {
+      const turn = this.lifecycleEvent(s);
+      if (em.kind === 'narration') this.onNarrationTrace?.(sessionId, { ...turn, content: em.content, parentToolCallId: em.parentToolCallId });
+      else if (em.kind === 'start') {
+        this.onToolStart?.(sessionId, { ...turn, toolName: em.toolName, args: em.args, toolCallId: em.toolCallId, ...(em.parentToolCallId && { parentToolCallId: em.parentToolCallId }), ...(em.subagent && { subagent: em.subagent }) });
+      } else {
+        this.onToolComplete?.(sessionId, { ...turn, toolName: em.toolName, result: em.result, success: em.success, toolCallId: em.toolCallId, ...(em.parentToolCallId && { parentToolCallId: em.parentToolCallId }), ...(em.subagent && { subagent: em.subagent }) });
+      }
+    }
+  }
+
+  private stopAwaitingSubagents(s: PiSession): void {
+    s.awaitingSubagents = false;
+    if (s.subagentGrace) clearTimeout(s.subagentGrace);
+    s.subagentGrace = undefined;
+  }
+
+  /** At the run boundary: keep the Kraki turn open while background subagents
+   *  still work (pi wakes the agent with their results). */
+  private holdForSubagents(sessionId: string, s: PiSession): boolean {
+    const tracker = this.subagentTrackers.get(sessionId);
+    if (!tracker || tracker.activeAsyncRuns() === 0) return false;
+    // Prose so far ("started…") is an intermediate step, not the reply.
+    this.flushPendingNarration(sessionId, s);
+    s.lastNarration = '';
+    s.toolSinceLastNarration = false;
+    s.awaitingSubagents = true;
+    logger.info({ sessionId, running: tracker.activeAsyncRuns() }, 'pi turn held open for background subagents');
+    return true;
+  }
+
+  /** Background runs may have finished: if no wake run follows, settle. */
+  private checkSubagentsDone(sessionId: string, s: PiSession): void {
+    if (!s.awaitingSubagents || this.subagentTrackers.get(sessionId)?.activeAsyncRuns()) return;
+    if (s.subagentGrace) clearTimeout(s.subagentGrace);
+    s.subagentGrace = setTimeout(() => {
+      if (!s.awaitingSubagents || this.sessions.get(sessionId) !== s) return;
+      logger.info({ sessionId }, 'pi background subagents finished without a wake run; settling');
+      this.stopAwaitingSubagents(s);
+      this.emitIdleOnce(sessionId, s);
+    }, PiAdapter.SUBAGENT_CONTINUATION_GRACE_MS);
+  }
+
+  static SUBAGENT_CONTINUATION_GRACE_MS = 5_000;
+
   private settleConversationalTurnAtAgentEnd(sessionId: string, s: PiSession, willRetry: boolean): void {
     // agent_end.willRetry covers transient retries, NOT every compaction
     // recovery. Only a completed answer may settle before agent_settled.
     if (willRetry || s.aborting || s.settledTurn === s.logicalTurn || s.lastStopReason !== 'stop') return;
+    if (this.subagentTrackers.get(sessionId)?.activeAsyncRuns()) return;
 
     const reply = s.lastNarration.trim();
     if (s.toolSinceLastNarration || !reply) return;
@@ -1010,6 +1107,7 @@ export class PiAdapter extends AgentAdapter {
   }
 
   private resetTurnTracking(s: PiSession): void {
+    this.stopAwaitingSubagents(s);
     s.logicalTurn += 1;
     s.settledTurn = undefined;
     s.narrationSegments = 0;
@@ -1144,6 +1242,9 @@ export class PiAdapter extends AgentAdapter {
         break;
       case 'agent_start': {
         const s = this.sessions.get(sessionId);
+        // A run while held: pi woke the agent with background results; it
+        // continues the same Kraki turn.
+        if (s?.awaitingSubagents) this.stopAwaitingSubagents(s);
         if (s) {
           s.eventTurnId = s.relayTurnId;
           s.promptPreflight = undefined;
@@ -1168,6 +1269,16 @@ export class PiAdapter extends AgentAdapter {
       }
       case 'message_end': {
         const m = (e as { message?: { role?: string; content?: Array<{ type: string; text?: string }>; stopReason?: string; errorMessage?: string } }).message;
+        if (m?.role === 'custom') {
+          // pi-subagents background run notifications.
+          const custom = m as unknown as { customType?: string; content?: unknown };
+          const text = typeof custom.content === 'string' ? custom.content : Array.isArray(custom.content) ? custom.content.map((c: { text?: string }) => c.text ?? '').join('\n') : '';
+          const tracker = this.subagentTrackers.get(sessionId);
+          const s = this.sessions.get(sessionId);
+          if (tracker && custom.customType === 'subagent-notify') this.emitSubagentSteps(sessionId, s, tracker.onAsyncNotify(text));
+          if (tracker && custom.customType === 'subagent-incremental-child-notify') this.emitSubagentSteps(sessionId, s, tracker.onChildNotify(text));
+          if (s) this.checkSubagentsDone(sessionId, s);
+        }
         if (m?.role === 'assistant') {
           const s = this.sessions.get(sessionId);
           // A backend failure (bad model, 400, quota, rate-limit) surfaces here
@@ -1230,12 +1341,22 @@ export class PiAdapter extends AgentAdapter {
           this.flushPendingNarration(sessionId, s);
           s.toolSinceLastNarration = true;
         }
+        const subagent = toolName === PI_SUBAGENT_TOOL && typeof e.toolCallId === 'string'
+          ? this.subagentTracker(sessionId).onStart(e.toolCallId, (e.args as Record<string, unknown>) ?? {})
+          : undefined;
         this.onToolStart?.(sessionId, {
           ...this.lifecycleEvent(s),
           toolName,
           args: (e.args as Record<string, unknown>) ?? {},
           toolCallId: e.toolCallId as string | undefined,
+          ...(subagent && { subagent }),
         });
+        break;
+      }
+      case 'tool_execution_update': {
+        if (e.toolName !== PI_SUBAGENT_TOOL || typeof e.toolCallId !== 'string') break;
+        const emits = this.subagentTrackers.get(sessionId)?.onUpdate(e.toolCallId, e.partialResult) ?? [];
+        this.emitSubagentSteps(sessionId, this.sessions.get(sessionId), emits);
         break;
       }
       case 'tool_execution_end': {
@@ -1296,12 +1417,24 @@ export class PiAdapter extends AgentAdapter {
           }
         }
         if (outputAttachments.length > 0 && !resultText) resultText = 'Output is ready.';
+        let subagent: import('@kraki/protocol').SubagentInfo | undefined;
+        if (toolName === PI_SUBAGENT_TOOL && typeof e.toolCallId === 'string') {
+          const tracker = this.subagentTrackers.get(sessionId);
+          const end = tracker?.onEnd(e.toolCallId, raw, e.isError === true);
+          if (end) {
+            this.emitSubagentSteps(sessionId, this.sessions.get(sessionId), end.emits);
+            // A background launch: the step stays running until the run reports.
+            if (end.async) break;
+            subagent = end.subagent;
+          }
+        }
         this.onToolComplete?.(sessionId, {
           ...this.lifecycleEvent(this.sessions.get(sessionId)),
           toolName,
           result: resultText,
           toolCallId: e.toolCallId as string | undefined,
           success: e.isError !== true,
+          ...(subagent && { subagent }),
           ...(outputAttachments.length > 0 && { attachments: outputAttachments }),
         });
         if (outputAttachments.length > 0) {
@@ -1371,6 +1504,7 @@ export class PiAdapter extends AgentAdapter {
           this.emitIdleOnce(sessionId, s);
           break;
         }
+        if (this.holdForSubagents(sessionId, s)) break;
         // A natural closing answer: the last narration was not followed by a
         // tool, so it IS the model's final reply — graduate it verbatim (and
         // discard its deferred trace so it isn't ALSO the last Step).
@@ -1395,6 +1529,24 @@ export class PiAdapter extends AgentAdapter {
         if (typeof e.id !== 'string') break;
         const s = this.sessions.get(sessionId);
         if (!s) break;
+        // pi-subagents' documented RPC-host status feed for background runs.
+        if (e.method === 'setWidget' && e.widgetKey === 'subagent-async') {
+          const line = Array.isArray(e.widgetLines) ? String(e.widgetLines[0] ?? '') : '';
+          const prefix = 'PI_SUBAGENT_ASYNC_JSON:';
+          const tracker = this.subagentTrackers.get(sessionId);
+          if (tracker && line.startsWith(prefix)) {
+            try {
+              this.emitSubagentSteps(sessionId, s, tracker.onAsyncSnapshot(JSON.parse(line.slice(prefix.length))));
+            } catch (err) {
+              logger.debug({ sessionId, err: (err as Error).message }, 'pi: unreadable subagent status snapshot');
+            }
+          } else if (tracker && !line) {
+            // The widget is cleared once no background run remains.
+            this.emitSubagentSteps(sessionId, s, tracker.onAsyncSnapshot({ runs: [] }));
+          }
+          this.checkSubagentsDone(sessionId, s);
+          break;
+        }
         // ask_user surfaces via ctx.ui.select (choices) / ctx.ui.input (free-form)
         // → a Kraki question card. The arm's answer returns via respondToQuestion
         // → the matching extension_ui_response.
@@ -1639,6 +1791,15 @@ export class PiAdapter extends AgentAdapter {
     const s = this.sessions.get(sessionId);
     if (!s?.proc.alive) return;
 
+    // Stop means stop the delegated background work too: a run finishing later
+    // would wake the agent into a turn nobody is listening to.
+    const backgroundRuns = this.subagentTrackers.get(sessionId)?.pendingAsyncRunIds() ?? [];
+    this.stopAwaitingSubagents(s);
+    for (const runId of backgroundRuns) {
+      s.proc.request('prompt', { message: `/subagents-stop ${runId}` }, { timeoutMs: 10_000 })
+        .catch((err) => logger.debug({ sessionId, runId, err: (err as Error).message }, 'pi: could not stop background subagent'));
+    }
+
     // Pi emits agent_end before resolving this RPC. Keep that event from
     // entering the normal finalize flow, which would start a new model turn
     // immediately after the user aborted the previous one.
@@ -1737,7 +1898,10 @@ export class PiAdapter extends AgentAdapter {
     this.clearPendingPerms(sessionId);
     this.clearPendingQuestions(sessionId);
     this.pendingModeSignals.delete(sessionId);
-    this.sessions.get(sessionId)?.proc.kill();
+    const killed = this.sessions.get(sessionId);
+    if (killed) this.stopAwaitingSubagents(killed);
+    this.subagentTrackers.delete(sessionId);
+    killed?.proc.kill();
     this.sessions.delete(sessionId);
     // Remove the adapter recovery sidecar (both co-located and legacy). pi's
     // transcript lives in the session dir and is reaped with it by the manager.

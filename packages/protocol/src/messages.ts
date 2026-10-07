@@ -282,7 +282,30 @@ export interface PermissionRequest extends BaseEnvelope {
     decision?: 'approve' | 'deny' | 'always_allow';
     /** Trace/history-only terminal state when the turn ended before a decision. */
     cancelled?: boolean;
+    /** Set when a subagent asked: the dispatching step's toolCallId. */
+    parentToolCallId?: string;
   };
+}
+
+/**
+ * A subagent run, attached to the trace step that dispatched it (the agent's
+ * Task/Agent/task/spawn tool call, or a synthetic step for one child of a
+ * multi-child dispatch). The subagent's own steps carry `parentToolCallId`
+ * pointing at that step; its report is the dispatching step's tool result.
+ * Clients show the step as a card that opens the subagent's own steps.
+ * Every field is a display hint — unknown/absent fields degrade gracefully.
+ */
+export interface SubagentInfo {
+  /** Short role / agent name, e.g. "scout", "Explore", "find_codeword". */
+  name: string;
+  /** One-line task description (never the full prompt). */
+  task?: string;
+  status?: 'running' | 'completed' | 'failed' | 'stopped';
+  /** Total tokens the subagent used, when the agent reports it. */
+  tokens?: number;
+  /** Number of tool calls the subagent made, when reported. */
+  toolCount?: number;
+  durationMs?: number;
 }
 
 /**
@@ -311,6 +334,10 @@ export interface ToolStartMessage extends BaseEnvelope {
     argsRef?: ContentRef;
     /** Unique ID for this tool invocation (matches tool_complete) */
     toolCallId?: string;
+    /** Set when a subagent made this call: the dispatching step's toolCallId. */
+    parentToolCallId?: string;
+    /** Set when this step dispatched a subagent. */
+    subagent?: SubagentInfo;
   };
 }
 
@@ -333,6 +360,12 @@ export interface ToolCompleteMessage extends BaseEnvelope {
     argsRef?: ContentRef;
     /** Unique ID matching the tool_start */
     toolCallId?: string;
+    /** See {@link ToolStartMessage}. */
+    parentToolCallId?: string;
+    /** Latest subagent state. A dispatch step may complete more than once
+     *  (e.g. a background subagent: launch receipt, then its report); the
+     *  last `tool_complete` for a toolCallId is authoritative. */
+    subagent?: SubagentInfo;
     /** Whether the tool execution succeeded (default true if absent). */
     success?: boolean;
     /** Synthetic terminal outcome when the turn ended before this tool returned.
@@ -358,6 +391,8 @@ export interface AgentNarrationMessage extends BaseEnvelope {
   type: 'agent_narration';
   payload: {
     content: string;
+    /** Set when a subagent said this: the dispatching step's toolCallId. */
+    parentToolCallId?: string;
   };
 }
 

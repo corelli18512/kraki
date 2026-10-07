@@ -13,6 +13,10 @@ struct MacStepsView: View {
 
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
+    /// Opens directly on a subagent page (snapshot tests).
+    var initialSubagentPath: [String] = []
+    /// Subagent pages pushed on top of the turn's Steps (dispatch toolCallIds).
+    @State private var subagentPath: [String] = []
 
     private var loadedSteps: [ChatMessage]? {
         store.turnSteps(sessionId, bubbleSeq: targetSeq)
@@ -48,11 +52,24 @@ struct MacStepsView: View {
                             systemImage: "checkmark.circle",
                             description: Text("This turn completed without a recorded tool trace.")
                         )
+                    } else if let current = subagentPath.last {
+                        SubagentPageView(
+                            sessionId: sessionId,
+                            dispatchId: current,
+                            merged: mergedSteps,
+                            onOpen: { subagentPath.append($0) },
+                            stepView: { stepView($0) }
+                        )
+                        .id(current)
                     } else {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 12) {
-                                ForEach(Array(mergedSteps.enumerated()), id: \.offset) { _, step in
-                                    stepView(step)
+                                ForEach(Array(SubagentSteps.steps(mergedSteps, under: nil).enumerated()), id: \.offset) { _, step in
+                                    if SubagentSteps.isSubagentStep(mergedSteps, step) {
+                                        SubagentCardRow(message: step, merged: mergedSteps) { subagentPath.append($0) }
+                                    } else {
+                                        stepView(step)
+                                    }
                                 }
                                 Color.clear.frame(height: 1).id(StepsLiveSyncMac.bottomID)
                             }
@@ -61,6 +78,7 @@ struct MacStepsView: View {
                     }
                 }
                 .onAppear {
+                    if subagentPath.isEmpty && !initialSubagentPath.isEmpty { subagentPath = initialSubagentPath }
                     #if DEBUG
                     if MacAutomationDriver.shared.enabled {
                         MacAutomationDriver.shared.updatePresentedSteps(sessionId: sessionId, seq: targetSeq)
@@ -85,18 +103,46 @@ struct MacStepsView: View {
         .background(Color.surfacePrimary)
         #if DEBUG
         .onReceive(NotificationCenter.default.publisher(for: .macNativeAutomationAction)) { note in
-            guard MacAutomationDriver.shared.enabled,
-                  note.userInfo?["action"] as? String == "closeSteps" else { return }
-            dismiss()
+            guard MacAutomationDriver.shared.enabled else { return }
+            switch note.userInfo?["action"] as? String {
+            case "closeSteps":
+                dismiss()
+            case "openSubagent":
+                let page = SubagentSteps.steps(mergedSteps, under: subagentPath.last)
+                    .filter { SubagentSteps.isSubagentStep(mergedSteps, $0) }
+                let index = note.userInfo?["index"] as? Int ?? 0
+                if page.indices.contains(index), let id = page[index].toolCallId { subagentPath.append(id) }
+            case "subagentBack":
+                if !subagentPath.isEmpty { subagentPath.removeLast() }
+            default:
+                break
+            }
         }
         #endif
     }
 
     private var header: some View {
         HStack {
-            Text("Steps")
+            if !subagentPath.isEmpty {
+                Button {
+                    subagentPath.removeLast()
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: "chevron.left")
+                        Text(subagentPath.count > 1 ? "Back" : "Steps")
+                    }
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color.krakiPrimary)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("[", modifiers: .command)
+                .accessibilityLabel("Back")
+                Spacer()
+            }
+            Text(subagentPath.last.flatMap { id in mergedSteps.first { $0.toolCallId == id }.flatMap { SubagentSteps.info(of: $0)?.name } } ?? (subagentPath.isEmpty ? "Steps" : "Subagent"))
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Color.textTitle)
+                .lineLimit(1)
             Spacer()
             if live {
                 Text("live")
@@ -139,23 +185,7 @@ struct MacStepsView: View {
     }
 
     private var mergedSteps: [ChatMessage] {
-        var output: [ChatMessage] = []
-        var starts: [String: Int] = [:]
-        for message in steps.sorted(by: { $0.seq < $1.seq }) {
-            guard let callId = message.toolCallId, !callId.isEmpty else {
-                output.append(message)
-                continue
-            }
-            if message.type == "tool_start" {
-                starts[callId] = output.count
-                output.append(message)
-            } else if message.type == "tool_complete", let index = starts.removeValue(forKey: callId) {
-                output[index] = message
-            } else {
-                output.append(message)
-            }
-        }
-        return output
+        SubagentSteps.merge(steps)
     }
 
     @ViewBuilder

@@ -64,3 +64,57 @@ describe('StepsList tool_start → tool_complete merge (protocol contract)', () 
     expect(screen.getAllByText('bash')).toHaveLength(2);
   });
 });
+
+describe('StepsList subagents', () => {
+  const trace = [
+    makeMsg('agent_narration', { content: 'Delegating.' }, 1),
+    makeMsg('tool_start', { toolName: 'Agent', headline: 'Find it', toolCallId: 'A', subagent: { name: 'scout', task: 'Find codeword', status: 'running' } }, 2),
+    makeMsg('agent_narration', { content: 'I will grep.', parentToolCallId: 'A' }, 3),
+    makeMsg('tool_start', { toolName: 'grep', headline: '/CODEWORD/', toolCallId: 'g', parentToolCallId: 'A' }, 4),
+    makeMsg('tool_complete', { toolName: 'grep', headline: '/CODEWORD/', toolCallId: 'g', parentToolCallId: 'A' }, 5),
+    makeMsg('agent_narration', { content: 'Waiting.' }, 6),
+    // Background subagent: completes later, with usage.
+    makeMsg('tool_complete', { toolName: 'Agent', headline: 'Find it', toolCallId: 'A', subagent: { name: 'scout', status: 'completed', durationMs: 9000 } }, 7),
+  ];
+
+  it('shows a dispatch as one card where it started; its own steps stay off the top level', () => {
+    let opened = '';
+    render(<MemoryRouter><StepsList messages={trace} sessionId="sess-1" onOpenSubagent={(id) => { opened = id; }} /></MemoryRouter>);
+    expect(screen.queryByText('I will grep.')).not.toBeInTheDocument();
+    expect(screen.queryByText('grep')).not.toBeInTheDocument();
+    const card = screen.getByRole('button', { name: 'Open subagent scout' });
+    expect(card).toHaveTextContent('Find codeword');
+    expect(card).toHaveTextContent('1 step · 9s');
+    // The card sits where the agent delegated (before "Waiting."), not at its completion.
+    const texts = [...document.querySelectorAll('.kstep-prose, .ksub-card')].map((n) => n.textContent);
+    expect(texts[0]).toBe('Delegating.');
+    expect(texts[1]).toContain('scout');
+    expect(texts[2]).toBe('Waiting.');
+    card.click();
+    expect(opened).toBe('A');
+  });
+
+  it('a subagent page lists only that subagent\'s steps', () => {
+    render(<MemoryRouter><StepsList messages={trace} sessionId="sess-1" parentId="A" onOpenSubagent={() => {}} /></MemoryRouter>);
+    expect(screen.getByText('I will grep.')).toBeInTheDocument();
+    expect(screen.getAllByText('grep')).toHaveLength(1);
+    expect(screen.queryByText('Delegating.')).not.toBeInTheDocument();
+  });
+
+  it('without a navigator, a dispatch still renders as a plain tool chip', () => {
+    renderSteps(trace);
+    expect(screen.queryByRole('button', { name: /Open subagent/ })).not.toBeInTheDocument();
+    expect(screen.getAllByText('Agent')).toHaveLength(1);
+  });
+});
+
+describe('StepsList subagent groups', () => {
+  it('a group dispatch counts its subagents, not steps', () => {
+    render(<MemoryRouter><StepsList sessionId="sess-1" onOpenSubagent={() => {}} messages={[
+      makeMsg('tool_start', { toolName: 'subagent', headline: '', toolCallId: 'P', subagent: { name: 'workflow', task: '2 subagents' } }, 1),
+      makeMsg('tool_start', { toolName: 'subagent', headline: '', toolCallId: 'P#a', parentToolCallId: 'P', subagent: { name: 'Find' } }, 2),
+      makeMsg('tool_start', { toolName: 'subagent', headline: '', toolCallId: 'P#b', parentToolCallId: 'P', subagent: { name: 'Count' } }, 3),
+    ]} /></MemoryRouter>);
+    expect(screen.getByRole('button', { name: 'Open subagent workflow' })).toHaveTextContent('2 subagents');
+  });
+});

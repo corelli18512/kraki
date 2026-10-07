@@ -76,8 +76,13 @@ describe('Copilot subagent events', () => {
     expect(rec.filter((r) => r.cb === 'onMessage').map((r) => r.data.content)).toEqual(['config.ts: purple-otter-42']);
     expect(rec.filter((r) => r.cb === 'onMessageDelta').map((r) => r.data.content)).toEqual(['config.ts: purple-otter-42']);
     expect(rec.filter((r) => r.cb === 'onError')).toHaveLength(0);
-    // Subagent steps still show.
+    // Subagent steps still show, attributed to the task call that started them.
     expect(rec.filter((r) => r.cb === 'onToolStart').map((r) => r.data.toolName)).toEqual(['task', 'grep']);
+    expect(rec.find((r) => r.cb === 'onToolStart' && r.data.toolName === 'task')!.data).toMatchObject({ toolCallId: A, subagent: { name: 'explore', status: 'running' } });
+    expect(rec.find((r) => r.cb === 'onToolStart' && r.data.toolName === 'grep')!.data).toMatchObject({ parentToolCallId: A });
+    expect(rec.find((r) => r.cb === 'onToolComplete' && r.data.toolCallId === A)!.data).toMatchObject({ subagent: { name: 'explore', status: 'completed', tokens: 4801 } });
+    // Its prose before its last words is narration on its page; the last words are the report.
+    expect(rec.filter((r) => r.cb === 'onNarrationTrace')).toEqual([]);
     // Usage counts the subagent's tokens, but context is the parent's window.
     const usage = rec.filter((r) => r.cb === 'onUsageUpdate').at(-1)!.data;
     expect(usage).toMatchObject({ inputTokens: 23182 + 4796, contextTokens: 23182 });
@@ -136,6 +141,13 @@ describe('Claude subagent messages', () => {
     expect(rec.filter((r) => r.cb === 'onError')).toHaveLength(0);
     expect(rec.filter((r) => r.cb === 'onToolStart').map((r) => r.data.toolName)).toEqual(['Task', 'Grep']);
     expect(rec.filter((r) => r.cb === 'onUsageUpdate').at(-1)!.data).toMatchObject({ inputTokens: 9500, contextTokens: 9000 });
+    // Attribution: the dispatch names its subagent; the subagent's steps and
+    // prose (but not its closing report) sit under it.
+    expect(rec.find((r) => r.cb === 'onToolStart' && r.data.toolName === 'Task')!.data).toMatchObject({ toolCallId: P, subagent: { name: 'Explore', status: 'running' } });
+    expect(rec.find((r) => r.cb === 'onToolStart' && r.data.toolName === 'Grep')!.data).toMatchObject({ parentToolCallId: P });
+    expect(rec.find((r) => r.cb === 'onToolComplete' && r.data.toolName === 'Grep')!.data).toMatchObject({ parentToolCallId: P });
+    expect(rec.filter((r) => r.cb === 'onNarrationTrace').map((r) => [r.data.content, r.data.parentToolCallId])).toEqual([['Delegating.', undefined], ['I will grep.', P]]);
+    expect(rec.find((r) => r.cb === 'onToolComplete' && r.data.toolCallId === P)!.data).toMatchObject({ result: 'Found: config.ts', subagent: { status: 'completed' } });
   });
 
   describe('background subagents (Claude Code 2.1.220 default)', () => {
@@ -170,9 +182,15 @@ describe('Claude subagent messages', () => {
     it('holds the turn open until Claude Code wakes the parent with the answer', () => {
       text('Delegating.'); launch(P1, 'a1', 'Find codeword'); text('Waiting for the subagent.'); result();
       expect(idles()).toBe(0);
+      // The launch receipt does not complete the dispatch step.
+      expect(rec.filter((r) => r.cb === 'onToolComplete' && r.data.toolCallId === P1)).toHaveLength(0);
       expect(claude.isTurnSettled('s')).toBe(false);
       expect(rec.filter((r) => r.cb === 'onNarration').map((r) => r.data.content)).toEqual(['Delegating.', 'Waiting for the subagent.']);
       text('SUBAGENT REPORT', P1); done('a1', P1);
+      // The task's report completes the dispatch, with its usage.
+      expect(rec.filter((r) => r.cb === 'onToolComplete' && r.data.toolCallId === P1).map((r) => r.data)).toEqual([
+        expect.objectContaining({ result: 'report', success: true, subagent: expect.objectContaining({ name: 'subagent', task: 'Find codeword', status: 'completed' }) }),
+      ]);
       continuation('src/deep/config.ts: purple-otter-42');
       expect(replies()).toEqual(['src/deep/config.ts: purple-otter-42']);
       expect(idles()).toBe(1);

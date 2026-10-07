@@ -749,6 +749,27 @@
 .ksheet-close { display: flex; padding: 4px; border: none; border-radius: 6px; background: none; color: var(--k-text-2, #64748b); cursor: pointer; }
 .ksheet-close svg { width: 18px; height: 18px; }
 .ksheet-body { min-width: 0; overflow-y: auto; padding: 14px 16px; font-size: 14px; }
+.ksheet-back { display: flex; align-items: center; gap: 2px; padding: 4px 6px 4px 0; border: none; background: none; color: var(--k-link, #0b5b9c); font-size: 15px; cursor: pointer; }
+.ksheet-back svg { width: 18px; height: 18px; }
+.ksheet-head:has(.ksheet-back) h3 { flex: 1; text-align: center; margin-right: 26px; }
+/* Subagent card in Steps: opens the subagent's own page. */
+.ksub-card { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 0.5px solid var(--k-border, #e2e8f0); border-radius: 12px; background: var(--k-bg, #fff); color: var(--k-text); text-align: left; cursor: pointer; font: inherit; }
+.ksub-card:hover { background: var(--k-fill, rgba(120,120,128,.12)); }
+.ksub-status { width: 16px; height: 16px; flex-shrink: 0; }
+.ksub-status-running { color: var(--k-text-2, #64748b); animation: kspin 1s linear infinite; }
+.ksub-status-completed { color: #16a34a; }
+.ksub-status-failed { color: #ef4444; }
+.ksub-status-stopped { color: #d97706; }
+.ksub-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.ksub-name { font-weight: 600; font-size: 14px; }
+.ksub-task { color: var(--k-text-2, #64748b); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ksub-meta { color: var(--k-text-3, #94a3b8); font-size: 12px; white-space: nowrap; }
+.ksub-chevron { width: 16px; height: 16px; color: var(--k-text-3, #94a3b8); flex-shrink: 0; }
+.ksub-page-task { margin: 0 0 4px; font-size: 14px; color: var(--k-text); }
+.ksub-page-facts { margin: 0 0 14px; font-size: 12px; color: var(--k-text-3, #94a3b8); }
+.ksub-empty { color: var(--k-text-2, #64748b); font-size: 13px; }
+.ksub-report { margin-top: 16px; padding-top: 12px; border-top: 0.5px solid var(--k-border, #e2e8f0); font-size: 14px; }
+.ksub-report-label { font-size: 12px; font-weight: 600; color: var(--k-text-2, #64748b); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
 .ksheet-loading { display: flex; align-items: center; gap: 8px; color: var(--k-text-2, #64748b); font-size: 13px; }
 .kstep-prose { color: var(--k-text-2, #64748b); font-size: 14px; line-height: 20px; }
 .kstep-note { display: flex; align-items: center; gap: 8px; font-size: 13px; }

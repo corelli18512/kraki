@@ -415,6 +415,11 @@ export class CopilotAdapter extends AgentAdapter {
   private sessionUsage = new Map<string, import('@kraki/protocol').SessionUsage>();
   /** Track tool start args by toolCallId for correlating with tool_complete */
   private pendingToolArgs = new Map<string, Record<string, unknown>>();
+  /** Subagents by the toolCallId of the task call that dispatched them. */
+  private subagents = new Map<string, import('@kraki/protocol').SubagentInfo>();
+  /** A subagent's latest prose, held until a further step shows it was
+   *  narration (its final words are its report = the task's result). */
+  private subagentDrafts = new Map<string, { sessionId: string; text: string }>();
   /**
    * Tool identity captured at tool.execution_start, keyed by toolCallId.
    * The Copilot SDK omits these fields from tool.execution_complete events —
@@ -1654,6 +1659,32 @@ export class CopilotAdapter extends AgentAdapter {
     // own — it reports back through the task tool's result — so they must not
     // reach the parent's reply or turn state. Its tool calls still show as steps.
     const fromSubagent = (event: unknown) => !!(event as { agentId?: string }).agentId;
+    // The subagent instance id is the toolCallId of the task call that started it.
+    const parentOf = (event: unknown): string | undefined => {
+      const e = event as { agentId?: string; data?: { parentToolCallId?: string } };
+      return e.agentId || e.data?.parentToolCallId || undefined;
+    };
+
+    // Subagent lifecycle: name the dispatching task step and track its status.
+    const subagentEvent = (status: 'running' | 'completed' | 'failed') => (event: unknown) => {
+      const d = (event as { data?: Record<string, unknown> }).data ?? {};
+      const id = typeof d.toolCallId === 'string' ? d.toolCallId : '';
+      if (!id) return;
+      const prev = this.subagents.get(id);
+      const name = (typeof d.agentDisplayName === 'string' && d.agentDisplayName)
+        || (typeof d.agentName === 'string' && d.agentName) || prev?.name || 'subagent';
+      this.subagents.set(id, {
+        ...prev,
+        name: prev?.name ?? name,
+        status,
+        ...(typeof d.totalTokens === 'number' && { tokens: d.totalTokens }),
+        ...(typeof d.totalToolCalls === 'number' && { toolCount: d.totalToolCalls }),
+        ...(typeof d.durationMs === 'number' && { durationMs: d.durationMs }),
+      });
+    };
+    session.on('subagent.started' as never, subagentEvent('running') as never);
+    session.on('subagent.completed' as never, subagentEvent('completed') as never);
+    session.on('subagent.failed' as never, subagentEvent('failed') as never);
 
     session.on('assistant.message_delta', (event) => {
       if (fromSubagent(event)) return;
@@ -1661,6 +1692,15 @@ export class CopilotAdapter extends AgentAdapter {
     });
 
     session.on('assistant.message', (event) => {
+      // A subagent's prose is shown in its own steps, never in the reply.
+      if (event.data.content && fromSubagent(event)) {
+        const owner = parentOf(event);
+        if (owner) {
+          const prev = this.subagentDrafts.get(owner)?.text;
+          this.subagentDrafts.set(owner, { sessionId, text: prev ? `${prev}\n${event.data.content}` : event.data.content });
+        }
+        return;
+      }
       // Skip empty messages (SDK sends these before tool calls)
       if (event.data.content && !fromSubagent(event)) {
         this.turnHasOutput.set(sessionId, true);
@@ -1709,11 +1749,26 @@ export class CopilotAdapter extends AgentAdapter {
         data.mcpServerName as string | undefined,
         data.mcpToolName as string | undefined,
       );
+      // A task call that started a subagent (subagent.started precedes it).
+      let subagent = toolCallId ? this.subagents.get(toolCallId) : undefined;
+      if (toolCallId && (subagent || data.toolName === 'task')) {
+        const task = typeof args.description === 'string' ? args.description : undefined;
+        subagent = { name: subagent?.name ?? (typeof args.agent_type === 'string' ? args.agent_type : 'subagent'), ...subagent, ...(task && { task }), status: 'running' };
+        this.subagents.set(toolCallId, subagent);
+      }
+      const parentToolCallId = parentOf(event);
+      const draft = parentToolCallId ? this.subagentDrafts.get(parentToolCallId) : undefined;
+      if (parentToolCallId && draft) {
+        this.subagentDrafts.delete(parentToolCallId);
+        this.onNarrationTrace?.(sessionId, { content: draft.text, parentToolCallId, ...this.lifecycleEvent(sessionId) });
+      }
       this.onToolStart?.(sessionId, {
         ...this.lifecycleEvent(sessionId),
         toolName: protocolToolName,
         args,
         toolCallId,
+        ...(parentToolCallId && { parentToolCallId }),
+        ...(subagent && { subagent }),
       });
     });
 
@@ -1794,6 +1849,13 @@ export class CopilotAdapter extends AgentAdapter {
       // Clean up tracked state for this tool call
       clearInflight();
 
+      let subagent = toolCallId ? this.subagents.get(toolCallId) : undefined;
+      if (toolCallId) this.subagentDrafts.delete(toolCallId);
+      if (subagent && toolCallId) {
+        if (subagent.status === 'running') subagent = { ...subagent, status: data.success === false ? 'failed' : 'completed' };
+        this.subagents.delete(toolCallId);
+      }
+      const parentToolCallId = parentOf(event);
       this.onToolComplete?.(sessionId, {
         ...this.lifecycleEvent(sessionId),
         toolName,
@@ -1801,6 +1863,8 @@ export class CopilotAdapter extends AgentAdapter {
         toolCallId,
         success: data.success as boolean | undefined,
         attachments,
+        ...(parentToolCallId && { parentToolCallId }),
+        ...(subagent && { subagent }),
       });
 
       // After tool_complete, fire the bytes broadcast event so RelayClient
@@ -1940,6 +2004,12 @@ export class CopilotAdapter extends AgentAdapter {
 
     session.on('assistant.usage', (event) => {
       const data = event.data as unknown as Record<string, unknown>;
+      const owner = fromSubagent(event) ? parentOf(event) : undefined;
+      const sub = owner ? this.subagents.get(owner) : undefined;
+      if (owner && sub) {
+        const used = ((data.inputTokens as number) ?? 0) + ((data.outputTokens as number) ?? 0);
+        this.subagents.set(owner, { ...sub, tokens: (sub.tokens ?? 0) + used });
+      }
       const prev = this.sessionUsage.get(sessionId) ?? {
         inputTokens: 0, outputTokens: 0,
         cacheReadTokens: 0, cacheWriteTokens: 0,
