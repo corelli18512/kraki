@@ -24,6 +24,7 @@ final class NewSessionComposerDefaultDeviceTests: XCTestCase {
     private func spin(_ seconds: TimeInterval = 0.4) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
 
     func testLastUsedComputerComingOnlineLaterBecomesTheDefault() throws {
+        try requireForegroundUITests() // puts a real window on screen
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("composer-\(UUID().uuidString)")
         let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
         app.deviceStore.devices["office"] = device("office", online: true)
