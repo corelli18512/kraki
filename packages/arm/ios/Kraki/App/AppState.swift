@@ -34,6 +34,9 @@ final class AppState {
     #if os(iOS)
     private(set) var pushManager: PushManager?
     #endif
+    /// Replaced only by the network harness: several harnesses in one test
+    /// process must not share UserDefaults.standard.
+    private(set) var voiceVocabularyStore = VoiceVocabularyStore()
     private(set) var preferencesManager: PreferencesManager?
     private(set) var pulseManager: PulseManager?
     private(set) var sessionSubscriptionController: SessionSubscriptionController!
@@ -128,7 +131,7 @@ final class AppState {
     /// isolated database, outbox and process-local open-auth identity, for
     /// resilience tests against a local stack. Never production credentials.
     @MainActor
-    static func makeNetworkHarness(relayPort: Int, outboxURL: URL? = nil) -> AppState {
+    static func makeNetworkHarness(relayPort: Int, outboxURL: URL? = nil, vocabularyDefaults: UserDefaults? = nil) -> AppState {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("kraki-net-harness-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -140,6 +143,7 @@ final class AppState {
         }
         state.hasCompletedInitialConnect = false
         state.attachmentStore = makeAttachmentStore(for: state)
+        if let vocabularyDefaults { state.voiceVocabularyStore = VoiceVocabularyStore(defaults: vocabularyDefaults) }
         state.setupNetworking(outboxURL: outboxURL ?? root.appendingPathComponent("outbox.json"))
         #if os(macOS)
         state.authManager?.useEphemeralKeysForCurrentProcess()
@@ -929,6 +933,7 @@ final class AppState {
         messageRouter = router
         wsClient?.onMessage = { [weak router] data in router?.handleRawMessage(data) }
         authManager?.clearStoredCredentials()
+        preferencesManager?.resetVocabulary()
         clearStoredRelayURL()
         deviceId = nil
         user = nil

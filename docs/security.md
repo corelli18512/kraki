@@ -9,6 +9,7 @@ This document explains what Kraki protects, what it does not protect, and what t
 - The relay cannot read message contents. All message bodies are end-to-end encrypted.
 - The relay sees only what it needs to forward traffic: envelope type, destination device ID, sender device ID, and payload size.
 - Endpoints still see plaintext: the machine running the agent and the device reading the session.
+- Account settings are separate from encrypted conversations. Custom Words are stored readably on the account's relay and synced over TLS/WSS; they are **not end-to-end encrypted**. Cloud speech/correction also receives words used for a dictation request.
 
 ## What Kraki is designed to protect
 
@@ -22,7 +23,7 @@ This document explains what Kraki protects, what it does not protect, and what t
 
 ## What the relay sees
 
-The relay must route traffic, so it sees some metadata. Here is the complete list:
+For end-to-end encrypted conversation payloads, the relay sees routing metadata:
 
 | Visible to the relay | Why |
 |----------------------|-----|
@@ -31,7 +32,7 @@ The relay must route traffic, so it sees some metadata. Here is the complete lis
 | Sender device ID (from connection) | Needed to identify origin |
 | Blob size | The relay forwards payloads, so size is visible |
 
-That is all. The following are **not** visible to the relay:
+Within those encrypted conversation payloads, the following are **not** visible to the relay:
 
 - Message content or message type
 - Session IDs
@@ -43,13 +44,13 @@ The relay is an encrypted forwarder and cannot inspect payloads. See "How device
 
 ## What the relay stores
 
-The relay maintains two database tables:
+The relay maintains account/device data, including:
 
-- **users** — user identity and auth records
+- **users** — user identity, auth records and account preferences (including readable Custom Words)
 - **devices** — registered devices and their public keys
 - **push_tokens** — push notification tokens for offline delivery (device token and provider type)
 
-The relay does not store messages, sessions, message history, or any content. Message buffering and replay are handled by `tentacle`.
+The relay does not store plaintext conversation contents. Message history and replay are handled by `tentacle`. Custom Words are account data, not session data: their spellings and mishearings are persisted in the account's regional relay database and its backups. Synchronizing them does not require any tentacle to be online. Deleted words are removed from the database; existing backups may still contain them.
 
 ## What Kraki does not protect against
 
@@ -133,7 +134,7 @@ That behavior is a normal consequence of per-device encryption.
 | Can the relay see routing metadata? | Yes — envelope type, device IDs, payload size |
 | Can the relay see session IDs, message types, or content? | No — all inside encrypted payload |
 | Do endpoints see plaintext? | Yes |
-| Does the relay store messages? | No — only user and device tables |
+| Does the relay store readable conversation messages? | No; account preferences such as Custom Words are a separate, readable data category |
 | Is self-hosting still useful? | Yes, for operational control and latency |
 
 ## Push notifications and E2E

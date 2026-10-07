@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'crypto';
 import Database from 'better-sqlite3';
+import { applyVoiceWordOps, storedVoiceWords, type VoiceWord, type VoiceWordOp } from './voice-vocabulary.js';
 
 // --- Row types for SQLite result mapping ---
 
@@ -454,9 +455,28 @@ export class Storage {
   updatePreferences(userId: string, preferences: Record<string, unknown>): void {
     const existing = this.getUser(userId);
     if (!existing) return;
-    const merged = { ...(existing.preferences ?? {}), ...preferences };
+    // Custom Words change only through update_voice_vocabulary intents; a
+    // generic preferences write must never replace the list.
+    const { voiceVocabulary: _reserved, ...patch } = preferences;
+    const merged = { ...(existing.preferences ?? {}), ...patch };
     this.db.prepare('UPDATE users SET preferences = ? WHERE user_id = ?')
       .run(JSON.stringify(merged), userId);
+  }
+
+  getVoiceVocabulary(userId: string): VoiceWord[] {
+    return storedVoiceWords(this.getUser(userId)?.preferences?.voiceVocabulary);
+  }
+
+  /** Applies a device's intents and returns the account's resulting list. */
+  updateVoiceVocabulary(userId: string, ops: VoiceWordOp[]): VoiceWord[] {
+    return this.db.transaction(() => {
+      const user = this.getUser(userId);
+      if (!user) throw new Error('Unknown vocabulary owner');
+      const words = applyVoiceWordOps(this.getVoiceVocabulary(userId), ops);
+      const preferences = { ...user.preferences, voiceVocabulary: { version: 2, words } };
+      this.db.prepare('UPDATE users SET preferences = ? WHERE user_id = ?').run(JSON.stringify(preferences), userId);
+      return words;
+    })();
   }
 
   // --- Region registry ---

@@ -1593,7 +1593,7 @@ enum IncomingMessageType {
              "server_error", "device_joined", "device_left", "device_removed",
              "device_pending",
              "pong", "push_token_registered", "pairing_token_created",
-             "auth_info_response", "preferences_updated":
+             "auth_info_response", "preferences_updated", "voice_vocabulary_updated":
             return .control(type)
         default:
             return .unknown

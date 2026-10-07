@@ -1446,6 +1446,9 @@ export interface AuthOkMessage {
   /** The auth method that was used */
   authMethod: AuthMethod['method'];
   user: { id: string; login: string; provider: string; email?: string; preferences?: Record<string, unknown>; region?: string };
+  /** The account's Custom Words (app devices only). Presence also advertises
+   *  sync support. */
+  voiceVocabulary?: VoiceWord[];
   devices: DeviceSummary[];
   /** GitHub OAuth client ID (present when GitHub OAuth is configured for web login) */
   githubClientId?: string;
@@ -1587,6 +1590,31 @@ export interface PreferencesUpdatedMessage {
   preferences: Record<string, unknown>;
 }
 
+/** One Custom Words entry, account-owned (not E2E encrypted). */
+export interface VoiceWord { term: string; heardAs: string }
+/** One user intent. Clients never upload whole lists; Head applies intents in
+ *  arrival order and the last one wins. Words are matched case-insensitively. */
+export interface VoiceWordOp {
+  op: 'add' | 'edit' | 'remove';
+  term: string;
+  heardAs?: string;
+  /** edit: the word being replaced (may equal `term` when only mishearings change). */
+  from?: string;
+}
+export interface UpdateVoiceVocabularyMessage {
+  type: 'update_voice_vocabulary';
+  /** Echoed so the sender can drop exactly these ops from its outbox. */
+  requestId: string;
+  ops: VoiceWordOp[];
+}
+/** The account's full list after a change: to the sender (with requestId) and
+ *  to the user's other online apps. */
+export interface VoiceVocabularyUpdatedMessage {
+  type: 'voice_vocabulary_updated';
+  requestId?: string;
+  words: VoiceWord[];
+}
+
 // ── Push notification token management ──────────────────
 
 /** Register a push notification token for this device. */
@@ -1654,6 +1682,8 @@ export type ControlMessage =
   | DeviceRemovedMessage
   | UpdatePreferencesMessage
   | PreferencesUpdatedMessage
+  | UpdateVoiceVocabularyMessage
+  | VoiceVocabularyUpdatedMessage
   | RegisterPushTokenMessage
   | PushTokenRegisteredMessage
   | NotificationPreviewMessage

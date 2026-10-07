@@ -11,6 +11,7 @@ import type {
 } from '@kraki/protocol';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { Storage } from './storage.js';
+import { parseVoiceWordOps, type VoiceWord } from './voice-vocabulary.js';
 import { PulseHub, PULSE_ACK_EVERY_BYTES } from './pulse-hub.js';
 import { LeaseIssuer } from './lease-issuer.js';
 import type { AuthProvider, AuthUser, AuthOutcome as ProviderAuthOutcome } from './auth.js';
@@ -20,6 +21,15 @@ import { trace, fp } from './trace.js';
 import { clientIp } from './client-ip.js';
 import type { PushManager } from './push/index.js';
 import type { AuthBackend, AuthOutcome, ChallengeOutcome } from './auth-backend.js';
+
+/** Custom Words has its own channel (`auth_ok.voiceVocabulary` and
+ *  `voice_vocabulary_updated`). Never ship it inside generic preferences: that
+ *  would duplicate it on every auth and broadcast it on every theme change. */
+function publicPreferences(prefs: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!prefs || !('voiceVocabulary' in prefs)) return prefs;
+  const { voiceVocabulary: _omitted, ...rest } = prefs;
+  return rest;
+}
 
 function importPublicKey(compactKey: string): string {
   const lines = compactKey.match(/.{1,64}/g) ?? [];
@@ -833,6 +843,7 @@ export class HeadServer {
   private handleControlMessage(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): boolean {
     switch (msg.type) {
       case 'update_preferences':    this.handleUpdatePreferences(ws, state, msg); return true;
+      case 'update_voice_vocabulary': this.handleUpdateVoiceVocabulary(state, msg); return true;
       case 'remove_device':         this.handleRemoveDevice(ws, state, msg.deviceId as string); return true;
       case 'register_push_token':   this.handleRegisterPushToken(ws, state, msg); return true;
       case 'unregister_push_token': this.handleUnregisterPushToken(ws, state, msg); return true;
@@ -856,7 +867,7 @@ export class HeadServer {
     this.storage.updatePreferences(state.userId, prefs);
     // Read back the full merged preferences
     const fullUser = this.storage.getUser(state.userId);
-    const merged = fullUser?.preferences ?? prefs;
+    const merged = publicPreferences(fullUser?.preferences ?? prefs);
     const confirmation = { type: 'preferences_updated', preferences: merged };
     // Confirm to the sender + fan out to the user's other devices — all over pulse.
     if (state.deviceId) this.sendControlToDevice(state.deviceId, confirmation);
@@ -868,6 +879,33 @@ export class HeadServer {
       const other = this.connections.get(d.id);
       if (!other || other.readyState !== WebSocket.OPEN) continue;
       this.sendControlToDevice(d.id, confirmation);
+    }
+  }
+
+  /** Account data, not session data: no tentacle is involved. The sender
+   *  always gets the resulting list back (its acknowledgement); other online
+   *  apps of the account get it only when something was applied. */
+  private handleUpdateVoiceVocabulary(state: ClientState, msg: Record<string, unknown>): void {
+    if (!state.userId || !state.deviceId) return;
+    const requestId = typeof msg.requestId === 'string' ? msg.requestId.slice(0, 64) : undefined;
+    const ops = parseVoiceWordOps(msg.ops);
+    let words: VoiceWord[];
+    try {
+      words = ops?.length
+        ? this.storage.updateVoiceVocabulary(state.userId, ops)
+        : this.storage.getVoiceVocabulary(state.userId);
+    } catch (err) {
+      // Pulse self-delivery has no outer try/catch. No reply: the client keeps
+      // the ops in its outbox and retries.
+      getLogger().warn('Voice vocabulary update failed', { error: (err as Error).message });
+      return;
+    }
+    this.sendControlToDevice(state.deviceId, { type: 'voice_vocabulary_updated', requestId, words });
+    if (!ops?.length) return;
+    for (const d of this.storage.getDevicesByUser(state.userId)) {
+      if (d.id !== state.deviceId && d.role === 'app' && this.connections.get(d.id)?.readyState === WebSocket.OPEN) {
+        this.sendControlToDevice(d.id, { type: 'voice_vocabulary_updated', words });
+      }
     }
   }
 
@@ -1338,7 +1376,7 @@ export class HeadServer {
     const fullUser = this.storage.getUser(params.userId);
     const userResponse = {
       ...params.user,
-      preferences: fullUser?.preferences ?? params.user.preferences,
+      preferences: publicPreferences(fullUser?.preferences ?? params.user.preferences),
     };
 
     // Devices list. If the caller provided one (edge mode), recompute online
@@ -1346,6 +1384,8 @@ export class HeadServer {
     const devices = params.devices
       ? params.devices.map(d => ({ ...d, online: this.connections.has(d.id) }))
       : this.getDeviceSummaries(params.userId);
+    const deviceRole = devices.find((device) => device.id === params.deviceId)?.role
+      ?? this.storage.getDevice(params.deviceId)?.role;
 
     ws.send(JSON.stringify({
       type: 'auth_ok',
@@ -1357,6 +1397,8 @@ export class HeadServer {
       vapidPublicKey: params.vapidPublicKey ?? this.getVapidPublicKey(),
       relayVersion: this.options.version,
       pulseAckBytes: PULSE_ACK_EVERY_BYTES,
+      // Apps only: a tentacle has no use for the user's word list.
+      ...(deviceRole === 'app' && { voiceVocabulary: this.storage.getVoiceVocabulary(params.userId) }),
       ...(this.getVoiceCapability() && { voice: this.getVoiceCapability() }),
     }));
 
@@ -1371,8 +1413,6 @@ export class HeadServer {
     // process epoch, fence the preceding process's non-durable downlink so the
     // new UI cannot animate through old live events. Tentacle downlinks carry
     // commands and retain ordinary Pulse resume semantics across process epochs.
-    const deviceRole = devices.find((device) => device.id === params.deviceId)?.role
-      ?? this.storage.getDevice(params.deviceId)?.role;
     this.pulseHub.onDeviceConnected(params.deviceId, {
       discardPreviousProcessNonDurable: deviceRole === 'app',
     });
