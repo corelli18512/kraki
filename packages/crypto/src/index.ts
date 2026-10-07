@@ -16,6 +16,8 @@ import {
   createCipheriv,
   createDecipheriv,
   constants,
+  createSign,
+  createVerify,
 } from 'crypto';
 
 // ── Types ───────────────────────────────────────────────
@@ -245,7 +247,6 @@ export function importPublicKey(compactKey: string): string {
 
 // ── Challenge-response signing ──────────────────────────
 
-import { createSign, createVerify } from 'crypto';
 
 /**
  * Sign a nonce with a private key (for challenge-response auth).

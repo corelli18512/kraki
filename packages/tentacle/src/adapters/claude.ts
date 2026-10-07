@@ -510,6 +510,10 @@ export class ClaudeAdapter extends AgentAdapter {
   private sessionModes = new Map<string, SessionMode>();
   /** Sessions with a pending mode change to prepend on next user message */
   private pendingModeSignals = new Map<string, string>();
+  /** Last API response id whose usage was counted, per session. */
+  private lastCountedResponse = new Map<string, string>();
+  /** Last `total_cost_usd` reported by the session's current query. */
+  private lastQueryCost = new Map<string, number>();
   /** Per-session cumulative token usage */
   private sessionUsage = new Map<string, SessionUsage>();
   /** Cached model list from last session init */
@@ -518,10 +522,8 @@ export class ClaudeAdapter extends AgentAdapter {
   private modelAliasMap = new Map<string, string>();
   /** Track in-flight tool_use IDs per session for correlating tool_complete */
   private pendingToolCalls = new Map<string, Map<string, { toolName: string; args: Record<string, unknown>; parentToolCallId?: string }>>();
-  /** Map Kraki session ID → SDK session UUID (for getSessionInfo polling) */
+  /** Map Kraki session ID → SDK session UUID (resume/fork). */
   private sdkSessionIds = new Map<string, string>();
-  /** Last known title per session (to detect changes) */
-  private lastKnownTitles = new Map<string, string>();
 
   private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
   private readonly krakiMcp?: {
@@ -1087,6 +1089,8 @@ export class ClaudeAdapter extends AgentAdapter {
 
     entry.query = q;
     entry.deferredConfig = undefined;
+    // A new query reports its cost from zero again (see lastQueryCost).
+    this.lastQueryCost.delete(sessionId);
     entry.consumerLoop = this.consumeMessages(sessionId, q, entry.abortController);
     if (config?.cwd) this.persistMeta(sessionId, { cwd: config.cwd, model: entry.model, reasoningEffort: entry.reasoningEffort });
     logger.debug({ sessionId }, 'SDK query spawned');
@@ -1238,20 +1242,18 @@ export class ClaudeAdapter extends AgentAdapter {
     }
   }
 
+  /**
+   * Kraki's Claude sessions in this process. (The SDK's own listSessions
+   * reads ~/.claude/projects, but Kraki's transcripts live in per-session
+   * shadow homes, so it never saw them; Kraki titles sessions itself.)
+   */
   async listSessions(): Promise<SessionInfo[]> {
-    try {
-      const { listSessions: listSessionsFn } = await import('@anthropic-ai/claude-agent-sdk');
-      const sessions = await listSessionsFn();
-      return sessions.map((s) => ({
-        id: s.sessionId,
-        state: this.sessions.has(s.sessionId) ? 'active' as const : 'ended' as const,
-        model: undefined,
-        cwd: s.cwd,
-        summary: s.summary ?? '',
-      }));
-    } catch {
-      return [];
-    }
+    return [...this.sessions.keys()].map((id) => ({
+      id,
+      state: 'active' as const,
+      model: undefined,
+      summary: '',
+    }));
   }
 
   /** Why the model list is empty, so `kraki agents` can show the real cause
@@ -1731,8 +1733,12 @@ export class ClaudeAdapter extends AgentAdapter {
           }
         }
 
-        // Track usage
-        if (betaMessage.usage) {
+        // Track usage. The SDK splits one API response into several
+        // assistant messages (one per content block) that all carry the
+        // response's full usage: count each response id once.
+        const responseId = (betaMessage as { id?: string }).id;
+        if (betaMessage.usage && (!responseId || this.lastCountedResponse.get(sessionId) !== responseId)) {
+          if (responseId) this.lastCountedResponse.set(sessionId, responseId);
           this.updateUsage(sessionId, betaMessage.usage as unknown as Record<string, unknown>, fromSubagent);
         }
         break;
@@ -1812,9 +1818,16 @@ export class ClaudeAdapter extends AgentAdapter {
           // Token counters are accumulated per assistant message (updateUsage).
           // Replacing them with this turn's result usage threw away every
           // earlier turn; the result only adds cost and duration.
+          // total_cost_usd is cumulative for the current query, which starts
+          // over when the query restarts (lastQueryCost is reset then): add
+          // only what it grew by. It used to replace the session total.
+          const queryCost = resultAny.total_cost_usd as number | undefined;
+          const lastQueryCost = this.lastQueryCost.get(sessionId) ?? 0;
+          const addedCost = typeof queryCost === 'number' ? Math.max(0, queryCost - lastQueryCost) : 0;
+          if (typeof queryCost === 'number') this.lastQueryCost.set(sessionId, queryCost);
           const updated: SessionUsage = {
             ...prev,
-            totalCost: (resultAny.total_cost_usd as number) ?? prev.totalCost,
+            totalCost: (prev.totalCost ?? 0) + addedCost,
             totalDurationMs: ((resultAny.duration_ms as number) ?? 0) + (prev.totalDurationMs ?? 0),
           };
           this.sessionUsage.set(sessionId, updated);
@@ -1839,9 +1852,6 @@ export class ClaudeAdapter extends AgentAdapter {
           this.onIdle?.(sessionId);
         }
 
-        // Poll for SDK-native title changes (the SDK auto-generates titles
-        // but doesn't emit title events in the stream)
-        this.pollTitleChange(sessionId).catch(() => {});
         break;
       }
 
@@ -1936,30 +1946,6 @@ export class ClaudeAdapter extends AgentAdapter {
       default:
         // Ignore other message types (status, auth_status, etc.)
         break;
-    }
-  }
-
-  /**
-   * Poll the SDK for title changes after a turn completes.
-   * The Claude SDK auto-generates titles but doesn't emit stream events for them.
-   * We check getSessionInfo() and fire onTitleChanged if the title differs.
-   */
-  private async pollTitleChange(sessionId: string): Promise<void> {
-    const sdkId = this.sdkSessionIds.get(sessionId);
-    if (!sdkId) return;
-
-    try {
-      const { getSessionInfo } = await import('@anthropic-ai/claude-agent-sdk');
-      const info = await getSessionInfo(sdkId);
-      const title = (info as unknown as { customTitle?: string; summary?: string }).customTitle
-        ?? (info as unknown as { summary?: string }).summary;
-      if (title && title !== this.lastKnownTitles.get(sessionId)) {
-        this.lastKnownTitles.set(sessionId, title);
-        this.onTitleChanged?.(sessionId, title);
-        logger.debug({ sessionId, title: title.slice(0, 60) }, 'SDK title change detected');
-      }
-    } catch {
-      // getSessionInfo may fail if session is too new or not persisted — that's fine
     }
   }
 
@@ -2138,9 +2124,10 @@ export class ClaudeAdapter extends AgentAdapter {
     this.sessionModes.delete(sessionId);
     this.pendingModeSignals.delete(sessionId);
     this.sessionUsage.delete(sessionId);
+    this.lastCountedResponse.delete(sessionId);
+    this.lastQueryCost.delete(sessionId);
     this.pendingToolCalls.delete(sessionId);
     this.sdkSessionIds.delete(sessionId);
-    this.lastKnownTitles.delete(sessionId);
   }
 
   private broadcastPendingResolutions(sessionId: string): void {

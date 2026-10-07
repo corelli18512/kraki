@@ -2,6 +2,11 @@
 
 Run your own relay instead of using the hosted one at `relay.kraki.chat`.
 
+> **Self-hosting is unsupported and at your own risk.** The official iOS and Mac apps only trust Kraki's own relays (`wss://*.kraki.chat`). Two things to know before pointing a computer at someone else's relay:
+>
+> - With GitHub sign-in, the relay verifies your GitHub token itself, so whoever runs it receives that token (scope `read:user`: your public profile). `kraki` warns about this during setup.
+> - Conversations stay end-to-end encrypted, but a relay operator controls which devices are on your account (see [security.md](./security.md)).
+
 ## Start the relay
 
 ```bash
@@ -12,7 +17,7 @@ npm i -g @kraki/head
 kraki-relay
 ```
 
-By default the relay listens on `ws://localhost:4000`. It stores only user and device data — no messages, no sessions.
+By default the relay listens on `ws://localhost:4000`. It stores user, device and delivery data, but never readable messages or sessions (see [security.md](./security.md#what-the-relay-stores)).
 
 Then run kraki on the coding machine and point it at your relay URL instead of the hosted default.
 

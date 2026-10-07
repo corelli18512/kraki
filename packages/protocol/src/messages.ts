@@ -181,10 +181,6 @@ export interface ContentRef {
   height?: number;
 }
 
-/** @deprecated Old name for {@link ContentRef}. Kept as alias during the
- *  v0.17 transition so callers can be migrated in one step. */
-export type AttachmentRef = ContentRef;
-
 export type Attachment = ImageAttachment | ContentRef;
 
 // ============================================================
@@ -425,15 +421,18 @@ export interface AgentNarrationMessage extends BaseEnvelope {
 }
 
 /**
- * The single "action slot" of the server-owned status card. tool, tool_batch,
- * permission and question share this ONE slot on equal footing (last-write-wins
- * by time) — there is no precedence between them. The tentacle owns the ENTIRE
+ * The single "action slot" of the server-owned status card. tool, tool_batch
+ * and permission share this ONE slot on equal footing (last-write-wins by
+ * time) — there is no precedence between them. The tentacle owns the ENTIRE
  * decision of what occupies the slot; clients render it verbatim and perform
- * ZERO precedence/derivation logic. `id` is the round-trip handle: clients
- * answer a permission/question by sending approve/deny/always_allow/answer with
- * this id. When a permission/question is resolved it stays in the slot with its
- * `decision`/`answer` set (read-only) until a newer action replaces it or the
- * card clears.
+ * ZERO precedence/derivation logic. A permission's `id` is the round-trip
+ * handle: clients answer it by sending approve/deny/always_allow with this id.
+ * When a permission is resolved it stays in the slot with its `decision` set
+ * (read-only) until a newer action replaces it or the card clears.
+ *
+ * Questions are NOT a card action: they live on the spine as
+ * `agent_message.payload.question` and are answered with `send_input`
+ * (`answerTo`).
  *
  * The agent may run tool calls in PARALLEL. A single running tool occupies the
  * slot as the tool's `tool_start`/`tool_complete` step; two-or-more concurrent
@@ -443,15 +442,14 @@ export interface AgentNarrationMessage extends BaseEnvelope {
  * single tool step.
  *
  * DESIGN: a card action is just "the current step" — and a step already has a
- * wire type. Rather than redefine parallel `tool`/`permission`/`question`
- * shapes, each variant REUSES the existing message's `type` + `payload`
- * verbatim (minus the envelope): a running tool is a {@link ToolStartMessage},
- * a finished tool a {@link ToolCompleteMessage}, an open prompt a
- * {@link PermissionRequest}. The slot's discriminant is
- * therefore the message's own `type`; clients render it with the SAME code they
- * use for the live/trace step. A resolved prompt stays in the slot with its
- * payload's `decision`/`answer` set. `tool_batch` is the sole synthetic variant
- * (a concurrency count with no standalone message).
+ * wire type. Rather than redefine parallel shapes, each variant REUSES the
+ * existing message's `type` + `payload` verbatim (minus the envelope): a
+ * running tool is a {@link ToolStartMessage}, a finished tool a
+ * {@link ToolCompleteMessage}, an open prompt a {@link PermissionRequest}. The
+ * slot's discriminant is therefore the message's own `type`; clients render it
+ * with the SAME code they use for the live/trace step. `tool_batch`,
+ * `user_abort` and `failed` are the synthetic variants (a concurrency count and
+ * the two terminal outcomes, which have no standalone message).
  */
 export type CardActionState =
   | Pick<ToolStartMessage, 'type' | 'payload'>
@@ -810,6 +808,7 @@ export interface UsageHistoryMessage extends BaseEnvelope {
 /**
  * Sent by tentacle to a device after replaying all buffered messages for a session.
  * @deprecated Use `request_session_messages` / `session_messages_batch` instead.
+ * Removal plan: docs/protocol-compatibility.md.
  */
 export interface SessionReplayBatchMessage extends BaseEnvelope {
   type: 'session_replay_batch';
@@ -980,7 +979,6 @@ export interface TurnTraceBatchMessage extends BaseEnvelope {
   };
 }
 
-/** Atomic subscribe/replace/unsubscribe request for one Arm's visible session. */
 /** App → Tentacle, per connection: behaviours this app supports (sent after
  *  a greeting that advertises them). `fragments`: can reassemble fragments. */
 export interface ClientFeaturesMessage extends BaseEnvelope {
@@ -990,6 +988,7 @@ export interface ClientFeaturesMessage extends BaseEnvelope {
   };
 }
 
+/** Atomic subscribe/replace/unsubscribe request for one Arm's visible session. */
 export interface SetSessionSubscriptionMessage extends BaseEnvelope {
   type: 'set_session_subscription';
   payload: {
@@ -1101,7 +1100,7 @@ export interface LocalSessionsListMessage extends BaseEnvelope {
 export interface AttachmentDataMessage extends BaseEnvelope {
   type: 'attachment_data';
   payload: {
-    /** Attachment id from the matching `AttachmentRef`. */
+    /** Attachment id from the matching `ContentRef`. */
     id: string;
     /** 0-based chunk index. */
     index: number;
@@ -1282,6 +1281,7 @@ export interface MarkReadMessage extends BaseEnvelope {
 /**
  * Sent by app to tentacle to request replay for a specific session.
  * @deprecated Use `request_session_messages` / `session_messages_batch` instead.
+ * No current client sends it. Removal plan: docs/protocol-compatibility.md.
  */
 export interface RequestSessionReplayMessage extends BaseEnvelope {
   type: 'request_session_replay';
@@ -1383,13 +1383,13 @@ export interface ImportSessionMessage extends BaseEnvelope {
 }
 
 /** Sent by app to tentacle to request the bytes of a stored attachment.
- *  Used when a client sees an `AttachmentRef` it can't satisfy from its local
+ *  Used when a client sees a `ContentRef` it can't satisfy from its local
  *  cache (typical after reconnect/replay). Tentacle responds with one or more
  *  `attachment_data` messages addressed to the requester. */
 export interface RequestAttachmentMessage extends BaseEnvelope {
   type: 'request_attachment';
   payload: {
-    /** Attachment id from the AttachmentRef. */
+    /** Attachment id from the ContentRef. */
     id: string;
     /** Session the attachment belongs to (used for AttachmentStore scoping). */
     sessionId: string;

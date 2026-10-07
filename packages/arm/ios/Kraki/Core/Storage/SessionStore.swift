@@ -548,6 +548,16 @@ final class SessionStore {
     /// created or freshly-imported sessions at the top after a cold
     /// relaunch, when their in-memory preview entry hasn't been
     /// seeded yet.
+    @ObservationIgnored private var previewDateCache: [String: Date] = [:]
+
+    private func parsedPreviewDate(_ timestamp: String) -> Date? {
+        if let cached = previewDateCache[timestamp] { return cached }
+        guard let date = ISO8601.parse(timestamp) else { return nil }
+        if previewDateCache.count > 4_096 { previewDateCache.removeAll(keepingCapacity: true) }
+        previewDateCache[timestamp] = date
+        return date
+    }
+
     var sortedSessions: [SessionInfo] {
         // Resolve each session's effective timestamp to a Date so we
         // can compare across mixed "Z" vs "+00:00" timestamp shapes
@@ -560,11 +570,13 @@ final class SessionStore {
         // main-thread hang. Precompute each session's effective date
         // ONCE (a Schwartzian transform), so the comparator does zero
         // parsing: ~865 parses total, ~20x fewer.
+        // Parsed dates are also cached by timestamp string: this property is
+        // read on every observation change, while previews rarely change.
         var effective: [String: Date] = Dictionary(minimumCapacity: sessions.count)
         for s in sessions.values {
             if let t = sessionPreviews[s.id]?.timestamp,
                !t.isEmpty,
-               let d = ISO8601.parse(t) {
+               let d = parsedPreviewDate(t) {
                 effective[s.id] = d
             } else {
                 effective[s.id] = s.createdAt

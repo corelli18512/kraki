@@ -213,6 +213,30 @@ final class MessageProviderHeadTests: XCTestCase {
         }
     }
 
+    func testSessionListPurgesOnlyRowsTheTentacleNoLongerHas() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kraki-message-provider-purge-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
+        let sessionId = "sess-purge"
+        let messages = (1...10).map { seq in
+            ChatMessage(type: seq.isMultiple(of: 2) ? "agent_message" : "user_message", seq: seq,
+                        sessionId: sessionId, deviceId: "dev-1", timestamp: "2026-10-07T00:00:00Z",
+                        payload: ["content": AnyCodable("m\(seq)")])
+        }
+        try database.insert(sessionId, messages)
+        let app = AppState(testDatabase: database)
+
+        // The tentacle is ahead: nothing local is dropped.
+        app.messageProvider?.setTentacleInfo(sessionId: sessionId, lastSeq: 12, deviceId: "dev-1")
+        XCTAssertEqual(app.messageStore.dbLastSeq(sessionId), 10)
+
+        // The tentacle reports less than we hold (restored from a backup):
+        // its history is the authority, the stale tail goes.
+        app.messageProvider?.setTentacleInfo(sessionId: sessionId, lastSeq: 7, deviceId: "dev-1")
+        XCTAssertEqual(app.messageStore.dbLastSeq(sessionId), 7)
+    }
+
     func testEnsureOlderLoadedAddsTenRowsToCompactIOSWindow() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("kraki-message-provider-older-page-test-\(UUID().uuidString)", isDirectory: true)

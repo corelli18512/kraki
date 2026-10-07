@@ -710,6 +710,20 @@ export class Storage {
     return rows.map(row => this.mapDeviceRow(row));
   }
 
+  /** Every device, grouped by user id (one query; for admin stats). */
+  getAllDevicesByUser(): Map<string, StoredDevice[]> {
+    const rows = this.stmt(
+      'SELECT id, user_id, name, role, kind, public_key, encryption_key, last_seen, created_at FROM devices'
+    ).all() as DeviceRow[];
+    const byUser = new Map<string, StoredDevice[]>();
+    for (const row of rows) {
+      const list = byUser.get(row.user_id) ?? [];
+      list.push(this.mapDeviceRow(row));
+      byUser.set(row.user_id, list);
+    }
+    return byUser;
+  }
+
   private mapDeviceRow(row: DeviceRow): StoredDevice {
     return {
       id: row.id, userId: row.user_id, name: row.name,
