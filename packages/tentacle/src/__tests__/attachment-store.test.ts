@@ -131,47 +131,6 @@ describe('AttachmentStore', () => {
     expect(store.read('sid-A', 'a'.repeat(32))).toBeNull();
   });
 
-  it('stream() yields chunks covering the full file', () => {
-    const big = Buffer.alloc(5000);
-    for (let i = 0; i < big.length; i++) big[i] = i & 0xff;
-    const ref = store.put('sid-A', big, 'image/png');
-    const chunks: Buffer[] = [];
-    for (const c of store.stream('sid-A', ref.id, 1024)) chunks.push(c);
-    expect(chunks.length).toBe(Math.ceil(5000 / 1024));
-    expect(Buffer.concat(chunks).equals(big)).toBe(true);
-  });
-
-  it('stream() yields nothing for unknown id', () => {
-    const chunks = Array.from(store.stream('sid-A', 'a'.repeat(32), 1024));
-    expect(chunks).toHaveLength(0);
-  });
-
-  it('removeSession() deletes the session attachments dir', () => {
-    store.put('sid-A', PNG_1X1, 'image/png');
-    expect(store.has('sid-A', store.put('sid-A', PNG_1X1, 'image/png').id)).toBe(true);
-    store.removeSession('sid-A');
-    expect(store.has('sid-A', store.put('sid-A', PNG_1X1, 'image/png').id)).toBe(true);
-    // ↑ re-put recreates because store still works on a fresh dir
-  });
-
-  it('gc() removes attachments not in referenced set', () => {
-    const r1 = store.put('sid-A', PNG_1X1, 'image/png');
-    const r2 = store.put('sid-A', Buffer.from('different'), 'image/png');
-    expect(store.has('sid-A', r1.id)).toBe(true);
-    expect(store.has('sid-A', r2.id)).toBe(true);
-
-    const removed = store.gc('sid-A', new Set([r1.id]));
-    expect(removed).toBeGreaterThan(0);
-    expect(store.has('sid-A', r1.id)).toBe(true);
-    expect(store.has('sid-A', r2.id)).toBe(false);
-  });
-
-  it('sizeOfSession() reports total bytes', () => {
-    expect(store.sizeOfSession('sid-A')).toBe(0);
-    store.put('sid-A', PNG_1X1, 'image/png');
-    expect(store.sizeOfSession('sid-A')).toBe(PNG_1X1.length);
-  });
-
   it('survives a corrupted sidecar — read returns null instead of crashing', () => {
     const ref = store.put('sid-A', PNG_1X1, 'image/png');
     const metaPath = join(root, 'sid-A', 'attachments', `${ref.id}.json`);

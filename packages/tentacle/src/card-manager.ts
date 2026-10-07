@@ -292,16 +292,6 @@ export class CardManager {
     return { draft: c?.draftText ?? '', action: c?.action ?? null };
   }
 
-  /** Rehydrate a durable pending card after a daemon/process restart. */
-  restore(sessionId: string, snapshot: { draft: string; action: CardActionState | null }): void {
-    const c = this.get(sessionId);
-    c.draftText = snapshot.draft;
-    c.resetNext = false;
-    c.action = snapshot.action;
-    c.runningTools.clear();
-    c.lastActionKey = this.actionKey(snapshot.action);
-  }
-
   // ── Lifecycle ─────────────────────────────────────────
 
   /** Turn ended (idle/abort) — wipe the card and broadcast the cleared state. */
@@ -325,16 +315,5 @@ export class CardManager {
       { type: 'agent_message_delta', sessionId, payload: { content: c?.draftText ?? '', reset: true } },
       { type: 'card_action', sessionId, payload: { action: c?.action ?? null } },
     ];
-  }
-
-  /** Session ids that currently carry meaningful card state (live draft or an
-   *  active action) — the set worth pushing to a freshly-joined consumer so a
-   *  mid-turn reconnect re-seeds without a client round-trip. */
-  activeSessions(): string[] {
-    const out: string[] = [];
-    for (const [sid, c] of this.cards) {
-      if (c.draftText || c.action) out.push(sid);
-    }
-    return out;
   }
 }

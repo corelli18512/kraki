@@ -184,5 +184,3 @@ export function applyProcessProxy(env: NodeJS.ProcessEnv = process.env): ProxySe
   return settings;
 }
 
-/** For tests. */
-export function resetProxyCache(): void { cached = undefined; }
