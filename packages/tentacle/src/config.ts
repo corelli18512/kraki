@@ -204,6 +204,11 @@ function getGitHubTokenPath(): string {
   return join(getKrakiHome(), 'github-token');
 }
 
+/** Forget Kraki's saved GitHub sign-in (the next setup signs in again). */
+export function clearGitHubToken(): void {
+  try { unlinkSync(getGitHubTokenPath()); } catch { /* not signed in */ }
+}
+
 export function saveGitHubToken(token: string): void {
   getConfigDir();
   const tokenPath = getGitHubTokenPath();
