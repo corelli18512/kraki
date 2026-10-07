@@ -172,6 +172,9 @@ struct BuiltInTentacle {
     }
 
     /// Restart the daemon in place under the same launchd supervision.
+    /// Ask launchd to (re)start the helper. Returns whether launchctl could be
+    /// launched; it is not awaited — `kickstart -k` kills and restarts the
+    /// daemon, which must not block the main thread. Callers poll status.
     @discardableResult
     func kickstart() -> Bool {
         let process = Process()
@@ -181,8 +184,7 @@ struct BuiltInTentacle {
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
-            process.waitUntilExit()
-            return process.terminationStatus == 0
+            return true
         } catch {
             return false
         }

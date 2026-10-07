@@ -46,6 +46,24 @@ final class SessionStoreTests: XCTestCase {
         )
     }
 
+    // MARK: - Ownership
+
+    func testAnotherPairedComputerCannotTakeOverASession() {
+        store.isDeviceStillPaired = { $0 == "dev-1" || $0 == "dev-2" }
+        store.upsertSession(makeDigest(title: "mine"), deviceId: "dev-1", deviceName: "A")
+        store.upsertSession(makeDigest(title: "hijack"), deviceId: "dev-2", deviceName: "B")
+        store.reconcileSessionList([makeDigest(title: "hijack")], deviceId: "dev-2", deviceName: "B")
+        XCTAssertEqual(store.sessions["sess-1"]?.deviceId, "dev-1")
+        XCTAssertEqual(store.sessions["sess-1"]?.title, "mine")
+    }
+
+    func testASessionOfARemovedComputerCanBeAdopted() {
+        store.isDeviceStillPaired = { $0 == "dev-2" }
+        store.upsertSession(makeDigest(), deviceId: "dev-1", deviceName: "A")
+        store.upsertSession(makeDigest(), deviceId: "dev-2", deviceName: "B")
+        XCTAssertEqual(store.sessions["sess-1"]?.deviceId, "dev-2")
+    }
+
     // MARK: - Upsert
 
     func testUpsertSession() {

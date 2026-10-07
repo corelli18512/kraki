@@ -278,6 +278,7 @@ targets:
       # Shared platform shims (KrakiPlatform exposes PlatformColor + helpers;
       # ThemePlatform is the macOS palette; Theme.swift stays iOS-only).
       - path: Kraki/Shared/KrakiPlatform.swift
+      - path: Kraki/Shared/AttachmentImageCache.swift
       - path: Kraki/Shared/ThemePlatform.swift
       - path: Kraki/Shared/AppColorScheme.swift
       - path: Kraki/Shared/AgentAvatar.swift

@@ -394,7 +394,7 @@ final class SessionStore {
             return
         }
         do {
-            try data.write(to: Self.snapshotURL, options: .atomic)
+            try data.write(to: Self.snapshotURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             lastFlushedHash = hash
             KLog.d("📂 [snapshot] flush: wrote sessions=\(snapshot.sessions.count) bytes=\(data.count)")
         } catch {
@@ -666,7 +666,15 @@ final class SessionStore {
 
     // MARK: - Session CRUD
 
+    /// Whether a device is still paired with this account (set by AppState).
+    @ObservationIgnored var isDeviceStillPaired: ((String) -> Bool)?
+
     func upsertSession(_ digest: SessionDigest, deviceId: String, deviceName: String) {
+        if let owner = sessions[digest.id]?.deviceId, owner != deviceId,
+           isDeviceStillPaired?(owner) == true {
+            KLog.d("⚠️ Ignoring session \(digest.id.prefix(12)) claimed by another computer")
+            return
+        }
         let date = ISO8601.parse(digest.createdAt) ?? Date()
 
         let mode = digest.mode
@@ -765,6 +773,15 @@ final class SessionStore {
         var nextPreviews = sessionPreviews
         var nextDrafts = drafts
         var nextAutoReadSuppressed = autoReadSuppressedSessions
+        // A computer may only describe its own sessions. A session id already
+        // owned by another computer that is still paired is not taken over
+        // (otherwise this computer would start receiving its inputs).
+        let digests = digests.filter { digest in
+            guard let owner = sessions[digest.id]?.deviceId, owner != deviceId,
+                  isDeviceStillPaired?(owner) == true else { return true }
+            KLog.d("⚠️ Ignoring session \(digest.id.prefix(12)) claimed by another computer")
+            return false
+        }
 
         for id in removedIDs {
             nextSessions.removeValue(forKey: id)
