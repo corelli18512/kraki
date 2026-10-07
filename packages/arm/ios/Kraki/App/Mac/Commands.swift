@@ -169,19 +169,21 @@ struct MacCommands: Commands {
         }
         #endif
 
-        // "This Mac" menu (the background service that runs agents here).
+        // "This Mac" menu: whether this Mac is online (MacPresence.swift).
         CommandMenu("This Mac") {
-            Button("Start Background Service") {
-                Task { await tentacleCLI.startDaemon() }
-            }
-            .disabled(!tentacleCLI.canStartDaemon)
+            Text(tentacleCLI.onlineStatus.title)
 
-            Button("Stop Background Service") {
-                Task { await tentacleCLI.stopDaemon() }
+            Button("Bring This Mac Online") {
+                Task { await tentacleCLI.goOnline() }
             }
-            .disabled(!tentacleCLI.canStopDaemon)
+            .disabled(!tentacleCLI.canGoOnline)
 
-            Button("Restart Background Service") {
+            Button("Take This Mac Offline") {
+                Task { await tentacleCLI.goOffline() }
+            }
+            .disabled(!tentacleCLI.canGoOffline)
+
+            Button("Reconnect This Mac") {
                 Task { await tentacleCLI.restartDaemon() }
             }
             .disabled(!tentacleCLI.canStopDaemon)
@@ -204,6 +206,25 @@ struct MacCommands: Commands {
 
         // App menu — Sparkle owns the standard update dialog and installation
         // lifecycle; this command only routes the user's explicit request.
+        // ⌘Q puts the window away while this Mac is online: quitting would
+        // take it offline, which is what the menu bar's Quit is for.
+        CommandGroup(replacing: .appTermination) {
+            if tentacleCLI.managesOnlinePresence && tentacleCLI.canGoOffline {
+                Button("Close Kraki (Stay Online)") {
+                    MacPresenceController.shared.closeWindowsStayingOnline()
+                }
+                .keyboardShortcut("q", modifiers: .command)
+                Button("Quit Kraki and Go Offline…") {
+                    MacPresenceController.shared.quitGoingOffline()
+                }
+            } else {
+                Button("Quit Kraki") {
+                    MacPresenceController.shared.quitGoingOffline()
+                }
+                .keyboardShortcut("q", modifiers: .command)
+            }
+        }
+
         CommandGroup(after: .appInfo) {
             Button("Check for Updates…") {
                 NotificationCenter.default.post(name: .macCheckForUpdates, object: nil)

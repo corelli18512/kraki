@@ -174,6 +174,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         #else
         NSApp.setActivationPolicy(.regular)
         #endif
+        // After the policy above: a login launch switches back to menu-bar-only.
+        installPresenceObservers()
 
         // Remove the "File" and "Window" menus. SwiftUI synthesizes both,
         // but this app has no file concept (New Session lives under
@@ -247,6 +249,36 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
                 // tiny SwiftUI placeholder surface. Inflate only when needed;
                 // this covers both production-relay Dev and local-relay Dev.
                 inflateAndCenterMainWindowOnce()
+            }
+        }
+
+        if let delay = ProcessInfo.processInfo.environment["KRAKI_MENUBAR_DUMP_AFTER"].flatMap(Double.init) {
+            // Check of the menu bar menu without opening it (no focus steal):
+            // log every item SwiftUI builds for it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                let button = NSApp.windows
+                    .filter { NSStringFromClass(type(of: $0)).contains("StatusBarWindow") }
+                    .compactMap { $0.contentView?.firstDescendant(ofType: NSStatusBarButton.self) }
+                    .first
+                // SwiftUI keeps the menu on its NSStatusItem, not on the button.
+                guard let menu = (button?.value(forKey: "_statusItem") as? NSStatusItem)?.menu else {
+                    NSLog("[menubar-dump] no menu")
+                    return
+                }
+                NSLog("[menubar-dump] icon template=%d size=%@", button?.image?.isTemplate == true ? 1 : 0,
+                      NSStringFromSize(button?.image?.size ?? .zero))
+                menu.delegate?.menuNeedsUpdate?(menu)
+                menu.update()
+                for item in menu.items {
+                    NSLog("[menubar-dump] %@", item.isSeparatorItem ? "----" : [
+                        item.isSectionHeader ? "[header]" : nil,
+                        item.title,
+                        item.subtitle.map { "· \($0)" },
+                        item.image == nil ? nil : "(image)",
+                        item.keyEquivalent.isEmpty ? nil : "⌘\(item.keyEquivalent)",
+                        item.isEnabled ? nil : "(disabled)",
+                    ].compactMap { $0 }.joined(separator: " "))
+                }
             }
         }
 
@@ -2667,9 +2699,62 @@ struct MacChatView: View {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // false → keep the app alive in the menu bar after the user
-        // hits red-circle close on the main window. They can ⌘Q to
-        // actually quit, or click "Quit" from the MenuBarExtra menu.
+        // hits red-circle close on the main window. While Kraki runs this
+        // Mac's agents it always stays: online must stay visible
+        // (MacPresence.swift). Quit from the MenuBarExtra menu.
+        if MacPresenceController.shared.managesPresence { return false }
         return !keepRunningInMenuBar
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // A person quitting (Dock, AppleScript) takes this Mac offline after
+        // confirming; logout, restart and updates pass straight through.
+        MacPresenceController.shared.shouldTerminate(sender)
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // Opening Kraki again (Finder, Spotlight, Dock) while it only lives in
+        // the menu bar shows its window, including the one hidden at login.
+        if !flag { MacPresenceController.shared.showMainWindow() }
+        return true
+    }
+
+    // MARK: - Presence (menu bar, Dock icon, login launch)
+
+    private var presenceObservers: [NSObjectProtocol] = []
+
+    private func installPresenceObservers() {
+        #if DEBUG
+        if NativeTestRuntime.isRunningTests || NSApp.activationPolicy() == .prohibited { return }
+        let automation = ProcessInfo.processInfo.environment["KRAKI_NATIVE_AUTOMATION"] == "1"
+            || CommandLine.arguments.contains("--kraki-native-automation")
+        if automation { return }
+        #endif
+        let presence = MacPresenceController.shared
+        if MacPresenceController.wasLaunchedAsLoginItem(NSAppleEventManager.shared().currentAppleEvent) {
+            KLog.diag("[Presence] launched at login; menu bar only")
+            presence.beginLoginLaunch()
+        }
+        let center = NotificationCenter.default
+        presenceObservers.append(center.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { presence.updateActivationPolicy() }
+        })
+        presenceObservers.append(center.addObserver(
+            forName: NSWindow.willCloseNotification, object: nil, queue: .main
+        ) { note in
+            guard let window = note.object as? NSWindow,
+                  !(window is NSPanel), window.styleMask.contains(.titled) else { return }
+            // The closing window still counts as visible until this returns.
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard MacPresenceController.appWindows().isEmpty else { return }
+                    presence.updateActivationPolicy()
+                    presence.lastWindowDidClose()
+                }
+            }
+        })
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -2701,5 +2786,17 @@ struct MacChatView: View {
         // and flushes its stores. Nothing extra to do here yet.
     }
 }
+
+#if DEBUG
+private extension NSView {
+    func firstDescendant<T: NSView>(ofType type: T.Type) -> T? {
+        if let match = self as? T { return match }
+        for child in subviews {
+            if let match = child.firstDescendant(ofType: type) { return match }
+        }
+        return nil
+    }
+}
+#endif
 
 #endif
