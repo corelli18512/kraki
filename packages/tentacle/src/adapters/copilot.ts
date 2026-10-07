@@ -1649,13 +1649,20 @@ export class CopilotAdapter extends AgentAdapter {
       this.turnErrorReported.set(sessionId, false);
     }
 
+    // Events from a subagent (task tool) carry a top-level `agentId`; the root
+    // agent's never do. A subagent's prose, turn boundaries and errors are its
+    // own — it reports back through the task tool's result — so they must not
+    // reach the parent's reply or turn state. Its tool calls still show as steps.
+    const fromSubagent = (event: unknown) => !!(event as { agentId?: string }).agentId;
+
     session.on('assistant.message_delta', (event) => {
+      if (fromSubagent(event)) return;
       this.onMessageDelta?.(sessionId, { content: event.data.deltaContent, ...this.lifecycleEvent(sessionId) });
     });
 
     session.on('assistant.message', (event) => {
       // Skip empty messages (SDK sends these before tool calls)
-      if (event.data.content) {
+      if (event.data.content && !fromSubagent(event)) {
         this.turnHasOutput.set(sessionId, true);
         this.touchSession(sessionId);
         // Draft-bubble model: buffer prose instead of graduating each message
@@ -1672,7 +1679,8 @@ export class CopilotAdapter extends AgentAdapter {
       // report_intent is a UI hint only — drop it from the message stream.
       if (data.toolName === 'report_intent') return;
       // A tool follows any buffered prose → that prose was narration.
-      this.flushNarration(sessionId);
+      // A subagent's tool says nothing about the parent's draft.
+      if (!fromSubagent(event)) this.flushNarration(sessionId);
       this.turnHasOutput.set(sessionId, true);
       this.touchSession(sessionId);
       if (data.mcpServerName) {
@@ -1835,7 +1843,8 @@ export class CopilotAdapter extends AgentAdapter {
       else finish();
     });
 
-    session.on('assistant.turn_start', () => {
+    session.on('assistant.turn_start', (event) => {
+      if (fromSubagent(event)) return;
       const entry = this.sessions.get(sessionId);
       if (entry) entry.eventTurnId = entry.relayTurnId;
       this.turnHasOutput.set(sessionId, false);
@@ -1850,7 +1859,9 @@ export class CopilotAdapter extends AgentAdapter {
       const data = event.data as unknown as Record<string, unknown>;
       const message = (data.message as string) ?? 'Unknown session error';
       const errorType = data.errorType as string | undefined;
-      logger.error({ sessionId, errorType, statusCode: data.statusCode }, `session.error: ${message}`);
+      logger.error({ sessionId, errorType, statusCode: data.statusCode, agentId: (event as { agentId?: string }).agentId }, `session.error: ${message}`);
+      // A subagent's failure reaches the parent as the task tool's result.
+      if (fromSubagent(event)) return;
       if (!this.turnErrorReported.get(sessionId)) {
         this.turnErrorReported.set(sessionId, true);
         const status = typeof data.statusCode === 'number' ? data.statusCode : undefined;
@@ -1901,6 +1912,11 @@ export class CopilotAdapter extends AgentAdapter {
     session.on('assistant.turn_end', async (event) => {
       const data = event.data as unknown as Record<string, unknown>;
       const reason = data?.reason;
+      if (fromSubagent(event)) {
+        // The parent sees the failure as the task tool's result.
+        if (reason === 'error') logger.warn({ sessionId, agentId: (event as { agentId?: string }).agentId, error: data?.error }, 'Copilot subagent turn ended with error');
+        return;
+      }
       if (reason === 'error') {
         const errorMsg = (data?.error as string) ?? 'Unknown agent error';
         this.turnErrorReported.set(sessionId, true);
@@ -1936,7 +1952,8 @@ export class CopilotAdapter extends AgentAdapter {
         cacheWriteTokens: prev.cacheWriteTokens + ((data.cacheWriteTokens as number) ?? 0),
         totalCost: prev.totalCost + ((data.cost as number) ?? 0),
         totalDurationMs: prev.totalDurationMs + ((data.duration as number) ?? 0),
-        contextTokens: (data.inputTokens as number) ?? prev.contextTokens,
+        // A subagent's prompt is its own window, not the parent's.
+        contextTokens: fromSubagent(event) ? prev.contextTokens : (data.inputTokens as number) ?? prev.contextTokens,
       };
       this.sessionUsage.set(sessionId, updated);
       this.onUsageUpdate?.(sessionId, updated);

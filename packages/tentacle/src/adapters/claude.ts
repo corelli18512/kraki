@@ -260,6 +260,23 @@ interface SessionEntry {
   staleResults?: number;
   /** Claude Code reported status=compacting and no end has been seen yet. */
   compacting?: boolean;
+  /** Subagent tasks (Agent/Task tool) still running, by SDK task id. Claude
+   *  Code runs them in the background by default and, when one finishes,
+   *  wakes the parent with a new provider turn on its own. */
+  runningSubagents?: Set<string>;
+  /** Subagent task id (= canUseTool agentID) → its task description. */
+  subagentLabels?: Map<string, string>;
+  /** The parent's provider turn ended while subagents were still running;
+   *  the Kraki turn stays open for the continuation Claude Code starts. */
+  awaitingSubagents?: boolean;
+  /** Fallback settle when subagents finished but no continuation came. */
+  subagentSettleTimer?: ReturnType<typeof setTimeout>;
+  /** The Kraki turn has been held open at least once for subagents; it stays
+   *  set across Claude Code's continuation turns until the turn settles. */
+  subagentPhase?: boolean;
+  /** Subagent completions seen during the phase whose continuation turn has
+   *  not finished yet (Claude Code wakes the parent once per completion). */
+  owedContinuations?: number;
   reasoningEffort?: string;
 }
 
@@ -908,10 +925,16 @@ export class ClaudeAdapter extends AgentAdapter {
       entry.pendingError = undefined;
       entry.turnFinalized = false;
       entry.userAborted = false;
+      this.resetSubagentPhase(entry);
       // A new logical turn owns every event from here on. The SDK does not
       // echo prompts back, and only tool turns produce SDK 'user' messages,
       // so waiting for one left text-only turns tagged with the PREVIOUS
       // turn's id — RelayClient then dropped their reply and idle as late.
+      entry.eventTurnId = entry.relayTurnId;
+    } else if (entry.awaitingSubagents) {
+      // An interjection while the turn is held for background subagents: no
+      // provider turn is in flight, so this message starts the next one and
+      // every event from here on belongs to the interjecting relay turn.
       entry.eventTurnId = entry.relayTurnId;
     }
 
@@ -1190,10 +1213,24 @@ export class ClaudeAdapter extends AgentAdapter {
       // arrive before interrupt() resolves. RelayClient already snapshotted the
       // live draft into turn_status(user_abort) and owns the aborted idle, so the
       // adapter must not also emit a conclusion bubble / error / idle for it.
-      if (entry.query && entry.turnFinalized === false) {
+      if (entry.awaitingSubagents) {
+        // No provider turn is in flight (it ended; only subagents run), so no
+        // result will come for it. Settle silently — RelayClient owns the
+        // aborted boundary.
+        this.resetSubagentPhase(entry);
+        entry.turnFinalized = true;
+        entry.pendingText = '';
+        entry.pendingError = undefined;
+      } else if (entry.query && entry.turnFinalized === false) {
+        this.resetSubagentPhase(entry);
         entry.userAborted = true;
         entry.pendingText = '';
         entry.pendingError = undefined;
+      }
+      // Stop means stop the delegated work too: a subagent finishing later
+      // would wake the parent into a turn nobody is listening to.
+      if (entry.query && entry.runningSubagents?.size) {
+        for (const taskId of entry.runningSubagents) entry.query.stopTask(taskId).catch(() => {});
       }
       this.broadcastPendingResolutions(sessionId);
       if (entry.query) {
@@ -1367,6 +1404,7 @@ export class ClaudeAdapter extends AgentAdapter {
       // Query completed normally. A result event is the authoritative turn
       // boundary; only fall back here when the SDK ended without one.
       const entry = this.sessions.get(sessionId);
+      if (entry) this.resetSubagentPhase(entry);
       if (entry?.userAborted && !entry.turnFinalized) {
         entry.turnFinalized = true;
       } else if (!entry?.turnFinalized) {
@@ -1389,6 +1427,7 @@ export class ClaudeAdapter extends AgentAdapter {
       }
       logger.error({ err, sessionId }, 'Session consumer loop error');
       const entry = this.sessions.get(sessionId);
+      if (entry) this.resetSubagentPhase(entry);
       if (entry) {
         this.emitError(sessionId, entry, getErrorMessage(err));
         // Settle the turn that was running when the process died so the
@@ -1454,7 +1493,69 @@ export class ClaudeAdapter extends AgentAdapter {
   /**
    * Route a single SDKMessage to the appropriate adapter callback.
    */
+  private stopAwaitingSubagents(entry: SessionEntry): void {
+    entry.awaitingSubagents = false;
+    if (entry.subagentSettleTimer) clearTimeout(entry.subagentSettleTimer);
+    entry.subagentSettleTimer = undefined;
+  }
+
+  /** Track subagent tasks; once none run while the turn is held open, give
+   *  Claude Code a moment to start its continuation, else settle the turn. */
+  private trackSubagentTask(sessionId: string, msg: Record<string, unknown>): void {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    const taskId = typeof msg.task_id === 'string' ? msg.task_id : '';
+    if (!taskId) return;
+    const running = entry.runningSubagents ??= new Set();
+    if (msg.subtype === 'task_started') {
+      // Only subagents: a background shell (e.g. a dev server) may never end.
+      const isAgent = typeof msg.task_type === 'string' ? msg.task_type === 'local_agent' : !!msg.subagent_type;
+      if (isAgent) running.add(taskId);
+      if (typeof msg.description === 'string' && msg.description) (entry.subagentLabels ??= new Map()).set(taskId, msg.description);
+      return;
+    }
+    const status = msg.subtype === 'task_notification'
+      ? msg.status
+      : (msg.patch as { status?: unknown } | undefined)?.status;
+    if (!['completed', 'failed', 'stopped', 'killed'].includes(String(status))) return;
+    const wasRunning = running.delete(taskId);
+    // Count each completion once (task_notification), and only while the turn
+    // is in its subagent phase: earlier ones are folded into the live turn.
+    if (msg.subtype === 'task_notification' && entry.subagentPhase) entry.owedContinuations = (entry.owedContinuations ?? 0) + 1;
+    if (wasRunning && running.size === 0 && entry.awaitingSubagents) this.armSubagentGrace(sessionId, entry);
+  }
+
+  private resetSubagentPhase(entry: SessionEntry): void {
+    this.stopAwaitingSubagents(entry);
+    entry.subagentPhase = false;
+    entry.owedContinuations = 0;
+  }
+
+  private armSubagentGrace(sessionId: string, entry: SessionEntry): void {
+    if (entry.subagentSettleTimer) clearTimeout(entry.subagentSettleTimer);
+    entry.subagentSettleTimer = setTimeout(() => {
+      if (!entry.awaitingSubagents || this.sessions.get(sessionId) !== entry) return;
+      logger.info({ sessionId }, 'Claude subagents finished without a continuation turn; settling');
+      this.resetSubagentPhase(entry);
+      entry.turnFinalized = true;
+      this.flushConclusion(sessionId);
+      this.emitIdle(sessionId, entry);
+    }, ClaudeAdapter.SUBAGENT_CONTINUATION_GRACE_MS);
+  }
+
+  static SUBAGENT_CONTINUATION_GRACE_MS = 5_000;
+
   private handleSDKMessage(sessionId: string, msg: SDKMessage): void {
+    // Held-open turn: any parent activity means Claude Code started the
+    // continuation turn, which now runs (and settles) like a normal turn.
+    const held = this.sessions.get(sessionId);
+    if (held?.awaitingSubagents) {
+      const m = msg as unknown as { type: string; subtype?: string; parent_tool_use_id?: string | null };
+      const parentActivity = (m.type === 'system' && (m.subtype === 'init' || (m.subtype === 'status' && (msg as unknown as { status?: string }).status === 'requesting')))
+        || ((m.type === 'assistant' || m.type === 'stream_event') && !m.parent_tool_use_id)
+        || m.type === 'result';
+      if (parentActivity) this.stopAwaitingSubagents(held);
+    }
     switch (msg.type) {
       case 'system': {
         const sysMsg = msg as SDKSystemMessage & { subtype?: string };
@@ -1489,6 +1590,8 @@ export class ClaudeAdapter extends AgentAdapter {
           // A boundary without a preceding status still completes a compaction.
           this.emitCompaction(sessionId, { phase: 'start', reason });
           this.emitCompaction(sessionId, { phase: 'end', reason });
+        } else if (['task_started', 'task_notification', 'task_updated'].includes(sysMsg.subtype as string)) {
+          this.trackSubagentTask(sessionId, msg as unknown as Record<string, unknown>);
         } else if (sysMsg.subtype === 'files_persisted') {
           // The SDK finished writing session files to disk — safe to
           // resume watching the session directory for external changes.
@@ -1499,7 +1602,12 @@ export class ClaudeAdapter extends AgentAdapter {
 
       case 'assistant': {
         const assistantMsg = msg as SDKAssistantMessage;
+        // A subagent (Task/Agent tool) message: it carries the dispatching
+        // tool call's id. Its prose and errors belong to the subagent, never
+        // to the parent's reply; its tool calls still show as steps.
+        const fromSubagent = !!assistantMsg.parent_tool_use_id;
         if (assistantMsg.error) {
+          if (fromSubagent) break;
           const entry = this.sessions.get(sessionId);
           const normalized = normalizeClaudeSDKError(assistantMsg as unknown as Record<string, unknown>);
           if (entry) entry.pendingError = preferClaudeError(entry.pendingError, normalized);
@@ -1512,6 +1620,7 @@ export class ClaudeAdapter extends AgentAdapter {
         const entry = this.sessions.get(sessionId);
         for (const block of betaMessage.content) {
           if (block.type === 'text' && (block as { text?: string }).text) {
+            if (fromSubagent) continue;
             // Draft-bubble model: buffer prose instead of graduating each block
             // to its own permanent bubble. Accumulate consecutive text blocks so
             // multi-block answers aren't lost. Flushed as narration (if a tool
@@ -1525,7 +1634,8 @@ export class ClaudeAdapter extends AgentAdapter {
             }
           } else if (block.type === 'tool_use') {
             // A tool follows the buffered prose → that prose was narration.
-            this.flushNarration(sessionId);
+            // A subagent's tool says nothing about the parent's draft.
+            if (!fromSubagent) this.flushNarration(sessionId);
             const toolBlock = block as { name: string; input?: Record<string, unknown>; id: string };
             const args = (toolBlock.input ?? {}) as Record<string, unknown>;
 
@@ -1549,13 +1659,15 @@ export class ClaudeAdapter extends AgentAdapter {
 
         // Track usage
         if (betaMessage.usage) {
-          this.updateUsage(sessionId, betaMessage.usage as unknown as Record<string, unknown>);
+          this.updateUsage(sessionId, betaMessage.usage as unknown as Record<string, unknown>, fromSubagent);
         }
         break;
       }
 
       case 'stream_event': {
         const partial = msg as SDKPartialAssistantMessage;
+        // Subagent stream (forwardSubagentText): not the parent's reply.
+        if (partial.parent_tool_use_id) break;
         const event = partial.event as unknown as Record<string, unknown>;
 
         if (event.type === 'content_block_delta') {
@@ -1580,6 +1692,11 @@ export class ClaudeAdapter extends AgentAdapter {
         }
         if (entry?.turnFinalized) break;
         if (entry?.compacting) this.emitCompaction(sessionId, { phase: 'end' });
+        // A result during the subagent phase ends one continuation turn.
+        if (entry?.subagentPhase && entry.owedContinuations) entry.owedContinuations -= 1;
+        const holdForSubagents = !resultAny.is_error && !entry?.userAborted
+          && (!!entry?.runningSubagents?.size || !!entry?.owedContinuations);
+        if (entry && !holdForSubagents) this.resetSubagentPhase(entry);
 
         if (entry?.userAborted) {
           // RelayClient owns this turn's terminal boundary (see abortSession).
@@ -1600,8 +1717,13 @@ export class ClaudeAdapter extends AgentAdapter {
           else this.onError?.(sessionId, { message: error.message });
         } else {
           if (entry) entry.pendingError = undefined;
-          // A tool-only turn is anchored centrally by RelayClient.
-          this.flushConclusion(sessionId);
+          if (holdForSubagents) {
+            // Prose so far ("waiting for the subagent…") is an intermediate step.
+            this.flushNarration(sessionId);
+          } else {
+            // A tool-only turn is anchored centrally by RelayClient.
+            this.flushConclusion(sessionId);
+          }
         }
 
         // Update final usage
@@ -1623,6 +1745,16 @@ export class ClaudeAdapter extends AgentAdapter {
           };
           this.sessionUsage.set(sessionId, updated);
           this.onUsageUpdate?.(sessionId, updated);
+        }
+
+        // Background subagents are still running: Claude Code will wake the
+        // parent when they finish. Keep the Kraki turn open for that answer.
+        if (holdForSubagents && entry) {
+          entry.awaitingSubagents = true;
+          entry.subagentPhase = true;
+          if (!entry.runningSubagents?.size) this.armSubagentGrace(sessionId, entry);
+          logger.info({ sessionId, running: entry.runningSubagents?.size }, 'Claude turn held open for background subagents');
+          break;
         }
 
         // The result is the authoritative turn boundary.
@@ -1816,6 +1948,11 @@ export class ClaudeAdapter extends AgentAdapter {
       const decision = new Promise<PermissionResult>((resolve) => {
         pendingPermissions.set(permId, { resolve, toolKind, input });
       });
+      // Approval cards raised by a subagent say so.
+      if (options.agentID) {
+        const label = this.sessions.get(sessionId)?.subagentLabels?.get(options.agentID) ?? 'subagent';
+        parsed.description = `Subagent ${label} — ${parsed.description}`;
+      }
       this.onPermissionRequest?.(sessionId, {
         ...this.lifecycleEvent(this.sessions.get(sessionId)),
         id: permId,
@@ -1912,6 +2049,8 @@ export class ClaudeAdapter extends AgentAdapter {
   // ── Helpers ───────────────────────────────────────
 
   private cleanupSessionState(sessionId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (entry?.subagentSettleTimer) clearTimeout(entry.subagentSettleTimer);
     this.sessionAllowSets.delete(sessionId);
     this.sessionModes.delete(sessionId);
     this.pendingModeSignals.delete(sessionId);
@@ -1943,7 +2082,7 @@ export class ClaudeAdapter extends AgentAdapter {
     entry.pendingQuestions.clear();
   }
 
-  private updateUsage(sessionId: string, usage: Record<string, unknown>): void {
+  private updateUsage(sessionId: string, usage: Record<string, unknown>, fromSubagent = false): void {
     const prev = this.sessionUsage.get(sessionId) ?? {
       inputTokens: 0, outputTokens: 0,
       cacheReadTokens: 0, cacheWriteTokens: 0,
@@ -1957,7 +2096,8 @@ export class ClaudeAdapter extends AgentAdapter {
       totalCost: prev.totalCost,
       totalDurationMs: prev.totalDurationMs,
       // Prompt size of the latest call = how full the context window is.
-      contextTokens: ((usage.input_tokens as number) ?? 0)
+      // A subagent's prompt is its own window, not the parent's.
+      contextTokens: fromSubagent ? prev.contextTokens : ((usage.input_tokens as number) ?? 0)
         + ((usage.cache_read_input_tokens as number) ?? 0)
         + ((usage.cache_creation_input_tokens as number) ?? 0) || prev.contextTokens,
     };

@@ -195,6 +195,41 @@ describe('CodexAdapter (fake app-server child process)', () => {
     expect(h.of('message')[0].content).toBe('shell decision: accept');
   });
 
+  it('subagent approvals are owned by the parent session; auto mode accepts them', async () => {
+    await started();
+    const sid = await session('auto');
+    await turn(sid, 'SUBAGENT', 'rt-1');
+    await h.idleCount(1);
+    expect(h.of('permission')).toHaveLength(0);
+    expect(h.replies().some((r) => r.result!.decision === 'accept')).toBe(true);
+    // The child's own reply and turn end never reach the parent session.
+    expect(h.of('message').map((e) => e.content)).toEqual(['subagent decision: accept']);
+    expect(h.of('delta').some((e) => String(e.content).includes('CHILD'))).toBe(false);
+    expect(h.of('idle')).toHaveLength(1);
+    expect(h.of('error')).toHaveLength(0);
+  });
+
+  it('safe mode raises a labelled card for a subagent command; deny declines', async () => {
+    await started();
+    const sid = await session('safe');
+    await turn(sid, 'SUBAGENT', 'rt-1');
+    const perm = await h.waitFor((e) => e.type === 'permission', 'permission');
+    expect(perm).toMatchObject({ sid, toolArgs: { toolName: 'shell', args: { command: 'rg -n CODEWORD .' } }, description: 'Subagent find_codeword — Run: rg -n CODEWORD .', turnId: 'rt-1' });
+    await h.adapter.respondToPermission(sid, perm.id as string, 'deny');
+    await h.idleCount(1);
+    expect(h.of('message').map((e) => e.content)).toEqual(['subagent decision: decline']);
+  });
+
+  it('a subagent request Codex withdraws retires its card', async () => {
+    await started();
+    const sid = await session('safe');
+    await turn(sid, 'SUBAGENT WITHDRAW', 'rt-1');
+    const perm = await h.waitFor((e) => e.type === 'permission', 'permission');
+    await h.waitFor((e) => e.type === 'perm_auto' && e.id === perm.id, 'card retired');
+    await h.idleCount(1);
+    expect(h.of('message').map((e) => e.content)).toEqual(['subagent decision: withdrawn']);
+  });
+
   it('safe mode raises a shell permission card; deny declines', async () => {
     await started();
     const sid = await session('safe');

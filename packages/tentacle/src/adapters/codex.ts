@@ -233,6 +233,11 @@ export class CodexAdapter extends AgentAdapter {
   private rpc: CodexRpcProcess | null = null;
   private sessions = new Map<string, CodexSession>();
   private threadToSession = new Map<string, string>();
+  /** Subagent threads spawned (directly or nested) by a session's thread →
+   * owning Kraki session. Only server requests (approvals, questions, Kraki
+   * tools) and their withdrawals are routed through it; a subagent's own
+   * messages and turn lifecycle never drive the parent session. */
+  private childThreads = new Map<string, { sessionId: string; label: string }>();
   private models: ModelDetail[] = [];
   /** Ephemeral title threads awaiting their final agent message. */
   private titleThreads = new Map<string, { text: string; done: (text: string | null) => void }>();
@@ -384,6 +389,7 @@ export class CodexAdapter extends AgentAdapter {
     if (rpc) await rpc.stop();
     this.sessions.clear();
     this.threadToSession.clear();
+    this.childThreads.clear();
     logger.info('Codex adapter stopped');
   }
 
@@ -744,6 +750,7 @@ export class CodexAdapter extends AgentAdapter {
         this.rpc.request('thread/unsubscribe', { threadId: s.threadId }, 5_000).catch(() => {});
       }
       if (s.threadId) this.threadToSession.delete(s.threadId);
+      for (const [tid, c] of this.childThreads) if (c.sessionId === sessionId) this.childThreads.delete(tid);
       this.sessions.delete(sessionId);
     }
     this.onSessionEnded?.(sessionId, { reason: 'killed' });
@@ -962,10 +969,53 @@ export class CodexAdapter extends AgentAdapter {
     return sid ? this.sessions.get(sid) : undefined;
   }
 
+  /** Owning session for a server request: the session's own thread, or one of
+   * the subagent threads it spawned. */
+  private sessionForRequest(params: unknown): { s: CodexSession; child?: string } | undefined {
+    const own = this.sessionForParams(params);
+    if (own) return { s: own };
+    const threadId = str((params as { threadId?: unknown } | undefined)?.threadId);
+    const child = threadId ? this.childThreads.get(threadId) : undefined;
+    const s = child ? this.sessions.get(child.sessionId) : undefined;
+    return s && child ? { s, child: child.label } : undefined;
+  }
+
+  /** Learn subagent threads from the notifications of a thread we own (the
+   * session's thread or an already-known subagent thread, for nesting). */
+  private learnChildThreads(n: RpcNotification, params: Record<string, unknown>): void {
+    const threadId = str(params.threadId);
+    const owner = threadId
+      ? this.threadToSession.get(threadId) ?? this.childThreads.get(threadId)?.sessionId
+      : undefined;
+    const adopt = (tid: string, label: string, sessionId: string | undefined) => {
+      if (!tid || !sessionId || this.threadToSession.has(tid) || this.childThreads.has(tid)) return;
+      this.childThreads.set(tid, { sessionId, label });
+      logger.debug({ sessionId, childThreadId: tid, label }, 'codex: subagent thread attached');
+    };
+    if (n.method === 'thread/started') {
+      const thread = params.thread as { id?: unknown; parentThreadId?: unknown } | undefined;
+      const parent = str(thread?.parentThreadId);
+      const sid = parent ? this.threadToSession.get(parent) ?? this.childThreads.get(parent)?.sessionId : undefined;
+      adopt(str(thread?.id), 'subagent', sid);
+      return;
+    }
+    if (!owner || (n.method !== 'item/started' && n.method !== 'item/completed')) return;
+    const item = params.item as Record<string, unknown> | undefined;
+    if (item?.type === 'subAgentActivity') {
+      const path = str(item.agentPath);
+      adopt(str(item.agentThreadId), path.split('/').filter(Boolean).pop() || 'subagent', owner);
+    } else if (item?.type === 'collabAgentToolCall' && Array.isArray(item.receiverThreadIds)) {
+      for (const tid of item.receiverThreadIds) adopt(str(tid), 'subagent', owner);
+    }
+  }
+
   private async handleServerRequest(req: RpcServerRequest): Promise<void> {
     const rpc = this.rpc!;
     const params = (req.params ?? {}) as Record<string, unknown>;
-    const s = this.sessionForParams(params);
+    const owner = this.sessionForRequest(params);
+    const s = owner?.s;
+    // Approval cards raised by a subagent say so.
+    const who = owner?.child ? `Subagent ${owner.child} — ` : '';
 
     switch (req.method) {
       case 'item/commandExecution/requestApproval': {
@@ -982,7 +1032,7 @@ export class CodexAdapter extends AgentAdapter {
         const reason = str(params.reason);
         return this.gate(s, pending, [], {
           toolArgs: { toolName: 'shell', args: { command } },
-          description: command ? `Run: ${command}` : (reason || 'Run a command'),
+          description: who + (command ? `Run: ${command}` : (reason || 'Run a command')),
         });
       }
 
@@ -995,7 +1045,7 @@ export class CodexAdapter extends AgentAdapter {
         const label = paths.length ? paths.join(', ') : (grantRoot || 'files');
         return this.gate(s, pending, grantRoot ? [grantRoot] : paths, {
           toolArgs: { toolName: 'write_file', args: { path: paths[0] ?? grantRoot, content: str(tracked?.args.diff) } },
-          description: `${str(params.reason) || 'Edit'}: ${label}`,
+          description: `${who}${str(params.reason) || 'Edit'}: ${label}`,
         });
       }
 
@@ -1006,7 +1056,7 @@ export class CodexAdapter extends AgentAdapter {
         const pending: PendingPermission = { rpcId: req.id, kind: 'permissions', toolKind, params };
         return this.gate(s, pending, [], {
           toolArgs: { toolName: 'permissions', args: perms },
-          description: str(params.reason) || `Grant extra permissions: ${Object.keys(perms).filter((k) => perms[k]).join(', ') || 'unspecified'}`,
+          description: who + (str(params.reason) || `Grant extra permissions: ${Object.keys(perms).filter((k) => perms[k]).join(', ') || 'unspecified'}`),
         });
       }
 
@@ -1150,8 +1200,15 @@ export class CodexAdapter extends AgentAdapter {
       }
       return;
     }
+    this.learnChildThreads(n, params);
     const s = this.sessionForParams(params);
-    if (!s) return;
+    if (!s) {
+      // A subagent thread: only withdraw cards it raised on its owner's behalf.
+      const child = this.childThreads.get(str(params.threadId));
+      const owner = child ? this.sessions.get(child.sessionId) : undefined;
+      if (owner && n.method === 'serverRequest/resolved') this.retireWithdrawnRequest(owner, params.requestId);
+      return;
+    }
 
     const turnScoped = n.method === 'turn/started' || n.method === 'turn/completed'
       ? str((params.turn as { id?: unknown } | undefined)?.id)
@@ -1220,17 +1277,7 @@ export class CodexAdapter extends AgentAdapter {
 
       case 'serverRequest/resolved': {
         // Codex withdrew a request itself (e.g. turn interrupted) — retire the card.
-        const rid = params.requestId;
-        for (const [id, p] of s.pendingPermissions) {
-          if (p.rpcId !== rid) continue;
-          s.pendingPermissions.delete(id);
-          this.onPermissionAutoResolved?.(s.sessionId, id, 'cancelled');
-        }
-        for (const [id, q] of s.pendingQuestions) {
-          if (q.rpcId !== rid) continue;
-          s.pendingQuestions.delete(id);
-          this.onQuestionAutoResolved?.(s.sessionId, id);
-        }
+        this.retireWithdrawnRequest(s, params.requestId);
         break;
       }
 
@@ -1240,6 +1287,19 @@ export class CodexAdapter extends AgentAdapter {
 
       default:
         break;
+    }
+  }
+
+  private retireWithdrawnRequest(s: CodexSession, rid: unknown): void {
+    for (const [id, p] of s.pendingPermissions) {
+      if (p.rpcId !== rid) continue;
+      s.pendingPermissions.delete(id);
+      this.onPermissionAutoResolved?.(s.sessionId, id, 'cancelled');
+    }
+    for (const [id, q] of s.pendingQuestions) {
+      if (q.rpcId !== rid) continue;
+      s.pendingQuestions.delete(id);
+      this.onQuestionAutoResolved?.(s.sessionId, id);
     }
   }
 
