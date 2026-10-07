@@ -186,6 +186,97 @@ final class ComposerGrowthShots: XCTestCase {
         try shot("stacked-typing-light")
     }
 
+    /// Dictation while Kraki isn't focused: after every partial the box must
+    /// fit the transcript (no text below the box's visible area).
+    func testProbeVoiceOverflowWhileUnfocused() throws {
+        window.resignKey()
+        var log = ""
+        let words = (0..<60).map { i in ["请把", "这个", "功能", "接入", "Kraki", "然后", "保留", "原来的", "输入框", "样式"][i % 10] }
+        for (mode, keyed) in [("unfocused", false), ("focused", true)] {
+            if keyed { window.makeKey() } else { window.resignKey() }
+            app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
+            drain(500)
+            var text = ""
+            var bad = 0
+            for (i, w) in words.enumerated() {
+                text += w
+                app.voiceInputController.debugApplyPartial(text)
+                drain(i % 7 == 0 ? 5 : 40)   // irregular arrival, like real ASR
+                drain(250)
+                guard let t = views(window.contentView!).compactMap({ $0 as? MacComposerVoiceTranscriptView }).first,
+                      let sv = t.enclosingScrollView else { continue }
+                let visible = sv.contentView.bounds
+                let lines = t.contentHeight / MacComposerVoiceTranscriptView.lineHeight
+                // The tail line must be visible: document bottom inside the viewport.
+                let tailHidden = t.frame.height - visible.maxY > 1
+                let clipped = t.contentHeight > visible.height + 1 && lines < 3.5   // < 3 lines must fit fully
+                if tailHidden || clipped {
+                    bad += 1
+                    log += "\(mode) i=\(i) lines=\(String(format: "%.1f", lines)) content=\(t.contentHeight) doc=\(t.frame.height) viewport=\(visible.height) originY=\(visible.minY) svFrame=\(sv.frame.height)\n"
+                    if bad <= 3 { try shot("overflow-\(mode)-\(i)") }
+                }
+            }
+            log += "\(mode): bad=\(bad)\n"
+            app.iosVoiceComposer.cancel(); drain(400)
+        }
+        try log.write(to: dir.appendingPathComponent("overflow.txt"), atomically: true, encoding: .utf8)
+        XCTAssertTrue(log.contains("unfocused: bad=0") && log.contains("focused: bad=0"), log)
+    }
+
+    /// Typed text: a width change without typing re-wraps the editor and the
+    /// box follows (no stale height, nothing scrolled out of view).
+    func testEditorFollowsWidthChangesWithoutTyping() throws {
+        app.sessionStore.setDraft(sid, Self.texts[2].1)
+        drain(500)
+        var log = "", bad = 0
+        for w in [640.0, 480, 420, 900, 560, 1100, 640] {
+            window.setContentSize(NSSize(width: w, height: 190))
+            drain(400)
+            let e = editor, sv = e.enclosingScrollView!
+            let clip = sv.contentView.bounds
+            let fitted = MacComposerScrollableTextInput.fittedHeight(e.string, width: clip.width + 8)
+            let wrong = abs(e.frame.width - clip.width) > 1 || (e.frame.height <= clip.height + 1 && clip.minY > 0.5)
+                || abs(sv.frame.height - fitted) > 2
+            if wrong { bad += 1 }
+            log += (wrong ? "BAD " : "ok  ") + "w=\(Int(w)) clip=\(clip.width)x\(clip.height) doc=\(e.frame.size) originY=\(clip.minY) fitted=\(fitted) box=\(sv.frame.height)\n"
+        }
+        try log.write(to: dir.appendingPathComponent("editor-resize.txt"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(bad, 0, log)
+    }
+
+    /// Width changes during dictation (window resize, sidebar / inspector):
+    /// the transcript must re-wrap to the new width and the box must follow.
+    func testProbeVoiceOverflowOnResize() throws {
+        var log = ""
+        app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
+        drain(500)
+        app.voiceInputController.debugApplyPartial("请把这个功能接入 Kraki，保留原来的输入框样式，然后再跑一遍测试看看有没有问题")
+        drain(500)
+        var bad = 0
+        for (i, w) in [640.0, 560, 480, 420, 520, 700, 900, 460, 640].enumerated() {
+            window.setContentSize(NSSize(width: w, height: 190))
+            drain(400)
+            guard let t = views(window.contentView!).compactMap({ $0 as? MacComposerVoiceTranscriptView }).first,
+                  let sv = t.enclosingScrollView else { continue }
+            let visible = sv.contentView.bounds
+            let expected = MacComposerVoiceTranscriptView.measure(
+                MacComposerVoiceTranscriptOnly.pieces(controller: app.voiceInputController, preview: app.iosVoiceComposer.preview),
+                width: visible.width)
+            let line = "w=\(Int(w)) clip=\(visible.width) docW=\(t.frame.width) content=\(t.contentHeight) expected=\(expected) viewport=\(visible.height) doc=\(t.frame.height) originY=\(visible.minY)"
+            // Short text must fill its document exactly (no stale extra height
+            // scrolled out of view), long text must stay pinned to its tail.
+            let fits = expected <= visible.height + 1
+            let wrong = abs(t.frame.width - visible.width) > 1 || abs(t.contentHeight - expected) > 1
+                || (fits && visible.minY > 0.5)
+                || (!fits && abs(t.frame.height - visible.maxY) > 1)
+            if wrong { bad += 1; try shot("resize-\(i)") }
+            log += (wrong ? "BAD " : "ok  ") + line + "\n"
+        }
+        log += "bad=\(bad)\n"
+        try log.write(to: dir.appendingPathComponent("overflow-resize.txt"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(bad, 0, log)
+    }
+
     func testStates() throws {
         for (suffix, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
             window.appearance = NSAppearance(named: appearance)

@@ -1654,6 +1654,15 @@ final class MacComposerVoiceTranscriptView: NSView {
         measure(attributedText(pieces: pieces, color: .labelColor), width: width)
     }
 
+    /// Re-wrap the current text at a new width (the box resized without
+    /// new speech). Returns whether anything changed.
+    @discardableResult
+    func refit(width: CGFloat) -> Bool {
+        guard width > 1, abs(width - measuredWidth) > 0.5 else { return false }
+        _ = update(pieces: pieces, width: width)
+        return true
+    }
+
     private static func attributedText(pieces: [Piece], color: NSColor) -> NSAttributedString {
         let output = NSMutableAttributedString()
         for piece in pieces where !piece.text.isEmpty {
@@ -1847,8 +1856,37 @@ struct MacComposerVoiceTranscript: NSViewRepresentable {
 final class MacComposerVoiceScrollView: MacEdgeFadingScrollView {
     var followsTail = true
 
+    /// The box can change size without new speech (window resize, sidebar,
+    /// the actions re-stacking). Re-fit the document to the viewport every
+    /// time: re-wrap at the new width and drop height left over from a
+    /// narrower / taller layout. Before, a stale taller document stayed
+    /// scrolled to its old bottom and the text slid out of the box.
+    override func tile() {
+        super.tile()
+        refitDocument()
+    }
+
+    func refitDocument() {
+        guard let document = documentView as? MacComposerVoiceTranscriptView else { return }
+        let clip = contentView.bounds.size
+        guard clip.width > 1, clip.height > 1 else { return }
+        document.refit(width: clip.width)
+        let height = max(document.contentHeight, clip.height)
+        if abs(document.frame.height - height) > 0.5 || abs(document.frame.width - clip.width) > 0.5 {
+            document.setFrameSize(NSSize(width: clip.width, height: height))
+        }
+        let maximumY = max(0, height - clip.height)
+        let target = followsTail ? maximumY : min(contentView.bounds.origin.y, maximumY)
+        if abs(contentView.bounds.origin.y - target) > 0.5 {
+            contentView.bounds.origin.y = target
+            super.reflectScrolledClipView(contentView)
+        }
+        edgeFade?.update()
+    }
+
     override func layout() {
         super.layout()
+        refitDocument()
         guard followsTail,
               let documentView,
               documentView.frame.height > contentView.bounds.height + 0.5 else { return }
