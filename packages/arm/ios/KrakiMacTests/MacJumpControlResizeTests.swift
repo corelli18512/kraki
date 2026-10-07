@@ -5,8 +5,9 @@ import AppKit
 /// ↑/↓ must track the window edge frame by frame during a resize drag and must
 /// not flicker or travel. Off-screen window, never activates the app.
 @MainActor final class MacJumpControlResizeTests: MacChatUXTestCase {
-    // Off-screen and never activated, so it does not need the foreground gate.
-    override func setUpWithError() throws {}
+    // Keeps MacChatUXTestCase's foreground gate: a titled window "moved
+    // off-screen" is pulled back onto a display by macOS (it showed up on the
+    // developer's screen during routine local runs). CI runs it.
 
 
     private struct Sample { let width: CGFloat; let up: NSRect; let down: NSRect; let upShown: Bool; let downShown: Bool; let expectedX: CGFloat }

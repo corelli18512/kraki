@@ -140,7 +140,7 @@ final class DeviceStore {
         guard let snapshot = pendingSnapshot else { return }
         pendingSnapshot = nil
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? data.write(to: Self.snapshotURL, options: .atomic)
+        try? data.write(to: Self.snapshotURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
     /// Wipe the on-disk file. Logout / reset.
@@ -248,7 +248,8 @@ final class DeviceStore {
 
     func setDevices(_ list: [DeviceSummary]) {
         let qrVerified = keyPins.verifyPendingQR(against: list)
-        devices = Dictionary(uniqueKeysWithValues: list.map { ($0.id, keyPins.apply($0)) })
+        // The list comes from the relay: a duplicate id must not trap.
+        devices = Dictionary(list.map { ($0.id, keyPins.apply($0)) }, uniquingKeysWith: { _, latest in latest })
         keyMismatchDeviceIds = keyPins.mismatched.union(qrVerified ? [] : [Self.unmatchedQRMarker])
         // Refresh greeting freshness — every online device in the fresh
         // list is "connecting" until its `device_greeting` lands in this

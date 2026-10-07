@@ -153,3 +153,47 @@ describe('G4: GitHub outage is not a rejected login', () => {
     ws.close();
   });
 });
+
+describe('edge service keys are scoped to their region', () => {
+  async function startApi() {
+    const storage = new Storage(':memory:');
+    const backend = new LocalAuthBackend({ storage, authProviders: new Map() });
+    const api = new AccountApi({ authBackend: backend, serviceKey: 'admin-svc' });
+    const http = createServer((req, res) => {
+      void api.handleRequest(req, res).then((handled) => { if (!handled) { res.writeHead(404); res.end(); } });
+    });
+    const port = await listen(http);
+    cleanups.push(() => storage.close());
+    storage.upsertUser('u_us', 'alice', 'github');
+    storage.setUserRegion('u_us', 'us');
+    storage.upsertUser('u_cn', 'bob', 'github');
+    storage.setUserRegion('u_cn', 'china');
+    const edgeKey = storage.issueRegionServiceKey('china').serviceKey;
+    return { port, edgeKey };
+  }
+
+  function post(port: number, path: string, body: unknown, key: string): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const data = JSON.stringify(body);
+      const r = request({
+        host: '127.0.0.1', port, path, method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data), Authorization: `Bearer ${key}` },
+      }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode ?? 0)); });
+      r.on('error', reject);
+      r.end(data);
+    });
+  }
+
+  it('lets an edge act only for its own region\'s users', async () => {
+    const { port, edgeKey } = await startApi();
+    expect(await post(port, '/api/pairing/create', { userId: 'u_cn' }, edgeKey)).toBe(200);
+    expect(await post(port, '/api/pairing/create', { userId: 'u_us' }, edgeKey)).toBe(403);
+    expect(await post(port, '/api/pairing/request', { userId: 'u_us' }, edgeKey)).toBe(403);
+    expect(await post(port, '/api/devices/remove', { userId: 'u_us', deviceId: 'd' }, edgeKey)).toBe(403);
+  });
+
+  it('the admin key is not region-scoped', async () => {
+    const { port } = await startApi();
+    expect(await post(port, '/api/pairing/create', { userId: 'u_us' }, 'admin-svc')).toBe(200);
+  });
+});

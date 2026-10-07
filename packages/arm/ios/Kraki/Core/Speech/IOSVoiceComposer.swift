@@ -66,6 +66,16 @@ protocol IOSVoiceComposerHost: AnyObject {
 
     init(host: IOSVoiceComposerHost) { self.host = host }
 
+    /// Draft owner for the Mac new-session composer: there is no Session yet,
+    /// so its text lives under this reserved key in `SessionStore.drafts`.
+    /// It only supports Edit (✓); a send waits for the correction and then
+    /// creates the Session (no staged bubble without a Session).
+    static let newSessionDraftID = "kraki.new-session-draft"
+
+    private func ownsDraft(_ store: SessionStore, _ id: String) -> Bool {
+        store.sessions[id] != nil || id == Self.newSessionDraftID
+    }
+
     var sessionID: String? { operation?.sessionID }
     var isRecording: Bool { operation?.phase == .recording }
     func isRecording(in sessionID: String) -> Bool { isRecording && operation?.sessionID == sessionID }
@@ -159,7 +169,7 @@ protocol IOSVoiceComposerHost: AnyObject {
     // MARK: - Recording
 
     func begin(sessionID: String, selection: NSRange?, context: VoiceSessionContext) {
-        guard let host, host.sessionStore.sessions[sessionID] != nil, !isRecording else { return }
+        guard let host, ownsDraft(host.sessionStore, sessionID), !isRecording else { return }
         // A newer utterance supersedes one still correcting into the draft;
         // its visible text is kept. A staged send is left to finish.
         if operation?.phase == .toDraft { retireKeepingDraft() }
@@ -353,7 +363,7 @@ protocol IOSVoiceComposerHost: AnyObject {
     // MARK: - Draft ownership (✓ path)
 
     private func matches(_ op: Operation) -> Bool {
-        guard let store = host?.sessionStore, store.sessions[op.sessionID] != nil else { return false }
+        guard let store = host?.sessionStore, ownsDraft(store, op.sessionID) else { return false }
         return (store.draftRevisions[op.sessionID] ?? 0) == op.revision && (store.drafts[op.sessionID] ?? "") == op.expectedDraft
     }
     /// Write the utterance into the draft unless the user has taken over.

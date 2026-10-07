@@ -69,6 +69,12 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        if NativeTestRuntime.isHeadlessTestHost {
+            // No Dock icon, no activation at launch; offscreen test windows
+            // still render.
+            NSApp.setActivationPolicy(.accessory)
+            return
+        }
         #if DEBUG
         if ProcessInfo.processInfo.environment["KRAKI_RELEASE_POLISH_BENCH"] == "1" {
             NSApp.setActivationPolicy(.prohibited)
@@ -154,6 +160,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if NativeTestRuntime.isHeadlessTestHost { return }
         if Bundle.main.bundleIdentifier == MacUpdateController.productionBundleIdentifier {
             updateController = MacUpdateController.makeIfProduction()
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
@@ -2703,6 +2710,8 @@ struct MacChatView: View {
         // Mac's agents it always stays: online must stay visible
         // (MacPresence.swift). Quit from the MenuBarExtra menu.
         if MacPresenceController.shared.managesPresence { return false }
+        // A headless test host closes its own offscreen windows: stay alive.
+        if NativeTestRuntime.isHeadlessTestHost { return false }
         return !keepRunningInMenuBar
     }
 

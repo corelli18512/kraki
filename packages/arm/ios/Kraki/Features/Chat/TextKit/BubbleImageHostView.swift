@@ -116,7 +116,7 @@ struct BubbleImageGallery: View {
                 return (id, IOSImagePreviewItem(id: id, image: image, title: "Image"))
             case .ref(let ref):
                 guard case .ready(_, let data) = attachmentStore?.state(for: ref.id),
-                      let image = UIImage(data: data) else { return nil }
+                      let image = AttachmentImageCache.image(id: ref.id, data: data) else { return nil }
                 return (
                     ref.id,
                     IOSImagePreviewItem(
@@ -157,7 +157,7 @@ struct BubbleImageGallery: View {
             let size = placeholderSize(ref)
             switch attachmentStore?.state(for: ref.id) {
             case .ready(_, let data):
-                if let image = UIImage(data: data) {
+                if let image = AttachmentImageCache.image(id: ref.id, data: data) {
                     imageButton(image: image, entryID: ref.id, cornerRadius: 12)
                         .frame(width: size.width, height: size.height)
                 } else {
@@ -221,7 +221,7 @@ struct BubbleImageGallery: View {
         case .ref(let ref):
             switch attachmentStore?.state(for: ref.id) {
             case .ready(_, let data):
-                if let image = UIImage(data: data) {
+                if let image = AttachmentImageCache.image(id: ref.id, data: data) {
                     imageButton(image: image, entryID: ref.id, cornerRadius: 12)
                         .frame(width: width, height: IOSImageGalleryLayout.multiCardHeight)
                         .overlay(cardBorder)

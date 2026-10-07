@@ -167,7 +167,24 @@ export class Storage {
     this.migrate();
   }
 
+  /** Prepared statements for the hot per-frame lookups, compiled once. */
+  private stmtCache = new Map<string, Database.Statement>();
+  private stmt(sql: string): Database.Statement {
+    let statement = this.stmtCache.get(sql);
+    if (!statement) {
+      statement = this.db.prepare(sql);
+      this.stmtCache.set(sql, statement);
+    }
+    return statement;
+  }
+
   private migrate(): void {
+    // All steps and the version bump commit together: a failure part-way
+    // leaves the previous schema intact instead of a half-migrated database.
+    this.db.transaction(() => this.migrateSteps())();
+  }
+
+  private migrateSteps(): void {
     const currentVersion = (this.db.pragma('user_version', { simple: true }) as number) || 0;
 
     if (currentVersion < 1) {
@@ -269,10 +286,15 @@ export class Storage {
     }
 
     if (currentVersion < 7) {
-      // Make region and relay_url nullable (edge provides them at join time)
-      try {
+      // Make region and relay_url nullable (edge provides them at join time).
+      // Copy the rows across; any error aborts the whole migration (rolled
+      // back), it is never swallowed after the old table was dropped.
+      const exists = this.db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'edge_join_tokens'",
+      ).get();
+      if (exists) {
         const rows = this.db.prepare('SELECT token_hash, region, relay_url, display_name, expires_at, used_at, created_at FROM edge_join_tokens').all();
-        this.db.exec('DROP TABLE IF EXISTS edge_join_tokens');
+        this.db.exec('DROP TABLE edge_join_tokens');
         this.db.exec(`
           CREATE TABLE edge_join_tokens (
             token_hash    TEXT PRIMARY KEY,
@@ -289,8 +311,6 @@ export class Storage {
         for (const row of rows as Array<{ token_hash: string; region: string | null; relay_url: string | null; display_name: string | null; expires_at: string; used_at: string | null; created_at: string }>) {
           ins.run(row.token_hash, row.region, row.relay_url, row.display_name, row.expires_at, row.used_at, row.created_at);
         }
-      } catch {
-        // Table may not exist yet on fresh DBs
       }
     }
 
@@ -437,7 +457,7 @@ export class Storage {
   }
 
   getUser(userId: string): StoredUser | undefined {
-    const row = this.db.prepare(
+    const row = this.stmt(
       'SELECT user_id, username, provider, email, preferences, region, created_at FROM users WHERE user_id = ?'
     ).get(userId) as UserRow | undefined;
     if (!row) return undefined;
@@ -643,6 +663,11 @@ export class Storage {
     if (existing && existing.userId !== userId) {
       throw new Error(`Device "${id}" belongs to user "${existing.userId}", not "${userId}"`);
     }
+    // Routing authorisation (multicast, tentacle-only messages) relies on
+    // role; a re-auth must not turn an app into a tentacle or back.
+    if (existing && existing.role !== role) {
+      throw new Error(`Device "${id}" is registered as ${existing.role}, not ${role}`);
+    }
     this.db.prepare(`
       INSERT INTO devices (id, user_id, name, role, kind, public_key, encryption_key)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -658,7 +683,7 @@ export class Storage {
   }
 
   getDevice(id: string): StoredDevice | undefined {
-    const row = this.db.prepare(
+    const row = this.stmt(
       'SELECT id, user_id, name, role, kind, public_key, encryption_key, last_seen, created_at FROM devices WHERE id = ?'
     ).get(id) as DeviceRow | undefined;
     if (!row) return undefined;
@@ -666,7 +691,7 @@ export class Storage {
   }
 
   getDevicesByUser(userId: string): StoredDevice[] {
-    const rows = this.db.prepare(
+    const rows = this.stmt(
       'SELECT id, user_id, name, role, kind, public_key, encryption_key, last_seen, created_at FROM devices WHERE user_id = ?'
     ).all(userId) as DeviceRow[];
     return rows.map(row => this.mapDeviceRow(row));

@@ -349,3 +349,26 @@ final class HeadControlWrapperTests: XCTestCase {
         XCTAssertNil(app.deviceStore.devices["T1"])
     }
 }
+
+@MainActor
+final class OutboundTargetingTests: XCTestCase {
+    func testMessageForAnUnknownSessionIsNotSentToEveryComputer() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
+        app.deviceId = "me"
+        // Real keys: with an unusable key the old code also returned false.
+        let crypto = CryptoManager()
+        let key = try crypto.exportPublicKeySPKI(crypto.generateKeyPair().publicKey)
+        for id in ["T1", "T2"] {
+            app.deviceStore.addDevice(DeviceSummary(
+                id: id, name: id, role: .tentacle, kind: .desktop,
+                publicKey: nil, encryptionKey: key, online: true, lastSeen: nil, createdAt: nil
+            ))
+        }
+        // The production path (no test hook): an unknown session fails closed
+        // before any encryption to the account's computers.
+        XCTAssertFalse(app.sendEncryptedMessage(["type": "send_input", "sessionId": "nope", "payload": [:]]))
+    }
+}
+

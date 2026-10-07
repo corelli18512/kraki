@@ -20,6 +20,7 @@
 /// content hashes, so the cache is shared across sessions; the OS may purge
 /// it and the tentacle still holds the source bytes.
 
+import CryptoKit
 import Foundation
 import Observation
 
@@ -47,26 +48,23 @@ enum HTMLArtifactSecurity {
 
     private static let csp = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; form-action 'none'; connect-src 'none'; media-src 'none'; manifest-src 'none'; worker-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:;\">"
 
+    /// Put the policy before anything the report can contain. It used to be
+    /// placed by pattern-matching `<head>` (or by replacing an existing CSP
+    /// meta in place), so a script ahead of that point — or a `<head>` inside a
+    /// comment — ran before any policy applied. Now the meta is the first
+    /// element (after a leading doctype, which must stay first to avoid quirks
+    /// mode). A report's own CSP meta, if any, can only tighten it: browsers
+    /// enforce the intersection of all policies.
     static func securedHTML(_ html: String) -> String {
-        let cspPattern = #"<meta[^>]+http-equiv\s*=\s*[\"']Content-Security-Policy[\"'][^>]*>"#
-        if let regex = try? NSRegularExpression(pattern: cspPattern, options: [.caseInsensitive]),
-           regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)) != nil {
-            return regex.stringByReplacingMatches(
-                in: html,
-                range: NSRange(html.startIndex..., in: html),
-                withTemplate: NSRegularExpression.escapedTemplate(for: csp)
-            )
+        var body = Substring(html)
+        if body.first == "\u{FEFF}" { body = body.dropFirst() }
+        let leading = body.prefix { $0.isWhitespace }
+        let rest = body.dropFirst(leading.count)
+        if rest.lowercased().hasPrefix("<!doctype"), let close = rest.firstIndex(of: ">") {
+            let doctype = rest[...close]
+            return String(doctype) + csp + String(rest[rest.index(after: close)...])
         }
-
-        let headPattern = #"<head(?:\s[^>]*)?>"#
-        if let regex = try? NSRegularExpression(pattern: headPattern, options: [.caseInsensitive]),
-           let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
-           let range = Range(match.range, in: html) {
-            var result = html
-            result.insert(contentsOf: csp, at: range.upperBound)
-            return result
-        }
-        return csp + html
+        return csp + String(body)
     }
 }
 
@@ -169,8 +167,24 @@ final class AttachmentStore {
     /// A view needs these bytes. Cached bytes load from disk; otherwise the
     /// attachment joins the paced transfer queue at `priority` (raising the
     /// priority of an existing request). A request after an error retries.
+    /// Attachment ids are the first 32 hex digits of the content's SHA-256
+    /// (tentacle AttachmentStore). Anything else is not a Kraki attachment and
+    /// must never reach a file path.
+    static func isValidID(_ id: String) -> Bool {
+        id.utf8.count == 32 && id.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x61...0x66).contains($0) }
+    }
+
+    /// Whether `data` is the content `id` names.
+    static func matchesID(_ data: Data, _ id: String) -> Bool {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined().prefix(32) == id
+    }
+
+    /// Upper bound on chunks per attachment (128 KiB chunks → 512 MiB).
+    static let maxChunks = 4096
+
     @MainActor
     func requestIfNeeded(id: String, sessionId: String, priority: AttachmentPriority = .visible) {
+        guard Self.isValidID(id) else { return }
         holders[id, default: [:]][priority, default: 0] += 1
         releasedReady.removeAll { $0 == id }
         if case .ready = states[id] { return }
@@ -264,6 +278,11 @@ final class AttachmentStore {
     }
 
     /// Test introspection: the chunk currently requested, if any.
+    /// Seed bytes for fixtures and previews without the network checks.
+    func seedForTesting(id: String, mimeType: String, data: Data) {
+        states[id] = .ready(mimeType: mimeType, data: data)
+    }
+
     var inFlightForTesting: (id: String, index: Int)? {
         inFlight.map { ($0.id, $0.index) }
     }
@@ -386,6 +405,14 @@ final class AttachmentStore {
         paced: Bool
     ) {
         let wasInFlight = inFlight?.id == id
+        // Chunks arrive from other devices: accept only well-formed chunks of
+        // an attachment this app actually asked for.
+        guard Self.isValidID(id),
+              wasInFlight || wants[id] != nil || pendingChunks[id] != nil,
+              error != nil || (total >= 1 && total <= Self.maxChunks && index >= 0 && index < total) else {
+            KLog.d("⚠️ Dropped unsolicited or malformed attachment chunk")
+            return
+        }
         if let error {
             if wasInFlight { clearInFlight() }
             wants[id] = nil
@@ -416,6 +443,12 @@ final class AttachmentStore {
             pendingTotal[id] = nil
             wants[id] = nil
             streamingWhole.remove(id)
+            guard Self.matchesID(assembled, id) else {
+                states[id] = .error(reason: "This attachment failed verification")
+                if wasInFlight { clearInFlight() }
+                pump()
+                return
+            }
             states[id] = .ready(mimeType: mimeType, data: assembled)
             persistToDisk(id: id, mimeType: mimeType, data: assembled)
             if wasInFlight { clearInFlight() }

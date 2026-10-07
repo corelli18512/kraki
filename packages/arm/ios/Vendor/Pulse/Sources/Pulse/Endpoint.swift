@@ -141,6 +141,10 @@ public final class Endpoint {
     /// GC policy keyed on "disconnected too long" survives restart. See §11.
     private var disconnectedAt: Int?
 
+    /// Largest inbound sequence gap a RESET may announce. Far beyond any real
+    /// outbox loss; anything larger is treated as corrupt or hostile.
+    static let maxResetJump: UInt64 = 1 << 24
+
     public init(
         epoch: String,
         params: PulseParams = PulseParams(),
@@ -331,9 +335,13 @@ public final class Endpoint {
 
         // (b) Prune what the peer already has, then resend the rest — announcing
         // any gap at the head of our outbox (e.g. non-durable lost in a restart).
-        if recvCursor >= outboxBase {
-            pruneOutbox(recvCursor, &effects)
-            resendWithGapAnnounce(recvCursor + 1, &effects, now)
+        // The peer's cursor is untrusted input: it can never legitimately
+        // exceed what we have sent, and an unclamped value near UInt64.max
+        // would overflow (a Swift trap) below.
+        let peerCursor = min(recvCursor, sendSeq)
+        if peerCursor >= outboxBase {
+            pruneOutbox(peerCursor, &effects)
+            resendWithGapAnnounce(peerCursor + 1, &effects, now)
         } else {
             effects.append(transmit(.reset(epoch: self.epoch, oldest: outboxBase + 1), now: now))
             resendFrom(outboxBase + 1, &effects, now)
@@ -344,7 +352,7 @@ public final class Endpoint {
     private func onData(seq: UInt64, ack: UInt64, payload: [UInt8], durable: Bool, coalesceKey: String?, now: Int) -> [Effect] {
         var effects: [Effect] = []
         pruneOutbox(ack, &effects)  // peer piggybacks its receipt of our outbound
-        if seq == recvCursor + 1 {
+        if seq == recvCursor &+ 1, recvCursor < UInt64.max {
             recvCursor = seq
             effects.append(.deliver(seq: seq, payload: payload, durable: durable, coalesceKey: coalesceKey))
         } else if seq <= recvCursor {
@@ -396,8 +404,14 @@ public final class Endpoint {
     }
 
     private func onReset(epoch: String, oldest: UInt64) -> [Effect] {
+        // `oldest` is untrusted: 0 would underflow `oldest - 1`, and a huge
+        // jump would make every later frame look like a duplicate (a silent
+        // black hole). A real gap is bounded by what a peer can have dropped.
+        guard oldest > 0, oldest - 1 <= recvCursor || oldest - 1 - recvCursor <= Self.maxResetJump else {
+            return []
+        }
         peerEpoch = epoch
-        if oldest > recvCursor + 1 {
+        if oldest > recvCursor &+ 1 {
             // Unavoidable gap: (recvCursor+1 .. oldest-1) are gone forever.
             recvCursor = oldest - 1
             return [.resetInbound(fromSeq: oldest, peerEpoch: epoch)]

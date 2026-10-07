@@ -66,15 +66,10 @@ final class AppState {
     init() {
         self.sessionStore = SessionStore()
         self.deviceStore = DeviceStore()
-        // The message DB is the persistence backbone for chat
-        // history. Failing to open it is fatal — without it the chat
-        // surface can't function and silent degradation would mask
-        // the failure. Loud crash on launch is the right signal.
-        do {
-            self.messageDatabase = try MessageDatabase()
-        } catch {
-            fatalError("Failed to open message database: \(error)")
-        }
+        // The message DB caches chat history that Tentacle replay can
+        // rebuild, so an unusable file is recreated rather than crashing
+        // every launch (see MessageDatabase.openRecovering).
+        self.messageDatabase = MessageDatabase.openRecovering()
         self.messageStore = MessageStore(db: messageDatabase)
         // The Keychain-kept lease lets a cold start warm the voice socket
         // in parallel with Head auth instead of after it.
@@ -84,6 +79,7 @@ final class AppState {
         // request-pull closure can capture self by weak reference
         // and the rest of setup (router, ws) can read it.
         self.attachmentStore = Self.makeAttachmentStore(for: self)
+        bindStores()
         setupNetworking()
 
         // App-termination flush. SwiftUI's `scenePhase` already drives
@@ -111,6 +107,11 @@ final class AppState {
 
     /// Paced attachment transfers through this app's encrypted channel.
     /// (Used by the production init too, so it must not be DEBUG-only.)
+    /// Cross-store links that need a fully initialized AppState.
+    private func bindStores() {
+        sessionStore.isDeviceStillPaired = { [weak deviceStore] id in deviceStore?.devices[id] != nil }
+    }
+
     static func makeAttachmentStore(for state: AppState) -> AttachmentStore {
         AttachmentStore { [weak state] id, sessionId, index in
             guard let state else { return false }
@@ -182,6 +183,7 @@ final class AppState {
         self.hasStoredCredentials = true
         self.hasCompletedInitialConnect = true
         self.connectionStatus = .disconnected
+        bindStores()
     }
     #endif
 
@@ -1174,8 +1176,16 @@ final class AppState {
             targetDeviceId = explicitTarget
         } else if let payloadTarget {
             targetDeviceId = payloadTarget
-        } else if let sessionId, let session = sessionStore.sessions[sessionId] {
-            targetDeviceId = session.deviceId
+        } else if let sessionId {
+            // A session's messages go only to the computer that owns it. An
+            // unknown session must not fall back to every computer: that would
+            // encrypt this command for machines that have nothing to do with it.
+            guard let owner = sessionStore.sessions[sessionId]?.deviceId
+                    ?? sessionStore.archivedSessionInfo(sessionId)?.deviceId else {
+                KLog.d("⚠️ Not sending \(message["type"] as? String ?? "?"): unknown session")
+                return false
+            }
+            targetDeviceId = owner
         } else {
             targetDeviceId = nil
         }

@@ -24,6 +24,9 @@ import CryptoKit
 
     override func setUp() {
         super.setUp()
+        // XCTest still calls setUp() after setUpWithError() skipped the test:
+        // without this the skipped suite opened (and activated) a window.
+        guard ProcessInfo.processInfo.environment["KRAKI_RUN_UI_TESTS"] == "1" else { return }
         app = IOSVoiceHoldScenarioFixture.makeAppState()
         app.testOutboundMessageHandler = { [weak self] payload, _, _ in
             if payload["type"] as? String == "send_input" {
@@ -48,9 +51,9 @@ import CryptoKit
         drain(700)
     }
     override func tearDown() {
-        app.iosVoiceComposer.retireKeepingDraft()
-        app.voiceInputController.forgetLease()
-        window.orderOut(nil); window.contentView = nil
+        app?.iosVoiceComposer.retireKeepingDraft()
+        app?.voiceInputController.forgetLease()
+        window?.orderOut(nil); window?.contentView = nil
         window = nil; app = nil; sent = []; sentAttachmentCounts = []
         sentAnswerIDs = []; sentDeliveries = []
         super.tearDown()

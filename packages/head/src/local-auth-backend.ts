@@ -91,6 +91,7 @@ export class LocalAuthBackend implements AuthBackend {
     auth: AuthMethod,
     device: DeviceInfo,
     headRegion?: string,
+    clientIp?: string,
   ): Promise<AuthOutcome> {
     const logger = getLogger();
 
@@ -102,9 +103,9 @@ export class LocalAuthBackend implements AuthBackend {
       return { ok: false, code: 'unknown_auth_method', message: 'Use startChallenge/verifyChallenge for challenge auth' };
     }
 
-    const resolved = await this.resolveAuthUser(auth);
+    const resolved = await this.resolveAuthUser(auth, clientIp);
     if (this.isAuthError(resolved)) {
-      logger.warn('Auth rejected', { method: auth.method, reason: resolved.message });
+      logger.warn('Auth rejected', { method: auth.method, ip: clientIp, reason: resolved.message });
       return resolved;
     }
 
@@ -243,7 +244,7 @@ export class LocalAuthBackend implements AuthBackend {
       return { ok: false, code: 'unsupported_auth_method', message: `${auth.method} cannot be used for login-first routing` };
     }
 
-    const resolved = await this.resolveAuthUser(auth);
+    const resolved = await this.resolveAuthUser(auth, clientIp);
     if (this.isAuthError(resolved)) return resolved;
 
     const regions = this.getRegions();
@@ -330,6 +331,11 @@ export class LocalAuthBackend implements AuthBackend {
       displayName: joinResult.displayName,
       serviceKey,
     };
+  }
+
+  /** Region the user's account is assigned to, if any. */
+  getUserRegion(userId: string): string | undefined {
+    return this.storage.getUser(userId)?.region ?? undefined;
   }
 
   validateServiceKey(serviceKey: string): { valid: boolean; region?: string } {
@@ -495,7 +501,7 @@ export class LocalAuthBackend implements AuthBackend {
     };
   }
 
-  private async resolveAuthUser(auth: AuthMethod): Promise<AuthUser | { ok: false; code: string; message: string }> {
+  private async resolveAuthUser(auth: AuthMethod, clientIp?: string): Promise<AuthUser | { ok: false; code: string; message: string }> {
     let provider: AuthProvider | undefined;
     let credentials: { token?: string; githubCode?: string; codeVerifier?: string; redirectUri?: string; ip?: string } = {};
 
@@ -530,7 +536,7 @@ export class LocalAuthBackend implements AuthBackend {
       return { ok: false, code: 'auth_rejected', message: `Auth method ${auth.method} not configured` };
     }
 
-    const result = await provider.authenticate(credentials);
+    const result = await provider.authenticate({ ...credentials, ip: clientIp });
     if (!result.ok) {
       return { ok: false, code: result.retryable ? 'service_unavailable' : 'auth_rejected', message: result.message };
     }

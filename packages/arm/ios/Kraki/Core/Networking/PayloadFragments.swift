@@ -39,6 +39,7 @@ final class PayloadAssembler {
     private var sets: [String: Pending] = [:]
     private var order: [String] = []
     private var bytes = 0
+    private var lastSweep = Date.distantPast
     private let maxBytes: Int, maxParts: Int, ttl: TimeInterval
     private let now: () -> Date
 
@@ -75,9 +76,16 @@ final class PayloadAssembler {
               n > 0, i >= 0, i < n else { return (false, nil) }
         guard n <= maxParts else { return (true, nil) }
         let t = now()
-        for (key, set) in sets where t.timeIntervalSince(set.touched) > ttl { drop(key) }
+        // Expiry is a sweep over every set; run it at most every 30 s rather
+        // than on each fragment of a large payload.
+        if t.timeIntervalSince(lastSweep) > 30 {
+            lastSweep = t
+            for (key, set) in sets where t.timeIntervalSince(set.touched) > ttl { drop(key) }
+        }
+        // A set that changed its part count was restarted by the sender: start
+        // over instead of ignoring the new parts until the old set expires.
+        if let existing = sets[id], existing.parts.count != n { drop(id) }
         var set = sets[id] ?? { order.append(id); return Pending(parts: Array(repeating: nil, count: n), touched: t) }()
-        guard set.parts.count == n else { return (true, nil) }
         set.touched = t
         if set.parts[i] == nil {
             set.parts[i] = d

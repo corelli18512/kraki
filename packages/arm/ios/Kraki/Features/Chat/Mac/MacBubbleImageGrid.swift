@@ -100,7 +100,7 @@ struct MacBubbleImageGrid: View {
                 return (id, item)
             case .ref(let ref):
                 guard case .ready(_, let data) = attachmentStore?.state(for: ref.id),
-                      let image = NSImage(data: data) else { return nil }
+                      let image = AttachmentImageCache.image(id: ref.id, data: data) else { return nil }
                 return (
                     ref.id,
                     MacImagePreviewItem(
@@ -138,7 +138,7 @@ struct MacBubbleImageGrid: View {
         case .ref(let ref):
             switch attachmentStore?.state(for: ref.id) {
             case .ready(_, let data):
-                if let image = NSImage(data: data) {
+                if let image = AttachmentImageCache.image(id: ref.id, data: data) {
                     let item = MacImagePreviewItem(
                         image: image,
                         title: ref.caption ?? ref.name ?? "Image"
@@ -204,7 +204,7 @@ struct MacBubbleImageGrid: View {
         case .ref(let ref):
             switch attachmentStore?.state(for: ref.id) {
             case .ready(_, let data):
-                if let image = NSImage(data: data) {
+                if let image = AttachmentImageCache.image(id: ref.id, data: data) {
                     let item = MacImagePreviewItem(
                         image: image,
                         title: ref.caption ?? ref.name ?? "Image"

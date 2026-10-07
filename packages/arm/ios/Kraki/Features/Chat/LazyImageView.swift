@@ -37,7 +37,7 @@ struct LazyImageView: View {
         Group {
             switch attachmentStore.state(for: ref.id) {
             case .ready(_, let data):
-                if let img = UIImage(data: data) {
+                if let img = AttachmentImageCache.image(id: ref.id, data: data) {
                     Image(uiImage: img)
                         .resizable()
                         .scaledToFit()

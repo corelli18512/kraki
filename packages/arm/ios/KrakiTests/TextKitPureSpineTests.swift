@@ -840,17 +840,24 @@ final class TextKitPureSpineTests: XCTestCase {
         XCTAssertEqual(projected.htmlArtifacts.map(\.id), ["report-late"])
     }
 
-    func testHTMLArtifactSecurityReplacesProducerCSPWithNativeBoundary() {
-        let source = "<html><head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src *\"></head><body>ok</body></html>"
-        let secured = HTMLArtifactSecurity.securedHTML(source)
-        XCTAssertFalse(secured.contains("default-src *"))
-        XCTAssertTrue(secured.contains("default-src 'none'"))
-        XCTAssertTrue(secured.contains("frame-src 'none'"))
-        XCTAssertTrue(secured.contains("connect-src 'none'"))
-        XCTAssertEqual(
-            secured.components(separatedBy: "Content-Security-Policy").count - 1,
-            1
-        )
+    func testHTMLArtifactSecurityPolicyPrecedesAllReportContent() {
+        let policyPrefix = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none';"
+        // Each of these used to run a script before the native policy applied.
+        let attacks = [
+            "<script>fetch('https://x')</script><html><head></head><body></body></html>",
+            "<!--<head>--><script>fetch('https://x')</script><head></head>",
+            "<script>fetch('https://x')</script><body><meta http-equiv=\"Content-Security-Policy\" content=\"\"></body>",
+            "\u{FEFF}  <script>fetch('https://x')</script>",
+        ]
+        for source in attacks {
+            let secured = HTMLArtifactSecurity.securedHTML(source)
+            XCTAssertTrue(secured.hasPrefix(policyPrefix), source)
+            XCTAssertTrue(secured.contains("connect-src 'none'"))
+            XCTAssertTrue(secured.contains("frame-src 'none'"))
+        }
+        // A doctype stays first (no quirks mode); the policy follows it.
+        let doc = HTMLArtifactSecurity.securedHTML("<!DOCTYPE html><html><head></head><body>ok</body></html>")
+        XCTAssertTrue(doc.hasPrefix("<!DOCTYPE html>" + policyPrefix))
         XCTAssertEqual(HTMLArtifactSecurity.maxBytes, 10 * 1024 * 1024)
     }
 

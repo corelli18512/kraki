@@ -137,6 +137,33 @@ struct VoiceSessionContext: Equatable, Sendable {
 }
 
 enum VoiceSessionContextBuilder {
+    /// A Session that does not exist yet (the Mac new-session composer): the
+    /// chosen agent, model and computer are the only context.
+    static func buildNewSession(agent: String, model: String?, deviceName: String?,
+                                userVocabulary: [String] = VoiceVocabulary.load(),
+                                shareConversation: Bool = VoiceInputSettings.shareConversationContext) -> VoiceSessionContext {
+        var fields: [String: VoiceInputJSONValue] = [
+            "product": .string("kraki"),
+            "inputMethod": .string("dictation"),
+            "locale": .string(Locale.current.identifier),
+        ]
+        guard shareConversation else { return VoiceSessionContext(fields: fields, vocabulary: userVocabulary) }
+        let terms = [agent, model ?? "", deviceName ?? ""]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.count >= 2 && $0.count <= 48 && $0.rangeOfCharacter(from: .letters) != nil }
+        fields["session"] = .object([
+            "agent": .string(agent),
+            "model": model.map(VoiceInputJSONValue.string) ?? .null,
+            "terms": .array(terms.map(VoiceInputJSONValue.string)),
+        ])
+        return VoiceSessionContext(
+            fields: fields,
+            vocabulary: userVocabulary + terms.filter { term in
+                !userVocabulary.contains { $0.lowercased() == term.lowercased() }
+            }
+        )
+    }
+
     /// `userVocabulary`: the user's own terms (Settings → Voice Input → Custom Words),
     /// first; then terms taken from the current conversation.
     static func build(session: SessionInfo, recentMessages: [ChatMessage],

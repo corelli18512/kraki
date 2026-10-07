@@ -81,19 +81,37 @@ struct DeviceUpdateProgress: Equatable, Sendable {
 }
 
 enum KrakiVersion {
-    /// Numeric major.minor.patch; a pre-release suffix (`-poc`) is ignored.
+    /// Numeric core (`1.2.3`) of a version string; missing parts are 0.
     static func parts(_ v: String) -> [Int] {
         let core = v.split(separator: "-", maxSplits: 1).first.map(String.init) ?? v
         return core.split(separator: ".").map { Int($0) ?? 0 }
     }
 
+    /// Pre-release identifiers (`beta.1` → ["beta", "1"]); empty for a release.
+    static func prerelease(_ v: String) -> [String] {
+        let pieces = v.split(separator: "-", maxSplits: 1)
+        guard pieces.count == 2 else { return [] }
+        return pieces[1].split(separator: "+").first.map { $0.split(separator: ".").map(String.init) } ?? []
+    }
+
+    /// Semantic-version order: `1.2.0-beta.1` < `1.2.0` < `1.2.1`.
     static func isNewer(_ a: String, than b: String) -> Bool {
         let x = parts(a), y = parts(b)
         for i in 0..<max(x.count, y.count, 3) {
             let l = i < x.count ? x[i] : 0, r = i < y.count ? y[i] : 0
             if l != r { return l > r }
         }
-        return false
+        let pa = prerelease(a), pb = prerelease(b)
+        if pa.isEmpty || pb.isEmpty { return pa.isEmpty && !pb.isEmpty }
+        for (l, r) in zip(pa, pb) where l != r {
+            switch (Int(l), Int(r)) {
+            case let (li?, ri?): return li > ri
+            case (nil, _?): return true   // alphanumeric outranks numeric
+            case (_?, nil): return false
+            case (nil, nil): return l > r
+            }
+        }
+        return pa.count > pb.count
     }
 }
 
