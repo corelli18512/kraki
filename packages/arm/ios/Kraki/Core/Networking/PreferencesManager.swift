@@ -42,7 +42,8 @@ final class PreferencesManager {
     // Custom Words: silent account sync. Edits are flushed into the store's
     // persisted outbox 0.7 s after the last change and sent as one request;
     // the reply (the account's list) acknowledges it. No reply in 5 s: resend.
-    // Ops are idempotent in effect, so a resend after a lost reply is harmless.
+    // A resend after a lost reply re-applies the same intents (harmless unless
+    // another device changed those words in between, then the resend wins).
     private var vocabularyWork: DispatchWorkItem?
     private var vocabularyInFlight: (id: String, count: Int)?
     private var vocabularyUser: String?

@@ -30,7 +30,9 @@ Devices never upload lists, only intents, one per changed word:
 
 Head applies intents in arrival order; the later one wins. Because only intents
 travel, a device that was offline cannot overwrite words it never touched, and
-replaying an intent (after a lost reply) has no further effect. The one cost: if
+resending an intent after a lost reply re-applies the same change. (If
+another device changed that word in between, the resend counts as the later
+intent and wins; acceptable for a word list.) The one cost: if
 two devices edit the same word at nearly the same moment, the earlier edit is
 replaced without notice. Native code mirrors Head's apply function
 (`VoiceWordList.apply`) for its local view; tests pin both to the same cases.
