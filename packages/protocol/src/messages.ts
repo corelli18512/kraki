@@ -665,8 +665,9 @@ export interface DeviceGreetingMessage extends BaseEnvelope {
 /** How Kraki is installed on a computer, which decides how it is updated:
  *  `mac-app` = built into Kraki for Mac (the app is the unit of update),
  *  `app-bundle` = the CLI's macOS Kraki.app, `binary` = single executable,
- *  `npm` = `npm i -g @kraki/tentacle`. */
-export type KrakiInstallMethod = 'mac-app' | 'app-bundle' | 'binary' | 'npm' | 'unknown';
+ *  `npm` = `npm i -g @kraki/tentacle`, `windows-app` = built into Kraki for
+ *  Windows (updated with the app, never in place). */
+export type KrakiInstallMethod = 'mac-app' | 'windows-app' | 'app-bundle' | 'binary' | 'npm' | 'unknown';
 
 export interface DeviceUpdateInfo {
   installedVia: KrakiInstallMethod;
