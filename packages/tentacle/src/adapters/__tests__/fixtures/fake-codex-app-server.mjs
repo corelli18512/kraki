@@ -180,6 +180,53 @@ async function runTurn(threadId, t, turnId, input) {
     return finish();
   }
 
+  // Subagent delegation, shaped from a live codex-cli 0.157.1 trace: the child
+  // runs on its own thread; its approvals and messages carry the CHILD threadId.
+  if (text.includes('SUBAGENT')) {
+    await say('Delegating to a subagent.', 'commentary');
+    const childThread = uid('thread');
+    const childTurn = uid('turn');
+    const cbase = { threadId: childThread, turnId: childTurn };
+    const act = (kind, agentThreadId, agentPath, b = base) => {
+      const it = { type: 'subAgentActivity', id: uid('call'), kind, agentThreadId, agentPath };
+      notify('item/started', { ...b, item: it }); notify('item/completed', { ...b, item: it });
+    };
+    act('started', childThread, '/root/find_codeword');
+    notify('thread/status/changed', { threadId: childThread, status: { type: 'active', activeFlags: [] } });
+    notify('turn/started', { threadId: childThread, turn: { id: childTurn, items: [], status: 'inProgress', error: null } });
+    const wait = item('collabAgentToolCall', { tool: 'wait', status: 'inProgress', senderThreadId: threadId, receiverThreadIds: [] });
+    started(wait);
+    const cmd = item('commandExecution', { command: "rg -n CODEWORD .", cwd: '/tmp', status: 'inProgress', commandActions: [], aggregatedOutput: null, exitCode: null });
+    notify('item/started', { ...cbase, item: cmd });
+    let decision;
+    if (text.includes('WITHDRAW')) {
+      const reqId = nextServerReqId;
+      void ask('item/commandExecution/requestApproval', { ...cbase, itemId: cmd.id, command: cmd.command, cwd: '/tmp', startedAtMs: Date.now() });
+      await sleep(150);
+      waiting.delete(reqId);
+      notify('serverRequest/resolved', { threadId: childThread, requestId: reqId });
+      decision = 'withdrawn';
+    } else {
+      const res = await ask('item/commandExecution/requestApproval', { ...cbase, itemId: cmd.id, command: cmd.command, cwd: '/tmp', startedAtMs: Date.now() });
+      notify('serverRequest/resolved', { threadId: childThread, requestId: nextServerReqId - 1 });
+      decision = res?.decision;
+    }
+    const ok = decision === 'accept' || decision === 'acceptForSession';
+    notify('item/completed', { ...cbase, item: { ...cmd, status: ok ? 'completed' : 'declined', aggregatedOutput: ok ? 'src/deep/config.ts:1:// CODEWORD: purple-otter-42' : null, exitCode: ok ? 0 : null } });
+    act('interacted', threadId, '/root', cbase);
+    completed({ ...wait, status: 'completed' });
+    const childMsg = { type: 'agentMessage', id: uid('item'), text: '', phase: 'final_answer' };
+    notify('item/started', { ...cbase, item: childMsg });
+    notify('item/agentMessage/delta', { ...cbase, itemId: childMsg.id, delta: 'CHILD REPORT' });
+    notify('item/completed', { ...cbase, item: { ...childMsg, text: `CHILD REPORT (${decision})` } });
+    act('completed', childThread, '/root/find_codeword');
+    notify('thread/status/changed', { threadId: childThread, status: { type: 'idle' } });
+    notify('turn/completed', { threadId: childThread, turn: { id: childTurn, items: [], status: 'completed', error: null, durationMs: 10 } });
+    await sleep(30);
+    await say(`subagent decision: ${decision}`);
+    return finish();
+  }
+
   if (text.includes('SHELL')) {
     const cmd = text.includes('KRAKISTOP') ? 'kraki stop' : 'rm -rf build';
     await say('Let me clean the build.', 'commentary');
