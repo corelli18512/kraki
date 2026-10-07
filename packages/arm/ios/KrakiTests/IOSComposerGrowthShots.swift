@@ -94,8 +94,15 @@ final class IOSComposerGrowthShots: XCTestCase {
             drain(0.3)
             try shot("ios-text-many-top-\(suffix)")
             log += "text-top-\(suffix): top=\(fade!.debugEdges.top) bottom=\(fade!.debugEdges.bottom)\n"
-            tv.setContentOffset(CGPoint(x: 0, y: tv.contentSize.height - tv.bounds.height + tv.adjustedContentInset.bottom), animated: false)
-            drain(0.3)
+            // UITextView lays text out lazily: its content height can grow
+            // after the first jump, so settle at the real bottom.
+            // (Never touch tv.layoutManager: that drops it to TextKit 1.)
+            for _ in 0..<3 {
+                tv.scrollRangeToVisible(NSRange(location: tv.text.utf16.count, length: 0))
+                drain(0.1)
+                tv.setContentOffset(CGPoint(x: 0, y: tv.contentSize.height - tv.bounds.height + tv.adjustedContentInset.bottom), animated: false)
+                drain(0.15)
+            }
             try shot("ios-text-many-bottom-\(suffix)")
             log += "text-bottom-\(suffix): top=\(fade!.debugEdges.top) bottom=\(fade!.debugEdges.bottom)\n"
             app.sessionStore.setDraft(sid, "")
@@ -108,6 +115,31 @@ final class IOSComposerGrowthShots: XCTestCase {
             XCTAssertTrue(log.contains("text-top-\(s): top=false bottom=true"), log)
             XCTAssertTrue(log.contains("text-bottom-\(s): top=true bottom=false"), log)
         }
+    }
+
+    /// Typing across the wrap: clear moves above the mic (the text gains its
+    /// width), once, and the field keeps focus (never rebuilt).
+    func testTypingAcrossTheWrapStacksClearAboveTheMic() throws {
+        app.sessionStore.setDraft(sid, "Fix")
+        drain(0.5)
+        let tv = try XCTUnwrap(textView)
+        XCTAssertTrue(tv.becomeFirstResponder())
+        tv.selectedRange = NSRange(location: tv.text.utf16.count, length: 0)
+        let oneLineWidth = tv.frame.width
+        var widths: [CGFloat] = []
+        for ch in " the failing tests in my-app, then run the suite" {
+            tv.insertText(String(ch))
+            drain(0.02)
+            widths.append(tv.frame.width)
+        }
+        drain(0.4)
+        XCTAssertTrue(textView === tv, "the field must not be rebuilt")
+        XCTAssertTrue(tv.isFirstResponder, "typing keeps focus")
+        XCTAssertGreaterThan(tv.frame.width, oneLineWidth + 20, "wrapped text gains the clear button's width")
+        var switches = 0
+        for (a, b) in zip(widths, widths.dropFirst()) where abs(a - b) > 1 { switches += 1 }
+        XCTAssertEqual(switches, 1, "one switch, no flicker: \(widths)")
+        try shot("ios-stacked-typing")
     }
 
     func testTypingGrowthEases() throws {

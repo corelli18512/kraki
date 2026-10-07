@@ -79,6 +79,18 @@ struct MessageInputView: View {
     /// Widths of the text field / transcript, so the height their text will
     /// take is known in the same update as the text (growth eases).
     @State private var textFieldWidth: CGFloat = 0
+    /// Text + clear + mic area (constant while typing).
+    @State private var textAreaWidth: CGFloat = 0
+    private static let micWidth: CGFloat = 44
+
+    /// Multi-line text: clear sits above the mic in one column, giving the
+    /// text that width. Decided from the stacked width only, so wrapping
+    /// can't flip it back and forth at the boundary.
+    private var stacksTrailingControls: Bool {
+        guard canShowVoiceToggle, hasText, textAreaWidth > 1 else { return false }
+        return IOSComposerTextMetrics.height(text, width: textAreaWidth - Self.micWidth - 6, maxHeight: .greatestFiniteMagnitude)
+            > IOSComposerTextMetrics.lineHeight + 0.5
+    }
     @State private var transcriptWidth: CGFloat = 0
     @State private var transcriptEdges = IOSScrollEdges()
     @FocusState private var isFocused: Bool
@@ -320,21 +332,52 @@ struct MessageInputView: View {
     private var restingBox: some View {
         HStack(alignment: .bottom, spacing: 0) {
             imageSlot
-            HStack(alignment: .center, spacing: 0) {
-                textFieldForMode
-                if hasText || hasImage { clearButton }
+            HStack(alignment: .bottom, spacing: 0) {
+                HStack(alignment: .center, spacing: 0) {
+                    // Same position in both arrangements: the field (focus,
+                    // IME) is never rebuilt.
+                    textFieldForMode
+                    if (hasText || hasImage) && !stacksTrailingControls { clearButton }
+                }
+                .frame(maxWidth: .infinity, minHeight: Self.inputBoxHeight)
+                // The TextField only hit-tests its glyph rect: any other tap in
+                // the text area (padding, edges) focuses it as well.
+                .background {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { if !isFocused { isFocused = true } }
+                }
+                .padding(.trailing, stacksTrailingControls ? Self.micWidth : 0)
+                .overlay(alignment: .trailing) {
+                    if stacksTrailingControls { stackedControls }
+                }
+                if canShowVoiceToggle && !stacksTrailingControls { micButton }
             }
-            .frame(maxWidth: .infinity, minHeight: Self.inputBoxHeight)
-            // The TextField only hit-tests its glyph rect: any other tap in
-            // the text area (padding, edges) focuses it as well.
-            .background {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { if !isFocused { isFocused = true } }
-            }
-            if canShowVoiceToggle { micButton }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textAreaWidth = $0 }
         }
         .padding(.trailing, 2)
+    }
+
+    /// Clear on the first line, the mic on the last (where it always is).
+    private var stackedControls: some View {
+        VStack(spacing: 0) {
+            Button(action: clearDraft) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 17))
+                    .foregroundStyle(Color(.tertiaryLabel))
+                    .frame(width: Self.micWidth, height: Self.inputBoxHeight - 2)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("chat-clear")
+            .accessibilityLabel("Clear message")
+            // Each takes half the column (minHeight 0: the one-row frames must
+            // not make it taller than the text); icons stay on the first /
+            // last line.
+            .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+            micButton.frame(minHeight: 0, maxHeight: .infinity, alignment: .bottom)
+        }
+        .frame(width: Self.micWidth)
     }
 
     // MARK: - Dictation (two rows)
@@ -483,7 +526,7 @@ struct MessageInputView: View {
                     ProgressView().controlSize(.small).accessibilityLabel("Finishing transcription")
                 }
             }
-            .frame(width: 44, height: Self.inputBoxHeight)
+            .frame(width: Self.micWidth, height: Self.inputBoxHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

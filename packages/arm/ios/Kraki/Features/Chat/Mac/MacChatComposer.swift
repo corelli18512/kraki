@@ -86,6 +86,18 @@ struct MacChatComposer: View {
     /// Widths of the editor / recording surface (stable while typing), so
     /// the height they will take is known in the same update as the text.
     @State private var textInputWidth: CGFloat = 0
+    /// Text + clear + mic area (constant while typing).
+    @State private var textAreaWidth: CGFloat = 0
+    private static let stackedColumnWidth: CGFloat = 32
+
+    /// Multi-line text: clear sits above the mic in one column, giving the
+    /// text that width. Decided from the stacked width only, so wrapping
+    /// can't flip it back and forth at the boundary.
+    private var stacksTrailingControls: Bool {
+        guard canShowVoice, hasText, textAreaWidth > 1 else { return false }
+        return MacComposerScrollableTextInput.fittedHeight(text, width: textAreaWidth - Self.stackedColumnWidth - 4)
+            > MacComposerMetrics.minimumTextHeight + 0.5
+    }
     @State private var voiceSurfaceWidth: CGFloat = 0
 
     init(
@@ -323,10 +335,19 @@ struct MacChatComposer: View {
                 HStack(alignment: .center, spacing: 0) {
                     imageSlot
                     HStack(alignment: .bottom, spacing: 0) {
+                        // Same position in both arrangements: the native
+                        // editor (focus, IME) is never rebuilt.
                         textFieldForMode
-                        if hasText || hasImage { clearButton }
-                        if canShowVoice { inlineVoiceButton }
+                            .padding(.trailing, stacksTrailingControls ? Self.stackedColumnWidth : 0)
+                            .overlay(alignment: .trailing) {
+                                if stacksTrailingControls { stackedControls }
+                            }
+                        if !stacksTrailingControls {
+                            if hasText || hasImage { clearButton }
+                            if canShowVoice { inlineVoiceButton }
+                        }
                     }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textAreaWidth = $0 }
                 }
                 .padding(.trailing, 5)
             }
@@ -454,6 +475,18 @@ struct MacChatComposer: View {
         .accessibilityLabel(voiceOwnsComposer ? (pendingPermission != nil ? "Edit voice text" : (pendingQuestion != nil ? "Submit voice answer" : "Send voice message")) : (role == .stop ? "Stop agent" : sendAccessibilityLabel))
         .accessibilityIdentifier(voiceOwnsComposer ? "voice-send" : "chat-primary")
         .accessibilityHint(role == .stop ? "Aborts the current agent turn" : sendAccessibilityHint)
+    }
+
+    /// Clear on the first line, the mic on the last (where it always is).
+    private var stackedControls: some View {
+        VStack(spacing: 0) {
+            // Each takes half the column (minHeight 0: their one-row frames
+            // must not make it taller than the text); the icons stay centered
+            // on the first / last line.
+            clearButton.frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+            inlineVoiceButton.frame(minHeight: 0, maxHeight: .infinity, alignment: .bottom)
+        }
+        .frame(width: Self.stackedColumnWidth)
     }
 
     private var clearButton: some View {
@@ -922,7 +955,9 @@ final class MacScrollEdgeFade {
 /// layout and scroll — the final geometry, never an intermediate frame.
 class MacEdgeFadingScrollView: NSScrollView {
     var edgeFade: MacScrollEdgeFade?
-    override func tile() { super.tile(); edgeFade?.update() }
+    /// Re-fits the document to a new width before the fade is computed.
+    var onTile: (() -> Void)?
+    override func tile() { super.tile(); onTile?(); edgeFade?.update() }
     override func layout() { super.layout(); edgeFade?.update() }
     override func reflectScrolledClipView(_ clipView: NSClipView) {
         super.reflectScrolledClipView(clipView)
@@ -1189,6 +1224,16 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.edgeFade = MacScrollEdgeFade(scrollView)
         scrollView.edgeFade = context.coordinator.edgeFade
+        // The width can change after the last update (the clear button moving
+        // above the mic): the document must follow, or a stale (narrower,
+        // taller) height leaves a phantom scroll range.
+        scrollView.onTile = { [weak scrollView, weak textView] in
+            guard let scrollView, let textView, !textView.hasMarkedText() else { return }
+            let width = max(1, scrollView.contentSize.width)
+            let height = max(Self.measuredHeight(textView.string, width: width), scrollView.contentSize.height)
+            guard abs(textView.frame.height - height) > 0.5 || abs(textView.frame.width - width) > 0.5 else { return }
+            textView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        }
         context.coordinator.reportVisualTextPresence(of: textView, deferred: true)
         return scrollView
     }

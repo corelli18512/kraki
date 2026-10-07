@@ -162,6 +162,32 @@ final class ComposerGrowthShots: XCTestCase {
         }
     }
 
+    /// Typing across the wrap: clear moves above the mic (the text gains its
+    /// width), once, and the native editor keeps focus (never rebuilt).
+    func testTypingAcrossTheWrapStacksClearAboveTheMic() throws {
+        app.sessionStore.setDraft(sid, "")
+        drain(300)
+        let e = editor
+        XCTAssertTrue(window.makeFirstResponder(e))
+        let oneLineWidth: CGFloat
+        e.insertText("Fix", replacementRange: e.selectedRange()); drain(150)
+        oneLineWidth = e.enclosingScrollView!.frame.width
+        var widths: [CGFloat] = []
+        for ch in " the failing tests in my-app, then run the whole suite again and tell me what broke" {
+            e.insertText(String(ch), replacementRange: e.selectedRange())
+            drain(15)
+            widths.append(e.enclosingScrollView!.frame.width)
+        }
+        drain(300)
+        XCTAssertTrue(editor === e, "the editor must not be rebuilt")
+        XCTAssertTrue(window.firstResponder === e, "typing keeps focus")
+        XCTAssertGreaterThan(e.enclosingScrollView!.frame.width, oneLineWidth + 20, "wrapped text gains the clear button's width")
+        var switches = 0
+        for (a, b) in zip(widths, widths.dropFirst()) where abs(a - b) > 1 { switches += 1 }
+        XCTAssertEqual(switches, 1, "one switch, no flicker: \(widths)")
+        try shot("stacked-typing-light")
+    }
+
     func testStates() throws {
         for (suffix, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
             window.appearance = NSAppearance(named: appearance)
