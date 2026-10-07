@@ -84,6 +84,9 @@ export class PayloadAssembler {
   /** Returns the whole payload when `fragment` completes it, else null. */
   accept(fragment: PayloadFragment): string | null {
     if (fragment.n > this.maxParts) return null;
+    // A part is never larger than the sender's fragment size (a little slack
+    // for other senders' sizes); a whole payload can't exceed the budget.
+    if (fragment.d.length > PAYLOAD_FRAGMENT_SIZE * 2 || fragment.n * PAYLOAD_FRAGMENT_SIZE > this.maxBytes) return null;
     const now = this.now();
     for (const [id, set] of this.sets) {
       if (now - set.touched > this.ttlMs) this.drop(id);
@@ -109,6 +112,8 @@ export class PayloadAssembler {
       if (this.bytes <= this.maxBytes) break;
       if (id !== fragment.id) this.drop(id);
     }
+    // Still over budget: the current payload alone is too big.
+    if (this.bytes > this.maxBytes) this.drop(fragment.id);
     return null;
   }
 

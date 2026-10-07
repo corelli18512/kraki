@@ -37,6 +37,7 @@ import {
   type PermissionDecision,
   type QuestionAnswer,
   type QuestionResponseResult,
+  type PermissionResponseResult,
   type SendMessageOptions,
   type SessionInfo,
 } from './base.js';
@@ -93,6 +94,12 @@ export function mapCodexModels(data: unknown): ModelDetail[] {
     });
   }
   return out;
+}
+
+/** First line of a prompt, capped — a task label, never the full prompt. */
+function oneLine(text: string, max = 120): string {
+  const line = text.trim().split('\n')[0].trim();
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
 function str(v: unknown): string {
@@ -227,12 +234,81 @@ export interface CodexAdapterOptions {
   requestTimeoutMs?: number;
 }
 
+/** A subagent thread spawned (directly or nested) by a session's thread. */
+interface CodexChildThread {
+  sessionId: string;
+  label: string;
+  /** Synthetic trace step standing for this subagent (its dispatch). */
+  dispatchId?: string;
+  /** The dispatch step of the subagent that spawned this one (nesting). */
+  parentDispatchId?: string;
+  task?: string;
+  tokens?: number;
+  /** Open tool items of the child, by item id. */
+  tools: Map<string, { toolName: string }>;
+  /** The child's latest prose: narration once a step follows, else its report. */
+  draft?: string;
+  done?: boolean;
+}
+
+/** Codex thread item → Kraki tool step (name + args), or null if not a tool. */
+function codexItemTool(item: Record<string, unknown>): { toolName: string; args: Record<string, unknown> } | null {
+  switch (item.type) {
+    case 'commandExecution':
+      return { toolName: 'shell', args: { command: unwrapShellCommand(str(item.command)), cwd: str(item.cwd) } };
+    case 'fileChange': {
+      const paths = fileChangePaths(item);
+      const changes = Array.isArray(item.changes) ? item.changes as Array<{ diff?: string }> : [];
+      return { toolName: 'edit', args: { path: paths.join(', '), paths, diff: changes.map((c) => str(c.diff)).join('\n') } };
+    }
+    case 'mcpToolCall': {
+      const args = (item.arguments && typeof item.arguments === 'object' ? item.arguments : {}) as Record<string, unknown>;
+      return { toolName: 'mcp', args: { server: str(item.server), tool: str(item.tool), params: args } };
+    }
+    case 'webSearch':
+      return { toolName: 'web_search', args: { query: str(item.query) } };
+    case 'imageView':
+      return { toolName: 'view', args: { path: str(item.path) } };
+    case 'dynamicToolCall':
+      return KRAKI_DYNAMIC_TOOLS.has(str(item.tool)) ? null : { toolName: str(item.tool) || 'tool', args: {} };
+    default:
+      return null;
+  }
+}
+
+/** Codex completed thread item → tool result, or null if not a tool. */
+function codexItemResult(item: Record<string, unknown>): { result: string; success: boolean } | null {
+  switch (item.type) {
+    case 'commandExecution':
+      return { result: str(item.aggregatedOutput), success: item.status === 'completed' && (item.exitCode === 0 || item.exitCode == null) };
+    case 'fileChange': {
+      const paths = fileChangePaths(item);
+      const ok = item.status === 'completed';
+      return { result: ok ? `Updated ${paths.join(', ')}` : `File change ${str(item.status)}`, success: ok };
+    }
+    case 'mcpToolCall':
+      return { result: mcpResultText(item), success: item.status === 'completed' };
+    case 'webSearch':
+    case 'imageView':
+      return { result: '', success: true };
+    case 'dynamicToolCall':
+      return KRAKI_DYNAMIC_TOOLS.has(str(item.tool)) ? null : { result: '', success: item.success === true };
+    default:
+      return null;
+  }
+}
+
 // ── Adapter ───────────────────────────────────────────────
 
 export class CodexAdapter extends AgentAdapter {
   private rpc: CodexRpcProcess | null = null;
   private sessions = new Map<string, CodexSession>();
   private threadToSession = new Map<string, string>();
+  /** Subagent threads spawned (directly or nested) by a session's thread →
+   * owning Kraki session. Only server requests (approvals, questions, Kraki
+   * tools) and their withdrawals are routed through it; a subagent's own
+   * messages and turn lifecycle never drive the parent session. */
+  private childThreads = new Map<string, CodexChildThread>();
   private models: ModelDetail[] = [];
   /** Ephemeral title threads awaiting their final agent message. */
   private titleThreads = new Map<string, { text: string; done: (text: string | null) => void }>();
@@ -384,6 +460,7 @@ export class CodexAdapter extends AgentAdapter {
     if (rpc) await rpc.stop();
     this.sessions.clear();
     this.threadToSession.clear();
+    this.childThreads.clear();
     logger.info('Codex adapter stopped');
   }
 
@@ -674,15 +751,23 @@ export class CodexAdapter extends AgentAdapter {
       if (s.settledTurns.length > 8) s.settledTurns.shift();
     }
     s.activeTurnId = undefined;
-    if (!s.userAborted) {
-      const ev = this.turnEvent(s);
+    const ev = this.turnEvent(s);
+    const next = s.queue.shift();
+    // A queued steer belongs to the relay turn that is ending here: Codex runs
+    // it as a new turn, but for the relay it is the same logical turn. Settling
+    // that turn now would make the relay drop everything the steer produces.
+    const continuesSameTurn = !!next?.relayTurnId && next.relayTurnId === ev.turnId && !s.userAborted;
+    if (!s.userAborted && !continuesSameTurn) {
       if (ev.turnId) this.onIdle?.(s.sessionId, ev); else this.onIdle?.(s.sessionId);
     }
     this.onFlushComplete?.(s.sessionId);
-    const next = s.queue.shift();
     if (next) {
       this.startTurn(s, next).catch((err) => {
-        this.onError?.(s.sessionId, { message: errMessage(err), ...(next.relayTurnId && { turnId: next.relayTurnId }) });
+        const turn = next.relayTurnId ? { turnId: next.relayTurnId } : {};
+        this.onError?.(s.sessionId, { message: errMessage(err), ...turn });
+        // The relay waits for this turn's idle; without it the session would
+        // stay "running" forever.
+        if (next.relayTurnId) this.onIdle?.(s.sessionId, turn); else this.onIdle?.(s.sessionId);
       });
     }
   }
@@ -744,6 +829,7 @@ export class CodexAdapter extends AgentAdapter {
         this.rpc.request('thread/unsubscribe', { threadId: s.threadId }, 5_000).catch(() => {});
       }
       if (s.threadId) this.threadToSession.delete(s.threadId);
+      for (const [tid, c] of this.childThreads) if (c.sessionId === sessionId) this.childThreads.delete(tid);
       this.sessions.delete(sessionId);
     }
     this.onSessionEnded?.(sessionId, { reason: 'killed' });
@@ -844,12 +930,13 @@ export class CodexAdapter extends AgentAdapter {
 
   // ── Permissions & questions (Kraki → Codex) ──────────
 
-  async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision, reason?: string): Promise<void> {
+  async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision, reason?: string): Promise<PermissionResponseResult> {
     const s = this.sessions.get(sessionId);
-    const pending = s?.pendingPermissions.get(permissionId);
-    if (!s || !pending) {
+    if (!s) return 'session_gone';
+    const pending = s.pendingPermissions.get(permissionId);
+    if (!pending) {
       logger.warn({ sessionId, permissionId }, 'codex respondToPermission: no pending permission');
-      return;
+      return 'not_found';
     }
     s.pendingPermissions.delete(permissionId);
     const allow = decision === 'approve' || decision === 'always_allow';
@@ -873,6 +960,7 @@ export class CodexAdapter extends AgentAdapter {
         this.onPermissionAutoResolved?.(sessionId, otherId, 'approved');
       }
     }
+    return 'accepted';
   }
 
   private answerPermission(p: PendingPermission, allow: boolean): void {
@@ -962,10 +1050,55 @@ export class CodexAdapter extends AgentAdapter {
     return sid ? this.sessions.get(sid) : undefined;
   }
 
+  /** Owning session for a server request: the session's own thread, or one of
+   * the subagent threads it spawned. */
+  private sessionForRequest(params: unknown): { s: CodexSession; child?: string } | undefined {
+    const own = this.sessionForParams(params);
+    if (own) return { s: own };
+    const threadId = str((params as { threadId?: unknown } | undefined)?.threadId);
+    const child = threadId ? this.childThreads.get(threadId) : undefined;
+    const s = child ? this.sessions.get(child.sessionId) : undefined;
+    return s && child ? { s, child: child.label } : undefined;
+  }
+
+  /** Learn subagent threads from the notifications of a thread we own (the
+   * session's thread or an already-known subagent thread, for nesting). */
+  private learnChildThreads(n: RpcNotification, params: Record<string, unknown>): void {
+    const threadId = str(params.threadId);
+    const owner = threadId
+      ? this.threadToSession.get(threadId) ?? this.childThreads.get(threadId)?.sessionId
+      : undefined;
+    const adopt = (tid: string, label: string, sessionId: string | undefined) => {
+      const known = this.childThreads.get(tid);
+      if (known && known.label === 'subagent' && label !== 'subagent') known.label = label;
+      if (!tid || !sessionId || this.threadToSession.has(tid) || known) return;
+      this.childThreads.set(tid, { sessionId, label, tools: new Map() });
+      logger.debug({ sessionId, childThreadId: tid, label }, 'codex: subagent thread attached');
+    };
+    if (n.method === 'thread/started') {
+      const thread = params.thread as { id?: unknown; parentThreadId?: unknown } | undefined;
+      const parent = str(thread?.parentThreadId);
+      const sid = parent ? this.threadToSession.get(parent) ?? this.childThreads.get(parent)?.sessionId : undefined;
+      adopt(str(thread?.id), 'subagent', sid);
+      return;
+    }
+    if (!owner || (n.method !== 'item/started' && n.method !== 'item/completed')) return;
+    const item = params.item as Record<string, unknown> | undefined;
+    if (item?.type === 'subAgentActivity') {
+      const path = str(item.agentPath);
+      adopt(str(item.agentThreadId), path.split('/').filter(Boolean).pop() || 'subagent', owner);
+    } else if (item?.type === 'collabAgentToolCall' && Array.isArray(item.receiverThreadIds)) {
+      for (const tid of item.receiverThreadIds) adopt(str(tid), 'subagent', owner);
+    }
+  }
+
   private async handleServerRequest(req: RpcServerRequest): Promise<void> {
     const rpc = this.rpc!;
     const params = (req.params ?? {}) as Record<string, unknown>;
-    const s = this.sessionForParams(params);
+    const owner = this.sessionForRequest(params);
+    const s = owner?.s;
+    // Approval cards raised by a subagent say so.
+    const who = owner?.child ? `Subagent ${owner.child} — ` : '';
 
     switch (req.method) {
       case 'item/commandExecution/requestApproval': {
@@ -982,7 +1115,7 @@ export class CodexAdapter extends AgentAdapter {
         const reason = str(params.reason);
         return this.gate(s, pending, [], {
           toolArgs: { toolName: 'shell', args: { command } },
-          description: command ? `Run: ${command}` : (reason || 'Run a command'),
+          description: who + (command ? `Run: ${command}` : (reason || 'Run a command')),
         });
       }
 
@@ -995,7 +1128,7 @@ export class CodexAdapter extends AgentAdapter {
         const label = paths.length ? paths.join(', ') : (grantRoot || 'files');
         return this.gate(s, pending, grantRoot ? [grantRoot] : paths, {
           toolArgs: { toolName: 'write_file', args: { path: paths[0] ?? grantRoot, content: str(tracked?.args.diff) } },
-          description: `${str(params.reason) || 'Edit'}: ${label}`,
+          description: `${who}${str(params.reason) || 'Edit'}: ${label}`,
         });
       }
 
@@ -1006,7 +1139,7 @@ export class CodexAdapter extends AgentAdapter {
         const pending: PendingPermission = { rpcId: req.id, kind: 'permissions', toolKind, params };
         return this.gate(s, pending, [], {
           toolArgs: { toolName: 'permissions', args: perms },
-          description: str(params.reason) || `Grant extra permissions: ${Object.keys(perms).filter((k) => perms[k]).join(', ') || 'unspecified'}`,
+          description: who + (str(params.reason) || `Grant extra permissions: ${Object.keys(perms).filter((k) => perms[k]).join(', ') || 'unspecified'}`),
         });
       }
 
@@ -1127,7 +1260,6 @@ export class CodexAdapter extends AgentAdapter {
           ...(refs.length > 0 && { attachments: refs }),
           ...this.turnEvent(s),
         });
-        if (refs.length > 0) this.onAttachmentBytes?.(s.sessionId, { refs, ...this.turnEvent(s) });
         return rpc.respond(req.id, { contentItems: [{ type: 'inputText', text: text || 'Done.' }], success: !result.isError });
       }
 
@@ -1150,8 +1282,16 @@ export class CodexAdapter extends AgentAdapter {
       }
       return;
     }
+    this.learnChildThreads(n, params);
     const s = this.sessionForParams(params);
-    if (!s) return;
+    if (!s) {
+      // A subagent thread: its steps show under its dispatch step; its
+      // messages and turn lifecycle never drive the owning session.
+      const child = this.childThreads.get(str(params.threadId));
+      const owner = child ? this.sessions.get(child.sessionId) : undefined;
+      if (owner && child) this.handleChildNotification(owner, child, n, params);
+      return;
+    }
 
     const turnScoped = n.method === 'turn/started' || n.method === 'turn/completed'
       ? str((params.turn as { id?: unknown } | undefined)?.id)
@@ -1220,17 +1360,7 @@ export class CodexAdapter extends AgentAdapter {
 
       case 'serverRequest/resolved': {
         // Codex withdrew a request itself (e.g. turn interrupted) — retire the card.
-        const rid = params.requestId;
-        for (const [id, p] of s.pendingPermissions) {
-          if (p.rpcId !== rid) continue;
-          s.pendingPermissions.delete(id);
-          this.onPermissionAutoResolved?.(s.sessionId, id, 'cancelled');
-        }
-        for (const [id, q] of s.pendingQuestions) {
-          if (q.rpcId !== rid) continue;
-          s.pendingQuestions.delete(id);
-          this.onQuestionAutoResolved?.(s.sessionId, id);
-        }
+        this.retireWithdrawnRequest(s, params.requestId);
         break;
       }
 
@@ -1240,6 +1370,19 @@ export class CodexAdapter extends AgentAdapter {
 
       default:
         break;
+    }
+  }
+
+  private retireWithdrawnRequest(s: CodexSession, rid: unknown): void {
+    for (const [id, p] of s.pendingPermissions) {
+      if (p.rpcId !== rid) continue;
+      s.pendingPermissions.delete(id);
+      this.onPermissionAutoResolved?.(s.sessionId, id, 'cancelled');
+    }
+    for (const [id, q] of s.pendingQuestions) {
+      if (q.rpcId !== rid) continue;
+      s.pendingQuestions.delete(id);
+      this.onQuestionAutoResolved?.(s.sessionId, id);
     }
   }
 
@@ -1258,39 +1401,136 @@ export class CodexAdapter extends AgentAdapter {
         // them, so a new message graduates the buffered one to narration.
         this.flushNarration(s);
         break;
-      case 'commandExecution':
-        s.turnCommandItems.add(id);
-        start('shell', { command: unwrapShellCommand(str(item.command)), cwd: str(item.cwd) });
-        break;
-      case 'fileChange': {
-        const paths = fileChangePaths(item);
-        const changes = Array.isArray(item.changes) ? item.changes as Array<{ diff?: string }> : [];
-        start('edit', { path: paths.join(', '), paths, diff: changes.map((c) => str(c.diff)).join('\n') });
-        break;
-      }
-      case 'mcpToolCall': {
-        const server = str(item.server);
-        const tool = str(item.tool);
-        const args = (item.arguments && typeof item.arguments === 'object' ? item.arguments : {}) as Record<string, unknown>;
-        start('mcp', { server, tool, params: args });
-        break;
-      }
-      case 'webSearch':
-        start('web_search', { query: str(item.query) });
-        break;
-      case 'imageView':
-        start('view', { path: str(item.path) });
-        break;
       case 'contextCompaction':
         this.onCompaction?.(s.sessionId, { phase: 'start', ...this.turnEvent(s) });
         break;
-      case 'dynamicToolCall':
-        // Kraki's own tools are surfaced from the item/tool/call request.
-        if (!KRAKI_DYNAMIC_TOOLS.has(str(item.tool))) start(str(item.tool) || 'tool', {});
+      case 'subAgentActivity':
+        this.flushNarration(s);
+        this.handleSubagentActivity(s, item, undefined);
         break;
-      default:
+      case 'collabAgentToolCall':
+        this.noteSpawnPrompt(item);
         break;
+      default: {
+        // Tool items (shared with subagent threads). Kraki's own dynamic
+        // tools are surfaced from the item/tool/call request instead.
+        const tool = codexItemTool(item);
+        if (!tool) break;
+        if (item.type === 'commandExecution') s.turnCommandItems.add(id);
+        start(tool.toolName, tool.args);
+        break;
+      }
     }
+  }
+
+  /** A spawn call carries the task it gave each new subagent. */
+  private noteSpawnPrompt(item: Record<string, unknown>): void {
+    const prompt = str(item.prompt);
+    if (!prompt || !Array.isArray(item.receiverThreadIds)) return;
+    for (const tid of item.receiverThreadIds) {
+      const child = this.childThreads.get(str(tid));
+      if (child && !child.task) child.task = oneLine(prompt);
+    }
+  }
+
+  /** subAgentActivity on a session's (or a subagent's) thread: a subagent
+   *  started → open its dispatch step; finished → close it with its report. */
+  private handleSubagentActivity(s: CodexSession, item: Record<string, unknown>, parentDispatchId: string | undefined): void {
+    const tid = str(item.agentThreadId);
+    const child = this.childThreads.get(tid);
+    if (!child || child.sessionId !== s.sessionId) return;
+    const kind = str(item.kind);
+    if (kind === 'started' && !child.dispatchId) {
+      child.dispatchId = `codex-subagent-${tid}`;
+      child.parentDispatchId = parentDispatchId;
+      this.onToolStart?.(s.sessionId, {
+        toolName: 'spawn_agent',
+        args: { agent: child.label, ...(child.task && { task: child.task }) },
+        toolCallId: child.dispatchId,
+        ...(parentDispatchId && { parentToolCallId: parentDispatchId }),
+        subagent: this.childInfo(child, 'running'),
+        ...this.turnEvent(s),
+      });
+    } else if ((kind === 'completed' || kind === 'interrupted') && child.dispatchId && !child.done) {
+      child.done = true;
+      const status = kind === 'completed' ? 'completed' : 'stopped';
+      // Close anything the child left open.
+      for (const [id, tool] of child.tools) {
+        this.onToolComplete?.(s.sessionId, { toolName: tool.toolName, result: '', success: false, toolCallId: id, parentToolCallId: child.dispatchId, ...this.turnEvent(s) });
+      }
+      child.tools.clear();
+      this.onToolComplete?.(s.sessionId, {
+        toolName: 'spawn_agent',
+        result: child.draft ?? '',
+        success: kind === 'completed',
+        toolCallId: child.dispatchId,
+        ...(child.parentDispatchId && { parentToolCallId: child.parentDispatchId }),
+        subagent: this.childInfo(child, status),
+        ...this.turnEvent(s),
+      });
+      child.draft = undefined;
+    }
+  }
+
+  private childInfo(child: CodexChildThread, status: 'running' | 'completed' | 'failed' | 'stopped'): import('@kraki/protocol').SubagentInfo {
+    return {
+      name: child.label,
+      ...(child.task && { task: child.task }),
+      status,
+      ...(child.tokens !== undefined && { tokens: child.tokens }),
+    };
+  }
+
+  /** A subagent thread's own events: its tool items and prose become steps
+   *  under its dispatch; nested spawns become dispatches under it. */
+  private handleChildNotification(s: CodexSession, child: CodexChildThread, n: RpcNotification, params: Record<string, unknown>): void {
+    if (n.method === 'serverRequest/resolved') {
+      this.retireWithdrawnRequest(s, params.requestId);
+      return;
+    }
+    if (n.method === 'thread/tokenUsage/updated') {
+      const total = (params.tokenUsage as { total?: Record<string, number> } | undefined)?.total;
+      if (total) child.tokens = (total.inputTokens ?? 0) + (total.outputTokens ?? 0);
+      return;
+    }
+    const parent = child.dispatchId;
+    if (!parent || (n.method !== 'item/started' && n.method !== 'item/completed')) return;
+    const item = params.item as Record<string, unknown> | undefined;
+    if (!item) return;
+    const id = str(item.id);
+    const flushDraft = () => {
+      if (!child.draft) return;
+      this.onNarrationTrace?.(s.sessionId, { content: child.draft, parentToolCallId: parent, ...this.turnEvent(s) });
+      child.draft = undefined;
+    };
+    if (n.method === 'item/started') {
+      if (item.type === 'subAgentActivity') { flushDraft(); this.handleSubagentActivity(s, item, parent); return; }
+      if (item.type === 'agentMessage') { flushDraft(); return; }
+      if (item.type === 'userMessage' && !child.task) {
+        const content = Array.isArray(item.content) ? item.content as Array<{ text?: string }> : [];
+        const text = content.map((c) => str(c.text)).join(' ').trim();
+        if (text) child.task = oneLine(text);
+        return;
+      }
+      const tool = codexItemTool(item);
+      if (!tool) return;
+      flushDraft();
+      child.tools.set(id, { toolName: tool.toolName });
+      this.onToolStart?.(s.sessionId, { ...tool, toolCallId: id, parentToolCallId: parent, ...this.turnEvent(s) });
+      return;
+    }
+    if (item.type === 'subAgentActivity') { this.handleSubagentActivity(s, item, parent); return; }
+    if (item.type === 'collabAgentToolCall') { this.noteSpawnPrompt(item); return; }
+    if (item.type === 'agentMessage') {
+      const text = str(item.text);
+      if (text) child.draft = child.draft ? `${child.draft}\n\n${text}` : text;
+      return;
+    }
+    const tracked = child.tools.get(id);
+    const res = codexItemResult(item);
+    if (!tracked || !res) return;
+    child.tools.delete(id);
+    this.onToolComplete?.(s.sessionId, { toolName: tracked.toolName, ...res, toolCallId: id, parentToolCallId: parent, ...this.turnEvent(s) });
   }
 
   private handleItemCompleted(s: CodexSession, item: Record<string, unknown> | undefined): void {
@@ -1308,30 +1548,14 @@ export class CodexAdapter extends AgentAdapter {
         if (text) s.pendingText = s.pendingText ? `${s.pendingText}\n\n${text}` : text;
         break;
       }
-      case 'commandExecution':
-        complete(str(item.aggregatedOutput), item.status === 'completed' && (item.exitCode === 0 || item.exitCode == null));
-        break;
-      case 'fileChange': {
-        const paths = fileChangePaths(item);
-        const ok = item.status === 'completed';
-        complete(ok ? `Updated ${paths.join(', ')}` : `File change ${str(item.status)}`, ok);
-        break;
-      }
-      case 'mcpToolCall':
-        complete(mcpResultText(item), item.status === 'completed');
-        break;
-      case 'webSearch':
-      case 'imageView':
-        complete('', true);
-        break;
-      case 'dynamicToolCall':
-        if (!KRAKI_DYNAMIC_TOOLS.has(str(item.tool))) complete('', item.success === true);
-        break;
       case 'contextCompaction':
         this.onCompaction?.(s.sessionId, { phase: 'end', ...this.turnEvent(s) });
         break;
-      default:
+      default: {
+        const res = codexItemResult(item);
+        if (res) complete(res.result, res.success);
         break;
+      }
     }
   }
 

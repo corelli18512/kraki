@@ -177,7 +177,8 @@ final class VoiceInputSessionTests: XCTestCase {
         for rate in [8_000.0, 48_000.0] {
             let f = Fixture(); f.start()
             eventually { f.capture.state.snapshot.starts == 1 }
-            f.capture.audio(rate: rate, sample: rate == 48_000 ? .nan : 0)
+            // Non-finite samples fail at any rate (8 kHz itself is valid now).
+            f.capture.audio(rate: rate, sample: .nan)
             eventually { f.failures == ["audio input format changed or is invalid"] }
         }
     }

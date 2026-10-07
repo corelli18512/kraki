@@ -169,6 +169,7 @@ export function processAuthError(
     // NOT clear the paired device: doing so turned a 15s account-service
     // timeout into a permanent logout that required a fresh QR/GitHub pairing.
     const fatal = authError.code === 'invalid_signature'
+      || authError.code === 'account_deleted'
       || authError.code === 'device_not_found'
       || authError.code === 'unknown_device'
       || authError.code === 'user_not_found';
@@ -177,7 +178,9 @@ export function processAuthError(
       localStorage.removeItem(STORAGE_KEY);
       deps.clearStoredDeviceId();
       store.setLastError(
-        oauthAvailable
+        authError.code === 'account_deleted'
+          ? 'Your Kraki account was deleted.'
+          : oauthAvailable
           ? 'Authentication failed. Please sign in again or scan a new pairing QR code.'
           : 'Authentication failed. Please scan a new pairing QR code.',
       );

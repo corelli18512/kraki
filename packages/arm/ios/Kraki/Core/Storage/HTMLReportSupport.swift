@@ -8,6 +8,55 @@ import WebKit
 /// 3.5 MB library. The app bundles the Mermaid runtime and injects it only
 /// into reports that contain Mermaid blocks, after the page's own scripts —
 /// so a legacy report that already inlined Mermaid keeps its own copy.
+/// Content-blocker rules for report web views: block every network load
+/// except inline `data:`/`blob:`/`about:` resources. A second line of defence
+/// behind the report CSP, so a CSP mistake cannot turn a report into a beacon.
+enum HTMLReportNetworkBlock {
+    static let identifier = "chat.kraki.report-offline"
+    static let rules = """
+    [
+      {"trigger": {"url-filter": ".*"}, "action": {"type": "block"}},
+      {"trigger": {"url-filter": "^data:"}, "action": {"type": "ignore-previous-rules"}},
+      {"trigger": {"url-filter": "^blob:"}, "action": {"type": "ignore-previous-rules"}},
+      {"trigger": {"url-filter": "^about:"}, "action": {"type": "ignore-previous-rules"}}
+    ]
+    """
+
+    private static var compiled: WKContentRuleList?
+    private static var waiting: [(WKContentRuleList?) -> Void] = []
+
+    /// Calls back on the main thread with the compiled rule list (compiled
+    /// once per process). `nil` means compilation failed; the CSP still holds.
+    /// Main thread only (web view setup).
+    static func withRuleList(_ body: @escaping (WKContentRuleList?) -> Void) {
+        if let compiled { body(compiled); return }
+        waiting.append(body)
+        guard waiting.count == 1 else { return }
+        WKContentRuleListStore.default().compileContentRuleList(
+            forIdentifier: identifier, encodedContentRuleList: rules
+        ) { list, error in
+            DispatchQueue.main.async {
+                if let error { KLog.d("⚠️ Report content blocker failed to compile: \(error)") }
+                compiled = list
+                let callbacks = waiting
+                waiting.removeAll()
+                callbacks.forEach { $0(list) }
+            }
+        }
+    }
+
+    /// Install the rules on a report web view, then load the page.
+    static func load(_ html: String, into webView: WKWebView) {
+        withRuleList { list in
+            if let list {
+                webView.configuration.userContentController.removeAllContentRuleLists()
+                webView.configuration.userContentController.add(list)
+            }
+            webView.loadHTMLString(html, baseURL: nil)
+        }
+    }
+}
+
 enum HTMLReportMermaid {
     private static let markerRegex = try? NSRegularExpression(
         pattern: #"class\s*=\s*["'][^"']*\bmermaid\b|language-mermaid"#,

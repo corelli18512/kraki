@@ -215,7 +215,10 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
                 if let destinationEnd = fragment[destinationStart...].firstIndex(of: ")"),
                    let destination = URL(string: String(fragment[destinationStart..<destinationEnd])) {
                     flushPlain(until: index)
-                    appendNested(String(fragment[next..<labelEnd]), link: destination)
+                    // Agent text is untrusted: only web and mail links become
+                    // tappable. Any other scheme (file:, app handlers, …) keeps
+                    // its label as plain text.
+                    appendNested(String(fragment[next..<labelEnd]), link: isSafeLinkURL(destination) ? destination : nil)
                     index = fragment.index(after: destinationEnd)
                     plainStart = index
                     continue
@@ -229,6 +232,14 @@ func parseMarkdownInline(_ text: String) -> [MarkdownInlineRun] {
     }
 
     return parse(text, bold: false, italic: false, strikethrough: false, link: nil)
+}
+
+/// Schemes a chat link may open. Everything else in agent-written text could
+/// launch local files or other apps (`file:`, `vscode:`, `x-apple…:`).
+func isSafeLinkURL(_ url: URL) -> Bool {
+    guard let scheme = url.scheme?.lowercased() else { return false }
+    if scheme == "mailto" { return true }
+    return (scheme == "http" || scheme == "https") && url.host?.isEmpty == false
 }
 
 /// A URL only when it is a complete http(s) address (no spaces).

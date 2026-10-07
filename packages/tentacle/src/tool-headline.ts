@@ -74,6 +74,16 @@ function pickRaw(toolName: string, args: Record<string, unknown>): string {
       const desc = strField(args, 'description') || strField(args, 'prompt');
       return desc;
     }
+    case 'subagent':
+    case 'spawn_agent': {
+      // pi-subagents management calls: list / status / doctor …
+      const action = strField(args, 'action');
+      if (action) return strField(args, 'id') ? `${action} ${strField(args, 'id')}` : action;
+      // pi subagent extensions / Codex spawn: `agent` + `task`.
+      const task = strField(args, 'task') || strField(args, 'description');
+      const agent = strField(args, 'agent');
+      return agent && task ? `${agent}: ${task}` : task || agent;
+    }
     case 'report_intent':
       return strField(args, 'intent');
     default:

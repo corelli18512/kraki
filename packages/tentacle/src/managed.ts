@@ -44,9 +44,6 @@ export function ownerName(by: AppOwner): string {
   return by === WINDOWS_APP_OWNER ? 'Kraki for Windows' : 'Kraki for Mac';
 }
 
-/** launchd label of the SMAppService job registered by Kraki for Mac. */
-export const MAC_APP_DAEMON_LABEL = 'chat.kraki.mac.tentacle';
-
 export interface ManagedByMarker {
   by: AppOwner;
   /** launchd label of the supervising job (Mac), or the owner id (Windows). */

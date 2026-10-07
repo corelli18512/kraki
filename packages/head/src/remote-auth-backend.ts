@@ -32,8 +32,11 @@ export class RemoteAuthBackend implements AuthBackend {
     auth: AuthMethod,
     device: DeviceInfo,
     headRegion?: string,
+    clientIp?: string,
   ): Promise<AuthOutcome> {
-    return this.post('/api/auth', { auth, device, headRegion });
+    // The account service throttles failed logins per client IP; forward the
+    // end user's address, not this edge's.
+    return this.post('/api/auth', { auth, device, headRegion, ...(clientIp && { clientIp }) });
   }
 
   async startChallenge(
@@ -70,6 +73,12 @@ export class RemoteAuthBackend implements AuthBackend {
   async removeDevice(userId: string, deviceId: string): Promise<boolean> {
     const result = await this.post<{ ok: boolean }>('/api/devices/remove', { userId, deviceId });
     return result.ok === true;
+  }
+
+  async deleteAccount(userId: string): Promise<string[]> {
+    const result = await this.post<{ ok: boolean; deviceIds?: string[]; message?: string }>('/api/account/delete', { userId });
+    if (result.ok !== true) throw new Error(result.message ?? 'Account service did not delete the account');
+    return Array.isArray(result.deviceIds) ? result.deviceIds : [];
   }
 
   async requestPairingToken(

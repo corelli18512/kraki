@@ -20,6 +20,8 @@ export interface AccountApiOptions {
   publicRateLimit?: number;
 }
 
+type ServiceCaller = { admin: true } | { admin: false; region: string };
+
 export class AccountApi {
   private backend: LocalAuthBackend;
   private serviceKey?: string;
@@ -60,7 +62,11 @@ export class AccountApi {
       || (path === '/api/config' && req.method === 'GET')
       || (path === '/api/edge/join' && req.method === 'POST');
 
-    if (!publicRoute && !this.checkServiceKey(req, res)) return true;
+    let caller: ServiceCaller | null = null;
+    if (!publicRoute) {
+      caller = this.checkServiceKey(req, res);
+      if (!caller) return true;
+    }
     if (publicRoute && !this.publicLimiter.take(clientIp(req))) {
       res.setHeader('Retry-After', '60');
       this.json(res, 429, { ok: false, code: 'rate_limited', message: 'Too many requests' });
@@ -88,16 +94,19 @@ export class AccountApi {
           if (req.method === 'POST') return await this.handleVerify(req, res);
           break;
         case '/api/pairing/create':
-          if (req.method === 'POST') return await this.handleCreatePairing(req, res);
+          if (req.method === 'POST') return await this.handleCreatePairing(req, res, caller!);
           break;
         case '/api/pairing/request':
-          if (req.method === 'POST') return await this.handleRequestPairing(req, res);
+          if (req.method === 'POST') return await this.handleRequestPairing(req, res, caller!);
           break;
         case '/api/config':
           if (req.method === 'GET') return this.handleGetConfig(req, res);
           break;
         case '/api/devices/remove':
-          if (req.method === 'POST') return await this.handleRemoveDevice(req, res);
+          if (req.method === 'POST') return await this.handleRemoveDevice(req, res, caller!);
+          break;
+        case '/api/account/delete':
+          if (req.method === 'POST') return await this.handleDeleteAccount(req, res, caller!);
           break;
         case '/api/edge/join':
           if (req.method === 'POST') return await this.handleEdgeJoin(req, res);
@@ -161,10 +170,13 @@ export class AccountApi {
       return true;
     }
 
+    // Service-key route: the caller is an edge relaying an end user's login,
+    // so the user's IP comes in the body (the socket address is the edge's).
     const result = await this.backend.authenticate(
       body.auth as import('@kraki/protocol').AuthMethod,
       body.device as import('@kraki/protocol').DeviceInfo,
       body.headRegion as string | undefined,
+      typeof body.clientIp === 'string' ? body.clientIp : undefined,
     );
 
     if (!result.ok && result.code === 'wrong_region') {
@@ -226,33 +238,54 @@ export class AccountApi {
   }
 
   /** Service-key route: an edge forwards a user's device removal here. */
-  private async handleRemoveDevice(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  private async handleRemoveDevice(req: IncomingMessage, res: ServerResponse, caller: ServiceCaller): Promise<boolean> {
     const body = await readBody(req);
     if (typeof body?.userId !== 'string' || typeof body?.deviceId !== 'string') {
       this.json(res, 400, { ok: false, code: 'bad_request', message: 'userId and deviceId required' });
       return true;
     }
+    if (!this.mayActForUser(caller, body.userId, res)) return true;
     const removed = await this.backend.removeDevice(body.userId, body.deviceId);
     this.json(res, removed ? 200 : 404, removed ? { ok: true } : { ok: false, code: 'not_found', message: 'Device not found' });
     return true;
   }
 
-  private async handleCreatePairing(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  /** Service-key route: an edge forwards a user's account deletion here. */
+  private async handleDeleteAccount(req: IncomingMessage, res: ServerResponse, caller: ServiceCaller): Promise<boolean> {
     const body = await readBody(req);
-    if (!body?.userId) {
+    if (typeof body?.userId !== 'string' || !body.userId) {
       this.json(res, 400, { ok: false, code: 'bad_request', message: 'userId required' });
       return true;
     }
+    if (!this.mayActForUser(caller, body.userId, res)) return true;
+    if (!this.backend.deleteAccount) {
+      this.json(res, 501, { ok: false, code: 'not_supported', message: 'Account deletion is not supported' });
+      return true;
+    }
+    const deviceIds = await this.backend.deleteAccount(body.userId);
+    getLogger().info('Account deleted via account API', { userId: body.userId, devices: deviceIds.length });
+    this.json(res, 200, { ok: true, deviceIds });
+    return true;
+  }
+
+  private async handleCreatePairing(req: IncomingMessage, res: ServerResponse, caller: ServiceCaller): Promise<boolean> {
+    const body = await readBody(req);
+    if (typeof body?.userId !== 'string' || !body.userId) {
+      this.json(res, 400, { ok: false, code: 'bad_request', message: 'userId required' });
+      return true;
+    }
+    if (!this.mayActForUser(caller, body.userId, res)) return true;
 
     const result = this.backend.createPairingToken(body.userId as string);
     this.json(res, 200, result);
     return true;
   }
 
-  private async handleRequestPairing(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  private async handleRequestPairing(req: IncomingMessage, res: ServerResponse, caller: ServiceCaller): Promise<boolean> {
     const body = await readBody(req);
 
-    if (body?.userId) {
+    if (typeof body?.userId === 'string' && body.userId) {
+      if (!this.mayActForUser(caller, body.userId, res)) return true;
       // Direct create (authenticated user)
       const result = this.backend.createPairingToken(body.userId as string);
       this.json(res, 200, { ok: true, ...result });
@@ -365,15 +398,29 @@ export class AccountApi {
 
   // ── Helpers ───────────────────────────────────────────
 
-  private checkServiceKey(req: IncomingMessage, res: ServerResponse): boolean {
+  /** The admin key, or the region of a registered edge; null when invalid. */
+  private checkServiceKey(req: IncomingMessage, res: ServerResponse): ServiceCaller | null {
     const authHeader = req.headers.authorization ?? '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-    const valid = !!token && (
-      (this.serviceKey ? safeEqual(token, this.serviceKey) : false)
-      || this.backend.validateServiceKey(token).valid
-    );
-    if (!valid) {
-      this.json(res, 401, { ok: false, code: 'unauthorized', message: 'Invalid service key' });
+    if (token && this.serviceKey && safeEqual(token, this.serviceKey)) return { admin: true };
+    const edge = token ? this.backend.validateServiceKey(token) : { valid: false as const };
+    if (edge.valid && edge.region) return { admin: false, region: edge.region };
+    this.json(res, 401, { ok: false, code: 'unauthorized', message: 'Invalid service key' });
+    return null;
+  }
+
+  /**
+   * An edge key acts only for users assigned to that edge's region; one
+   * compromised edge must not be able to pair devices into, or remove devices
+   * from, accounts that live elsewhere. Users not yet assigned a region are
+   * allowed (they are being onboarded through this edge).
+   */
+  private mayActForUser(caller: ServiceCaller, userId: string, res: ServerResponse): boolean {
+    if (caller.admin) return true;
+    const userRegion = this.backend.getUserRegion(userId);
+    if (userRegion && userRegion !== caller.region) {
+      getLogger().warn('Edge tried to act for a user of another region', { edgeRegion: caller.region, userRegion });
+      this.json(res, 403, { ok: false, code: 'wrong_region', message: 'User is not assigned to this region' });
       return false;
     }
     return true;

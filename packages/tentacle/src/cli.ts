@@ -19,8 +19,9 @@ import { wsProxyOptions, applyProcessProxy } from './proxy.js';
 import { launchedFromExplorer } from './windows-console.js';
 import chalk from 'chalk';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
-import { readFileSync, existsSync, unlinkSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, unlinkSync, readdirSync, statSync, renameSync } from 'node:fs';
 import { select } from '@inquirer/prompts';
 
 import { loadConfig, saveConfig, getConfigPath, getKrakiHome, getLogVerbosity, getVersion, loadChannelKey, type KrakiConfig } from './config.js';
@@ -257,7 +258,8 @@ async function cmdDefault(): Promise<void> {
           { name: '  Check coding agents', value: 'agents' },
           { name: '  Stop', value: 'stop' },
           { name: '  Restart', value: 'restart' },
-          { name: '  Clean restart (reconfigure)', value: 'reconfig' },
+          { name: '  Reconfigure (sign in again)', value: 'reconfig' },
+          { name: '  Delete all Kraki data…', value: 'delete' },
         ],
       });
 
@@ -281,10 +283,13 @@ async function cmdDefault(): Promise<void> {
           break;
         case 'reconfig':
           cmdStop();
-          const { rmSync } = await import('node:fs');
-          try { rmSync(getKrakiHome(), { recursive: true, force: true }); } catch { /* ignore */ }
-          config = await runSetup();
+          config = await reconfigure();
           await silentStart(config);
+          break;
+        case 'delete':
+          if (await confirmDeleteAllData()) cmdStop();
+          else return;
+          moveKrakiHomeAside();
           break;
       }
       return;
@@ -299,14 +304,16 @@ async function cmdDefault(): Promise<void> {
       },
       choices: [
         { name: '  Start with existing config', value: 'start' },
-        { name: '  Reconfigure', value: 'reconfig' },
+        { name: '  Reconfigure (sign in again)', value: 'reconfig' },
+        { name: '  Delete all Kraki data…', value: 'delete' },
       ],
     });
 
     if (action === 'reconfig') {
-      const { rmSync } = await import('node:fs');
-      try { rmSync(getKrakiHome(), { recursive: true, force: true }); } catch { /* ignore */ }
-      config = await runSetup();
+      config = await reconfigure();
+    } else if (action === 'delete') {
+      if (await confirmDeleteAllData()) moveKrakiHomeAside();
+      return;
     }
   } else {
     // No config — first time setup
@@ -315,6 +322,83 @@ async function cmdDefault(): Promise<void> {
 
   // Start daemon
   await silentStart(config);
+}
+
+// ── Reconfigure / delete data ──────────────────────────
+
+/**
+ * Run setup again (sign in again, pick the relay) while keeping everything
+ * else: sessions, attachments and this computer's identity, so phones stay
+ * paired. It used to delete the whole Kraki folder.
+ */
+async function reconfigure(): Promise<KrakiConfig> {
+  const { clearGitHubToken } = await import('./config.js');
+  clearGitHubToken();
+  return runSetup();
+}
+
+/** What deleting the Kraki folder would remove, for the confirmation. */
+function describeKrakiData(): { sessions: number; bytes: number } {
+  const home = getKrakiHome();
+  let sessions = 0;
+  try { sessions = readdirSync(join(home, 'sessions')).length; } catch { /* none */ }
+  let bytes = 0;
+  const walk = (dir: string, depth: number) => {
+    if (depth > 6) return;
+    let names: string[] = [];
+    try { names = readdirSync(dir); } catch { return; }
+    for (const name of names) {
+      const path = join(dir, name);
+      try {
+        const st = statSync(path);
+        if (st.isDirectory()) walk(path, depth + 1); else bytes += st.size;
+      } catch { /* vanished */ }
+    }
+  };
+  walk(home, 0);
+  return { sessions, bytes };
+}
+
+/** Explicit, typed confirmation before deleting all Kraki data. */
+async function confirmDeleteAllData(): Promise<boolean> {
+  const { input } = await import('@inquirer/prompts');
+  const { sessions, bytes } = describeKrakiData();
+  const mb = (bytes / (1024 * 1024)).toFixed(1);
+  console.log('');
+  console.log(chalk.red('  This deletes everything Kraki keeps on this computer:'));
+  console.log(`    • ${sessions} session${sessions === 1 ? '' : 's'} with their history and attachments (${mb} MB)`);
+  console.log('    • this computer\'s identity — every phone and browser must pair again');
+  console.log('    • Kraki\'s sign-in and settings');
+  console.log(chalk.dim('  Your agents\' own files (Claude Code, Copilot, Codex, Pi) are not touched.'));
+  console.log('');
+  const answer = await input({ message: 'Type "delete" to confirm:', theme: { prefix: chalk.red('  !') } });
+  if (answer.trim().toLowerCase() !== 'delete') {
+    console.log(chalk.dim('  Nothing was deleted.'));
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Move the Kraki folder out of the way rather than erasing it: into the
+ * Trash on macOS, next to it elsewhere. A mistaken confirmation stays
+ * recoverable.
+ */
+function moveKrakiHomeAside(): void {
+  const home = getKrakiHome();
+  if (!existsSync(home)) return;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const trash = join(homedir(), '.Trash');
+  const target = process.platform === 'darwin' && existsSync(trash)
+    ? join(trash, `kraki-${stamp}`)
+    : `${home}.deleted-${stamp}`;
+  try {
+    renameSync(home, target);
+    console.log(chalk.green(`  ✔ Kraki data moved to ${target}`));
+    console.log(chalk.dim('  Delete that folder to free the space for good. Run `kraki` to set up again.'));
+  } catch (err) {
+    console.log(chalk.red(`  Could not move ${home}: ${(err as Error).message}`));
+  }
 }
 
 // ── kraki start — silent start from config ──────────────
@@ -484,6 +568,7 @@ function cmdStatus(jsonOutput = false): void {
             agents: config.agents ?? null,
             region: statusFile?.region ?? null,
             logVerbosity: getLogVerbosity(config),
+            remoteUpdate: config.remoteUpdate !== false,
           }
         : { exists: false },
     };
@@ -570,14 +655,16 @@ function cmdLogs(follow: boolean): void {
     return;
   }
 
-  const args = follow
-    ? ['-f', join(logDir, '*.log')]
-    : ['-n', '50', join(logDir, '*.log')];
+  // Expand the glob here instead of through a shell: KRAKI_HOME is a path
+  // and must never be interpreted as shell syntax.
+  const files = readdirSync(logDir).filter((f) => f.endsWith('.log')).map((f) => join(logDir, f));
+  if (files.length === 0) {
+    console.log(chalk.yellow(`No log files in ${logDir}`));
+    return;
+  }
+  const args = follow ? ['-f', ...files] : ['-n', '50', ...files];
 
-  const child = spawn('tail', args, {
-    stdio: 'inherit',
-    shell: true,
-  });
+  const child = spawn('tail', args, { stdio: 'inherit' });
 
   child.on('error', () => {
     console.log(chalk.red('Failed to tail logs.'));
@@ -591,6 +678,28 @@ function cmdConfig(): void {
     return;
   }
   console.log(JSON.stringify(config, null, 2));
+}
+
+function cmdConfigRemoteUpdate(value?: string): void {
+  const config = loadConfig();
+  if (!config) {
+    console.log(chalk.yellow('No config found. Run `kraki` to set up.'));
+    return;
+  }
+  if (!value) {
+    console.log(`Remote update: ${config.remoteUpdate === false ? 'off' : 'on'}`);
+    return;
+  }
+  if (value !== 'on' && value !== 'off') {
+    console.log(chalk.red(`Invalid value: ${value}`));
+    console.log(chalk.dim('Use `kraki config remote-update on` or `kraki config remote-update off`.'));
+    gracefulExit(1);
+    return;
+  }
+  saveConfig({ ...config, remoteUpdate: value === 'on' });
+  console.log(value === 'on'
+    ? chalk.green('Your apps can now update Kraki on this computer.')
+    : chalk.green('Remote update is off. Update Kraki here with `kraki update`.'));
 }
 
 function cmdConfigLog(verbosity?: string): void {
@@ -1216,6 +1325,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === '__apply-update') {
+    const { runApplier } = await import('./remote-update.js');
+    await runApplier(args.slice(1));
+    return;
+  }
+
   if (cmd === INTERNAL_DAEMON_SMOKE_COMMAND) {
     const config = loadConfig();
     if (!config) throw new Error(`No release smoke config found at ${getConfigPath()}`);
@@ -1366,6 +1481,10 @@ async function main(): Promise<void> {
     }
     if (args[1] === 'log') {
       cmdConfigLog(args[2]);
+      return;
+    }
+    if (args[1] === 'remote-update') {
+      cmdConfigRemoteUpdate(args[2]);
       return;
     }
     cmdConfig();

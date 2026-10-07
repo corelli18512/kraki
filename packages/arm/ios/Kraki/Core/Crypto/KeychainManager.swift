@@ -4,8 +4,10 @@
 /// - Signing key (RSASSA-PKCS1-v1_5) for challenge-response auth
 /// - Encryption key (RSA-OAEP) for E2E message decryption
 ///
-/// Uses `kSecAttrAccessibleAfterFirstUnlock` so the Notification Service Extension
-/// can access keys in the background without requiring device unlock.
+/// Uses `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` so the Notification
+/// Service Extension can access keys in the background without requiring device
+/// unlock, while the device identity never travels to another phone through a
+/// backup restore (two phones sharing one device key).
 ///
 /// Sharing with the NSE: when `accessGroup` is nil (default), iOS uses the FIRST
 /// entry in the `keychain-access-groups` entitlement. Both the host app and
@@ -270,7 +272,7 @@ public final class KeychainManager {
         var privateKeyAttrs: [String: Any] = [
             kSecAttrIsPermanent as String: true,
             kSecAttrApplicationTag as String: tag.data(using: .utf8)!,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
 
         if let group = accessGroup {
@@ -365,6 +367,27 @@ public final class KeychainManager {
         return (privateKey: privateKey, publicKey: publicKey)
     }
 
+    /// Keys created by earlier versions were `AfterFirstUnlock` and so were
+    /// included in encrypted backups. Tighten them once, in place (best effort:
+    /// a failure leaves the key usable exactly as before).
+    private func migrateToThisDeviceOnly(tag: String) {
+        let flag = "kraki.keychain.thisDeviceOnly.\(tag)"
+        guard !UserDefaults.standard.bool(forKey: flag) else { return }
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassKey,
+            kSecAttrApplicationTag as String: tag.data(using: .utf8)!,
+            kSecAttrKeyClass as String: kSecAttrKeyClassPrivate,
+        ]
+        if let group = accessGroup { query[kSecAttrAccessGroup as String] = group }
+        let update = [kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+        let status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        if status == errSecSuccess || status == errSecItemNotFound {
+            UserDefaults.standard.set(true, forKey: flag)
+        } else {
+            KLog.d("⚠️ Keychain accessibility migration failed for \(tag): \(status)")
+        }
+    }
+
     private func loadKeyPair(tag: String) throws -> (privateKey: SecKey, publicKey: SecKey)? {
         #if os(macOS) && DEBUG
         if DevSecretFileStore.isEnabled {
@@ -398,6 +421,7 @@ public final class KeychainManager {
         if status == errSecItemNotFound {
             return nil
         }
+        if status == errSecSuccess { migrateToThisDeviceOnly(tag: tag) }
         guard status == errSecSuccess, let ref = result else {
             throw KeychainError.loadFailed(status)
         }

@@ -67,6 +67,14 @@ export type EdgeJoinOutcome =
   | { ok: true; region: string; relayUrl: string; displayName?: string; serviceKey: string }
   | { ok: false; code: string; message: string };
 
+/** Auth answer for a device of a deleted account: clients sign out and stop
+ *  reconnecting instead of re-creating the account. */
+const ACCOUNT_DELETED = {
+  ok: false as const,
+  code: 'account_deleted',
+  message: 'This Kraki account was deleted.',
+};
+
 export class LocalAuthBackend implements AuthBackend {
   private storage: Storage;
   private authProviders: Map<string, AuthProvider>;
@@ -91,8 +99,11 @@ export class LocalAuthBackend implements AuthBackend {
     auth: AuthMethod,
     device: DeviceInfo,
     headRegion?: string,
+    clientIp?: string,
   ): Promise<AuthOutcome> {
     const logger = getLogger();
+
+    if (device.deviceId && this.storage.isDeletedDevice(device.deviceId)) return ACCOUNT_DELETED;
 
     if (auth.method === 'pairing') {
       return this.handlePairingAuth(auth.token, device, headRegion);
@@ -102,9 +113,9 @@ export class LocalAuthBackend implements AuthBackend {
       return { ok: false, code: 'unknown_auth_method', message: 'Use startChallenge/verifyChallenge for challenge auth' };
     }
 
-    const resolved = await this.resolveAuthUser(auth);
+    const resolved = await this.resolveAuthUser(auth, clientIp);
     if (this.isAuthError(resolved)) {
-      logger.warn('Auth rejected', { method: auth.method, reason: resolved.message });
+      logger.warn('Auth rejected', { method: auth.method, ip: clientIp, reason: resolved.message });
       return resolved;
     }
 
@@ -116,6 +127,7 @@ export class LocalAuthBackend implements AuthBackend {
     _encryptionKey?: string,
     headRegion?: string,
   ): Promise<ChallengeOutcome> {
+    if (this.storage.isDeletedDevice(deviceId)) return ACCOUNT_DELETED;
     const device = this.storage.getDevice(deviceId);
     if (!device || !device.publicKey) {
       return { ok: false, code: 'unknown_device', message: 'Unknown device' };
@@ -137,6 +149,7 @@ export class LocalAuthBackend implements AuthBackend {
     headRegion?: string,
   ): Promise<AuthOutcome> {
     const logger = getLogger();
+    if (this.storage.isDeletedDevice(deviceId)) return ACCOUNT_DELETED;
     const device = this.storage.getDevice(deviceId);
     if (!device || !device.publicKey) {
       return { ok: false, code: 'device_not_found', message: 'Device not found' };
@@ -193,6 +206,11 @@ export class LocalAuthBackend implements AuthBackend {
     return { token, expiresIn: this.pairingTtl };
   }
 
+  /** Delete the account and everything stored for it. Returns its device ids. */
+  async deleteAccount(userId: string): Promise<string[]> {
+    return this.storage.deleteUser(userId);
+  }
+
   async removeDevice(userId: string, deviceId: string): Promise<boolean> {
     const device = this.storage.getDevice(deviceId);
     if (!device || device.userId !== userId) return false;
@@ -243,7 +261,7 @@ export class LocalAuthBackend implements AuthBackend {
       return { ok: false, code: 'unsupported_auth_method', message: `${auth.method} cannot be used for login-first routing` };
     }
 
-    const resolved = await this.resolveAuthUser(auth);
+    const resolved = await this.resolveAuthUser(auth, clientIp);
     if (this.isAuthError(resolved)) return resolved;
 
     const regions = this.getRegions();
@@ -330,6 +348,11 @@ export class LocalAuthBackend implements AuthBackend {
       displayName: joinResult.displayName,
       serviceKey,
     };
+  }
+
+  /** Region the user's account is assigned to, if any. */
+  getUserRegion(userId: string): string | undefined {
+    return this.storage.getUser(userId)?.region ?? undefined;
   }
 
   validateServiceKey(serviceKey: string): { valid: boolean; region?: string } {
@@ -495,7 +518,7 @@ export class LocalAuthBackend implements AuthBackend {
     };
   }
 
-  private async resolveAuthUser(auth: AuthMethod): Promise<AuthUser | { ok: false; code: string; message: string }> {
+  private async resolveAuthUser(auth: AuthMethod, clientIp?: string): Promise<AuthUser | { ok: false; code: string; message: string }> {
     let provider: AuthProvider | undefined;
     let credentials: { token?: string; githubCode?: string; codeVerifier?: string; redirectUri?: string; ip?: string } = {};
 
@@ -530,7 +553,7 @@ export class LocalAuthBackend implements AuthBackend {
       return { ok: false, code: 'auth_rejected', message: `Auth method ${auth.method} not configured` };
     }
 
-    const result = await provider.authenticate(credentials);
+    const result = await provider.authenticate({ ...credentials, ip: clientIp });
     if (!result.ok) {
       return { ok: false, code: result.retryable ? 'service_unavailable' : 'auth_rejected', message: result.message };
     }

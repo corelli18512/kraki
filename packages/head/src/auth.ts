@@ -55,7 +55,6 @@ export interface AuthProvider {
 /** Credentials a device can send */
 export interface AuthCredentials {
   token?: string;
-  channelKey?: string;
   /** GitHub OAuth authorization code (exchanged for access token) */
   githubCode?: string;
   /**
@@ -76,6 +75,9 @@ export interface AuthCredentials {
 }
 
 // --- Built-in providers ---
+
+/** GitHub calls must finish well inside the socket's 15 s auth deadline. */
+const GITHUB_REQUEST_TIMEOUT_MS = 10_000;
 
 /**
  * GitHub OAuth token provider.
@@ -138,6 +140,7 @@ export class GitHubAuthProvider implements AuthProvider {
           Accept: 'application/json',
         },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
       });
 
       if (!res.ok) {
@@ -184,6 +187,7 @@ export class GitHubAuthProvider implements AuthProvider {
           Accept: 'application/vnd.github+json',
           'User-Agent': 'kraki-head',
         },
+        signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
       });
 
       if (!res.ok) {
@@ -281,32 +285,37 @@ export class ThrottledAuthProvider implements AuthProvider {
   }
 
   async authenticate(credentials: AuthCredentials): Promise<AuthOutcome> {
-    const ip = credentials.ip ?? 'unknown';
-    const now = Date.now();
-    const record = this.failures.get(ip);
+    const ip = credentials.ip;
+    // Without a client address there is nothing to key on. Keying every such
+    // attempt under one shared bucket would let five bad logins lock out
+    // everyone, so these are not throttled here.
+    if (!ip || ip === 'unknown') return this.inner.authenticate(credentials);
 
-    if (record) {
-      if (now - record.firstAt > this.windowMs) {
-        this.failures.delete(ip);
-      } else if (record.count >= this.maxAttempts) {
-        getLogger().warn('Auth throttled', { ip, attempts: record.count });
-        return { ok: false, message: 'Too many auth attempts. Try again later.' };
-      }
+    const now = Date.now();
+    let record = this.failures.get(ip);
+    if (record && now - record.firstAt > this.windowMs) {
+      this.failures.delete(ip);
+      record = undefined;
     }
+    if (record && record.count >= this.maxAttempts) {
+      getLogger().warn('Auth throttled', { ip, attempts: record.count });
+      return { ok: false, message: 'Too many auth attempts. Try again later.' };
+    }
+    // Reserve the attempt before awaiting, so concurrent attempts from one IP
+    // cannot all pass the check above.
+    if (record) record.count++;
+    else this.failures.set(ip, (record = { count: 1, firstAt: now }));
 
     const result = await this.inner.authenticate(credentials);
-
-    if (!result.ok) {
-      const existing = this.failures.get(ip);
-      if (existing) {
-        existing.count++;
-      } else {
-        this.failures.set(ip, { count: 1, firstAt: now });
+    // Only a rejected credential counts; success and provider outages
+    // (retryable) give the attempt back.
+    if (result.ok || result.retryable) {
+      const current = this.failures.get(ip);
+      if (current) {
+        current.count--;
+        if (current.count <= 0 || result.ok) this.failures.delete(ip);
       }
-    } else {
-      this.failures.delete(ip);
     }
-
     return result;
   }
 

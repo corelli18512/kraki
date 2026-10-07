@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'crypto';
 import Database from 'better-sqlite3';
+import { applyVoiceWordOps, storedVoiceWords, type VoiceWord, type VoiceWordOp } from './voice-vocabulary.js';
 
 // --- Row types for SQLite result mapping ---
 
@@ -96,7 +97,7 @@ export interface StoredRegion {
   lastSeenAt?: string;
 }
 
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 
 /**
  * Audio a live broker connection may run ahead of its last usage report.
@@ -166,7 +167,24 @@ export class Storage {
     this.migrate();
   }
 
+  /** Prepared statements for the hot per-frame lookups, compiled once. */
+  private stmtCache = new Map<string, Database.Statement>();
+  private stmt(sql: string): Database.Statement {
+    let statement = this.stmtCache.get(sql);
+    if (!statement) {
+      statement = this.db.prepare(sql);
+      this.stmtCache.set(sql, statement);
+    }
+    return statement;
+  }
+
   private migrate(): void {
+    // All steps and the version bump commit together: a failure part-way
+    // leaves the previous schema intact instead of a half-migrated database.
+    this.db.transaction(() => this.migrateSteps())();
+  }
+
+  private migrateSteps(): void {
     const currentVersion = (this.db.pragma('user_version', { simple: true }) as number) || 0;
 
     if (currentVersion < 1) {
@@ -268,10 +286,15 @@ export class Storage {
     }
 
     if (currentVersion < 7) {
-      // Make region and relay_url nullable (edge provides them at join time)
-      try {
+      // Make region and relay_url nullable (edge provides them at join time).
+      // Copy the rows across; any error aborts the whole migration (rolled
+      // back), it is never swallowed after the old table was dropped.
+      const exists = this.db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'edge_join_tokens'",
+      ).get();
+      if (exists) {
         const rows = this.db.prepare('SELECT token_hash, region, relay_url, display_name, expires_at, used_at, created_at FROM edge_join_tokens').all();
-        this.db.exec('DROP TABLE IF EXISTS edge_join_tokens');
+        this.db.exec('DROP TABLE edge_join_tokens');
         this.db.exec(`
           CREATE TABLE edge_join_tokens (
             token_hash    TEXT PRIMARY KEY,
@@ -288,8 +311,6 @@ export class Storage {
         for (const row of rows as Array<{ token_hash: string; region: string | null; relay_url: string | null; display_name: string | null; expires_at: string; used_at: string | null; created_at: string }>) {
           ins.run(row.token_hash, row.region, row.relay_url, row.display_name, row.expires_at, row.used_at, row.created_at);
         }
-      } catch {
-        // Table may not exist yet on fresh DBs
       }
     }
 
@@ -421,7 +442,20 @@ export class Storage {
       `);
     }
 
+    if (currentVersion < 13) {
+      // Device ids of deleted accounts. Only random ids and a date: an
+      // offline computer of a deleted account must learn it was deleted
+      // instead of silently signing up again with its saved token.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS deleted_devices (
+          device_id  TEXT PRIMARY KEY,
+          deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+    }
+
     this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
+    this.sweepDeletedDevices();
   }
 
   // --- Users ---
@@ -436,7 +470,7 @@ export class Storage {
   }
 
   getUser(userId: string): StoredUser | undefined {
-    const row = this.db.prepare(
+    const row = this.stmt(
       'SELECT user_id, username, provider, email, preferences, region, created_at FROM users WHERE user_id = ?'
     ).get(userId) as UserRow | undefined;
     if (!row) return undefined;
@@ -454,9 +488,28 @@ export class Storage {
   updatePreferences(userId: string, preferences: Record<string, unknown>): void {
     const existing = this.getUser(userId);
     if (!existing) return;
-    const merged = { ...(existing.preferences ?? {}), ...preferences };
+    // Custom Words change only through update_voice_vocabulary intents; a
+    // generic preferences write must never replace the list.
+    const { voiceVocabulary: _reserved, ...patch } = preferences;
+    const merged = { ...(existing.preferences ?? {}), ...patch };
     this.db.prepare('UPDATE users SET preferences = ? WHERE user_id = ?')
       .run(JSON.stringify(merged), userId);
+  }
+
+  getVoiceVocabulary(userId: string): VoiceWord[] {
+    return storedVoiceWords(this.getUser(userId)?.preferences?.voiceVocabulary);
+  }
+
+  /** Applies a device's intents and returns the account's resulting list. */
+  updateVoiceVocabulary(userId: string, ops: VoiceWordOp[]): VoiceWord[] {
+    return this.db.transaction(() => {
+      const user = this.getUser(userId);
+      if (!user) throw new Error('Unknown vocabulary owner');
+      const words = applyVoiceWordOps(this.getVoiceVocabulary(userId), ops);
+      const preferences = { ...user.preferences, voiceVocabulary: { version: 2, words } };
+      this.db.prepare('UPDATE users SET preferences = ? WHERE user_id = ?').run(JSON.stringify(preferences), userId);
+      return words;
+    })();
   }
 
   // --- Region registry ---
@@ -623,6 +676,11 @@ export class Storage {
     if (existing && existing.userId !== userId) {
       throw new Error(`Device "${id}" belongs to user "${existing.userId}", not "${userId}"`);
     }
+    // Routing authorisation (multicast, tentacle-only messages) relies on
+    // role; a re-auth must not turn an app into a tentacle or back.
+    if (existing && existing.role !== role) {
+      throw new Error(`Device "${id}" is registered as ${existing.role}, not ${role}`);
+    }
     this.db.prepare(`
       INSERT INTO devices (id, user_id, name, role, kind, public_key, encryption_key)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -638,7 +696,7 @@ export class Storage {
   }
 
   getDevice(id: string): StoredDevice | undefined {
-    const row = this.db.prepare(
+    const row = this.stmt(
       'SELECT id, user_id, name, role, kind, public_key, encryption_key, last_seen, created_at FROM devices WHERE id = ?'
     ).get(id) as DeviceRow | undefined;
     if (!row) return undefined;
@@ -646,7 +704,7 @@ export class Storage {
   }
 
   getDevicesByUser(userId: string): StoredDevice[] {
-    const rows = this.db.prepare(
+    const rows = this.stmt(
       'SELECT id, user_id, name, role, kind, public_key, encryption_key, last_seen, created_at FROM devices WHERE user_id = ?'
     ).all(userId) as DeviceRow[];
     return rows.map(row => this.mapDeviceRow(row));
@@ -659,6 +717,37 @@ export class Storage {
       encryptionKey: row.encryption_key,
       lastSeen: row.last_seen, createdAt: row.created_at,
     };
+  }
+
+  /**
+   * Delete an account and everything the relay keeps for it: devices, their
+   * push tokens, voice leases and usage, and the user row (preferences and
+   * custom words live there). Returns the deleted device ids so the caller
+   * can drop their pulse state and connections. One transaction.
+   */
+  deleteUser(userId: string): string[] {
+    return this.db.transaction(() => {
+      const deviceIds = (this.db.prepare('SELECT id FROM devices WHERE user_id = ?').all(userId) as Array<{ id: string }>)
+        .map((row) => row.id);
+      for (const id of deviceIds) this.db.prepare('DELETE FROM push_tokens WHERE device_id = ?').run(id);
+      this.db.prepare('DELETE FROM devices WHERE user_id = ?').run(userId);
+      this.db.prepare('DELETE FROM voice_leases WHERE user_id = ?').run(userId);
+      this.db.prepare('DELETE FROM voice_usage_daily WHERE user_id = ?').run(userId);
+      this.db.prepare('DELETE FROM users WHERE user_id = ?').run(userId);
+      const tombstone = this.db.prepare('INSERT OR REPLACE INTO deleted_devices (device_id) VALUES (?)');
+      for (const id of deviceIds) tombstone.run(id);
+      return deviceIds;
+    })();
+  }
+
+  /** Whether this device id belonged to an account that was deleted. */
+  isDeletedDevice(deviceId: string): boolean {
+    return this.db.prepare('SELECT 1 FROM deleted_devices WHERE device_id = ?').get(deviceId) !== undefined;
+  }
+
+  /** Forget tombstones older than `days` (default 180). */
+  sweepDeletedDevices(days = 180): number {
+    return this.db.prepare(`DELETE FROM deleted_devices WHERE deleted_at < datetime('now', ?)`).run(`-${days} days`).changes;
   }
 
   deleteDevice(id: string): boolean {

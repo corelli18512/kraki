@@ -22,6 +22,10 @@ final class DeviceStore {
     /// (multi-agent device).
     var deviceAgents: [String: [AgentCapabilities]] = [:]
     var deviceVersions: [String: String] = [:]
+    /// `device_greeting.update` per computer (tentacles ≥ 0.36).
+    var deviceUpdates: [String: DeviceUpdateInfo] = [:]
+    /// Remote updates in flight or just finished (not persisted).
+    var updateProgress: [String: DeviceUpdateProgress] = [:]
     /// Latest subscription account quota per tentacle (`device_usage`).
     /// In-memory only: a fresh reading arrives on every connect.
     var deviceUsage: [String: DeviceUsageSnapshot] = [:]
@@ -71,6 +75,8 @@ final class DeviceStore {
         var devices: [String: DeviceSummary]
         var deviceAgents: [String: [AgentCapabilities]]
         var deviceVersions: [String: String]
+        /// Added after v2; optional so older snapshots still load.
+        var deviceUpdates: [String: DeviceUpdateInfo]?
     }
 
     private static let snapshotSchemaVersion = 2
@@ -106,6 +112,7 @@ final class DeviceStore {
         self.devices = snapshot.devices
         self.deviceAgents = snapshot.deviceAgents
         self.deviceVersions = snapshot.deviceVersions
+        self.deviceUpdates = snapshot.deviceUpdates ?? [:]
     }
 
     /// Debounced write of the current persistable state to disk.
@@ -116,7 +123,8 @@ final class DeviceStore {
             schemaVersion: Self.snapshotSchemaVersion,
             devices: devices,
             deviceAgents: deviceAgents,
-            deviceVersions: deviceVersions
+            deviceVersions: deviceVersions,
+            deviceUpdates: deviceUpdates
         )
         saveTask?.cancel()
         let task = DispatchWorkItem { [weak self] in self?.flushCache() }
@@ -132,7 +140,7 @@ final class DeviceStore {
         guard let snapshot = pendingSnapshot else { return }
         pendingSnapshot = nil
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? data.write(to: Self.snapshotURL, options: .atomic)
+        try? data.write(to: Self.snapshotURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
     /// Wipe the on-disk file. Logout / reset.
@@ -240,7 +248,8 @@ final class DeviceStore {
 
     func setDevices(_ list: [DeviceSummary]) {
         let qrVerified = keyPins.verifyPendingQR(against: list)
-        devices = Dictionary(uniqueKeysWithValues: list.map { ($0.id, keyPins.apply($0)) })
+        // The list comes from the relay: a duplicate id must not trap.
+        devices = Dictionary(list.map { ($0.id, keyPins.apply($0)) }, uniquingKeysWith: { _, latest in latest })
         keyMismatchDeviceIds = keyPins.mismatched.union(qrVerified ? [] : [Self.unmatchedQRMarker])
         // Refresh greeting freshness — every online device in the fresh
         // list is "connecting" until its `device_greeting` lands in this
@@ -268,6 +277,7 @@ final class DeviceStore {
         deviceFeatures.removeValue(forKey: id)
         deviceAgents.removeValue(forKey: id)
         deviceVersions.removeValue(forKey: id)
+        deviceUpdates.removeValue(forKey: id)
         pendingGreetingIds.remove(id)
         scheduleSave()
     }
@@ -387,6 +397,47 @@ final class DeviceStore {
     func setDeviceVersion(_ id: String, version: String) {
         deviceVersions[id] = version
         scheduleSave()
+    }
+
+    func setDeviceUpdate(_ id: String, update: DeviceUpdateInfo) {
+        // The new version greeting us is the update having landed, even if
+        // its own "updated" announcement didn't reach this app.
+        if let p = updateProgress[id], p.isActive, let to = p.to, update.current == to {
+            updateProgress[id] = DeviceUpdateProgress(phase: .updated, requestId: p.requestId, from: p.from, to: to)
+        }
+        guard deviceUpdates[id] != update else { return }
+        deviceUpdates[id] = update
+        scheduleSave()
+    }
+
+    func setUpdateProgress(_ id: String, _ progress: DeviceUpdateProgress?) {
+        updateProgress[id] = progress
+    }
+
+    /// The version a user recognises: Kraki for Mac's own version for its
+    /// built-in tentacle, the tentacle version otherwise.
+    func displayVersion(for id: String) -> String? {
+        if let u = deviceUpdates[id], u.installedVia == "mac-app" { return "Kraki for Mac \(u.current)" }
+        return deviceVersions[id].map { "Kraki \($0)" }
+    }
+
+    /// Newest published tentacle any computer on the account has reported.
+    var knownLatestTentacle: String? {
+        deviceUpdates.values.compactMap(\.latestTentacle)
+            .max { KrakiVersion.isNewer($1, than: $0) }
+    }
+
+    /// A newer Kraki for this computer, if any. Computers that predate update
+    /// reporting are compared with the newest tentacle seen on the account.
+    func availableUpdate(for id: String) -> AvailableUpdate? {
+        if let info = deviceUpdates[id] {
+            guard let latest = info.latest, KrakiVersion.isNewer(latest, than: info.current) else { return nil }
+            return AvailableUpdate(latest: latest, installedVia: info.installedVia, remote: info.remote == true)
+        }
+        guard devices[id]?.role == .tentacle,
+              let version = deviceVersions[id], let newest = knownLatestTentacle,
+              KrakiVersion.isNewer(newest, than: version) else { return nil }
+        return AvailableUpdate(latest: newest, installedVia: "legacy", remote: false)
     }
 
     func setDeviceUsage(_ id: String, accounts: [AccountUsage], receivedAt: Date = Date()) {

@@ -19,6 +19,8 @@ final class CommandSender {
     /// during optimistic create/fork. When `session_created` arrives
     /// with this requestId, the router swaps placeholderId → real id.
     var pendingPlaceholderIds: [String: String] = [:]
+    /// First messages of create requests that timed out, by requestId.
+    @ObservationIgnored private var timedOutCreatePrompts: [String: String] = [:]
     /// Debug automation correlation: resolved request id → authoritative
     /// session id. This never changes transport behavior; it only lets the
     /// in-process native automation driver wait for the exact create result.
@@ -811,61 +813,8 @@ final class CommandSender {
 
         send(["type": "set_session_mode", "payload": ["mode": mode.wireName]], sessionId: sessionId)
         appState.sessionStore.setMode(sessionId, mode)
-
-        // Auto-resolve pending permissions based on the new mode.
-        // Pending permissions are derived from the message DB: a
-        // `permission` row with no `resolution` stamp and no
-        // matching approve/deny/always_allow/permission_resolved in
-        // the same session. Window-state-agnostic since this can
-        // fire for a session the user hasn't opened.
-        let pending = pendingPermissions(in: sessionId)
-
-        switch mode {
-        case .auto, .delegate:
-            for perm in pending {
-                send(["type": "approve", "payload": ["permissionId": perm.id]], sessionId: sessionId)
-            }
-        case .safe:
-            break // No auto-resolution in safe mode
-        }
-    }
-
-    /// Derive currently-unresolved permission requests for a session
-    /// from the persisted message stream. Used by mode-change
-    /// auto-resolution; the old code held a dedicated dict, but the
-    /// truth lives in the message log so we just read it. Bounded
-    /// scan (recent 100 messages) — old permissions that never got
-    /// resolved still surface from there.
-    private func pendingPermissions(in sessionId: String) -> [PendingPermission] {
-        guard let appState else { return [] }
-        let msgs = appState.messageStore.recentFromDB(sessionId, limit: 100)
-        var resolvedIds = Set<String>()
-        for m in msgs {
-            switch m.type {
-            case "approve", "deny", "always_allow", "permission_resolved":
-                if let pid = m.payload["permissionId"]?.stringValue {
-                    resolvedIds.insert(pid)
-                }
-            default:
-                break
-            }
-        }
-        var out: [PendingPermission] = []
-        for m in msgs where m.type == "permission" {
-            guard let pid = m.permissionId else { continue }
-            // Resolved iff a matching approve/deny/always_allow/
-            // permission_resolved appears later in the stream.
-            if resolvedIds.contains(pid) { continue }
-            out.append(PendingPermission(
-                id: pid,
-                sessionId: sessionId,
-                description: m.toolDescription ?? "",
-                toolName: m.toolName,
-                args: m.args,
-                timestamp: Date()  // close-enough; only used for ordering on UI
-            ))
-        }
-        return out
+        // Pending permission prompts are resolved by the tentacle, never
+        // approved from here.
     }
 
     /// Consume one pending mode echo. Returns true if this was our own echo.
@@ -1017,6 +966,12 @@ final class CommandSender {
                 placeholderId,
                 reason: "Request timed out"
             )
+            // The computer may still create the session later. Keep the first
+            // message so it lands in that session's draft instead of being lost
+            // (not sent: the user may already have retried).
+            if let prompt = self.pendingCreateRequests[requestId], !prompt.isEmpty {
+                self.timedOutCreatePrompts[requestId] = prompt
+            }
             self.clearPendingRequest(requestId)
         }
     }
@@ -1032,7 +987,13 @@ final class CommandSender {
 
     func deleteSession(sessionId: String) {
         guard let appState else { return }
-        send(["type": "delete_session", "payload": [:] as [String: Any]], sessionId: sessionId)
+        // Remove local history only once the delete is on its way. If it
+        // cannot be sent (offline), the session would come back with the next
+        // session list — with its local history already gone.
+        guard send(["type": "delete_session", "payload": [:] as [String: Any]], sessionId: sessionId) else {
+            appState.lastError = "Couldn't delete the session while offline. Try again when connected."
+            return
+        }
         appState.sessionStore.removeSession(sessionId)
         appState.messageStore.deleteSessionMessages(sessionId)
     }
@@ -1044,7 +1005,10 @@ final class CommandSender {
     /// same connectivity/queue semantics as other commands and won't
     /// silently disappear if the socket is mid-reconnect.
     func removeDevice(deviceId: String) {
-        send(["type": "remove_device", "deviceId": deviceId])
+        // Relay-terminated: the relay must read it, so it goes as plaintext
+        // control. It used to be end-to-end encrypted to the computers, which
+        // ignore it, so the relay never removed anything.
+        appState?.sendRelayControl(["type": "remove_device", "deviceId": deviceId])
     }
 
     // MARK: - Local sessions (import picker)
@@ -1132,6 +1096,24 @@ final class CommandSender {
         return sent
     }
 
+    /// Ask a computer to update Kraki (remote update). `when`: nil asks first
+    /// if sessions are running; "now" stops them; "idle" waits for them.
+    @discardableResult
+    func updateDevice(_ deviceId: String, when: String? = nil) -> Bool {
+        guard let appState else { return false }
+        let store = appState.deviceStore
+        let requestId = UUID().uuidString
+        var payload: [String: Any] = ["requestId": requestId]
+        if let when { payload["when"] = when }
+        let info = store.deviceUpdates[deviceId]
+        store.setUpdateProgress(deviceId, DeviceUpdateProgress(phase: .requested, requestId: requestId, from: info?.current, to: info?.latest))
+        guard send(["type": "update_device", "targetDeviceId": deviceId, "payload": payload], connectionScoped: true) else {
+            store.setUpdateProgress(deviceId, DeviceUpdateProgress(phase: .failed, requestId: requestId, error: "Not connected."))
+            return false
+        }
+        return true
+    }
+
     func requestArchivedSessions(targetDeviceId: String) {
         send(["type": "request_archived_sessions", "targetDeviceId": targetDeviceId, "payload": [:] as [String: Any]])
     }
@@ -1141,8 +1123,11 @@ final class CommandSender {
     }
 
     func deleteArchivedSessions(targetDeviceId: String) {
+        guard send(["type": "delete_archived_sessions", "targetDeviceId": targetDeviceId, "payload": [:] as [String: Any]]) else {
+            appState?.lastError = "Couldn't delete archived sessions while offline. Try again when connected."
+            return
+        }
         appState?.sessionStore.archivedSessions[targetDeviceId] = []
-        send(["type": "delete_archived_sessions", "targetDeviceId": targetDeviceId, "payload": [:] as [String: Any]])
     }
 
     /// Restore an archived session and show it right away; the computer's
@@ -1233,6 +1218,10 @@ final class CommandSender {
     /// Resolve a create request — correlate the requestId with the created sessionId.
     func resolveCreateRequest(_ requestId: String, sessionId: String) {
         guard let appState else { return }
+        if let prompt = timedOutCreatePrompts.removeValue(forKey: requestId) {
+            appState.sessionStore.setDraft(sessionId, prompt)
+            return
+        }
         #if DEBUG
         resolvedCreateSessions[requestId] = sessionId
         #endif
@@ -1297,6 +1286,7 @@ final class CommandSender {
         pendingCreateRequests.removeAll()
         pendingCreateTitles.removeAll()
         pendingPlaceholderIds.removeAll()
+        timedOutCreatePrompts.removeAll()
         pendingModeChanges.removeAll()
         #if DEBUG
         resolvedCreateSessions.removeAll()

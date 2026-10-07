@@ -206,7 +206,12 @@ final class MessageRouter {
         // ── Server messages ──────────────────────────────────────────────
         case "server_error":
             let message = json["message"] as? String ?? "Unknown server error"
-            appState?.lastError = message
+            if appState?.accountDeletionFailedIfPending(message) != true {
+                appState?.lastError = message
+            }
+
+        case "account_deleted":
+            appState?.accountWasDeleted()
 
         case "pong":
             break
@@ -253,6 +258,12 @@ final class MessageRouter {
             KLog.d("🎙️ Voice lease denied reason=\(reason.rawValue)")
             Task { @MainActor in
                 appState?.voiceInputController.receiveLeaseDenied(reason: reason, detail: detail)
+            }
+
+        case "voice_vocabulary_updated":
+            Task { @MainActor [weak self] in
+                guard let self, !self.retired else { return }
+                self.appState?.preferencesManager?.receiveVocabulary(json)
             }
 
         case "preferences_updated":
@@ -352,6 +363,11 @@ final class MessageRouter {
 
         if type == "device_greeting" {
             handleDeviceGreeting(dict)
+            return
+        }
+
+        if type == "device_update_status" {
+            handleDeviceUpdateStatus(dict)
             return
         }
 
@@ -931,6 +947,24 @@ final class MessageRouter {
         }
     }
 
+    private func handleDeviceUpdateStatus(_ dict: [String: Any]) {
+        guard let appState,
+              let deviceId = dict["deviceId"] as? String,
+              let payload = dict["payload"] as? [String: Any],
+              let raw = payload["phase"] as? String,
+              let phase = DeviceUpdateProgress.Phase(rawValue: raw) else { return }
+        let previous = appState.deviceStore.updateProgress[deviceId]
+        appState.deviceStore.setUpdateProgress(deviceId, DeviceUpdateProgress(
+            phase: phase,
+            requestId: payload["requestId"] as? String ?? previous?.requestId,
+            from: payload["from"] as? String ?? previous?.from,
+            to: payload["to"] as? String ?? previous?.to,
+            progress: (payload["progress"] as? NSNumber)?.doubleValue,
+            runningSessions: (payload["runningSessions"] as? NSNumber)?.intValue,
+            error: payload["error"] as? String
+        ))
+    }
+
     private func handleDeviceGreeting(_ dict: [String: Any]) {
         guard let appState,
               let deviceId = dict["deviceId"] as? String else { return }
@@ -947,6 +981,9 @@ final class MessageRouter {
 
         if let version = payload?["version"] as? String {
             appState.deviceStore.setDeviceVersion(deviceId, version: version)
+        }
+        if let raw = payload?["update"] as? [String: Any], let update = DeviceUpdateInfo(json: raw) {
+            appState.deviceStore.setDeviceUpdate(deviceId, update: update)
         }
         // A greeting without `features` says nothing about them (some Tentacle
         // builds omit them from the broadcast after their own reconnect):

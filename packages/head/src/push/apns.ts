@@ -27,6 +27,9 @@ export function isPermanentTokenFailure(reason: string | undefined): boolean {
   return !!reason && PERMANENT_TOKEN_REASONS.has(reason);
 }
 
+/** An APNs request that has not answered within this time is abandoned. */
+const APNS_REQUEST_TIMEOUT_MS = 10_000;
+
 export function buildApnsPayload(payload?: PushPayload): string {
   return JSON.stringify({
     aps: {
@@ -117,7 +120,13 @@ export class ApnsProvider implements PushProvider {
     const jwt = this.getJwt();
     const session = this.getSession(host);
 
-    return new Promise<PushResult>((resolve) => {
+    return new Promise<PushResult>((resolveOnce) => {
+      let settled = false;
+      const resolve = (result: PushResult) => {
+        if (settled) return;
+        settled = true;
+        resolveOnce(result);
+      };
       const req = session.request({
         ':method': 'POST',
         ':path': `/3/device/${token}`,
@@ -151,6 +160,10 @@ export class ApnsProvider implements PushProvider {
             const parsed = JSON.parse(responseData);
             if (parsed.reason) errorReason = parsed.reason;
           } catch { /* ignore parse errors */ }
+          if (errorReason === 'ExpiredProviderToken' || errorReason === 'InvalidProviderToken') {
+            // Our signing token, not the device token: mint a fresh JWT next time.
+            this.jwt = null;
+          }
           if (isPermanentTokenFailure(errorReason)) {
             logger.info('APNs token rejected, marking for removal', { status: statusCode, reason: errorReason, tokenSuffix: token.slice(-8) });
             resolve({ success: false, gone: true, error: errorReason });
@@ -164,6 +177,12 @@ export class ApnsProvider implements PushProvider {
       req.on('error', (err) => {
         logger.error('APNs request error', { error: (err as Error).message, tokenSuffix: token.slice(-8) });
         resolve({ success: false, error: (err as Error).message });
+      });
+
+      req.setTimeout(APNS_REQUEST_TIMEOUT_MS, () => {
+        logger.warn('APNs request timed out', { tokenSuffix: token.slice(-8) });
+        req.close(http2.constants.NGHTTP2_CANCEL);
+        resolve({ success: false, error: 'timeout' });
       });
 
       req.end(body);

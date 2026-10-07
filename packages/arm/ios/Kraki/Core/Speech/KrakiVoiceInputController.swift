@@ -161,6 +161,13 @@ enum NativeTestRuntime {
             || NSClassFromString("XCTestCase") != nil
     }
 
+    /// Routine local test runs (no KRAKI_RUN_UI_TESTS=1): the hosting app
+    /// must show nothing — no main window, Dock icon or menu bar item — and
+    /// never activate, so it cannot take the developer's focus.
+    static var isHeadlessTestHost: Bool {
+        isRunningTests && ProcessInfo.processInfo.environment["KRAKI_RUN_UI_TESTS"] != "1"
+    }
+
     static var allowsLiveAudio: Bool {
         !isRunningTests || ProcessInfo.processInfo.environment["KRAKI_ALLOW_TEST_MICROPHONE"] == "1"
     }
@@ -188,6 +195,13 @@ private final class IsolatedVoiceSession: VoiceInputSessionProtocol {
     func startCapture(context: [String: VoiceInputJSONValue], vocabulary: [String]) {}
     func stopCapture() {}
     func close() {}
+}
+#else
+/// Release builds are never test hosts.
+enum NativeTestRuntime {
+    static let isRunningTests = false
+    static let isHeadlessTestHost = false
+    static let allowsLiveAudio = true
 }
 #endif
 
@@ -1265,18 +1279,32 @@ final class KrakiVoiceInputController {
         }
         guard !normalizedCorrected.isEmpty, !normalizedRaw.isEmpty else { return 0 }
 
-        var previous = Array(0...normalizedRaw.count)
+        // Edit distance between the corrected text and every raw prefix,
+        // computed only in a band around the diagonal: a correction moves
+        // text by far less than `band` characters, and the full O(n·m) table
+        // ran on every correction delta (16 ms cadence), ~1M operations per
+        // frame for long dictations.
+        let n = normalizedRaw.count
+        let band = 128
+        let infinity = Int.max / 4
+        var previous = [Int](repeating: infinity, count: n + 1)
+        for j in 0...min(n, band) { previous[j] = j }
         for (index, correctedCharacter) in normalizedCorrected.enumerated() {
-            var current = Array(repeating: 0, count: normalizedRaw.count + 1)
-            current[0] = index + 1
-            for rawIndex in 1...normalizedRaw.count {
-                let substitution = previous[rawIndex - 1]
-                    + (correctedCharacter == normalizedRaw[rawIndex - 1] ? 0 : 1)
-                current[rawIndex] = min(
-                    previous[rawIndex] + 1,
-                    current[rawIndex - 1] + 1,
-                    substitution
-                )
+            let row = index + 1
+            var current = [Int](repeating: infinity, count: n + 1)
+            let lower = max(1, row - band)
+            let upper = min(n, row + band)
+            if row <= band { current[0] = row }
+            if lower <= upper {
+                for rawIndex in lower...upper {
+                    let substitution = previous[rawIndex - 1]
+                        + (correctedCharacter == normalizedRaw[rawIndex - 1] ? 0 : 1)
+                    current[rawIndex] = min(
+                        previous[rawIndex] + 1,
+                        current[rawIndex - 1] + 1,
+                        substitution
+                    )
+                }
             }
             previous = current
         }

@@ -28,6 +28,7 @@ describe('Kraki MCP — end-to-end show_image over HTTP', () => {
   let server: KrakiMcpServer;
   let baseUrl: string;
   let token: string;
+  let tokenForSession: (sid: string) => string;
   let urlForSession: (s: string) => string;
   let activeSessions: Set<string>;
   let tmp: string;
@@ -40,7 +41,8 @@ describe('Kraki MCP — end-to-end show_image over HTTP', () => {
     });
     const info = await server.start();
     baseUrl = info.baseUrl;
-    token = info.bearerToken;
+    token = server.bearerToken;
+    tokenForSession = info.tokenForSession;
     urlForSession = info.urlForSession;
     tmp = mkdtempSync(join(tmpdir(), 'kraki-mcp-e2e-'));
   });
@@ -71,7 +73,7 @@ describe('Kraki MCP — end-to-end show_image over HTTP', () => {
     const png = join(tmp, 'hello.png');
     writeFileSync(png, Buffer.from(PNG_1X1, 'base64'));
 
-    const call = await post(urlForSession('sess-A'), token, {
+    const call = await post(urlForSession('sess-A'), tokenForSession('sess-A'), {
       jsonrpc: '2.0',
       id: 3,
       method: 'tools/call',

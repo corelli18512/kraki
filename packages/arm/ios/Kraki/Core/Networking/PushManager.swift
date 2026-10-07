@@ -395,6 +395,8 @@ final class PushManager: NSObject {
               ) as? [String: Any],
               let entitlements = plist["Entitlements"] as? [String: Any],
               let env = entitlements["aps-environment"] as? String else {
+            // Expected for App Store / TestFlight builds (no embedded profile).
+            KLog.d("ℹ️ APNs environment not found in a provisioning profile; using production")
             return "production"
         }
         // Normalize Apple's entitlement value to the relay's expected endpoint name.

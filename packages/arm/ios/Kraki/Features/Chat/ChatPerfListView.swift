@@ -4,32 +4,21 @@ import UIKit
 import os
 
 // =====================================================================
-// Production flat-spine scroll/windowing engine.
+// The production iOS chat list (used by ChatView).
 //
-// Purpose: prove that a NORMAL-ORDER (newest-at-bottom) chat list
-// can scroll smoothly AND paginate jump-free, with ZERO dependence on
-// the real ChatView list stack. Everything
-// here is self-contained:
+// Despite the "Perf" name (it began as a scroll-performance harness), this
+// is the real conversation list: a newest-at-bottom UICollectionView that
+// windows the session's flat spine through MessageProvider / MessageStore.
 //
-//   • MockMessageProvider — a pure in-memory sliding window over a
-//     fixed backing array. No network, no Store, no Provider.
-//   • ChatPerfListVC    — a clean-room UICollectionView (flow layout
-//     with an explicit cached-height sizer, a MANUAL data source driven
-//     by performBatchUpdates, and inline header/footer spinners).
-//   • Frame-time monitor  — a CADisplayLink that flags dropped frames so
-//     jank is visible on-screen, not just "feels laggy".
+//   • ChatPerfListVC  — UICollectionView with a flow layout, an explicit
+//     cached-height sizer, a manual data source driven by
+//     performBatchUpdates, and inline header/footer pagination spinners.
+//   • Heights come from the offscreen TextKit self-size path, pre-warmed by
+//     HeightMeasurementScheduler so scrolling never measures on the frame.
+//   • chatPerfLog — debug-only perf logging (frame drops, apply timings).
 //
-// Phase-2 scope: each seq maps to a REAL message cell. The cheap UILabel
-// bubbles are replaced by the production TextKit bubble (markdown / code /
-// the same SwiftUI hosting the real chat uses) so the harness exercises
-// the ACTUAL expensive self-size (`systemLayoutSizeFitting`, 15–60 ms per
-// rich cell) instead of a trivial label. Heights come from the same
-// offscreen self-size path the real app uses, pre-warmed off the critical
-// frame by the production `HeightMeasurementScheduler`. Goal: measure how
-// much scroll jank real markdown adds on a normal-order (newest-at-bottom) list, and
-// validate that measure-ahead keeps the scroll frames clean.
-//
-// Reached from: Settings → Diagnostics → "Scroll Perf Test".
+// Model swaps around performBatchUpdates are order-sensitive; read the
+// comments at each `items =` assignment before changing them.
 // =====================================================================
 
 /// Perf logger. Mirrors every line to BOTH the unified-logging store (for
@@ -1994,9 +1983,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             guard !paths.isEmpty else { return }
             let layoutStarted = CFAbsoluteTimeGetCurrent()
             let oldContentHeight = self.collectionView.contentSize.height
-            let oldHeights = Dictionary(uniqueKeysWithValues: paths.map { path in
+            let oldHeights = Dictionary(paths.map { path in
                 (path, self.collectionView.layoutAttributesForItem(at: path)?.frame.height ?? -1)
-            })
+            }, uniquingKeysWith: { first, _ in first })
             let contentHeightDelta = paths.reduce(CGFloat.zero) { total, path in
                 let old = oldHeights[path] ?? 0
                 guard path.item < self.items.count,

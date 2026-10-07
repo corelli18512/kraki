@@ -9,6 +9,7 @@ This document explains what Kraki protects, what it does not protect, and what t
 - The relay cannot read message contents. All message bodies are end-to-end encrypted.
 - The relay sees only what it needs to forward traffic: envelope type, destination device ID, sender device ID, and payload size.
 - Endpoints still see plaintext: the machine running the agent and the device reading the session.
+- Account settings are separate from encrypted conversations. Custom Words are stored readably on the account's relay and synced over TLS/WSS; they are **not end-to-end encrypted**. Cloud speech/correction also receives words used for a dictation request.
 
 ## What Kraki is designed to protect
 
@@ -16,13 +17,13 @@ This document explains what Kraki protects, what it does not protect, and what t
 |--------|-----------------|
 | Relay operator reading content | E2E encryption keeps message bodies on the endpoints |
 | Network interception | Clients use TLS / WSS |
-| Message tampering | Authenticated encryption (AES-256-GCM) detects modification |
+| Message tampering | Authenticated encryption (AES-256-GCM) detects modification of a message in transit |
 | Unauthorized device access | Pairing, authentication, and device registration control who can join |
 | Unauthorized web access | GitHub OAuth code exchange keeps `client_secret` server-side; CSRF state parameter prevents forged callbacks |
 
 ## What the relay sees
 
-The relay must route traffic, so it sees some metadata. Here is the complete list:
+For end-to-end encrypted conversation payloads, the relay sees routing metadata:
 
 | Visible to the relay | Why |
 |----------------------|-----|
@@ -31,7 +32,7 @@ The relay must route traffic, so it sees some metadata. Here is the complete lis
 | Sender device ID (from connection) | Needed to identify origin |
 | Blob size | The relay forwards payloads, so size is visible |
 
-That is all. The following are **not** visible to the relay:
+Within those encrypted conversation payloads, the following are **not** visible to the relay:
 
 - Message content or message type
 - Session IDs
@@ -43,13 +44,13 @@ The relay is an encrypted forwarder and cannot inspect payloads. See "How device
 
 ## What the relay stores
 
-The relay maintains two database tables:
+The relay maintains account/device data, including:
 
-- **users** — user identity and auth records
+- **users** — user identity, auth records and account preferences (including readable Custom Words)
 - **devices** — registered devices and their public keys
 - **push_tokens** — push notification tokens for offline delivery (device token and provider type)
 
-The relay does not store messages, sessions, message history, or any content. Message buffering and replay are handled by `tentacle`.
+The relay does not store plaintext conversation contents. Message history and replay are handled by `tentacle`. Custom Words are account data, not session data: their spellings and mishearings are persisted in the account's regional relay database and its backups. Synchronizing them does not require any tentacle to be online. Deleted words are removed from the database; existing backups may still contain them.
 
 ## What Kraki does not protect against
 
@@ -117,6 +118,28 @@ Remaining limits: the computer currently trusts phone keys as reported by the
 relay, and the web app does not pin keys yet. Both are addressed by the
 upcoming key upgrade (E2E v2).
 
+## Who can send commands to your computer
+
+Encryption keeps the relay from **reading** or **modifying** messages. It does
+not, on its own, prove **who wrote** a message: encrypting to a computer only
+needs the computer's public key, which the relay also holds. Today, the
+authenticity of a command rests on two things:
+
+- **Only E2E messages are accepted.** The computer acts on a command only after
+  decrypting it. Plaintext frames from the relay, and anything a device places
+  inside the head's own plaintext control wrapper (`{from:"@head"}`), are
+  dropped; that wrapper may carry only the head's presence/preferences/voice
+  control types.
+- **The relay binds each message to its sender.** The head stamps every
+  forwarded payload with the authenticated device that sent it (`src`) and
+  refuses payloads that try to set it themselves. Receivers reject a message
+  whose inner `deviceId` differs, so one device on your account cannot pose as
+  another.
+
+What this does **not** cover: a compromised relay, or a stolen device that is
+still signed in to your account, can compose and encrypt new commands. Closing
+that gap needs per-device signatures bound at pairing time (E2E v2, planned).
+
 ## New devices and old history
 
 A newly added device cannot automatically decrypt old messages that were encrypted for earlier devices.
@@ -130,10 +153,12 @@ That behavior is a normal consequence of per-device encryption.
 | Question | Answer |
 |----------|--------|
 | Can the relay read message bodies? | No — not passively; key substitution is detected for pinned computers (see above) |
+| Can the relay change a message in transit? | No — authenticated encryption detects it |
+| Can the relay forge a new command? | Not as plaintext. A compromised relay could still encrypt a command to your computer's public key; per-device signatures (E2E v2) are planned to close this |
 | Can the relay see routing metadata? | Yes — envelope type, device IDs, payload size |
 | Can the relay see session IDs, message types, or content? | No — all inside encrypted payload |
 | Do endpoints see plaintext? | Yes |
-| Does the relay store messages? | No — only user and device tables |
+| Does the relay store readable conversation messages? | No; account preferences such as Custom Words are a separate, readable data category |
 | Is self-hosting still useful? | Yes, for operational control and latency |
 
 ## Push notifications and E2E
@@ -142,8 +167,6 @@ Push notifications use the same E2E encryption model. When an agent event requir
 
 1. The tentacle encrypts a small preview (`pushPreview`) with the offline device's public key — the same RSA-OAEP wrapping used for WebSocket messages.
 2. The relay forwards the opaque encrypted preview through the push service (APNs or Web Push/VAPID).
-
-Voice input is different: dictated audio is sent to Kraki's cloud speech service for transcription and is not end-to-end encrypted.
 3. The device's service worker decrypts the preview locally and shows the notification content.
 
 The relay sees the encrypted payload size and the push token — never the notification content. This extends the same trust boundary from WebSocket delivery to push delivery.
@@ -158,6 +181,16 @@ Bytes are delivered separately, encrypted per-recipient like any other message:
 - Report HTML is rendered in a sandboxed web view with a strict CSP (inline scripts/styles only; no network, media, frames or forms). "Open in Browser" writes the original report to a temporary file and opens it outside that sandbox only on explicit user action.
 
 The relay sees the same opaque encrypted payloads it sees for any other message, plus chunked transfer adds nothing to its visibility. Bytes never leave the tentacle except on an authenticated session-member request, so the privacy boundary for screenshots matches the privacy boundary for prompts and tool output.
+
+## Voice input
+
+Voice input is the one feature that is **not** end-to-end encrypted. The first time someone dictates, the app says so and asks them to continue.
+
+- **Audio** goes to Kraki's cloud speech service (a `wss://*.kraki.chat` broker; the apps refuse any other broker the relay might advertise). It is transcribed by a cloud speech-recognition provider.
+- **Correct Transcripts** (on by default): the transcript is sent to an AI model that fixes recognition mistakes. With it go the user's Custom Words and, if **Use Conversation Context** is on (default), the conversation title, agent, model and up to 32 names or terms taken from the last 12 messages.
+- Conversation terms are filtered on the device: whole messages are never sent, and anything shaped like a credential (GitHub/Slack/OpenAI-style tokens, AWS key ids, JWTs, PEM blocks), a URL, host:port, e-mail address, file path, long hex string or high-entropy token is dropped. See `VoiceContextTermFilter`.
+- Both switches are in Settings → Voice Input. With context off, only Custom Words and the locale accompany the transcript.
+- The relay authorizes each voice connection with a signed, quota-limited lease.
 
 ## Local MCP server
 

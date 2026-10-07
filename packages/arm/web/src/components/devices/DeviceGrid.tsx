@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { DevicePanel } from './DevicePanel';
 import { SessionInfoPanel } from './SessionInfoPanel';
+import { availableUpdate } from '../../lib/device-update';
 import type { DeviceSummary } from '@kraki/protocol';
 
 function useIsDesktop(): boolean {
@@ -22,6 +23,7 @@ export function DeviceGrid() {
   const devices = useStore((s) => s.devices);
   const deviceAgents = useStore((s) => s.deviceAgents);
   const deviceVersions = useStore((s) => s.deviceVersions);
+  const deviceUpdates = useStore((s) => s.deviceUpdates);
   const sessionUsage = useStore((s) => s.sessionUsage);
   const sessions = useStore((s) => s.sessions);
   const myDeviceId = useStore((s) => s.deviceId);
@@ -102,6 +104,7 @@ export function DeviceGrid() {
               hasGreeting={deviceAgents.has(d.id)}
               isSelected={effectiveDeviceId === d.id}
               isSelf={d.id === myDeviceId}
+              hasUpdate={availableUpdate(d, deviceUpdates, deviceVersions) !== null}
               onClick={() => handleSelectDevice(d.id)}
             />
           ))}
@@ -151,10 +154,12 @@ function DeviceButton({
   hasGreeting,
   isSelected,
   isSelf,
+  hasUpdate = false,
   onClick,
 }: {
   device: DeviceSummary;
   hasGreeting: boolean;
+  hasUpdate?: boolean;
   isSelected: boolean;
   isSelf: boolean;
   onClick: () => void;
@@ -176,6 +181,9 @@ function DeviceButton({
     >
       <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
       <span className="min-w-0 flex-1 truncate text-xs font-medium">{device.name}</span>
+      {hasUpdate && (
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-kraki-500" title="A newer Kraki is available on this computer" aria-label="Update available" />
+      )}
       {isSelf && (
         <span className="shrink-0 rounded-full bg-kraki-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-kraki-600 dark:text-kraki-400">
           You

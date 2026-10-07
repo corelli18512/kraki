@@ -421,14 +421,7 @@ private final class MacChatScenarioHarness {
             applyPhase(scenarioID: scenario.id, index: index, materializeIfActive: false)
         }
         for fixture in attachmentFixtures {
-            appState.attachmentStore.ingestChunk(
-                id: fixture.id,
-                index: 0,
-                total: 1,
-                mimeType: fixture.mimeType,
-                data: fixture.data.base64EncodedString(),
-                error: nil
-            )
+            appState.attachmentStore.seedForTesting(id: fixture.id, mimeType: fixture.mimeType, data: fixture.data)
         }
 
         appState.testOutboundMessageHandler = { [weak self] message, routingTarget, connectionScoped in

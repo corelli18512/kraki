@@ -135,8 +135,7 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: true
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_NSCameraUsageDescription: "Kraki uses the camera to scan QR codes for device pairing."
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Kraki uses the microphone for press-to-talk voice messages."
-        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Kraki transcribes your voice on-device so you can dictate messages."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Kraki records your voice while you dictate and sends it to its cloud speech service to turn it into text."
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
         INFOPLIST_KEY_UIBackgroundModes: ["remote-notification"]
         CODE_SIGN_STYLE: Automatic
@@ -223,6 +222,7 @@ targets:
     platform: macOS
     sources:
       - path: KrakiMacTests
+      - path: KrakiTests/SubagentStepsTests.swift
       - path: KrakiTests/NativeSessionPreviewGlyphTests.swift
       - path: KrakiTests/NativeStyleTests.swift
       - path: KrakiTests/ComposerGeometryProbeTests.swift
@@ -230,6 +230,7 @@ targets:
       - path: KrakiTests/IOSVoiceComposerTests.swift
       - path: KrakiTests/AccountUsageTests.swift
       - path: KrakiTests/PushPreviewFormatTests.swift
+      - path: KrakiTests/VoiceVocabularySyncTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.tests
@@ -276,6 +277,7 @@ targets:
       # Shared platform shims (KrakiPlatform exposes PlatformColor + helpers;
       # ThemePlatform is the macOS palette; Theme.swift stays iOS-only).
       - path: Kraki/Shared/KrakiPlatform.swift
+      - path: Kraki/Shared/AttachmentImageCache.swift
       - path: Kraki/Shared/ThemePlatform.swift
       - path: Kraki/Shared/AppColorScheme.swift
       - path: Kraki/Shared/AgentAvatar.swift
@@ -289,6 +291,7 @@ targets:
       - path: Kraki/Shared/DiagnosticsSummary.swift
       # AppState is platformized (push + willTerminate guarded).
       - path: Kraki/App/AppState.swift
+      - path: Kraki/App/AppState+AccountDeletion.swift
       # Mac-only app shell, scenes, commands.
       - path: Kraki/App/Mac
         excludes:
@@ -313,11 +316,13 @@ targets:
       - path: Kraki/Features/Chat/ChatScrollPolicy.swift
       - path: Kraki/Features/Chat/Sizing/HeightMeasurementScheduler.swift
       - path: Kraki/Features/Chat/Mac
+      - path: Kraki/Features/Chat/Subagents
       # DEBUG-only synthetic voice fixture shared with native Mac tests.
       - path: Kraki/Features/Diagnostics/IOSVoiceHoldScenario.swift
       - path: Kraki/Features/Welcome
       - path: Kraki/Features/Tentacle
       - path: Kraki/Features/Settings/MacPanes
+      - path: Kraki/Features/Settings/DeleteAccountSection.swift
       - path: Kraki/Features/Usage
       - path: Kraki/Features/Chat/ChatPlaceholderView+macOS.swift
       - path: Kraki/Features/Pairing/PairingSheet+macOS.swift
@@ -331,8 +336,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac
         PRODUCT_NAME: Kraki
-        MARKETING_VERSION: "0.2.68"
-        CURRENT_PROJECT_VERSION: 70
+        MARKETING_VERSION: "0.2.74"
+        CURRENT_PROJECT_VERSION: 76
         GENERATE_INFOPLIST_FILE: false
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic

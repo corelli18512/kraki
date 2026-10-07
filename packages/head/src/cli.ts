@@ -75,7 +75,7 @@ if (args.includes('--help') || args.includes('-h')) {
     --port <n>        Server port (default: 4000, env: PORT)
     --db <path>       SQLite database path (default: kraki-head.db, env: DB_PATH)
     --auth <mode>     Auth mode: open | github | apikey (default: open, env: AUTH_MODE)
-    --admin-key <key> Enable GET /admin/stats endpoint (env: ADMIN_KEY)
+    --admin-key <key> Enable GET /admin/stats endpoint (prefer env ADMIN_KEY: argv is visible in ps)
     --push <type>     Push providers: apns,web_push (comma-separated, env: PUSH_PROVIDERS)
     --log <level>     Log level: debug | info | warn | error (default: info)
     --help, -h        Show this help
@@ -640,3 +640,15 @@ async function shutdown() {
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+// A stray rejection is logged and survives; an uncaught exception leaves the
+// process in an unknown state, so it is logged and the relay exits for the
+// supervisor (systemd) to restart it cleanly.
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled promise rejection', { error: reason instanceof Error ? reason.stack ?? reason.message : String(reason) });
+});
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught exception — exiting', { error: err.stack ?? err.message });
+  logger.close();
+  process.exit(1);
+});

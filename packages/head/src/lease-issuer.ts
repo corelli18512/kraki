@@ -56,7 +56,7 @@ export class LeaseIssuer {
     }
 
     const kp = generateKeyPair();
-    writeFileSync(privPath, kp.privateKey, { encoding: 'utf-8' });
+    writeFileSync(privPath, kp.privateKey, { encoding: 'utf-8', mode: 0o600 });
     writeFileSync(pubPath, kp.publicKey, { encoding: 'utf-8' });
     try {
       chmodSync(privPath, 0o600);

@@ -296,16 +296,42 @@ describe('ThrottledAuthProvider', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('should use "unknown" when no IP provided', async () => {
+  it('does not share one bucket across clients without an IP', async () => {
     const inner = new ApiKeyAuthProvider('secret');
     const throttled = new ThrottledAuthProvider(inner, 2, 60_000);
 
-    // No ip field at all
+    // Unknown-address failures must not lock out everyone else.
     await throttled.authenticate({ token: 'wrong' });
     await throttled.authenticate({ token: 'wrong' });
-    const result = await throttled.authenticate({ token: 'secret' });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.message).toContain('Too many');
+    await throttled.authenticate({ token: 'wrong', ip: 'unknown' });
+    expect((await throttled.authenticate({ token: 'secret' })).ok).toBe(true);
+    expect((await throttled.authenticate({ token: 'secret', ip: '9.9.9.9' })).ok).toBe(true);
+  });
+
+  it('counts concurrent attempts from one IP against the limit', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const slow = {
+      name: 'slow',
+      authenticate: async () => { await gate; return { ok: false as const, message: 'bad' }; },
+    };
+    const throttled = new ThrottledAuthProvider(slow, 2, 60_000);
+    const attempts = Array.from({ length: 5 }, () => throttled.authenticate({ token: 'x', ip: '7.7.7.7' }));
+    release();
+    const results = await Promise.all(attempts);
+    expect(results.filter((r) => !r.ok && r.message.includes('Too many'))).toHaveLength(3);
+  });
+
+  it('does not count provider outages (retryable) as failures', async () => {
+    const flaky = {
+      name: 'flaky',
+      authenticate: async () => ({ ok: false as const, message: 'GitHub 503', retryable: true }),
+    };
+    const throttled = new ThrottledAuthProvider(flaky, 2, 60_000);
+    for (let i = 0; i < 5; i++) {
+      const r = await throttled.authenticate({ token: 'x', ip: '8.8.8.8' });
+      expect(!r.ok && r.message).toBe('GitHub 503');
+    }
   });
 });
 

@@ -1,5 +1,9 @@
-import { useEffect, useMemo } from 'react';
-import { X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { ChevronLeft, X } from 'lucide-react';
+import type { ContentRef } from '@kraki/protocol';
+import { useAttachmentText } from '../../hooks/useAttachment';
+import { callIdOf, contentsLabel, formatDuration, formatTokens, mergeSteps, subagentOf, subagentStatus } from '../../lib/subagent-steps';
+import { Markdown } from './Markdown';
 import type { ChatMessage } from '../../types/store';
 import { useStore } from '../../hooks/useStore';
 import { messageProvider } from '../../lib/message-provider';
@@ -98,27 +102,102 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
     messageProvider.requestTurnTrace(sessionId, targetSeq);
   }, [sessionId, targetSeq, live]);
 
+  // A running turn keeps its Steps (and any open subagent page) current.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    if (!live || targetSeq < 0) return;
+    const timer = setInterval(() => {
+      messageProvider.invalidateTurnTrace(sessionId, targetSeq);
+      messageProvider.requestTurnTrace(sessionId, targetSeq);
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [sessionId, targetSeq, live]);
+
+  // Subagent pages pushed on top of the turn's Steps (dispatch toolCallIds).
+  const [path, setPath] = useState<string[]>([]);
+  const open = (id: string) => setPath((p) => [...p, id]);
+  const back = () => setPath((p) => p.slice(0, -1));
+  const merged = useMemo(() => mergeSteps(steps), [steps]);
+  const current = path.length ? merged.find((m) => callIdOf(m) === path[path.length - 1]) : undefined;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (path.length) back(); else onClose();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, path.length]);
 
+  const title = current ? (subagentOf(current)?.name ?? 'Subagent') : 'Steps';
   return (
     <div className="ksheet-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label="Steps">
       <div className="ksheet" onClick={(e) => e.stopPropagation()}>
         <div className="ksheet-head">
-          <h3>Steps</h3>
+          {path.length > 0 && (
+            <button type="button" onClick={back} className="ksheet-back" aria-label="Back">
+              <ChevronLeft aria-hidden />{path.length > 1 ? 'Back' : 'Steps'}
+            </button>
+          )}
+          <h3>{title}</h3>
           <button type="button" onClick={onClose} className="ksheet-close" aria-label="Close steps"><X aria-hidden /></button>
         </div>
-        <div className="ksheet-body">
-          {steps.length > 0 ? (
-            <StepsList messages={steps} agent={agent} sessionId={sessionId} />
-          ) : (
+        <div className="ksheet-body" key={path.join('/')}>
+          {steps.length === 0 ? (
             <p className="ksheet-loading"><span className="kspinner" /> Loading steps…</p>
+          ) : current ? (
+            <SubagentPage msg={current} merged={merged} steps={steps} agent={agent} sessionId={sessionId} onOpen={open} />
+          ) : (
+            <StepsList messages={steps} agent={agent} sessionId={sessionId} onOpenSubagent={open} />
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+const pullRef = (sid: string, ref: ContentRef): void => {
+  void import('../../lib/ws-client').then(({ wsClient }) => wsClient.requestAttachment(sid, ref));
+};
+
+/** One subagent: what it was asked, its own steps, and what it reported back. */
+function SubagentPage({ msg, merged, steps, agent, sessionId, onOpen }: {
+  msg: ChatMessage;
+  merged: ChatMessage[];
+  steps: ChatMessage[];
+  agent?: string;
+  sessionId: string;
+  onOpen: (id: string) => void;
+}) {
+  const id = callIdOf(msg) ?? '';
+  const info = subagentOf(msg);
+  const status = subagentStatus(msg);
+  const facts = [
+    status === 'running' ? 'Running' : status === 'failed' ? 'Failed' : status === 'stopped' ? 'Stopped' : 'Done',
+    contentsLabel(merged, id),
+    formatDuration(info?.durationMs),
+    formatTokens(info?.tokens),
+  ].filter(Boolean).join(' · ');
+  const resultRef = msg.type === 'tool_complete' ? (msg.payload as { resultRef?: ContentRef }).resultRef : undefined;
+  return (
+    <div className="ksub-page">
+      {info?.task && <p className="ksub-page-task">{info.task}</p>}
+      <p className="ksub-page-facts">{facts}</p>
+      {merged.some((m) => (m.payload as { parentToolCallId?: string }).parentToolCallId === id) ? (
+        <StepsList messages={steps} agent={agent} sessionId={sessionId} parentId={id} onOpenSubagent={onOpen} />
+      ) : (
+        <p className="ksub-empty">{status === 'running' ? 'Working… its steps appear here as it reports them.' : 'The agent did not report this subagent\'s steps.'}</p>
+      )}
+      {resultRef && status !== 'running' && <SubagentReport resultRef={resultRef} sessionId={sessionId} />}
+    </div>
+  );
+}
+
+function SubagentReport({ resultRef, sessionId }: { resultRef: ContentRef; sessionId: string }) {
+  const { text } = useAttachmentText(resultRef, sessionId, pullRef, true);
+  return (
+    <div className="ksub-report">
+      <div className="ksub-report-label">Report</div>
+      {text === null ? <p className="ksheet-loading"><span className="kspinner" /> Loading…</p> : <Markdown text={text} />}
     </div>
   );
 }

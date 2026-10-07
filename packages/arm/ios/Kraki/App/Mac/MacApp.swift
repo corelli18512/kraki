@@ -61,6 +61,11 @@ final class MacLaunchCoordinator {
     ) async {
         guard !hasStarted else { return }
         hasStarted = true
+        // The local Kraki belongs to the deleted account too: stop it (it
+        // has already forgotten its sign-in, or AppState just removed it).
+        appState.onAccountDeleted = { [weak tentacleCLI] in
+            Task { @MainActor in await tentacleCLI?.stopDaemon() }
+        }
 
         if bypassProductionLaunch {
             phase = .authenticated
@@ -89,6 +94,10 @@ final class MacLaunchCoordinator {
             Task { @MainActor in
                 await tentacleCLI.refreshDaemonState()
                 tentacleCLI.startPolling()
+                // Opening Kraki brings this Mac online (quitting took it
+                // offline), and keeps Kraki in the menu bar at login.
+                await tentacleCLI.goOnlineAtLaunchIfNeeded()
+                MacPresenceController.shared.syncLoginItem()
             }
         }
 
@@ -290,7 +299,7 @@ struct MacApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
 
     @State private var appState: AppState
-    @State private var tentacleCLI = TentacleCLIManager()
+    @State private var tentacleCLI: TentacleCLIManager
     @State private var launchCoordinator: MacLaunchCoordinator
     @AppStorage("colorScheme") private var colorScheme: AppColorScheme = .system
 
@@ -360,6 +369,9 @@ struct MacApp: App {
         let state = AppState()
         #endif
         _appState = State(initialValue: state)
+        let tentacle = TentacleCLIManager()
+        _tentacleCLI = State(initialValue: tentacle)
+        MacPresenceController.shared.tentacle = tentacle
         let coordinator = MacLaunchCoordinator()
         _launchCoordinator = State(initialValue: coordinator)
         // Hold-to-peek account usage (default F6). The Session open in Kraki —
@@ -523,7 +535,8 @@ struct MacApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .windowResizability(.contentMinSize)
-        .defaultLaunchBehavior(.presented)
+        // A routine local test host shows no window at all.
+        .defaultLaunchBehavior(NativeTestRuntime.isHeadlessTestHost ? .suppressed : .presented)
         // Kraki reopens its own window and last session on every launch, so
         // macOS state restoration adds nothing — and restoring windows at
         // login re-entered SwiftUI's scene updates until the main thread's
@@ -573,12 +586,30 @@ struct MacApp: App {
         .restorationBehavior(.disabled)
         #endif
 
-        MenuBarExtra {
+        MenuBarExtra(isInserted: .constant(!NativeTestRuntime.isHeadlessTestHost)) {
             MenuBarExtraView()
                 .environment(appState)
                 .environment(tentacleCLI)
         } label: {
-            Label("Kraki", systemImage: tentacleCLI.menuBarSymbolName)
+            // Its own view, so session updates re-render only the icon, not
+            // every scene of the app.
+            MenuBarIconLabel(appState: appState, tentacleCLI: tentacleCLI)
+                .task {
+                    // A login launch keeps the window hidden, so the window's
+                    // `.task` never runs. Start from the status item instead:
+                    // presence, connection and Needs You must work without a
+                    // window (MacPresence.swift).
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard MacPresenceController.shared.launchedAtLogin else { return }
+                    KLog.diag("[Presence] starting without a window")
+                    await launchCoordinator.bootstrap(
+                        appState: appState,
+                        tentacleCLI: tentacleCLI,
+                        devLocal: appState.devLocalActive,
+                        mock: false,
+                        bypassProductionLaunch: false
+                    )
+                }
         }
         .menuBarExtraStyle(.menu)
     }

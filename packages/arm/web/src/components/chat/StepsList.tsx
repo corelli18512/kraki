@@ -1,5 +1,9 @@
 import type { ContentRef } from '@kraki/protocol';
-import { Lock, TriangleAlert } from 'lucide-react';
+import { ChevronRight, CheckCircle2, CircleSlash, Loader2, Lock, TriangleAlert, XCircle } from 'lucide-react';
+import {
+  callIdOf, contentsLabel, formatDuration, isSubagentStep, mergeSteps, stepsUnder,
+  subagentOf, subagentStatus,
+} from '../../lib/subagent-steps';
 import type { ChatMessage } from '../../types/store';
 import { Markdown, StreamingMarkdown } from './Markdown';
 import { ToolActivity } from './ToolActivity';
@@ -49,6 +53,30 @@ function StepRow({ msg, sessionId, forceExpanded, cancelled }: { msg: ChatMessag
   return null;
 }
 
+/** A step that dispatched a subagent: a card that opens the subagent's page. */
+export function SubagentCard({ msg, merged, onOpen }: { msg: ChatMessage; merged: ChatMessage[]; onOpen: (id: string) => void }) {
+  const id = callIdOf(msg) ?? '';
+  const info = subagentOf(msg);
+  const status = subagentStatus(msg);
+  const meta = [
+    status === 'running' ? 'Running' : undefined,
+    contentsLabel(merged, id),
+    formatDuration(info?.durationMs),
+  ].filter(Boolean).join(' · ');
+  const Icon = status === 'running' ? Loader2 : status === 'failed' ? XCircle : status === 'stopped' ? CircleSlash : CheckCircle2;
+  return (
+    <button type="button" className="ksub-card" data-status={status} onClick={() => onOpen(id)} aria-label={`Open subagent ${info?.name ?? ''}`}>
+      <Icon className={`ksub-status ksub-status-${status}`} aria-hidden />
+      <span className="ksub-text">
+        <span className="ksub-name">{info?.name ?? String((msg.payload as { toolName?: string }).toolName ?? 'subagent')}</span>
+        {info?.task && <span className="ksub-task">{info.task}</span>}
+      </span>
+      {meta && <span className="ksub-meta">{meta}</span>}
+      <ChevronRight className="ksub-chevron" aria-hidden />
+    </button>
+  );
+}
+
 interface StepsListProps {
   /** Interleaved trace steps in recorded order (tool_start/tool_complete +
    *  agent_narration / agent_message narration prose). */
@@ -62,6 +90,10 @@ interface StepsListProps {
   allExpanded?: boolean;
   /** Mark in-flight tool_start chips as cancelled (aborted turn). */
   aborted?: boolean;
+  /** Show one subagent's steps (its dispatch toolCallId); default: the turn's own. */
+  parentId?: string;
+  /** Open a subagent's page. Without it, dispatches render as plain tool chips. */
+  onOpenSubagent?: (id: string) => void;
 }
 
 /**
@@ -70,27 +102,21 @@ interface StepsListProps {
  * draft. Shared by the live in-progress LiveAgentBubble and the
  * right-click "Open steps" history popover on concluded agent_message bubbles.
  */
-export function StepsList({ messages, agent: _agent, sessionId, streamingText, allExpanded, aborted }: StepsListProps) {
+export function StepsList({ messages, agent: _agent, sessionId, streamingText, allExpanded, aborted, parentId, onOpenSubagent }: StepsListProps) {
   // Merge tool_start → tool_complete by toolCallId (protocol contract): once a
   // tool has completed, drop its earlier tool_start chip so a finished tool
   // renders as a single "done" chip instead of a duplicate "Running…" + "done"
   // pair. In-flight tools (no matching tool_complete) keep their tool_start.
-  const completedToolIds = new Set<string>();
+  // Subagents' own steps are on their pages, not here.
+  const merged = mergeSteps(messages);
   const resolvedPromptIds = new Set<string>();
   for (const msg of messages) {
-    if (msg.type === 'tool_complete') {
-      const id = (msg.payload as { toolCallId?: string }).toolCallId;
-      if (id) completedToolIds.add(id);
-    } else if (msg.type === 'permission') {
+    if (msg.type === 'permission') {
       const p = msg.payload as { id?: string; decision?: string; cancelled?: boolean };
       if (p.id && (p.decision || p.cancelled)) resolvedPromptIds.add(`permission:${p.id}`);
     }
   }
-  const visible = messages.filter((msg) => {
-    if (msg.type === 'tool_start') {
-      const id = (msg.payload as { toolCallId?: string }).toolCallId;
-      return !(id && completedToolIds.has(id));
-    }
+  const visible = stepsUnder(merged, parentId).filter((msg) => {
     if (msg.type === 'permission') {
       const p = msg.payload as { id?: string; decision?: string; cancelled?: boolean };
       const resolved = !!p.decision || !!p.cancelled;
@@ -112,6 +138,9 @@ export function StepsList({ messages, agent: _agent, sessionId, streamingText, a
               <Markdown text={(msg.payload as { content: string }).content} />
             </div>
           );
+        }
+        if (onOpenSubagent && isSubagentStep(merged, msg)) {
+          return <SubagentCard key={key} msg={msg} merged={merged} onOpen={onOpenSubagent} />;
         }
         return (
           <StepRow

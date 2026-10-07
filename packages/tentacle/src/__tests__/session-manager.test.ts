@@ -1513,3 +1513,74 @@ describe('isSafeId (release review D6)', () => {
     }
   });
 });
+
+describe('SessionManager log integrity and indexed reads', () => {
+  let dir: string;
+  let sm: SessionManager;
+  const env = (type: string, text: string) => JSON.stringify({ type, payload: { content: text } });
+
+  beforeEach(() => {
+    dir = tmpSessionsDir();
+    sm = new SessionManager(dir);
+  });
+
+  afterEach(() => {
+    try { rmSync(dir, { recursive: true }); } catch {}
+  });
+
+  it('pages correctly through the index, including rows appended after it was built', () => {
+    const { sessionId } = sm.createSession('pi');
+    for (let i = 1; i <= 30; i++) sm.appendMessage(sessionId, 'agent_message', env('agent_message', `m${i}`));
+    expect(sm.getMessagesAfterSeq(sessionId, 10, 5).map((m) => m.seq)).toEqual([11, 12, 13, 14, 15]);
+    sm.appendMessage(sessionId, 'agent_message', env('agent_message', 'm31'));
+    expect(sm.getMessagesAfterSeq(sessionId, 29).map((m) => m.seq)).toEqual([30, 31]);
+    expect(sm.getMessagesAfterSeq(sessionId, 31)).toEqual([]);
+  });
+
+  it('reads rows larger than the read chunk (inline images)', () => {
+    const { sessionId } = sm.createSession('pi');
+    const big = 'x'.repeat(3 * 1024 * 1024);
+    sm.appendMessage(sessionId, 'agent_message', env('agent_message', 'a'));
+    sm.appendMessage(sessionId, 'agent_message', env('agent_message', big));
+    sm.appendMessage(sessionId, 'agent_message', env('agent_message', 'c'));
+    const rows = sm.getMessagesAfterSeq(sessionId, 1);
+    expect(rows.map((m) => m.seq)).toEqual([2, 3]);
+    expect(JSON.parse(rows[0].payload).payload.content).toHaveLength(big.length);
+  });
+
+  it('skips a torn last line until it is complete', () => {
+    const { sessionId } = sm.createSession('pi');
+    sm.appendMessage(sessionId, 'agent_message', env('agent_message', 'a'));
+    const log = join(dir, sessionId, 'messages.jsonl');
+    appendFileSync(log, '{"seq":2,"type":"agent_message","payload":"{}","ts":"');
+    expect(sm.getMessagesAfterSeq(sessionId, 0).map((m) => m.seq)).toEqual([1]);
+    appendFileSync(log, 'x"}\n');
+    expect(sm.getMessagesAfterSeq(sessionId, 0).map((m) => m.seq)).toEqual([1, 2]);
+  });
+
+  it('never reuses a seq after a crash between log append and meta write', () => {
+    const { sessionId } = sm.createSession('pi');
+    sm.appendMessage(sessionId, 'user_message', env('user_message', 'hi'));
+    // The process died after appending seq 2 but before meta recorded it.
+    appendFileSync(join(dir, sessionId, 'messages.jsonl'), JSON.stringify({ seq: 2, type: 'agent_message', payload: env('agent_message', 'lost?'), ts: '' }) + '\n');
+    const restarted = new SessionManager(dir);
+    expect(restarted.appendMessage(sessionId, 'agent_message', env('agent_message', 'next'))).toBe(3);
+  });
+
+  it('upgrades rows imported in the legacy inner-payload shape', () => {
+    const { sessionId } = sm.createSession('copilot');
+    sm.appendMessagesBatch(sessionId, [{ type: 'user_message', payload: JSON.stringify({ content: 'old import' }), ts: 't' }]);
+    const [row] = sm.getMessagesAfterSeq(sessionId, 0);
+    expect(JSON.parse(row.payload)).toEqual({ type: 'user_message', sessionId, timestamp: 't', payload: { content: 'old import' } });
+  });
+
+  it('a fork keeps the source session attachments', () => {
+    const { sessionId } = sm.createSession('pi');
+    const src = join(dir, sessionId, 'attachments');
+    mkdirSync(src, { recursive: true });
+    writeFileSync(join(src, 'abc.png'), 'img');
+    writeFileSync(join(src, 'abc.json'), '{}');
+    const fork = sm.forkSession(sessionId);
+    expect(readFileSync(join(dir, fork.sessionId, 'attachments', 'abc.png'), 'utf8')).toBe('img');
+  });
+});

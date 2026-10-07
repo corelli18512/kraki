@@ -20,6 +20,7 @@ import {
   type PermissionDecision,
   type QuestionAnswer,
   type QuestionResponseResult,
+  type PermissionResponseResult,
   type SendMessageOptions,
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
@@ -79,44 +80,9 @@ export function loadClaudeSettingsEnv(configDir: string): Record<string, string>
   return out;
 }
 
-/**
- * Make `src` available at `dest` inside a shadow Claude home. Symlinks need
- * admin or Developer Mode on Windows, so there directories become junctions
- * and files hard links (copies across volumes). Returns false on failure.
- */
-export function linkIntoShadow(src: string, dest: string, os: NodeJS.Platform = process.platform): boolean {
-  removeShadowEntry(dest);
-  try {
-    if (os !== 'win32') {
-      symlinkSync(src, dest);
-      return true;
-    }
-    if (statSync(src).isDirectory()) {
-      symlinkSync(src, dest, 'junction');
-    } else {
-      try { linkSync(src, dest); } catch { copyFileSync(src, dest); }
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
+import { linkIntoShadow } from './shadow-link.js';
 
-/** Remove a previous link (or a real file/dir Claude wrote) at `dest` —
- *  never what a link points to. Windows junctions are directories to rm(). */
-function removeShadowEntry(dest: string): void {
-  let st;
-  try { st = lstatSync(dest); } catch { return; }
-  try {
-    if (st.isSymbolicLink()) {
-      try { unlinkSync(dest); } catch { rmdirSync(dest); }
-    } else if (st.isDirectory()) {
-      rmSync(dest, { recursive: true, force: true });
-    } else {
-      unlinkSync(dest);
-    }
-  } catch { /* linking reports the failure */ }
-}
+export { linkIntoShadow };
 
 /** The user's real Claude Code config root: an explicit CLAUDE_CONFIG_DIR,
  *  otherwise ~/.claude. Kraki's per-session shadow homes are built FROM this. */
@@ -260,8 +226,48 @@ interface SessionEntry {
   staleResults?: number;
   /** Claude Code reported status=compacting and no end has been seen yet. */
   compacting?: boolean;
+  /** Subagent tasks (Agent/Task tool) still running, by SDK task id. Claude
+   *  Code runs them in the background by default and, when one finishes,
+   *  wakes the parent with a new provider turn on its own. */
+  runningSubagents?: Set<string>;
+  /** Subagent task id (= canUseTool agentID) → its task description. */
+  subagentLabels?: Map<string, string>;
+  /** Agent/Task tool calls that dispatched a subagent, by tool_use id. */
+  dispatches?: Map<string, ClaudeDispatch>;
+  /** Subagent task id → dispatching tool_use id. */
+  taskDispatch?: Map<string, string>;
+  /** Each subagent's latest prose, held until a further step shows it was
+   *  narration — its final words are its report (the dispatch's result). */
+  subagentDrafts?: Map<string, string>;
+  /** The parent's provider turn ended while subagents were still running;
+   *  the Kraki turn stays open for the continuation Claude Code starts. */
+  awaitingSubagents?: boolean;
+  /** Fallback settle when subagents finished but no continuation came. */
+  subagentSettleTimer?: ReturnType<typeof setTimeout>;
+  /** The Kraki turn has been held open at least once for subagents; it stays
+   *  set across Claude Code's continuation turns until the turn settles. */
+  subagentPhase?: boolean;
+  /** Subagent completions seen during the phase whose continuation turn has
+   *  not finished yet (Claude Code wakes the parent once per completion). */
+  owedContinuations?: number;
   reasoningEffort?: string;
 }
+
+/** One Agent/Task tool call and the subagent it started. */
+interface ClaudeDispatch {
+  info: import('@kraki/protocol').SubagentInfo;
+  /** The SDK task running it (background agents report through it). */
+  taskId?: string;
+  /** The tool already returned a background launch receipt. */
+  receipt?: boolean;
+  /** Its terminal tool_complete was emitted. */
+  done?: boolean;
+  /** Report text from task_notification (background agents). */
+  summary?: string;
+}
+
+/** Tools that dispatch a Claude Code subagent. */
+const CLAUDE_DISPATCH_TOOLS = new Set(['Agent', 'Task']);
 
 // ── Helpers ─────────────────────────────────────────────
 
@@ -511,7 +517,7 @@ export class ClaudeAdapter extends AgentAdapter {
   /** Map resolved display name → SDK alias for env-overridden models */
   private modelAliasMap = new Map<string, string>();
   /** Track in-flight tool_use IDs per session for correlating tool_complete */
-  private pendingToolCalls = new Map<string, Map<string, { toolName: string; args: Record<string, unknown> }>>();
+  private pendingToolCalls = new Map<string, Map<string, { toolName: string; args: Record<string, unknown>; parentToolCallId?: string }>>();
   /** Map Kraki session ID → SDK session UUID (for getSessionInfo polling) */
   private sdkSessionIds = new Map<string, string>();
   /** Last known title per session (to detect changes) */
@@ -520,7 +526,7 @@ export class ClaudeAdapter extends AgentAdapter {
   private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
   private readonly krakiMcp?: {
     urlForSession: (sessionId: string) => string;
-    bearerToken: string;
+    tokenForSession: (sessionId: string) => string;
   };
   /**
    * Absolute path to the `claude` binary, set by the multi-adapter via
@@ -535,7 +541,7 @@ export class ClaudeAdapter extends AgentAdapter {
     attachmentStore?: import('../attachment-store.js').AttachmentStore;
     krakiMcp?: {
       urlForSession: (sessionId: string) => string;
-      bearerToken: string;
+      tokenForSession: (sessionId: string) => string;
     };
     claudeExecutablePath?: string;
   } = {}) {
@@ -908,10 +914,16 @@ export class ClaudeAdapter extends AgentAdapter {
       entry.pendingError = undefined;
       entry.turnFinalized = false;
       entry.userAborted = false;
+      this.resetSubagentPhase(entry);
       // A new logical turn owns every event from here on. The SDK does not
       // echo prompts back, and only tool turns produce SDK 'user' messages,
       // so waiting for one left text-only turns tagged with the PREVIOUS
       // turn's id — RelayClient then dropped their reply and idle as late.
+      entry.eventTurnId = entry.relayTurnId;
+    } else if (entry.awaitingSubagents) {
+      // An interjection while the turn is held for background subagents: no
+      // provider turn is in flight, so this message starts the next one and
+      // every event from here on belongs to the interjecting relay turn.
       entry.eventTurnId = entry.relayTurnId;
     }
 
@@ -1018,7 +1030,7 @@ export class ClaudeAdapter extends AgentAdapter {
         kraki: {
           type: 'http' as const,
           url: this.krakiMcp.urlForSession(sessionId),
-          headers: { Authorization: `Bearer ${this.krakiMcp.bearerToken}` },
+          headers: { Authorization: `Bearer ${this.krakiMcp.tokenForSession(sessionId)}` },
         },
       };
       logger.info({ sessionId }, 'wired kraki MCP into session');
@@ -1045,6 +1057,10 @@ export class ClaudeAdapter extends AgentAdapter {
       systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: systemPromptContent },
       ...(mcpServers && { mcpServers }),
       includePartialMessages: true,
+      // Forward subagent prose (tagged parent_tool_use_id) so Kraki can show
+      // what each subagent said in its own steps. Display-only: it does not
+      // change how Claude Code runs.
+      forwardSubagentText: true,
       canUseTool: this.makeCanUseToolHandler(sessionId, entry.pendingPermissions, entry.pendingQuestions),
       // Kraki's mode is the authority on asking. In `safe`, a local Claude
       // ALLOW rule (settings / "always allow" clicked in the terminal) must not
@@ -1081,16 +1097,16 @@ export class ClaudeAdapter extends AgentAdapter {
     permissionId: string,
     decision: PermissionDecision,
     reason?: string,
-  ): Promise<void> {
+  ): Promise<PermissionResponseResult> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       logger.warn({ sessionId }, 'respondToPermission: session not found');
-      return;
+      return 'session_gone';
     }
     const pending = entry.pendingPermissions.get(permissionId);
     if (!pending) {
       logger.warn({ permissionId }, 'respondToPermission: no pending permission');
-      return;
+      return 'not_found';
     }
 
     // For always_allow: add tool kind to session-scope allow set
@@ -1118,6 +1134,7 @@ export class ClaudeAdapter extends AgentAdapter {
     }
     entry.pendingPermissions.delete(permissionId);
     logger.debug({ permissionId, sessionId, decision }, 'permission resolved');
+    return 'accepted';
   }
 
   async respondToQuestion(
@@ -1190,10 +1207,24 @@ export class ClaudeAdapter extends AgentAdapter {
       // arrive before interrupt() resolves. RelayClient already snapshotted the
       // live draft into turn_status(user_abort) and owns the aborted idle, so the
       // adapter must not also emit a conclusion bubble / error / idle for it.
-      if (entry.query && entry.turnFinalized === false) {
+      if (entry.awaitingSubagents) {
+        // No provider turn is in flight (it ended; only subagents run), so no
+        // result will come for it. Settle silently — RelayClient owns the
+        // aborted boundary.
+        this.resetSubagentPhase(entry);
+        entry.turnFinalized = true;
+        entry.pendingText = '';
+        entry.pendingError = undefined;
+      } else if (entry.query && entry.turnFinalized === false) {
+        this.resetSubagentPhase(entry);
         entry.userAborted = true;
         entry.pendingText = '';
         entry.pendingError = undefined;
+      }
+      // Stop means stop the delegated work too: a subagent finishing later
+      // would wake the parent into a turn nobody is listening to.
+      if (entry.query && entry.runningSubagents?.size) {
+        for (const taskId of entry.runningSubagents) entry.query.stopTask(taskId).catch(() => {});
       }
       this.broadcastPendingResolutions(sessionId);
       if (entry.query) {
@@ -1317,12 +1348,17 @@ export class ClaudeAdapter extends AgentAdapter {
 
   private async runTitleQuery(sessionId: string, context: TitleContext, model?: string): Promise<string | null> {
     const supportsEffort = model ? this.cachedModels.find((m) => m.id === model)?.supportsReasoningEffort : false;
+    // A hung side-call must not pin the session's "title in flight" state.
+    const abortController = new AbortController();
+    const timer = setTimeout(() => abortController.abort(), 60_000);
+    timer.unref?.();
     try {
       const { query: queryFn } = await import('@anthropic-ai/claude-agent-sdk');
       let raw = '';
       const q = queryFn({
         prompt: buildTitlePrompt(context),
         options: {
+          abortController,
           ...(this.claudeExecutablePath && { pathToClaudeCodeExecutable: this.claudeExecutablePath }),
           env: this.claudeEnv(secureStorageEnv()),
           systemPrompt: TITLE_SYSTEM_PROMPT,
@@ -1345,6 +1381,8 @@ export class ClaudeAdapter extends AgentAdapter {
     } catch (err) {
       logger.warn({ err: (err as Error).message, sessionId, model }, 'Title generation failed');
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -1367,6 +1405,7 @@ export class ClaudeAdapter extends AgentAdapter {
       // Query completed normally. A result event is the authoritative turn
       // boundary; only fall back here when the SDK ended without one.
       const entry = this.sessions.get(sessionId);
+      if (entry) this.resetSubagentPhase(entry);
       if (entry?.userAborted && !entry.turnFinalized) {
         entry.turnFinalized = true;
       } else if (!entry?.turnFinalized) {
@@ -1379,6 +1418,16 @@ export class ClaudeAdapter extends AgentAdapter {
           this.onIdle?.(sessionId);
         }
       }
+      // Input is a long-lived stream, so a normal end means the CLI process
+      // exited (killSession removes its entry first). Keeping the entry would
+      // push the next message into a channel nobody reads; evict it so the
+      // next message resumes the session, as the error path does.
+      if (entry && this.sessions.get(sessionId) === entry && !abortController?.signal.aborted) {
+        this.broadcastPendingResolutions(sessionId);
+        try { entry.inputChannel.end(); } catch { /* already closed */ }
+        this.sessions.delete(sessionId);
+        this.onSessionEvicted?.(sessionId);
+      }
     } catch (err) {
       // stop()/killSession() abort the controller on purpose; the SDK surfaces
       // that as a plain Error("Operation aborted"), not an AbortError. That is
@@ -1389,6 +1438,7 @@ export class ClaudeAdapter extends AgentAdapter {
       }
       logger.error({ err, sessionId }, 'Session consumer loop error');
       const entry = this.sessions.get(sessionId);
+      if (entry) this.resetSubagentPhase(entry);
       if (entry) {
         this.emitError(sessionId, entry, getErrorMessage(err));
         // Settle the turn that was running when the process died so the
@@ -1451,10 +1501,109 @@ export class ClaudeAdapter extends AgentAdapter {
     this.onCompaction?.(sessionId, { ...event, ...this.lifecycleEvent(entry) });
   }
 
+  private stopAwaitingSubagents(entry: SessionEntry): void {
+    entry.awaitingSubagents = false;
+    if (entry.subagentSettleTimer) clearTimeout(entry.subagentSettleTimer);
+    entry.subagentSettleTimer = undefined;
+  }
+
+  /** Track subagent tasks; once none run while the turn is held open, give
+   *  Claude Code a moment to start its continuation, else settle the turn. */
+  private trackSubagentTask(sessionId: string, msg: Record<string, unknown>): void {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    const taskId = typeof msg.task_id === 'string' ? msg.task_id : '';
+    if (!taskId) return;
+    const running = entry.runningSubagents ??= new Set();
+    if (msg.subtype === 'task_started') {
+      // Only subagents: a background shell (e.g. a dev server) may never end.
+      const isAgent = typeof msg.task_type === 'string' ? msg.task_type === 'local_agent' : !!msg.subagent_type;
+      if (isAgent) running.add(taskId);
+      if (typeof msg.description === 'string' && msg.description) (entry.subagentLabels ??= new Map()).set(taskId, msg.description);
+      const toolUseId = typeof msg.tool_use_id === 'string' ? msg.tool_use_id : '';
+      const dispatch = toolUseId ? entry.dispatches?.get(toolUseId) : undefined;
+      if (dispatch) {
+        dispatch.taskId = taskId;
+        (entry.taskDispatch ??= new Map()).set(taskId, toolUseId);
+      }
+      return;
+    }
+    if (msg.subtype === 'task_notification') this.reportSubagentTask(sessionId, entry, taskId, msg);
+    const status = msg.subtype === 'task_notification'
+      ? msg.status
+      : (msg.patch as { status?: unknown } | undefined)?.status;
+    if (!['completed', 'failed', 'stopped', 'killed'].includes(String(status))) return;
+    const wasRunning = running.delete(taskId);
+    // Count each completion once (task_notification), and only while the turn
+    // is in its subagent phase: earlier ones are folded into the live turn.
+    if (msg.subtype === 'task_notification' && entry.subagentPhase) entry.owedContinuations = (entry.owedContinuations ?? 0) + 1;
+    if (wasRunning && running.size === 0 && entry.awaitingSubagents) this.armSubagentGrace(sessionId, entry);
+  }
+
+  /** A subagent task finished: record its usage/status, and for a background
+   *  subagent (whose tool only returned a receipt) complete its step now,
+   *  with its report as the result. */
+  private reportSubagentTask(sessionId: string, entry: SessionEntry, taskId: string, msg: Record<string, unknown>): void {
+    const toolUseId = entry.taskDispatch?.get(taskId) ?? (typeof msg.tool_use_id === 'string' ? msg.tool_use_id : '');
+    const dispatch = toolUseId ? entry.dispatches?.get(toolUseId) : undefined;
+    if (!dispatch) return;
+    const usage = msg.usage as { total_tokens?: number; tool_uses?: number; duration_ms?: number } | undefined;
+    const status = msg.status === 'completed' ? 'completed' : msg.status === 'failed' ? 'failed' : 'stopped';
+    dispatch.info = {
+      ...dispatch.info,
+      status,
+      ...(typeof usage?.total_tokens === 'number' && { tokens: usage.total_tokens }),
+      ...(typeof usage?.tool_uses === 'number' && { toolCount: usage.tool_uses }),
+      ...(typeof usage?.duration_ms === 'number' && { durationMs: usage.duration_ms }),
+    };
+    if (typeof msg.summary === 'string') dispatch.summary = msg.summary;
+    if (!dispatch.receipt || dispatch.done) return;
+    dispatch.done = true;
+    entry.subagentDrafts?.delete(toolUseId);
+    this.onToolComplete?.(sessionId, {
+      ...this.lifecycleEvent(entry),
+      toolName: 'Agent',
+      result: dispatch.summary ?? '',
+      toolCallId: toolUseId,
+      success: status === 'completed',
+      subagent: dispatch.info,
+    });
+  }
+
+  private resetSubagentPhase(entry: SessionEntry): void {
+    this.stopAwaitingSubagents(entry);
+    entry.subagentPhase = false;
+    entry.owedContinuations = 0;
+  }
+
+  private armSubagentGrace(sessionId: string, entry: SessionEntry): void {
+    if (entry.subagentSettleTimer) clearTimeout(entry.subagentSettleTimer);
+    entry.subagentSettleTimer = setTimeout(() => {
+      if (!entry.awaitingSubagents || this.sessions.get(sessionId) !== entry) return;
+      logger.info({ sessionId }, 'Claude subagents finished without a continuation turn; settling');
+      this.resetSubagentPhase(entry);
+      entry.turnFinalized = true;
+      this.flushConclusion(sessionId);
+      this.emitIdle(sessionId, entry);
+    }, ClaudeAdapter.SUBAGENT_CONTINUATION_GRACE_MS);
+  }
+
+  static SUBAGENT_CONTINUATION_GRACE_MS = 5_000;
+
   /**
    * Route a single SDKMessage to the appropriate adapter callback.
    */
   private handleSDKMessage(sessionId: string, msg: SDKMessage): void {
+    // Held-open turn: any parent activity means Claude Code started the
+    // continuation turn, which now runs (and settles) like a normal turn.
+    const held = this.sessions.get(sessionId);
+    if (held?.awaitingSubagents) {
+      const m = msg as unknown as { type: string; subtype?: string; parent_tool_use_id?: string | null };
+      const parentActivity = (m.type === 'system' && (m.subtype === 'init' || (m.subtype === 'status' && (msg as unknown as { status?: string }).status === 'requesting')))
+        || ((m.type === 'assistant' || m.type === 'stream_event') && !m.parent_tool_use_id)
+        || m.type === 'result';
+      if (parentActivity) this.stopAwaitingSubagents(held);
+    }
     switch (msg.type) {
       case 'system': {
         const sysMsg = msg as SDKSystemMessage & { subtype?: string };
@@ -1489,6 +1638,8 @@ export class ClaudeAdapter extends AgentAdapter {
           // A boundary without a preceding status still completes a compaction.
           this.emitCompaction(sessionId, { phase: 'start', reason });
           this.emitCompaction(sessionId, { phase: 'end', reason });
+        } else if (['task_started', 'task_notification', 'task_updated'].includes(sysMsg.subtype as string)) {
+          this.trackSubagentTask(sessionId, msg as unknown as Record<string, unknown>);
         } else if (sysMsg.subtype === 'files_persisted') {
           // The SDK finished writing session files to disk — safe to
           // resume watching the session directory for external changes.
@@ -1499,7 +1650,12 @@ export class ClaudeAdapter extends AgentAdapter {
 
       case 'assistant': {
         const assistantMsg = msg as SDKAssistantMessage;
+        // A subagent (Task/Agent tool) message: it carries the dispatching
+        // tool call's id. Its prose and errors belong to the subagent, never
+        // to the parent's reply; its tool calls still show as steps.
+        const fromSubagent = !!assistantMsg.parent_tool_use_id;
         if (assistantMsg.error) {
+          if (fromSubagent) break;
           const entry = this.sessions.get(sessionId);
           const normalized = normalizeClaudeSDKError(assistantMsg as unknown as Record<string, unknown>);
           if (entry) entry.pendingError = preferClaudeError(entry.pendingError, normalized);
@@ -1512,6 +1668,17 @@ export class ClaudeAdapter extends AgentAdapter {
         const entry = this.sessions.get(sessionId);
         for (const block of betaMessage.content) {
           if (block.type === 'text' && (block as { text?: string }).text) {
+            if (fromSubagent) {
+              // forwardSubagentText: the subagent's own prose, shown in its steps.
+              if (entry) {
+                const drafts = entry.subagentDrafts ??= new Map();
+                const owner = assistantMsg.parent_tool_use_id!;
+                const prev = drafts.get(owner);
+                const text = (block as { text: string }).text;
+                drafts.set(owner, prev ? `${prev}\n${text}` : text);
+              }
+              continue;
+            }
             // Draft-bubble model: buffer prose instead of graduating each block
             // to its own permanent bubble. Accumulate consecutive text blocks so
             // multi-block answers aren't lost. Flushed as narration (if a tool
@@ -1525,7 +1692,8 @@ export class ClaudeAdapter extends AgentAdapter {
             }
           } else if (block.type === 'tool_use') {
             // A tool follows the buffered prose → that prose was narration.
-            this.flushNarration(sessionId);
+            // A subagent's tool says nothing about the parent's draft.
+            if (!fromSubagent) this.flushNarration(sessionId);
             const toolBlock = block as { name: string; input?: Record<string, unknown>; id: string };
             const args = (toolBlock.input ?? {}) as Record<string, unknown>;
 
@@ -1536,26 +1704,44 @@ export class ClaudeAdapter extends AgentAdapter {
               this.pendingToolCalls.set(sessionId, sessionTools);
             }
             const canonicalToolName = canonicalArtifactToolName(toolBlock.name);
-            sessionTools.set(toolBlock.id, { toolName: canonicalToolName, args });
+            const parentToolCallId = assistantMsg.parent_tool_use_id ?? undefined;
+            const draft = parentToolCallId ? entry?.subagentDrafts?.get(parentToolCallId) : undefined;
+            if (parentToolCallId && draft) {
+              entry!.subagentDrafts!.delete(parentToolCallId);
+              this.onNarrationTrace?.(sessionId, { ...this.lifecycleEvent(entry), content: draft, parentToolCallId });
+            }
+            sessionTools.set(toolBlock.id, { toolName: canonicalToolName, args, ...(parentToolCallId && { parentToolCallId }) });
+
+            let subagent: import('@kraki/protocol').SubagentInfo | undefined;
+            if (entry && CLAUDE_DISPATCH_TOOLS.has(toolBlock.name)) {
+              const task = typeof args.description === 'string' ? args.description : undefined;
+              const name = typeof args.subagent_type === 'string' && args.subagent_type ? args.subagent_type : 'subagent';
+              subagent = { name, ...(task && { task }), status: 'running' };
+              (entry.dispatches ??= new Map()).set(toolBlock.id, { info: subagent });
+            }
 
             this.onToolStart?.(sessionId, {
               ...this.lifecycleEvent(entry),
               toolName: canonicalToolName,
               args,
               toolCallId: toolBlock.id,
+              ...(parentToolCallId && { parentToolCallId }),
+              ...(subagent && { subagent }),
             });
           }
         }
 
         // Track usage
         if (betaMessage.usage) {
-          this.updateUsage(sessionId, betaMessage.usage as unknown as Record<string, unknown>);
+          this.updateUsage(sessionId, betaMessage.usage as unknown as Record<string, unknown>, fromSubagent);
         }
         break;
       }
 
       case 'stream_event': {
         const partial = msg as SDKPartialAssistantMessage;
+        // Subagent stream (forwardSubagentText): not the parent's reply.
+        if (partial.parent_tool_use_id) break;
         const event = partial.event as unknown as Record<string, unknown>;
 
         if (event.type === 'content_block_delta') {
@@ -1580,6 +1766,11 @@ export class ClaudeAdapter extends AgentAdapter {
         }
         if (entry?.turnFinalized) break;
         if (entry?.compacting) this.emitCompaction(sessionId, { phase: 'end' });
+        // A result during the subagent phase ends one continuation turn.
+        if (entry?.subagentPhase && entry.owedContinuations) entry.owedContinuations -= 1;
+        const holdForSubagents = !resultAny.is_error && !entry?.userAborted
+          && (!!entry?.runningSubagents?.size || !!entry?.owedContinuations);
+        if (entry && !holdForSubagents) this.resetSubagentPhase(entry);
 
         if (entry?.userAborted) {
           // RelayClient owns this turn's terminal boundary (see abortSession).
@@ -1600,8 +1791,13 @@ export class ClaudeAdapter extends AgentAdapter {
           else this.onError?.(sessionId, { message: error.message });
         } else {
           if (entry) entry.pendingError = undefined;
-          // A tool-only turn is anchored centrally by RelayClient.
-          this.flushConclusion(sessionId);
+          if (holdForSubagents) {
+            // Prose so far ("waiting for the subagent…") is an intermediate step.
+            this.flushNarration(sessionId);
+          } else {
+            // A tool-only turn is anchored centrally by RelayClient.
+            this.flushConclusion(sessionId);
+          }
         }
 
         // Update final usage
@@ -1623,6 +1819,16 @@ export class ClaudeAdapter extends AgentAdapter {
           };
           this.sessionUsage.set(sessionId, updated);
           this.onUsageUpdate?.(sessionId, updated);
+        }
+
+        // Background subagents are still running: Claude Code will wake the
+        // parent when they finish. Keep the Kraki turn open for that answer.
+        if (holdForSubagents && entry) {
+          entry.awaitingSubagents = true;
+          entry.subagentPhase = true;
+          if (!entry.runningSubagents?.size) this.armSubagentGrace(sessionId, entry);
+          logger.info({ sessionId, running: entry.runningSubagents?.size }, 'Claude turn held open for background subagents');
+          break;
         }
 
         // The result is the authoritative turn boundary.
@@ -1696,24 +1902,29 @@ export class ClaudeAdapter extends AgentAdapter {
                 }
               }
 
+              const dispatch = entry?.dispatches?.get(toolCallId);
+              if (dispatch && !(dispatch.taskId && entry?.runningSubagents?.has(dispatch.taskId))) entry?.subagentDrafts?.delete(toolCallId);
+              if (dispatch && dispatch.taskId && entry?.runningSubagents?.has(dispatch.taskId) && !b.is_error) {
+                // Background subagent: this is only its launch receipt. The
+                // step stays running until the task reports (task_notification).
+                dispatch.receipt = true;
+                this.pendingToolCalls.get(sessionId)?.delete(toolCallId);
+                continue;
+              }
+              if (dispatch) {
+                dispatch.done = true;
+                dispatch.info = { ...dispatch.info, status: b.is_error ? 'failed' : dispatch.info.status === 'running' ? 'completed' : dispatch.info.status };
+              }
               this.onToolComplete?.(sessionId, {
                 ...this.lifecycleEvent(entry),
                 toolName: tracked?.toolName ?? 'tool',
                 result,
                 toolCallId,
                 success: !b.is_error,
+                ...(tracked?.parentToolCallId && { parentToolCallId: tracked.parentToolCallId }),
+                ...(dispatch && { subagent: dispatch.info }),
                 ...(imageAttachments.length > 0 && { attachments: imageAttachments }),
               });
-
-              // Broadcast image bytes to connected devices
-              if (imageAttachments.length > 0) {
-                const refs = imageAttachments.filter(
-                  (a): a is import('@kraki/protocol').ContentRef => a.type === 'content_ref',
-                );
-                if (refs.length > 0) {
-                  this.onAttachmentBytes?.(sessionId, { refs, ...this.lifecycleEvent(entry) });
-                }
-              }
 
               this.pendingToolCalls.get(sessionId)?.delete(toolCallId);
             }
@@ -1816,10 +2027,19 @@ export class ClaudeAdapter extends AgentAdapter {
       const decision = new Promise<PermissionResult>((resolve) => {
         pendingPermissions.set(permId, { resolve, toolKind, input });
       });
+      // Approval cards raised by a subagent say so.
+      let parentToolCallId: string | undefined;
+      if (options.agentID) {
+        const owner = this.sessions.get(sessionId);
+        const label = owner?.subagentLabels?.get(options.agentID) ?? 'subagent';
+        parsed.description = `Subagent ${label} — ${parsed.description}`;
+        parentToolCallId = owner?.taskDispatch?.get(options.agentID);
+      }
       this.onPermissionRequest?.(sessionId, {
         ...this.lifecycleEvent(this.sessions.get(sessionId)),
         id: permId,
         ...parsed,
+        ...(parentToolCallId && { parentToolCallId }),
       });
       return decision;
     };
@@ -1912,6 +2132,8 @@ export class ClaudeAdapter extends AgentAdapter {
   // ── Helpers ───────────────────────────────────────
 
   private cleanupSessionState(sessionId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (entry?.subagentSettleTimer) clearTimeout(entry.subagentSettleTimer);
     this.sessionAllowSets.delete(sessionId);
     this.sessionModes.delete(sessionId);
     this.pendingModeSignals.delete(sessionId);
@@ -1943,7 +2165,7 @@ export class ClaudeAdapter extends AgentAdapter {
     entry.pendingQuestions.clear();
   }
 
-  private updateUsage(sessionId: string, usage: Record<string, unknown>): void {
+  private updateUsage(sessionId: string, usage: Record<string, unknown>, fromSubagent = false): void {
     const prev = this.sessionUsage.get(sessionId) ?? {
       inputTokens: 0, outputTokens: 0,
       cacheReadTokens: 0, cacheWriteTokens: 0,
@@ -1957,7 +2179,8 @@ export class ClaudeAdapter extends AgentAdapter {
       totalCost: prev.totalCost,
       totalDurationMs: prev.totalDurationMs,
       // Prompt size of the latest call = how full the context window is.
-      contextTokens: ((usage.input_tokens as number) ?? 0)
+      // A subagent's prompt is its own window, not the parent's.
+      contextTokens: fromSubagent ? prev.contextTokens : ((usage.input_tokens as number) ?? 0)
         + ((usage.cache_read_input_tokens as number) ?? 0)
         + ((usage.cache_creation_input_tokens as number) ?? 0) || prev.contextTokens,
     };

@@ -401,6 +401,7 @@ final class AuthManager {
     /// Process a successful `auth_ok` from the relay.
     func handleAuthOk(message: [String: Any]) {
         guard let appState else { return }
+        appState.accountDeletedNotice = false
 
         // The deviceId is required — without it we can't address any
         // subsequent commands. A malformed/missing field here would
@@ -502,9 +503,26 @@ final class AuthManager {
             githubClientId: githubClientId,
             relayVersion: relayVersion
         )
+        let words = VoiceWord.decodeList(message["voiceVocabulary"])
+        if let userID = user?.id {
+            Task { @MainActor [weak appState] in
+                guard let appState, appState.user?.id == userID else { return }
+                appState.preferencesManager?.authenticateVocabulary(userID: userID, words: words)
+            }
+        }
     }
 
     /// Process an `auth_error` from the relay.
+    /// Region redirects may point only at Kraki's relays over TLS (and, in
+    /// debug builds, a local relay).
+    static func isAllowedRegionRedirect(_ redirect: String) -> Bool {
+        guard let url = URL(string: redirect), let host = url.host?.lowercased() else { return false }
+        #if DEBUG
+        if ["localhost", "127.0.0.1", "::1"].contains(host) { return true }
+        #endif
+        return url.scheme?.lowercased() == "wss" && (host == "kraki.chat" || host.hasSuffix(".kraki.chat"))
+    }
+
     func handleAuthError(message: [String: Any]) {
         guard let appState else { return }
 
@@ -524,7 +542,22 @@ final class AuthManager {
         // We hold the new id transiently — only persisting once the
         // redirected relay confirms it with `auth_ok`. That way a failed
         // redirect doesn't clobber the user's previous identity.
+        // This device's account was deleted (here or from another device
+        // while this one was offline). Sign out for good; never fall back to
+        // another credential, which would sign up a new account.
+        if code == "account_deleted" {
+            appState.accountWasDeleted()
+            return
+        }
+
         if code == "wrong_region", let redirect = message["redirect"] as? String {
+            // A redirect is persisted and then used for challenge auth with
+            // this device's key, so only Kraki's own relays are followed.
+            guard Self.isAllowedRegionRedirect(redirect) else {
+                KLog.d("⚠️ Ignoring wrong_region redirect to an untrusted relay")
+                appState.onAuthFailed(error: "This server asked Kraki to connect somewhere it doesn't trust.")
+                return
+            }
             KLog.d("🌏 wrong_region → \(redirect)")
             if let newDeviceId = message["deviceId"] as? String, !newDeviceId.isEmpty {
                 pendingRegionDeviceId = newDeviceId

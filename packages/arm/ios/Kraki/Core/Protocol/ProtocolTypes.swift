@@ -205,7 +205,9 @@ enum SessionMode: RawRepresentable, Codable, Sendable, CaseIterable, Hashable {
 
     init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
-        self = SessionMode(rawValue: raw) ?? .default
+        // A mode from a newer computer that this build doesn't know is shown
+        // as the most restrictive one, never as the more permissive default.
+        self = SessionMode(rawValue: raw) ?? .safe
     }
 
     func encode(to encoder: Encoder) throws {

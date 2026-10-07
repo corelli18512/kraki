@@ -1,4 +1,4 @@
-import type { CardActionState, SessionSummary } from '@kraki/protocol';
+import type { SessionSummary } from '@kraki/protocol';
 import type { SessionCard } from '../types/store';
 
 /**
@@ -15,26 +15,6 @@ import type { SessionCard } from '../types/store';
  * (`previewType === 'question'`), so it is known before the session is opened.
  */
 export type SessionStatus = 'idle' | 'working' | 'compacting' | 'pending' | 'ended';
-
-/** A stable identity for a card action — changes when the slot's meaningful
- *  state changes (tool start/complete, prompt open/resolve, batch count). Used
- *  both to gate trace re-pulls and to drive scroll auto-follow. */
-export function cardActionKey(a: CardActionState | null): string {
-  if (!a) return 'none';
-  switch (a.type) {
-    case 'tool_start':
-    case 'tool_complete':
-      return `${a.type}:${a.payload.toolCallId ?? a.payload.headline}`;
-    case 'tool_batch':
-      return `batch:${a.payload.running}`;
-    case 'permission':
-      return `perm:${a.payload.id}:${a.payload.decision ?? 'pending'}`;
-    case 'user_abort':
-      return `user_abort:${a.payload.abortedAt}`;
-    case 'failed':
-      return `failed:${a.payload.failedAt}:${a.payload.code ?? ''}:${a.payload.message}`;
-  }
-}
 
 /** An unresolved permission in the session's live card (1) or none (0). */
 export function countPendingQuestions(

@@ -66,6 +66,8 @@ export interface AuthBackend {
     auth: AuthMethod,
     device: DeviceInfo,
     headRegion?: string,
+    /** The connecting client's IP, for per-IP auth throttling. */
+    clientIp?: string,
   ): Promise<AuthOutcome>;
 
   /**
@@ -91,17 +93,28 @@ export interface AuthBackend {
   ): Promise<AuthOutcome>;
 
   /**
-   * Create a pairing token for an authenticated user.
-   * Returns the token string and TTL.
-   */
-  /**
    * Forget a device in the account's source of truth. Edges call this so a
    * removal survives the device list they re-mirror from it on every auth.
    * Optional: backends without a separate account store don't need it.
    */
   removeDevice?(userId: string, deviceId: string): Promise<boolean>;
 
+  /**
+   * Delete an account at the account store (users, devices, push tokens,
+   * voice usage) and tombstone its device ids. Returns the deleted device ids.
+   * Must throw when the store could not be reached, so the relay never
+   * reports a deletion that did not happen.
+   */
+  deleteAccount?(userId: string): Promise<string[]>;
+
+  /**
+   * Create a pairing token for an authenticated user.
+   * Returns the token string and TTL.
+   */
   createPairingToken(userId: string): { token: string; expiresIn: number };
+
+  /** Drop expired pairing tokens. Called periodically by HeadServer. */
+  sweepPairingTokens?(): void;
 
   /**
    * Request a one-shot pairing token (authenticates the requester first).

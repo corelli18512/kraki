@@ -162,8 +162,9 @@ final class VoiceInputCoreTests: XCTestCase {
         XCTAssertEqual(output[1], -16_383)
     }
 
-    func testPCMConverterRejectsUpsampling() {
-        let input: [Float] = [0.25, -0.25]
+    func testPCMConverterUpsamplesLowRateHeadsets() {
+        // 8 kHz Bluetooth input becomes 16 kHz by linear interpolation.
+        let input: [Float] = [0.0, 0.5, 1.0]
         let converted = input.withUnsafeBufferPointer {
             VoicePCMConverter.convert(
                 samples: $0.baseAddress!,
@@ -172,7 +173,13 @@ final class VoiceInputCoreTests: XCTestCase {
                 targetRate: 16_000
             )
         }
-        XCTAssertNil(converted)
+        XCTAssertNotNil(converted)
+        let output = converted!.data.withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
+        XCTAssertEqual(output.count, 6)
+        XCTAssertEqual(output[0], 0)
+        XCTAssertEqual(output[1], Int16(0.25 * 32767))
+        XCTAssertEqual(output[2], Int16(0.5 * 32767))
+        XCTAssertEqual(Double(converted!.peak), 1.0, accuracy: 0.0001)
     }
 
     func testCorrectionDeltaIsNotAnAuthoritativeFinal() {

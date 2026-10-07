@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
-import { generateKeyPairSync, createSign } from 'crypto';
+import { generateKeyPairSync, createSign, randomUUID } from 'crypto';
 import { decodeFrame, Endpoint } from '@coinfra/pulse';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { HeadServer } from '../server.js';
@@ -850,6 +850,59 @@ describe('HeadServer (thin relay)', () => {
       const user2 = authOk2.user as Record<string, unknown>;
       expect(user2.preferences).toEqual(expect.objectContaining({ debugLogging: true }));
       ws2.close();
+    });
+  });
+
+  describe('account vocabulary sync', () => {
+    it('syncs two app clients live and hydrates a reconnect without any tentacle', async () => {
+      head = await createHead();
+      const { ws: a, authOk } = await authConnect(head.port, 'Phone', 'app', { deviceId: 'words-phone' });
+      expect(authOk.voiceVocabulary).toEqual([]);
+      const joined = waitForMessageOfType(a, 'device_joined');
+      const { ws: b } = await authConnect(head.port, 'Mac', 'app', { deviceId: 'words-mac' });
+      await joined;
+      const requestId = randomUUID();
+      const ack = waitForMessageOfType(a, 'voice_vocabulary_updated');
+      const live = waitForMessageOfType(b, 'voice_vocabulary_updated');
+      a.send(JSON.stringify({ type: 'update_voice_vocabulary', requestId, ops: [{ op: 'add', term: 'Kraki', heardAs: 'cracky' }] }));
+      const response = await ack;
+      expect(response).toMatchObject({ requestId, words: [{ term: 'Kraki', heardAs: 'cracky' }] });
+      expect((await live).words).toEqual(response.words);
+      // A theme change must not carry (or broadcast) the word list.
+      const themeAck = waitForMessageOfType(a, 'preferences_updated');
+      const themeLive = waitForMessageOfType(b, 'preferences_updated');
+      a.send(JSON.stringify({ type: 'update_preferences', preferences: { theme: 'dark' } }));
+      for (const msg of [await themeAck, await themeLive]) {
+        expect(msg.preferences).toEqual({ theme: 'dark' });
+      }
+      a.close(); b.close();
+      const { ws: c, authOk: reconnected } = await authConnect(head.port, 'New App', 'app', { deviceId: 'words-new' });
+      expect(reconnected.voiceVocabulary).toEqual(response.words);
+      expect((reconnected.user as Record<string, unknown>).preferences).toEqual({ theme: 'dark' });
+      const { ws: t, authOk: tentacleOk } = await authConnect(head.port, 'Laptop', 'tentacle', { deviceId: 'words-tentacle' });
+      expect(tentacleOk.type).toBe('auth_ok');
+      expect(tentacleOk).not.toHaveProperty('voiceVocabulary');
+      c.close(); t.close();
+    });
+
+    it('acknowledges malformed requests, and keeps accounts apart', async () => {
+      head = await createHead({ authProvider: new GitHubAuthProvider({ fetcher: mockGitHubFetcher({
+        alice: { id: 101, login: 'alice' }, bob: { id: 102, login: 'bob' },
+      }) }) });
+      const { ws: a } = await authConnect(head.port, 'Alice', 'app', { token: 'alice', deviceId: 'words-alice' });
+      const { ws: b } = await authConnect(head.port, 'Bob', 'app', { token: 'bob', deviceId: 'words-bob' });
+      const received: unknown[] = [];
+      b.on('message', data => { const msg = unwrapControlFrame(JSON.parse(data.toString())); if (msg?.type === 'voice_vocabulary_updated') received.push(msg); });
+      const bad = waitForMessageOfType(a, 'voice_vocabulary_updated');
+      a.send(JSON.stringify({ type: 'update_voice_vocabulary', requestId: 'r1', ops: 'not a list' }));
+      expect(await bad).toMatchObject({ requestId: 'r1', words: [] });
+      const good = waitForMessageOfType(a, 'voice_vocabulary_updated');
+      a.send(JSON.stringify({ type: 'update_voice_vocabulary', requestId: 'r2', ops: [{ op: 'add', term: 'Private' }] }));
+      await good;
+      const { ws: c, authOk } = await authConnect(head.port, 'Bob New', 'app', { token: 'bob', deviceId: 'words-bob-new' });
+      expect(authOk.voiceVocabulary).toEqual([]);
+      expect(received).toEqual([]);
+      a.close(); b.close(); c.close();
     });
   });
 

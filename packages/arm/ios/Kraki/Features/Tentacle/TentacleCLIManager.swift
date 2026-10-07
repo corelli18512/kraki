@@ -90,6 +90,7 @@ final class TentacleCLIManager {
     @ObservationIgnored private var launchdDomainStuck = false
     @ObservationIgnored private var reRegisteredThisLaunch = false
     @ObservationIgnored private var checkedLegacyHelperPath = false
+    @ObservationIgnored private var registeredHelperThisLaunch = false
 
     var isBuiltInAvailable: Bool { builtIn.isAvailable }
 
@@ -110,6 +111,15 @@ final class TentacleCLIManager {
         let deviceId: String?
         let region: String?
         let logVerbosity: String?
+        /// Apps may update Kraki here (`kraki config remote-update`).
+        var remoteUpdate: Bool = true
+    }
+
+    /// Turn remote update (from the user's other devices) on or off here.
+    func setRemoteUpdate(_ on: Bool) async {
+        guard case .available(let path, _) = installState else { return }
+        _ = await runCapturing(binary: path, args: ["config", "remote-update", on ? "on" : "off"])
+        await refreshDaemonState()
     }
 
     // MARK: - Persistence
@@ -160,6 +170,11 @@ final class TentacleCLIManager {
         )
         switch mode {
         case .builtIn:
+            // Before the version-lock restart below can relaunch the daemon:
+            // local network privacy needs the helper known to Launch Services.
+            if !registeredHelperThisLaunch, builtIn.isAvailable {
+                registeredHelperThisLaunch = builtIn.registerHelperWithLaunchServices()
+            }
             installState = .available(path: builtIn.binaryPath, version: builtIn.version)
         case .external:
             if let external {
@@ -275,7 +290,7 @@ final class TentacleCLIManager {
             return
         }
 
-        guard let result = await runCapturing(binary: path, args: ["status", "--json"]),
+        guard let result = await runCapturing(binary: path, args: ["status", "--json"], timeout: 15),
               result.exitCode == 0,
               let data = result.stdout.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -400,7 +415,8 @@ final class TentacleCLIManager {
                 deviceName: device?["name"] as? String,
                 deviceId: device?["id"] as? String,
                 region: cfg["region"] as? String,
-                logVerbosity: cfg["logVerbosity"] as? String
+                logVerbosity: cfg["logVerbosity"] as? String,
+                remoteUpdate: cfg["remoteUpdate"] as? Bool ?? true
             )
         } else {
             configInfo = nil
@@ -413,7 +429,10 @@ final class TentacleCLIManager {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                // Each poll spawns the CLI; while Kraki is in the background
+                // (menu-bar status only) poll five times less often.
+                let pace = NSApp.isActive ? interval : interval * 5
+                try? await Task.sleep(nanoseconds: UInt64(pace * 1_000_000_000))
                 await self?.refreshDaemonState()
             }
         }
@@ -464,7 +483,8 @@ final class TentacleCLIManager {
         guard case .available(let path, _) = installState else { return }
         daemonState = .stopping
         if mode == .builtIn {
-            do { try await builtIn.disable() } catch { lastError = error.localizedDescription }
+            // Offline, not handed over: the app keeps ownership (see disable).
+            do { try await builtIn.disable(keepOwnership: true) } catch { lastError = error.localizedDescription }
             try? await Task.sleep(nanoseconds: 300_000_000)
             await refreshDaemonState()
             return
@@ -505,7 +525,7 @@ final class TentacleCLIManager {
             try? await Task.sleep(nanoseconds: 500_000_000)
             builtIn.kickstart()
         } catch {
-            daemonState = .error("Could not restart Kraki in the background: \(error.localizedDescription)")
+            daemonState = .error("Couldn't reconnect this Mac: \(error.localizedDescription)")
         }
     }
 
@@ -579,7 +599,7 @@ final class TentacleCLIManager {
                 return
             }
         } catch {
-            daemonState = .error("Could not start Kraki in the background: \(error.localizedDescription)")
+            daemonState = .error("Couldn't bring this Mac online: \(error.localizedDescription)")
             return
         }
         // The worker publishes its PID within a second or two; poll briefly so
@@ -651,20 +671,6 @@ final class TentacleCLIManager {
 
     // MARK: - Menu bar appearance
 
-    /// SF Symbol name to render in the MenuBarExtra label. We use the
-    /// solid circle variants so the dot is visually distinct from the
-    /// regular menu bar icons.
-    var menuBarSymbolName: String {
-        switch daemonState {
-        case .running:  return "circle.fill"
-        case .starting, .stopping: return "circle.dashed"
-        case .stopped:  return "circle"
-        case .needsApproval: return "exclamationmark.circle"
-        case .error:    return "exclamationmark.circle"
-        case .unknown:  return "questionmark.circle"
-        }
-    }
-
     // MARK: - Internals
 
     private struct CommandResult {
@@ -675,7 +681,7 @@ final class TentacleCLIManager {
 
     /// Spawn a process, capture stdout/stderr, return on exit. Returns
     /// nil if Process throws on launch (binary missing / permissions).
-    private func runCapturing(binary: String, args: [String]) async -> CommandResult? {
+    private func runCapturing(binary: String, args: [String], timeout: TimeInterval = 60) async -> CommandResult? {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
@@ -684,6 +690,11 @@ final class TentacleCLIManager {
                 let outPipe = Pipe(), errPipe = Pipe()
                 process.standardOutput = outPipe
                 process.standardError = errPipe
+                // A hung CLI must not hang the caller (and every later poll):
+                // terminate it after `timeout`; its pipes then reach EOF.
+                let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
+                defer { watchdog.cancel() }
 
                 do {
                     try process.run()

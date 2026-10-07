@@ -8,8 +8,8 @@
 
 import { wsProxyOptions } from './proxy.js';
 import { WebSocket } from 'ws';
-import { DEFAULT_SESSION_MODE, normalizeSessionMode, toWireSessionMode } from '@kraki/protocol';
-import { appendFileSync } from 'node:fs';
+import { DEFAULT_SESSION_MODE, normalizeSessionMode, toWireSessionMode, ACCOUNT_DELETED_CLOSE_CODE } from '@kraki/protocol';
+import { appendFileSync, renameSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -20,7 +20,8 @@ import type {
   BroadcastEnvelope, UnicastEnvelope, MulticastEnvelope, CardActionState,
   SessionLiveSnapshot, SessionDigest, IdleMessage,
 } from '@kraki/protocol';
-import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment } from '@kraki/protocol';
+import type { DeviceUpdateInfo, DeviceUpdatePhase } from '@kraki/protocol';
+import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment } from '@kraki/protocol';
 import { randomUUID } from 'node:crypto';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
 import type { RecipientKey } from '@kraki/crypto';
@@ -242,6 +243,7 @@ export class RelayClient {
   private legacyReplayWarned = new Set<string>();
   /** Prefer challenge auth when the relay already knows this device */
   private preferChallengeAuth = true;
+  private reRegisteredKey = false;
 
   // ── Title generation state ──────────────────────────
   /** Turn count per session (for title generation scheduling) */
@@ -734,6 +736,8 @@ export class RelayClient {
 
   /** Watches imported sessions' events.jsonl for external changes */
   private eventsWatcher: EventsWatcher | null = null;
+  /** True while send() relays an external events.jsonl change (see initEventsWatcher). */
+  private mirroringExternalEvent = false;
 
   constructor(
     adapter: AgentAdapter,
@@ -958,7 +962,12 @@ export class RelayClient {
       this.recordTrace({
         type: 'tool_complete',
         sessionId,
-        payload: { ...tool.payload, success: false, termination },
+        payload: {
+          ...tool.payload,
+          success: false,
+          termination,
+          ...(tool.payload.subagent && { subagent: { ...tool.payload.subagent, status: termination === 'cancelled' ? 'stopped' : 'failed' } }),
+        },
       });
       const id = tool.payload.toolCallId;
       if (id) {
@@ -1035,7 +1044,12 @@ export class RelayClient {
       this.lastActivityAt = Date.now();
       try {
         const rawLen = (data as Buffer | ArrayBuffer | string).toString ? (data as Buffer).length : 0;
-        const msg = JSON.parse(data.toString());
+        let msg: Record<string, unknown>;
+        try {
+          msg = JSON.parse(data.toString());
+        } catch {
+          return; // Ignore malformed frames from head
+        }
         traceLog.info({
           ns: wsRxNs.toString(),
           comp: 'tentacle',
@@ -1046,9 +1060,16 @@ export class RelayClient {
           hasPulse: typeof msg.pulse === 'string',
           rawLen,
         });
+        // Only the relay itself writes raw frames (peers' data arrives inside
+        // pulse frames), so this cannot be forged by another device.
+        if (msg.type === 'account_deleted') {
+          this.accountDeleted();
+          return;
+        }
         this.handleMessage(msg);
-      } catch {
-        // Ignore malformed messages from head
+      } catch (err) {
+        // A handler bug, not a malformed frame: never swallow it silently.
+        logger.error({ err }, 'Error handling relay message');
       }
     });
 
@@ -1059,6 +1080,10 @@ export class RelayClient {
       logger.info({ code, reason: reasonStr, intentional: this.intentionalDisconnect }, 'WS closed');
       this.setState('disconnected');
       this.pulse.onDisconnected();
+      if (code === ACCOUNT_DELETED_CLOSE_CODE) {
+        this.accountDeleted();
+        return;
+      }
       if (!this.intentionalDisconnect) {
         this.scheduleReconnect();
       }
@@ -1135,6 +1160,24 @@ export class RelayClient {
 
   // ── Message handling ────────────────────────────────
 
+  /**
+   * The account was deleted from an app (or while this computer was offline).
+   * Stop for good: never reconnect, which would sign up a new account with
+   * the saved token. The daemon forgets its credentials (onAccountDeleted).
+   */
+  private accountDeleted(): void {
+    if (this.accountDeletedHandled) return;
+    this.accountDeletedHandled = true;
+    logger.warn('Kraki account was deleted; disconnecting for good');
+    this.disconnect();
+    this.onAccountDeleted?.();
+  }
+
+  private accountDeletedHandled = false;
+
+  /** Called once when the relay reports that the account was deleted. */
+  onAccountDeleted: (() => void) | null = null;
+
   private handleMessage(msg: Record<string, unknown>): void {
     if (msg.type === 'auth_ok') {
       this.authInfo = msg as unknown as AuthOkMessage;
@@ -1162,6 +1205,10 @@ export class RelayClient {
 
     if (msg.type === 'auth_error') {
       const authError = msg as unknown as AuthErrorMessage;
+      if (authError.code === 'account_deleted') {
+        this.accountDeleted();
+        return;
+      }
       if (authError.code === 'wrong_region' && authError.redirect) {
         logger.info({ to: authError.redirect }, 'Relay requested reconnect to assigned region');
         this.options.relayUrl = authError.redirect;
@@ -1170,6 +1217,18 @@ export class RelayClient {
       }
       if (authError.code === 'unknown_device' && this.preferChallengeAuth && this.options.device.deviceId && this.keyManager) {
         logger.warn('Challenge auth rejected for unknown device; retrying with full auth');
+        this.preferChallengeAuth = false;
+        this.ws?.close();
+        return;
+      }
+      // The relay holds a different key for this device than the one on
+      // disk (an earlier install raced two key generators). Signing in again
+      // with the account token re-registers the current key; without this the
+      // computer could never come back online. Once per process.
+      if (authError.code === 'invalid_signature' && this.preferChallengeAuth && this.options.token
+        && this.options.authMethod !== 'open' && !this.reRegisteredKey) {
+        logger.warn('Relay has a different key for this device; signing in again to re-register it');
+        this.reRegisteredKey = true;
         this.preferChallengeAuth = false;
         this.ws?.close();
         return;
@@ -1280,8 +1339,10 @@ export class RelayClient {
       return;
     }
 
-    // Plaintext consumer messages (fallback when no keyManager)
-    this.handleConsumerMessage(msg as unknown as ConsumerMessage);
+    // Anything else is not a consumer message. Consumer messages are accepted
+    // ONLY after E2E decryption above (or via the Pulse path); a plaintext
+    // frame from the relay must never reach handleConsumerMessage.
+    logger.debug({ type: msg.type }, 'Ignoring unrecognized relay frame');
   }
 
   private buildAuthPayload(device: DeviceInfo): AuthMethod {
@@ -1338,6 +1399,43 @@ export class RelayClient {
     if (!this.currentSessionByArm.has(deviceId)) this.currentSessionByArm.set(deviceId, null);
     this.attachmentPacer.notifyOnline(deviceId);
     logger.warn({ deviceId }, 'App marked offline is sending; restored as online');
+  }
+
+  /**
+   * Apply an app's permission decision. The resolution is announced only when
+   * a live pending request took it. A request that is still open here but gone
+   * from the agent (timed out, session ended) is closed as cancelled so apps
+   * stop showing it; a duplicate of an earlier decision (Pulse resend) is
+   * ignored and never overrides the announced outcome.
+   */
+  private resolvePermission(sessionId: string, permissionId: string, decision: 'approve' | 'deny' | 'always_allow', reason: string): void {
+    const verb = { approve: 'approve', deny: 'deny', always_allow: 'set always-allow for' }[decision];
+    (reason
+      ? this.adapter.respondToPermission(sessionId, permissionId, decision, reason)
+      : this.adapter.respondToPermission(sessionId, permissionId, decision))
+      .then((result) => {
+        const wasOpen = this.openPermissions.get(sessionId)?.delete(permissionId) === true;
+        if (result === 'not_found' || result === 'session_gone') {
+          if (!wasOpen) return;
+          this.card.resolvePrompt(sessionId, permissionId);
+          this.broadcastSessionList();
+          this.send({ type: 'permission_resolved', sessionId, payload: { permissionId, resolution: 'cancelled', reason: 'This request is no longer pending.' } });
+          return;
+        }
+        this.card.resolvePrompt(sessionId, permissionId, { decision });
+        this.broadcastSessionList();
+        this.recordTrace({ type: 'permission', sessionId, payload: { id: permissionId, description: '', toolName: '', args: {}, decision } });
+        const resolution = decision === 'approve'
+          ? { resolution: 'approved' as const }
+          : decision === 'deny'
+            ? { resolution: 'denied' as const, ...(reason && { reason }) }
+            : { resolution: 'always_allowed' as const };
+        this.send({ type: 'permission_resolved', sessionId, payload: { permissionId, ...resolution } });
+      })
+      .catch((err) => {
+        logger.error({ err, sessionId }, 'respondToPermission failed');
+        this.send({ type: 'error', sessionId, payload: { message: `Failed to ${verb} permission: ${(err as Error).message}` } });
+      });
   }
 
   private handleConsumerMessage(msg: ConsumerMessage): void {
@@ -1444,6 +1542,15 @@ export class RelayClient {
     }
     if (msg.type === 'import_session') {
       this.handleImportSession(msg);
+      return;
+    }
+
+    if (msg.type === 'update_device') {
+      const p = msg.payload as { requestId?: unknown; when?: unknown } | undefined;
+      const requestId = typeof p?.requestId === 'string' && /^[a-zA-Z0-9-]{1,128}$/.test(p.requestId) ? p.requestId : '';
+      const when = p?.when === 'now' || p?.when === 'idle' ? p.when : undefined;
+      if (this.onUpdateRequest) void this.onUpdateRequest(requestId, when);
+      else this.sendUpdateStatus({ phase: 'failed', requestId, error: 'This computer can’t be updated remotely.' });
       return;
     }
 
@@ -1683,55 +1790,15 @@ export class RelayClient {
           break;
         }
         case 'approve':
-          // Broadcast the resolution only AFTER the adapter actually applies it,
-          // so arms are never told "approved" for a permission that failed /
-          // already timed out. (Adapter no-ops on an unknown/resolved id, so a
-          // pulse resend is safe.)
-          this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'approve')
-            .then(() => {
-              this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'approve' });
-              this.openPermissions.get(sessionId)?.delete(msg.payload.permissionId);
-              this.broadcastSessionList();
-              this.recordTrace({ type: 'permission', sessionId, payload: { id: msg.payload.permissionId, description: '', toolName: '', args: {}, decision: 'approve' } });
-              this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'approved' } });
-            })
-            .catch((err) => {
-              logger.error({ err, sessionId }, 'respondToPermission failed');
-              this.send({ type: 'error', sessionId, payload: { message: `Failed to approve permission: ${(err as Error).message}` } });
-            });
-          break;
-        case 'deny': {
-          const reason = typeof msg.payload.reason === 'string' ? msg.payload.reason.trim().slice(0, 2000) : '';
-          (reason
-            ? this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'deny', reason)
-            : this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'deny'))
-            .then(() => {
-              this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'deny' });
-              this.openPermissions.get(sessionId)?.delete(msg.payload.permissionId);
-              this.broadcastSessionList();
-              this.recordTrace({ type: 'permission', sessionId, payload: { id: msg.payload.permissionId, description: '', toolName: '', args: {}, decision: 'deny' } });
-              this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'denied', ...(reason && { reason }) } });
-            })
-            .catch((err) => {
-              logger.error({ err, sessionId }, 'respondToPermission failed');
-              this.send({ type: 'error', sessionId, payload: { message: `Failed to deny permission: ${(err as Error).message}` } });
-            });
+        case 'deny':
+        case 'always_allow': {
+          const decision = msg.type;
+          const reason = decision === 'deny' && typeof (msg.payload as { reason?: unknown }).reason === 'string'
+            ? ((msg.payload as { reason: string }).reason).trim().slice(0, 2000)
+            : '';
+          this.resolvePermission(sessionId, msg.payload.permissionId, decision, reason);
           break;
         }
-        case 'always_allow':
-          this.adapter.respondToPermission(sessionId, msg.payload.permissionId, 'always_allow')
-            .then(() => {
-              this.card.resolvePrompt(sessionId, msg.payload.permissionId, { decision: 'always_allow' });
-              this.openPermissions.get(sessionId)?.delete(msg.payload.permissionId);
-              this.broadcastSessionList();
-              this.recordTrace({ type: 'permission', sessionId, payload: { id: msg.payload.permissionId, description: '', toolName: '', args: {}, decision: 'always_allow' } });
-              this.send({ type: 'permission_resolved', sessionId, payload: { permissionId: msg.payload.permissionId, resolution: 'always_allowed' } });
-            })
-            .catch((err) => {
-              logger.error({ err, sessionId }, 'respondToPermission failed');
-              this.send({ type: 'error', sessionId, payload: { message: `Failed to set always-allow: ${(err as Error).message}` } });
-            });
-          break;
         case 'kill_session':
           this.adapter.killSession(sessionId)
             .catch((err) => logger.error({ err, sessionId }, 'killSession failed'));
@@ -1886,7 +1953,9 @@ export class RelayClient {
     }
 
     try {
-      const result = await this.adapter.createSession({ model, reasoningEffort, contextTier, cwd: cwd || '/', sessionId: preSessionId, agentId });
+      // Without an explicit folder the agent works in the user's home, never
+      // the filesystem root.
+      const result = await this.adapter.createSession({ model, reasoningEffort, contextTier, cwd: cwd || homedir(), sessionId: preSessionId, agentId });
 
       // If an initial prompt was provided, send it to the new session.
       // Otherwise mark idle — the SDK only fires session.idle after a turn
@@ -2061,7 +2130,7 @@ export class RelayClient {
       const source: import('@kraki/protocol').LocalSessionSource = clientMeta?.source as import('@kraki/protocol').LocalSessionSource ?? 'copilot-cli';
       const model = parsedMeta.model ?? clientMeta?.model;
       const autoTitle = clientMeta?.summary?.slice(0, 100);
-      const cwd = clientMeta?.cwd ?? parsedMeta.cwd ?? '/';
+      const cwd = clientMeta?.cwd ?? parsedMeta.cwd ?? homedir();
 
       // Create Kraki session
       this.sessionManager.createSession('copilot', model, krakiSessionId);
@@ -2074,8 +2143,20 @@ export class RelayClient {
         createdAt: clientMeta?.startTime,
       });
 
-      // Batch-write all backfilled messages (single write instead of N appends)
-      const lastSeq = this.sessionManager.appendMessagesBatch(krakiSessionId, backfilledMessages, true);
+      // Batch-write the backfilled spine (single write instead of N appends),
+      // in the same envelope shape send() persists. Tool activity is not on
+      // the spine (it would take seqs that every reader then skips).
+      const deviceId = this.authInfo?.deviceId ?? '';
+      const spineRows = backfilledMessages
+        .filter((m) => RelayClient.PERSISTENT_TYPES.has(m.type))
+        .map((m) => ({
+          type: m.type,
+          ts: m.ts,
+          payload: JSON.stringify({
+            type: m.type, sessionId: krakiSessionId, deviceId, timestamp: m.ts, payload: JSON.parse(m.payload),
+          }),
+        }));
+      const lastSeq = this.sessionManager.appendMessagesBatch(krakiSessionId, spineRows, true);
 
       // Write link table entry
       this.sessionManager.addLink({
@@ -2117,12 +2198,11 @@ export class RelayClient {
       }
 
       // Send backfilled history as replay batch
-      if (backfilledMessages.length > 0) {
+      if (spineRows.length > 0) {
         const replayMessages = this.sessionManager.getMessagesAfterSeq(krakiSessionId, 0, 500);
         const asProducerMessages = replayMessages.map(m => {
           try {
-            const payload = JSON.parse(m.payload);
-            return { type: m.type, seq: m.seq, timestamp: m.ts, sessionId: krakiSessionId, deviceId: this.authInfo?.deviceId ?? '', payload } as unknown as import('@kraki/protocol').ProducerMessage;
+            return { ...JSON.parse(m.payload), seq: m.seq } as unknown as import('@kraki/protocol').ProducerMessage;
           } catch { return null; }
         }).filter((m): m is import('@kraki/protocol').ProducerMessage => m !== null);
 
@@ -2152,7 +2232,7 @@ export class RelayClient {
       this.send({ type: 'idle', sessionId: krakiSessionId, payload: {} });
       this.broadcastSessionList();
 
-      logger.info({ localSessionId, krakiSessionId, backfilled: backfilledMessages.length, adapterFailed }, 'Session imported');
+      logger.info({ localSessionId, krakiSessionId, backfilled: spineRows.length, adapterFailed }, 'Session imported');
 
       // Start watching events.jsonl for external changes (CLI, VS Code)
       this.eventsWatcher?.watch(krakiSessionId);
@@ -2176,10 +2256,15 @@ export class RelayClient {
       (msg) => {
         // Broadcast external events to all arms; send() persists spine types
         // itself (appending here too wrote every external event twice).
-        this.send({
-          ...msg,
-          deviceId: this.authInfo?.deviceId ?? '',
-        } as unknown as Partial<ProducerMessage>);
+        this.mirroringExternalEvent = true;
+        try {
+          this.send({
+            ...msg,
+            deviceId: this.authInfo?.deviceId ?? '',
+          } as unknown as Partial<ProducerMessage>);
+        } finally {
+          this.mirroringExternalEvent = false;
+        }
       },
       this.authInfo?.deviceId ?? '',
     );
@@ -2270,7 +2355,7 @@ export class RelayClient {
     };
     this.adapter.onNarrationTrace = (sessionId, event) => {
       if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
-      this.recordTrace({ type: 'agent_narration', sessionId, payload: { content: event.content } });
+      this.recordTrace({ type: 'agent_narration', sessionId, payload: { content: event.content, ...(event.parentToolCallId && { parentToolCallId: event.parentToolCallId }) } });
     };
 
     this.adapter.onPermissionRequest = (sessionId, event) => {
@@ -2290,7 +2375,7 @@ export class RelayClient {
         openedAt: new Date().toISOString(),
       });
       this.broadcastSessionList();
-      this.recordTrace({ type: 'permission', sessionId, payload: action.payload });
+      this.recordTrace({ type: 'permission', sessionId, payload: { ...action.payload, ...(event.parentToolCallId && { parentToolCallId: event.parentToolCallId }) } });
     };
 
     // Auto-resolved (e.g. by an Always Allow rule) — mark the slot approved.
@@ -2367,6 +2452,8 @@ export class RelayClient {
           ...(argsRef && { argsRef }),
           ...(inlineArgs && { args: inlineArgs }),
           toolCallId: event.toolCallId,
+          ...(event.parentToolCallId && { parentToolCallId: event.parentToolCallId }),
+          ...(event.subagent && { subagent: event.subagent }),
         },
       };
       // Off-spine: mirror to trace.jsonl for the lazy "Steps" history, and fold
@@ -2379,6 +2466,9 @@ export class RelayClient {
           headline,
           ...(argsRef && { argsRef }),
           toolCallId: event.toolCallId,
+          // Kept so a turn-end synthetic completion stays under its subagent.
+          ...(event.parentToolCallId && { parentToolCallId: event.parentToolCallId }),
+          ...(event.subagent && { subagent: event.subagent }),
         },
       });
       // Track key files from tool usage
@@ -2425,6 +2515,8 @@ export class RelayClient {
           ...(argsRef && { argsRef }),
           ...(inlineArgs && { args: inlineArgs }),
           toolCallId: event.toolCallId,
+          ...(event.parentToolCallId && { parentToolCallId: event.parentToolCallId }),
+          ...(event.subagent && { subagent: event.subagent }),
           ...(event.success === false && { success: false }),
           ...(event.attachments?.length && { attachments: event.attachments }),
         },
@@ -2442,13 +2534,6 @@ export class RelayClient {
           ...(event.attachments?.length && { attachments: event.attachments }),
         },
       });
-    };
-
-    // Bytes remain in AttachmentStore until an Arm actually renders the
-    // ContentRef. Broadcasting large results to every Arm blocked unrelated
-    // control and live messages in Pulse's ordered stream.
-    this.adapter.onAttachmentBytes = (sessionId, event) => {
-      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
     };
 
     this.adapter.onIdle = (sessionId, event) => {
@@ -2636,6 +2721,7 @@ export class RelayClient {
       // is a no-op on single-agent adapters and idempotent on the multi one.
       this.adapter.registerSessionAgent(meta.id, meta.agent);
       if (normalise && (meta.state === 'active' || meta.state === 'idle')) {
+        if (meta.state === 'active') this.closeTurnLostInRestart(meta.id);
         this.sessionManager.markDisconnected(meta.id);
         normalised++;
       }
@@ -2646,6 +2732,28 @@ export class RelayClient {
         'Sessions available for lazy resume on first interaction',
       );
     }
+  }
+
+  /**
+   * A session left `active` by the previous daemon process (restart or update
+   * mid-turn) whose spine ends with the user's prompt never got an outcome:
+   * the conversation would just stop after the user's message. Record the
+   * turn as failed so every app shows why. A session waiting on an agent
+   * question is left alone — its answer can still resume it.
+   */
+  private closeTurnLostInRestart(sessionId: string): void {
+    const lastSeq = this.sessionManager.getMeta(sessionId)?.lastSeq ?? 0;
+    if (lastSeq <= 0) return;
+    const [last] = this.sessionManager.getMessagesAfterSeq(sessionId, lastSeq - 1, 1);
+    if (last?.type !== 'user_message') return;
+    this.finishTurnWithStatus(sessionId, {
+      type: 'failed',
+      payload: {
+        message: 'Kraki restarted on this computer while this turn was running.',
+        code: 'process_lost',
+        failedAt: new Date().toISOString(),
+      },
+    });
   }
 
   /**
@@ -3287,33 +3395,33 @@ export class RelayClient {
       this.unicastAttachmentError(requesterDeviceId, requesterKey, sessionId, id, 'not_found');
       return;
     }
+    if (msg.payload.mode === 'paced') {
+      // One chunk per request: read just that range, not the whole file.
+      const chunk = RelayClient.ATTACHMENT_CHUNK_BYTES;
+      const index = Math.floor(msg.payload.index ?? 0);
+      const got = index >= 0 ? this.attachmentStore.readRange(sessionId, id, index * chunk, chunk) : null;
+      const total = got ? Math.max(1, Math.ceil(got.size / chunk)) : 0;
+      if (!got || index >= total) {
+        this.unicastAttachmentError(requesterDeviceId, requesterKey, sessionId, id, 'not_found');
+        return;
+      }
+      const wire = this.sendAttachmentChunk(requesterDeviceId, requesterKey, sessionId, id, got.meta.mimeType, index, total, got.bytes, true);
+      this.attachmentPacer.charge(wire);
+      return;
+    }
     const got = this.attachmentStore.read(sessionId, id);
     if (!got) {
       this.unicastAttachmentError(requesterDeviceId, requesterKey, sessionId, id, 'not_found');
       return;
     }
-    const total = Math.max(1, Math.ceil(got.bytes.length / RelayClient.ATTACHMENT_CHUNK_BYTES));
-    if (msg.payload.mode !== 'paced') {
-      this.attachmentPacer.enqueue({
-        deviceId: requesterDeviceId,
-        sessionId,
-        id,
-        bytes: got.bytes,
-        mimeType: got.meta.mimeType,
-      });
-      return;
-    }
-    const index = Math.floor(msg.payload.index ?? 0);
-    if (index < 0 || index >= total) {
-      this.unicastAttachmentError(requesterDeviceId, requesterKey, sessionId, id, 'not_found');
-      return;
-    }
-    const slice = got.bytes.subarray(
-      index * RelayClient.ATTACHMENT_CHUNK_BYTES,
-      Math.min((index + 1) * RelayClient.ATTACHMENT_CHUNK_BYTES, got.bytes.length),
-    );
-    const wire = this.sendAttachmentChunk(requesterDeviceId, requesterKey, sessionId, id, got.meta.mimeType, index, total, slice, true);
-    this.attachmentPacer.charge(wire);
+    // Legacy whole-file request: queued and rate-limited by the pacer.
+    this.attachmentPacer.enqueue({
+      deviceId: requesterDeviceId,
+      sessionId,
+      id,
+      bytes: got.bytes,
+      mimeType: got.meta.mimeType,
+    });
   }
 
   /** Send one attachment chunk; returns its estimated wire size. */
@@ -3372,11 +3480,22 @@ export class RelayClient {
   /**
    * Write web app debug logs to a local file.
    */
+  /** Largest web-client.log before it is rotated to web-client.log.1. */
+  private static readonly CLIENT_LOG_MAX_BYTES = 5 * 1024 * 1024;
+
   private handleClientLog(deviceId: string, entries: Array<{ ts: string; level: string; scope: string; message: string }> | undefined): void {
-    if (!entries || entries.length === 0) return;
+    if (!Array.isArray(entries) || entries.length === 0) return;
     try {
       const logPath = join(getKrakiHome(), 'logs', 'web-client.log');
-      const lines = entries.map(e => `${e.ts} [${deviceId}] [${e.level}:${e.scope}] ${e.message}`).join('\n') + '\n';
+      // App-supplied text: one line per entry (no injected newlines/control
+      // characters), bounded size per entry and per batch.
+      const clean = (v: unknown, max: number) => String(v ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, max);
+      const lines = entries.slice(0, 200)
+        .map(e => `${clean(e.ts, 40)} [${clean(deviceId, 80)}] [${clean(e.level, 16)}:${clean(e.scope, 64)}] ${clean(e.message, 4000)}`)
+        .join('\n') + '\n';
+      try {
+        if (statSync(logPath).size > RelayClient.CLIENT_LOG_MAX_BYTES) renameSync(logPath, `${logPath}.1`);
+      } catch { /* no log yet */ }
       appendFileSync(logPath, lines, 'utf8');
     } catch {
       // Ignore write errors
@@ -3487,7 +3606,9 @@ export class RelayClient {
     // Advance the events watcher past any events the adapter just wrote,
     // so the watcher only picks up external changes (CLI, VS Code).
     // Only for persistent message types — transient metadata doesn't touch events.jsonl.
-    if (sessionId && this.eventsWatcher && RelayClient.PERSISTENT_TYPES.has(type)) {
+    // (Not for the watcher's own mirrored events: pausing there stopped the
+    // live sync after its first batch.)
+    if (sessionId && this.eventsWatcher && !this.mirroringExternalEvent && RelayClient.PERSISTENT_TYPES.has(type)) {
       this.eventsWatcher.skipToEnd(sessionId);
     }
 
@@ -3642,9 +3763,9 @@ export class RelayClient {
     for (const part of parts) this.pulse.send(part, shape(fragmenting), durable, undefined, stream);
   }
 
-  private handlePulseDelivered(payloadJson: string): void {
+  private handlePulseDelivered(payloadJson: string, fragmentSender?: string): void {
     if (!this.keyManager || !this.authInfo) return;
-    let parsed: { from?: string; msg?: Record<string, unknown>; blob?: string; keys?: Record<string, string> };
+    let parsed: { from?: string; src?: string; msg?: Record<string, unknown>; blob?: string; keys?: Record<string, string> };
     try {
       parsed = JSON.parse(payloadJson);
     } catch (err) {
@@ -3653,16 +3774,26 @@ export class RelayClient {
     }
     if (isPayloadFragment(parsed)) {
       const whole = this.payloadAssembler.accept(parsed);
-      if (whole !== null) this.handlePulseDelivered(whole);
+      // Every part of a set is stamped by the head with the same sender; carry
+      // it to the reassembled payload, which itself has no `src`.
+      if (whole !== null) this.handlePulseDelivered(whole, parsed.src);
       return;
     }
     // Head-originated plaintext control (device_joined/left/removed, etc.): route
     // back through the normal presence handling in handleMessage. This is
-    // load-bearing — device_joined registers the app's consumer key.
-    if (parsed.from === HEAD_PULSE_TARGET && parsed.msg) {
-      this.handleMessage(parsed.msg);
+    // load-bearing — device_joined registers the app's consumer key. Only the
+    // head's own control types are accepted from this plaintext wrapper; auth
+    // frames and consumer messages arriving this way are forged and dropped.
+    if (parsed.from === HEAD_PULSE_TARGET) {
+      const type = parsed.msg?.type;
+      if (parsed.msg && typeof type === 'string' && HEAD_CONTROL_TYPES.has(type)) {
+        this.handleMessage(parsed.msg);
+      } else {
+        logger.warn({ type }, 'Dropped non-control message in head pulse wrapper');
+      }
       return;
     }
+    const sender = parsed.src ?? fragmentSender;
     try {
       const decryptStart = process.hrtime.bigint();
       const { blob, keys } = parsed as { blob: string; keys: Record<string, string> };
@@ -3672,6 +3803,17 @@ export class RelayClient {
         this.keyManager.getKeyPair().privateKey,
       );
       const inner = JSON.parse(decrypted) as ConsumerMessage;
+      // The head stamps the authenticated sender (`src`). The deviceId inside
+      // the encrypted message is chosen by the sender, so it must match.
+      if (sender !== undefined) {
+        const claimed = (inner as { deviceId?: unknown }).deviceId;
+        if (typeof claimed === 'string' && claimed !== '' && claimed !== sender) {
+          logger.warn({ src: sender, claimed, type: (inner as { type?: string }).type }, 'Dropped consumer message whose deviceId does not match its sender');
+          return;
+        }
+        // Replies and per-app state key off deviceId: use the verified sender.
+        (inner as { deviceId?: string }).deviceId = sender;
+      }
       traceLog.info({
         ns: process.hrtime.bigint().toString(),
         comp: 'tentacle',
@@ -3893,6 +4035,34 @@ export class RelayClient {
     });
   }
 
+  /** Set by the daemon when remote update is wired (remote-update.ts). */
+  onUpdateRequest: ((requestId: string, when?: 'now' | 'idle') => Promise<void>) | null = null;
+
+  /** Progress/outcome of a remote update, to every online app. */
+  sendUpdateStatus(payload: { phase: DeviceUpdatePhase; requestId?: string; from?: string; to?: string; progress?: number; runningSessions?: number; error?: string }): void {
+    if (this.state !== 'connected') return;
+    this.sendEncrypted({
+      type: 'device_update_status',
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload,
+    } as ProducerMessage);
+  }
+
+  /** Sessions with a turn running right now (asked before an update). */
+  runningSessionCount(): number {
+    return this.sessionManager.getSessionList({ all: true }).filter((s) => s.state === 'active').length;
+  }
+
+  private updateInfo: DeviceUpdateInfo | null = null;
+  get currentUpdateInfo(): DeviceUpdateInfo | null { return this.updateInfo; }
+  /** Latest answer to "is a newer Kraki available here" (update-status.ts); re-greets apps. */
+  setUpdateInfo(info: DeviceUpdateInfo): void {
+    this.updateInfo = info;
+    if (this.state === 'connected') this.sendGreetingBroadcast();
+  }
+
   /** Replace the advertised agent capabilities (e.g. a model list that was
    *  unavailable at startup) and re-greet connected apps. Apps replace a
    *  device's agents on every greeting, so no new message type is needed; the
@@ -3925,6 +4095,7 @@ export class RelayClient {
       version: this.options.version,
       features: ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE, ...(this.accountUsageEnabled ? ['account_usage'] : []),
         ...(this.accountUsageEnabled && this.accountUsageRefresher ? ['account_usage_refresh'] : [])],
+      ...(this.updateInfo ? { update: this.updateInfo } : {}),
     };
   }
 

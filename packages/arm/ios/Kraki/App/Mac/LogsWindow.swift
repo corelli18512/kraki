@@ -88,13 +88,32 @@ struct LogsWindow: View {
         }
     }
 
+    /// Most of a log the window shows; older lines are in the file.
+    private static let maxShownBytes: UInt64 = 512 * 1024
+
     private func reload() async {
         guard let url = selectedFile else {
             await MainActor.run { contents = "" }
             return
         }
-        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        await MainActor.run { contents = text }
+        // Read only the tail, off the main thread: daemon logs grow to many
+        // MB and Follow reloads every second.
+        let text = await Task.detached(priority: .utility) { Self.tail(of: url) }.value
+        await MainActor.run { if contents != text { contents = text } }
+    }
+
+    private static func tail(of url: URL) -> String {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return "" }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        let start = size > maxShownBytes ? size - maxShownBytes : 0
+        try? handle.seek(toOffset: start)
+        let data = (try? handle.readToEnd()) ?? Data()
+        var text = String(decoding: data, as: UTF8.self)
+        if start > 0, let firstNewline = text.firstIndex(of: "\n") {
+            text = "… (showing the end of the log)\n" + text[text.index(after: firstNewline)...]
+        }
+        return text
     }
 
     private func startPollingIfNeeded() {

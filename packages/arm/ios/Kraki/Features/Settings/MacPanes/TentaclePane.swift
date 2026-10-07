@@ -33,12 +33,24 @@ struct TentaclePane: View {
                 }
             }
 
-            Section("Background Service") {
+            Section("Online") {
                 daemonContent
                 if tentacleCLI.mode == .external {
                     Toggle("Start the background service when Kraki opens", isOn: $autostart)
                 } else {
-                    Text("Runs in the background and starts when you log in. You can also turn it off in System Settings → General → Login Items.")
+                    Text("While this Mac is online, your phone and other computers can use its agents, even with the Kraki window closed. Quitting Kraki takes it offline; opening Kraki brings it back.")
+                        .font(.caption)
+                        .foregroundStyle(Color.textSecondary)
+                }
+            }
+
+            if tentacleCLI.configInfo?.exists == true {
+                Section("Updates") {
+                    Toggle("Let my other devices update Kraki on this Mac", isOn: Binding(
+                        get: { tentacleCLI.configInfo?.remoteUpdate ?? true },
+                        set: { on in Task { await tentacleCLI.setRemoteUpdate(on) } }
+                    ))
+                    Text("From your phone or another computer, you can update Kraki here when a new version is out. Kraki restarts for a few seconds; running sessions are only stopped if you choose to.")
                         .font(.caption)
                         .foregroundStyle(Color.textSecondary)
                 }
@@ -162,18 +174,18 @@ struct TentaclePane: View {
             ProgressView("Checking…").controlSize(.small)
         case .stopped:
             HStack {
-                Label("Stopped", systemImage: "moon.zzz.fill")
+                Label("Offline", systemImage: "moon.zzz.fill")
                     .foregroundStyle(Color.textMuted)
                 Spacer()
-                Button("Start") { Task { await tentacleCLI.startDaemon() } }
+                Button("Go Online") { Task { await tentacleCLI.goOnline() } }
                     .buttonStyle(.borderedProminent)
                     .tint(Color.krakiPrimary)
                     .disabled(!tentacleCLI.canStartDaemon)
             }
         case .starting:
-            ProgressView("Starting…").controlSize(.small)
+            ProgressView("Going online…").controlSize(.small)
         case .stopping:
-            ProgressView("Stopping…").controlSize(.small)
+            ProgressView("Going offline…").controlSize(.small)
         case .needsApproval:
             VStack(alignment: .leading, spacing: 6) {
                 Label("Turned off in Login Items", systemImage: "exclamationmark.circle.fill")
@@ -185,11 +197,12 @@ struct TentaclePane: View {
             }
         case .running(let pid):
             HStack {
-                Label("Running (pid \(String(pid)))", systemImage: "circle.fill")
+                Label("Online", systemImage: "circle.fill")
                     .foregroundStyle(Color(hex: 0x34D399))
+                    .help("Background service pid \(String(pid))")
                 Spacer()
-                Button("Stop") { Task { await tentacleCLI.stopDaemon() } }
-                Button("Restart") { Task { await tentacleCLI.restartDaemon() } }
+                Button("Go Offline") { Task { await tentacleCLI.goOffline() } }
+                Button("Reconnect") { Task { await tentacleCLI.restartDaemon() } }
             }
         case .error(let msg):
             VStack(alignment: .leading, spacing: 4) {

@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import type { DeviceSummary, AgentCapabilities } from '@kraki/protocol';
+import { displayVersion } from '../../lib/device-update';
+import { DeviceUpdateBox } from './DeviceUpdateBox';
 
 function formatDate(iso?: string): string {
   if (!iso) return '—';
@@ -30,6 +32,10 @@ export function DevicePanel({
   onSelectSession: (id: string) => void;
   onClose: () => void;
 }) {
+  const deviceUpdates = useStore((s) => s.deviceUpdates);
+  const deviceVersions = useStore((s) => s.deviceVersions);
+  const shownVersion = displayVersion(device.id, deviceUpdates, deviceVersions) ?? version;
+
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [showTooltip, setShowTooltip] = useState(false);
   const sessions = useStore((s) => s.sessions);
@@ -107,13 +113,15 @@ export function DevicePanel({
             <span className="text-text-muted">Last online</span>
             <span className="text-text-secondary">{device.online ? 'Now' : formatDate(device.lastSeen)}</span>
           </div>
-          {version && (
+          {shownVersion && (
             <div className="flex justify-between text-[11px]">
               <span className="text-text-muted">Version</span>
-              <span className="text-text-secondary">{version}</span>
+              <span className="text-text-secondary">{shownVersion}</span>
             </div>
           )}
         </div>
+
+        <DeviceUpdateBox device={device} />
 
         {/* Agents & Models */}
         {agents && agents.length > 0 ? (

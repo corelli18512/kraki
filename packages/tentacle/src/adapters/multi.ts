@@ -23,6 +23,7 @@ import {
   type PermissionDecision,
   type QuestionAnswer,
   type QuestionResponseResult,
+  type PermissionResponseResult,
   type SendMessageOptions,
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
@@ -142,7 +143,7 @@ export interface MultiAgentAdapterOptions {
   /** Passed through to sub-adapters that need it. */
   attachmentStore?: import('../attachment-store.js').AttachmentStore;
   /** Kraki MCP server info (optional). */
-  krakiMcp?: { urlForSession: (sid: string) => string; bearerToken: string };
+  krakiMcp?: { urlForSession: (sid: string) => string; tokenForSession: (sessionId: string) => string };
 }
 
 /**
@@ -218,29 +219,63 @@ export class MultiAgentAdapter extends AgentAdapter {
     // Start agents in parallel: each one spawns its CLI and lists models, and
     // the sum easily exceeded the daemon's readiness window on a cold machine.
     // Insert in detection order so the default agent stays deterministic.
-    const started = await Promise.all(ids.map(async (id) => {
-      try {
-        const adapter = await createAgentAdapter(id, adapterOpts);
-        if (!adapter) return null;
-        this.wireCallbacks(id, adapter);
-        await adapter.start();
-        logger.info({ id }, 'Agent adapter started');
-        return [id, adapter] as const;
-      } catch (err) {
-        logger.warn({ id, err: (err as Error).message }, 'Agent adapter failed to start — skipping');
-        return null;
-      }
-    }));
-    for (const entry of started) if (entry) this.adapters.set(entry[0], entry[1]);
+    const started = await Promise.all(ids.map((id) => this.startAgent(id, adapterOpts)));
+    started.forEach((ok, i) => { if (!ok) this.failedAgentIds.add(ids[i]); });
 
     if (this.adapters.size === 0) {
-      throw new Error('All agent adapters failed to start.');
+      logger.warn({ agents: ids }, 'No agent adapter started yet; retrying in the background');
+    } else {
+      logger.info({ agents: [...this.adapters.keys()] }, 'Multi-agent adapter ready');
     }
+    if (this.failedAgentIds.size > 0) this.scheduleAgentRetry(adapterOpts, 60_000);
+  }
 
-    logger.info({ agents: [...this.adapters.keys()] }, 'Multi-agent adapter ready');
+  /** Agents that were detected but failed to start (e.g. signed out). */
+  private failedAgentIds = new Set<AgentId>();
+  private agentRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  private stopped = false;
+
+  private async startAgent(id: AgentId, adapterOpts: Parameters<typeof createAgentAdapter>[1]): Promise<boolean> {
+    try {
+      const adapter = await createAgentAdapter(id, adapterOpts);
+      if (!adapter) return false;
+      this.wireCallbacks(id, adapter);
+      await adapter.start();
+      if (this.stopped) { await adapter.stop().catch(() => {}); return false; }
+      this.adapters.set(id, adapter);
+      logger.info({ id }, 'Agent adapter started');
+      return true;
+    } catch (err) {
+      logger.warn({ id, err: (err as Error).message }, 'Agent adapter failed to start');
+      return false;
+    }
+  }
+
+  /**
+   * Keep retrying agents that failed at startup (a user who signs in to Claude
+   * after the daemon started should not need to restart it). Backs off to
+   * 15 minutes; apps are re-greeted when an agent comes up.
+   */
+  private scheduleAgentRetry(adapterOpts: Parameters<typeof createAgentAdapter>[1], delayMs: number): void {
+    if (this.stopped) return;
+    this.agentRetryTimer = setTimeout(async () => {
+      this.agentRetryTimer = undefined;
+      let recovered = false;
+      for (const id of [...this.failedAgentIds]) {
+        if (await this.startAgent(id, adapterOpts)) {
+          this.failedAgentIds.delete(id);
+          recovered = true;
+        }
+      }
+      if (recovered) this.onCapabilitiesChanged?.();
+      if (this.failedAgentIds.size > 0) this.scheduleAgentRetry(adapterOpts, Math.min(delayMs * 2, 15 * 60_000));
+    }, delayMs);
+    this.agentRetryTimer.unref?.();
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
+    if (this.agentRetryTimer) clearTimeout(this.agentRetryTimer);
     const stops = [...this.adapters.entries()].map(async ([id, adapter]) => {
       try {
         await adapter.stop();
@@ -328,7 +363,7 @@ export class MultiAgentAdapter extends AgentAdapter {
     return this.getSessionAdapter(sessionId).sendMessage(sessionId, text, attachments, options);
   }
 
-  async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision, reason?: string): Promise<void> {
+  async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision, reason?: string): Promise<PermissionResponseResult> {
     return reason
       ? this.getSessionAdapter(sessionId).respondToPermission(sessionId, permissionId, decision, reason)
       : this.getSessionAdapter(sessionId).respondToPermission(sessionId, permissionId, decision);
@@ -385,10 +420,11 @@ export class MultiAgentAdapter extends AgentAdapter {
     return adapter.generateTitle(sessionId, context);
   }
 
+  /** Record a session's agent even when that agent is not running now: the
+   *  session must then fail with "not available", never fall back to another
+   *  agent (and it routes correctly once the agent starts). */
   override registerSessionAgent(sessionId: string, agentId: string): void {
-    if (this.adapters.has(agentId as AgentId)) {
-      this.sessionAgent.set(sessionId, agentId as AgentId);
-    }
+    if (agentId) this.sessionAgent.set(sessionId, agentId as AgentId);
   }
 
   // ── Internal helpers ────────────────────────────────
@@ -398,32 +434,36 @@ export class MultiAgentAdapter extends AgentAdapter {
   }
 
   private getSessionAdapter(sessionId: string): AgentAdapter {
-    const agentId = this.sessionAgent.get(sessionId);
-    if (agentId) {
-      const adapter = this.adapters.get(agentId);
-      if (adapter) return adapter;
-    }
-    // Fallback: try first adapter (session might have been created before multi-adapter)
-    logger.warn({ sessionId }, 'No agent mapping for session, falling back to first adapter');
-    for (const adapter of this.adapters.values()) {
-      return adapter;
-    }
-    throw new Error(`No adapter available for session ${sessionId}`);
+    return this.adapterForSession(sessionId);
   }
 
   /** Resolve adapter for resume — uses pre-registered mapping or falls back. */
   private resolveAdapter(sessionId: string, _context?: SessionContext): AgentAdapter {
-    // If we already know the mapping (via registerSessionAgent or prior create), use it
-    const known = this.sessionAgent.get(sessionId);
-    if (known) {
-      const adapter = this.adapters.get(known);
-      if (adapter) return adapter;
-    }
+    const adapter = this.adapterForSession(sessionId);
+    if (!this.sessionAgent.has(sessionId)) this.sessionAgent.set(sessionId, this.agentIdFor(adapter));
+    return adapter;
+  }
 
-    // Fallback to first adapter
-    const fallback = this.defaultAgentId();
-    this.sessionAgent.set(sessionId, fallback);
-    return this.adapters.get(fallback)!;
+  /**
+   * The adapter that owns a session. A session whose agent is not running on
+   * this computer (e.g. Claude Code is signed out) must fail with that reason —
+   * routing it to another agent would resume or send into a foreign session.
+   * Only sessions with no recorded agent (created before multi-agent support,
+   * all Copilot) fall back to Copilot.
+   */
+  private adapterForSession(sessionId: string): AgentAdapter {
+    const agentId = this.sessionAgent.get(sessionId);
+    if (agentId) {
+      const adapter = this.adapters.get(agentId);
+      if (adapter) return adapter;
+      throw new Error(`${agentLabel(agentId)} is not available on this computer`);
+    }
+    const legacy = this.adapters.get('copilot');
+    if (legacy) {
+      logger.warn({ sessionId }, 'No agent mapping for session; treating it as a legacy Copilot session');
+      return legacy;
+    }
+    throw new Error(`No agent is recorded for session ${sessionId}`);
   }
 
   private agentIdFor(adapter: AgentAdapter): AgentId {
@@ -450,7 +490,6 @@ export class MultiAgentAdapter extends AgentAdapter {
     adapter.onQuestionRequest = (sid, e) => this.onQuestionRequest?.(sid, e);
     adapter.onToolStart = (sid, e) => this.onToolStart?.(sid, e);
     adapter.onToolComplete = (sid, e) => this.onToolComplete?.(sid, e);
-    adapter.onAttachmentBytes = (sid, e) => this.onAttachmentBytes?.(sid, e);
     adapter.onIdle = (sid, e) => this.onIdle?.(sid, e);
     adapter.onFlushComplete = (sid) => this.onFlushComplete?.(sid);
     adapter.onError = (sid, e) => this.onError?.(sid, e);
@@ -480,3 +519,8 @@ export class MultiAgentAdapter extends AgentAdapter {
     return this.getSessionAdapter(sessionId).isTurnSettled(sessionId);
   }
 }
+
+function agentLabel(agentId: string): string {
+  return ({ claude: 'Claude Code', copilot: 'GitHub Copilot', codex: 'Codex', pi: 'Pi' } as Record<string, string>)[agentId] ?? agentId;
+}
+

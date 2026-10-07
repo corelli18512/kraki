@@ -32,7 +32,9 @@ beforeEach(() => {
   claude = new ClaudeAdapter();
   sdk.query.mockReset().mockImplementation(() => ({
     supportedModels: async () => [{ value: 'sonnet', displayName: 'Sonnet' }],
-    [Symbol.asyncIterator]: async function* () {},
+    // A live Claude Code query streams until its process exits; a normal end
+    // means the process is gone (and the adapter evicts the session).
+    [Symbol.asyncIterator]: async function* () { await new Promise(() => {}); },
   }));
 });
 

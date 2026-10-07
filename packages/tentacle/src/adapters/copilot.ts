@@ -33,6 +33,7 @@ import { dirname, join, basename } from 'node:path';
 import { getKrakiHome } from '../config.js';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isSea } from 'node:sea';
+import { linkIntoShadow } from './shadow-link.js';
 import {
   AgentAdapter,
   type CreateSessionConfig,
@@ -40,6 +41,7 @@ import {
   type PermissionDecision,
   type QuestionAnswer,
   type QuestionResponseResult,
+  type PermissionResponseResult,
   type SendMessageOptions,
 } from './base.js';
 import { parsePermission } from '../parse-permission.js';
@@ -283,16 +285,11 @@ function getCopilotConfigDir(): string {
     try {
       for (const entry of readdirSync(realCopilotDir)) {
         if (entry.startsWith('permissions-config')) continue;
-        const src = join(realCopilotDir, entry);
-        const dest = join(shadowDir, entry);
-        try {
-          // Remove stale symlink / file (lstatSync doesn't follow symlinks)
-          lstatSync(dest);
-          unlinkSync(dest);
-        } catch { /* dest doesn't exist */ }
-        try {
-          symlinkSync(src, dest);
-        } catch { /* best effort */ }
+        // Junction/hard-link fallback on Windows without Developer Mode,
+        // where a plain symlink fails and the user's config would vanish.
+        if (!linkIntoShadow(join(realCopilotDir, entry), join(shadowDir, entry))) {
+          logger.warn({ entry }, 'Could not share a Copilot config entry with Kraki sessions');
+        }
       }
     } catch (err) {
       logger.warn(`Failed to set up shadow copilot config: ${(err as Error).message}`);
@@ -307,43 +304,7 @@ function getCopilotConfigDir(): string {
   return shadowDir;
 }
 
-export function patchCopilotSdkSessionImport(currentUrl: string = getRuntimeUrl()): boolean {
-  const sessionPath = resolveCopilotSdkSessionPath(currentUrl);
-  if (!sessionPath) {
-    return false;
-  }
-  const source = readFileSync(sessionPath, 'utf8');
-  const patched = source.replace(
-    /from ['"]vscode-jsonrpc\/node['"]/g,
-    `from "${VSCODE_JSONRPC_NODE_JS_SPECIFIER}"`,
-  );
-
-  if (patched === source) {
-    return false;
-  }
-
-  writeFileSync(sessionPath, patched, 'utf8');
-  return true;
-}
-
-export function resolveCopilotSdkSessionPath(currentUrl: string = getRuntimeUrl()): string | null {
-  let dir = dirname(fileURLToPath(currentUrl));
-
-  while (true) {
-    const candidate = join(dir, 'node_modules', '@github', 'copilot-sdk', 'dist', 'session.js');
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-
-    const parent = dirname(dir);
-    if (parent === dir) {
-      return null;
-    }
-    dir = parent;
-  }
-}
-
-export function installCopilotSdkImportCompatibility(currentUrl: string = getRuntimeUrl()): 'hook' | 'patch' | null {
+export function installCopilotSdkImportCompatibility(currentUrl: string = getRuntimeUrl()): 'hook' | null {
   if (typeof moduleCompat.registerHooks === 'function') {
     moduleCompat.registerHooks({
       resolve(specifier, context, nextResolve) {
@@ -364,14 +325,8 @@ export function installCopilotSdkImportCompatibility(currentUrl: string = getRun
     return 'hook';
   }
 
-  if (isSea()) {
-    return null;
-  }
-
-  if (patchCopilotSdkSessionImport(currentUrl)) {
-    return 'patch';
-  }
-
+  // Node ≥ 22.19 (our engines floor) always has a module hook API, so the
+  // SDK file is never rewritten on disk.
   return null;
 }
 
@@ -415,6 +370,11 @@ export class CopilotAdapter extends AgentAdapter {
   private sessionUsage = new Map<string, import('@kraki/protocol').SessionUsage>();
   /** Track tool start args by toolCallId for correlating with tool_complete */
   private pendingToolArgs = new Map<string, Record<string, unknown>>();
+  /** Subagents by the toolCallId of the task call that dispatched them. */
+  private subagents = new Map<string, import('@kraki/protocol').SubagentInfo>();
+  /** A subagent's latest prose, held until a further step shows it was
+   *  narration (its final words are its report = the task's result). */
+  private subagentDrafts = new Map<string, { sessionId: string; text: string }>();
   /**
    * Tool identity captured at tool.execution_start, keyed by toolCallId.
    * The Copilot SDK omits these fields from tool.execution_complete events —
@@ -512,7 +472,7 @@ export class CopilotAdapter extends AgentAdapter {
      *  session it creates/resumes, with the URL scoped per Kraki sessionId. */
     krakiMcp?: {
       urlForSession: (sessionId: string) => string;
-      bearerToken: string;
+      tokenForSession: (sessionId: string) => string;
     };
   } = {}) {
     super();
@@ -571,7 +531,7 @@ export class CopilotAdapter extends AgentAdapter {
   private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
   private readonly krakiMcp?: {
     urlForSession: (sessionId: string) => string;
-    bearerToken: string;
+    tokenForSession: (sessionId: string) => string;
   };
 
   /** System prompt appended to the SDK's built-in prompt. See system-prompt.md for docs. */
@@ -969,7 +929,7 @@ export class CopilotAdapter extends AgentAdapter {
       const krakiEntry: MCPServerConfig = {
         type: 'http' as const,
         url: this.krakiMcp.urlForSession(config.sessionId),
-        headers: { Authorization: `Bearer ${this.krakiMcp.bearerToken}` },
+        headers: { Authorization: `Bearer ${this.krakiMcp.tokenForSession(config.sessionId)}` },
         tools: ['*'],
       } as MCPServerConfig;
       mcpServers = { ...(mcpServers ?? {}), kraki: krakiEntry };
@@ -1097,15 +1057,24 @@ export class CopilotAdapter extends AgentAdapter {
         : tmpdir();
       const sdkAttachments: Array<{ type: 'file'; path: string; displayName?: string }> = [];
       for (const att of attachments) {
+        // Images arrive inline (base64) or, from current apps, as a content_ref
+        // into the AttachmentStore (as Claude/Codex already read them).
+        let bytes: Buffer | undefined;
+        let mimeType = att.mimeType;
         if (att.type === 'image') {
-          const ext = att.mimeType === 'image/png' ? '.png' : att.mimeType === 'image/webp' ? '.webp' : '.jpg';
-          const fileName = `kraki-img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
-          const filePath = join(sdkFilesDir, fileName);
-          mkdirSync(sdkFilesDir, { recursive: true });
-          writeFileSync(filePath, Buffer.from(att.data, 'base64'));
-          if (!entry) tempFiles.push(filePath);
-          sdkAttachments.push({ type: 'file' as const, path: filePath, displayName: fileName });
+          bytes = Buffer.from(att.data, 'base64');
+        } else if (att.type === 'content_ref' && this.attachmentStore) {
+          const hit = this.attachmentStore.read(sessionId, att.id);
+          if (hit) { bytes = hit.bytes; mimeType = hit.meta.mimeType ?? mimeType; }
         }
+        if (!bytes || !/^image\//.test(mimeType)) continue;
+        const ext = mimeType === 'image/png' ? '.png' : mimeType === 'image/webp' ? '.webp' : mimeType === 'image/gif' ? '.gif' : '.jpg';
+        const fileName = `kraki-img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+        const filePath = join(sdkFilesDir, fileName);
+        mkdirSync(sdkFilesDir, { recursive: true });
+        writeFileSync(filePath, bytes);
+        if (!entry) tempFiles.push(filePath);
+        sdkAttachments.push({ type: 'file' as const, path: filePath, displayName: fileName });
       }
       if (sdkAttachments.length) opts.attachments = sdkAttachments as MessageOptions['attachments'];
     }
@@ -1183,16 +1152,16 @@ export class CopilotAdapter extends AgentAdapter {
     permissionId: string,
     decision: PermissionDecision,
     reason?: string,
-  ): Promise<void> {
+  ): Promise<PermissionResponseResult> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       logger.warn(`respondToPermission: session not found: ${sessionId}`);
-      return;
+      return 'session_gone';
     }
     const pending = entry.pendingPermissions.get(permissionId);
     if (!pending) {
       logger.warn(`respondToPermission: no pending permission: ${permissionId} (already resolved or timed out)`);
-      return;
+      return 'not_found';
     }
 
     // For always_allow: add tool kind to session-scope allow set
@@ -1227,6 +1196,7 @@ export class CopilotAdapter extends AgentAdapter {
     entry.pendingPermissions.delete(permissionId);
     this.touchSession(sessionId);
     logger.debug({ permissionId, sessionId, decision }, 'permission resolved');
+    return 'accepted';
   }
 
   async respondToQuestion(
@@ -1500,7 +1470,7 @@ export class CopilotAdapter extends AgentAdapter {
       const krakiEntry: MCPServerConfig = {
         type: 'http' as const,
         url: this.krakiMcp.urlForSession(sessionId),
-        headers: { Authorization: `Bearer ${this.krakiMcp.bearerToken}` },
+        headers: { Authorization: `Bearer ${this.krakiMcp.tokenForSession(sessionId)}` },
         tools: ['*'],
       } as MCPServerConfig;
       mcpServers = { ...(mcpServers ?? {}), kraki: krakiEntry };
@@ -1649,13 +1619,55 @@ export class CopilotAdapter extends AgentAdapter {
       this.turnErrorReported.set(sessionId, false);
     }
 
+    // Events from a subagent (task tool) carry a top-level `agentId`; the root
+    // agent's never do. A subagent's prose, turn boundaries and errors are its
+    // own — it reports back through the task tool's result — so they must not
+    // reach the parent's reply or turn state. Its tool calls still show as steps.
+    const fromSubagent = (event: unknown) => !!(event as { agentId?: string }).agentId;
+    // The subagent instance id is the toolCallId of the task call that started it.
+    const parentOf = (event: unknown): string | undefined => {
+      const e = event as { agentId?: string; data?: { parentToolCallId?: string } };
+      return e.agentId || e.data?.parentToolCallId || undefined;
+    };
+
+    // Subagent lifecycle: name the dispatching task step and track its status.
+    const subagentEvent = (status: 'running' | 'completed' | 'failed') => (event: unknown) => {
+      const d = (event as { data?: Record<string, unknown> }).data ?? {};
+      const id = typeof d.toolCallId === 'string' ? d.toolCallId : '';
+      if (!id) return;
+      const prev = this.subagents.get(id);
+      const name = (typeof d.agentDisplayName === 'string' && d.agentDisplayName)
+        || (typeof d.agentName === 'string' && d.agentName) || prev?.name || 'subagent';
+      this.subagents.set(id, {
+        ...prev,
+        name: prev?.name ?? name,
+        status,
+        ...(typeof d.totalTokens === 'number' && { tokens: d.totalTokens }),
+        ...(typeof d.totalToolCalls === 'number' && { toolCount: d.totalToolCalls }),
+        ...(typeof d.durationMs === 'number' && { durationMs: d.durationMs }),
+      });
+    };
+    session.on('subagent.started' as never, subagentEvent('running') as never);
+    session.on('subagent.completed' as never, subagentEvent('completed') as never);
+    session.on('subagent.failed' as never, subagentEvent('failed') as never);
+
     session.on('assistant.message_delta', (event) => {
+      if (fromSubagent(event)) return;
       this.onMessageDelta?.(sessionId, { content: event.data.deltaContent, ...this.lifecycleEvent(sessionId) });
     });
 
     session.on('assistant.message', (event) => {
+      // A subagent's prose is shown in its own steps, never in the reply.
+      if (event.data.content && fromSubagent(event)) {
+        const owner = parentOf(event);
+        if (owner) {
+          const prev = this.subagentDrafts.get(owner)?.text;
+          this.subagentDrafts.set(owner, { sessionId, text: prev ? `${prev}\n${event.data.content}` : event.data.content });
+        }
+        return;
+      }
       // Skip empty messages (SDK sends these before tool calls)
-      if (event.data.content) {
+      if (event.data.content && !fromSubagent(event)) {
         this.turnHasOutput.set(sessionId, true);
         this.touchSession(sessionId);
         // Draft-bubble model: buffer prose instead of graduating each message
@@ -1672,7 +1684,8 @@ export class CopilotAdapter extends AgentAdapter {
       // report_intent is a UI hint only — drop it from the message stream.
       if (data.toolName === 'report_intent') return;
       // A tool follows any buffered prose → that prose was narration.
-      this.flushNarration(sessionId);
+      // A subagent's tool says nothing about the parent's draft.
+      if (!fromSubagent(event)) this.flushNarration(sessionId);
       this.turnHasOutput.set(sessionId, true);
       this.touchSession(sessionId);
       if (data.mcpServerName) {
@@ -1701,11 +1714,26 @@ export class CopilotAdapter extends AgentAdapter {
         data.mcpServerName as string | undefined,
         data.mcpToolName as string | undefined,
       );
+      // A task call that started a subagent (subagent.started precedes it).
+      let subagent = toolCallId ? this.subagents.get(toolCallId) : undefined;
+      if (toolCallId && (subagent || data.toolName === 'task')) {
+        const task = typeof args.description === 'string' ? args.description : undefined;
+        subagent = { name: subagent?.name ?? (typeof args.agent_type === 'string' ? args.agent_type : 'subagent'), ...subagent, ...(task && { task }), status: 'running' };
+        this.subagents.set(toolCallId, subagent);
+      }
+      const parentToolCallId = parentOf(event);
+      const draft = parentToolCallId ? this.subagentDrafts.get(parentToolCallId) : undefined;
+      if (parentToolCallId && draft) {
+        this.subagentDrafts.delete(parentToolCallId);
+        this.onNarrationTrace?.(sessionId, { content: draft.text, parentToolCallId, ...this.lifecycleEvent(sessionId) });
+      }
       this.onToolStart?.(sessionId, {
         ...this.lifecycleEvent(sessionId),
         toolName: protocolToolName,
         args,
         toolCallId,
+        ...(parentToolCallId && { parentToolCallId }),
+        ...(subagent && { subagent }),
       });
     });
 
@@ -1786,6 +1814,13 @@ export class CopilotAdapter extends AgentAdapter {
       // Clean up tracked state for this tool call
       clearInflight();
 
+      let subagent = toolCallId ? this.subagents.get(toolCallId) : undefined;
+      if (toolCallId) this.subagentDrafts.delete(toolCallId);
+      if (subagent && toolCallId) {
+        if (subagent.status === 'running') subagent = { ...subagent, status: data.success === false ? 'failed' : 'completed' };
+        this.subagents.delete(toolCallId);
+      }
+      const parentToolCallId = parentOf(event);
       this.onToolComplete?.(sessionId, {
         ...this.lifecycleEvent(sessionId),
         toolName,
@@ -1793,18 +1828,9 @@ export class CopilotAdapter extends AgentAdapter {
         toolCallId,
         success: data.success as boolean | undefined,
         attachments,
+        ...(parentToolCallId && { parentToolCallId }),
+        ...(subagent && { subagent }),
       });
-
-      // After tool_complete, fire the bytes broadcast event so RelayClient
-      // can stream attachment_data chunks to all connected devices.
-      if (attachments && attachments.length > 0) {
-        const refs = attachments.filter(
-          (a): a is import('@kraki/protocol').ContentRef => a.type === 'content_ref',
-        );
-        if (refs.length > 0) {
-          this.onAttachmentBytes?.(sessionId, { refs, ...this.lifecycleEvent(sessionId) });
-        }
-      }
     });
 
     session.on('session.idle', () => {
@@ -1835,7 +1861,8 @@ export class CopilotAdapter extends AgentAdapter {
       else finish();
     });
 
-    session.on('assistant.turn_start', () => {
+    session.on('assistant.turn_start', (event) => {
+      if (fromSubagent(event)) return;
       const entry = this.sessions.get(sessionId);
       if (entry) entry.eventTurnId = entry.relayTurnId;
       this.turnHasOutput.set(sessionId, false);
@@ -1850,7 +1877,9 @@ export class CopilotAdapter extends AgentAdapter {
       const data = event.data as unknown as Record<string, unknown>;
       const message = (data.message as string) ?? 'Unknown session error';
       const errorType = data.errorType as string | undefined;
-      logger.error({ sessionId, errorType, statusCode: data.statusCode }, `session.error: ${message}`);
+      logger.error({ sessionId, errorType, statusCode: data.statusCode, agentId: (event as { agentId?: string }).agentId }, `session.error: ${message}`);
+      // A subagent's failure reaches the parent as the task tool's result.
+      if (fromSubagent(event)) return;
       if (!this.turnErrorReported.get(sessionId)) {
         this.turnErrorReported.set(sessionId, true);
         const status = typeof data.statusCode === 'number' ? data.statusCode : undefined;
@@ -1901,6 +1930,11 @@ export class CopilotAdapter extends AgentAdapter {
     session.on('assistant.turn_end', async (event) => {
       const data = event.data as unknown as Record<string, unknown>;
       const reason = data?.reason;
+      if (fromSubagent(event)) {
+        // The parent sees the failure as the task tool's result.
+        if (reason === 'error') logger.warn({ sessionId, agentId: (event as { agentId?: string }).agentId, error: data?.error }, 'Copilot subagent turn ended with error');
+        return;
+      }
       if (reason === 'error') {
         const errorMsg = (data?.error as string) ?? 'Unknown agent error';
         this.turnErrorReported.set(sessionId, true);
@@ -1924,6 +1958,12 @@ export class CopilotAdapter extends AgentAdapter {
 
     session.on('assistant.usage', (event) => {
       const data = event.data as unknown as Record<string, unknown>;
+      const owner = fromSubagent(event) ? parentOf(event) : undefined;
+      const sub = owner ? this.subagents.get(owner) : undefined;
+      if (owner && sub) {
+        const used = ((data.inputTokens as number) ?? 0) + ((data.outputTokens as number) ?? 0);
+        this.subagents.set(owner, { ...sub, tokens: (sub.tokens ?? 0) + used });
+      }
       const prev = this.sessionUsage.get(sessionId) ?? {
         inputTokens: 0, outputTokens: 0,
         cacheReadTokens: 0, cacheWriteTokens: 0,
@@ -1936,7 +1976,8 @@ export class CopilotAdapter extends AgentAdapter {
         cacheWriteTokens: prev.cacheWriteTokens + ((data.cacheWriteTokens as number) ?? 0),
         totalCost: prev.totalCost + ((data.cost as number) ?? 0),
         totalDurationMs: prev.totalDurationMs + ((data.duration as number) ?? 0),
-        contextTokens: (data.inputTokens as number) ?? prev.contextTokens,
+        // A subagent's prompt is its own window, not the parent's.
+        contextTokens: fromSubagent(event) ? prev.contextTokens : (data.inputTokens as number) ?? prev.contextTokens,
       };
       this.sessionUsage.set(sessionId, updated);
       this.onUsageUpdate?.(sessionId, updated);

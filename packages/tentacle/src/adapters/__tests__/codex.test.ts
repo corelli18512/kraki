@@ -45,7 +45,6 @@ class Harness {
     a.onQuestionAutoResolved = (sid, id) => this.events.push({ type: 'q_auto', sid, id });
     a.onToolStart = push('tool_start');
     a.onToolComplete = push('tool_complete');
-    a.onAttachmentBytes = push('attachment_bytes');
     a.onIdle = push('idle');
     a.onError = push('error');
     a.onCompaction = push('compaction');
@@ -195,6 +194,59 @@ describe('CodexAdapter (fake app-server child process)', () => {
     expect(h.of('message')[0].content).toBe('shell decision: accept');
   });
 
+  it('subagent approvals are owned by the parent session; auto mode accepts them', async () => {
+    await started();
+    const sid = await session('auto');
+    await turn(sid, 'SUBAGENT', 'rt-1');
+    await h.idleCount(1);
+    expect(h.of('permission')).toHaveLength(0);
+    expect(h.replies().some((r) => r.result!.decision === 'accept')).toBe(true);
+    // The child's own reply and turn end never reach the parent session.
+    expect(h.of('message').map((e) => e.content)).toEqual(['subagent decision: accept']);
+    expect(h.of('delta').some((e) => String(e.content).includes('CHILD'))).toBe(false);
+    expect(h.of('idle')).toHaveLength(1);
+    expect(h.of('error')).toHaveLength(0);
+  });
+
+  it('subagent steps nest under a dispatch step that completes with the report', async () => {
+    await started();
+    const sid = await session('auto');
+    await turn(sid, 'SUBAGENT', 'rt-1');
+    await h.idleCount(1);
+    const dispatch = h.of('tool_start').find((e) => e.toolName === 'spawn_agent')!;
+    expect(dispatch).toMatchObject({ args: { agent: 'find_codeword' }, subagent: { name: 'find_codeword', status: 'running' }, turnId: 'rt-1' });
+    expect(dispatch.parentToolCallId).toBeUndefined();
+    const id = dispatch.toolCallId as string;
+    expect(h.of('tool_start').find((e) => e.toolName === 'shell')).toMatchObject({ parentToolCallId: id, args: { command: 'rg -n CODEWORD .' } });
+    expect(h.of('tool_complete').find((e) => e.toolName === 'shell')).toMatchObject({ parentToolCallId: id, success: true });
+    expect(h.of('tool_complete').find((e) => e.toolCallId === id)).toMatchObject({
+      result: 'CHILD REPORT (accept)', success: true, subagent: { name: 'find_codeword', status: 'completed' },
+    });
+    // The child's final message is its report, not a narration step.
+    expect(h.of('narration_trace').map((e) => e.content)).toEqual(['Delegating to a subagent.']);
+  });
+
+  it('safe mode raises a labelled card for a subagent command; deny declines', async () => {
+    await started();
+    const sid = await session('safe');
+    await turn(sid, 'SUBAGENT', 'rt-1');
+    const perm = await h.waitFor((e) => e.type === 'permission', 'permission');
+    expect(perm).toMatchObject({ sid, toolArgs: { toolName: 'shell', args: { command: 'rg -n CODEWORD .' } }, description: 'Subagent find_codeword — Run: rg -n CODEWORD .', turnId: 'rt-1' });
+    await h.adapter.respondToPermission(sid, perm.id as string, 'deny');
+    await h.idleCount(1);
+    expect(h.of('message').map((e) => e.content)).toEqual(['subagent decision: decline']);
+  });
+
+  it('a subagent request Codex withdraws retires its card', async () => {
+    await started();
+    const sid = await session('safe');
+    await turn(sid, 'SUBAGENT WITHDRAW', 'rt-1');
+    const perm = await h.waitFor((e) => e.type === 'permission', 'permission');
+    await h.waitFor((e) => e.type === 'perm_auto' && e.id === perm.id, 'card retired');
+    await h.idleCount(1);
+    expect(h.of('message').map((e) => e.content)).toEqual(['subagent decision: withdrawn']);
+  });
+
   it('safe mode raises a shell permission card; deny declines', async () => {
     await started();
     const sid = await session('safe');
@@ -319,7 +371,6 @@ describe('CodexAdapter (fake app-server child process)', () => {
     const refs = done.attachments as Array<{ type: string; id: string; caption?: string }>;
     expect(refs[0]).toMatchObject({ type: 'content_ref', caption: 'chart' });
     expect(store.has(sid, refs[0].id)).toBe(true);
-    expect(h.of('attachment_bytes')).toHaveLength(1);
     expect(h.of('message')[0].content).toBe('image: true');
   });
 

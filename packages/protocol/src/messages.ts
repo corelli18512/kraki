@@ -54,6 +54,34 @@ export interface PulseFrameField {
  *  uuid, never `@`-prefixed). */
 export const HEAD_PULSE_TARGET = '@head';
 
+/**
+ * Message types the head itself sends to a device as `{from:'@head', msg}` over
+ * pulse. These are the ONLY types a receiver may act on from that wrapper: the
+ * wrapper is plaintext, so anything else (auth_*, consumer/producer messages)
+ * arriving this way is forged and must be dropped. Auth frames are accepted only
+ * from the raw socket during the handshake.
+ */
+export const HEAD_CONTROL_TYPES: ReadonlySet<string> = new Set([
+  'device_joined',
+  'device_left',
+  'device_removed',
+  'device_pending',
+  'preferences_updated',
+  'push_token_registered',
+  'notification_preview',
+  'voice_lease_grant',
+  'voice_lease_denied',
+]);
+
+/**
+ * Field the head stamps onto every device-originated pulse payload it forwards:
+ * the authenticated deviceId of the connection that sent it. Devices cannot set
+ * it themselves (the head drops any device payload that already carries `src`
+ * or `from`), so receivers may trust it as the real sender. Absent when the
+ * payload came through an older head.
+ */
+export const PULSE_SENDER_FIELD = 'src';
+
 /** App → specific tentacle. Relay reads `to` for routing. */
 export interface UnicastEnvelope extends PulseFrameField {
   type: 'unicast';
@@ -282,7 +310,30 @@ export interface PermissionRequest extends BaseEnvelope {
     decision?: 'approve' | 'deny' | 'always_allow';
     /** Trace/history-only terminal state when the turn ended before a decision. */
     cancelled?: boolean;
+    /** Set when a subagent asked: the dispatching step's toolCallId. */
+    parentToolCallId?: string;
   };
+}
+
+/**
+ * A subagent run, attached to the trace step that dispatched it (the agent's
+ * Task/Agent/task/spawn tool call, or a synthetic step for one child of a
+ * multi-child dispatch). The subagent's own steps carry `parentToolCallId`
+ * pointing at that step; its report is the dispatching step's tool result.
+ * Clients show the step as a card that opens the subagent's own steps.
+ * Every field is a display hint — unknown/absent fields degrade gracefully.
+ */
+export interface SubagentInfo {
+  /** Short role / agent name, e.g. "scout", "Explore", "find_codeword". */
+  name: string;
+  /** One-line task description (never the full prompt). */
+  task?: string;
+  status?: 'running' | 'completed' | 'failed' | 'stopped';
+  /** Total tokens the subagent used, when the agent reports it. */
+  tokens?: number;
+  /** Number of tool calls the subagent made, when reported. */
+  toolCount?: number;
+  durationMs?: number;
 }
 
 /**
@@ -311,6 +362,10 @@ export interface ToolStartMessage extends BaseEnvelope {
     argsRef?: ContentRef;
     /** Unique ID for this tool invocation (matches tool_complete) */
     toolCallId?: string;
+    /** Set when a subagent made this call: the dispatching step's toolCallId. */
+    parentToolCallId?: string;
+    /** Set when this step dispatched a subagent. */
+    subagent?: SubagentInfo;
   };
 }
 
@@ -333,6 +388,12 @@ export interface ToolCompleteMessage extends BaseEnvelope {
     argsRef?: ContentRef;
     /** Unique ID matching the tool_start */
     toolCallId?: string;
+    /** See {@link ToolStartMessage}. */
+    parentToolCallId?: string;
+    /** Latest subagent state. A dispatch step may complete more than once
+     *  (e.g. a background subagent: launch receipt, then its report); the
+     *  last `tool_complete` for a toolCallId is authoritative. */
+    subagent?: SubagentInfo;
     /** Whether the tool execution succeeded (default true if absent). */
     success?: boolean;
     /** Synthetic terminal outcome when the turn ended before this tool returned.
@@ -358,6 +419,8 @@ export interface AgentNarrationMessage extends BaseEnvelope {
   type: 'agent_narration';
   payload: {
     content: string;
+    /** Set when a subagent said this: the dispatching step's toolCallId. */
+    parentToolCallId?: string;
   };
 }
 
@@ -593,7 +656,36 @@ export interface DeviceGreetingMessage extends BaseEnvelope {
      *  `fragments`: accepts and (to apps that reply with `client_features`)
      *  sends large payloads as fragments (see fragments.ts). */
     features?: string[];
+    /** Whether a newer Kraki is available for this computer (absent from
+     *  tentacles older than 0.36). */
+    update?: DeviceUpdateInfo;
   };
+}
+
+/** How Kraki is installed on a computer, which decides how it is updated:
+ *  `mac-app` = built into Kraki for Mac (the app is the unit of update),
+ *  `app-bundle` = the CLI's macOS Kraki.app, `binary` = single executable,
+ *  `npm` = `npm i -g @kraki/tentacle`. */
+export type KrakiInstallMethod = 'mac-app' | 'app-bundle' | 'binary' | 'npm' | 'unknown';
+
+export interface DeviceUpdateInfo {
+  installedVia: KrakiInstallMethod;
+  /** Version of what an update replaces: the Mac app's version for
+   *  `mac-app`, otherwise the tentacle's. */
+  current: string;
+  /** Set only when a newer version than `current` is available. */
+  latest?: string;
+  /** Newest published tentacle, so apps can tell computers that predate
+   *  this field that they are out of date. */
+  latestTentacle?: string;
+  /** This computer accepts `update_device` from apps. */
+  remote?: boolean;
+  /** Why it doesn't: turned off on the computer, the install isn't writable
+   *  by the user Kraki runs as (e.g. npm under a root-owned prefix), or an
+   *  install method that can't be updated in place. */
+  remoteBlock?: 'disabled' | 'not_writable' | 'unsupported';
+  /** ISO time of the last successful check. */
+  checkedAt?: string;
 }
 
 // ── Subscription account usage (read-only, per tentacle) ─────
@@ -671,6 +763,38 @@ export interface UsageHistorySample {
 export interface RefreshAccountUsageMessage extends BaseEnvelope {
   type: 'refresh_account_usage';
   payload: { requestId: string };
+}
+
+/** App → tentacle: update Kraki on this computer to the newest release.
+ *  Only send to computers whose greeting has `update.remote`. Without
+ *  `when`, a computer with running sessions answers `busy` and does nothing;
+ *  `now` stops them, `idle` waits until none is running. */
+export interface UpdateDeviceMessage extends BaseEnvelope {
+  type: 'update_device';
+  payload: { requestId: string; when?: 'now' | 'idle' };
+}
+
+export type DeviceUpdatePhase =
+  | 'busy'            // sessions are running; ask the user (runningSessions)
+  | 'waiting_idle'    // will start once no session is running
+  | 'downloading'     // progress 0…1 when known
+  | 'installing'      // the computer goes offline for a few seconds next
+  | 'updated'         // sent by the new version once it is online
+  | 'failed'          // nothing changed (error says why)
+  | 'rolled_back';    // the new version didn't come up; the old one is back
+
+/** Tentacle → apps: progress and outcome of an update (broadcast). */
+export interface DeviceUpdateStatusMessage extends BaseEnvelope {
+  type: 'device_update_status';
+  payload: {
+    requestId?: string;
+    phase: DeviceUpdatePhase;
+    from?: string;
+    to?: string;
+    progress?: number;
+    runningSessions?: number;
+    error?: string;
+  };
 }
 
 /** Tentacle → app reply to `request_usage_history`. */
@@ -1031,7 +1155,8 @@ export type ProducerMessage =
   | ArchivedSessionListMessage
   | AttachmentDataMessage
   | DeviceUsageMessage
-  | UsageHistoryMessage;
+  | UsageHistoryMessage
+  | DeviceUpdateStatusMessage;
 
 // ============================================================
 // Consumer messages (app → tentacle, inside encrypted blob)
@@ -1315,7 +1440,8 @@ export type ConsumerMessage =
   | SetSessionSubscriptionMessage
   | ClientFeaturesMessage
   | RequestUsageHistoryMessage
-  | RefreshAccountUsageMessage;
+  | RefreshAccountUsageMessage
+  | UpdateDeviceMessage;
 
 // ============================================================
 // Auth credentials — discriminated union by method
@@ -1383,6 +1509,9 @@ export interface AuthOkMessage {
   /** The auth method that was used */
   authMethod: AuthMethod['method'];
   user: { id: string; login: string; provider: string; email?: string; preferences?: Record<string, unknown>; region?: string };
+  /** The account's Custom Words (app devices only). Presence also advertises
+   *  sync support. */
+  voiceVocabulary?: VoiceWord[];
   devices: DeviceSummary[];
   /** GitHub OAuth client ID (present when GitHub OAuth is configured for web login) */
   githubClientId?: string;
@@ -1417,6 +1546,7 @@ export type AuthErrorCode =
   | 'invalid_signature'
   | 'user_not_found'
   | 'device_registration_failed'
+  | 'account_deleted'
   | 'wrong_region';
 
 export interface AuthErrorMessage {
@@ -1506,6 +1636,29 @@ export interface RemoveDeviceMessage {
   deviceId: string;
 }
 
+/**
+ * App → head: permanently delete this Kraki account (App Store 5.1.1(v)).
+ * The relay deletes the user, every device, push tokens, preferences, custom
+ * words and voice usage, then sends `account_deleted` to every connected
+ * device and closes it. Only devices with role `app` may ask.
+ */
+export interface DeleteAccountMessage {
+  type: 'delete_account';
+}
+
+/**
+ * Head → every device of a deleted account (raw WebSocket, right before the
+ * relay closes the socket with `ACCOUNT_DELETED_CLOSE_CODE`). A device that
+ * was offline learns it from `auth_error` code `account_deleted` instead.
+ * Clients sign out, forget their credentials and stop reconnecting.
+ */
+export interface AccountDeletedMessage {
+  type: 'account_deleted';
+}
+
+/** WebSocket close code the relay uses after deleting the account. */
+export const ACCOUNT_DELETED_CLOSE_CODE = 4005;
+
 /** Broadcast confirmation that a device was removed. */
 export interface DeviceRemovedMessage {
   type: 'device_removed';
@@ -1522,6 +1675,31 @@ export interface UpdatePreferencesMessage {
 export interface PreferencesUpdatedMessage {
   type: 'preferences_updated';
   preferences: Record<string, unknown>;
+}
+
+/** One Custom Words entry, account-owned (not E2E encrypted). */
+export interface VoiceWord { term: string; heardAs: string }
+/** One user intent. Clients never upload whole lists; Head applies intents in
+ *  arrival order and the last one wins. Words are matched case-insensitively. */
+export interface VoiceWordOp {
+  op: 'add' | 'edit' | 'remove';
+  term: string;
+  heardAs?: string;
+  /** edit: the word being replaced (may equal `term` when only mishearings change). */
+  from?: string;
+}
+export interface UpdateVoiceVocabularyMessage {
+  type: 'update_voice_vocabulary';
+  /** Echoed so the sender can drop exactly these ops from its outbox. */
+  requestId: string;
+  ops: VoiceWordOp[];
+}
+/** The account's full list after a change: to the sender (with requestId) and
+ *  to the user's other online apps. */
+export interface VoiceVocabularyUpdatedMessage {
+  type: 'voice_vocabulary_updated';
+  requestId?: string;
+  words: VoiceWord[];
 }
 
 // ── Push notification token management ──────────────────
@@ -1589,8 +1767,12 @@ export type ControlMessage =
   | DevicePendingMessage
   | RemoveDeviceMessage
   | DeviceRemovedMessage
+  | DeleteAccountMessage
+  | AccountDeletedMessage
   | UpdatePreferencesMessage
   | PreferencesUpdatedMessage
+  | UpdateVoiceVocabularyMessage
+  | VoiceVocabularyUpdatedMessage
   | RegisterPushTokenMessage
   | PushTokenRegisteredMessage
   | NotificationPreviewMessage

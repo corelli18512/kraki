@@ -30,6 +30,9 @@ export interface KrakiConfig {
   logging?: {
     verbosity?: KrakiLogVerbosity;
   };
+  /** Let your apps update Kraki on this computer. On unless false
+   *  (`kraki config remote-update off`, or the switch in Kraki for Mac). */
+  remoteUpdate?: boolean;
   /**
    * Read-only subscription quota of the Claude / Codex logins on this machine,
    * shown in Kraki apps. On unless `enabled: false` (or KRAKI_ACCOUNT_USAGE=0).
@@ -90,9 +93,20 @@ export function getKrakiHome(): string {
   return override ? resolve(override) : join(homedir(), '.kraki');
 }
 
+let krakiHomeSecured = false;
+
+/**
+ * The Kraki home holds every conversation, attachment and credential, so it
+ * is private to the user (0700): on a shared machine the default umask would
+ * let other accounts read it. Existing installs are tightened once per process.
+ */
 export function getConfigDir(): string {
   const dir = getKrakiHome();
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (!krakiHomeSecured && process.platform !== 'win32') {
+    krakiHomeSecured = true;
+    try { chmodSync(dir, 0o700); } catch { /* not ours to change (e.g. shared KRAKI_HOME) */ }
+  }
   return dir;
 }
 
@@ -172,7 +186,7 @@ export function getChannelKeyPath(): string {
 export function saveChannelKey(key: string): void {
   getConfigDir();
   const keyPath = getChannelKeyPath();
-  writeFileSync(keyPath, key, 'utf8');
+  writeFileSync(keyPath, key, { encoding: 'utf8', mode: 0o600 });
   chmodSync(keyPath, 0o600);
 }
 
@@ -190,10 +204,15 @@ function getGitHubTokenPath(): string {
   return join(getKrakiHome(), 'github-token');
 }
 
+/** Forget Kraki's saved GitHub sign-in (the next setup signs in again). */
+export function clearGitHubToken(): void {
+  try { unlinkSync(getGitHubTokenPath()); } catch { /* not signed in */ }
+}
+
 export function saveGitHubToken(token: string): void {
   getConfigDir();
   const tokenPath = getGitHubTokenPath();
-  writeFileSync(tokenPath, token, 'utf8');
+  writeFileSync(tokenPath, token, { encoding: 'utf8', mode: 0o600 });
   chmodSync(tokenPath, 0o600);
 }
 

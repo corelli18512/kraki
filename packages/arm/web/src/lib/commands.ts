@@ -272,6 +272,16 @@ export function setAutoArchiveDays(
   send({ type: 'set_auto_archive_days', payload: { targetDeviceId, days } });
 }
 
+/** Ask a computer to update Kraki (remote update). */
+export function updateDevice(
+  targetDeviceId: string,
+  requestId: string,
+  when: 'now' | 'idle' | undefined,
+  send: (msg: Record<string, unknown>) => void,
+): void {
+  send({ type: 'update_device', payload: { targetDeviceId, requestId, ...(when ? { when } : {}) } });
+}
+
 export function requestLocalSessions(
   targetDeviceId: string,
   send: (msg: Record<string, unknown>) => void,

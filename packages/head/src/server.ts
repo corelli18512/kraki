@@ -1,7 +1,5 @@
 import { RemoteAuthBackend } from './remote-auth-backend.js';
 import { WebSocketServer, WebSocket } from 'ws';
-import { randomBytes, createVerify } from 'crypto';
-import { v4 as uuid } from 'uuid';
 import type { IncomingMessage as HttpIncomingMessage } from 'http';
 import type { Server } from 'http';
 import type {
@@ -9,27 +7,26 @@ import type {
   DeviceSummary, DeviceRole, DeviceKind,
   VoiceResource, VoiceCapability, BlobPayload,
 } from '@kraki/protocol';
-import { HEAD_PULSE_TARGET } from '@kraki/protocol';
+import { HEAD_PULSE_TARGET, ACCOUNT_DELETED_CLOSE_CODE } from '@kraki/protocol';
 import { Storage } from './storage.js';
+import { parseVoiceWordOps, type VoiceWord } from './voice-vocabulary.js';
 import { PulseHub, PULSE_ACK_EVERY_BYTES } from './pulse-hub.js';
 import { LeaseIssuer } from './lease-issuer.js';
-import type { AuthProvider, AuthUser, AuthOutcome as ProviderAuthOutcome } from './auth.js';
-import { GitHubAuthProvider } from './auth.js';
+import type { AuthProvider } from './auth.js';
+import { LocalAuthBackend } from './local-auth-backend.js';
 import { getLogger } from './logger.js';
 import { trace, fp } from './trace.js';
 import { clientIp } from './client-ip.js';
 import type { PushManager } from './push/index.js';
 import type { AuthBackend, AuthOutcome, ChallengeOutcome } from './auth-backend.js';
 
-function importPublicKey(compactKey: string): string {
-  const lines = compactKey.match(/.{1,64}/g) ?? [];
-  return `-----BEGIN PUBLIC KEY-----\n${lines.join('\n')}\n-----END PUBLIC KEY-----\n`;
-}
-
-function verifySignature(nonce: string, signature: string, publicKeyPem: string): boolean {
-  const verify = createVerify('SHA256');
-  verify.update(nonce);
-  return verify.verify(publicKeyPem, signature, 'base64');
+/** Custom Words has its own channel (`auth_ok.voiceVocabulary` and
+ *  `voice_vocabulary_updated`). Never ship it inside generic preferences: that
+ *  would duplicate it on every auth and broadcast it on every theme change. */
+function publicPreferences(prefs: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!prefs || !('voiceVocabulary' in prefs)) return prefs;
+  const { voiceVocabulary: _omitted, ...rest } = prefs;
+  return rest;
 }
 
 interface ClientState {
@@ -40,6 +37,8 @@ interface ClientState {
   isAlive: boolean;
   authenticatedAt?: number;
   pendingNonce?: string;
+  /** An `auth` / `auth_response` is awaiting its backend. */
+  authInFlight?: boolean;
   pendingDeviceId?: string;
   pendingDeviceInfo?: { encryptionKey?: string };
   pendingAuthMethod?: string;
@@ -61,11 +60,6 @@ interface ClientState {
   bufferedAtPing?: number;
   /** Declared at auth: this client's Pulse accepts progress heartbeats. */
   pulseProgressAck?: boolean;
-}
-
-interface PairingToken {
-  userId: string;
-  expiresAt: number;
 }
 
 export interface HeadServerOptions {
@@ -119,6 +113,8 @@ const DEFAULT_MAX_PAYLOAD = 10 * 1024 * 1024;
 const DEFAULT_AUTH_TIMEOUT_MS = 15_000;
 const DEFAULT_LOGIN_SCREEN_AUTH_TIMEOUT_MS = 10 * 60_000;
 const MAX_MULTICAST_TARGETS = 64;
+/** Send-buffer ceiling per socket before a stalled client is disconnected. */
+const MAX_WS_BUFFERED_BYTES = 32 * 1024 * 1024;
 
 /** How often the liveness sweep runs (ms). Faster than the 30s ping timer so
  *  device_pending detection latency tracks the recipient's ping cadence
@@ -154,7 +150,7 @@ export class HeadServer {
 
   // In-memory state
   private connections = new Map<string, WebSocket>();
-  private pairingTokens = new Map<string, PairingToken>();
+  private authBackend: AuthBackend;
   private userByDevice = new Map<string, string>();
   private clients = new Map<WebSocket, ClientState>();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -166,6 +162,21 @@ export class HeadServer {
   constructor(storage: Storage, options: HeadServerOptions) {
     this.storage = storage;
     this.options = options;
+    // One auth implementation for every deployment: without an explicit
+    // backend (standalone tests, self-hosted defaults) the server builds the
+    // same LocalAuthBackend production uses from its providers.
+    this.authBackend = options.authBackend ?? new LocalAuthBackend({
+      storage,
+      // A single `authProvider` answers every token method, as it always has.
+      authProviders: options.authProviders
+        ?? (options.authProvider
+          ? new Map(['open', 'apikey', 'github'].map((method) => [method, options.authProvider!]))
+          : new Map()),
+      pairingEnabled: options.pairingEnabled,
+      pairingTtl: options.pairingTtl,
+      pushManager: options.pushManager,
+      region: options.region,
+    });
     this.wss = new WebSocketServer({
       noServer: true,
       maxPayload: options.maxPayload ?? DEFAULT_MAX_PAYLOAD,
@@ -240,9 +251,7 @@ export class HeadServer {
       }
 
       // Sweep expired pairing tokens
-      for (const [token, data] of this.pairingTokens) {
-        if (now > data.expiresAt) this.pairingTokens.delete(token);
-      }
+      this.authBackend.sweepPairingTokens?.();
 
       // Periodic health snapshot — ALWAYS on (not trace-gated). Cheap (one line
       // / 30s) and is the canary for the OOM / event-loop-stall class of bugs
@@ -313,25 +322,6 @@ export class HeadServer {
 
   // --- Auth provider helpers ---
 
-  private getAuthProvider(): AuthProvider {
-    if (this.options.authProviders?.size) {
-      return this.options.authProviders.values().next().value!;
-    }
-    return this.options.authProvider!;
-  }
-
-  private getAuthProviderForMode(mode?: string): AuthProvider {
-    if (mode && this.options.authProviders?.has(mode)) {
-      return this.options.authProviders.get(mode)!;
-    }
-    return this.getAuthProvider();
-  }
-
-  private getGitHubClientId(): string | undefined {
-    const ghProvider = this.findGitHubProvider();
-    return ghProvider?.oauthConfigured ? ghProvider.getClientId() : undefined;
-  }
-
   private getVapidPublicKey(): string | undefined {
     return this.options.pushManager?.getVapidPublicKey();
   }
@@ -350,17 +340,6 @@ export class HeadServer {
     const url = this.options.voiceBrokerUrl;
     if (!url) return undefined;
     return { brokerUrl: url, resource: 'voice/doubao' };
-  }
-
-  private findGitHubProvider(): GitHubAuthProvider | undefined {
-    const provider = this.options.authProviders?.get('github') ?? this.options.authProvider;
-    if (!provider) return undefined;
-    if (provider instanceof GitHubAuthProvider) return provider;
-    if ('inner' in provider) {
-      const inner = (provider as unknown as { inner: unknown }).inner;
-      if (inner instanceof GitHubAuthProvider) return inner;
-    }
-    return undefined;
   }
 
   // --- Connection management ---
@@ -482,32 +461,13 @@ export class HeadServer {
     if (!state.authenticated) {
       if (msg.type === 'auth_info') {
         this.armAuthTimer(ws, state, this.options.loginScreenAuthTimeoutMs ?? DEFAULT_LOGIN_SCREEN_AUTH_TIMEOUT_MS);
-        if (this.options.authBackend) {
-          const info = this.options.authBackend.getAuthInfo();
-          ws.send(JSON.stringify({
-            type: 'auth_info_response',
-            methods: info.methods,
-            githubClientId: info.githubClientId,
-            vapidPublicKey: info.vapidPublicKey ?? this.getVapidPublicKey(),
-          }));
-        } else {
-          const methods: string[] = [];
-          if (this.options.authProviders?.has('github')) {
-            methods.push('github_token');
-            const ghProvider = this.findGitHubProvider();
-            if (ghProvider?.oauthConfigured) methods.push('github_oauth');
-          }
-          if (this.options.authProviders?.has('apikey')) methods.push('apikey');
-          if (this.options.authProviders?.has('open')) methods.push('open');
-          if (this.options.pairingEnabled !== false) methods.push('pairing');
-          methods.push('challenge');
-          ws.send(JSON.stringify({
-            type: 'auth_info_response',
-            methods,
-            githubClientId: this.getGitHubClientId(),
-            vapidPublicKey: this.getVapidPublicKey(),
-          }));
-        }
+        const info = this.authBackend.getAuthInfo();
+        ws.send(JSON.stringify({
+          type: 'auth_info_response',
+          methods: info.methods,
+          githubClientId: info.githubClientId,
+          vapidPublicKey: info.vapidPublicKey ?? this.getVapidPublicKey(),
+        }));
         return;
       }
       if (msg.type === 'auth') {
@@ -526,7 +486,7 @@ export class HeadServer {
 
     // Authenticated messages
     if (msg.type === 'create_pairing_token') {
-      this.handleCreatePairingToken(ws, state);
+      await this.handleCreatePairingToken(ws, state);
       return;
     }
 
@@ -553,7 +513,10 @@ export class HeadServer {
         // endpoint/disk-growth amplifier from a single client.
         if (to !== '' && to !== HEAD_PULSE_TARGET) {
           const target = this.storage.getDevice(to);
-          if (!target || target.userId !== state.userId) {
+          // Same account, and only across roles (app ⇄ tentacle): no feature
+          // sends app→app or tentacle→tentacle, so such a frame is not trusted.
+          const sender = this.storage.getDevice(state.deviceId);
+          if (!target || target.userId !== state.userId || !sender || target.role === sender.role) {
             this.sendError(ws, 'unicast target is not reachable');
             return;
           }
@@ -618,7 +581,10 @@ export class HeadServer {
       if (typeof msg.pulse === 'string' && state.deviceId) {
         // A pushPreview may ride the same pulse envelope — fire it for offline
         // devices (the reliable message itself is delivered by the hub).
-        if (msg.pushPreview) this.firePushPreview(state, msg.pushPreview as BlobPayload);
+        // Push previews are tentacle-originated (same rule as dispatch_push).
+        if (msg.pushPreview && this.storage.getDevice(state.deviceId)?.role === 'tentacle') {
+          this.firePushPreview(state, msg.pushPreview as BlobPayload);
+        }
         this.pulseHub.onPulseEnvelope(state.deviceId, { pulse: msg.pulse as string });
         return;
       }
@@ -779,6 +745,14 @@ export class HeadServer {
     const online = !!ws && ws.readyState === WebSocket.OPEN;
     trace('HUB-TX-WS', { to: deviceId, online, pulseB64Len: pulseB64.length });
     if (!online) return false;
+    // Backpressure: a connected but stalled client would otherwise grow the
+    // socket's send buffer without bound. Drop the connection instead; every
+    // reliable frame is still in the pulse outbox and resends on reconnect.
+    if (ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
+      getLogger().warn('Closing stalled connection (send buffer full)', { deviceId, bufferedBytes: ws.bufferedAmount });
+      ws.terminate();
+      return false;
+    }
     // `to` lets the receiver's own pulse layer know which stream this is; blob
     // is empty because the payload (if any) is inside the pulse frame.
     ws.send(JSON.stringify({ type: 'unicast', to: deviceId, pulse: pulseB64, blob: '', keys: {} }));
@@ -833,7 +807,9 @@ export class HeadServer {
   private handleControlMessage(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): boolean {
     switch (msg.type) {
       case 'update_preferences':    this.handleUpdatePreferences(ws, state, msg); return true;
+      case 'update_voice_vocabulary': this.handleUpdateVoiceVocabulary(state, msg); return true;
       case 'remove_device':         this.handleRemoveDevice(ws, state, msg.deviceId as string); return true;
+      case 'delete_account':        void this.handleDeleteAccount(ws, state); return true;
       case 'register_push_token':   this.handleRegisterPushToken(ws, state, msg); return true;
       case 'unregister_push_token': this.handleUnregisterPushToken(ws, state, msg); return true;
       case 'dispatch_push': {
@@ -856,7 +832,7 @@ export class HeadServer {
     this.storage.updatePreferences(state.userId, prefs);
     // Read back the full merged preferences
     const fullUser = this.storage.getUser(state.userId);
-    const merged = fullUser?.preferences ?? prefs;
+    const merged = publicPreferences(fullUser?.preferences ?? prefs);
     const confirmation = { type: 'preferences_updated', preferences: merged };
     // Confirm to the sender + fan out to the user's other devices — all over pulse.
     if (state.deviceId) this.sendControlToDevice(state.deviceId, confirmation);
@@ -868,6 +844,33 @@ export class HeadServer {
       const other = this.connections.get(d.id);
       if (!other || other.readyState !== WebSocket.OPEN) continue;
       this.sendControlToDevice(d.id, confirmation);
+    }
+  }
+
+  /** Account data, not session data: no tentacle is involved. The sender
+   *  always gets the resulting list back (its acknowledgement); other online
+   *  apps of the account get it only when something was applied. */
+  private handleUpdateVoiceVocabulary(state: ClientState, msg: Record<string, unknown>): void {
+    if (!state.userId || !state.deviceId) return;
+    const requestId = typeof msg.requestId === 'string' ? msg.requestId.slice(0, 64) : undefined;
+    const ops = parseVoiceWordOps(msg.ops);
+    let words: VoiceWord[];
+    try {
+      words = ops?.length
+        ? this.storage.updateVoiceVocabulary(state.userId, ops)
+        : this.storage.getVoiceVocabulary(state.userId);
+    } catch (err) {
+      // Pulse self-delivery has no outer try/catch. No reply: the client keeps
+      // the ops in its outbox and retries.
+      getLogger().warn('Voice vocabulary update failed', { error: (err as Error).message });
+      return;
+    }
+    this.sendControlToDevice(state.deviceId, { type: 'voice_vocabulary_updated', requestId, words });
+    if (!ops?.length) return;
+    for (const d of this.storage.getDevicesByUser(state.userId)) {
+      if (d.id !== state.deviceId && d.role === 'app' && this.connections.get(d.id)?.readyState === WebSocket.OPEN) {
+        this.sendControlToDevice(d.id, { type: 'voice_vocabulary_updated', words });
+      }
     }
   }
 
@@ -973,16 +976,24 @@ export class HeadServer {
     state.pulseProgressAck = msg.device?.pulseProgressAck === true;
     const logger = getLogger();
     const { auth } = msg;
-
-    // If auth backend is configured, delegate everything to it
-    if (this.options.authBackend) {
+    // One auth attempt per socket at a time: a second `auth` while the first
+    // is awaiting its backend would register the device twice.
+    if (state.authInFlight || state.pendingNonce) {
+      // Ignored rather than answered with auth_error: clients treat auth
+      // errors as credential failures, and this one is just a duplicate.
+      logger.warn('Ignoring duplicate auth while one is in progress', { ip: state.ip });
+      return;
+    }
+    state.authInFlight = true;
+    try {
       if (auth.method === 'challenge') {
         // Challenge is multi-step — start here, verify in handleChallengeResponse
-        const result = await this.options.authBackend.startChallenge(
+        const result = await this.authBackend.startChallenge(
           auth.deviceId,
           msg.device.encryptionKey,
           this.options.region,
         );
+        if (!this.socketStillAuthenticating(ws, state)) return;
         if (!result.ok) {
           this.sendAuthError(ws, result.code as AuthErrorCode, result.message,
             result.code === 'wrong_region' ? (result as { redirect?: string }).redirect : undefined);
@@ -992,132 +1003,24 @@ export class HeadServer {
         state.pendingDeviceId = result.deviceId;
         state.pendingDeviceInfo = { encryptionKey: msg.device.encryptionKey };
         state.pendingAuthMethod = 'challenge';
-        logger.debug('Issuing auth challenge (via backend)', { deviceId: auth.deviceId });
+        logger.debug('Issuing auth challenge', { deviceId: auth.deviceId });
         ws.send(JSON.stringify({ type: 'auth_challenge', nonce: result.nonce }));
         return;
       }
 
-      const result = await this.options.authBackend.authenticate(auth, msg.device, this.options.region);
+      const result = await this.authBackend.authenticate(auth, msg.device, this.options.region, state.ip);
+      if (!this.socketStillAuthenticating(ws, state)) return;
       this.handleBackendAuthResult(ws, state, result);
-      return;
-    }
-
-    // Legacy: inline auth (no backend configured)
-
-    switch (auth.method) {
-      case 'pairing': {
-        this.handlePairingAuth(ws, state, auth.token, msg);
-        return;
-      }
-
-      case 'challenge': {
-        const device = this.storage.getDevice(auth.deviceId);
-        if (device && device.publicKey) {
-          const nonce = randomBytes(32).toString('hex');
-          state.pendingNonce = nonce;
-          state.pendingDeviceId = auth.deviceId;
-          state.pendingDeviceInfo = { encryptionKey: msg.device.encryptionKey };
-          state.pendingAuthMethod = 'challenge';
-          logger.debug('Issuing auth challenge', { deviceId: auth.deviceId });
-          ws.send(JSON.stringify({ type: 'auth_challenge', nonce }));
-          return;
-        }
-        this.sendAuthError(ws, 'unknown_device', 'Unknown device');
-        return;
-      }
-
-      case 'github_token': {
-        const provider = this.getAuthProviderForMode('github');
-        const result = await provider.authenticate({ token: auth.token, ip: state.ip });
-        if (!result.ok) {
-          logger.warn('Auth rejected', { method: 'github_token', ip: state.ip, reason: result.message });
-          // A GitHub outage or network error is not a bad credential (G4).
-          this.sendAuthError(ws, result.retryable ? 'service_unavailable' : 'auth_rejected', result.message);
-          return;
-        }
-        this.completeAuth(ws, state, result.user, msg, 'github_token');
-        return;
-      }
-
-      case 'github_oauth': {
-        const provider = this.getAuthProviderForMode('github');
-        const oauthAuth = auth as { method: 'github_oauth'; code: string; codeVerifier?: string; redirectUri?: string };
-        const result = await provider.authenticate({
-          githubCode: oauthAuth.code,
-          codeVerifier: typeof oauthAuth.codeVerifier === 'string' ? oauthAuth.codeVerifier : undefined,
-          redirectUri: typeof oauthAuth.redirectUri === 'string' ? oauthAuth.redirectUri : undefined,
-          ip: state.ip,
-        });
-        if (!result.ok) {
-          logger.warn('Auth rejected', { method: 'github_oauth', ip: state.ip, reason: result.message });
-          // A GitHub outage or network error is not a bad credential (G4).
-          this.sendAuthError(ws, result.retryable ? 'service_unavailable' : 'auth_rejected', result.message);
-          return;
-        }
-        this.completeAuth(ws, state, result.user, msg, 'github_oauth');
-        return;
-      }
-
-      case 'apikey': {
-        const provider = this.getAuthProviderForMode('apikey');
-        const result = await provider.authenticate({ token: auth.key, ip: state.ip });
-        if (!result.ok) {
-          logger.warn('Auth rejected', { method: 'apikey', ip: state.ip, reason: result.message });
-          // A GitHub outage or network error is not a bad credential (G4).
-          this.sendAuthError(ws, result.retryable ? 'service_unavailable' : 'auth_rejected', result.message);
-          return;
-        }
-        this.completeAuth(ws, state, result.user, msg, 'apikey');
-        return;
-      }
-
-      case 'open': {
-        const provider = this.getAuthProviderForMode('open');
-        const result = await provider.authenticate({ token: auth.sharedKey, ip: state.ip });
-        if (!result.ok) {
-          logger.warn('Auth rejected', { method: 'open', ip: state.ip, reason: result.message });
-          // A GitHub outage or network error is not a bad credential (G4).
-          this.sendAuthError(ws, result.retryable ? 'service_unavailable' : 'auth_rejected', result.message);
-          return;
-        }
-        this.completeAuth(ws, state, result.user, msg, 'open');
-        return;
-      }
-
-      default: {
-        const method = (auth as { method: string }).method;
-        this.sendAuthError(ws, 'unknown_auth_method', `Unknown auth method: ${method}`);
-      }
+    } finally {
+      state.authInFlight = false;
     }
   }
 
-  private handlePairingAuth(ws: WebSocket, state: ClientState, pairingToken: string, msg: AuthMessage): void {
-    const logger = getLogger();
-    if (!(this.options.pairingEnabled ?? true)) {
-      this.sendAuthError(ws, 'pairing_disabled', 'Pairing is disabled.');
-      return;
-    }
-
-    const tokenData = this.pairingTokens.get(pairingToken);
-
-    if (!tokenData || tokenData.expiresAt < Date.now()) {
-      if (tokenData) this.pairingTokens.delete(pairingToken);
-      logger.warn('Pairing auth failed: invalid or expired token', { ip: state.ip });
-      this.sendAuthError(ws, 'invalid_pairing_token', 'Invalid or expired pairing token');
-      return;
-    }
-
-    // Consume token (single-use)
-    this.pairingTokens.delete(pairingToken);
-
-    const user = this.storage.getUser(tokenData.userId);
-    if (!user) {
-      this.sendAuthError(ws, 'user_not_found', 'User not found');
-      return;
-    }
-
-    const authUser: AuthUser = { id: user.userId, login: user.username, provider: user.provider, email: user.email };
-    this.completeAuth(ws, state, authUser, msg, 'pairing');
+  /** After an awaited auth step: is this socket still open, still ours and
+   *  still unauthenticated? The auth deadline may have closed it meanwhile;
+   *  registering a dead socket would evict the device's live connection. */
+  private socketStillAuthenticating(ws: WebSocket, state: ClientState): boolean {
+    return ws.readyState === WebSocket.OPEN && this.clients.get(ws) === state && !state.authenticated;
   }
 
   private handleChallengeResponse(ws: WebSocket, state: ClientState, msg: { deviceId: string; signature: string }): void {
@@ -1135,81 +1038,28 @@ export class HeadServer {
       return;
     }
 
-    // If auth backend is configured, delegate verification
-    if (this.options.authBackend) {
-      this.options.authBackend.verifyChallenge(
-        deviceId, nonce, msg.signature,
-        pendingInfo?.encryptionKey,
-        this.options.region,
-      ).then(result => {
-        this.handleBackendAuthResult(ws, state, result);
-      }).catch(err => {
-        // A thrown error means the auth backend itself was unreachable / timed
-        // out (network, 5xx, abort) — NOT that the signature was invalid. A
-        // deterministic auth failure comes back as a resolved AuthError outcome
-        // above. Reporting this as auth_rejected made the arm treat a transient
-        // backend outage as a permanent credential failure and wipe the paired
-        // device, forcing a full re-pair. Surface it as auth_unavailable so the
-        // client retries instead of destroying a valid session.
-        logger.error('Auth backend verifyChallenge failed', { error: (err as Error).message });
+    state.authInFlight = true;
+    this.authBackend.verifyChallenge(
+      deviceId, nonce, msg.signature,
+      pendingInfo?.encryptionKey,
+      this.options.region,
+    ).then(result => {
+      if (!this.socketStillAuthenticating(ws, state)) return;
+      this.handleBackendAuthResult(ws, state, result);
+    }).catch(err => {
+      // A thrown error means the auth backend itself was unreachable / timed
+      // out (network, 5xx, abort) — NOT that the signature was invalid. A
+      // deterministic auth failure comes back as a resolved AuthError outcome
+      // above. Reporting this as auth_rejected made the arm treat a transient
+      // backend outage as a permanent credential failure and wipe the paired
+      // device, forcing a full re-pair. Surface it as auth_unavailable so the
+      // client retries instead of destroying a valid session.
+      logger.error('Auth backend verifyChallenge failed', { error: (err as Error).message });
+      if (this.socketStillAuthenticating(ws, state)) {
         this.sendAuthError(ws, 'service_unavailable', 'Authentication service unavailable');
-      });
-      return;
-    }
-
-    // Legacy: inline challenge verification
-
-    const device = this.storage.getDevice(deviceId);
-    if (!device || !device.publicKey) {
-      this.sendAuthError(ws, 'device_not_found', 'Device not found');
-      return;
-    }
-
-    const publicKeyPem = importPublicKey(device.publicKey);
-    const valid = verifySignature(nonce, msg.signature, publicKeyPem);
-
-    if (!valid) {
-      logger.warn('Challenge-response auth failed', { deviceId, ip: state.ip });
-      this.sendAuthError(ws, 'invalid_signature', 'Invalid signature');
-      return;
-    }
-
-    // Update encryption key if provided
-    const encryptionKey = pendingInfo?.encryptionKey ?? device.encryptionKey ?? undefined;
-    this.storage.upsertDevice(
-      deviceId, device.userId, device.name, device.role,
-      device.kind ?? undefined, device.publicKey ?? undefined, encryptionKey,
-    );
-
-    const user = this.storage.getUser(device.userId);
-    if (!user) {
-      this.sendAuthError(ws, 'user_not_found', 'User not found');
-      return;
-    }
-
-    // Register connection
-    state.authenticated = true;
-    state.authenticatedAt = Date.now();
-    if (state.authTimer) { clearTimeout(state.authTimer); state.authTimer = undefined; }
-    state.deviceId = deviceId;
-    state.userId = user.userId;
-    this.evictPreviousConnection(deviceId, ws);
-    this.connections.set(deviceId, ws);
-    this.userByDevice.set(deviceId, user.userId);
-    trace('DEV-CONNECT', { device: deviceId, user: user.userId, auth: 'challenge' });
-
-    logger.info('Device authenticated via challenge-response', { deviceId, ip: state.ip });
-
-    this.completeAuthHandshake(ws, {
-      deviceId,
-      userId: user.userId,
-      user: {
-        id: user.userId,
-        login: user.username,
-        provider: user.provider,
-        email: user.email,
-      },
-      authMethod: 'challenge',
+      }
+    }).finally(() => {
+      state.authInFlight = false;
     });
   }
 
@@ -1319,7 +1169,7 @@ export class HeadServer {
       /** Devices list to include in auth_ok. If omitted, derived from local storage.
        *  Edge mode supplies this from the remote backend's view. */
       devices?: DeviceSummary[];
-      /** Override of `getGitHubClientId()` (used when delegated). */
+      /** Override of the backend's GitHub client id (used when delegated). */
       githubClientId?: string;
       /** Override of `getVapidPublicKey()` (used when delegated). */
       vapidPublicKey?: string;
@@ -1338,7 +1188,7 @@ export class HeadServer {
     const fullUser = this.storage.getUser(params.userId);
     const userResponse = {
       ...params.user,
-      preferences: fullUser?.preferences ?? params.user.preferences,
+      preferences: publicPreferences(fullUser?.preferences ?? params.user.preferences),
     };
 
     // Devices list. If the caller provided one (edge mode), recompute online
@@ -1346,6 +1196,8 @@ export class HeadServer {
     const devices = params.devices
       ? params.devices.map(d => ({ ...d, online: this.connections.has(d.id) }))
       : this.getDeviceSummaries(params.userId);
+    const deviceRole = devices.find((device) => device.id === params.deviceId)?.role
+      ?? this.storage.getDevice(params.deviceId)?.role;
 
     ws.send(JSON.stringify({
       type: 'auth_ok',
@@ -1353,10 +1205,12 @@ export class HeadServer {
       authMethod: params.authMethod,
       user: userResponse,
       devices,
-      githubClientId: params.githubClientId ?? this.getGitHubClientId(),
+      githubClientId: params.githubClientId ?? this.authBackend.getAuthInfo().githubClientId,
       vapidPublicKey: params.vapidPublicKey ?? this.getVapidPublicKey(),
       relayVersion: this.options.version,
       pulseAckBytes: PULSE_ACK_EVERY_BYTES,
+      // Apps only: a tentacle has no use for the user's word list.
+      ...(deviceRole === 'app' && { voiceVocabulary: this.storage.getVoiceVocabulary(params.userId) }),
       ...(this.getVoiceCapability() && { voice: this.getVoiceCapability() }),
     }));
 
@@ -1371,8 +1225,6 @@ export class HeadServer {
     // process epoch, fence the preceding process's non-durable downlink so the
     // new UI cannot animate through old live events. Tentacle downlinks carry
     // commands and retain ordinary Pulse resume semantics across process epochs.
-    const deviceRole = devices.find((device) => device.id === params.deviceId)?.role
-      ?? this.storage.getDevice(params.deviceId)?.role;
     this.pulseHub.onDeviceConnected(params.deviceId, {
       discardPreviousProcessNonDurable: deviceRole === 'app',
     });
@@ -1402,65 +1254,9 @@ export class HeadServer {
     try { previous.terminate(); } catch { /* best effort */ }
   }
 
-  private completeAuth(
-    ws: WebSocket,
-    state: ClientState,
-    user: AuthUser,
-    msg: AuthMessage,
-    authMethod: AuthMethod['method'],
-  ): void {
-    const logger = getLogger();
-
-    // Persist user
-    this.storage.upsertUser(user.id, user.login, user.provider, user.email);
-
-    // Register device
-    const deviceId = msg.device.deviceId ?? `dev_${uuid().slice(0, 12)}`;
-    try {
-      this.storage.upsertDevice(
-        deviceId, user.id, msg.device.name, msg.device.role,
-        msg.device.kind, msg.device.publicKey, msg.device.encryptionKey,
-      );
-    } catch (err) {
-      logger.warn('Device registration failed', { ip: state.ip, error: (err as Error).message });
-      this.sendAuthError(ws, 'device_registration_failed', (err as Error).message);
-      return;
-    }
-
-    state.authenticated = true;
-    state.authenticatedAt = Date.now();
-    if (state.authTimer) { clearTimeout(state.authTimer); state.authTimer = undefined; }
-    state.deviceId = deviceId;
-    state.userId = user.id;
-    this.evictPreviousConnection(deviceId, ws);
-    this.connections.set(deviceId, ws);
-    this.userByDevice.set(deviceId, user.id);
-    trace('DEV-CONNECT', { device: deviceId, user: user.id, auth: 'inline' });
-
-    logger.info('Device authenticated', {
-      deviceId,
-      name: msg.device.name,
-      role: msg.device.role,
-      user: user.login,
-      ip: state.ip,
-    });
-
-    this.completeAuthHandshake(ws, {
-      deviceId,
-      userId: user.id,
-      user: {
-        id: user.id,
-        login: user.login,
-        provider: user.provider,
-        email: user.email,
-      },
-      authMethod,
-    });
-  }
-
   // --- Pairing tokens (in-memory) ---
 
-  private handleCreatePairingToken(ws: WebSocket, state: ClientState): void {
+  private async handleCreatePairingToken(ws: WebSocket, state: ClientState): Promise<void> {
     const logger = getLogger();
     if (!(this.options.pairingEnabled ?? true)) {
       this.sendError(ws, 'Pairing is disabled on this relay');
@@ -1470,32 +1266,23 @@ export class HeadServer {
       this.sendError(ws, 'Not authenticated');
       return;
     }
-
-    if (this.options.authBackend) {
-      try {
-        const result = this.options.authBackend.createPairingToken(state.userId);
-        logger.info('Pairing token created (via backend)', { userId: state.userId });
+    try {
+      // A remote (edge) backend creates tokens on the account service.
+      const backend = this.authBackend as AuthBackend & {
+        createPairingTokenAsync?: (userId: string) => Promise<{ token: string; expiresIn: number }>;
+      };
+      const result = backend.createPairingTokenAsync
+        ? await backend.createPairingTokenAsync(state.userId)
+        : backend.createPairingToken(state.userId);
+      if (!result?.token) throw new Error('no token returned');
+      logger.info('Pairing token created', { userId: state.userId });
+      if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'pairing_token_created', token: result.token, expiresIn: result.expiresIn }));
-      } catch {
-        // Remote backend needs async — fall through to error
-        this.sendError(ws, 'Pairing not available in remote mode');
       }
-      return;
+    } catch (err) {
+      logger.warn('Pairing token creation failed', { userId: state.userId, error: (err as Error).message });
+      this.sendError(ws, 'Pairing is temporarily unavailable');
     }
-
-    const token = `pt_${randomBytes(32).toString('hex')}`;
-    const ttl = this.options.pairingTtl ?? 300;
-    this.pairingTokens.set(token, {
-      userId: state.userId,
-      expiresAt: Date.now() + ttl * 1000,
-    });
-
-    logger.info('Pairing token created', { userId: state.userId, ttl });
-    ws.send(JSON.stringify({
-      type: 'pairing_token_created',
-      token,
-      expiresIn: ttl,
-    }));
   }
 
   private async handleRequestPairingToken(ws: WebSocket, state: ClientState, msg: { token?: string }): Promise<void> {
@@ -1508,52 +1295,17 @@ export class HeadServer {
       this.sendError(ws, 'Token required for pairing request');
       return;
     }
-
-    // If auth backend is configured, delegate
-    if (this.options.authBackend) {
-      const result = await this.options.authBackend.requestPairingToken(msg.token, state.ip);
-      if (!result.ok) {
-        this.sendAuthError(ws, result.code as AuthErrorCode, result.message);
-        return;
-      }
-      logger.info('Pairing token created (one-shot, via backend)', { userId: result.userId });
-      ws.send(JSON.stringify({
-        type: 'pairing_token_created',
-        token: result.pairingToken,
-        expiresIn: result.expiresIn,
-      }));
+    const result = await this.authBackend.requestPairingToken(msg.token, state.ip);
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (!result.ok) {
+      this.sendAuthError(ws, result.code as AuthErrorCode, result.message);
       return;
     }
-
-    // Legacy: inline pairing token creation
-    let authResult: ProviderAuthOutcome = { ok: false, message: 'No auth provider accepted the token' };
-    for (const provider of (this.options.authProviders?.values() ?? [])) {
-      authResult = await provider.authenticate({ token: msg.token, ip: state.ip });
-      if (authResult.ok) break;
-    }
-    if (!authResult.ok && this.options.authProvider && !this.options.authProviders?.size) {
-      authResult = await this.options.authProvider.authenticate({ token: msg.token, ip: state.ip });
-    }
-
-    if (!authResult.ok) {
-      this.sendAuthError(ws, 'auth_rejected', authResult.message);
-      return;
-    }
-
-    this.storage.upsertUser(authResult.user.id, authResult.user.login, authResult.user.provider, authResult.user.email);
-
-    const token = `pt_${randomBytes(32).toString('hex')}`;
-    const ttl = this.options.pairingTtl ?? 300;
-    this.pairingTokens.set(token, {
-      userId: authResult.user.id,
-      expiresAt: Date.now() + ttl * 1000,
-    });
-
-    logger.info('Pairing token created (one-shot)', { userId: authResult.user.id, ttl });
+    logger.info('Pairing token created (one-shot)', { userId: result.userId });
     ws.send(JSON.stringify({
       type: 'pairing_token_created',
-      token,
-      expiresIn: ttl,
+      token: result.pairingToken,
+      expiresIn: result.expiresIn,
     }));
   }
 
@@ -1595,7 +1347,7 @@ export class HeadServer {
     // Edge mode: the account service owns the device list and every auth
     // mirrors it back here, so the removal must reach it too (otherwise the
     // device reappears after the next reconnect).
-    const remote = this.options.authBackend;
+    const remote = this.authBackend;
     if (remote instanceof RemoteAuthBackend) {
       const userId = state.userId;
       remote.removeDevice(userId, targetDeviceId).then((ok) => {
@@ -1607,6 +1359,64 @@ export class HeadServer {
 
     // Broadcast removal to all remaining user devices
     this.broadcastDeviceRemoved(state.userId, targetDeviceId);
+  }
+
+  // --- Account deletion ---
+
+  /** Users whose deletion is in flight (a double tap must not run it twice). */
+  private deletingAccounts = new Set<string>();
+
+  /**
+   * Delete the requesting user's account: at the account store (the account
+   * service in edge mode) and in this relay's own storage and pulse state.
+   * Then tell every connected device and close it. Devices that were offline
+   * get `auth_error` code `account_deleted` when they next connect.
+   */
+  private async handleDeleteAccount(ws: WebSocket, state: ClientState): Promise<void> {
+    const logger = getLogger();
+    const userId = state.userId;
+    const deviceId = state.deviceId;
+    if (!userId || !deviceId) {
+      this.sendError(ws, 'Not authenticated');
+      return;
+    }
+    if (this.storage.getDevice(deviceId)?.role !== 'app') {
+      this.sendError(ws, 'Only the Kraki app can delete the account');
+      return;
+    }
+    if (this.deletingAccounts.has(userId)) return;
+    this.deletingAccounts.add(userId);
+    try {
+      const deviceIds = new Set(this.storage.getDevicesByUser(userId).map((d) => d.id));
+      if (this.authBackend.deleteAccount) {
+        for (const id of await this.authBackend.deleteAccount(userId)) deviceIds.add(id);
+      }
+      // This relay's own rows (the edge mirror; already gone when the
+      // account store is this relay's storage).
+      for (const id of this.storage.deleteUser(userId)) deviceIds.add(id);
+      logger.info('Account deleted', { userId, devices: deviceIds.size, byDevice: deviceId });
+
+      for (const id of deviceIds) {
+        const socket = this.connections.get(id);
+        if (socket) {
+          // Detach before closing so the close handler doesn't announce
+          // device_left or touch the deleted rows.
+          this.connections.delete(id);
+          this.userByDevice.delete(id);
+          this.clients.delete(socket);
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'account_deleted' }));
+            socket.close(ACCOUNT_DELETED_CLOSE_CODE, 'account_deleted');
+          }
+        }
+        this.pulseHub.forgetDevice(id);
+      }
+    } catch (err) {
+      logger.error('Account deletion failed', { userId, error: (err as Error).message });
+      this.sendError(ws, 'Could not delete the account. Try again.');
+    } finally {
+      this.deletingAccounts.delete(userId);
+    }
   }
 
   // --- Push token management ---
@@ -1634,7 +1444,11 @@ export class HeadServer {
 
     // Clean up push tokens from stale devices (offline >24h) to prevent
     // duplicate notifications from abandoned PWA installs on the same phone.
-    const onlineDeviceIds = Array.from(this.connections.keys());
+    // Only this user's devices matter; passing every connection on the relay
+    // made each registration O(global connections) in SQL parameters.
+    const onlineDeviceIds = this.storage.getDevicesByUser(state.userId)
+      .map((d) => d.id)
+      .filter((id) => this.connections.has(id));
     const pruned = this.storage.deleteStaleUserPushTokens(state.userId, state.deviceId, onlineDeviceIds);
     if (pruned > 0) {
       logger.info('Pruned stale push tokens', { userId: state.userId, count: pruned });

@@ -184,9 +184,19 @@ function safeEqualSecret(actual, expected) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-/** Legacy static-key authorizer for non-Kraki clients during migration. */
-export function createLegacyApiKeyAuthorizer(legacyApiKey) {
-  return ({ start }) => safeEqualSecret(start?.apiKey, legacyApiKey)
-    ? { ok: true }
-    : { ok: false, reason: 'missing_authorization', detail: 'missing legacy API key' };
+/**
+ * Legacy static-key authorizer for non-Kraki clients during migration. It
+ * bypasses lease verification, Head settlement and the daily quota, so it is
+ * off unless VOICE_API_KEY is set, and every use is reported (`onUse`) so it
+ * can be retired once nothing uses it.
+ */
+export function createLegacyApiKeyAuthorizer(legacyApiKey, options = {}) {
+  const onUse = typeof options.onUse === 'function' ? options.onUse : () => {};
+  return ({ start }) => {
+    if (legacyApiKey && safeEqualSecret(start?.apiKey, legacyApiKey)) {
+      onUse();
+      return { ok: true };
+    }
+    return { ok: false, reason: 'missing_authorization', detail: 'missing legacy API key' };
+  };
 }

@@ -20,7 +20,13 @@ export function testScope(paths, full = false) {
       scope.resilience = true;
     } else if (path.startsWith('packages/protocol/')) {
       Object.keys(scope).forEach(key => { scope[key] = true; });
-    } else if (/^packages\/(crypto|tentacle)\//.test(path)) {
+    } else if (path.startsWith('packages/crypto/')) {
+      // The Swift CryptoManager must stay byte-compatible with it.
+      scope.typescript = true;
+      scope.binary = true;
+      scope.resilience = true;
+      scope.native = true;
+    } else if (path.startsWith('packages/tentacle/')) {
       scope.typescript = true;
       scope.binary = true;
       scope.resilience = true;
@@ -38,8 +44,9 @@ export function testScope(paths, full = false) {
       scope.typescript = true;
     } else if (path.startsWith('scripts/')) {
       scope.typescript = true;
-    } else if (path.startsWith('.github/workflows/')) {
-      // Release/deploy workflows have their own build/smoke checks.
+    } else if (path.startsWith('.github/workflows/') || path === '.github/actionlint.yaml') {
+      // Linted by actionlint in the scope job on every run; release/deploy
+      // workflows have their own build/smoke checks.
       continue;
     } else {
       // Unknown build/config inputs: err on the side of coverage.

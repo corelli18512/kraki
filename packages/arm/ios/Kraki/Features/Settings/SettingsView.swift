@@ -24,6 +24,9 @@ struct SettingsView: View {
             ArchiveSettingsSection()
             aboutSection
             rateSection
+            if appState.user != nil {
+                DeleteAccountSection()
+            }
             #if DEBUG
             diagnosticsSection
             #endif

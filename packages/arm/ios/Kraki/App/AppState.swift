@@ -34,6 +34,9 @@ final class AppState {
     #if os(iOS)
     private(set) var pushManager: PushManager?
     #endif
+    /// Replaced only by the network harness: several harnesses in one test
+    /// process must not share UserDefaults.standard.
+    private(set) var voiceVocabularyStore = VoiceVocabularyStore()
     private(set) var preferencesManager: PreferencesManager?
     private(set) var pulseManager: PulseManager?
     private(set) var sessionSubscriptionController: SessionSubscriptionController!
@@ -63,15 +66,10 @@ final class AppState {
     init() {
         self.sessionStore = SessionStore()
         self.deviceStore = DeviceStore()
-        // The message DB is the persistence backbone for chat
-        // history. Failing to open it is fatal — without it the chat
-        // surface can't function and silent degradation would mask
-        // the failure. Loud crash on launch is the right signal.
-        do {
-            self.messageDatabase = try MessageDatabase()
-        } catch {
-            fatalError("Failed to open message database: \(error)")
-        }
+        // The message DB caches chat history that Tentacle replay can
+        // rebuild, so an unusable file is recreated rather than crashing
+        // every launch (see MessageDatabase.openRecovering).
+        self.messageDatabase = MessageDatabase.openRecovering()
         self.messageStore = MessageStore(db: messageDatabase)
         // The Keychain-kept lease lets a cold start warm the voice socket
         // in parallel with Head auth instead of after it.
@@ -81,6 +79,7 @@ final class AppState {
         // request-pull closure can capture self by weak reference
         // and the rest of setup (router, ws) can read it.
         self.attachmentStore = Self.makeAttachmentStore(for: self)
+        bindStores()
         setupNetworking()
 
         // App-termination flush. SwiftUI's `scenePhase` already drives
@@ -108,6 +107,11 @@ final class AppState {
 
     /// Paced attachment transfers through this app's encrypted channel.
     /// (Used by the production init too, so it must not be DEBUG-only.)
+    /// Cross-store links that need a fully initialized AppState.
+    private func bindStores() {
+        sessionStore.isDeviceStillPaired = { [weak deviceStore] id in deviceStore?.devices[id] != nil }
+    }
+
     static func makeAttachmentStore(for state: AppState) -> AttachmentStore {
         AttachmentStore { [weak state] id, sessionId, index in
             guard let state else { return false }
@@ -128,7 +132,7 @@ final class AppState {
     /// isolated database, outbox and process-local open-auth identity, for
     /// resilience tests against a local stack. Never production credentials.
     @MainActor
-    static func makeNetworkHarness(relayPort: Int, outboxURL: URL? = nil) -> AppState {
+    static func makeNetworkHarness(relayPort: Int, outboxURL: URL? = nil, vocabularyDefaults: UserDefaults? = nil) -> AppState {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("kraki-net-harness-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -140,6 +144,7 @@ final class AppState {
         }
         state.hasCompletedInitialConnect = false
         state.attachmentStore = makeAttachmentStore(for: state)
+        if let vocabularyDefaults { state.voiceVocabularyStore = VoiceVocabularyStore(defaults: vocabularyDefaults) }
         state.setupNetworking(outboxURL: outboxURL ?? root.appendingPathComponent("outbox.json"))
         #if os(macOS)
         state.authManager?.useEphemeralKeysForCurrentProcess()
@@ -178,6 +183,7 @@ final class AppState {
         self.hasStoredCredentials = true
         self.hasCompletedInitialConnect = true
         self.connectionStatus = .disconnected
+        bindStores()
     }
     #endif
 
@@ -359,6 +365,16 @@ final class AppState {
     var githubClientId: String?
     var relayVersion: String?
     var lastError: String?
+    /// Progress of a "Delete Account" request from this device.
+    var accountDeletion: AccountDeletionState = .idle
+    @ObservationIgnored var accountDeletionAttempt: UUID?
+    @ObservationIgnored var accountDeletedHandled = false
+    /// Shown on the sign-in screen after the account was deleted.
+    var accountDeletedNotice = false
+    #if os(macOS)
+    /// Kraki for Mac turns its built-in Kraki off when the account is deleted.
+    @ObservationIgnored var onAccountDeleted: (() -> Void)?
+    #endif
     /// 0 means "no reconnect in progress". Incremented by the WS client
     /// on every retry; reset to 0 on a successful connect.
     var reconnectAttempt: Int = 0
@@ -929,6 +945,7 @@ final class AppState {
         messageRouter = router
         wsClient?.onMessage = { [weak router] data in router?.handleRawMessage(data) }
         authManager?.clearStoredCredentials()
+        preferencesManager?.resetVocabulary()
         clearStoredRelayURL()
         deviceId = nil
         user = nil
@@ -1169,8 +1186,16 @@ final class AppState {
             targetDeviceId = explicitTarget
         } else if let payloadTarget {
             targetDeviceId = payloadTarget
-        } else if let sessionId, let session = sessionStore.sessions[sessionId] {
-            targetDeviceId = session.deviceId
+        } else if let sessionId {
+            // A session's messages go only to the computer that owns it. An
+            // unknown session must not fall back to every computer: that would
+            // encrypt this command for machines that have nothing to do with it.
+            guard let owner = sessionStore.sessions[sessionId]?.deviceId
+                    ?? sessionStore.archivedSessionInfo(sessionId)?.deviceId else {
+                KLog.d("⚠️ Not sending \(message["type"] as? String ?? "?"): unknown session")
+                return false
+            }
+            targetDeviceId = owner
         } else {
             targetDeviceId = nil
         }
@@ -1327,6 +1352,26 @@ extension AppState: SessionSubscriptionHost {
 extension AppState: KrakiVoiceInputHost {
     static let headPulseTarget = "@head"
 
+    /// The only message types the head sends inside a plaintext
+    /// `{from:"@head", msg}` Pulse wrapper (mirrors `HEAD_CONTROL_TYPES` in
+    /// packages/protocol). Anything else arriving that way, notably `auth_ok`,
+    /// `auth_error` and consumer/producer messages, is forged and dropped.
+    static let headControlTypes: Set<String> = [
+        "device_joined", "device_left", "device_removed", "device_pending",
+        "preferences_updated", "push_token_registered", "notification_preview",
+        "voice_lease_grant", "voice_lease_denied",
+    ]
+
+    /// The inner message of a `{from:"@head", msg}` wrapper, or nil when it is
+    /// not one of the head's own control types.
+    static func headControlMessage(in wrapper: [String: Any]) -> [String: Any]? {
+        guard wrapper["from"] as? String == headPulseTarget,
+              let message = wrapper["msg"] as? [String: Any],
+              let type = message["type"] as? String,
+              headControlTypes.contains(type) else { return nil }
+        return message
+    }
+
     var voiceUserID: String? { user?.id }
     var voiceDeviceID: String? { deviceId }
     var voiceTransportReady: Bool { connectionStatus == .connected }
@@ -1387,10 +1432,13 @@ extension AppState: PulseHost {
         // Head-originated control (presence, preferences, voice lease) is
         // intentionally plaintext inside ordered Pulse. Route its inner message
         // through the same control dispatcher as a raw WebSocket frame.
-        if object["from"] as? String == Self.headPulseTarget,
-           let message = object["msg"] as? [String: Any],
-           let messageData = try? JSONSerialization.data(withJSONObject: message) {
-            KLog.d("🎙️ Head control delivered type=\(message["type"] as? String ?? "unknown")")
+        if object["from"] as? String == Self.headPulseTarget {
+            guard let message = Self.headControlMessage(in: object),
+                  let messageData = try? JSONSerialization.data(withJSONObject: message) else {
+                KLog.d("⚠️ Dropped non-control message in head pulse wrapper")
+                return
+            }
+            KLog.d("🎙️ Head control delivered type=\(message["type"] as? String ?? "")")
             messageRouter?.handleRawMessage(messageData)
             return
         }

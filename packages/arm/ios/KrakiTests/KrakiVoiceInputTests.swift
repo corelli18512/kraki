@@ -516,6 +516,55 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertNil(VoiceCapability(json: ["resource": "voice/doubao"]))
     }
 
+    func testCapabilityOnlyAcceptsKrakisOwnTLSBroker() {
+        func capability(_ url: String) -> VoiceCapability? {
+            VoiceCapability(json: ["brokerUrl": url, "resource": "voice/doubao"])
+        }
+        XCTAssertNotNil(capability("wss://cn.stt.kraki.chat/voice"))
+        XCTAssertNotNil(capability("wss://kraki.chat/voice"))
+        XCTAssertNil(capability("ws://cn.stt.kraki.chat/voice"), "cleartext")
+        XCTAssertNil(capability("wss://evil.example/voice"), "not Kraki's")
+        XCTAssertNil(capability("wss://kraki.chat.evil.example/voice"))
+        XCTAssertNil(capability("wss://notkraki.chat/voice"))
+        XCTAssertNil(capability("https://cn.stt.kraki.chat/voice"))
+        // Debug builds (tests) also accept a local broker.
+        XCTAssertNotNil(capability("ws://127.0.0.1:4500/voice"))
+    }
+
+    func testSecretShapedTermsNeverLeaveTheDevice() {
+        let sensitive = [
+            "ghp_0123456789abcdefABCDEF0123456789abcd", "github_pat_11ABCDEFG0123456789",
+            "sk-proj-AbC123dEf456GhI789", "xoxb-1234-5678-abcdEFGH", "AKIAIOSFODNN7EXAMPLE",
+            "AIzaSyD-1234567890abcdefghijk", "eyJhbGciOiJIUzI1NiJ9", "glpat-xxxxxxxxxxxxxxxxxxxx",
+            "https://internal.corp.example/x", "build01.corp.internal:8443", "alice@example.com",
+            "packages/arm/ios", "C:\\Users\\me", "3f9a1c2b7d4e5f60a1b2", "Zk3q9Xv2Lm8Rt5Wy1Pc7",
+        ]
+        for token in sensitive {
+            XCTAssertTrue(VoiceContextTermFilter.isSensitive(token), token)
+        }
+        let useful = ["KrakiVoiceInputController", "PostgreSQL", "Next.js", "gpt-5.6-sol", "InternalCodename-v2",
+                      "snake_case_name", "iPhone", "README.md"]
+        for token in useful {
+            XCTAssertFalse(VoiceContextTermFilter.isSensitive(token), token)
+        }
+    }
+
+    func testContextTermsDropSecretsFromMessagesAndTitle() {
+        let session = SessionInfo(id: "s", deviceId: "d", deviceName: "D", agent: "pi",
+                                  title: "ghp_0123456789abcdefABCDEF0123456789abcd",
+                                  state: .idle, mode: .auto, lastSeq: 0, readSeq: 0, messageCount: 0,
+                                  createdAt: Date(), pinned: false)
+        let message = ChatMessage(type: "user_message", seq: 1, sessionId: "s", deviceId: "d", timestamp: nil,
+                                  payload: ["content": AnyCodable(
+                                    "use sk-proj-AbC123dEf456GhI789 on build01.corp.internal:8443 for PaymentService")])
+        let context = VoiceSessionContextBuilder.build(session: session, recentMessages: [message],
+                                                       userVocabulary: [], shareConversation: true)
+        XCTAssertTrue(context.vocabulary.contains("PaymentService"))
+        XCTAssertFalse(context.vocabulary.contains { $0.contains("sk-proj") || $0.contains("ghp_") || $0.contains("corp.internal") })
+        guard case .object(let sessionFields)? = context.fields["session"] else { return XCTFail("missing session") }
+        XCTAssertEqual(sessionFields["title"], .string(""))
+    }
+
     func testVoiceTranscriptRevisionChangesWhenLatestTextChanges() {
         let first = VoiceComposerPresentation.transcriptPieces(
             prefix: "",
@@ -901,6 +950,20 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertGreaterThan(offset, 0)
         XCTAssertLessThanOrEqual(offset, raw.count)
         XCTAssertTrue(String(Array(raw).dropFirst(offset)).count < raw.count)
+    }
+
+    func testCorrectionAlignmentOnLongDictationFindsTheConsumedPrefix() {
+        // A long dictation: the corrected text covers the first half of the
+        // raw text, with small edits. The banded alignment must still find
+        // the end of that half, and stay fast.
+        let sentence = "please refactor the voice input controller and keep the tests green "
+        let raw = String(repeating: sentence, count: 40)
+        let half = String(repeating: sentence, count: 20)
+        let corrected = half.replacingOccurrences(of: "voice input controller", with: "VoiceInputController")
+        let started = Date()
+        let offset = KrakiVoiceInputController.alignedRawPrefixLength(corrected: corrected, raw: raw)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5)
+        XCTAssertEqual(Double(offset), Double(half.count), accuracy: 3)
     }
 
     func testCancelSuppressesLateGrantAndLateFinal() async {

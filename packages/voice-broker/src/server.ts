@@ -1,6 +1,10 @@
 /**
- * Standalone Kraki voice broker used by local development and direct Doubao
- * tests. Production uses the matching @coinfra/voice gateway adapter.
+ * DEVELOPMENT ONLY. Standalone Kraki voice broker for local development and
+ * direct Doubao tests; it binds to 127.0.0.1 by default. Production uses the
+ * @coinfra/voice gateway via deploy/coinfra-lease-serve.mjs, which speaks the
+ * protocol the apps use (this broker lags it: no correction_delta /
+ * recordingId / rawText, in-memory per-connection quota, and `config` lets
+ * the client override Doubao request fields). Do not expose it publicly.
  *
  * A signed lease authorizes the WebSocket once; the connection then carries
  * many sequential start / binary PCM / finish cycles.
@@ -72,6 +76,9 @@ export async function startBroker(opts: BrokerOptions): Promise<BrokerServer> {
   const host = opts.host ?? '127.0.0.1';
   const path = opts.path ?? '/voice';
   const logger = opts.logger ?? createLogger('broker');
+  if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
+    logger.warn('Standalone voice broker is for development only; it is not hardened for public exposure', { host });
+  }
   const expectedResource: VoiceResource = opts.resource ?? 'voice/doubao';
   const sampleRateHz = opts.sampleRateHz ?? 16000;
   const bytesPerSecond = sampleRateHz * 2;
@@ -107,7 +114,8 @@ export async function startBroker(opts: BrokerOptions): Promise<BrokerServer> {
     res.end();
   });
 
-  const wss = new WebSocketServer({ server: http, path });
+  // Audio frames are small; refuse anything near ws's 100 MB default.
+  const wss = new WebSocketServer({ server: http, path, maxPayload: 1024 * 1024 });
   const owners = new Map<string, ConnectionOwner>();
   const pongTimeouts = new Map<WebSocket, ReturnType<typeof setTimeout>>();
   const closeConnections = new Set<() => void>();

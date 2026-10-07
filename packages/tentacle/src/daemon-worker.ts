@@ -44,6 +44,7 @@ process.on('unhandledRejection', (reason) => {
 import { RelayClient } from './relay-client.js';
 import { AccountUsageMonitor, UsageHistory } from './account-usage.js';
 import { join } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { SessionManager } from './session-manager.js';
 import { KeyManager } from './key-manager.js';
 import { AttachmentStore } from './attachment-store.js';
@@ -136,12 +137,20 @@ export async function startWorker(): Promise<WorkerResult> {
     ensureTccBundleRegistered();
     // Also purge zombie Launch Services entries from past updates / builds —
     // a one-time sweep that fixes every already-installed machine.
-    const sweep = cleanupStaleBundleEntries();
-    if (sweep.removed.length > 0) {
-      logger.info(
-        { removedCount: sweep.removed.length },
-        'Cleaned stale Launch Services entries for chat.kraki.cli (TCC hygiene)',
-      );
+    // `lsregister -dump` is large and synchronous: sweep once per installed
+    // version, not on every daemon start.
+    const sweepMarker = join(getKrakiHome(), '.ls-sweep-version');
+    let sweptVersion = '';
+    try { sweptVersion = readFileSync(sweepMarker, 'utf8').trim(); } catch { /* never swept */ }
+    if (sweptVersion !== getVersion()) {
+      const sweep = cleanupStaleBundleEntries();
+      if (sweep.removed.length > 0) {
+        logger.info(
+          { removedCount: sweep.removed.length },
+          'Cleaned stale Launch Services entries for chat.kraki.cli (TCC hygiene)',
+        );
+      }
+      try { writeFileSync(sweepMarker, getVersion()); } catch { /* retried next start */ }
     }
   }
 
@@ -159,9 +168,11 @@ export async function startWorker(): Promise<WorkerResult> {
     }
     let lastFda = fdaStatus;
     let nextCheckAt = 0;
+    const monitorStartedAt = Date.now();
     fdaMonitor = setInterval(() => {
-      // Poll quickly while the user may be granting access, slowly afterwards
-      // (FDA can also be revoked at any time).
+      // Poll quickly while the user may be granting access (the first minutes
+      // after start or a change), slowly afterwards (FDA can also be revoked at
+      // any time). Every probe also rewrites status.json.
       if (Date.now() < nextCheckAt) return;
       probeFda().then((status) => {
         if (status !== lastFda) {
@@ -169,7 +180,8 @@ export async function startWorker(): Promise<WorkerResult> {
           lastFda = status;
         }
         updateFdaStatus(status);
-        nextCheckAt = Date.now() + (status === 'granted' ? 60_000 : 0);
+        const eager = status !== 'granted' && Date.now() - monitorStartedAt < 10 * 60_000;
+        nextCheckAt = Date.now() + (eager ? 0 : 60_000);
       }).catch(() => {});
     }, 3000);
     fdaMonitor.unref();
@@ -226,7 +238,7 @@ export async function startWorker(): Promise<WorkerResult> {
 
   // 3b. Start Kraki MCP server (in-process HTTP, loopback only). If bind
   //     fails, log and continue without it — daemon stays up.
-  let mcpInfo: { urlForSession: (sid: string) => string; bearerToken: string } | undefined;
+  let mcpInfo: { urlForSession: (sid: string) => string; tokenForSession: (sid: string) => string } | undefined;
   let mcpServer: KrakiMcpServer | null = null;
   try {
     mcpServer = new KrakiMcpServer({
@@ -236,7 +248,7 @@ export async function startWorker(): Promise<WorkerResult> {
     const started = await mcpServer.start();
     mcpInfo = {
       urlForSession: started.urlForSession,
-      bearerToken: started.bearerToken,
+      tokenForSession: started.tokenForSession,
     };
     logger.info({ port: started.port }, 'Kraki MCP server started');
   } catch (err) {
@@ -382,6 +394,20 @@ export async function startWorker(): Promise<WorkerResult> {
     if (info.user?.region) {
       updateRegion(info.user.region);
     }
+    announceUpdateResult();
+  };
+
+  relay.onAccountDeleted = () => {
+    logger.warn('The Kraki account was deleted — signing this computer out and stopping');
+    void (async () => {
+      const { forgetDeletedAccount, retireAutostart } = await import('./account-deleted.js');
+      forgetDeletedAccount();
+      retireAutostart();
+      await shutdown().catch(() => {});
+      // Clean exit: supervisors don't restart it, and without a config the
+      // next `kraki` runs setup from scratch.
+      process.exit(0);
+    })();
   };
 
   relay.onFatalError = (message) => {
@@ -393,6 +419,56 @@ export async function startWorker(): Promise<WorkerResult> {
     shutdown().catch(() => {}).finally(() => process.exit(1));
   };
 
+  // "Is a newer Kraki available here?" — shown on this computer in every app —
+  // and updating it from an app (remote-update.ts).
+  const { watchUpdateStatus, detectInstall } = await import('./update-status.js');
+  const remoteUpdate = await import('./remote-update.js');
+  const install = detectInstall();
+  remoteUpdate.cleanupAfterUpdate(install.target);
+  const remoteState = () => {
+    const block = remoteUpdate.remoteUpdateBlock(install, loadConfig());
+    return block ? { remote: false, remoteBlock: block } : { remote: true };
+  };
+  const updateWatch = watchUpdateStatus((info) => relay.setUpdateInfo(info), install, remoteState);
+  // The switch (`kraki config remote-update`, Kraki for Mac's setting) is
+  // read locally; re-announce within a minute when it changes.
+  const remoteRecheck = setInterval(() => {
+    const cur = relay.currentUpdateInfo;
+    if (!cur) return;
+    const r = remoteState();
+    if (cur.remote === r.remote && cur.remoteBlock === (r as { remoteBlock?: string }).remoteBlock) return;
+    const { remoteBlock: _old, ...rest } = cur;
+    relay.setUpdateInfo({ ...rest, ...r });
+  }, 60_000);
+  remoteRecheck.unref();
+  const stopUpdateWatch = () => { updateWatch.stop(); clearInterval(remoteRecheck); };
+  const updater = new remoteUpdate.RemoteUpdater({
+    install,
+    currentVersion: getVersion(),
+    status: () => {
+      const info = relay.currentUpdateInfo;
+      return info ? { ...info, ...remoteState() } : null;
+    },
+    runningSessions: () => relay.runningSessionCount(),
+    emit: (p) => relay.sendUpdateStatus(p),
+  });
+  relay.onUpdateRequest = async (requestId, when) => {
+    // A stale "no update" answer must not block a release published since.
+    if (!relay.currentUpdateInfo?.latest) await updateWatch.checkNow();
+    await updater.request(requestId, when);
+  };
+  const announceUpdateResult = () => {
+    const r = remoteUpdate.takeUnannouncedResult();
+    if (r) relay.sendUpdateStatus({ phase: r.phase, requestId: r.requestId, from: r.from, to: r.to, error: r.error });
+  };
+  // The applier writes the outcome only after this (new) daemon is online,
+  // so look for it for a few minutes after start, not just once.
+  let resultChecks = 0;
+  const resultWatch = setInterval(() => {
+    if (++resultChecks > 36) { clearInterval(resultWatch); return; }
+    if (relay.getState() === 'connected') announceUpdateResult();
+  }, 5000);
+  resultWatch.unref();
   relay.connect();
   logger.info({ relay: config.relay, device: config.device.name }, 'Daemon running');
   {
@@ -418,6 +494,7 @@ export async function startWorker(): Promise<WorkerResult> {
     clearDaemonIdentity();
     if (fdaMonitor) clearInterval(fdaMonitor);
     usageMonitor?.stop();
+    stopUpdateWatch();
     clearStatusFile();
     relay.disconnect();
     await adapter.stop();

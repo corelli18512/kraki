@@ -25,8 +25,17 @@ export interface TurnLifecycleEvent {
   turnId?: string;
 }
 
+/** Subagent attribution shared by trace callbacks: `parentToolCallId` marks
+ *  a step the subagent took; `subagent` marks the step that dispatched it. */
+export interface SubagentTraceFields {
+  parentToolCallId?: string;
+  subagent?: import('@kraki/protocol').SubagentInfo;
+}
+
 export interface MessageEvent extends TurnLifecycleEvent {
   content: string;
+  /** Narration trace only: a subagent said this. */
+  parentToolCallId?: string;
 }
 
 export interface MessageDeltaEvent extends TurnLifecycleEvent {
@@ -35,6 +44,8 @@ export interface MessageDeltaEvent extends TurnLifecycleEvent {
 
 export interface PermissionRequestEvent extends TurnLifecycleEvent {
   id: string;
+  /** A subagent asked: the dispatching step's toolCallId. */
+  parentToolCallId?: string;
   toolArgs: ToolArgs;
   description: string;
 }
@@ -46,25 +57,18 @@ export interface QuestionRequestEvent extends TurnLifecycleEvent {
   choices?: string[];
 }
 
-export interface ToolStartEvent extends TurnLifecycleEvent {
+export interface ToolStartEvent extends TurnLifecycleEvent, SubagentTraceFields {
   toolName: string;
   args: Record<string, unknown>;
   toolCallId?: string;
 }
 
-export interface ToolCompleteEvent extends TurnLifecycleEvent {
+export interface ToolCompleteEvent extends TurnLifecycleEvent, SubagentTraceFields {
   toolName: string;
   result: string;
   toolCallId?: string;
   success?: boolean;
   attachments?: import('@kraki/protocol').Attachment[];
-}
-
-/** Emitted alongside a tool_complete that carries one or more
- *  `ContentRef`s. Tells the runtime (RelayClient) to broadcast the bytes
- *  to all connected devices as `attachment_data` chunks. */
-export interface AttachmentBytesEvent extends TurnLifecycleEvent {
-  refs: Array<import('@kraki/protocol').ContentRef>;
 }
 
 export interface SessionEndedEvent {
@@ -136,6 +140,8 @@ export interface SendMessageOptions {
 }
 
 export type QuestionResponseResult = 'accepted' | 'not_found' | 'session_gone';
+/** Whether a permission decision reached a live pending request. */
+export type PermissionResponseResult = QuestionResponseResult;
 
 // ── The adapter interface ───────────────────────────────
 
@@ -167,9 +173,6 @@ export abstract class AgentAdapter {
   onQuestionRequest: ((sessionId: string, event: QuestionRequestEvent) => void) | null = null;
   onToolStart: ((sessionId: string, event: ToolStartEvent) => void) | null = null;
   onToolComplete: ((sessionId: string, event: ToolCompleteEvent) => void) | null = null;
-  /** Called immediately after onToolComplete when bytes need to be pushed
-   *  (broadcast as `attachment_data` chunks) to connected devices. */
-  onAttachmentBytes: ((sessionId: string, event: AttachmentBytesEvent) => void) | null = null;
   onIdle: ((sessionId: string, event?: TurnLifecycleEvent) => void) | null = null;
   /** Called when the adapter has finished all writes to the session's history file
    *  after a turn completes. Used by EventsWatcher to safely resume watching. */
@@ -237,13 +240,15 @@ export abstract class AgentAdapter {
   ): Promise<void>;
 
   /** Respond to a pending permission request. `reason` (deny only) is the
-   *  operator's explanation; adapters relay it to the agent. */
+   *  operator's explanation; adapters relay it to the agent. Returns whether a
+   *  live pending request took the decision; callers must not announce a
+   *  resolution otherwise. */
   abstract respondToPermission(
     sessionId: string,
     permissionId: string,
     decision: PermissionDecision,
     reason?: string,
-  ): Promise<void>;
+  ): Promise<PermissionResponseResult>;
 
   /** Respond to a pending agent question. Returns whether the live runtime
    *  actually accepted the answer; callers must not resolve UI state earlier. */

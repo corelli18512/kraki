@@ -49,6 +49,33 @@ fetch_latest_version() {
   fi
 }
 
+# ── Verify the download ──────────────────────────────────
+#
+# Every release publishes SHA256SUMS.txt. Refuse a download whose hash does
+# not match (a corrupted or tampered file); a release without the file is
+# refused too.
+
+verify_checksum() {
+  DIR="$1"
+  SUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS.txt"
+  if ! curl -fsSL -o "${DIR}/SHA256SUMS.txt" "$SUMS_URL"; then
+    echo "Error: Could not download checksums — ${SUMS_URL}"
+    rm -rf "$DIR"
+    exit 1
+  fi
+  EXPECTED=$(awk -v f="$ASSET" '$2 == f || $2 == "*"f { print $1; exit }' "${DIR}/SHA256SUMS.txt")
+  if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL=$(sha256sum "${DIR}/${ASSET}" | awk '{ print $1 }')
+  else
+    ACTUAL=$(shasum -a 256 "${DIR}/${ASSET}" | awk '{ print $1 }')
+  fi
+  if [ -z "$EXPECTED" ] || [ "$EXPECTED" != "$ACTUAL" ]; then
+    echo "Error: Checksum mismatch for ${ASSET} — refusing to install"
+    rm -rf "$DIR"
+    exit 1
+  fi
+}
+
 # ── Stop a running daemon before replacing it ────────────
 #
 # An upgrade over a running daemon left the old version running (and the
@@ -80,6 +107,8 @@ install() {
     rm -rf "$TMP"
     exit 1
   fi
+
+  verify_checksum "$TMP"
 
   stop_running_daemon
 

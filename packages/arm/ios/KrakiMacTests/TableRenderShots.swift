@@ -114,6 +114,8 @@ Links and code in cells:
 Error rate is highest on `/api/voice/lease`.
 """#
     func testRenderTables() throws {
+        // A titled window "off-screen" is pulled back onto a display by macOS.
+        try requireForegroundUITests()
         let sid = "table-shot", dev = "table-dev"
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("tbl-\(UUID().uuidString)")
         let db = try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite"))

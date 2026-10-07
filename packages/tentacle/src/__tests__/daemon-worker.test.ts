@@ -68,7 +68,7 @@ vi.mock('../mcp/index.js', () => ({
   KrakiMcpServer: vi.fn().mockImplementation(() => ({
     start: vi.fn().mockResolvedValue({
       urlForSession: (sid: string) => `http://127.0.0.1:1234/mcp/${sid}`,
-      bearerToken: 'test-bearer',
+      tokenForSession: (sid: string) => `test-token-${sid}`,
       port: 1234,
       baseUrl: 'http://127.0.0.1:1234/mcp',
     }),

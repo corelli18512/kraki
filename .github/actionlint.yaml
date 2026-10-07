@@ -1,0 +1,5 @@
+self-hosted-runner:
+  # GitHub-hosted labels newer than actionlint 1.7.7 knows about.
+  labels:
+    - macos-26
+    - macos-15-intel

@@ -9,7 +9,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, createWriteStream, unlinkSync, chmodSync, renameSync, copyFileSync, realpathSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, createWriteStream, unlinkSync, chmodSync, renameSync, copyFileSync, realpathSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { tmpdir, platform } from 'node:os';
 import { request as httpRequest, type IncomingMessage, type RequestOptions as HttpRequestOptions } from 'node:http';
@@ -19,7 +19,7 @@ import { createHash } from 'node:crypto';
 import { isSea } from 'node:sea';
 import chalk from 'chalk';
 import ora from 'ora';
-import { getKrakiHome } from './config.js';
+import { getConfigDir, getKrakiHome } from './config.js';
 import { probeFda, registerKrakiAppBundle, unregisterAppBundlePath, cleanupStaleBundleEntries } from './checks.js';
 
 const GITHUB_REPO = 'corelli18512/kraki';
@@ -49,6 +49,8 @@ export function detectInstallMethod(): InstallMethod {
 
 interface GitHubRelease {
   tag_name: string;
+  draft?: boolean;
+  prerelease?: boolean;
   assets?: Array<{ name: string; browser_download_url: string }>;
 }
 
@@ -185,6 +187,16 @@ function createProxiedRequest(
   return connectReq;
 }
 
+/** Follow a redirect, never from https to plain http (update downloads are
+ *  installed as executables). */
+function followRedirect(from: URL, location: string, redirects: number): Promise<IncomingMessage> {
+  const next = new URL(location, from);
+  if (from.protocol === 'https:' && next.protocol !== 'https:') {
+    return Promise.reject(new Error(`Refusing insecure redirect to ${next.origin}`));
+  }
+  return sendRequest(next.toString(), redirects + 1);
+}
+
 function sendRequest(url: string, redirects = 0): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
     if (redirects > MAX_REDIRECTS) {
@@ -198,7 +210,7 @@ function sendRequest(url: string, redirects = 0): Promise<IncomingMessage> {
       const location = getLocation(res.headers.location);
       if (isRedirect(res.statusCode) && location) {
         res.resume();
-        sendRequest(new URL(location, target).toString(), redirects + 1).then(resolve, reject);
+        followRedirect(target, location, redirects).then(resolve, reject);
         return;
       }
       resolve(res);
@@ -206,7 +218,7 @@ function sendRequest(url: string, redirects = 0): Promise<IncomingMessage> {
       const location = getLocation(res.headers.location);
       if (isRedirect(res.statusCode) && location) {
         res.resume();
-        sendRequest(new URL(location, target).toString(), redirects + 1).then(resolve, reject);
+        followRedirect(target, location, redirects).then(resolve, reject);
         return;
       }
       resolve(res);
@@ -217,17 +229,25 @@ function sendRequest(url: string, redirects = 0): Promise<IncomingMessage> {
   });
 }
 
+/** Largest text response read into memory (release JSON, checksums). */
+const MAX_TEXT_RESPONSE_BYTES = 8 * 1024 * 1024;
+
 function readResponseText(res: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = '';
     res.setEncoding('utf8');
-    res.on('data', (chunk) => { data += chunk; });
+    res.on('data', (chunk: string) => {
+      data += chunk;
+      if (data.length > MAX_TEXT_RESPONSE_BYTES) {
+        res.destroy(new Error('Response too large'));
+      }
+    });
     res.on('end', () => resolve(data));
     res.on('error', reject);
   });
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
+export async function fetchJson<T>(url: string): Promise<T> {
   const res = await sendRequest(url);
   if (res.statusCode !== 200) {
     throw new Error(`HTTP ${res.statusCode}`);
@@ -245,6 +265,8 @@ export async function fetchLatestVersion(): Promise<string | null> {
   try {
     const releases = await fetchJsonArray(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20`);
     for (const r of releases) {
+      // Never offer a draft or pre-release as "the latest version".
+      if (r.draft || r.prerelease) continue;
       const tag = r.tag_name;
       // Support both v* and tentacle-v* tag formats
       if (tag.startsWith('v')) {
@@ -286,9 +308,9 @@ function readCache(): UpdateCheckCache | null {
   return null;
 }
 
-function writeCache(latestVersion: string): void {
+export function writeCache(latestVersion: string): void {
   try {
-    mkdirSync(getKrakiHome(), { recursive: true });
+    getConfigDir();
     writeFileSync(getCachePath(), JSON.stringify({ latestVersion, checkedAt: Date.now() }));
   } catch { /* ignore */ }
 }
@@ -318,17 +340,27 @@ export async function checkForUpdate(currentVersion: string, timeoutMs = 2000): 
   return null;
 }
 
-function isNewer(latest: string, current: string): boolean {
-  const l = latest.split('.').map(Number);
-  const c = current.split('.').map(Number);
+/** Semantic-version order, including pre-releases (`1.2.0-beta.1` < `1.2.0`). */
+export function isNewer(latest: string, current: string): boolean {
+  const split = (v: string) => {
+    const [core, pre = ''] = v.replace(/^v/, '').split('+')[0].split(/-(.*)/s);
+    return { core: core.split('.').map((n) => Number.parseInt(n, 10) || 0), pre: pre ? pre.split('.') : [] };
+  };
+  const l = split(latest), c = split(current);
   for (let i = 0; i < 3; i++) {
-    if ((l[i] ?? 0) > (c[i] ?? 0)) return true;
-    if ((l[i] ?? 0) < (c[i] ?? 0)) return false;
+    if ((l.core[i] ?? 0) !== (c.core[i] ?? 0)) return (l.core[i] ?? 0) > (c.core[i] ?? 0);
   }
-  return false;
+  if (l.pre.length === 0 || c.pre.length === 0) return l.pre.length === 0 && c.pre.length > 0;
+  for (let i = 0; i < Math.min(l.pre.length, c.pre.length); i++) {
+    const a = l.pre[i], b = c.pre[i];
+    if (a === b) continue;
+    const na = /^\d+$/.test(a), nb = /^\d+$/.test(b);
+    if (na && nb) return Number(a) > Number(b);
+    if (na !== nb) return nb; // alphanumeric outranks numeric
+    return a > b;
+  }
+  return l.pre.length > c.pre.length;
 }
-
-// ── Update command ──────────────────────────────────────
 
 export async function stopDaemonForUpdate(
   deps: { isDaemonRunning: () => boolean; stopDaemon: () => boolean },
@@ -363,6 +395,10 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   }
 
   const method = detectInstallMethod();
+  if (method !== 'npm' && method !== 'sea') {
+    spinner.fail('Cannot determine install method. Update manually.');
+    return;
+  }
   spinner.text = `Updating ${currentVersion} → ${latest}…`;
 
   // Import daemon management upfront — needed for pre-update stop and post-update restart
@@ -388,6 +424,25 @@ export async function performUpdate(currentVersion: string): Promise<void> {
   //     event. Skipping this leaves orphaned tool_use blocks in the
   //     conversation history and the next resume hits CAPIError 400.
   // Wait briefly for the process to release locks / finish flushing.
+  // Download and verify BEFORE stopping the daemon: the computer stays online
+  // during the download, and a failed download or checksum leaves it running.
+  let installStaged: (() => void) | undefined;
+  if (method === 'sea') {
+    try {
+      installStaged = await prepareBinaryUpdate(latest, (received, total) => {
+        if (total > 0) {
+          const pct = Math.floor((received / total) * 100);
+          spinner.text = `Downloading ${pct}% (${formatBytes(received)} / ${formatBytes(total)})…`;
+        } else {
+          spinner.text = `Downloading ${formatBytes(received)}…`;
+        }
+      });
+    } catch (err) {
+      spinner.fail((err as Error).message);
+      throw err;
+    }
+  }
+
   if (daemonWasRunning) {
     spinner.text = `Stopping daemon before update…`;
     try {
@@ -405,18 +460,9 @@ export async function performUpdate(currentVersion: string): Promise<void> {
         await updateViaNpm(latest);
         break;
       case 'sea':
-        await updateViaBinary(latest, (received, total) => {
-          if (total > 0) {
-            const pct = Math.floor((received / total) * 100);
-            spinner.text = `Downloading ${pct}% (${formatBytes(received)} / ${formatBytes(total)})…`;
-          } else {
-            spinner.text = `Downloading ${formatBytes(received)}…`;
-          }
-        });
+        spinner.text = 'Installing…';
+        installStaged!();
         break;
-      default:
-        spinner.fail('Cannot determine install method. Update manually.');
-        return;
     }
 
     spinner.succeed(`Updated ${chalk.dim(currentVersion)} → ${chalk.green(latest)}`);
@@ -483,7 +529,7 @@ async function updateViaNpm(version: string): Promise<void> {
 
 // ── SEA binary update ───────────────────────────────────
 
-function getPlatformAssetName(): string {
+export function getPlatformAssetName(): string {
   const platform = process.platform === 'darwin' ? 'macos'
     : process.platform === 'win32' ? 'windows'
     : process.platform;
@@ -519,14 +565,18 @@ function detectAppBundle(): string | null {
  * Get the .app bundle asset name for macOS.
  * e.g. "kraki-macos-arm64.app.tar.gz"
  */
-function getAppBundleAssetName(): string {
+export function getAppBundleAssetName(): string {
   return `kraki-macos-${process.arch}.app.tar.gz`;
 }
 
-async function updateViaBinary(
+/**
+ * Download and verify the release for this platform into a private temp
+ * directory. Returns the step that installs it (run after the daemon stops).
+ */
+async function prepareBinaryUpdate(
   version: string,
   onProgress?: (received: number, total: number) => void,
-): Promise<void> {
+): Promise<() => void> {
   // Try v* tag first, fall back to tentacle-v*
   let release: GitHubRelease;
   try {
@@ -540,8 +590,7 @@ async function updateViaBinary(
     const appBundleName = getAppBundleAssetName();
     const appAsset = release.assets?.find((a) => a.name === appBundleName);
     if (appAsset) {
-      await updateViaAppBundle(release, appAsset, onProgress);
-      return;
+      return prepareAppBundleUpdate(release, appAsset, onProgress);
     }
     // Fall through to standalone binary update if .app asset not found
   }
@@ -555,80 +604,73 @@ async function updateViaBinary(
   const downloadUrl = asset.browser_download_url;
   const currentBinary = process.execPath;
 
-  // Download to OS temp dir (always user-writable)
-  const tmpPath = join(tmpdir(), assetName + '.update');
+  // A fresh 0700 directory with an unpredictable name: a fixed /tmp path let
+  // another local user pre-create or swap the file between check and install.
+  const workDir = mkdtempSync(join(tmpdir(), 'kraki-update-'));
+  const tmpPath = join(workDir, assetName);
+  try {
+    await downloadFile(downloadUrl, tmpPath, onProgress);
+    await verifyReleaseChecksum(release, assetName, tmpPath);
 
-  // Download binary
-  await downloadFile(downloadUrl, tmpPath, onProgress);
-
-  // Verify checksum if SHA256SUMS is available
-  const checksumAsset = release.assets?.find((a) => a.name === 'SHA256SUMS.txt');
-  if (checksumAsset) {
-    const checksumData = await fetchText(checksumAsset.browser_download_url);
-    const expectedHash = parseChecksum(checksumData, assetName);
-    if (expectedHash) {
-      const actualHash = hashFile(tmpPath);
-      if (actualHash !== expectedHash) {
-        unlinkSync(tmpPath);
-        throw new Error(`Checksum mismatch for ${assetName}: expected ${expectedHash.slice(0, 12)}…, got ${actualHash.slice(0, 12)}…`);
-      }
-    }
-  }
-
-  // Make executable
-  if (process.platform !== 'win32') {
-    chmodSync(tmpPath, 0o755);
-  }
-
-  // macOS: strip quarantine/provenance xattrs on the temp file *before*
-  // copying so the installed binary is clean from the start.
-  if (process.platform === 'darwin') {
-    stripProvenance(tmpPath);
+    if (process.platform !== 'win32') chmodSync(tmpPath, 0o755);
+    // macOS: strip quarantine/provenance xattrs on the temp file *before*
+    // copying so the installed binary is clean from the start.
+    if (process.platform === 'darwin') stripProvenance(tmpPath);
+  } catch (err) {
+    rmSync(workDir, { recursive: true, force: true });
+    throw err;
   }
 
   // Replace current binary — try direct first, sudo fallback for system dirs
-  replaceBinary(tmpPath, currentBinary);
+  return () => {
+    try {
+      replaceBinary(tmpPath, currentBinary);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  };
+}
+
+/**
+ * The release must list a SHA-256 for the asset and the download must match
+ * it. Fails closed: an install never proceeds unverified.
+ */
+async function verifyReleaseChecksum(release: GitHubRelease, assetName: string, path: string): Promise<void> {
+  const checksumAsset = release.assets?.find((a) => a.name === 'SHA256SUMS.txt');
+  if (!checksumAsset) throw new Error(`Release ${release.tag_name} has no SHA256SUMS.txt; refusing to install`);
+  const expectedHash = parseChecksum(await fetchText(checksumAsset.browser_download_url), assetName);
+  if (!expectedHash) throw new Error(`SHA256SUMS.txt has no entry for ${assetName}; refusing to install`);
+  const actualHash = hashFile(path);
+  if (actualHash !== expectedHash) {
+    throw new Error(`Checksum mismatch for ${assetName}: expected ${expectedHash.slice(0, 12)}…, got ${actualHash.slice(0, 12)}…`);
+  }
 }
 
 // ── macOS .app bundle update ────────────────────────────
 
-async function updateViaAppBundle(
+async function prepareAppBundleUpdate(
   release: GitHubRelease,
   appAsset: { name: string; browser_download_url: string },
   onProgress?: (received: number, total: number) => void,
-): Promise<void> {
-  const tmpDir = join(tmpdir(), 'kraki-app-update');
+): Promise<() => void> {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'kraki-app-update-'));
   const tarPath = join(tmpDir, appAsset.name);
-
-  // Clean up any prior failed attempt
-  rmSync(tmpDir, { recursive: true, force: true });
-  mkdirSync(tmpDir, { recursive: true });
-
-  // Download tar.gz
-  await downloadFile(appAsset.browser_download_url, tarPath, onProgress);
-
-  // Verify checksum
-  const checksumAsset = release.assets?.find((a) => a.name === 'SHA256SUMS.txt');
-  if (checksumAsset) {
-    const checksumData = await fetchText(checksumAsset.browser_download_url);
-    const expectedHash = parseChecksum(checksumData, appAsset.name);
-    if (expectedHash) {
-      const actualHash = hashFile(tarPath);
-      if (actualHash !== expectedHash) {
-        rmSync(tmpDir, { recursive: true, force: true });
-        throw new Error(`Checksum mismatch for ${appAsset.name}`);
-      }
-    }
-  }
-
-  // Extract
-  execSync(`tar -xzf "${tarPath}" -C "${tmpDir}"`, { stdio: 'ignore' });
-  const extractedApp = join(tmpDir, 'Kraki.app');
-  if (!existsSync(extractedApp)) {
+  let extractedApp: string;
+  try {
+    await downloadFile(appAsset.browser_download_url, tarPath, onProgress);
+    await verifyReleaseChecksum(release, appAsset.name, tarPath);
+    execSync(`tar -xzf "${tarPath}" -C "${tmpDir}"`, { stdio: 'ignore' });
+    extractedApp = join(tmpDir, 'Kraki.app');
+    if (!existsSync(extractedApp)) throw new Error('Extracted .app bundle not found');
+  } catch (err) {
     rmSync(tmpDir, { recursive: true, force: true });
-    throw new Error('Extracted .app bundle not found');
+    throw err;
   }
 
+  return () => installAppBundle(tmpDir, extractedApp);
+}
+
+function installAppBundle(tmpDir: string, extractedApp: string): void {
   // Strip quarantine/provenance xattrs
   stripProvenance(extractedApp);
 
@@ -775,12 +817,12 @@ function stripProvenance(filePath: string): void {
   } catch { /* best-effort — xattr may not exist or may fail */ }
 }
 
-function hashFile(path: string): string {
+export function hashFile(path: string): string {
   const data = readFileSync(path);
   return createHash('sha256').update(data).digest('hex');
 }
 
-function parseChecksum(checksumData: string, assetName: string): string | null {
+export function parseChecksum(checksumData: string, assetName: string): string | null {
   for (const line of checksumData.split('\n')) {
     const parts = line.trim().split(/\s+/);
     if (parts.length >= 2 && parts[1] === assetName) {
@@ -790,7 +832,7 @@ function parseChecksum(checksumData: string, assetName: string): string | null {
   return null;
 }
 
-function fetchText(url: string): Promise<string> {
+export function fetchText(url: string): Promise<string> {
   return sendRequest(url).then(async (res) => {
     if (res.statusCode !== 200) {
       throw new Error(`HTTP ${res.statusCode}`);
@@ -799,7 +841,7 @@ function fetchText(url: string): Promise<string> {
   });
 }
 
-async function downloadFile(
+export async function downloadFile(
   url: string,
   dest: string,
   onProgress?: (received: number, total: number) => void,
