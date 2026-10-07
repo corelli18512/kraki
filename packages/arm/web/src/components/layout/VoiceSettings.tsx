@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { editWords, useVoice, voiceSettings } from '../../lib/voice/voice';
+import { useStore } from '../../hooks/useStore';
 
 function Switch({ on, onChange, label, testId }: { on: boolean; onChange: (v: boolean) => void; label: string; testId: string }) {
   return (
@@ -17,13 +18,14 @@ function Switch({ on, onChange, label, testId }: { on: boolean; onChange: (v: bo
 
 export function VoiceSettings() {
   const available = useVoice((s) => !!s.capability);
+  const connected = useStore((s) => s.status === 'connected');
   const words = useVoice((s) => s.words);
   const pending = useVoice((s) => s.outbox.length > 0);
   useVoice((s) => s.settingsRev); // re-render after a toggle
   const [term, setTerm] = useState('');
   const [heard, setHeard] = useState('');
   const [error, setError] = useState<string | null>(null);
-  if (!available) return null;
+  if (!connected) return null;
 
   const add = () => {
     if (!term.trim()) return;
@@ -35,6 +37,7 @@ export function VoiceSettings() {
   return (
     <section data-testid="settings-voice">
       <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">Voice Input</h3>
+      {!available && <p className="mb-3 text-[11px] text-text-muted">Voice input isn't available with this relay. Your custom words still sync to your other devices.</p>}
       <div className="space-y-3">
         <div className="flex items-center justify-between gap-3">
           <div>

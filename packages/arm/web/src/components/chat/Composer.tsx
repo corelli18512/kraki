@@ -127,8 +127,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     el.style.height = '0px';
     el.style.height = `${Math.min(el.scrollHeight, MAX_LINES_HEIGHT)}px`;
     // Multi-line drafts use two rows: text across the box, controls below (Mac/iOS).
-    const line = parseFloat(getComputedStyle(el).lineHeight) || 22;
-    setMultiline(text.includes('\n') || el.scrollHeight > line * 1.6);
+    // Text taller than one line (the box's padding excluded), or a line break.
+    const cs = getComputedStyle(el);
+    const line = parseFloat(cs.lineHeight) || 20;
+    const content = el.scrollHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    setMultiline(text.length > 0 && (text.includes('\n') || content > line * 1.6));
   }, [text, multiline]);
 
   const hasText = text.trim().length > 0;

@@ -68,8 +68,13 @@ export function sessionContext(
   for (const text of recentTexts.slice(-12).reverse()) {
     if (terms.length >= 32) break;
     for (const m of text.matchAll(re)) {
-      const tok = m[0];
-      const distinctive = /[A-Z]/.test(tok) || /[_/.-]/.test(tok);
+      // Sentence punctuation is not part of a name ("done." / "use:").
+      const tok = m[0].replace(/[.:+#-]+$/, '');
+      if (tok.length < 3) continue;
+      // Code-like: camelCase, PascalCase with more capitals, snake_case,
+      // dotted.names, kebab-case. A capitalized ordinary word ("Since") isn't.
+      const inner = tok.slice(1);
+      const distinctive = /[A-Z]/.test(inner) || /[_/.-]/.test(tok) || /\d/.test(tok);
       if (distinctive && !isSensitive(tok)) add(tok);
       if (terms.length >= 32) break;
     }

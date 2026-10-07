@@ -102,3 +102,13 @@ describe('voice controller rules', () => {
     expect(useVoice.getState().capability).toBeNull();
   });
 });
+
+describe('context terms are names, not sentence words', () => {
+  it('skips sentence punctuation and capitalized ordinary words', () => {
+    const c = sessionContext({ id: 's', agent: 'pi', model: 'deepseek/flash' },
+      ['Since you asked, use PulseManager.connect() here. Do anything. Try kube-proxy and my_var or HTTP2.'], [], true);
+    const terms = (c.fields.session as { terms: string[] }).terms;
+    expect(terms).toEqual(expect.arrayContaining(['PulseManager.connect', 'kube-proxy', 'my_var', 'HTTP2']));
+    for (const w of ['Since', 'anything', 'anything.', 'here.', 'Do', 'Try']) expect(terms).not.toContain(w);
+  });
+});

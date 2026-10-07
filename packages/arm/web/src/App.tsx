@@ -104,9 +104,11 @@ export function App() {
   useEffect(() => {
     if (!desktop?.setNeedsYou) return;
     const list = [...sessions.values()].flatMap((s) => {
-      const type = previews.get(s.id)?.type;
-      const reason = type === 'permission' ? 'Needs approval' : type === 'question' ? 'Has a question' : null;
-      return reason ? [{ id: s.id, title: s.title || s.autoTitle || 'Session', reason }] : [];
+      const preview = previews.get(s.id);
+      const reason = preview?.type === 'permission' ? 'Needs approval' : preview?.type === 'question' ? 'Has a question' : null;
+      // Untitled yet: the question or request itself says what it is about.
+      const title = s.title || s.autoTitle || preview?.text?.replace(/\s+/g, ' ').slice(0, 48) || 'Session';
+      return reason ? [{ id: s.id, title, reason }] : [];
     });
     desktop.setNeedsYou(list);
   }, [sessions, previews]);

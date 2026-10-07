@@ -222,10 +222,10 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
   return (
     <div className={className}>
       {open && <div className="fixed inset-0 z-40 bg-black/30" onClick={onClose} />}
-      <div className={`fixed inset-y-0 left-0 z-50 w-72 border-r border-border-primary bg-surface-primary shadow-xl transition-transform duration-300 sm:w-80 ${
+      <div className={`fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-border-primary bg-surface-primary shadow-xl transition-transform duration-300 sm:w-80 ${
         open ? 'translate-x-0' : '-translate-x-full'
       }`}>
-        <div className="flex h-11 items-center justify-between border-b border-border-primary px-4">
+        <div className="flex h-11 shrink-0 items-center justify-between border-b border-border-primary px-4">
           <h2 className="text-sm font-semibold text-text-primary">Settings</h2>
           <button
             onClick={onClose}
@@ -236,7 +236,7 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
             </svg>
           </button>
         </div>
-        <div className="overflow-y-auto p-4">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4" data-testid="settings-scroll">
           {content}
         </div>
       </div>
