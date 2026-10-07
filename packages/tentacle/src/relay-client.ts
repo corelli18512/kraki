@@ -959,7 +959,12 @@ export class RelayClient {
       this.recordTrace({
         type: 'tool_complete',
         sessionId,
-        payload: { ...tool.payload, success: false, termination },
+        payload: {
+          ...tool.payload,
+          success: false,
+          termination,
+          ...(tool.payload.subagent && { subagent: { ...tool.payload.subagent, status: termination === 'cancelled' ? 'stopped' : 'failed' } }),
+        },
       });
       const id = tool.payload.toolCallId;
       if (id) {
@@ -2280,7 +2285,7 @@ export class RelayClient {
     };
     this.adapter.onNarrationTrace = (sessionId, event) => {
       if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
-      this.recordTrace({ type: 'agent_narration', sessionId, payload: { content: event.content } });
+      this.recordTrace({ type: 'agent_narration', sessionId, payload: { content: event.content, ...(event.parentToolCallId && { parentToolCallId: event.parentToolCallId }) } });
     };
 
     this.adapter.onPermissionRequest = (sessionId, event) => {
@@ -2300,7 +2305,7 @@ export class RelayClient {
         openedAt: new Date().toISOString(),
       });
       this.broadcastSessionList();
-      this.recordTrace({ type: 'permission', sessionId, payload: action.payload });
+      this.recordTrace({ type: 'permission', sessionId, payload: { ...action.payload, ...(event.parentToolCallId && { parentToolCallId: event.parentToolCallId }) } });
     };
 
     // Auto-resolved (e.g. by an Always Allow rule) — mark the slot approved.
@@ -2377,6 +2382,8 @@ export class RelayClient {
           ...(argsRef && { argsRef }),
           ...(inlineArgs && { args: inlineArgs }),
           toolCallId: event.toolCallId,
+          ...(event.parentToolCallId && { parentToolCallId: event.parentToolCallId }),
+          ...(event.subagent && { subagent: event.subagent }),
         },
       };
       // Off-spine: mirror to trace.jsonl for the lazy "Steps" history, and fold
@@ -2389,6 +2396,9 @@ export class RelayClient {
           headline,
           ...(argsRef && { argsRef }),
           toolCallId: event.toolCallId,
+          // Kept so a turn-end synthetic completion stays under its subagent.
+          ...(event.parentToolCallId && { parentToolCallId: event.parentToolCallId }),
+          ...(event.subagent && { subagent: event.subagent }),
         },
       });
       // Track key files from tool usage
@@ -2435,6 +2445,8 @@ export class RelayClient {
           ...(argsRef && { argsRef }),
           ...(inlineArgs && { args: inlineArgs }),
           toolCallId: event.toolCallId,
+          ...(event.parentToolCallId && { parentToolCallId: event.parentToolCallId }),
+          ...(event.subagent && { subagent: event.subagent }),
           ...(event.success === false && { success: false }),
           ...(event.attachments?.length && { attachments: event.attachments }),
         },

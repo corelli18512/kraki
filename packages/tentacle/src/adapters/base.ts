@@ -25,8 +25,17 @@ export interface TurnLifecycleEvent {
   turnId?: string;
 }
 
+/** Subagent attribution shared by trace callbacks: `parentToolCallId` marks
+ *  a step the subagent took; `subagent` marks the step that dispatched it. */
+export interface SubagentTraceFields {
+  parentToolCallId?: string;
+  subagent?: import('@kraki/protocol').SubagentInfo;
+}
+
 export interface MessageEvent extends TurnLifecycleEvent {
   content: string;
+  /** Narration trace only: a subagent said this. */
+  parentToolCallId?: string;
 }
 
 export interface MessageDeltaEvent extends TurnLifecycleEvent {
@@ -35,6 +44,8 @@ export interface MessageDeltaEvent extends TurnLifecycleEvent {
 
 export interface PermissionRequestEvent extends TurnLifecycleEvent {
   id: string;
+  /** A subagent asked: the dispatching step's toolCallId. */
+  parentToolCallId?: string;
   toolArgs: ToolArgs;
   description: string;
 }
@@ -46,13 +57,13 @@ export interface QuestionRequestEvent extends TurnLifecycleEvent {
   choices?: string[];
 }
 
-export interface ToolStartEvent extends TurnLifecycleEvent {
+export interface ToolStartEvent extends TurnLifecycleEvent, SubagentTraceFields {
   toolName: string;
   args: Record<string, unknown>;
   toolCallId?: string;
 }
 
-export interface ToolCompleteEvent extends TurnLifecycleEvent {
+export interface ToolCompleteEvent extends TurnLifecycleEvent, SubagentTraceFields {
   toolName: string;
   result: string;
   toolCallId?: string;

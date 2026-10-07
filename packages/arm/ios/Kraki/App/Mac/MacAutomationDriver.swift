@@ -555,6 +555,13 @@ final class MacAutomationDriver {
         case "closeSteps":
             postUIAction("closeSteps")
             send(result: ["requested": true], id: id, on: connection)
+        case "openSubagent":
+            // Open the n-th subagent card on the visible Steps page.
+            postUIAction("openSubagent", ["index": params["index"] as? Int ?? 0])
+            send(result: ["requested": true], id: id, on: connection)
+        case "subagentBack":
+            postUIAction("subagentBack")
+            send(result: ["requested": true], id: id, on: connection)
         case "requestSteps":
             guard let appState,
                   let sessionId = params["sessionId"] as? String,

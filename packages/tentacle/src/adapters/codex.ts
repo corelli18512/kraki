@@ -95,6 +95,12 @@ export function mapCodexModels(data: unknown): ModelDetail[] {
   return out;
 }
 
+/** First line of a prompt, capped — a task label, never the full prompt. */
+function oneLine(text: string, max = 120): string {
+  const line = text.trim().split('\n')[0].trim();
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
 function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
@@ -227,6 +233,70 @@ export interface CodexAdapterOptions {
   requestTimeoutMs?: number;
 }
 
+/** A subagent thread spawned (directly or nested) by a session's thread. */
+interface CodexChildThread {
+  sessionId: string;
+  label: string;
+  /** Synthetic trace step standing for this subagent (its dispatch). */
+  dispatchId?: string;
+  /** The dispatch step of the subagent that spawned this one (nesting). */
+  parentDispatchId?: string;
+  task?: string;
+  tokens?: number;
+  /** Open tool items of the child, by item id. */
+  tools: Map<string, { toolName: string }>;
+  /** The child's latest prose: narration once a step follows, else its report. */
+  draft?: string;
+  done?: boolean;
+}
+
+/** Codex thread item → Kraki tool step (name + args), or null if not a tool. */
+function codexItemTool(item: Record<string, unknown>): { toolName: string; args: Record<string, unknown> } | null {
+  switch (item.type) {
+    case 'commandExecution':
+      return { toolName: 'shell', args: { command: unwrapShellCommand(str(item.command)), cwd: str(item.cwd) } };
+    case 'fileChange': {
+      const paths = fileChangePaths(item);
+      const changes = Array.isArray(item.changes) ? item.changes as Array<{ diff?: string }> : [];
+      return { toolName: 'edit', args: { path: paths.join(', '), paths, diff: changes.map((c) => str(c.diff)).join('\n') } };
+    }
+    case 'mcpToolCall': {
+      const args = (item.arguments && typeof item.arguments === 'object' ? item.arguments : {}) as Record<string, unknown>;
+      return { toolName: 'mcp', args: { server: str(item.server), tool: str(item.tool), params: args } };
+    }
+    case 'webSearch':
+      return { toolName: 'web_search', args: { query: str(item.query) } };
+    case 'imageView':
+      return { toolName: 'view', args: { path: str(item.path) } };
+    case 'dynamicToolCall':
+      return KRAKI_DYNAMIC_TOOLS.has(str(item.tool)) ? null : { toolName: str(item.tool) || 'tool', args: {} };
+    default:
+      return null;
+  }
+}
+
+/** Codex completed thread item → tool result, or null if not a tool. */
+function codexItemResult(item: Record<string, unknown>): { result: string; success: boolean } | null {
+  switch (item.type) {
+    case 'commandExecution':
+      return { result: str(item.aggregatedOutput), success: item.status === 'completed' && (item.exitCode === 0 || item.exitCode == null) };
+    case 'fileChange': {
+      const paths = fileChangePaths(item);
+      const ok = item.status === 'completed';
+      return { result: ok ? `Updated ${paths.join(', ')}` : `File change ${str(item.status)}`, success: ok };
+    }
+    case 'mcpToolCall':
+      return { result: mcpResultText(item), success: item.status === 'completed' };
+    case 'webSearch':
+    case 'imageView':
+      return { result: '', success: true };
+    case 'dynamicToolCall':
+      return KRAKI_DYNAMIC_TOOLS.has(str(item.tool)) ? null : { result: '', success: item.success === true };
+    default:
+      return null;
+  }
+}
+
 // ── Adapter ───────────────────────────────────────────────
 
 export class CodexAdapter extends AgentAdapter {
@@ -237,7 +307,7 @@ export class CodexAdapter extends AgentAdapter {
    * owning Kraki session. Only server requests (approvals, questions, Kraki
    * tools) and their withdrawals are routed through it; a subagent's own
    * messages and turn lifecycle never drive the parent session. */
-  private childThreads = new Map<string, { sessionId: string; label: string }>();
+  private childThreads = new Map<string, CodexChildThread>();
   private models: ModelDetail[] = [];
   /** Ephemeral title threads awaiting their final agent message. */
   private titleThreads = new Map<string, { text: string; done: (text: string | null) => void }>();
@@ -988,8 +1058,10 @@ export class CodexAdapter extends AgentAdapter {
       ? this.threadToSession.get(threadId) ?? this.childThreads.get(threadId)?.sessionId
       : undefined;
     const adopt = (tid: string, label: string, sessionId: string | undefined) => {
-      if (!tid || !sessionId || this.threadToSession.has(tid) || this.childThreads.has(tid)) return;
-      this.childThreads.set(tid, { sessionId, label });
+      const known = this.childThreads.get(tid);
+      if (known && known.label === 'subagent' && label !== 'subagent') known.label = label;
+      if (!tid || !sessionId || this.threadToSession.has(tid) || known) return;
+      this.childThreads.set(tid, { sessionId, label, tools: new Map() });
       logger.debug({ sessionId, childThreadId: tid, label }, 'codex: subagent thread attached');
     };
     if (n.method === 'thread/started') {
@@ -1203,10 +1275,11 @@ export class CodexAdapter extends AgentAdapter {
     this.learnChildThreads(n, params);
     const s = this.sessionForParams(params);
     if (!s) {
-      // A subagent thread: only withdraw cards it raised on its owner's behalf.
+      // A subagent thread: its steps show under its dispatch step; its
+      // messages and turn lifecycle never drive the owning session.
       const child = this.childThreads.get(str(params.threadId));
       const owner = child ? this.sessions.get(child.sessionId) : undefined;
-      if (owner && n.method === 'serverRequest/resolved') this.retireWithdrawnRequest(owner, params.requestId);
+      if (owner && child) this.handleChildNotification(owner, child, n, params);
       return;
     }
 
@@ -1318,39 +1391,136 @@ export class CodexAdapter extends AgentAdapter {
         // them, so a new message graduates the buffered one to narration.
         this.flushNarration(s);
         break;
-      case 'commandExecution':
-        s.turnCommandItems.add(id);
-        start('shell', { command: unwrapShellCommand(str(item.command)), cwd: str(item.cwd) });
-        break;
-      case 'fileChange': {
-        const paths = fileChangePaths(item);
-        const changes = Array.isArray(item.changes) ? item.changes as Array<{ diff?: string }> : [];
-        start('edit', { path: paths.join(', '), paths, diff: changes.map((c) => str(c.diff)).join('\n') });
-        break;
-      }
-      case 'mcpToolCall': {
-        const server = str(item.server);
-        const tool = str(item.tool);
-        const args = (item.arguments && typeof item.arguments === 'object' ? item.arguments : {}) as Record<string, unknown>;
-        start('mcp', { server, tool, params: args });
-        break;
-      }
-      case 'webSearch':
-        start('web_search', { query: str(item.query) });
-        break;
-      case 'imageView':
-        start('view', { path: str(item.path) });
-        break;
       case 'contextCompaction':
         this.onCompaction?.(s.sessionId, { phase: 'start', ...this.turnEvent(s) });
         break;
-      case 'dynamicToolCall':
-        // Kraki's own tools are surfaced from the item/tool/call request.
-        if (!KRAKI_DYNAMIC_TOOLS.has(str(item.tool))) start(str(item.tool) || 'tool', {});
+      case 'subAgentActivity':
+        this.flushNarration(s);
+        this.handleSubagentActivity(s, item, undefined);
         break;
-      default:
+      case 'collabAgentToolCall':
+        this.noteSpawnPrompt(item);
         break;
+      default: {
+        // Tool items (shared with subagent threads). Kraki's own dynamic
+        // tools are surfaced from the item/tool/call request instead.
+        const tool = codexItemTool(item);
+        if (!tool) break;
+        if (item.type === 'commandExecution') s.turnCommandItems.add(id);
+        start(tool.toolName, tool.args);
+        break;
+      }
     }
+  }
+
+  /** A spawn call carries the task it gave each new subagent. */
+  private noteSpawnPrompt(item: Record<string, unknown>): void {
+    const prompt = str(item.prompt);
+    if (!prompt || !Array.isArray(item.receiverThreadIds)) return;
+    for (const tid of item.receiverThreadIds) {
+      const child = this.childThreads.get(str(tid));
+      if (child && !child.task) child.task = oneLine(prompt);
+    }
+  }
+
+  /** subAgentActivity on a session's (or a subagent's) thread: a subagent
+   *  started → open its dispatch step; finished → close it with its report. */
+  private handleSubagentActivity(s: CodexSession, item: Record<string, unknown>, parentDispatchId: string | undefined): void {
+    const tid = str(item.agentThreadId);
+    const child = this.childThreads.get(tid);
+    if (!child || child.sessionId !== s.sessionId) return;
+    const kind = str(item.kind);
+    if (kind === 'started' && !child.dispatchId) {
+      child.dispatchId = `codex-subagent-${tid}`;
+      child.parentDispatchId = parentDispatchId;
+      this.onToolStart?.(s.sessionId, {
+        toolName: 'spawn_agent',
+        args: { agent: child.label, ...(child.task && { task: child.task }) },
+        toolCallId: child.dispatchId,
+        ...(parentDispatchId && { parentToolCallId: parentDispatchId }),
+        subagent: this.childInfo(child, 'running'),
+        ...this.turnEvent(s),
+      });
+    } else if ((kind === 'completed' || kind === 'interrupted') && child.dispatchId && !child.done) {
+      child.done = true;
+      const status = kind === 'completed' ? 'completed' : 'stopped';
+      // Close anything the child left open.
+      for (const [id, tool] of child.tools) {
+        this.onToolComplete?.(s.sessionId, { toolName: tool.toolName, result: '', success: false, toolCallId: id, parentToolCallId: child.dispatchId, ...this.turnEvent(s) });
+      }
+      child.tools.clear();
+      this.onToolComplete?.(s.sessionId, {
+        toolName: 'spawn_agent',
+        result: child.draft ?? '',
+        success: kind === 'completed',
+        toolCallId: child.dispatchId,
+        ...(child.parentDispatchId && { parentToolCallId: child.parentDispatchId }),
+        subagent: this.childInfo(child, status),
+        ...this.turnEvent(s),
+      });
+      child.draft = undefined;
+    }
+  }
+
+  private childInfo(child: CodexChildThread, status: 'running' | 'completed' | 'failed' | 'stopped'): import('@kraki/protocol').SubagentInfo {
+    return {
+      name: child.label,
+      ...(child.task && { task: child.task }),
+      status,
+      ...(child.tokens !== undefined && { tokens: child.tokens }),
+    };
+  }
+
+  /** A subagent thread's own events: its tool items and prose become steps
+   *  under its dispatch; nested spawns become dispatches under it. */
+  private handleChildNotification(s: CodexSession, child: CodexChildThread, n: RpcNotification, params: Record<string, unknown>): void {
+    if (n.method === 'serverRequest/resolved') {
+      this.retireWithdrawnRequest(s, params.requestId);
+      return;
+    }
+    if (n.method === 'thread/tokenUsage/updated') {
+      const total = (params.tokenUsage as { total?: Record<string, number> } | undefined)?.total;
+      if (total) child.tokens = (total.inputTokens ?? 0) + (total.outputTokens ?? 0);
+      return;
+    }
+    const parent = child.dispatchId;
+    if (!parent || (n.method !== 'item/started' && n.method !== 'item/completed')) return;
+    const item = params.item as Record<string, unknown> | undefined;
+    if (!item) return;
+    const id = str(item.id);
+    const flushDraft = () => {
+      if (!child.draft) return;
+      this.onNarrationTrace?.(s.sessionId, { content: child.draft, parentToolCallId: parent, ...this.turnEvent(s) });
+      child.draft = undefined;
+    };
+    if (n.method === 'item/started') {
+      if (item.type === 'subAgentActivity') { flushDraft(); this.handleSubagentActivity(s, item, parent); return; }
+      if (item.type === 'agentMessage') { flushDraft(); return; }
+      if (item.type === 'userMessage' && !child.task) {
+        const content = Array.isArray(item.content) ? item.content as Array<{ text?: string }> : [];
+        const text = content.map((c) => str(c.text)).join(' ').trim();
+        if (text) child.task = oneLine(text);
+        return;
+      }
+      const tool = codexItemTool(item);
+      if (!tool) return;
+      flushDraft();
+      child.tools.set(id, { toolName: tool.toolName });
+      this.onToolStart?.(s.sessionId, { ...tool, toolCallId: id, parentToolCallId: parent, ...this.turnEvent(s) });
+      return;
+    }
+    if (item.type === 'subAgentActivity') { this.handleSubagentActivity(s, item, parent); return; }
+    if (item.type === 'collabAgentToolCall') { this.noteSpawnPrompt(item); return; }
+    if (item.type === 'agentMessage') {
+      const text = str(item.text);
+      if (text) child.draft = child.draft ? `${child.draft}\n\n${text}` : text;
+      return;
+    }
+    const tracked = child.tools.get(id);
+    const res = codexItemResult(item);
+    if (!tracked || !res) return;
+    child.tools.delete(id);
+    this.onToolComplete?.(s.sessionId, { toolName: tracked.toolName, ...res, toolCallId: id, parentToolCallId: parent, ...this.turnEvent(s) });
   }
 
   private handleItemCompleted(s: CodexSession, item: Record<string, unknown> | undefined): void {
@@ -1368,30 +1538,14 @@ export class CodexAdapter extends AgentAdapter {
         if (text) s.pendingText = s.pendingText ? `${s.pendingText}\n\n${text}` : text;
         break;
       }
-      case 'commandExecution':
-        complete(str(item.aggregatedOutput), item.status === 'completed' && (item.exitCode === 0 || item.exitCode == null));
-        break;
-      case 'fileChange': {
-        const paths = fileChangePaths(item);
-        const ok = item.status === 'completed';
-        complete(ok ? `Updated ${paths.join(', ')}` : `File change ${str(item.status)}`, ok);
-        break;
-      }
-      case 'mcpToolCall':
-        complete(mcpResultText(item), item.status === 'completed');
-        break;
-      case 'webSearch':
-      case 'imageView':
-        complete('', true);
-        break;
-      case 'dynamicToolCall':
-        if (!KRAKI_DYNAMIC_TOOLS.has(str(item.tool))) complete('', item.success === true);
-        break;
       case 'contextCompaction':
         this.onCompaction?.(s.sessionId, { phase: 'end', ...this.turnEvent(s) });
         break;
-      default:
+      default: {
+        const res = codexItemResult(item);
+        if (res) complete(res.result, res.success);
         break;
+      }
     }
   }
 
