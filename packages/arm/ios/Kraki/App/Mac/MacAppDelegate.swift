@@ -154,7 +154,6 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        installPresenceObservers()
         if Bundle.main.bundleIdentifier == MacUpdateController.productionBundleIdentifier {
             updateController = MacUpdateController.makeIfProduction()
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
@@ -175,6 +174,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         #else
         NSApp.setActivationPolicy(.regular)
         #endif
+        // After the policy above: a login launch switches back to menu-bar-only.
+        installPresenceObservers()
 
         // Remove the "File" and "Window" menus. SwiftUI synthesizes both,
         // but this app has no file concept (New Session lives under
