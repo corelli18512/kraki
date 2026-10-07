@@ -588,6 +588,22 @@ struct MacApp: App {
             // Its own view, so session updates re-render only the icon, not
             // every scene of the app.
             MenuBarIconLabel(appState: appState, tentacleCLI: tentacleCLI)
+                .task {
+                    // A login launch keeps the window hidden, so the window's
+                    // `.task` never runs. Start from the status item instead:
+                    // presence, connection and Needs You must work without a
+                    // window (MacPresence.swift).
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard MacPresenceController.shared.launchedAtLogin else { return }
+                    KLog.diag("[Presence] starting without a window")
+                    await launchCoordinator.bootstrap(
+                        appState: appState,
+                        tentacleCLI: tentacleCLI,
+                        devLocal: appState.devLocalActive,
+                        mock: false,
+                        bypassProductionLaunch: false
+                    )
+                }
         }
         .menuBarExtraStyle(.menu)
     }
