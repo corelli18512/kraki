@@ -18,8 +18,9 @@ import { spawn, type ChildProcessWithoutNullStreams, execSync } from 'node:child
 import { cliSpawnArgs } from '../cli-launch.js';
 import { readPiJsonLines } from './pi-jsonl.js';
 import { readPiModelScope, scopePiModels } from './pi-model-scope.js';
+import { PiSubagentTracker, PI_SUBAGENT_TOOL, type PiSubagentEmit } from './pi-subagent.js';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync, appendFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import {
   AgentAdapter,
   type CreateSessionConfig,
@@ -455,13 +456,14 @@ interface PiSession {
   subagentGrace?: ReturnType<typeof setTimeout>;
 }
 
-import { PiSubagentTracker, PI_SUBAGENT_TOOL, type PiSubagentEmit } from './pi-subagent.js';
-
-/** A subagent's saved output file (pi-subagents notifications point at it):
- *  small text files only — it is shown as the subagent's report. */
-function readSubagentOutput(path: string): string | undefined {
+/** A subagent's saved output file (pi-subagents notifications point at it),
+ *  shown as the subagent's report. Only the extension's own artifact files
+ *  (`…/subagent-artifacts/outputs/….md`), and only small ones. */
+export function readSubagentOutput(path: string): string | undefined {
   try {
-    if (!path.startsWith('/') || statSync(path).size > 64 * 1024) return undefined;
+    if (!isAbsolute(path) || path.split(/[\\/]/).includes('..')) return undefined;
+    if (!/[\\/]subagent-artifacts[\\/]outputs[\\/].+\.(md|txt)$/.test(path)) return undefined;
+    if (statSync(path).size > 64 * 1024) return undefined;
     return readFileSync(path, 'utf8');
   } catch {
     return undefined;
@@ -1019,12 +1021,6 @@ export class PiAdapter extends AgentAdapter {
     else this.onIdle?.(sessionId);
   }
 
-  /**
-   * Settle the user-visible answer once Pi has confirmed a non-retrying run and
-   * either maintenance has started or the fully-settled fallback is reached.
-   * Compaction remains a separate maintenance callback and can continue after
-   * this idle.
-   */
   private subagentTracker(sessionId: string): PiSubagentTracker {
     let t = this.subagentTrackers.get(sessionId);
     if (!t) { t = new PiSubagentTracker(readSubagentOutput); this.subagentTrackers.set(sessionId, t); }
@@ -1078,6 +1074,12 @@ export class PiAdapter extends AgentAdapter {
 
   static SUBAGENT_CONTINUATION_GRACE_MS = 5_000;
 
+  /**
+   * Settle the user-visible answer once Pi has confirmed a non-retrying run and
+   * either maintenance has started or the fully-settled fallback is reached.
+   * Compaction remains a separate maintenance callback and can continue after
+   * this idle.
+   */
   private settleConversationalTurnAtAgentEnd(sessionId: string, s: PiSession, willRetry: boolean): void {
     // agent_end.willRetry covers transient retries, NOT every compaction
     // recovery. Only a completed answer may settle before agent_settled.

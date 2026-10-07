@@ -153,3 +153,23 @@ describe('parseCallText', () => {
     expect(parseCallText('ls')).toEqual({ toolName: 'ls', args: {} });
   });
 });
+
+describe('readSubagentOutput', () => {
+  it('reads only small pi-subagents artifact files', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { readSubagentOutput } = await import('../adapters/pi.js');
+    const root = mkdtempSync(join(tmpdir(), 'kraki-pisub-'));
+    const dir = join(root, 'subagent-artifacts', 'outputs', 'run-1');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'codeword.md'), 'src/a.ts: purple\n');
+    writeFileSync(join(dir, 'big.md'), 'x'.repeat(70_000));
+    writeFileSync(join(root, 'secret.md'), 'nope');
+    expect(readSubagentOutput(join(dir, 'codeword.md'))).toBe('src/a.ts: purple\n');
+    expect(readSubagentOutput(join(dir, 'big.md'))).toBeUndefined();
+    expect(readSubagentOutput(join(root, 'secret.md'))).toBeUndefined();
+    expect(readSubagentOutput(`${dir}/../../../secret.md`)).toBeUndefined();
+    expect(readSubagentOutput('subagent-artifacts/outputs/x.md')).toBeUndefined();
+  });
+});

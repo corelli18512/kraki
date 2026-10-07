@@ -1391,35 +1391,8 @@ export class CodexAdapter extends AgentAdapter {
         // them, so a new message graduates the buffered one to narration.
         this.flushNarration(s);
         break;
-      case 'commandExecution':
-        s.turnCommandItems.add(id);
-        start('shell', { command: unwrapShellCommand(str(item.command)), cwd: str(item.cwd) });
-        break;
-      case 'fileChange': {
-        const paths = fileChangePaths(item);
-        const changes = Array.isArray(item.changes) ? item.changes as Array<{ diff?: string }> : [];
-        start('edit', { path: paths.join(', '), paths, diff: changes.map((c) => str(c.diff)).join('\n') });
-        break;
-      }
-      case 'mcpToolCall': {
-        const server = str(item.server);
-        const tool = str(item.tool);
-        const args = (item.arguments && typeof item.arguments === 'object' ? item.arguments : {}) as Record<string, unknown>;
-        start('mcp', { server, tool, params: args });
-        break;
-      }
-      case 'webSearch':
-        start('web_search', { query: str(item.query) });
-        break;
-      case 'imageView':
-        start('view', { path: str(item.path) });
-        break;
       case 'contextCompaction':
         this.onCompaction?.(s.sessionId, { phase: 'start', ...this.turnEvent(s) });
-        break;
-      case 'dynamicToolCall':
-        // Kraki's own tools are surfaced from the item/tool/call request.
-        if (!KRAKI_DYNAMIC_TOOLS.has(str(item.tool))) start(str(item.tool) || 'tool', {});
         break;
       case 'subAgentActivity':
         this.flushNarration(s);
@@ -1428,8 +1401,15 @@ export class CodexAdapter extends AgentAdapter {
       case 'collabAgentToolCall':
         this.noteSpawnPrompt(item);
         break;
-      default:
+      default: {
+        // Tool items (shared with subagent threads). Kraki's own dynamic
+        // tools are surfaced from the item/tool/call request instead.
+        const tool = codexItemTool(item);
+        if (!tool) break;
+        if (item.type === 'commandExecution') s.turnCommandItems.add(id);
+        start(tool.toolName, tool.args);
         break;
+      }
     }
   }
 
@@ -1558,30 +1538,14 @@ export class CodexAdapter extends AgentAdapter {
         if (text) s.pendingText = s.pendingText ? `${s.pendingText}\n\n${text}` : text;
         break;
       }
-      case 'commandExecution':
-        complete(str(item.aggregatedOutput), item.status === 'completed' && (item.exitCode === 0 || item.exitCode == null));
-        break;
-      case 'fileChange': {
-        const paths = fileChangePaths(item);
-        const ok = item.status === 'completed';
-        complete(ok ? `Updated ${paths.join(', ')}` : `File change ${str(item.status)}`, ok);
-        break;
-      }
-      case 'mcpToolCall':
-        complete(mcpResultText(item), item.status === 'completed');
-        break;
-      case 'webSearch':
-      case 'imageView':
-        complete('', true);
-        break;
-      case 'dynamicToolCall':
-        if (!KRAKI_DYNAMIC_TOOLS.has(str(item.tool))) complete('', item.success === true);
-        break;
       case 'contextCompaction':
         this.onCompaction?.(s.sessionId, { phase: 'end', ...this.turnEvent(s) });
         break;
-      default:
+      default: {
+        const res = codexItemResult(item);
+        if (res) complete(res.result, res.success);
         break;
+      }
     }
   }
 
