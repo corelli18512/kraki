@@ -50,7 +50,7 @@ The relay maintains account/device data, including:
 - **devices** — registered devices and their public keys
 - **push_tokens** — push notification tokens for offline delivery (device token and provider type)
 
-The relay does not store plaintext conversation contents. Message history and replay are handled by `tentacle`. Custom Words are account data, not session data: their spellings and mishearings are persisted in the account's regional relay database and its backups. Synchronizing them does not require any tentacle to be online. Deleted word records retain only IDs/revisions for conflict protection, not their spelling or mishearings; existing backups may still contain earlier values.
+The relay does not store plaintext conversation contents. Message history and replay are handled by `tentacle`. Custom Words are account data, not session data: their spellings and mishearings are persisted in the account's regional relay database and its backups. Synchronizing them does not require any tentacle to be online. Deleted words are removed from the database; existing backups may still contain them.
 
 ## What Kraki does not protect against
 

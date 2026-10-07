@@ -1,6 +1,6 @@
 /// PreferencesManager — Cross-device preference sync via head's
 /// `update_preferences` / `preferences_updated` control-plane messages, plus
-/// revisioned `update_voice_vocabulary` / `voice_vocabulary_updated` for words.
+/// `update_voice_vocabulary` / `voice_vocabulary_updated` for words.
 ///
 /// What's synced today
 /// -------------------
@@ -8,8 +8,8 @@
 ///   `UserDefaults["colorScheme"]` key that `KrakiApp` watches via
 ///   `@AppStorage`. Setting the value here makes the next render tick
 ///   adopt the new colour scheme automatically.
-/// - Custom Words → account-scoped VoiceVocabularyStore and durable outbox.
-///   See docs/custom-words-sync.md for migration, conflicts and privacy.
+/// - Custom Words → VoiceVocabularyStore, sent as add/edit/remove intents.
+///   See docs/custom-words-sync.md.
 ///
 /// Future keys the protocol supports but iOS deliberately ignores:
 /// - `internal: Bool` — debug-log verbosity. Honour when we wire KLog.
@@ -39,85 +39,79 @@ final class PreferencesManager {
     private weak var appState: AppState?
     private static let themeKey = "colorScheme"
 
+    // Custom Words: silent account sync. Edits are flushed into the store's
+    // persisted outbox 0.7 s after the last change and sent as one request;
+    // the reply (the account's list) acknowledges it. No reply in 5 s: resend.
+    // Ops are idempotent in effect, so a resend after a lost reply is harmless.
     private var vocabularyWork: DispatchWorkItem?
-    private var vocabularyRequest: (id: String, changes: [VoiceVocabularyChange])?
-    private var vocabularyAccount: String?
+    private var vocabularyInFlight: (id: String, count: Int)?
+    private var vocabularyUser: String?
 
     init(appState: AppState) {
         self.appState = appState
         appState.voiceVocabularyStore.onChange = { [weak self] in self?.scheduleVocabularySend() }
     }
 
-    /// Auth is both capability negotiation and a reconnect resync. Never send
-    /// queued account data to an older head or before the identity is known.
-    func authenticateVocabulary(userID: String, relay: String, snapshot: VoiceVocabularySnapshot?) {
-        guard let appState else { return }
+    /// Every auth_ok: adopt the account's list (also how a reconnect catches
+    /// up) and send anything queued. `words` nil: this Head can't sync yet.
+    func authenticateVocabulary(userID: String, words: [VoiceWord]?) {
+        guard let store = appState?.voiceVocabularyStore else { return }
         vocabularyWork?.cancel()
-        vocabularyRequest = nil
-        let store = appState.voiceVocabularyStore
-        store.activate(userID: userID, relay: relay)
-        vocabularyAccount = store.accountKey
-        store.syncSupported = snapshot != nil
-        if let snapshot { store.receive(snapshot) }
-        scheduleVocabularySend()
+        vocabularyInFlight = nil
+        vocabularyUser = userID
+        store.activate(userID: userID)
+        store.syncSupported = words != nil
+        if let words { store.receive(words) }
+        scheduleVocabularySend(after: 0)
     }
 
     func resetVocabulary() {
         vocabularyWork?.cancel()
         vocabularyWork = nil
-        vocabularyRequest = nil
-        vocabularyAccount = nil
+        vocabularyInFlight = nil
+        vocabularyUser = nil
         appState?.voiceVocabularyStore.deactivate()
     }
 
     func receiveVocabulary(_ message: [String: Any]) {
-        guard let appState, let account = vocabularyAccount,
-              appState.voiceVocabularyStore.accountKey == account,
-              let user = appState.user,
-              account == VoiceVocabularyStore.accountKey(userID: user.id, relay: appState.relayURL) else { return }
-        let store = appState.voiceVocabularyStore
-        let request = vocabularyRequest
-        let isReply = request != nil && message["requestId"] as? String == request?.id
-        if let snapshot = VoiceVocabularySnapshot.decode(message["vocabulary"]) {
-            store.receive(snapshot, sent: isReply ? request!.changes : [],
-                          results: isReply ? message["results"] as? [[String: Any]] ?? [] : [])
-        } else if isReply, message["error"] != nil {
-            store.reject(request!.changes)
-        } else { return }
-        if isReply {
-            vocabularyRequest = nil
+        guard let appState, let user = vocabularyUser, appState.user?.id == user,
+              let words = VoiceWord.decodeList(message["words"]) else { return }
+        var acknowledged = 0
+        if let request = vocabularyInFlight, message["requestId"] as? String == request.id {
+            acknowledged = request.count
+            vocabularyInFlight = nil
             vocabularyWork?.cancel()
         }
-        scheduleVocabularySend()
+        appState.voiceVocabularyStore.receive(words, acknowledged: acknowledged)
+        scheduleVocabularySend(after: 0)
     }
 
-    private func scheduleVocabularySend() {
-        // Keep the retry timer while a batch is in flight; subsequent typing
-        // updates the durable outbox, not the already-sent request.
-        guard vocabularyRequest == nil else { return }
+    private func scheduleVocabularySend(after delay: TimeInterval = 0.7) {
+        // While a request is in flight its retry timer is pending; new edits
+        // wait in the outbox and go out after the reply.
+        guard vocabularyInFlight == nil else { return }
         vocabularyWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.sendVocabulary() }
         vocabularyWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     private func sendVocabulary() {
-        guard let appState, appState.connectionStatus == .connected,
-              let user = appState.user, let ws = appState.wsClient,
-              vocabularyAccount == VoiceVocabularyStore.accountKey(userID: user.id, relay: appState.relayURL),
-              appState.voiceVocabularyStore.syncSupported else { return }
+        guard let appState, appState.connectionStatus == .connected, let ws = appState.wsClient,
+              let user = vocabularyUser, appState.user?.id == user else { return }
         let store = appState.voiceVocabularyStore
-        if vocabularyRequest == nil {
-            let changes = Array(store.syncState.pending.filter { store.syncState.blocked[$0.changeId] == nil }.prefix(100))
-            guard !changes.isEmpty else { return }
-            vocabularyRequest = (UUID().uuidString.lowercased(), changes)
-        }
-        guard let request = vocabularyRequest,
-              let data = try? JSONSerialization.data(withJSONObject: [
-                "type": "update_voice_vocabulary", "requestId": request.id,
-                "changes": request.changes.map(\.json),
+        guard store.syncSupported else { return }
+        store.flush()
+        // Only acknowledgements remove ops from the front, so a resend covers
+        // exactly the same ops as the request it repeats.
+        let count = vocabularyInFlight?.count ?? min(store.outbox.count, 200)
+        guard count > 0 else { return }
+        let id = vocabularyInFlight?.id ?? UUID().uuidString.lowercased()
+        vocabularyInFlight = (id, count)
+        guard let data = try? JSONSerialization.data(withJSONObject: [
+                "type": "update_voice_vocabulary", "requestId": id,
+                "ops": store.outbox.prefix(count).map(\.json),
               ]), let text = String(data: data, encoding: .utf8) else { return }
-        // Own durable retry queue, never WebSocketClient's cross-reconnect queue.
         ws.sendRaw(text)
         let work = DispatchWorkItem { [weak self] in self?.sendVocabulary() }
         vocabularyWork = work

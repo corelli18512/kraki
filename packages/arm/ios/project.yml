@@ -231,7 +231,6 @@ targets:
       - path: KrakiTests/AccountUsageTests.swift
       - path: KrakiTests/PushPreviewFormatTests.swift
       - path: KrakiTests/VoiceVocabularySyncTests.swift
-      - path: KrakiTests/VoiceVocabularyShots.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.tests

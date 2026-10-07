@@ -11,7 +11,7 @@ import type {
 } from '@kraki/protocol';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { Storage } from './storage.js';
-import { parseVocabularyUpdate } from './voice-vocabulary.js';
+import { parseVoiceWordOps, type VoiceWord } from './voice-vocabulary.js';
 import { PulseHub, PULSE_ACK_EVERY_BYTES } from './pulse-hub.js';
 import { LeaseIssuer } from './lease-issuer.js';
 import type { AuthProvider, AuthUser, AuthOutcome as ProviderAuthOutcome } from './auth.js';
@@ -882,32 +882,29 @@ export class HeadServer {
     }
   }
 
-  /** Account data, not session data: no tentacle is involved. */
+  /** Account data, not session data: no tentacle is involved. The sender
+   *  always gets the resulting list back (its acknowledgement); other online
+   *  apps of the account get it only when something was applied. */
   private handleUpdateVoiceVocabulary(state: ClientState, msg: Record<string, unknown>): void {
     if (!state.userId || !state.deviceId) return;
-    const update = parseVocabularyUpdate(msg);
-    if (!update) {
-      this.sendControlToDevice(state.deviceId, {
-        type: 'voice_vocabulary_updated', error: 'invalid_update',
-        requestId: typeof msg.requestId === 'string' ? msg.requestId.slice(0, 64) : undefined,
-      });
-      return;
-    }
-    let result: ReturnType<Storage['updateVoiceVocabulary']>;
+    const requestId = typeof msg.requestId === 'string' ? msg.requestId.slice(0, 64) : undefined;
+    const ops = parseVoiceWordOps(msg.ops);
+    let words: VoiceWord[];
     try {
-      result = this.storage.updateVoiceVocabulary(state.userId, update);
+      words = ops?.length
+        ? this.storage.updateVoiceVocabulary(state.userId, ops)
+        : this.storage.getVoiceVocabulary(state.userId);
     } catch (err) {
       // Pulse self-delivery has no outer try/catch. No reply: the client keeps
-      // the change in its durable outbox and retries.
+      // the ops in its outbox and retries.
       getLogger().warn('Voice vocabulary update failed', { error: (err as Error).message });
       return;
     }
-    this.sendControlToDevice(state.deviceId, {
-      type: 'voice_vocabulary_updated', requestId: update.requestId, ...result,
-    });
+    this.sendControlToDevice(state.deviceId, { type: 'voice_vocabulary_updated', requestId, words });
+    if (!ops?.length) return;
     for (const d of this.storage.getDevicesByUser(state.userId)) {
       if (d.id !== state.deviceId && d.role === 'app' && this.connections.get(d.id)?.readyState === WebSocket.OPEN) {
-        this.sendControlToDevice(d.id, { type: 'voice_vocabulary_updated', vocabulary: result.vocabulary });
+        this.sendControlToDevice(d.id, { type: 'voice_vocabulary_updated', words });
       }
     }
   }

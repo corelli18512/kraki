@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'crypto';
 import Database from 'better-sqlite3';
-import { emptyVocabulary, mergeVocabulary, type VocabularySnapshot, type VocabularyUpdate } from './voice-vocabulary.js';
+import { applyVoiceWordOps, storedVoiceWords, type VoiceWord, type VoiceWordOp } from './voice-vocabulary.js';
 
 // --- Row types for SQLite result mapping ---
 
@@ -463,18 +463,19 @@ export class Storage {
       .run(JSON.stringify(merged), userId);
   }
 
-  getVoiceVocabulary(userId: string): VocabularySnapshot {
-    return (this.getUser(userId)?.preferences?.voiceVocabulary as VocabularySnapshot | undefined) ?? emptyVocabulary();
+  getVoiceVocabulary(userId: string): VoiceWord[] {
+    return storedVoiceWords(this.getUser(userId)?.preferences?.voiceVocabulary);
   }
 
-  updateVoiceVocabulary(userId: string, update: VocabularyUpdate) {
+  /** Applies a device's intents and returns the account's resulting list. */
+  updateVoiceVocabulary(userId: string, ops: VoiceWordOp[]): VoiceWord[] {
     return this.db.transaction(() => {
       const user = this.getUser(userId);
       if (!user) throw new Error('Unknown vocabulary owner');
-      const result = mergeVocabulary(this.getVoiceVocabulary(userId), update.changes);
-      const preferences = { ...user.preferences, voiceVocabulary: result.vocabulary };
+      const words = applyVoiceWordOps(this.getVoiceVocabulary(userId), ops);
+      const preferences = { ...user.preferences, voiceVocabulary: { version: 2, words } };
       this.db.prepare('UPDATE users SET preferences = ? WHERE user_id = ?').run(JSON.stringify(preferences), userId);
-      return result;
+      return words;
     })();
   }
 

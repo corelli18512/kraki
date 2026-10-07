@@ -55,8 +55,16 @@ final class VoiceVocabularyNetworkTests: XCTestCase {
         Set(app.voiceVocabularyStore.terms.compactMap(\.line).filter { $0.hasPrefix(tag) })
     }
 
+    /// Everything edited so far has reached Head. Edits enter the outbox at
+    /// the debounced flush, so flush first or this is trivially true.
     private func synced(_ app: AppState) -> Bool {
-        app.voiceVocabularyStore.syncState.pending.isEmpty && !app.voiceVocabularyStore.hasSyncProblems
+        app.voiceVocabularyStore.flush()
+        return app.voiceVocabularyStore.outbox.isEmpty
+    }
+
+    /// Row ids are local to a device; find the row by its word.
+    private func row(_ app: AppState, _ term: String) -> VoiceTerm {
+        app.voiceVocabularyStore.terms.first { $0.cleanTerm == term }!
     }
 
     @discardableResult
@@ -97,7 +105,8 @@ final class VoiceVocabularyNetworkTests: XCTestCase {
         a.voiceVocabularyStore.upsert(term)
         try await waitUntil(10, "B receives the edit") { self.words(b) == ["\(tag) Kraki = cracky, 克拉奇"] }
 
-        b.voiceVocabularyStore.remove(term.id)
+        try await waitUntil(10, "A acknowledged the edit") { self.synced(a) }
+        b.voiceVocabularyStore.remove(row(b, term.term).id)
         try await waitUntil(10, "A receives the deletion") { self.words(a).isEmpty }
         try await waitUntil(10, "both settled") { self.synced(a) && self.synced(b) }
     }
@@ -117,7 +126,8 @@ final class VoiceVocabularyNetworkTests: XCTestCase {
         a.voiceVocabularyStore.upsert(VoiceTerm(term: "\(tag) Offline Word"))
         b.voiceVocabularyStore.upsert(VoiceTerm(term: "\(tag) Online Word"))
         try await waitUntil(10, "B acknowledged") { self.synced(b) }
-        XCTAssertEqual(a.voiceVocabularyStore.syncState.pending.count, 1, "A keeps the edit in its outbox")
+        a.voiceVocabularyStore.flush()
+        XCTAssertEqual(a.voiceVocabularyStore.outbox.count, 1, "A keeps the edit in its outbox")
 
         // Relaunch A from the same storage while still offline.
         a.disconnect()
@@ -132,31 +142,52 @@ final class VoiceVocabularyNetworkTests: XCTestCase {
         try await waitUntil(10, "outbox drained") { self.synced(relaunched) }
     }
 
-    /// Two clients edit the same word while one is offline: the newer server
-    /// value is kept, the offline edit is not silently lost and is not applied.
-    func testConflictingOfflineEditIsKeptLocallyAndReported() async throws {
+    /// Same word edited on both clients while one is offline: no prompt, the
+    /// edit that reaches the server last wins and both clients converge.
+    func testConcurrentEditsOfSameWordConvergeSilently() async throws {
         let tag = self.tag
         let a = try await launch(port: stack.appPort)
         let b = try await launch(port: stack.app2Port)
-        var term = VoiceTerm(term: "\(tag) Original")
-        a.voiceVocabularyStore.upsert(term)
-        try await waitUntil(10, "B has it") { self.words(b) == ["\(tag) Original"] }
+        a.voiceVocabularyStore.upsert(VoiceTerm(term: "\(tag) Word", heardAs: "original"))
+        try await waitUntil(10, "B has it") { self.words(b) == ["\(tag) Word = original"] }
 
         try await control("/fault", ["link": "app", "refuse": true])
         try await control("/reset", ["link": "app"])
         try await waitUntil(15, "A offline") { a.connectionStatus != .connected }
-        term.term = "\(tag) From A"
-        a.voiceVocabularyStore.upsert(term)
-        var fromB = term; fromB.term = "\(tag) From B"
-        b.voiceVocabularyStore.upsert(fromB)
+        var onA = a.voiceVocabularyStore.terms.first { $0.term.hasPrefix(tag) }!
+        onA.heardAs = "from A"
+        a.voiceVocabularyStore.upsert(onA)
+        var onB = b.voiceVocabularyStore.terms.first { $0.term.hasPrefix(tag) }!
+        onB.heardAs = "from B"
+        b.voiceVocabularyStore.upsert(onB)
         try await waitUntil(10, "B acknowledged") { self.synced(b) }
 
         try await control("/heal")
-        try await waitUntil(20, "A reports a conflict") { a.voiceVocabularyStore.hasSyncProblems }
-        XCTAssertEqual(words(a), ["\(tag) From A"], "local edit is still shown")
-        XCTAssertEqual(words(b), ["\(tag) From B"], "conflict did not overwrite the server value")
+        let expected: Set<String> = ["\(tag) Word = from A"]
+        try await waitUntil(20, "converged on A's later edit") { self.words(a) == expected && self.words(b) == expected }
+        try await waitUntil(10, "settled") { self.synced(a) }
+    }
 
-        a.voiceVocabularyStore.useSyncedWords()
-        try await waitUntil(10, "A adopts the synced value") { self.words(a) == ["\(tag) From B"] && self.synced(a) }
+    /// Deleted on one client while the other edits it offline: the later edit
+    /// brings the word back with that edit, on both clients.
+    func testOfflineEditOfWordDeletedElsewhereKeepsTheEdit() async throws {
+        let tag = self.tag
+        let a = try await launch(port: stack.appPort)
+        let b = try await launch(port: stack.app2Port)
+        a.voiceVocabularyStore.upsert(VoiceTerm(term: "\(tag) Word"))
+        try await waitUntil(10, "B has it") { self.words(b) == ["\(tag) Word"] }
+
+        try await control("/fault", ["link": "app", "refuse": true])
+        try await control("/reset", ["link": "app"])
+        try await waitUntil(15, "A offline") { a.connectionStatus != .connected }
+        var onA = a.voiceVocabularyStore.terms.first { $0.term.hasPrefix(tag) }!
+        onA.heardAs = "kept"
+        a.voiceVocabularyStore.upsert(onA)
+        b.voiceVocabularyStore.remove(b.voiceVocabularyStore.terms.first { $0.term.hasPrefix(tag) }!.id)
+        try await waitUntil(10, "B's delete acknowledged") { self.synced(b) && self.words(b).isEmpty }
+
+        try await control("/heal")
+        let expected: Set<String> = ["\(tag) Word = kept"]
+        try await waitUntil(20, "both show the edited word") { self.words(a) == expected && self.words(b) == expected }
     }
 }

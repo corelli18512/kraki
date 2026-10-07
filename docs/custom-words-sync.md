@@ -1,96 +1,84 @@
 # Custom Words account sync
 
-Custom Words belongs to the **Kraki account**, not a session, computer, Tentacle,
-or Apple ID. iOS and macOS share the implementation. Web currently has no voice
-input/Custom Words editor; this change does not add one. Correct Transcripts and
-Use Conversation Context remain device-local.
+Custom Words belongs to the **Kraki account**, not a session, computer, Tentacle
+or Apple ID. iOS and macOS share the implementation. Web has no voice input and
+is unchanged. Correct Transcripts and Use Conversation Context stay device-local.
+
+The goal is sync the user does not notice: no status, no prompts, no conflict UI.
 
 ## Privacy and storage
 
-Words and mishearings are ordinary readable account data, transported over TLS/WSS
-in hosted deployments (self-hosters must configure TLS). They are not E2E encrypted.
-The regional head stores `users.preferences.voiceVocabulary`; DB backups include
-this data. No Tentacle is required. Chat encryption is unchanged. This does not
-replicate data between independent relays/regions.
+Words and mishearings are ordinary readable account data, sent over TLS/WSS in
+hosted deployments. They are not E2E encrypted. The regional Head stores them in
+`users.preferences.voiceVocabulary = { version: 2, words: [{term, heardAs}] }`;
+DB backups include them. No Tentacle is involved and chat encryption is
+unchanged. Independent relays/regions do not replicate each other.
 
-The native client keeps an account/relay-scoped snapshot and durable pending edits
-in UserDefaults. `voice.vocabulary` remains a derived cache for the next dictation
-request. Logout clears that active cache and retires the transport; it retains
-account-scoped offline edits so signing back into that account can resume them.
+## Model
+
+Head holds the account's list; it is the truth. Each device keeps a copy (the
+next dictation request reads it, so voice input never waits on sync) plus an
+outbox of edits Head has not acknowledged.
+
+Devices never upload lists, only intents, one per changed word:
+
+| Intent | Effect on Head |
+|---|---|
+| `add {term, heardAs}` | Append. If the word exists (case-insensitive), merge its mishearings. |
+| `edit {from, term, heardAs}` | Replace `from`. If `from` is gone (removed elsewhere), add it back. If renamed onto another existing word, merge into it. |
+| `remove {term}` | Delete if present. |
+
+Head applies intents in arrival order; the later one wins. Because only intents
+travel, a device that was offline cannot overwrite words it never touched, and
+replaying an intent (after a lost reply) has no further effect. The one cost: if
+two devices edit the same word at nearly the same moment, the earlier edit is
+replaced without notice. Native code mirrors Head's apply function
+(`VoiceWordList.apply`) for its local view; tests pin both to the same cases.
 
 ## Protocol
 
-- `auth_ok.voiceVocabulary`: `{version: 1, revision, entries}`. Its presence is also
-  the capability gate. Clients never upload words to an older server.
-- `update_voice_vocabulary`: `{requestId, changes}`; each change has `changeId`,
-  stable UUID `id`, `baseRevision`, `action` (`upsert`, `delete`, `import`) and, for
-  non-deletes, `term` / `heardAs`.
-- `voice_vocabulary_updated`: sender receives `requestId`, full `vocabulary` and
-  per-change `results`. Other online apps on the account receive only the snapshot.
-  Both responses use the existing head-to-device Pulse control transport. The
-  native sender uses raw authenticated control JSON and its own durable outbox.
-- Generic `update_preferences` ignores the reserved `voiceVocabulary` field so a
-  stale preference client cannot replace the canonical state.
+- `auth_ok.voiceVocabulary: [{term, heardAs}]`. Its presence is also the
+  capability gate: a client never sends intents to an older Head and keeps them
+  queued instead. Every auth_ok is a full resync.
+- `update_voice_vocabulary {requestId, ops}`: up to 200 intents. Invalid intents
+  are dropped individually.
+- `voice_vocabulary_updated {words, requestId?}`: the resulting list, to the
+  sender (acknowledges `requestId`) and, if anything was applied, to the user's
+  other online apps. Head-to-device control over Pulse.
+- `update_preferences` cannot write `voiceVocabulary`, and `auth_ok.user.preferences`
+  / `preferences_updated` never include it, so a theme change doesn't carry the list.
 
-Each entry records its server-assigned revision and last applied change ID. The
-head validates the whole batch before applying it transactionally. Repeating an
-already-applied change is idempotent. Different words merge independently; a stale
-edit of the same word returns a conflict rather than overwriting newer work.
-Deletions retain ID/revision tombstones, with spelling/mishearings removed. Only an
-explicitly rebased edit can restore a deleted ID.
+## Client
 
-The client persists edits before sending and clears only acknowledged change IDs.
-Typing during an in-flight request is retained; its baseline advances only over
-its own acknowledged write. Old responses cannot roll back newer snapshots.
-Uploads debounce for 700 ms and unacknowledged batches retry every five seconds
-while connected; reconnect resynchronizes and retries pending changes.
+Edits show immediately and are persisted with the outbox, per account. 0.7 s after
+the last change the store diffs the rows against the last flush (so Mac
+keystrokes collapse into one intent per word) and sends the outbox; the reply
+removes the acknowledged intents. No reply in 5 s: resend. A received list is
+rendered with the remaining outbox applied on top, keeping row identity, raw
+text being typed and empty draft rows.
 
-The normal synced state shows no extra UI; "waiting to sync" or "sign in" is a
-footer sentence. Conflict, duplicate, validation or capacity failures keep the
-local edit, mark the affected word with an orange warning and its reason, and
-show a notice section. **Retry My Changes** explicitly rebases blocked edits on the current
-snapshot; **Use Synced Words** discards blocked edits, not unrelated pending work.
-Nothing auto-rebases a stale edit over a deletion.
+On the first sign-in per installation, the old device-local words are backed up
+and sent as `add` intents, merging with words from the user's other devices. They
+are not imported into a second account. Signed out, the list is hidden and not
+editable; an account's queued edits stay stored for its next sign-in.
 
-## Migration and bounds
-
-On the first account activation per installation, legacy local words are backed
-up and queued once as imports. Their deterministic IDs are the first 128 bits of
-SHA-256 of `kraki.voice.legacy:` plus NFC-normalized, lowercased spelling, formatted
-as UUIDs. This identifies the same legacy word across devices, including after
-its deletion or rename. The backup is not automatically imported into another
-account after logout.
-
-Imports union mishearings for the same spelling, leave existing canonical spelling
-unchanged, and never undo a tombstone/rename. Normal words get random stable UUIDs.
-The existing limit is 100 active words and 120 graphemes per formatted entry. The
-server additionally bounds raw input size, batches (100) and retained records
-(2,000, including tombstones). Overflow is explicit and local words remain saved;
-there is no silent truncation or tombstone eviction. A future retention protocol
-would be needed to safely compact very long-lived deletion history.
+Limits: 100 words and 120 graphemes per entry; extra additions beyond 100 are
+ignored by Head and the client then shows Head's list.
 
 ## Release order and tests
 
-Deploy head first, then native clients. Old clients keep using local words; new
-clients connected to old heads retain edits locally and show that sync is waiting.
-No database schema migration or encryption migration is required.
+Deploy Head first, then native clients. Old clients keep using local words.
+No DB schema migration.
 
-`auth_ok.user.preferences` and `preferences_updated` never include
-`voiceVocabulary`; the word list only travels on its own channel, so theme changes
-do not broadcast it. A head-side storage failure is logged and not answered; the
-client keeps the change and retries.
-
-End-to-end: `bash scripts/chaos/run-native.sh -only-testing:KrakiMacTests/VoiceVocabularyNetworkTests`
-(build workspace packages first: `pnpm -r --filter @kraki/tests... build`). Two
-production-networking clients of one account sync add/edit/delete live, an
-offline edit survives a relaunch and merges with the other client's edit, and a
-conflicting offline edit is reported without overwriting the server value.
-Settings screenshots: `touch /tmp/kraki-words-shots/enable`, then run
-`VoiceVocabularyShots` on iOS and Mac.
-
-Tests cover native migration/restarts, account and relay isolation, live cache
-refresh, in-flight editing, out-of-order acknowledgements, deletion conflicts,
-invalid editing drafts, migration overflow and deduplication. Head tests cover
-normalization/validation, idempotency, concurrency, tombstones, import merging,
-capacity, reserved preference protection, same-account live delivery, reconnect
-hydration, and cross-account isolation without a Tentacle.
+- Head unit/integration: intent parsing and normalization, merge/replace/re-add
+  rules, limit, reserved field, live fan-out, reconnect hydration, malformed
+  requests acknowledged, account isolation, preferences not carrying the list.
+- Native unit (iOS + Mac): diff to intents, optimistic view with acknowledgement,
+  drafts and row identity across remote updates, migration, account isolation,
+  apply parity with Head.
+- End-to-end: `pnpm -r --filter @kraki/tests... build`, then
+  `bash scripts/chaos/run-native.sh -only-testing:KrakiMacTests/VoiceVocabularyNetworkTests`.
+  Two production-networking clients of one account against a local Head: live
+  add/edit/delete; an offline edit surviving a relaunch and merging with the other
+  client's edit; concurrent edits of one word converging on the later one; an
+  offline edit of a word deleted elsewhere bringing it back.

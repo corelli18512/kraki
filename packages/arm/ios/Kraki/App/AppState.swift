@@ -152,10 +152,6 @@ final class AppState {
         return state
     }
 
-    func setVoiceVocabularyStoreForTesting(_ store: VoiceVocabularyStore) {
-        voiceVocabularyStore = store
-    }
-
     static func makeUnitTestHost() -> AppState {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("kraki-unit-host-\(UUID().uuidString)", isDirectory: true)

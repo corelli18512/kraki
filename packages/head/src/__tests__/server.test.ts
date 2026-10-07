@@ -857,19 +857,17 @@ describe('HeadServer (thin relay)', () => {
     it('syncs two app clients live and hydrates a reconnect without any tentacle', async () => {
       head = await createHead();
       const { ws: a, authOk } = await authConnect(head.port, 'Phone', 'app', { deviceId: 'words-phone' });
-      expect(authOk.voiceVocabulary).toEqual({ version: 1, revision: 0, entries: [] });
+      expect(authOk.voiceVocabulary).toEqual([]);
       const joined = waitForMessageOfType(a, 'device_joined');
       const { ws: b } = await authConnect(head.port, 'Mac', 'app', { deviceId: 'words-mac' });
       await joined;
-      const change = { id: randomUUID(), changeId: randomUUID(), baseRevision: 0, action: 'upsert', term: 'Kraki', heardAs: 'cracky' };
       const requestId = randomUUID();
       const ack = waitForMessageOfType(a, 'voice_vocabulary_updated');
       const live = waitForMessageOfType(b, 'voice_vocabulary_updated');
-      a.send(JSON.stringify({ type: 'update_voice_vocabulary', requestId, changes: [change] }));
+      a.send(JSON.stringify({ type: 'update_voice_vocabulary', requestId, ops: [{ op: 'add', term: 'Kraki', heardAs: 'cracky' }] }));
       const response = await ack;
-      expect(response.requestId).toBe(requestId);
-      expect(response.results).toEqual([{ changeId: change.changeId, status: 'applied' }]);
-      expect((await live).vocabulary).toEqual(response.vocabulary);
+      expect(response).toMatchObject({ requestId, words: [{ term: 'Kraki', heardAs: 'cracky' }] });
+      expect((await live).words).toEqual(response.words);
       // A theme change must not carry (or broadcast) the word list.
       const themeAck = waitForMessageOfType(a, 'preferences_updated');
       const themeLive = waitForMessageOfType(b, 'preferences_updated');
@@ -879,12 +877,12 @@ describe('HeadServer (thin relay)', () => {
       }
       a.close(); b.close();
       const { ws: c, authOk: reconnected } = await authConnect(head.port, 'New App', 'app', { deviceId: 'words-new' });
-      expect(reconnected.voiceVocabulary).toEqual(response.vocabulary);
+      expect(reconnected.voiceVocabulary).toEqual(response.words);
       expect((reconnected.user as Record<string, unknown>).preferences).toEqual({ theme: 'dark' });
       c.close();
     });
 
-    it('does not fan out another account’s words and rejects malformed batches', async () => {
+    it('acknowledges malformed requests, and keeps accounts apart', async () => {
       head = await createHead({ authProvider: new GitHubAuthProvider({ fetcher: mockGitHubFetcher({
         alice: { id: 101, login: 'alice' }, bob: { id: 102, login: 'bob' },
       }) }) });
@@ -893,15 +891,13 @@ describe('HeadServer (thin relay)', () => {
       const received: unknown[] = [];
       b.on('message', data => { const msg = unwrapControlFrame(JSON.parse(data.toString())); if (msg?.type === 'voice_vocabulary_updated') received.push(msg); });
       const bad = waitForMessageOfType(a, 'voice_vocabulary_updated');
-      a.send(JSON.stringify({ type: 'update_voice_vocabulary', requestId: randomUUID(), changes: [{ term: 'invalid' }] }));
-      expect((await bad).error).toBe('invalid_update');
+      a.send(JSON.stringify({ type: 'update_voice_vocabulary', requestId: 'r1', ops: 'not a list' }));
+      expect(await bad).toMatchObject({ requestId: 'r1', words: [] });
       const good = waitForMessageOfType(a, 'voice_vocabulary_updated');
-      a.send(JSON.stringify({ type: 'update_voice_vocabulary', requestId: randomUUID(), changes: [{
-        id: randomUUID(), changeId: randomUUID(), baseRevision: 0, action: 'upsert', term: 'Private', heardAs: '',
-      }] }));
+      a.send(JSON.stringify({ type: 'update_voice_vocabulary', requestId: 'r2', ops: [{ op: 'add', term: 'Private' }] }));
       await good;
       const { ws: c, authOk } = await authConnect(head.port, 'Bob New', 'app', { token: 'bob', deviceId: 'words-bob-new' });
-      expect(authOk.voiceVocabulary).toEqual({ version: 1, revision: 0, entries: [] });
+      expect(authOk.voiceVocabulary).toEqual([]);
       expect(received).toEqual([]);
       a.close(); b.close(); c.close();
     });

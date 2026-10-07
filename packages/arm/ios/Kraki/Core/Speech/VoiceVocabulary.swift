@@ -4,7 +4,7 @@ import SwiftUI
 
 /// One entry of the user's voice vocabulary: a word or name spelled as it
 /// should appear, and (optionally) how speech recognition tends to mishear it.
-struct VoiceTerm: Identifiable, Equatable {
+struct VoiceTerm: Identifiable, Equatable, Codable {
     let id: UUID
     var term: String
     /// Mishearings as typed: separated by commas or semicolons (ASCII or full-width) or the ideographic comma.
@@ -63,9 +63,9 @@ enum VoiceInputSettings {
     }
 }
 
-/// The current account's spelling vocabulary, cached on this device for voice
-/// correction (one `Term = heard, …` line per entry). The structured sync state
-/// and unacknowledged edits are stored separately, scoped to the account.
+/// The user's own spelling vocabulary for voice correction, stored on this
+/// device (UserDefaults, one `Term = heard, …` line per entry). Nothing is
+/// built in: which words matter is entirely the user's.
 enum VoiceVocabulary {
     static let storageKey = "voice.vocabulary"
     /// Bounded so the correction prompt (and its cost) stays small.
@@ -100,230 +100,198 @@ enum VoiceVocabulary {
     }
 }
 
-/// Editing state shared by the iOS page and the Mac pane. Rows being typed
-/// (empty word) stay in memory and are never saved.
+/// Custom Words for the signed-in account, shared by the iOS page and the Mac
+/// pane. Edits show at once and are kept on the device; `flush()` (debounced by
+/// PreferencesManager) turns them into intents for Head, and `receive` adopts
+/// the account's list. Sync is silent: there is no conflict UI, the later
+/// intent wins. Rows being typed (empty or invalid word) are never sent.
 @Observable
 final class VoiceVocabularyStore {
     private let defaults: UserDefaults
-    var terms: [VoiceTerm] { didSet { if !applyingRemote { save() } } }
+    var terms: [VoiceTerm] { didSet { if !applyingRemote { changed() } } }
     private var applyingRemote = false
-    private var savedTerms: [VoiceTerm] = []
-    private var draftBaseRevisions: [UUID: Int] = [:]
+    private var state = VoiceVocabularyAccountState()
     private(set) var accountKey: String?
-    private(set) var syncState = VoiceVocabularySyncState()
+    /// Head supports sync (else edits stay queued on this device).
     var syncSupported = false
+    /// Local edit happened; PreferencesManager debounces and sends.
     var onChange: (() -> Void)?
+    var outbox: [VoiceWordOp] { state.outbox }
+
     private static let activeKey = "voice.vocabulary.activeAccount"
     private static let migratedKey = "voice.vocabulary.legacyClaimed"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        let activeAccount = defaults.string(forKey: Self.activeKey)
-        accountKey = activeAccount
-        if let accountKey = activeAccount, let data = defaults.data(forKey: accountKey),
-           let state = try? JSONDecoder().decode(VoiceVocabularySyncState.self, from: data) {
-            syncState = state
-            terms = state.terms
+        let active = defaults.string(forKey: Self.activeKey)
+        if let active, let loaded = Self.load(active, defaults) {
+            accountKey = active
+            state = loaded
+            terms = loaded.rows
         } else {
             terms = VoiceVocabulary.terms(from: defaults.string(forKey: VoiceVocabulary.storageKey) ?? "")
         }
-        savedTerms = terms
     }
 
-    // Before first migration, preserve the old local editor. After signing
-    // out of an account, require login rather than creating unowned edits.
+    /// Before the first sign-in the old device-local list stays editable.
+    /// After signing out, edits wait for sign-in rather than belong to no one.
     var canEdit: Bool { accountKey != nil || !defaults.bool(forKey: Self.migratedKey) }
-    var hasSyncProblems: Bool { !syncState.blocked.isEmpty }
-    /// One footer sentence; nil when everything is synced (the normal state
-    /// needs no chrome). Problems get their own section instead.
-    var syncNote: String? {
-        if accountKey == nil { return canEdit ? nil : "Sign in to edit and sync custom words." }
-        if hasSyncProblems { return nil }
-        if !syncSupported { return "Saved on this device. This server doesn't sync custom words yet." }
-        return syncState.pending.isEmpty ? nil : "Saved on this device. Waiting to sync."
-    }
-
-    var problemSummary: String {
-        let n = syncState.blocked.count
-        return (n == 1 ? "1 custom word couldn't sync." : "\(n) custom words couldn't sync.") + " Your edits are kept on this device."
-    }
-
-    /// Why this word's latest edit was refused, or nil if it isn't blocked.
-    func blockedReason(_ id: UUID) -> String? {
-        let key = id.uuidString.lowercased()
-        guard let change = syncState.pending.first(where: { $0.id == key }),
-              let status = syncState.blocked[change.changeId] else { return nil }
-        switch status {
-        case "conflict": return "Changed or deleted on another device."
-        case "duplicate": return "Already in your synced words."
-        case "full": return "Your account has reached \(VoiceVocabulary.maxEntries) words."
-        default: return "Not accepted by the server."
-        }
-    }
-
-    static func accountKey(userID: String, relay: String) -> String {
-        // Separate self-hosted relays may use the same user IDs.
-        "voice.vocabulary.account." + VoiceVocabularySyncState.hash(relay + "\n" + userID)
-    }
-
-    func activate(userID: String, relay: String) {
-        let key = Self.accountKey(userID: userID, relay: relay)
-        if key == accountKey { return }
-        let legacy = defaults.bool(forKey: Self.migratedKey) ? [] : VoiceVocabulary.terms(from: defaults.string(forKey: VoiceVocabulary.storageKey) ?? "")
-        accountKey = key
-        syncState = defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(VoiceVocabularySyncState.self, from: $0) } ?? VoiceVocabularySyncState()
-        if !defaults.bool(forKey: Self.migratedKey) {
-            // Keep a local backup; never import this installation's words into
-            // a second account after logout.
-            defaults.set(defaults.string(forKey: VoiceVocabulary.storageKey) ?? "", forKey: "voice.vocabulary.legacyBackup")
-            for var term in legacy {
-                term = VoiceTerm(id: VoiceVocabularySyncState.legacyID(term.cleanTerm), term: term.term, heardAs: term.heardAs)
-                syncState.stage(term, importing: true)
-            }
-            // Save the import outbox before marking migration complete.
-            persist()
-            defaults.set(true, forKey: Self.migratedKey)
-        }
-        defaults.set(key, forKey: Self.activeKey)
-        refreshTerms(preserveDrafts: false)
-    }
-
-    func deactivate() {
-        accountKey = nil
-        syncSupported = false
-        syncState = VoiceVocabularySyncState()
-        defaults.removeObject(forKey: Self.activeKey)
-        refreshTerms(preserveDrafts: false)
-    }
-
-    func receive(_ snapshot: VoiceVocabularySnapshot, sent: [VoiceVocabularyChange] = [], results: [[String: Any]] = []) {
-        for result in results where result["status"] as? String == "applied" {
-            guard let original = sent.first(where: { $0.changeId == result["changeId"] as? String }),
-                  let id = UUID(uuidString: original.id), draftBaseRevisions[id] == original.baseRevision,
-                  let entry = snapshot.entries.first(where: { $0.id == original.id }), !entry.deleted else { continue }
-            draftBaseRevisions[id] = entry.revision
-        }
-        syncState.receive(snapshot, sent: sent, results: results)
-        refreshTerms()
-    }
-
-    func reject(_ changes: [VoiceVocabularyChange]) {
-        for c in changes where syncState.pending.contains(where: { $0.changeId == c.changeId }) {
-            syncState.blocked[c.changeId] = "invalid"
-        }
-        persist()
-    }
-
-    func retrySync() {
-        syncState.retryBlocked()
-        draftBaseRevisions.removeAll()
-        refreshTerms()
-        onChange?()
-    }
-    func useSyncedWords() {
-        let rejectedIDs = Set(syncState.pending.filter { syncState.blocked[$0.changeId] != nil }.map(\.id))
-        applyingRemote = true
-        terms.removeAll { rejectedIDs.contains($0.id.uuidString.lowercased()) }
-        applyingRemote = false
-        syncState.discardBlocked()
-        refreshTerms()
-        onChange?()
-    }
-
-    private func refreshTerms(preserveDrafts: Bool = true) {
-        let drafts = preserveDrafts ? terms.filter { term in
-            // Preserve raw input too: an acknowledgement must not erase a
-            // comma/space the Mac user just typed to start the next alias.
-            term.line == nil || term.problem != nil ||
-            (savedTerms.first { $0.id == term.id }.map { $0.term != term.term || $0.heardAs != term.heardAs } ?? false)
-        } : []
-        let draftIDs = Set(drafts.map(\.id))
-        draftBaseRevisions = draftBaseRevisions.filter { draftIDs.contains($0.key) }
-        var values = syncState.terms
-        for draft in drafts {
-            if let index = values.firstIndex(where: { $0.id == draft.id }) { values[index] = draft }
-            else { values.append(draft) }
-        }
-        applyingRemote = true
-        terms = values
-        applyingRemote = false
-        savedTerms = syncState.terms
-        persist()
-    }
-
-    private func persist() {
-        if let accountKey, let data = try? JSONEncoder().encode(syncState) { defaults.set(data, forKey: accountKey) }
-        defaults.set(VoiceVocabulary.text(from: savedTerms), forKey: VoiceVocabulary.storageKey)
-    }
-
     var savedCount: Int { terms.filter { $0.line != nil }.count }
     var isFull: Bool { terms.count >= VoiceVocabulary.maxEntries }
 
     /// A term already in the list, other than `id` (case-insensitive).
     func isDuplicate(_ term: String, excluding id: UUID?) -> Bool {
-        let key = term.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return !key.isEmpty && terms.contains { $0.id != id && $0.cleanTerm.lowercased() == key }
+        let key = VoiceWordList.key(term)
+        return !key.isEmpty && terms.contains { $0.id != id && VoiceWordList.key($0.cleanTerm) == key }
     }
 
-    func upsert(_ term: VoiceTerm, baseRevision: Int? = nil) {
+    func upsert(_ term: VoiceTerm) {
         guard canEdit else { return }
-        if let baseRevision { draftBaseRevisions[term.id] = baseRevision }
         if let i = terms.firstIndex(where: { $0.id == term.id }) { terms[i] = term } else if !isFull { terms.append(term) }
     }
 
-    func revision(for id: UUID) -> Int {
-        let key = id.uuidString.lowercased()
-        return syncState.pending.first { $0.id == key }?.baseRevision ?? syncState.snapshot.entries.first { $0.id == key }?.revision ?? 0
-    }
-
-    func remove(_ id: UUID, baseRevision: Int? = nil) {
+    func remove(_ id: UUID) {
         guard canEdit else { return }
-        if let baseRevision { draftBaseRevisions[id] = baseRevision }
         terms.removeAll { $0.id == id }
     }
 
-    private func save() {
-        guard canEdit else {
-            applyingRemote = true
-            terms = savedTerms
-            applyingRemote = false
+    // MARK: Account
+
+    func activate(userID: String) {
+        let key = VoiceVocabularyAccountState.storageKey(userID: userID)
+        guard key != accountKey else { return }
+        accountKey = key
+        state = Self.load(key, defaults) ?? VoiceVocabularyAccountState()
+        if !defaults.bool(forKey: Self.migratedKey) {
+            // This installation's pre-sync words go to the first account that
+            // signs in, once; the next flush uploads them as additions, which
+            // Head merges with words from the user's other devices.
+            let text = defaults.string(forKey: VoiceVocabulary.storageKey) ?? ""
+            defaults.set(text, forKey: "voice.vocabulary.legacyBackup")
+            let keys = Set(state.rows.map { VoiceWordList.key($0.cleanTerm) })
+            state.rows += VoiceVocabulary.terms(from: text).filter { !keys.contains(VoiceWordList.key($0.cleanTerm)) }
+            persist()
+            defaults.set(true, forKey: Self.migratedKey)
+        }
+        defaults.set(key, forKey: Self.activeKey)
+        show(state.rows)
+    }
+
+    /// Sign-out: hide the account's words. Its queued edits stay stored and
+    /// are sent when that account signs in again.
+    func deactivate() {
+        accountKey = nil
+        syncSupported = false
+        state = VoiceVocabularyAccountState()
+        defaults.removeObject(forKey: Self.activeKey)
+        show([])
+    }
+
+    // MARK: Sync
+
+    /// Turns edits since the last flush into intents in the outbox.
+    func flush() {
+        guard accountKey != nil else { return }
+        let valid = Self.valid(terms)
+        let validIDs = Set(valid.map(\.id))
+        let committed = Dictionary(state.committed.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var ops = state.committed.filter { !validIDs.contains($0.id) }
+            .map { VoiceWordOp(op: .remove, term: $0.cleanTerm) }
+        // Edits before additions: renaming A and adding a new A must not fold
+        // the new A into the renamed word.
+        for row in valid {
+            guard let old = committed[row.id], old.line != row.line else { continue }
+            ops.append(VoiceWordOp(op: .edit, term: row.word.term, heardAs: row.word.heardAs, from: old.cleanTerm))
+        }
+        for row in valid where committed[row.id] == nil {
+            ops.append(VoiceWordOp(op: .add, term: row.word.term, heardAs: row.word.heardAs))
+        }
+        guard !ops.isEmpty else { return }
+        state.outbox += ops
+        state.committed = valid
+        persist()
+    }
+
+    /// The account's list from Head. `acknowledged`: how many outbox intents
+    /// (from the front) this list already includes.
+    func receive(_ words: [VoiceWord], acknowledged: Int = 0) {
+        guard accountKey != nil else { return }
+        flush()
+        state.outbox.removeFirst(min(acknowledged, state.outbox.count))
+        state.server = words
+        let rows = reconcile(VoiceWordList.apply(state.outbox, to: words))
+        state.committed = Self.valid(rows)
+        show(rows)
+    }
+
+    /// Keeps row identity and raw text (e.g. a trailing comma being typed on
+    /// Mac) for words that are unchanged, and keeps drafts.
+    private func reconcile(_ target: [VoiceWord]) -> [VoiceTerm] {
+        var pool = terms
+        var rows: [VoiceTerm] = []
+        for word in target {
+            let key = VoiceWordList.key(word.term)
+            if let i = pool.firstIndex(where: { $0.line != nil && $0.problem == nil && VoiceWordList.key($0.cleanTerm) == key }) {
+                var row = pool.remove(at: i)
+                if row.word != word { row.term = word.term; row.heardAs = word.heardAs }
+                rows.append(row)
+            } else {
+                rows.append(VoiceTerm(term: word.term, heardAs: word.heardAs))
+            }
+        }
+        let keys = Set(target.map { VoiceWordList.key($0.term) })
+        return rows + pool.filter { $0.line == nil || $0.problem != nil || keys.contains(VoiceWordList.key($0.cleanTerm)) }
+    }
+
+    // MARK: Storage
+
+    private func changed() {
+        if accountKey == nil {
+            guard canEdit else { show([]); return }
+            defaults.set(VoiceVocabulary.text(from: Self.valid(terms)), forKey: VoiceVocabulary.storageKey)
             return
         }
-        var seen = Set<String>()
-        let unique = terms.filter { $0.line != nil && $0.problem == nil && seen.insert($0.cleanTerm.lowercased()).inserted }
-        if accountKey != nil {
-            let visibleIDs = Set(terms.map(\.id))
-            for term in terms where draftBaseRevisions[term.id] == nil {
-                if let old = savedTerms.first(where: { $0.id == term.id }), old.term != term.term || old.heardAs != term.heardAs {
-                    draftBaseRevisions[term.id] = revision(for: term.id)
-                }
-            }
-            for old in savedTerms where !visibleIDs.contains(old.id) { syncState.stage(old, deleting: true, baseRevision: draftBaseRevisions[old.id]) }
-            for term in unique {
-                let old = savedTerms.first { $0.id == term.id }
-                if old?.line != term.line { syncState.stage(term, baseRevision: draftBaseRevisions[term.id]) }
-            }
-            savedTerms = syncState.terms
-            draftBaseRevisions = draftBaseRevisions.filter { id, _ in
-                guard let raw = terms.first(where: { $0.id == id }), let saved = savedTerms.first(where: { $0.id == id }) else { return false }
-                return raw.term != saved.term || raw.heardAs != saved.heardAs
-            }
-            persist()
-            onChange?()
-        } else {
-            savedTerms = unique
-            defaults.set(VoiceVocabulary.text(from: unique), forKey: VoiceVocabulary.storageKey)
-        }
+        state.rows = terms
+        persist()
+        onChange?()
     }
+
+    private func show(_ rows: [VoiceTerm]) {
+        applyingRemote = true
+        terms = rows
+        applyingRemote = false
+        state.rows = rows
+        persist()
+    }
+
+    private func persist() {
+        if let accountKey, let data = try? JSONEncoder().encode(state) { defaults.set(data, forKey: accountKey) }
+        // What the next dictation request reads.
+        defaults.set(VoiceVocabulary.text(from: Self.valid(state.rows)), forKey: VoiceVocabulary.storageKey)
+    }
+
+    private static func load(_ key: String, _ defaults: UserDefaults) -> VoiceVocabularyAccountState? {
+        defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(VoiceVocabularyAccountState.self, from: $0) }
+    }
+
+    static func valid(_ terms: [VoiceTerm]) -> [VoiceTerm] {
+        var seen = Set<String>()
+        return terms.filter { $0.line != nil && $0.problem == nil && seen.insert(VoiceWordList.key($0.cleanTerm)).inserted }
+    }
+}
+
+extension VoiceTerm {
+    var word: VoiceWord { VoiceWord(term: cleanTerm, heardAs: heardList.joined(separator: ", ")) }
 }
 
 enum VoiceVocabularyCopy {
     static let title = "Custom Words"
-    static let explanation = "Help voice input get your names and terms right, like product names, people or tech jargon. Synced through your Kraki account and stored on the server; not end-to-end encrypted."
+    static let explanation = "Help voice input get your names and terms right, like product names, people or tech jargon. Synced across your devices with your Kraki account."
     static let emptyTitle = "No custom words yet"
     static let recognizedAs = "Often recognized as"
     static let recognizedAsFooter = "Optional. How voice input tends to get it wrong, separated by commas. Similar spellings are caught too."
     static let termFooter = "Spelled exactly as it should appear."
+    static let signedOut = "Sign in to edit your custom words."
 }
 
 #if os(iOS)
@@ -336,7 +304,6 @@ struct VoiceVocabularyPage: View {
 
     var body: some View {
         List {
-            VoiceVocabularySyncSection(store: store)
             if store.terms.isEmpty {
                 Section {
                     VStack(spacing: 10) {
@@ -344,7 +311,7 @@ struct VoiceVocabularyPage: View {
                             .font(.system(size: 34, weight: .light))
                             .foregroundStyle(Color.krakiPrimary)
                         Text(VoiceVocabularyCopy.emptyTitle).font(.headline)
-                        Text([VoiceVocabularyCopy.explanation, store.syncNote].compactMap { $0 }.joined(separator: "\n\n"))
+                        Text(store.canEdit ? VoiceVocabularyCopy.explanation : VoiceVocabularyCopy.signedOut)
                             .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         Button { add() } label: {
                             HStack(spacing: 6) { Image(systemName: "plus"); Text("Add Word") }
@@ -357,7 +324,7 @@ struct VoiceVocabularyPage: View {
             } else {
                 Section {
                     ForEach(store.terms) { term in
-                        Button { isNew = false; editing = term } label: { VoiceTermRow(term: term, blockedReason: store.blockedReason(term.id)) }
+                        Button { isNew = false; editing = term } label: { VoiceTermRow(term: term) }
                             .foregroundStyle(.primary)
                     }
                     .onDelete { offsets in
@@ -368,8 +335,8 @@ struct VoiceVocabularyPage: View {
                         Button { add() } label: { Label("Add Word", systemImage: "plus") }
                     }
                 } footer: {
-                    Text([VoiceVocabularyCopy.explanation + " \(store.savedCount) of \(VoiceVocabulary.maxEntries).", store.syncNote]
-                        .compactMap { $0 }.joined(separator: "\n\n"))
+                    Text(store.canEdit ? VoiceVocabularyCopy.explanation + " \(store.savedCount) of \(VoiceVocabulary.maxEntries)."
+                         : VoiceVocabularyCopy.signedOut)
                 }
             }
         }
@@ -392,22 +359,12 @@ struct VoiceVocabularyPage: View {
 
 private struct VoiceTermRow: View {
     let term: VoiceTerm
-    var blockedReason: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Text(term.cleanTerm).font(.body)
-                if blockedReason != nil {
-                    Image(systemName: "exclamationmark.triangle.fill").font(.footnote).foregroundStyle(.orange)
-                        .accessibilityLabel("Not synced")
-                }
-            }
+            Text(term.cleanTerm).font(.body)
             if !term.heardList.isEmpty {
                 Text("Often recognized as " + term.heardList.joined(separator: ", "))
                     .font(.footnote).foregroundStyle(.secondary).lineLimit(2)
-            }
-            if let blockedReason {
-                Text("Not synced: " + blockedReason).font(.footnote).foregroundStyle(.orange)
             }
         }
         .padding(.vertical, 2)
@@ -430,7 +387,6 @@ private struct VoiceTermEditor: View {
     let store: VoiceVocabularyStore
     let dismiss: () -> Void
     @FocusState private var focus: Bool
-    @State private var baseRevision: Int?
 
     private var duplicate: Bool { store.isDuplicate(term.term, excluding: term.id) }
     private var canSave: Bool { store.canEdit && !term.cleanTerm.isEmpty && !duplicate && term.problem == nil }
@@ -455,7 +411,7 @@ private struct VoiceTermEditor: View {
                 }
                 if !isNew {
                     Section {
-                        Button("Delete Word", role: .destructive) { store.remove(term.id, baseRevision: baseRevision); dismiss() }
+                        Button("Delete Word", role: .destructive) { store.remove(term.id); dismiss() }
                     }
                 }
             }
@@ -464,13 +420,10 @@ private struct VoiceTermEditor: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: dismiss) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isNew ? "Add" : "Save") { store.upsert(term, baseRevision: baseRevision); dismiss() }.disabled(!canSave)
+                    Button(isNew ? "Add" : "Save") { store.upsert(term); dismiss() }.disabled(!canSave)
                 }
             }
-            .onAppear {
-                if baseRevision == nil { baseRevision = store.revision(for: term.id) }
-                if isNew { focus = true }
-            }
+            .onAppear { if isNew { focus = true } }
         }
         .presentationDetents([.medium, .large])
     }
@@ -486,7 +439,6 @@ struct VoiceVocabularyMacSection: View {
 
     var body: some View {
         @Bindable var store = store
-        VoiceVocabularySyncSection(store: store)
         Section {
             if store.terms.isEmpty {
                 Text("No custom words yet. Add names and terms voice input gets wrong.")
@@ -518,10 +470,7 @@ struct VoiceVocabularyMacSection: View {
                     .buttonStyle(.borderless)
                     .help("Remove")
                 }
-                if let reason = store.blockedReason(term.id) {
-                    Label("Not synced: " + reason, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption).foregroundStyle(.orange)
-                } else if let problem = term.problem {
+                if let problem = term.problem {
                     Text(problem + " This word isn't saved.").font(.caption).foregroundStyle(.orange)
                 } else if store.isDuplicate(term.term, excluding: term.id) {
                     Text("“\(term.cleanTerm)” is already in the list; only the first is used.")
@@ -542,30 +491,13 @@ struct VoiceVocabularyMacSection: View {
         } header: {
             Text(VoiceVocabularyCopy.title)
         } footer: {
-            Text([VoiceVocabularyCopy.explanation, store.syncNote].compactMap { $0 }.joined(separator: " "))
+            Text(store.canEdit ? VoiceVocabularyCopy.explanation : VoiceVocabularyCopy.signedOut)
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .disabled(!store.canEdit)
     }
 }
 #endif
-
-private struct VoiceVocabularySyncSection: View {
-    let store: VoiceVocabularyStore
-    var body: some View {
-        if store.hasSyncProblems {
-            Section {
-                Label {
-                    Text(store.problemSummary)
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                }
-                Button("Retry My Changes") { store.retrySync() }
-                Button("Use Synced Words") { store.useSyncedWords() }
-            }
-        }
-    }
-}
 
 // MARK: - Voice Input settings screens
 

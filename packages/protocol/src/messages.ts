@@ -1446,8 +1446,8 @@ export interface AuthOkMessage {
   /** The auth method that was used */
   authMethod: AuthMethod['method'];
   user: { id: string; login: string; provider: string; email?: string; preferences?: Record<string, unknown>; region?: string };
-  /** Presence advertises account Custom Words sync support. Not E2E encrypted. */
-  voiceVocabulary?: VoiceVocabularySnapshot;
+  /** The account's Custom Words. Presence also advertises sync support. */
+  voiceVocabulary?: VoiceWord[];
   devices: DeviceSummary[];
   /** GitHub OAuth client ID (present when GitHub OAuth is configured for web login) */
   githubClientId?: string;
@@ -1589,30 +1589,29 @@ export interface PreferencesUpdatedMessage {
   preferences: Record<string, unknown>;
 }
 
-/** Account-owned custom words. Deleted entries retain their ID/revision so a
- * stale offline client cannot resurrect them. All IDs are lowercase UUIDs. */
-export interface VoiceVocabularySnapshot {
-  version: 1;
-  revision: number;
-  entries: Array<{
-    id: string; revision: number; term: string; heardAs: string;
-    deleted: boolean; changeId: string;
-  }>;
+/** One Custom Words entry, account-owned (not E2E encrypted). */
+export interface VoiceWord { term: string; heardAs: string }
+/** One user intent. Clients never upload whole lists; Head applies intents in
+ *  arrival order and the last one wins. Words are matched case-insensitively. */
+export interface VoiceWordOp {
+  op: 'add' | 'edit' | 'remove';
+  term: string;
+  heardAs?: string;
+  /** edit: the word being replaced (may equal `term` when only mishearings change). */
+  from?: string;
 }
 export interface UpdateVoiceVocabularyMessage {
   type: 'update_voice_vocabulary';
+  /** Echoed so the sender can drop exactly these ops from its outbox. */
   requestId: string;
-  changes: Array<{
-    changeId: string; id: string; baseRevision: number;
-    action: 'upsert' | 'delete' | 'import'; term?: string; heardAs?: string;
-  }>;
+  ops: VoiceWordOp[];
 }
+/** The account's full list after a change: to the sender (with requestId) and
+ *  to the user's other online apps. */
 export interface VoiceVocabularyUpdatedMessage {
   type: 'voice_vocabulary_updated';
-  vocabulary?: VoiceVocabularySnapshot;
   requestId?: string;
-  results?: Array<{ changeId: string; status: 'applied' | 'conflict' | 'duplicate' | 'full' }>;
-  error?: 'invalid_update';
+  words: VoiceWord[];
 }
 
 // ── Push notification token management ──────────────────
