@@ -387,6 +387,19 @@ export async function startWorker(): Promise<WorkerResult> {
     announceUpdateResult();
   };
 
+  relay.onAccountDeleted = () => {
+    logger.warn('The Kraki account was deleted — signing this computer out and stopping');
+    void (async () => {
+      const { forgetDeletedAccount, retireAutostart } = await import('./account-deleted.js');
+      forgetDeletedAccount();
+      retireAutostart();
+      await shutdown().catch(() => {});
+      // Clean exit: supervisors don't restart it, and without a config the
+      // next `kraki` runs setup from scratch.
+      process.exit(0);
+    })();
+  };
+
   relay.onFatalError = (message) => {
     logger.fatal({ message }, 'Relay fatal error — exiting so the supervisor can restart');
     // A dead relay client inside a live process looks "running" to every

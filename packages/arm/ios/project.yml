@@ -135,8 +135,7 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: true
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_NSCameraUsageDescription: "Kraki uses the camera to scan QR codes for device pairing."
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Kraki uses the microphone for press-to-talk voice messages."
-        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Kraki transcribes your voice on-device so you can dictate messages."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Kraki records your voice while you dictate and sends it to its cloud speech service to turn it into text."
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
         INFOPLIST_KEY_UIBackgroundModes: ["remote-notification"]
         CODE_SIGN_STYLE: Automatic
@@ -292,6 +291,7 @@ targets:
       - path: Kraki/Shared/DiagnosticsSummary.swift
       # AppState is platformized (push + willTerminate guarded).
       - path: Kraki/App/AppState.swift
+      - path: Kraki/App/AppState+AccountDeletion.swift
       # Mac-only app shell, scenes, commands.
       - path: Kraki/App/Mac
         excludes:
@@ -322,6 +322,7 @@ targets:
       - path: Kraki/Features/Welcome
       - path: Kraki/Features/Tentacle
       - path: Kraki/Features/Settings/MacPanes
+      - path: Kraki/Features/Settings/DeleteAccountSection.swift
       - path: Kraki/Features/Usage
       - path: Kraki/Features/Chat/ChatPlaceholderView+macOS.swift
       - path: Kraki/Features/Pairing/PairingSheet+macOS.swift

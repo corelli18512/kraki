@@ -167,8 +167,6 @@ Push notifications use the same E2E encryption model. When an agent event requir
 
 1. The tentacle encrypts a small preview (`pushPreview`) with the offline device's public key — the same RSA-OAEP wrapping used for WebSocket messages.
 2. The relay forwards the opaque encrypted preview through the push service (APNs or Web Push/VAPID).
-
-Voice input is different: dictated audio is sent to Kraki's cloud speech service for transcription and is not end-to-end encrypted.
 3. The device's service worker decrypts the preview locally and shows the notification content.
 
 The relay sees the encrypted payload size and the push token — never the notification content. This extends the same trust boundary from WebSocket delivery to push delivery.
@@ -183,6 +181,16 @@ Bytes are delivered separately, encrypted per-recipient like any other message:
 - Report HTML is rendered in a sandboxed web view with a strict CSP (inline scripts/styles only; no network, media, frames or forms). "Open in Browser" writes the original report to a temporary file and opens it outside that sandbox only on explicit user action.
 
 The relay sees the same opaque encrypted payloads it sees for any other message, plus chunked transfer adds nothing to its visibility. Bytes never leave the tentacle except on an authenticated session-member request, so the privacy boundary for screenshots matches the privacy boundary for prompts and tool output.
+
+## Voice input
+
+Voice input is the one feature that is **not** end-to-end encrypted. The first time someone dictates, the app says so and asks them to continue.
+
+- **Audio** goes to Kraki's cloud speech service (a `wss://*.kraki.chat` broker; the apps refuse any other broker the relay might advertise). It is transcribed by a cloud speech-recognition provider.
+- **Correct Transcripts** (on by default): the transcript is sent to an AI model that fixes recognition mistakes. With it go the user's Custom Words and, if **Use Conversation Context** is on (default), the conversation title, agent, model and up to 32 names or terms taken from the last 12 messages.
+- Conversation terms are filtered on the device: whole messages are never sent, and anything shaped like a credential (GitHub/Slack/OpenAI-style tokens, AWS key ids, JWTs, PEM blocks), a URL, host:port, e-mail address, file path, long hex string or high-entropy token is dropped. See `VoiceContextTermFilter`.
+- Both switches are in Settings → Voice Input. With context off, only Custom Words and the locale accompany the transcript.
+- The relay authorizes each voice connection with a signed, quota-limited lease.
 
 ## Local MCP server
 

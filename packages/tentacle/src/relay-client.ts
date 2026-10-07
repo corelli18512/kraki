@@ -8,7 +8,7 @@
 
 import { wsProxyOptions } from './proxy.js';
 import { WebSocket } from 'ws';
-import { DEFAULT_SESSION_MODE, normalizeSessionMode, toWireSessionMode } from '@kraki/protocol';
+import { DEFAULT_SESSION_MODE, normalizeSessionMode, toWireSessionMode, ACCOUNT_DELETED_CLOSE_CODE } from '@kraki/protocol';
 import { appendFileSync, renameSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -1060,6 +1060,12 @@ export class RelayClient {
           hasPulse: typeof msg.pulse === 'string',
           rawLen,
         });
+        // Only the relay itself writes raw frames (peers' data arrives inside
+        // pulse frames), so this cannot be forged by another device.
+        if (msg.type === 'account_deleted') {
+          this.accountDeleted();
+          return;
+        }
         this.handleMessage(msg);
       } catch (err) {
         // A handler bug, not a malformed frame: never swallow it silently.
@@ -1074,6 +1080,10 @@ export class RelayClient {
       logger.info({ code, reason: reasonStr, intentional: this.intentionalDisconnect }, 'WS closed');
       this.setState('disconnected');
       this.pulse.onDisconnected();
+      if (code === ACCOUNT_DELETED_CLOSE_CODE) {
+        this.accountDeleted();
+        return;
+      }
       if (!this.intentionalDisconnect) {
         this.scheduleReconnect();
       }
@@ -1150,6 +1160,24 @@ export class RelayClient {
 
   // ── Message handling ────────────────────────────────
 
+  /**
+   * The account was deleted from an app (or while this computer was offline).
+   * Stop for good: never reconnect, which would sign up a new account with
+   * the saved token. The daemon forgets its credentials (onAccountDeleted).
+   */
+  private accountDeleted(): void {
+    if (this.accountDeletedHandled) return;
+    this.accountDeletedHandled = true;
+    logger.warn('Kraki account was deleted; disconnecting for good');
+    this.disconnect();
+    this.onAccountDeleted?.();
+  }
+
+  private accountDeletedHandled = false;
+
+  /** Called once when the relay reports that the account was deleted. */
+  onAccountDeleted: (() => void) | null = null;
+
   private handleMessage(msg: Record<string, unknown>): void {
     if (msg.type === 'auth_ok') {
       this.authInfo = msg as unknown as AuthOkMessage;
@@ -1177,6 +1205,10 @@ export class RelayClient {
 
     if (msg.type === 'auth_error') {
       const authError = msg as unknown as AuthErrorMessage;
+      if (authError.code === 'account_deleted') {
+        this.accountDeleted();
+        return;
+      }
       if (authError.code === 'wrong_region' && authError.redirect) {
         logger.info({ to: authError.redirect }, 'Relay requested reconnect to assigned region');
         this.options.relayUrl = authError.redirect;
@@ -2502,13 +2534,6 @@ export class RelayClient {
           ...(event.attachments?.length && { attachments: event.attachments }),
         },
       });
-    };
-
-    // Bytes remain in AttachmentStore until an Arm actually renders the
-    // ContentRef. Broadcasting large results to every Arm blocked unrelated
-    // control and live messages in Pulse's ordered stream.
-    this.adapter.onAttachmentBytes = (sessionId, event) => {
-      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
     };
 
     this.adapter.onIdle = (sessionId, event) => {

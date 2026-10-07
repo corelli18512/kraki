@@ -71,13 +71,6 @@ export interface ToolCompleteEvent extends TurnLifecycleEvent, SubagentTraceFiel
   attachments?: import('@kraki/protocol').Attachment[];
 }
 
-/** Emitted alongside a tool_complete that carries one or more
- *  `ContentRef`s. Tells the runtime (RelayClient) to broadcast the bytes
- *  to all connected devices as `attachment_data` chunks. */
-export interface AttachmentBytesEvent extends TurnLifecycleEvent {
-  refs: Array<import('@kraki/protocol').ContentRef>;
-}
-
 export interface SessionEndedEvent {
   reason: string;
 }
@@ -180,9 +173,6 @@ export abstract class AgentAdapter {
   onQuestionRequest: ((sessionId: string, event: QuestionRequestEvent) => void) | null = null;
   onToolStart: ((sessionId: string, event: ToolStartEvent) => void) | null = null;
   onToolComplete: ((sessionId: string, event: ToolCompleteEvent) => void) | null = null;
-  /** Called immediately after onToolComplete when bytes need to be pushed
-   *  (broadcast as `attachment_data` chunks) to connected devices. */
-  onAttachmentBytes: ((sessionId: string, event: AttachmentBytesEvent) => void) | null = null;
   onIdle: ((sessionId: string, event?: TurnLifecycleEvent) => void) | null = null;
   /** Called when the adapter has finished all writes to the session's history file
    *  after a turn completes. Used by EventsWatcher to safely resume watching. */

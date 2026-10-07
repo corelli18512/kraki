@@ -1005,7 +1005,10 @@ final class CommandSender {
     /// same connectivity/queue semantics as other commands and won't
     /// silently disappear if the socket is mid-reconnect.
     func removeDevice(deviceId: String) {
-        send(["type": "remove_device", "deviceId": deviceId])
+        // Relay-terminated: the relay must read it, so it goes as plaintext
+        // control. It used to be end-to-end encrypted to the computers, which
+        // ignore it, so the relay never removed anything.
+        appState?.sendRelayControl(["type": "remove_device", "deviceId": deviceId])
     }
 
     // MARK: - Local sessions (import picker)

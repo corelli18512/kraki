@@ -5,6 +5,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, chm
 import { execFileSync, spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setMachOUuid } from './macho-uuid.mjs';
 
 const SENTINEL_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -151,6 +152,14 @@ async function main() {
   }
 
   run(getPostjectPath(), postjectArgs, { cwd: packageRoot });
+  if (process.platform === 'darwin') {
+    // The copied Node runtime still carries Node's own LC_UUID. Give the CLI
+    // its own, or macOS local network privacy confuses it with every other
+    // program built from the same Node (see macho-uuid.mjs).
+    for (const { arch, from, to } of setMachOUuid(outputPath, 'chat.kraki.cli')) {
+      console.log(`🆔 ${arch} LC_UUID ${from} -> ${to}`);
+    }
+  }
   maybeSignMacBinary(outputPath);
 
   if (process.platform !== 'win32') {

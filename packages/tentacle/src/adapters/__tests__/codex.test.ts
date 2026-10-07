@@ -45,7 +45,6 @@ class Harness {
     a.onQuestionAutoResolved = (sid, id) => this.events.push({ type: 'q_auto', sid, id });
     a.onToolStart = push('tool_start');
     a.onToolComplete = push('tool_complete');
-    a.onAttachmentBytes = push('attachment_bytes');
     a.onIdle = push('idle');
     a.onError = push('error');
     a.onCompaction = push('compaction');
@@ -372,7 +371,6 @@ describe('CodexAdapter (fake app-server child process)', () => {
     const refs = done.attachments as Array<{ type: string; id: string; caption?: string }>;
     expect(refs[0]).toMatchObject({ type: 'content_ref', caption: 'chart' });
     expect(store.has(sid, refs[0].id)).toBe(true);
-    expect(h.of('attachment_bytes')).toHaveLength(1);
     expect(h.of('message')[0].content).toBe('image: true');
   });
 

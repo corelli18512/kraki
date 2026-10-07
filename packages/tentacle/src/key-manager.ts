@@ -2,14 +2,14 @@
  * Tentacle key management for E2E encryption.
  *
  * Generates and persists RSA keypair on first run.
- * Provides encrypt/decrypt helpers using @kraki/crypto.
+ * Encryption itself uses @kraki/crypto directly with getKeyPair().
  */
 
 import { existsSync, linkSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { createPublicKey } from 'node:crypto';
-import { generateKeyPair, exportPublicKey, importPublicKey, encrypt, decrypt } from '@kraki/crypto';
-import type { KeyPair, EncryptedPayload, RecipientKey } from '@kraki/crypto';
+import { generateKeyPair, exportPublicKey, importPublicKey } from '@kraki/crypto';
+import type { KeyPair } from '@kraki/crypto';
 import { getConfigDir } from './config.js';
 
 const KEYS_DIR_NAME = 'keys';
@@ -67,19 +67,5 @@ export class KeyManager {
    */
   getCompactPublicKey(): string {
     return exportPublicKey(this.getKeyPair().publicKey);
-  }
-
-  /**
-   * Encrypt a message payload for a set of recipient devices.
-   */
-  encryptForRecipients(plaintext: string, recipients: RecipientKey[]): EncryptedPayload {
-    return encrypt(plaintext, recipients);
-  }
-
-  /**
-   * Decrypt a message payload intended for this device.
-   */
-  decryptForMe(payload: EncryptedPayload, myDeviceId: string): string {
-    return decrypt(payload, myDeviceId, this.getKeyPair().privateKey);
   }
 }

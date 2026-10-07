@@ -33,7 +33,7 @@
 	<key>LSUIElement</key>
 	<false/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Kraki uses the microphone to transcribe voice input into the current Session draft.</string>
+	<string>Kraki records your voice while you dictate and sends it to its cloud speech service to turn it into text.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>(c) 2026 Kraki</string>
 	<key>SUAllowsAutomaticUpdates</key>

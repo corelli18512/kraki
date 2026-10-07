@@ -1463,12 +1463,6 @@ export class PiAdapter extends AgentAdapter {
           ...(subagent && { subagent }),
           ...(outputAttachments.length > 0 && { attachments: outputAttachments }),
         });
-        if (outputAttachments.length > 0) {
-          const refs = outputAttachments.filter(
-            (a): a is import('@kraki/protocol').ContentRef => a.type === 'content_ref',
-          );
-          if (refs.length > 0) this.onAttachmentBytes?.(sessionId, { refs, ...this.lifecycleEvent(this.sessions.get(sessionId)) });
-        }
         break;
       }
       case 'turn_end':

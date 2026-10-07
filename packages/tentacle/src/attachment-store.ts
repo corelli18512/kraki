@@ -292,20 +292,6 @@ export class AttachmentStore {
     }
   }
 
-  /**
-   * Iterate over the bytes of an attachment in chunks of `chunkSize` bytes.
-   * Memory-bounded — does not load the whole file into one buffer (uses
-   * subarray slices into the read buffer).
-   */
-  *stream(sessionId: string, id: string, chunkSize: number): Generator<Buffer> {
-    const result = this.read(sessionId, id);
-    if (!result) return;
-    const { bytes } = result;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      yield bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
-    }
-  }
-
   /** Read the sidecar metadata only. */
   readMeta(sessionId: string, id: string): AttachmentMetaSidecar | null {
     if (!isSafeId(sessionId) || !isSafeId(id)) return null;
@@ -316,58 +302,6 @@ export class AttachmentStore {
     } catch {
       return null;
     }
-  }
-
-  /** Remove all attachments for a session (called on session deletion). */
-  removeSession(sessionId: string): void {
-    const dir = this.dir(sessionId);
-    if (!existsSync(dir)) return;
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch (err) {
-      logger.warn({ err, sessionId }, 'failed to remove attachments dir');
-    }
-  }
-
-  /**
-   * Garbage-collect orphan attachments — files in the session's
-   * attachments dir whose id is NOT in `referencedIds`. Returns count of
-   * deleted (data, meta) pairs.
-   */
-  gc(sessionId: string, referencedIds: Set<string>): number {
-    const dir = this.dir(sessionId);
-    if (!existsSync(dir)) return 0;
-    let removed = 0;
-    let entries: string[];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      return 0;
-    }
-    // Collect ids present on disk: anything matching <id>.<ext> or <id>.json
-    const idsOnDisk = new Set<string>();
-    for (const name of entries) {
-      const dot = name.lastIndexOf('.');
-      if (dot <= 0) continue;
-      idsOnDisk.add(name.slice(0, dot));
-    }
-    for (const id of idsOnDisk) {
-      if (referencedIds.has(id)) continue;
-      for (const name of entries) {
-        if (name.startsWith(`${id}.`)) {
-          try {
-            unlinkSync(join(dir, name));
-            removed++;
-          } catch {
-            // ignore
-          }
-        }
-      }
-    }
-    if (removed > 0) {
-      logger.info({ sessionId, removed }, 'gc removed orphan attachments');
-    }
-    return removed;
   }
 
   /**
@@ -402,25 +336,5 @@ export class AttachmentStore {
     }
     if (removed > 0) logger.info({ removed, maxAgeDays: Math.round(maxAgeMs / 86_400_000) }, 'pruned old tool payload attachments');
     return removed;
-  }
-
-  /** Total bytes consumed by a session's attachments (for diagnostics). */
-  sizeOfSession(sessionId: string): number {
-    const dir = this.dir(sessionId);
-    if (!existsSync(dir)) return 0;
-    let total = 0;
-    try {
-      for (const name of readdirSync(dir)) {
-        if (name.endsWith('.json')) continue;
-        try {
-          total += statSync(join(dir, name)).size;
-        } catch {
-          // ignore
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return total;
   }
 }
