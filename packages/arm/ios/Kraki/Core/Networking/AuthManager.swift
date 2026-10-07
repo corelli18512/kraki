@@ -401,6 +401,7 @@ final class AuthManager {
     /// Process a successful `auth_ok` from the relay.
     func handleAuthOk(message: [String: Any]) {
         guard let appState else { return }
+        appState.accountDeletedNotice = false
 
         // The deviceId is required — without it we can't address any
         // subsequent commands. A malformed/missing field here would
@@ -541,6 +542,14 @@ final class AuthManager {
         // We hold the new id transiently — only persisting once the
         // redirected relay confirms it with `auth_ok`. That way a failed
         // redirect doesn't clobber the user's previous identity.
+        // This device's account was deleted (here or from another device
+        // while this one was offline). Sign out for good; never fall back to
+        // another credential, which would sign up a new account.
+        if code == "account_deleted" {
+            appState.accountWasDeleted()
+            return
+        }
+
         if code == "wrong_region", let redirect = message["redirect"] as? String {
             // A redirect is persisted and then used for challenge auth with
             // this device's key, so only Kraki's own relays are followed.

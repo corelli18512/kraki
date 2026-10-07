@@ -97,7 +97,7 @@ export interface StoredRegion {
   lastSeenAt?: string;
 }
 
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 
 /**
  * Audio a live broker connection may run ahead of its last usage report.
@@ -442,7 +442,20 @@ export class Storage {
       `);
     }
 
+    if (currentVersion < 13) {
+      // Device ids of deleted accounts. Only random ids and a date: an
+      // offline computer of a deleted account must learn it was deleted
+      // instead of silently signing up again with its saved token.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS deleted_devices (
+          device_id  TEXT PRIMARY KEY,
+          deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+    }
+
     this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
+    this.sweepDeletedDevices();
   }
 
   // --- Users ---
@@ -704,6 +717,37 @@ export class Storage {
       encryptionKey: row.encryption_key,
       lastSeen: row.last_seen, createdAt: row.created_at,
     };
+  }
+
+  /**
+   * Delete an account and everything the relay keeps for it: devices, their
+   * push tokens, voice leases and usage, and the user row (preferences and
+   * custom words live there). Returns the deleted device ids so the caller
+   * can drop their pulse state and connections. One transaction.
+   */
+  deleteUser(userId: string): string[] {
+    return this.db.transaction(() => {
+      const deviceIds = (this.db.prepare('SELECT id FROM devices WHERE user_id = ?').all(userId) as Array<{ id: string }>)
+        .map((row) => row.id);
+      for (const id of deviceIds) this.db.prepare('DELETE FROM push_tokens WHERE device_id = ?').run(id);
+      this.db.prepare('DELETE FROM devices WHERE user_id = ?').run(userId);
+      this.db.prepare('DELETE FROM voice_leases WHERE user_id = ?').run(userId);
+      this.db.prepare('DELETE FROM voice_usage_daily WHERE user_id = ?').run(userId);
+      this.db.prepare('DELETE FROM users WHERE user_id = ?').run(userId);
+      const tombstone = this.db.prepare('INSERT OR REPLACE INTO deleted_devices (device_id) VALUES (?)');
+      for (const id of deviceIds) tombstone.run(id);
+      return deviceIds;
+    })();
+  }
+
+  /** Whether this device id belonged to an account that was deleted. */
+  isDeletedDevice(deviceId: string): boolean {
+    return this.db.prepare('SELECT 1 FROM deleted_devices WHERE device_id = ?').get(deviceId) !== undefined;
+  }
+
+  /** Forget tombstones older than `days` (default 180). */
+  sweepDeletedDevices(days = 180): number {
+    return this.db.prepare(`DELETE FROM deleted_devices WHERE deleted_at < datetime('now', ?)`).run(`-${days} days`).changes;
   }
 
   deleteDevice(id: string): boolean {

@@ -67,6 +67,14 @@ export type EdgeJoinOutcome =
   | { ok: true; region: string; relayUrl: string; displayName?: string; serviceKey: string }
   | { ok: false; code: string; message: string };
 
+/** Auth answer for a device of a deleted account: clients sign out and stop
+ *  reconnecting instead of re-creating the account. */
+const ACCOUNT_DELETED = {
+  ok: false as const,
+  code: 'account_deleted',
+  message: 'This Kraki account was deleted.',
+};
+
 export class LocalAuthBackend implements AuthBackend {
   private storage: Storage;
   private authProviders: Map<string, AuthProvider>;
@@ -95,6 +103,8 @@ export class LocalAuthBackend implements AuthBackend {
   ): Promise<AuthOutcome> {
     const logger = getLogger();
 
+    if (device.deviceId && this.storage.isDeletedDevice(device.deviceId)) return ACCOUNT_DELETED;
+
     if (auth.method === 'pairing') {
       return this.handlePairingAuth(auth.token, device, headRegion);
     }
@@ -117,6 +127,7 @@ export class LocalAuthBackend implements AuthBackend {
     _encryptionKey?: string,
     headRegion?: string,
   ): Promise<ChallengeOutcome> {
+    if (this.storage.isDeletedDevice(deviceId)) return ACCOUNT_DELETED;
     const device = this.storage.getDevice(deviceId);
     if (!device || !device.publicKey) {
       return { ok: false, code: 'unknown_device', message: 'Unknown device' };
@@ -138,6 +149,7 @@ export class LocalAuthBackend implements AuthBackend {
     headRegion?: string,
   ): Promise<AuthOutcome> {
     const logger = getLogger();
+    if (this.storage.isDeletedDevice(deviceId)) return ACCOUNT_DELETED;
     const device = this.storage.getDevice(deviceId);
     if (!device || !device.publicKey) {
       return { ok: false, code: 'device_not_found', message: 'Device not found' };
@@ -192,6 +204,11 @@ export class LocalAuthBackend implements AuthBackend {
       expiresAt: Date.now() + this.pairingTtl * 1000,
     });
     return { token, expiresIn: this.pairingTtl };
+  }
+
+  /** Delete the account and everything stored for it. Returns its device ids. */
+  async deleteAccount(userId: string): Promise<string[]> {
+    return this.storage.deleteUser(userId);
   }
 
   async removeDevice(userId: string, deviceId: string): Promise<boolean> {

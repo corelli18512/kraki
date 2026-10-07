@@ -365,6 +365,16 @@ final class AppState {
     var githubClientId: String?
     var relayVersion: String?
     var lastError: String?
+    /// Progress of a "Delete Account" request from this device.
+    var accountDeletion: AccountDeletionState = .idle
+    @ObservationIgnored var accountDeletionAttempt: UUID?
+    @ObservationIgnored var accountDeletedHandled = false
+    /// Shown on the sign-in screen after the account was deleted.
+    var accountDeletedNotice = false
+    #if os(macOS)
+    /// Kraki for Mac turns its built-in Kraki off when the account is deleted.
+    @ObservationIgnored var onAccountDeleted: (() -> Void)?
+    #endif
     /// 0 means "no reconnect in progress". Incremented by the WS client
     /// on every retry; reset to 0 on a successful connect.
     var reconnectAttempt: Int = 0

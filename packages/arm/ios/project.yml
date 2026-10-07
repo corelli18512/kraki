@@ -292,6 +292,7 @@ targets:
       - path: Kraki/Shared/DiagnosticsSummary.swift
       # AppState is platformized (push + willTerminate guarded).
       - path: Kraki/App/AppState.swift
+      - path: Kraki/App/AppState+AccountDeletion.swift
       # Mac-only app shell, scenes, commands.
       - path: Kraki/App/Mac
         excludes:
@@ -322,6 +323,7 @@ targets:
       - path: Kraki/Features/Welcome
       - path: Kraki/Features/Tentacle
       - path: Kraki/Features/Settings/MacPanes
+      - path: Kraki/Features/Settings/DeleteAccountSection.swift
       - path: Kraki/Features/Usage
       - path: Kraki/Features/Chat/ChatPlaceholderView+macOS.swift
       - path: Kraki/Features/Pairing/PairingSheet+macOS.swift

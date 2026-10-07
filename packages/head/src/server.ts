@@ -7,7 +7,7 @@ import type {
   DeviceSummary, DeviceRole, DeviceKind,
   VoiceResource, VoiceCapability, BlobPayload,
 } from '@kraki/protocol';
-import { HEAD_PULSE_TARGET } from '@kraki/protocol';
+import { HEAD_PULSE_TARGET, ACCOUNT_DELETED_CLOSE_CODE } from '@kraki/protocol';
 import { Storage } from './storage.js';
 import { parseVoiceWordOps, type VoiceWord } from './voice-vocabulary.js';
 import { PulseHub, PULSE_ACK_EVERY_BYTES } from './pulse-hub.js';
@@ -809,6 +809,7 @@ export class HeadServer {
       case 'update_preferences':    this.handleUpdatePreferences(ws, state, msg); return true;
       case 'update_voice_vocabulary': this.handleUpdateVoiceVocabulary(state, msg); return true;
       case 'remove_device':         this.handleRemoveDevice(ws, state, msg.deviceId as string); return true;
+      case 'delete_account':        void this.handleDeleteAccount(ws, state); return true;
       case 'register_push_token':   this.handleRegisterPushToken(ws, state, msg); return true;
       case 'unregister_push_token': this.handleUnregisterPushToken(ws, state, msg); return true;
       case 'dispatch_push': {
@@ -1358,6 +1359,64 @@ export class HeadServer {
 
     // Broadcast removal to all remaining user devices
     this.broadcastDeviceRemoved(state.userId, targetDeviceId);
+  }
+
+  // --- Account deletion ---
+
+  /** Users whose deletion is in flight (a double tap must not run it twice). */
+  private deletingAccounts = new Set<string>();
+
+  /**
+   * Delete the requesting user's account: at the account store (the account
+   * service in edge mode) and in this relay's own storage and pulse state.
+   * Then tell every connected device and close it. Devices that were offline
+   * get `auth_error` code `account_deleted` when they next connect.
+   */
+  private async handleDeleteAccount(ws: WebSocket, state: ClientState): Promise<void> {
+    const logger = getLogger();
+    const userId = state.userId;
+    const deviceId = state.deviceId;
+    if (!userId || !deviceId) {
+      this.sendError(ws, 'Not authenticated');
+      return;
+    }
+    if (this.storage.getDevice(deviceId)?.role !== 'app') {
+      this.sendError(ws, 'Only the Kraki app can delete the account');
+      return;
+    }
+    if (this.deletingAccounts.has(userId)) return;
+    this.deletingAccounts.add(userId);
+    try {
+      const deviceIds = new Set(this.storage.getDevicesByUser(userId).map((d) => d.id));
+      if (this.authBackend.deleteAccount) {
+        for (const id of await this.authBackend.deleteAccount(userId)) deviceIds.add(id);
+      }
+      // This relay's own rows (the edge mirror; already gone when the
+      // account store is this relay's storage).
+      for (const id of this.storage.deleteUser(userId)) deviceIds.add(id);
+      logger.info('Account deleted', { userId, devices: deviceIds.size, byDevice: deviceId });
+
+      for (const id of deviceIds) {
+        const socket = this.connections.get(id);
+        if (socket) {
+          // Detach before closing so the close handler doesn't announce
+          // device_left or touch the deleted rows.
+          this.connections.delete(id);
+          this.userByDevice.delete(id);
+          this.clients.delete(socket);
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'account_deleted' }));
+            socket.close(ACCOUNT_DELETED_CLOSE_CODE, 'account_deleted');
+          }
+        }
+        this.pulseHub.forgetDevice(id);
+      }
+    } catch (err) {
+      logger.error('Account deletion failed', { userId, error: (err as Error).message });
+      this.sendError(ws, 'Could not delete the account. Try again.');
+    } finally {
+      this.deletingAccounts.delete(userId);
+    }
   }
 
   // --- Push token management ---

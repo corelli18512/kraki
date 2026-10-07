@@ -75,6 +75,12 @@ export class RemoteAuthBackend implements AuthBackend {
     return result.ok === true;
   }
 
+  async deleteAccount(userId: string): Promise<string[]> {
+    const result = await this.post<{ ok: boolean; deviceIds?: string[]; message?: string }>('/api/account/delete', { userId });
+    if (result.ok !== true) throw new Error(result.message ?? 'Account service did not delete the account');
+    return Array.isArray(result.deviceIds) ? result.deviceIds : [];
+  }
+
   async requestPairingToken(
     token: string,
     ip?: string,
