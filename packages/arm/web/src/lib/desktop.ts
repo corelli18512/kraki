@@ -60,6 +60,10 @@ export interface KrakiDesktopBridge {
   notify: (n: { title: string; body: string; sessionId?: string }) => void;
   setBadge: (count: number) => void;
   onOpenSession: (handler: (sessionId: string) => void) => () => void;
+  /** Sessions waiting on you, for the tray menu (Kraki for Windows). */
+  setNeedsYou?: (list: { id: string; title: string; reason: string }[]) => void;
+  /** Tray › Account Usage / Settings… */
+  onOpen?: (what: 'usage' | 'settings', handler: () => void) => () => void;
 }
 
 declare global {

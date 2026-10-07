@@ -105,6 +105,10 @@ function reg(args) {
   });
 }
 
+function readFileSafe(file) {
+  try { return readFileSync(file, 'utf8').trim(); } catch { return ''; }
+}
+
 function readJson(file) {
   try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
 }
@@ -230,10 +234,9 @@ class BuiltInKraki {
     writeFileSync(path.join(home, 'managed-by.json'), JSON.stringify({
       by: OWNER, label: OWNER, appPath: this.appPath, appVersion: this.appVersion, updatedAt: new Date().toISOString(),
     }, null, 2) + '\n', { mode: 0o600 });
-    if (process.platform === 'win32') {
-      const [exe, ...rest] = this.daemonCommand();
-      await reg(['add', RUN_KEY, '/v', APP_RUN_VALUE, '/t', 'REG_SZ', '/d', `conhost.exe --headless "${exe}" ${rest.join(' ')}`, '/f']);
-    }
+    // At sign-in the app starts in the tray and brings the service up
+    // ("online ⇒ visible", as Kraki for Mac does from the menu bar).
+    if (process.platform === 'win32') await this.setLoginItem(true);
     await this.start();
   }
 
@@ -259,8 +262,36 @@ class BuiltInKraki {
   }
 
   /** Stop for good: the supervisor (not just the worker) and the login entry. */
+  async setLoginItem(on) {
+    if (process.platform !== 'win32') return;
+    if (on) await reg(['add', RUN_KEY, '/v', APP_RUN_VALUE, '/t', 'REG_SZ', '/d', `"${this.appPath}" --login`, '/f']);
+    else await reg(['delete', RUN_KEY, '/v', APP_RUN_VALUE, '/f']);
+  }
+
+  /**
+   * Cheap local read for the tray (no child process): owner marker, the
+   * daemon's status file and whether its process is alive.
+   */
+  quickState() {
+    const home = krakiHome();
+    const marker = readJson(path.join(home, 'managed-by.json'));
+    const status = readJson(path.join(home, 'status.json'));
+    const pid = Number(readFileSafe(path.join(home, 'daemon.pid'))) || status?.pid || null;
+    let alive = false;
+    if (pid) { try { process.kill(pid, 0); alive = true; } catch (e) { alive = e.code === 'EPERM'; } }
+    const owned = marker?.by === OWNER;
+    return {
+      available: this.available(),
+      owned,
+      running: alive,
+      relayState: alive ? status?.relayState ?? null : null,
+      cliDaemon: alive && !owned,
+      configured: existsSync(path.join(home, 'config.json')),
+    };
+  }
+
   async disable({ keepOwnership = false } = {}) {
-    if (process.platform === 'win32') await reg(['delete', RUN_KEY, '/v', APP_RUN_VALUE, '/f']);
+    if (process.platform === 'win32') await this.setLoginItem(false);
     const status = readJson(path.join(krakiHome(), 'status.json'));
     const pids = [status?.supervisorPid, status?.pid].filter((p) => Number.isInteger(p) && p > 0);
     for (const pid of pids) {

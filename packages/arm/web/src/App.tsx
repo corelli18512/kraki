@@ -97,6 +97,19 @@ export function App() {
     desktop?.setBadge(total);
   }, [unreadCount]);
 
+  // Tray › Needs You (Kraki for Windows): sessions waiting on an answer or approval.
+  const sessions = useStore((s) => s.sessions);
+  const previews = useStore((s) => s.sessionPreviews);
+  useEffect(() => {
+    if (!desktop?.setNeedsYou) return;
+    const list = [...sessions.values()].flatMap((s) => {
+      const type = previews.get(s.id)?.type;
+      const reason = type === 'permission' ? 'Needs approval' : type === 'question' ? 'Has a question' : null;
+      return reason ? [{ id: s.id, title: s.title || s.autoTitle || 'Session', reason }] : [];
+    });
+    desktop.setNeedsYou(list);
+  }, [sessions, previews]);
+
   // Clicking a desktop notification opens its session.
   useEffect(() => desktop?.onOpenSession((sid) => navigate(`/session/${sid}`)), [navigate]);
 

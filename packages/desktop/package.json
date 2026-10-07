@@ -11,7 +11,8 @@
     "start": "electron .",
     "dist:win": "electron-builder --win nsis --x64 --publish never",
     "dist:dir": "electron-builder --dir --publish never",
-    "kraki": "node scripts/prepare-kraki.mjs"
+    "kraki": "node scripts/prepare-kraki.mjs",
+    "test": "node --test test/*.test.cjs"
   },
   "devDependencies": {
     "electron": "^38.1.2",
@@ -31,7 +32,11 @@
       "build/tray.png",
       "build/badge.png",
       "package.json",
-      "build/icon.ico"
+      "build/icon.ico",
+      "build/tray-online.png",
+      "build/tray-offline.png",
+      "build/tray-attention.png",
+      "build/tray-problem.png"
     ],
     "asar": true,
     "protocols": [

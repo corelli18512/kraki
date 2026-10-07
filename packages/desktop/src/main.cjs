@@ -3,7 +3,7 @@
 // the relay connection (so replies, questions and approvals notify natively),
 // a taskbar badge, single-instance behaviour, and in-window GitHub sign-in.
 const {
-  app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, nativeTheme,
+  app, BrowserWindow, Menu, Notification, Tray, dialog, ipcMain, nativeImage, nativeTheme,
   net, protocol, screen, shell,
 } = require('electron');
 const { existsSync, readFileSync, writeFileSync } = require('node:fs');
@@ -11,6 +11,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const os = require('node:os');
 const { BuiltInKraki } = require('./tentacle.cjs');
+const presence = require('./presence.cjs');
 
 const SCHEME = 'app';
 const HOST = 'kraki';
@@ -46,6 +47,24 @@ let quitting = false;
 let unread = 0;
 /** @type {BuiltInKraki | null} */
 let builtIn = null;
+/** Started by the login entry: tray only, no window. */
+const LAUNCHED_AT_LOGIN = process.argv.includes('--login') || process.argv.includes('--hidden');
+/** Sessions waiting on a permission or an answer (from the Web). */
+let needsYou = [];
+/** 'starting' | 'stopping' while the service changes state. */
+let transition = null;
+let lastStatus = 'checking';
+
+// ── Small persisted prefs ──
+const prefsFile = () => path.join(app.getPath('userData'), 'prefs.json');
+function pref(key, value) {
+  let all = {};
+  try { all = JSON.parse(readFileSync(prefsFile(), 'utf8')); } catch { /* none */ }
+  if (value === undefined) return all[key];
+  all[key] = value;
+  try { writeFileSync(prefsFile(), JSON.stringify(all)); } catch { /* ignore */ }
+  return value;
+}
 
 // ── Window state ──
 const stateFile = () => path.join(app.getPath('userData'), 'window-state.json');
@@ -134,11 +153,11 @@ function createWindow() {
   if (bounds?.maximized) win.maximize();
   Menu.setApplicationMenu(null);
 
-  win.once('ready-to-show', () => { if (!process.argv.includes('--hidden')) win.show(); });
+  win.once('ready-to-show', () => { if (!LAUNCHED_AT_LOGIN) win.show(); });
   win.on('close', (e) => {
     saveBounds();
     // Closing keeps Kraki running in the tray (replies still notify).
-    if (!quitting) { e.preventDefault(); win.hide(); }
+    if (!quitting) { e.preventDefault(); win.hide(); stillOnlineHintOnce(); }
   });
   win.on('focus', () => win.flashFrame(false));
 
@@ -182,22 +201,112 @@ function createWindow() {
   void win.loadURL(`${APP_ORIGIN}/${START_QUERY ? `?${START_QUERY}` : ''}`);
 }
 
-// ── Tray + badge ──
-function updateTray() {
-  // One fixed icon: swapping the image made Windows drop the icon from the
-  // notification area. Unread shows as the taskbar badge and in the tooltip.
-  tray?.setToolTip(unread > 0 ? `Kraki — ${unread} unread` : 'Kraki');
+// ── Tray: is this PC online (presence.cjs) ──
+const trayImages = {};
+function trayImage(name) {
+  if (!trayImages[name]) {
+    const img = nativeImage.createFromPath(path.join(ASSETS, `tray-${name}.png`));
+    trayImages[name] = img.isEmpty() ? nativeImage.createFromPath(path.join(ASSETS, 'tray.png')) : img;
+  }
+  return trayImages[name];
 }
+let shownIcon = '';
+let shownMenu = '';
+function currentState() {
+  if (!builtIn) return null;
+  return { ...builtIn.quickState(), transition };
+}
+function updateTray() {
+  if (!tray) return;
+  const s = currentState();
+  const status = presence.resolveStatus(s);
+  const managed = presence.managesPresence(s);
+  lastStatus = status;
+  const icon = presence.trayIcon(status, needsYou.length);
+  if (icon !== shownIcon) { shownIcon = icon; tray.setImage(trayImage(icon)); }
+  const tip = [presence.TITLE[status], unread > 0 ? `${unread} unread` : null].filter(Boolean).join(' · ');
+  tray.setToolTip(`Kraki — ${tip}`);
+  const key = JSON.stringify([status, managed, needsYou]);
+  if (key !== shownMenu) {
+    shownMenu = key;
+    tray.setContextMenu(Menu.buildFromTemplate(presence.trayMenu(status, managed, needsYou, {
+      open: showWindow,
+      openSession: (id) => { showWindow(); win?.webContents.send('kraki:open-session', id); },
+      usage: () => { showWindow(); win?.webContents.send('kraki:open-usage'); },
+      settings: () => { showWindow(); win?.webContents.send('kraki:open-settings'); },
+      goOffline: () => { void goOffline(); },
+      goOnline: () => { void goOnline(); },
+      quit: () => { void quitFromTray(); },
+    })));
+  }
+}
+
+async function goOnline() {
+  if (!builtIn) return;
+  transition = 'starting'; updateTray();
+  try { await builtIn.enable(); } catch { /* the status shows it */ }
+  transition = null; updateTray();
+}
+async function goOffline() {
+  if (!builtIn) return;
+  transition = 'stopping'; updateTray();
+  // Keep ownership: this PC stays Kraki for Windows' and comes back online
+  // when Kraki is opened again.
+  try { await builtIn.disable({ keepOwnership: true }); } catch { /* status shows it */ }
+  transition = null; updateTray();
+}
+
+/** Tray › Quit: while this PC is online, quitting takes it offline (asked once). */
+async function quitFromTray() {
+  const s = currentState();
+  const managed = presence.managesPresence(s);
+  if (managed && presence.canGoOffline(presence.resolveStatus(s))) {
+    if (!pref('quitConfirmSuppressed')) {
+      const r = await dialog.showMessageBox(win && win.isVisible() ? win : undefined, {
+        type: 'question',
+        title: 'Kraki',
+        message: 'Quit Kraki and take this PC offline?',
+        detail: "Your phone and other computers won't be able to use the agents on this PC until you open Kraki again.\n\nTo keep this PC online, just close the window. Kraki stays in the tray.",
+        buttons: ['Quit and Go Offline', 'Cancel'],
+        defaultId: 0,
+        cancelId: 1,
+        checkboxLabel: "Don't ask again",
+        noLink: true,
+      });
+      if (r.response !== 0) return;
+      if (r.checkboxChecked) pref('quitConfirmSuppressed', true);
+    }
+    await goOffline();
+  }
+  quitting = true;
+  app.quit();
+}
+
+/** The first time the window closes while online, say Kraki is still there. */
+function stillOnlineHintOnce() {
+  if (pref('closeHintShown') || !Notification.isSupported()) return;
+  if (!presence.managesPresence(currentState()) || lastStatus !== 'online') return;
+  pref('closeHintShown', true);
+  const n = new Notification({
+    title: 'Kraki is still online',
+    body: 'Your phone can keep using this PC. Open Kraki from the tray any time; quit it there to take this PC offline.',
+    icon: path.join(ASSETS, 'icon.png'),
+  });
+  n.on('click', showWindow);
+  n.show();
+}
+
+ipcMain.on('kraki:needs-you', (_e, list) => {
+  needsYou = Array.isArray(list) ? list.slice(0, 20).map((s) => ({ id: String(s.id), title: String(s.title).slice(0, 60), reason: String(s.reason) })) : [];
+  updateTray();
+});
+
 function createTray() {
-  const icon = nativeImage.createFromPath(path.join(ASSETS, 'tray.png'));
-  tray = new Tray(icon.isEmpty() ? nativeImage.createFromPath(path.join(ASSETS, 'icon.png')).resize({ width: 16 }) : icon);
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Open Kraki', click: showWindow },
-    { type: 'separator' },
-    { label: 'Quit Kraki', click: () => { quitting = true; app.quit(); } },
-  ]));
+  tray = new Tray(trayImage('online'));
+  shownIcon = 'online';
   tray.on('click', showWindow);
   updateTray();
+  setInterval(updateTray, 3000);
   if (process.env.KRAKI_DESKTOP_LOG_NOTIFY) {
     setTimeout(() => {
       try { require('node:fs').appendFileSync(path.join(app.getPath('userData'), 'notify.log'), `${new Date().toISOString()} tray bounds=${JSON.stringify(tray.getBounds())} empty=${icon.isEmpty()}\n`); } catch { /* ignore */ }
@@ -312,8 +421,11 @@ app.whenReady().then(async () => {
   builtIn = new BuiltInKraki({ resourcesPath: process.resourcesPath, appPath: process.execPath, appVersion: app.getVersion() });
   // An owned daemon that is not running (a crash loop gave up, or it was
   // stopped by an update) starts again with the app.
+  // Opening Kraki (or the sign-in launch) brings this PC back online when it
+  // went offline at the last quit. enable() also restores the login item.
   if (builtIn.available()) {
-    builtIn.state().then((s) => { if (s.owned && !s.running) return builtIn.start(); }).catch(() => {});
+    const q = builtIn.quickState();
+    if (q.owned && q.configured && !q.running) void goOnline();
   }
   serveApp();
   createWindow();

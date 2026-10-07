@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { BotMessageSquare, Download, Gauge, MonitorCloud, Plus, Search, Settings, UserCog, X } from 'lucide-react';
 import { OPEN_USAGE_EVENT, USAGE_SHORTCUT } from '../usage/UsagePanel';
@@ -14,6 +14,7 @@ import { SettingsPanel } from './SettingsPanel';
 import { ProfileBar } from './ProfileBar';
 import { KrakiLogo } from '../KrakiLogo';
 import { requestComposerFocus } from '../sessions/NewSessionComposer';
+import { desktop } from '../../lib/desktop';
 import './sidebar.css';
 
 function Brand() {
@@ -77,6 +78,8 @@ export function Sidebar() {
   const [importOpen, setImportOpen] = useState(false);
   const [plusMenu, setPlusMenu] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Tray › Settings… (Kraki for Windows).
+  useEffect(() => desktop?.onOpen?.('settings', () => { if (narrow) setTab('settings'); else setSettingsOpen(true); }), [narrow]);
   const [tab, setTab] = useState<'sessions' | 'devices' | 'settings'>('sessions');
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
   const navigate = useNavigate();

@@ -17,6 +17,7 @@ import {
   accountKeyForSession, isStale, lastUpdatedText, mergedUsage, orderedAccounts, planTitle, providerTitle,
   readStatus, ringState, ringWindows, shortLabel, shortReset, usageUpdateHint, windowName, type MergedAccountUsage,
 } from '../../lib/usage';
+import { desktop } from '../../lib/desktop';
 import './usage.css';
 
 export const OPEN_USAGE_EVENT = 'kraki:open-usage';
@@ -295,11 +296,13 @@ export function UsagePanel() {
     window.addEventListener('keyup', up);
     window.addEventListener('blur', blur);
     window.addEventListener(OPEN_USAGE_EVENT, openPinned);
+    const offTray = desktop?.onOpen?.('usage', openPinned);
     return () => {
       window.removeEventListener('keydown', down);
       window.removeEventListener('keyup', up);
       window.removeEventListener('blur', blur);
       window.removeEventListener(OPEN_USAGE_EVENT, openPinned);
+      offTray?.();
     };
   }, [mode, pinned, open, close]);
 

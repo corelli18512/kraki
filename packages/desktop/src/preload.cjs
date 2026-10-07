@@ -35,6 +35,14 @@ contextBridge.exposeInMainWorld('krakiDesktop', {
     credentials: () => ipcRenderer.sendSync('kraki:builtin-credentials'),
     openLogs: () => ipcRenderer.send('kraki:builtin-open-logs'),
   } : undefined,
+  setNeedsYou: (list) => ipcRenderer.send('kraki:needs-you', list),
+  /** Tray › Account Usage / Settings… */
+  onOpen: (what, handler) => {
+    const channel = what === 'usage' ? 'kraki:open-usage' : 'kraki:open-settings';
+    const listener = () => handler();
+    ipcRenderer.on(channel, listener);
+    return () => ipcRenderer.removeListener(channel, listener);
+  },
   onOpenSession: (handler) => {
     const listener = (_e, sessionId) => handler(String(sessionId));
     ipcRenderer.on('kraki:open-session', listener);
