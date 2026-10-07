@@ -57,6 +57,7 @@ struct NewSessionComposer: View {
         })
     }
     @State private var focused = false
+    @State private var showVoiceConsent = false
     @State private var focusRequest = 0
     @State private var nativeEditorHasText = false
     @State private var selection: NSRange?
@@ -117,6 +118,15 @@ struct NewSessionComposer: View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 10) {
                 textArea
+                    .alert(VoiceConsent.title, isPresented: $showVoiceConsent) {
+                        Button(VoiceConsent.continueButton) {
+                            VoiceConsent.grant()
+                            handleVoiceButton()
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text(VoiceConsent.message)
+                    }
                 HStack(spacing: 6) {
                     devicePill
                     if availability == .ready {
@@ -442,6 +452,10 @@ struct NewSessionComposer: View {
     private func handleVoiceButton() {
         if voiceOwnsComposer { voiceComposer.finishToDraft(); return }
         guard canStartVoice, !sendAfterVoice else { return }
+        guard VoiceConsent.isGranted else {
+            showVoiceConsent = true
+            return
+        }
         MacChatComposer.playVoiceStartCue()
         voiceController.clearFailure()
         focused = false
