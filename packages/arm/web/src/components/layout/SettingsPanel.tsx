@@ -1,3 +1,4 @@
+import { DeleteAccountSection } from './DeleteAccount';
 import { desktop } from '../../lib/desktop';
 import { ThisPCSettings } from '../desktop/ThisPCSettings';
 import { useEffect, useState } from 'react';
@@ -12,6 +13,7 @@ import { ArchiveSettings } from '../sessions/ArchivedSessions';
 export function SettingsPanel({ open, onClose, inline, className }: { open: boolean; onClose: () => void; inline?: boolean; className?: string }) {
   const { isDark, toggleDark } = useTheme();
   const relayVersion = useStore((s) => s.relayVersion);
+  const status = useStore((s) => s.status);
   const devices = useStore((s) => s.devices);
   const deviceVersions = useStore((s) => s.deviceVersions);
   const [diagCopied, setDiagCopied] = useState(false);
@@ -184,6 +186,8 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
         </h3>
         <ArchiveSettings />
       </section>
+
+      {status === 'connected' && <DeleteAccountSection />}
 
       <section>
         <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">

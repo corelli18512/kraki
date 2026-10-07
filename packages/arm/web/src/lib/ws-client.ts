@@ -1,10 +1,11 @@
+import { useAccountDeletion, DELETION_TIMEOUT_MS } from './account-deletion';
 import { canRefreshUsage } from './usage';
 import { desktopCredentials, setDesktopSignedOut } from './desktop';
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
 import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, type SessionMode } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
-import { KrakiTransport, type MessageHandler } from './transport';
+import { KrakiTransport, STORAGE_KEY, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
 import { markSessionRead } from './replay';
 import { sendAuth, handleAuthChallenge, processAuthOk, processAuthError, applyPreferences } from './auth';
@@ -70,6 +71,44 @@ export class KrakiWSClient {
   /** Pair with a scanned QR code URL. */
   pairWithToken(relay: string, token: string) {
     this.transport.pairWithToken(relay, token);
+  }
+
+  /** Ask the relay to delete the account (relay control, not E2E). */
+  requestAccountDeletion(): void {
+    const del = useAccountDeletion.getState();
+    if (getStore().status !== 'connected') {
+      del.set({ kind: 'failed', message: 'Connect to Kraki first. The account is deleted on the server.' });
+      return;
+    }
+    const attempt = Date.now();
+    del.set({ kind: 'deleting', attempt });
+    this.transport.sendRaw({ type: 'delete_account' });
+    setTimeout(() => {
+      const now = useAccountDeletion.getState().state;
+      if (now.kind === 'deleting' && now.attempt === attempt) {
+        useAccountDeletion.getState().set({ kind: 'failed', message: "Kraki didn't answer. Check the connection and try again." });
+      }
+    }, DELETION_TIMEOUT_MS);
+  }
+
+  /** The relay deleted this account (asked from here or another device): sign out for good. */
+  private accountWasDeleted(): void {
+    const savedClientId = getStore().githubClientId;
+    localStorage.removeItem(STORAGE_KEY);
+    this.transport.storedDeviceId = undefined;
+    this.disconnect();
+    // Kraki for Windows: the built-in Kraki forgets its own sign-in and stops;
+    // drop its login item and ownership so setup starts from the beginning.
+    if (window.krakiDesktop?.builtIn) {
+      void window.krakiDesktop.builtIn.disable();
+      for (const k of ['kraki-desktop.role', 'kraki-desktop.owner', 'kraki-desktop.movedFromCLI']) localStorage.removeItem(k);
+      setDesktopSignedOut(false);
+    }
+    getStore().reset();
+    setStoreState({ githubClientId: savedClientId, status: 'awaiting_login' });
+    useAccountDeletion.getState().set({ kind: 'idle' });
+    useAccountDeletion.getState().setNotice(true);
+    window.history.replaceState({}, '', '/');
   }
 
   /** Connect with the account of the Kraki built into the desktop app. */
@@ -978,6 +1017,7 @@ export class KrakiWSClient {
         break;
 
       case 'auth_error':
+        if ((msg as { code?: string }).code === 'account_deleted') { this.accountWasDeleted(); break; }
         processAuthError(msg as Parameters<typeof processAuthError>[0], this.transport.storedDeviceId, {
           clearStoredDeviceId: () => { this.transport.storedDeviceId = undefined; },
           setStoredDeviceId: (id: string) => { this.transport.storedDeviceId = id; },
@@ -1000,8 +1040,15 @@ export class KrakiWSClient {
         break;
       }
 
+      case 'account_deleted' as Message['type']:
+        this.accountWasDeleted();
+        break;
+
       case 'server_error': {
         const serverErr = msg as ServerErrorMessage;
+        // A server error while a deletion is pending is its answer.
+        const del = useAccountDeletion.getState();
+        if (del.state.kind === 'deleting') del.set({ kind: 'failed', message: serverErr.message || "Couldn't delete the account. Try again." });
         logger.error('Server error:', serverErr.message);
         const ref = serverErr.ref;
         if (ref) {

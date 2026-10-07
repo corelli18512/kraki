@@ -18,6 +18,7 @@ import { KrakiLogo } from '../KrakiLogo';
 import { isDesktopSignedOut, setDesktopSignedOut, type BuiltInBridge, type BuiltInState, type SetupEvent } from '../../lib/desktop';
 import { wsClient } from '../../lib/ws-client';
 import { AgentsPanel, useAgentsCheck } from './AgentsPanel';
+import { AccountDeletedNotice } from '../layout/DeleteAccount';
 import './desktop-setup.css';
 
 const ROLE_KEY = 'kraki-desktop.role';
@@ -93,6 +94,7 @@ export function DesktopSetup({ builtIn }: { builtIn: BuiltInBridge }) {
     <div className="ds-page" data-testid="desktop-setup">
       <Backdrop />
       <div className="ds-scroll">
+        <AccountDeletedNotice />
         <div className="ds-card">
           {step === 'detecting' && <span className="ds-spinner" />}
           {step === 'chooseOwner' && (

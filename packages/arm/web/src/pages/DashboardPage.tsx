@@ -1,3 +1,4 @@
+import { AccountDeletedNotice } from '../components/layout/DeleteAccount';
 import { KrakiLogo } from '../components/KrakiLogo';
 import { useState, useCallback, useEffect } from 'react';
 import { useStore } from '../hooks/useStore';
@@ -73,6 +74,7 @@ export function DashboardPage() {
             </div>
           </div>
         )}
+        <AccountDeletedNotice />
         <KrakiLogo className="mx-auto mb-4 h-40 w-40 object-contain animate-logo-reveal" />
         <h2 className="text-lg font-semibold text-text-primary animate-fade-up">Welcome to Kraki</h2>
         {oauthAvailable && (
