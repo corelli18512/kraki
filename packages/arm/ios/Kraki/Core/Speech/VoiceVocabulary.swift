@@ -134,11 +134,31 @@ final class VoiceVocabularyStore {
     // out of an account, require login rather than creating unowned edits.
     var canEdit: Bool { accountKey != nil || !defaults.bool(forKey: Self.migratedKey) }
     var hasSyncProblems: Bool { !syncState.blocked.isEmpty }
-    var syncStatus: String {
-        if accountKey == nil { return "Sign in to sync custom words." }
-        if hasSyncProblems { return "Some changes couldn't sync: a word changed elsewhere, is duplicated, or exceeds the account limit. Your edits are kept on this device." }
-        if !syncSupported { return "Waiting for a server that supports Custom Words sync." }
-        return syncState.pending.isEmpty ? "Synced with your Kraki account." : "Changes saved on this device. Waiting to sync."
+    /// One footer sentence; nil when everything is synced (the normal state
+    /// needs no chrome). Problems get their own section instead.
+    var syncNote: String? {
+        if accountKey == nil { return canEdit ? nil : "Sign in to edit and sync custom words." }
+        if hasSyncProblems { return nil }
+        if !syncSupported { return "Saved on this device. This server doesn't sync custom words yet." }
+        return syncState.pending.isEmpty ? nil : "Saved on this device. Waiting to sync."
+    }
+
+    var problemSummary: String {
+        let n = syncState.blocked.count
+        return (n == 1 ? "1 custom word couldn't sync." : "\(n) custom words couldn't sync.") + " Your edits are kept on this device."
+    }
+
+    /// Why this word's latest edit was refused, or nil if it isn't blocked.
+    func blockedReason(_ id: UUID) -> String? {
+        let key = id.uuidString.lowercased()
+        guard let change = syncState.pending.first(where: { $0.id == key }),
+              let status = syncState.blocked[change.changeId] else { return nil }
+        switch status {
+        case "conflict": return "Changed or deleted on another device."
+        case "duplicate": return "Already in your synced words."
+        case "full": return "Your account has reached \(VoiceVocabulary.maxEntries) words."
+        default: return "Not accepted by the server."
+        }
     }
 
     static func accountKey(userID: String, relay: String) -> String {
@@ -324,7 +344,7 @@ struct VoiceVocabularyPage: View {
                             .font(.system(size: 34, weight: .light))
                             .foregroundStyle(Color.krakiPrimary)
                         Text(VoiceVocabularyCopy.emptyTitle).font(.headline)
-                        Text(VoiceVocabularyCopy.explanation)
+                        Text([VoiceVocabularyCopy.explanation, store.syncNote].compactMap { $0 }.joined(separator: "\n\n"))
                             .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         Button { add() } label: {
                             HStack(spacing: 6) { Image(systemName: "plus"); Text("Add Word") }
@@ -337,7 +357,7 @@ struct VoiceVocabularyPage: View {
             } else {
                 Section {
                     ForEach(store.terms) { term in
-                        Button { isNew = false; editing = term } label: { VoiceTermRow(term: term) }
+                        Button { isNew = false; editing = term } label: { VoiceTermRow(term: term, blockedReason: store.blockedReason(term.id)) }
                             .foregroundStyle(.primary)
                     }
                     .onDelete { offsets in
@@ -348,7 +368,8 @@ struct VoiceVocabularyPage: View {
                         Button { add() } label: { Label("Add Word", systemImage: "plus") }
                     }
                 } footer: {
-                    Text(VoiceVocabularyCopy.explanation + " \(store.savedCount) of \(VoiceVocabulary.maxEntries).")
+                    Text([VoiceVocabularyCopy.explanation + " \(store.savedCount) of \(VoiceVocabulary.maxEntries).", store.syncNote]
+                        .compactMap { $0 }.joined(separator: "\n\n"))
                 }
             }
         }
@@ -371,12 +392,22 @@ struct VoiceVocabularyPage: View {
 
 private struct VoiceTermRow: View {
     let term: VoiceTerm
+    var blockedReason: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(term.cleanTerm).font(.body)
+            HStack(spacing: 6) {
+                Text(term.cleanTerm).font(.body)
+                if blockedReason != nil {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.footnote).foregroundStyle(.orange)
+                        .accessibilityLabel("Not synced")
+                }
+            }
             if !term.heardList.isEmpty {
                 Text("Often recognized as " + term.heardList.joined(separator: ", "))
                     .font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+            }
+            if let blockedReason {
+                Text("Not synced: " + blockedReason).font(.footnote).foregroundStyle(.orange)
             }
         }
         .padding(.vertical, 2)
@@ -487,7 +518,10 @@ struct VoiceVocabularyMacSection: View {
                     .buttonStyle(.borderless)
                     .help("Remove")
                 }
-                if let problem = term.problem {
+                if let reason = store.blockedReason(term.id) {
+                    Label("Not synced: " + reason, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.orange)
+                } else if let problem = term.problem {
                     Text(problem + " This word isn't saved.").font(.caption).foregroundStyle(.orange)
                 } else if store.isDuplicate(term.term, excluding: term.id) {
                     Text("“\(term.cleanTerm)” is already in the list; only the first is used.")
@@ -508,7 +542,7 @@ struct VoiceVocabularyMacSection: View {
         } header: {
             Text(VoiceVocabularyCopy.title)
         } footer: {
-            Text(VoiceVocabularyCopy.explanation)
+            Text([VoiceVocabularyCopy.explanation, store.syncNote].compactMap { $0 }.joined(separator: " "))
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .disabled(!store.canEdit)
@@ -519,9 +553,13 @@ struct VoiceVocabularyMacSection: View {
 private struct VoiceVocabularySyncSection: View {
     let store: VoiceVocabularyStore
     var body: some View {
-        Section {
-            Text(store.syncStatus).font(.footnote).foregroundStyle(.secondary)
-            if store.hasSyncProblems {
+        if store.hasSyncProblems {
+            Section {
+                Label {
+                    Text(store.problemSummary)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                }
                 Button("Retry My Changes") { store.retrySync() }
                 Button("Use Synced Words") { store.useSyncedWords() }
             }

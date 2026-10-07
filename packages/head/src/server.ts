@@ -22,6 +22,15 @@ import { clientIp } from './client-ip.js';
 import type { PushManager } from './push/index.js';
 import type { AuthBackend, AuthOutcome, ChallengeOutcome } from './auth-backend.js';
 
+/** Custom Words has its own channel (`auth_ok.voiceVocabulary` and
+ *  `voice_vocabulary_updated`). Never ship it inside generic preferences: that
+ *  would duplicate it on every auth and broadcast it on every theme change. */
+function publicPreferences(prefs: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!prefs || !('voiceVocabulary' in prefs)) return prefs;
+  const { voiceVocabulary: _omitted, ...rest } = prefs;
+  return rest;
+}
+
 function importPublicKey(compactKey: string): string {
   const lines = compactKey.match(/.{1,64}/g) ?? [];
   return `-----BEGIN PUBLIC KEY-----\n${lines.join('\n')}\n-----END PUBLIC KEY-----\n`;
@@ -858,7 +867,7 @@ export class HeadServer {
     this.storage.updatePreferences(state.userId, prefs);
     // Read back the full merged preferences
     const fullUser = this.storage.getUser(state.userId);
-    const merged = fullUser?.preferences ?? prefs;
+    const merged = publicPreferences(fullUser?.preferences ?? prefs);
     const confirmation = { type: 'preferences_updated', preferences: merged };
     // Confirm to the sender + fan out to the user's other devices — all over pulse.
     if (state.deviceId) this.sendControlToDevice(state.deviceId, confirmation);
@@ -884,7 +893,15 @@ export class HeadServer {
       });
       return;
     }
-    const result = this.storage.updateVoiceVocabulary(state.userId, update);
+    let result: ReturnType<Storage['updateVoiceVocabulary']>;
+    try {
+      result = this.storage.updateVoiceVocabulary(state.userId, update);
+    } catch (err) {
+      // Pulse self-delivery has no outer try/catch. No reply: the client keeps
+      // the change in its durable outbox and retries.
+      getLogger().warn('Voice vocabulary update failed', { error: (err as Error).message });
+      return;
+    }
     this.sendControlToDevice(state.deviceId, {
       type: 'voice_vocabulary_updated', requestId: update.requestId, ...result,
     });
@@ -1362,7 +1379,7 @@ export class HeadServer {
     const fullUser = this.storage.getUser(params.userId);
     const userResponse = {
       ...params.user,
-      preferences: fullUser?.preferences ?? params.user.preferences,
+      preferences: publicPreferences(fullUser?.preferences ?? params.user.preferences),
     };
 
     // Devices list. If the caller provided one (edge mode), recompute online

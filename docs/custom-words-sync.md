@@ -45,8 +45,10 @@ its own acknowledged write. Old responses cannot roll back newer snapshots.
 Uploads debounce for 700 ms and unacknowledged batches retry every five seconds
 while connected; reconnect resynchronizes and retries pending changes.
 
-Conflict, duplicate, validation or capacity failures keep the local edit and show
-a notice. **Retry My Changes** explicitly rebases blocked edits on the current
+The normal synced state shows no extra UI; "waiting to sync" or "sign in" is a
+footer sentence. Conflict, duplicate, validation or capacity failures keep the
+local edit, mark the affected word with an orange warning and its reason, and
+show a notice section. **Retry My Changes** explicitly rebases blocked edits on the current
 snapshot; **Use Synced Words** discards blocked edits, not unrelated pending work.
 Nothing auto-rebases a stale edit over a deletion.
 
@@ -72,6 +74,19 @@ would be needed to safely compact very long-lived deletion history.
 Deploy head first, then native clients. Old clients keep using local words; new
 clients connected to old heads retain edits locally and show that sync is waiting.
 No database schema migration or encryption migration is required.
+
+`auth_ok.user.preferences` and `preferences_updated` never include
+`voiceVocabulary`; the word list only travels on its own channel, so theme changes
+do not broadcast it. A head-side storage failure is logged and not answered; the
+client keeps the change and retries.
+
+End-to-end: `bash scripts/chaos/run-native.sh -only-testing:KrakiMacTests/VoiceVocabularyNetworkTests`
+(build workspace packages first: `pnpm -r --filter @kraki/tests... build`). Two
+production-networking clients of one account sync add/edit/delete live, an
+offline edit survives a relaunch and merges with the other client's edit, and a
+conflicting offline edit is reported without overwriting the server value.
+Settings screenshots: `touch /tmp/kraki-words-shots/enable`, then run
+`VoiceVocabularyShots` on iOS and Mac.
 
 Tests cover native migration/restarts, account and relay isolation, live cache
 refresh, in-flight editing, out-of-order acknowledgements, deletion conflicts,

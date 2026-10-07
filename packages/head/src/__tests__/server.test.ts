@@ -870,9 +870,17 @@ describe('HeadServer (thin relay)', () => {
       expect(response.requestId).toBe(requestId);
       expect(response.results).toEqual([{ changeId: change.changeId, status: 'applied' }]);
       expect((await live).vocabulary).toEqual(response.vocabulary);
+      // A theme change must not carry (or broadcast) the word list.
+      const themeAck = waitForMessageOfType(a, 'preferences_updated');
+      const themeLive = waitForMessageOfType(b, 'preferences_updated');
+      a.send(JSON.stringify({ type: 'update_preferences', preferences: { theme: 'dark' } }));
+      for (const msg of [await themeAck, await themeLive]) {
+        expect(msg.preferences).toEqual({ theme: 'dark' });
+      }
       a.close(); b.close();
       const { ws: c, authOk: reconnected } = await authConnect(head.port, 'New App', 'app', { deviceId: 'words-new' });
       expect(reconnected.voiceVocabulary).toEqual(response.vocabulary);
+      expect((reconnected.user as Record<string, unknown>).preferences).toEqual({ theme: 'dark' });
       c.close();
     });
 
