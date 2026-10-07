@@ -6,6 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.72</title>
+            <pubDate>Wed, 07 Oct 2026 05:44:59 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.72</sparkle:fullReleaseNotesLink>
+            <sparkle:version>74</sparkle:version>
+            <sparkle:shortVersionString>0.2.72</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* Sync Custom Words across account clients (silent, last write wins) by @corelli18512 in https://github.com/corelli18512/kraki/pull/412
+* release: head 0.20.0, protocol 0.27.0, Mac 0.2.72 (74) by @corelli18512 in https://github.com/corelli18512/kraki/pull/415
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.71...mac-v0.2.72
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.72/Kraki.app.zip" length="92609434" type="application/octet-stream" sparkle:edSignature="Lcxw1KBN6GL0E3mu7AJMzh7htEfulO4QOrGPr/nb6oVu/MiN/SMT0H6wyqAZEXFRnkRBNIqpDUftHRfm/NB3Ag=="/>
+        </item>
+        <item>
             <title>0.2.71</title>
             <pubDate>Mon, 05 Oct 2026 23:56:39 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -40,31 +57,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.70/Kraki.app.zip" length="92536116" type="application/octet-stream" sparkle:edSignature="Ey3WSWvafwb7QVHHmJ6QyS/awl8pbrTvRIvYGGcmdZhJoe2D2IHst4kxDfGTcTwcn0KoWkUNS8t/6mrkEuXnBw=="/>
         </item>
-        <item>
-            <title>0.2.69</title>
-            <pubDate>Mon, 05 Oct 2026 07:12:36 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.69</sparkle:fullReleaseNotesLink>
-            <sparkle:version>71</sparkle:version>
-            <sparkle:shortVersionString>0.2.69</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* feat(clients): redesigned chat tables on iOS and Mac; bare URLs become links by @corelli18512 in https://github.com/corelli18512/kraki/pull/401
-* fix(native): solid voice text, safe progressive Edit and equal-width Mac actions by @corelli18512 in https://github.com/corelli18512/kraki/pull/405
-* fix(usage): add safe refresh and cadence-aware stale status by @corelli18512 in https://github.com/corelli18512/kraki/pull/404
-* docs(readme): beta status, link kraki.chat by @corelli18512 in https://github.com/corelli18512/kraki/pull/402
-* test(ios): await delivered voice text and caret, not fixed delays by @corelli18512 in https://github.com/corelli18512/kraki/pull/406
-* Computers report available Kraki updates; apps show them (step 1 of remote update) by @corelli18512 in https://github.com/corelli18512/kraki/pull/407
-* Release: Tentacle 0.36.0 (protocol 0.25.0), Mac 0.2.69 — computers report available updates by @corelli18512 in https://github.com/corelli18512/kraki/pull/408
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.66...mac-v0.2.69
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.69/Kraki.app.zip" length="92464966" type="application/octet-stream" sparkle:edSignature="uzwpS7So8UCDsVBVi/Yn6mjpVVQXNEGMwMJ8GwsTLgj4um45THvP7yinFXctYeQAH/A/+ZrN7uMawpU699bHDQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: 8VpBQY5wGT7lvUBysI7v298RW1jWJheAjw2DB27oNI7rWdbELJB2VYGP507bysEp86PF3FZb9z0CvU5JWgZVCA==
-length: 5144
+edSignature: RmoEfHp04EET6artcKus+xNh4TLC2dTHJiOPBUQBPiK4KzXNMJI1Q5eSpkxjP65pMalC1qEF0ja3J4kCSZdrAg==
+length: 4417
 -->
