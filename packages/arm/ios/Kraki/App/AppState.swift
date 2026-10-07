@@ -1332,6 +1332,26 @@ extension AppState: SessionSubscriptionHost {
 extension AppState: KrakiVoiceInputHost {
     static let headPulseTarget = "@head"
 
+    /// The only message types the head sends inside a plaintext
+    /// `{from:"@head", msg}` Pulse wrapper (mirrors `HEAD_CONTROL_TYPES` in
+    /// packages/protocol). Anything else arriving that way, notably `auth_ok`,
+    /// `auth_error` and consumer/producer messages, is forged and dropped.
+    static let headControlTypes: Set<String> = [
+        "device_joined", "device_left", "device_removed", "device_pending",
+        "preferences_updated", "push_token_registered", "notification_preview",
+        "voice_lease_grant", "voice_lease_denied",
+    ]
+
+    /// The inner message of a `{from:"@head", msg}` wrapper, or nil when it is
+    /// not one of the head's own control types.
+    static func headControlMessage(in wrapper: [String: Any]) -> [String: Any]? {
+        guard wrapper["from"] as? String == headPulseTarget,
+              let message = wrapper["msg"] as? [String: Any],
+              let type = message["type"] as? String,
+              headControlTypes.contains(type) else { return nil }
+        return message
+    }
+
     var voiceUserID: String? { user?.id }
     var voiceDeviceID: String? { deviceId }
     var voiceTransportReady: Bool { connectionStatus == .connected }
@@ -1392,10 +1412,13 @@ extension AppState: PulseHost {
         // Head-originated control (presence, preferences, voice lease) is
         // intentionally plaintext inside ordered Pulse. Route its inner message
         // through the same control dispatcher as a raw WebSocket frame.
-        if object["from"] as? String == Self.headPulseTarget,
-           let message = object["msg"] as? [String: Any],
-           let messageData = try? JSONSerialization.data(withJSONObject: message) {
-            KLog.d("🎙️ Head control delivered type=\(message["type"] as? String ?? "unknown")")
+        if object["from"] as? String == Self.headPulseTarget {
+            guard let message = Self.headControlMessage(in: object),
+                  let messageData = try? JSONSerialization.data(withJSONObject: message) else {
+                KLog.d("⚠️ Dropped non-control message in head pulse wrapper")
+                return
+            }
+            KLog.d("🎙️ Head control delivered type=\(message["type"] as? String ?? "")")
             messageRouter?.handleRawMessage(messageData)
             return
         }

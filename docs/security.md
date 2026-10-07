@@ -17,7 +17,7 @@ This document explains what Kraki protects, what it does not protect, and what t
 |--------|-----------------|
 | Relay operator reading content | E2E encryption keeps message bodies on the endpoints |
 | Network interception | Clients use TLS / WSS |
-| Message tampering | Authenticated encryption (AES-256-GCM) detects modification |
+| Message tampering | Authenticated encryption (AES-256-GCM) detects modification of a message in transit |
 | Unauthorized device access | Pairing, authentication, and device registration control who can join |
 | Unauthorized web access | GitHub OAuth code exchange keeps `client_secret` server-side; CSRF state parameter prevents forged callbacks |
 
@@ -118,6 +118,28 @@ Remaining limits: the computer currently trusts phone keys as reported by the
 relay, and the web app does not pin keys yet. Both are addressed by the
 upcoming key upgrade (E2E v2).
 
+## Who can send commands to your computer
+
+Encryption keeps the relay from **reading** or **modifying** messages. It does
+not, on its own, prove **who wrote** a message: encrypting to a computer only
+needs the computer's public key, which the relay also holds. Today, the
+authenticity of a command rests on two things:
+
+- **Only E2E messages are accepted.** The computer acts on a command only after
+  decrypting it. Plaintext frames from the relay, and anything a device places
+  inside the head's own plaintext control wrapper (`{from:"@head"}`), are
+  dropped; that wrapper may carry only the head's presence/preferences/voice
+  control types.
+- **The relay binds each message to its sender.** The head stamps every
+  forwarded payload with the authenticated device that sent it (`src`) and
+  refuses payloads that try to set it themselves. Receivers reject a message
+  whose inner `deviceId` differs, so one device on your account cannot pose as
+  another.
+
+What this does **not** cover: a compromised relay, or a stolen device that is
+still signed in to your account, can compose and encrypt new commands. Closing
+that gap needs per-device signatures bound at pairing time (E2E v2, planned).
+
 ## New devices and old history
 
 A newly added device cannot automatically decrypt old messages that were encrypted for earlier devices.
@@ -131,6 +153,8 @@ That behavior is a normal consequence of per-device encryption.
 | Question | Answer |
 |----------|--------|
 | Can the relay read message bodies? | No — not passively; key substitution is detected for pinned computers (see above) |
+| Can the relay change a message in transit? | No — authenticated encryption detects it |
+| Can the relay forge a new command? | Not as plaintext. A compromised relay could still encrypt a command to your computer's public key; per-device signatures (E2E v2) are planned to close this |
 | Can the relay see routing metadata? | Yes — envelope type, device IDs, payload size |
 | Can the relay see session IDs, message types, or content? | No — all inside encrypted payload |
 | Do endpoints see plaintext? | Yes |

@@ -24,7 +24,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { decodeFrame, decodeFrameWithStream, type Effect, encodeFrame, Endpoint, type Snapshot, StreamSet } from '@coinfra/pulse';
-import { HEAD_PULSE_TARGET, type PulseFrameField, type UnicastEnvelope } from '@kraki/protocol';
+import { HEAD_PULSE_TARGET, PULSE_SENDER_FIELD, type PulseFrameField, type UnicastEnvelope } from '@kraki/protocol';
 import { getLogger } from './logger.js';
 import { fp, trace } from './trace.js';
 
@@ -106,6 +106,33 @@ export interface PulseHubHost {
 
 const b64encode = (u: Uint8Array): string => Buffer.from(u).toString('base64');
 const b64decode = (s: string): Uint8Array => new Uint8Array(Buffer.from(s, 'base64'));
+
+/**
+ * Stamp a device-originated pulse payload with its authenticated sender
+ * (`src`) before the head forwards it. Returns null when the payload already
+ * names a sender (`from` or `src`): only the head may set those, so such a
+ * payload is a forgery and must be dropped. Payloads that are not a JSON object
+ * are forwarded unchanged — no receiver can parse a sender out of them.
+ */
+export function stampPulseSender(deviceId: string, payload: Uint8Array): Uint8Array | null {
+  const text = Buffer.from(payload).toString('utf8');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return payload;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return payload;
+  const obj = parsed as Record<string, unknown>;
+  if (Object.hasOwn(obj, 'from') || Object.hasOwn(obj, PULSE_SENDER_FIELD)) return null;
+  // Insert the field right after the opening brace instead of re-serializing:
+  // the rest of the bytes stay exactly as the sender produced them.
+  const open = text.indexOf('{');
+  const rest = text.slice(open + 1).trimStart();
+  const field = `${JSON.stringify(PULSE_SENDER_FIELD)}:${JSON.stringify(deviceId)}`;
+  const stamped = rest.startsWith('}') ? `{${field}${rest}` : `{${field},${rest}`;
+  return new Uint8Array(Buffer.from(stamped, 'utf8'));
+}
 
 /** Inbound DATA bytes after which the hub acknowledges without waiting for
  *  outbound traffic or the idle heartbeat (advertised in auth_ok). */
@@ -510,7 +537,15 @@ export class PulseHub {
             // (trace/range/attachment) from head-of-line blocking live
             // (echo/abort/card) on the downlink.
             const stream = e.streamId ?? STREAM_LIVE;
-            for (const dest of dests ?? []) this.forward(dest, e.payload, e.durable, e.coalesceKey, stream);
+            // Bind the payload to its authenticated sender. A device may not
+            // pose as the head (`from:'@head'`) or as another device (`src`).
+            const stamped = stampPulseSender(deviceId, e.payload);
+            if (!stamped) {
+              getLogger().warn('pulse-hub dropped forged sender field', { from: deviceId });
+              trace('HUB-DROP-FORGED', { from: deviceId, seq: String(e.seq) });
+              break;
+            }
+            for (const dest of dests ?? []) this.forward(dest, stamped, e.durable, e.coalesceKey, stream);
           }
           break;
         case 'store':

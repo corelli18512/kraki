@@ -21,7 +21,7 @@ import type {
   SessionLiveSnapshot, SessionDigest, IdleMessage,
 } from '@kraki/protocol';
 import type { DeviceUpdateInfo, DeviceUpdatePhase } from '@kraki/protocol';
-import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment } from '@kraki/protocol';
+import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment } from '@kraki/protocol';
 import { randomUUID } from 'node:crypto';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
 import type { RecipientKey } from '@kraki/crypto';
@@ -1286,8 +1286,10 @@ export class RelayClient {
       return;
     }
 
-    // Plaintext consumer messages (fallback when no keyManager)
-    this.handleConsumerMessage(msg as unknown as ConsumerMessage);
+    // Anything else is not a consumer message. Consumer messages are accepted
+    // ONLY after E2E decryption above (or via the Pulse path); a plaintext
+    // frame from the relay must never reach handleConsumerMessage.
+    logger.debug({ type: msg.type }, 'Ignoring unrecognized relay frame');
   }
 
   private buildAuthPayload(device: DeviceInfo): AuthMethod {
@@ -3664,9 +3666,9 @@ export class RelayClient {
     for (const part of parts) this.pulse.send(part, shape(fragmenting), durable, undefined, stream);
   }
 
-  private handlePulseDelivered(payloadJson: string): void {
+  private handlePulseDelivered(payloadJson: string, fragmentSender?: string): void {
     if (!this.keyManager || !this.authInfo) return;
-    let parsed: { from?: string; msg?: Record<string, unknown>; blob?: string; keys?: Record<string, string> };
+    let parsed: { from?: string; src?: string; msg?: Record<string, unknown>; blob?: string; keys?: Record<string, string> };
     try {
       parsed = JSON.parse(payloadJson);
     } catch (err) {
@@ -3675,16 +3677,26 @@ export class RelayClient {
     }
     if (isPayloadFragment(parsed)) {
       const whole = this.payloadAssembler.accept(parsed);
-      if (whole !== null) this.handlePulseDelivered(whole);
+      // Every part of a set is stamped by the head with the same sender; carry
+      // it to the reassembled payload, which itself has no `src`.
+      if (whole !== null) this.handlePulseDelivered(whole, parsed.src);
       return;
     }
     // Head-originated plaintext control (device_joined/left/removed, etc.): route
     // back through the normal presence handling in handleMessage. This is
-    // load-bearing — device_joined registers the app's consumer key.
-    if (parsed.from === HEAD_PULSE_TARGET && parsed.msg) {
-      this.handleMessage(parsed.msg);
+    // load-bearing — device_joined registers the app's consumer key. Only the
+    // head's own control types are accepted from this plaintext wrapper; auth
+    // frames and consumer messages arriving this way are forged and dropped.
+    if (parsed.from === HEAD_PULSE_TARGET) {
+      const type = parsed.msg?.type;
+      if (parsed.msg && typeof type === 'string' && HEAD_CONTROL_TYPES.has(type)) {
+        this.handleMessage(parsed.msg);
+      } else {
+        logger.warn({ type }, 'Dropped non-control message in head pulse wrapper');
+      }
       return;
     }
+    const sender = parsed.src ?? fragmentSender;
     try {
       const decryptStart = process.hrtime.bigint();
       const { blob, keys } = parsed as { blob: string; keys: Record<string, string> };
@@ -3694,6 +3706,17 @@ export class RelayClient {
         this.keyManager.getKeyPair().privateKey,
       );
       const inner = JSON.parse(decrypted) as ConsumerMessage;
+      // The head stamps the authenticated sender (`src`). The deviceId inside
+      // the encrypted message is chosen by the sender, so it must match.
+      if (sender !== undefined) {
+        const claimed = (inner as { deviceId?: unknown }).deviceId;
+        if (typeof claimed === 'string' && claimed !== '' && claimed !== sender) {
+          logger.warn({ src: sender, claimed, type: (inner as { type?: string }).type }, 'Dropped consumer message whose deviceId does not match its sender');
+          return;
+        }
+        // Replies and per-app state key off deviceId: use the verified sender.
+        (inner as { deviceId?: string }).deviceId = sender;
+      }
       traceLog.info({
         ns: process.hrtime.bigint().toString(),
         comp: 'tentacle',

@@ -54,6 +54,34 @@ export interface PulseFrameField {
  *  uuid, never `@`-prefixed). */
 export const HEAD_PULSE_TARGET = '@head';
 
+/**
+ * Message types the head itself sends to a device as `{from:'@head', msg}` over
+ * pulse. These are the ONLY types a receiver may act on from that wrapper: the
+ * wrapper is plaintext, so anything else (auth_*, consumer/producer messages)
+ * arriving this way is forged and must be dropped. Auth frames are accepted only
+ * from the raw socket during the handshake.
+ */
+export const HEAD_CONTROL_TYPES: ReadonlySet<string> = new Set([
+  'device_joined',
+  'device_left',
+  'device_removed',
+  'device_pending',
+  'preferences_updated',
+  'push_token_registered',
+  'notification_preview',
+  'voice_lease_grant',
+  'voice_lease_denied',
+]);
+
+/**
+ * Field the head stamps onto every device-originated pulse payload it forwards:
+ * the authenticated deviceId of the connection that sent it. Devices cannot set
+ * it themselves (the head drops any device payload that already carries `src`
+ * or `from`), so receivers may trust it as the real sender. Absent when the
+ * payload came through an older head.
+ */
+export const PULSE_SENDER_FIELD = 'src';
+
 /** App → specific tentacle. Relay reads `to` for routing. */
 export interface UnicastEnvelope extends PulseFrameField {
   type: 'unicast';
