@@ -73,6 +73,7 @@ struct MessageInputView: View {
     @State private var submitFailureTask: Task<Void, Never>?
     @State private var awaitingActive = false
     @State private var abortPending = false
+    @State private var showVoiceConsent = false
     @State private var textSelection: TextSelection?
     @State private var selectionText = ""
     @State private var programmaticVoiceFocus = false
@@ -186,6 +187,15 @@ struct MessageInputView: View {
 
     var body: some View {
         composeCard
+            .alert(VoiceConsent.title, isPresented: $showVoiceConsent) {
+                Button(VoiceConsent.continueButton) {
+                    VoiceConsent.grant()
+                    startVoice()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(VoiceConsent.message)
+            }
             .overlay(alignment: .top) {
                 // Offline / reconnecting hint pill. Sits a few points
                 // above the input row, full-width centered, low-key
@@ -548,6 +558,10 @@ struct MessageInputView: View {
 
     private func startVoice() {
         guard canStartVoice, let session else { return }
+        guard VoiceConsent.isGranted else {
+            showVoiceConsent = true
+            return
+        }
         let range = selectedRange
         voiceController.clearFailure()
         let context = VoiceSessionContextBuilder.build(session: session,

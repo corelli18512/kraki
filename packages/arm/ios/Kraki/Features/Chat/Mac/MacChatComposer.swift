@@ -79,6 +79,7 @@ struct MacChatComposer: View {
     @State private var imageAttachError: String?
     @State private var awaitingActive = false
     @State private var abortPending = false
+    @State private var showVoiceConsent = false
     @State private var composerFocusRequest = 0
     @State private var isFocused = false
     @State private var nativeEditorHasText = false
@@ -196,6 +197,15 @@ struct MacChatComposer: View {
 
     var body: some View {
         composeCard
+            .alert(VoiceConsent.title, isPresented: $showVoiceConsent) {
+                Button(VoiceConsent.continueButton) {
+                    VoiceConsent.grant()
+                    handleVoiceButton()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(VoiceConsent.message)
+            }
             .overlay(alignment: .top) {
                 unreachableHintPill
                     .offset(y: -28)
@@ -567,6 +577,10 @@ struct MacChatComposer: View {
             return
         }
         guard canStartVoice, let session else { return }
+        guard VoiceConsent.isGranted else {
+            showVoiceConsent = true
+            return
+        }
         Self.playVoiceStartCue()
         voiceController.clearFailure()
         isFocused = false

@@ -56,11 +56,47 @@ enum VoiceInputSettings {
     static var correctionEnabled: Bool {
         UserDefaults.standard.object(forKey: correctionKey) as? Bool ?? true
     }
-    /// Send the conversation title and names/terms found in recent messages
-    /// (never the messages themselves) to help correction.
+    /// Send the conversation title, agent, model and names/terms found in
+    /// recent messages (never whole messages, never secret-like tokens; see
+    /// VoiceContextTermFilter) to help correction.
     static var shareConversationContext: Bool {
         UserDefaults.standard.object(forKey: shareContextKey) as? Bool ?? true
     }
+}
+
+/// One-time notice before the first recording: voice input is processed by
+/// cloud services, unlike chat, which is end-to-end encrypted. Settings stay
+/// at their defaults (on); the notice says where to change them.
+enum VoiceConsent {
+    static let key = "voice.consent.v1"
+
+    static var isGranted: Bool {
+        #if DEBUG
+        // Native tests and scripted voice scenarios press the real button.
+        if NativeTestRuntime.isRunningTests
+            || ProcessInfo.processInfo.environment["KRAKI_IOS_VOICE_HOLD_SCENARIO"] == "1" {
+            return true
+        }
+        #endif
+        return UserDefaults.standard.bool(forKey: key)
+    }
+
+    static func grant() { UserDefaults.standard.set(true, forKey: key) }
+
+    static let title = "Voice input uses cloud services"
+    static let message = """
+    Unlike your chats, which are end-to-end encrypted, voice input is processed \
+    in the cloud: your recording goes to Kraki's speech recognition service to \
+    turn it into text.
+
+    With Correct Transcripts on, the text, your Custom Words and some \
+    conversation context (the title, agent, model and names or terms from \
+    recent messages; never whole messages or anything that looks like a key or \
+    password) are sent to an AI model that fixes mistakes.
+
+    You can turn these off in Settings → Voice Input.
+    """
+    static let continueButton = "Continue"
 }
 
 /// The user's own spelling vocabulary for voice correction, stored on this
@@ -286,7 +322,7 @@ extension VoiceTerm {
 
 enum VoiceVocabularyCopy {
     static let title = "Custom Words"
-    static let explanation = "Help voice input get your names and terms right, like product names, people or tech jargon. Synced across your devices with your Kraki account."
+    static let explanation = "Help voice input get your names and terms right, like product names, people or tech jargon. Synced across your devices with your Kraki account and sent to the correction service when you dictate."
     static let emptyTitle = "No custom words yet"
     static let recognizedAs = "Often recognized as"
     static let recognizedAsFooter = "Optional. How voice input tends to get it wrong, separated by commas. Similar spellings are caught too."
@@ -504,9 +540,9 @@ struct VoiceVocabularyMacSection: View {
 enum VoiceInputCopy {
     static let title = "Voice Input"
     static let correction = "Correct Transcripts"
-    static let correctionFooter = "After you finish speaking, an AI model fixes recognition mistakes such as names, terms and punctuation. Turn off to use exactly what was recognized."
+    static let correctionFooter = "After you finish speaking, an AI model in the cloud fixes recognition mistakes such as names, terms and punctuation. Turn off to use exactly what was recognized; your recording is still transcribed in the cloud."
     static let context = "Use Conversation Context"
-    static let contextFooter = "Sends the conversation title and names or terms that appear in recent messages, never the messages themselves, so names you are discussing are spelled right."
+    static let contextFooter = "Sends the conversation title, agent and model, and names or terms that appear in recent messages, to the correction service so names you are discussing are spelled right. Whole messages and anything that looks like a key, token, password or file path are never sent."
 }
 
 #if os(iOS)

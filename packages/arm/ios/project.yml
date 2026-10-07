@@ -135,7 +135,7 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: true
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_NSCameraUsageDescription: "Kraki uses the camera to scan QR codes for device pairing."
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Kraki uses the microphone for press-to-talk voice messages."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Kraki records your voice while you dictate and sends it to its cloud speech service to turn it into text."
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
         INFOPLIST_KEY_UIBackgroundModes: ["remote-notification"]
         CODE_SIGN_STYLE: Automatic
