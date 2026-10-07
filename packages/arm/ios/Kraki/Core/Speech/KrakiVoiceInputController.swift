@@ -196,6 +196,13 @@ private final class IsolatedVoiceSession: VoiceInputSessionProtocol {
     func stopCapture() {}
     func close() {}
 }
+#else
+/// Release builds are never test hosts.
+enum NativeTestRuntime {
+    static let isRunningTests = false
+    static let isHeadlessTestHost = false
+    static let allowsLiveAudio = true
+}
 #endif
 
 struct LiveVoiceInputAudioPolicy: VoiceInputAudioPolicy {
