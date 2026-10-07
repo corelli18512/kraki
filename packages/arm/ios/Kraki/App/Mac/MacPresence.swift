@@ -367,7 +367,7 @@ final class MacPresenceController {
     /// The Dock icon follows the windows: none while Kraki only lives in the
     /// menu bar, back as soon as a window opens.
     func updateActivationPolicy() {
-        guard NSApp.activationPolicy() != .prohibited else { return }
+        guard NSApp.activationPolicy() != .prohibited, !settlingLoginLaunch else { return }
         let wanted: NSApplication.ActivationPolicy = Self.appWindows().isEmpty ? .accessory : .regular
         guard NSApp.activationPolicy() != wanted else { return }
         NSApp.setActivationPolicy(wanted)
@@ -375,6 +375,8 @@ final class MacPresenceController {
     }
 
     func showMainWindow() {
+        // The user asked for the window: stop hiding it.
+        settlingLoginLaunch = false
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         let candidates = NSApp.windows.filter {
@@ -395,18 +397,32 @@ final class MacPresenceController {
 
     /// Launched at login: keep the window's content alive (it owns startup)
     /// but never show it. The menu bar octopus is the only thing that appears.
+    ///
+    /// The Dock icon is dropped only once launch has settled. Changing the
+    /// activation policy while SwiftUI is still building its scenes re-entered
+    /// SwiftUI's scene updates until the main thread's stack overflowed (seen
+    /// on a clean VM after a restart), so nothing here touches the policy
+    /// during the first seconds, and window notifications are ignored then.
     func beginLoginLaunch() {
         launchedAtLogin = true
-        NSApp.setActivationPolicy(.accessory)
-        var ticks = 0
-        let timer = Timer(timeInterval: 0.05, repeats: true) { timer in
-            MainActor.assumeIsolated {
-                ticks += 1
-                for window in Self.appWindows() { window.orderOut(nil) }
-                if ticks >= 60 { timer.invalidate() }
-            }
+        settlingLoginLaunch = true
+        hideWindowsDuringLoginLaunch(remaining: 12)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, self.settlingLoginLaunch else { return }
+            self.settlingLoginLaunch = false
+            self.updateActivationPolicy()
         }
-        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// True during the first seconds of a login launch (see beginLoginLaunch).
+    private(set) var settlingLoginLaunch = false
+
+    private func hideWindowsDuringLoginLaunch(remaining: Int) {
+        guard settlingLoginLaunch, remaining > 0 else { return }
+        for window in Self.appWindows() { window.orderOut(nil) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.hideWindowsDuringLoginLaunch(remaining: remaining - 1)
+        }
     }
 
     /// While this Mac is online, Kraki opens at login so the menu bar shows
