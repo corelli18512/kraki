@@ -530,7 +530,8 @@ struct MacApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .windowResizability(.contentMinSize)
-        .defaultLaunchBehavior(.presented)
+        // A routine local test host shows no window at all.
+        .defaultLaunchBehavior(NativeTestRuntime.isHeadlessTestHost ? .suppressed : .presented)
         // Kraki reopens its own window and last session on every launch, so
         // macOS state restoration adds nothing — and restoring windows at
         // login re-entered SwiftUI's scene updates until the main thread's
@@ -580,7 +581,7 @@ struct MacApp: App {
         .restorationBehavior(.disabled)
         #endif
 
-        MenuBarExtra {
+        MenuBarExtra(isInserted: .constant(!NativeTestRuntime.isHeadlessTestHost)) {
             MenuBarExtraView()
                 .environment(appState)
                 .environment(tentacleCLI)

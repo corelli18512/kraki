@@ -18,6 +18,12 @@ final class LaunchdOnDemandTests: XCTestCase {
         let data = out.fileHandleForReading.readDataToEndOfFile() // read before wait: output > pipe buffer
         p.waitUntilExit()
         let text = String(data: data, encoding: .utf8) ?? ""
-        XCTAssertTrue(text.contains("on-demand count = "))
+        // The domain is readable. macOS 27 omits `on-demand count` when it is
+        // 0, so only check that a missing field reads as "not stuck".
+        XCTAssertEqual(p.terminationStatus, 0)
+        XCTAssertTrue(text.contains("active count = "), "launchctl print gui/<uid> is readable")
+        if !text.contains("on-demand count = ") {
+            XCTAssertEqual(TentacleCLIManager.onDemandCount(fromLaunchctlPrint: text), 0)
+        }
     }
 }

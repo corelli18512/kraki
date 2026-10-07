@@ -161,6 +161,13 @@ enum NativeTestRuntime {
             || NSClassFromString("XCTestCase") != nil
     }
 
+    /// Routine local test runs (no KRAKI_RUN_UI_TESTS=1): the hosting app
+    /// must show nothing — no main window, Dock icon or menu bar item — and
+    /// never activate, so it cannot take the developer's focus.
+    static var isHeadlessTestHost: Bool {
+        isRunningTests && ProcessInfo.processInfo.environment["KRAKI_RUN_UI_TESTS"] != "1"
+    }
+
     static var allowsLiveAudio: Bool {
         !isRunningTests || ProcessInfo.processInfo.environment["KRAKI_ALLOW_TEST_MICROPHONE"] == "1"
     }

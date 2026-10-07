@@ -76,6 +76,11 @@ struct MessageInputView: View {
     @State private var textSelection: TextSelection?
     @State private var selectionText = ""
     @State private var programmaticVoiceFocus = false
+    /// Widths of the text field / transcript, so the height their text will
+    /// take is known in the same update as the text (growth eases).
+    @State private var textFieldWidth: CGFloat = 0
+    @State private var transcriptWidth: CGFloat = 0
+    @State private var transcriptEdges = IOSScrollEdges()
     @FocusState private var isFocused: Bool
 
     private static let inputBoxHeight: CGFloat = IOSComposerMetrics.height
@@ -288,7 +293,29 @@ struct MessageInputView: View {
         .background { inputBoxGlassBackground }
         .contentShape(Self.boxShape)
         .animation(Self.expandAnimation, value: isRecordingHere)
+        // A new line (typing) or a wrapping transcript eases the box taller
+        // instead of jumping; the bottom edge stays, so it grows upward.
+        .animation(.easeOut(duration: 0.18), value: typingHeightKey)
+        .animation(.easeOut(duration: 0.18), value: transcriptHeightKey)
     }
+
+    /// The transcript's height (it grows past two lines, up to its cap).
+    private var transcriptHeightKey: CGFloat {
+        guard isRecordingHere else { return -1 }
+        let parts = voice.preview
+        return IOSComposerTextMetrics.height(parts.prefix + parts.spoken + parts.suffix,
+                                             width: transcriptWidth, maxHeight: Self.transcriptMaxHeight)
+    }
+
+    /// The height the typed text will take. Constant while dictating, so the
+    /// box-wide animation never touches the recording transitions.
+    private var typingHeightKey: CGFloat {
+        guard !isRecordingHere else { return -1 }
+        return IOSComposerTextMetrics.height(text, width: textFieldWidth,
+                                             maxHeight: IOSComposerTextMetrics.lineHeight * 5)
+    }
+
+    private static let transcriptMaxHeight: CGFloat = 132
 
     private var restingBox: some View {
         HStack(alignment: .bottom, spacing: 0) {
@@ -334,14 +361,24 @@ struct MessageInputView: View {
                 ScrollView {
                     liveTranscript
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { transcriptWidth = $0 }
                         .padding(.horizontal, 16)
                         .padding(.top, 12)
                         .padding(.bottom, 4)
                         .id("transcript")
                 }
-                .frame(maxHeight: 132)
+                .frame(maxHeight: Self.transcriptMaxHeight)
                 .fixedSize(horizontal: false, vertical: true)
+                // Long dictation keeps its newest words in view, also while
+                // the box is easing taller.
+                .defaultScrollAnchor(.bottom)
                 .onChange(of: voice.rawText) { _, _ in proxy.scrollTo("transcript", anchor: .bottom) }
+                // Text scrolled out of view above / below: that edge fades.
+                .onScrollGeometryChange(for: IOSScrollEdges.self) { IOSScrollEdges($0) } action: { _, edges in
+                    transcriptEdges = edges
+                }
+                .mask { IOSScrollEdgeMask(edges: transcriptEdges) }
+                .accessibilityIdentifier("voice-transcript-scroll")
             }
         }
     }
@@ -760,6 +797,7 @@ struct MessageInputView: View {
         .font(.body)
         // The image slot clears the leading curve; 12pt vertical insets give
         // one line of body text the 48pt capsule height.
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textFieldWidth = $0 }
         .padding(.leading, 2)
         .padding(.trailing, 4)
         .padding(.vertical, 12)
@@ -767,6 +805,12 @@ struct MessageInputView: View {
         .background {
             IOSVoiceDraftDecoration(text: text, pending: voice.uncorrectedRange(in: sessionId),
                                     onTakeOver: { voice.takeOver(sessionID: sessionId) })
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        .background {
+            // Past five lines the field scrolls: fade the edge with more text.
+            IOSTextFieldEdgeFade()
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }

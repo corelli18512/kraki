@@ -42,6 +42,17 @@ enum MacComposerMetrics {
     /// Outside the scrolling viewport: retained even when text scrolls.
     static let textVerticalPadding: CGFloat = 8
     static let maxVisibleTextLines: CGFloat = 3
+    #if DEBUG
+    /// Off-screen snapshot tests: cacheDisplay cannot draw Liquid Glass (nor
+    /// anything composited into it), so draw flat fills instead.
+    static var snapshotFlatGlass = false
+    #endif
+    static var usesGlass: Bool {
+        #if DEBUG
+        if snapshotFlatGlass { return false }
+        #endif
+        return true
+    }
     static var minimumTextHeight: CGFloat { capsuleHeight - textVerticalPadding * 2 }
     /// Distance from the chat bottom to the bottom of the ↓ jump control.
     static var jumpControlBottom: CGFloat {
@@ -72,6 +83,10 @@ struct MacChatComposer: View {
     @State private var isFocused = false
     @State private var nativeEditorHasText = false
     @State private var selection: NSRange?
+    /// Widths of the editor / recording surface (stable while typing), so
+    /// the height they will take is known in the same update as the text.
+    @State private var textInputWidth: CGFloat = 0
+    @State private var voiceSurfaceWidth: CGFloat = 0
 
     init(
         sessionId: String,
@@ -277,6 +292,18 @@ struct MacChatComposer: View {
             primaryButton
                 .padding(.bottom, (Self.inputBoxHeight - MacComposerMetrics.control) / 2)
         }
+        // Growing / shrinking (a new line, the transcript wrapping) eases
+        // instead of jumping; the bottom edge stays put, so it grows upward.
+        .animation(.easeOut(duration: 0.18), value: contentHeightKey)
+    }
+
+    /// The height the box's content will take for the current text.
+    private var contentHeightKey: CGFloat {
+        if voiceOwnsComposer {
+            let pieces = MacComposerVoiceTranscriptOnly.pieces(controller: voiceController, preview: voiceComposer.preview)
+            return 10_000 + MacVoiceSurfaceLayout(pieces: pieces).geometry(width: voiceSurfaceWidth).height
+        }
+        return MacComposerScrollableTextInput.fittedHeight(text, width: textInputWidth)
     }
 
     private var inputBox: some View {
@@ -290,6 +317,7 @@ struct MacChatComposer: View {
                         onFinish: { voiceComposer.finishToDraft() },
                         onCancel: { voiceComposer.cancel() }
                     )
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width - 9 } action: { voiceSurfaceWidth = $0 }
                 }
             } else {
                 HStack(alignment: .center, spacing: 0) {
@@ -312,7 +340,7 @@ struct MacChatComposer: View {
     @ViewBuilder
     private var inputBoxGlassBackground: some View {
         let shape = RoundedRectangle(cornerRadius: Self.inputBoxHeight / 2, style: .continuous)
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), MacComposerMetrics.usesGlass {
             Color.clear.glassEffect(.regular, in: shape)
         } else {
             shape.fill(.ultraThinMaterial)
@@ -365,6 +393,7 @@ struct MacChatComposer: View {
             .padding(.leading, 0)
             .padding(.trailing, 4)
             .padding(.vertical, MacComposerMetrics.textVerticalPadding)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width - 4 } action: { textInputWidth = $0 }
         }
         .frame(maxWidth: .infinity)
         .onPasteCommand(
@@ -528,7 +557,8 @@ struct MacChatComposer: View {
         voiceComposer.begin(sessionID: sessionId, selection: selection, context: voiceContext)
     }
 
-    private static func playVoiceStartCue() {
+    static func playVoiceStartCue() {
+        if NativeTestRuntime.isHeadlessTestHost { return } // silent local test runs
         guard let sound = voiceStartSound else {
             KLog.diag("🎙️ [voice] start cue unavailable; continuing silently")
             return
@@ -824,9 +854,85 @@ struct MacChatComposer: View {
     }
 }
 
+// MARK: - Scroll edge fade
+
+/// While text is scrolled out of view at the top or bottom of a composer's
+/// scroll view, that edge fades out — a hint that there is more.
+final class MacScrollEdgeFade {
+    static let length: CGFloat = 14
+    private weak var scrollView: NSScrollView?
+    private let mask = CAGradientLayer()
+    private var observers: [NSObjectProtocol] = []
+    private(set) var fadesTop = false
+    private(set) var fadesBottom = false
+
+    init(_ scrollView: NSScrollView) {
+        self.scrollView = scrollView
+        scrollView.wantsLayer = true
+        scrollView.postsFrameChangedNotifications = true
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: NSView.boundsDidChangeNotification, object: scrollView.contentView,
+                                            queue: .main) { [weak self] _ in self?.scheduleUpdate() })
+        observers.append(center.addObserver(forName: NSView.frameDidChangeNotification, object: scrollView,
+                                            queue: .main) { [weak self] _ in self?.scheduleUpdate() })
+        if let document = scrollView.documentView {
+            // Created after the document view is installed.
+            observers.append(center.addObserver(forName: NSView.frameDidChangeNotification, object: document,
+                                                queue: .main) { [weak self] _ in self?.scheduleUpdate() })
+        }
+    }
+
+    /// Now, and again once the clip view has re-tiled after a resize (a
+    /// growing box must not keep a fade from an intermediate frame).
+    func scheduleUpdate() {
+        update()
+        DispatchQueue.main.async { [weak self] in self?.update() }
+    }
+
+    deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+
+    func update() {
+        guard let scrollView, let layer = scrollView.layer else { return }
+        let clip = scrollView.contentView.bounds
+        let documentHeight = scrollView.documentView?.frame.height ?? 0
+        let top = clip.minY > 0.5
+        let bottom = clip.maxY < documentHeight - 0.5
+        fadesTop = top; fadesBottom = bottom
+        guard top || bottom else {
+            if layer.mask != nil { layer.mask = nil }
+            return
+        }
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        mask.frame = layer.bounds
+        let f = min(0.45, Self.length / max(1, layer.bounds.height))
+        let edge = NSColor.black.withAlphaComponent(0).cgColor, solid = NSColor.black.cgColor
+        mask.colors = [top ? edge : solid, solid, solid, bottom ? edge : solid]
+        mask.locations = [0, NSNumber(value: Double(f)), NSNumber(value: Double(1 - f)), 1]
+        // Unit points: 0 is the visual top in either layer orientation.
+        let flipped = layer.contentsAreFlipped()
+        mask.startPoint = CGPoint(x: 0.5, y: flipped ? 0 : 1)
+        mask.endPoint = CGPoint(x: 0.5, y: flipped ? 1 : 0)
+        if layer.mask !== mask { layer.mask = mask }
+        CATransaction.commit()
+    }
+}
+
+/// A composer scroll view that refreshes its edge fade after every tile,
+/// layout and scroll — the final geometry, never an intermediate frame.
+class MacEdgeFadingScrollView: NSScrollView {
+    var edgeFade: MacScrollEdgeFade?
+    override func tile() { super.tile(); edgeFade?.update() }
+    override func layout() { super.layout(); edgeFade?.update() }
+    override func reflectScrolledClipView(_ clipView: NSClipView) {
+        super.reflectScrolledClipView(clipView)
+        edgeFade?.update()
+    }
+}
+
 // MARK: - Scrollable native Composer text input
 
-private final class MacComposerTextView: NSTextView {
+final class MacComposerTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onPasteCompleted: (() -> Void)?
     var onTakeOver: (() -> Void)?
@@ -883,7 +989,7 @@ private final class MacComposerTextView: NSTextView {
     }
 }
 
-private struct MacComposerScrollableTextInput: NSViewRepresentable {
+struct MacComposerScrollableTextInput: NSViewRepresentable {
     @Binding var text: String
     @Binding var focused: Bool
     @Binding var nativeEditorHasText: Bool
@@ -895,6 +1001,9 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
     let onSubmit: () -> Void
     let onSelection: (NSRange) -> Void
     let onTakeOver: () -> Void
+    /// Taller editors (the new-session composer); nil = one Composer row.
+    var minLines: CGFloat? = nil
+    var maxLines: CGFloat = MacComposerMetrics.maxVisibleTextLines
 
     private static let font = NSFont.systemFont(ofSize: 15)
     private static let lineHeight = ceil(NSLayoutManager().defaultLineHeight(for: font))
@@ -902,10 +1011,14 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
     // the scroll view so it remains present at every scroll position.
     private static let verticalPadding: CGFloat = 1
 
+    /// Editor height for `lines` lines of text (without the outer padding).
+    static func height(lines: CGFloat) -> CGFloat { lineHeight * lines + verticalPadding * 2 }
+
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: MacComposerScrollableTextInput
         weak var scrollView: NSScrollView?
         weak var textView: MacComposerTextView?
+        var edgeFade: MacScrollEdgeFade?
         var isApplying = false
         var wasComposing = false
         var appliedFocusRequest = -1
@@ -1037,7 +1150,7 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView(frame: .zero)
+        let scrollView = MacEdgeFadingScrollView(frame: .zero)
         scrollView.drawsBackground = false
         scrollView.contentView.drawsBackground = false
         scrollView.borderType = .noBorder
@@ -1074,6 +1187,8 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
         scrollView.documentView = textView
         context.coordinator.scrollView = scrollView
         context.coordinator.textView = textView
+        context.coordinator.edgeFade = MacScrollEdgeFade(scrollView)
+        scrollView.edgeFade = context.coordinator.edgeFade
         context.coordinator.reportVisualTextPresence(of: textView, deferred: true)
         return scrollView
     }
@@ -1146,7 +1261,17 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
                 window.makeFirstResponder(nil)
             }
             textView.scrollRangeToVisible(textView.selectedRange())
+            coordinator?.edgeFade?.scheduleUpdate()
         }
+    }
+
+    /// The editor height this text takes at `width` (what sizeThatFits
+    /// returns); composers animate their growth on its changes.
+    static func fittedHeight(_ text: String, width: CGFloat,
+                             minLines: CGFloat? = nil, maxLines: CGFloat = MacComposerMetrics.maxVisibleTextLines) -> CGFloat {
+        guard width > 1 else { return 0 }
+        let minHeight = minLines.map(height(lines:)) ?? MacComposerMetrics.minimumTextHeight
+        return min(max(measuredHeight(text, width: width), minHeight), max(minHeight, height(lines: maxLines)))
     }
 
     func sizeThatFits(
@@ -1156,8 +1281,8 @@ private struct MacComposerScrollableTextInput: NSViewRepresentable {
     ) -> CGSize? {
         let width = max(1, proposal.width ?? nsView.frame.width)
         let measured = Self.measuredHeight(text, width: width)
-        let minHeight = MacComposerMetrics.minimumTextHeight
-        let maxHeight = Self.lineHeight * MacComposerMetrics.maxVisibleTextLines + Self.verticalPadding * 2
+        let minHeight = minLines.map(Self.height(lines:)) ?? MacComposerMetrics.minimumTextHeight
+        let maxHeight = max(minHeight, Self.height(lines: maxLines))
         return CGSize(width: width, height: min(max(measured, minHeight), maxHeight))
     }
 
@@ -1272,29 +1397,34 @@ struct MacVoiceSurfaceLayout: Layout {
     }
 }
 
-private struct MacComposerVoiceSurface: View {
+struct MacComposerVoiceSurface: View {
     let controller: KrakiVoiceInputController
     let preview: (prefix: String, spoken: String, suffix: String)
     let onFinish: () -> Void
     let onCancel: () -> Void
+    @State private var width: CGFloat = 0
+    /// Cancel / Edit re-stack when the transcript wraps: they don't slide
+    /// across each other while the box grows; they fade in at their new place.
+    @State private var actionsOpacity = 1.0
+    private var stacked: Bool { width > 1 && MacVoiceSurfaceLayout(pieces: displayedPieces).geometry(width: width - 9).stacked }
+
     var body: some View {
         MacVoiceSurfaceLayout(pieces: displayedPieces) {
-            MacComposerScrollableVoiceTranscript(pieces: displayedPieces, revision: revision)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background {
-                    MacVoiceBackgroundWaveform(levels: controller.levels)
-                        .mask {
-                            LinearGradient(stops: [
-                                .init(color: .clear, location: 0),
-                                .init(color: .white, location: 0.12),
-                                .init(color: .white, location: 0.88),
-                                .init(color: .clear, location: 1)
-                            ], startPoint: .leading, endPoint: .trailing)
-                        }
-                        .clipped()
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                }
+            MacComposerVoiceTranscriptOnly(controller: controller, preview: preview)
+            actions
+        }
+        .padding(.leading, 4)
+        .padding(.trailing, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .onChange(of: stacked) { _, _ in
+            actionsOpacity = 0
+            withAnimation(.easeOut(duration: 0.14).delay(0.14)) { actionsOpacity = 1 }
+        }
+    }
+
+    @ViewBuilder
+    private var actions: some View {
             Button(action: onCancel) {
                 Label("Cancel", systemImage: "xmark")
                     .font(.system(size: 12, weight: .medium))
@@ -1310,6 +1440,8 @@ private struct MacComposerVoiceSurface: View {
                 MacComposerControlGeometryProbe(identifier: "voice-cancel")
                 #endif
             }
+            .opacity(actionsOpacity)
+            .animation(nil, value: stacked)
             Button(action: onFinish) {
                 Label("Edit", systemImage: "character.cursor.ibeam")
                     .font(.system(size: 12, weight: .medium))
@@ -1327,17 +1459,55 @@ private struct MacComposerVoiceSurface: View {
                 MacComposerControlGeometryProbe(identifier: "voice-to-text")
                 #endif
             }
-        }
-        .padding(.leading, 4)
-        .padding(.trailing, 5)
-        .frame(maxWidth: .infinity, alignment: .leading)
+            .opacity(actionsOpacity)
+            .animation(nil, value: stacked)
+    }
+
+    private var displayedPieces: [(text: String, opacity: Double)] {
+        MacComposerVoiceTranscriptOnly.pieces(controller: controller, preview: preview)
+    }
+}
+
+/// The recording transcript over its live waveform, without the actions:
+/// the chat surface adds Cancel / Edit beside it; the new-session composer
+/// puts them in its bottom row instead.
+struct MacComposerVoiceTranscriptOnly: View {
+    let controller: KrakiVoiceInputController
+    let preview: (prefix: String, spoken: String, suffix: String)
+    var topAligned = false
+    /// The new-session composer shows iOS's level bars in its bottom row.
+    var showsWaveform = true
+
+    var body: some View {
+        let pieces = Self.pieces(controller: controller, preview: preview)
+        MacComposerScrollableVoiceTranscript(pieces: pieces, revision: revision, topAligned: topAligned)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background {
+                if showsWaveform { waveform }
+            }
+    }
+
+    private var waveform: some View {
+                MacVoiceBackgroundWaveform(levels: controller.levels)
+                    .mask {
+                        LinearGradient(stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .white, location: 0.12),
+                            .init(color: .white, location: 0.88),
+                            .init(color: .clear, location: 1)
+                        ], startPoint: .leading, endPoint: .trailing)
+                    }
+                    .clipped()
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
     }
 
     private var revision: String {
         "\(preview.prefix)-\(preview.spoken)-\(preview.suffix)-\(controller.state)"
     }
 
-    private var displayedPieces: [(text: String, opacity: Double)] {
+    static func pieces(controller: KrakiVoiceInputController,
+                       preview: (prefix: String, spoken: String, suffix: String)) -> [(text: String, opacity: Double)] {
         // Pressed while Kraki is reconnecting: say so at the caret until the
         // connection is back and recording starts by itself.
         if preview.spoken.isEmpty, controller.state == .waitingForConnection {
@@ -1362,6 +1532,9 @@ final class MacComposerVoiceTranscriptView: NSView {
     private var measuredHeight: CGFloat = lineHeight
     private(set) var contentHeight: CGFloat = lineHeight
     var preservesContentHeight = false
+    /// Taller boxes (new session): short speech starts on the first line,
+    /// where the editor's text will be after Edit.
+    var topAligned = false { didSet { if topAligned != oldValue { needsDisplay = true } } }
 
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: measuredHeight)
@@ -1468,6 +1641,9 @@ final class MacComposerVoiceTranscriptView: NSView {
     /// Short speech is vertically centered within its current viewport.
     /// Long speech keeps its complete document height and native tail scroll.
     var textDrawingRect: CGRect {
+        // Wrapped speech starts at the top: two lines in the stacked (three
+        // line tall) surface must not float in the middle.
+        if topAligned || contentHeight > Self.lineHeight * 1.5 { return bounds }
         let inset = max(0, (bounds.height - contentHeight) / 2)
         return bounds.insetBy(dx: 0, dy: inset)
     }
@@ -1582,7 +1758,7 @@ struct MacComposerVoiceTranscript: NSViewRepresentable {
 /// Keeps the live voice transcript at its newest line after AppKit finishes
 /// a document-frame/layout pass. The scroll view still accepts normal wheel
 /// and trackpad input between recognition updates.
-private final class MacComposerVoiceScrollView: NSScrollView {
+final class MacComposerVoiceScrollView: MacEdgeFadingScrollView {
     var followsTail = true
 
     override func layout() {
@@ -1594,6 +1770,7 @@ private final class MacComposerVoiceScrollView: NSScrollView {
         guard abs(contentView.bounds.origin.y - maximumY) > 0.5 else { return }
         contentView.bounds.origin.y = maximumY
         super.reflectScrolledClipView(contentView)
+        edgeFade?.update()
     }
 }
 
@@ -1601,15 +1778,17 @@ private final class MacComposerVoiceScrollView: NSScrollView {
 /// document keeps the complete CoreText layout while the clip view follows
 /// its bottom edge after every recognition update, so long dictation remains
 /// readable and the newest words never disappear below the composer.
-private struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
+struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
     let pieces: [MacComposerVoiceTranscriptView.Piece]
     let revision: String
+    var topAligned = false
 
     final class Coordinator {
         var revision = ""
         var width: CGFloat = 0
         var proposedWidth: CGFloat = 0
         weak var documentView: MacComposerVoiceTranscriptView?
+        var edgeFade: MacScrollEdgeFade?
 
         func apply(
             pieces: [MacComposerVoiceTranscriptView.Piece],
@@ -1656,6 +1835,7 @@ private struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
             let maxY = max(0, clipView.documentRect.height - clipView.bounds.height)
             clipView.bounds.origin.y = maxY
             scrollView.reflectScrolledClipView(clipView)
+            edgeFade?.scheduleUpdate()
         }
     }
 
@@ -1677,11 +1857,14 @@ private struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
         let documentView = MacComposerVoiceTranscriptView(frame: .zero)
         documentView.autoresizingMask = [.width]
         documentView.preservesContentHeight = true
+        documentView.topAligned = topAligned
         documentView.wantsLayer = true
         documentView.layer?.masksToBounds = false
         scrollView.documentView = documentView
         scrollView.followsTail = true
         context.coordinator.documentView = documentView
+        context.coordinator.edgeFade = MacScrollEdgeFade(scrollView)
+        scrollView.edgeFade = context.coordinator.edgeFade
         return scrollView
     }
 
@@ -1715,7 +1898,7 @@ private struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
 #if DEBUG
 /// Passive markers on the actual controls, for geometry and real hit-test
 /// regression checks without relying on SwiftUI's lazily-created AX tree.
-private struct MacComposerControlGeometryProbe: NSViewRepresentable {
+struct MacComposerControlGeometryProbe: NSViewRepresentable {
     let identifier: String
     final class Probe: NSView {
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -1817,7 +2000,7 @@ private struct MacComposerWaveform: View {
     }
 }
 
-private struct MacComposerVoiceKeyProbe: NSViewRepresentable {
+struct MacComposerVoiceKeyProbe: NSViewRepresentable {
     let enabled: Bool
     let voiceActive: Bool
     let onToggle: () -> Void
@@ -1840,7 +2023,7 @@ private struct MacComposerVoiceKeyProbe: NSViewRepresentable {
     }
 }
 
-private final class MacComposerVoiceKeyProbeView: NSView {
+final class MacComposerVoiceKeyProbeView: NSView {
     var enabled = false
     var voiceActive = false
     var onToggle: (() -> Void)?
@@ -2132,7 +2315,7 @@ private struct MacPrimaryGlassCircle: View {
     let tint: Color?
     let fallback: Color
     var body: some View {
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), MacComposerMetrics.usesGlass {
             Circle().fill(.clear)
                 .glassEffect(tint.map { Glass.regular.tint($0) } ?? Glass.regular, in: Circle())
                 .animation(.easeInOut(duration: 0.22), value: tint)
