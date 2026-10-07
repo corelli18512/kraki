@@ -284,7 +284,7 @@ final class MacPresenceController {
     /// Returns false when the user cancelled.
     @discardableResult
     func confirmQuitGoingOffline() -> Bool {
-        guard managesPresence, let tentacle, tentacle.onlineStatus != .offline else { return true }
+        guard managesPresence, let tentacle, tentacle.canGoOffline else { return true }
         if UserDefaults.standard.bool(forKey: Self.confirmQuitSuppressedKey) { return true }
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()

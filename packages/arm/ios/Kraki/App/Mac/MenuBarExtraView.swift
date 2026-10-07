@@ -66,7 +66,7 @@ struct MenuBarExtraView: View {
         }
         .keyboardShortcut(",", modifiers: .command)
 
-        Button(tentacleCLI.managesOnlinePresence && tentacleCLI.onlineStatus != .offline
+        Button(tentacleCLI.managesOnlinePresence && tentacleCLI.canGoOffline
                ? "Quit Kraki and Go Offline…" : "Quit Kraki") {
             MacPresenceController.shared.quitGoingOffline()
         }

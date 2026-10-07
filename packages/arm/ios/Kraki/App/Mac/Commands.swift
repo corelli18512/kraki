@@ -209,7 +209,7 @@ struct MacCommands: Commands {
         // ⌘Q puts the window away while this Mac is online: quitting would
         // take it offline, which is what the menu bar's Quit is for.
         CommandGroup(replacing: .appTermination) {
-            if tentacleCLI.managesOnlinePresence && tentacleCLI.onlineStatus != .offline {
+            if tentacleCLI.managesOnlinePresence && tentacleCLI.canGoOffline {
                 Button("Close Kraki (Stay Online)") {
                     MacPresenceController.shared.closeWindowsStayingOnline()
                 }
