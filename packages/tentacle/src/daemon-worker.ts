@@ -44,6 +44,7 @@ process.on('unhandledRejection', (reason) => {
 import { RelayClient } from './relay-client.js';
 import { AccountUsageMonitor, UsageHistory } from './account-usage.js';
 import { join } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { SessionManager } from './session-manager.js';
 import { KeyManager } from './key-manager.js';
 import { AttachmentStore } from './attachment-store.js';
@@ -126,12 +127,20 @@ export async function startWorker(): Promise<WorkerResult> {
     ensureTccBundleRegistered();
     // Also purge zombie Launch Services entries from past updates / builds —
     // a one-time sweep that fixes every already-installed machine.
-    const sweep = cleanupStaleBundleEntries();
-    if (sweep.removed.length > 0) {
-      logger.info(
-        { removedCount: sweep.removed.length },
-        'Cleaned stale Launch Services entries for chat.kraki.cli (TCC hygiene)',
-      );
+    // `lsregister -dump` is large and synchronous: sweep once per installed
+    // version, not on every daemon start.
+    const sweepMarker = join(getKrakiHome(), '.ls-sweep-version');
+    let sweptVersion = '';
+    try { sweptVersion = readFileSync(sweepMarker, 'utf8').trim(); } catch { /* never swept */ }
+    if (sweptVersion !== getVersion()) {
+      const sweep = cleanupStaleBundleEntries();
+      if (sweep.removed.length > 0) {
+        logger.info(
+          { removedCount: sweep.removed.length },
+          'Cleaned stale Launch Services entries for chat.kraki.cli (TCC hygiene)',
+        );
+      }
+      try { writeFileSync(sweepMarker, getVersion()); } catch { /* retried next start */ }
     }
   }
 
@@ -149,9 +158,11 @@ export async function startWorker(): Promise<WorkerResult> {
     }
     let lastFda = fdaStatus;
     let nextCheckAt = 0;
+    const monitorStartedAt = Date.now();
     fdaMonitor = setInterval(() => {
-      // Poll quickly while the user may be granting access, slowly afterwards
-      // (FDA can also be revoked at any time).
+      // Poll quickly while the user may be granting access (the first minutes
+      // after start or a change), slowly afterwards (FDA can also be revoked at
+      // any time). Every probe also rewrites status.json.
       if (Date.now() < nextCheckAt) return;
       probeFda().then((status) => {
         if (status !== lastFda) {
@@ -159,7 +170,8 @@ export async function startWorker(): Promise<WorkerResult> {
           lastFda = status;
         }
         updateFdaStatus(status);
-        nextCheckAt = Date.now() + (status === 'granted' ? 60_000 : 0);
+        const eager = status !== 'granted' && Date.now() - monitorStartedAt < 10 * 60_000;
+        nextCheckAt = Date.now() + (eager ? 0 : 60_000);
       }).catch(() => {});
     }, 3000);
     fdaMonitor.unref();
@@ -216,7 +228,7 @@ export async function startWorker(): Promise<WorkerResult> {
 
   // 3b. Start Kraki MCP server (in-process HTTP, loopback only). If bind
   //     fails, log and continue without it — daemon stays up.
-  let mcpInfo: { urlForSession: (sid: string) => string; bearerToken: string } | undefined;
+  let mcpInfo: { urlForSession: (sid: string) => string; tokenForSession: (sid: string) => string } | undefined;
   let mcpServer: KrakiMcpServer | null = null;
   try {
     mcpServer = new KrakiMcpServer({
@@ -226,7 +238,7 @@ export async function startWorker(): Promise<WorkerResult> {
     const started = await mcpServer.start();
     mcpInfo = {
       urlForSession: started.urlForSession,
-      bearerToken: started.bearerToken,
+      tokenForSession: started.tokenForSession,
     };
     logger.info({ port: started.port }, 'Kraki MCP server started');
   } catch (err) {

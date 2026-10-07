@@ -35,6 +35,10 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
+  openSync,
+  fstatSync,
+  readSync,
+  closeSync,
 } from 'node:fs';
 import { join } from 'node:path';
 
@@ -262,6 +266,29 @@ export class AttachmentStore {
       return { bytes: readFileSync(dataPath), meta };
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Read `length` bytes at `start` plus the total size, without loading the
+   * whole file (paced transfers request one chunk at a time).
+   */
+  readRange(sessionId: string, id: string, start: number, length: number): { bytes: Buffer; size: number; meta: AttachmentMetaSidecar } | null {
+    const meta = this.readMeta(sessionId, id);
+    if (!meta) return null;
+    const dataPath = this.filePath(sessionId, id, extForMime(meta.mimeType));
+    let fd: number | undefined;
+    try {
+      fd = openSync(dataPath, 'r');
+      const size = fstatSync(fd).size;
+      const end = Math.min(size, Math.max(0, start) + Math.max(0, length));
+      const bytes = Buffer.alloc(Math.max(0, end - start));
+      if (bytes.length > 0) readSync(fd, bytes, 0, bytes.length, start);
+      return { bytes, size, meta };
+    } catch {
+      return null;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
     }
   }
 

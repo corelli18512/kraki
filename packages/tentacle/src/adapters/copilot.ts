@@ -33,6 +33,7 @@ import { dirname, join, basename } from 'node:path';
 import { getKrakiHome } from '../config.js';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isSea } from 'node:sea';
+import { linkIntoShadow } from './shadow-link.js';
 import {
   AgentAdapter,
   type CreateSessionConfig,
@@ -40,6 +41,7 @@ import {
   type PermissionDecision,
   type QuestionAnswer,
   type QuestionResponseResult,
+  type PermissionResponseResult,
   type SendMessageOptions,
 } from './base.js';
 import { parsePermission } from '../parse-permission.js';
@@ -283,16 +285,11 @@ function getCopilotConfigDir(): string {
     try {
       for (const entry of readdirSync(realCopilotDir)) {
         if (entry.startsWith('permissions-config')) continue;
-        const src = join(realCopilotDir, entry);
-        const dest = join(shadowDir, entry);
-        try {
-          // Remove stale symlink / file (lstatSync doesn't follow symlinks)
-          lstatSync(dest);
-          unlinkSync(dest);
-        } catch { /* dest doesn't exist */ }
-        try {
-          symlinkSync(src, dest);
-        } catch { /* best effort */ }
+        // Junction/hard-link fallback on Windows without Developer Mode,
+        // where a plain symlink fails and the user's config would vanish.
+        if (!linkIntoShadow(join(realCopilotDir, entry), join(shadowDir, entry))) {
+          logger.warn({ entry }, 'Could not share a Copilot config entry with Kraki sessions');
+        }
       }
     } catch (err) {
       logger.warn(`Failed to set up shadow copilot config: ${(err as Error).message}`);
@@ -307,43 +304,7 @@ function getCopilotConfigDir(): string {
   return shadowDir;
 }
 
-export function patchCopilotSdkSessionImport(currentUrl: string = getRuntimeUrl()): boolean {
-  const sessionPath = resolveCopilotSdkSessionPath(currentUrl);
-  if (!sessionPath) {
-    return false;
-  }
-  const source = readFileSync(sessionPath, 'utf8');
-  const patched = source.replace(
-    /from ['"]vscode-jsonrpc\/node['"]/g,
-    `from "${VSCODE_JSONRPC_NODE_JS_SPECIFIER}"`,
-  );
-
-  if (patched === source) {
-    return false;
-  }
-
-  writeFileSync(sessionPath, patched, 'utf8');
-  return true;
-}
-
-export function resolveCopilotSdkSessionPath(currentUrl: string = getRuntimeUrl()): string | null {
-  let dir = dirname(fileURLToPath(currentUrl));
-
-  while (true) {
-    const candidate = join(dir, 'node_modules', '@github', 'copilot-sdk', 'dist', 'session.js');
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-
-    const parent = dirname(dir);
-    if (parent === dir) {
-      return null;
-    }
-    dir = parent;
-  }
-}
-
-export function installCopilotSdkImportCompatibility(currentUrl: string = getRuntimeUrl()): 'hook' | 'patch' | null {
+export function installCopilotSdkImportCompatibility(currentUrl: string = getRuntimeUrl()): 'hook' | null {
   if (typeof moduleCompat.registerHooks === 'function') {
     moduleCompat.registerHooks({
       resolve(specifier, context, nextResolve) {
@@ -364,14 +325,8 @@ export function installCopilotSdkImportCompatibility(currentUrl: string = getRun
     return 'hook';
   }
 
-  if (isSea()) {
-    return null;
-  }
-
-  if (patchCopilotSdkSessionImport(currentUrl)) {
-    return 'patch';
-  }
-
+  // Node ≥ 22.19 (our engines floor) always has a module hook API, so the
+  // SDK file is never rewritten on disk.
   return null;
 }
 
@@ -517,7 +472,7 @@ export class CopilotAdapter extends AgentAdapter {
      *  session it creates/resumes, with the URL scoped per Kraki sessionId. */
     krakiMcp?: {
       urlForSession: (sessionId: string) => string;
-      bearerToken: string;
+      tokenForSession: (sessionId: string) => string;
     };
   } = {}) {
     super();
@@ -576,7 +531,7 @@ export class CopilotAdapter extends AgentAdapter {
   private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
   private readonly krakiMcp?: {
     urlForSession: (sessionId: string) => string;
-    bearerToken: string;
+    tokenForSession: (sessionId: string) => string;
   };
 
   /** System prompt appended to the SDK's built-in prompt. See system-prompt.md for docs. */
@@ -974,7 +929,7 @@ export class CopilotAdapter extends AgentAdapter {
       const krakiEntry: MCPServerConfig = {
         type: 'http' as const,
         url: this.krakiMcp.urlForSession(config.sessionId),
-        headers: { Authorization: `Bearer ${this.krakiMcp.bearerToken}` },
+        headers: { Authorization: `Bearer ${this.krakiMcp.tokenForSession(config.sessionId)}` },
         tools: ['*'],
       } as MCPServerConfig;
       mcpServers = { ...(mcpServers ?? {}), kraki: krakiEntry };
@@ -1102,15 +1057,24 @@ export class CopilotAdapter extends AgentAdapter {
         : tmpdir();
       const sdkAttachments: Array<{ type: 'file'; path: string; displayName?: string }> = [];
       for (const att of attachments) {
+        // Images arrive inline (base64) or, from current apps, as a content_ref
+        // into the AttachmentStore (as Claude/Codex already read them).
+        let bytes: Buffer | undefined;
+        let mimeType = att.mimeType;
         if (att.type === 'image') {
-          const ext = att.mimeType === 'image/png' ? '.png' : att.mimeType === 'image/webp' ? '.webp' : '.jpg';
-          const fileName = `kraki-img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
-          const filePath = join(sdkFilesDir, fileName);
-          mkdirSync(sdkFilesDir, { recursive: true });
-          writeFileSync(filePath, Buffer.from(att.data, 'base64'));
-          if (!entry) tempFiles.push(filePath);
-          sdkAttachments.push({ type: 'file' as const, path: filePath, displayName: fileName });
+          bytes = Buffer.from(att.data, 'base64');
+        } else if (att.type === 'content_ref' && this.attachmentStore) {
+          const hit = this.attachmentStore.read(sessionId, att.id);
+          if (hit) { bytes = hit.bytes; mimeType = hit.meta.mimeType ?? mimeType; }
         }
+        if (!bytes || !/^image\//.test(mimeType)) continue;
+        const ext = mimeType === 'image/png' ? '.png' : mimeType === 'image/webp' ? '.webp' : mimeType === 'image/gif' ? '.gif' : '.jpg';
+        const fileName = `kraki-img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+        const filePath = join(sdkFilesDir, fileName);
+        mkdirSync(sdkFilesDir, { recursive: true });
+        writeFileSync(filePath, bytes);
+        if (!entry) tempFiles.push(filePath);
+        sdkAttachments.push({ type: 'file' as const, path: filePath, displayName: fileName });
       }
       if (sdkAttachments.length) opts.attachments = sdkAttachments as MessageOptions['attachments'];
     }
@@ -1188,16 +1152,16 @@ export class CopilotAdapter extends AgentAdapter {
     permissionId: string,
     decision: PermissionDecision,
     reason?: string,
-  ): Promise<void> {
+  ): Promise<PermissionResponseResult> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       logger.warn(`respondToPermission: session not found: ${sessionId}`);
-      return;
+      return 'session_gone';
     }
     const pending = entry.pendingPermissions.get(permissionId);
     if (!pending) {
       logger.warn(`respondToPermission: no pending permission: ${permissionId} (already resolved or timed out)`);
-      return;
+      return 'not_found';
     }
 
     // For always_allow: add tool kind to session-scope allow set
@@ -1232,6 +1196,7 @@ export class CopilotAdapter extends AgentAdapter {
     entry.pendingPermissions.delete(permissionId);
     this.touchSession(sessionId);
     logger.debug({ permissionId, sessionId, decision }, 'permission resolved');
+    return 'accepted';
   }
 
   async respondToQuestion(
@@ -1505,7 +1470,7 @@ export class CopilotAdapter extends AgentAdapter {
       const krakiEntry: MCPServerConfig = {
         type: 'http' as const,
         url: this.krakiMcp.urlForSession(sessionId),
-        headers: { Authorization: `Bearer ${this.krakiMcp.bearerToken}` },
+        headers: { Authorization: `Bearer ${this.krakiMcp.tokenForSession(sessionId)}` },
         tools: ['*'],
       } as MCPServerConfig;
       mcpServers = { ...(mcpServers ?? {}), kraki: krakiEntry };

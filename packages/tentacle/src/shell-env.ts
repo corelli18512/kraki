@@ -128,18 +128,23 @@ export function hydrateLoginShellEnv(
     // cannot block; the timeout bounds a profile that hangs anyway. The
     // script is valid in sh-compatible shells and fish alike.
     const script = `printf '%s' '${START}'; command env -0; printf '%s' '${END}'`;
-    const result = run(shell, ['-i', '-l', '-c', script], {
+    const probe = (flags: string[], timeout: number) => run(shell, [...flags, '-c', script], {
       encoding: 'utf8',
-      timeout: opts.timeoutMs ?? 10_000,
+      timeout,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...env, HOME: env.HOME ?? homedir(), TERM: 'dumb' },
       maxBuffer: 8 * 1024 * 1024,
     });
-    if (result.error) {
-      error = result.error.message;
-    } else {
-      shellEnv = parseMarkedEnv(String(result.stdout ?? ''));
-      if (!shellEnv) error = `shell exited ${result.status ?? 'null'} without environment markers`;
+    let result = probe(['-i', '-l'], opts.timeoutMs ?? 10_000);
+    shellEnv = result.error ? null : parseMarkedEnv(String(result.stdout ?? ''));
+    if (!shellEnv) {
+      // An rc file that execs tmux, prints a prompt or asks a question breaks
+      // the interactive probe; a login-only shell still yields the profile.
+      result = probe(['-l'], Math.min(opts.timeoutMs ?? 10_000, 5_000));
+      shellEnv = result.error ? null : parseMarkedEnv(String(result.stdout ?? ''));
+    }
+    if (!shellEnv) {
+      error = result.error?.message ?? `shell exited ${result.status ?? 'null'} without environment markers`;
     }
   } catch (err) {
     error = (err as Error).message;

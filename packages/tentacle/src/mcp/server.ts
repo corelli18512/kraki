@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   createServer,
   type IncomingMessage,
@@ -46,8 +46,9 @@ export interface KrakiMcpServerOptions {
 export interface KrakiMcpServerStartResult {
   /** Base URL up to (but excluding) the per-session segment. */
   baseUrl: string;
-  /** Bearer token clients must send in `Authorization`. */
-  bearerToken: string;
+  /** Bearer token for one session's URL. Each session gets its own, so an
+   *  agent cannot post into another session by changing the URL. */
+  tokenForSession(sessionId: string): string;
   /** Helper: build the per-session URL the SDK should connect to. */
   urlForSession(sessionId: string): string;
   /** Bound port (resolved after listen). */
@@ -58,7 +59,8 @@ export interface KrakiMcpServerStartResult {
  * Tentacle-hosted MCP server.
  *
  * - Binds to 127.0.0.1 on a kernel-assigned port (no LAN exposure)
- * - Requires `Authorization: Bearer <token>` on every request
+ * - Requires `Authorization: Bearer <token>` on every request; a session URL
+ *   accepts only that session's token (HMAC of the session id)
  * - Routes requests under `/mcp/<sessionId>`; the sessionId is injected into
  *   tool-call context. `initialize` and `tools/list` accept a `/mcp` URL too.
  */
@@ -113,7 +115,7 @@ export class KrakiMcpServer {
     const baseUrl = `http://127.0.0.1:${this.port}/mcp`;
     return {
       baseUrl,
-      bearerToken: this.token,
+      tokenForSession: (sessionId) => this.tokenForSession(sessionId),
       port: this.port,
       urlForSession: (sessionId) => `${baseUrl}/${encodeURIComponent(sessionId)}`,
     };
@@ -136,17 +138,17 @@ export class KrakiMcpServer {
       return;
     }
 
-    if (!this.checkAuth(req)) {
-      res.writeHead(401, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: 'unauthorized' }));
-      return;
-    }
-
     const sessionId = this.extractSessionId(req.url ?? '');
     // sessionId === null means malformed path; sessionId === '' means `/mcp` with no segment
     if (sessionId === null) {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'not_found' }));
+      return;
+    }
+
+    if (!this.checkAuth(req, sessionId)) {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'unauthorized' }));
       return;
     }
 
@@ -180,18 +182,18 @@ export class KrakiMcpServer {
     res.end(JSON.stringify(response));
   }
 
-  private checkAuth(req: IncomingMessage): boolean {
+  /** The token a session's URL accepts. */
+  tokenForSession(sessionId: string): string {
+    return createHmac('sha256', this.token).update(sessionId).digest('hex');
+  }
+
+  /** `/mcp/<session>` needs that session's token; bare `/mcp` the server token. */
+  private checkAuth(req: IncomingMessage, sessionId: string): boolean {
     const header = req.headers['authorization'];
-    if (typeof header !== 'string') return false;
-    if (!header.startsWith('Bearer ')) return false;
-    const presented = header.slice('Bearer '.length).trim();
-    // constant-time-ish compare (length differs → reject; otherwise compare)
-    if (presented.length !== this.token.length) return false;
-    let diff = 0;
-    for (let i = 0; i < presented.length; i++) {
-      diff |= presented.charCodeAt(i) ^ this.token.charCodeAt(i);
-    }
-    return diff === 0;
+    if (typeof header !== 'string' || !header.startsWith('Bearer ')) return false;
+    const presented = Buffer.from(header.slice('Bearer '.length).trim());
+    const expected = Buffer.from(sessionId ? this.tokenForSession(sessionId) : this.token);
+    return presented.length === expected.length && timingSafeEqual(presented, expected);
   }
 
   /**

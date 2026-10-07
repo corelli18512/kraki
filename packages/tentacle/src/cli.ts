@@ -533,14 +533,16 @@ function cmdLogs(follow: boolean): void {
     return;
   }
 
-  const args = follow
-    ? ['-f', join(logDir, '*.log')]
-    : ['-n', '50', join(logDir, '*.log')];
+  // Expand the glob here instead of through a shell: KRAKI_HOME is a path
+  // and must never be interpreted as shell syntax.
+  const files = readdirSync(logDir).filter((f) => f.endsWith('.log')).map((f) => join(logDir, f));
+  if (files.length === 0) {
+    console.log(chalk.yellow(`No log files in ${logDir}`));
+    return;
+  }
+  const args = follow ? ['-f', ...files] : ['-n', '50', ...files];
 
-  const child = spawn('tail', args, {
-    stdio: 'inherit',
-    shell: true,
-  });
+  const child = spawn('tail', args, { stdio: 'inherit' });
 
   child.on('error', () => {
     console.log(chalk.red('Failed to tail logs.'));
