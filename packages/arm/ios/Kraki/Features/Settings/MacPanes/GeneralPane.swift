@@ -67,12 +67,19 @@ struct GeneralPane: View {
                 } else {
                     Toggle("Keep running in menu bar when window closes", isOn: $keepRunningInMenuBar)
                 }
-                Toggle("Open Kraki at login", isOn: Binding(
-                    get: { loginItem.enabled },
-                    set: { loginItem.set($0) }))
-                    .help(tentacleCLI.managesOnlinePresence
-                          ? "Kraki opens in the menu bar at login so you can see this Mac is online."
-                          : "Adds Kraki to your login items.")
+                if tentacleCLI.managesOnlinePresence {
+                    // Kraki adds itself as a login item while online, so a
+                    // toggle here would not stick (MacPresence.syncLoginItem).
+                    LabeledContent("At login") {
+                        Text("Opens in the menu bar while this Mac is online")
+                            .foregroundStyle(Color.textSecondary)
+                    }
+                } else {
+                    Toggle("Open Kraki at login", isOn: Binding(
+                        get: { loginItem.enabled },
+                        set: { loginItem.set($0) }))
+                        .help("Adds Kraki to your login items.")
+                }
                 if loginItem.needsApproval {
                     HStack(spacing: 6) {
                         Text("Allow Kraki in System Settings › General › Login Items.")
