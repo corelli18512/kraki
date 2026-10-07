@@ -93,3 +93,41 @@ describe('KeyManager recovery (release review Z8)', () => {
     expect(km.getKeyPair().privateKey).toBe(priv);
   });
 });
+
+describe('KeyManager key creation race', () => {
+  it('processes generating at the same time all end up with the one key on disk', async () => {
+    const { execFile } = await import('node:child_process');
+    const { mkdtempSync, readFileSync, rmSync, readdirSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join, resolve } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-keyrace-'));
+    const mod = resolve(__dirname, '../key-manager.ts');
+    const script = `import { KeyManager } from ${JSON.stringify(mod)}; process.stdout.write(new KeyManager(${JSON.stringify(dir)}).getCompactPublicKey());`;
+    const run = () => new Promise<string>((ok, fail) => execFile(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script],
+      { cwd: resolve(__dirname, '../..') }, (err, out) => (err ? fail(err) : ok(out))));
+    try {
+      const keys = await Promise.all([run(), run(), run(), run()]);
+      expect(new Set(keys).size).toBe(1);
+      const { exportPublicKey } = await import('@kraki/crypto');
+      expect(exportPublicKey(readFileSync(join(dir, 'public.pem'), 'utf8'))).toBe(keys[0]);
+      expect(readdirSync(dir).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, 60_000);
+
+  it('repairs a public.pem that does not belong to private.pem', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { generateKeyPair } = await import('@kraki/crypto');
+    const { KeyManager } = await import('../key-manager.js');
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-keyfix-'));
+    try {
+      const a = generateKeyPair(); const b = generateKeyPair();
+      writeFileSync(join(dir, 'private.pem'), a.privateKey);
+      writeFileSync(join(dir, 'public.pem'), b.publicKey);
+      const { createPublicKey } = await import('node:crypto');
+      const want = createPublicKey(a.privateKey).export({ type: 'spki', format: 'pem' }).toString();
+      expect(new KeyManager(dir).getKeyPair().publicKey).toBe(want);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

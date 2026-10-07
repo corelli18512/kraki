@@ -12,6 +12,7 @@ on:
     paths:
       - packages/tentacle/src/remote-update.ts
       - packages/tentacle/src/update-status.ts
+      - packages/tentacle/src/key-manager.ts
       - scripts/e2e/remote-update/**
       - .github/workflows/e2e-remote-update.yml
 
@@ -92,6 +93,13 @@ jobs:
               (cd packages/tentacle && pnpm pack --pack-destination "$HOME")
               TGZ=$(ls "$HOME"/kraki-tentacle-*.tgz | head -1)
               npm install -g "$TGZ"
+              # …but run this repo's protocol/crypto code (main may be ahead of npm).
+              ROOT="$(npm root -g)"
+              for pkg in protocol crypto; do
+                for P in "$ROOT/@kraki/tentacle/node_modules/@kraki/$pkg" "$ROOT/@kraki/$pkg"; do
+                  [ -d "$P" ] && cp -R "packages/$pkg/dist/." "$P/dist/" && echo "patched $P"
+                done
+              done
               echo "KRAKI=kraki" >> "$GITHUB_ENV"; echo "OLD_ARTIFACT=$TGZ" >> "$GITHUB_ENV"
               ;;
           esac

@@ -24,7 +24,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import {
   accessSync, appendFileSync, chmodSync, constants as fsConstants, copyFileSync, cpSync, existsSync,
-  mkdirSync, readFileSync, renameSync, rmSync, writeFileSync,
+  mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -312,6 +312,17 @@ function resultPath(): string { return join(workDir(), 'result.json'); }
 
 export function writeResult(r: Omit<UpdateResult, 'at'>): void {
   writeFileSync(resultPath(), `${JSON.stringify({ ...r, at: new Date().toISOString() }, null, 2)}\n`);
+  // The update is over: a daemon starting from now on may clean up.
+  try { rmSync(join(workDir(), 'plan.json'), { force: true }); } catch { /* ignore */ }
+}
+
+/** True while an applier may still need `<target>.old` (to roll back). A
+ *  plan older than an hour belongs to an applier that died. */
+export function updateInProgress(maxAgeMs = 60 * 60_000): boolean {
+  try {
+    const st = statSync(join(workDir(), 'plan.json'));
+    return Date.now() - st.mtimeMs < maxAgeMs;
+  } catch { return false; }
 }
 
 /** The outcome of the last update, once, if it is recent. */
@@ -325,8 +336,11 @@ export function takeUnannouncedResult(maxAgeMs = 30 * 60_000): UpdateResult | nu
 }
 
 /** Remove leftovers of a finished update; a locked one is retried next start. */
-export function cleanupAfterUpdate(target?: string): void {
+export function cleanupAfterUpdate(target?: string, opts: { duringUpdate?: boolean } = {}): void {
   if (!target) return;
+  // The new version's own daemon starts while its applier is still verifying
+  // it; the backup must stay until the applier is done (it may roll back).
+  if (!opts.duringUpdate && updateInProgress()) { log(`update in progress; keeping ${target}.old`); return; }
   for (const p of [`${target}.old`, `${target}.new`]) {
     if (!existsSync(p)) continue;
     try { rmSync(p, { recursive: true, force: true }); log(`removed ${p}`); }
@@ -408,7 +422,7 @@ export async function runApplier(args: string[]): Promise<void> {
       const offline = Math.round((Date.now() - offlineAt) / 100) / 10;
       log(`✔ updated to ${expect}; offline ${offline}s`);
       writeResult({ requestId: plan.requestId, phase: 'updated', from: plan.from, to: plan.to, method: plan.method, offlineSeconds: offline });
-      cleanupAfterUpdate(plan.target);
+      cleanupAfterUpdate(plan.target, { duringUpdate: true });
       return;
     }
     throw new Error(`the new version didn't come online within ${plan.deadlineSeconds}s`);
@@ -416,18 +430,27 @@ export async function runApplier(args: string[]): Promise<void> {
     const reason = (err as Error).message;
     log(`✘ ${phase}: ${reason}; restoring ${plan.from}`);
     let back = false;
+    let running = plan.from;
     try {
       if (phase !== 'stop' && phase !== 'swap') {
         runCli(plan.cli, ['stop']);
         for (let k = 0; k < 20 && status(plan.cli).running; k++) await sleep(500);
-        await rmRetry(plan.target);
-        await renameRetry(old, plan.target);
+        if (existsSync(old)) {
+          await rmRetry(plan.target);
+          await renameRetry(old, plan.target);
+        } else {
+          // Never leave the computer without Kraki: keep the new version and
+          // start it again rather than deleting it with nothing to restore.
+          log('  no backup to restore; keeping the installed version');
+          running = plan.to;
+        }
       }
       runCli(plan.cli, ['start', '--login'], 120_000);
-      back = await waitOnline(plan.cli, plan.from, plan.deadlineSeconds);
+      back = await waitOnline(plan.cli, running, plan.deadlineSeconds);
     } catch (e2) { log(`✘ restore failed: ${(e2 as Error).message}`); }
-    log(back ? `↺ back on ${plan.from} (${Math.round((Date.now() - t0) / 1000)}s)` : '✘ old version not online either');
-    writeResult({ requestId: plan.requestId, phase: phase === 'stop' || phase === 'swap' ? 'failed' : 'rolled_back', from: plan.from, to: plan.to, method: plan.method, error: reason });
+    log(back ? `↺ online on ${running} (${Math.round((Date.now() - t0) / 1000)}s)` : `✘ ${running} not online either`);
+    const restored = running === plan.from && phase !== 'stop' && phase !== 'swap';
+    writeResult({ requestId: plan.requestId, phase: restored ? 'rolled_back' : 'failed', from: plan.from, to: plan.to, method: plan.method, error: reason });
   }
 }
 
@@ -473,7 +496,7 @@ async function applyMacApp(plan: UpdatePlan): Promise<void> {
       const offline = Math.round((Date.now() - offlineAt) / 100) / 10;
       log(`✔ Kraki for Mac ${plan.to} (helper ${expect}) online; offline ${offline}s`);
       writeResult({ requestId: plan.requestId, phase: 'updated', from: plan.from, to: plan.to, method: 'mac-app', offlineSeconds: offline });
-      cleanupAfterUpdate(plan.target);
+      cleanupAfterUpdate(plan.target, { duringUpdate: true });
       return;
     }
     throw new Error(`the new version didn't come online within ${plan.deadlineSeconds}s`);
