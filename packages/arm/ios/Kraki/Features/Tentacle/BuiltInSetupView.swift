@@ -262,8 +262,8 @@ struct BuiltInSetupView: View {
         switch tentacleCLI.daemonState {
         case .needsApproval:
             StepCard(
-                title: "Allow Kraki in the background",
-                detail: "Kraki is turned off in System Settings → General → Login Items. Turn Kraki on there so it can keep your agents connected."
+                title: "Let this Mac stay online",
+                detail: "Kraki is turned off in System Settings → General → Login Items. Turn Kraki on there so your phone and other computers can use the agents on this Mac."
             ) {
                 HStack(spacing: 10) {
                     Button("Open Login Items") { BuiltInTentacle.openLoginItemsSettings() }
@@ -296,7 +296,7 @@ struct BuiltInSetupView: View {
                 }
             }
         default:
-            ProgressView("Starting Kraki in the background…").controlSize(.small)
+            ProgressView("Bringing this Mac online…").controlSize(.small)
         }
     }
 }

@@ -26,6 +26,25 @@ Verified on a clean macOS VM with a notarized build:
 - The registration survives reboot and in-place replacement of the app.
 - Registering from a translocated app (opened from Downloads without moving it) works until the next reboot, then the job points at a vanished path. The app refuses to start the service unless it runs from a stable location; the DMG's Applications alias is the intended install path. Moving with `mv` does not end translocation, a Finder move does.
 
+## Online presence (what users see)
+
+Users never see "daemon", "tentacle" or "background service". There is one status: **this Mac is online** (your phone and other computers can use its agents) or **offline**. The window is only a remote control, like the phone app. `App/Mac/MacPresence.swift` owns the rules for the built-in tentacle with "Run agents on this Mac" on:
+
+| Action | Result |
+|---|---|
+| Close the window, or ⌘Q in it ("Close Kraki (Stay Online)") | Window goes away, the Dock icon with it; the menu bar octopus stays; still online. The first time, a note under the octopus says so. |
+| Menu bar › Quit Kraki and Go Offline…, Dock › Quit, AppleScript `quit` | Confirmation (can be suppressed), then the service is unregistered (ownership marker kept, so the CLI still won't start a second daemon) and the app quits. Offline. |
+| Open Kraki | Comes back online (`goOnlineAtLaunchIfNeeded`). |
+| Log out, restart, shut down, Sparkle update | App quits, service untouched: the Mac stays/comes back online. A quit Apple event with `keyAEQuitReason` or no quit event at all is never treated as a user quit. |
+| Log in | While online, Kraki is a login item (registered automatically and removed again on quit only if Kraki added it) and starts in the menu bar without a window. |
+| Menu bar › Take This Mac Offline / Bring This Mac Online | Same service switch without quitting. |
+
+Menu bar icon: the logo silhouette (`MenuBarKraki` asset, template). Online solid, going online/offline 60 %, offline 40 %, a red "!" badge when it can't go online (Login Items, errors), an orange dot when a session waits for a permission or an answer. The menu lists those sessions under "Needs You".
+
+A standalone-CLI install (external mode) and a remote-only Mac keep the plain behavior: the CLI owns its daemon, so quitting the app never stops it.
+
+Debug-only checks: `KRAKI_MENUBAR_ICON_PREVIEW=online|offline|starting|attention|problem` forces the icon; `KRAKI_MENUBAR_DUMP_AFTER=<seconds>` logs the menu's items without opening it.
+
 ## Ownership
 
 `~/.kraki` (config, login, device id, sessions) is shared with the standalone CLI. Only one owner may supervise a daemon, otherwise two daemons share one device id and the relay drops messages. The Mac app writes `~/.kraki/managed-by.json` before registering; while it exists the CLI:

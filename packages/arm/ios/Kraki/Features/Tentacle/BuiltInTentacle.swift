@@ -161,12 +161,14 @@ struct BuiltInTentacle {
         return service.status
     }
 
-    /// Unregister the job (launchd stops the daemon) and release ownership.
-    func disable() async throws {
+    /// Unregister the job (launchd stops the daemon). Releases ownership
+    /// unless `keepOwnership`: taking this Mac offline keeps the app in
+    /// charge, so the standalone CLI still won't start a second daemon.
+    func disable(keepOwnership: Bool = false) async throws {
         if service.status != .notRegistered && service.status != .notFound {
             try await service.unregister()
         }
-        clearOwnershipMarker()
+        if !keepOwnership { clearOwnershipMarker() }
     }
 
     /// Restart the daemon in place under the same launchd supervision.

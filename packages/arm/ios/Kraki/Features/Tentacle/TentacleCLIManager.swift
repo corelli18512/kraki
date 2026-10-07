@@ -474,7 +474,8 @@ final class TentacleCLIManager {
         guard case .available(let path, _) = installState else { return }
         daemonState = .stopping
         if mode == .builtIn {
-            do { try await builtIn.disable() } catch { lastError = error.localizedDescription }
+            // Offline, not handed over: the app keeps ownership (see disable).
+            do { try await builtIn.disable(keepOwnership: true) } catch { lastError = error.localizedDescription }
             try? await Task.sleep(nanoseconds: 300_000_000)
             await refreshDaemonState()
             return
@@ -515,7 +516,7 @@ final class TentacleCLIManager {
             try? await Task.sleep(nanoseconds: 500_000_000)
             builtIn.kickstart()
         } catch {
-            daemonState = .error("Could not restart Kraki in the background: \(error.localizedDescription)")
+            daemonState = .error("Couldn't reconnect this Mac: \(error.localizedDescription)")
         }
     }
 
@@ -589,7 +590,7 @@ final class TentacleCLIManager {
                 return
             }
         } catch {
-            daemonState = .error("Could not start Kraki in the background: \(error.localizedDescription)")
+            daemonState = .error("Couldn't bring this Mac online: \(error.localizedDescription)")
             return
         }
         // The worker publishes its PID within a second or two; poll briefly so
@@ -660,20 +661,6 @@ final class TentacleCLIManager {
     }
 
     // MARK: - Menu bar appearance
-
-    /// SF Symbol name to render in the MenuBarExtra label. We use the
-    /// solid circle variants so the dot is visually distinct from the
-    /// regular menu bar icons.
-    var menuBarSymbolName: String {
-        switch daemonState {
-        case .running:  return "circle.fill"
-        case .starting, .stopping: return "circle.dashed"
-        case .stopped:  return "circle"
-        case .needsApproval: return "exclamationmark.circle"
-        case .error:    return "exclamationmark.circle"
-        case .unknown:  return "questionmark.circle"
-        }
-    }
 
     // MARK: - Internals
 

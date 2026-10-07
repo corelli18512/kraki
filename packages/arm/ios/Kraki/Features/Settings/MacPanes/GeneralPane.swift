@@ -6,6 +6,7 @@ import SwiftUI
 
 struct GeneralPane: View {
     @Environment(AppState.self) private var appState
+    @Environment(TentacleCLIManager.self) private var tentacleCLI
     @AppStorage("colorScheme") private var colorScheme: AppColorScheme = .system
     @AppStorage("mac.keepRunningInMenuBar") private var keepRunningInMenuBar: Bool = true
     @State private var loginItem = LoginItemSetting()
@@ -54,11 +55,24 @@ struct GeneralPane: View {
             ArchiveSettingsSection()
 
             Section("Behavior") {
-                Toggle("Keep running in menu bar when window closes", isOn: $keepRunningInMenuBar)
+                if tentacleCLI.managesOnlinePresence {
+                    // Online must stay visible: Kraki keeps its menu bar
+                    // octopus while this Mac runs agents (MacPresence.swift).
+                    LabeledContent("Menu bar") {
+                        Text("Always shown while this Mac is online")
+                            .foregroundStyle(Color.textSecondary)
+                    }
+                    Text("Closing the window or pressing ⌘Q keeps this Mac online. Quit Kraki from the menu bar to take it offline; opening Kraki brings it back online.")
+                        .font(.system(size: 11)).foregroundStyle(Color.textMuted)
+                } else {
+                    Toggle("Keep running in menu bar when window closes", isOn: $keepRunningInMenuBar)
+                }
                 Toggle("Open Kraki at login", isOn: Binding(
                     get: { loginItem.enabled },
                     set: { loginItem.set($0) }))
-                    .help("Adds Kraki to your login items.")
+                    .help(tentacleCLI.managesOnlinePresence
+                          ? "Kraki opens in the menu bar at login so you can see this Mac is online."
+                          : "Adds Kraki to your login items.")
                 if loginItem.needsApproval {
                     HStack(spacing: 6) {
                         Text("Allow Kraki in System Settings › General › Login Items.")
