@@ -6,6 +6,26 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.73</title>
+            <pubDate>Wed, 07 Oct 2026 11:48:11 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.73</sparkle:fullReleaseNotesLink>
+            <sparkle:version>75</sparkle:version>
+            <sparkle:shortVersionString>0.2.73</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* Sync Custom Words across account clients (silent, last write wins) by @corelli18512 in https://github.com/corelli18512/kraki/pull/412
+* release: head 0.20.0, protocol 0.27.0, Mac 0.2.72 (74) by @corelli18512 in https://github.com/corelli18512/kraki/pull/415
+* fix(adapters): subagents work correctly under Kraki (Codex, Copilot, Claude) by @corelli18512 in https://github.com/corelli18512/kraki/pull/424
+* feat: show each subagent's own steps (Claude, Copilot, Codex, pi) on web, iOS and Mac by @corelli18512 in https://github.com/corelli18512/kraki/pull/425
+* release: Tentacle 0.38.0 (protocol 0.28.0), Mac 0.2.73 (75), iOS 0.1.25 — subagent steps by @corelli18512 in https://github.com/corelli18512/kraki/pull/428
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.71...mac-v0.2.73
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.73/Kraki.app.zip" length="92696788" type="application/octet-stream" sparkle:edSignature="EFOcq3t4pH+zsQCVIAO5GEnWte6ugGzIASzshsGH1kzJkn7+bQ9tRRYO5M2A1+L9m73kKDoFJPRAEclHwvoeBw=="/>
+        </item>
+        <item>
             <title>0.2.72</title>
             <pubDate>Wed, 07 Oct 2026 05:44:59 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -40,26 +60,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.71/Kraki.app.zip" length="92536157" type="application/octet-stream" sparkle:edSignature="MQiBBjJOxszqgZndwmFT7Ap+GAYTffbng8m1n0dlt7Oy2PhP0Uq9GB7voD9hIj1rJtd6L828kNAH1YoYUlx8Dw=="/>
         </item>
-        <item>
-            <title>0.2.70</title>
-            <pubDate>Mon, 05 Oct 2026 10:26:54 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.70</sparkle:fullReleaseNotesLink>
-            <sparkle:version>72</sparkle:version>
-            <sparkle:shortVersionString>0.2.70</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* Remote update: update Kraki on a computer from your other devices (step 2) by @corelli18512 in https://github.com/corelli18512/kraki/pull/409
-* Release: Tentacle 0.37.0 (protocol 0.26.0), Mac 0.2.70 — update Kraki on a computer from your other devices by @corelli18512 in https://github.com/corelli18512/kraki/pull/410
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.69...mac-v0.2.70
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.70/Kraki.app.zip" length="92536116" type="application/octet-stream" sparkle:edSignature="Ey3WSWvafwb7QVHHmJ6QyS/awl8pbrTvRIvYGGcmdZhJoe2D2IHst4kxDfGTcTwcn0KoWkUNS8t/6mrkEuXnBw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: RmoEfHp04EET6artcKus+xNh4TLC2dTHJiOPBUQBPiK4KzXNMJI1Q5eSpkxjP65pMalC1qEF0ja3J4kCSZdrAg==
-length: 4417
+edSignature: onb4Ft/Gu9sORG6RU9OFqzrIEZ1aeTylTIz2Rz+UxBPS5eReIMa+Ejh6TuTL3+Pnu2uDfCdXnSSWOaxmfuJfAQ==
+length: 4815
 -->
