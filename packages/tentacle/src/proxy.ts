@@ -7,6 +7,10 @@
  *     Clash/Surge "system proxy" sets), read from `scutil --proxy`. Kraki for
  *     Mac's helper and launchd jobs never see shell variables, so this is the
  *     only way they learn about a proxy.
+ *  3. Windows: the system proxy (Settings → Network → Proxy → manual proxy,
+ *     also what Clash/v2rayN "system proxy" sets), read from the registry
+ *     (HKCU\…\Internet Settings). Most users there never set HTTPS_PROXY.
+ *     A PAC script (automatic setup) is not supported.
  *
  * `applyProcessProxy()` makes fetch()/http(s).request use it (Node's built-in
  * proxy support) and exports the variables to agent child processes.
@@ -23,7 +27,7 @@ export interface ProxySettings {
   https?: string;
   http?: string;
   noProxy: string[];
-  source: 'env' | 'macos-system';
+  source: 'env' | 'macos-system' | 'windows-system';
 }
 
 function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -45,6 +49,45 @@ export function parseScutilProxy(text: string): ProxySettings | null {
   return { https: https ?? httpUrl, http: httpUrl ?? https, noProxy, source: 'macos-system' };
 }
 
+/** One `ProxyOverride` entry → a NO_PROXY rule (`127.*` → `127.0.0.0/8`). */
+function overrideToNoProxy(entry: string): string | null {
+  const e = entry.trim();
+  if (!e || e === '<local>') return null;
+  const ip = e.match(/^(\d+(?:\.\d+){0,3})\.\*$/);
+  if (ip) {
+    const parts = ip[1].split('.');
+    return `${[...parts, ...Array(4 - parts.length).fill('0')].join('.')}/${parts.length * 8}`;
+  }
+  return e;
+}
+
+/** Parse `reg query "HKCU\…\Internet Settings"` output. */
+export function parseWindowsProxy(text: string): ProxySettings | null {
+  const val = (name: string) => text.match(new RegExp(`^\\s*${name}\\s+REG_\\w+\\s+(.*?)\\s*$`, 'mi'))?.[1];
+  const enable = val('ProxyEnable');
+  if (!enable || Number(enable) === 0) return null; // REG_DWORD prints 0x1
+  const server = val('ProxyServer');
+  if (!server) return null;
+  const withScheme = (hp: string) => (/^[a-z]+:\/\//i.test(hp) ? hp : `http://${hp}`);
+  let https: string | undefined; let httpUrl: string | undefined;
+  if (server.includes('=')) {
+    // "http=host:port;https=host:port;socks=host:port"
+    for (const part of server.split(';')) {
+      const [k, v] = part.split('=').map((x) => x.trim());
+      if (!v) continue;
+      if (k.toLowerCase() === 'https') https = withScheme(v);
+      if (k.toLowerCase() === 'http') httpUrl = withScheme(v);
+    }
+  } else {
+    https = httpUrl = withScheme(server.trim());
+  }
+  if (!https && !httpUrl) return null;
+  const override = val('ProxyOverride') ?? '';
+  const noProxy = override.split(';').map(overrideToNoProxy).filter((x): x is string => !!x);
+  if (override.includes('<local>') && !noProxy.includes('localhost')) noProxy.push('localhost');
+  return { https: https ?? httpUrl, http: httpUrl ?? https, noProxy, source: 'windows-system' };
+}
+
 let cached: ProxySettings | null | undefined;
 
 export function detectProxy(env: NodeJS.ProcessEnv = process.env, platform = process.platform): ProxySettings | null {
@@ -53,6 +96,15 @@ export function detectProxy(env: NodeJS.ProcessEnv = process.env, platform = pro
   if (https || httpUrl) {
     const noProxy = (envValue(env, 'NO_PROXY') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
     return { https: https ?? httpUrl, http: httpUrl ?? https, noProxy, source: 'env' };
+  }
+  if (platform === 'win32') {
+    try {
+      const out = execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'],
+        { encoding: 'utf8', timeout: 3000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      return parseWindowsProxy(out);
+    } catch {
+      return null;
+    }
   }
   if (platform !== 'darwin') return null;
   try {
@@ -119,7 +171,7 @@ export function wsProxyOptions(url: string): { agent?: HttpsProxyAgent<string> }
 export function applyProcessProxy(env: NodeJS.ProcessEnv = process.env): ProxySettings | null {
   const settings = proxySettings();
   if (!settings) return null;
-  if (settings.source === 'macos-system') {
+  if (settings.source !== 'env') {
     // Children (Copilot, Claude, Codex, Pi) read these variables.
     if (settings.https) env.HTTPS_PROXY = settings.https;
     if (settings.http) env.HTTP_PROXY = settings.http;
