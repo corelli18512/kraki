@@ -617,12 +617,10 @@ describe('pi outbound images (tool result → attachment store)', () => {
     return { adapter, emit, put };
   }
 
-  it('extracts image blocks from a tool result into the attachment store + broadcasts bytes', async () => {
+  it('extracts image blocks from a tool result into the attachment store', async () => {
     const { adapter, emit, put } = makeAdapterWithStore();
     const onToolComplete = vi.fn();
-    const onAttachmentBytes = vi.fn();
     adapter.onToolComplete = onToolComplete;
-    adapter.onAttachmentBytes = onAttachmentBytes;
 
     await emit({
       type: 'tool_execution_end',
@@ -646,22 +644,17 @@ describe('pi outbound images (tool result → attachment store)', () => {
       success: true,
       attachments: [{ type: 'content_ref', id: 'ref1', mimeType: 'image/png', size: 3 }],
     });
-    expect(onAttachmentBytes).toHaveBeenCalledWith('s1', {
-      refs: [{ type: 'content_ref', id: 'ref1', mimeType: 'image/png', size: 3 }],
-    });
   });
 
-  it.each(['show_report', 'show_html'])('stores %s output as a text/html attachment and broadcasts its bytes', async (tool) => {
+  it.each(['show_report', 'show_html'])('stores %s output as a text/html attachment', async (tool) => {
     const dir = mkdtempSync(join(tmpdir(), 'kraki-show-html-'));
     const htmlPath = join(dir, 'report.html');
     writeFileSync(htmlPath, '<!doctype html><title>Report</title>');
     try {
       const { adapter, emit, put } = makeAdapterWithStore();
       const onToolComplete = vi.fn();
-      const onAttachmentBytes = vi.fn();
-      adapter.onToolComplete = onToolComplete;
-      adapter.onAttachmentBytes = onAttachmentBytes;
-
+        adapter.onToolComplete = onToolComplete;
+  
       await emit({
         type: 'tool_execution_end',
         toolName: tool,
@@ -685,9 +678,6 @@ describe('pi outbound images (tool result → attachment store)', () => {
         toolCallId: 'html-1',
         success: true,
         attachments: [{ type: 'content_ref', id: 'ref1', mimeType: 'text/html', size: 3 }],
-      });
-      expect(onAttachmentBytes).toHaveBeenCalledWith('s1', {
-        refs: [{ type: 'content_ref', id: 'ref1', mimeType: 'text/html', size: 3 }],
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -740,9 +730,7 @@ describe('pi outbound images (tool result → attachment store)', () => {
   it('joins text content blocks (no images) into a clean result string', () => {
     const { adapter, emit, put } = makeAdapterWithStore();
     const onToolComplete = vi.fn();
-    const onAttachmentBytes = vi.fn();
     adapter.onToolComplete = onToolComplete;
-    adapter.onAttachmentBytes = onAttachmentBytes;
 
     emit({
       type: 'tool_execution_end',
@@ -753,7 +741,6 @@ describe('pi outbound images (tool result → attachment store)', () => {
     });
 
     expect(put).not.toHaveBeenCalled();
-    expect(onAttachmentBytes).not.toHaveBeenCalled();
     expect(onToolComplete).toHaveBeenCalledWith('s1', {
       toolName: 'bash', result: 'line1\nline2', toolCallId: 't2', success: true,
     });

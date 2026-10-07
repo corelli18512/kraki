@@ -1926,16 +1926,6 @@ export class ClaudeAdapter extends AgentAdapter {
                 ...(imageAttachments.length > 0 && { attachments: imageAttachments }),
               });
 
-              // Broadcast image bytes to connected devices
-              if (imageAttachments.length > 0) {
-                const refs = imageAttachments.filter(
-                  (a): a is import('@kraki/protocol').ContentRef => a.type === 'content_ref',
-                );
-                if (refs.length > 0) {
-                  this.onAttachmentBytes?.(sessionId, { refs, ...this.lifecycleEvent(entry) });
-                }
-              }
-
               this.pendingToolCalls.get(sessionId)?.delete(toolCallId);
             }
           }

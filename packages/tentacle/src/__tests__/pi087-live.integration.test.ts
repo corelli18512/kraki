@@ -112,7 +112,7 @@ run('Pi 0.87 live RPC compatibility', () => {
     writeFileSync(join(agent, 'settings.json'), JSON.stringify({ defaultProvider: 'audit', defaultModel: 'model-a', compaction: { enabled: true, reserveTokens: 1024, keepRecentTokens: 32 }, retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 }, enableInstallTelemetry: false }));
     adapter = new PiAdapter({ cliPath: cli!, attachmentStore: new AttachmentStore(join(kraki, 'sessions')) });
     callbacks = {};
-    for (const name of ['onMessage', 'onMessageDelta', 'onFinalizeDelta', 'onIdle', 'onError', 'onToolStart', 'onToolComplete', 'onQuestionRequest', 'onPermissionRequest', 'onCompaction', 'onUsageUpdate', 'onAttachmentBytes', 'onSessionEvicted', 'onSystemMessage']) {
+    for (const name of ['onMessage', 'onMessageDelta', 'onFinalizeDelta', 'onIdle', 'onError', 'onToolStart', 'onToolComplete', 'onQuestionRequest', 'onPermissionRequest', 'onCompaction', 'onUsageUpdate', 'onSessionEvicted', 'onSystemMessage']) {
       const cb = vi.fn<Callback>((...args) => { timeline.push({ type: name, args }); });
       callbacks[name] = cb; (adapter as unknown as Record<string, Callback>)[name] = cb;
     }
@@ -238,7 +238,6 @@ run('Pi 0.87 live RPC compatibility', () => {
     const completed = callbacks.onToolComplete.mock.calls.map(c => c[1]);
     expect(completed.find(c => c.toolName === 'show_image').attachments[0].mimeType).toBe('image/png');
     expect(completed.find(c => c.toolName === 'show_report').attachments[0].mimeType).toBe('text/html');
-    expect(callbacks.onAttachmentBytes).toHaveBeenCalledTimes(2);
   });
 
   it.each(['show_image', 'show_report'])('marks a failed %s as an error rather than a successful artifact', async tool => {
@@ -246,7 +245,6 @@ run('Pi 0.87 live RPC compatibility', () => {
     await turn();
     expect(toolResult(tool).isError).toBe(true);
     expect(callbacks.onToolComplete.mock.calls.find(c => c[1].toolName === tool)?.[1].success).toBe(false);
-    expect(callbacks.onAttachmentBytes).not.toHaveBeenCalled();
   });
 
   it('relays an ends-on-tool turn as steps without injecting a finalize request', async () => {

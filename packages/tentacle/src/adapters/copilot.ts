@@ -1831,17 +1831,6 @@ export class CopilotAdapter extends AgentAdapter {
         ...(parentToolCallId && { parentToolCallId }),
         ...(subagent && { subagent }),
       });
-
-      // After tool_complete, fire the bytes broadcast event so RelayClient
-      // can stream attachment_data chunks to all connected devices.
-      if (attachments && attachments.length > 0) {
-        const refs = attachments.filter(
-          (a): a is import('@kraki/protocol').ContentRef => a.type === 'content_ref',
-        );
-        if (refs.length > 0) {
-          this.onAttachmentBytes?.(sessionId, { refs, ...this.lifecycleEvent(sessionId) });
-        }
-      }
     });
 
     session.on('session.idle', () => {

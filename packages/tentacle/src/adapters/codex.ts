@@ -1260,7 +1260,6 @@ export class CodexAdapter extends AgentAdapter {
           ...(refs.length > 0 && { attachments: refs }),
           ...this.turnEvent(s),
         });
-        if (refs.length > 0) this.onAttachmentBytes?.(s.sessionId, { refs, ...this.turnEvent(s) });
         return rpc.respond(req.id, { contentItems: [{ type: 'inputText', text: text || 'Done.' }], success: !result.isError });
       }
 

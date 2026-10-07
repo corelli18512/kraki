@@ -490,7 +490,6 @@ export class MultiAgentAdapter extends AgentAdapter {
     adapter.onQuestionRequest = (sid, e) => this.onQuestionRequest?.(sid, e);
     adapter.onToolStart = (sid, e) => this.onToolStart?.(sid, e);
     adapter.onToolComplete = (sid, e) => this.onToolComplete?.(sid, e);
-    adapter.onAttachmentBytes = (sid, e) => this.onAttachmentBytes?.(sid, e);
     adapter.onIdle = (sid, e) => this.onIdle?.(sid, e);
     adapter.onFlushComplete = (sid) => this.onFlushComplete?.(sid);
     adapter.onError = (sid, e) => this.onError?.(sid, e);

@@ -2536,13 +2536,6 @@ export class RelayClient {
       });
     };
 
-    // Bytes remain in AttachmentStore until an Arm actually renders the
-    // ContentRef. Broadcasting large results to every Arm blocked unrelated
-    // control and live messages in Pulse's ordered stream.
-    this.adapter.onAttachmentBytes = (sessionId, event) => {
-      if (!this.acceptsAdapterEvent(sessionId, event.turnId)) return;
-    };
-
     this.adapter.onIdle = (sessionId, event) => {
       if (!this.acceptsAdapterTurn(sessionId, event?.turnId)) return;
       if (this.steerAcceptanceInFlight.has(sessionId)) {

@@ -25,7 +25,6 @@ describe('MultiAgentAdapter.wireCallbacks forwards sub-adapter callbacks', () =>
       onQuestionRequest: null,
       onToolStart: null,
       onToolComplete: null,
-      onAttachmentBytes: null,
       onIdle: null,
       onFlushComplete: null,
       onError: null,
