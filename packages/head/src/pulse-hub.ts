@@ -674,7 +674,16 @@ export class PulseHub {
     const row = this.db
       .prepare('SELECT snapshot FROM pulse_meta WHERE device = ? AND stream = ?')
       .get(device, stream) as { snapshot: string } | undefined;
-    return row ? (JSON.parse(row.snapshot) as Snapshot) : undefined;
+    if (!row) return undefined;
+    try {
+      return JSON.parse(row.snapshot) as Snapshot;
+    } catch (err) {
+      // One corrupt row must not crash-loop the relay on boot: drop it. The
+      // device resumes with a fresh endpoint (RESET tells the peer).
+      getLogger().error('pulse-hub dropped unreadable snapshot', { device, stream, error: (err as Error).message });
+      this.db.prepare('DELETE FROM pulse_meta WHERE device = ? AND stream = ?').run(device, stream);
+      return undefined;
+    }
   }
 
   /** On head boot, rebuild endpoints from persisted snapshots so durable

@@ -64,11 +64,17 @@ describe('Storage', () => {
     });
 
     it('should update device on upsert', () => {
-      storage.upsertDevice('dev_1', 'user1', 'Old Name', 'tentacle');
+      storage.upsertDevice('dev_1', 'user1', 'Old Name', 'app');
       const dev = storage.upsertDevice('dev_1', 'user1', 'New Name', 'app', 'web');
       expect(dev.name).toBe('New Name');
       expect(dev.role).toBe('app');
       expect(dev.kind).toBe('web');
+    });
+
+    it('refuses to change a device role on upsert', () => {
+      storage.upsertDevice('dev_1', 'user1', 'Laptop', 'tentacle');
+      expect(() => storage.upsertDevice('dev_1', 'user1', 'Laptop', 'app')).toThrow(/registered as tentacle/);
+      expect(storage.getDevice('dev_1')?.role).toBe('tentacle');
     });
 
     it('should store public key', () => {
