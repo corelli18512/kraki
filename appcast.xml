@@ -6,6 +6,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.74</title>
+            <pubDate>Wed, 07 Oct 2026 14:05:13 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.74</sparkle:fullReleaseNotesLink>
+            <sparkle:version>76</sparkle:version>
+            <sparkle:shortVersionString>0.2.74</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* feat: in-app account deletion (App Store 5.1.1(v)) by @corelli18512 in https://github.com/corelli18512/kraki/pull/421
+* chore: remove dead code; keep test-only Mac code out of Release by @corelli18512 in https://github.com/corelli18512/kraki/pull/422
+* Fix Release builds (Mac/iOS): NativeTestRuntime used outside #if DEBUG by @corelli18512 in https://github.com/corelli18512/kraki/pull/434
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.38.1...mac-v0.2.74
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.74/Kraki.app.zip" length="92736414" type="application/octet-stream" sparkle:edSignature="1XucUC27jUS5Ttse7oJmwa5xT0onu8HmaS82P985eb8rhfMJKdfnnCtnKgprTA7i+Y1LRRUwMRMsNSC0q2bSCQ=="/>
+        </item>
+        <item>
             <title>0.2.73</title>
             <pubDate>Wed, 07 Oct 2026 11:48:11 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -42,27 +60,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.72/Kraki.app.zip" length="92609434" type="application/octet-stream" sparkle:edSignature="Lcxw1KBN6GL0E3mu7AJMzh7htEfulO4QOrGPr/nb6oVu/MiN/SMT0H6wyqAZEXFRnkRBNIqpDUftHRfm/NB3Ag=="/>
         </item>
-        <item>
-            <title>0.2.71</title>
-            <pubDate>Mon, 05 Oct 2026 23:56:39 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.71</sparkle:fullReleaseNotesLink>
-            <sparkle:version>73</sparkle:version>
-            <sparkle:shortVersionString>0.2.71</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* Remote update: update Kraki on a computer from your other devices (step 2) by @corelli18512 in https://github.com/corelli18512/kraki/pull/409
-* Release: Tentacle 0.37.0 (protocol 0.26.0), Mac 0.2.70 — update Kraki on a computer from your other devices by @corelli18512 in https://github.com/corelli18512/kraki/pull/410
-* fix(mac): composer follows the default computer until the user picks one; Mac 0.2.71 by @corelli18512 in https://github.com/corelli18512/kraki/pull/411
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.69...mac-v0.2.71
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.71/Kraki.app.zip" length="92536157" type="application/octet-stream" sparkle:edSignature="MQiBBjJOxszqgZndwmFT7Ap+GAYTffbng8m1n0dlt7Oy2PhP0Uq9GB7voD9hIj1rJtd6L828kNAH1YoYUlx8Dw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: onb4Ft/Gu9sORG6RU9OFqzrIEZ1aeTylTIz2Rz+UxBPS5eReIMa+Ejh6TuTL3+Pnu2uDfCdXnSSWOaxmfuJfAQ==
-length: 4815
+edSignature: q6GYJcKR9lhm/ZHNSL2Qp4ZQBa6g3kCHyaiSto4ZXzjkNabH2qg0NLTd51fOfIqr/7QlPbgw9JfLl4y/7fEsAw==
+length: 4727
 -->
