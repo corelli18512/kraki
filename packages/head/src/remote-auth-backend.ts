@@ -32,8 +32,11 @@ export class RemoteAuthBackend implements AuthBackend {
     auth: AuthMethod,
     device: DeviceInfo,
     headRegion?: string,
+    clientIp?: string,
   ): Promise<AuthOutcome> {
-    return this.post('/api/auth', { auth, device, headRegion });
+    // The account service throttles failed logins per client IP; forward the
+    // end user's address, not this edge's.
+    return this.post('/api/auth', { auth, device, headRegion, ...(clientIp && { clientIp }) });
   }
 
   async startChallenge(
