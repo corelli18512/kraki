@@ -1490,9 +1490,6 @@ export class ClaudeAdapter extends AgentAdapter {
     this.onCompaction?.(sessionId, { ...event, ...this.lifecycleEvent(entry) });
   }
 
-  /**
-   * Route a single SDKMessage to the appropriate adapter callback.
-   */
   private stopAwaitingSubagents(entry: SessionEntry): void {
     entry.awaitingSubagents = false;
     if (entry.subagentSettleTimer) clearTimeout(entry.subagentSettleTimer);
@@ -1545,6 +1542,9 @@ export class ClaudeAdapter extends AgentAdapter {
 
   static SUBAGENT_CONTINUATION_GRACE_MS = 5_000;
 
+  /**
+   * Route a single SDKMessage to the appropriate adapter callback.
+   */
   private handleSDKMessage(sessionId: string, msg: SDKMessage): void {
     // Held-open turn: any parent activity means Claude Code started the
     // continuation turn, which now runs (and settles) like a normal turn.
