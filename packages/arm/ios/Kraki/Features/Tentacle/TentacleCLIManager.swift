@@ -90,6 +90,7 @@ final class TentacleCLIManager {
     @ObservationIgnored private var launchdDomainStuck = false
     @ObservationIgnored private var reRegisteredThisLaunch = false
     @ObservationIgnored private var checkedLegacyHelperPath = false
+    @ObservationIgnored private var registeredHelperThisLaunch = false
 
     var isBuiltInAvailable: Bool { builtIn.isAvailable }
 
@@ -169,6 +170,11 @@ final class TentacleCLIManager {
         )
         switch mode {
         case .builtIn:
+            // Before the version-lock restart below can relaunch the daemon:
+            // local network privacy needs the helper known to Launch Services.
+            if !registeredHelperThisLaunch, builtIn.isAvailable {
+                registeredHelperThisLaunch = builtIn.registerHelperWithLaunchServices()
+            }
             installState = .available(path: builtIn.binaryPath, version: builtIn.version)
         case .external:
             if let external {

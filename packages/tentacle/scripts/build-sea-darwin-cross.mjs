@@ -17,6 +17,7 @@ import { chmodSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setMachOUuid } from './macho-uuid.mjs';
 
 if (process.platform !== 'darwin') {
   console.error('build-sea-darwin-cross only runs on macOS');
@@ -57,6 +58,10 @@ try {
     '--sentinel-fuse', SENTINEL_FUSE,
     '--macho-segment-name', 'NODE_SEA',
   ], { stdio: 'inherit' });
+  // Same as build-local-binary: the CLI gets its own UUID, not Node's.
+  for (const { arch, from, to } of setMachOUuid(outputPath, 'chat.kraki.cli')) {
+    console.log(`🆔 ${arch} LC_UUID ${from} -> ${to}`);
+  }
   execFileSync('codesign', ['--sign', '-', '--force', outputPath], { stdio: 'inherit' });
   chmodSync(outputPath, 0o755);
   console.log(`✅ ${outputPath} (${execFileSync('lipo', ['-archs', outputPath], { encoding: 'utf8' }).trim()})`);

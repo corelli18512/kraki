@@ -63,6 +63,14 @@ else
 fi
 chmod 755 "$APP/Contents/MacOS/kraki"
 
+# Own Mach-O build UUID, distinct from the CLI's (chat.kraki.cli) and from
+# Node's. launchd executes this helper directly, so macOS local network
+# privacy identifies it by its executable UUID; a shared UUID attributes it to
+# the CLI and the helper's agents never get local network access. Seeded by
+# the bundle id, so it stays the same across releases and grants survive
+# updates. Must run before signing.
+node "$ROOT/packages/tentacle/scripts/macho-uuid.mjs" set "$APP/Contents/MacOS/kraki" chat.kraki.mac.tentacle
+
 # The Mac app's own icon (same PNGs as its asset catalog), so prompts show
 # the familiar Kraki icon.
 ICON_SRC="$ROOT/packages/arm/ios/Kraki/Resources/Assets.xcassets/AppIcon.appiconset"
@@ -117,5 +125,6 @@ ENT="$ROOT/packages/tentacle/entitlements.plist"
 codesign --force --options runtime ${TS[@]+"${TS[@]}"} --entitlements "$ENT" --sign "$IDENTITY" "$APP/Contents/MacOS/kraki"
 codesign --force --options runtime ${TS[@]+"${TS[@]}"} --entitlements "$ENT" --sign "$IDENTITY" "$APP"
 codesign --verify --strict --verbose=2 "$APP"
+node "$ROOT/packages/tentacle/scripts/macho-uuid.mjs" check "$APP/Contents/MacOS/kraki" chat.kraki.mac.tentacle
 lipo -archs "$APP/Contents/MacOS/kraki"
 echo "Built $APP (tentacle $VERSION)"

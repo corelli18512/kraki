@@ -27,6 +27,7 @@
 
 #if os(macOS)
 import AppKit
+import CoreServices
 import Foundation
 import ServiceManagement
 
@@ -154,11 +155,31 @@ struct BuiltInTentacle {
     /// in Login Items and must re-enable it there.
     func enable() throws -> SMAppService.Status {
         try writeOwnershipMarker()
+        registerHelperWithLaunchServices()
         let service = service
         if service.status != .enabled {
             try service.register()
         }
         return service.status
+    }
+
+    /// Register the helper bundle with Launch Services.
+    ///
+    /// launchd executes the helper's binary directly, so the daemon has no
+    /// Launch Services identity of its own. macOS local network privacy then
+    /// identifies it by its executable UUID, and with the helper unknown to
+    /// Launch Services that lookup misses: the user's "Allow" only takes
+    /// effect after a second prompt or a reboot. Registered, the first Allow
+    /// applies at once (verified on clean macOS VMs). Cheap and idempotent;
+    /// done on every launch because app updates replace the bundle. Only from
+    /// a stable install location, never a translocated or disk-image path.
+    @discardableResult
+    func registerHelperWithLaunchServices() -> Bool {
+        guard AppInstallLocation.classify(bundlePath: appBundle.bundlePath) == .stable,
+              FileManager.default.fileExists(atPath: helperURL.path) else { return false }
+        let status = LSRegisterURL(helperURL as CFURL, true)
+        if status != noErr { KLog.diag("[Tentacle] LSRegisterURL(helper) failed: \(status)") }
+        return status == noErr
     }
 
     /// Unregister the job (launchd stops the daemon). Releases ownership
