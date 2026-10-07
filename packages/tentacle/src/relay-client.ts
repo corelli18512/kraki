@@ -147,6 +147,25 @@ export function coalesceKeyFor(msg: Partial<ProducerMessage>): string | undefine
   return undefined;
 }
 
+/**
+ * Whether to follow a relay's `wrong_region` redirect. From an official
+ * relay only to another official one (`wss://kraki.chat` or a subdomain); a
+ * self-hosted relay may send its users elsewhere, but only over TLS (plain
+ * `ws://` only to this machine). The computer authenticates at the redirect
+ * target, so a hostile redirect would hand its connection to anyone.
+ */
+export function isAcceptableRegionRedirect(current: string, redirect: string): boolean {
+  let to: URL;
+  let from: URL | null = null;
+  try { to = new URL(redirect); } catch { return false; }
+  try { from = new URL(current); } catch { /* unknown current relay */ }
+  const official = (u: URL) => u.hostname === 'kraki.chat' || u.hostname.endsWith('.kraki.chat');
+  const loopback = (u: URL) => ['localhost', '127.0.0.1', '[::1]', '::1'].includes(u.hostname);
+  if (to.protocol !== 'wss:' && !(to.protocol === 'ws:' && loopback(to))) return false;
+  if (from && official(from)) return to.protocol === 'wss:' && official(to);
+  return true;
+}
+
 export class RelayClient {
   private ws: WebSocket | null = null;
   private adapter: AgentAdapter;
@@ -540,6 +559,7 @@ export class RelayClient {
     }
     if (this.soleOpenQuestion(sessionId) && !terminalError) return;
     this.settledAdapterTurnIds.set(sessionId, idleTurnId);
+    this.errorPersistedForTurn.delete(sessionId);
     if (turnId) {
       this.sessionManager.markInputLedgerSettled(sessionId, turnId);
       traceLog.info({
@@ -658,6 +678,8 @@ export class RelayClient {
   /** Idle-sleep assertion while any turn runs (see sleep-guard.ts). */
   private readonly sleepGuard = new SleepGuard();
 
+  /** Turn whose first adapter error was already persisted, per session. */
+  private errorPersistedForTurn = new Map<string, string>();
   private card = new CardManager((msg) => this.send(msg as Partial<ProducerMessage>));
 
   /** Sessions whose agent runtime is currently compacting context. The reason
@@ -1001,6 +1023,7 @@ export class RelayClient {
    *  `lastArgs*` maps would leak entries for any tool call that didn't
    *  receive a matching `tool_complete` before the session went away. */
   private purgeSessionToolState(sessionId: string): void {
+    this.errorPersistedForTurn.delete(sessionId);
     this.clearOpenQuestions(sessionId);
     this.turnStepCounts.delete(sessionId);
     const inflight = this.sessionToolCallIds.get(sessionId);
@@ -1210,6 +1233,12 @@ export class RelayClient {
         return;
       }
       if (authError.code === 'wrong_region' && authError.redirect) {
+        if (!isAcceptableRegionRedirect(this.options.relayUrl, authError.redirect)) {
+          logger.warn({ to: authError.redirect }, 'Ignoring region redirect to an untrusted relay');
+          this.onFatalError?.('The relay redirected to an untrusted address');
+          this.disconnect();
+          return;
+        }
         logger.info({ to: authError.redirect }, 'Relay requested reconnect to assigned region');
         this.options.relayUrl = authError.redirect;
         this.ws?.close();
@@ -2197,26 +2226,9 @@ export class RelayClient {
         });
       }
 
-      // Send backfilled history as replay batch
-      if (spineRows.length > 0) {
-        const replayMessages = this.sessionManager.getMessagesAfterSeq(krakiSessionId, 0, 500);
-        const asProducerMessages = replayMessages.map(m => {
-          try {
-            return { ...JSON.parse(m.payload), seq: m.seq } as unknown as import('@kraki/protocol').ProducerMessage;
-          } catch { return null; }
-        }).filter((m): m is import('@kraki/protocol').ProducerMessage => m !== null);
-
-        this.send({
-          type: 'session_replay_batch',
-          sessionId: krakiSessionId,
-          payload: {
-            sessionId: krakiSessionId,
-            messages: asProducerMessages,
-            lastSeq,
-            totalLastSeq: lastSeq,
-          },
-        });
-      }
+      // No history broadcast: apps fetch it with request_session_messages
+      // when they open the session (the old session_replay_batch pushed up
+      // to 500 messages to every app).
 
       // Notify user if adapter failed — session is browsable but not interactive
       if (adapterFailed) {
@@ -2593,8 +2605,14 @@ export class RelayClient {
       this.recordTrace({
         type: 'error',
         sessionId,
-        payload: { message: selected.message },
+        payload: { message: candidate.message },
       });
+      // `error` rows are permanent history. A turn that retries can report
+      // many errors (and may still recover), so persist only the first one per
+      // turn; the rest go to the Steps trace, and a turn that does fail shows
+      // the best message on its failed card at idle.
+      if (this.errorPersistedForTurn.get(sessionId) === activeTurnId) return;
+      this.errorPersistedForTurn.set(sessionId, activeTurnId);
       this.send({
         type: 'error',
         sessionId,
@@ -3271,6 +3289,7 @@ export class RelayClient {
    *  the session's `trace.jsonl` without broadcasting it live — the live view
    *  is served by the status card; this is only for the lazy "Steps" history. */
   private recordTrace(msg: { type: string; sessionId: string; payload: unknown }): void {
+    this.sleepGuard.touch(msg.sessionId);
     // Per-turn step counter (chip-producing entries only — tool_complete merges
     // into its matching tool_start chip, so don't count it). The concluding
     // agent_message / system_message stamps this running total as payload.steps
@@ -3619,6 +3638,7 @@ export class RelayClient {
 
     // Keep the machine awake while any session's turn is running.
     if (sessionId) {
+      this.sleepGuard.touch(sessionId);
       if (type === 'active') this.sleepGuard.hold(sessionId);
       else if (type === 'idle' || type === 'session_ended' || type === 'session_deleted') this.sleepGuard.release(sessionId);
     }

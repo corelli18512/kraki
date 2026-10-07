@@ -1149,15 +1149,6 @@ final class CommandSender {
 
     // MARK: - Replay
 
-    /// Deprecated: legacy message-count pagination. Kept only for
-    /// backwards compatibility while the new endpoint stabilises.
-    /// New code should call `requestSessionMessages` instead.
-    func requestReplay(sessionId: String, afterSeq: Int, limit: Int? = nil) {
-        var payload: [String: Any] = ["sessionId": sessionId, "afterSeq": afterSeq]
-        if let limit { payload["limit"] = limit }
-        send(["type": "request_session_replay", "payload": payload], sessionId: sessionId)
-    }
-
     /// Ask the tentacle for turn-aligned messages.
     ///
     /// - `beforeSeq == nil` → tentacle anchors at the latest turn and

@@ -232,6 +232,13 @@ final class PushManager: NSObject {
     func handleSignOut() {
         if let appState, appState.connectionStatus == .connected {
             sendControl(["type": "unregister_push_token", "payload": ["provider": "apns"]])
+        } else if deviceToken != nil {
+            // Offline: the relay can't be told, and a retry after the next
+            // sign-in would belong to the new identity. Retire the APNs token
+            // instead; pushes for the old account then fail at Apple and the
+            // relay drops the token. The next sign-in registers a fresh one.
+            UIApplication.shared.unregisterForRemoteNotifications()
+            KLog.d("📭 Signed out offline — unregistered from APNs")
         }
         deviceToken = nil
         registered = false
@@ -385,8 +392,11 @@ final class PushManager: NSObject {
         #if DEBUG
         return "sandbox"
         #else
-        guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
-              let data = try? Data(contentsOf: url),
+        guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision") else {
+            // App Store / TestFlight builds have no embedded profile.
+            return "production"
+        }
+        guard let data = try? Data(contentsOf: url),
               let plistRange = Self.extractPlistRange(in: data),
               let plist = try? PropertyListSerialization.propertyList(
                   from: data.subdata(in: plistRange),
@@ -395,8 +405,9 @@ final class PushManager: NSObject {
               ) as? [String: Any],
               let entitlements = plist["Entitlements"] as? [String: Any],
               let env = entitlements["aps-environment"] as? String else {
-            // Expected for App Store / TestFlight builds (no embedded profile).
-            KLog.d("ℹ️ APNs environment not found in a provisioning profile; using production")
+            // A profile exists (ad-hoc / development build) but could not be
+            // read: production is a guess that may be the wrong gateway.
+            KLog.diag("⚠️ APNs: embedded.mobileprovision unreadable; assuming production (pushes fail if this is a development build)")
             return "production"
         }
         // Normalize Apple's entitlement value to the relay's expected endpoint name.

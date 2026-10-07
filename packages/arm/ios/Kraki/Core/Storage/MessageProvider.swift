@@ -156,6 +156,13 @@ final class MessageProvider {
     /// pre-fix builds. Purge anything above the tentacle's lastSeq so
     /// `requestLatest`'s `storeLastSeq >= tentacleLastSeq` guard
     /// doesn't short-circuit and silently swallow the gap.
+    ///
+    /// Safe against races: `session_list`, subscription ACKs and every
+    /// spine message travel on the same ordered Pulse stream (stream 0;
+    /// only history/trace/attachment batches use the bulk stream), so a
+    /// row newer than the reported lastSeq cannot already be here unless
+    /// the tentacle really lost it (e.g. restored from a backup). The
+    /// tentacle is the authority for its own history.
     func setTentacleInfo(sessionId: String, lastSeq: Int, deviceId: String) {
         if let appState, lastSeq > 0 {
             let storeLastSeq = appState.messageStore.dbLastSeq(sessionId)
@@ -1071,6 +1078,12 @@ final class MessageProvider {
             guard !cached, Date().timeIntervalSince(requestedAt) > 10 else { return }
         }
         guard appState?.sessionStore.sessions[sessionId]?.deviceId != nil else { return }
+        // Only a recent request dedupes; forget old ones so a long-lived
+        // process doesn't keep one entry per turn ever opened.
+        if tracePulled.count > 500 {
+            let cutoff = Date().addingTimeInterval(-60)
+            tracePulled = tracePulled.filter { $0.value > cutoff }
+        }
         tracePulled[key] = Date()
         appState?.commandSender?.requestTurnTrace(sessionId: sessionId, bubbleSeq: bubbleSeq)
     }
