@@ -2740,6 +2740,12 @@ export class RelayClient {
    * the conversation would just stop after the user's message. Record the
    * turn as failed so every app shows why. A session waiting on an agent
    * question is left alone — its answer can still resume it.
+   *
+   * The failure must be followed by an `idle`, exactly like a turn settled by
+   * the adapter. `idle` is the turn boundary on the spine (`idleSeqs`, client
+   * projection): without it the user's next prompt and its reply are joined
+   * to this failed turn, and clients fold that reply into the failure row so
+   * it disappears from the chat.
    */
   private closeTurnLostInRestart(sessionId: string): void {
     const lastSeq = this.sessionManager.getMeta(sessionId)?.lastSeq ?? 0;
@@ -2754,6 +2760,9 @@ export class RelayClient {
         failedAt: new Date().toISOString(),
       },
     });
+    // No push: the failure row already marks the session unread, and a daemon
+    // restart must not fan out one notification per interrupted session.
+    this.sendTurnIdle(sessionId, { reason: 'failed' }, null);
   }
 
   /**

@@ -51,12 +51,26 @@ enum TurnSpineProjection {
 
         for message in messages {
             if traceTypes.contains(message.type) { continue }
+            // A terminal status ends its turn even without a closing `idle`
+            // (history written by a daemon that recorded a restart-lost turn
+            // without one). A new prompt after it starts a new turn; otherwise
+            // its reply is folded into the old failure row and disappears.
+            if startsNewPrompt(message), segment.contains(where: isTerminal) { flushSegment() }
             segment.append(message)
             if message.type == "idle" { flushSegment() }
         }
         flushSegment()
 
         return keepOnlyFinalConclusionPerLogicalLifecycle(projected)
+    }
+
+    private static func isTerminal(_ message: ChatMessage) -> Bool {
+        message.type == "turn_status" || message.type == "interrupted_turn"
+    }
+
+    private static func startsNewPrompt(_ message: ChatMessage) -> Bool {
+        (message.type == "user_message" || message.type == "send_input")
+            && message.payload["delivery"]?.stringValue != "steer"
     }
 
     private static func normalizedTerminal(

@@ -96,6 +96,19 @@ describe('turn projection', () => {
     expect((rows[1].message as { payload: { attachments: unknown[] } }).payload.attachments).toEqual([ref]);
   });
 
+  it('a reply after a restart-lost failure without idle is not folded into the failure', () => {
+    const failed = m('turn_status', 3, {
+      draft: '', action: { type: 'failed', payload: { message: 'Kraki restarted on this computer while this turn was running.', code: 'process_lost' } },
+    });
+    const rows = spineRows([
+      m('user_message', 1, { content: 'go' }), m('agent_message', 2, { content: 'checking' }), failed,
+      m('user_message', 4, { content: 'continue' }), m('agent_message', 5, { content: 'merged' }), m('idle', 6),
+      m('user_message', 7, { content: 'status?' }), m('agent_message', 8, { content: 'not released' }), m('idle', 9),
+    ], [], true);
+    expect(rows.map((r) => seqOf(r.message))).toEqual([1, 3, 4, 5, 7, 8]);
+    expect(frozenCardOf(rows[1])?.text).toBe('checking');
+  });
+
   it('draft-less legacy interrupted turn without a reply renders nothing', () => {
     const rows = spineRows([m('user_message', 1, { content: 'go' }), m('interrupted_turn', 2, { reason: 'user_aborted' }), m('idle', 3)], [], true);
     expect(rows.map((r) => seqOf(r.message))).toEqual([1]);

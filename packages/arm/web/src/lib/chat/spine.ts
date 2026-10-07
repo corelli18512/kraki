@@ -239,6 +239,14 @@ function keepOnlyFinalConclusionPerLogicalLifecycle(items: SpineItem[]): SpineIt
   });
 }
 
+function isTerminal(message: ChatMessage): boolean {
+  return message.type === 'turn_status' || message.type === 'interrupted_turn';
+}
+
+function startsNewPrompt(message: ChatMessage): boolean {
+  return (message.type === 'user_message' || message.type === 'send_input') && !isSteer(message);
+}
+
 /** Project durable records into the bubbles a turn shows (iOS
  *  `TurnSpineProjection.project`). */
 export function projectTurns(items: SpineItem[]): SpineItem[] {
@@ -279,6 +287,11 @@ export function projectTurns(items: SpineItem[]): SpineItem[] {
 
   for (const item of items) {
     if (TRACE_TYPES.has(item.message.type)) continue;
+    // A terminal status ends its turn even without a closing `idle` (history
+    // written by a daemon that recorded a restart-lost turn without one). A
+    // new prompt after it starts a new turn; otherwise its reply would be
+    // folded into the old failure row and disappear.
+    if (startsNewPrompt(item.message) && segment.some(({ message }) => isTerminal(message))) flush();
     segment.push(item);
     if (item.message.type === 'idle') flush();
   }
