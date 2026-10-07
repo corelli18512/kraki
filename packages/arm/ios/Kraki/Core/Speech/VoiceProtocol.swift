@@ -10,19 +10,35 @@ struct VoiceCapability: Codable, Equatable, Sendable {
         self.resource = resource
     }
 
+    /// From the relay's `auth_ok.voice`. A broker the app would not send
+    /// microphone audio to (see `validatedBrokerURL`) means no voice input.
     init?(json: [String: Any]) {
         guard let brokerUrl = json["brokerUrl"] as? String,
               let resource = json["resource"] as? String else { return nil }
         self.init(brokerUrl: brokerUrl, resource: resource)
+        guard (try? validatedBrokerURL()) != nil else {
+            KLog.diag("Voice broker rejected: \(URL(string: brokerUrl)?.host ?? "invalid URL")")
+            return nil
+        }
     }
 
+    /// Microphone audio only goes to Kraki's own speech service over TLS:
+    /// `wss://` on kraki.chat or a subdomain. Debug builds also accept a
+    /// local broker (ws or wss on localhost / 127.0.0.1).
     func validatedBrokerURL() throws -> URL {
-        guard let url = URL(string: brokerUrl),
-              url.scheme == "wss" || url.scheme == "ws",
-              url.host != nil else {
+        guard let url = URL(string: brokerUrl), let host = url.host?.lowercased() else {
             throw VoiceInputError.invalidBrokerURL
         }
-        return url
+        if url.scheme == "wss", host == "kraki.chat" || host.hasSuffix(".kraki.chat") {
+            return url
+        }
+        #if DEBUG
+        if url.scheme == "wss" || url.scheme == "ws",
+           host == "localhost" || host == "127.0.0.1" || host == "::1" || host.hasSuffix(".invalid") {
+            return url
+        }
+        #endif
+        throw VoiceInputError.invalidBrokerURL
     }
 }
 
@@ -193,7 +209,7 @@ enum VoiceSessionContextBuilder {
             terms.append(value)
         }
 
-        add(session.displayTitle)
+        if !VoiceContextTermFilter.isSensitive(session.displayTitle) { add(session.displayTitle) }
         add(session.agent)
         if let model = session.model { add(model) }
 
@@ -213,7 +229,7 @@ enum VoiceSessionContextBuilder {
                 let isDistinctive = token.contains(where: { $0.isUppercase })
                     || token.contains("_") || token.contains("/")
                     || token.contains("-") || token.contains(".")
-                if isDistinctive { add(token) }
+                if isDistinctive, !VoiceContextTermFilter.isSensitive(token) { add(token) }
                 if terms.count >= 32 { stop.pointee = true }
             }
         }
@@ -224,7 +240,7 @@ enum VoiceSessionContextBuilder {
             "inputMethod": .string("dictation"),
             "locale": .string(Locale.current.identifier),
             "session": .object([
-                "title": .string(session.displayTitle),
+                "title": .string(VoiceContextTermFilter.isSensitive(session.displayTitle) ? "" : session.displayTitle),
                 "agent": .string(session.agent),
                 "model": session.model.map(VoiceInputJSONValue.string) ?? .null,
                 "mode": .string(session.mode.rawValue),
@@ -237,5 +253,47 @@ enum VoiceSessionContextBuilder {
                 !userVocabulary.contains { $0.lowercased().hasPrefix(term.lowercased()) }
             }
         )
+    }
+}
+
+/// Terms scraped from the conversation must help spelling, never leak
+/// secrets: drop anything shaped like a credential, a URL or path, an
+/// e-mail address, or a long high-entropy identifier (keys, hashes, ids).
+enum VoiceContextTermFilter {
+    /// Case-sensitive prefixes of well-known credential formats.
+    private static let secretPrefixes = [
+        "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "glpat-", "sk-", "sk_live_", "sk_test_", "rk_live_",
+        "pk_live_", "xoxa-", "xoxb-", "xoxp-", "xoxr-", "xoxs-", "xapp-", "AIza", "ya29.", "npm_", "hf_",
+        "eyJ", "dop_v1_", "shpat_", "-----BEGIN",
+    ]
+
+    static func isSensitive(_ raw: String) -> Bool {
+        let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if secretPrefixes.contains(where: { token.hasPrefix($0) }) { return true }
+        // AWS access key ids.
+        if token.count == 20, token.hasPrefix("AKIA") || token.hasPrefix("ASIA"),
+           token.allSatisfy({ $0.isUppercase || $0.isNumber }) { return true }
+        // URLs, host:port, user@host, file paths.
+        if token.contains("://") || token.contains("@") || token.contains("/") || token.contains("\\") { return true }
+        if token.contains(":"), token.split(separator: ":").last.map({ $0.allSatisfy(\.isNumber) }) == true { return true }
+        // Long hex (hashes, ids) and long mixed letter+digit strings with
+        // high entropy (API keys, tokens).
+        let hexDigits = token.filter(\.isHexDigit)
+        if token.count >= 12, hexDigits.count == token.count, token.contains(where: \.isNumber) { return true }
+        let digits = token.filter(\.isNumber).count
+        if token.count >= 16, digits >= 3, entropy(token) >= 3.5 { return true }
+        return false
+    }
+
+    /// Shannon entropy in bits per character.
+    static func entropy(_ s: String) -> Double {
+        guard !s.isEmpty else { return 0 }
+        var counts: [Character: Int] = [:]
+        for c in s { counts[c, default: 0] += 1 }
+        let n = Double(s.count)
+        return counts.values.reduce(0) { acc, count in
+            let p = Double(count) / n
+            return acc - p * log2(p)
+        }
     }
 }
