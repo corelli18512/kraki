@@ -7,7 +7,7 @@
  */
 
 import { atomicWriteFile, renameWithRetry } from './fs-retry.js';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync, appendFileSync, openSync, readSync, closeSync, cpSync, fstatSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync, appendFileSync, openSync, readSync, closeSync, cpSync, fstatSync, statSync, linkSync, copyFileSync } from 'node:fs';
 import { DEFAULT_SESSION_MODE, normalizeSessionMode, toWireSessionMode } from '@kraki/protocol';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -212,6 +212,117 @@ export interface InputLedgerEntry {
 }
 
 // ── Session Manager ─────────────────────────────────────
+
+/**
+ * Spine rows store the full ProducerMessage envelope as `payload`. Sessions
+ * imported before that was enforced stored only the inner payload
+ * (`{"content": ...}`), which readers could not route. Wrap such rows into the
+ * envelope shape on read.
+ */
+/** Seq of the last complete row of a messages.jsonl (0 if none). Reads
+ *  backwards in chunks: rows with inline images can exceed a megabyte. */
+export function lastLoggedSeq(logPath: string): number {
+  if (!existsSync(logPath)) return 0;
+  let fd: number | undefined;
+  try {
+    fd = openSync(logPath, 'r');
+    const size = fstatSync(fd).size;
+    const chunk = 256 * 1024;
+    let end = size;
+    let tail = Buffer.alloc(0);
+    while (end > 0 && tail.length < 32 * 1024 * 1024) {
+      const start = Math.max(0, end - chunk);
+      const buf = Buffer.alloc(end - start);
+      readSync(fd, buf, 0, buf.length, start);
+      tail = Buffer.concat([buf, tail]);
+      end = start;
+      const lines = tail.toString('utf8').split('\n');
+      // Skip a trailing partial line (crash mid-write); the last complete row
+      // is the last line followed by a newline that also has a full start.
+      for (let i = lines.length - 2; i >= (end > 0 ? 1 : 0); i--) {
+        if (!lines[i]) continue;
+        try {
+          const seq = (JSON.parse(lines[i]) as { seq?: unknown }).seq;
+          if (typeof seq === 'number') return seq;
+        } catch { /* corrupt row: keep looking */ }
+      }
+    }
+  } catch {
+    return 0;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  return 0;
+}
+
+interface LogIndex {
+  ino: number;
+  /** Bytes of the file covered (always ends after a newline). */
+  size: number;
+  seqs: number[];
+  offsets: number[];
+  /** Seqs strictly increase in file order (binary search is valid). */
+  ascending: boolean;
+}
+
+/**
+ * Stream complete lines of `path` in [start, end) without reading the whole
+ * file. `visit` gets each line and its byte offset; returning false stops.
+ * Returns the offset just past the last complete line visited.
+ */
+export function forEachLogLine(
+  path: string,
+  start: number,
+  end: number,
+  visit: (line: string, offset: number) => boolean,
+): number {
+  let fd: number | undefined;
+  let consumed = start;
+  try {
+    fd = openSync(path, 'r');
+    const chunkSize = 1024 * 1024;
+    let carry = Buffer.alloc(0);
+    let carryOffset = start;
+    let pos = start;
+    while (pos < end) {
+      const buf = Buffer.alloc(Math.min(chunkSize, end - pos));
+      const read = readSync(fd, buf, 0, buf.length, pos);
+      if (read <= 0) break;
+      pos += read;
+      let data = carry.length ? Buffer.concat([carry, buf.subarray(0, read)]) : buf.subarray(0, read);
+      let lineStart = 0;
+      for (let nl = data.indexOf(0x0a); nl !== -1; nl = data.indexOf(0x0a, lineStart)) {
+        const lineOffset = carryOffset + lineStart;
+        if (nl > lineStart && !visit(data.subarray(lineStart, nl).toString('utf8'), lineOffset)) {
+          return lineOffset + (nl - lineStart) + 1;
+        }
+        lineStart = nl + 1;
+        consumed = carryOffset + lineStart;
+      }
+      carry = Buffer.from(data.subarray(lineStart));
+      carryOffset += lineStart;
+      data = Buffer.alloc(0);
+    }
+  } catch {
+    return consumed;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  return consumed;
+}
+
+export function upgradeLegacyEntry(entry: LoggedMessage, sessionId: string): LoggedMessage {
+  try {
+    const parsed = JSON.parse(entry.payload) as Record<string, unknown>;
+    if (parsed && typeof parsed === 'object' && typeof parsed.type === 'string') return entry;
+    return {
+      ...entry,
+      payload: JSON.stringify({ type: entry.type, sessionId, timestamp: entry.ts, payload: parsed }),
+    };
+  } catch {
+    return entry;
+  }
+}
 
 export class SessionManager {
   private static readonly INPUT_LEDGER_TERMINAL_LIMIT = 2048;
@@ -527,8 +638,40 @@ export class SessionManager {
     // Steps of the copied turns live in trace.jsonl, keyed by the same seqs.
     const srcTrace = join(this.sessionDir(sourceSessionId), 'trace.jsonl');
     if (existsSync(srcTrace)) cpSync(srcTrace, join(newDir, 'trace.jsonl'));
+    // The copied messages reference attachments by id; without them every
+    // image/report in the fork answers not_found. Attachments are immutable
+    // and content-addressed, so hard-link them (copy across volumes).
+    const srcAttachments = join(this.sessionDir(sourceSessionId), 'attachments');
+    if (existsSync(srcAttachments)) {
+      const dstAttachments = join(newDir, 'attachments');
+      mkdirSync(dstAttachments, { recursive: true });
+      for (const name of readdirSync(srcAttachments)) {
+        const from = join(srcAttachments, name);
+        const to = join(dstAttachments, name);
+        try { linkSync(from, to); } catch { try { copyFileSync(from, to); } catch { /* best effort */ } }
+      }
+    }
 
     return { sessionId: newId, runId };
+  }
+
+  /** Sessions whose meta.lastSeq was checked against the log this process. */
+  private lastSeqReconciled = new Set<string>();
+
+  /**
+   * A row is appended to messages.jsonl before meta.json records its seq. A
+   * crash between the two leaves meta one behind the log, and the next append
+   * would reuse the seq (apps dedupe by seq, so a message would vanish). Once
+   * per session per process, take lastSeq from the log's last row if ahead.
+   */
+  private reconcileLastSeq(sessionId: string, meta: SessionMeta): void {
+    if (this.lastSeqReconciled.has(sessionId)) return;
+    this.lastSeqReconciled.add(sessionId);
+    const tail = lastLoggedSeq(join(this.sessionDir(sessionId), 'messages.jsonl'));
+    if (tail > (meta.lastSeq ?? 0)) {
+      meta.lastSeq = tail;
+      this.writeMeta(sessionId, meta);
+    }
   }
 
   /**
@@ -942,6 +1085,7 @@ export class SessionManager {
   appendMessage(sessionId: string, type: string, payload: string, createsUnread = false): number {
     const meta = this.readMeta(sessionId);
     if (!meta) return 0;
+    this.reconcileLastSeq(sessionId, meta);
 
     const previousLastSeq = meta.lastSeq ?? 0;
     const wasRead = (meta.readSeq ?? 0) >= previousLastSeq;
@@ -994,6 +1138,7 @@ export class SessionManager {
   ): number {
     const meta = this.readMeta(sessionId);
     if (!meta || messages.length === 0) return meta?.lastSeq ?? 0;
+    this.reconcileLastSeq(sessionId, meta);
 
     let seq = meta.lastSeq ?? 0;
     const now = new Date().toISOString();
@@ -1037,32 +1182,78 @@ export class SessionManager {
 
   /**
    * Get messages for a session with seq > afterSeq.
+   *
+   * Reads only from the first matching row onward, located through a
+   * per-session seq→byte-offset index: logs carry inline images (rows can be
+   * megabytes), so re-reading and parsing whole files per page stalled the
+   * daemon. Files whose seqs are not ascending fall back to a full scan.
    */
   getMessagesAfterSeq(sessionId: string, afterSeq: number, limit?: number): LoggedMessage[] {
     const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
     if (!existsSync(logPath)) return [];
+    const index = this.logIndexFor(sessionId, logPath);
+    if (!index) return [];
 
-    let content: string;
-    try {
-      content = readFileSync(logPath, 'utf8');
-    } catch {
-      return [];
+    let start = 0;
+    if (index.ascending) {
+      // First row with seq > afterSeq.
+      let lo = 0, hi = index.seqs.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (index.seqs[mid] > afterSeq) hi = mid; else lo = mid + 1;
+      }
+      if (lo >= index.seqs.length) return [];
+      start = index.offsets[lo];
     }
 
     const messages: LoggedMessage[] = [];
-    for (const line of content.split('\n')) {
-      if (!line) continue;
+    forEachLogLine(logPath, start, index.size, (line) => {
       try {
         const msg = JSON.parse(line) as LoggedMessage;
         if (msg.seq > afterSeq) {
-          messages.push(msg);
-          if (limit && messages.length >= limit) break;
+          messages.push(upgradeLegacyEntry(msg, sessionId));
+          if (limit && messages.length >= limit) return false;
         }
       } catch {
         // Skip corrupted lines
       }
-    }
+      return true;
+    });
     return messages;
+  }
+
+  /** Per-session index of messages.jsonl rows (seq and byte offset). */
+  private logIndexes = new Map<string, LogIndex>();
+
+  private logIndexFor(sessionId: string, logPath: string): LogIndex | null {
+    let st;
+    try { st = statSync(logPath); } catch { return null; }
+    let index = this.logIndexes.get(sessionId);
+    // Rewritten (atomic rename → new inode) or truncated: start over.
+    if (!index || index.ino !== st.ino || st.size < index.size) {
+      index = { ino: st.ino, size: 0, seqs: [], offsets: [], ascending: true };
+      this.logIndexes.set(sessionId, index);
+    }
+    if (st.size > index.size) {
+      const target = index;
+      let lastSeq = target.seqs.length > 0 ? target.seqs[target.seqs.length - 1] : -Infinity;
+      // Index only complete lines; a torn tail is picked up once finished.
+      const indexedTo = forEachLogLine(logPath, target.size, st.size, (line, offset) => {
+        const m = /^\{"seq":(\d+)/.exec(line);
+        let seq: number | undefined = m ? Number(m[1]) : undefined;
+        if (seq === undefined) {
+          try { seq = (JSON.parse(line) as { seq?: number }).seq; } catch { /* corrupt row */ }
+        }
+        if (typeof seq !== 'number') return true;
+        if (seq <= lastSeq) target.ascending = false;
+        lastSeq = seq;
+        target.seqs.push(seq);
+        target.offsets.push(offset);
+        return true;
+      });
+      target.size = indexedTo;
+    }
+    return index;
   }
 
   // ── Turn trace (TRACE axis) ─────────────────────────────
@@ -1360,7 +1551,7 @@ export class SessionManager {
 
     const previewFromLine = (line: string): import('@kraki/protocol').SessionPreviewDigest | undefined => {
       try {
-        const entry = JSON.parse(line) as LoggedMessage;
+        const entry = upgradeLegacyEntry(JSON.parse(line) as LoggedMessage, sessionId);
         if (!PREVIEW_BOUNDARY_TYPES.has(entry.type)) return undefined;
         const inner = JSON.parse(entry.payload) as { type?: string; payload?: Record<string, unknown> };
         const payload = inner.payload;

@@ -37,6 +37,7 @@ import {
   type PermissionDecision,
   type QuestionAnswer,
   type QuestionResponseResult,
+  type PermissionResponseResult,
   type SendMessageOptions,
   type SessionInfo,
 } from './base.js';
@@ -750,15 +751,23 @@ export class CodexAdapter extends AgentAdapter {
       if (s.settledTurns.length > 8) s.settledTurns.shift();
     }
     s.activeTurnId = undefined;
-    if (!s.userAborted) {
-      const ev = this.turnEvent(s);
+    const ev = this.turnEvent(s);
+    const next = s.queue.shift();
+    // A queued steer belongs to the relay turn that is ending here: Codex runs
+    // it as a new turn, but for the relay it is the same logical turn. Settling
+    // that turn now would make the relay drop everything the steer produces.
+    const continuesSameTurn = !!next?.relayTurnId && next.relayTurnId === ev.turnId && !s.userAborted;
+    if (!s.userAborted && !continuesSameTurn) {
       if (ev.turnId) this.onIdle?.(s.sessionId, ev); else this.onIdle?.(s.sessionId);
     }
     this.onFlushComplete?.(s.sessionId);
-    const next = s.queue.shift();
     if (next) {
       this.startTurn(s, next).catch((err) => {
-        this.onError?.(s.sessionId, { message: errMessage(err), ...(next.relayTurnId && { turnId: next.relayTurnId }) });
+        const turn = next.relayTurnId ? { turnId: next.relayTurnId } : {};
+        this.onError?.(s.sessionId, { message: errMessage(err), ...turn });
+        // The relay waits for this turn's idle; without it the session would
+        // stay "running" forever.
+        if (next.relayTurnId) this.onIdle?.(s.sessionId, turn); else this.onIdle?.(s.sessionId);
       });
     }
   }
@@ -921,12 +930,13 @@ export class CodexAdapter extends AgentAdapter {
 
   // ── Permissions & questions (Kraki → Codex) ──────────
 
-  async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision, reason?: string): Promise<void> {
+  async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision, reason?: string): Promise<PermissionResponseResult> {
     const s = this.sessions.get(sessionId);
-    const pending = s?.pendingPermissions.get(permissionId);
-    if (!s || !pending) {
+    if (!s) return 'session_gone';
+    const pending = s.pendingPermissions.get(permissionId);
+    if (!pending) {
       logger.warn({ sessionId, permissionId }, 'codex respondToPermission: no pending permission');
-      return;
+      return 'not_found';
     }
     s.pendingPermissions.delete(permissionId);
     const allow = decision === 'approve' || decision === 'always_allow';
@@ -950,6 +960,7 @@ export class CodexAdapter extends AgentAdapter {
         this.onPermissionAutoResolved?.(sessionId, otherId, 'approved');
       }
     }
+    return 'accepted';
   }
 
   private answerPermission(p: PendingPermission, allow: boolean): void {

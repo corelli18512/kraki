@@ -149,3 +149,29 @@ describe('MultiAgentAdapter.wireCallbacks forwards sub-adapter callbacks', () =>
     expect(map.has('s1')).toBe(false);
   });
 });
+
+describe('MultiAgentAdapter session routing', () => {
+  function multiWith(agents: Record<string, Partial<AgentAdapter>>) {
+    const multi = new MultiAgentAdapter({ agentIds: Object.keys(agents) as never });
+    const map = (multi as unknown as { adapters: Map<string, AgentAdapter> }).adapters;
+    for (const [id, a] of Object.entries(agents)) map.set(id, a as AgentAdapter);
+    return multi;
+  }
+
+  it('fails clearly instead of routing a session to another agent', async () => {
+    const copilotSend = vi.fn(() => Promise.resolve());
+    const multi = multiWith({ copilot: { sendMessage: copilotSend } });
+    multi.registerSessionAgent('s1', 'claude');
+    await expect(multi.sendMessage('s1', 'hi')).rejects.toThrow('Claude Code is not available on this computer');
+    expect(copilotSend).not.toHaveBeenCalled();
+  });
+
+  it('treats a session with no recorded agent as legacy Copilot', async () => {
+    const copilotSend = vi.fn(() => Promise.resolve());
+    const piSend = vi.fn(() => Promise.resolve());
+    const multi = multiWith({ pi: { sendMessage: piSend }, copilot: { sendMessage: copilotSend } });
+    await multi.sendMessage('legacy', 'hi');
+    expect(copilotSend).toHaveBeenCalled();
+    expect(piSend).not.toHaveBeenCalled();
+  });
+});

@@ -28,6 +28,7 @@ import {
   type PermissionDecision,
   type QuestionAnswer,
   type QuestionResponseResult,
+  type PermissionResponseResult,
   type SendMessageOptions,
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
@@ -256,7 +257,17 @@ class PiRpcProcess {
     this.intentionalExit = true;
     this.stopReading?.();
     this.stopReading = null;
-    if (this.child && !this.child.killed) this.child.kill('SIGTERM');
+    const child = this.child;
+    if (child && !child.killed) {
+      child.kill('SIGTERM');
+      // A pi stuck in a long operation (e.g. compaction) may ignore SIGTERM;
+      // never leave it running as an orphan.
+      const force = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      }, 2_000);
+      force.unref?.();
+      child.once('exit', () => clearTimeout(force));
+    }
     this.child = null;
   }
 
@@ -845,7 +856,12 @@ export class PiAdapter extends AgentAdapter {
     if (!existsSync(sessionFile)) return null;
     const original = readFileSync(sessionFile, 'utf8');
     const lines = original.split('\n').filter(line => line.trim().length > 0);
-    const last = lines.length > 0 ? JSON.parse(lines[lines.length - 1]) as { id?: string } : undefined;
+    let last: { id?: string } | undefined;
+    try {
+      last = lines.length > 0 ? JSON.parse(lines[lines.length - 1]) as { id?: string } : undefined;
+    } catch {
+      last = undefined; // a torn last line: chain from nothing rather than throw
+    }
     const entry = {
       type: 'model_change',
       id: randomUUID().replaceAll('-', '').slice(0, 8),
@@ -904,8 +920,16 @@ export class PiAdapter extends AgentAdapter {
       env,
     });
     const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), relayTurnId: undefined, eventTurnId: undefined, exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 0, settledTurn: 0, pendingMaintenanceIdle: false, pendingNarration: '', aborting: false };
-    proc.onEvent = (e) => this.handleEvent(sessionId, e);
-    proc.onExit = (code) => this.handleProcessExit(sessionId, sess, code);
+    // Events are handled strictly in order: handleEvent awaits (image resize
+    // on tool_execution_end), and an unawaited dispatch let a later
+    // message_end/agent_settled settle the turn before that tool_complete,
+    // which the relay then dropped. Process exit queues behind them too.
+    let events: Promise<void> = Promise.resolve();
+    const enqueue = (work: () => void | Promise<void>) => {
+      events = events.then(work).catch((err) => logger.error({ err, sessionId }, 'Pi event handling failed'));
+    };
+    proc.onEvent = (e) => enqueue(() => this.handleEvent(sessionId, e));
+    proc.onExit = (code) => enqueue(() => this.handleProcessExit(sessionId, sess, code));
     proc.start();
     this.sessions.set(sessionId, sess);
     // Write the meta sidecar up front so KRAKI_META_FILE points at a real file
@@ -1848,12 +1872,12 @@ export class PiAdapter extends AgentAdapter {
     }
   }
 
-  async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision, reason?: string): Promise<void> {
+  async respondToPermission(sessionId: string, permissionId: string, decision: PermissionDecision, reason?: string): Promise<PermissionResponseResult> {
     const s = this.sessions.get(sessionId);
-    if (!s) { logger.warn({ sessionId }, 'respondToPermission: session not found'); return; }
+    if (!s) { logger.warn({ sessionId }, 'respondToPermission: session not found'); return 'session_gone'; }
     if (!s.pendingPerms.delete(permissionId)) {
       logger.warn({ sessionId, permissionId }, 'respondToPermission: no pending permission');
-      return;
+      return 'not_found';
     }
     // 'approve' and 'always_allow' both run the tool this time. Per-session
     // "always allow" persistence is a future enhancement — for now it behaves
@@ -1867,6 +1891,7 @@ export class PiAdapter extends AgentAdapter {
         .catch((err) => logger.debug({ sessionId, err: (err as Error).message }, 'pi deny-reason steer failed'));
     }
     logger.debug({ sessionId, permissionId, confirmed }, 'pi permission answered');
+    return 'accepted';
   }
 
   async respondToQuestion(sessionId: string, questionId: string, answer: QuestionAnswer | string, _wasFreeform: boolean): Promise<QuestionResponseResult> {
@@ -2142,7 +2167,10 @@ export class PiAdapter extends AgentAdapter {
    *  before any async capabilities request completed. Same behavior as before
    *  (blocking read), except that a failure is not cached. */
   private ensureRawModelsSync(): void {
-    if (this.cachedModels) return;
+    // This blocks the daemon's event loop (up to the list timeout); after a
+    // failure, leave recovery to the scheduled async retry instead of
+    // blocking again on every session spawn.
+    if (this.cachedModels || this.modelListFailed) return;
     try {
       const stdout = execSync(`"${this.cliPath}" --list-models`, {
         encoding: 'utf-8',
