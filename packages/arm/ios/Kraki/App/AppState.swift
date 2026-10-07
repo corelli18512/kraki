@@ -66,15 +66,10 @@ final class AppState {
     init() {
         self.sessionStore = SessionStore()
         self.deviceStore = DeviceStore()
-        // The message DB is the persistence backbone for chat
-        // history. Failing to open it is fatal — without it the chat
-        // surface can't function and silent degradation would mask
-        // the failure. Loud crash on launch is the right signal.
-        do {
-            self.messageDatabase = try MessageDatabase()
-        } catch {
-            fatalError("Failed to open message database: \(error)")
-        }
+        // The message DB caches chat history that Tentacle replay can
+        // rebuild, so an unusable file is recreated rather than crashing
+        // every launch (see MessageDatabase.openRecovering).
+        self.messageDatabase = MessageDatabase.openRecovering()
         self.messageStore = MessageStore(db: messageDatabase)
         // The Keychain-kept lease lets a cold start warm the voice socket
         // in parallel with Head auth instead of after it.

@@ -36,7 +36,9 @@ struct PairingLink: Equatable {
               let scheme = url.scheme?.lowercased(), scheme == "wss" || scheme == "ws",
               let host = url.host?.lowercased() else { return false }
         if ["localhost", "127.0.0.1", "::1"].contains(host) { return true }
-        return host == "kraki.chat" || host.hasSuffix(".kraki.chat")
+        // Kraki's relays only over TLS: a `ws://` link to a kraki.chat host
+        // would pair and authenticate in cleartext.
+        return scheme == "wss" && (host == "kraki.chat" || host.hasSuffix(".kraki.chat"))
     }
 
     var needsRelayConfirmation: Bool {

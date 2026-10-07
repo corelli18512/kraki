@@ -1994,9 +1994,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             guard !paths.isEmpty else { return }
             let layoutStarted = CFAbsoluteTimeGetCurrent()
             let oldContentHeight = self.collectionView.contentSize.height
-            let oldHeights = Dictionary(uniqueKeysWithValues: paths.map { path in
+            let oldHeights = Dictionary(paths.map { path in
                 (path, self.collectionView.layoutAttributesForItem(at: path)?.frame.height ?? -1)
-            })
+            }, uniquingKeysWith: { first, _ in first })
             let contentHeightDelta = paths.reduce(CGFloat.zero) { total, path in
                 let old = oldHeights[path] ?? 0
                 guard path.item < self.items.count,

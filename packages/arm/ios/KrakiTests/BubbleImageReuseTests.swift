@@ -39,13 +39,13 @@ final class BubbleImageReuseTests: XCTestCase {
             host.configure(images: [], refs: [ref(id)], sessionId: "s", maxWidth: 300, alignment: .leading,
                            attachmentStore: store, onOpenImage: { _ in })
         }
-        configure("first")
+        configure("6e340b9cffb37a989ca544e6bb780a2c")
         await pump(host)
-        XCTAssertEqual(requested, ["first"])
-        configure("second")
+        XCTAssertEqual(requested, ["6e340b9cffb37a989ca544e6bb780a2c"])
+        configure("0123456789abcdef0123456789abcdef")
         await pump(host)
-        store.ingestChunk(id: "first", index: 0, total: 1, mimeType: "image/png", data: "AA==", error: nil, paced: true)
+        store.ingestChunk(id: "6e340b9cffb37a989ca544e6bb780a2c", index: 0, total: 1, mimeType: "image/png", data: "AA==", error: nil, paced: true)
         await pump(host)
-        XCTAssertTrue(requested.contains("second"), "reused host never requested its new image: \(requested)")
+        XCTAssertTrue(requested.contains("0123456789abcdef0123456789abcdef"), "reused host never requested its new image: \(requested)")
     }
 }
