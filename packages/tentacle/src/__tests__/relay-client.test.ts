@@ -363,6 +363,39 @@ describe('RelayClient auth negotiation', () => {
     expect(retryAuth.auth).toEqual({ method: 'open' });
   });
 
+  it('re-registers its key with the account token once when the relay has a different key (invalid_signature)', async () => {
+    const client = new RelayClient(
+      createAdapter(),
+      createSessionManager(),
+      {
+        relayUrl: 'ws://localhost:4000',
+        authMethod: 'github_token',
+        token: 'ghu_123',
+        device: { name: 'ALEX-PC', role: 'tentacle', deviceId: 'dev_123' },
+        reconnectDelay: 10,
+      },
+      createKeyManager(),
+    );
+    const fatal = vi.fn();
+    client.onFatalError = fatal;
+    client.connect();
+    sockets[0].emit('open');
+    expect(JSON.parse(sockets[0].sent[0]).auth).toEqual({ method: 'challenge', deviceId: 'dev_123' });
+    sockets[0].emit('message', Buffer.from(JSON.stringify({ type: 'auth_error', code: 'invalid_signature', message: 'Invalid signature' })));
+    await vi.advanceTimersByTimeAsync(20);
+    expect(fatal).not.toHaveBeenCalled();
+    const retry = sockets.at(-1)!;
+    retry.emit('open');
+    const auth = JSON.parse(retry.sent[0]);
+    expect(auth.auth).toEqual({ method: 'github_token', token: 'ghu_123' });
+    expect(auth.device.deviceId).toBe('dev_123');
+    expect(typeof auth.device.publicKey).toBe('string');
+    // A second invalid_signature in the same process is fatal (no loop).
+    retry.emit('message', Buffer.from(JSON.stringify({ type: 'auth_error', code: 'invalid_signature', message: 'Invalid signature' })));
+    await vi.advanceTimersByTimeAsync(20);
+    expect(fatal).toHaveBeenCalledWith('Invalid signature');
+  });
+
   it('uses github_token auth when configured for GitHub', () => {
     const client = new RelayClient(
       createAdapter(),

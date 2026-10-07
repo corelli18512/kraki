@@ -12,6 +12,7 @@ on:
     paths:
       - packages/tentacle/src/remote-update.ts
       - packages/tentacle/src/update-status.ts
+      - packages/tentacle/src/key-manager.ts
       - scripts/e2e/remote-update/**
       - .github/workflows/e2e-remote-update.yml
 

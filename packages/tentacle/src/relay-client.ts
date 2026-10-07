@@ -243,6 +243,7 @@ export class RelayClient {
   private legacyReplayWarned = new Set<string>();
   /** Prefer challenge auth when the relay already knows this device */
   private preferChallengeAuth = true;
+  private reRegisteredKey = false;
 
   // ── Title generation state ──────────────────────────
   /** Turn count per session (for title generation scheduling) */
@@ -1176,6 +1177,18 @@ export class RelayClient {
       }
       if (authError.code === 'unknown_device' && this.preferChallengeAuth && this.options.device.deviceId && this.keyManager) {
         logger.warn('Challenge auth rejected for unknown device; retrying with full auth');
+        this.preferChallengeAuth = false;
+        this.ws?.close();
+        return;
+      }
+      // The relay holds a different key for this device than the one on
+      // disk (an earlier install raced two key generators). Signing in again
+      // with the account token re-registers the current key; without this the
+      // computer could never come back online. Once per process.
+      if (authError.code === 'invalid_signature' && this.preferChallengeAuth && this.options.token
+        && this.options.authMethod !== 'open' && !this.reRegisteredKey) {
+        logger.warn('Relay has a different key for this device; signing in again to re-register it');
+        this.reRegisteredKey = true;
         this.preferChallengeAuth = false;
         this.ws?.close();
         return;

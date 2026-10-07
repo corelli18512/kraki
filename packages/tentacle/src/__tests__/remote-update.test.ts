@@ -198,3 +198,20 @@ describe('renameRetry', () => {
     await expect(renameRetry('a', 'b', 3, 1, () => { throw Object.assign(new Error('busy'), { code: 'EBUSY' }); })).rejects.toThrow('busy');
   });
 });
+
+describe('cleanup during an update', () => {
+  it('keeps the backup while an applier is still working, removes it once the result is in', async () => {
+    const { cleanupAfterUpdate, writeResult, workDir, updateInProgress } = await import('../remote-update.js');
+    const target = join(home, 'kraki.exe');
+    writeFileSync(target, 'new'); writeFileSync(`${target}.old`, 'old');
+    writeFileSync(join(workDir(), 'plan.json'), '{}');
+    expect(updateInProgress()).toBe(true);
+    cleanupAfterUpdate(target);                       // the new daemon starting up
+    expect(readFileSync(`${target}.old`, 'utf8')).toBe('old');
+    writeResult({ phase: 'updated', from: '1', to: '2' });  // the applier finished
+    expect(updateInProgress()).toBe(false);
+    cleanupAfterUpdate(target);
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(`${target}.old`)).toBe(false);
+  });
+});
