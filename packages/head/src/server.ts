@@ -1384,6 +1384,8 @@ export class HeadServer {
     const devices = params.devices
       ? params.devices.map(d => ({ ...d, online: this.connections.has(d.id) }))
       : this.getDeviceSummaries(params.userId);
+    const deviceRole = devices.find((device) => device.id === params.deviceId)?.role
+      ?? this.storage.getDevice(params.deviceId)?.role;
 
     ws.send(JSON.stringify({
       type: 'auth_ok',
@@ -1395,7 +1397,8 @@ export class HeadServer {
       vapidPublicKey: params.vapidPublicKey ?? this.getVapidPublicKey(),
       relayVersion: this.options.version,
       pulseAckBytes: PULSE_ACK_EVERY_BYTES,
-      voiceVocabulary: this.storage.getVoiceVocabulary(params.userId),
+      // Apps only: a tentacle has no use for the user's word list.
+      ...(deviceRole === 'app' && { voiceVocabulary: this.storage.getVoiceVocabulary(params.userId) }),
       ...(this.getVoiceCapability() && { voice: this.getVoiceCapability() }),
     }));
 
@@ -1410,8 +1413,6 @@ export class HeadServer {
     // process epoch, fence the preceding process's non-durable downlink so the
     // new UI cannot animate through old live events. Tentacle downlinks carry
     // commands and retain ordinary Pulse resume semantics across process epochs.
-    const deviceRole = devices.find((device) => device.id === params.deviceId)?.role
-      ?? this.storage.getDevice(params.deviceId)?.role;
     this.pulseHub.onDeviceConnected(params.deviceId, {
       discardPreviousProcessNonDurable: deviceRole === 'app',
     });

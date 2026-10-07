@@ -455,8 +455,8 @@ export class Storage {
   updatePreferences(userId: string, preferences: Record<string, unknown>): void {
     const existing = this.getUser(userId);
     if (!existing) return;
-    // Vocabulary has its own validated, revisioned update path. Generic/old
-    // preference clients must never replace it with a stale snapshot.
+    // Custom Words change only through update_voice_vocabulary intents; a
+    // generic preferences write must never replace the list.
     const { voiceVocabulary: _reserved, ...patch } = preferences;
     const merged = { ...(existing.preferences ?? {}), ...patch };
     this.db.prepare('UPDATE users SET preferences = ? WHERE user_id = ?')

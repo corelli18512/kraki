@@ -37,7 +37,8 @@ replaced without notice. Native code mirrors Head's apply function
 
 ## Protocol
 
-- `auth_ok.voiceVocabulary: [{term, heardAs}]`. Its presence is also the
+- `auth_ok.voiceVocabulary: [{term, heardAs}]`, sent to app devices only (a
+  Tentacle never receives the list). Its presence is also the
   capability gate: a client never sends intents to an older Head and keeps them
   queued instead. Every auth_ok is a full resync.
 - `update_voice_vocabulary {requestId, ops}`: up to 200 intents. Invalid intents

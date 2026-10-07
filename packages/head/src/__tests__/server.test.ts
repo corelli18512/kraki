@@ -879,7 +879,10 @@ describe('HeadServer (thin relay)', () => {
       const { ws: c, authOk: reconnected } = await authConnect(head.port, 'New App', 'app', { deviceId: 'words-new' });
       expect(reconnected.voiceVocabulary).toEqual(response.words);
       expect((reconnected.user as Record<string, unknown>).preferences).toEqual({ theme: 'dark' });
-      c.close();
+      const { ws: t, authOk: tentacleOk } = await authConnect(head.port, 'Laptop', 'tentacle', { deviceId: 'words-tentacle' });
+      expect(tentacleOk.type).toBe('auth_ok');
+      expect(tentacleOk).not.toHaveProperty('voiceVocabulary');
+      c.close(); t.close();
     });
 
     it('acknowledges malformed requests, and keeps accounts apart', async () => {

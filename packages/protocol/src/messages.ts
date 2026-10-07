@@ -1446,7 +1446,8 @@ export interface AuthOkMessage {
   /** The auth method that was used */
   authMethod: AuthMethod['method'];
   user: { id: string; login: string; provider: string; email?: string; preferences?: Record<string, unknown>; region?: string };
-  /** The account's Custom Words. Presence also advertises sync support. */
+  /** The account's Custom Words (app devices only). Presence also advertises
+   *  sync support. */
   voiceVocabulary?: VoiceWord[];
   devices: DeviceSummary[];
   /** GitHub OAuth client ID (present when GitHub OAuth is configured for web login) */
