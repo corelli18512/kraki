@@ -49,3 +49,28 @@ describe('proxy', () => {
     expect(proxyFor('wss://x', null)).toBeUndefined();
   });
 });
+
+describe('parseWindowsProxy', async () => {
+  const { parseWindowsProxy } = await import('../proxy.js');
+  const head = '\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\r\n    CertificateRevocation    REG_DWORD    0x1\r\n';
+  const tail = '\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\\Connections\r\n';
+  it('reads a manual proxy (real reg query output)', () => {
+    const out = `${head}    ProxyEnable    REG_DWORD    0x1\r\n    MigrateProxy    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    10.0.2.2:2181\r\n${tail}`;
+    expect(parseWindowsProxy(out)).toEqual({ https: 'http://10.0.2.2:2181', http: 'http://10.0.2.2:2181', noProxy: [], source: 'windows-system' });
+  });
+  it('ignores a proxy that is switched off', () => {
+    expect(parseWindowsProxy(`${head}    ProxyEnable    REG_DWORD    0x0\r\n    ProxyServer    REG_SZ    127.0.0.1:7890\r\n`)).toBeNull();
+    expect(parseWindowsProxy(head)).toBeNull();
+  });
+  it('per-protocol servers and bypass list (Clash style)', () => {
+    const out = `${head}    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    http=127.0.0.1:7890;https=127.0.0.1:7891;socks=127.0.0.1:7892\r\n    ProxyOverride    REG_SZ    localhost;127.*;10.*;192.168.*;*.corp.example;<local>\r\n`;
+    expect(parseWindowsProxy(out)).toEqual({
+      https: 'http://127.0.0.1:7891', http: 'http://127.0.0.1:7890',
+      noProxy: ['localhost', '127.0.0.0/8', '10.0.0.0/8', '192.168.0.0/16', '*.corp.example'], source: 'windows-system',
+    });
+  });
+  it('keeps an explicit scheme', () => {
+    const out = `${head}    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    http://proxy.corp:8080\r\n`;
+    expect(parseWindowsProxy(out)?.https).toBe('http://proxy.corp:8080');
+  });
+});
