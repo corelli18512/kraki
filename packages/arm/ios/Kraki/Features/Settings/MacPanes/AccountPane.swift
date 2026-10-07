@@ -10,6 +10,7 @@ import SwiftUI
 
 struct AccountPane: View {
     @Environment(AppState.self) private var appState
+    @State private var confirmSignOut = false
 
     var body: some View {
         Form {
@@ -54,8 +55,18 @@ struct AccountPane: View {
                 }
 
                 Section {
-                    Button("Sign Out", role: .destructive) {
-                        appState.logout()
+                    Button("Sign Out…", role: .destructive) {
+                        confirmSignOut = true
+                    }
+                    .confirmationDialog(
+                        "Sign out of Kraki on this Mac?",
+                        isPresented: $confirmSignOut,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Sign Out", role: .destructive) { appState.logout() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Conversations cached on this Mac are removed. Your computers keep all sessions; sign in again to see them.")
                     }
                 }
             } else {
