@@ -25,6 +25,60 @@ enum IOSComposerTextMetrics {
     }
 }
 
+/// The resting composer: [image] text [clear] [mic] on one row, or — once
+/// the draft wraps — the text across the whole box with the controls in a
+/// row below (the same shape as dictation: transcript over its controls).
+/// Subviews: image, text, clear, mic (always present; hidden ones invisible).
+struct IOSComposerRestingLayout: Layout {
+    var stacked: Bool
+    var showsClear: Bool
+    var showsMic: Bool
+    var rowHeight: CGFloat = IOSComposerMetrics.height
+    /// Two-row text: leading edge in from the box's curve, as the transcript.
+    static let stackedLeading: CGFloat = 12
+    static let stackedTrailing: CGFloat = 10
+    /// The text's bottom padding and the row's top inset overlap by this.
+    static let rowOverlap: CGFloat = 14
+
+    private func frames(width: CGFloat, _ s: Subviews) -> (frames: [CGRect], height: CGFloat) {
+        let image = s[0].sizeThatFits(.unspecified)
+        let clear = s[2].sizeThatFits(.unspecified)
+        let mic = s[3].sizeThatFits(.unspecified)
+        let clearW = showsClear ? clear.width : 0, micW = showsMic ? mic.width : 0
+        if stacked {
+            let textW = max(1, width - Self.stackedLeading - Self.stackedTrailing)
+            let textH = s[1].sizeThatFits(ProposedViewSize(width: textW, height: nil)).height
+            let rowTop = max(0, textH - Self.rowOverlap)
+            let height = rowTop + rowHeight
+            return ([CGRect(x: 0, y: rowTop, width: image.width, height: rowHeight),
+                     CGRect(x: Self.stackedLeading, y: 0, width: textW, height: textH),
+                     CGRect(x: width - micW - clear.width, y: rowTop + (rowHeight - clear.height) / 2,
+                            width: clear.width, height: clear.height),
+                     CGRect(x: width - mic.width, y: rowTop, width: mic.width, height: rowHeight)], height)
+        }
+        let textW = max(1, width - image.width - clearW - micW)
+        let textH = s[1].sizeThatFits(ProposedViewSize(width: textW, height: nil)).height
+        let height = max(rowHeight, textH)
+        return ([CGRect(x: 0, y: height - rowHeight, width: image.width, height: rowHeight),
+                 CGRect(x: image.width, y: 0, width: textW, height: height),
+                 CGRect(x: image.width + textW, y: (height - clear.height) / 2, width: clear.width, height: clear.height),
+                 CGRect(x: width - mic.width, y: height - rowHeight, width: mic.width, height: rowHeight)], height)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 320
+        return CGSize(width: width, height: frames(width: width, subviews).height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 4 else { return }
+        for (view, f) in zip(subviews, frames(width: bounds.width, subviews).frames) {
+            view.place(at: CGPoint(x: bounds.minX + f.minX, y: bounds.minY + f.minY), anchor: .topLeading,
+                       proposal: ProposedViewSize(f.size))
+        }
+    }
+}
+
 struct IOSScrollEdges: Equatable {
     var top = false
     var bottom = false

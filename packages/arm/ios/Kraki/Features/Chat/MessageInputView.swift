@@ -79,16 +79,21 @@ struct MessageInputView: View {
     /// Widths of the text field / transcript, so the height their text will
     /// take is known in the same update as the text (growth eases).
     @State private var textFieldWidth: CGFloat = 0
-    /// Text + clear + mic area (constant while typing).
-    @State private var textAreaWidth: CGFloat = 0
+    /// Width of the resting box (constant while typing).
+    @State private var restingWidth: CGFloat = 0
     private static let micWidth: CGFloat = 44
+    private static let clearWidth: CGFloat = 30
 
-    /// Multi-line text: clear sits above the mic in one column, giving the
-    /// text that width. Decided from the stacked width only, so wrapping
-    /// can't flip it back and forth at the boundary.
-    private var stacksTrailingControls: Bool {
-        guard canShowVoiceToggle, hasText, textAreaWidth > 1 else { return false }
-        return IOSComposerTextMetrics.height(text, width: textAreaWidth - Self.micWidth - 6, maxHeight: .greatestFiniteMagnitude)
+    private var showsClear: Bool { hasText || hasImage }
+
+    /// Multi-line drafts use two rows: the text spans the box, the controls
+    /// sit in a row below. Decided from the one-row width only, so it
+    /// switches once at the wrap and never flickers back.
+    private var stacksRows: Bool {
+        guard hasText, restingWidth > 1 else { return false }
+        let oneRowText = restingWidth - 48 - (showsClear ? Self.clearWidth : 0)
+            - (canShowVoiceToggle ? Self.micWidth : 0) - 6
+        return IOSComposerTextMetrics.height(text, width: oneRowText, maxHeight: .greatestFiniteMagnitude)
             > IOSComposerTextMetrics.lineHeight + 0.5
     }
     @State private var transcriptWidth: CGFloat = 0
@@ -323,22 +328,18 @@ struct MessageInputView: View {
     /// box-wide animation never touches the recording transitions.
     private var typingHeightKey: CGFloat {
         guard !isRecordingHere else { return -1 }
-        return IOSComposerTextMetrics.height(text, width: textFieldWidth,
-                                             maxHeight: IOSComposerTextMetrics.lineHeight * 5)
+        return (stacksRows ? 1_000 : 0) + IOSComposerTextMetrics.height(text, width: textFieldWidth,
+                                                                       maxHeight: IOSComposerTextMetrics.lineHeight * 5)
     }
 
     private static let transcriptMaxHeight: CGFloat = 132
 
     private var restingBox: some View {
-        HStack(alignment: .bottom, spacing: 0) {
+        // One layout places the same views in one or two rows: the field
+        // (focus, IME) is never rebuilt when the draft wraps.
+        IOSComposerRestingLayout(stacked: stacksRows, showsClear: showsClear, showsMic: canShowVoiceToggle) {
             imageSlot
-            HStack(alignment: .bottom, spacing: 0) {
-                HStack(alignment: .center, spacing: 0) {
-                    // Same position in both arrangements: the field (focus,
-                    // IME) is never rebuilt.
-                    textFieldForMode
-                    if (hasText || hasImage) && !stacksTrailingControls { clearButton }
-                }
+            textFieldForMode
                 .frame(maxWidth: .infinity, minHeight: Self.inputBoxHeight)
                 // The TextField only hit-tests its glyph rect: any other tap in
                 // the text area (padding, edges) focuses it as well.
@@ -347,37 +348,17 @@ struct MessageInputView: View {
                         .contentShape(Rectangle())
                         .onTapGesture { if !isFocused { isFocused = true } }
                 }
-                .padding(.trailing, stacksTrailingControls ? Self.micWidth : 0)
-                .overlay(alignment: .trailing) {
-                    if stacksTrailingControls { stackedControls }
-                }
-                if canShowVoiceToggle && !stacksTrailingControls { micButton }
-            }
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textAreaWidth = $0 }
+            clearButton
+                .opacity(showsClear ? 1 : 0)
+                .allowsHitTesting(showsClear)
+                .accessibilityHidden(!showsClear)
+            micButton
+                .opacity(canShowVoiceToggle ? 1 : 0)
+                .allowsHitTesting(canShowVoiceToggle)
+                .accessibilityHidden(!canShowVoiceToggle)
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { restingWidth = $0 }
         .padding(.trailing, 2)
-    }
-
-    /// Clear on the first line, the mic on the last (where it always is).
-    private var stackedControls: some View {
-        VStack(spacing: 0) {
-            Button(action: clearDraft) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 17))
-                    .foregroundStyle(Color(.tertiaryLabel))
-                    .frame(width: Self.micWidth, height: Self.inputBoxHeight - 2)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("chat-clear")
-            .accessibilityLabel("Clear message")
-            // Each takes half the column (minHeight 0: the one-row frames must
-            // not make it taller than the text); icons stay on the first /
-            // last line.
-            .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
-            micButton.frame(minHeight: 0, maxHeight: .infinity, alignment: .bottom)
-        }
-        .frame(width: Self.micWidth)
     }
 
     // MARK: - Dictation (two rows)
@@ -776,7 +757,7 @@ struct MessageInputView: View {
             Image(systemName: "xmark.circle.fill")
                 .font(.system(size: 17))
                 .foregroundStyle(Color(.tertiaryLabel))
-                .frame(width: 30, height: 40)
+                .frame(width: Self.clearWidth, height: 40)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

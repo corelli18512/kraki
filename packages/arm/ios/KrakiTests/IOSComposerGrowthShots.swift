@@ -135,10 +135,9 @@ final class IOSComposerGrowthShots: XCTestCase {
         drain(0.4)
         XCTAssertTrue(textView === tv, "the field must not be rebuilt")
         XCTAssertTrue(tv.isFirstResponder, "typing keeps focus")
-        XCTAssertGreaterThan(tv.frame.width, oneLineWidth + 20, "wrapped text gains the clear button's width")
-        var switches = 0
-        for (a, b) in zip(widths, widths.dropFirst()) where abs(a - b) > 1 { switches += 1 }
-        XCTAssertEqual(switches, 1, "one switch, no flicker: \(widths)")
+        XCTAssertGreaterThan(tv.frame.width, oneLineWidth + 60, "wrapped text spans the box (controls in a row below)")
+        // One eased transition: the width only ever grows (no flicker back).
+        XCTAssertFalse(zip(widths, widths.dropFirst()).contains { $1 < $0 - 0.5 }, "no flicker: \(widths)")
         try shot("ios-stacked-typing")
     }
 

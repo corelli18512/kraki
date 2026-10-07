@@ -86,16 +86,17 @@ struct MacChatComposer: View {
     /// Widths of the editor / recording surface (stable while typing), so
     /// the height they will take is known in the same update as the text.
     @State private var textInputWidth: CGFloat = 0
-    /// Text + clear + mic area (constant while typing).
-    @State private var textAreaWidth: CGFloat = 0
-    private static let stackedColumnWidth: CGFloat = 32
+    /// Width of the resting box (constant while typing).
+    @State private var restingWidth: CGFloat = 0
+    private var showsClear: Bool { hasText || hasImage }
 
-    /// Multi-line text: clear sits above the mic in one column, giving the
-    /// text that width. Decided from the stacked width only, so wrapping
-    /// can't flip it back and forth at the boundary.
-    private var stacksTrailingControls: Bool {
-        guard canShowVoice, hasText, textAreaWidth > 1 else { return false }
-        return MacComposerScrollableTextInput.fittedHeight(text, width: textAreaWidth - Self.stackedColumnWidth - 4)
+    /// Multi-line drafts use two rows: the text spans the box, the controls
+    /// sit in a row below (as on iOS, and as dictation). Decided from the
+    /// one-row width only, so it switches once at the wrap.
+    private var stacksRows: Bool {
+        guard hasText, restingWidth > 1 else { return false }
+        let oneRowText = restingWidth - 44 - (showsClear ? 26 : 0) - (canShowVoice ? 32 : 0) - 5 - 8
+        return MacComposerScrollableTextInput.fittedHeight(text, width: oneRowText)
             > MacComposerMetrics.minimumTextHeight + 0.5
     }
     @State private var voiceSurfaceWidth: CGFloat = 0
@@ -315,7 +316,7 @@ struct MacChatComposer: View {
             let pieces = MacComposerVoiceTranscriptOnly.pieces(controller: voiceController, preview: voiceComposer.preview)
             return 10_000 + MacVoiceSurfaceLayout(pieces: pieces).geometry(width: voiceSurfaceWidth).height
         }
-        return MacComposerScrollableTextInput.fittedHeight(text, width: textInputWidth)
+        return (stacksRows ? 1_000 : 0) + MacComposerScrollableTextInput.fittedHeight(text, width: textInputWidth)
     }
 
     private var inputBox: some View {
@@ -332,23 +333,21 @@ struct MacChatComposer: View {
                     .onGeometryChange(for: CGFloat.self) { $0.size.width - 9 } action: { voiceSurfaceWidth = $0 }
                 }
             } else {
-                HStack(alignment: .center, spacing: 0) {
+                // One layout places the same views in one or two rows: the
+                // native editor (focus, IME) is never rebuilt at the wrap.
+                MacComposerRestingLayout(stacked: stacksRows, showsClear: showsClear, showsMic: canShowVoice) {
                     imageSlot
-                    HStack(alignment: .bottom, spacing: 0) {
-                        // Same position in both arrangements: the native
-                        // editor (focus, IME) is never rebuilt.
-                        textFieldForMode
-                            .padding(.trailing, stacksTrailingControls ? Self.stackedColumnWidth : 0)
-                            .overlay(alignment: .trailing) {
-                                if stacksTrailingControls { stackedControls }
-                            }
-                        if !stacksTrailingControls {
-                            if hasText || hasImage { clearButton }
-                            if canShowVoice { inlineVoiceButton }
-                        }
-                    }
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textAreaWidth = $0 }
+                    textFieldForMode
+                    clearButton
+                        .opacity(showsClear ? 1 : 0)
+                        .allowsHitTesting(showsClear)
+                        .accessibilityHidden(!showsClear)
+                    inlineVoiceButton
+                        .opacity(canShowVoice ? 1 : 0)
+                        .allowsHitTesting(canShowVoice)
+                        .accessibilityHidden(!canShowVoice)
                 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { restingWidth = $0 }
                 .padding(.trailing, 5)
             }
         }
@@ -475,18 +474,6 @@ struct MacChatComposer: View {
         .accessibilityLabel(voiceOwnsComposer ? (pendingPermission != nil ? "Edit voice text" : (pendingQuestion != nil ? "Submit voice answer" : "Send voice message")) : (role == .stop ? "Stop agent" : sendAccessibilityLabel))
         .accessibilityIdentifier(voiceOwnsComposer ? "voice-send" : "chat-primary")
         .accessibilityHint(role == .stop ? "Aborts the current agent turn" : sendAccessibilityHint)
-    }
-
-    /// Clear on the first line, the mic on the last (where it always is).
-    private var stackedControls: some View {
-        VStack(spacing: 0) {
-            // Each takes half the column (minHeight 0: their one-row frames
-            // must not make it taller than the text); the icons stay centered
-            // on the first / last line.
-            clearButton.frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
-            inlineVoiceButton.frame(minHeight: 0, maxHeight: .infinity, alignment: .bottom)
-        }
-        .frame(width: Self.stackedColumnWidth)
     }
 
     private var clearButton: some View {
@@ -884,6 +871,60 @@ struct MacChatComposer: View {
         context.flushGraphics()
         NSGraphicsContext.restoreGraphicsState()
         return bitmap.representation(using: .jpeg, properties: [.compressionFactor: quality])
+    }
+}
+
+// MARK: - Resting layout
+
+/// The resting Composer: [image] text [clear] [mic] on one row, or — once
+/// the draft wraps — the text across the box with the controls in a row
+/// below (the iOS Composer's shape, and dictation's: text over controls).
+/// Subviews: image, text, clear, mic (always present; hidden ones invisible).
+struct MacComposerRestingLayout: Layout {
+    var stacked: Bool
+    var showsClear: Bool
+    var showsMic: Bool
+    var rowHeight: CGFloat = MacComposerMetrics.capsuleHeight
+    static let stackedLeading: CGFloat = 12
+    /// The text's bottom padding and the row's top inset overlap by this.
+    static let rowOverlap: CGFloat = 6
+
+    private func frames(width: CGFloat, _ s: Subviews) -> (frames: [CGRect], height: CGFloat) {
+        let image = s[0].sizeThatFits(.unspecified)
+        let clear = s[2].sizeThatFits(.unspecified)
+        let mic = s[3].sizeThatFits(.unspecified)
+        let clearW = showsClear ? clear.width : 0, micW = showsMic ? mic.width : 0
+        if stacked {
+            let textW = max(1, width - Self.stackedLeading)
+            let textH = s[1].sizeThatFits(ProposedViewSize(width: textW, height: nil)).height
+            let rowTop = max(0, textH - Self.rowOverlap)
+            return ([CGRect(x: 0, y: rowTop, width: image.width, height: rowHeight),
+                     CGRect(x: Self.stackedLeading, y: 0, width: textW, height: textH),
+                     CGRect(x: width - micW - clear.width, y: rowTop + (rowHeight - clear.height) / 2,
+                            width: clear.width, height: clear.height),
+                     CGRect(x: width - mic.width, y: rowTop + (rowHeight - mic.height) / 2,
+                            width: mic.width, height: mic.height)], rowTop + rowHeight)
+        }
+        let textW = max(1, width - image.width - clearW - micW)
+        let textH = s[1].sizeThatFits(ProposedViewSize(width: textW, height: nil)).height
+        let height = max(rowHeight, textH)
+        return ([CGRect(x: 0, y: (height - image.height) / 2, width: image.width, height: image.height),
+                 CGRect(x: image.width, y: 0, width: textW, height: height),
+                 CGRect(x: image.width + textW, y: height - clear.height, width: clear.width, height: clear.height),
+                 CGRect(x: width - mic.width, y: height - mic.height, width: mic.width, height: mic.height)], height)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 600
+        return CGSize(width: width, height: frames(width: width, subviews).height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 4 else { return }
+        for (view, f) in zip(subviews, frames(width: bounds.width, subviews).frames) {
+            view.place(at: CGPoint(x: bounds.minX + f.minX, y: bounds.minY + f.minY), anchor: .topLeading,
+                       proposal: ProposedViewSize(f.size))
+        }
     }
 }
 

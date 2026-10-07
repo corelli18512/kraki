@@ -181,10 +181,8 @@ final class ComposerGrowthShots: XCTestCase {
         drain(300)
         XCTAssertTrue(editor === e, "the editor must not be rebuilt")
         XCTAssertTrue(window.firstResponder === e, "typing keeps focus")
-        XCTAssertGreaterThan(e.enclosingScrollView!.frame.width, oneLineWidth + 20, "wrapped text gains the clear button's width")
-        var switches = 0
-        for (a, b) in zip(widths, widths.dropFirst()) where abs(a - b) > 1 { switches += 1 }
-        XCTAssertEqual(switches, 1, "one switch, no flicker: \(widths)")
+        XCTAssertGreaterThan(e.enclosingScrollView!.frame.width, oneLineWidth + 60, "wrapped text spans the box (controls in a row below)")
+        XCTAssertFalse(zip(widths, widths.dropFirst()).contains { $1 < $0 - 0.5 }, "no flicker: \(widths)")
         try shot("stacked-typing-light")
     }
 
