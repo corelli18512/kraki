@@ -1,0 +1,8 @@
+# Actions are pinned by commit SHA; Dependabot proposes updates (with the
+# version in the trailing comment) so pins don't go stale.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

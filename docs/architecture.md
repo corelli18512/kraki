@@ -4,7 +4,7 @@ Kraki is a small distributed system for seeing and controlling AI coding session
 
 - `tentacle` runs beside the agent on the machine doing the work
 - `head` is a thin encrypted relay that forwards messages
-- `arm` gives you a UI on a phone or browser
+- `arm` gives you a UI: native iOS and macOS apps (the primary clients) and a web app
 
 The relay is deliberately minimal: it authenticates devices, forwards encrypted payloads over a reliable transport, and tracks device presence. Everything else — session management, message buffering, sequencing — lives at the edges.
 
@@ -59,9 +59,9 @@ A session represents one agent conversation or run. Sessions are identified by `
 
 1. **Authenticate** — verify device identity on connect
 2. **Forward pulse frames** — route unicast and broadcast envelopes to the right WebSocket connections via the per-device pulse hub
-3. **Track identity** — maintain a users table, a devices table, and push token registration
+3. **Track identity** — maintain users, devices and push token registration
 
-`head` stores its state in SQLite (`users`, `devices`, `push_tokens`, `pulse_meta` for durable snapshots, `pulse_outbox` for durable outbox rows). It has zero visibility into message content.
+`head` stores its state in SQLite: `users` (including preferences and Custom Words), `devices`, `push_tokens`, `deleted_devices` (tombstones of deleted accounts), the voice lease and usage tables, the region/edge tables in multi-region deployments, and the pulse tables (`pulse_meta` for durable snapshots, `pulse_outbox` for durable encrypted outbox rows, `pulse_capabilities`). It has zero visibility into message content.
 
 When a device connects or disconnects, the relay sends `device_joined` / `device_left` control messages so other devices can update their presence view. The relay pings all connected devices every 30 seconds as a heartbeat.
 
@@ -82,11 +82,11 @@ Its job is to:
 - store image attachments and serve them on demand
 - expose a local MCP server (`kraki-show_image`)
 
-The repository includes adapters for **GitHub Copilot**, **Claude Code**, and **pi**. The adapter boundary is intentionally separated so more agents can be added.
+The repository includes adapters for **GitHub Copilot**, **Claude Code**, **Codex** and **pi**. The adapter boundary is intentionally separated so more agents can be added.
 
 ### Arm
 
-`arm` is the receiving client — primarily the web app / PWA.
+`arm` is the receiving client: the native **iOS app** and **Kraki for Mac** (SwiftUI, `packages/arm/ios`, the primary clients) and the **web app / PWA** (`packages/arm/web`). Kraki for Mac can also run a built-in tentacle for the Mac itself.
 
 Its job is to:
 
@@ -95,7 +95,7 @@ Its job is to:
 - surface permissions, questions, and errors
 - send user actions back to the correct session
 - maintain UI state: read tracking, unread counts, active session
-- register push notification tokens and display notifications via service worker
+- register push notification tokens (APNs on iOS/macOS, Web Push in the browser) and display notifications
 
 ## Message flows
 
@@ -165,7 +165,10 @@ This is the central architectural choice in Kraki: the relay is a dumb pipe for 
 - `packages/crypto` — encryption primitives and blob helpers
 - `packages/head` — thin relay server (pulse hub + push + auth)
 - `packages/tentacle` — CLI bridge, agent adapters, session management
+- `packages/arm/ios` — native iOS app and Kraki for Mac (one Xcode project, `project.yml` → XcodeGen)
 - `packages/arm/web` — web receiver / PWA
+- `packages/monitor` — client diagnostics collector
+- `packages/voice-broker` — voice input lease authorizer and the legacy standalone broker
 - `packages/tests` — integration coverage
 
 For the threat model, see [`security.md`](./security.md). For the 2026-07-10 pulse outage post-mortem and debugging tools, see [`pulse-outage-postmortem.md`](./pulse-outage-postmortem.md).

@@ -51,4 +51,12 @@ describe('payload fragments', () => {
     asm.accept(p1[0]);
     expect(asm.pendingPayloads).toBe(1); // p2 expired; p1 restarted
   });
+
+  it('rejects parts larger than a fragment and payloads larger than the budget', () => {
+    const asm = new PayloadAssembler(100_000);
+    expect(asm.accept({ kfrag: 1, id: 'x', i: 0, n: 2, d: 'a'.repeat(200_000) })).toBeNull();
+    expect(asm.pendingPayloads).toBe(0);
+    expect(asm.accept({ kfrag: 1, id: 'y', i: 0, n: 1000, d: 'a' })).toBeNull();
+    expect(asm.pendingPayloads).toBe(0);
+  });
 });

@@ -19,6 +19,12 @@ describe('isKrakiSelfManagementCommand', () => {
     'npm test || kraki update',
     'pkill -f kraki',
     'taskkill /F /IM kraki.exe',
+    'bash -c "kraki stop"',
+    "sh -c 'kraki restart'",
+    'echo `kraki update`',
+    'kill $(cat ~/.kraki/daemon.pid)',
+    'kill -9 `cat /Users/me/.kraki/daemon.pid`',
+    'launchctl bootout gui/501/chat.kraki.tentacle',
   ])('blocks %s', (command) => {
     expect(isKrakiSelfManagementCommand(command)).toBe(true);
   });
@@ -32,6 +38,8 @@ describe('isKrakiSelfManagementCommand', () => {
     'grep -rn "kraki stop" docs/',
     'echo "run kraki update to upgrade" >> README.md',
     "cat > notes.md <<'EOF'\\nThe guard blocks kraki restart.\\nEOF",
+    'kill %1',
+    'launchctl list | grep kraki',
   ])('allows %s', (command) => {
     expect(isKrakiSelfManagementCommand(command)).toBe(false);
   });

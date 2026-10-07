@@ -139,13 +139,13 @@ Three scripts in `scripts/`:
 
 ```bash
 # Passive observation — connect and watch WS + pulse events for N seconds
-pnpm exec tsx scripts/arm-prod-log.ts --duration 60
+pnpm exec tsx scripts/arm-prod-log.ts --prod --duration 60
 
 # Chat with an existing session
-KRAKI_SESSION_ID=<id> pnpm exec tsx scripts/arm-prod-chat.ts --message "hello" --duration 60
+KRAKI_SESSION_ID=<id> pnpm exec tsx scripts/arm-prod-chat.ts --prod --message "hello" --duration 60
 
 # Create a NEW session (select agent + model via UI) and send a prompt
-pnpm exec tsx scripts/arm-prod-newsession.ts
+pnpm exec tsx scripts/arm-prod-newsession.ts --prod
 ```
 
 All scripts use a persistent browser profile at `.tmp/arm-pw-profile` (paired once via `kraki connect --json` token). The proxy is `socks5://127.0.0.1:1080` (hysteria).

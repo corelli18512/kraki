@@ -97,13 +97,33 @@ struct IOSVoiceDraftDecoration: UIViewRepresentable {
             }
         }
 
-        private func findInput(in root: UIView) -> UIView? {
-            if let view = root as? UITextView, view.isEditable, view.text == expectedText { return view }
-            if let view = root as? UITextField, view.text == expectedText { return view }
-            for child in root.subviews {
-                if let found = findInput(in: child) { return found }
+        /// The text input this marker decorates: the marker is the field's
+        /// background, so it is the matching input that overlaps the marker
+        /// most, searched from the nearest ancestor outward. Matching on text
+        /// alone picked other fields (search, rename) with the same text, or
+        /// any empty one.
+        private func findInput() -> UIView? {
+            let markerFrame = convert(bounds, to: nil)
+            guard markerFrame.width > 0, markerFrame.height > 0 else { return nil }
+            var root = superview
+            while let ancestor = root {
+                var best: (view: UIView, area: CGFloat)?
+                visitInputs(in: ancestor) { view in
+                    let overlap = view.convert(view.bounds, to: nil).intersection(markerFrame)
+                    guard !overlap.isNull else { return }
+                    let area = overlap.width * overlap.height
+                    if area > 0, area > (best?.area ?? 0) { best = (view, area) }
+                }
+                if let best { return best.view }
+                root = ancestor.superview
             }
             return nil
+        }
+
+        private func visitInputs(in root: UIView, _ visit: (UIView) -> Void) {
+            if let view = root as? UITextView, view.isEditable, view.text == expectedText { visit(view) }
+            if let view = root as? UITextField, view.text == expectedText { visit(view) }
+            for child in root.subviews { visitInputs(in: child, visit) }
         }
 
         private func trackInput(_ view: UIView?) {
@@ -128,12 +148,7 @@ struct IOSVoiceDraftDecoration: UIViewRepresentable {
         private func applyIfReady() {
             guard window != nil else { return }
             if input?.window !== window || input == nil {
-                trackInput(nil)
-                var root = superview
-                while let candidate = root {
-                    if let found = findInput(in: candidate) { trackInput(found); break }
-                    root = candidate.superview
-                }
+                trackInput(findInput())
             }
             guard pending != nil || hadTint else { return }
             applying = true

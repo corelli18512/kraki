@@ -23,6 +23,8 @@ for (const [name, paths, expected] of [
   ['chaos stack', ['packages/tests/src/chaos/proxy.ts', 'scripts/chaos/run-native.sh'], relay],
   ['Windows adapter does not launch native apps', ['packages/tentacle/src/adapters/codex.ts'], tentacle],
   ['shared contract affects all clients', ['packages/protocol/src/types.ts'], all],
+  ['crypto must stay compatible with the Swift client', ['packages/crypto/src/index.ts'], { ...tentacle, native: true }],
+  ['other workflows are linted in the scope job', ['.github/workflows/release.yml', '.github/actionlint.yaml'], none],
   ['lockfile', ['pnpm-lock.yaml'], all],
   ['CI rules', ['.github/workflows/ci.yml'], all],
   ['scope script', ['scripts/ci/test-scope.mjs'], all],

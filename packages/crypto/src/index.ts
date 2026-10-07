@@ -54,6 +54,7 @@ export interface RecipientKey {
 const RSA_KEY_SIZE = 4096;
 const AES_KEY_SIZE = 32;  // 256 bits
 const IV_SIZE = 12;       // 96 bits for GCM
+const TAG_SIZE = 16;      // AES-GCM auth tag is always 16 bytes
 
 /**
  * Generate an RSA-OAEP key pair for a device.
@@ -149,13 +150,15 @@ export function decrypt(payload: EncryptedPayload, deviceId: string, privateKey:
     Buffer.from(wrappedKey, 'base64'),
   );
 
-  // 2. Decrypt ciphertext
-  const decipher = createDecipheriv(
-    'aes-256-gcm',
-    aesKey,
-    Buffer.from(payload.iv, 'base64'),
-  );
-  decipher.setAuthTag(Buffer.from(payload.tag, 'base64'));
+  // 2. Decrypt ciphertext. Exact IV and full 16-byte tag only: GCM would
+  //    otherwise accept a truncated tag, weakening the integrity check.
+  const iv = Buffer.from(payload.iv, 'base64');
+  const tag = Buffer.from(payload.tag, 'base64');
+  if (iv.length !== IV_SIZE || tag.length !== TAG_SIZE) {
+    throw new Error('Malformed encrypted payload');
+  }
+  const decipher = createDecipheriv('aes-256-gcm', aesKey, iv, { authTagLength: TAG_SIZE });
+  decipher.setAuthTag(tag);
 
   const decrypted = Buffer.concat([
     decipher.update(Buffer.from(payload.ciphertext, 'base64')),
@@ -167,7 +170,6 @@ export function decrypt(payload: EncryptedPayload, deviceId: string, privateKey:
 
 // ── Blob format (consolidated envelope) ────────────────
 
-const TAG_SIZE = 16; // AES-GCM auth tag is always 16 bytes
 
 /**
  * Encrypt and pack into a single blob string.
@@ -188,6 +190,7 @@ export function encryptToBlob(plaintext: string, recipients: RecipientKey[]): Bl
  */
 export function decryptFromBlob(blobPayload: BlobPayload, deviceId: string, privateKey: string): string {
   const raw = Buffer.from(blobPayload.blob, 'base64');
+  if (raw.length < IV_SIZE + TAG_SIZE) throw new Error('Malformed encrypted payload');
   const iv = raw.subarray(0, IV_SIZE).toString('base64');
   const tag = raw.subarray(raw.length - TAG_SIZE).toString('base64');
   const ciphertext = raw.subarray(IV_SIZE, raw.length - TAG_SIZE).toString('base64');

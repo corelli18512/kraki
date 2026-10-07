@@ -23,6 +23,12 @@ type Page = import('playwright').Page;
 
 const PROFILE_DIR = join(REPO, '.tmp', 'arm-pw-profile');
 const OUT_FILE = join(REPO, '.tmp', 'arm-prod-chat.jsonl');
+// Production-touching tool: refuse to run without an explicit --prod.
+if (!process.argv.includes('--prod')) {
+  console.error('This script drives the PRODUCTION web app and relay with your real account. Re-run with --prod.');
+  process.exit(2);
+}
+
 const APP_URL = 'https://app.kraki.chat';
 const RELAY = 'wss://cn.relay.kraki.chat';
 
@@ -142,7 +148,11 @@ async function main(): Promise<void> {
   // Navigate directly to the latest session — session cards in the sidebar are
   // plain <button> elements with onClick handlers (no href/data attrs), so
   // direct URL navigation is more reliable than trying to click them.
-  const SESSION_ID = process.env.KRAKI_SESSION_ID || 'mrbdurdy-gkmhch33';
+  const SESSION_ID = process.env.KRAKI_SESSION_ID;
+  if (!SESSION_ID) {
+    console.error('Set KRAKI_SESSION_ID to the session to drive.');
+    process.exit(2);
+  }
   console.log(`${C.green}navigating to session ${SESSION_ID}${C.reset}`);
   await page.goto(`${APP_URL}/session/${SESSION_ID}`, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(3000);
