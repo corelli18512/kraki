@@ -932,6 +932,11 @@ jobs:
       - name: Build packages
         run: pnpm --filter @kraki/protocol build && pnpm --filter @kraki/crypto build && pnpm --filter @kraki/tentacle build && pnpm --filter @kraki/head build
 
+      - name: Shared packages are not stale on npm
+        # A changed protocol/crypto with an unchanged version would be skipped
+        # below, and tentacle/head published against the old copy.
+        run: node scripts/release/check-published.mjs packages/protocol packages/crypto
+
       - name: Pack and publish
         run: |
           set -euo pipefail
