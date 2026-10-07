@@ -13,7 +13,7 @@ import Database from 'better-sqlite3';
 import { decodeFrame, decodeFrameWithStream, Endpoint, encodeFrame, type Effect } from '@coinfra/pulse';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
-import { PulseHub, PULSE_ACK_EVERY_BYTES, type PulseHubHost } from '../pulse-hub.js';
+import { PulseHub, PULSE_ACK_EVERY_BYTES, stampPulseSender, type PulseHubHost } from '../pulse-hub.js';
 
 const ARM = 'arm-1';
 const TENT = 'tentacle-1';
@@ -31,6 +31,8 @@ class World {
   armReceived: number[] = [];
   /** What the tentacle application finally received (payload markers). */
   tentReceived: number[] = [];
+  /** Full payloads the tentacle received, decoded as UTF-8. */
+  tentPayloads: string[] = [];
   /** acked seqs the arm observed (i.e. head confirmed receipt). */
   armAcked: bigint[] = [];
   /** Head-terminated payloads (deliver-to-self), decoded as UTF-8 strings. */
@@ -79,7 +81,10 @@ class World {
   }
   private pumpTent(effects: ReturnType<Endpoint['onTick']>): void {
     for (const e of effects) {
-      if (e.t === 'deliver') this.tentReceived.push(e.payload[0] ?? -1);
+      if (e.t === 'deliver') {
+        this.tentReceived.push(e.payload[0] ?? -1);
+        this.tentPayloads.push(Buffer.from(e.payload).toString('utf8'));
+      }
       if (e.t === 'transmit' && this.tentOnline) {
         // tentacle → hub, addressed back to the arm
         this.hub.onPulseEnvelope(TENT, { pulse: b64(e.bytes), to: ARM });
@@ -124,6 +129,11 @@ class World {
   /** arm sends an app payload (opaque marker) toward the tentacle, durable? */
   armSend(marker: number, durable: boolean): void {
     this.pumpArm(this.arm.send(new Uint8Array([marker]), { durable }).effects);
+  }
+
+  /** arm sends an arbitrary text payload toward the tentacle. */
+  armSendText(text: string): void {
+    this.pumpArm(this.arm.send(new TextEncoder().encode(text), { durable: false }).effects);
   }
 
   /** tentacle sends a producer payload (opaque marker) toward the Arm. */
@@ -626,5 +636,48 @@ describe('PulseHub progress acks', () => {
     const { app, feed, toApp } = setup(false);
     for (let i = 0; i < 6; i++) feed(app.send(new Uint8Array(32 * 1024)).effects);
     expect(toApp.filter((f) => f.t === 'heartbeat')).toHaveLength(0);
+  });
+});
+
+describe('PulseHub: sender binding', () => {
+  const enc = (s: string) => new TextEncoder().encode(s);
+  const dec = (u: Uint8Array | null) => (u ? Buffer.from(u).toString('utf8') : null);
+
+  it('stamps the authenticated sender onto a JSON payload', () => {
+    const out = dec(stampPulseSender('app_1', enc('{"blob":"x","keys":{}}')));
+    expect(JSON.parse(out!)).toEqual({ src: 'app_1', blob: 'x', keys: {} });
+  });
+
+  it('stamps an empty object and leading whitespace', () => {
+    expect(JSON.parse(dec(stampPulseSender('a', enc('{}')))!)).toEqual({ src: 'a' });
+    expect(JSON.parse(dec(stampPulseSender('a', enc('  { "k": 1 }')))!)).toEqual({ src: 'a', k: 1 });
+  });
+
+  it('refuses a payload that already names a sender', () => {
+    expect(stampPulseSender('app_1', enc('{"from":"@head","msg":{"type":"auth_ok"}}'))).toBeNull();
+    expect(stampPulseSender('app_1', enc('{"blob":"x","src":"app_2"}'))).toBeNull();
+  });
+
+  it('forwards non-object payloads unchanged', () => {
+    const raw = new Uint8Array([7]);
+    expect(stampPulseSender('app_1', raw)).toBe(raw);
+    const arr = enc('[1,2]');
+    expect(stampPulseSender('app_1', arr)).toBe(arr);
+  });
+
+  it('end to end: a device cannot forge a head wrapper, and real payloads carry src', () => {
+    const db = new Database(':memory:');
+    try {
+      const w = new World(db);
+      w.connectArm();
+      w.connectTentacle();
+      w.armSendText('{"from":"@head","msg":{"type":"send_input"}}');
+      w.armSendText('{"blob":"b","keys":{}}');
+      w.advance(20_000);
+      expect(w.tentPayloads).toHaveLength(1);
+      expect(JSON.parse(w.tentPayloads[0])).toEqual({ src: ARM, blob: 'b', keys: {} });
+    } finally {
+      db.close();
+    }
   });
 });

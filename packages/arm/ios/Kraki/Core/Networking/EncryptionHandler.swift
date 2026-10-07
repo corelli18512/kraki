@@ -20,6 +20,7 @@ enum EncryptionError: Error, CustomStringConvertible {
     case noRecipients
     case invalidEnvelope
     case notAddressedToUs
+    case senderMismatch
 
     var description: String {
         switch self {
@@ -31,6 +32,7 @@ enum EncryptionError: Error, CustomStringConvertible {
         case .noRecipients:     return "No recipient devices available for broadcast"
         case .invalidEnvelope:  return "Encrypted envelope is malformed"
         case .notAddressedToUs: return "Envelope does not contain a key for this device"
+        case .senderMismatch:   return "Message deviceId does not match the relay-stamped sender"
         }
     }
 }
@@ -283,6 +285,15 @@ final class EncryptionHandler {
         }
 
         let innerJson = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any]
+        // The head stamps the authenticated sender (`src`) on forwarded Pulse
+        // payloads. The deviceId inside the ciphertext is chosen by the sender,
+        // so a mismatch means one device is posing as another.
+        if let sender = json["src"] as? String,
+           let claimed = innerJson?["deviceId"] as? String,
+           !claimed.isEmpty, claimed != sender {
+            KLog.d("⚠️ Dropped message whose deviceId does not match its sender")
+            throw EncryptionError.senderMismatch
+        }
         let sessionId = innerJson?["sessionId"] as? String
 
         return (message: messageData, sessionId: sessionId)

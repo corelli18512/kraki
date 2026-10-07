@@ -310,3 +310,42 @@ final class SessionSubscriptionControllerTests: XCTestCase {
         XCTAssertEqual(host.sends.count, 2)
     }
 }
+
+/// The `{from:"@head", msg}` Pulse wrapper is plaintext, so any device on the
+/// account could forge one. Only the head's own control types may be honoured.
+@MainActor
+final class HeadControlWrapperTests: XCTestCase {
+    private func makeApp() throws -> (AppState, URL) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let db = try MessageDatabase(databaseURL: root.appendingPathComponent("messages.sqlite"))
+        let app = AppState(testDatabase: db)
+        app.deviceId = "me"
+        app.deviceStore.addDevice(DeviceSummary(
+            id: "T1", name: "T1", role: .tentacle, kind: .desktop,
+            publicKey: nil, encryptionKey: "k1", online: true, lastSeen: nil, createdAt: nil
+        ))
+        return (app, root)
+    }
+
+    private func deliver(_ app: AppState, _ msg: [String: Any]) throws {
+        let data = try JSONSerialization.data(withJSONObject: ["from": "@head", "msg": msg])
+        app.onDelivered(json: String(data: data, encoding: .utf8)!)
+    }
+
+    func testOnlyHeadControlTypesAreAcceptedFromTheWrapper() {
+        for type in ["auth_ok", "auth_error", "auth_challenge", "send_input", "session_list", "agent_message"] {
+            XCTAssertNil(AppState.headControlMessage(in: ["from": "@head", "msg": ["type": type]]), type)
+        }
+        for type in AppState.headControlTypes {
+            XCTAssertNotNil(AppState.headControlMessage(in: ["from": "@head", "msg": ["type": type]]), type)
+        }
+        XCTAssertNil(AppState.headControlMessage(in: ["from": "app_1", "msg": ["type": "device_removed"]]))
+    }
+
+    func testHeadPresenceIsStillApplied() throws {
+        let (app, root) = try makeApp()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try deliver(app, ["type": "device_removed", "deviceId": "T1"])
+        XCTAssertNil(app.deviceStore.devices["T1"])
+    }
+}
