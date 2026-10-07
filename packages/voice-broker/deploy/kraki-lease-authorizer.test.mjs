@@ -85,9 +85,16 @@ test('rejects wrong user, device, resource and time window', () => {
 });
 
 test('legacy API-key clients remain a separate per-start path', () => {
-  const legacy = createLegacyApiKeyAuthorizer('legacy-secret');
+  let uses = 0;
+  const legacy = createLegacyApiKeyAuthorizer('legacy-secret', { onUse: () => { uses += 1; } });
   assert.deepEqual(legacy({ start: { type: 'start', apiKey: 'legacy-secret' } }), { ok: true });
   assert.equal(legacy({ start: { type: 'start', apiKey: 'wrong' } }).reason, 'missing_authorization');
+  assert.equal(uses, 1, 'every legacy use is reported');
+
+  // Unset key: the legacy path is off, even for an empty apiKey.
+  const off = createLegacyApiKeyAuthorizer('');
+  assert.equal(off({ start: { type: 'start', apiKey: '' } }).ok, false);
+  assert.equal(off({ start: { type: 'start' } }).ok, false);
 });
 
 test('activation precedes acceptance and restores cumulative usage for reconnect', async () => {

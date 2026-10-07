@@ -81,13 +81,17 @@ async function main() {
     authorizeConnection: createKrakiConnectionAuthorizer(publicKey, {
       activate: settlement.activate,
     }),
-    authorize: createLegacyApiKeyAuthorizer(required('VOICE_API_KEY')),
+    // Legacy static key: optional, and logged on every use so it can be
+    // removed once nothing relies on it.
+    authorize: createLegacyApiKeyAuthorizer(process.env.VOICE_API_KEY?.trim() || '', {
+      onUse: () => log.warn('legacy VOICE_API_KEY authorization used (bypasses lease, settlement and quota)'),
+    }),
     onUsage: settlement.onUsage,
   });
   log.info('Kraki lease gateway ready', {
     url: gateway.url,
     correction: correctionEnabled,
-    authorization: 'warm-kraki-lease+legacy-api-key',
+    authorization: process.env.VOICE_API_KEY?.trim() ? 'warm-kraki-lease+legacy-api-key' : 'warm-kraki-lease',
     settlement: 'cumulative-audio-checkpoints',
   });
 

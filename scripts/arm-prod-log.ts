@@ -60,6 +60,12 @@ const PROFILE_DIR = join(REPO, '.tmp', 'arm-pw-profile');
 const OUT_FILE = join(REPO, '.tmp', 'arm-prod-log.jsonl');
 
 // prod web + force the cn region relay (matches the user's tentacle).
+// Production-touching tool: refuse to run without an explicit --prod.
+if (!process.argv.includes('--prod')) {
+  console.error('This script drives the PRODUCTION web app and relay with your real account. Re-run with --prod.');
+  process.exit(2);
+}
+
 const APP_URL = 'https://app.kraki.chat';
 const RELAY = 'wss://cn.relay.kraki.chat';
 

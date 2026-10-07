@@ -42,9 +42,9 @@ jobs:
       OLD: "0.35.99"
       RELAY_DIR: ${{ github.workspace }}/.relay
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - run: corepack enable
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
           cache: pnpm
@@ -94,12 +94,7 @@ jobs:
               TGZ=$(ls "$HOME"/kraki-tentacle-*.tgz | head -1)
               npm install -g "$TGZ"
               # …but run this repo's protocol/crypto code (main may be ahead of npm).
-              ROOT="$(npm root -g)"
-              for pkg in protocol crypto; do
-                for P in "$ROOT/@kraki/tentacle/node_modules/@kraki/$pkg" "$ROOT/@kraki/$pkg"; do
-                  [ -d "$P" ] && cp -R "packages/$pkg/dist/." "$P/dist/" && echo "patched $P"
-                done
-              done
+              bash scripts/e2e/remote-update/patch-npm-deps.sh
               echo "KRAKI=kraki" >> "$GITHUB_ENV"; echo "OLD_ARTIFACT=$TGZ" >> "$GITHUB_ENV"
               ;;
           esac
@@ -127,7 +122,7 @@ jobs:
           case "$KIND" in
             binary) cp "$OLD_ARTIFACT" "$KRAKI" ;;
             app) rm -rf "$HOME/.kraki-app/Kraki.app"; tar -xzf "$OLD_ARTIFACT" -C "$HOME/.kraki-app" ;;
-            npm) npm install -g "$OLD_ARTIFACT" ;;
+            npm) npm install -g "$OLD_ARTIFACT"; bash scripts/e2e/remote-update/patch-npm-deps.sh ;;
           esac
           rm -f "$HOME/.kraki/remote-update/result.json"
           "$KRAKI" start --login || true

@@ -75,8 +75,26 @@ KRAKI_VOICE_LEASE_PUBLIC_KEY_PATH=/path/to/voice-lease.pub.pem
 KRAKI_VOICE_SETTLEMENT_URL=http://127.0.0.1:4000/internal/voice/settle
 KRAKI_VOICE_SETTLEMENT_KEY=<same secret as Head VOICE_SETTLEMENT_KEY>
 KRAKI_VOICE_SETTLEMENT_TIMEOUT_MS=2000
-VOICE_API_KEY=<legacy server-only migration key>
+VOICE_API_KEY=<optional legacy server-only migration key>
 ```
+
+`VOICE_API_KEY` enables the legacy static-key path for non-Kraki clients. It
+bypasses lease verification, Head settlement and the daily quota, so it is off
+when unset and every use is logged ("legacy VOICE_API_KEY authorization
+used"). Unset it once those logs stop.
+
+The gateway itself (`./coinfra/index.mjs`: `startGateway`, the Doubao ASR
+provider and the OpenAI-compatible corrector) is **not in this repository**.
+It is the built `@coinfra/voice` distribution (0.3.0 or later) from the
+coinfra repository, copied next to this file at deploy time. Audio goes to
+Doubao (Volcengine); with correction on, the transcript and the client's
+context go to the OpenAI-compatible corrector configured by `CORRECTOR_*`
+(DeepSeek by default).
+
+Lease verification exists twice: `src/lease-verifier.ts` (the development
+broker, via @kraki/crypto) and `deploy/kraki-lease-authorizer.mjs` (the
+production adapter, dependency-free). `src/__tests__/lease-parity.test.ts`
+checks that both accept and reject the same leases.
 
 Kraki clients send the signed lease once in a connection-level `authorize`
 frame. Signature, algorithm, issuer, user, device, resource, time window, and

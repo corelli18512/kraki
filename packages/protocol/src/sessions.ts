@@ -131,7 +131,12 @@ export interface SessionDigest {
 // Local session types — for local session sync / import feature
 // ------------------------------------------------------------
 
-/** Where a local session originated. */
+/**
+ * Where a local session originated. Import currently scans only Copilot's
+ * session store (`~/.copilot/session-state`), so tentacles produce
+ * `copilot-cli` or `vscode` (Copilot in VS Code). `claude-code` is reserved
+ * for a future Claude Code import and is never sent today.
+ */
 export type LocalSessionSource = 'copilot-cli' | 'claude-code' | 'vscode' | 'unknown';
 
 /**

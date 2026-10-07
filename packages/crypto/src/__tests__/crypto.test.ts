@@ -2,6 +2,7 @@ import {
   generateKeyPair,
   encrypt,
   decrypt,
+  decryptFromBlob,
   exportPublicKey,
   importPublicKey,
   signChallenge,
@@ -39,6 +40,15 @@ describe('@kraki/crypto', () => {
 
     beforeEach(() => {
       kp = generateKeyPair();
+    });
+
+    it('rejects a truncated auth tag or a short blob', () => {
+      const recipients: RecipientKey[] = [{ deviceId, publicKey: kp.publicKey }];
+      const payload = encrypt('hello', recipients);
+      const shortTag = Buffer.from(payload.tag, 'base64').subarray(0, 4).toString('base64');
+      expect(() => decrypt({ ...payload, tag: shortTag }, deviceId, kp.privateKey)).toThrow();
+      expect(() => decryptFromBlob({ blob: Buffer.alloc(10).toString('base64'), keys: payload.keys }, deviceId, kp.privateKey))
+        .toThrow('Malformed encrypted payload');
     });
 
     it('should encrypt and decrypt a simple message', () => {

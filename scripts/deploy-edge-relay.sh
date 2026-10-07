@@ -112,6 +112,20 @@ rollback() {
     npm install -g --registry="$NPM_REGISTRY" "@kraki/head@$CURRENT_VERSION" || true
   fi
   cp -p "$SNAP/kraki-relay.service" "$UNIT"
+  # The new version may have migrated the schema; old code on a newer schema
+  # can fail or corrupt data. Restore the snapshot when user_version moved
+  # (we are seconds after the restart, so little is lost). The migrated DB
+  # is kept next to the snapshot.
+  local snap_schema live_schema
+  snap_schema="$(sqlite3 "$SNAP/kraki-relay.db" 'PRAGMA user_version;' 2>/dev/null || echo '?')"
+  live_schema="$(sqlite3 "$DB" 'PRAGMA user_version;' 2>/dev/null || echo '?')"
+  if [ "$snap_schema" != "$live_schema" ]; then
+    echo "==> schema changed ($snap_schema -> $live_schema): restoring the DB snapshot"
+    systemctl stop kraki-relay || true
+    mv "$DB" "$SNAP/kraki-relay.migrated.db" 2>/dev/null || true
+    rm -f "$DB-wal" "$DB-shm"
+    cp -p "$SNAP/kraki-relay.db" "$DB"
+  fi
   if [ -f "$SNAP/relay.env" ]; then
     cp -p "$SNAP/relay.env" "$ENV_FILE"
     chmod 600 "$ENV_FILE"
@@ -160,7 +174,10 @@ echo "deploy OK: kraki-relay $VERSION running, /127.0.0.1:4000/ healthy"
 echo "snapshot: $SNAP"
 echo
 echo "manual rollback (within 30 days of snapshot):"
+echo "  systemctl stop kraki-relay"
 echo "  npm install -g @kraki/head@${CURRENT_VERSION:-<prev>}"
+echo "  # only if the new version changed the schema (PRAGMA user_version):"
+echo "  #   mv $DB $SNAP/kraki-relay.migrated.db && rm -f $DB-wal $DB-shm && cp $SNAP/kraki-relay.db $DB"
 echo "  cp $SNAP/kraki-relay.service $UNIT"
 echo "  cp $SNAP/relay.env $ENV_FILE && chmod 600 $ENV_FILE"
 echo "  systemctl daemon-reload && systemctl restart kraki-relay"

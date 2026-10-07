@@ -8,6 +8,11 @@
  * trip an API-side rejection. Aspect ratio is preserved.
  */
 
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 /** Max per-side pixel dimension we'll ship to the model. */
 export const MAX_DIMENSION = 2000;
 
@@ -40,7 +45,9 @@ export async function fitToMaxDimension(
     const sharp = await getSharp();
     meta = await sharp(bytes, { animated: isGif }).metadata();
   } catch {
-    return { bytes, mimeType };
+    // No sharp: the shipped single-executable build can't load it. macOS
+    // has `sips`; elsewhere the image goes unchanged.
+    return (await fitWithSips(bytes, mimeType)) ?? { bytes, mimeType };
   }
   const w = meta.width ?? 0;
   const h = meta.height ?? 0;
@@ -71,5 +78,42 @@ export async function fitToMaxDimension(
     }
   } catch {
     return { bytes, mimeType };
+  }
+}
+
+function run(file: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { timeout: 15_000 }, (err, stdout) => (err ? reject(err) : resolve(String(stdout))));
+  });
+}
+
+/**
+ * macOS fallback with the built-in `sips` (PNG and JPEG only). Returns null
+ * when it doesn't apply or fails, so callers keep the original bytes.
+ */
+export async function fitWithSips(
+  bytes: Buffer,
+  mimeType: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<{ bytes: Buffer; mimeType: string } | null> {
+  if (platform !== 'darwin') return null;
+  const ext = mimeType === 'image/png' ? 'png' : mimeType === 'image/jpeg' ? 'jpg' : null;
+  if (!ext) return null;
+  let dir: string | undefined;
+  try {
+    dir = await mkdtemp(join(tmpdir(), 'kraki-resize-'));
+    const input = join(dir, `in.${ext}`);
+    const output = join(dir, `out.${ext}`);
+    await writeFile(input, bytes);
+    const info = await run('/usr/bin/sips', ['-g', 'pixelWidth', '-g', 'pixelHeight', input]);
+    const w = Number(/pixelWidth:\s*(\d+)/.exec(info)?.[1] ?? 0);
+    const h = Number(/pixelHeight:\s*(\d+)/.exec(info)?.[1] ?? 0);
+    if (w === 0 || h === 0 || Math.max(w, h) <= MAX_DIMENSION) return { bytes, mimeType };
+    await run('/usr/bin/sips', ['-Z', String(MAX_DIMENSION), input, '--out', output]);
+    return { bytes: await readFile(output), mimeType };
+  } catch {
+    return null;
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }

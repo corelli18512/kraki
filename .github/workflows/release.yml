@@ -59,7 +59,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
 
@@ -219,7 +219,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
           ref: ${{ needs.prepare.outputs.checkout_ref }}
@@ -228,7 +228,7 @@ jobs:
         run: corepack enable
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
           cache: pnpm
@@ -400,7 +400,7 @@ jobs:
         run: node packages/tentacle/scripts/daemon-release-smoke.mjs packages/tentacle/dist/sea/Kraki.app/Contents/MacOS/kraki
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-${{ matrix.asset_name }}
           path: packages/tentacle/dist/sea/${{ matrix.asset_name }}
@@ -408,7 +408,7 @@ jobs:
 
       - name: Upload .app bundle artifact (macOS)
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-${{ matrix.asset_name }}-app
           path: packages/tentacle/dist/sea/kraki-macos-*.app.tar.gz
@@ -430,7 +430,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ needs.prepare.outputs.checkout_ref }}
 
@@ -438,7 +438,7 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
       - name: Resolve Swift packages cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             packages/arm/ios/.build
@@ -464,7 +464,7 @@ jobs:
         run: corepack enable
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
           cache: pnpm
@@ -633,7 +633,7 @@ jobs:
           ls -lh "$RUNNER_TEMP/kraki-mac-gui-universal.app.tar.gz" "$RUNNER_TEMP/Kraki.app.zip"
 
       - name: Preserve matching dSYMs for diagnostics
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mac-symbols-${{ needs.prepare.outputs.release_sha }}
           path: ${{ runner.temp }}/KrakiMac.xcarchive/dSYMs
@@ -641,7 +641,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Sparkle update archive
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-kraki-mac-sparkle-update
           path: ${{ runner.temp }}/Kraki.app.zip
@@ -673,7 +673,7 @@ jobs:
           fi
 
       - name: Upload .app bundle artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-kraki-mac-gui-universal-app
           path: ${{ runner.temp }}/kraki-mac-gui-universal.app.tar.gz
@@ -710,7 +710,7 @@ jobs:
           ls -lh "$DMG"
 
       - name: Upload disk image artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-kraki-mac-dmg
           path: ${{ runner.temp }}/Kraki.dmg
@@ -748,7 +748,7 @@ jobs:
 
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: build-kraki-*
           path: release-assets
@@ -765,12 +765,12 @@ jobs:
 
       - name: Attest build provenance
         if: needs.prepare.outputs.publish_mode == 'publish'
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: 'release-assets/*'
 
       - name: Upload release assets bundle
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-assets-${{ needs.prepare.outputs.release_sha }}
           path: release-assets
@@ -816,7 +816,7 @@ jobs:
 
     steps:
       - name: Check out appcast branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: mac-updates
           fetch-depth: 1
@@ -903,7 +903,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ needs.prepare.outputs.checkout_ref }}
 
@@ -911,7 +911,7 @@ jobs:
         run: corepack enable
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
           cache: pnpm

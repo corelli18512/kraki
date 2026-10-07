@@ -952,6 +952,20 @@ final class KrakiVoiceInputTests: XCTestCase {
         XCTAssertTrue(String(Array(raw).dropFirst(offset)).count < raw.count)
     }
 
+    func testCorrectionAlignmentOnLongDictationFindsTheConsumedPrefix() {
+        // A long dictation: the corrected text covers the first half of the
+        // raw text, with small edits. The banded alignment must still find
+        // the end of that half, and stay fast.
+        let sentence = "please refactor the voice input controller and keep the tests green "
+        let raw = String(repeating: sentence, count: 40)
+        let half = String(repeating: sentence, count: 20)
+        let corrected = half.replacingOccurrences(of: "voice input controller", with: "VoiceInputController")
+        let started = Date()
+        let offset = KrakiVoiceInputController.alignedRawPrefixLength(corrected: corrected, raw: raw)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5)
+        XCTAssertEqual(Double(offset), Double(half.count), accuracy: 3)
+    }
+
     func testCancelSuppressesLateGrantAndLateFinal() async {
         let host = FakeVoiceHost()
         let factory = FakeVoiceFactory()

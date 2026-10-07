@@ -59,6 +59,27 @@ try {
     Remove-Item -Force -ErrorAction SilentlyContinue $download
     throw
 }
+
+# Verify against the release's SHA256SUMS.txt; refuse a mismatch or a
+# release without checksums.
+$sumsUrl = ($release.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' } | Select-Object -First 1).browser_download_url
+$expected = $null
+if ($sumsUrl) {
+    try {
+        $sums = (Invoke-WebRequest -Uri $sumsUrl @web).Content
+        if ($sums -is [byte[]]) { $sums = [Text.Encoding]::UTF8.GetString($sums) }
+        foreach ($line in ($sums -split "`n")) {
+            $parts = $line.Trim() -split '\s+', 2
+            if ($parts.Count -eq 2 -and $parts[1].TrimStart('*') -eq $asset) { $expected = $parts[0].ToLower(); break }
+        }
+    } catch {}
+}
+$actual = (Get-FileHash -Algorithm SHA256 -Path $download).Hash.ToLower()
+if (-not $expected -or $expected -ne $actual) {
+    Remove-Item -Force -ErrorAction SilentlyContinue $download
+    throw "Checksum verification failed for $asset - refusing to install."
+}
+
 if (Test-Path $target) {
     $wasRunning = $false
     try { $wasRunning = ((& $target status --json 2>$null | Out-String) -match '"running":\s*true') } catch {}

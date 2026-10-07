@@ -127,7 +127,9 @@ public struct VoiceInputConfiguration: Sendable {
 }
 
 public enum VoicePCMConverter {
-    /// Downmix the first Float32 channel to mono Int16 PCM at `targetRate`.
+    /// Convert the first Float32 channel to mono Int16 PCM at `targetRate`:
+    /// averaging when downsampling, linear interpolation when the input is
+    /// slower (8 kHz Bluetooth headsets).
     public static func convert(
         samples: UnsafePointer<Float>,
         frameLength: Int,
@@ -135,7 +137,10 @@ public enum VoicePCMConverter {
         targetRate: Double
     ) -> (data: Data, peak: Float)? {
         guard frameLength > 0, sourceRate.isFinite, targetRate.isFinite,
-              sourceRate >= targetRate, targetRate > 0 else { return nil }
+              sourceRate > 0, targetRate > 0 else { return nil }
+        if sourceRate < targetRate {
+            return upsample(samples: samples, frameLength: frameLength, sourceRate: sourceRate, targetRate: targetRate)
+        }
         let ratio = sourceRate / targetRate
         let outputLength = Int(Double(frameLength) / ratio)
         guard outputLength > 0 else { return nil }
@@ -152,6 +157,31 @@ public enum VoicePCMConverter {
                 count += 1
             }
             let sample = count > 0 ? accumulator / Float(count) : 0
+            guard sample.isFinite else { return nil }
+            peak = max(peak, abs(sample))
+            let clamped = max(-1.0, min(1.0, Double(sample)))
+            output[index] = Int16(clamped * 32767)
+        }
+        return (output.withUnsafeBufferPointer { Data(buffer: $0) }, peak)
+    }
+
+    private static func upsample(
+        samples: UnsafePointer<Float>,
+        frameLength: Int,
+        sourceRate: Double,
+        targetRate: Double
+    ) -> (data: Data, peak: Float)? {
+        let step = sourceRate / targetRate // < 1
+        let outputLength = Int(Double(frameLength) * targetRate / sourceRate)
+        guard outputLength > 0 else { return nil }
+        var output = [Int16](repeating: 0, count: outputLength)
+        var peak: Float = 0
+        for index in 0..<outputLength {
+            let position = Double(index) * step
+            let lower = min(frameLength - 1, Int(position))
+            let upper = min(frameLength - 1, lower + 1)
+            let fraction = Float(position - Double(lower))
+            let sample = samples[lower] + (samples[upper] - samples[lower]) * fraction
             guard sample.isFinite else { return nil }
             peak = max(peak, abs(sample))
             let clamped = max(-1.0, min(1.0, Double(sample)))
