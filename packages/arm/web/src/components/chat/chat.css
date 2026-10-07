@@ -6,7 +6,8 @@
 
 .kchat-page,
 .kchat,
-.ktable-window-backdrop {
+.ktable-window-backdrop,
+.ns-composer-wrap {
   --k-bg: #ffffff;
   --k-text: #0f172a;           /* slate-900 */
   --k-text-2: #64748b;         /* slate-500 */
@@ -39,7 +40,8 @@
 .dark .kchat-page,
 .dark .kchat,
 .dark .ksheet,
-.dark .ktable-window-backdrop {
+.dark .ktable-window-backdrop,
+.dark .ns-composer-wrap {
   --k-bg: #020617;             /* slate-950 */
   --k-text: #f1f5f9;           /* slate-100 */
   --k-text-2: #94a3b8;
@@ -700,7 +702,7 @@
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
   background: linear-gradient(to bottom, color-mix(in srgb, var(--k-bg) 0%, transparent), var(--k-bg) 38%);
 }
-.kcomposer { display: flex; align-items: flex-end; gap: var(--k-gap); }
+.kcomposer { position: relative; display: flex; align-items: flex-end; gap: var(--k-gap); }
 .kcomposer-field {
   position: relative;
   display: flex;
@@ -729,6 +731,45 @@
   font: 16px/20px var(--k-font);
 }
 .kcomposer-field textarea::placeholder { color: var(--k-text-3); }
+/* Multi-line drafts: text across the box, attach/mic in a row below (Mac/iOS). */
+.kcomposer-field.is-multiline { flex-wrap: wrap; }
+.kcomposer-field.is-multiline textarea { order: -1; flex-basis: 100%; padding: 13px 16px 4px; }
+.kcomposer-field.is-multiline .kmic { margin-left: auto; }
+
+/* Mic and dictation */
+.kmic {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 44px; height: 48px; border: 0; background: none; color: var(--k-text-2); cursor: pointer;
+}
+.kmic svg { width: 21px; height: 21px; stroke-width: 2.1; }
+.kmic:hover:not(:disabled) { color: var(--k-text); }
+.kmic:disabled { opacity: 0.4; cursor: default; }
+.kspin { animation: kspin 0.9s linear infinite; }
+@keyframes kspin { to { transform: rotate(360deg); } }
+.kcomposer-field.is-dictating { flex-direction: column; align-items: stretch; }
+.kvoice-transcript { max-height: 132px; overflow-y: auto; padding: 13px 16px 2px; font: 16px/21px var(--k-font); color: var(--k-text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.kvoice-rec { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: #ef4444; vertical-align: 2px; }
+.kvoice-row { display: flex; align-items: center; gap: 6px; height: 48px; padding: 0 6px 0 8px; }
+.kvoice-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 34px; padding: 0 12px; border: 0; border-radius: 17px;
+  background: color-mix(in srgb, var(--k-text) 9%, transparent); color: var(--k-text); font: 500 14px var(--k-font); cursor: pointer;
+}
+.kvoice-chip svg { width: 14px; height: 14px; stroke-width: 2.3; }
+.kvoice-chip.is-edit { background: color-mix(in srgb, var(--k-user) 12%, transparent); color: var(--k-link); }
+.kvoice-chip:disabled { opacity: 0.45; cursor: default; }
+.kvoice-bars { display: inline-flex; align-items: center; gap: 2.5px; height: 26px; margin-left: 6px; }
+.kvoice-bars i { width: 3px; border-radius: 2px; background: var(--k-user); transition: height 0.12s ease-out; }
+.kvoice-time { margin-left: 4px; font: 12px var(--k-mono); color: var(--k-text-2); font-variant-numeric: tabular-nums; }
+.kvoice-spacer { flex: 1; }
+.kvoice-error {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); z-index: 2;
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; border-radius: 12px;
+  background: color-mix(in srgb, #ef4444 12%, var(--k-bg)); color: #b91c1c; font: 13px var(--k-font);
+}
+.dark .kvoice-error { color: #fca5a5; }
+.kvoice-error span { flex: 1; }
+.kvoice-error button { border: 0; background: none; color: inherit; cursor: pointer; display: inline-flex; }
+.kvoice-error svg { width: 14px; height: 14px; }
 .kcomposer-attach {
   display: flex;
   width: 44px;

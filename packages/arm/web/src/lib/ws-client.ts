@@ -1,3 +1,4 @@
+import * as voice from './voice/voice';
 import { useAccountDeletion, DELETION_TIMEOUT_MS } from './account-deletion';
 import { canRefreshUsage } from './usage';
 import { desktopCredentials, setDesktopSignedOut } from './desktop';
@@ -105,6 +106,7 @@ export class KrakiWSClient {
       setDesktopSignedOut(false);
     }
     getStore().reset();
+    voice.resetVoice();
     setStoreState({ githubClientId: savedClientId, status: 'awaiting_login' });
     useAccountDeletion.getState().set({ kind: 'idle' });
     useAccountDeletion.getState().setNotice(true);
@@ -122,6 +124,13 @@ export class KrakiWSClient {
   }
 
   constructor(url?: string) {
+    voice.configureVoiceTransport({
+      sendRaw: (m) => this.transport.sendRaw(m),
+      deviceId: () => getStore().deviceId,
+      userId: () => getStore().user?.id ?? null,
+      relayUrl: () => this.transport.url,
+      connected: () => getStore().status === 'connected',
+    });
     outbox.configure({
       send: (msg) => this.transmit(msg),
       isDeliveryPathUp: (sessionId) => this.isDeliveryPathUp(sessionId),
@@ -1005,6 +1014,10 @@ export class KrakiWSClient {
         this.pulse.onConnected();
         this.startPulseTick();
         this.attachmentPulls.resume();
+        {
+          const ok = msg as unknown as { voice?: import('@kraki/protocol').VoiceCapability; voiceVocabulary?: import('@kraki/protocol').VoiceWord[] };
+          voice.onAuthOk(ok.voice, ok.voiceVocabulary);
+        }
         break;
 
       case 'auth_challenge':
@@ -1037,6 +1050,20 @@ export class KrakiWSClient {
         }
         getStore().setReconnectState(0, null);
         getStore().setStatus('awaiting_login');
+        break;
+      }
+
+      case 'voice_lease_grant' as Message['type']:
+        voice.onLeaseGrant((msg as unknown as { lease: import('@kraki/protocol').VoiceLease }).lease);
+        break;
+      case 'voice_lease_denied' as Message['type']: {
+        const d = msg as unknown as { reason: string; detail?: string };
+        voice.onLeaseDenied(d.reason, d.detail);
+        break;
+      }
+      case 'voice_vocabulary_updated' as Message['type']: {
+        const v = msg as unknown as { words?: import('@kraki/protocol').VoiceWord[]; requestId?: string };
+        if (Array.isArray(v.words)) voice.onWordsUpdated(v.words, v.requestId);
         break;
       }
 

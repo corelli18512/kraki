@@ -27,6 +27,11 @@ if (process.env.KRAKI_DESKTOP_DEBUG_PORT) {
   app.commandLine.appendSwitch('remote-debugging-port', process.env.KRAKI_DESKTOP_DEBUG_PORT);
 }
 const START_QUERY = process.env.KRAKI_DESKTOP_QUERY || '';
+// Local testing only: a WAV file plays as the microphone (VMs have none).
+if (process.env.KRAKI_DESKTOP_FAKE_MIC) {
+  app.commandLine.appendSwitch('use-fake-device-for-media-stream');
+  app.commandLine.appendSwitch('use-file-for-fake-audio-capture', process.env.KRAKI_DESKTOP_FAKE_MIC);
+}
 
 protocol.registerSchemesAsPrivileged([{
   scheme: SCHEME,
@@ -418,6 +423,14 @@ app.on('before-quit', () => { quitting = true; });
 app.on('activate', showWindow);
 
 app.whenReady().then(async () => {
+  // The microphone (voice input) for the app itself only; nothing else.
+  const { session } = require('electron');
+  const isApp = (url) => typeof url === 'string' && url.startsWith(`${APP_ORIGIN}/`);
+  session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+    const audioOnly = permission === 'media' && (details.mediaTypes ?? []).every((t) => t === 'audio');
+    callback(audioOnly && isApp(details.requestingUrl ?? wc.getURL()));
+  });
+  session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => permission === 'media' && origin === APP_ORIGIN);
   builtIn = new BuiltInKraki({ resourcesPath: process.resourcesPath, appPath: process.execPath, appVersion: app.getVersion() });
   // An owned daemon that is not running (a crash loop gave up, or it was
   // stopped by an update) starts again with the app.

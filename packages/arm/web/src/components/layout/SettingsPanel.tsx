@@ -1,3 +1,4 @@
+import { VoiceSettings } from './VoiceSettings';
 import { DeleteAccountSection } from './DeleteAccount';
 import { desktop } from '../../lib/desktop';
 import { ThisPCSettings } from '../desktop/ThisPCSettings';
@@ -186,6 +187,8 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
         </h3>
         <ArchiveSettings />
       </section>
+
+      <VoiceSettings />
 
       {status === 'connected' && <DeleteAccountSection />}
 

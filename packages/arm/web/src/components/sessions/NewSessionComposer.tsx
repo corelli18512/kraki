@@ -14,6 +14,9 @@ import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import { desktop } from '../../lib/desktop';
 import { AgentGlyph, agentLabel } from '../common/AgentAvatar';
+import { MicButton, VoiceError, VoiceRow, VoiceTranscript, useDictation, useStartDictation } from '../chat/Voice';
+import { finishDictation, voiceSettings, type VoiceFinish } from '../../lib/voice/voice';
+import { newSessionContext } from '../../lib/voice/context';
 import './new-session.css';
 
 const LAST_DEVICE_KEY = 'kraki:last-device';
@@ -235,13 +238,22 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
     el.style.height = `${Math.min(Math.max(el.scrollHeight, minRows * line), 10 * line)}px`;
   }, [text, minRows]);
 
-  const submit = () => {
-    if (!canSubmit) return;
+  const dictation = useDictation('new');
+  const onVoiceFinal = (spoken: string, mode: VoiceFinish) => {
+    const full = [text.trimEnd(), spoken].filter(Boolean).join(' ');
+    if (mode === 'send' && full.trim() && availability === 'ready' && deviceId && agentId && model) submit(full);
+    else { setText(full); setTimeout(() => textRef.current?.focus(), 0); }
+  };
+  const startVoice = useStartDictation('new', () => newSessionContext(agentId, model ? modelName(model) : undefined, device?.name, [], voiceSettings.shareContext), onVoiceFinal);
+
+  const submit = (override?: string) => {
+    const prompt = (override ?? text).trim();
+    if (!prompt || availability !== 'ready' || !deviceId || !agentId || !model) return;
     localStorage.setItem(LAST_DEVICE_KEY, deviceId);
     writeJson(AGENT_PREF_KEY, deviceId, agentId);
     writeJson(MODEL_PREF_KEY, `${deviceId}:${agentId}`, model);
     if (effort) writeJson(EFFORT_PREF_KEY, model, effort);
-    wsClient.createSession({ targetDeviceId: deviceId, agentId, model, reasoningEffort: effort, prompt: text.trim() });
+    wsClient.createSession({ targetDeviceId: deviceId, agentId, model, reasoningEffort: effort, prompt });
     setText('');
     onCreated?.();
   };
@@ -255,6 +267,10 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
         className={`ns-composer${focused ? ' ns-focused' : ''}${nudged ? ' ns-nudged' : ''}`}
         onMouseDown={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); textRef.current?.focus(); } }}
       >
+        <VoiceError owner="new" />
+        {dictation.active ? (
+          <div className="ns-dictation"><VoiceTranscript owner="new" /><VoiceRow owner="new" /></div>
+        ) : (
         <textarea
           ref={textRef}
           className="ns-text"
@@ -272,6 +288,7 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
           }}
           data-testid="new-session-text"
         />
+        )}
         <div className="ns-bar">
           <div className="ns-pill-wrap">
             <PillButton open={openPill === 'device'} onOpen={() => setOpenPill('device')} testId="new-session-device" title={device?.name}>
@@ -373,7 +390,8 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
             </>
           )}
           <span className="ns-spacer" />
-          <button type="button" className="ns-send" disabled={!canSubmit} onClick={submit} title="Start session (Enter)" data-testid="new-session-create" aria-label="Start session">
+          {!dictation.active && <MicButton owner="new" onStart={startVoice} disabled={availability !== 'ready'} />}
+          <button type="button" className="ns-send" disabled={dictation.active ? dictation.phase === 'finishing' : !canSubmit} onClick={() => (dictation.active ? finishDictation('send') : submit())} title="Start session (Enter)" data-testid="new-session-create" aria-label="Start session">
             <ArrowUp strokeWidth={3} />
           </button>
         </div>

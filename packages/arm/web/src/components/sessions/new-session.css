@@ -169,3 +169,11 @@
 }
 .dark .ns-check { background: rgba(255, 255, 255, 0.14); }
 .ns-check:disabled { opacity: 0.5; }
+
+.ns-composer { position: relative; }
+.ns-composer .kmic { width: 34px; height: 30px; }
+.ns-composer .kvoice-error { bottom: calc(100% + 8px); }
+.ns-dictation { margin: -6px -8px 0; }
+.ns-dictation .kvoice-transcript { min-height: 60px; padding: 4px 8px 2px; font-size: 14px; line-height: 20px; }
+.ns-dictation .kvoice-row { height: 40px; padding: 0; }
+.ns-dictation .kvoice-chip { height: 28px; font-size: 12.5px; }

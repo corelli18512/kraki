@@ -1,3 +1,4 @@
+import { resetVoice } from '../../lib/voice/voice';
 import { setDesktopSignedOut } from '../../lib/desktop';
 import { useState } from 'react';
 import { useStore } from '../../hooks/useStore';
@@ -33,6 +34,7 @@ export function ProfileBar({ compact = false }: { compact?: boolean } = {}) {
     localStorage.removeItem(STORAGE_KEY);
     setDesktopSignedOut(true);
     wsClient.disconnect();
+    resetVoice();
     useStore.getState().reset();
     useStore.setState({ githubClientId: savedClientId, status: 'awaiting_login' });
     window.history.replaceState({}, '', '/');
