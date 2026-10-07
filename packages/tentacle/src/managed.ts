@@ -26,9 +26,6 @@ import { getKrakiHome } from './config.js';
 /** Value of `KRAKI_MANAGED_BY` injected by the Mac app's launchd job. */
 export const MAC_APP_OWNER = 'kraki-mac';
 
-/** launchd label of the SMAppService job registered by Kraki for Mac. */
-export const MAC_APP_DAEMON_LABEL = 'chat.kraki.mac.tentacle';
-
 export interface ManagedByMarker {
   by: typeof MAC_APP_OWNER;
   /** launchd label of the supervising job. */

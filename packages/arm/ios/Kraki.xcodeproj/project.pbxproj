@@ -90,7 +90,6 @@
 		2D511A9C6FB61ADC2DA98C62 /* MacChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8AD64AEE5A57AF1667249A7 /* MacChatView.swift */; };
 		2EB7589D7EBECE7995E65571 /* GeneralPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = B153278B8FD6A628243129FA /* GeneralPane.swift */; };
 		2EC40327706787FAA97C3224 /* PulseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = E45FF5DF9F0159EB23B50D72 /* PulseManager.swift */; };
-		2F6ACAA1E3FE2A106BC70A32 /* SpeechRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BF3123CD705AB984A21AD16 /* SpeechRecognizer.swift */; };
 		3038625FBC08F11D1FC57F5B /* IOSVoiceComposerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4FFB255BA0EAD5FA0EE3D2F /* IOSVoiceComposerUITests.swift */; };
 		3081E32A4A16DAF6DBD9F6EE /* LICENSE-mermaid.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0B49EB7064E3E13899D443B5 /* LICENSE-mermaid.txt */; };
 		3183C64B6DA84A5E4471641F /* SessionCardMetadataRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE7A32645792B92BEF345A93 /* SessionCardMetadataRow.swift */; };
@@ -157,7 +156,6 @@
 		4E27FE6760FD0B131488F0FF /* MenuBarExtraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 735BA6282777D61A4335E5F5 /* MenuBarExtraView.swift */; };
 		4E52628A580F338209AF7BB8 /* SessionCardPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC62AF0A675E25283C546919 /* SessionCardPresentation.swift */; };
 		4EC8B5AAF16DFE0A9859EA35 /* PreferencesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C0AE2F0350124712EAE0E17 /* PreferencesManager.swift */; };
-		4F248E44B2F839DA51C609BD /* SpeechRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BF3123CD705AB984A21AD16 /* SpeechRecognizer.swift */; };
 		50081F6ED81CAC7430B9230F /* DeviceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04BA085D5DB073C1C3E8D700 /* DeviceStore.swift */; };
 		5095126837B9D8AF7B714EF9 /* NavigationIDs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9656866F24E385A14F14E699 /* NavigationIDs.swift */; };
 		5140DE3F2876AC1AA96FE488 /* ComposerHitAreaUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A130A3774A3144CDA4C6023 /* ComposerHitAreaUITests.swift */; };
@@ -506,7 +504,6 @@
 		1B08A6C619269A5DD0E185DE /* DeviceUpdateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceUpdateTests.swift; sourceTree = "<group>"; };
 		1B40607F268A8BCEBF58C6D7 /* MacBubbleActionSlot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBubbleActionSlot.swift; sourceTree = "<group>"; };
 		1B7DBD1AD1C67E1CFB6ED036 /* MacChatComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatComposer.swift; sourceTree = "<group>"; };
-		1BF3123CD705AB984A21AD16 /* SpeechRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognizer.swift; sourceTree = "<group>"; };
 		1D6472A002F2CB9C07380792 /* MessagesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesTests.swift; sourceTree = "<group>"; };
 		1DF2FADB7D9A46A1299A30E2 /* KeychainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainManager.swift; sourceTree = "<group>"; };
 		1E254833E8916A34AD087E56 /* BackgroundReconnectingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundReconnectingTests.swift; sourceTree = "<group>"; };
@@ -955,7 +952,6 @@
 			children = (
 				DAEABA66C53A4169697F5D6A /* IOSVoiceComposer.swift */,
 				341940FBEAD0F36C8E7F510C /* KrakiVoiceInputController.swift */,
-				1BF3123CD705AB984A21AD16 /* SpeechRecognizer.swift */,
 				B88D48670B859C4CA3FFFA48 /* VoiceComposerPresentation.swift */,
 				14DE4C914007046BE9F67973 /* VoiceDraftStyling.swift */,
 				83BE65A70DC511EA8DBC81A3 /* VoiceProtocol.swift */,
@@ -1878,7 +1874,6 @@
 				13FB3A5224988D3C72001202 /* SessionTable.swift in Sources */,
 				905C91DB5410CEEDA060E7A1 /* SessionsSidebarView+macOS.swift in Sources */,
 				A9998526CF744DB0A952EE90 /* SettingsView.swift in Sources */,
-				2F6ACAA1E3FE2A106BC70A32 /* SpeechRecognizer.swift in Sources */,
 				A8BE2E53F2D843F20B5214F3 /* StabilityTracker.swift in Sources */,
 				CECE9A56D0EB248D3802DABF /* StepsSheetView.swift in Sources */,
 				6AE759FD9FF9F2B7C51FA60E /* SubagentSteps.swift in Sources */,
@@ -2045,7 +2040,6 @@
 				0B9C805B95F5C98CA01E756B /* SessionStore.swift in Sources */,
 				ED69BD9687C030C318D9EF49 /* SessionSubscriptionController.swift in Sources */,
 				236085337A1CC490BAC5BB56 /* SessionsSidebarView+macOS.swift in Sources */,
-				4F248E44B2F839DA51C609BD /* SpeechRecognizer.swift in Sources */,
 				883F3668FB80B2AE0C2863AC /* StabilityTracker.swift in Sources */,
 				89AC7B492C1EEEFF6C8029D5 /* SubagentSteps.swift in Sources */,
 				6DA4593C5C1B08590A395E41 /* SubagentViews.swift in Sources */,
@@ -2508,7 +2502,6 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Kraki uses the camera to scan QR codes for device pairing.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kraki uses the microphone for press-to-talk voice messages.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Kraki transcribes your voice on-device so you can dictate messages.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIBackgroundModes = (
@@ -2616,7 +2609,6 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Kraki uses the camera to scan QR codes for device pairing.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kraki uses the microphone for press-to-talk voice messages.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Kraki transcribes your voice on-device so you can dictate messages.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIBackgroundModes = (
@@ -2682,7 +2674,6 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Kraki uses the camera to scan QR codes for device pairing.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kraki uses the microphone for press-to-talk voice messages.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Kraki transcribes your voice on-device so you can dictate messages.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIBackgroundModes = (
@@ -2758,7 +2749,6 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Kraki uses the camera to scan QR codes for device pairing.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kraki uses the microphone for press-to-talk voice messages.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Kraki transcribes your voice on-device so you can dictate messages.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIBackgroundModes = (

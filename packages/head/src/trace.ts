@@ -33,10 +33,6 @@ export function fp(u: Uint8Array): string {
   return (h >>> 0).toString(16).padStart(8, '0');
 }
 
-export function isTraceEnabled(): boolean {
-  return TRACE_ENABLED;
-}
-
 /** Emit one trace line. No-op when trace is off (checked once at module load). */
 export function trace(evt: string, fields: Record<string, unknown> = {}): void {
   if (!TRACE_ENABLED) return;

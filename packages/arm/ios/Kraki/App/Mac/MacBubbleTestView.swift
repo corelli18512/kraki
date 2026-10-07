@@ -1,12 +1,10 @@
-/// MacBubbleTestView — Isolated validation of the macOS TextKit bubble render
-/// path before it is wired into the production ChatView.
+/// MacBubbleTestView.swift — despite the name, mostly PRODUCTION code: the
+/// macOS chat bubble's Markdown → NSAttributedString renderer, palettes,
+/// code highlighting and table views used by MacChatBubbleCell.
 ///
-/// Reuses the cross-platform `MessageBodyParser` (segment splitting) and
-/// mirrors the iOS `TKMarkdown` attributed-string construction with AppKit
-/// types (`NSFont` / `NSColor`) so the bubble renders identically on macOS
-/// via an `NSTextView` (TextKit2).
-///
-/// Reach via the Debug menu → "Bubble Test Page".
+/// Only `MacBubbleCatalog` and the SwiftUI/AppKit test pages at the end are
+/// test-only; they are compiled in Debug builds only (Debug menu →
+/// "Bubble Test Page", KRAKI_RENDER_BUBBLE_TEST).
 
 #if os(macOS)
 import AppKit
@@ -89,6 +87,7 @@ enum MacCodePalette {
     }
 }
 
+#if DEBUG
 /// Shared stress catalog for the three Mac render paths (SwiftUI page,
 /// pure-AppKit page, headless PNG render). Mirrors the iOS
 /// `BubbleCatalogTestView` Markdown matrix so coverage stays in lock-step.
@@ -360,6 +359,7 @@ pnpm test
                body: "\u{4E2D}\u{6587}\u{6392}\u{7248}\u{3001}かな\u{3001}한국어, emoji 🦑🚀, combining café, and a verylongtoken_without_breaks_abcdefghijklmnopqrstuvwxyz0123456789."),
     ]
 }
+#endif
 
 private func macContentCacheKey(prefix: String, content: String) -> NSString {
     var hasher = Hasher()
@@ -1764,7 +1764,9 @@ final class MacBubbleTextView: NSTextView {
     }
 }
 
-// MARK: - SwiftUI host
+// MARK: - SwiftUI host (Debug test pages only)
+
+#if DEBUG
 
 struct MacBubbleTestView: View {
     private let samples = MacBubbleCatalog.samples
@@ -1907,5 +1909,6 @@ final class BubbleTestPageView: NSView {
         return card
     }
 }
+#endif
 
 #endif

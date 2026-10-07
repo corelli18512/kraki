@@ -321,30 +321,3 @@ describe('CardManager lifecycle', () => {
     expect((card.snapshot('s1')[0].payload as { content: string }).content).toBe('');
   });
 });
-
-describe('CardManager.activeSessions', () => {
-  it('lists sessions with live text', () => {
-    const { card } = setup();
-    card.onDelta('s1', 'hello');
-    expect(card.activeSessions()).toEqual(['s1']);
-  });
-
-  it('lists sessions with an active action (prompt or tool)', () => {
-    const { card } = setup();
-    card.onPrompt('s1', permission('q1'));
-    card.onToolStart('s2', tool('tc1', 't'));
-    expect(card.activeSessions().sort()).toEqual(['s1', 's2']);
-  });
-
-  it('omits sessions with no text and no action', () => {
-    const { card } = setup();
-    card.onDelta('s1', 'hi');
-    card.clear('s1');
-    expect(card.activeSessions()).toEqual([]);
-  });
-
-  it('omits sessions that were never touched', () => {
-    const { card } = setup();
-    expect(card.activeSessions()).toEqual([]);
-  });
-});

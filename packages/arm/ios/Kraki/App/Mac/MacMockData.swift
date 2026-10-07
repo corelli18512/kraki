@@ -6,7 +6,7 @@
 /// debug builds). Lives entirely on the mac side; iOS never compiles
 /// this file.
 
-#if os(macOS)
+#if os(macOS) && DEBUG
 import Foundation
 
 @MainActor
