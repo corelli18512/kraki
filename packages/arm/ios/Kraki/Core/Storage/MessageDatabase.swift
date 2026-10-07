@@ -97,6 +97,44 @@ final class MessageDatabase {
         try self.init(databaseURL: Self.databaseURL())
     }
 
+    /// Open the standard database, never failing the launch. The database is a
+    /// cache that Tentacle replay rebuilds:
+    /// - a file SQLite reports as corrupt is moved aside and recreated;
+    /// - any other failure (protected data before first unlock, disk full,
+    ///   locked) leaves the file untouched and runs this launch on a
+    ///   temporary database, so a healthy cache is never thrown away.
+    static func openRecovering() -> MessageDatabase {
+        let fm = FileManager.default
+        let temporary = { () -> MessageDatabase in
+            let url = fm.temporaryDirectory.appendingPathComponent("kraki-messages-\(UUID().uuidString).sqlite")
+            // A fresh file in the temporary directory is always creatable.
+            return try! MessageDatabase(databaseURL: url)
+        }
+        guard let url = try? databaseURL() else {
+            KLog.diag("⚠️ Message database directory unavailable; using a temporary one")
+            return temporary()
+        }
+        do {
+            return try MessageDatabase(databaseURL: url)
+        } catch let error as DatabaseError
+            where error.resultCode == .SQLITE_CORRUPT || error.resultCode == .SQLITE_NOTADB {
+            KLog.diag("⚠️ Message database is corrupt, recreating: \(error)")
+        } catch {
+            KLog.diag("⚠️ Message database unavailable this launch: \(error)")
+            return temporary()
+        }
+        let stamp = Int(Date().timeIntervalSince1970)
+        for suffix in ["", "-wal", "-shm"] {
+            let file = URL(fileURLWithPath: url.path + suffix)
+            guard fm.fileExists(atPath: file.path) else { continue }
+            let quarantine = URL(fileURLWithPath: url.path + ".corrupt-\(stamp)" + suffix)
+            try? fm.moveItem(at: file, to: quarantine)
+        }
+        if let fresh = try? MessageDatabase(databaseURL: url) { return fresh }
+        KLog.diag("⚠️ Message database could not be recreated; using a temporary one")
+        return temporary()
+    }
+
     /// Opens an explicitly located database. Used by the macOS Debug scroll
     /// harness to exercise the full production store/provider/list stack in an
     /// isolated temporary directory without touching production history.

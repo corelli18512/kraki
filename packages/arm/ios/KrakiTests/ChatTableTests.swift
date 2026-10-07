@@ -2,6 +2,14 @@ import XCTest
 @testable import Kraki
 
 final class ChatTableTests: XCTestCase {
+    func testOnlyWebAndMailLinksAreTappable() {
+        let text = "[docs](https://kraki.chat) [mail](mailto:a@b.c) [run](file:///tmp/x.command) [app](vscode://x) [js](javascript:alert(1))"
+        let links = parseMarkdownInline(text).compactMap(\.link).map(\.absoluteString)
+        XCTAssertEqual(links, ["https://kraki.chat", "mailto:a@b.c"])
+        // The label of a refused link stays as text.
+        XCTAssertTrue(parseMarkdownInline(text).map(\.text).joined().contains("run"))
+    }
+
 
     // MARK: Inline Markdown
 

@@ -21,6 +21,11 @@ final class PairingLinkTests: XCTestCase {
         XCTAssertFalse(PairingLink.isTrustedRelay("wss://kraki.chat.evil.example"))
         XCTAssertTrue(PairingLink.isTrustedRelay("ws://localhost:4000"))
         XCTAssertTrue(PairingLink.isTrustedRelay("wss://relay.kraki.chat"))
+        XCTAssertFalse(PairingLink.isTrustedRelay("ws://relay.kraki.chat"), "Kraki relays only over TLS")
+        XCTAssertTrue(AuthManager.isAllowedRegionRedirect("wss://cn.relay.kraki.chat"))
+        XCTAssertFalse(AuthManager.isAllowedRegionRedirect("wss://evil.example"))
+        XCTAssertFalse(AuthManager.isAllowedRegionRedirect("ws://cn.relay.kraki.chat"))
+        XCTAssertFalse(AuthManager.isAllowedRegionRedirect("wss://kraki.chat.evil.example"))
     }
 
     func testFingerprintMatchesTentacle() {

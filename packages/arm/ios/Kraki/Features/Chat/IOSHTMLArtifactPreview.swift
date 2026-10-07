@@ -218,7 +218,7 @@ private struct IOSHTMLArtifactWebView: UIViewRepresentable {
             let scripts = webView.configuration.userContentController
             scripts.removeAllUserScripts()
             HTMLReportMermaid.install(into: scripts, for: html)
-            webView.loadHTMLString(html, baseURL: nil)
+            HTMLReportNetworkBlock.load(html, into: webView)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

@@ -580,7 +580,7 @@ final class MacCoreTextBodyView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        if let pendingLink, !didDragSelection, !hasSelection {
+        if let pendingLink, !didDragSelection, !hasSelection, isSafeLinkURL(pendingLink) {
             NSWorkspace.shared.open(pendingLink)
         }
         self.pendingLink = nil

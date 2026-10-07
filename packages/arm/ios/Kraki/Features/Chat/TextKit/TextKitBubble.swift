@@ -533,6 +533,7 @@ final class TKTableScrollView: UIScrollView, UIScrollViewDelegate, UIContextMenu
     }
 
     private func open(_ url: URL) {
+        guard isSafeLinkURL(url) else { return }
         UIApplication.shared.open(url)
     }
 

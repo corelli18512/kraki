@@ -304,13 +304,8 @@ struct IOSChatAlignmentPreview: View {
             IOSChatAlignmentLog.reset()
             IOSChatAlignmentLog.write("start session=isolated productionPath=1")
             let html = IOSChatAlignmentPreviewFixture.reportHTML
-            appState.attachmentStore.ingestChunk(
-                id: IOSChatAlignmentPreviewFixture.artifact.id,
-                index: 0,
-                total: 1,
-                mimeType: "text/html",
-                data: Data(html.utf8).base64EncodedString(),
-                error: nil
+            appState.attachmentStore.seedForTesting(
+                id: IOSChatAlignmentPreviewFixture.artifact.id, mimeType: "text/html", data: Data(html.utf8)
             )
             try? await Task.sleep(for: .milliseconds(600))
             if ProcessInfo.processInfo.environment["KRAKI_IOS_IMAGE_PREVIEW_AUTO_OPEN"] == "1" {

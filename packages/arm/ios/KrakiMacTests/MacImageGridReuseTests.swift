@@ -38,19 +38,19 @@ final class MacImageGridReuseTests: XCTestCase {
         store.setTransportReady(true)
 
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 400), styleMask: [.borderless], backing: .buffered, defer: false)
-        let host = NSHostingView(rootView: Optional(grid([ref("first")], store)))
+        let host = NSHostingView(rootView: Optional(grid([ref("6e340b9cffb37a989ca544e6bb780a2c")], store)))
         host.frame = window.contentLayoutRect
         window.contentView = host
         await pump(host)
-        XCTAssertEqual(requested, ["first"])
+        XCTAssertEqual(requested, ["6e340b9cffb37a989ca544e6bb780a2c"])
 
         // What MacChatBubbleCell does on reuse: clear, then configure anew.
         host.rootView = nil
-        host.rootView = grid([ref("second")], store)
+        host.rootView = grid([ref("0123456789abcdef0123456789abcdef")], store)
         await pump(host)
-        // "first" finishes (it was in flight); the queue must move on to "second".
-        store.ingestChunk(id: "first", index: 0, total: 1, mimeType: "image/png", data: "AA==", error: nil, paced: true)
+        // The first image (one zero byte; id = its SHA-256 prefix) finishes; the queue must move on to the second.
+        store.ingestChunk(id: "6e340b9cffb37a989ca544e6bb780a2c", index: 0, total: 1, mimeType: "image/png", data: "AA==", error: nil, paced: true)
         await pump(host)
-        XCTAssertTrue(requested.contains("second"), "the reused cell never requested its new image: \(requested)")
+        XCTAssertTrue(requested.contains("0123456789abcdef0123456789abcdef"), "the reused cell never requested its new image: \(requested)")
     }
 }

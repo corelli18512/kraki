@@ -390,7 +390,8 @@ final class MacChatDocumentView: NSView {
         contentsSnapshotBeforeApply = contents
         defer { contentsSnapshotBeforeApply = [] }
         let oldDisplayedHeightByKey = Dictionary(
-            uniqueKeysWithValues: zip(oldKeys, itemFrames.map(\.height))
+            zip(oldKeys, itemFrames.map(\.height)),
+            uniquingKeysWith: { first, _ in first }
         )
         let oldSignatureByKey = Dictionary(zip(oldKeys, itemSignatures), uniquingKeysWith: { a, _ in a })
         // Only an exact, settled height can become a correcting floor; an
@@ -421,7 +422,7 @@ final class MacChatDocumentView: NSView {
         contents = newContents
         itemKeys = keys
         itemSignatures = signatures
-        indexByKey = Dictionary(uniqueKeysWithValues: keys.enumerated().map { ($0.element, $0.offset) })
+        indexByKey = Dictionary(keys.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { first, _ in first })
         indexBySeq = Dictionary(
             newContents.enumerated().map { ($0.element.seq, $0.offset) },
             uniquingKeysWith: { _, latest in latest }

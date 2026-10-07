@@ -837,7 +837,7 @@ private final class MacTableDocumentView: NSView {
             return
         }
         if let url = geometry.link(at: point, viewportMinX: visible.minX, viewportMinY: visible.minY, stickyHeader: host.fullTable) {
-            NSWorkspace.shared.open(url)
+            if isSafeLinkURL(url) { NSWorkspace.shared.open(url) }
         } else if geometry.mode == .cards, geometry.hiddenCardFields > 0 {
             host.openFullTable()
         }
