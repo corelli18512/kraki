@@ -284,7 +284,7 @@ final class TentacleCLIManager {
             return
         }
 
-        guard let result = await runCapturing(binary: path, args: ["status", "--json"]),
+        guard let result = await runCapturing(binary: path, args: ["status", "--json"], timeout: 15),
               result.exitCode == 0,
               let data = result.stdout.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -423,7 +423,10 @@ final class TentacleCLIManager {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                // Each poll spawns the CLI; while Kraki is in the background
+                // (menu-bar status only) poll five times less often.
+                let pace = NSApp.isActive ? interval : interval * 5
+                try? await Task.sleep(nanoseconds: UInt64(pace * 1_000_000_000))
                 await self?.refreshDaemonState()
             }
         }
@@ -672,7 +675,7 @@ final class TentacleCLIManager {
 
     /// Spawn a process, capture stdout/stderr, return on exit. Returns
     /// nil if Process throws on launch (binary missing / permissions).
-    private func runCapturing(binary: String, args: [String]) async -> CommandResult? {
+    private func runCapturing(binary: String, args: [String], timeout: TimeInterval = 60) async -> CommandResult? {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
@@ -681,6 +684,11 @@ final class TentacleCLIManager {
                 let outPipe = Pipe(), errPipe = Pipe()
                 process.standardOutput = outPipe
                 process.standardError = errPipe
+                // A hung CLI must not hang the caller (and every later poll):
+                // terminate it after `timeout`; its pipes then reach EOF.
+                let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
+                defer { watchdog.cancel() }
 
                 do {
                     try process.run()

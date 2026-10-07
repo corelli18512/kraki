@@ -227,9 +227,10 @@ final class ProtocolEnumTests: XCTestCase {
         XCTAssertNil(SessionMode(rawValue: "unknown"))
         XCTAssertEqual(SessionMode.auto.wireName, "execute")
         XCTAssertEqual(SessionMode.safe.wireName, "safe")
-        // Codable: legacy decodes, encode uses the wire name, unknown → default.
+        // Codable: legacy decodes, encode uses the wire name, unknown → safe
+        // (never shown as a more permissive mode than it may be).
         let decoded = try JSONDecoder().decode([SessionMode].self, from: Data(#"["execute","safe","delegate","bogus"]"#.utf8))
-        XCTAssertEqual(decoded, [.auto, .safe, .delegate, .auto])
+        XCTAssertEqual(decoded, [.auto, .safe, .delegate, .safe])
         let encoded = String(data: try JSONEncoder().encode([SessionMode.auto]), encoding: .utf8)
         XCTAssertEqual(encoded, #"["execute"]"#)
     }

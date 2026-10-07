@@ -331,7 +331,7 @@ enum MacChatBubbleContentBuilder {
             guard attachment.type == "image" else { return nil }
             let key = attachment.data as NSString
             if let cached = imageCache.object(forKey: key) { return cached }
-            guard let data = Data(base64Encoded: attachment.data), let image = NSImage(data: data) else { return nil }
+            guard let data = Data(base64Encoded: attachment.data), let image = AttachmentImageCache.decode(data) else { return nil }
             imageCache.setObject(image, forKey: key)
             return image
         }

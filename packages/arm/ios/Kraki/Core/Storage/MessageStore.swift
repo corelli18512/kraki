@@ -156,8 +156,15 @@ final class MessageStore {
     ///     in range.
     func append(_ sessionId: String, _ message: ChatMessage) {
         if Self.isPersistent(message) {
-            try? db.insert(sessionId, [message])
-            notePersisted(sessionId, upTo: message.seq)
+            // Advance the persisted head only when the row is really on disk:
+            // a failed write (disk full, data protection) must leave the gap
+            // visible so the history is fetched again.
+            do {
+                try db.insert(sessionId, [message])
+                notePersisted(sessionId, upTo: message.seq)
+            } catch {
+                KLog.d("⚠️ Message cache write failed: \(error)")
+            }
         }
 
         guard let state = windows[sessionId] else { return }
@@ -285,8 +292,12 @@ final class MessageStore {
         }
         #endif
 
-        try? db.insert(sessionId, batch)
-        notePersisted(sessionId, upTo: batch.last?.seq ?? 0)
+        do {
+            try db.insert(sessionId, batch)
+            notePersisted(sessionId, upTo: batch.last?.seq ?? 0)
+        } catch {
+            KLog.d("⚠️ Message cache write failed: \(error)")
+        }
     }
 
     // MARK: - Local head
@@ -352,10 +363,10 @@ final class MessageStore {
                 max(0, beforeCount - minimumPixelManagedWindowCount)
             )
             var removed = 0
-            func windowPx() -> CGFloat { window.reduce(0) { $0 + h(sessionId, $1.seq) } }
-            while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx,
+            var windowPx = window.reduce(CGFloat(0)) { $0 + h(sessionId, $1.seq) }
+            while removed < maxRemove, window.count > 1, windowPx > maxWindowPx,
                   mayTrim(sessionId, window.last!.seq) {
-                window.removeLast()
+                windowPx -= h(sessionId, window.removeLast().seq)
                 updated.bottomSeq = window.last!.seq
                 removed += 1
             }
@@ -400,15 +411,15 @@ final class MessageStore {
         updated.bottomSeq = append.last!.seq
 
         if let h = heightForSeq, maxWindowPx.isFinite {
-            func windowPx() -> CGFloat { window.reduce(0) { $0 + h(sessionId, $1.seq) } }
+            var windowPx = window.reduce(CGFloat(0)) { $0 + h(sessionId, $1.seq) }
             let maxRemove = min(
                 append.count,
                 max(0, beforeCount - minimumPixelManagedWindowCount)
             )
             var removed = 0
-            while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx,
+            while removed < maxRemove, window.count > 1, windowPx > maxWindowPx,
                   mayTrim(sessionId, window.first!.seq) {
-                window.removeFirst()
+                windowPx -= h(sessionId, window.removeFirst().seq)
                 updated.topSeq = window.first!.seq
                 removed += 1
             }
@@ -535,7 +546,7 @@ final class MessageStore {
         // window slides rather than collapses) and never fall below the compact
         // initial-tail count, so tall rows cannot reduce the overlap to one row.
         if let h = heightForSeq, maxWindowPx.isFinite {
-            func windowPx() -> CGFloat { window.reduce(0) { $0 + h(sessionId, $1.seq) } }
+            var windowPx = window.reduce(CGFloat(0)) { $0 + h(sessionId, $1.seq) }
             if didAppend {
                 // Extended the bottom → trim the TOP (older rows, off-screen
                 // above). Keep the initial-tail floor; remove ≤ the appended page.
@@ -544,9 +555,9 @@ final class MessageStore {
                     max(0, originalWindowCount - minimumPixelManagedWindowCount)
                 )
                 var removed = 0
-                while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx,
+                while removed < maxRemove, window.count > 1, windowPx > maxWindowPx,
                       mayTrim(sessionId, window.first!.seq) {
-                    window.removeFirst()
+                    windowPx -= h(sessionId, window.removeFirst().seq)
                     updated.topSeq = window.first!.seq
                     removed += 1
                 }
@@ -558,9 +569,9 @@ final class MessageStore {
                     max(0, originalWindowCount - minimumPixelManagedWindowCount)
                 )
                 var removed = 0
-                while removed < maxRemove, window.count > 1, windowPx() > maxWindowPx,
+                while removed < maxRemove, window.count > 1, windowPx > maxWindowPx,
                       mayTrim(sessionId, window.last!.seq) {
-                    window.removeLast()
+                    windowPx -= h(sessionId, window.removeLast().seq)
                     updated.bottomSeq = window.last!.seq
                     removed += 1
                 }
@@ -1070,9 +1081,18 @@ final class MessageStore {
     }
 
     /// `turn_trace_batch`: replace a turn's pulled steps.
+    /// Turn traces kept per session; older ones are re-pulled on demand.
+    static let maxTracesPerSession = 64
+
     func setTurnSteps(_ sessionId: String, bubbleSeq: Int, _ entries: [ChatMessage]) {
         var sessionTraces = traces[sessionId] ?? [:]
         sessionTraces[bubbleSeq] = entries
+        if sessionTraces.count > Self.maxTracesPerSession {
+            // Drop the oldest turns (lowest bubble seq) first.
+            for seq in sessionTraces.keys.sorted().prefix(sessionTraces.count - Self.maxTracesPerSession) {
+                sessionTraces.removeValue(forKey: seq)
+            }
+        }
         traces[sessionId] = sessionTraces
         traceRevision &+= 1
     }

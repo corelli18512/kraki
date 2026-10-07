@@ -13,6 +13,13 @@ final class DeviceUpdateTests: XCTestCase {
         XCTAssertTrue(KrakiVersion.isNewer("0.35.12", than: "0.35.10-poc"))
         XCTAssertFalse(KrakiVersion.isNewer("0.35.12", than: "0.35.12"))
         XCTAssertFalse(KrakiVersion.isNewer("0.2.9", than: "0.2.10"))
+        // Pre-releases order below their release and among themselves.
+        XCTAssertTrue(KrakiVersion.isNewer("1.2.0", than: "1.2.0-beta.1"))
+        XCTAssertFalse(KrakiVersion.isNewer("1.2.0-beta.1", than: "1.2.0"))
+        XCTAssertTrue(KrakiVersion.isNewer("1.2.0-beta.2", than: "1.2.0-beta.1"))
+        XCTAssertTrue(KrakiVersion.isNewer("1.2.0-beta.10", than: "1.2.0-beta.9"))
+        XCTAssertTrue(KrakiVersion.isNewer("1.2.0-rc.1", than: "1.2.0-beta.3"))
+        XCTAssertFalse(KrakiVersion.isNewer("1.2.0-beta", than: "1.2.0-beta"))
     }
 
     func testReportedUpdate() {

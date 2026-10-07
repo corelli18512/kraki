@@ -55,7 +55,9 @@ final class MessageProvider {
     private var loadingOlderDB: Set<String> = []
 
     /// Per-turn trace pulls already issued (dedup), keyed `sid:bubbleSeq`.
-    private var tracePulled: Set<String> = []
+    /// Turn traces requested, with when. A trace the store has since evicted
+    /// is requested again once the earlier request has had time to answer.
+    private var tracePulled: [String: Date] = [:]
     /// Sessions whose live card snapshot has been requested (dedup).
     private var cardRequested: Set<String> = []
 
@@ -1064,22 +1066,25 @@ final class MessageProvider {
     func requestTurnTrace(sessionId: String, bubbleSeq: Int) {
         guard bubbleSeq > 0 else { return }
         let key = "\(sessionId):\(bubbleSeq)"
-        guard !tracePulled.contains(key) else { return }
+        if let requestedAt = tracePulled[key] {
+            let cached = appState?.messageStore.turnSteps(sessionId, bubbleSeq: bubbleSeq) != nil
+            guard !cached, Date().timeIntervalSince(requestedAt) > 10 else { return }
+        }
         guard appState?.sessionStore.sessions[sessionId]?.deviceId != nil else { return }
-        tracePulled.insert(key)
+        tracePulled[key] = Date()
         appState?.commandSender?.requestTurnTrace(sessionId: sessionId, bubbleSeq: bubbleSeq)
     }
 
     /// Force a re-pull of a turn's trace on the next request (e.g. a live turn).
     func invalidateTurnTrace(sessionId: String, bubbleSeq: Int) {
-        tracePulled.remove("\(sessionId):\(bubbleSeq)")
+        tracePulled.removeValue(forKey: "\(sessionId):\(bubbleSeq)")
     }
 
     /// Inject a pulled trace into the store. A still-running turn
     /// (`complete == false`) is left re-pullable so idle can reconcile.
     func handleTurnTraceBatch(sessionId: String, bubbleSeq: Int, entries: [ChatMessage], complete: Bool) {
         appState?.messageStore.setTurnSteps(sessionId, bubbleSeq: bubbleSeq, entries)
-        if !complete { tracePulled.remove("\(sessionId):\(bubbleSeq)") }
+        if !complete { tracePulled.removeValue(forKey: "\(sessionId):\(bubbleSeq)") }
     }
 
     /// On idle: find the just-concluded bubble (agent_message / system_message)
@@ -1170,7 +1175,7 @@ final class MessageProvider {
         }
         outstanding.removeValue(forKey: sessionId)
         pendingTail.removeValue(forKey: sessionId)
-        tracePulled = tracePulled.filter { !$0.hasPrefix("\(sessionId):") }
+        tracePulled = tracePulled.filter { !$0.key.hasPrefix("\(sessionId):") }
         cardRequested.remove(sessionId)
         appState?.sessionStore.setLoading(sessionId, false)
     }

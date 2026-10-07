@@ -37,6 +37,7 @@ final class TentacleSetupRunner {
     @ObservationIgnored private var process: Process?
     @ObservationIgnored private var stdin: FileHandle?
     @ObservationIgnored private var buffer = Data()
+    @ObservationIgnored private var stderrTail = Data()
     @ObservationIgnored private var webAuth: ASWebAuthenticationSession?
     @ObservationIgnored private let webAuthAnchor = WebAuthAnchor()
     @ObservationIgnored private var lastStart: (binaryPath: String, deviceName: String?, forceLogin: Bool)?
@@ -59,9 +60,11 @@ final class TentacleSetupRunner {
         case "oauth_url":
             return .waitingForBrowser
         case "device_code":
+            // Only GitHub's own verification page is opened in the browser.
             guard let code = json["userCode"] as? String,
                   let raw = json["verificationUri"] as? String,
-                  let url = URL(string: raw) else { return nil }
+                  let url = URL(string: raw), url.scheme == "https",
+                  url.host == "github.com" || url.host?.hasSuffix(".github.com") == true else { return nil }
             return .waitingForGitHub(userCode: code, verificationURL: url)
         case "authenticated":
             return .configuring(username: json["username"] as? String ?? "")
@@ -98,7 +101,18 @@ final class TentacleSetupRunner {
         let input = Pipe()
         process.standardOutput = out
         process.standardInput = input
-        process.standardError = FileHandle.nullDevice
+        // Keep the tail of stderr so an unexpected exit can say why.
+        let err = Pipe()
+        process.standardError = err
+        stderrTail = Data()
+        err.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let chunk = handle.availableData
+            Task { @MainActor [weak self] in
+                guard let self, !chunk.isEmpty else { return }
+                self.stderrTail.append(chunk)
+                if self.stderrTail.count > 4096 { self.stderrTail = self.stderrTail.suffix(4096) }
+            }
+        }
 
         out.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
@@ -117,6 +131,7 @@ final class TentacleSetupRunner {
             self.stdin = input.fileHandleForWriting
         } catch {
             out.fileHandleForReading.readabilityHandler = nil
+            err.fileHandleForReading.readabilityHandler = nil
             phase = .failed(message: "Could not start Kraki on this Mac: \(error.localizedDescription)")
         }
     }
@@ -247,8 +262,12 @@ final class TentacleSetupRunner {
         stdin = nil
         webAuth?.cancel()
         webAuth = nil
+        (finished.standardError as? Pipe)?.fileHandleForReading.readabilityHandler = nil
         if isRunning {
-            phase = status == 0 ? phase : .failed(message: "Setup stopped unexpectedly (exit \(status)).")
+            let lastError = String(decoding: stderrTail, as: UTF8.self)
+                .split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty }
+            phase = status == 0 ? phase : .failed(message: "Setup stopped unexpectedly (exit \(status))."
+                + (lastError.map { " \($0)" } ?? ""))
         }
     }
 }

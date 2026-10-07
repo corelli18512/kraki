@@ -140,7 +140,7 @@ final class DeviceStore {
         guard let snapshot = pendingSnapshot else { return }
         pendingSnapshot = nil
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? data.write(to: Self.snapshotURL, options: .atomic)
+        try? data.write(to: Self.snapshotURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
     /// Wipe the on-disk file. Logout / reset.

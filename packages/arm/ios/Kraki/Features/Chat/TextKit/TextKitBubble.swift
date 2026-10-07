@@ -1433,7 +1433,7 @@ final class TKBubbleContent {
             let key = attachment.data as NSString
             if let cached = imageCache.object(forKey: key) { return cached }
             guard let data = Data(base64Encoded: attachment.data),
-                  let image = UIImage(data: data) else { return nil }
+                  let image = AttachmentImageCache.decode(data) else { return nil }
             imageCache.setObject(image, forKey: key)
             return image
         }
