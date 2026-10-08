@@ -98,7 +98,7 @@ Platforms: **M** Kraki for Mac · **W** Kraki for Windows · **I** iPhone ·
 | F1 | Look at the devices | Each device online or when it was last online, version, agents and models | M W I B |
 | F2 | Remove an old device | Confirmation; gone everywhere; this device can't remove itself | M W I B |
 | F3 | Connect your phone | QR code and Copy link; closes with a check mark when the phone joins | M W B |
-| F4 | A computer has an update | Shown per computer; Update runs on CLI installs; app installs say to update the app | M W I B |
+| F4 | A computer has an update | Shown per computer; Update runs on CLI installs; app installs say to update the app. Sessions only waiting for your answer don't hold the update back | M W I B |
 
 ## G. Usage
 
