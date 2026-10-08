@@ -191,6 +191,15 @@ final class FakeHTTP: URLProtocol, @unchecked Sendable {
         client.setForeground(false); client.testTick()
         check(!client.testSnapshot().task && client.testSnapshot().count == 1, "background saves locally without HTTP")
 
+        // A 400 deletes the spooled batch. The collector now drops names it does
+        // not know instead of rejecting, so a 400 means a real format violation.
+        client.setForeground(true)
+        FakeHTTP.lock.lock(); FakeHTTP.postStatus = 400; let postsBefore = FakeHTTP.posts.count; FakeHTTP.lock.unlock()
+        for n in 0..<20 { recorder.record(.input, [.clientId: .id("rejected-\(n)"), .textLength: .int(n)]) }
+        client.testTick(); wait(client)
+        FakeHTTP.lock.lock(); let postsAfter = FakeHTTP.posts.count; FakeHTTP.postStatus = 204; FakeHTTP.lock.unlock()
+        check(postsAfter > postsBefore && client.testSnapshot().count == 0, "400 deletes the batch")
+
         let retryRecorder = DiagRecorder()
         let retryConfig = DiagClient(recorder: retryRecorder, root: root.appendingPathComponent("config-retry"), defaults: defaults, sessionConfiguration: config)
         defer { retryConfig.testStop() }

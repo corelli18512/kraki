@@ -4,7 +4,7 @@ import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { gzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { DiagApi, diagSigningText } from '../diag-api.js';
 
 const key = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -72,17 +72,46 @@ describe('off-band diagnostics', () => {
     f.batch.events[0].d.textLength = 123;
     expect((await f.request(gzipSync(JSON.stringify(f.batch)))).status).toBe(409);
   });
-  it('rejects unallowlisted content, unknown events, fields and non-numeric timings', async () => {
-    const f = await fixture();
+  it('rejects known fields with values outside their format (free text, paths, non-numeric timings)', async () => {
     for (const event of [
-      { ev: 'cmd.answer', seq: 1, m: 0, t: 0, d: { text: 'private text' } },
-      { ev: 'raw.log', seq: 1, m: 0, t: 0, d: {} },
       { ev: 'cmd.answer', seq: 1, m: 0, t: 0, d: { textLength: 'secret' } },
       { ev: 'cmd.answer', seq: 1, m: 0, t: 0, d: { stack: '/Users/name/private/path' } },
     ]) {
+      const f = await fixture();
       expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, events: [event] })))).status).toBe(400);
     }
-    expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, token: 'secret' })))).status).toBe(400);
+  });
+  it('drops names it does not know (never stored) instead of rejecting the batch', async () => {
+    const stored = async (f: Awaited<ReturnType<typeof fixture>>) => {
+      const [owner] = await readdir(f.dir);
+      if (!owner) return null;
+      const files = await readdir(join(f.dir, owner));
+      return files.length ? JSON.parse(gunzipSync(await readFile(join(f.dir, owner, files[0]))).toString()) : null;
+    };
+    // Unknown field of a known event (e.g. a field added by a newer client).
+    let f = await fixture();
+    const known = f.batch.events[0];
+    let res = await f.request(gzipSync(JSON.stringify({ ...f.batch,
+      events: [{ ...known, d: { ...known.d, text: 'private text', someNewerField: true } }] })));
+    expect(res.status).toBe(204);
+    let saved = await stored(f);
+    expect(saved.events[0].d).toEqual(known.d);
+    expect(JSON.stringify(saved)).not.toContain('private text');
+    // Unknown event type next to known ones; unknown top-level / event keys.
+    f = await fixture();
+    res = await f.request(gzipSync(JSON.stringify({ ...f.batch, token: 'secret',
+      events: [{ ev: 'raw.log', seq: 1, m: 0, t: 0, d: { line: 'secret' } }, { ...known, seq: 2, extra: 'x' }] })));
+    expect(res.status).toBe(204);
+    saved = await stored(f);
+    expect(saved.events.map((e: { ev: string }) => e.ev)).toEqual(['cmd.answer']);
+    expect(JSON.stringify(saved)).not.toMatch(/secret|extra|token/);
+    // Same bytes again: still idempotent after re-encoding.
+    expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, token: 'secret',
+      events: [{ ev: 'raw.log', seq: 1, m: 0, t: 0, d: { line: 'secret' } }, { ...known, seq: 2, extra: 'x' }] })))).status).toBe(204);
+    // Only unknown events: accepted, nothing stored.
+    f = await fixture();
+    expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, events: [{ ev: 'raw.log', seq: 1, m: 0, t: 0, d: {} }] })))).status).toBe(204);
+    expect(await stored(f)).toBeNull();
   });
   it('accepts metadata-only transport recovery reason and generation', async () => {
     const f = await fixture();
@@ -112,7 +141,6 @@ describe('off-band diagnostics', () => {
       { ...ready, d: { ...ready.d, kind: 'lukewarm' } },
       { ...outage, d: { ...outage.d, code: 'connection reset by peer' } },
       { ...outage, d: { ...outage.d, path: 'Home-WiFi-5G' } },
-      { ...ready, d: { ...ready.d, source: 'x' } },
     ]) {
       expect((await f.request(gzipSync(JSON.stringify({ ...f.batch, events: [bad] })))).status).toBe(400);
     }

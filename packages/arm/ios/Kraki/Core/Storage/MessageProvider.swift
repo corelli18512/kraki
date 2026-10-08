@@ -172,7 +172,7 @@ final class MessageProvider {
             }
         }
         let oldLastSeq = tentacleLastSeq[sessionId]
-        tentacleLastSeq[sessionId] = lastSeq
+        if oldLastSeq != lastSeq { tentacleLastSeq[sessionId] = lastSeq } // no-op writes notify observers
         if let oldLastSeq, oldLastSeq != lastSeq {
             KLog.d("🏷️ [2/history setTentacleInfo] session=\(sessionId.prefix(12)) lastSeq=\(oldLastSeq)→\(lastSeq) device=\(deviceId.prefix(12))")
         } else if oldLastSeq == nil {
@@ -434,13 +434,10 @@ final class MessageProvider {
         KLog.chat("🔥 [2/history warm-up] candidates=\(eager.count) fired=\(fired.count) skipAtHeadOrLoading=\(skipped.count) droppedBeyondCap=\(dropped) cap=\(Self.warmupCap) firedSessions=\(fired)")
     }
 
-    private static func parseISO(_ s: String) -> Date? {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: s) { return d }
-        f.formatOptions = [.withInternetDateTime]
-        return f.date(from: s)
-    }
+    /// Shared memoised parser. A fresh ISO8601DateFormatter per digest made
+    /// warm-up cost 10–20 ms of every 56-session `session_list` on the main
+    /// thread (diag `session_list.reconcile` 53–215 ms on reconnect).
+    private static func parseISO(_ s: String) -> Date? { ISO8601.parse(s) }
 
     // MARK: - Request Before (Pagination)
 

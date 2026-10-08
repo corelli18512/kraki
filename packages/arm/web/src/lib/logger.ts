@@ -79,9 +79,21 @@ export function setLogBroadcast(fn: (msg: Record<string, unknown>) => void): voi
   if (isDebugLoggingEnabled()) startLogShipping();
 }
 
+/** One shipped log argument as text. An Error has no enumerable fields, so
+ *  JSON.stringify gives `{}` and the cause is lost (the 2026-10-07 storm's
+ *  305 "Malformed WS message" lines all ended in `{}`). */
+export function formatLogArg(a: unknown): string {
+  if (typeof a === 'string') return a;
+  if (a instanceof Error) {
+    const stack = a.stack?.split('\n').slice(1, 4).map((l) => l.trim()).join(' | ');
+    return `${a.name}: ${a.message}${stack ? ` [${stack}]` : ''}`;
+  }
+  try { return JSON.stringify(a) ?? String(a); } catch { return String(a); }
+}
+
 function shipLog(level: string, scope: string, args: unknown[]): void {
   if (!isDebugLoggingEnabled()) return;
-  const message = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+  const message = args.map(formatLogArg).join(' ');
   LOG_BUFFER.push({ ts: new Date().toISOString(), level, scope, message });
   if (LOG_BUFFER.length >= FLUSH_SIZE) flushLogs();
 }

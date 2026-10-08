@@ -361,6 +361,7 @@ final class KrakiVoiceInputController {
 
     var isRecording: Bool { state == .recording }
     var isBusy: Bool {
+        if audioActivationInFlight { return true }
         switch state {
         case .waitingForConnection, .requestingPermission, .obtainingLease, .recording, .finishing:
             return true
@@ -372,6 +373,29 @@ final class KrakiVoiceInputController {
     private weak var host: KrakiVoiceInputHost?
     private let sessionFactory: VoiceInputSessionFactory
     private let audioPolicy: VoiceInputAudioPolicy
+    /// AVAudioSession setCategory/setActive block for tens to hundreds of ms
+    /// (diag: recording.begin was the longest main-thread stall, up to 507 ms).
+    /// Both run here, off the main thread, on ONE serial queue so a release
+    /// issued while activation is in flight still deactivates after it.
+    @ObservationIgnored private let audioSessionQueue = DispatchQueue(
+        label: "chat.kraki.voice.audio-session", qos: .userInitiated)
+
+    /// The press is being turned into a recording while `state` still reads
+    /// idle (activation used to block the main thread, so there was no such
+    /// window): counts as busy so a second press cannot start alongside it.
+    @ObservationIgnored private var audioActivationInFlight = false
+
+    private func activateAudio() async -> Bool {
+        let policy = audioPolicy
+        return await withCheckedContinuation { continuation in
+            audioSessionQueue.async { continuation.resume(returning: policy.activate()) }
+        }
+    }
+
+    private func deactivateAudio() {
+        let policy = audioPolicy
+        audioSessionQueue.async { policy.deactivate() }
+    }
     private var session: VoiceInputSessionProtocol?
     private var connectionGeneration = UUID()
     private var recordingGeneration = UUID()
@@ -619,6 +643,7 @@ final class KrakiVoiceInputController {
         default:
             return
         }
+        guard !audioActivationInFlight else { return }
         #if KRAKI_DIAG
         KrakiDiag.record(.voice, session: sessionID, [.source: .tag("recording.begin")])
         #endif
@@ -700,11 +725,13 @@ final class KrakiVoiceInputController {
             failRecording(VoiceInputError.microphoneUnavailable, closeTransport: false)
             return
         }
-        let activated = audioPolicy.activate()
+        audioActivationInFlight = true
+        let activated = await activateAudio()
+        audioActivationInFlight = false
         guard recordingGeneration == currentRecording else {
             // Released/cancelled meanwhile: never leave a record session active
             // (it interrupts or ducks other audio) unless a newer recording owns it.
-            if activated, !isBusy { audioPolicy.deactivate() }
+            if activated, !isBusy { deactivateAudio() }
             return
         }
         guard activated else {
@@ -1334,7 +1361,7 @@ final class KrakiVoiceInputController {
         correctionDisplayTask?.cancel()
         correctionDisplayTask = nil
         pendingCorrectionText = nil
-        audioPolicy.deactivate()
+        deactivateAudio()
         resetPresentation()
         activeSessionID = nil
         context = nil

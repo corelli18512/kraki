@@ -259,6 +259,10 @@ struct MacChatView: View {
         return hash
     }
 
+    /// Inputs of `ChatViewModel.refreshMessageCache()` — the persisted window
+    /// and the pending inputs. Not the live card: the card is passed to the
+    /// list separately, and hashing its text here re-projected the whole
+    /// spine and re-rendered the chat a second time on every streaming delta.
     private var spineRevision: Int {
         // Read the observable store DIRECTLY. Going through
         // MessageProvider.currentWindow() hides the dependency behind a
@@ -272,20 +276,6 @@ struct MacChatView: View {
         hash = hash &* 31 &+ (window.last?.seq ?? 0)
         hash = hash &* 31 &+ (window.last?.type.hashValue ?? 0)
         hash = hash &* 31 &+ (window.last?.content?.hashValue ?? 0)
-        hash = hash &* 31 &+ (viewModel.card == nil ? 0 : 1)
-        hash = hash &* 31 &+ (viewModel.card?.text.hashValue ?? 0)
-        if let action = viewModel.card?.action {
-            hash = hash &* 31 &+ action.type.hashValue
-            hash = hash &* 31 &+ (action.toolCallId?.hashValue ?? 0)
-            hash = hash &* 31 &+ (action.headline?.hashValue ?? 0)
-            hash = hash &* 31 &+ (action.permissionId?.hashValue ?? 0)
-            hash = hash &* 31 &+ (action.payload["decision"]?.stringValue?.hashValue ?? 0)
-            hash = hash &* 31 &+ (action.cancelled ? 1 : 0)
-            hash = hash &* 31 &+ (action.payload["localPending"]?.boolValue == true ? 1 : 0)
-            hash = hash &* 31 &+ (action.payload["localError"]?.stringValue?.hashValue ?? 0)
-            hash = hash &* 31 &+ (action.payload["success"]?.boolValue == true ? 1 : 0)
-            hash = hash &* 31 &+ (action.payload["running"]?.intValue ?? 0)
-        }
         hash = hash &* 31 &+ (appState.commandSender?.outbox[sessionId]?.count ?? 0)
         hash = hash &* 31 &+ viewModel.pendingSignature.hashValue
         return hash

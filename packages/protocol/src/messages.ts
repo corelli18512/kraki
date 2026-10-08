@@ -1659,6 +1659,14 @@ export interface AccountDeletedMessage {
 /** WebSocket close code the relay uses after deleting the account. */
 export const ACCOUNT_DELETED_CLOSE_CODE = 4005;
 
+/**
+ * WebSocket close code the relay uses when the same device id authenticated
+ * on a newer socket (e.g. a second browser tab sharing one stored identity).
+ * The evicted client must NOT reconnect on its own: doing so evicts the newer
+ * one, and the two would replace each other about once a second.
+ */
+export const DEVICE_REPLACED_CLOSE_CODE = 4009;
+
 /** Broadcast confirmation that a device was removed. */
 export interface DeviceRemovedMessage {
   type: 'device_removed';

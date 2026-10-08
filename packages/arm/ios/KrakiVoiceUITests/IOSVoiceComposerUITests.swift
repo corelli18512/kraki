@@ -211,4 +211,54 @@ final class IOSVoiceComposerUITests: XCTestCase {
         sleep(1)
         screenshot("answer-sent")
     }
+
+    // MARK: Backgrounding while a sent voice message is being corrected
+    // (diag 2026-09-28: such messages stayed "not delivered" until a manual
+    // Retry 4 and 16 minutes later). Real background transitions (Home).
+
+    private func sendAndGoHome() {
+        mic.tap()
+        awaitTranscript()
+        app.buttons["voice-send"].tap()
+        awaitState("staged=1", timeout: 2)
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 5) || app.state == .runningBackgroundSuspended)
+    }
+
+    func testBackgroundRightAfterSendStillDeliversCorrectedText() {
+        launch(finalMs: 2500)
+        sendAndGoHome()
+        sleep(6)                    // the correction finishes while in the background
+        app.activate()
+        awaitState("sent=1", timeout: 2)
+        awaitState("bgSent=1")      // delivered while backgrounded, not after returning
+        awaitState("staged=0")
+        awaitState("failed=0")
+        XCTAssertEqual(app.staticTexts["voice-test-sent"].label, corrected)
+    }
+
+    func testBackgroundBriefReturnSendsOnce() {
+        launch(finalMs: 4000)
+        sendAndGoHome()
+        sleep(1)
+        app.activate()             // back before the correction: nothing was torn down
+        awaitState("sent=1", timeout: 8)
+        awaitState("bgSent=0")
+        sleep(2)
+        awaitState("sent=1")
+        awaitState("failed=0")
+    }
+
+    func testCorrectionTooSlowInBackgroundKeepsTheMessageNotDelivered() {
+        launch(finalMs: 20_000)     // longer than the background grace period
+        sendAndGoHome()
+        sleep(13)
+        app.activate()
+        awaitState("staged=0", timeout: 3)
+        awaitState("failed=1")
+        awaitState("sent=0")
+        XCTAssertTrue(app.descendants(matching: .any)["Not delivered. Tap to retry"].waitForExistence(timeout: 3)
+                      || app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Not delivered'")).firstMatch.exists,
+                      "kept as a retryable bubble, never silently sent")
+    }
 }
