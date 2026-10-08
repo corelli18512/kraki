@@ -36,7 +36,8 @@ private struct SessionCardBody: View {
                 return false
             }(),
             pendingInputs: appState.commandSender?.pendingInputs(session.id) ?? [],
-            isDeliveryOnline: appState.isFullyOnline
+            isDeliveryOnline: appState.isFullyOnline,
+            modelName: appState.deviceStore.modelDisplayName(session.model, deviceId: session.deviceId, agent: session.agent)
         )
     }
 
@@ -48,9 +49,8 @@ private struct SessionCardBody: View {
         return Color(hex: 0x34D399)
     }
 
-    private var cardTitle: String {
-        session.title ?? session.autoTitle ?? AgentInfo.from(session.agent).label
-    }
+    /// Same name as the chat header, Mac and web ("New Session" when untitled).
+    private var cardTitle: String { session.displayTitle }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {

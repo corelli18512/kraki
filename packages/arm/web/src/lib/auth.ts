@@ -8,6 +8,22 @@ import { setTheme } from '../hooks/useTheme';
 
 const logger = createLogger('auth');
 
+/** How this browser appears in Devices: "Chrome on Mac", "Safari on iPhone".
+ *  Every browser used to be "Web Browser", so several were indistinguishable. */
+export function browserDeviceName(ua: string): string {
+  const browser = /Edg\//.test(ua) ? 'Edge'
+    : /Firefox\//.test(ua) ? 'Firefox'
+      : /(Chrome|CriOS)\//.test(ua) ? 'Chrome'
+        : /Safari/.test(ua) ? 'Safari' : 'Browser';
+  const os = /iPhone/.test(ua) ? 'iPhone'
+    : /iPad/.test(ua) ? 'iPad'
+      : /Android/.test(ua) ? 'Android'
+        : /Windows/.test(ua) ? 'Windows'
+          : /Mac OS X|Macintosh/.test(ua) ? 'Mac'
+            : /Linux/.test(ua) ? 'Linux' : '';
+  return os ? `${browser} on ${os}` : `Web ${browser}`;
+}
+
 /** Send the initial auth message. Returns true if a pairing token was consumed. */
 export async function sendAuth(
   send: (msg: Record<string, unknown>) => void,
@@ -17,7 +33,7 @@ export async function sendAuth(
   githubCode: string | undefined,
   githubOAuthExtras?: { codeVerifier?: string; redirectUri?: string },
 ): Promise<boolean> {
-  const deviceName = `Web ${navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Browser'}`;
+  const deviceName = browserDeviceName(navigator.userAgent);
 
   // Wait for key store if not ready
   if (!keyStore.isReady()) {

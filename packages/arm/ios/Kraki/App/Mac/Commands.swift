@@ -283,4 +283,17 @@ extension Notification.Name {
     static let macCheckForUpdates  = Notification.Name("mac.checkForUpdates")
 }
 
+/// Session Info asked for a Session whose chat may not be open yet (a row's
+/// Rename…): the chat shows it as soon as it appears.
+@MainActor
+enum MacSessionInfoRequest {
+    static var pending: String?
+
+    static func take(_ sessionId: String) -> Bool {
+        guard pending == sessionId else { return false }
+        pending = nil
+        return true
+    }
+}
+
 #endif

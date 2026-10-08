@@ -117,6 +117,27 @@ final class MacPresenceTests: XCTestCase {
         )
     }
 
+    /// Sparkle's "Install and Relaunch" quits through a quit Apple event that
+    /// looks like a person's quit; it used to ask "take this Mac offline?".
+    func testInstallingAnUpdateNeverAsksToGoOffline() {
+        XCTAssertTrue(MacPresenceController.asksBeforeQuitting(
+            quittingOffline: false, installingUpdate: false, managesPresence: true, source: .user))
+        XCTAssertFalse(MacPresenceController.asksBeforeQuitting(
+            quittingOffline: false, installingUpdate: true, managesPresence: true, source: .user))
+        XCTAssertFalse(MacPresenceController.asksBeforeQuitting(
+            quittingOffline: false, installingUpdate: false, managesPresence: true, source: .system))
+        XCTAssertFalse(MacPresenceController.asksBeforeQuitting(
+            quittingOffline: true, installingUpdate: false, managesPresence: true, source: .user))
+        XCTAssertFalse(MacPresenceController.asksBeforeQuitting(
+            quittingOffline: false, installingUpdate: false, managesPresence: false, source: .user))
+    }
+
+    func testAWindowlessLaunchStartsFromTheMenuBar() {
+        XCTAssertTrue(MacLaunchCoordinator.needsWindowlessStart(bootstrapStarted: false, visibleWindows: 0))
+        XCTAssertFalse(MacLaunchCoordinator.needsWindowlessStart(bootstrapStarted: true, visibleWindows: 0))
+        XCTAssertFalse(MacLaunchCoordinator.needsWindowlessStart(bootstrapStarted: false, visibleWindows: 1))
+    }
+
     func testQuitEventDescriptorsAreClassified() {
         let target = NSAppleEventDescriptor(processIdentifier: ProcessInfo.processInfo.processIdentifier)
         let userQuit = NSAppleEventDescriptor(

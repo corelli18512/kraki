@@ -54,5 +54,16 @@ final class MacUpdateController: NSObject, SPUUpdaterDelegate {
     func allowedChannels(for updater: SPUUpdater) -> Set<String> {
         []
     }
+
+    // Installing an update quits Kraki to replace it. That is not a person
+    // quitting: no "take this Mac offline?" question, and this Mac comes back
+    // online with the new version.
+    func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        MacPresenceController.shared.beginInstallingUpdate()
+    }
+
+    func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
+        MacPresenceController.shared.beginInstallingUpdate()
+    }
 }
 #endif

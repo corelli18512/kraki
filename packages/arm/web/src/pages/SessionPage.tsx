@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { sessionDisplayTitle } from '../lib/session-status';
 import { useParams, useNavigate } from 'react-router';
 import { useStore } from '../hooks/useStore';
 import { useShowsReconnecting } from '../hooks/useShowsReconnecting';
@@ -6,7 +7,6 @@ import { ChatView } from '../components/chat/ChatView';
 import { ChatHeader, HEADER_HEIGHT, type SessionMode } from '../components/chat/ChatHeader';
 import { wsClient } from '../lib/ws-client';
 import { useNarrow } from '../hooks/useNarrow';
-import { agentInfo } from '../lib/format';
 import { SessionInfoPanel } from '../components/devices/SessionInfoPanel';
 import { messageProvider } from '../lib/message-provider';
 import { HtmlArtifactPanel } from '../components/chat/HtmlArtifactPanel';
@@ -126,8 +126,7 @@ export function SessionPage() {
     );
   }
 
-  const { label } = agentInfo(session.agent);
-  const displayTitle = session.title ?? session.autoTitle ?? label;
+  const displayTitle = sessionDisplayTitle(session);
   const topInset = narrow ? HEADER_HEIGHT.narrow : HEADER_HEIGHT.wide;
 
   return (

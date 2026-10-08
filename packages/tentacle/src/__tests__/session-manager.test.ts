@@ -245,6 +245,15 @@ describe('SessionManager', () => {
       expect(forkedMeta.reasoningEffort).toBe('high');
     });
 
+    it('names a fork of an auto-titled session as a fork (not an identical twin)', () => {
+      const { sessionId } = sm.createSession('pi');
+      sm.setAutoTitle(sessionId, 'Create hello.txt');
+      const forkedMeta = sm.getMeta(sm.forkSession(sessionId)!.sessionId)!;
+      expect(forkedMeta.title).toBe('Fork of Create hello.txt');
+      const untitled = sm.createSession('pi').sessionId;
+      expect(sm.getMeta(sm.forkSession(untitled)!.sessionId)!.title).toBeUndefined();
+    });
+
     it('keeps the source permission mode and turn index when forking', () => {
       const { sessionId } = sm.createSession('claude');
       sm.setMode(sessionId, 'safe');

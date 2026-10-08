@@ -541,6 +541,7 @@ enum VoiceInputCopy {
     static let title = "Voice Input"
     static let correction = "Correct Transcripts"
     static let correctionFooter = "After you finish speaking, an AI model in the cloud fixes recognition mistakes such as names, terms and punctuation. Turn off to use exactly what was recognized; your recording is still transcribed in the cloud."
+    static let unavailable = "Voice input isn't available with this relay. Your Custom Words still sync to your other devices."
     static let context = "Use Conversation Context"
     static let contextFooter = "Sends the conversation title, agent and model, and names or terms that appear in recent messages, to the correction service so names you are discussing are spelled right. Whole messages and anything that looks like a key, token, password or file path are never sent."
 }
@@ -594,6 +595,13 @@ struct VoiceInputPane: View {
 
     var body: some View {
         Form {
+            if appState.connectionStatus == .connected, appState.voiceCapability == nil {
+                // The microphone button is hidden then; say why (like the web).
+                Section {
+                    Label(VoiceInputCopy.unavailable, systemImage: "mic.slash")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+            }
             Section {
                 Toggle(VoiceInputCopy.correction, isOn: $correction)
             } footer: {

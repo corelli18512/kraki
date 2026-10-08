@@ -18,10 +18,11 @@ struct NotificationsPane: View {
             Section("System permission") {
                 LabeledContent("Status", value: statusText)
                 HStack {
-                    Button("Request permission") {
-                        Task { await requestPermission() }
+                    if authStatus == .notDetermined {
+                        Button("Allow Notifications…") {
+                            Task { await requestPermission() }
+                        }
                     }
-                    .disabled(authStatus == .authorized || authStatus == .denied)
                     Button("Open System Settings…") {
                         openSystemNotificationSettings()
                     }
@@ -46,8 +47,10 @@ struct NotificationsPane: View {
         switch authStatus {
         case .authorized: return "Granted"
         case .provisional: return "Provisional"
-        case .denied: return "Denied (use System Settings)"
-        case .notDetermined: return "Not requested"
+        // macOS also reports a request nobody has answered yet (its banner is
+        // still in Notification Center) as denied: don't say the person did.
+        case .denied: return "Off — turn on in System Settings"
+        case .notDetermined: return "Not asked yet"
         case .ephemeral: return "Ephemeral"
         @unknown default: return "Unknown"
         }

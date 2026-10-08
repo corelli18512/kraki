@@ -128,6 +128,33 @@ describe('kraki setup --json', () => {
     expect(existsSync(join(home, 'config.json'))).toBe(false);
   });
 
+  it('a self-hosted relay without accounts is set up without a GitHub sign-in', async () => {
+    process.env.KRAKI_RELAY_URL = 'ws://relay.local:4000';
+    const { deps, events } = makeDeps({}, { queryRelayInfo: async () => ({ methods: ['open'] }) });
+    expect(await runSetupJsonWith(['--oauth', '--device-name', 'PC'], deps)).toBe(0);
+    expect(events.map((e) => e.event)).toEqual(['start', 'relay', 'done']);
+    expect(JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'))).toMatchObject({ relay: 'ws://relay.local:4000', authMethod: 'open', device: { name: 'PC' } });
+    expect(existsSync(join(home, 'github-token'))).toBe(false);
+  });
+
+  it('a self-hosted relay with GitHub accounts still signs in with GitHub', async () => {
+    process.env.KRAKI_RELAY_URL = 'ws://relay.local:4000';
+    writeFileSync(join(home, 'github-token'), 'gho_saved\n');
+    const { deps } = makeDeps({ 'https://api.github.com/user': () => json({ login: 'octocat' }) },
+      { queryRelayInfo: async () => ({ methods: ['github_token', 'pairing'] }) });
+    expect(await runSetupJsonWith([], deps)).toBe(0);
+    expect(JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'))).toMatchObject({ authMethod: 'github_token' });
+  });
+
+  it('a relay still loading its account config (only "challenge") keeps the GitHub sign-in', async () => {
+    process.env.KRAKI_RELAY_URL = 'wss://relay.example';
+    writeFileSync(join(home, 'github-token'), 'gho_saved\n');
+    const { deps } = makeDeps({ 'https://api.github.com/user': () => json({ login: 'octocat' }) },
+      { queryRelayInfo: async () => ({ methods: ['challenge'] }) });
+    expect(await runSetupJsonWith([], deps)).toBe(0);
+    expect(JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'))).toMatchObject({ authMethod: 'github_token' });
+  });
+
   it('fails with relay_unreachable before writing config', async () => {
     writeFileSync(join(home, 'github-token'), 'gho_saved\n');
     const { deps, events } = makeDeps({

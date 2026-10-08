@@ -398,7 +398,9 @@ async function cmdStart(atLogin = false): Promise<void> {
     config = await runSetup();
   }
 
-  if (isDaemonRunning()) {
+  // An app-managed Kraki says which app runs it (silentStart), even when it
+  // is already running.
+  if (isDaemonRunning() && !loadManagedBy()) {
     const status = getDaemonStatus();
     console.log(chalk.green(`  🦑 Kraki is already running (PID ${status.pid})`));
     return;

@@ -51,6 +51,10 @@ extension AppState {
         onAccountDeleted?()
         #endif
         logout()
+        #if os(macOS)
+        // Nothing left to reuse: setup starts from the beginning.
+        signedOutByUser = false
+        #endif
         accountDeletion = .idle
         accountDeletionAttempt = nil
         accountDeletedNotice = true

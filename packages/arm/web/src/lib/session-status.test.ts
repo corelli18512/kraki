@@ -80,3 +80,18 @@ describe('getSessionStatus', () => {
     expect(getSessionStatus(session({ state: 'idle' }), 1)).toBe('pending');
   });
 });
+
+describe('one name per session and model (same as iOS/Mac)', () => {
+  it('untitled sessions are "New Session"', async () => {
+    const { sessionDisplayTitle } = await import('./session-status');
+    expect(sessionDisplayTitle({})).toBe('New Session');
+    expect(sessionDisplayTitle({ autoTitle: 'Fix tests' })).toBe('Fix tests');
+    expect(sessionDisplayTitle({ title: 'Mine', autoTitle: 'Fix tests' })).toBe('Mine');
+  });
+  it("models show their agent's name", async () => {
+    const { modelDisplayName } = await import('./session-status');
+    const agents = [{ id: 'pi', modelDetails: [{ id: 'deepseek/deepseek-flash', name: 'Deepseek deepseek-flash' }] }];
+    expect(modelDisplayName('deepseek/deepseek-flash', agents, 'pi')).toBe('Deepseek deepseek-flash');
+    expect(modelDisplayName('other/model', agents, 'pi')).toBe('other/model');
+  });
+});

@@ -200,6 +200,9 @@ final class AppState {
         self.messageDatabase = testDatabase
         self.messageStore = MessageStore(db: testDatabase)
         self.voiceInputController = voiceController ?? KrakiVoiceInputController.isolatedForTesting()
+        #if os(macOS)
+        self.signedOutDefaults = UserDefaults(suiteName: "kraki-test-\(UUID().uuidString)") ?? .standard
+        #endif
         if voiceController == nil { self.voiceInputController.bind(host: self) }
         self.attachmentStore = AttachmentStore { _, _, _ in true }
         self.commandSender = CommandSender(appState: self)
@@ -745,6 +748,37 @@ final class AppState {
     #if os(macOS)
     private var cliLoginInFlight = false
 
+    /// Sign Out on this Mac. The app signs in with the built-in Kraki's own
+    /// login, which stays (this Mac keeps serving its agents, like Kraki for
+    /// Windows), so until the person signs in again the app must not quietly
+    /// reuse it: not at launch, not from the sign-in watchdog.
+    static let signedOutByUserKey = "mac.signedOutByUser"
+    static let signedOutAtKey = "mac.signedOutAt"
+    var signedOutByUser: Bool {
+        get { signedOutDefaults.bool(forKey: Self.signedOutByUserKey) }
+        set {
+            signedOutDefaults.set(newValue, forKey: Self.signedOutByUserKey)
+            if newValue { signedOutDefaults.set(Date().timeIntervalSince1970, forKey: Self.signedOutAtKey) }
+            else { signedOutDefaults.removeObject(forKey: Self.signedOutAtKey) }
+        }
+    }
+
+    /// Signed out, and no new sign-in since. A GitHub sign-in saved by the
+    /// local Kraki afterwards (`kraki connect` in Terminal, or setup) is the
+    /// person signing in again: it ends the Sign Out, so returning from
+    /// Terminal still signs in by itself.
+    var staysSignedOut: Bool {
+        guard signedOutByUser else { return false }
+        let at = signedOutDefaults.double(forKey: Self.signedOutAtKey)
+        if at > 0, let signIn = AuthManager.cliSignInDate(), signIn.timeIntervalSince1970 > at {
+            signedOutByUser = false
+            return false
+        }
+        return true
+    }
+    /// Test graphs use their own store, so one test's Sign Out never leaks.
+    @ObservationIgnored var signedOutDefaults: UserDefaults = .standard
+
     /// Reuse the locally-installed `kraki` CLI's login (relay + GitHub token
     /// from `~/.kraki` / `gh auth token`) to authenticate this Mac as an arm
     /// device — no manual pairing required. Returns true when a CLI login was
@@ -752,6 +786,10 @@ final class AppState {
     /// installed/logged in (caller falls back to the login screen).
     @discardableResult
     func attemptCLILogin(ghDeadline: TimeInterval = AuthManager.launchGhDeadline) async -> Bool {
+        if staysSignedOut {
+            KLog.diag("Mac CLI login skipped: signed out on this Mac")
+            return false
+        }
         // SwiftUI WindowGroup tasks can be recreated while the app is already
         // connecting/authenticating. Loading the CLI token twice used to call
         // connect twice and leave parallel sockets behind.
@@ -793,16 +831,16 @@ final class AppState {
         // process-local keys so a denied Keychain prompt cannot strand the
         // Mac before the relay refreshes this device's public keys.
         authManager?.useEphemeralKeysForCurrentProcess()
-        let relayChanged = creds.relay != relayURL
-        if relayChanged {
-            relayURL = creds.relay
-            wsClient?.setRelayURL(creds.relay)
-        }
+        if creds.relay != relayURL { relayURL = creds.relay }
+        // Sign Out resets AppState's relay but not the socket's, so compare
+        // with the socket: only a real change schedules a new connection.
+        let socketRelayChanged = wsClient.map { $0.relayURL != creds.relay } ?? false
+        if socketRelayChanged { wsClient?.setRelayURL(creds.relay) }
         authManager?.cliGitHubToken = creds.token
         KLog.diag("Auth: using local CLI login")
         // setRelayURL schedules the replacement connection itself. Calling
         // connect again here would briefly create two authenticated sockets.
-        guard !relayChanged, connectionStatus != .connected else { return }
+        guard !socketRelayChanged, connectionStatus != .connected else { return }
         reconnectForNewCredentials(reason: "cli_token")
     }
 
@@ -824,7 +862,7 @@ final class AppState {
     /// Find the local CLI login with a realistic `gh` deadline and sign in
     /// with it. Falls back to the relay login flow when there is none.
     func recoverCLIAuthentication(reason: String) async {
-        guard !cliRecoveryInFlight, connectionStatus != .connected else { return }
+        guard !cliRecoveryInFlight, connectionStatus != .connected, !staysSignedOut else { return }
         cliRecoveryInFlight = true
         defer { cliRecoveryInFlight = false }
         KLog.diag("Auth: recovering sign-in (\(reason))")
@@ -962,6 +1000,9 @@ final class AppState {
         pushManager?.handleSignOut()
         #elseif os(macOS)
         Self.onMacNotificationsMain { $0.handleSignOut(appState: self) }
+        #endif
+        #if os(macOS)
+        signedOutByUser = true
         #endif
         wsClient?.disconnect()
         pulseManager?.resetForIdentityChange()
@@ -1400,7 +1441,7 @@ extension AppState: KrakiVoiceInputHost {
     static let headControlTypes: Set<String> = [
         "device_joined", "device_left", "device_removed", "device_pending",
         "preferences_updated", "push_token_registered", "notification_preview",
-        "voice_lease_grant", "voice_lease_denied",
+        "voice_lease_grant", "voice_lease_denied", "voice_vocabulary_updated",
     ]
 
     /// The inner message of a `{from:"@head", msg}` wrapper, or nil when it is

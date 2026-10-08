@@ -75,11 +75,12 @@ export function deny(
   permissionId: string,
   sessionId: string,
   send: (msg: Record<string, unknown>) => void,
+  reason?: string,
 ): void {
   send({
     type: 'deny',
     sessionId,
-    payload: { permissionId },
+    payload: { permissionId, ...(reason?.trim() && { reason: reason.trim() }) },
   });
 }
 

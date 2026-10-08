@@ -1,4 +1,5 @@
 import { memo, useCallback, useState } from 'react';
+import { modelDisplayName, sessionDisplayTitle } from '../../lib/session-status';
 import { useNavigate } from 'react-router';
 import type { SessionSummary } from '@kraki/protocol';
 import {
@@ -6,7 +7,6 @@ import {
   MessageCircleQuestion, Pin, PinOff, ShieldQuestion, Trash2, WifiOff,
 } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
-import { agentInfo } from '../../lib/format';
 import { wsClient } from '../../lib/ws-client';
 import { collapseWhitespace, resolveCardStatus, sessionTimeLabel, STATUS_LABEL, type SessionCardStatus } from '../../lib/chat/session-card';
 import { AgentAvatar } from '../common/AgentAvatar';
@@ -44,6 +44,7 @@ export const SessionRow = memo(function SessionRow({
 }) {
   const navigate = useNavigate();
   const device = useStore((s) => s.devices.get(session.deviceId));
+  const deviceAgents = useStore((s) => s.deviceAgents.get(session.deviceId));
   const livePreview = useStore((s) => s.sessionPreviews.get(session.id));
   const preview = livePreview ?? archived?.preview;
   const draft = useStore((s) => s.drafts.get(session.id));
@@ -56,7 +57,7 @@ export const SessionRow = memo(function SessionRow({
   const hasDraft = !!draftText && !selected;
   const previewText = hasDraft ? draftText : collapseWhitespace(preview?.text);
   const status = resolveCardStatus(session.state, preview?.type, device?.online, hasDraft, compacting);
-  const title = session.title ?? session.autoTitle ?? agentInfo(session.agent).label;
+  const title = sessionDisplayTitle(session);
   const machine = session.deviceName || device?.name;
   const time = sessionTimeLabel(preview?.timestamp ?? '');
 
@@ -99,7 +100,7 @@ export const SessionRow = memo(function SessionRow({
             </>
           )}
           {machine && session.model && <span className="ksr-sep" />}
-          {session.model && <span className="ksr-model">{session.model}</span>}
+          {session.model && <span className="ksr-model">{modelDisplayName(session.model, deviceAgents, session.agent)}</span>}
         </span>
         <span className="ksr-line3">
           <StatusGlyph status={status} draft={hasDraft} />

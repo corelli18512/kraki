@@ -398,8 +398,20 @@ struct SessionsSidebarView: View {
                     appState.commandSender?.markUnread(sessionId: session.id)
                 }
             }
+            Button("Rename…") {
+                // Rename lives in Session Info, which the open chat presents
+                // (now, or as soon as that chat appears).
+                MacSessionInfoRequest.pending = session.id
+                selectSession(session.id)
+                NotificationCenter.default.post(name: .macOpenSessionInfo, object: nil,
+                                                userInfo: ["sessionId": session.id])
+            }
             Button("Fork") {
                 appState.commandSender?.forkSession(sessionId: session.id)
+            }
+            Button("Archive") {
+                if selectedSessionId == session.id { selectedSessionId = nil }
+                appState.commandSender?.archiveSession(sessionId: session.id, archived: true)
             }
             Divider()
             Button("Delete…", role: .destructive) {
@@ -525,7 +537,8 @@ struct MacSidebarSessionRow: View {
             }(),
             pendingInputs: appState.commandSender?.pendingInputs(session.id) ?? [],
             isDeliveryOnline: appState.isFullyOnline,
-            presenceKnown: appState.hasCompletedInitialConnect
+            presenceKnown: appState.hasCompletedInitialConnect,
+            modelName: appState.deviceStore.modelDisplayName(session.model, deviceId: session.deviceId, agent: session.agent)
         )
     }
 

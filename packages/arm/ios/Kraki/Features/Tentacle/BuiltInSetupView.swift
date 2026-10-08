@@ -26,6 +26,9 @@ struct BuiltInSetupView: View {
     @AppStorage(BuiltInTentacle.thisMacRoleKey) private var thisMacRole = BuiltInTentacle.ThisMacRole.undecided.rawValue
     @State private var finished = false
     @AppStorage("tentacle.movedFromCLI") private var movedFromCLI = false
+    /// Signed out of the app on this Mac: ask to sign in again (the built-in
+    /// Kraki keeps its own sign-in and keeps this Mac online meanwhile).
+    @AppStorage(AppState.signedOutByUserKey) private var signedOutByUser = false
 
     /// Called once the tentacle is configured and running; the caller retries
     /// the credential discovery that moves the app into the signed-in UI.
@@ -51,7 +54,8 @@ struct BuiltInSetupView: View {
         daemonState: TentacleCLIManager.DaemonState,
         role: BuiltInTentacle.ThisMacRole,
         ownerChoicePending: Bool = false,
-        movedFromCLI: Bool = false
+        movedFromCLI: Bool = false,
+        signedOutByUser: Bool = false
     ) -> Step {
         if case .unknown = installState { return .detecting }
         if location != .stable { return .moveToApplications(location) }
@@ -63,7 +67,7 @@ struct BuiltInSetupView: View {
         // Sign-in cannot be skipped yet: every Kraki client needs an account
         // today. Once a local-only mode exists (use this Mac's agents without
         // an account), make this step skippable too.
-        if !configured { return .signIn }
+        if !configured || signedOutByUser { return .signIn }
         if role == .remoteOnly { return .done }
         guard case .running = daemonState else { return .background }
         return .done
@@ -85,7 +89,8 @@ struct BuiltInSetupView: View {
             daemonState: tentacleCLI.daemonState,
             role: role,
             ownerChoicePending: tentacleCLI.ownerChoicePending,
-            movedFromCLI: movedFromCLI
+            movedFromCLI: movedFromCLI,
+            signedOutByUser: signedOutByUser
         )
     }
 
@@ -134,9 +139,17 @@ struct BuiltInSetupView: View {
         }
         .onChange(of: runner.phase) { _, phase in
             guard case .done = phase else { return }
+            let signingInAgain = signedOutByUser
             Task {
                 await tentacleCLI.refreshDaemonState()
-                if role != .remoteOnly { await tentacleCLI.startDaemon() }
+                if signingInAgain {
+                    // Possibly another account: the running Kraki picks it up.
+                    if role != .remoteOnly { await tentacleCLI.restartDaemon() }
+                    finished = true
+                    onFinished()
+                } else if role != .remoteOnly {
+                    await tentacleCLI.startDaemon()
+                }
             }
         }
         .task {
@@ -172,13 +185,13 @@ struct BuiltInSetupView: View {
         switch runner.phase {
         case .idle, .failed:
             StepCard(
-                step: "Step 2 of 2",
+                step: signedOutByUser ? nil : "Step 2 of 2",
                 title: "Sign in",
                 detail: "Sign in with GitHub. The coding agents on this Mac become available here, on your phone and on your other computers."
             ) {
                 VStack(spacing: 10) {
                     Button {
-                        runner.start(binaryPath: tentacleCLI.builtIn.binaryPath)
+                        runner.start(binaryPath: tentacleCLI.builtIn.binaryPath, forceLogin: signedOutByUser)
                     } label: {
                         HStack(spacing: 8) {
                             GitHubMark().frame(width: 16, height: 16)
@@ -206,7 +219,7 @@ struct BuiltInSetupView: View {
             ProgressView("Contacting GitHub…").controlSize(.small)
         case .waitingForBrowser:
             StepCard(
-                step: "Step 2 of 2",
+                step: signedOutByUser ? nil : "Step 2 of 2",
                 title: "Continue in the sign-in window",
                 detail: "Approve Kraki on GitHub. If you're already signed in to GitHub, that's one click."
             ) {
@@ -228,7 +241,7 @@ struct BuiltInSetupView: View {
             }
         case .waitingForGitHub(let code, _):
             StepCard(
-                step: "Step 2 of 2",
+                step: signedOutByUser ? nil : "Step 2 of 2",
                 title: "Enter this code on GitHub",
                 detail: "The code is copied and GitHub is open in your browser. Paste it there and approve Kraki."
             ) {

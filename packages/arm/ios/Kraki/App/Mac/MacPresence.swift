@@ -321,13 +321,30 @@ final class MacPresenceController {
         }
     }
 
+    /// Set when Sparkle is about to replace the app (MacUpdateController).
+    private(set) var isInstallingUpdate = false
+
+    func beginInstallingUpdate() {
+        KLog.diag("[Presence] installing an update; quitting without going offline")
+        isInstallingUpdate = true
+    }
+
+    /// Whether quitting goes through the "take this Mac offline?" question.
+    nonisolated static func asksBeforeQuitting(
+        quittingOffline: Bool, installingUpdate: Bool, managesPresence: Bool, source: MacQuitSource
+    ) -> Bool {
+        !quittingOffline && !installingUpdate && managesPresence && source == .user
+    }
+
     /// `applicationShouldTerminate`: route a person's quit (Dock, AppleScript)
     /// through the same confirmation; let everything else through.
     func shouldTerminate(_ app: NSApplication) -> NSApplication.TerminateReply {
-        if isQuittingOffline || !managesPresence { return .terminateNow }
-        guard MacQuitSource.classify(NSAppleEventManager.shared().currentAppleEvent) == .user else {
-            return .terminateNow
-        }
+        guard Self.asksBeforeQuitting(
+            quittingOffline: isQuittingOffline,
+            installingUpdate: isInstallingUpdate,
+            managesPresence: managesPresence,
+            source: MacQuitSource.classify(NSAppleEventManager.shared().currentAppleEvent)
+        ) else { return .terminateNow }
         guard confirmQuitGoingOffline() else { return .terminateCancel }
         Task { @MainActor in
             await self.takeOfflineForQuit()

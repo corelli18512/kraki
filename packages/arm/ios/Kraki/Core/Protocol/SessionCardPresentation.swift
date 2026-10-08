@@ -81,7 +81,8 @@ struct SessionCardProjection: Equatable {
         isCompacting: Bool = false,
         pendingInputs: [ChatMessage] = [],
         isDeliveryOnline: Bool = true,
-        presenceKnown: Bool = true
+        presenceKnown: Bool = true,
+        modelName: String? = nil
     ) -> Self {
         // Before the first sign-in the cached device list has no live
         // presence: show it as unknown, never as every device offline.
@@ -102,7 +103,7 @@ struct SessionCardProjection: Equatable {
         return Self(
             title: session.displayTitle,
             machineName: normalizedMachineName,
-            model: session.model,
+            model: modelName ?? session.model,
             effortLabel: session.model?.isEmpty == false ? session.reasoningEffort?.rawValue : nil,
             previewText: previewText?.isEmpty == true ? nil : previewText,
             timestamp: timestamp,

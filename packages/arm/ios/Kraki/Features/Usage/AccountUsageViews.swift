@@ -350,7 +350,7 @@ struct AccountUsageRefreshControls: View {
         if ids.contains(where: { store.deviceUsage[$0]?.accounts.contains(where: { $0.error != nil }) == true }) {
             return "Some accounts couldn't be updated"
         }
-        return ready ? "Provider rate limits apply" : "Refreshed recently · wait a moment"
+        return ready ? "Provider rate limits apply" : "Just updated"
     }
 }
 
