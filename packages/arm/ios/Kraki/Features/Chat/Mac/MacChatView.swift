@@ -225,9 +225,9 @@ struct MacChatView: View {
     private var currentMode: SessionMode {
         appState.sessionStore.sessionModes[sessionId] ?? session?.mode ?? .auto
     }
-    private var composerVisible: Bool {
-        isDeviceOnline || viewModel.isCompacting
-    }
+    /// Always, like iPhone: with the computer offline the Composer says so and
+    /// queues the message until it reconnects (it used to just disappear).
+    private var composerVisible: Bool { true }
     private var effectiveBottomInputHeight: CGFloat {
         // The Composer is a floating overlay. Keep one stable base clearance so
         // the last bubble can rest above the input capsule, but never couple
@@ -547,15 +547,13 @@ struct MacChatView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Compacting context")
             }
-            if isDeviceOnline {
-                MacChatComposer(
-                    sessionId: sessionId,
-                    pendingPermission: viewModel.permissions.first,
-                    pendingQuestion: viewModel.questions.last,
-                    isCompacting: viewModel.isCompacting,
-                    hasLiveCard: viewModel.card != nil
-                )
-            }
+            MacChatComposer(
+                sessionId: sessionId,
+                pendingPermission: viewModel.permissions.first,
+                pendingQuestion: viewModel.questions.last,
+                isCompacting: viewModel.isCompacting,
+                hasLiveCard: viewModel.card != nil
+            )
         }
     }
 

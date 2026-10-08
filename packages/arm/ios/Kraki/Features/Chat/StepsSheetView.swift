@@ -164,9 +164,17 @@ struct StepsSheetView: View {
                 .font(.subheadline)
                 .foregroundStyle(.red)
         case "permission":
-            Label(message.content ?? "Permission request", systemImage: "lock")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Label(PermissionStep.title(message), systemImage: "lock")
+                    .foregroundStyle(.secondary)
+                if let outcome = PermissionStep.outcome(message) {
+                    Text(outcome)
+                        .foregroundStyle(PermissionStep.isDenied(message) ? Color.red : Color(hex: 0x34D399))
+                        .padding(.leading, 26)
+                        .textSelection(.enabled)
+                }
+            }
+            .font(.subheadline)
         default:
             if let content = message.content, !content.isEmpty {
                 Text(content)

@@ -8,6 +8,17 @@ final class DeviceUpdateTests: XCTestCase {
                       online: true, lastSeen: nil, createdAt: nil)
     }
 
+    /// Mac can remove an old device (previously the pane was read-only).
+    func testDevicesPaneRemovesOfflineOtherDevicesOnly() {
+        var old = tentacle("old-pc"); old.online = false
+        XCTAssertTrue(DevicesPane.canRemove(old, appDeviceId: "app", thisMacDeviceId: "mac"))
+        XCTAssertFalse(DevicesPane.canRemove(tentacle("online-pc"), appDeviceId: "app", thisMacDeviceId: "mac"))
+        var me = tentacle("app"); me.online = false
+        XCTAssertFalse(DevicesPane.canRemove(me, appDeviceId: "app", thisMacDeviceId: "mac"))
+        var mac = tentacle("mac"); mac.online = false
+        XCTAssertFalse(DevicesPane.canRemove(mac, appDeviceId: "app", thisMacDeviceId: "mac"))
+    }
+
     func testVersionCompare() {
         XCTAssertTrue(KrakiVersion.isNewer("0.36.0", than: "0.35.12"))
         XCTAssertTrue(KrakiVersion.isNewer("0.35.12", than: "0.35.10-poc"))

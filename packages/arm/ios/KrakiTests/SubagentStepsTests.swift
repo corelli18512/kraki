@@ -30,6 +30,37 @@ final class SubagentStepsTests: XCTestCase {
         return ChatMessage(type: "agent_narration", seq: seq, sessionId: "s", deviceId: nil, timestamp: nil, payload: payload)
     }
 
+    private func permission(_ id: String, description: String = "", toolName: String = "", decision: String? = nil, reason: String? = nil) -> ChatMessage {
+        seq += 1
+        var payload: [String: AnyCodable] = ["id": AnyCodable(id), "description": AnyCodable(description), "toolName": AnyCodable(toolName)]
+        if let decision { payload["decision"] = AnyCodable(decision) }
+        if let reason { payload["reason"] = AnyCodable(reason) }
+        return ChatMessage(type: "permission", seq: seq, sessionId: "s", deviceId: nil, timestamp: nil, payload: payload)
+    }
+
+    /// The tentacle records a permission when asked and again when decided
+    /// (decision only). Steps showed two "Permission request" rows with no
+    /// outcome; now one row: the request and how it ended.
+    func testPermissionRequestAndDecisionShowAsOneStep() {
+        let trace = [
+            permission("p1", description: "Edit win.txt", toolName: "edit"),
+            step("tool_start", "t1"),
+            permission("p1", decision: "approve"),
+            step("tool_complete", "t1"),
+            permission("p2", description: "Delete win.txt", toolName: "bash"),
+            permission("p2", decision: "deny", reason: "keep it"),
+        ]
+        let merged = SubagentSteps.merge(trace)
+        let permissions = merged.filter { $0.type == "permission" }
+        XCTAssertEqual(permissions.count, 2)
+        XCTAssertEqual(PermissionStep.title(permissions[0]), "Edit win.txt")
+        XCTAssertEqual(PermissionStep.outcome(permissions[0]), "Approved")
+        XCTAssertEqual(PermissionStep.title(permissions[1]), "Delete win.txt")
+        XCTAssertEqual(PermissionStep.outcome(permissions[1]), "Denied: keep it")
+        XCTAssertEqual(merged.first?.type, "permission", "stays where it was asked")
+        XCTAssertNil(PermissionStep.outcome(permission("p3", description: "Open")))
+    }
+
     func testTopLevelShowsDispatchCardsAndHidesSubagentSteps() {
         let trace = [
             narration("Delegating."),

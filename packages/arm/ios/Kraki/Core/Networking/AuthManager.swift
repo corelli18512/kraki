@@ -464,6 +464,10 @@ final class AuthManager {
             }
             appState.hasStoredCredentials = true
         }
+        #if os(macOS)
+        // Signed in again (only an explicit sign-in gets here after Sign Out).
+        appState.signedOutByUser = false
+        #endif
 
         // Mark transport as authenticated
         appState.wsClient?.setAuthenticated(true)

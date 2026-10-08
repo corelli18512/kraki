@@ -22,6 +22,31 @@ export const callIdOf = (m: ChatMessage): string | undefined => payloadOf(m).too
 /** Merge tool lifecycles. Non-dispatch tools keep the existing contract (a
  *  finished tool sits at its completion position); dispatches stay put. */
 export function mergeSteps(messages: ChatMessage[]): ChatMessage[] {
+  return mergeToolSteps(mergePermissionSteps(messages));
+}
+
+/** A permission is recorded when asked and again when decided (decision and
+ *  deny reason only): one step, the request with its outcome, where it was
+ *  asked. Mirrors iOS/Mac `SubagentSteps.merge`. */
+export function mergePermissionSteps(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  const at = new Map<string, number>();
+  for (const m of messages) {
+    const id = m.type === 'permission' ? String((m.payload as { id?: unknown }).id ?? '') : '';
+    if (!id) { out.push(m); continue; }
+    const i = at.get(id);
+    if (i === undefined) { at.set(id, out.length); out.push(m); continue; }
+    const earlier = out[i].payload as Record<string, unknown>;
+    const later = m.payload as Record<string, unknown>;
+    const payload = { ...earlier };
+    for (const k of ['decision', 'reason']) if (later[k]) payload[k] = later[k];
+    for (const k of ['description', 'toolName']) if (!payload[k] && later[k]) payload[k] = later[k];
+    out[i] = { ...out[i], payload } as ChatMessage;
+  }
+  return out;
+}
+
+function mergeToolSteps(messages: ChatMessage[]): ChatMessage[] {
   const lastComplete = new Map<string, ChatMessage>();
   const startInfo = new Map<string, SubagentInfo>();
   for (const m of messages) {

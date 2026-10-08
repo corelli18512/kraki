@@ -52,6 +52,14 @@ final class MacLaunchCoordinator {
     @ObservationIgnored private var isFinishingAuthenticatedSurface = false
     @ObservationIgnored private var presentationWatchdogTask: Task<Void, Never>?
 
+    /// Startup ran (or is running) for this process.
+    var bootstrapStarted: Bool { hasStarted }
+
+    /// A launch with no window after the window had its chance to start up.
+    nonisolated static func needsWindowlessStart(bootstrapStarted: Bool, visibleWindows: Int) -> Bool {
+        !bootstrapStarted && visibleWindows == 0
+    }
+
     func bootstrap(
         appState: AppState,
         tentacleCLI: TentacleCLIManager,
@@ -243,8 +251,12 @@ final class MacLaunchCoordinator {
         )
     }
 
-    func retryLogin(appState: AppState, tentacleCLI: TentacleCLIManager? = nil) async {
+    /// `userInitiated`: the person asked to sign in (Check Again, or setup's
+    /// sign-in finished), which also ends a Sign Out. Automatic retries (app
+    /// activation) never sign back in after Sign Out.
+    func retryLogin(appState: AppState, tentacleCLI: TentacleCLIManager? = nil, userInitiated: Bool = false) async {
         guard !isCheckingCredentials else { return }
+        if userInitiated { appState.signedOutByUser = false }
         // While setup asks which install should run Kraki, don't slip in with
         // the command-line login (e.g. on app activation): setup finishes the
         // choice and then calls back here.
@@ -600,7 +612,19 @@ struct MacApp: App {
                     // presence, connection and Needs You must work without a
                     // window (MacPresence.swift).
                     try? await Task.sleep(for: .milliseconds(500))
-                    guard MacPresenceController.shared.launchedAtLogin else { return }
+                    if !MacPresenceController.shared.launchedAtLogin {
+                        // macOS can also reopen Kraki at login without the
+                        // login-item event and without a window (seen after a
+                        // restart): nothing started then, and the menu bar sat
+                        // on "Checking this Mac…" until a window was opened.
+                        // Start here once the window had its chance.
+                        try? await Task.sleep(for: .seconds(2))
+                        guard MacLaunchCoordinator.needsWindowlessStart(
+                            bootstrapStarted: launchCoordinator.bootstrapStarted,
+                            visibleWindows: MacPresenceController.appWindows().count
+                        ) else { return }
+                        MacPresenceController.shared.updateActivationPolicy()
+                    }
                     KLog.diag("[Presence] starting without a window")
                     await launchCoordinator.bootstrap(
                         appState: appState,
@@ -659,7 +683,7 @@ struct MacApp: App {
                 loginCheckFailed: launchCoordinator.loginCheckFailed,
                 onRetry: {
                     Task {
-                        await launchCoordinator.retryLogin(appState: appState)
+                        await launchCoordinator.retryLogin(appState: appState, userInitiated: true)
                     }
                 }
             )

@@ -4334,15 +4334,25 @@ describe('RelayClient permission decisions', () => {
     });
     sockets[0].sent.length = 0;
     // Consumer messages arrive as E2E envelopes (the crypto mock returns the blob).
-    const decide = () => sockets[0].emit('message', Buffer.from(JSON.stringify({
+    const decide = (type: 'approve' | 'deny' = 'approve', reason?: string) => sockets[0].emit('message', Buffer.from(JSON.stringify({
       type: 'unicast', to: 'tentacle-dev', keys: {},
-      blob: JSON.stringify({ type: 'approve', sessionId: 'sess_1', deviceId: 'app_1', seq: 1, timestamp: '', payload: { permissionId: 'perm_1' } }),
+      blob: JSON.stringify({ type, sessionId: 'sess_1', deviceId: 'app_1', seq: 1, timestamp: '', payload: { permissionId: 'perm_1', ...(reason && { reason }) } }),
     })));
     const resolutions = () => decodePulseSends(sockets[0].sent)
       .filter((m) => m.type === 'permission_resolved')
       .map((m) => (m.payload as { resolution: string }).resolution);
-    return { decide, resolutions, respond };
+    const traced = () => (sm.appendTrace as ReturnType<typeof vi.fn>).mock.calls
+      .filter((c) => c[1] === 'permission')
+      .map((c) => JSON.parse(c[2] as string).payload as Record<string, unknown>);
+    return { decide, resolutions, respond, traced };
   }
+
+  it('records a deny reason in Steps', async () => {
+    const { decide, resolutions, traced } = connected(['accepted']);
+    decide('deny', 'keep the file');
+    await vi.waitFor(() => expect(resolutions()).toEqual(['denied']));
+    expect(traced().at(-1)).toMatchObject({ id: 'perm_1', decision: 'deny', reason: 'keep the file' });
+  });
 
   it('announces a decision the agent accepted', async () => {
     const { decide, resolutions } = connected(['accepted']);

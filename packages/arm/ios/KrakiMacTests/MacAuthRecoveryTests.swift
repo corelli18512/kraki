@@ -157,6 +157,36 @@ final class MacAuthRecoveryTests: XCTestCase {
         }
     }
 
+    /// Sign Out on the Mac: the built-in Kraki keeps its login, so the app
+    /// must stay signed out (no launch login, no watchdog recovery) until the
+    /// person signs in again. Previously the window sat on "Connecting to
+    /// Kraki…" and the next launch silently signed back in.
+    func testSignOutStaysSignedOutUntilSignedInAgain() async throws {
+        relay.challengeMode = .fatal
+        AuthManager.debugCLICredentialLoader = { [url = relay.url] _ in (url, "tok-ok") }
+        app = try makeApp()
+        app.authManager?.debugSetStoredDeviceId(nil)
+        XCTAssertTrue(await app.attemptCLILogin())
+        try await waitUntil(10, "signed in") { app.connectionStatus == .connected }
+        let attempts = relay.methods.count
+
+        app.logout()
+        XCTAssertTrue(app.signedOutByUser)
+        XCTAssertEqual(app.connectionStatus, .awaitingLogin)
+        XCTAssertFalse(await app.attemptCLILogin(), "relaunch must not reuse the built-in login")
+        await app.recoverCLIAuthentication(reason: "test")
+        try await Task.sleep(for: .seconds(2))   // watchdog ticks every 0.2 s
+        XCTAssertEqual(app.connectionStatus, .awaitingLogin)
+        XCTAssertNil(app.user)
+        XCTAssertEqual(relay.methods.count, attempts, "nothing signed in behind the person's back")
+
+        // Signing in again (Check Again / setup sign-in) ends it.
+        app.signedOutByUser = false
+        XCTAssertTrue(await app.attemptCLILogin())
+        try await waitUntil(10, "signed in again") { app.connectionStatus == .connected }
+        XCTAssertFalse(app.signedOutByUser)
+    }
+
     /// Launch probe times out, the stored challenge is rejected as fatal:
     /// previously the window fell to signed-out (or stayed on the main page,
     /// never signed in). Now it signs in with the CLI token by itself.

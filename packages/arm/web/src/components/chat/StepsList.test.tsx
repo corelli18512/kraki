@@ -118,3 +118,20 @@ describe('StepsList subagent groups', () => {
     expect(screen.getByRole('button', { name: 'Open subagent workflow' })).toHaveTextContent('2 subagents');
   });
 });
+
+describe('permission steps', () => {
+  it('a request and its decision show as one step with the outcome and deny reason', async () => {
+    const { mergeSteps } = await import('../../lib/subagent-steps');
+    const perm = (seq: number, payload: Record<string, unknown>) =>
+      ({ type: 'permission', seq, sessionId: 's', payload } as unknown as import('../../types/store').ChatMessage);
+    const merged = mergeSteps([
+      perm(1, { id: 'p1', description: 'Edit win.txt', toolName: 'edit' }),
+      perm(2, { id: 'p1', description: '', toolName: '', decision: 'approve' }),
+      perm(3, { id: 'p2', description: 'Delete win.txt', toolName: 'bash' }),
+      perm(4, { id: 'p2', description: '', toolName: '', decision: 'deny', reason: 'keep it' }),
+    ]);
+    expect(merged).toHaveLength(2);
+    expect(merged[0].payload).toMatchObject({ description: 'Edit win.txt', decision: 'approve' });
+    expect(merged[1].payload).toMatchObject({ description: 'Delete win.txt', decision: 'deny', reason: 'keep it' });
+  });
+});

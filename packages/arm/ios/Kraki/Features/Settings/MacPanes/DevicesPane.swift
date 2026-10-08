@@ -1,8 +1,5 @@
-/// DevicesPane — Paired devices list (read-only for now).
-///
-/// Full device management (rename, revoke) lives in DeviceDetailView
-/// reachable from the sidebar Devices section. This pane is a quick
-/// overview.
+/// DevicesPane — the account's devices: online state, version, updates, and
+/// removing an old device (like iPhone's Remove Device and the web's Remove).
 
 #if os(macOS)
 import SwiftUI
@@ -11,6 +8,7 @@ struct DevicesPane: View {
     @Environment(AppState.self) private var appState
     @Environment(TentacleCLIManager.self) private var tentacleCLI
     @State private var showingPairing = false
+    @State private var removing: DeviceSummary?
 
     private var devices: [DeviceSummary] {
         appState.deviceStore.devices.values
@@ -29,7 +27,10 @@ struct DevicesPane: View {
                                   version: appState.deviceStore.displayVersion(for: device.id),
                                   update: appState.deviceStore.availableUpdate(for: device.id),
                                   hasProgress: appState.deviceStore.updateProgress[device.id] != nil,
-                                  isThisMac: device.id == tentacleCLI.configInfo?.deviceId)
+                                  isThisMac: device.id == tentacleCLI.configInfo?.deviceId,
+                                  canRemove: Self.canRemove(device, appDeviceId: appState.deviceId,
+                                                            thisMacDeviceId: tentacleCLI.configInfo?.deviceId),
+                                  onRemove: { removing = device })
                     }
                 }
             }
@@ -55,6 +56,24 @@ struct DevicesPane: View {
         }
         .formStyle(.grouped)
         .sheet(isPresented: $showingPairing) { PairingSheet() }
+        .alert(
+            "Remove \(removing?.name ?? "device")?",
+            isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })
+        ) {
+            Button("Cancel", role: .cancel) { removing = nil }
+            Button("Remove", role: .destructive) {
+                if let id = removing?.id { appState.commandSender?.removeDevice(deviceId: id) }
+                removing = nil
+            }
+        } message: {
+            Text("It's signed out of your account. To use it again, sign in or pair it again.")
+        }
+    }
+
+    /// Same rule as iPhone: an offline device that is neither this app nor
+    /// the Kraki built into this Mac.
+    static func canRemove(_ device: DeviceSummary, appDeviceId: String?, thisMacDeviceId: String?) -> Bool {
+        !device.online && device.id != appDeviceId && device.id != thisMacDeviceId
     }
 }
 
@@ -64,6 +83,8 @@ private struct DeviceRow: View {
     var update: AvailableUpdate?
     var hasProgress = false
     var isThisMac = false
+    var canRemove = false
+    var onRemove: () -> Void = {}
     var body: some View {
       VStack(alignment: .leading, spacing: 8) {
         HStack(spacing: 10) {
@@ -82,14 +103,23 @@ private struct DeviceRow: View {
                     if let version, device.role == .tentacle {
                         Text(version).font(.system(size: 10.5))
                     }
+                    if !device.online, let seen = DeviceDates.relative(device.lastSeen) {
+                        Text("Last online \(seen)").font(.system(size: 10.5))
+                    }
                 }
                 .foregroundStyle(Color.textMuted)
             }
             Spacer()
-            Text(String(device.id.prefix(10)) + "…")
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(Color.textMuted)
-                .help(device.id)
+            if canRemove {
+                Button("Remove…", action: onRemove)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("prefs.devices.remove.\(device.id)")
+            } else {
+                Text(String(device.id.prefix(10)) + "…")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(Color.textMuted)
+                    .help(device.id)
+            }
         }
         if update != nil || hasProgress {
             DeviceUpdateControl(device: device, isThisMac: isThisMac)

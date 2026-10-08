@@ -200,6 +200,9 @@ final class AppState {
         self.messageDatabase = testDatabase
         self.messageStore = MessageStore(db: testDatabase)
         self.voiceInputController = voiceController ?? KrakiVoiceInputController.isolatedForTesting()
+        #if os(macOS)
+        self.signedOutDefaults = UserDefaults(suiteName: "kraki-test-\(UUID().uuidString)") ?? .standard
+        #endif
         if voiceController == nil { self.voiceInputController.bind(host: self) }
         self.attachmentStore = AttachmentStore { _, _, _ in true }
         self.commandSender = CommandSender(appState: self)
@@ -745,6 +748,18 @@ final class AppState {
     #if os(macOS)
     private var cliLoginInFlight = false
 
+    /// Sign Out on this Mac. The app signs in with the built-in Kraki's own
+    /// login, which stays (this Mac keeps serving its agents, like Kraki for
+    /// Windows), so until the person signs in again the app must not quietly
+    /// reuse it: not at launch, not from the sign-in watchdog.
+    static let signedOutByUserKey = "mac.signedOutByUser"
+    var signedOutByUser: Bool {
+        get { signedOutDefaults.bool(forKey: Self.signedOutByUserKey) }
+        set { signedOutDefaults.set(newValue, forKey: Self.signedOutByUserKey) }
+    }
+    /// Test graphs use their own store, so one test's Sign Out never leaks.
+    @ObservationIgnored var signedOutDefaults: UserDefaults = .standard
+
     /// Reuse the locally-installed `kraki` CLI's login (relay + GitHub token
     /// from `~/.kraki` / `gh auth token`) to authenticate this Mac as an arm
     /// device — no manual pairing required. Returns true when a CLI login was
@@ -752,6 +767,10 @@ final class AppState {
     /// installed/logged in (caller falls back to the login screen).
     @discardableResult
     func attemptCLILogin(ghDeadline: TimeInterval = AuthManager.launchGhDeadline) async -> Bool {
+        if signedOutByUser {
+            KLog.diag("Mac CLI login skipped: signed out on this Mac")
+            return false
+        }
         // SwiftUI WindowGroup tasks can be recreated while the app is already
         // connecting/authenticating. Loading the CLI token twice used to call
         // connect twice and leave parallel sockets behind.
@@ -824,7 +843,7 @@ final class AppState {
     /// Find the local CLI login with a realistic `gh` deadline and sign in
     /// with it. Falls back to the relay login flow when there is none.
     func recoverCLIAuthentication(reason: String) async {
-        guard !cliRecoveryInFlight, connectionStatus != .connected else { return }
+        guard !cliRecoveryInFlight, connectionStatus != .connected, !signedOutByUser else { return }
         cliRecoveryInFlight = true
         defer { cliRecoveryInFlight = false }
         KLog.diag("Auth: recovering sign-in (\(reason))")
@@ -962,6 +981,9 @@ final class AppState {
         pushManager?.handleSignOut()
         #elseif os(macOS)
         Self.onMacNotificationsMain { $0.handleSignOut(appState: self) }
+        #endif
+        #if os(macOS)
+        signedOutByUser = true
         #endif
         wsClient?.disconnect()
         pulseManager?.resetForIdentityChange()

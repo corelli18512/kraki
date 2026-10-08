@@ -1453,7 +1453,7 @@ export class RelayClient {
         }
         this.card.resolvePrompt(sessionId, permissionId, { decision });
         this.broadcastSessionList();
-        this.recordTrace({ type: 'permission', sessionId, payload: { id: permissionId, description: '', toolName: '', args: {}, decision } });
+        this.recordTrace({ type: 'permission', sessionId, payload: { id: permissionId, description: '', toolName: '', args: {}, decision, ...(decision === 'deny' && reason && { reason }) } });
         const resolution = decision === 'approve'
           ? { resolution: 'approved' as const }
           : decision === 'deny'
