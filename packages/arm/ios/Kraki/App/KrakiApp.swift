@@ -70,8 +70,15 @@ struct KrakiApp: App {
                 #if DEBUG
                 if voiceHoldScenarioEnabled {
                     IOSVoiceHoldScenarioView()
+                        // Same lifecycle handling as the production root, so
+                        // background/foreground behaviour is exercised for real.
                         .onChange(of: scenePhase) {
-                            if scenePhase != .active { appState.handleInactive() }
+                            switch scenePhase {
+                            case .active: appState.handleForegroundRehydrate()
+                            case .background: appState.handleBackground()
+                            case .inactive: appState.handleInactive()
+                            @unknown default: break
+                            }
                         }
                 } else if newSessionScenarioEnabled {
                     IOSNewSessionScenarioView()

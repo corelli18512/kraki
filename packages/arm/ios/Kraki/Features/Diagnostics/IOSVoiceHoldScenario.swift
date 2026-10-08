@@ -23,6 +23,7 @@ import VoiceInputCore
             if payload["type"] as? String == "send_input" {
                 driver.lastAnswerTo = (payload["payload"] as? [String: Any])?["answerTo"] as? String ?? ""
                 driver.sentCount += 1
+                if UIApplication.shared.applicationState == .background { driver.sentInBackground += 1 }
                 driver.lastSent = (payload["payload"] as? [String: Any])?["text"] as? String ?? ""
                 // Keep the scenario available for the next gesture without inventing a server reply.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -41,6 +42,7 @@ import VoiceInputCore
     var voiceDeviceID: String? = "voice-test-app"
     var voiceTransportReady = true
     var sentCount = 0
+    var sentInBackground = 0
     var lastSent = ""
     var starts = 0
     var aborts = 0
@@ -125,6 +127,9 @@ struct IOSVoiceHoldScenarioView: View {
     private var stagedCount: Int {
         (app.commandSender?.pendingInputs(id) ?? []).filter { $0.payload["localState"]?.stringValue == "correcting" }.count
     }
+    private var failedCount: Int {
+        (app.commandSender?.pendingInputs(id) ?? []).filter { $0.payload["localState"]?.stringValue == "failed" }.count
+    }
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -159,7 +164,7 @@ struct IOSVoiceHoldScenarioView: View {
                     app.commandSender?.reset()
                 }
             }.font(.caption).padding(8)
-            Text("sent=\(driver.sentCount) starts=\(driver.starts) aborts=\(driver.aborts) rec=\(app.iosVoiceComposer.isRecording ? 1 : 0) finishing=\(app.iosVoiceComposer.isFinishing(in: id) ? 1 : 0) staged=\(stagedCount) session=\(id) appearance=\(colorScheme == .dark ? "dark" : "light")")
+            Text("sent=\(driver.sentCount) bgSent=\(driver.sentInBackground) starts=\(driver.starts) aborts=\(driver.aborts) rec=\(app.iosVoiceComposer.isRecording ? 1 : 0) finishing=\(app.iosVoiceComposer.isFinishing(in: id) ? 1 : 0) staged=\(stagedCount) failed=\(failedCount) session=\(id) appearance=\(colorScheme == .dark ? "dark" : "light")")
                 .font(.system(size: 10, design: .monospaced)).accessibilityIdentifier("voice-test-state")
             Text(driver.lastSent).font(.caption2).lineLimit(1).accessibilityIdentifier("voice-test-sent")
             Text("answerTo=\(driver.lastAnswerTo)").font(.caption2).accessibilityIdentifier("voice-test-answer")
