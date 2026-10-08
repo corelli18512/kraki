@@ -434,6 +434,14 @@ describe('CLI when the daemon is managed by Kraki for Mac', () => {
     process.exitCode = 0;
   });
 
+  it('start while the app runs Kraki says the app manages it', async () => {
+    mockIsDaemonRunning.mockReturnValue(true);
+    mockGetDaemonStatus.mockReturnValue({ running: true, pid: 77 });
+    await runCli(['start']);
+    expect(mockStartDaemon).not.toHaveBeenCalled();
+    expect(consoleOutput.join('\n')).toContain('managed by Kraki for Mac');
+  });
+
   it('stop refuses instead of signalling a KeepAlive job', async () => {
     mockIsDaemonRunning.mockReturnValue(true);
     mockGetDaemonStatus.mockReturnValue({ running: true, pid: 77 });
