@@ -42,6 +42,8 @@ interface ClientState {
   pendingDeviceId?: string;
   pendingDeviceInfo?: { encryptionKey?: string };
   pendingAuthMethod?: string;
+  /** Replaced by a newer socket of the same device: closing, inert. */
+  evicted?: boolean;
   /** Closes the socket if it never authenticates (G1). */
   authTimer?: ReturnType<typeof setTimeout>;
 
@@ -386,6 +388,10 @@ export class HeadServer {
     ws.on('pong', () => { this.onPongReceived(state); });
 
     ws.on('message', (data) => {
+      // An evicted socket stays open until its close handshake completes;
+      // nothing it sends may act for the device (its Pulse stream now
+      // belongs to the replacement connection).
+      if (state.evicted) return;
       state.lastInboundAt = Date.now();
       try {
         const msg = JSON.parse(data.toString());
@@ -1250,6 +1256,8 @@ export class HeadServer {
     // its guarded cleanup. Publish the Pulse disconnect here so capability and
     // connection-scoped state cannot leak across the replacement boundary.
     this.pulseHub.onDeviceDisconnected(deviceId);
+    const previousState = this.clients.get(previous);
+    if (previousState) previousState.evicted = true;
     this.clients.delete(previous);
     // Say why (a bare terminate() reads as a network drop, and a client that
     // reconnects on it evicts this new connection in turn). Force the TCP

@@ -720,6 +720,24 @@ describe('HeadServer (thin relay)', () => {
       expect(clients.size).toBe(1);
     });
 
+    it('ignores everything an evicted socket sends while its close completes', async () => {
+      head = await createHead();
+      const { authOk } = await authConnect(head.port, 'Laptop', 'tentacle', { deviceId: 'dev_evict' });
+      const deviceId = authOk.deviceId as string;
+      const server = head.server as unknown as {
+        connections: Map<string, import('ws').WebSocket>;
+        onMessage: (...a: unknown[]) => Promise<void>;
+      };
+      const evictedServerSide = server.connections.get(deviceId)!;
+      const onMessage = vi.spyOn(server, 'onMessage');
+      await authConnect(head.port, 'Laptop', 'tentacle', { deviceId });
+      const before = onMessage.mock.calls.length;
+      // A frame from the evicted peer arriving before its close handshake ends.
+      evictedServerSide.emit('message', Buffer.from(JSON.stringify({ type: 'ping' })), false);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(onMessage.mock.calls.length).toBe(before);
+    });
+
     it('should handle invalid JSON gracefully', async () => {
       head = await createHead();
       const ws = connect(head.port);
