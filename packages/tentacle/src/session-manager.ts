@@ -9,7 +9,7 @@
 import { atomicWriteFile, renameWithRetry } from './fs-retry.js';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync, appendFileSync, openSync, readSync, closeSync, cpSync, fstatSync, statSync, linkSync, copyFileSync } from 'node:fs';
 import { DEFAULT_SESSION_MODE, normalizeSessionMode, toWireSessionMode } from '@kraki/protocol';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getConfigDir } from './config.js';
 import type { ContentRef } from '@kraki/protocol';
@@ -381,11 +381,13 @@ export class SessionManager {
   }
 
   /**
-   * Migrate from global message-log.jsonl to per-session message logs.
-   * Runs once on startup — if the old file exists, splits it by sessionId.
+   * Migrate from global message-log.jsonl (before 2026-03) to per-session
+   * message logs. Runs on startup only while the old file exists next to the
+   * sessions folder; splits it by sessionId, then deletes it.
    */
   private migrateGlobalLog(): void {
-    const configDir = this.sessionsDir.replace(/\/sessions$/, '');
+    // dirname, not a '/sessions' regex: that never matched Windows paths.
+    const configDir = dirname(this.sessionsDir);
     const oldLogPath = join(configDir, 'message-log.jsonl');
     if (!existsSync(oldLogPath)) return;
 
@@ -604,7 +606,9 @@ export class SessionManager {
       agent: sourceMeta.agent,
       model: sourceMeta.model,
       reasoningEffort: sourceMeta.reasoningEffort,
-      title: sourceMeta.title ? `Fork of ${sourceMeta.title}` : undefined,
+      // A fork is named as one (the agent's auto title counts too), so it is
+      // never an identical twin of its source in the list.
+      title: (sourceMeta.title || sourceMeta.autoTitle) ? `Fork of ${sourceMeta.title || sourceMeta.autoTitle}` : undefined,
       autoTitle: sourceMeta.autoTitle,
       state: 'active',
       // A fork keeps the source's permission mode: forking a `safe` session
@@ -1760,18 +1764,45 @@ export class SessionManager {
     return candidateStart;
   }
 
+  /**
+   * meta.json is read dozens of times per message and rewritten on every
+   * spine append. Keep the parsed copy in memory, revalidated by the file's
+   * inode, mtime and size (another process, e.g. a CLI command, may write it), and
+   * hand out clones so a caller's unsaved edits never leak into the cache.
+   */
+  private metaCache = new Map<string, { ino: number; mtimeMs: number; size: number; meta: SessionMeta }>();
+
   private readMeta(sessionId: string): SessionMeta | null {
+    const path = join(this.sessionDir(sessionId), 'meta.json');
+    let st;
+    try { st = statSync(path); } catch {
+      this.metaCache.delete(sessionId);
+      return null;
+    }
+    const cached = this.metaCache.get(sessionId);
+    if (cached && cached.ino === st.ino && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return structuredClone(cached.meta);
     try {
-      const meta = JSON.parse(readFileSync(join(this.sessionDir(sessionId), 'meta.json'), 'utf8')) as SessionMeta;
+      const meta = JSON.parse(readFileSync(path, 'utf8')) as SessionMeta;
       // Normalize legacy wire names (`execute`) and unknown values.
       // Rewritten on the next save; nothing else on disk needs migrating.
       meta.mode = normalizeSessionMode(meta.mode);
+      this.metaCache.set(sessionId, { ino: st.ino, mtimeMs: st.mtimeMs, size: st.size, meta: structuredClone(meta) });
       return meta;
-    } catch { return null; }
+    } catch {
+      this.metaCache.delete(sessionId);
+      return null;
+    }
   }
 
   private writeMeta(sessionId: string, meta: SessionMeta): void {
-    atomicWrite(join(this.sessionDir(sessionId), 'meta.json'), JSON.stringify(meta, null, 2));
+    const path = join(this.sessionDir(sessionId), 'meta.json');
+    atomicWrite(path, JSON.stringify(meta));
+    try {
+      const st = statSync(path);
+      this.metaCache.set(sessionId, { ino: st.ino, mtimeMs: st.mtimeMs, size: st.size, meta: structuredClone(meta) });
+    } catch {
+      this.metaCache.delete(sessionId);
+    }
   }
 
   private readContext(sessionId: string): SessionContext | null {

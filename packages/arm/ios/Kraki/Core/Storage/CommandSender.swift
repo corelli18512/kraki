@@ -785,6 +785,16 @@ final class CommandSender {
                          pending: outbox[sessionId]?.values.filter { $0.answerTo == questionId }.count ?? 0,
                          source: "CommandSender.answer")
         #endif
+        // One open question takes one answer. A second call while the first is
+        // still on its way (two dispatch paths for one click — Mac 0.2.40 sent
+        // seq 90 and 91 for one mouse event) must not send a second message.
+        // A failed answer can be answered again (its bubble also offers Retry).
+        if outbox[sessionId]?.values.contains(where: {
+            $0.answerTo == questionId && pendingState($0) != .failed
+        }) == true {
+            KLog.diag("[Answer] dropped duplicate answer for open question=\(questionId.prefix(12))")
+            return true
+        }
         return sendInput(sessionId: sessionId, text: answer, attachments: attachments, answerTo: questionId)
     }
 
@@ -1148,15 +1158,6 @@ final class CommandSender {
     }
 
     // MARK: - Replay
-
-    /// Deprecated: legacy message-count pagination. Kept only for
-    /// backwards compatibility while the new endpoint stabilises.
-    /// New code should call `requestSessionMessages` instead.
-    func requestReplay(sessionId: String, afterSeq: Int, limit: Int? = nil) {
-        var payload: [String: Any] = ["sessionId": sessionId, "afterSeq": afterSeq]
-        if let limit { payload["limit"] = limit }
-        send(["type": "request_session_replay", "payload": payload], sessionId: sessionId)
-    }
 
     /// Ask the tentacle for turn-aligned messages.
     ///

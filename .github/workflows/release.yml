@@ -841,8 +841,23 @@ jobs:
             --dir "$WORK_DIR/archives"
           test -f "$WORK_DIR/archives/Kraki.app.zip"
 
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json body --jq .body > "$WORK_DIR/archives/Kraki.app.md"
+          # What the update window shows. People read it, so prefer notes
+          # written for them: release-notes/<tag>.md in the tagged commit,
+          # else the annotated tag's message, and only as a last resort
+          # GitHub's generated list of pull request titles.
+          NOTES="$WORK_DIR/archives/Kraki.app.md"
+          if gh api "repos/$GITHUB_REPOSITORY/contents/release-notes/$RELEASE_TAG.md?ref=$RELEASE_TAG" \
+               -H 'Accept: application/vnd.github.raw' > "$NOTES" 2>/dev/null && [ -s "$NOTES" ]; then
+            echo "Release notes: release-notes/$RELEASE_TAG.md"
+          else
+            TAG_OBJECT=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq 'select(.object.type == "tag") | .object.sha' || true)
+            if [ -n "$TAG_OBJECT" ] && gh api "repos/$GITHUB_REPOSITORY/git/tags/$TAG_OBJECT" --jq .message > "$NOTES" && [ -s "$NOTES" ]; then
+              echo "Release notes: annotated tag message"
+            else
+              gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+                --json body --jq .body > "$NOTES"
+            fi
+          fi
 
           gh release download 2.9.5 --repo sparkle-project/Sparkle \
             --pattern 'Sparkle-for-Swift-Package-Manager.zip' \

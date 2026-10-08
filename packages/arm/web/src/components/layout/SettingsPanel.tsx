@@ -12,7 +12,7 @@ import { version } from '../../../package.json';
 import { ArchiveSettings } from '../sessions/ArchivedSessions';
 
 export function SettingsPanel({ open, onClose, inline, className }: { open: boolean; onClose: () => void; inline?: boolean; className?: string }) {
-  const { isDark, toggleDark } = useTheme();
+  const { theme, setTheme } = useTheme();
   const relayVersion = useStore((s) => s.relayVersion);
   const status = useStore((s) => s.status);
   const devices = useStore((s) => s.devices);
@@ -59,30 +59,27 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
         <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
           Appearance
         </h3>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm text-text-primary">Dark mode</p>
-            <p className="text-[11px] text-text-muted">Toggle light and dark theme</p>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm text-text-primary">Appearance</p>
+          <div role="radiogroup" aria-label="Appearance" className="flex rounded-lg bg-surface-tertiary p-0.5 text-[12px]">
+            {(['system', 'light', 'dark'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                role="radio"
+                aria-checked={theme === option}
+                onClick={() => {
+                  setTheme(option);
+                  wsClient.updatePreferences({ theme: option });
+                }}
+                className={`rounded-md px-2.5 py-1 font-medium transition-colors ${
+                  theme === option ? 'bg-surface-primary text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'
+                }`}
+              >
+                {option === 'system' ? 'System' : option === 'light' ? 'Light' : 'Dark'}
+              </button>
+            ))}
           </div>
-          <button
-            aria-label="Toggle dark mode"
-            role="switch"
-            aria-checked={isDark}
-            onClick={() => {
-              const next = !isDark;
-              toggleDark();
-              wsClient.updatePreferences({ theme: next ? 'dark' : 'light' });
-            }}
-            className={`relative h-6 w-11 rounded-full transition-colors ${
-              isDark ? 'bg-kraki-500' : 'bg-slate-300'
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                isDark ? 'translate-x-5' : 'translate-x-0'
-              }`}
-            />
-          </button>
         </div>
       </section>
 

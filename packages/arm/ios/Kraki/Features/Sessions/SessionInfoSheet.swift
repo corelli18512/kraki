@@ -142,7 +142,7 @@ struct SessionInfoSheet: View {
     /// is used to choose a model in both surfaces.
     @ViewBuilder
     private var modelRow: some View {
-        let label = session.model ?? "Select"
+        let label = appState.deviceStore.modelDisplayName(session.model, deviceId: session.deviceId, agent: session.agent) ?? "Select"
         let canTap = !availableModels.isEmpty
         if canTap {
             NavigationLink(value: ModelPickerNav()) {
@@ -158,7 +158,7 @@ struct SessionInfoSheet: View {
                 }
             }
             .buttonStyle(.plain)
-        } else if let model = session.model {
+        } else if let model = appState.deviceStore.modelDisplayName(session.model, deviceId: session.deviceId, agent: session.agent) {
             infoRow("Model", value: model)
         }
     }

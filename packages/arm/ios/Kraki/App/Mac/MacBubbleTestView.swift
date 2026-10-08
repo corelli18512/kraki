@@ -1593,6 +1593,20 @@ enum MacMarkdown {
 // MARK: - Bubble text view (NSTextView, TextKit2)
 
 final class MacBubbleTextView: NSTextView {
+    /// Body whose plain text is this view's accessibility label, computed only
+    /// when accessibility asks (converting the whole body on every configure
+    /// cost ~2 scans of the full answer per streaming delta on the main thread).
+    var lazyAccessibilityBody: NSAttributedString? {
+        didSet { if lazyAccessibilityBody !== oldValue { lazyAccessibilityLabel = nil } }
+    }
+    private var lazyAccessibilityLabel: String?
+    override func accessibilityLabel() -> String? {
+        guard let body = lazyAccessibilityBody else { return super.accessibilityLabel() }
+        if let cached = lazyAccessibilityLabel { return cached }
+        let text = MacMarkdown.plainText(body) ?? ""
+        lazyAccessibilityLabel = text
+        return text
+    }
     override var acceptsFirstResponder: Bool { false }
 
     init() {

@@ -594,6 +594,10 @@ struct MainWindowView: View {
             generation: generation
         )
         appState.beginViewingSession(id)
+        // The first render above ran before the opening was recorded: report
+        // it now, or `open.summary` waits for the next data change (diag Mac
+        // 0.2.51: 8–29 s "openings" and timeouts while content was on screen).
+        appState.noteConversationRendered(id, hasContent: !nextViewModel.cachedMessages.isEmpty)
         appState.sessionSubscriptionController.setDesired(id)
         if isSessionDeviceOnline(id) {
             appState.messageProvider?.ensureLoaded(sessionId: id, reason: "mainWindowSelection")

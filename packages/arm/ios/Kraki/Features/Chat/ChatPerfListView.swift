@@ -2584,7 +2584,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
         // The tail swap is applied model-first: the replaced rows are
         // reconfigured explicitly below, and the OLD model is not layout-safe
-        // here (a just-cleared live card has no content to size).
+        // here (a just-cleared live card has no content to size), because
+        // performBatchUpdates computes pre-update attributes before running
+        // its block. Pagination (applyEdges) swaps INSIDE the block instead:
+        // there the old rows are intact and the swap must not be visible to
+        // the pre-update pass. Invariant for this path: nothing may lay out
+        // between this assignment and performBatchUpdates (no layoutIfNeeded,
+        // no run-loop turn); invalidateLayout below is lazy.
         items = new
         UIView.performWithoutAnimation {
             let context = UICollectionViewFlowLayoutInvalidationContext()

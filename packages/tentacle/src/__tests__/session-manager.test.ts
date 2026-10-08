@@ -245,6 +245,15 @@ describe('SessionManager', () => {
       expect(forkedMeta.reasoningEffort).toBe('high');
     });
 
+    it('names a fork of an auto-titled session as a fork (not an identical twin)', () => {
+      const { sessionId } = sm.createSession('pi');
+      sm.setAutoTitle(sessionId, 'Create hello.txt');
+      const forkedMeta = sm.getMeta(sm.forkSession(sessionId)!.sessionId)!;
+      expect(forkedMeta.title).toBe('Fork of Create hello.txt');
+      const untitled = sm.createSession('pi').sessionId;
+      expect(sm.getMeta(sm.forkSession(untitled)!.sessionId)!.title).toBeUndefined();
+    });
+
     it('keeps the source permission mode and turn index when forking', () => {
       const { sessionId } = sm.createSession('claude');
       sm.setMode(sessionId, 'safe');
@@ -1582,5 +1591,28 @@ describe('SessionManager log integrity and indexed reads', () => {
     writeFileSync(join(src, 'abc.json'), '{}');
     const fork = sm.forkSession(sessionId);
     expect(readFileSync(join(dir, fork.sessionId, 'attachments', 'abc.png'), 'utf8')).toBe('img');
+  });
+});
+
+describe('SessionManager meta cache', () => {
+  let dir: string;
+  beforeEach(() => { dir = tmpSessionsDir(); });
+  afterEach(() => { try { rmSync(dir, { recursive: true }); } catch {} });
+
+  it('picks up a meta.json written by another process', () => {
+    const sm = new SessionManager(dir);
+    const { sessionId } = sm.createSession('pi');
+    expect(sm.getMeta(sessionId)?.title).toBeUndefined();
+    const other = new SessionManager(dir);
+    other.updateMeta(sessionId, { title: 'From the CLI' });
+    expect(sm.getMeta(sessionId)?.title).toBe('From the CLI');
+  });
+
+  it('does not leak a caller’s unsaved edits into later reads', () => {
+    const sm = new SessionManager(dir);
+    const { sessionId } = sm.createSession('pi');
+    const meta = sm.getMeta(sessionId)!;
+    meta.title = 'not saved';
+    expect(sm.getMeta(sessionId)?.title).toBeUndefined();
   });
 });

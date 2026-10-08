@@ -225,9 +225,9 @@ struct MacChatView: View {
     private var currentMode: SessionMode {
         appState.sessionStore.sessionModes[sessionId] ?? session?.mode ?? .auto
     }
-    private var composerVisible: Bool {
-        isDeviceOnline || viewModel.isCompacting
-    }
+    /// Always, like iPhone: with the computer offline the Composer says so and
+    /// queues the message until it reconnects (it used to just disappear).
+    private var composerVisible: Bool { true }
     private var effectiveBottomInputHeight: CGFloat {
         // The Composer is a floating overlay. Keep one stable base clearance so
         // the last bubble can rest above the input capsule, but never couple
@@ -259,6 +259,10 @@ struct MacChatView: View {
         return hash
     }
 
+    /// Inputs of `ChatViewModel.refreshMessageCache()` — the persisted window
+    /// and the pending inputs. Not the live card: the card is passed to the
+    /// list separately, and hashing its text here re-projected the whole
+    /// spine and re-rendered the chat a second time on every streaming delta.
     private var spineRevision: Int {
         // Read the observable store DIRECTLY. Going through
         // MessageProvider.currentWindow() hides the dependency behind a
@@ -272,20 +276,6 @@ struct MacChatView: View {
         hash = hash &* 31 &+ (window.last?.seq ?? 0)
         hash = hash &* 31 &+ (window.last?.type.hashValue ?? 0)
         hash = hash &* 31 &+ (window.last?.content?.hashValue ?? 0)
-        hash = hash &* 31 &+ (viewModel.card == nil ? 0 : 1)
-        hash = hash &* 31 &+ (viewModel.card?.text.hashValue ?? 0)
-        if let action = viewModel.card?.action {
-            hash = hash &* 31 &+ action.type.hashValue
-            hash = hash &* 31 &+ (action.toolCallId?.hashValue ?? 0)
-            hash = hash &* 31 &+ (action.headline?.hashValue ?? 0)
-            hash = hash &* 31 &+ (action.permissionId?.hashValue ?? 0)
-            hash = hash &* 31 &+ (action.payload["decision"]?.stringValue?.hashValue ?? 0)
-            hash = hash &* 31 &+ (action.cancelled ? 1 : 0)
-            hash = hash &* 31 &+ (action.payload["localPending"]?.boolValue == true ? 1 : 0)
-            hash = hash &* 31 &+ (action.payload["localError"]?.stringValue?.hashValue ?? 0)
-            hash = hash &* 31 &+ (action.payload["success"]?.boolValue == true ? 1 : 0)
-            hash = hash &* 31 &+ (action.payload["running"]?.intValue ?? 0)
-        }
         hash = hash &* 31 &+ (appState.commandSender?.outbox[sessionId]?.count ?? 0)
         hash = hash &* 31 &+ viewModel.pendingSignature.hashValue
         return hash
@@ -355,8 +345,14 @@ struct MacChatView: View {
         .onChange(of: providerWaitingForLatest, initial: true) { _, waiting in
             if !waiting { hasMaterializedLatest = true }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .macOpenSessionInfo)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .macOpenSessionInfo)) { note in
+            // From the menu (current chat) or a session row's Rename… (that one).
+            if let target = note.userInfo?["sessionId"] as? String, target != sessionId { return }
+            _ = MacSessionInfoRequest.take(sessionId)
             showInfo = true
+        }
+        .onChange(of: sessionId, initial: true) { _, id in
+            if MacSessionInfoRequest.take(id) { showInfo = true }
         }
         #if DEBUG
         .onReceive(NotificationCenter.default.publisher(for: .macNativeAutomationAction)) { note in
@@ -557,15 +553,13 @@ struct MacChatView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Compacting context")
             }
-            if isDeviceOnline {
-                MacChatComposer(
-                    sessionId: sessionId,
-                    pendingPermission: viewModel.permissions.first,
-                    pendingQuestion: viewModel.questions.last,
-                    isCompacting: viewModel.isCompacting,
-                    hasLiveCard: viewModel.card != nil
-                )
-            }
+            MacChatComposer(
+                sessionId: sessionId,
+                pendingPermission: viewModel.permissions.first,
+                pendingQuestion: viewModel.questions.last,
+                isCompacting: viewModel.isCompacting,
+                hasLiveCard: viewModel.card != nil
+            )
         }
     }
 
@@ -712,6 +706,10 @@ private struct MacSessionInfoSheet: View {
     private var modelDetails: [ModelDetail] {
         appState.deviceStore.modelDetails(for: session.deviceId, agentId: session.agent)
     }
+    /// The model's name as the pickers and the session list show it.
+    private func modelName(_ id: String?) -> String? {
+        appState.deviceStore.modelDisplayName(id, deviceId: session.deviceId, agent: session.agent)
+    }
     private var supportedEfforts: [ReasoningEffort] {
         guard let detail = modelDetails.first(where: { $0.id == selectedModel }),
               detail.supportsReasoningEffort else { return [] }
@@ -800,13 +798,13 @@ private struct MacSessionInfoSheet: View {
             infoRow("Agent", session.agent)
             infoRow(label: "Model") {
                 if availableModels.isEmpty {
-                    Text(liveSession.model ?? "—")
+                    Text(modelName(liveSession.model) ?? "—")
                 } else {
                     Picker("", selection: Binding(
                         get: { selectedModel },
                         set: { applyModel($0) }
                     )) {
-                        ForEach(availableModels, id: \.self) { Text($0).tag($0) }
+                        ForEach(availableModels, id: \.self) { Text(modelName($0) ?? $0).tag($0) }
                     }
                     .labelsHidden()
                     .frame(maxWidth: 250, alignment: .trailing)

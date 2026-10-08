@@ -75,7 +75,19 @@ enum SubagentSteps {
     static func merge(_ steps: [ChatMessage]) -> [ChatMessage] {
         var output: [ChatMessage] = []
         var index: [String: Int] = [:]
+        var permissionIndex: [String: Int] = [:]
         for message in steps.sorted(by: { $0.seq < $1.seq }) {
+            // A permission is recorded when asked and again when decided
+            // (decision only): one row, the request with its outcome.
+            if message.type == "permission", let id = message.permissionId, !id.isEmpty {
+                if let at = permissionIndex[id] {
+                    output[at] = PermissionStep.merged(output[at], with: message)
+                } else {
+                    permissionIndex[id] = output.count
+                    output.append(message)
+                }
+                continue
+            }
             guard isTool(message), let callId = message.toolCallId, !callId.isEmpty else {
                 output.append(message)
                 continue
@@ -189,5 +201,44 @@ enum SubagentSteps {
             formatDuration(info(of: m)?.durationMs),
             formatTokens(info(of: m)?.tokens),
         ].compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+/// A permission step: what was asked and what was decided.
+enum PermissionStep {
+    /// The earlier record's request (description, tool) with the later
+    /// record's decision and deny reason.
+    static func merged(_ earlier: ChatMessage, with later: ChatMessage) -> ChatMessage {
+        var next = earlier
+        for key in ["decision", "reason"] {
+            if let value = later.payload[key], value.stringValue?.isEmpty == false { next.payload[key] = value }
+        }
+        for key in ["description", "toolName"] where next.payload[key]?.stringValue?.isEmpty != false {
+            if let value = later.payload[key], value.stringValue?.isEmpty == false { next.payload[key] = value }
+        }
+        return next
+    }
+
+    static func title(_ message: ChatMessage) -> String {
+        if let d = message.payload["description"]?.stringValue, !d.isEmpty { return d }
+        if let t = message.payload["toolName"]?.stringValue, !t.isEmpty { return "Run \(t)" }
+        return message.content ?? "Permission"
+    }
+
+    /// "Approved", "Always allowed", "Denied", "Denied: <reason>"; nil while open.
+    static func outcome(_ message: ChatMessage) -> String? {
+        switch message.payload["decision"]?.stringValue {
+        case "approve": return "Approved"
+        case "always_allow": return "Always allowed"
+        case "deny":
+            if let reason = message.payload["reason"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !reason.isEmpty { return "Denied: \(reason)" }
+            return "Denied"
+        default: return message.cancelled ? "Cancelled" : nil
+        }
+    }
+
+    static func isDenied(_ message: ChatMessage) -> Bool {
+        message.payload["decision"]?.stringValue == "deny"
     }
 }

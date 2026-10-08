@@ -492,13 +492,13 @@ describe('RelayClient auth negotiation', () => {
       type: 'auth_error',
       code: 'wrong_region',
       message: 'Use the china relay',
-      redirect: 'ws://cn.example.com',
+      redirect: 'wss://cn.example.com',
     })));
     await vi.advanceTimersByTimeAsync(20);
 
     expect(fatal).not.toHaveBeenCalled();
     expect(sockets.length).toBeGreaterThanOrEqual(2);
-    expect(sockets.at(-1)?.url).toBe('ws://cn.example.com');
+    expect(sockets.at(-1)?.url).toBe('wss://cn.example.com');
   });
 });
 
@@ -534,6 +534,56 @@ describe('RelayClient agent-mapping pre-registration on auth_ok', () => {
     (client as unknown as { handleMessage: (m: Record<string, unknown>) => void })
       .handleMessage(JSON.parse(authOk.toString()));
     expect(smMock.markDisconnected).not.toHaveBeenCalled();
+  });
+
+  it('closes a turn lost in a daemon restart with a failure row followed by idle', () => {
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getResumableSessions.mockReturnValue([{ id: 'running', agent: 'pi', state: 'active' }]);
+    smMock.getMeta.mockReturnValue({ id: 'running', agent: 'pi', state: 'active', lastSeq: 45 });
+    smMock.getMessagesAfterSeq.mockReturnValue([{ seq: 45, type: 'user_message' }]);
+    const client = new RelayClient(adapter, sm, {
+      relayUrl: 'ws://localhost:4000', authMethod: 'open',
+      device: { name: 'Test', role: 'tentacle' }, reconnectDelay: 10,
+    }, null);
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_1', authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' }, devices: [],
+    })));
+
+    const rows = smMock.appendMessage.mock.calls
+      .filter(([sid]) => sid === 'running')
+      .map(([, type, raw]) => ({ type, payload: JSON.parse(raw as string).payload as Record<string, unknown> }));
+    // The idle is the turn boundary: without it the next prompt and its reply
+    // join the failed turn and clients hide that reply behind the failure row.
+    expect(rows.map((r) => r.type)).toEqual(['turn_status', 'idle']);
+    expect((rows[0].payload.action as { payload: { code: string } }).payload.code).toBe('process_lost');
+    expect(rows[1].payload.reason).toBe('failed');
+    expect(smMock.markDisconnected).toHaveBeenCalledWith('running');
+  });
+
+  it('does not close a restarted session whose spine already has an outcome', () => {
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getResumableSessions.mockReturnValue([{ id: 'running', agent: 'pi', state: 'active' }]);
+    smMock.getMeta.mockReturnValue({ id: 'running', agent: 'pi', state: 'active', lastSeq: 46 });
+    smMock.getMessagesAfterSeq.mockReturnValue([{ seq: 46, type: 'agent_message' }]);
+    const client = new RelayClient(adapter, sm, {
+      relayUrl: 'ws://localhost:4000', authMethod: 'open',
+      device: { name: 'Test', role: 'tentacle' }, reconnectDelay: 10,
+    }, null);
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_1', authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' }, devices: [],
+    })));
+
+    expect(smMock.appendMessage.mock.calls.filter(([sid]) => sid === 'running')).toEqual([]);
   });
 
   it('pre-registers agent mapping for every resumable session so multi-adapter routing survives daemon restart', () => {
@@ -669,6 +719,15 @@ describe('RelayClient fork session confirmation', () => {
       sessionId: 'source-forked1',
       payload: { agent: 'pi', model: 'test/model', requestId: 'req_fork_pi', lastSeq: 42 },
     });
+  });
+
+  it('sends the session list after a fork so every app gets its name', async () => {
+    connectForkClient(false);
+    sockets[0].sent.length = 0;
+    sendForkRequest('req_fork_list');
+    await vi.runAllTimersAsync();
+    const types = decodePulseSends(sockets[0].sent).map((msg) => msg.type);
+    expect(types.indexOf('session_list')).toBeGreaterThan(types.indexOf('session_created'));
   });
 
   it('does not duplicate session_created when the adapter emits its own callback', async () => {
@@ -2913,6 +2972,24 @@ describe('RelayClient pending-question digest', () => {
     expect(decodePulseSends(ws.sent).some((message) => message.type === 'compacting')).toBe(false);
   });
 
+  it('a session only waiting for an answer is not running (an update may restart it)', () => {
+    const { client, askQ, askP } = buildClient();
+    expect(client.runningSessionCount()).toBe(1);
+    askQ('q1');
+    expect(client.runningSessionCount()).toBe(0);
+    askP('p1');
+    expect(client.runningSessionCount()).toBe(1);
+  });
+
+  it('answering the question makes the session running again', async () => {
+    const { client, askQ, answerQ } = buildClient();
+    askQ('q1');
+    expect(client.runningSessionCount()).toBe(0);
+    answerQ('q1');
+    await vi.runAllTimersAsync();
+    expect(client.runningSessionCount()).toBe(1);
+  });
+
   it('overrides the digest preview with the open question while it is pending', () => {
     const { askQ, preview } = buildClient();
     expect(preview()?.type).not.toBe('question');
@@ -3871,11 +3948,8 @@ describe('RelayClient pending-question digest', () => {
     const errorMessages = messages
       .filter((call) => call[1] === 'error')
       .map((call) => JSON.parse(call[2]).payload.message);
-    expect(errorMessages).toEqual([
-      'HTTP 400 invalid request (request id req_123)',
-      'HTTP 400 invalid request (request id req_123)',
-      'HTTP 400 invalid request (request id req_123)',
-    ]);
+    // One persisted error row per turn; later reports only refine the card.
+    expect(errorMessages).toEqual(['HTTP 400 invalid request (request id req_123)']);
     expect(errorMessages).not.toContain('success');
     expect(errorMessages).not.toContain('unknown');
 
@@ -3884,6 +3958,18 @@ describe('RelayClient pending-question digest', () => {
     expect(JSON.parse(statusCalls[0][2]).payload.action.payload.message).toBe(
       'HTTP 400 invalid request (request id req_123)',
     );
+  });
+
+  it('a recovering turn leaves one error row, and the next turn may add its own', () => {
+    const { adapter, sm } = buildClient();
+    const onError = adapter.onError as (sid: string, event: { message: string }) => void;
+    onError('sess_1', { message: 'rate limited, retrying' });
+    onError('sess_1', { message: 'rate limited, retrying' });
+    onError('sess_1', { message: 'rate limited, retrying' });
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    onError('sess_1', { message: 'HTTP 500' });
+    const rows = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.filter((call) => call[1] === 'error');
+    expect(rows).toHaveLength(2);
   });
 
   it('uses a safe fallback for a standalone invalid adapter error', () => {
@@ -4275,15 +4361,25 @@ describe('RelayClient permission decisions', () => {
     });
     sockets[0].sent.length = 0;
     // Consumer messages arrive as E2E envelopes (the crypto mock returns the blob).
-    const decide = () => sockets[0].emit('message', Buffer.from(JSON.stringify({
+    const decide = (type: 'approve' | 'deny' = 'approve', reason?: string) => sockets[0].emit('message', Buffer.from(JSON.stringify({
       type: 'unicast', to: 'tentacle-dev', keys: {},
-      blob: JSON.stringify({ type: 'approve', sessionId: 'sess_1', deviceId: 'app_1', seq: 1, timestamp: '', payload: { permissionId: 'perm_1' } }),
+      blob: JSON.stringify({ type, sessionId: 'sess_1', deviceId: 'app_1', seq: 1, timestamp: '', payload: { permissionId: 'perm_1', ...(reason && { reason }) } }),
     })));
     const resolutions = () => decodePulseSends(sockets[0].sent)
       .filter((m) => m.type === 'permission_resolved')
       .map((m) => (m.payload as { resolution: string }).resolution);
-    return { decide, resolutions, respond };
+    const traced = () => (sm.appendTrace as ReturnType<typeof vi.fn>).mock.calls
+      .filter((c) => c[1] === 'permission')
+      .map((c) => JSON.parse(c[2] as string).payload as Record<string, unknown>);
+    return { decide, resolutions, respond, traced };
   }
+
+  it('records a deny reason in Steps', async () => {
+    const { decide, resolutions, traced } = connected(['accepted']);
+    decide('deny', 'keep the file');
+    await vi.waitFor(() => expect(resolutions()).toEqual(['denied']));
+    expect(traced().at(-1)).toMatchObject({ id: 'perm_1', decision: 'deny', reason: 'keep the file' });
+  });
 
   it('announces a decision the agent accepted', async () => {
     const { decide, resolutions } = connected(['accepted']);
@@ -4305,5 +4401,23 @@ describe('RelayClient permission decisions', () => {
     await vi.waitFor(() => expect(respond).toHaveBeenCalledTimes(2));
     await new Promise((r) => setTimeout(r, 10));
     expect(resolutions()).toEqual(['approved']);
+  });
+});
+
+describe('isAcceptableRegionRedirect', () => {
+  it('keeps official relays on official relays over TLS', async () => {
+    const { isAcceptableRegionRedirect } = await import('../relay-client.js');
+    expect(isAcceptableRegionRedirect('wss://relay.kraki.chat', 'wss://cn.relay.kraki.chat')).toBe(true);
+    expect(isAcceptableRegionRedirect('wss://relay.kraki.chat', 'ws://cn.relay.kraki.chat')).toBe(false);
+    expect(isAcceptableRegionRedirect('wss://relay.kraki.chat', 'wss://evil.example')).toBe(false);
+    expect(isAcceptableRegionRedirect('wss://relay.kraki.chat', 'wss://kraki.chat.evil.example')).toBe(false);
+    expect(isAcceptableRegionRedirect('wss://relay.kraki.chat', 'not a url')).toBe(false);
+  });
+
+  it('lets a self-hosted relay redirect over TLS (or to this machine)', async () => {
+    const { isAcceptableRegionRedirect } = await import('../relay-client.js');
+    expect(isAcceptableRegionRedirect('wss://relay.example.com', 'wss://eu.relay.example.com')).toBe(true);
+    expect(isAcceptableRegionRedirect('ws://localhost:4000', 'ws://127.0.0.1:4001')).toBe(true);
+    expect(isAcceptableRegionRedirect('wss://relay.example.com', 'ws://eu.relay.example.com')).toBe(false);
   });
 });

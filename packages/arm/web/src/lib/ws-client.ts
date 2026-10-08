@@ -367,6 +367,9 @@ export class KrakiWSClient {
    *  send per online tentacle, each E2E-encrypted to that tentacle. No raw WS. */
   sendBroadcast(msg: Record<string, unknown>) {
     const store = getStore();
+    // Name the sender: client_log lines were all "[undefined]", so different
+    // browsers/devices could not be told apart in web-client.log.
+    if (msg.deviceId === undefined && store.deviceId) msg = { ...msg, deviceId: store.deviceId };
     for (const dev of store.devices.values()) {
       if (dev.role !== 'tentacle' || !dev.online) continue;
       if (dev.id === store.deviceId) continue;
@@ -472,7 +475,7 @@ export class KrakiWSClient {
    *  "Sending…"); Tentacle's resolved card replaces it. Without confirmation
    *  while the delivery path is up it reverts with an explanation. */
   resolvePermission(sessionId: string, permissionId: string, toolName: string | undefined,
-                    decision: 'approve' | 'always_allow' | 'deny') {
+                    decision: 'approve' | 'always_allow' | 'deny', reason?: string) {
     const store = getStore();
     const current = store.cards.get(sessionId)?.action;
     if (current?.type === 'permission' && current.payload.id === permissionId) {
@@ -486,7 +489,7 @@ export class KrakiWSClient {
     if (decision === 'approve') {
       commands.approve(permissionId, sessionId, send);
     } else if (decision === 'deny') {
-      commands.deny(permissionId, sessionId, send);
+      commands.deny(permissionId, sessionId, send, reason);
     } else {
       commands.alwaysAllow(permissionId, sessionId, send, toolName);
     }

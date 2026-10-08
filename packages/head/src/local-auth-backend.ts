@@ -3,7 +3,8 @@
  * Used when head runs in standalone mode (no remote account service).
  */
 
-import { randomBytes, createVerify } from 'crypto';
+import { randomBytes } from 'crypto';
+import { importPublicKey, verifyChallenge as verifyChallengeSignature } from '@kraki/crypto';
 import { v4 as uuid } from 'uuid';
 import type { AuthMethod, DeviceInfo, DeviceSummary, DeviceRole, DeviceKind } from '@kraki/protocol';
 import type { AuthBackend, AuthOutcome, ChallengeOutcome, AuthInfoConfig } from './auth-backend.js';
@@ -13,17 +14,6 @@ import type { Storage } from './storage.js';
 import type { PushManager } from './push/index.js';
 import { getLogger } from './logger.js';
 import { suggestRegionForIp } from './ip-geo.js';
-
-function importPublicKey(compactKey: string): string {
-  const lines = compactKey.match(/.{1,64}/g) ?? [];
-  return `-----BEGIN PUBLIC KEY-----\n${lines.join('\n')}\n-----END PUBLIC KEY-----\n`;
-}
-
-function verifySignature(nonce: string, signature: string, publicKeyPem: string): boolean {
-  const verify = createVerify('SHA256');
-  verify.update(nonce);
-  return verify.verify(publicKeyPem, signature, 'base64');
-}
 
 export interface LocalAuthBackendOptions {
   storage: Storage;
@@ -156,7 +146,7 @@ export class LocalAuthBackend implements AuthBackend {
     }
 
     const publicKeyPem = importPublicKey(device.publicKey);
-    const valid = verifySignature(nonce, signature, publicKeyPem);
+    const valid = verifyChallengeSignature(nonce, signature, publicKeyPem);
     if (!valid) {
       logger.warn('Challenge-response auth failed', { deviceId });
       return { ok: false, code: 'invalid_signature', message: 'Invalid signature' };

@@ -132,7 +132,7 @@ enum KLog {
         let body = "[\(filename):\(line)] \(message())"
         os_log("%{public}s", log: krakiOSLog, type: .default, "[chat-entry] \(body)")
 
-        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let timestamp = ISO8601.withoutFractional.string(from: Date())
         let record = "\(timestamp) \(body)\n"
         entryQueue.async {
             let fm = FileManager.default

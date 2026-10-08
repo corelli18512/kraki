@@ -177,12 +177,22 @@ final class BuiltInTentacleTests: XCTestCase {
         daemon: TentacleCLIManager.DaemonState = .running(pid: 1),
         role: BuiltInTentacle.ThisMacRole = .runsAgents,
         ownerChoice: Bool = false,
-        moved: Bool = false
+        moved: Bool = false,
+        signedOut: Bool = false
     ) -> BuiltInSetupView.Step {
         BuiltInSetupView.step(
             installState: install, location: location, configured: configured,
-            daemonState: daemon, role: role, ownerChoicePending: ownerChoice, movedFromCLI: moved
+            daemonState: daemon, role: role, ownerChoicePending: ownerChoice, movedFromCLI: moved,
+            signedOutByUser: signedOut
         )
+    }
+
+    func testSignedOutOfTheAppAsksToSignInAgain() {
+        // The built-in Kraki is configured and running (this Mac stays
+        // online), but the app was signed out: sign in, don't skip to done.
+        XCTAssertEqual(step(signedOut: true), .signIn)
+        XCTAssertEqual(step(role: .remoteOnly, signedOut: true), .signIn)
+        XCTAssertEqual(step(signedOut: false), .done)
     }
 
     func testAnExistingCLIIsResolvedInSetupFirst() {

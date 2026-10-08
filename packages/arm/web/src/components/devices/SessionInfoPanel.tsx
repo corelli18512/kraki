@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { modelDisplayName, sessionDisplayTitle } from '../../lib/session-status';
 import { useNavigate } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
@@ -59,7 +60,7 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
     setPendingContextTier(undefined);
   };
 
-  const sessionName = session.title ?? session.autoTitle ?? `${session.agent}${session.model ? ` · ${session.model}` : ''}`;
+  const sessionName = sessionDisplayTitle(session);
 
   const startEditing = useCallback(() => {
     setTitleDraft(session.title ?? session.autoTitle ?? '');
@@ -147,7 +148,7 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
                   : 'text-text-secondary cursor-default'
               }`}
             >
-              {session.model ?? 'Unknown'}
+              {modelDisplayName(session.model, [{ modelDetails }]) ?? 'Unknown'}
             </button>
           </div>
           {showModelPicker && models && (

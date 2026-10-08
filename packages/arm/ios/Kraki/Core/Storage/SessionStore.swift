@@ -548,7 +548,37 @@ final class SessionStore {
     /// created or freshly-imported sessions at the top after a cold
     /// relaunch, when their in-memory preview entry hasn't been
     /// seeded yet.
+    @ObservationIgnored private var previewDateCache: [String: Date] = [:]
+
+    private func parsedPreviewDate(_ timestamp: String) -> Date? {
+        if let cached = previewDateCache[timestamp] { return cached }
+        guard let date = ISO8601.parse(timestamp) else { return nil }
+        if previewDateCache.count > 4_096 { previewDateCache.removeAll(keepingCapacity: true) }
+        previewDateCache[timestamp] = date
+        return date
+    }
+
+    /// Last sort, keyed by the exact inputs. Both dictionaries are value
+    /// types: when nothing changed they share storage and `==` is O(1).
+    /// SessionListView.body read this several times per evaluation and each
+    /// read sorted (and copied) every SessionInfo again — ~4 ms of every
+    /// iOS conversation open on the simulator (Time Profiler, 56 sessions).
+    @ObservationIgnored private var sortedMemo: (sessions: [String: SessionInfo],
+                                                 previews: [String: SessionPreview],
+                                                 value: [SessionInfo])?
+
     var sortedSessions: [SessionInfo] {
+        // Reading both inputs keeps observation tracking intact for callers.
+        let sessions = self.sessions
+        let previews = self.sessionPreviews
+        if let memo = sortedMemo, memo.sessions == sessions, memo.previews == previews { return memo.value }
+        let value = computeSortedSessions(sessions, previews)
+        sortedMemo = (sessions, previews, value)
+        return value
+    }
+
+    private func computeSortedSessions(_ sessions: [String: SessionInfo],
+                                       _ sessionPreviews: [String: SessionPreview]) -> [SessionInfo] {
         // Resolve each session's effective timestamp to a Date so we
         // can compare across mixed "Z" vs "+00:00" timestamp shapes
         // without string-compare bugs. Falls back to createdAt when
@@ -560,11 +590,13 @@ final class SessionStore {
         // main-thread hang. Precompute each session's effective date
         // ONCE (a Schwartzian transform), so the comparator does zero
         // parsing: ~865 parses total, ~20x fewer.
+        // Parsed dates are also cached by timestamp string: this property is
+        // read on every observation change, while previews rarely change.
         var effective: [String: Date] = Dictionary(minimumCapacity: sessions.count)
         for s in sessions.values {
             if let t = sessionPreviews[s.id]?.timestamp,
                !t.isEmpty,
-               let d = ISO8601.parse(t) {
+               let d = parsedPreviewDate(t) {
                 effective[s.id] = d
             } else {
                 effective[s.id] = s.createdAt
@@ -870,13 +902,16 @@ final class SessionStore {
             }
         }
 
-        sessions = nextSessions
-        pinnedSessions = nextPinned
-        sessionModes = nextModes
-        sessionUsage = nextUsage
-        sessionPreviews = nextPreviews
-        drafts = nextDrafts
-        autoReadSuppressedSessions = nextAutoReadSuppressed
+        // Assign only what changed: with @Observable every assignment notifies
+        // every reader, and the Mac sidebar rows read these dictionaries — an
+        // unchanged reconnect list re-rendered all 56 rows (Time Profiler).
+        if sessions != nextSessions { sessions = nextSessions }
+        if pinnedSessions != nextPinned { pinnedSessions = nextPinned }
+        if sessionModes != nextModes { sessionModes = nextModes }
+        if sessionUsage != nextUsage { sessionUsage = nextUsage }
+        if sessionPreviews != nextPreviews { sessionPreviews = nextPreviews }
+        if drafts != nextDrafts { drafts = nextDrafts }
+        if autoReadSuppressedSessions != nextAutoReadSuppressed { autoReadSuppressedSessions = nextAutoReadSuppressed }
         scheduleSave()
         return removedIDs
     }

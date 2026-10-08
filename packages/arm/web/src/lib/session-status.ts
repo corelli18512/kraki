@@ -41,3 +41,25 @@ export function getSessionStatus(
   if (session.state === 'compacting') return 'compacting';
   return 'working';
 }
+
+/** A Session's name everywhere (list, header, info): its title, else the
+ *  agent's auto title, else "New Session" — the same as iOS and Mac. */
+export function sessionDisplayTitle(session: { title?: string | null; autoTitle?: string | null }): string {
+  return session.title?.trim() || session.autoTitle?.trim() || 'New Session';
+}
+
+/** A model's name as its agent reports it (what the model pickers show),
+ *  else its id — one name for a model everywhere, like iOS and Mac. */
+export function modelDisplayName(
+  model: string | null | undefined,
+  agents: ReadonlyArray<{ id?: string; modelDetails?: ReadonlyArray<{ id: string; name?: string }> }> | undefined,
+  agent?: string,
+): string | undefined {
+  if (!model) return model ?? undefined;
+  const scoped = agents?.filter((a) => !agent || a.id === agent);
+  for (const a of (scoped?.length ? scoped : agents) ?? []) {
+    const name = a.modelDetails?.find((d) => d.id === model)?.name;
+    if (name) return name;
+  }
+  return model;
+}

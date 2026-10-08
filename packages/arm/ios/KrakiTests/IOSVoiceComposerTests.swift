@@ -534,10 +534,26 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
 
     // MARK: Speech controller safety (shared with macOS)
 
-    func testBeginActivatesAudioOnMainActor() async {
+    /// AVAudioSession activation blocks (diag: up to 507 ms on the main
+    /// thread at recording.begin); it runs on the audio-session queue.
+    func testBeginActivatesAudioOffTheMainThread() async {
         let (host, voice) = make()
         _ = await start(host, voice)
-        XCTAssertEqual(host.audio.activatedOnMain, [true])
+        XCTAssertEqual(host.audio.activatedOnMain, [false])
+    }
+
+    func testSecondPressDuringSlowActivationDoesNotStartTwice() async {
+        let (host, _) = make()
+        host.audio.activateDelay = 0.3
+        let controller = host.voiceInputController
+        let context = VoiceSessionContext(fields: [:], vocabulary: [])
+        async let first: Void = controller.begin(sessionID: "a", context: context, onFinal: { _ in })
+        try? await Task.sleep(for: .milliseconds(60))   // activation in flight, state still idle
+        XCTAssertTrue(controller.isBusy, "an in-flight activation counts as busy")
+        await controller.begin(sessionID: "b", context: context, onFinal: { _ in })
+        _ = await first
+        XCTAssertEqual(host.audio.events.filter { $0 == "activate-begin" }.count, 1, "\(host.audio.events)")
+        XCTAssertEqual(controller.activeSessionID, "a")
     }
 
     func testQuickCancelDuringSlowAudioActivationNeverLeavesAudioActive() async {

@@ -522,8 +522,11 @@ final class MessageRouter {
             if let content = payload?["content"] as? String {
                 let reset = payload?["reset"] as? Bool ?? false
                 appState.messageStore.applyCardMessage(sessionId, content, reset: reset)
-                appState.sessionStore.setAgentTextActivity(
-                    sessionId, text: appState.messageStore.cards[sessionId]?.text ?? content)
+                // No per-delta SessionInfo.activity write: nothing displays the
+                // agent-text activity (ActivityRow has no callers), and copying
+                // the growing answer into `sessions` on every delta notified
+                // every reader of the session list. The final agent_message
+                // still sets it.
             }
 
         case "card_action":

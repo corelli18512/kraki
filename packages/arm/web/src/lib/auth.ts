@@ -9,6 +9,22 @@ import { setTheme } from '../hooks/useTheme';
 
 const logger = createLogger('auth');
 
+/** How this browser appears in Devices: "Chrome on Mac", "Safari on iPhone".
+ *  Every browser used to be "Web Browser", so several were indistinguishable. */
+export function browserDeviceName(ua: string): string {
+  const browser = /Edg\//.test(ua) ? 'Edge'
+    : /Firefox\//.test(ua) ? 'Firefox'
+      : /(Chrome|CriOS)\//.test(ua) ? 'Chrome'
+        : /Safari/.test(ua) ? 'Safari' : 'Browser';
+  const os = /iPhone/.test(ua) ? 'iPhone'
+    : /iPad/.test(ua) ? 'iPad'
+      : /Android/.test(ua) ? 'Android'
+        : /Windows/.test(ua) ? 'Windows'
+          : /Mac OS X|Macintosh/.test(ua) ? 'Mac'
+            : /Linux/.test(ua) ? 'Linux' : '';
+  return os ? `${browser} on ${os}` : `Web ${browser}`;
+}
+
 /** Send the initial auth message. Returns true if a pairing token was consumed. */
 export async function sendAuth(
   send: (msg: Record<string, unknown>) => void,
@@ -19,7 +35,7 @@ export async function sendAuth(
   githubOAuthExtras?: { codeVerifier?: string; redirectUri?: string },
 ): Promise<boolean> {
   const desktopBridge = window.krakiDesktop;
-  const deviceName = desktopBridge?.deviceName ?? `Web ${navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Browser'}`;
+  const deviceName = desktopBridge?.deviceName ?? browserDeviceName(navigator.userAgent);
   // The desktop app signs in with the token of the Kraki built into it (as
   // Kraki for Mac does with its tentacle's), keeping its device id.
   const desktopToken = desktopCredentials()?.token;

@@ -117,6 +117,43 @@ final class MacPresenceTests: XCTestCase {
         )
     }
 
+    /// Sparkle's "Install and Relaunch" quits through a quit Apple event that
+    /// looks like a person's quit; it used to ask "take this Mac offline?".
+    func testInstallingAnUpdateNeverAsksToGoOffline() {
+        XCTAssertTrue(MacPresenceController.asksBeforeQuitting(
+            quittingOffline: false, installingUpdate: false, managesPresence: true, source: .user))
+        XCTAssertFalse(MacPresenceController.asksBeforeQuitting(
+            quittingOffline: false, installingUpdate: true, managesPresence: true, source: .user))
+        XCTAssertFalse(MacPresenceController.asksBeforeQuitting(
+            quittingOffline: false, installingUpdate: false, managesPresence: true, source: .system))
+        XCTAssertFalse(MacPresenceController.asksBeforeQuitting(
+            quittingOffline: true, installingUpdate: false, managesPresence: true, source: .user))
+        XCTAssertFalse(MacPresenceController.asksBeforeQuitting(
+            quittingOffline: false, installingUpdate: false, managesPresence: false, source: .user))
+    }
+
+    /// A remote update (from the phone) quits Kraki with an AppleScript quit
+    /// that looks like a person's; it used to ask "take this Mac offline?"
+    /// and the update waited on the answer.
+    func testARemoteUpdateInProgressIsRecognized() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-home-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        XCTAssertFalse(MacPresenceController.remoteUpdateInProgress(krakiHome: home))
+        let dir = home.appendingPathComponent("remote-update")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let plan = dir.appendingPathComponent("plan.json")
+        try Data("{}".utf8).write(to: plan)
+        XCTAssertTrue(MacPresenceController.remoteUpdateInProgress(krakiHome: home))
+        // A plan left by an updater that died long ago doesn't count.
+        XCTAssertFalse(MacPresenceController.remoteUpdateInProgress(krakiHome: home, now: Date().addingTimeInterval(7200)))
+    }
+
+    func testAWindowlessLaunchStartsFromTheMenuBar() {
+        XCTAssertTrue(MacLaunchCoordinator.needsWindowlessStart(bootstrapStarted: false, visibleWindows: 0))
+        XCTAssertFalse(MacLaunchCoordinator.needsWindowlessStart(bootstrapStarted: true, visibleWindows: 0))
+        XCTAssertFalse(MacLaunchCoordinator.needsWindowlessStart(bootstrapStarted: false, visibleWindows: 1))
+    }
+
     func testQuitEventDescriptorsAreClassified() {
         let target = NSAppleEventDescriptor(processIdentifier: ProcessInfo.processInfo.processIdentifier)
         let userQuit = NSAppleEventDescriptor(

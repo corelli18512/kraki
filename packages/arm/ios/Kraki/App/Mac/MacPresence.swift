@@ -321,13 +321,44 @@ final class MacPresenceController {
         }
     }
 
+    /// Set when Sparkle is about to replace the app (MacUpdateController).
+    private(set) var isInstallingUpdate = false
+
+    func beginInstallingUpdate() {
+        KLog.diag("[Presence] installing an update; quitting without going offline")
+        isInstallingUpdate = true
+    }
+
+    /// Whether quitting goes through the "take this Mac offline?" question.
+    nonisolated static func asksBeforeQuitting(
+        quittingOffline: Bool, installingUpdate: Bool, managesPresence: Bool, source: MacQuitSource
+    ) -> Bool {
+        !quittingOffline && !installingUpdate && managesPresence && source == .user
+    }
+
+    /// An update started from another device (Update in the phone's device
+    /// details) quits Kraki with an AppleScript `quit` while it swaps the app:
+    /// the built-in Kraki keeps `remote-update/plan.json` until it is done.
+    /// Recent only: a plan left by an updater that died never silences Quit.
+    nonisolated static func remoteUpdateInProgress(
+        krakiHome: URL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".kraki"),
+        now: Date = Date()
+    ) -> Bool {
+        let plan = krakiHome.appendingPathComponent("remote-update/plan.json")
+        guard let modified = (try? FileManager.default.attributesOfItem(atPath: plan.path))?[.modificationDate] as? Date
+        else { return false }
+        return now.timeIntervalSince(modified) < 3600
+    }
+
     /// `applicationShouldTerminate`: route a person's quit (Dock, AppleScript)
     /// through the same confirmation; let everything else through.
     func shouldTerminate(_ app: NSApplication) -> NSApplication.TerminateReply {
-        if isQuittingOffline || !managesPresence { return .terminateNow }
-        guard MacQuitSource.classify(NSAppleEventManager.shared().currentAppleEvent) == .user else {
-            return .terminateNow
-        }
+        guard Self.asksBeforeQuitting(
+            quittingOffline: isQuittingOffline,
+            installingUpdate: isInstallingUpdate || Self.remoteUpdateInProgress(),
+            managesPresence: managesPresence,
+            source: MacQuitSource.classify(NSAppleEventManager.shared().currentAppleEvent)
+        ) else { return .terminateNow }
         guard confirmQuitGoingOffline() else { return .terminateCancel }
         Task { @MainActor in
             await self.takeOfflineForQuit()

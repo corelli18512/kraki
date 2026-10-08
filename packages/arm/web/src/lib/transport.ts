@@ -1,5 +1,6 @@
 import { desktopCredentials } from './desktop';
 import type { Message } from '@kraki/protocol';
+import { DEVICE_REPLACED_CLOSE_CODE } from '@kraki/protocol';
 import { createLogger } from './logger';
 import { getStore } from './store-adapter';
 import { traceEvent } from './trace';
@@ -25,6 +26,9 @@ const LIVENESS_TIMEOUT = 22_000;
 const LIVENESS_CHECK = 2_000;
 /** A WebSocket handshake that has not opened by now is abandoned. */
 const CONNECT_TIMEOUT = 10_000;
+/** Shown while another tab/window with the same stored identity holds the
+ *  relay connection. Coming back to this tab takes the connection over. */
+export const REPLACED_ELSEWHERE_MESSAGE = 'Kraki is open in another tab or window. Come back to this tab to use it here.';
 /** Application-level ping interval. 10s keeps the connection warm through
  *  proxies and bounds liveness-detection latency during read-only viewing. */
 const PING_INTERVAL = 10_000;
@@ -215,6 +219,7 @@ export class KrakiTransport {
   private reconnectDelay = RECONNECT_BASE;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   intentionalClose = false;
+  private replacedElsewhere = false;
   private reconnectAttempts = 0;
   private callbacks: TransportCallbacks;
   private authenticated = false;
@@ -327,18 +332,30 @@ export class KrakiTransport {
     ws.onmessage = (event) => {
       if (this.ws !== ws) return;
       this.lastRxAt = Date.now();
+      let msg: Message;
       try {
-        const msg = JSON.parse(event.data as string) as Message;
-        const rawLen = typeof event.data === 'string' ? event.data.length : 0;
-        traceEvent({ comp: 'arm', evt: 'WS-RX', type: (msg as { type?: string }).type, hasPulse: typeof (msg as { pulse?: unknown }).pulse === 'string', rawLen });
+        msg = JSON.parse(event.data as string) as Message;
+      } catch (err) {
+        const raw = typeof event.data === 'string' ? event.data : '';
+        logger.warn('Malformed WS message:', raw.slice(0, 200), err);
+        return;
+      }
+      const rawLen = typeof event.data === 'string' ? event.data.length : 0;
+      traceEvent({ comp: 'arm', evt: 'WS-RX', type: (msg as { type?: string }).type, hasPulse: typeof (msg as { pulse?: unknown }).pulse === 'string', rawLen });
+      try {
         this.callbacks.onParsedMessage(msg);
       } catch (err) {
-        logger.warn('Malformed WS message:', event.data, err);
+        // A handler bug, not a bad frame: keep the type, never the payload.
+        logger.error('WS message handler failed:', { type: (msg as { type?: string }).type }, err);
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event?: CloseEvent) => {
       if (this.ws !== ws) return; // already abandoned
+      if (event?.code === DEVICE_REPLACED_CLOSE_CODE) {
+        this.handleReplaced();
+        return;
+      }
       this.handleClosed();
     };
 
@@ -360,6 +377,39 @@ export class KrakiTransport {
       getStore().setStatus('disconnected');
       this.scheduleReconnect();
     }
+  }
+
+  /** The relay closed this socket because the same device id authenticated
+   *  on a newer one (another tab sharing the stored identity). Reconnecting
+   *  now would evict that tab, which would reconnect and evict this one — the
+   *  two would trade the connection about once a second forever. Stay offline
+   *  until this tab is brought back into view. */
+  private handleReplaced() {
+    logger.warn('Connection replaced by another tab/window with this device identity');
+    traceEvent({ comp: 'arm', evt: 'WS-REPLACED' });
+    this.cleanup();
+    this.ws = null;
+    this.callbacks.onClose?.();
+    this.replacedElsewhere = true;
+    this.intentionalClose = true;
+    this.reconnectAttempts = 0;
+    this.outageStartedAt = null;
+    getStore().setReconnectState(0, null);
+    getStore().setStatus('disconnected');
+    getStore().setLastError(REPLACED_ELSEWHERE_MESSAGE);
+  }
+
+  /** True while another tab holds this device's connection. */
+  get isReplacedElsewhere(): boolean { return this.replacedElsewhere; }
+
+  /** Take the connection back after this tab was replaced elsewhere. */
+  private reclaim(reason: string) {
+    if (!this.replacedElsewhere) return;
+    logger.info('Reclaiming connection:', reason);
+    this.replacedElsewhere = false;
+    if (getStore().lastError === REPLACED_ELSEWHERE_MESSAGE) getStore().setLastError(null);
+    this.reconnectDelay = RECONNECT_BASE;
+    this.connect();
   }
 
   /** Stop using a socket that is dead but has not closed (half-open, stuck
@@ -388,11 +438,17 @@ export class KrakiTransport {
     };
     window.addEventListener('online', () => wake('online'));
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') wake('visible');
+      if (document.visibilityState !== 'visible') return;
+      if (this.replacedElsewhere) this.reclaim('visible');
+      else wake('visible');
     });
+    // Two windows side by side are both "visible": the one the user clicks
+    // into takes the connection.
+    window.addEventListener('focus', () => this.reclaim('focus'));
   }
 
   disconnect() {
+    this.replacedElsewhere = false;
     this.intentionalClose = true;
     this.cleanup();
     this.ws?.close();

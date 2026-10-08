@@ -45,6 +45,33 @@ final class AppState {
     var voiceCapability: VoiceCapability?
     @ObservationIgnored private(set) var voiceInputController: KrakiVoiceInputController
     @ObservationIgnored lazy var iosVoiceComposer = IOSVoiceComposer(host: self)
+    #if os(iOS)
+    /// Lets a sent voice message finish its correction after the app is
+    /// backgrounded instead of failing it at once (see BackgroundVoiceFinisher).
+    @ObservationIgnored private var backgroundVoiceClientID: String?
+    @ObservationIgnored private lazy var backgroundVoiceFinisher = BackgroundVoiceFinisher(hooks: .init(
+        isFinishing: { [weak self] in
+            if case .staged = self?.iosVoiceComposer.operation?.phase { return true }
+            return false
+        },
+        isDelivered: { [weak self] in
+            guard let self, let id = self.backgroundVoiceClientID, let sender = self.commandSender else { return true }
+            guard let message = sender.outbox.values.lazy.compactMap({ $0[id] }).first else { return true } // echoed
+            return sender.pendingState(message) == .failed
+        },
+        retire: { [weak self] in self?.iosVoiceComposer.retireKeepingDraft() },
+        teardown: { [weak self] in
+            self?.backgroundVoiceClientID = nil
+            guard self?.isInBackground == true else { return }
+            self?.tearDownForBackground()
+        },
+        beginTask: { expired in
+            let id = UIApplication.shared.beginBackgroundTask(withName: "KrakiVoiceFinish", expirationHandler: expired)
+            return id == .invalid ? nil : id.rawValue
+        },
+        endTask: { UIApplication.shared.endBackgroundTask(UIBackgroundTaskIdentifier(rawValue: $0)) }
+    ))
+    #endif
 
     /// The durable outbox lives next to the message database, so each app
     /// flavor (Release / Dev / isolated KRAKI_DATA_DIR test instances) has its
@@ -173,6 +200,9 @@ final class AppState {
         self.messageDatabase = testDatabase
         self.messageStore = MessageStore(db: testDatabase)
         self.voiceInputController = voiceController ?? KrakiVoiceInputController.isolatedForTesting()
+        #if os(macOS)
+        self.signedOutDefaults = UserDefaults(suiteName: "kraki-test-\(UUID().uuidString)") ?? .standard
+        #endif
         if voiceController == nil { self.voiceInputController.bind(host: self) }
         self.attachmentStore = AttachmentStore { _, _, _ in true }
         self.commandSender = CommandSender(appState: self)
@@ -718,6 +748,37 @@ final class AppState {
     #if os(macOS)
     private var cliLoginInFlight = false
 
+    /// Sign Out on this Mac. The app signs in with the built-in Kraki's own
+    /// login, which stays (this Mac keeps serving its agents, like Kraki for
+    /// Windows), so until the person signs in again the app must not quietly
+    /// reuse it: not at launch, not from the sign-in watchdog.
+    static let signedOutByUserKey = "mac.signedOutByUser"
+    static let signedOutAtKey = "mac.signedOutAt"
+    var signedOutByUser: Bool {
+        get { signedOutDefaults.bool(forKey: Self.signedOutByUserKey) }
+        set {
+            signedOutDefaults.set(newValue, forKey: Self.signedOutByUserKey)
+            if newValue { signedOutDefaults.set(Date().timeIntervalSince1970, forKey: Self.signedOutAtKey) }
+            else { signedOutDefaults.removeObject(forKey: Self.signedOutAtKey) }
+        }
+    }
+
+    /// Signed out, and no new sign-in since. A GitHub sign-in saved by the
+    /// local Kraki afterwards (`kraki connect` in Terminal, or setup) is the
+    /// person signing in again: it ends the Sign Out, so returning from
+    /// Terminal still signs in by itself.
+    var staysSignedOut: Bool {
+        guard signedOutByUser else { return false }
+        let at = signedOutDefaults.double(forKey: Self.signedOutAtKey)
+        if at > 0, let signIn = AuthManager.cliSignInDate(), signIn.timeIntervalSince1970 > at {
+            signedOutByUser = false
+            return false
+        }
+        return true
+    }
+    /// Test graphs use their own store, so one test's Sign Out never leaks.
+    @ObservationIgnored var signedOutDefaults: UserDefaults = .standard
+
     /// Reuse the locally-installed `kraki` CLI's login (relay + GitHub token
     /// from `~/.kraki` / `gh auth token`) to authenticate this Mac as an arm
     /// device — no manual pairing required. Returns true when a CLI login was
@@ -725,6 +786,10 @@ final class AppState {
     /// installed/logged in (caller falls back to the login screen).
     @discardableResult
     func attemptCLILogin(ghDeadline: TimeInterval = AuthManager.launchGhDeadline) async -> Bool {
+        if staysSignedOut {
+            KLog.diag("Mac CLI login skipped: signed out on this Mac")
+            return false
+        }
         // SwiftUI WindowGroup tasks can be recreated while the app is already
         // connecting/authenticating. Loading the CLI token twice used to call
         // connect twice and leave parallel sockets behind.
@@ -766,16 +831,16 @@ final class AppState {
         // process-local keys so a denied Keychain prompt cannot strand the
         // Mac before the relay refreshes this device's public keys.
         authManager?.useEphemeralKeysForCurrentProcess()
-        let relayChanged = creds.relay != relayURL
-        if relayChanged {
-            relayURL = creds.relay
-            wsClient?.setRelayURL(creds.relay)
-        }
+        if creds.relay != relayURL { relayURL = creds.relay }
+        // Sign Out resets AppState's relay but not the socket's, so compare
+        // with the socket: only a real change schedules a new connection.
+        let socketRelayChanged = wsClient.map { $0.relayURL != creds.relay } ?? false
+        if socketRelayChanged { wsClient?.setRelayURL(creds.relay) }
         authManager?.cliGitHubToken = creds.token
         KLog.diag("Auth: using local CLI login")
         // setRelayURL schedules the replacement connection itself. Calling
         // connect again here would briefly create two authenticated sockets.
-        guard !relayChanged, connectionStatus != .connected else { return }
+        guard !socketRelayChanged, connectionStatus != .connected else { return }
         reconnectForNewCredentials(reason: "cli_token")
     }
 
@@ -797,7 +862,7 @@ final class AppState {
     /// Find the local CLI login with a realistic `gh` deadline and sign in
     /// with it. Falls back to the relay login flow when there is none.
     func recoverCLIAuthentication(reason: String) async {
-        guard !cliRecoveryInFlight, connectionStatus != .connected else { return }
+        guard !cliRecoveryInFlight, connectionStatus != .connected, !staysSignedOut else { return }
         cliRecoveryInFlight = true
         defer { cliRecoveryInFlight = false }
         KLog.diag("Auth: recovering sign-in (\(reason))")
@@ -936,6 +1001,9 @@ final class AppState {
         #elseif os(macOS)
         Self.onMacNotificationsMain { $0.handleSignOut(appState: self) }
         #endif
+        #if os(macOS)
+        signedOutByUser = true
+        #endif
         wsClient?.disconnect()
         pulseManager?.resetForIdentityChange()
         // The old decrypt pipeline may already have queued main-actor work.
@@ -973,6 +1041,10 @@ final class AppState {
     /// kick a fresh connect immediately so the user doesn't have to
     /// wait out a long backoff timer that started in the background.
     func handleForegroundRehydrate(forceReconnect: Bool = false) {
+        #if os(iOS)
+        // Back before a deferred teardown ran: nothing was closed.
+        if backgroundVoiceFinisher.isActive { backgroundVoiceFinisher.cancel(); backgroundVoiceClientID = nil }
+        #endif
         if isInBackground {
             isInBackground = false
             // The debounce restarts now: a quick foreground reconnect never
@@ -1030,15 +1102,25 @@ final class AppState {
         KrakiDiag.phase("background", pending: commandSender?.outbox.values.reduce(0) { $0 + $1.count } ?? 0)
         #endif
         updateReadVisibility(appForeground: false, conversationVisible: false)
-        #if os(iOS)
-        // iOS may suspend immediately and the voice socket is closed below:
-        // keep everything heard (a draft, or a not-sent voice bubble with its
-        // original transcript) rather than rely on a background callback.
-        iosVoiceComposer.retireKeepingDraft()
-        #endif
-        voiceInputController.suspendWarmConnection()
         sessionStore.flushCache()
         deviceStore.flushCache()
+        #if os(iOS)
+        // A sent voice message still being corrected: keep the voice and relay
+        // sockets for a short background task so it goes out as it would in
+        // the foreground. Otherwise (or if that runs out) keep everything
+        // heard — a draft, or a not-sent bubble with the original transcript.
+        if case .staged(let clientID) = iosVoiceComposer.operation?.phase {
+            backgroundVoiceClientID = clientID
+            if backgroundVoiceFinisher.beginIfNeeded() { return }
+        }
+        iosVoiceComposer.retireKeepingDraft()
+        #endif
+        tearDownForBackground()
+    }
+
+    /// Close the voice and relay sockets for the background (APNs takes over).
+    private func tearDownForBackground() {
+        voiceInputController.suspendWarmConnection()
         wsClient?.disconnect()
     }
 
@@ -1359,7 +1441,7 @@ extension AppState: KrakiVoiceInputHost {
     static let headControlTypes: Set<String> = [
         "device_joined", "device_left", "device_removed", "device_pending",
         "preferences_updated", "push_token_registered", "notification_preview",
-        "voice_lease_grant", "voice_lease_denied",
+        "voice_lease_grant", "voice_lease_denied", "voice_vocabulary_updated",
     ]
 
     /// The inner message of a `{from:"@head", msg}` wrapper, or nil when it is

@@ -449,12 +449,12 @@ export async function startWorker(): Promise<WorkerResult> {
       const info = relay.currentUpdateInfo;
       return info ? { ...info, ...remoteState() } : null;
     },
+    refresh: () => updateWatch.checkNow(),
     runningSessions: () => relay.runningSessionCount(),
     emit: (p) => relay.sendUpdateStatus(p),
   });
   relay.onUpdateRequest = async (requestId, when) => {
-    // A stale "no update" answer must not block a release published since.
-    if (!relay.currentUpdateInfo?.latest) await updateWatch.checkNow();
+    // The updater checks for the newest release itself before acting.
     await updater.request(requestId, when);
   };
   const announceUpdateResult = () => {

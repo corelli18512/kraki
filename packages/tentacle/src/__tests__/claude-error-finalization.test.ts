@@ -124,3 +124,38 @@ describe('Claude error finalization', () => {
     });
   });
 });
+
+describe('Claude usage accounting', () => {
+  const assistant = (id: string, text: string) => ({
+    type: 'assistant',
+    parent_tool_use_id: null,
+    message: { id, content: [{ type: 'text', text }], usage: { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+  });
+
+  it('counts one API response once even when the SDK splits it into several messages', () => {
+    const { adapter, handle } = setup();
+    const usage = vi.fn();
+    adapter.onUsageUpdate = usage;
+    handle(assistant('msg_1', 'part one'));
+    handle(assistant('msg_1', 'part two'));
+    handle(assistant('msg_2', 'next call'));
+    const last = usage.mock.calls.at(-1)?.[1];
+    expect(last.inputTokens).toBe(200);
+    expect(last.outputTokens).toBe(20);
+  });
+
+  it('adds what the query cost grew by instead of replacing the session total', () => {
+    const { adapter, entry, handle } = setup();
+    const usage = vi.fn();
+    adapter.onUsageUpdate = usage;
+    const turn = (cost: number) => { entry.turnFinalized = false; handle(result(cost)); };
+    const result = (cost: number) => ({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: cost, duration_ms: 1, usage: {} });
+    turn(0.25);
+    turn(0.75);
+    expect(usage.mock.calls.at(-1)?.[1].totalCost).toBeCloseTo(0.75);
+    // The query restarted (resume): its cost starts from zero again.
+    (adapter as unknown as { lastQueryCost: Map<string, number> }).lastQueryCost.delete('s1');
+    turn(0.1);
+    expect(usage.mock.calls.at(-1)?.[1].totalCost).toBeCloseTo(0.85);
+  });
+});

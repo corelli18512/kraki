@@ -111,6 +111,7 @@ final class MacAuthRecoveryTests: XCTestCase {
 
     override func tearDown() async throws {
         AuthManager.debugCLICredentialLoader = nil
+        AuthManager.debugCLISignInDate = nil
         app?.disconnect()
         app = nil
         relay?.stop()
@@ -155,6 +156,44 @@ final class MacAuthRecoveryTests: XCTestCase {
             if Date() > end { XCTFail("timed out: \(what)"); return }
             try await Task.sleep(for: .milliseconds(50))
         }
+    }
+
+    /// Sign Out on the Mac: the built-in Kraki keeps its login, so the app
+    /// must stay signed out (no launch login, no watchdog recovery) until the
+    /// person signs in again. Previously the window sat on "Connecting to
+    /// Kraki…" and the next launch silently signed back in.
+    func testSignOutStaysSignedOutUntilSignedInAgain() async throws {
+        relay.challengeMode = .fatal
+        AuthManager.debugCLICredentialLoader = { [url = relay.url] _ in (url, "tok-ok") }
+        app = try makeApp()
+        app.authManager?.debugSetStoredDeviceId(nil)
+        let signedIn = await app.attemptCLILogin()
+        XCTAssertTrue(signedIn)
+        try await waitUntil(10, "signed in") { app.connectionStatus == .connected }
+        let attempts = relay.methods.count
+
+        app.logout()
+        XCTAssertTrue(app.signedOutByUser)
+        XCTAssertEqual(app.connectionStatus, .awaitingLogin)
+        let reused = await app.attemptCLILogin()
+        XCTAssertFalse(reused, "relaunch must not reuse the built-in login")
+        await app.recoverCLIAuthentication(reason: "test")
+        try await Task.sleep(for: .seconds(2))   // watchdog ticks every 0.2 s
+        XCTAssertEqual(app.connectionStatus, .awaitingLogin)
+        XCTAssertNil(app.user)
+        XCTAssertEqual(relay.methods.count, attempts, "nothing signed in behind the person's back")
+
+        // A sign-in the local Kraki saved before the Sign Out changes nothing.
+        AuthManager.debugCLISignInDate = { Date().addingTimeInterval(-3600) }
+        XCTAssertTrue(app.staysSignedOut)
+
+        // `kraki connect` in Terminal afterwards is signing in again: returning
+        // to Kraki (an automatic retry) signs in by itself.
+        AuthManager.debugCLISignInDate = { Date().addingTimeInterval(60) }
+        let again = await app.attemptCLILogin()
+        XCTAssertTrue(again)
+        try await waitUntil(10, "signed in again") { app.connectionStatus == .connected }
+        XCTAssertFalse(app.signedOutByUser)
     }
 
     /// Launch probe times out, the stored challenge is rejected as fatal:

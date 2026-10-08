@@ -44,13 +44,19 @@ The relay is an encrypted forwarder and cannot inspect payloads. See "How device
 
 ## What the relay stores
 
-The relay maintains account/device data, including:
+The relay keeps account, device and delivery state in SQLite:
 
-- **users** — user identity, auth records and account preferences (including readable Custom Words)
-- **devices** — registered devices and their public keys
+- **users** — user identity, auth provider, region, and account preferences (including readable Custom Words)
+- **devices** — registered devices, their names, roles and public keys
 - **push_tokens** — push notification tokens for offline delivery (device token and provider type)
+- **pulse_outbox / pulse_meta / pulse_capabilities** — the reliable transport's store-and-forward state. `pulse_outbox` holds **end-to-end encrypted** payloads waiting for an offline device (only messages marked durable, such as session deletion, survive a disconnect for long; everything else is dropped after a few minutes offline). The relay cannot read them.
+- **voice_leases / voice_usage_daily** — voice input authorizations and seconds used per day (no audio, no transcripts)
+- **deleted_devices** — random ids of devices whose account was deleted, and the date, kept 180 days so an offline computer learns of the deletion instead of signing up again
+- **regions / edge_join_tokens / edge_services** — multi-region deployment configuration (no user data)
 
 The relay does not store plaintext conversation contents. Message history and replay are handled by `tentacle`. Custom Words are account data, not session data: their spellings and mishearings are persisted in the account's regional relay database and its backups. Synchronizing them does not require any tentacle to be online. Deleted words are removed from the database; existing backups may still contain them.
+
+The optional diagnostics collector (`packages/monitor`) stores client diagnostic batches that users choose to send; it is a separate service from the relay.
 
 ## What Kraki does not protect against
 

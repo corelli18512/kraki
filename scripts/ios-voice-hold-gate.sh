@@ -28,6 +28,11 @@ if [[ -n "${KRAKI_SOURCE_PACKAGES_DIR:-}" ]]; then
     args+=(-clonedSourcePackagesDirPath "$KRAKI_SOURCE_PACKAGES_DIR" -disableAutomaticPackageResolution -skipPackageUpdates)
 fi
 printf 'Evidence retained at %s\n' "$work"
-env -u KRAKI_HOME HOME="$work/home" xcodebuild "${args[@]}" -scheme Kraki -resultBundlePath "$work/unit.xcresult" test >"$work/unit.log" 2>&1
-env -u KRAKI_HOME HOME="$work/home" xcodebuild "${args[@]}" -scheme KrakiVoiceHold -resultBundlePath "$work/ui.xcresult" test >"$work/ui.log" 2>&1
+# KRAKI_VOICE_HOLD_ONLY="Class/test ..." runs just those UI tests (no unit pass).
+only=()
+for t in ${KRAKI_VOICE_HOLD_ONLY:-}; do only+=("-only-testing:KrakiVoiceUITests/$t"); done
+if [[ ${#only[@]} -eq 0 ]]; then
+    env -u KRAKI_HOME HOME="$work/home" xcodebuild "${args[@]}" -scheme Kraki -resultBundlePath "$work/unit.xcresult" test >"$work/unit.log" 2>&1
+fi
+env -u KRAKI_HOME HOME="$work/home" xcodebuild "${args[@]}" -scheme KrakiVoiceHold -resultBundlePath "$work/ui.xcresult" ${only[@]+"${only[@]}"} test >"$work/ui.log" 2>&1
 printf 'Passed. Evidence: %s\n' "$work"
