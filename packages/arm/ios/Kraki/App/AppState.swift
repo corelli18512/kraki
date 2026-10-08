@@ -812,16 +812,16 @@ final class AppState {
         // process-local keys so a denied Keychain prompt cannot strand the
         // Mac before the relay refreshes this device's public keys.
         authManager?.useEphemeralKeysForCurrentProcess()
-        let relayChanged = creds.relay != relayURL
-        if relayChanged {
-            relayURL = creds.relay
-            wsClient?.setRelayURL(creds.relay)
-        }
+        if creds.relay != relayURL { relayURL = creds.relay }
+        // Sign Out resets AppState's relay but not the socket's, so compare
+        // with the socket: only a real change schedules a new connection.
+        let socketRelayChanged = wsClient.map { $0.relayURL != creds.relay } ?? false
+        if socketRelayChanged { wsClient?.setRelayURL(creds.relay) }
         authManager?.cliGitHubToken = creds.token
         KLog.diag("Auth: using local CLI login")
         // setRelayURL schedules the replacement connection itself. Calling
         // connect again here would briefly create two authenticated sockets.
-        guard !relayChanged, connectionStatus != .connected else { return }
+        guard !socketRelayChanged, connectionStatus != .connected else { return }
         reconnectForNewCredentials(reason: "cli_token")
     }
 

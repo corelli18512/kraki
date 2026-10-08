@@ -139,6 +139,17 @@ describe('SessionPage', () => {
 describe('Composer', () => {
   const baseProps = { sessionId: 's1', canAbort: false, reachable: true, onSend: vi.fn(), onAbort: vi.fn() };
 
+  it('a waiting permission makes the composer its deny reason', async () => {
+    expect(composerIntent(true, false, true)).toBe('denyPermission');
+    expect(composerIntent(true, true, true)).toBe('denyPermission');
+    const onSend = vi.fn();
+    render(<Composer {...baseProps} onSend={onSend} intent="denyPermission" />);
+    const field = screen.getByPlaceholderText('Deny with reason…');
+    await userEvent.type(field, 'keep the file');
+    await userEvent.click(screen.getByRole('button', { name: 'Deny with reason' }));
+    expect(onSend).toHaveBeenCalledWith('keep the file', undefined, 'denyPermission');
+  });
+
   it('intent: an open question makes it the answer field; a running turn steers', () => {
     expect(composerIntent(false, true)).toBe('answerQuestion');
     expect(composerIntent(true, false)).toBe('steer');

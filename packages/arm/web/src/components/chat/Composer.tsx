@@ -8,11 +8,13 @@ const MAX_LINES_HEIGHT = 168;
 const MAX_IMAGE_SIZE = 3 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1024;
 
-export type ComposerIntent = 'prompt' | 'steer' | 'answerQuestion';
+export type ComposerIntent = 'prompt' | 'steer' | 'answerQuestion' | 'denyPermission';
 
-/** iOS/Mac `MessageComposerPolicy`: an open question turns the composer into
- *  its answer field; a running turn makes sends steer it. */
-export function composerIntent(isBusy: boolean, hasQuestion: boolean): ComposerIntent {
+/** iOS/Mac `MessageComposerPolicy`: a waiting permission turns the composer
+ *  into its deny reason, an open question into its answer field; a running
+ *  turn makes sends steer it. */
+export function composerIntent(isBusy: boolean, hasQuestion: boolean, hasPermission = false): ComposerIntent {
+  if (hasPermission) return 'denyPermission';
   if (hasQuestion) return 'answerQuestion';
   return isBusy ? 'steer' : 'prompt';
 }
@@ -21,6 +23,7 @@ const PLACEHOLDER: Record<ComposerIntent, string> = {
   prompt: 'Send a message…',
   steer: 'Steer the agent…',
   answerQuestion: 'Type your answer…',
+  denyPermission: 'Deny with reason…',
 };
 
 async function compressImage(file: File): Promise<{ attachment: Attachment; preview: string } | null> {
@@ -96,7 +99,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [text]);
 
   const hasText = text.trim().length > 0;
-  const structured = intent === 'answerQuestion';
+  const structured = intent === 'answerQuestion' || intent === 'denyPermission';
   const canSend = structured ? hasText : hasText || !!image;
   const showsStop = canAbort && !hasText && !image;
 
@@ -128,6 +131,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const glyph = showsStop ? 'stop' : intent === 'steer' ? 'steer' : 'send';
   const label = showsStop ? 'Stop agent'
     : intent === 'answerQuestion' ? 'Submit answer'
+    : intent === 'denyPermission' ? 'Deny with reason'
     : intent === 'steer' ? 'Steer agent' : 'Send message';
 
   return (

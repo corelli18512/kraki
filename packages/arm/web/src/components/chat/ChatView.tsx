@@ -203,10 +203,15 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
 
   // ── Actions ──
   const onSend = useCallback((text: string, attachments: Attachment[] | undefined, intent: ComposerIntent) => {
+    if (intent === 'denyPermission' && action?.type === 'permission') {
+      // Typing while a permission waits: the text is the reason for denying it.
+      wsClient.resolvePermission(sessionId, String(action.payload.id), action.payload.toolName as string | undefined, 'deny', text);
+      return;
+    }
     const answerTo = intent === 'answerQuestion' ? questions.at(-1)?.id : undefined;
     wsClient.sendInput(sessionId, text, { attachments, delivery: intent === 'steer' ? 'steer' : 'prompt', answerTo });
     afterSubmit();
-  }, [sessionId, questions, afterSubmit]);
+  }, [sessionId, questions, afterSubmit, action]);
 
   const [stepsFor, setStepsFor] = useState<{ seq: number | null } | null>(null);
 
@@ -226,7 +231,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
     onOpenArtifact,
   }), [sessionId, afterSubmit, onOpenArtifact]);
 
-  const intent = composerIntent(sessionActive, questions.length > 0);
+  const intent = composerIntent(sessionActive, questions.length > 0, permissionOpen);
   const canAbort = sessionActive || showLive;
   const reachable = connected && deviceOnline;
 

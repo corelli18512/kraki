@@ -72,3 +72,14 @@ describe('handleDataMessage session_mode_set', () => {
     expect(useStore.getState().sessionModes.get('sess-2')).toBe('delegate');
   });
 });
+
+describe('deny with a reason', () => {
+  it('sends the reason with the deny', async () => {
+    const { deny } = await import('./commands');
+    const sent: Record<string, unknown>[] = [];
+    deny('p1', 's1', (m) => sent.push(m), '  keep the file ');
+    deny('p2', 's1', (m) => sent.push(m));
+    expect(sent[0]).toEqual({ type: 'deny', sessionId: 's1', payload: { permissionId: 'p1', reason: 'keep the file' } });
+    expect(sent[1]).toEqual({ type: 'deny', sessionId: 's1', payload: { permissionId: 'p2' } });
+  });
+});
