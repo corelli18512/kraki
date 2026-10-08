@@ -336,12 +336,26 @@ final class MacPresenceController {
         !quittingOffline && !installingUpdate && managesPresence && source == .user
     }
 
+    /// An update started from another device (Update in the phone's device
+    /// details) quits Kraki with an AppleScript `quit` while it swaps the app:
+    /// the built-in Kraki keeps `remote-update/plan.json` until it is done.
+    /// Recent only: a plan left by an updater that died never silences Quit.
+    nonisolated static func remoteUpdateInProgress(
+        krakiHome: URL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".kraki"),
+        now: Date = Date()
+    ) -> Bool {
+        let plan = krakiHome.appendingPathComponent("remote-update/plan.json")
+        guard let modified = (try? FileManager.default.attributesOfItem(atPath: plan.path))?[.modificationDate] as? Date
+        else { return false }
+        return now.timeIntervalSince(modified) < 3600
+    }
+
     /// `applicationShouldTerminate`: route a person's quit (Dock, AppleScript)
     /// through the same confirmation; let everything else through.
     func shouldTerminate(_ app: NSApplication) -> NSApplication.TerminateReply {
         guard Self.asksBeforeQuitting(
             quittingOffline: isQuittingOffline,
-            installingUpdate: isInstallingUpdate,
+            installingUpdate: isInstallingUpdate || Self.remoteUpdateInProgress(),
             managesPresence: managesPresence,
             source: MacQuitSource.classify(NSAppleEventManager.shared().currentAppleEvent)
         ) else { return .terminateNow }
