@@ -7,7 +7,7 @@ import { access, mkdir, readdir, readFile, rename, rm, stat, statfs, writeFile }
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { gunzip as gunzipCallback } from 'node:zlib';
+import { gunzip as gunzipCallback, gzipSync } from 'node:zlib';
 import type { DiagnosticDevice } from './device-keys.js';
 
 const gunzip = promisify(gunzipCallback);
@@ -86,26 +86,61 @@ function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-export function validateDiagBatch(value: unknown, batchId: string): boolean {
-  if (!object(value) || Object.keys(value).some(k => !['schema', 'batchId', 'processId', 'platform', 'version', 'build', 'events', 'image'].includes(k))) return false;
-  if (value.schema !== 1 || value.batchId !== batchId || !uuid(value.processId)) return false;
-  if (!['ios', 'mac', 'test'].includes(String(value.platform))) return false;
-  if (typeof value.version !== 'string' || !/^[\d.]{1,32}$/.test(value.version)) return false;
-  if (typeof value.build !== 'string' || !/^\d{1,16}$/.test(value.build)) return false;
-  if (value.image !== undefined) {
-    const image = value.image;
-    if (!object(image) || Object.keys(image).some(k => !['uuid', 'base', 'os', 'arch'].includes(k)) || !uuid(image.uuid)
+const BATCH_KEYS = ['schema', 'batchId', 'processId', 'platform', 'version', 'build', 'events', 'image'];
+const EVENT_KEYS = ['t', 'm', 'seq', 'ev', 'sid', 'd'];
+
+/**
+ * The batch to store, or null to reject it (400).
+ *
+ * Names the collector does not know yet — a top-level key, an event key, a
+ * whole event type, or a field of a known event — are dropped, never stored.
+ * A newer client is therefore not punished for one added field: before,
+ * that rejected the whole batch, the client deleted it on 400, and every
+ * event in it was lost (2026-10-01/02, `voice.summary.correctionOn`: 15
+ * batches). A known name with a value outside its format still rejects the
+ * batch: that is where free text or paths would leak.
+ */
+export function sanitizeDiagBatch(value: unknown, batchId: string): { batch: Record<string, unknown>; stripped: number } | null {
+  if (!object(value)) return null;
+  let stripped = 0;
+  const strip = <T extends Record<string, unknown>>(o: T, allowed: (k: string) => boolean): T => {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(o)) { if (allowed(k)) out[k] = v; else stripped++; }
+    return out as T;
+  };
+  const batch = strip(value, k => BATCH_KEYS.includes(k));
+  if (batch.schema !== 1 || batch.batchId !== batchId || !uuid(batch.processId)) return null;
+  if (!['ios', 'mac', 'test'].includes(String(batch.platform))) return null;
+  if (typeof batch.version !== 'string' || !/^[\d.]{1,32}$/.test(batch.version)) return null;
+  if (typeof batch.build !== 'string' || !/^\d{1,16}$/.test(batch.build)) return null;
+  if (batch.image !== undefined) {
+    if (!object(batch.image)) return null;
+    const image = strip(batch.image, k => ['uuid', 'base', 'os', 'arch'].includes(k));
+    if (!uuid(image.uuid)
       || typeof image.base !== 'string' || !/^0x[\da-f]{1,16}$/i.test(image.base)
-      || typeof image.os !== 'string' || !/^[\d.]{1,32}$/.test(image.os) || !['arm64', 'x86_64'].includes(String(image.arch))) return false;
+      || typeof image.os !== 'string' || !/^[\d.]{1,32}$/.test(image.os) || !['arm64', 'x86_64'].includes(String(image.arch))) return null;
+    batch.image = image;
   }
-  if (!Array.isArray(value.events) || value.events.length < 1 || value.events.length > 1000) return false;
-  return value.events.every(event => {
-    if (!object(event) || Object.keys(event).some(k => !['t', 'm', 'seq', 'ev', 'sid', 'd'].includes(k))) return false;
-    if (!number(event.t) || !number(event.m) || !Number.isSafeInteger(event.seq) || Number(event.seq) < 1) return false;
-    if (event.sid !== undefined && !id(event.sid)) return false;
-    if (typeof event.ev !== 'string' || !Object.hasOwn(schemas, event.ev) || !object(event.d)) return false;
-    return Object.entries(event.d).every(([key, val]) => schemas[event.ev as string].includes(key) && fields[key]?.(val));
-  });
+  if (!Array.isArray(batch.events) || batch.events.length < 1 || batch.events.length > 1000) return null;
+  const events: Record<string, unknown>[] = [];
+  for (const raw of batch.events) {
+    if (!object(raw)) return null;
+    const event = strip(raw, k => EVENT_KEYS.includes(k));
+    if (!number(event.t) || !number(event.m) || !Number.isSafeInteger(event.seq) || Number(event.seq) < 1) return null;
+    if (event.sid !== undefined && !id(event.sid)) return null;
+    if (typeof event.ev !== 'string' || !object(event.d)) return null;
+    if (!Object.hasOwn(schemas, event.ev)) { stripped++; continue; }
+    const schema = schemas[event.ev];
+    const d = strip(event.d, k => schema.includes(k) && Object.hasOwn(fields, k));
+    if (!Object.entries(d).every(([key, val]) => fields[key](val))) return null;
+    events.push({ ...event, d });
+  }
+  batch.events = events;
+  return { batch, stripped };
+}
+
+export function validateDiagBatch(value: unknown, batchId: string): boolean {
+  return sanitizeDiagBatch(value, batchId) !== null;
 }
 
 export function diagSigningText(method: string, path: string, deviceId: string, timestamp: string, requestId: string, body: Buffer): string {
@@ -191,10 +226,15 @@ export class DiagApi {
       let batch: unknown;
       try { batch = JSON.parse(raw.toString('utf8')); } catch { throw new HttpFailure(400); }
       const batchId = req.headers['x-kraki-request'] as string;
-      if (!validateDiagBatch(batch, batchId)) throw new HttpFailure(400);
+      const clean = sanitizeDiagBatch(batch, batchId);
+      if (!clean) throw new HttpFailure(400);
+      if ((clean.batch.events as unknown[]).length === 0) { res.writeHead(204); res.end(); return true; }
+      // Unchanged batches keep their exact bytes; a stripped one is stored
+      // re-encoded (deterministic, so a retry of the same bytes stays idempotent).
+      const stored = clean.stripped === 0 ? body : gzipSync(JSON.stringify(clean.batch));
       if (this.devicesWriting.has(device.id)) throw new HttpFailure(429);
       this.devicesWriting.add(device.id);
-      try { await this.store(device, batchId, body); }
+      try { await this.store(device, batchId, stored); }
       finally { this.devicesWriting.delete(device.id); }
       res.writeHead(204); res.end();
     } catch (error) {
