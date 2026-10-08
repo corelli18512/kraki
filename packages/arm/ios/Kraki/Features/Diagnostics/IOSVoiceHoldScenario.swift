@@ -23,7 +23,9 @@ import VoiceInputCore
             if payload["type"] as? String == "send_input" {
                 driver.lastAnswerTo = (payload["payload"] as? [String: Any])?["answerTo"] as? String ?? ""
                 driver.sentCount += 1
+                #if os(iOS)
                 if UIApplication.shared.applicationState == .background { driver.sentInBackground += 1 }
+                #endif
                 driver.lastSent = (payload["payload"] as? [String: Any])?["text"] as? String ?? ""
                 // Keep the scenario available for the next gesture without inventing a server reply.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
