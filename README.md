@@ -122,6 +122,10 @@ pnpm validate
 Prefer focused checks for the changed component. See [test scope and device safety](./docs/testing.md)
 for isolated native tests and explicitly opt-in performance/hardware acceptance.
 
+Everything a person can do with Kraki is listed in [`FEATURES.md`](./FEATURES.md): add or update its
+row when a change adds or changes something people see. Before big releases, run the full manual pass
+in [`QA-TEMPLATE.md`](./QA-TEMPLATE.md).
+
 ### Run the pieces individually
 
 ```bash

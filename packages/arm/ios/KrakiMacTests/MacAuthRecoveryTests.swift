@@ -166,14 +166,16 @@ final class MacAuthRecoveryTests: XCTestCase {
         AuthManager.debugCLICredentialLoader = { [url = relay.url] _ in (url, "tok-ok") }
         app = try makeApp()
         app.authManager?.debugSetStoredDeviceId(nil)
-        XCTAssertTrue(await app.attemptCLILogin())
+        let signedIn = await app.attemptCLILogin()
+        XCTAssertTrue(signedIn)
         try await waitUntil(10, "signed in") { app.connectionStatus == .connected }
         let attempts = relay.methods.count
 
         app.logout()
         XCTAssertTrue(app.signedOutByUser)
         XCTAssertEqual(app.connectionStatus, .awaitingLogin)
-        XCTAssertFalse(await app.attemptCLILogin(), "relaunch must not reuse the built-in login")
+        let reused = await app.attemptCLILogin()
+        XCTAssertFalse(reused, "relaunch must not reuse the built-in login")
         await app.recoverCLIAuthentication(reason: "test")
         try await Task.sleep(for: .seconds(2))   // watchdog ticks every 0.2 s
         XCTAssertEqual(app.connectionStatus, .awaitingLogin)
@@ -182,7 +184,8 @@ final class MacAuthRecoveryTests: XCTestCase {
 
         // Signing in again (Check Again / setup sign-in) ends it.
         app.signedOutByUser = false
-        XCTAssertTrue(await app.attemptCLILogin())
+        let again = await app.attemptCLILogin()
+        XCTAssertTrue(again)
         try await waitUntil(10, "signed in again") { app.connectionStatus == .connected }
         XCTAssertFalse(app.signedOutByUser)
     }
