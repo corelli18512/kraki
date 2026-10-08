@@ -7,7 +7,7 @@
 // The app owns the daemon (managed-by.json, by "kraki-windows"): it starts it
 // now and at every login (HKCU Run, through conhost --headless so no console
 // appears), and a separately installed CLI then defers to it.
-const { execFile, execFileSync, spawn } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 const { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -29,15 +29,18 @@ function binaryPath(resourcesPath) {
   return path.join(resourcesPath, 'kraki', exe);
 }
 
-/** One PATH value from the registry (REG_EXPAND_SZ expanded), or ''. */
-function registryPath(key) {
-  try {
-    const out = execFileSync('reg', ['query', key, '/v', 'Path'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
-    const m = /\s+Path\s+REG_(?:EXPAND_)?SZ\s+(.*)/i.exec(out);
-    return m ? m[1].trim().replace(/%([^%]+)%/g, (all, name) => process.env[name] ?? all) : '';
-  } catch {
-    return '';
-  }
+/** The PATH value in `reg query … /v Path` output (REG_EXPAND_SZ expanded), or ''. */
+function parseRegistryPath(out) {
+  const m = /\s+Path\s+REG_(?:EXPAND_)?SZ\s+(.*)/i.exec(String(out ?? ''));
+  return m ? m[1].trim().replace(/%([^%]+)%/g, (all, name) => process.env[name] ?? all) : '';
+}
+
+/** Join PATH lists, dropping blanks and repeats (case-insensitive, trailing \ ignored). */
+function mergePath(...lists) {
+  const seen = new Set();
+  return lists.join(';').split(';').map((p) => p.trim()).filter(Boolean)
+    .filter((p) => { const k = p.toLowerCase().replace(/\\+$/, ''); if (seen.has(k)) return false; seen.add(k); return true; })
+    .join(';');
 }
 
 /**
@@ -45,14 +48,30 @@ function registryPath(key) {
  * the system and user PATH in the registry gained since the app started
  * (an agent, Node or Git installed while Kraki is open). Windows' version of
  * Kraki for Mac reading the login shell's environment.
+ *
+ * Read asynchronously and cached: `reg query` used to run synchronously for
+ * every child process (each status poll), blocking the app's main process and
+ * with it the window, which then missed or delayed clicks.
  */
+const SYSTEM_ENV_KEY = 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment';
+const USER_ENV_KEY = 'HKCU\\Environment';
+const pathCache = { registry: '', at: 0, pending: null };
+const PATH_CACHE_MS = 15_000;
+
+function refreshRegistryPath() {
+  if (process.platform !== 'win32') return Promise.resolve();
+  if (!pathCache.pending) {
+    pathCache.pending = Promise.all([reg(['query', SYSTEM_ENV_KEY, '/v', 'Path']), reg(['query', USER_ENV_KEY, '/v', 'Path'])])
+      .then(([system, user]) => { pathCache.registry = mergePath(parseRegistryPath(system), parseRegistryPath(user)); pathCache.at = Date.now(); })
+      .finally(() => { pathCache.pending = null; });
+  }
+  return pathCache.pending;
+}
+
 function currentPath(own) {
   if (process.platform !== 'win32') return own;
-  const parts = [own,
-    registryPath('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment'),
-    registryPath('HKCU\\Environment')].join(';').split(';').map((p) => p.trim()).filter(Boolean);
-  const seen = new Set();
-  return parts.filter((p) => { const k = p.toLowerCase().replace(/\\+$/, ''); if (seen.has(k)) return false; seen.add(k); return true; }).join(';');
+  if (Date.now() - pathCache.at > PATH_CACHE_MS) void refreshRegistryPath();
+  return mergePath(own, pathCache.registry);
 }
 
 /** Environment for every tentacle child: never inherit a supervisor's marks. */
@@ -180,7 +199,8 @@ class BuiltInKraki {
     return runJson(this.bin, ['connect', '--json'], 30_000);
   }
 
-  checkAgents(onEvent) {
+  async checkAgents(onEvent) {
+    if (this.available()) await refreshRegistryPath();
     return new Promise((resolve) => {
       if (!this.available()) { resolve({ ok: false }); return; }
       streamNdjson(this.bin, ['agents', '--json'], onEvent, (code) => resolve({ ok: code === 0 }));
@@ -192,8 +212,12 @@ class BuiltInKraki {
    * kraki://auth/callback?… URL (or null when the user closed it).
    */
   setup({ deviceName, forceLogin, onEvent, openSignIn }) {
-    return new Promise((resolve) => {
-      this.cancelSetup();
+    // Cancel at once; the PATH refresh is async and must not let an old
+    // setup run on.
+    this.cancelSetup();
+    const attempt = this.setupAttempt;
+    return refreshRegistryPath().then(() => new Promise((resolve) => {
+      if (attempt !== this.setupAttempt) { resolve({ ok: false, code: -1, detail: 'cancelled' }); return; }
       const args = ['setup', '--json', '--oauth'];
       if (deviceName) args.push('--device-name', deviceName);
       if (forceLogin) args.push('--force-login');
@@ -211,10 +235,11 @@ class BuiltInKraki {
         resolve(done ? { ok: true, ...done } : { ok: false, code, detail: stderr.slice(-400) });
       });
       this.setupChild = child;
-    });
+    }));
   }
 
   cancelSetup() {
+    this.setupAttempt = (this.setupAttempt ?? 0) + 1;
     if (this.setupChild) { try { this.setupChild.kill(); } catch { /* gone */ } this.setupChild = null; }
   }
 
@@ -307,4 +332,4 @@ class BuiltInKraki {
   }
 }
 
-module.exports = { BuiltInKraki, OWNER, currentPath };
+module.exports = { BuiltInKraki, OWNER, currentPath, mergePath, parseRegistryPath };
