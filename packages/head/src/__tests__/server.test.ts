@@ -703,14 +703,17 @@ describe('HeadServer (thin relay)', () => {
       head = await createHead();
       const { ws: first, authOk } = await authConnect(head.port, 'Laptop', 'tentacle', { deviceId: 'dev_dup' });
       const deviceId = authOk.deviceId as string;
-      const closed = new Promise<void>((resolve) => first.on('close', () => resolve()));
+      const closed = new Promise<{ code: number; reason: string }>((resolve) =>
+        first.on('close', (code, reason) => resolve({ code, reason: reason.toString() })));
       const pulseHub = (head.server as unknown as {
         pulseHub: { onDeviceDisconnected: (id: string) => void };
       }).pulseHub;
       const disconnected = vi.spyOn(pulseHub, 'onDeviceDisconnected');
 
       await authConnect(head.port, 'Laptop', 'tentacle', { deviceId });
-      await closed; // the first socket must be terminated by the server
+      // The first socket is closed by the server with an explicit reason, so
+      // the evicted client can tell "replaced" from a network drop.
+      expect(await closed).toEqual({ code: 4009, reason: 'replaced' });
 
       expect(disconnected).toHaveBeenCalledWith(deviceId);
       const clients = (head.server as unknown as { clients: Map<unknown, unknown> }).clients;

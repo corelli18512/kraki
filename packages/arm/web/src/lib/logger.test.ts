@@ -34,3 +34,15 @@ describe('logger', () => {
     })).toBe(false);
   });
 });
+
+describe('formatLogArg', () => {
+  it('keeps an Error’s name, message and top frames (JSON.stringify gives {})', async () => {
+    const { formatLogArg } = await import('./logger');
+    const text = formatLogArg(new TypeError('boom'));
+    expect(text).toMatch(/^TypeError: boom/);
+    expect(JSON.stringify(new TypeError('boom'))).toBe('{}');
+    expect(formatLogArg({ a: 1 })).toBe('{"a":1}');
+    const cyclic: Record<string, unknown> = {}; cyclic.self = cyclic;
+    expect(typeof formatLogArg(cyclic)).toBe('string');
+  });
+});

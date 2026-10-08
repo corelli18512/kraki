@@ -7,7 +7,7 @@ import type {
   DeviceSummary, DeviceRole, DeviceKind,
   VoiceResource, VoiceCapability, BlobPayload,
 } from '@kraki/protocol';
-import { HEAD_PULSE_TARGET, ACCOUNT_DELETED_CLOSE_CODE } from '@kraki/protocol';
+import { HEAD_PULSE_TARGET, ACCOUNT_DELETED_CLOSE_CODE, DEVICE_REPLACED_CLOSE_CODE } from '@kraki/protocol';
 import { Storage } from './storage.js';
 import { parseVoiceWordOps, type VoiceWord } from './voice-vocabulary.js';
 import { PulseHub, PULSE_ACK_EVERY_BYTES } from './pulse-hub.js';
@@ -1251,7 +1251,13 @@ export class HeadServer {
     // connection-scoped state cannot leak across the replacement boundary.
     this.pulseHub.onDeviceDisconnected(deviceId);
     this.clients.delete(previous);
-    try { previous.terminate(); } catch { /* best effort */ }
+    // Say why (a bare terminate() reads as a network drop, and a client that
+    // reconnects on it evicts this new connection in turn). Force the TCP
+    // teardown shortly after in case the old peer never completes the close.
+    try { previous.close(DEVICE_REPLACED_CLOSE_CODE, 'replaced'); } catch { /* best effort */ }
+    const force = setTimeout(() => { try { previous.terminate(); } catch { /* already gone */ } }, 2_000);
+    force.unref?.();
+    previous.once('close', () => clearTimeout(force));
   }
 
   // --- Pairing tokens (in-memory) ---
