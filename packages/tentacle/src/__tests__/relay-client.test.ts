@@ -2972,6 +2972,24 @@ describe('RelayClient pending-question digest', () => {
     expect(decodePulseSends(ws.sent).some((message) => message.type === 'compacting')).toBe(false);
   });
 
+  it('a session only waiting for an answer is not running (an update may restart it)', () => {
+    const { client, askQ, askP } = buildClient();
+    expect(client.runningSessionCount()).toBe(1);
+    askQ('q1');
+    expect(client.runningSessionCount()).toBe(0);
+    askP('p1');
+    expect(client.runningSessionCount()).toBe(1);
+  });
+
+  it('answering the question makes the session running again', async () => {
+    const { client, askQ, answerQ } = buildClient();
+    askQ('q1');
+    expect(client.runningSessionCount()).toBe(0);
+    answerQ('q1');
+    await vi.runAllTimersAsync();
+    expect(client.runningSessionCount()).toBe(1);
+  });
+
   it('overrides the digest preview with the open question while it is pending', () => {
     const { askQ, preview } = buildClient();
     expect(preview()?.type).not.toBe('question');

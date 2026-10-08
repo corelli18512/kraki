@@ -4083,8 +4083,14 @@ export class RelayClient {
   }
 
   /** Sessions with a turn running right now (asked before an update). */
+  /** Sessions an update would interrupt. A turn that is only waiting for the
+   *  person's answer to a question doesn't count: the question is persisted
+   *  (pending-human-action.json) and answering it after a restart continues
+   *  the session, as it does for a session whose agent already stopped. A
+   *  waiting permission does count — it is not persisted. */
   runningSessionCount(): number {
-    return this.sessionManager.getSessionList({ all: true }).filter((s) => s.state === 'active').length;
+    return this.sessionManager.getSessionList({ all: true }).filter((s) => s.state === 'active'
+      && !(this.openQuestions.get(s.id)?.size && !this.openPermissions.get(s.id)?.size)).length;
   }
 
   private updateInfo: DeviceUpdateInfo | null = null;
