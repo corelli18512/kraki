@@ -111,6 +111,7 @@ final class MacAuthRecoveryTests: XCTestCase {
 
     override func tearDown() async throws {
         AuthManager.debugCLICredentialLoader = nil
+        AuthManager.debugCLISignInDate = nil
         app?.disconnect()
         app = nil
         relay?.stop()
@@ -182,8 +183,13 @@ final class MacAuthRecoveryTests: XCTestCase {
         XCTAssertNil(app.user)
         XCTAssertEqual(relay.methods.count, attempts, "nothing signed in behind the person's back")
 
-        // Signing in again (Check Again / setup sign-in) ends it.
-        app.signedOutByUser = false
+        // A sign-in the local Kraki saved before the Sign Out changes nothing.
+        AuthManager.debugCLISignInDate = { Date().addingTimeInterval(-3600) }
+        XCTAssertTrue(app.staysSignedOut)
+
+        // `kraki connect` in Terminal afterwards is signing in again: returning
+        // to Kraki (an automatic retry) signs in by itself.
+        AuthManager.debugCLISignInDate = { Date().addingTimeInterval(60) }
         let again = await app.attemptCLILogin()
         XCTAssertTrue(again)
         try await waitUntil(10, "signed in again") { app.connectionStatus == .connected }

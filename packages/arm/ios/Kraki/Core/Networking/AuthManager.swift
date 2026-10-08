@@ -143,6 +143,23 @@ final class AuthManager {
     /// Mirrors the kraki daemon: only Kraki's own saved token at
     /// ~/.kraki/github-token (the GitHub CLI token is never used).
     /// `ghDeadline` is kept for call-site compatibility and is unused.
+    /// When the local Kraki last saved a GitHub sign-in (`kraki connect`,
+    /// setup), or nil. A sign-in after Sign Out ends the Sign Out.
+    static func cliSignInDate() -> Date? {
+        #if DEBUG
+        if let override = debugCLISignInDate { return override() }
+        let krakiHome = ProcessInfo.processInfo.environment["KRAKI_CLI_CREDENTIAL_DIR"]
+            ?? (NSHomeDirectory() + "/.kraki")
+        #else
+        let krakiHome = NSHomeDirectory() + "/.kraki"
+        #endif
+        let attributes = try? FileManager.default.attributesOfItem(atPath: krakiHome + "/github-token")
+        return attributes?[.modificationDate] as? Date
+    }
+    #if DEBUG
+    static var debugCLISignInDate: (() -> Date?)?
+    #endif
+
     static func loadCLICredentials(ghDeadline: TimeInterval = launchGhDeadline) async -> (relay: String, token: String)? {
         #if DEBUG
         if let loader = debugCLICredentialLoader { return await loader(ghDeadline) }

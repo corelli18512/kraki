@@ -321,8 +321,6 @@ final class MacPresenceController {
         }
     }
 
-    /// `applicationShouldTerminate`: route a person's quit (Dock, AppleScript)
-    /// through the same confirmation; let everything else through.
     /// Set when Sparkle is about to replace the app (MacUpdateController).
     private(set) var isInstallingUpdate = false
 
@@ -338,6 +336,8 @@ final class MacPresenceController {
         !quittingOffline && !installingUpdate && managesPresence && source == .user
     }
 
+    /// `applicationShouldTerminate`: route a person's quit (Dock, AppleScript)
+    /// through the same confirmation; let everything else through.
     func shouldTerminate(_ app: NSApplication) -> NSApplication.TerminateReply {
         guard Self.asksBeforeQuitting(
             quittingOffline: isQuittingOffline,

@@ -242,10 +242,9 @@ export async function runSetupJsonWith(args: string[], deps: SetupJsonDeps): Pro
       } catch (err) {
         throw new SetupJsonError('relay_unreachable', `Cannot reach the Kraki relay (${(err as Error).message}).`);
       }
-      if (methods?.length && !methods.includes('github_token')) {
-        if (!methods.includes('open')) {
-          throw new SetupJsonError('relay_auth_unsupported', "This relay doesn't accept GitHub sign-in. Pair this computer with a code from the relay's owner instead.");
-        }
+      // Only a relay that says so: one still loading its account config
+      // reports just ['challenge'] and keeps the GitHub sign-in.
+      if (methods?.includes('open') && !methods.includes('github_token')) {
         deps.emit({ event: 'relay', relay: explicitRelay, region: null, fallback: false });
         const existing = loadConfig();
         const deviceName = getArg(args, '--device-name') ?? existing?.device.name ?? hostname().replace(/\.local$/, '');

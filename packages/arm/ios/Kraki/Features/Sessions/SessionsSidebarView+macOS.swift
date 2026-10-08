@@ -399,12 +399,12 @@ struct SessionsSidebarView: View {
                 }
             }
             Button("Rename…") {
-                // Rename lives in Session Info, which the open chat presents.
+                // Rename lives in Session Info, which the open chat presents
+                // (now, or as soon as that chat appears).
+                MacSessionInfoRequest.pending = session.id
                 selectSession(session.id)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                    NotificationCenter.default.post(name: .macOpenSessionInfo, object: nil,
-                                                    userInfo: ["sessionId": session.id])
-                }
+                NotificationCenter.default.post(name: .macOpenSessionInfo, object: nil,
+                                                userInfo: ["sessionId": session.id])
             }
             Button("Fork") {
                 appState.commandSender?.forkSession(sessionId: session.id)

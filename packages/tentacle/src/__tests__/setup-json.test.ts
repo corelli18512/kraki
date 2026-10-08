@@ -146,6 +146,15 @@ describe('kraki setup --json', () => {
     expect(JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'))).toMatchObject({ authMethod: 'github_token' });
   });
 
+  it('a relay still loading its account config (only "challenge") keeps the GitHub sign-in', async () => {
+    process.env.KRAKI_RELAY_URL = 'wss://relay.example';
+    writeFileSync(join(home, 'github-token'), 'gho_saved\n');
+    const { deps } = makeDeps({ 'https://api.github.com/user': () => json({ login: 'octocat' }) },
+      { queryRelayInfo: async () => ({ methods: ['challenge'] }) });
+    expect(await runSetupJsonWith([], deps)).toBe(0);
+    expect(JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'))).toMatchObject({ authMethod: 'github_token' });
+  });
+
   it('fails with relay_unreachable before writing config', async () => {
     writeFileSync(join(home, 'github-token'), 'gho_saved\n');
     const { deps, events } = makeDeps({

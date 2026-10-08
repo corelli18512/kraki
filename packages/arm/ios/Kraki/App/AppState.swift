@@ -753,9 +753,28 @@ final class AppState {
     /// Windows), so until the person signs in again the app must not quietly
     /// reuse it: not at launch, not from the sign-in watchdog.
     static let signedOutByUserKey = "mac.signedOutByUser"
+    static let signedOutAtKey = "mac.signedOutAt"
     var signedOutByUser: Bool {
         get { signedOutDefaults.bool(forKey: Self.signedOutByUserKey) }
-        set { signedOutDefaults.set(newValue, forKey: Self.signedOutByUserKey) }
+        set {
+            signedOutDefaults.set(newValue, forKey: Self.signedOutByUserKey)
+            if newValue { signedOutDefaults.set(Date().timeIntervalSince1970, forKey: Self.signedOutAtKey) }
+            else { signedOutDefaults.removeObject(forKey: Self.signedOutAtKey) }
+        }
+    }
+
+    /// Signed out, and no new sign-in since. A GitHub sign-in saved by the
+    /// local Kraki afterwards (`kraki connect` in Terminal, or setup) is the
+    /// person signing in again: it ends the Sign Out, so returning from
+    /// Terminal still signs in by itself.
+    var staysSignedOut: Bool {
+        guard signedOutByUser else { return false }
+        let at = signedOutDefaults.double(forKey: Self.signedOutAtKey)
+        if at > 0, let signIn = AuthManager.cliSignInDate(), signIn.timeIntervalSince1970 > at {
+            signedOutByUser = false
+            return false
+        }
+        return true
     }
     /// Test graphs use their own store, so one test's Sign Out never leaks.
     @ObservationIgnored var signedOutDefaults: UserDefaults = .standard
@@ -767,7 +786,7 @@ final class AppState {
     /// installed/logged in (caller falls back to the login screen).
     @discardableResult
     func attemptCLILogin(ghDeadline: TimeInterval = AuthManager.launchGhDeadline) async -> Bool {
-        if signedOutByUser {
+        if staysSignedOut {
             KLog.diag("Mac CLI login skipped: signed out on this Mac")
             return false
         }
@@ -843,7 +862,7 @@ final class AppState {
     /// Find the local CLI login with a realistic `gh` deadline and sign in
     /// with it. Falls back to the relay login flow when there is none.
     func recoverCLIAuthentication(reason: String) async {
-        guard !cliRecoveryInFlight, connectionStatus != .connected, !signedOutByUser else { return }
+        guard !cliRecoveryInFlight, connectionStatus != .connected, !staysSignedOut else { return }
         cliRecoveryInFlight = true
         defer { cliRecoveryInFlight = false }
         KLog.diag("Auth: recovering sign-in (\(reason))")

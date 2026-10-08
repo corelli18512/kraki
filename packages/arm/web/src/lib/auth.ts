@@ -8,7 +8,6 @@ import { setTheme } from '../hooks/useTheme';
 
 const logger = createLogger('auth');
 
-/** Send the initial auth message. Returns true if a pairing token was consumed. */
 /** How this browser appears in Devices: "Chrome on Mac", "Safari on iPhone".
  *  Every browser used to be "Web Browser", so several were indistinguishable. */
 export function browserDeviceName(ua: string): string {
@@ -25,6 +24,7 @@ export function browserDeviceName(ua: string): string {
   return os ? `${browser} on ${os}` : `Web ${browser}`;
 }
 
+/** Send the initial auth message. Returns true if a pairing token was consumed. */
 export async function sendAuth(
   send: (msg: Record<string, unknown>) => void,
   keyStore: AppKeyStore,

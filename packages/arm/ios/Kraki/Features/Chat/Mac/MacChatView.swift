@@ -348,7 +348,11 @@ struct MacChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: .macOpenSessionInfo)) { note in
             // From the menu (current chat) or a session row's Rename… (that one).
             if let target = note.userInfo?["sessionId"] as? String, target != sessionId { return }
+            _ = MacSessionInfoRequest.take(sessionId)
             showInfo = true
+        }
+        .onChange(of: sessionId, initial: true) { _, id in
+            if MacSessionInfoRequest.take(id) { showInfo = true }
         }
         #if DEBUG
         .onReceive(NotificationCenter.default.publisher(for: .macNativeAutomationAction)) { note in
