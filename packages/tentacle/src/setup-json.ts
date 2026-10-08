@@ -52,7 +52,7 @@ export type SetupJsonEvent =
   | { event: 'oauth_url'; url: string; callbackScheme: string }
   | { event: 'authenticated'; username: string; source: TokenSource }
   | { event: 'relay'; relay: string; region: string | null; fallback: boolean }
-  | { event: 'done'; configPath: string; relay: string; username: string; deviceName: string }
+  | { event: 'done'; configPath: string; relay: string; username: string | null; deviceName: string }
   | { event: 'error'; code: string; message: string };
 
 type TokenSource = 'saved' | 'device_flow' | 'oauth';
@@ -67,7 +67,7 @@ export interface SetupJsonDeps {
   /** @deprecated Ignored: Kraki no longer reuses the GitHub CLI token. */
   ghAuthToken?: () => string | null;
   sleep: (ms: number) => Promise<void>;
-  queryRelayInfo: (url: string) => Promise<{ githubClientId?: string }>;
+  queryRelayInfo: (url: string) => Promise<{ githubClientId?: string; methods?: string[] }>;
   resolveRelay: (token: string) => Promise<{ ok: boolean; relayUrl: string; region?: string }>;
   apiBase: string;
   officialRelay: string;
@@ -232,6 +232,34 @@ export async function runSetupJsonWith(args: string[], deps: SetupJsonDeps): Pro
   deps.emit({ event: 'start', version: getVersion() });
   try {
     const explicitRelay = getArg(args, '--relay') ?? process.env.KRAKI_RELAY_URL;
+    if (explicitRelay) {
+      // A self-hosted relay without accounts (`--auth open`) needs no GitHub
+      // sign-in; signing in anyway left a config the relay refused, and the
+      // app then said the sign-in had expired.
+      let methods: string[] | undefined;
+      try {
+        methods = (await deps.queryRelayInfo(explicitRelay)).methods;
+      } catch (err) {
+        throw new SetupJsonError('relay_unreachable', `Cannot reach the Kraki relay (${(err as Error).message}).`);
+      }
+      if (methods?.length && !methods.includes('github_token')) {
+        if (!methods.includes('open')) {
+          throw new SetupJsonError('relay_auth_unsupported', "This relay doesn't accept GitHub sign-in. Pair this computer with a code from the relay's owner instead.");
+        }
+        deps.emit({ event: 'relay', relay: explicitRelay, region: null, fallback: false });
+        const existing = loadConfig();
+        const deviceName = getArg(args, '--device-name') ?? existing?.device.name ?? hostname().replace(/\.local$/, '');
+        saveConfig({
+          ...(existing ?? {}),
+          relay: explicitRelay,
+          authMethod: 'open',
+          device: { name: deviceName, id: getOrCreateDeviceId() },
+          logging: existing?.logging ?? { verbosity: DEFAULT_LOG_VERBOSITY },
+        });
+        deps.emit({ event: 'done', configPath: getConfigPath(), relay: explicitRelay, username: null, deviceName });
+        return 0;
+      }
+    }
     // Browser sign-in goes through the official web + account API; a
     // self-hosted relay keeps the device flow it has always used.
     const useBrowser = args.includes('--oauth') && !explicitRelay;
