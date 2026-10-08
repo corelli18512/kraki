@@ -8,7 +8,7 @@
 // now and at every login (HKCU Run, through conhost --headless so no console
 // appears), and a separately installed CLI then defers to it.
 const { execFile, spawn } = require('node:child_process');
-const { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
+const { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -122,6 +122,27 @@ function reg(args) {
   return new Promise((resolve) => {
     execFile('reg', args, { windowsHide: true }, (err, stdout) => resolve(err ? null : String(stdout)));
   });
+}
+
+/** When this computer started (ms since epoch). */
+function bootTime(now = Date.now(), uptimeSeconds = os.uptime()) {
+  return now - uptimeSeconds * 1000;
+}
+
+/**
+ * The daemon's PID as recorded in daemon.pid / status.json, or null when the
+ * record predates this boot: Windows reuses PIDs, so after a restart the old
+ * number may belong to another process (seen: msedgewebview2), and the app
+ * then thought Kraki was running and never started it at login.
+ */
+function recordedPid(home, boot = bootTime()) {
+  const fresh = (file) => { try { return statSync(file).mtimeMs >= boot - 5000; } catch { return false; } };
+  const pidFile = path.join(home, 'daemon.pid');
+  const statusFile = path.join(home, 'status.json');
+  const fromPid = fresh(pidFile) ? Number(readFileSafe(pidFile)) : 0;
+  if (fromPid) return fromPid;
+  const status = fresh(statusFile) ? readJson(statusFile) : null;
+  return Number(status?.pid) || null;
 }
 
 function readFileSafe(file) {
@@ -300,10 +321,10 @@ class BuiltInKraki {
   quickState() {
     const home = krakiHome();
     const marker = readJson(path.join(home, 'managed-by.json'));
-    const status = readJson(path.join(home, 'status.json'));
-    const pid = Number(readFileSafe(path.join(home, 'daemon.pid'))) || status?.pid || null;
+    const pid = recordedPid(home);
     let alive = false;
     if (pid) { try { process.kill(pid, 0); alive = true; } catch (e) { alive = e.code === 'EPERM'; } }
+    const status = alive ? readJson(path.join(home, 'status.json')) : null;
     const owned = marker?.by === OWNER;
     return {
       available: this.available(),
@@ -317,7 +338,9 @@ class BuiltInKraki {
 
   async disable({ keepOwnership = false } = {}) {
     if (process.platform === 'win32') await this.setLoginItem(false);
-    const status = readJson(path.join(krakiHome(), 'status.json'));
+    // Only PIDs recorded since this boot: an older one may be another program now.
+    const home = krakiHome();
+    const status = recordedPid(home) ? readJson(path.join(home, 'status.json')) : null;
     const pids = [status?.supervisorPid, status?.pid].filter((p) => Number.isInteger(p) && p > 0);
     for (const pid of pids) {
       await new Promise((r) => execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => r()));
@@ -332,4 +355,4 @@ class BuiltInKraki {
   }
 }
 
-module.exports = { BuiltInKraki, OWNER, currentPath, mergePath, parseRegistryPath };
+module.exports = { BuiltInKraki, OWNER, currentPath, mergePath, parseRegistryPath, recordedPid };
