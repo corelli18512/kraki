@@ -78,6 +78,26 @@ struct DevicesPane: View {
 }
 
 private struct DeviceRow: View {
+    /// "today", "yesterday", "Sep 28" (relay dates: ISO 8601 or SQLite UTC).
+    static func lastOnline(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var date = iso.date(from: raw)
+        if date == nil { iso.formatOptions = [.withInternetDateTime]; date = iso.date(from: raw) }
+        if date == nil {
+            let sql = DateFormatter()
+            sql.locale = Locale(identifier: "en_US_POSIX")
+            sql.timeZone = TimeZone(identifier: "UTC")
+            sql.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            date = sql.date(from: raw)
+        }
+        guard let date else { return nil }
+        if Calendar.current.isDateInToday(date) { return "today" }
+        if Calendar.current.isDateInYesterday(date) { return "yesterday" }
+        return date.formatted(.dateTime.month(.abbreviated).day())
+    }
+
     let device: DeviceSummary
     var version: String?
     var update: AvailableUpdate?
@@ -103,7 +123,7 @@ private struct DeviceRow: View {
                     if let version, device.role == .tentacle {
                         Text(version).font(.system(size: 10.5))
                     }
-                    if !device.online, let seen = DeviceDates.relative(device.lastSeen) {
+                    if !device.online, let seen = Self.lastOnline(device.lastSeen) {
                         Text("Last online \(seen)").font(.system(size: 10.5))
                     }
                 }

@@ -563,6 +563,8 @@ struct MacApp: App {
                 .environment(appState)
                 .environment(tentacleCLI)
                 .frame(width: 540, height: 420)
+                // Follows General › Appearance like the main window.
+                .preferredColorScheme(colorScheme.scheme)
         }
         .restorationBehavior(.disabled)
 
@@ -570,6 +572,7 @@ struct MacApp: App {
             LocalAgentsWindow()
                 .environment(appState)
                 .environment(tentacleCLI)
+                .preferredColorScheme(colorScheme.scheme)
         }
         .windowResizability(.contentSize)
         .defaultPosition(.center)

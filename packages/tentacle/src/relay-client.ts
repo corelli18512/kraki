@@ -2050,6 +2050,9 @@ export class RelayClient {
       // 3. Forked session is idle until the user sends a message
       this.sessionManager.markIdle(newId);
       this.send({ type: 'idle', sessionId: newId, payload: {} });
+      // Every app learns the fork's name and preview now (others only got
+      // session_created, and showed an untitled "New Session").
+      this.broadcastSessionList();
 
     } catch (err) {
       for (const [sessionId, pendingId] of this.pendingRequestIds) {

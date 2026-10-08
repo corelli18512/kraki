@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { sessionDisplayTitle } from '../../lib/session-status';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import type { DeviceSummary, AgentCapabilities } from '@kraki/protocol';
@@ -172,7 +173,7 @@ export function DevicePanel({
                       : 'bg-surface-secondary text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
                   }`}
                 >
-                  <span className="truncate">{s.title ?? s.autoTitle ?? `${s.agent}${s.model ? ` · ${s.model}` : ''}`}</span>
+                  <span className="truncate">{sessionDisplayTitle(s)}</span>
                 </button>
               ))}
             </div>

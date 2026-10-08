@@ -25,6 +25,7 @@ describe('Sidebar', () => {
     render(<MemoryRouter><Sidebar /></MemoryRouter>);
     // "MacBook Pro" appears in both device list and session card
     expect(screen.getAllByText('MacBook Pro').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Copilot').length).toBeGreaterThanOrEqual(1);
+    // Untitled: "New Session", like iOS and Mac (it used to be the agent name).
+    expect(screen.getAllByText('New Session').length).toBeGreaterThanOrEqual(1);
   });
 });

@@ -606,7 +606,9 @@ export class SessionManager {
       agent: sourceMeta.agent,
       model: sourceMeta.model,
       reasoningEffort: sourceMeta.reasoningEffort,
-      title: sourceMeta.title ? `Fork of ${sourceMeta.title}` : undefined,
+      // A fork is named as one (the agent's auto title counts too), so it is
+      // never an identical twin of its source in the list.
+      title: (sourceMeta.title || sourceMeta.autoTitle) ? `Fork of ${sourceMeta.title || sourceMeta.autoTitle}` : undefined,
       autoTitle: sourceMeta.autoTitle,
       state: 'active',
       // A fork keeps the source's permission mode: forking a `safe` session

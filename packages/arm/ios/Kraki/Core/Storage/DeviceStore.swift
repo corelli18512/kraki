@@ -232,6 +232,13 @@ final class DeviceStore {
         return ordered
     }
 
+    /// The model's name as its agent reports it (the same as the model
+    /// pickers show), else its id. One name for a model everywhere.
+    func modelDisplayName(_ model: String?, deviceId: String, agent: String?) -> String? {
+        guard let model, !model.isEmpty else { return model }
+        return modelDetails(for: deviceId, agentId: agent).first { $0.id == model }?.name ?? model
+    }
+
     /// Encryption key for a device (falls back to publicKey if encryptionKey absent).
     func encryptionKeyFor(_ deviceId: String) -> String? {
         guard let device = devices[deviceId] else { return nil }

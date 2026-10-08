@@ -345,7 +345,9 @@ struct MacChatView: View {
         .onChange(of: providerWaitingForLatest, initial: true) { _, waiting in
             if !waiting { hasMaterializedLatest = true }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .macOpenSessionInfo)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .macOpenSessionInfo)) { note in
+            // From the menu (current chat) or a session row's Rename… (that one).
+            if let target = note.userInfo?["sessionId"] as? String, target != sessionId { return }
             showInfo = true
         }
         #if DEBUG
@@ -700,6 +702,10 @@ private struct MacSessionInfoSheet: View {
     private var modelDetails: [ModelDetail] {
         appState.deviceStore.modelDetails(for: session.deviceId, agentId: session.agent)
     }
+    /// The model's name as the pickers and the session list show it.
+    private func modelName(_ id: String?) -> String? {
+        appState.deviceStore.modelDisplayName(id, deviceId: session.deviceId, agent: session.agent)
+    }
     private var supportedEfforts: [ReasoningEffort] {
         guard let detail = modelDetails.first(where: { $0.id == selectedModel }),
               detail.supportsReasoningEffort else { return [] }
@@ -788,13 +794,13 @@ private struct MacSessionInfoSheet: View {
             infoRow("Agent", session.agent)
             infoRow(label: "Model") {
                 if availableModels.isEmpty {
-                    Text(liveSession.model ?? "—")
+                    Text(modelName(liveSession.model) ?? "—")
                 } else {
                     Picker("", selection: Binding(
                         get: { selectedModel },
                         set: { applyModel($0) }
                     )) {
-                        ForEach(availableModels, id: \.self) { Text($0).tag($0) }
+                        ForEach(availableModels, id: \.self) { Text(modelName($0) ?? $0).tag($0) }
                     }
                     .labelsHidden()
                     .frame(maxWidth: 250, alignment: .trailing)

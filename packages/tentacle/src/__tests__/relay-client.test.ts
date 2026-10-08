@@ -721,6 +721,15 @@ describe('RelayClient fork session confirmation', () => {
     });
   });
 
+  it('sends the session list after a fork so every app gets its name', async () => {
+    connectForkClient(false);
+    sockets[0].sent.length = 0;
+    sendForkRequest('req_fork_list');
+    await vi.runAllTimersAsync();
+    const types = decodePulseSends(sockets[0].sent).map((msg) => msg.type);
+    expect(types.indexOf('session_list')).toBeGreaterThan(types.indexOf('session_created'));
+  });
+
   it('does not duplicate session_created when the adapter emits its own callback', async () => {
     connectForkClient(true);
     sendForkRequest('req_fork_copilot');
