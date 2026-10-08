@@ -6,6 +6,28 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.77</title>
+            <pubDate>Thu, 08 Oct 2026 12:55:43 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.77</sparkle:fullReleaseNotesLink>
+            <sparkle:version>79</sparkle:version>
+            <sparkle:shortVersionString>0.2.77</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's new in Kraki 0.2.77
+
+- **Custom Words sync right away.** Words you add or remove on your phone or in the browser show up on this Mac immediately, and removed words no longer come back.
+- **Sign Out works.** Kraki stays signed out until you sign in again; this Mac keeps serving its agents meanwhile.
+- **After a restart** the menu bar shows whether this Mac is online, even before you open the window.
+- **Updating** no longer asks whether to take this Mac offline.
+- **Devices:** remove an old device in Settings › Devices, and see when an offline one was last online.
+- **Offline computers:** the message box stays and your message is delivered when the computer is back.
+- **Steps** show each permission once, with what happened: Approved, or Denied with your reason.
+- **Sessions:** Rename… and Archive in the session menu; forks are named "Fork of …"; one name for each model everywhere.
+- Settings follow Light/Dark, and say plainly when notifications are off or voice isn't available.
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.77/Kraki.app.zip" length="92807272" type="application/octet-stream" sparkle:edSignature="rvwSCxvNUlrGJHv5Emp0QJqfAJ2pCKYkMj6JJraFL+6s41MDKvdFEu9HACQZZpwMkkMjwO2SbwrYqyRKh4WSCQ=="/>
+        </item>
+        <item>
             <title>0.2.76</title>
             <pubDate>Thu, 08 Oct 2026 11:25:11 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -51,27 +73,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.75/Kraki.app.zip" length="92759671" type="application/octet-stream" sparkle:edSignature="flVaSx1k2APINO07eqo4rudIIopU7UD7iDByI9KK8Zg7TnrBx8XKljlOpuJa9h3Iy6DS+VW1C/2BW8jiW/BUCQ=="/>
         </item>
-        <item>
-            <title>0.2.74</title>
-            <pubDate>Wed, 07 Oct 2026 14:05:13 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.74</sparkle:fullReleaseNotesLink>
-            <sparkle:version>76</sparkle:version>
-            <sparkle:shortVersionString>0.2.74</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* feat: in-app account deletion (App Store 5.1.1(v)) by @corelli18512 in https://github.com/corelli18512/kraki/pull/421
-* chore: remove dead code; keep test-only Mac code out of Release by @corelli18512 in https://github.com/corelli18512/kraki/pull/422
-* Fix Release builds (Mac/iOS): NativeTestRuntime used outside #if DEBUG by @corelli18512 in https://github.com/corelli18512/kraki/pull/434
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/v0.38.1...mac-v0.2.74
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.74/Kraki.app.zip" length="92736414" type="application/octet-stream" sparkle:edSignature="1XucUC27jUS5Ttse7oJmwa5xT0onu8HmaS82P985eb8rhfMJKdfnnCtnKgprTA7i+Y1LRRUwMRMsNSC0q2bSCQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: xzYJnBTQFePAUOojVbmnVopd1sq6CcaDZDr3GjudfspNhnLiTPg9UfBlL14hbagAVCR+tEnySY0r2rXkWQJnDQ==
-length: 6080
+edSignature: +oNrE/dZEvhrY4nkFOQKuNhhs5CyE9i2bb0lBTSbL/IUss5xzMUTSGAQFWatDIxvuUc0x/hUQ+6PAtR9EmKBCA==
+length: 6587
 -->
