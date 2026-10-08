@@ -336,8 +336,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac
         PRODUCT_NAME: Kraki
-        MARKETING_VERSION: "0.2.77"
-        CURRENT_PROJECT_VERSION: 79
+        MARKETING_VERSION: "0.2.78"
+        CURRENT_PROJECT_VERSION: 80
         GENERATE_INFOPLIST_FILE: false
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
