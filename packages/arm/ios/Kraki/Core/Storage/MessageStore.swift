@@ -853,7 +853,11 @@ final class MessageStore {
         runtimeStatusBySession[sessionId] ?? .idle
     }
 
+    // Writes below are skipped when they would not change anything: under
+    // @Observable even a no-op write notifies every reader, and session_list
+    // calls these for every Session on each reconnect.
     func setCompacting(_ sessionId: String, reason: CompactionReason?) {
+        guard runtimeStatusBySession[sessionId] != .compacting(reason: reason) else { return }
         runtimeStatusBySession[sessionId] = .compacting(reason: reason)
     }
 
@@ -863,6 +867,7 @@ final class MessageStore {
     }
 
     func clearRuntimeStatus(_ sessionId: String) {
+        guard runtimeStatusBySession[sessionId] != nil else { return }
         runtimeStatusBySession.removeValue(forKey: sessionId)
     }
 
@@ -923,8 +928,8 @@ final class MessageStore {
     /// Permanently retire transient state for the concluded turn. Late WS
     /// coalescing or request_card snapshots are ignored until beginCardTurn.
     func endCardTurn(_ sessionId: String) {
-        closedCardTurns.insert(sessionId)
-        cards.removeValue(forKey: sessionId)
+        if !closedCardTurns.contains(sessionId) { closedCardTurns.insert(sessionId) }
+        if cards[sessionId] != nil { cards.removeValue(forKey: sessionId) }
     }
 
     /// Restore the gate from persisted conversation truth when opening a DB
@@ -1077,6 +1082,7 @@ final class MessageStore {
 
     /// Land-and-clear: the concluding bubble landed on the spine, drop the card.
     func clearCard(_ sessionId: String) {
+        guard cards[sessionId] != nil else { return }
         cards.removeValue(forKey: sessionId)
     }
 

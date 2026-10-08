@@ -87,6 +87,14 @@ final class MessageDatabase {
 
     private let dbPool: DatabasePool
 
+    /// `MAX(seq)` per session. Every write goes through this type, so the
+    /// memo stays exact; it is read on the main thread on every streaming
+    /// delta (persistedHead) and for every session in each session_list.
+    private let lastSeqLock = NSLock()
+    private var lastSeqMemo: [String: Int] = [:]
+    /// Bumped by every write: a read that raced a write must not fill the memo.
+    private var writeGeneration = 0
+
     // MARK: - Init
 
     /// Opens (or creates) the database at the standard application
@@ -260,6 +268,12 @@ final class MessageDatabase {
                 )
             }
         }
+        let inserted = messages.lazy.map(\.seq).max() ?? 0
+        lastSeqLock.lock()
+        writeGeneration += 1
+        // Known head: advance it. Unknown: leave it to the next read.
+        if let known = lastSeqMemo[sessionId], inserted > known { lastSeqMemo[sessionId] = inserted }
+        lastSeqLock.unlock()
     }
 
     /// Delete every message for a session. Called on session
@@ -272,6 +286,14 @@ final class MessageDatabase {
                 arguments: [sessionId]
             )
         }
+        forgetLastSeq(sessionId)
+    }
+
+    private func forgetLastSeq(_ sessionId: String?) {
+        lastSeqLock.lock()
+        writeGeneration += 1
+        if let sessionId { lastSeqMemo.removeValue(forKey: sessionId) } else { lastSeqMemo.removeAll() }
+        lastSeqLock.unlock()
     }
 
     /// Drop every cached message above `seq` for a session. Used by
@@ -286,6 +308,7 @@ final class MessageDatabase {
                 arguments: [sessionId, seq]
             )
         }
+        forgetLastSeq(sessionId)
     }
 
     /// Wipe everything. Logout / factory reset only.
@@ -293,6 +316,7 @@ final class MessageDatabase {
         try dbPool.write { db in
             try db.execute(sql: "DELETE FROM messages")
         }
+        forgetLastSeq(nil)
     }
 
     // MARK: - Read
@@ -403,14 +427,23 @@ final class MessageDatabase {
 
     /// Largest seq for a session, or 0 if nothing is cached.
     func lastSeq(_ sessionId: String) -> Int {
+        lastSeqLock.lock()
+        let memo = lastSeqMemo[sessionId]
+        let generation = writeGeneration
+        lastSeqLock.unlock()
+        if let memo { return memo }
         do {
-            return try dbPool.read { db in
+            let value = try dbPool.read { db in
                 try Int.fetchOne(
                     db,
                     sql: "SELECT MAX(seq) FROM messages WHERE session_id = ?",
                     arguments: [sessionId]
                 ) ?? 0
             }
+            lastSeqLock.lock()
+            if writeGeneration == generation, lastSeqMemo[sessionId] == nil { lastSeqMemo[sessionId] = value }
+            lastSeqLock.unlock()
+            return value
         } catch {
             return 0
         }

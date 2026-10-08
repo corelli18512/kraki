@@ -901,6 +901,17 @@ struct MacBubbleActionCaptureContext {
 }
 
 final class MacChatBubbleCell: NSView {
+    private var accessibilityBody: NSAttributedString? {
+        didSet { if accessibilityBody !== oldValue { accessibilityBodyText = nil } }
+    }
+    private var accessibilityBodyText: String?
+    override func accessibilityLabel() -> String? {
+        guard let body = accessibilityBody else { return super.accessibilityLabel() }
+        if let cached = accessibilityBodyText { return cached }
+        let text = MacMarkdown.plainText(body) ?? ""
+        accessibilityBodyText = text
+        return text
+    }
     override var isFlipped: Bool { true }
     private let contentClipView = MacFlippedContentClipView()
     private let bubbleBG = MacRoundedView()
@@ -1376,7 +1387,7 @@ final class MacChatBubbleCell: NSView {
             bodyView.textStorage?.setAttributedString(content.body ?? NSAttributedString())
             bodyView.isSelectable = bodyHasLinks
             bodyView.setAccessibilityElement(bodyHasLinks)
-            bodyView.setAccessibilityLabel(MacMarkdown.plainText(content.body) ?? "")
+            bodyView.lazyAccessibilityBody = content.body ?? NSAttributedString()
             bodyView.setTableViewportWidth(content.bodyTextWidth)
             bodyView.textContainer?.size = NSSize(
                 width: content.bodyTextWidth,
@@ -1465,9 +1476,9 @@ final class MacChatBubbleCell: NSView {
             || !content.htmlArtifacts.isEmpty
         setAccessibilityElement(!exposesInteractiveContent)
         setAccessibilityRole(.group)
-        if !exposesInteractiveContent {
-            setAccessibilityLabel(MacMarkdown.plainText(content.body) ?? "")
-        }
+        // Plain text is produced lazily in accessibilityLabel(): converting
+        // the whole body here ran on every streaming delta.
+        accessibilityBody = exposesInteractiveContent ? nil : (content.body ?? NSAttributedString())
         needsLayout = true
     }
 

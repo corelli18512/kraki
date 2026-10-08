@@ -172,7 +172,7 @@ final class MessageProvider {
             }
         }
         let oldLastSeq = tentacleLastSeq[sessionId]
-        tentacleLastSeq[sessionId] = lastSeq
+        if oldLastSeq != lastSeq { tentacleLastSeq[sessionId] = lastSeq } // no-op writes notify observers
         if let oldLastSeq, oldLastSeq != lastSeq {
             KLog.d("🏷️ [2/history setTentacleInfo] session=\(sessionId.prefix(12)) lastSeq=\(oldLastSeq)→\(lastSeq) device=\(deviceId.prefix(12))")
         } else if oldLastSeq == nil {
