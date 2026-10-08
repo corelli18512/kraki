@@ -219,7 +219,7 @@ struct BuiltInSetupView: View {
             ProgressView("Contacting GitHub…").controlSize(.small)
         case .waitingForBrowser:
             StepCard(
-                step: "Step 2 of 2",
+                step: signedOutByUser ? nil : "Step 2 of 2",
                 title: "Continue in the sign-in window",
                 detail: "Approve Kraki on GitHub. If you're already signed in to GitHub, that's one click."
             ) {
@@ -241,7 +241,7 @@ struct BuiltInSetupView: View {
             }
         case .waitingForGitHub(let code, _):
             StepCard(
-                step: "Step 2 of 2",
+                step: signedOutByUser ? nil : "Step 2 of 2",
                 title: "Enter this code on GitHub",
                 detail: "The code is copied and GitHub is open in your browser. Paste it there and approve Kraki."
             ) {
