@@ -6,6 +6,28 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.75</title>
+            <pubDate>Thu, 08 Oct 2026 03:16:40 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.75</sparkle:fullReleaseNotesLink>
+            <sparkle:version>77</sparkle:version>
+            <sparkle:shortVersionString>0.2.75</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's Changed
+* fix(mac): own executable UUIDs for the CLI and built-in helper (local network access) by @corelli18512 in https://github.com/corelli18512/kraki/pull/433
+* fix(voice): first-use cloud notice, secret filter, broker pinning, honest copy by @corelli18512 in https://github.com/corelli18512/kraki/pull/423
+* release: Tentacle 0.38.2 (protocol 0.28.1) — npm installs start again by @corelli18512 in https://github.com/corelli18512/kraki/pull/435
+* fix: P3 sweep 1 — independent files (crypto/protocol bounds, voice, guard, CI pins, installers) by @corelli18512 in https://github.com/corelli18512/kraki/pull/426
+* fix: P3 sweep 2 — remaining review findings by @corelli18512 in https://github.com/corelli18512/kraki/pull/439
+* fix: keep replies visible after a turn lost in a daemon restart by @corelli18512 in https://github.com/corelli18512/kraki/pull/440
+* release: Tentacle 0.38.3 (protocol 0.29.0, crypto 0.2.2), Mac 0.2.75 by @corelli18512 in https://github.com/corelli18512/kraki/pull/441
+
+
+**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.74...mac-v0.2.75
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.75/Kraki.app.zip" length="92759671" type="application/octet-stream" sparkle:edSignature="flVaSx1k2APINO07eqo4rudIIopU7UD7iDByI9KK8Zg7TnrBx8XKljlOpuJa9h3Iy6DS+VW1C/2BW8jiW/BUCQ=="/>
+        </item>
+        <item>
             <title>0.2.74</title>
             <pubDate>Wed, 07 Oct 2026 14:05:13 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -43,26 +65,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.73/Kraki.app.zip" length="92696788" type="application/octet-stream" sparkle:edSignature="EFOcq3t4pH+zsQCVIAO5GEnWte6ugGzIASzshsGH1kzJkn7+bQ9tRRYO5M2A1+L9m73kKDoFJPRAEclHwvoeBw=="/>
         </item>
-        <item>
-            <title>0.2.72</title>
-            <pubDate>Wed, 07 Oct 2026 05:44:59 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.72</sparkle:fullReleaseNotesLink>
-            <sparkle:version>74</sparkle:version>
-            <sparkle:shortVersionString>0.2.72</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's Changed
-* Sync Custom Words across account clients (silent, last write wins) by @corelli18512 in https://github.com/corelli18512/kraki/pull/412
-* release: head 0.20.0, protocol 0.27.0, Mac 0.2.72 (74) by @corelli18512 in https://github.com/corelli18512/kraki/pull/415
-
-
-**Full Changelog**: https://github.com/corelli18512/kraki/compare/mac-v0.2.71...mac-v0.2.72
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.72/Kraki.app.zip" length="92609434" type="application/octet-stream" sparkle:edSignature="Lcxw1KBN6GL0E3mu7AJMzh7htEfulO4QOrGPr/nb6oVu/MiN/SMT0H6wyqAZEXFRnkRBNIqpDUftHRfm/NB3Ag=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: q6GYJcKR9lhm/ZHNSL2Qp4ZQBa6g3kCHyaiSto4ZXzjkNabH2qg0NLTd51fOfIqr/7QlPbgw9JfLl4y/7fEsAw==
-length: 4727
+edSignature: b5KT2Xe8/GUkU6/mooR052WsqxD/H7y7L9XOq0C5XmJ4UYo6cqFgfr9Wmoqkz3Mt7JIajXxmpvcyFnCm+bjmCw==
+length: 5464
 -->
