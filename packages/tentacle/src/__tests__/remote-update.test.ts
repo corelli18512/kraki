@@ -126,6 +126,24 @@ function updater(over: Partial<DeviceUpdateInfo> = {}, running = 0) {
 }
 
 describe('RemoteUpdater', () => {
+  it('checks for the newest release before updating (a cached answer can be hours old)', async () => {
+    let latest = '0.2.75';
+    const stage = vi.fn(async (o: { latestApp?: string }) => ({ requestId: 'r', method: 'mac-app' as const, target: '/A', staged: '/A.new', cli: ['/k'], from: '0.2.74', to: o.latestApp ?? '', deadlineSeconds: 1 }));
+    const events: UpdateProgress[] = [];
+    const u = new RemoteUpdater({
+      install: { method: 'mac-app', target: '/A' },
+      currentVersion: '0.38.1',
+      status: () => ({ installedVia: 'mac-app', current: '0.2.74', latest, latestTentacle: '0.38.4', remote: true }),
+      refresh: async () => { latest = '0.2.77'; },
+      runningSessions: () => 0,
+      emit: (p) => events.push(p),
+      stage: stage as never, launch: vi.fn(),
+    });
+    await u.request('r1');
+    expect(stage.mock.calls[0][0]).toMatchObject({ latestApp: '0.2.77' });
+    expect(events.at(-1)).toMatchObject({ phase: 'installing', to: '0.2.77' });
+  });
+
   it('stages and hands off to the applier', async () => {
     const { u, events, launch } = updater();
     await u.request('r1');

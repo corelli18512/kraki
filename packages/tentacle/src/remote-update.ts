@@ -480,7 +480,9 @@ async function applyMacApp(plan: UpdatePlan): Promise<void> {
   log(`applier: mac-app ${plan.from} → ${plan.to}; app running=${wasRunning}`);
   try {
     if (wasRunning) {
-      spawnSync('osascript', ['-e', `quit app "${plan.target}"`]);
+      // Kraki for Mac skips its "take this Mac offline?" question while
+      // plan.json exists; an older app may still ask, so never wait on it.
+      spawnSync('osascript', ['-e', `quit app "${plan.target}"`], { timeout: 10_000 });
       for (let k = 0; k < 20 && macAppRunning(plan.target); k++) await sleep(250);
       if (macAppRunning(plan.target)) spawnSync('pkill', ['-f', `${plan.target}/Contents/MacOS/`]);
     }
@@ -523,6 +525,8 @@ export interface RemoteUpdaterOptions {
   currentVersion: string;
   /** Latest check result (update-status.ts). */
   status: () => DeviceUpdateInfo | null;
+  /** Check for the newest version now (before acting on a request). */
+  refresh?: () => Promise<void>;
   /** Sessions with a turn running right now. */
   runningSessions: () => number;
   emit: (p: UpdateProgress) => void;
@@ -540,6 +544,10 @@ export class RemoteUpdater {
   get inProgress(): boolean { return this.busy; }
 
   async request(requestId: string, when?: 'now' | 'idle'): Promise<void> {
+    // The periodic check may be hours old: install the newest release, not
+    // whatever was newest then (a 0.2.75 answer installed 0.2.75 after 0.2.77
+    // was out). A failed check keeps the previous answer.
+    if (!this.busy) await this.o.refresh?.().catch(() => {});
     const s = this.o.status();
     const fail = (error: string) => { log(`request ${requestId}: ${error}`); this.o.emit({ phase: 'failed', requestId, error }); };
     if (this.busy) { fail('An update is already in progress.'); return; }
