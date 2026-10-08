@@ -71,6 +71,7 @@ export const HEAD_CONTROL_TYPES: ReadonlySet<string> = new Set([
   'notification_preview',
   'voice_lease_grant',
   'voice_lease_denied',
+  'voice_vocabulary_updated',
 ]);
 
 /**
