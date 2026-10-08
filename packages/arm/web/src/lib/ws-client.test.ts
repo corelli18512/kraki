@@ -155,7 +155,7 @@ describe('KrakiWSClient', () => {
       expect(msg.type).toBe('auth_info');
     });
 
-    it('sends "Web Mobile" name when user agent includes Mobile', async () => {
+    it('names the device after the browser and system', async () => {
       const origUA = navigator.userAgent;
       Object.defineProperty(navigator, 'userAgent', {
         value: 'Mozilla/5.0 (iPhone; CPU iPhone OS) Mobile Safari',
@@ -172,7 +172,7 @@ describe('KrakiWSClient', () => {
       });
 
       const authMsg = JSON.parse(lastWsInstance.sentMessages[0]);
-      expect(authMsg.device.name).toBe('Web Mobile');
+      expect(authMsg.device.name).toBe('Safari on iPhone');
 
       Object.defineProperty(navigator, 'userAgent', {
         value: origUA,
