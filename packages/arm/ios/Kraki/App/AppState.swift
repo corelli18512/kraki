@@ -45,6 +45,33 @@ final class AppState {
     var voiceCapability: VoiceCapability?
     @ObservationIgnored private(set) var voiceInputController: KrakiVoiceInputController
     @ObservationIgnored lazy var iosVoiceComposer = IOSVoiceComposer(host: self)
+    #if os(iOS)
+    /// Lets a sent voice message finish its correction after the app is
+    /// backgrounded instead of failing it at once (see BackgroundVoiceFinisher).
+    @ObservationIgnored private var backgroundVoiceClientID: String?
+    @ObservationIgnored private lazy var backgroundVoiceFinisher = BackgroundVoiceFinisher(hooks: .init(
+        isFinishing: { [weak self] in
+            if case .staged = self?.iosVoiceComposer.operation?.phase { return true }
+            return false
+        },
+        isDelivered: { [weak self] in
+            guard let self, let id = self.backgroundVoiceClientID, let sender = self.commandSender else { return true }
+            guard let message = sender.outbox.values.lazy.compactMap({ $0[id] }).first else { return true } // echoed
+            return sender.pendingState(message) == .failed
+        },
+        retire: { [weak self] in self?.iosVoiceComposer.retireKeepingDraft() },
+        teardown: { [weak self] in
+            self?.backgroundVoiceClientID = nil
+            guard self?.isInBackground == true else { return }
+            self?.tearDownForBackground()
+        },
+        beginTask: { expired in
+            let id = UIApplication.shared.beginBackgroundTask(withName: "KrakiVoiceFinish", expirationHandler: expired)
+            return id == .invalid ? nil : id.rawValue
+        },
+        endTask: { UIApplication.shared.endBackgroundTask(UIBackgroundTaskIdentifier(rawValue: $0)) }
+    ))
+    #endif
 
     /// The durable outbox lives next to the message database, so each app
     /// flavor (Release / Dev / isolated KRAKI_DATA_DIR test instances) has its
@@ -973,6 +1000,10 @@ final class AppState {
     /// kick a fresh connect immediately so the user doesn't have to
     /// wait out a long backoff timer that started in the background.
     func handleForegroundRehydrate(forceReconnect: Bool = false) {
+        #if os(iOS)
+        // Back before a deferred teardown ran: nothing was closed.
+        if backgroundVoiceFinisher.isActive { backgroundVoiceFinisher.cancel(); backgroundVoiceClientID = nil }
+        #endif
         if isInBackground {
             isInBackground = false
             // The debounce restarts now: a quick foreground reconnect never
@@ -1030,15 +1061,25 @@ final class AppState {
         KrakiDiag.phase("background", pending: commandSender?.outbox.values.reduce(0) { $0 + $1.count } ?? 0)
         #endif
         updateReadVisibility(appForeground: false, conversationVisible: false)
-        #if os(iOS)
-        // iOS may suspend immediately and the voice socket is closed below:
-        // keep everything heard (a draft, or a not-sent voice bubble with its
-        // original transcript) rather than rely on a background callback.
-        iosVoiceComposer.retireKeepingDraft()
-        #endif
-        voiceInputController.suspendWarmConnection()
         sessionStore.flushCache()
         deviceStore.flushCache()
+        #if os(iOS)
+        // A sent voice message still being corrected: keep the voice and relay
+        // sockets for a short background task so it goes out as it would in
+        // the foreground. Otherwise (or if that runs out) keep everything
+        // heard — a draft, or a not-sent bubble with the original transcript.
+        if case .staged(let clientID) = iosVoiceComposer.operation?.phase {
+            backgroundVoiceClientID = clientID
+            if backgroundVoiceFinisher.beginIfNeeded() { return }
+        }
+        iosVoiceComposer.retireKeepingDraft()
+        #endif
+        tearDownForBackground()
+    }
+
+    /// Close the voice and relay sockets for the background (APNs takes over).
+    private func tearDownForBackground() {
+        voiceInputController.suspendWarmConnection()
         wsClient?.disconnect()
     }
 
