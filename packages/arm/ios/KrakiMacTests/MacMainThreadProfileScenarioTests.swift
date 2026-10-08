@@ -91,6 +91,11 @@ final class MacMainThreadProfileScenarioTests: XCTestCase {
         for _ in 0..<30 { try applySessionList(); drain(400) }
     }
 
+    /// Baseline: the same window with a conversation open, nothing arriving.
+    func testPhaseIdle() throws {
+        select(7); drain(16_000)
+    }
+
     func testPhaseStreaming() throws {
         select(7); drain(1_000)
         let sub = try XCTUnwrap(app.sessionSubscriptionController)
@@ -99,9 +104,11 @@ final class MacMainThreadProfileScenarioTests: XCTestCase {
         drain(100)
         XCTAssertTrue(sub.acceptsLive("s7"))
         app.messageStore.beginCardTurn("s7")
+        // ~20 characters per delta (the Tentacle batches 40 ms of tokens):
+        // the answer grows to ~8,000 characters, a long but ordinary reply.
         let source = (String(repeating: Self.para, count: 6) + Self.code) as NSString
         for k in 0..<400 {
-            let chunk = source.substring(with: NSRange(location: (k * 7) % (source.length - 8), length: 7))
+            let chunk = source.substring(with: NSRange(location: (k * 20) % (source.length - 21), length: 20))
             app.messageRouter?.handleDataMessage(try JSONSerialization.data(withJSONObject: [
                 "type": "agent_message_delta", "sessionId": "s7", "deviceId": Self.device,
                 "payload": ["content": chunk, "reset": false]]))
