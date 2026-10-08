@@ -262,3 +262,12 @@
 .ksb-archived-toggle:hover { background: var(--s-fill); }
 .ksb-archived-toggle svg { width: 14px; height: 14px; }
 .ksb-archived-hint { padding: 6px 16px; font-size: 12px; color: var(--s-text-3); }
+
+/* Mac: "+" is lit while the new-session composer is what's on the right. */
+.ksb.is-wide .ksb-new.is-composing { color: var(--k-user, #0b5b9c); background: color-mix(in srgb, #0b5b9c 18%, transparent); }
+.dark .ksb.is-wide .ksb-new.is-composing { color: #5ea0d7; background: color-mix(in srgb, #5ea0d7 18%, transparent); }
+/* Mac empty sidebar: the logo, "No sessions yet", one quiet line. */
+.ksb-empty-wide { padding: 0 24px; gap: 6px; min-height: 100%; justify-content: center; box-sizing: border-box; padding-bottom: 12%; }
+.ksb-empty-logo { width: 52px; height: 52px; object-fit: contain; margin-bottom: 2px; }
+.ksb-empty-wide .ksb-empty-title { font-size: 12.5px; font-weight: 500; color: var(--color-text-secondary); margin: 0; }
+.ksb-empty-wide .ksb-empty-hint { font-size: 11px; color: var(--color-text-muted); text-align: center; margin: 0; }

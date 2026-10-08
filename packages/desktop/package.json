@@ -1,0 +1,90 @@
+{
+  "name": "kraki-desktop",
+  "productName": "Kraki",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kraki desktop app (Windows / Linux): the Kraki Web client in a native shell.",
+  "author": "Kraki",
+  "main": "src/main.cjs",
+  "scripts": {
+    "web": "node scripts/prepare-web.mjs",
+    "start": "electron .",
+    "dist:win": "electron-builder --win nsis --x64 --publish never",
+    "dist:dir": "electron-builder --dir --publish never",
+    "kraki": "node scripts/prepare-kraki.mjs",
+    "test": "node --test test/*.test.cjs"
+  },
+  "devDependencies": {
+    "electron": "^38.1.2",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "chat.kraki.desktop",
+    "productName": "Kraki",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**",
+      "app/**",
+      "build/icon.png",
+      "build/tray.png",
+      "build/badge.png",
+      "package.json",
+      "build/icon.ico",
+      "build/tray-online.png",
+      "build/tray-offline.png",
+      "build/tray-attention.png",
+      "build/tray-problem.png"
+    ],
+    "asar": true,
+    "protocols": [
+      {
+        "name": "Kraki",
+        "schemes": [
+          "kraki"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Kraki",
+      "artifactName": "Kraki-Setup-${version}-x64.${ext}",
+      "installerLanguages": [
+        "en_US"
+      ],
+      "multiLanguageInstaller": false,
+      "include": "build/installer.nsh"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development",
+      "icon": "build/icon.png"
+    },
+    "extraResources": [
+      {
+        "from": "kraki",
+        "to": "kraki",
+        "filter": [
+          "kraki.exe"
+        ]
+      }
+    ]
+  }
+}

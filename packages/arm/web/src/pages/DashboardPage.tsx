@@ -1,3 +1,4 @@
+import { AccountDeletedNotice } from '../components/layout/DeleteAccount';
 import { KrakiLogo } from '../components/KrakiLogo';
 import { useState, useCallback, useEffect } from 'react';
 import { useStore } from '../hooks/useStore';
@@ -6,6 +7,10 @@ import { startOAuthFlow, loadStoredDevice } from '../lib/transport';
 import { getOAuthClientId, supportsOAuthLogin } from '../lib/oauth';
 import { ScanQrCode } from 'lucide-react';
 import { QrScanner } from '../components/common/QrScanner';
+import { desktop, desktopCredentials } from '../lib/desktop';
+import { DesktopSetup } from '../components/desktop/DesktopSetup';
+import { StartSessionView } from '../components/sessions/NewSessionComposer';
+import { useNarrow } from '../hooks/useNarrow';
 import { MAC_RELEASES_PAGE, isMacBrowser, resolveMacDmgUrl } from '../lib/macDownload';
 
 /** GitHub mark SVG for the sign-in button */
@@ -28,6 +33,8 @@ export function DashboardPage() {
   const oauthAvailable = supportsOAuthLogin(githubClientId);
   const hasCredentials = !!loadStoredDevice()?.deviceId;
   const [scannerOpen, setScannerOpen] = useState(false);
+  const sessionCount = useStore((s) => s.sessions.size);
+  const wide = !useNarrow();
 
   const handleQrScan = useCallback((url: string) => {
     setScannerOpen(false);
@@ -50,6 +57,11 @@ export function DashboardPage() {
     return () => { cancelled = true; };
   }, [onMac]);
 
+  // Kraki for Windows: set up the Kraki built into the app (like Kraki for Mac).
+  if (desktop?.builtIn && (status === 'awaiting_login' || !desktopCredentials())) {
+    return <DesktopSetup builtIn={desktop.builtIn} />;
+  }
+
   if (status === 'awaiting_login' || (status === 'connecting' && !hasCredentials)) {
     const isAuthenticating = status === 'connecting';
     return (
@@ -62,6 +74,7 @@ export function DashboardPage() {
             </div>
           </div>
         )}
+        <AccountDeletedNotice />
         <KrakiLogo className="mx-auto mb-4 h-40 w-40 object-contain animate-logo-reveal" />
         <h2 className="text-lg font-semibold text-text-primary animate-fade-up">Welcome to Kraki</h2>
         {oauthAvailable && (
@@ -129,7 +142,16 @@ export function DashboardPage() {
     );
   }
 
-  // Connected — desktop shows empty state (sidebar has sessions), mobile shows sidebar directly
+  // Connected — the wide layout's idle pane is the new-session composer (Mac);
+  // the narrow layout shows the session list instead.
+  if (wide) {
+    return (
+      <StartSessionView
+        firstTime={sessionCount === 0}
+        onConnectPhone={desktop?.builtIn ? () => window.dispatchEvent(new Event('kraki:connect-phone')) : undefined}
+      />
+    );
+  }
   return (
     <div className="flex flex-1 flex-col">
       <div className="hidden flex-1 items-center justify-center md:flex">

@@ -77,6 +77,10 @@ export function detectInstall(inputs: DetectInputs = {}): InstallInfo {
     }
     return { method: 'mac-app' };
   }
+  // …\Kraki\resources\kraki\kraki.exe, run by Kraki for Windows.
+  if (env.KRAKI_MANAGED_BY === 'kraki-windows' || (sea && plat === 'win32' && /[\\/]resources[\\/]kraki[\\/]kraki\.exe$/i.test(exe))) {
+    return { method: 'windows-app', target: exe };
+  }
   if (sea) {
     if (plat === 'darwin') {
       const macos = dirname(exe);

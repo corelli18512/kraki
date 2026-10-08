@@ -36,6 +36,12 @@ const RELAY_PORT = Number(process.env.KRAKI_LOCAL_RELAY_PORT ?? 4400);
 const RELAY_URL = `ws://localhost:${RELAY_PORT}`;
 const REDIRECT_PORT = Number(process.env.KRAKI_LOCAL_REDIRECT_PORT ?? 3400);
 const ENTRY_URL = `http://localhost:${REDIRECT_PORT}`;
+// A shell inside a Kraki-supervised session inherits the supervisor's markers;
+// the local daemon must not, or it treats its (absent) supervisor as gone and
+// exits right after starting.
+delete process.env.KRAKI_SUPERVISED;
+delete process.env.KRAKI_MANAGED_BY;
+
 const WEB_DEV_PORT = Number(process.env.KRAKI_LOCAL_WEB_PORT ?? 3300);
 const STATE_VERSION = 'thin-relay-v1';
 const STATE_VERSION_PATH = join(ROOT_DIR, '.state-version');

@@ -26,9 +26,27 @@ import { getKrakiHome } from './config.js';
 /** Value of `KRAKI_MANAGED_BY` injected by the Mac app's launchd job. */
 export const MAC_APP_OWNER = 'kraki-mac';
 
+/**
+ * Kraki for Windows (packages/desktop) ships this tentacle as
+ * `resources\kraki\kraki.exe` and runs it itself: started by the app and at
+ * login through a per-user Run entry, supervised in-process (see
+ * daemon-supervisor.ts) since Windows has no launchd. It records ownership in
+ * the same marker so a separately installed CLI never starts a second daemon.
+ */
+export const WINDOWS_APP_OWNER = 'kraki-windows';
+
+export type AppOwner = typeof MAC_APP_OWNER | typeof WINDOWS_APP_OWNER;
+
+const APP_OWNERS: readonly string[] = [MAC_APP_OWNER, WINDOWS_APP_OWNER];
+
+/** "Kraki for Mac" / "Kraki for Windows", for messages. */
+export function ownerName(by: AppOwner): string {
+  return by === WINDOWS_APP_OWNER ? 'Kraki for Windows' : 'Kraki for Mac';
+}
+
 export interface ManagedByMarker {
-  by: typeof MAC_APP_OWNER;
-  /** launchd label of the supervising job. */
+  by: AppOwner;
+  /** launchd label of the supervising job (Mac), or the owner id (Windows). */
   label: string;
   /** Absolute path of the owning app, informational only. */
   appPath?: string;
@@ -51,14 +69,15 @@ export function loadManagedBy(appExists: (path: string) => boolean = existsSync)
   if (!existsSync(path)) return null;
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<ManagedByMarker>;
-    if (parsed.by !== MAC_APP_OWNER || typeof parsed.label !== 'string' || parsed.label.length === 0) {
+    if (typeof parsed.by !== 'string' || !APP_OWNERS.includes(parsed.by)
+      || typeof parsed.label !== 'string' || parsed.label.length === 0) {
       return null;
     }
     if (typeof parsed.appPath === 'string' && parsed.appPath.length > 0 && !appExists(parsed.appPath)) {
       return null;
     }
     return {
-      by: MAC_APP_OWNER,
+      by: parsed.by as AppOwner,
       label: parsed.label,
       appPath: typeof parsed.appPath === 'string' ? parsed.appPath : undefined,
       appVersion: typeof parsed.appVersion === 'string' ? parsed.appVersion : undefined,
@@ -81,6 +100,18 @@ export function clearManagedBy(): void {
 /** True inside the daemon worker launched by Kraki for Mac's launchd job. */
 export function isMacAppManagedWorker(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.KRAKI_MANAGED_BY === MAC_APP_OWNER;
+}
+
+/** True inside the daemon worker run by Kraki for Windows. */
+export function isWindowsAppManagedWorker(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.KRAKI_MANAGED_BY === WINDOWS_APP_OWNER;
+}
+
+/** The app that supervises this worker, if any. */
+export function appManagedWorkerOwner(env: NodeJS.ProcessEnv = process.env): AppOwner | null {
+  if (isMacAppManagedWorker(env)) return MAC_APP_OWNER;
+  if (isWindowsAppManagedWorker(env)) return WINDOWS_APP_OWNER;
+  return null;
 }
 
 /**

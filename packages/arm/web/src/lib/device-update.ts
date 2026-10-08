@@ -65,6 +65,7 @@ export function updateTitle(u: AvailableUpdate): string {
 
 export function updateHowTo(u: AvailableUpdate): string {
   if (u.installedVia === 'mac-app') return 'Open Kraki on that Mac and choose Kraki → Check for Updates…';
+  if (u.installedVia === 'windows-app') return 'Install the latest Kraki for Windows on that PC. Kraki updates with the app.';
   if (u.installedVia === 'legacy') return 'Update Kraki on that computer: Check for Updates in Kraki for Mac, or run `kraki update`.';
   return 'Run `kraki update` on that computer.';
 }

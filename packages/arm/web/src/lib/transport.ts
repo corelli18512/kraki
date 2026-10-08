@@ -1,3 +1,4 @@
+import { desktopCredentials } from './desktop';
 import type { Message } from '@kraki/protocol';
 import { DEVICE_REPLACED_CLOSE_CODE } from '@kraki/protocol';
 import { createLogger } from './logger';
@@ -187,7 +188,10 @@ export async function startOAuthFlow(clientId: string): Promise<void> {
   const verifier = generateCodeVerifier();
   const challenge = await deriveCodeChallenge(verifier);
 
-  const redirectUri = window.location.origin + OAUTH_CALLBACK_PATH;
+  // The desktop shell serves the app from its own origin, which GitHub does
+  // not know; it uses the Web's registered origin and intercepts the redirect.
+  const origin = window.krakiDesktop?.oauthRedirectOrigin ?? window.location.origin;
+  const redirectUri = origin + OAUTH_CALLBACK_PATH;
   storePkceMaterial(verifier, redirectUri);
 
   const params = new URLSearchParams({
@@ -241,7 +245,9 @@ export class KrakiTransport {
     const params = getUrlParams();
     const stored = loadStoredDevice();
 
-    this._url = url ?? params.relay ?? stored?.relay ?? import.meta.env.VITE_WS_URL ?? DEFAULT_RELAY;
+    // The desktop app connects to the relay its built-in Kraki was set up with.
+    const desktopRelay = typeof window !== 'undefined' ? desktopCredentials()?.relay : undefined;
+    this._url = url ?? params.relay ?? desktopRelay ?? stored?.relay ?? import.meta.env.VITE_WS_URL ?? DEFAULT_RELAY;
     this.pairingToken = params.token;
     this.storedDeviceId = stored?.deviceId;
     this.callbacks = callbacks;

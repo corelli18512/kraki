@@ -77,6 +77,9 @@ vi.mock('../managed.js', () => ({
   kickstartManagedDaemon: (...args: unknown[]) => mockKickstart(...args),
   isManagedDaemonLoaded: (...args: unknown[]) => mockIsManagedLoaded(...args),
   isMacAppManagedWorker: () => false,
+  isWindowsAppManagedWorker: () => false,
+  ownerName: (by: string) => (by === 'kraki-windows' ? 'Kraki for Windows' : 'Kraki for Mac'),
+  WINDOWS_APP_OWNER: 'kraki-windows',
 }));
 
 vi.mock('../daemon-worker.js', () => ({

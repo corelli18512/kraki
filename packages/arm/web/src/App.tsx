@@ -8,6 +8,11 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { useStore } from './hooks/useStore';
 import { useSessionShortcuts } from './hooks/useSessionShortcuts';
 import { wsClient } from './lib/ws-client';
+import { desktop, desktopCredentials } from './lib/desktop';
+import { ConnectPhoneHost } from './components/devices/ConnectPhoneCard';
+import { UsagePanel } from './components/usage/UsagePanel';
+import { VoiceConsentHost } from './components/chat/Voice';
+import { OwnerChoiceHost } from './components/desktop/OwnerChoiceHost';
 
 function RelayBlockingOverlay({
   status,
@@ -90,7 +95,26 @@ export function App() {
     let total = 0;
     for (const count of unreadCount.values()) total += count;
     document.title = total > 0 ? `(${total}) ${BASE_TITLE}` : BASE_TITLE;
+    desktop?.setBadge(total);
   }, [unreadCount]);
+
+  // Tray › Needs You (Kraki for Windows): sessions waiting on an answer or approval.
+  const sessions = useStore((s) => s.sessions);
+  const previews = useStore((s) => s.sessionPreviews);
+  useEffect(() => {
+    if (!desktop?.setNeedsYou) return;
+    const list = [...sessions.values()].flatMap((s) => {
+      const preview = previews.get(s.id);
+      const reason = preview?.type === 'permission' ? 'Needs approval' : preview?.type === 'question' ? 'Has a question' : null;
+      // Untitled yet: the question or request itself says what it is about.
+      const title = s.title || s.autoTitle || preview?.text?.replace(/\s+/g, ' ').slice(0, 48) || 'Session';
+      return reason ? [{ id: s.id, title, reason }] : [];
+    });
+    desktop.setNeedsYou(list);
+  }, [sessions, previews]);
+
+  // Clicking a desktop notification opens its session.
+  useEffect(() => desktop?.onOpenSession((sid) => navigate(`/session/${sid}`)), [navigate]);
 
   useEffect(() => {
     if (navigateToSession) {
@@ -99,7 +123,11 @@ export function App() {
     }
   }, [navigateToSession, navigate, setNavigateToSession]);
 
-  if (status === 'awaiting_login') {
+  // Kraki for Windows before its built-in Kraki is signed in: the setup owns
+  // the whole window, like Kraki for Mac's entry gate.
+  const desktopSetupGate = !!desktop?.builtIn && !desktopCredentials();
+
+  if (status === 'awaiting_login' || desktopSetupGate) {
     return (
       <div className="app-viewport flex overflow-hidden bg-surface-primary">
         <ErrorBanner />
@@ -126,6 +154,10 @@ export function App() {
           <Outlet />
         </ErrorBoundary>
       </main>
+      <ConnectPhoneHost />
+      <UsagePanel />
+      <VoiceConsentHost />
+      <OwnerChoiceHost />
       {showBlockingOverlay && (
         <RelayBlockingOverlay
           status={status}

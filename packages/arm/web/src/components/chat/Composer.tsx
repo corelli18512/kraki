@@ -3,6 +3,16 @@ import { ArrowUp, CornerRightUp, ImagePlus, Square, X } from 'lucide-react';
 import type { Attachment } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
 import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
+import { MicButton, VoiceError, VoiceRow, VoiceTranscript, useDictation, useStartDictation } from './Voice';
+import { finishDictation, voiceSettings, type VoiceFinish } from '../../lib/voice/voice';
+import { sessionContext } from '../../lib/voice/context';
+
+/** Text worth mining for spelling terms (never sent whole). */
+function messageText(m: unknown): string {
+  const p = (m as { payload?: { content?: unknown; text?: unknown } }).payload;
+  const v = p?.content ?? p?.text;
+  return typeof v === 'string' ? v : '';
+}
 
 const MAX_LINES_HEIGHT = 168;
 const MAX_IMAGE_SIZE = 3 * 1024 * 1024;
@@ -79,6 +89,31 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const composing = useRef(false);
+  const [multiline, setMultiline] = useState(false);
+  /** Draft length at which the field went to two rows. */
+  const multilineFrom = useRef(0);
+  const dictation = useDictation(sessionId);
+
+  const onVoiceFinal = (spoken: string, mode: VoiceFinish) => {
+    const draft = useStore.getState().drafts.get(sessionId) ?? '';
+    const full = [draft.trimEnd(), spoken].filter(Boolean).join(draft && !/\s$/.test(draft) ? ' ' : '');
+    if (mode === 'send' && full.trim()) {
+      onSend(full.trim(), undefined, intent);
+      setDraft(sessionId, '');
+    } else {
+      setDraft(sessionId, full);
+      setTimeout(() => fieldRef.current?.focus(), 0);
+    }
+  };
+  const startVoice = useStartDictation(sessionId, () => {
+    const st = useStore.getState();
+    const session = st.sessions.get(sessionId);
+    const recent = (st.messages.get(sessionId) ?? []).slice(-12).map(messageText).filter(Boolean);
+    return sessionContext(
+      { id: sessionId, title: session?.title ?? session?.autoTitle ?? undefined, agent: session?.agent ?? 'agent', model: session?.model ?? undefined, mode: st.sessionModes.get(sessionId) },
+      recent, [], voiceSettings.shareContext,
+    );
+  }, onVoiceFinal);
 
   useImperativeHandle(ref, () => ({ focus: () => fieldRef.current?.focus() }), []);
 
@@ -96,7 +131,24 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (!el) return;
     el.style.height = '0px';
     el.style.height = `${Math.min(el.scrollHeight, MAX_LINES_HEIGHT)}px`;
-  }, [text]);
+    // Multi-line drafts use two rows: text across the box, controls below (Mac/iOS).
+    // Only the one-row layout is measured: two rows give the text the full
+    // width, where it may fit on one line again, and measuring there would
+    // flip the layout back and forth forever. Two rows end when the draft is
+    // shorter than when it got there (and has no line break).
+    if (multiline) {
+      if (!text || (!text.includes('\n') && text.length < multilineFrom.current)) setMultiline(false);
+      return;
+    }
+    if (!text) return;
+    const cs = getComputedStyle(el);
+    const line = parseFloat(cs.lineHeight) || 20;
+    const content = el.scrollHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    if (text.includes('\n') || content > line * 1.6) {
+      multilineFrom.current = text.length;
+      setMultiline(true);
+    }
+  }, [text, multiline]);
 
   const hasText = text.trim().length > 0;
   const structured = intent === 'answerQuestion' || intent === 'denyPermission';
@@ -112,6 +164,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [canSend, text, image, intent, onSend, setDraft, sessionId]);
 
   const primary = () => {
+    if (dictation.active) { if (dictation.phase !== 'finishing') finishDictation('send'); return; }
     if (showsStop) {
       if (abortPending || !reachable) return;
       setAbortPending(true);
@@ -128,15 +181,23 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     else useStore.getState().setLastError('Image is too large (max 3 MB after compression).');
   };
 
-  const glyph = showsStop ? 'stop' : intent === 'steer' ? 'steer' : 'send';
-  const label = showsStop ? 'Stop agent'
+  const voiceSend = dictation.active;
+  const glyph = voiceSend ? 'send' : showsStop ? 'stop' : intent === 'steer' ? 'steer' : 'send';
+  const label = voiceSend ? 'Send dictation' : showsStop ? 'Stop agent'
     : intent === 'answerQuestion' ? 'Submit answer'
     : intent === 'denyPermission' ? 'Deny with reason'
     : intent === 'steer' ? 'Steer agent' : 'Send message';
 
   return (
     <div className="kcomposer">
-      <div className="kcomposer-field">
+      <VoiceError owner={sessionId} />
+      <div className={`kcomposer-field${multiline && !dictation.active ? ' is-multiline' : ''}${dictation.active ? ' is-dictating' : ''}`}>
+        {dictation.active ? (
+          <>
+            <VoiceTranscript owner={sessionId} />
+            <VoiceRow owner={sessionId} />
+          </>
+        ) : (<>
         <button
           type="button"
           className={`kcomposer-attach ${image ? 'has-image' : ''}`}
@@ -179,16 +240,18 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             submit();
           }}
         />
+        <MicButton owner={sessionId} onStart={startVoice} disabled={!reachable} />
+        </>)}
       </div>
       <button
         type="button"
-        className={`kprimary is-${glyph} ${!showsStop && !canSend ? 'is-disabled' : ''} ${showsStop && !reachable ? 'is-unreachable' : ''}`}
+        className={`kprimary is-${glyph} ${!voiceSend && !showsStop && !canSend ? 'is-disabled' : ''} ${!voiceSend && showsStop && !reachable ? 'is-unreachable' : ''}`}
         aria-label={label}
-        data-testid={showsStop ? 'chat-stop' : 'chat-send'}
+        data-testid={voiceSend ? 'voice-send' : showsStop ? 'chat-stop' : 'chat-send'}
         onClick={primary}
-        disabled={showsStop ? abortPending || !reachable : false}
+        disabled={voiceSend ? dictation.phase === 'finishing' : showsStop ? abortPending || !reachable : false}
       >
-        {showsStop
+        {!voiceSend && showsStop
           ? abortPending ? <span className="kspinner is-light" aria-hidden /> : <Square className="kprimary-stop" aria-hidden />
           : glyph === 'steer' ? <CornerRightUp aria-hidden /> : <ArrowUp aria-hidden />}
       </button>

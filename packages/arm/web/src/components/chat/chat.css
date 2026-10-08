@@ -5,7 +5,9 @@
  */
 
 .kchat-page,
-.kchat {
+.kchat,
+.ktable-window-backdrop,
+.ns-composer-wrap {
   --k-bg: #ffffff;
   --k-text: #0f172a;           /* slate-900 */
   --k-text-2: #64748b;         /* slate-500 */
@@ -37,7 +39,9 @@
 
 .dark .kchat-page,
 .dark .kchat,
-.dark .ksheet {
+.dark .ksheet,
+.dark .ktable-window-backdrop,
+.dark .ns-composer-wrap {
   --k-bg: #020617;             /* slate-950 */
   --k-text: #f1f5f9;           /* slate-100 */
   --k-text-2: #94a3b8;
@@ -433,14 +437,16 @@
 .kslot-outcome-detail { min-width: 0; overflow: hidden; color: var(--k-text-3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .kslot-outcome.is-failed, .kslot-outcome.is-failed .kslot-icon { color: #ef4444; }
 
-/* Three equal buttons need room (as on iOS/Mac: at least 380pt). */
-.kslot-permission { display: flex; width: min(380px, 100%); min-width: 0; flex-direction: column; gap: 10px; }
-.kslot-permission-head { display: flex; gap: 8px; }
-.kslot-permission-head .kslot-icon { margin-top: 3px; }
-.kslot-permission-title { color: #f97316; font-size: 12px; font-weight: 600; }
-.kslot-permission-desc { font-size: 14px; }
+/* Permission prompt, written like a question (Mac/iOS since c6d7539c):
+   title, a quiet caption with a lock, the diff, capsule buttons that match
+   question choices; a resolved prompt shows a small outcome capsule. */
+.kslot-permission { display: flex; min-width: 0; max-width: 100%; flex-direction: column; gap: 8px; }
+.kslot-permission-head { display: flex; flex-direction: column; gap: 3px; }
+.kslot-permission-q { font-size: 15px; font-weight: 600; line-height: 1.3; color: var(--k-text); overflow-wrap: anywhere; }
+.kslot-permission-caption { display: inline-flex; align-items: center; gap: 5px; color: var(--k-text-2); font-size: 12px; }
+.kslot-lock { width: 10px; height: 10px; color: #f97316; stroke-width: 3; }
 .kslot-permission-args {
-  margin-top: 3px;
+  margin: 0;
   padding: 5px 8px;
   border-radius: 5px;
   background: var(--k-fill);
@@ -452,26 +458,23 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.kslot-permission-decision { margin-top: 2px; color: #16a34a; font-size: 12px; font-weight: 600; }
-.kslot-permission-decision.is-denied { color: #ef4444; }
-.kslot-permission-error { margin-top: 2px; color: #ef4444; font-size: 12px; }
-.kslot-permission-buttons { display: flex; gap: 8px; }
-.kperm {
-  flex: 1;
-  min-width: 0;
-  padding: 7px 8px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  font: 600 12px/16px var(--k-font);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
+.kslot-permission-args.is-diff { display: block; -webkit-line-clamp: unset; white-space: pre-wrap; }
+.kslot-permission-outcome { display: flex; align-items: center; gap: 6px; }
+.kperm-outcome {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 999px;
+  background: rgba(34, 197, 94, 0.12); color: #16a34a;
+  font-size: 12px; font-weight: 600;
 }
-.kperm-approve { background: #22c55e; color: #fff; }
-.kperm-allow { border-color: rgba(34, 197, 94, 0.35); background: rgba(34, 197, 94, 0.12); color: #16a34a; }
-.kperm-deny { border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.1); color: #ef4444; }
-.kperm:hover { filter: brightness(1.05); }
+.kperm-outcome svg { width: 11px; height: 11px; stroke-width: 3.2; }
+.kperm-outcome.is-denied { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
+.kslot-permission-error { color: #ef4444; font-size: 12px; }
+.kslot-permission-buttons { display: flex; gap: 6px; }
+.kslot-permission-buttons .kchoice { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; }
+.kslot-permission-buttons .kchoice svg { width: 11px; height: 11px; stroke-width: 3.4; flex: none; }
+.kperm-approve { border-color: transparent !important; background: var(--k-user) !important; color: #fff !important; }
+.kperm-approve:hover { filter: brightness(1.08); }
+.kperm-deny svg { color: #ef4444; }
 
 /* ── Markdown (TextKit / Mac bubble styles) ─────────────────────── */
 
@@ -555,18 +558,87 @@
 .kmd-code pre code.hljs { padding: 0; background: transparent; }
 .kmd-code code { font-size: 13px; }
 
-.kmd-table { margin: 0 0 8px; max-width: 100%; overflow-x: auto; }
-.kmd-table table { border-collapse: collapse; font: 12px/16px var(--k-mono); }
-.kmd-table th, .kmd-table td {
-  padding: 13px 12px;
-  border-bottom: 0.5px solid color-mix(in srgb, var(--k-text-3) 45%, transparent);
+/* Chat tables — Mac/iOS ChatTable (13.5 / 12.5 pt, 10 radius, 7×10 padding,
+   hairline = label 13%, header tint = label 5%). */
+.ktable {
+  --kt-hair: color-mix(in srgb, var(--k-text) 13%, transparent);
+  --kt-head: color-mix(in srgb, var(--k-text) 5%, transparent);
+  margin: 2px 0 8px;
+  max-width: 100%;
+  border: 1px solid var(--kt-hair);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--k-bubble-bg, transparent);
+}
+.ktable-scroll { position: relative; }
+.ktable-scroller { overflow-x: auto; overscroll-behavior-x: contain; }
+.ktable-scroll::before, .ktable-scroll::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 18px; pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 2;
+}
+.ktable-scroll::after { right: 0; background: linear-gradient(to right, transparent, color-mix(in srgb, var(--k-text) 10%, transparent)); }
+.ktable-scroll.fade-right::after { opacity: 1; }
+.ktable-grid { border-collapse: separate; border-spacing: 0; min-width: 100%; font: 13.5px/18px var(--k-font); font-variant-numeric: tabular-nums; }
+.ktable-grid th, .ktable-grid td { padding: 7px 10px; vertical-align: top; max-width: 420px; overflow-wrap: anywhere; }
+.ktable-grid th {
+  background: var(--kt-head);
+  color: var(--k-text-2);
+  font-size: 12.5px;
+  font-weight: 600;
   text-align: left;
   white-space: nowrap;
 }
-.kmd-table td + td, .kmd-table th + th {
-  border-left: 0.5px solid color-mix(in srgb, var(--k-text-3) 45%, transparent);
+.ktable-grid tbody td { border-top: 1px solid var(--kt-hair); color: var(--k-text); }
+.ktable-grid td.is-num { white-space: nowrap; }
+.ktable-grid code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--k-text) 8%, transparent); font: 12.5px var(--k-mono); }
+.ktable-grid a { color: #0056a8; }
+.dark .ktable-grid a { color: #8fd5ff; }
+/* Pinned first column while the grid scrolls sideways. */
+.ktable-grid.is-sticky th:first-child, .ktable-grid.is-sticky td:first-child {
+  position: sticky; left: 0; z-index: 1;
+  background: hsl(var(--hue, 210) var(--k-agent-s) var(--k-agent-l));
+  box-shadow: 1px 0 0 var(--kt-hair);
 }
-.kmd-table th { font-weight: 700; }
+.ktable-grid.is-sticky th:first-child { background-image: linear-gradient(var(--kt-head), var(--kt-head)); }
+.ktable-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  height: 34px; padding: 0 10px;
+  border-top: 1px solid var(--kt-hair);
+  color: var(--k-text-2); font-size: 12px;
+}
+.ktable-open { border: 0; background: none; padding: 0; color: var(--k-link); font: 500 12px var(--k-font); cursor: pointer; white-space: nowrap; }
+.ktable-open:hover { text-decoration: underline; }
+
+.ktable-window-backdrop { position: fixed; inset: 0; z-index: 95; display: flex; align-items: center; justify-content: center; padding: 32px; background: rgba(15, 23, 42, 0.25); }
+.ktable-window {
+  --kt-hair: color-mix(in srgb, var(--k-text) 13%, transparent);
+  --kt-head: color-mix(in srgb, var(--k-text) 5%, transparent);
+  display: flex; flex-direction: column;
+  width: min(1100px, 100%); max-height: 100%;
+  border-radius: 12px; overflow: hidden;
+  border: 1px solid var(--kt-hair);
+  background: var(--k-bg); color: var(--k-text);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.3);
+  font-family: var(--k-font);
+}
+.ktable-window-bar { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--kt-hair); }
+.ktable-search { display: flex; align-items: center; gap: 6px; height: 28px; width: 260px; padding: 0 9px; border-radius: 8px; background: var(--k-fill); }
+.ktable-search svg { width: 13px; height: 13px; color: var(--k-text-3); flex: none; }
+.ktable-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--k-text); font: 12.5px var(--k-font); }
+.ktable-count { color: var(--k-text-3); font-size: 11px; white-space: nowrap; }
+.ktable-spacer { flex: 1; }
+.ktable-meta { color: var(--k-text-3); font-size: 11.5px; }
+.ktable-btn { height: 24px; padding: 0 10px; border: 0; border-radius: 6px; background: var(--k-fill); color: var(--k-text); font: 12px var(--k-font); cursor: pointer; }
+.ktable-close { width: 24px; height: 24px; border: 0; border-radius: 50%; background: var(--k-fill); color: var(--k-text-2); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.ktable-close svg { width: 13px; height: 13px; }
+.ktable-window-body { overflow: auto; min-height: 0; }
+.ktable-window-body .ktable-grid thead th { position: sticky; top: 0; z-index: 2; background: var(--k-bg); background-image: linear-gradient(var(--kt-head), var(--kt-head)); box-shadow: 0 1px 0 var(--kt-hair); }
+.ktable-window-body .ktable-grid.is-sticky th:first-child { z-index: 3; }
+.ktable-window-body .ktable-grid.is-sticky td:first-child { background: var(--k-bg); }
+.ktable-grid th.is-sortable { cursor: pointer; user-select: none; }
+.ktable-grid th.is-sortable:hover { color: var(--k-text); }
+.ktable-arrow { margin-left: 4px; }
+.ktable-grid td.is-hit { background: rgba(250, 204, 21, 0.22) !important; }
+.ktable-grid td.is-current { box-shadow: inset 0 0 0 2px rgba(250, 204, 21, 0.48); }
 .kmd-check { margin-right: 4px; }
 
 /* ── Round controls (↑ / ↓) ─────────────────────────────────────── */
@@ -630,7 +702,7 @@
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
   background: linear-gradient(to bottom, color-mix(in srgb, var(--k-bg) 0%, transparent), var(--k-bg) 38%);
 }
-.kcomposer { display: flex; align-items: flex-end; gap: var(--k-gap); }
+.kcomposer { position: relative; display: flex; align-items: flex-end; gap: var(--k-gap); }
 .kcomposer-field {
   position: relative;
   display: flex;
@@ -659,6 +731,45 @@
   font: 16px/20px var(--k-font);
 }
 .kcomposer-field textarea::placeholder { color: var(--k-text-3); }
+/* Multi-line drafts: text across the box, attach/mic in a row below (Mac/iOS). */
+.kcomposer-field.is-multiline { flex-wrap: wrap; }
+.kcomposer-field.is-multiline textarea { order: -1; flex-basis: 100%; padding: 13px 16px 4px; }
+.kcomposer-field.is-multiline .kmic { margin-left: auto; }
+
+/* Mic and dictation */
+.kmic {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 44px; height: 48px; border: 0; background: none; color: var(--k-text-2); cursor: pointer;
+}
+.kmic svg { width: 21px; height: 21px; stroke-width: 2.1; }
+.kmic:hover:not(:disabled) { color: var(--k-text); }
+.kmic:disabled { opacity: 0.4; cursor: default; }
+.kspin { animation: kspin 0.9s linear infinite; }
+@keyframes kspin { to { transform: rotate(360deg); } }
+.kcomposer-field.is-dictating { flex-direction: column; align-items: stretch; }
+.kvoice-transcript { max-height: 132px; overflow-y: auto; padding: 13px 16px 2px; font: 16px/21px var(--k-font); color: var(--k-text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.kvoice-rec { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: #ef4444; vertical-align: 2px; }
+.kvoice-row { display: flex; align-items: center; gap: 6px; height: 48px; padding: 0 6px 0 8px; }
+.kvoice-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 34px; padding: 0 12px; border: 0; border-radius: 17px;
+  background: color-mix(in srgb, var(--k-text) 9%, transparent); color: var(--k-text); font: 500 14px var(--k-font); cursor: pointer;
+}
+.kvoice-chip svg { width: 14px; height: 14px; stroke-width: 2.3; }
+.kvoice-chip.is-edit { background: color-mix(in srgb, var(--k-user) 12%, transparent); color: var(--k-link); }
+.kvoice-chip:disabled { opacity: 0.45; cursor: default; }
+.kvoice-bars { display: inline-flex; align-items: center; gap: 2.5px; height: 26px; margin-left: 6px; }
+.kvoice-bars i { width: 3px; border-radius: 2px; background: var(--k-user); transition: height 0.12s ease-out; }
+.kvoice-time { margin-left: 4px; font: 12px var(--k-mono); color: var(--k-text-2); font-variant-numeric: tabular-nums; }
+.kvoice-spacer { flex: 1; }
+.kvoice-error {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); z-index: 2;
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; border-radius: 12px;
+  background: color-mix(in srgb, #ef4444 12%, var(--k-bg)); color: #b91c1c; font: 13px var(--k-font);
+}
+.dark .kvoice-error { color: #fca5a5; }
+.kvoice-error span { flex: 1; }
+.kvoice-error button { border: 0; background: none; color: inherit; cursor: pointer; display: inline-flex; }
+.kvoice-error svg { width: 14px; height: 14px; }
 .kcomposer-attach {
   display: flex;
   width: 44px;

@@ -14,6 +14,12 @@ const APPCAST = '<rss><channel><item><sparkle:shortVersionString>0.2.70</sparkle
   + '<item><sparkle:shortVersionString>0.2.69</sparkle:shortVersionString></item></channel></rss>';
 
 describe('detectInstall', () => {
+  it('Kraki for Windows: the built-in kraki.exe updates with the app', () => {
+    expect(detectInstall({ env: { KRAKI_MANAGED_BY: 'kraki-windows' }, sea: true, platform: 'win32', execPath: 'C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\resources\\kraki\\kraki.exe' }).method).toBe('windows-app');
+    expect(detectInstall({ env: {}, sea: true, platform: 'win32', execPath: 'C:\\Users\\a\\AppData\\Local\\Programs\\Kraki\\resources\\kraki\\kraki.exe' }).method).toBe('windows-app');
+    expect(detectInstall({ env: {}, sea: true, platform: 'win32', execPath: 'C:\\Users\\a\\kraki-cli\\kraki.exe' }).method).toBe('binary');
+  });
+
   it('Kraki for Mac helper → mac-app, with the app version', () => {
     const r = detectInstall({
       env: { KRAKI_MANAGED_BY: 'kraki-mac' }, sea: true, platform: 'darwin',

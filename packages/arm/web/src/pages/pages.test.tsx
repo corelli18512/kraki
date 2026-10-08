@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { useStore } from '../hooks/useStore';
@@ -77,20 +77,40 @@ describe('DashboardPage', () => {
     expect(screen.getByText('Connecting to relay…')).toBeInTheDocument();
   });
 
-  it('shows welcome state when connected on mobile viewport', () => {
+  it('shows the new-session composer when connected (Mac idle pane)', () => {
     useStore.getState().setStatus('connected');
     useStore.getState().setSessions([
       { id: 's1', deviceId: 'd1', deviceName: 'Mac', agent: 'copilot', messageCount: 2 },
     ]);
     renderWithRoute('/', <DashboardPage />);
-    expect(screen.getByText('Welcome to Kraki')).toBeInTheDocument();
+    expect(screen.getByText("What's next?")).toBeInTheDocument();
+    expect(screen.getByTestId('new-session-text')).toBeInTheDocument();
   });
 
-  it('shows empty state when connected with no sessions', () => {
+  it('asks what to work on first when there are no sessions yet', () => {
     useStore.getState().setStatus('connected');
     renderWithRoute('/', <DashboardPage />);
-    expect(screen.getByText('Welcome to Kraki')).toBeInTheDocument();
-    expect(screen.getByText('Select a session from the sidebar to get started')).toBeInTheDocument();
+    expect(screen.getByText('What should we work on first?')).toBeInTheDocument();
+    expect(screen.getByText('No computer is online. Open Kraki on a computer to start a session there.')).toBeInTheDocument();
+  });
+
+  it('starts a session with the typed task on the remembered computer, agent and model', () => {
+    useStore.getState().setStatus('connected');
+    useStore.getState().setDevices([{ id: 'd1', name: 'Office PC', role: 'tentacle', online: true }]);
+    useStore.setState({ deviceAgents: new Map([['d1', [
+      { type: 'copilot', id: 'copilot', models: ['gpt-6', 'claude-5'], modelDetails: [{ id: 'gpt-6', name: 'GPT-6', supportsReasoningEffort: true, supportedReasoningEfforts: ['low', 'medium', 'high'] }] },
+    ]]]) } as never);
+    const create = vi.spyOn(wsClient, 'createSession').mockImplementation(() => {});
+    renderWithRoute('/', <DashboardPage />);
+    expect(screen.getByTestId('new-session-device')).toHaveTextContent('Office PC');
+    expect(screen.getByTestId('new-session-model')).toHaveTextContent('GPT-6');
+    expect(screen.getByTestId('new-session-effort')).toHaveTextContent('Medium thinking');
+    const box = screen.getByTestId('new-session-text');
+    expect(screen.getByTestId('new-session-create')).toBeDisabled();
+    fireEvent.change(box, { target: { value: 'Fix the flaky test' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(create).toHaveBeenCalledWith({ targetDeviceId: 'd1', agentId: 'copilot', model: 'gpt-6', reasoningEffort: 'medium', prompt: 'Fix the flaky test' });
+    create.mockRestore();
   });
 });
 
@@ -195,8 +215,56 @@ describe('Composer', () => {
     expect(screen.getByRole('button', { name: 'Steer agent' })).toBeInTheDocument();
   });
 
+  it('a draft that wraps only in the one-row layout settles in two rows (no layout ping-pong)', () => {
+    // Real layout: one row leaves the text ~half the box, so this draft wraps;
+    // two rows give it the full width, where it fits on one line.
+    const draft = 'Use your ask-user question tool to ask me which color I prefer, with choices red, green and blue.';
+    const sh = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (!(this instanceof HTMLTextAreaElement)) return 0;
+        const twoRows = this.parentElement?.classList.contains('is-multiline');
+        const perLine = twoRows ? 120 : 60;
+        return 20 * Math.max(1, Math.ceil(this.value.length / perLine));
+      },
+    });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      useStore.getState().setDraft('s1', draft);
+      render(<Composer {...baseProps} intent="prompt" />);
+      const field = screen.getByRole('textbox');
+      expect(field.parentElement).toHaveClass('is-multiline');
+      // Shorter than where it went to two rows: back to one row; empty: one row.
+      fireEvent.change(field, { target: { value: 'short' } });
+      expect(field.parentElement).not.toHaveClass('is-multiline');
+      fireEvent.change(field, { target: { value: 'line one\nline two' } });
+      expect(field.parentElement).toHaveClass('is-multiline');
+      fireEvent.change(field, { target: { value: '' } });
+      expect(field.parentElement).not.toHaveClass('is-multiline');
+      expect(errors.mock.calls.flat().join(' ')).not.toMatch(/Maximum update depth/);
+    } finally {
+      errors.mockRestore();
+      if (sh) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', sh);
+      else delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+    }
+  });
+
   it('Stop is disabled while the device is unreachable', () => {
     render(<Composer {...baseProps} canAbort reachable={false} intent="steer" />);
     expect(screen.getByRole('button', { name: 'Stop agent' })).toBeDisabled();
+  });
+});
+
+describe('New session composer default computer', () => {
+  it('switches to the last-used computer when it comes online after the composer appeared', () => {
+    localStorage.setItem('kraki:last-device', 'pc');
+    useStore.getState().setStatus('connected');
+    useStore.getState().setDevices([{ id: 'mac', name: 'Local Mac', role: 'tentacle', online: true }, { id: 'pc', name: 'Alex-PC', role: 'tentacle', online: false }]);
+    renderWithRoute('/', <DashboardPage />);
+    expect(screen.getByTestId('new-session-device')).toHaveTextContent('Local Mac');
+    act(() => useStore.getState().setDevices([{ id: 'mac', name: 'Local Mac', role: 'tentacle', online: true }, { id: 'pc', name: 'Alex-PC', role: 'tentacle', online: true }]));
+    expect(screen.getByTestId('new-session-device')).toHaveTextContent('Alex-PC');
+    localStorage.removeItem('kraki:last-device');
   });
 });

@@ -51,7 +51,7 @@ import { AttachmentStore } from './attachment-store.js';
 import { KrakiMcpServer } from './mcp/index.js';
 import { createLogger } from './logger.js';
 import { initStatusFile, updateRelayState, updateRegion, clearStatusFile, updateFdaStatus, updateDaemonIdentity } from './status-file.js';
-import { isMacAppManagedWorker, loadManagedBy } from './managed.js';
+import { appManagedWorkerOwner, isMacAppManagedWorker, loadManagedBy } from './managed.js';
 import { hydrateLoginShellEnv } from './shell-env.js';
 import type { AgentAdapter } from './adapters/base.js';
 import type { AgentId } from '@kraki/protocol';
@@ -103,6 +103,16 @@ export async function startWorker(): Promise<WorkerResult> {
     logger.warn('Kraki for Mac runs the daemon for this home; retiring the leftover CLI launchd job');
     const { retireCliLaunchdJob } = await import('./daemon.js');
     retireCliLaunchdJob();
+    return process.exit(0);
+  }
+
+  // Kraki for Windows owns the daemon for this home, yet the CLI started us
+  // (its login entry or `kraki start` from an older CLI): do not run a second
+  // daemon under the same device id; drop the CLI's login entry.
+  if (!appManagedWorkerOwner() && platform() === 'win32' && loadManagedBy()?.by === 'kraki-windows') {
+    logger.warn('Kraki for Windows runs the daemon for this home; the CLI worker exits');
+    const { disableWindowsAutostart } = await import('./windows-autostart.js');
+    disableWindowsAutostart();
     return process.exit(0);
   }
 
@@ -183,7 +193,7 @@ export async function startWorker(): Promise<WorkerResult> {
 
   // 1. Load config
   let config = loadConfig();
-  if (!config && managedByMacApp) {
+  if (!config && appManagedWorkerOwner()) {
     // The Mac app registers its job only after setup, but the user can still
     // reset the config while the job is enabled. Exiting would make launchd
     // respawn us every ThrottleInterval forever; wait for setup instead.
@@ -470,7 +480,8 @@ export async function startWorker(): Promise<WorkerResult> {
   // Write initial status file so toolbar can detect the daemon. Readiness is
   // published only after the lifecycle handlers below are installed.
   initStatusFile(process.env.KRAKI_RELAY_URL ?? config.relay, config.device.name);
-  updateDaemonIdentity({ managedBy: managedByMacApp ? 'kraki-mac' : 'cli', version: getVersion(), pid: process.pid });
+  const supervisorPid = Number(process.env.KRAKI_SUPERVISED) || undefined;
+  updateDaemonIdentity({ managedBy: appManagedWorkerOwner() ?? 'cli', version: getVersion(), pid: process.pid, supervisorPid });
   if (pendingFda) updateFdaStatus(pendingFda);
 
   // 6. Graceful shutdown

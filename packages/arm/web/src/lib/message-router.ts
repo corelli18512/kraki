@@ -10,6 +10,12 @@ import type { SessionPreview } from '../types/store';
 import { traceEvent } from './trace';
 import { allowAutoRead, suppressAutoRead } from './read-visibility';
 import { outbox } from './chat/outbox';
+import { notifyDesktop } from './desktop';
+
+function sessionTitle(sid: string): string {
+  const s = getStore().sessions.get(sid);
+  return s?.title ?? s?.autoTitle ?? 'Kraki';
+}
 
 const logger = createLogger('msg-router');
 
@@ -122,6 +128,17 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   if (msg.type === 'card_action') {
     const cardAction = msg as CardAction;
     if (cardAction.sessionId) store.setCardAction(cardAction.sessionId, cardAction.payload.action);
+    const action = cardAction.payload.action;
+    if (cardAction.sessionId && action?.type === 'permission' && !action.payload.decision) {
+      notifyDesktop(cardAction.sessionId, sessionTitle(cardAction.sessionId), `Approval needed: ${action.payload.description || action.payload.toolName}`);
+    }
+    return;
+  }
+
+  // device_usage — subscription accounts and remaining quota from a tentacle
+  if (msg.type === 'device_usage') {
+    const payload = (msg as { payload?: { accounts?: import('@kraki/protocol').AccountUsage[]; requestId?: string; refreshError?: string } }).payload;
+    if (msg.deviceId && payload) store.receiveDeviceUsage(msg.deviceId, { accounts: payload.accounts ?? [], requestId: payload.requestId, refreshError: payload.refreshError });
     return;
   }
 
@@ -249,6 +266,8 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       logger.info('agent_message received', { sessionId: sid, contentLen: msg.payload.content?.length });
       traceEvent({ comp: 'arm', evt: 'APP-AGENT-MESSAGE', sessionId: sid, contentLen: msg.payload.content?.length });
       store.appendMessage(sid, msg);
+      const question = (msg.payload as { question?: { text?: string } }).question;
+      if (question) notifyDesktop(sid, sessionTitle(sid), question.text || 'The agent has a question');
       // The sidebar preview is owned by the session_list digest (the tentacle is
       // the single authority). The agent reply becomes the preview only once the
       // turn closes and the tentacle broadcasts; setting it here would show
@@ -307,6 +326,10 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     case 'idle': {
       const idled = store.sessions.get(sid);
       if (idled) store.upsertSession({ ...idled, state: 'idle' });
+      if (idled?.state === 'active') {
+        const reply = [...(store.messages.get(sid) ?? [])].reverse().find((m) => m.type === 'agent_message');
+        notifyDesktop(sid, sessionTitle(sid), (reply?.payload as { content?: string } | undefined)?.content || 'Finished');
+      }
       store.appendMessage(sid, msg);
       // A closing idle can arrive even if the immediately preceding agent
       // message was dropped in transit. Reconcile the authoritative spine tail

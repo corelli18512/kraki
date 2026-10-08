@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { useAccountDeletion } from './account-deletion';
 import { decodeFrame } from '@coinfra/pulse';
 import { KrakiWSClient, wsClient } from '../lib/ws-client';
 import { useStore } from '../hooks/useStore';
@@ -742,6 +743,51 @@ describe('KrakiWSClient', () => {
 
       // Should not throw
       lastWsInstance._receive({ type: 'pong' });
+    });
+  });
+
+  describe('account deletion (Mac/iOS parity)', () => {
+    async function connected() {
+      localStorage.setItem('kraki_device', JSON.stringify({ relay: 'ws://localhost:9999', deviceId: 'dev_test' }));
+      const client = new KrakiWSClient('ws://localhost:9999');
+      client.connect();
+      await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+      useStore.getState().setStatus('connected');
+      return client;
+    }
+
+    it('asks the relay, then signs out for good when it answers account_deleted', async () => {
+      const client = await connected();
+      client.requestAccountDeletion();
+      expect(useAccountDeletion.getState().state.kind).toBe('deleting');
+      expect(lastWsInstance.sentMessages.map((m) => JSON.parse(m).type)).toContain('delete_account');
+      lastWsInstance._receive({ type: 'account_deleted' });
+      expect(useStore.getState().status).toBe('awaiting_login');
+      expect(localStorage.getItem('kraki_device')).toBeNull();
+      expect(useAccountDeletion.getState().deletedNotice).toBe(true);
+      useAccountDeletion.getState().setNotice(false);
+    });
+
+    it('a server error while deleting is its answer', async () => {
+      const client = await connected();
+      client.requestAccountDeletion();
+      lastWsInstance._receive({ type: 'server_error', message: 'Try again later' });
+      expect(useAccountDeletion.getState().state).toEqual({ kind: 'failed', message: 'Try again later' });
+    });
+
+    it('an offline device learns it from auth_error account_deleted', async () => {
+      await connected();
+      lastWsInstance._receive({ type: 'auth_error', code: 'account_deleted', message: 'deleted' });
+      expect(useStore.getState().status).toBe('awaiting_login');
+      expect(useAccountDeletion.getState().deletedNotice).toBe(true);
+      useAccountDeletion.getState().setNotice(false);
+    });
+
+    it('cannot delete while disconnected', () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      useStore.getState().setStatus('disconnected');
+      client.requestAccountDeletion();
+      expect(useAccountDeletion.getState().state.kind).toBe('failed');
     });
   });
 

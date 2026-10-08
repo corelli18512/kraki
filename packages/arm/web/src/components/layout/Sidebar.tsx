@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { BotMessageSquare, Download, MonitorCloud, Plus, Search, Settings, UserCog, X } from 'lucide-react';
+import { BotMessageSquare, Download, Gauge, MonitorCloud, Plus, Search, Settings, UserCog, X } from 'lucide-react';
+import { OPEN_USAGE_EVENT, USAGE_SHORTCUT } from '../usage/UsagePanel';
 import { useStore } from '../../hooks/useStore';
 import { useShowsReconnecting } from '../../hooks/useShowsReconnecting';
 import { useNarrow } from '../../hooks/useNarrow';
@@ -11,6 +12,9 @@ import { ArchivedSessions, useArchivedCount } from '../sessions/ArchivedSessions
 import { DeviceGrid } from '../devices/DeviceGrid';
 import { SettingsPanel } from './SettingsPanel';
 import { ProfileBar } from './ProfileBar';
+import { KrakiLogo } from '../KrakiLogo';
+import { requestComposerFocus } from '../sessions/NewSessionComposer';
+import { desktop } from '../../lib/desktop';
 import './sidebar.css';
 
 function Brand() {
@@ -74,6 +78,8 @@ export function Sidebar() {
   const [importOpen, setImportOpen] = useState(false);
   const [plusMenu, setPlusMenu] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Tray › Settings… (Kraki for Windows).
+  useEffect(() => desktop?.onOpen?.('settings', () => { if (narrow) setTab('settings'); else setSettingsOpen(true); }), [narrow]);
   const [tab, setTab] = useState<'sessions' | 'devices' | 'settings'>('sessions');
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -81,8 +87,23 @@ export function Sidebar() {
   const total = useStore((s) => s.sessions.size);
   const archivedCount = useArchivedCount();
 
+  // New session on the wide layout = the composer in the idle pane (Mac):
+  // leave the current session and put the cursor in the composer.
+  const startNewSession = () => {
+    requestComposerFocus();
+    if (sessionId) navigate('/');
+  };
+
   const list = total === 0 && archivedCount === 0
-    ? <EmptySessions onNew={() => setNewOpen(true)} onImport={() => setImportOpen(true)} />
+    ? (narrow
+      ? <EmptySessions onNew={() => setNewOpen(true)} onImport={() => setImportOpen(true)} />
+      : (
+        <div className="ksb-empty ksb-empty-wide" data-testid="sidebar-empty">
+          <KrakiLogo className="ksb-empty-logo" />
+          <p className="ksb-empty-title">No sessions yet</p>
+          <p className="ksb-empty-hint">Sessions you start here, on your phone or on the web show up in this list.</p>
+        </div>
+      ))
     : (
       <div className="ksb-list" role="list">
         {sorted.map((session) => (
@@ -118,10 +139,18 @@ export function Sidebar() {
             {query && <button type="button" aria-label="Clear search" onClick={() => setQuery('')}><X /></button>}
           </label>
           <div className="ksb-plus-wrap">
-            <button type="button" className="ksb-icon" aria-label="New session" aria-haspopup="menu" onClick={() => setPlusMenu((v) => !v)}><Plus /></button>
+            <button
+              type="button"
+              className={`ksb-icon ksb-new${sessionId ? '' : ' is-composing'}`}
+              aria-label="New session"
+              title="New Session (Ctrl+N)"
+              onClick={startNewSession}
+              onContextMenu={(e) => { e.preventDefault(); setPlusMenu((v) => !v); }}
+              data-testid="sidebar-new-session"
+            ><Plus /></button>
             {plusMenu && (
               <div className="ksb-plus-menu" role="menu" onMouseLeave={() => setPlusMenu(false)}>
-                <button type="button" role="menuitem" onClick={() => { setPlusMenu(false); setNewOpen(true); }}><Plus /> New Session</button>
+                <button type="button" role="menuitem" onClick={() => { setPlusMenu(false); startNewSession(); }}><Plus /> New Session</button>
                 <button type="button" role="menuitem" onClick={() => { setPlusMenu(false); setImportOpen(true); }}><Download /> Import Session…</button>
               </div>
             )}
@@ -133,6 +162,7 @@ export function Sidebar() {
         <div className="ksb-footer">
           <ProfileBar compact />
           <button type="button" className="ksb-icon" aria-label="Devices" title="Devices" onClick={() => navigate('/devices')}><MonitorCloud /></button>
+          <button type="button" className="ksb-icon" aria-label="Account Usage" title={`Account Usage (hold ${USAGE_SHORTCUT})`} onClick={() => window.dispatchEvent(new Event(OPEN_USAGE_EVENT))} data-testid="sidebar-usage"><Gauge /></button>
           <button type="button" className="ksb-icon" aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}><Settings /></button>
         </div>
         <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />

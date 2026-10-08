@@ -1,3 +1,4 @@
+import { desktopCredentials } from '../lib/desktop';
 import { create } from 'zustand';
 import { DEFAULT_SESSION_MODE, normalizeSessionMode } from '@kraki/protocol';
 import { persist, createJSONStorage } from 'zustand/middleware';
@@ -36,7 +37,7 @@ function reviver(_key: string, value: unknown): unknown {
 function getInitialStatus(): ConnectionStatus {
   const stored = loadStoredDevice();
   const params = getUrlParams();
-  if (stored?.deviceId || params.token || params.githubCode) {
+  if (stored?.deviceId || params.token || params.githubCode || desktopCredentials()) {
     return 'connecting';
   }
   return 'awaiting_login';
@@ -65,6 +66,8 @@ const initialState = {
   relayVersion: null,
   deviceAgents: new Map<string, import('@kraki/protocol').AgentCapabilities[]>(),
   deviceVersions: new Map<string, string>(),
+  deviceUsage: new Map(),
+  usageRefreshes: new Map(),
   deviceUpdates: new Map<string, DeviceUpdateInfo>(),
   updateProgress: new Map(),
   sessionUsage: new Map<string, import('@kraki/protocol').SessionUsage>(),
@@ -455,6 +458,40 @@ export const useStore = create<Store>()(persist((set) => ({
     next.set(deviceId, info);
     return { archiveInfo: next };
   }),
+  receiveDeviceUsage: (deviceId, payload) => set((state) => {
+    const out: Partial<typeof state> = {};
+    if (payload.requestId) {
+      const pending = state.usageRefreshes.get(deviceId);
+      if (pending && pending.requestId !== payload.requestId) return {};
+      if (pending && !pending.finished) {
+        const next = new Map(state.usageRefreshes);
+        next.set(deviceId, { ...pending, finished: true, error: payload.refreshError });
+        out.usageRefreshes = next;
+      }
+    }
+    // A transport/disabled error carries a cache, not a new successful reading.
+    if (!payload.refreshError) {
+      const next = new Map(state.deviceUsage);
+      next.set(deviceId, { accounts: payload.accounts ?? [], receivedAt: Date.now() });
+      out.deviceUsage = next;
+    }
+    return out;
+  }),
+
+  beginUsageRefresh: (deviceId, requestId) => set((state) => {
+    const next = new Map(state.usageRefreshes);
+    next.set(deviceId, { requestId, startedAt: Date.now(), finished: false });
+    return { usageRefreshes: next };
+  }),
+
+  finishUsageRefresh: (deviceId, requestId, error) => set((state) => {
+    const cur = state.usageRefreshes.get(deviceId);
+    if (!cur || cur.requestId !== requestId || cur.finished) return {};
+    const next = new Map(state.usageRefreshes);
+    next.set(deviceId, { ...cur, finished: true, error });
+    return { usageRefreshes: next };
+  }),
+
   setArchivedSessions: (deviceId, sessions) => set((state) => {
     const next = new Map(state.archivedSessions);
     next.set(deviceId, sessions);
@@ -634,6 +671,8 @@ export const useStore = create<Store>()(persist((set) => ({
   relayVersion: null,
     deviceAgents: new Map(),
     deviceVersions: new Map(),
+    deviceUsage: new Map(),
+    usageRefreshes: new Map(),
     sessionUsage: new Map(),
     sessionPreviews: new Map(),
     loadingSessions: new Set(),

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { clearManagedBy, isMacAppManagedWorker, loadManagedBy, saveManagedBy, getManagedByPath, findMacAppWithBuiltIn, MAC_APP_HELPER_BINARY, LEGACY_MAC_APP_HELPER_BINARY } from '../managed.js';
+import { appManagedWorkerOwner, ownerName, clearManagedBy, isMacAppManagedWorker, loadManagedBy, saveManagedBy, getManagedByPath, findMacAppWithBuiltIn, MAC_APP_HELPER_BINARY, LEGACY_MAC_APP_HELPER_BINARY } from '../managed.js';
 
 let home: string;
 let prev: string | undefined;
@@ -26,6 +26,22 @@ describe('managed-by marker', () => {
     expect(statSync(getManagedByPath()).mode & 0o777).toBe(0o600);
     clearManagedBy();
     expect(loadManagedBy()).toBeNull();
+  });
+
+  it('accepts Kraki for Windows as the owner; a removed app makes the marker stale', () => {
+    const exe = 'C:\\Users\\me\\AppData\\Local\\Programs\\Kraki\\Kraki.exe';
+    saveManagedBy({ by: 'kraki-windows', label: 'kraki-windows', appPath: exe });
+    expect(loadManagedBy(() => true)).toMatchObject({ by: 'kraki-windows', label: 'kraki-windows' });
+    expect(loadManagedBy(() => false)).toBeNull();
+    expect(ownerName('kraki-windows')).toBe('Kraki for Windows');
+    expect(ownerName('kraki-mac')).toBe('Kraki for Mac');
+  });
+
+  it('knows which app supervises a worker', () => {
+    expect(appManagedWorkerOwner({ KRAKI_MANAGED_BY: 'kraki-windows' })).toBe('kraki-windows');
+    expect(appManagedWorkerOwner({ KRAKI_MANAGED_BY: 'kraki-mac' })).toBe('kraki-mac');
+    expect(appManagedWorkerOwner({})).toBeNull();
+    expect(appManagedWorkerOwner({ KRAKI_MANAGED_BY: 'other' })).toBeNull();
   });
 
   it('ignores malformed or foreign markers', () => {

@@ -57,6 +57,7 @@ struct AvailableUpdate: Equatable, Sendable {
     var howTo: String {
         switch installedVia {
         case "mac-app": return "Open Kraki on that Mac and choose Kraki → Check for Updates…"
+        case "windows-app": return "Install the latest Kraki for Windows on that PC. Kraki updates with the app."
         case "legacy": return "Update Kraki on that computer: Check for Updates in Kraki for Mac, or run `kraki update`."
         default: return "Run `kraki update` on that computer."
         }

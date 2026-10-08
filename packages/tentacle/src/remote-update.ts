@@ -92,6 +92,9 @@ export function remoteUpdateBlock(
   if (config?.remoteUpdate === false) return 'disabled';
   if (install.method === 'unknown' || !install.target) return 'unsupported';
   if (install.method === 'mac-app' && !install.appVersion) return 'unsupported';
+  // Kraki for Windows ships this binary inside the app; replacing it alone
+  // would desync the two. It updates with the app.
+  if (install.method === 'windows-app') return 'unsupported';
   // Moving the install aside needs its parent directory; replacing in place
   // needs the install itself.
   if (!canWrite(dirname(install.target)) || !canWrite(install.target)) return 'not_writable';

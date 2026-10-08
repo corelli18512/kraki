@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useStore } from './useStore';
+import { requestComposerFocus } from '../components/sessions/NewSessionComposer';
 
 /**
  * Cmd+Up / Cmd+Down (Mac) or Ctrl+Up / Ctrl+Down (Windows/Linux)
@@ -16,6 +17,13 @@ export function useSessionShortcuts() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
+      // Ctrl/Cmd+N: new session — the composer in the idle pane (wide layout).
+      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n' && window.innerWidth >= 768) {
+        e.preventDefault();
+        requestComposerFocus();
+        if (params.sessionId) navigate('/');
+        return;
+      }
       if (!mod || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
 
       const sorted = [...sessions.values()].sort((a, b) => {

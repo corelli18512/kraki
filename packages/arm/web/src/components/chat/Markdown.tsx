@@ -3,6 +3,7 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
 import remend from 'remend';
+import { ChatTable } from './ChatTable';
 
 function textOf(node: ReactNode): string {
   if (node == null || typeof node === 'boolean') return '';
@@ -29,13 +30,15 @@ const components: Components = {
       </div>
     );
   },
-  table: ({ children }) => (
-    <div className="kmd-table"><table>{children}</table></div>
-  ),
+  // Tables: the Mac/iOS ChatTable (preview, side scroll, full-table window).
+  table: ({ node }) => (node ? <ChatTable node={node} components={cellComponents} /> : null),
   input: ({ checked, type }) => (type === 'checkbox'
     ? <span className="kmd-check" aria-checked={!!checked} role="checkbox">{checked ? '☑' : '☐'}</span>
     : null),
 };
+
+/** Inline elements inside table cells (links open outside). */
+const cellComponents = { a: components.a };
 
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (

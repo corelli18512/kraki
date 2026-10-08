@@ -1,8 +1,12 @@
+import * as voice from './voice/voice';
+import { useAccountDeletion, DELETION_TIMEOUT_MS } from './account-deletion';
+import { canRefreshUsage } from './usage';
+import { desktopCredentials, setDesktopSignedOut } from './desktop';
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
 import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, type SessionMode } from '@kraki/protocol';
 import { createAppKeyStore } from './e2e';
-import { KrakiTransport, type MessageHandler } from './transport';
+import { KrakiTransport, STORAGE_KEY, type MessageHandler } from './transport';
 import { EncryptionHandler } from './encryption';
 import { markSessionRead } from './replay';
 import { sendAuth, handleAuthChallenge, processAuthOk, processAuthError, applyPreferences } from './auth';
@@ -70,7 +74,63 @@ export class KrakiWSClient {
     this.transport.pairWithToken(relay, token);
   }
 
+  /** Ask the relay to delete the account (relay control, not E2E). */
+  requestAccountDeletion(): void {
+    const del = useAccountDeletion.getState();
+    if (getStore().status !== 'connected') {
+      del.set({ kind: 'failed', message: 'Connect to Kraki first. The account is deleted on the server.' });
+      return;
+    }
+    const attempt = Date.now();
+    del.set({ kind: 'deleting', attempt });
+    this.transport.sendRaw({ type: 'delete_account' });
+    setTimeout(() => {
+      const now = useAccountDeletion.getState().state;
+      if (now.kind === 'deleting' && now.attempt === attempt) {
+        useAccountDeletion.getState().set({ kind: 'failed', message: "Kraki didn't answer. Check the connection and try again." });
+      }
+    }, DELETION_TIMEOUT_MS);
+  }
+
+  /** The relay deleted this account (asked from here or another device): sign out for good. */
+  private accountWasDeleted(): void {
+    const savedClientId = getStore().githubClientId;
+    localStorage.removeItem(STORAGE_KEY);
+    this.transport.storedDeviceId = undefined;
+    this.disconnect();
+    // Kraki for Windows: the built-in Kraki forgets its own sign-in and stops;
+    // drop its login item and ownership so setup starts from the beginning.
+    if (window.krakiDesktop?.builtIn) {
+      void window.krakiDesktop.builtIn.disable();
+      for (const k of ['kraki-desktop.role', 'kraki-desktop.owner', 'kraki-desktop.movedFromCLI']) localStorage.removeItem(k);
+      setDesktopSignedOut(false);
+    }
+    getStore().reset();
+    voice.resetVoice();
+    setStoreState({ githubClientId: savedClientId, status: 'awaiting_login' });
+    useAccountDeletion.getState().set({ kind: 'idle' });
+    useAccountDeletion.getState().setNotice(true);
+    window.history.replaceState({}, '', '/');
+  }
+
+  /** Connect with the account of the Kraki built into the desktop app. */
+  connectWithDesktopCredentials(): boolean {
+    setDesktopSignedOut(false);
+    const creds = desktopCredentials();
+    if (!creds) return false;
+    getStore().setStatus('connecting');
+    this.transport.redirectToRelay(creds.relay);
+    return true;
+  }
+
   constructor(url?: string) {
+    voice.configureVoiceTransport({
+      sendRaw: (m) => this.transport.sendRaw(m),
+      deviceId: () => getStore().deviceId,
+      userId: () => getStore().user?.id ?? null,
+      relayUrl: () => this.transport.url,
+      connected: () => getStore().status === 'connected',
+    });
     outbox.configure({
       send: (msg) => this.transmit(msg),
       isDeliveryPathUp: (sessionId) => this.isDeliveryPathUp(sessionId),
@@ -505,6 +565,35 @@ export class KrakiWSClient {
     commands.archiveSession(sessionId, archived, (msg) => this.sendEncrypted(msg));
   }
 
+  /** True when the tentacle's greeting lists this feature. */
+  deviceHasFeature(deviceId: string, feature: string): boolean | undefined {
+    const f = this.deviceFeatures.get(deviceId);
+    return f ? f.has(feature) : undefined;
+  }
+
+  /**
+   * Ask tentacles for a fresh account usage reading (CommandSender
+   * .refreshAccountUsage on Mac/iOS): online ones that support it, at most
+   * once a minute each; provider cooldowns still apply on the tentacle.
+   */
+  refreshAccountUsage(opts: { automatic?: boolean; deviceIds?: string[] } = {}): number {
+    const store = getStore();
+    if (store.status !== 'connected') return 0;
+    let sent = 0;
+    for (const d of store.devices.values()) {
+      if (d.role !== 'tentacle' || !d.online) continue;
+      if (opts.deviceIds && !opts.deviceIds.includes(d.id)) continue;
+      if (!this.deviceHasFeature(d.id, 'account_usage_refresh')) continue;
+      if (!canRefreshUsage(store.usageRefreshes.get(d.id), store.deviceUsage.get(d.id), !!opts.automatic)) continue;
+      const requestId = crypto.randomUUID();
+      store.beginUsageRefresh(d.id, requestId);
+      this.sendEncryptedTo(d.id, { type: 'refresh_account_usage', deviceId: store.deviceId ?? undefined, payload: { requestId } });
+      setTimeout(() => getStore().finishUsageRefresh(d.id, requestId, 'timeout'), 120_000);
+      sent++;
+    }
+    return sent;
+  }
+
   requestArchivedSessions(targetDeviceId: string) {
     commands.requestArchivedSessions(targetDeviceId, (msg) => this.sendEncrypted(msg));
   }
@@ -852,7 +941,8 @@ export class KrakiWSClient {
   // --- Internal ---
 
   private async authenticate(): Promise<void> {
-    const hasCredentials = this.transport.pairingToken || this.transport.storedDeviceId || this.transport.githubCode;
+    const hasCredentials = this.transport.pairingToken || this.transport.storedDeviceId || this.transport.githubCode
+      || desktopCredentials();
 
     if (!hasCredentials) {
       // No credentials — query server capabilities so the UI can show login options
@@ -927,6 +1017,10 @@ export class KrakiWSClient {
         this.pulse.onConnected();
         this.startPulseTick();
         this.attachmentPulls.resume();
+        {
+          const ok = msg as unknown as { voice?: import('@kraki/protocol').VoiceCapability; voiceVocabulary?: import('@kraki/protocol').VoiceWord[] };
+          voice.onAuthOk(ok.voice, ok.voiceVocabulary);
+        }
         break;
 
       case 'auth_challenge':
@@ -939,6 +1033,7 @@ export class KrakiWSClient {
         break;
 
       case 'auth_error':
+        if ((msg as { code?: string }).code === 'account_deleted') { this.accountWasDeleted(); break; }
         processAuthError(msg as Parameters<typeof processAuthError>[0], this.transport.storedDeviceId, {
           clearStoredDeviceId: () => { this.transport.storedDeviceId = undefined; },
           setStoredDeviceId: (id: string) => { this.transport.storedDeviceId = id; },
@@ -961,8 +1056,29 @@ export class KrakiWSClient {
         break;
       }
 
+      case 'voice_lease_grant' as Message['type']:
+        voice.onLeaseGrant((msg as unknown as { lease: import('@kraki/protocol').VoiceLease }).lease);
+        break;
+      case 'voice_lease_denied' as Message['type']: {
+        const d = msg as unknown as { reason: string; detail?: string };
+        voice.onLeaseDenied(d.reason, d.detail);
+        break;
+      }
+      case 'voice_vocabulary_updated' as Message['type']: {
+        const v = msg as unknown as { words?: import('@kraki/protocol').VoiceWord[]; requestId?: string };
+        if (Array.isArray(v.words)) voice.onWordsUpdated(v.words, v.requestId);
+        break;
+      }
+
+      case 'account_deleted' as Message['type']:
+        this.accountWasDeleted();
+        break;
+
       case 'server_error': {
         const serverErr = msg as ServerErrorMessage;
+        // A server error while a deletion is pending is its answer.
+        const del = useAccountDeletion.getState();
+        if (del.state.kind === 'deleting') del.set({ kind: 'failed', message: serverErr.message || "Couldn't delete the account. Try again." });
         logger.error('Server error:', serverErr.message);
         const ref = serverErr.ref;
         if (ref) {

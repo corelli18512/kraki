@@ -19,6 +19,10 @@ afterEach(() => {
 });
 
 describe('remoteUpdateBlock', () => {
+  it('never replaces the kraki.exe built into Kraki for Windows', () => {
+    expect(remoteUpdateBlock({ method: 'windows-app', target: 'C:\\K\\resources\\kraki\\kraki.exe' }, null, () => true)).toBe('unsupported');
+  });
+
   const ok = () => true;
   it('allows a writable install', () => {
     expect(remoteUpdateBlock({ method: 'binary', target: '/x/kraki' }, null, ok)).toBeNull();
