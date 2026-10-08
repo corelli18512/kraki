@@ -492,13 +492,13 @@ describe('RelayClient auth negotiation', () => {
       type: 'auth_error',
       code: 'wrong_region',
       message: 'Use the china relay',
-      redirect: 'ws://cn.example.com',
+      redirect: 'wss://cn.example.com',
     })));
     await vi.advanceTimersByTimeAsync(20);
 
     expect(fatal).not.toHaveBeenCalled();
     expect(sockets.length).toBeGreaterThanOrEqual(2);
-    expect(sockets.at(-1)?.url).toBe('ws://cn.example.com');
+    expect(sockets.at(-1)?.url).toBe('wss://cn.example.com');
   });
 });
 
@@ -3921,11 +3921,8 @@ describe('RelayClient pending-question digest', () => {
     const errorMessages = messages
       .filter((call) => call[1] === 'error')
       .map((call) => JSON.parse(call[2]).payload.message);
-    expect(errorMessages).toEqual([
-      'HTTP 400 invalid request (request id req_123)',
-      'HTTP 400 invalid request (request id req_123)',
-      'HTTP 400 invalid request (request id req_123)',
-    ]);
+    // One persisted error row per turn; later reports only refine the card.
+    expect(errorMessages).toEqual(['HTTP 400 invalid request (request id req_123)']);
     expect(errorMessages).not.toContain('success');
     expect(errorMessages).not.toContain('unknown');
 
@@ -3934,6 +3931,18 @@ describe('RelayClient pending-question digest', () => {
     expect(JSON.parse(statusCalls[0][2]).payload.action.payload.message).toBe(
       'HTTP 400 invalid request (request id req_123)',
     );
+  });
+
+  it('a recovering turn leaves one error row, and the next turn may add its own', () => {
+    const { adapter, sm } = buildClient();
+    const onError = adapter.onError as (sid: string, event: { message: string }) => void;
+    onError('sess_1', { message: 'rate limited, retrying' });
+    onError('sess_1', { message: 'rate limited, retrying' });
+    onError('sess_1', { message: 'rate limited, retrying' });
+    (adapter.onIdle as (sid: string) => void)('sess_1');
+    onError('sess_1', { message: 'HTTP 500' });
+    const rows = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.filter((call) => call[1] === 'error');
+    expect(rows).toHaveLength(2);
   });
 
   it('uses a safe fallback for a standalone invalid adapter error', () => {
@@ -4355,5 +4364,23 @@ describe('RelayClient permission decisions', () => {
     await vi.waitFor(() => expect(respond).toHaveBeenCalledTimes(2));
     await new Promise((r) => setTimeout(r, 10));
     expect(resolutions()).toEqual(['approved']);
+  });
+});
+
+describe('isAcceptableRegionRedirect', () => {
+  it('keeps official relays on official relays over TLS', async () => {
+    const { isAcceptableRegionRedirect } = await import('../relay-client.js');
+    expect(isAcceptableRegionRedirect('wss://relay.kraki.chat', 'wss://cn.relay.kraki.chat')).toBe(true);
+    expect(isAcceptableRegionRedirect('wss://relay.kraki.chat', 'ws://cn.relay.kraki.chat')).toBe(false);
+    expect(isAcceptableRegionRedirect('wss://relay.kraki.chat', 'wss://evil.example')).toBe(false);
+    expect(isAcceptableRegionRedirect('wss://relay.kraki.chat', 'wss://kraki.chat.evil.example')).toBe(false);
+    expect(isAcceptableRegionRedirect('wss://relay.kraki.chat', 'not a url')).toBe(false);
+  });
+
+  it('lets a self-hosted relay redirect over TLS (or to this machine)', async () => {
+    const { isAcceptableRegionRedirect } = await import('../relay-client.js');
+    expect(isAcceptableRegionRedirect('wss://relay.example.com', 'wss://eu.relay.example.com')).toBe(true);
+    expect(isAcceptableRegionRedirect('ws://localhost:4000', 'ws://127.0.0.1:4001')).toBe(true);
+    expect(isAcceptableRegionRedirect('wss://relay.example.com', 'ws://eu.relay.example.com')).toBe(false);
   });
 });

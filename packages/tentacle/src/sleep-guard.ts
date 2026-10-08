@@ -21,7 +21,13 @@ export interface SleepGuardDeps {
   platform: NodeJS.Platform;
   pid: number;
   spawn: typeof spawn;
+  now: () => number;
 }
+
+/** A session that shows no activity for this long stops keeping the computer
+ *  awake: a stuck "active" session (a lost turn) must not do so forever. Long
+ *  tool runs report progress well within it. */
+export const SLEEP_HOLD_IDLE_LIMIT_MS = 4 * 60 * 60 * 1000;
 
 export function sleepInhibitCommand(platform: NodeJS.Platform, pid: number): [string, string[]] | null {
   switch (platform) {
@@ -44,13 +50,15 @@ export function sleepInhibitCommand(platform: NodeJS.Platform, pid: number): [st
 }
 
 export class SleepGuard {
-  private readonly active = new Set<string>();
+  /** Active sessions → time of their last activity. */
+  private readonly active = new Map<string, number>();
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private child: ChildProcess | null = null;
   private readonly deps: SleepGuardDeps;
   private disabled = false;
 
   constructor(deps: Partial<SleepGuardDeps> = {}) {
-    this.deps = { platform: process.platform, pid: process.pid, spawn, ...deps };
+    this.deps = { platform: process.platform, pid: process.pid, spawn, now: Date.now, ...deps };
     // Opt-out for users who want normal sleep; never spawn a real inhibitor
     // from unit tests that drive RelayClient.
     if (process.env.KRAKI_ALLOW_SLEEP === '1' || (process.env.VITEST && !deps.spawn)) this.disabled = true;
@@ -58,7 +66,24 @@ export class SleepGuard {
 
   /** A session started (or continued) work. */
   hold(sessionId: string): void {
-    this.active.add(sessionId);
+    this.active.set(sessionId, this.deps.now());
+    this.sync();
+  }
+
+  /** The session did something (a reply, a step): it is still working. */
+  touch(sessionId: string): void {
+    if (this.active.has(sessionId)) this.active.set(sessionId, this.deps.now());
+  }
+
+  /** Drop sessions silent for longer than the limit. Runs periodically. */
+  sweep(): void {
+    const cutoff = this.deps.now() - SLEEP_HOLD_IDLE_LIMIT_MS;
+    for (const [sessionId, last] of this.active) {
+      if (last < cutoff) {
+        logger.warn({ sessionId }, 'Session silent for hours; no longer keeping the computer awake for it');
+        this.active.delete(sessionId);
+      }
+    }
     this.sync();
   }
 
@@ -80,6 +105,13 @@ export class SleepGuard {
   private sync(): void {
     if (this.active.size > 0 && !this.child && !this.disabled) this.start();
     else if (this.active.size === 0 && this.child) this.end();
+    if (this.active.size > 0 && !this.sweepTimer) {
+      this.sweepTimer = setInterval(() => this.sweep(), 10 * 60 * 1000);
+      this.sweepTimer.unref?.();
+    } else if (this.active.size === 0 && this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
   }
 
   private start(): void {

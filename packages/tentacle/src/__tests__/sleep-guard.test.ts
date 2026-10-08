@@ -44,3 +44,23 @@ describe('SleepGuard (release review B3)', () => {
     expect(sleepInhibitCommand('aix', 7)).toBeNull();
   });
 });
+
+describe('SleepGuard idle limit', () => {
+  it('stops holding for a session that has been silent for hours', async () => {
+    const { SLEEP_HOLD_IDLE_LIMIT_MS } = await import('../sleep-guard.js');
+    const { spawn, children } = fakeSpawn();
+    let now = 0;
+    const guard = new SleepGuard({ platform: 'darwin', pid: 1, spawn: spawn as never, now: () => now });
+    guard.hold('stuck');
+    guard.hold('busy');
+    now = SLEEP_HOLD_IDLE_LIMIT_MS - 1000;
+    guard.touch('busy');
+    now = SLEEP_HOLD_IDLE_LIMIT_MS + 1000;
+    guard.sweep();
+    expect(guard.holding).toBe(true); // 'busy' was active recently
+    now = 2 * SLEEP_HOLD_IDLE_LIMIT_MS;
+    guard.sweep();
+    expect(children[0].kill).toHaveBeenCalled();
+    expect(guard.holding).toBe(false);
+  });
+});

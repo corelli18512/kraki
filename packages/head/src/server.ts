@@ -1657,8 +1657,9 @@ export class HeadServer {
     }
 
     const allUsers = this.storage.getAllUsers();
+    const devicesByUser = this.storage.getAllDevicesByUser();
     const registeredUsers = allUsers.map(u => {
-      const devices = this.storage.getDevicesByUser(u.userId);
+      const devices = devicesByUser.get(u.userId) ?? [];
       return {
         userId: u.userId,
         username: u.username,

@@ -753,6 +753,10 @@ async function runSetupDirect(defaultRelay: string): Promise<KrakiConfig> {
   let user: string | undefined;
   if (relayInfo.methods.includes('github_token')) {
     authMethod = 'github_token';
+    // The relay checks the GitHub sign-in itself, so this relay's operator
+    // receives the token (scope read:user). Say so before signing in.
+    console.log(chalk.yellow('    This relay is not run by Kraki. Signing in with GitHub sends your GitHub sign-in'));
+    console.log(chalk.yellow('    (read-only access to your public profile) to whoever runs it.'));
     user = (await signInWithGitHub(async () => relayInfo.githubClientId)).username;
   } else if (cliMethods.length === 1) {
     authMethod = cliMethods[0];
