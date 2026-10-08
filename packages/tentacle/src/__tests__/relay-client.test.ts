@@ -536,6 +536,56 @@ describe('RelayClient agent-mapping pre-registration on auth_ok', () => {
     expect(smMock.markDisconnected).not.toHaveBeenCalled();
   });
 
+  it('closes a turn lost in a daemon restart with a failure row followed by idle', () => {
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getResumableSessions.mockReturnValue([{ id: 'running', agent: 'pi', state: 'active' }]);
+    smMock.getMeta.mockReturnValue({ id: 'running', agent: 'pi', state: 'active', lastSeq: 45 });
+    smMock.getMessagesAfterSeq.mockReturnValue([{ seq: 45, type: 'user_message' }]);
+    const client = new RelayClient(adapter, sm, {
+      relayUrl: 'ws://localhost:4000', authMethod: 'open',
+      device: { name: 'Test', role: 'tentacle' }, reconnectDelay: 10,
+    }, null);
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_1', authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' }, devices: [],
+    })));
+
+    const rows = smMock.appendMessage.mock.calls
+      .filter(([sid]) => sid === 'running')
+      .map(([, type, raw]) => ({ type, payload: JSON.parse(raw as string).payload as Record<string, unknown> }));
+    // The idle is the turn boundary: without it the next prompt and its reply
+    // join the failed turn and clients hide that reply behind the failure row.
+    expect(rows.map((r) => r.type)).toEqual(['turn_status', 'idle']);
+    expect((rows[0].payload.action as { payload: { code: string } }).payload.code).toBe('process_lost');
+    expect(rows[1].payload.reason).toBe('failed');
+    expect(smMock.markDisconnected).toHaveBeenCalledWith('running');
+  });
+
+  it('does not close a restarted session whose spine already has an outcome', () => {
+    const adapter = createAdapter();
+    const sm = createSessionManager();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getResumableSessions.mockReturnValue([{ id: 'running', agent: 'pi', state: 'active' }]);
+    smMock.getMeta.mockReturnValue({ id: 'running', agent: 'pi', state: 'active', lastSeq: 46 });
+    smMock.getMessagesAfterSeq.mockReturnValue([{ seq: 46, type: 'agent_message' }]);
+    const client = new RelayClient(adapter, sm, {
+      relayUrl: 'ws://localhost:4000', authMethod: 'open',
+      device: { name: 'Test', role: 'tentacle' }, reconnectDelay: 10,
+    }, null);
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_1', authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'open' }, devices: [],
+    })));
+
+    expect(smMock.appendMessage.mock.calls.filter(([sid]) => sid === 'running')).toEqual([]);
+  });
+
   it('pre-registers agent mapping for every resumable session so multi-adapter routing survives daemon restart', () => {
     const adapter = createAdapter();
     const sm = createSessionManager();

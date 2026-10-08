@@ -1114,6 +1114,35 @@ final class TextKitPureSpineTests: XCTestCase {
         }.map(\.seq), [65, 67])
     }
 
+    /// A daemon restart recorded the lost turn as failed without a closing
+    /// idle. The next prompt's reply must still render (it used to be folded
+    /// into the failure row and vanish).
+    func testReplyAfterRestartLostFailureWithoutIdleStaysVisible() {
+        let sid = "projection-restart-lost-no-idle"
+        func row(_ type: String, _ seq: Int, _ payload: [String: AnyCodable]) -> ChatMessage {
+            ChatMessage(type: type, seq: seq, sessionId: sid, deviceId: "d", timestamp: nil, payload: payload)
+        }
+        let messages = [
+            row("user_message", 45, ["content": AnyCodable("fix it")]),
+            row("turn_status", 46, [
+                "draft": AnyCodable(""), "steps": AnyCodable(0),
+                "action": AnyCodable(["type": "failed", "payload": [
+                    "message": "Kraki restarted on this computer while this turn was running.",
+                    "code": "process_lost",
+                ]]),
+            ]),
+            row("user_message", 47, ["content": AnyCodable("continue")]),
+            row("agent_message", 48, ["content": AnyCodable("merged")]),
+            row("idle", 49, [:]),
+            row("user_message", 50, ["content": AnyCodable("status?")]),
+            row("agent_message", 51, ["content": AnyCodable("not released")]),
+            row("idle", 52, [:]),
+        ]
+
+        let visible = ChatViewModel.renderable(TurnSpineProjection.project(messages))
+        XCTAssertEqual(visible.map(\.seq), [45, 46, 47, 48, 50, 51])
+    }
+
     func testTurnProjectionKeepsRecoveredAgentAfterSteerFollowingTerminalIdle() {
         let sid = "projection-terminal-idle-steer-agent"
         let messages = [
