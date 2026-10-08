@@ -12,6 +12,7 @@ const { pathToFileURL } = require('node:url');
 const os = require('node:os');
 const { BuiltInKraki } = require('./tentacle.cjs');
 const presence = require('./presence.cjs');
+const permissions = require('./permissions.cjs');
 
 const SCHEME = 'app';
 const HOST = 'kraki';
@@ -423,14 +424,13 @@ app.on('before-quit', () => { quitting = true; });
 app.on('activate', showWindow);
 
 app.whenReady().then(async () => {
-  // The microphone (voice input) for the app itself only; nothing else.
+  // The microphone (voice input) and clipboard writes (Copy buttons) for the
+  // app itself only; nothing else (permissions.cjs).
   const { session } = require('electron');
-  const isApp = (url) => typeof url === 'string' && url.startsWith(`${APP_ORIGIN}/`);
   session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
-    const audioOnly = permission === 'media' && (details.mediaTypes ?? []).every((t) => t === 'audio');
-    callback(audioOnly && isApp(details.requestingUrl ?? wc.getURL()));
+    callback(permissions.allowRequest(permission, details, details.requestingUrl ?? wc.getURL(), APP_ORIGIN));
   });
-  session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => permission === 'media' && origin === APP_ORIGIN);
+  session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => permissions.allowCheck(permission, origin, APP_ORIGIN));
   builtIn = new BuiltInKraki({ resourcesPath: process.resourcesPath, appPath: process.execPath, appVersion: app.getVersion() });
   // An owned daemon that is not running (a crash loop gave up, or it was
   // stopped by an update) starts again with the app.

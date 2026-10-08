@@ -87,6 +87,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const fileRef = useRef<HTMLInputElement>(null);
   const composing = useRef(false);
   const [multiline, setMultiline] = useState(false);
+  /** Draft length at which the field went to two rows. */
+  const multilineFrom = useRef(0);
   const dictation = useDictation(sessionId);
 
   const onVoiceFinal = (spoken: string, mode: VoiceFinish) => {
@@ -127,11 +129,22 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     el.style.height = '0px';
     el.style.height = `${Math.min(el.scrollHeight, MAX_LINES_HEIGHT)}px`;
     // Multi-line drafts use two rows: text across the box, controls below (Mac/iOS).
-    // Text taller than one line (the box's padding excluded), or a line break.
+    // Only the one-row layout is measured: two rows give the text the full
+    // width, where it may fit on one line again, and measuring there would
+    // flip the layout back and forth forever. Two rows end when the draft is
+    // shorter than when it got there (and has no line break).
+    if (multiline) {
+      if (!text || (!text.includes('\n') && text.length < multilineFrom.current)) setMultiline(false);
+      return;
+    }
+    if (!text) return;
     const cs = getComputedStyle(el);
     const line = parseFloat(cs.lineHeight) || 20;
     const content = el.scrollHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-    setMultiline(text.length > 0 && (text.includes('\n') || content > line * 1.6));
+    if (text.includes('\n') || content > line * 1.6) {
+      multilineFrom.current = text.length;
+      setMultiline(true);
+    }
   }, [text, multiline]);
 
   const hasText = text.trim().length > 0;

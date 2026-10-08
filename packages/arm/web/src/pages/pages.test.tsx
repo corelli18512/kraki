@@ -204,6 +204,41 @@ describe('Composer', () => {
     expect(screen.getByRole('button', { name: 'Steer agent' })).toBeInTheDocument();
   });
 
+  it('a draft that wraps only in the one-row layout settles in two rows (no layout ping-pong)', () => {
+    // Real layout: one row leaves the text ~half the box, so this draft wraps;
+    // two rows give it the full width, where it fits on one line.
+    const draft = 'Use your ask-user question tool to ask me which color I prefer, with choices red, green and blue.';
+    const sh = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (!(this instanceof HTMLTextAreaElement)) return 0;
+        const twoRows = this.parentElement?.classList.contains('is-multiline');
+        const perLine = twoRows ? 120 : 60;
+        return 20 * Math.max(1, Math.ceil(this.value.length / perLine));
+      },
+    });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      useStore.getState().setDraft('s1', draft);
+      render(<Composer {...baseProps} intent="prompt" />);
+      const field = screen.getByRole('textbox');
+      expect(field.parentElement).toHaveClass('is-multiline');
+      // Shorter than where it went to two rows: back to one row; empty: one row.
+      fireEvent.change(field, { target: { value: 'short' } });
+      expect(field.parentElement).not.toHaveClass('is-multiline');
+      fireEvent.change(field, { target: { value: 'line one\nline two' } });
+      expect(field.parentElement).toHaveClass('is-multiline');
+      fireEvent.change(field, { target: { value: '' } });
+      expect(field.parentElement).not.toHaveClass('is-multiline');
+      expect(errors.mock.calls.flat().join(' ')).not.toMatch(/Maximum update depth/);
+    } finally {
+      errors.mockRestore();
+      if (sh) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', sh);
+      else delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+    }
+  });
+
   it('Stop is disabled while the device is unreachable', () => {
     render(<Composer {...baseProps} canAbort reachable={false} intent="steer" />);
     expect(screen.getByRole('button', { name: 'Stop agent' })).toBeDisabled();
