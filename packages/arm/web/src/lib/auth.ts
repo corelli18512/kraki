@@ -15,7 +15,7 @@ export function browserDeviceName(ua: string): string {
   const browser = /Edg\//.test(ua) ? 'Edge'
     : /Firefox\//.test(ua) ? 'Firefox'
       : /(Chrome|CriOS)\//.test(ua) ? 'Chrome'
-        : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+        : /Safari/.test(ua) ? 'Safari' : 'Browser';
   const os = /iPhone/.test(ua) ? 'iPhone'
     : /iPad/.test(ua) ? 'iPad'
       : /Android/.test(ua) ? 'Android'
