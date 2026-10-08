@@ -117,7 +117,42 @@ final class ChatViewModel {
     }
 
     /// Confirmed spine bubbles plus optimistic pending input.
-    var displayMessages: [ChatMessage] { cachedMessages + pendingMessages }
+    var displayMessages: [ChatMessage] { Self.place(pendingMessages, in: cachedMessages) }
+
+    /// In-flight inputs follow the conversation tail. One that FAILED stays
+    /// where it was written: later messages that did go through land below it
+    /// instead of the failed one sliding to the bottom (out of order).
+    static func place(_ pending: [ChatMessage], in spine: [ChatMessage]) -> [ChatMessage] {
+        guard !pending.isEmpty else { return spine }
+        // Only anchor inside the loaded window. One written before the window
+        // keeps the old tail position: a row prepended above the window would
+        // look like an older page to the list's pagination reconcile.
+        let windowStart = spine.first(where: { $0.seq > 0 })?.seq ?? Int.max
+        func anchor(_ message: ChatMessage) -> Int? {
+            guard message.payload["localState"]?.stringValue == "failed",
+                  let seq = message.payload[CommandSender.afterSeqKey]?.intValue,
+                  seq >= windowStart else { return nil }
+            return seq
+        }
+        // `pending` is in send order; ties on the anchor keep that order.
+        let anchored = pending.enumerated()
+            .compactMap { i, m in anchor(m).map { (seq: $0, order: i, message: m) } }
+            .sorted { ($0.seq, $0.order) < ($1.seq, $1.order) }
+        guard !anchored.isEmpty else { return spine + pending }
+        let tail = pending.filter { anchor($0) == nil }
+        var result: [ChatMessage] = []
+        result.reserveCapacity(spine.count + pending.count)
+        var next = 0
+        for message in spine {
+            while next < anchored.count, message.seq > 0, message.seq > anchored[next].seq {
+                result.append(anchored[next].message)
+                next += 1
+            }
+            result.append(message)
+        }
+        result.append(contentsOf: anchored[next...].map(\.message))
+        return result + tail
+    }
 
     @ObservationIgnored private var currentSpineMemo: (revision: Int, answering: [String], atHead: Bool, messages: [ChatMessage])?
 
@@ -136,13 +171,13 @@ final class ChatViewModel {
         let answering = pending.compactMap(\.answerTo)
         let atHead = windowAtHead
         if let memo = currentSpineMemo, memo.revision == revision, memo.answering == answering, memo.atHead == atHead {
-            return memo.messages + pendingMessages(landedIn: memo.messages)
+            return Self.place(pendingMessages(landedIn: memo.messages), in: memo.messages)
         }
         let spine = Self.renderable(TurnSpineProjection.project(
             Self.presentingQuestions(filteredMessages, pending: pending, atHead: atHead)
         ))
         currentSpineMemo = (revision, answering, atHead, spine)
-        return spine + pendingMessages(landedIn: spine)
+        return Self.place(pendingMessages(landedIn: spine), in: spine)
     }
 
     private func pendingMessages(landedIn spine: [ChatMessage]) -> [ChatMessage] {

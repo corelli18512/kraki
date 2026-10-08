@@ -752,6 +752,8 @@ struct MacChatComposer: View {
     /// returns to its newest edge, and focus stays in the composer so a
     /// follow-up can be typed immediately (as on iOS).
     private func didSubmitFromComposer() {
+        // Any submission resolves a voice failure note ("text is back in the box").
+        if voiceController.hasFailure(for: sessionId) { voiceController.clearFailure() }
         NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil,
                                         userInfo: ["sessionId": sessionId])
     }
