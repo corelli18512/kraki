@@ -855,7 +855,12 @@ final class KrakiVoiceInputTests: XCTestCase {
             ("audio capture stalled", "microphone stopped", "capture_stalled"),
             ("audio input changed during recording", "audio input changed", "capture_interrupted"),
             ("audio input format changed or is invalid", "audio input changed", "capture_interrupted"),
-            ("voice upload stalled", "couldn't be uploaded", "upload_stalled"),
+            ("voice upload stalled", "connection stalled", "upload_stalled"),
+            // Doubao gave up waiting for audio: the upload stalled on this device's network.
+            ("gateway error: Doubao ASR error 45000081: wait packet timeout", "connection stalled",
+             VoiceTracker.classify(gatewayReason: "gateway error: Doubao ASR error 45000081: wait packet timeout")),
+            ("ws error: The network connection was lost.", "connection dropped",
+             VoiceTracker.classify(gatewayReason: "ws error: The network connection was lost.")),
             ("ASR closed without final transcript", "recognition ended", "asr_final_missing"),
         ]
         for (reason, expected, cause) in cases {

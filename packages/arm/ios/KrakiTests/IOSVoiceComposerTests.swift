@@ -262,14 +262,41 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
         }
     }
 
-    func testRecordingFailureWithoutFinalStillOffersTheOriginal() async {
+    func testRecordingCutOffReturnsWhatWasHeardToTheBoxNotAFailedBubble() async {
         let (host, voice) = make()
         let session = await start(host, voice)
         await partial("heard so far", session); voice.send(attachments: nil, delivery: .prompt)
-        session.event(.failed("socket disconnected")); await settle()
+        session.event(.failed("gateway error: Doubao ASR error 45000081: wait packet timeout")); await settle()
         XCTAssertTrue(host.transmitted.isEmpty, "no final transcript: the user decides")
-        XCTAssertEqual(host.last?.state, "failed")
-        XCTAssertEqual(host.last?.text, "heard so far")
+        XCTAssertTrue(host.staged.isEmpty, "no 'not delivered' bubble that looks like a send failure")
+        XCTAssertEqual(host.sessionStore.drafts["a"], "heard so far", "the words are back in the box")
+        XCTAssertNil(voice.operation)
+        XCTAssertTrue(host.voiceInputController.hasFailure(for: "a"))
+        XCTAssertEqual(host.voiceInputController.state,
+                       .failed("\(KrakiVoiceInputController.connectionStalledMessage) \(IOSVoiceComposer.returnedToDraftDetail)"),
+                       "says what happened AND where the words went")
+    }
+
+    func testRecordingCutOffKeepsTextTypedMeanwhile() async {
+        let (host, voice) = make()
+        let session = await start(host, voice)
+        await partial("first part", session); voice.send(attachments: nil, delivery: .prompt)
+        host.sessionStore.setDraft("a", "typed after")
+        session.event(.failed("socket disconnected")); await settle()
+        XCTAssertEqual(host.sessionStore.drafts["a"], "first part\ntyped after")
+        XCTAssertTrue(host.staged.isEmpty)
+    }
+
+    func testRecordingCutOffWithImageKeepsAnUnsentBubble() async {
+        let (host, voice) = make()
+        let session = await start(host, voice)
+        await partial("look at this", session)
+        voice.send(attachments: [ImageAttachment(type: "image", mimeType: "image/png", data: "AA==")], delivery: .prompt)
+        session.event(.failed("socket disconnected")); await settle()
+        XCTAssertEqual(host.last?.state, "failed", "an image cannot go back into the box")
+        XCTAssertEqual(host.last?.text, "look at this")
+        guard case .failed(let message) = host.voiceInputController.state else { return XCTFail("no failure shown") }
+        XCTAssertTrue(message.hasSuffix(IOSVoiceComposer.keptUnsentDetail))
     }
 
     func testTransportFailureAfterCorrectionLeavesRetryableBubble() async {
@@ -289,8 +316,8 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
         await partial("full raw", session); voice.send(attachments: nil, delivery: .prompt)
         session.event(.correctionDelta("partial correction")); await settle(40)
         session.event(.failed("synthetic failure")); await settle()
-        XCTAssertEqual(host.last?.state, "failed")
-        XCTAssertEqual(host.last?.text, "full raw")
+        XCTAssertTrue(host.staged.isEmpty)
+        XCTAssertEqual(host.sessionStore.drafts["a"], "full raw", "the original, not a partial correction")
         XCTAssertTrue(host.transmitted.isEmpty)
         XCTAssertNil(voice.operation)
     }

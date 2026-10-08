@@ -805,6 +805,56 @@ final class ChatUXRegressionTests: XCTestCase {
         XCTAssertNil(payload["delivery"], "an answer is never a steer")
     }
 
+    /// 2026-10-08: a voice message failed, the next message went through, and
+    /// the failed one was drawn BELOW it (pending inputs were always appended).
+    func testFailedInputStaysWhereItWasWrittenWhenALaterMessageLands() throws {
+        let fx = try makeFixture(total: 10) { _ in true }
+        drain(300)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        let failedId = try XCTUnwrap(sender.stageInput(sessionId: sid, text: "cut off"))
+        sender.failStagedInput(sessionId: sid, clientId: failedId, text: "cut off")
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "second"))
+        let secondId = try XCTUnwrap(sender.pendingInputs(sid).last?.payload["clientId"]?.stringValue)
+        let echo = try JSONSerialization.data(withJSONObject: [
+            "type": "user_message", "seq": 11, "sessionId": sid, "deviceId": dev,
+            "timestamp": "2026-09-01T00:00:03.000Z", "payload": ["content": "second", "clientId": secondId],
+        ])
+        fx.app.messageProvider?.ingestTailCandidate(sid, json: echo)
+        fx.app.sessionStore.observeLastSeq(sid, seq: 11)
+        fx.vc.syncLiveUpdates(); drain(150)
+
+        let vm = ChatViewModel(sessionId: sid, appState: fx.app)
+        vm.refreshMessageCache()
+        let tail = vm.displayMessages.suffix(2).map { $0.payload["clientId"]?.stringValue ?? "\($0.seq)" }
+        XCTAssertEqual(tail, [failedId, secondId], "the failed message stays above the later delivered one")
+        let shown = rows(fx.cv).suffix(2).map(\.id)
+        XCTAssertEqual(shown.first?.hasSuffix(":pending:\(failedId)"), true, "the list draws the same order: \(shown)")
+        XCTAssertEqual(shown.last, "\(sid):11")
+
+        // Retrying sends it now: it follows the conversation tail again.
+        XCTAssertTrue(sender.retryPending(sessionId: sid, clientId: failedId))
+        XCTAssertEqual(vm.displayMessages.last?.payload["clientId"]?.stringValue, failedId)
+    }
+
+    func testPendingPlacementKeepsInFlightAtTailAndFailedAtItsAnchor() {
+        func spine(_ seq: Int) -> ChatMessage {
+            ChatMessage(type: "agent_message", seq: seq, sessionId: "s", deviceId: nil, timestamp: nil, payload: [:])
+        }
+        func pending(_ id: String, _ state: String, after: Int?) -> ChatMessage {
+            var payload: [String: AnyCodable] = ["clientId": AnyCodable(id), "localState": AnyCodable(state)]
+            if let after { payload[CommandSender.afterSeqKey] = AnyCodable(after) }
+            return ChatMessage(type: "pending_input", seq: 0, sessionId: "s", deviceId: nil, timestamp: nil, payload: payload)
+        }
+        let placed = ChatViewModel.place(
+            [pending("f1", "failed", after: 2), pending("s1", "sending", after: 1),
+             pending("f2", "failed", after: 2), pending("old", "failed", after: nil),
+             pending("f0", "failed", after: 0)],
+            in: [spine(1), spine(2), spine(3), spine(4)])
+        XCTAssertEqual(placed.map { $0.payload["clientId"]?.stringValue ?? "\($0.seq)" },
+                       ["1", "2", "f1", "f2", "3", "4", "s1", "old", "f0"],
+                       "in-flight, legacy (no anchor) and before-the-window failures keep the tail")
+    }
+
     func testStagedVoiceFailureRetriesOriginalAndDeleteWins() throws {
         var texts: [String] = []
         let fx = try makeFixture(total: 4) { msg in

@@ -210,6 +210,11 @@ final class CommandSender {
         }
         pendingPayload["localState"] = AnyCodable(state.rawValue)
         pendingPayload["localOrder"] = AnyCodable(nextLocalOrder)
+        // Where in the conversation this was written. A message that is never
+        // delivered stays here instead of sliding below later messages.
+        if let head = appState?.sessionStore.sessions[sessionId]?.lastSeq, head > 0 {
+            pendingPayload[Self.afterSeqKey] = AnyCodable(head)
+        }
         nextLocalOrder += 1
         let pending = ChatMessage(
             type: "pending_input",
@@ -613,7 +618,11 @@ final class CommandSender {
         let attachments: [[String: String]]?
         var answerTo: String? = nil
         var state: String? = nil
+        var afterSeq: Int? = nil
     }
+
+    /// Pending payload key: the session head seq when the input was written.
+    static let afterSeqKey = "localAfterSeq"
 
     #if DEBUG
     /// Functional tests wait for the actual FIFO boundary, not a disk-speed guess.
@@ -646,7 +655,8 @@ final class CommandSender {
                     delivery: message.payload["delivery"]?.stringValue,
                     attachments: persistedAttachments,
                     answerTo: message.answerTo,
-                    state: message.payload["localState"]?.stringValue
+                    state: message.payload["localState"]?.stringValue,
+                    afterSeq: message.payload[Self.afterSeqKey]?.intValue
                 ))
             }
         }
@@ -689,6 +699,7 @@ final class CommandSender {
             if let delivery = item.delivery { payload["delivery"] = AnyCodable(delivery) }
             if let answerTo = item.answerTo { payload["answerTo"] = AnyCodable(answerTo) }
             if let attachments = item.attachments { payload["attachments"] = AnyCodable(attachments) }
+            if let afterSeq = item.afterSeq { payload[Self.afterSeqKey] = AnyCodable(afterSeq) }
             appState?.sendMetrics.restored(
                 item.clientId,
                 kind: item.state == "correcting" ? .voice : item.answerTo != nil ? .answer

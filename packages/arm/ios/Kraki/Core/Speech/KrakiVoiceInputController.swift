@@ -823,6 +823,16 @@ final class KrakiVoiceInputController {
         return failedSessionID == nil || failedSessionID == sessionID
     }
 
+    static let connectionStalledMessage = "Voice cut off: your connection stalled."
+
+    /// The owner of a failed recording says what became of the words heard
+    /// so far ("back in the message box"), so the failure reads as one story.
+    func appendFailureDetail(_ detail: String, for sessionID: String) {
+        guard case .failed(let message) = state, failedSessionID == nil || failedSessionID == sessionID,
+              !message.hasSuffix(detail) else { return }
+        state = .failed("\(message) \(detail)")
+    }
+
     func clearFailure() {
         guard case .failed = state else { return }
         failedSessionID = nil
@@ -1400,8 +1410,14 @@ final class KrakiVoiceInputController {
         if lower.contains("audio input changed") || lower.contains("audio input format") {
             return "The audio input changed during recording. Please try again."
         }
-        if lower.contains("voice upload") {
-            return "Voice audio couldn't be uploaded. Check your connection and try again."
+        // Speech recognition stopped hearing us: the upload stalled long
+        // enough on this device's network for the provider to give up
+        // (Doubao 45000081 = no audio for 8 s), or the client noticed first.
+        if lower.contains("45000081") || lower.contains("wait packet") || lower.contains("voice upload") {
+            return Self.connectionStalledMessage
+        }
+        if lower.contains("ws error") || lower.contains("ws send error") || lower.contains("ws ping error") {
+            return "Voice cut off: the connection dropped."
         }
         if lower.contains("asr closed without final") || lower.contains("asr_closed_without_final") {
             return "Speech recognition ended before returning a transcript. Please try again."

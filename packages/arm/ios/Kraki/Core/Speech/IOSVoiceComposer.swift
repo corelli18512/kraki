@@ -345,15 +345,31 @@ protocol IOSVoiceComposerHost: AnyObject {
                 } else {
                     host.discardVoiceInput(sessionID: sessionID, clientID: clientID)
                 }
+            } else if !op.hasAttachment {
+                // No usable final transcript (recognition was cut off, e.g.
+                // the upload stalled): the words heard are probably only the
+                // first part. Never leave them as a "not delivered" bubble that
+                // looks like a network send failure: take the message back and
+                // put it in the box to finish and send. A failed *correction*
+                // still completes with the raw transcript and is sent above.
+                host.discardVoiceInput(sessionID: sessionID, clientID: clientID)
+                let store = host.sessionStore
+                let draft = store.drafts[sessionID] ?? ""
+                let restored = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? original : original + "\n" + draft
+                store.setDraft(sessionID, restored)
+                host.voiceInputController.appendFailureDetail(Self.returnedToDraftDetail, for: sessionID)
             } else {
-                // No usable final transcript (the recording failed or ended
-                // early): keep what was heard, let the user choose (Retry =
-                // send it, or Delete). A failed *correction* still completes
-                // with the raw transcript and is sent above.
+                // Images cannot go back into the box: keep the message as not
+                // sent (Retry sends what was heard, or Delete).
                 host.failVoiceInput(sessionID: sessionID, clientID: clientID, text: original)
+                host.voiceInputController.appendFailureDetail(Self.keptUnsentDetail, for: sessionID)
             }
         }
     }
+
+    static let returnedToDraftDetail = "Nothing was sent; the text so far is back in the box."
+    static let keptUnsentDetail = "Not sent. Tap the message to retry or delete it."
 
     private func dispatch(_ sessionID: String, _ clientID: String, _ text: String, _ delivery: CommandSender.InputDelivery) {
         guard host?.dispatchVoiceInput(sessionID: sessionID, clientID: clientID, text: text) == true else { return }

@@ -113,6 +113,11 @@ import VoiceInputCore
                 let delay = Int(ProcessInfo.processInfo.environment["KRAKI_VOICE_TEST_FINAL_MS"] ?? "1800") ?? 1800
                 try? await Task.sleep(for: .milliseconds(delay))
                 guard self.generation == id else { return }
+                // Recognition cut off mid-message (e.g. Doubao 45000081 after the upload stalled).
+                if let failure = ProcessInfo.processInfo.environment["KRAKI_VOICE_TEST_FAIL"] {
+                    self.onEvent(.failed(failure))
+                    return
+                }
                 self.onEvent(.final("\u{8BF7}\u{628A}\u{8FD9}\u{4E2A}\u{529F}\u{80FD}\u{63A5}\u{5165} Kraki\u{FF0C}\u{4FDD}\u{7559}\u{539F}\u{6765}\u{7684}\u{8F93}\u{5165}\u{6846}\u{3002}", rawText: "\u{8BF7}\u{628A}\u{8FD9}\u{4E2A}\u{529F}\u{80FD}\u{63A5}\u{5165} Kraki \u{4FDD}\u{7559}\u{539F}\u{6765}\u{7684}\u{8F93}\u{5165}\u{6846}"))
             }
         }

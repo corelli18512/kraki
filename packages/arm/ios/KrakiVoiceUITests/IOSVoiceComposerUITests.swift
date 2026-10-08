@@ -12,12 +12,13 @@ final class IOSVoiceComposerUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         launch()
     }
-    private func launch(dark: Bool = false, finalMs: Int = 3500) {
+    private func launch(dark: Bool = false, finalMs: Int = 3500, fail: String? = nil) {
         app = XCUIApplication()
         app.launchEnvironment["KRAKI_IOS_VOICE_HOLD_SCENARIO"] = "1"
         app.launchEnvironment["KRAKI_VOICE_TEST_SCREENSHOTS"] = "1"
         app.launchEnvironment["KRAKI_VOICE_TEST_FINAL_MS"] = String(finalMs)
         if dark { app.launchEnvironment["KRAKI_VOICE_TEST_DARK"] = "1" }
+        if let fail { app.launchEnvironment["KRAKI_VOICE_TEST_FAIL"] = fail }
         app.launch()
         XCTAssertTrue(mic.waitForExistence(timeout: 10))
     }
@@ -235,6 +236,25 @@ final class IOSVoiceComposerUITests: XCTestCase {
         awaitState("staged=0")
         awaitState("failed=0")
         XCTAssertEqual(app.staticTexts["voice-test-sent"].label, corrected)
+    }
+
+    /// 2026-10-08: recognition was cut off after Send. The half message must
+    /// not look like a network send failure: it goes back into the box with
+    /// an explanation, and nothing is sent.
+    func testCutOffAfterSendPutsTheWordsBackInTheBoxAndExplains() {
+        launch(finalMs: 800, fail: "gateway error: Doubao ASR error 45000081: wait packet timeout")
+        mic.tap()
+        awaitState("rec=1")
+        awaitTranscript()
+        app.buttons["voice-send"].tap()
+        awaitState("staged=0", timeout: 5)
+        awaitState("sent=0")
+        awaitState("failed=0")
+        let note = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'connection stalled'")).firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 3), "explains what happened")
+        XCTAssertTrue(note.label.contains("back in the box"), note.label)
+        screenshot("cut-off-back-in-box")
+        XCTAssertTrue(fieldValue.contains("Kraki"), "the words heard are back in the composer: \(fieldValue)")
     }
 
     func testBackgroundBriefReturnSendsOnce() {

@@ -534,7 +534,7 @@ struct MessageInputView: View {
             Text(voiceStatusText)
                 .font(.caption)
                 .foregroundStyle(.red)
-                .lineLimit(2)
+                .lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button("Dismiss") {
                 voiceController.clearFailure()
@@ -932,6 +932,8 @@ struct MessageInputView: View {
     /// conversation to its newest edge. The keyboard stays up for follow-ups.
     private func didSubmitFromComposer() {
         submitFailureTask?.cancel()
+        // Any submission resolves a voice failure note ("text is back in the box").
+        if voiceController.hasFailure(for: sessionId) { voiceController.clearFailure() }
         submitFailure = nil
         UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.6)
         NotificationCenter.default.post(name: .krakiComposerSubmitted, object: nil,
