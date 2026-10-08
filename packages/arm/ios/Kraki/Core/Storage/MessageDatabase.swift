@@ -457,11 +457,10 @@ final class MessageDatabase {
     /// ordered queries can use INTEGER comparison directly. Nil
     /// timestamps are stored as NULL.
     private static func parseISOToMillis(_ iso: String) -> Int64? {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: iso) { return Int64(d.timeIntervalSince1970 * 1000) }
-        f.formatOptions = [.withInternetDateTime]
-        if let d = f.date(from: iso) { return Int64(d.timeIntervalSince1970 * 1000) }
-        return nil
+        // Shared (thread-safe) formatters: creating two per inserted row made
+        // ingesting a page of history pay for 2×N formatter constructions.
+        // Not memoised: message timestamps are mostly unique.
+        guard let d = ISO8601.withFractional.date(from: iso) ?? ISO8601.withoutFractional.date(from: iso) else { return nil }
+        return Int64(d.timeIntervalSince1970 * 1000)
     }
 }
