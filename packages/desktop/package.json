@@ -1,7 +1,7 @@
 {
   "name": "kraki-desktop",
   "productName": "Kraki",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Kraki desktop app (Windows / Linux): the Kraki Web client in a native shell.",
   "author": "Kraki",
