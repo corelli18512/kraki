@@ -7,7 +7,7 @@ import { useTheme } from '../../hooks/useTheme';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import { isPushSupported, isPushSubscribed, subscribeToPush, unsubscribeFromPush, getPushPermission } from '../../lib/push';
-import { getCurrentChannel, setChannel } from '../../lib/auth';
+import { CHANNEL_SWITCHING_ENABLED, getCurrentChannel, setChannel } from '../../lib/auth';
 import { version } from '../../../package.json';
 import { ArchiveSettings } from '../sessions/ArchivedSessions';
 
@@ -134,7 +134,7 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
         </section>
       )}
 
-      {isInternal && (
+      {isInternal && CHANNEL_SWITCHING_ENABLED && (
         <section>
           <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
             Dogfood

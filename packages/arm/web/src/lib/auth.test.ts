@@ -116,7 +116,21 @@ describe('browserDeviceName', () => {
 });
 
 describe('channel preference', () => {
-  it('never reloads inside Kraki for Windows, nor when the channel cookie does not stick', async () => {
+  it('is switched off: the account channel preference never reloads the app', async () => {
+    const { applyPreferences, CHANNEL_SWITCHING_ENABLED } = await import('./auth');
+    expect(CHANNEL_SWITCHING_ENABLED).toBe(false);
+    const reload = vi.fn();
+    const loc = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...loc, reload } });
+    try {
+      applyPreferences({ channel: 'beta' });
+      expect(reload).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: loc });
+    }
+  });
+
+  it.skipIf(true)('when enabled: never reloads inside Kraki for Windows, nor when the channel cookie does not stick', async () => {
     const { applyPreferences } = await import('./auth');
     const reload = vi.fn();
     const loc = window.location;

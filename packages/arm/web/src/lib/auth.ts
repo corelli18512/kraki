@@ -219,6 +219,9 @@ export function processAuthError(
   }
 }
 
+/** Beta/stable channel switching (Settings › Dogfood, account preference). */
+export const CHANNEL_SWITCHING_ENABLED = false;
+
 /** Apply user preferences to local state. Called on auth_ok and preferences_updated. */
 export function applyPreferences(prefs: Record<string, unknown> | undefined): void {
   if (!prefs) return;
@@ -227,11 +230,13 @@ export function applyPreferences(prefs: Record<string, unknown> | undefined): vo
   if (typeof prefs.theme === 'string' && ['light', 'dark', 'system'].includes(prefs.theme)) {
     setTheme(prefs.theme as 'light' | 'dark' | 'system');
   }
+  // Channel switching is off for now (dogfood distribution to be redesigned):
+  // the account's `channel` preference is kept but not acted on.
   // Channel switching: set cookie so nginx serves the correct build. Only on
   // the hosted web app: Kraki for Windows ships its own build (app://), where
   // the cookie never sticks — reloading there looped forever (account with
   // channel=beta). And never reload unless the cookie actually took.
-  if (typeof prefs.channel === 'string' && /^[a-z]+$/.test(prefs.channel) && !window.krakiDesktop) {
+  if (CHANNEL_SWITCHING_ENABLED && typeof prefs.channel === 'string' && /^[a-z]+$/.test(prefs.channel) && !window.krakiDesktop) {
     const current = getCurrentChannel();
     if (prefs.channel !== current) {
       setChannelCookie(prefs.channel);
