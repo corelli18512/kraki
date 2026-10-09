@@ -227,12 +227,16 @@ export function applyPreferences(prefs: Record<string, unknown> | undefined): vo
   if (typeof prefs.theme === 'string' && ['light', 'dark', 'system'].includes(prefs.theme)) {
     setTheme(prefs.theme as 'light' | 'dark' | 'system');
   }
-  // Channel switching: set cookie so nginx serves the correct build
-  if (typeof prefs.channel === 'string' && /^[a-z]+$/.test(prefs.channel)) {
+  // Channel switching: set cookie so nginx serves the correct build. Only on
+  // the hosted web app: Kraki for Windows ships its own build (app://), where
+  // the cookie never sticks — reloading there looped forever (account with
+  // channel=beta). And never reload unless the cookie actually took.
+  if (typeof prefs.channel === 'string' && /^[a-z]+$/.test(prefs.channel) && !window.krakiDesktop) {
     const current = getCurrentChannel();
     if (prefs.channel !== current) {
       setChannelCookie(prefs.channel);
-      window.location.reload();
+      if (getCurrentChannel() === prefs.channel) window.location.reload();
+      else logger.warn('Channel cookie not stored; staying on this build', { channel: prefs.channel });
     }
   }
 }

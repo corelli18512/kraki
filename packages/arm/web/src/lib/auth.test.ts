@@ -114,3 +114,33 @@ describe('browserDeviceName', () => {
     expect(browserDeviceName('Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36')).toBe('Chrome on Android');
   });
 });
+
+describe('channel preference', () => {
+  it('never reloads inside Kraki for Windows, nor when the channel cookie does not stick', async () => {
+    const { applyPreferences } = await import('./auth');
+    const reload = vi.fn();
+    const loc = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...loc, reload } });
+    const cookie = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie')!;
+    try {
+      // Desktop app: ignored entirely.
+      (window as unknown as { krakiDesktop?: unknown }).krakiDesktop = {};
+      applyPreferences({ channel: 'beta' });
+      expect(reload).not.toHaveBeenCalled();
+      delete (window as unknown as { krakiDesktop?: unknown }).krakiDesktop;
+      // Cookie that never sticks (custom scheme): no reload loop.
+      Object.defineProperty(document, 'cookie', { configurable: true, get: () => '', set: () => {} });
+      applyPreferences({ channel: 'beta' });
+      expect(reload).not.toHaveBeenCalled();
+      // Normal web: switches once.
+      let jar = '';
+      Object.defineProperty(document, 'cookie', { configurable: true, get: () => jar, set: (v: string) => { jar = v.split(';')[0]; } });
+      applyPreferences({ channel: 'beta' });
+      expect(reload).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: loc });
+      delete (document as unknown as { cookie?: string }).cookie;
+      Object.defineProperty(Document.prototype, 'cookie', cookie);
+    }
+  });
+});
