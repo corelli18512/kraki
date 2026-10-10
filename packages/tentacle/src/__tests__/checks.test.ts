@@ -714,3 +714,23 @@ describe('unregisterAppBundlePath()', () => {
     expect(() => unregisterAppBundlePath('/x.app')).not.toThrow();
   });
 });
+
+describe('githubLoginOnlyFromEnv', () => {
+  it('is true only for a real token in env with no saved gh login', async () => {
+    const { githubLoginOnlyFromEnv } = await import('../checks.js');
+    const noSaved = () => { throw new Error('not logged in'); };
+    const saved = () => 'gho_saved';
+    expect(githubLoginOnlyFromEnv({ GH_TOKEN: 'ghp_x' }, noSaved)).toBe(true);
+    expect(githubLoginOnlyFromEnv({ GH_TOKEN: 'ghp_x' }, saved)).toBe(false);
+    expect(githubLoginOnlyFromEnv({}, noSaved)).toBe(false);
+    // A Copilot session token is not the user's login anyway.
+    expect(githubLoginOnlyFromEnv({ GITHUB_TOKEN: 'gho_session' }, noSaved)).toBe(false);
+  });
+
+  it('checks the saved login with the env tokens removed', async () => {
+    const { githubLoginOnlyFromEnv } = await import('../checks.js');
+    let seen: NodeJS.ProcessEnv = {};
+    githubLoginOnlyFromEnv({ GH_TOKEN: 'ghp_x', GITHUB_TOKEN: 'ghp_y', PATH: '/bin' }, (_c, e) => { seen = e; return 'tok'; });
+    expect(seen).toEqual({ PATH: '/bin' });
+  });
+});

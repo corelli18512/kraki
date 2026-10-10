@@ -157,6 +157,27 @@ export function checkGhAuth(): AuthCheckResult {
   }
 }
 
+/**
+ * True when GitHub access here comes only from GITHUB_TOKEN / GH_TOKEN in
+ * this shell, with no saved `gh` login behind it. The background daemon does
+ * not keep those variables (they would sit in plaintext in its launchd job),
+ * so agents running there would have no GitHub access.
+ */
+export function githubLoginOnlyFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  run: (cmd: string, env: NodeJS.ProcessEnv) => string = (cmd, e) =>
+    execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: e }),
+): boolean {
+  const token = (env.GITHUB_TOKEN || env.GH_TOKEN || '').trim();
+  if (!token || token.startsWith('gho_')) return false;
+  const { GITHUB_TOKEN: _a, GH_TOKEN: _b, ...rest } = env;
+  try {
+    return run('gh auth token', rest).trim() === '';
+  } catch {
+    return true;
+  }
+}
+
 export function checkCopilotCli(): CliCheckResult {
   try {
     const output = execSync('copilot --version', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
