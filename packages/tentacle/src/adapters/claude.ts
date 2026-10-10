@@ -25,7 +25,7 @@ import {
 } from './base.js';
 import type { SessionContext } from '../session-manager.js';
 import { createLogger } from '../logger.js';
-import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, symlinkSync, lstatSync, unlinkSync, cpSync, rmSync, rmdirSync, statSync, linkSync, copyFileSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, symlinkSync, lstatSync, unlinkSync, rmSync, rmdirSync, statSync, linkSync, copyFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getConfigDir } from '../config.js';
@@ -81,6 +81,7 @@ export function loadClaudeSettingsEnv(configDir: string): Record<string, string>
 }
 
 import { linkIntoShadow } from './shadow-link.js';
+import { cloneTree } from '../fs-clone.js';
 
 export { linkIntoShadow };
 
@@ -615,7 +616,7 @@ export class ClaudeAdapter extends AgentAdapter {
     return this.modelAliasMap.get(model) ?? model;
   }
 
-  private persistMeta(sessionId: string, meta: { cwd?: string; sdkSessionId?: string; model?: string; reasoningEffort?: string }): void {
+  private persistMeta(sessionId: string, meta: { cwd?: string; sdkSessionId?: string; model?: string; reasoningEffort?: string; forkFrom?: string }): void {
     try {
       mkdirSync(this.storeDir(sessionId), { recursive: true });
       const prev = this.loadMeta(sessionId) ?? {};
@@ -625,7 +626,7 @@ export class ClaudeAdapter extends AgentAdapter {
     }
   }
 
-  private loadMeta(sessionId: string): { cwd?: string; sdkSessionId?: string; model?: string; reasoningEffort?: string } | null {
+  private loadMeta(sessionId: string): { cwd?: string; sdkSessionId?: string; model?: string; reasoningEffort?: string; forkFrom?: string } | null {
     const p = this.sidecarPath(sessionId);
     if (!existsSync(p)) return null;
     try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; }
@@ -828,7 +829,9 @@ export class ClaudeAdapter extends AgentAdapter {
       consumerLoop: Promise.resolve(),
       eventTurnId: undefined,
       deferredConfig: {
-        resume: meta?.sdkSessionId ?? sessionId,
+        // A fork that never ran yet still has to be made from its source.
+        ...(!meta?.sdkSessionId && meta?.forkFrom && { fork: true }),
+        resume: meta?.sdkSessionId ?? meta?.forkFrom ?? sessionId,
         ...(meta?.cwd && { cwd: meta.cwd }),
         ...(meta?.model && { model: meta.model }),
         ...(meta?.reasoningEffort && { reasoningEffort: meta.reasoningEffort as CreateSessionConfig['reasoningEffort'] }),
@@ -855,7 +858,7 @@ export class ClaudeAdapter extends AgentAdapter {
     if (existsSync(srcProjects)) {
       try {
         mkdirSync(this.claudeHome(newSessionId), { recursive: true });
-        cpSync(srcProjects, join(this.claudeHome(newSessionId), 'projects'), { recursive: true });
+        cloneTree(srcProjects, join(this.claudeHome(newSessionId), 'projects'));
       } catch (err) {
         logger.debug({ err: (err as Error).message }, 'claude fork copy failed');
       }
@@ -883,7 +886,12 @@ export class ClaudeAdapter extends AgentAdapter {
     };
 
     this.sessions.set(newSessionId, entry);
-    if (srcMeta) this.persistMeta(newSessionId, { cwd: srcMeta.cwd, model: srcMeta.model, reasoningEffort: srcMeta.reasoningEffort });
+    // The fork is made by the first query (resume + forkSession). Record what
+    // it forks from, so a daemon restart before that still forks the right
+    // conversation instead of starting an empty one.
+    this.persistMeta(newSessionId, {
+      cwd: srcMeta?.cwd, model: srcMeta?.model, reasoningEffort: srcMeta?.reasoningEffort, forkFrom: resumeId,
+    });
 
     this.onSessionCreated?.({
       sessionId: newSessionId,
@@ -1615,7 +1623,7 @@ export class ClaudeAdapter extends AgentAdapter {
             this.sdkSessionIds.set(sessionId, sdkSessionId);
             // Persist the SDK's own session UUID — the value its `resume`
             // option expects — so a fresh daemon can re-attach this transcript.
-            this.persistMeta(sessionId, { sdkSessionId });
+            this.persistMeta(sessionId, { sdkSessionId, forkFrom: undefined });
             if (sdkSessionId !== sessionId) {
               const entry = this.sessions.get(sessionId);
               if (entry) entry.sessionId = sdkSessionId;

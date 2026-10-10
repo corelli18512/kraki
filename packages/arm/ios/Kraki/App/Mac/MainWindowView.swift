@@ -733,7 +733,7 @@ private struct MacPendingSessionView: View {
                 Image(systemName: "exclamationmark.circle")
                     .font(.system(size: 34))
                     .foregroundStyle(.red)
-                Text("Couldn't start session")
+                Text(appState.sessionStore.pendingSessionTitles[sessionId] != nil ? "Couldn't fork session" : "Couldn't start session")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.textTitle)
                 Text(reason)
@@ -743,7 +743,7 @@ private struct MacPendingSessionView: View {
                     .frame(maxWidth: 360)
             } else {
                 ProgressView().controlSize(.large)
-                Text("Starting session…")
+                Text(appState.sessionStore.pendingSessionTitles[sessionId] != nil ? "Copying session…" : "Starting session…")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Color.textSecondary)
             }

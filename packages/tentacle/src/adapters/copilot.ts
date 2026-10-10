@@ -26,7 +26,7 @@ import type {
   ContextTier,
 } from '@github/copilot-sdk';
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, cpSync, mkdtempSync, mkdirSync, unlinkSync, readdirSync, symlinkSync, lstatSync, statSync, renameSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, mkdirSync, unlinkSync, readdirSync, symlinkSync, lstatSync, statSync, renameSync } from 'node:fs';
 import * as moduleApi from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, basename } from 'node:path';
@@ -34,6 +34,7 @@ import { getKrakiHome } from '../config.js';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isSea } from 'node:sea';
 import { linkIntoShadow } from './shadow-link.js';
+import { cloneTree } from '../fs-clone.js';
 import {
   AgentAdapter,
   type CreateSessionConfig,
@@ -988,7 +989,7 @@ export class CopilotAdapter extends AgentAdapter {
 
     // Copy SDK session state if it exists
     if (existsSync(srcDir)) {
-      cpSync(srcDir, dstDir, { recursive: true });
+      cloneTree(srcDir, dstDir);
 
       // Update the session ID in workspace.yaml
       const yamlPath = join(dstDir, 'workspace.yaml');

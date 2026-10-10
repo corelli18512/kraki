@@ -7,9 +7,10 @@
  */
 
 import { atomicWriteFile, renameWithRetry } from './fs-retry.js';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync, appendFileSync, openSync, readSync, closeSync, cpSync, fstatSync, statSync, linkSync, copyFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync, appendFileSync, openSync, readSync, closeSync, fstatSync, statSync } from 'node:fs';
 import { DEFAULT_SESSION_MODE, normalizeSessionMode, toWireSessionMode } from '@kraki/protocol';
 import { dirname, join } from 'node:path';
+import { promises as fsp } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { getConfigDir } from './config.js';
 import type { ContentRef } from '@kraki/protocol';
@@ -146,6 +147,8 @@ export interface SessionListEntry {
 
 export interface SessionMeta {
   id: string;
+  /** A fork whose attachments are still being linked from this session. */
+  attachmentsFrom?: string;
   agent: string;
   model?: string;
   reasoningEffort?: import('@kraki/protocol').ReasoningEffort;
@@ -339,6 +342,7 @@ export class SessionManager {
     mkdirSync(this.sessionsDir, { recursive: true });
     this.migrateGlobalLog();
     this.clampOverflowReadSeq();
+    this.resumeForkAttachmentLinks();
   }
 
   /**
@@ -588,27 +592,39 @@ export class SessionManager {
   }
 
   /**
-   * Fork a session: copy meta, context, and messages with a new ID.
-   * Returns the new session ID and run ID.
+   * Copy a session's Kraki state into a new session. Fast and bounded: the
+   * spine and trace are rewritten to the new id (so every copied row belongs
+   * to the fork), and attachments — which can be tens of thousands of files —
+   * are linked in the background (`attachmentsFrom` lets reads fall back to
+   * the source meanwhile). Agent state is the adapter's job.
    */
-  forkSession(sourceSessionId: string): { sessionId: string; runId: string } | null {
+  forkSession(sourceSessionId: string): {
+    sessionId: string;
+    runId: string;
+    /** Seqs 1…throughSeq are the source's rows, unchanged except the id. */
+    throughSeq: number;
+    /** The source was in the middle of a turn when it was copied. */
+    sourceWasRunning: boolean;
+  } | null {
     const sourceMeta = this.readMeta(sourceSessionId);
     if (!sourceMeta) return null;
 
     const newId = `${sourceSessionId.split('-')[0]}-${randomUUID().slice(0, 8)}`;
     const runId = 'run_001';
+    const srcDir = this.sessionDir(sourceSessionId);
     const newDir = this.sessionDir(newId);
     mkdirSync(join(newDir, 'runs'), { recursive: true });
 
     const now = new Date().toISOString();
+    const throughSeq = sourceMeta.lastSeq ?? 0;
+    const srcAttachments = join(srcDir, 'attachments');
+    const hasAttachments = existsSync(srcAttachments);
     const meta: SessionMeta = {
       id: newId,
       agent: sourceMeta.agent,
       model: sourceMeta.model,
       reasoningEffort: sourceMeta.reasoningEffort,
-      // A fork is named as one (the agent's auto title counts too), so it is
-      // never an identical twin of its source in the list.
-      title: (sourceMeta.title || sourceMeta.autoTitle) ? `Fork of ${sourceMeta.title || sourceMeta.autoTitle}` : undefined,
+      title: this.forkTitle(sourceMeta.title || sourceMeta.autoTitle || this.firstUserText(sourceSessionId) || 'New Session'),
       autoTitle: sourceMeta.autoTitle,
       state: 'active',
       // A fork keeps the source's permission mode: forking a `safe` session
@@ -618,46 +634,123 @@ export class SessionManager {
       ...(sourceMeta.currentTurnStartSeq !== undefined && { currentTurnStartSeq: sourceMeta.currentTurnStartSeq }),
       currentRunId: runId,
       totalRuns: 1,
-      lastSeq: sourceMeta.lastSeq ?? 0,
-      readSeq: sourceMeta.lastSeq ?? 0,
+      lastSeq: throughSeq,
+      readSeq: throughSeq,
       createdAt: now,
       updatedAt: now,
+      ...(hasAttachments && { attachmentsFrom: sourceSessionId }),
     };
+
+    // Copied rows carry the source id inside their payloads; rewrite it so
+    // apps don't attribute the fork's history to the source.
+    const rewrite = (name: string) => {
+      const from = join(srcDir, name);
+      if (!existsSync(from)) return;
+      const content = readFileSync(from, 'utf8');
+      writeFileSync(join(newDir, name), content.split(sourceSessionId).join(newId));
+    };
+    rewrite('messages.jsonl');
+    rewrite('trace.jsonl');
 
     this.writeMeta(newId, meta);
     this.writeRun(newId, { id: runId, startedAt: now });
-
-    // Copy context
     const context = this.readContext(sourceSessionId);
-    if (context) {
-      this.writeContext(newId, { ...context, updatedAt: now });
-    }
+    if (context) this.writeContext(newId, { ...context, updatedAt: now });
 
-    // Copy message log
-    const srcLog = join(this.sessionDir(sourceSessionId), 'messages.jsonl');
-    const dstLog = join(newDir, 'messages.jsonl');
-    if (existsSync(srcLog)) {
-      cpSync(srcLog, dstLog);
-    }
-    // Steps of the copied turns live in trace.jsonl, keyed by the same seqs.
-    const srcTrace = join(this.sessionDir(sourceSessionId), 'trace.jsonl');
-    if (existsSync(srcTrace)) cpSync(srcTrace, join(newDir, 'trace.jsonl'));
-    // The copied messages reference attachments by id; without them every
-    // image/report in the fork answers not_found. Attachments are immutable
-    // and content-addressed, so hard-link them (copy across volumes).
-    const srcAttachments = join(this.sessionDir(sourceSessionId), 'attachments');
-    if (existsSync(srcAttachments)) {
-      const dstAttachments = join(newDir, 'attachments');
-      mkdirSync(dstAttachments, { recursive: true });
-      for (const name of readdirSync(srcAttachments)) {
-        const from = join(srcAttachments, name);
-        const to = join(dstAttachments, name);
-        try { linkSync(from, to); } catch { try { copyFileSync(from, to); } catch { /* best effort */ } }
-      }
-    }
+    if (hasAttachments) void this.linkForkAttachments(newId, sourceSessionId);
 
-    return { sessionId: newId, runId };
+    return { sessionId: newId, runId, throughSeq, sourceWasRunning: sourceMeta.state === 'active' };
   }
+
+  /** The first thing the user said, shortened: the name of an untitled
+   *  session's fork. */
+  private firstUserText(sessionId: string): string | undefined {
+    for (const row of this.getMessagesAfterSeq(sessionId, 0, 50)) {
+      if (row.type !== 'user_message') continue;
+      try {
+        const text = (JSON.parse(row.payload) as { payload?: { content?: string } }).payload?.content?.trim();
+        if (text) return text.length > 40 ? `${text.slice(0, 40).trimEnd()}…` : text;
+      } catch { /* skip */ }
+    }
+    return undefined;
+  }
+
+  /** "Fork of X", then "Fork 2 of X", "Fork 3 of X"… when that name is
+   *  taken. The number comes first so a truncated title still shows it. */
+  private forkTitle(sourceTitle: string | undefined): string | undefined {
+    if (!sourceTitle) return undefined;
+    const subject = sourceTitle.replace(/^Fork(?: \d+)? of /, '');
+    const taken = new Set<string>();
+    let names: string[] = [];
+    try { names = readdirSync(this.sessionsDir); } catch { /* none */ }
+    for (const name of names) {
+      if (!isSafeId(name)) continue;
+      const title = this.readMeta(name)?.title;
+      if (title) taken.add(title);
+    }
+    if (!taken.has(`Fork of ${subject}`)) return `Fork of ${subject}`;
+    for (let n = 2; ; n++) if (!taken.has(`Fork ${n} of ${subject}`)) return `Fork ${n} of ${subject}`;
+  }
+
+
+  /** Forks whose attachments are still being linked (one job per fork). */
+  private attachmentLinkJobs = new Map<string, Promise<void>>();
+
+  /**
+   * Hard-link (or copy across volumes) the source's attachments into a fork,
+   * off the event loop's critical path, then drop `attachmentsFrom`.
+   * Attachments are immutable and content-addressed, so linking is safe.
+   */
+  linkForkAttachments(forkId: string, sourceId: string): Promise<void> {
+    const running = this.attachmentLinkJobs.get(forkId);
+    if (running) return running;
+    const job = (async () => {
+      const from = join(this.sessionDir(sourceId), 'attachments');
+      const to = join(this.sessionDir(forkId), 'attachments');
+      await fsp.mkdir(to, { recursive: true });
+      let names: string[] = [];
+      try { names = await fsp.readdir(from); } catch { /* source gone */ }
+      const queue = [...names];
+      const worker = async () => {
+        for (let name = queue.pop(); name !== undefined; name = queue.pop()) {
+          const src = join(from, name);
+          const dst = join(to, name);
+          try { await fsp.link(src, dst); } catch (err) {
+            if ((err as NodeJS.ErrnoException).code === 'EEXIST') continue;
+            try { await fsp.copyFile(src, dst); } catch { /* best effort */ }
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: 16 }, worker));
+      const meta = this.readMeta(forkId);
+      if (meta?.attachmentsFrom === sourceId) {
+        delete meta.attachmentsFrom;
+        this.writeMeta(forkId, meta);
+      }
+    })().catch(() => { /* retried at the next start */ }).finally(() => {
+      this.attachmentLinkJobs.delete(forkId);
+    });
+    this.attachmentLinkJobs.set(forkId, job);
+    return job;
+  }
+
+  /** Where to look for a session's attachments that aren't linked yet. */
+  attachmentsFallback(sessionId: string): string | undefined {
+    if (!isSafeId(sessionId)) return undefined;
+    return this.readMeta(sessionId)?.attachmentsFrom;
+  }
+
+  /** Resume attachment links a restart interrupted. */
+  private resumeForkAttachmentLinks(): void {
+    let names: string[] = [];
+    try { names = readdirSync(this.sessionsDir); } catch { return; }
+    for (const name of names) {
+      if (!isSafeId(name)) continue;
+      const from = this.readMeta(name)?.attachmentsFrom;
+      if (from) void this.linkForkAttachments(name, from);
+    }
+  }
+
 
   /** Sessions whose meta.lastSeq was checked against the log this process. */
   private lastSeqReconciled = new Set<string>();

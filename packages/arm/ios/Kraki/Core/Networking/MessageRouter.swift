@@ -880,6 +880,10 @@ final class MessageRouter {
         // Use it instead of the receiver's wall clock so ordering remains
         // stable and the metadata survives the first session_list reconcile.
         let createdAt = (dict["timestamp"] as? String).flatMap(ISO8601.parse) ?? Date()
+        // A fork arrives complete (idle, named, with history); a new session
+        // is starting its first turn.
+        let initialState = (payload?["state"] as? String).flatMap(SessionState.init(rawValue:)) ?? .active
+        let forkedFrom = payload?["forkedFrom"] as? [String: Any]
         let session = SessionInfo(
             id: sessionId,
             deviceId: deviceId,
@@ -888,18 +892,25 @@ final class MessageRouter {
             model: payload?["model"] as? String,
             reasoningEffort: (payload?["reasoningEffort"] as? String)
                 .flatMap(ReasoningEffort.init(rawValue:)),
-            title: nil,
+            title: payload?["title"] as? String,
             autoTitle: nil,
-            state: .active,
+            state: initialState,
             mode: SessionMode(rawValue: modeStr) ?? .default,
-            lastSeq: 0,
-            readSeq: 0,
+            lastSeq: payload?["lastSeq"] as? Int ?? 0,
+            readSeq: payload?["lastSeq"] as? Int ?? 0,
             messageCount: 0,
             createdAt: createdAt,
             usage: nil,
             pinned: false
         )
         appState.sessionStore.upsertSession(session)
+
+        // A fork's first rows are the source's: take them from the local
+        // cache before the session_created row lands, so it opens instantly.
+        if let source = forkedFrom?["sessionId"] as? String,
+           let throughSeq = forkedFrom?["throughSeq"] as? Int {
+            appState.messageStore.seedFork(sessionId, from: source, throughSeq: throughSeq)
+        }
 
         // Store the raw message
         if let json = try? JSONSerialization.data(withJSONObject: dict) {
@@ -912,10 +923,13 @@ final class MessageRouter {
         // of `SessionCardView.previewText`.
         let timestamp = dict["timestamp"] as? String
             ?? ISO8601DateFormatter().string(from: Date())
+        // A fork shows its last message (the source's), dated now so it
+        // sorts first; a new session shows "Session created".
+        let preview = payload?["preview"] as? [String: Any]
         updatePreview(
             sessionId,
-            text: "Session created",
-            type: "session_created",
+            text: preview?["text"] as? String ?? "Session created",
+            type: preview?["type"] as? String ?? "session_created",
             timestamp: timestamp,
             notify: false
         )

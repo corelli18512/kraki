@@ -82,8 +82,16 @@ struct MainTabView: View {
     private func consumePendingSessionNavigation() {
         guard let target = appState.sessionStore.navigateToSession else { return }
         let replacesPlaceholder = appState.sessionStore.navigationReplacesPlaceholder
+        let pushesOnTop = appState.sessionStore.navigationPushesOnTop
         appState.sessionStore.navigationReplacesPlaceholder = false
+        appState.sessionStore.navigationPushesOnTop = false
         appState.sessionStore.navigateToSession = nil
+        if pushesOnTop, selectedTab == 0, !sessionPath.isEmpty {
+            // A fork opened from its source chat: a plain push, so the source
+            // never reappears mid-transition and Back returns to it.
+            sessionPath.append(SessionNavID(id: target))
+            return
+        }
         selectedTab = 0
         if replacesPlaceholder, sessionPath.count == 1 {
             // "Starting session…" → the created Session: swap the top route in

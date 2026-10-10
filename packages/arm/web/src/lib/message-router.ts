@@ -221,7 +221,9 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
         deviceName: device?.name ?? msg.deviceId,
         agent: msg.payload.agent as import('@kraki/protocol').AgentId,
         model: msg.payload.model,
-        state: 'active',
+        // A fork arrives complete (idle, named); a new session is starting.
+        state: ((msg.payload as { state?: 'idle' | 'active' }).state) ?? 'active',
+        ...((msg.payload as { title?: string }).title && { title: (msg.payload as { title?: string }).title }),
         messageCount: 0,
         lastSeq: msg.payload.lastSeq ?? 0,
         readSeq: msg.payload.lastSeq ?? 0,
@@ -229,10 +231,18 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       // Clear pending state — session is now real
       store.removePendingSession(sid);
       // Set an initial preview so new sessions sort to the top of the list
-      updatePreview(sid, { text: 'New session', type: 'session_created', timestamp: msg.timestamp ?? new Date().toISOString() }, false);
+      const forkPreview = (msg.payload as { preview?: { text: string; type: string } }).preview;
+      updatePreview(sid, {
+        text: forkPreview?.text ?? 'New session',
+        type: forkPreview?.type ?? 'session_created',
+        timestamp: msg.timestamp ?? new Date().toISOString(),
+      }, false);
       const lastSeq = (msg.payload as Record<string, unknown>).lastSeq as number | undefined;
-      const enriched = lastSeq && lastSeq > 0 ? { ...msg, payload: { ...msg.payload, forked: true } } : msg;
-      store.appendMessage(sid, enriched);
+      // A fork's session_created is an announcement (seq 0), not history.
+      if (!(msg.payload as { forkedFrom?: unknown }).forkedFrom) {
+        const enriched = lastSeq && lastSeq > 0 ? { ...msg, payload: { ...msg.payload, forked: true } } : msg;
+        store.appendMessage(sid, enriched);
+      }
       // Set tentacle info so message provider can route replay requests
       messageProvider.setTentacleInfo(sid, lastSeq ?? 0, msg.deviceId);
       if (lastSeq && lastSeq > 0) {

@@ -161,8 +161,24 @@ function hashBytes(bytes: Buffer): string {
 export class AttachmentStore {
   private readonly sessionsDir: string;
 
+  /** A fork whose attachments are still being linked reads them from its
+   *  source session meanwhile (SessionManager.attachmentsFallback). */
+  private fallback: ((sessionId: string) => string | undefined) | null = null;
+
   constructor(sessionsDir: string) {
     this.sessionsDir = sessionsDir;
+  }
+
+  setFallback(fallback: (sessionId: string) => string | undefined): void {
+    this.fallback = fallback;
+  }
+
+  /** The session whose folder holds attachment `id`: the session itself, or
+   *  the fork source it is still being linked from. */
+  private locate(sessionId: string, id: string): string {
+    if (!isSafeId(sessionId) || !isSafeId(id) || existsSync(this.metaPath(sessionId, id))) return sessionId;
+    const source = this.fallback?.(sessionId);
+    return source && isSafeId(source) && existsSync(this.metaPath(source, id)) ? source : sessionId;
   }
 
   /** Directory holding attachments for a session. */
@@ -245,12 +261,14 @@ export class AttachmentStore {
   /** Whether an attachment id exists for the session. */
   has(sessionId: string, id: string): boolean {
     if (!isSafeId(sessionId) || !isSafeId(id)) return false;
+    sessionId = this.locate(sessionId, id);
     return existsSync(this.metaPath(sessionId, id));
   }
 
   /** Read the full bytes + metadata. Returns null if absent. */
   read(sessionId: string, id: string): { bytes: Buffer; meta: AttachmentMetaSidecar } | null {
     if (!isSafeId(sessionId) || !isSafeId(id)) return null;
+    sessionId = this.locate(sessionId, id);
     const metaPath = this.metaPath(sessionId, id);
     if (!existsSync(metaPath)) return null;
     let meta: AttachmentMetaSidecar;
@@ -274,6 +292,8 @@ export class AttachmentStore {
    * whole file (paced transfers request one chunk at a time).
    */
   readRange(sessionId: string, id: string, start: number, length: number): { bytes: Buffer; size: number; meta: AttachmentMetaSidecar } | null {
+    if (!isSafeId(sessionId) || !isSafeId(id)) return null;
+    sessionId = this.locate(sessionId, id);
     const meta = this.readMeta(sessionId, id);
     if (!meta) return null;
     const dataPath = this.filePath(sessionId, id, extForMime(meta.mimeType));
@@ -295,6 +315,7 @@ export class AttachmentStore {
   /** Read the sidecar metadata only. */
   readMeta(sessionId: string, id: string): AttachmentMetaSidecar | null {
     if (!isSafeId(sessionId) || !isSafeId(id)) return null;
+    sessionId = this.locate(sessionId, id);
     const metaPath = this.metaPath(sessionId, id);
     if (!existsSync(metaPath)) return null;
     try {

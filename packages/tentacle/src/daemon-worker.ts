@@ -230,6 +230,7 @@ export async function startWorker(): Promise<WorkerResult> {
   // 3. Initialize components
   const sessionManager = new SessionManager();
   const attachmentStore = new AttachmentStore(sessionManager.getSessionsRoot());
+  attachmentStore.setFallback((sid) => sessionManager.attachmentsFallback(sid));
   // Offloaded tool args/results accumulate a few files per tool call. Keep
   // them for the archive window, then reclaim them (images/reports stay).
   const TOOL_PAYLOAD_TTL_MS = 14 * 24 * 3600_000;
