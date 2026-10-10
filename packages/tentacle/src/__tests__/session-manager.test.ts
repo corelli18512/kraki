@@ -251,7 +251,7 @@ describe('SessionManager', () => {
       const forkedMeta = sm.getMeta(sm.forkSession(sessionId)!.sessionId)!;
       expect(forkedMeta.title).toBe('Fork of Create hello.txt');
       const untitled = sm.createSession('pi').sessionId;
-      expect(sm.getMeta(sm.forkSession(untitled)!.sessionId)!.title).toBeUndefined();
+      expect(sm.getMeta(sm.forkSession(untitled)!.sessionId)!.title).toBe('Fork of New Session');
     });
 
     it('keeps the source permission mode and turn index when forking', () => {
@@ -1583,14 +1583,34 @@ describe('SessionManager log integrity and indexed reads', () => {
     expect(JSON.parse(row.payload)).toEqual({ type: 'user_message', sessionId, timestamp: 't', payload: { content: 'old import' } });
   });
 
-  it('a fork keeps the source session attachments', () => {
+  it('a fork keeps the source session attachments', async () => {
     const { sessionId } = sm.createSession('pi');
     const src = join(dir, sessionId, 'attachments');
     mkdirSync(src, { recursive: true });
     writeFileSync(join(src, 'abc.png'), 'img');
     writeFileSync(join(src, 'abc.json'), '{}');
-    const fork = sm.forkSession(sessionId);
+    const fork = sm.forkSession(sessionId)!;
+    // Linked in the background; meanwhile reads fall back to the source.
+    expect(sm.attachmentsFallback(fork.sessionId)).toBe(sessionId);
+    await sm.linkForkAttachments(fork.sessionId, sessionId);
     expect(readFileSync(join(dir, fork.sessionId, 'attachments', 'abc.png'), 'utf8')).toBe('img');
+    expect(sm.attachmentsFallback(fork.sessionId)).toBeUndefined();
+  });
+
+  it('a fork rewrites copied rows to its own id and names itself uniquely', () => {
+    const { sessionId } = sm.createSession('pi');
+    sm.updateMeta(sessionId, { title: 'Plan' });
+    sm.appendMessage(sessionId, 'user_message', JSON.stringify({ type: 'user_message', sessionId, payload: { content: 'hi' } }));
+    const first = sm.forkSession(sessionId)!;
+    const second = sm.forkSession(sessionId)!;
+    expect(first.throughSeq).toBe(1);
+    expect(sm.getMeta(first.sessionId)?.title).toBe('Fork of Plan');
+    expect(sm.getMeta(second.sessionId)?.title).toBe('Fork 2 of Plan');
+    // A fork of a fork is not "Fork of Fork of …".
+    expect(sm.getMeta(sm.forkSession(first.sessionId)!.sessionId)?.title).toBe('Fork 3 of Plan');
+    const [row] = sm.getMessagesAfterSeq(first.sessionId, 0);
+    expect(JSON.parse(row.payload).sessionId).toBe(first.sessionId);
+    expect(readFileSync(join(dir, first.sessionId, 'messages.jsonl'), 'utf8')).not.toContain(sessionId);
   });
 });
 

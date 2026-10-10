@@ -215,24 +215,32 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   switch (msg.type) {
     case 'session_created': {
       const device = store.devices.get(msg.deviceId);
-      store.upsertSession({
-        id: sid,
-        deviceId: msg.deviceId,
-        deviceName: device?.name ?? msg.deviceId,
-        agent: msg.payload.agent as import('@kraki/protocol').AgentId,
-        model: msg.payload.model,
-        state: 'active',
-        messageCount: 0,
-        lastSeq: msg.payload.lastSeq ?? 0,
-        readSeq: msg.payload.lastSeq ?? 0,
-      });
+      // A fork is announced after the session list that already carries it
+      // (name, idle state, preview): keep that.
+      const known = store.sessions.has(sid);
+      if (!known) {
+        store.upsertSession({
+          id: sid,
+          deviceId: msg.deviceId,
+          deviceName: device?.name ?? msg.deviceId,
+          agent: msg.payload.agent as import('@kraki/protocol').AgentId,
+          model: msg.payload.model,
+          state: 'active',
+          messageCount: 0,
+          lastSeq: msg.payload.lastSeq ?? 0,
+          readSeq: msg.payload.lastSeq ?? 0,
+        });
+        // Set an initial preview so new sessions sort to the top of the list
+        updatePreview(sid, { text: 'New session', type: 'session_created', timestamp: msg.timestamp ?? new Date().toISOString() }, false);
+      }
       // Clear pending state — session is now real
       store.removePendingSession(sid);
-      // Set an initial preview so new sessions sort to the top of the list
-      updatePreview(sid, { text: 'New session', type: 'session_created', timestamp: msg.timestamp ?? new Date().toISOString() }, false);
       const lastSeq = (msg.payload as Record<string, unknown>).lastSeq as number | undefined;
-      const enriched = lastSeq && lastSeq > 0 ? { ...msg, payload: { ...msg.payload, forked: true } } : msg;
-      store.appendMessage(sid, enriched);
+      // A fork's session_created is an announcement (seq 0), not history.
+      if ((msg.seq ?? 0) > 0) {
+        const enriched = lastSeq && lastSeq > 0 ? { ...msg, payload: { ...msg.payload, forked: true } } : msg;
+        store.appendMessage(sid, enriched);
+      }
       // Set tentacle info so message provider can route replay requests
       messageProvider.setTentacleInfo(sid, lastSeq ?? 0, msg.deviceId);
       if (lastSeq && lastSeq > 0) {

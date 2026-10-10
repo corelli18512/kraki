@@ -19,7 +19,7 @@ import { cliSpawnArgs } from '../cli-launch.js';
 import { readPiJsonLines } from './pi-jsonl.js';
 import { readPiModelScope, scopePiModels } from './pi-model-scope.js';
 import { PiSubagentTracker, PI_SUBAGENT_TOOL, type PiSubagentEmit } from './pi-subagent.js';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync, appendFileSync, statSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, appendFileSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import {
   AgentAdapter,
@@ -44,6 +44,7 @@ import { KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMo
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 import { tmpdir } from 'node:os';
 import { fitToMaxDimension } from '../image-resize.js';
+import { cloneFile } from '../fs-clone.js';
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 
 const logger = createLogger('pi-adapter');
@@ -1940,7 +1941,8 @@ export class PiAdapter extends AgentAdapter {
     const forkFile = this.transcriptPath(newSessionId);
     mkdirSync(this.storeDir(newSessionId), { recursive: true });
     if (srcFile && existsSync(srcFile)) {
-      try { copyFileSync(srcFile, forkFile); } catch (err) { logger.debug({ err: (err as Error).message }, 'fork copy failed'); }
+      // Clone (copy-on-write): transcripts reach hundreds of MB.
+      try { cloneFile(srcFile, forkFile); } catch (err) { logger.debug({ err: (err as Error).message }, 'fork copy failed'); }
     }
     const next = this.spawn(newSessionId, src?.cwd ?? process.cwd(), src?.model ?? this.getDefaultModel(), src?.mode ?? MUTATING_DEFAULT_MODE, forkFile, src?.thinking);
     this.persistMeta(newSessionId, next);

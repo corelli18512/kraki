@@ -48,6 +48,22 @@ final class MessageStore {
 
     let db: MessageDatabase
 
+    /// A fork starts with the source's rows 1…throughSeq (only the session id
+    /// differs). Copy the newest of them from the local cache so the fork
+    /// opens instantly instead of fetching history it already has here.
+    /// Returns how many rows were copied.
+    @discardableResult
+    func seedFork(_ forkId: String, from sourceId: String, throughSeq: Int, limit: Int = 400) -> Int {
+        guard throughSeq > 0, db.lastSeq(forkId) == 0 else { return 0 }
+        let rows = db.messagesBefore(sourceId, beforeSeq: throughSeq + 1, limit: limit)
+            .filter { $0.seq <= throughSeq }
+            .map { ChatMessage(type: $0.type, seq: $0.seq, sessionId: forkId, deviceId: $0.deviceId,
+                               timestamp: $0.timestamp, payload: $0.payload) }
+        guard !rows.isEmpty else { return 0 }
+        do { try db.insert(forkId, rows) } catch { return 0 }
+        return rows.count
+    }
+
     init(db: MessageDatabase) {
         self.db = db
     }
