@@ -731,7 +731,7 @@ describe('RelayClient fork session confirmation', () => {
     sendForkRequest('req_fork_list');
     await vi.runAllTimersAsync();
     const types = decodePulseSends(sockets[0].sent).map((msg) => msg.type);
-    expect(types.indexOf('session_list')).toBeGreaterThan(types.indexOf('session_created'));
+    expect(types.lastIndexOf('session_list')).toBeGreaterThan(types.indexOf('session_created'));
   });
 
   it('does not duplicate session_created when the adapter emits its own callback', async () => {
@@ -748,16 +748,15 @@ describe('RelayClient fork session confirmation', () => {
     });
   });
 
-  it('announces the fork complete: idle, named, and which source rows it starts with', async () => {
+  it('sends the session list before announcing the fork, and the announcement is no spine row', async () => {
     connectForkClient(true);
-    sendForkRequest('req_fork_state');
+    sockets[0].sent.length = 0;
+    sendForkRequest('req_fork_order');
     await vi.runAllTimersAsync();
-    const created = decodePulseSends(sockets[0].sent).find((msg) => msg.type === 'session_created');
-    expect(created?.payload).toMatchObject({
-      state: 'idle',
-      title: 'Fork of Plan',
-      forkedFrom: { sessionId: 'source-original', throughSeq: 42 },
-    });
+    const sent = decodePulseSends(sockets[0].sent);
+    const created = sent.findIndex((m) => m.type === 'session_created');
+    expect(sent.findIndex((m) => m.type === 'session_list')).toBeLessThan(created);
+    expect(sent[created].seq).toBe(0);
   });
 
   it('closes a turn that was copied mid-run instead of leaving it open', async () => {

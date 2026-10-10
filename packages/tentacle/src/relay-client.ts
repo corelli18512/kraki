@@ -2031,11 +2031,13 @@ export class RelayClient {
       if (meta?.mode) this.adapter.setSessionMode(newId, meta.mode);
       this.forkingSessions.delete(newId);
 
-      // 3. Announce the fork complete: idle, named, with its preview, and
-      // which source rows it starts with, so apps show it at once (they
-      // copy those rows from their own cache instead of fetching them).
+      // 3. Announce the fork. The session list goes first: every app then
+      // already knows the fork's name, state and preview when
+      // session_created arrives (the requester navigates on it). The
+      // announcement is not a spine row (seq 0): the fork's history ends
+      // where the source's did.
       this.sessionManager.markIdle(newId);
-      const preview = this.sessionManager.getSessionList().find((d) => d.id === newId)?.preview;
+      this.broadcastSessionList();
       this.send({
         type: 'session_created',
         sessionId: newId,
@@ -2046,19 +2048,15 @@ export class RelayClient {
           requestId,
           lastSeq: meta?.lastSeq ?? 0,
           ...(meta?.mode && { mode: toWireSessionMode(meta.mode) }),
-          state: 'idle',
-          ...(meta?.title && { title: meta.title }),
-          ...(preview && { preview }),
-          forkedFrom: { sessionId: sourceSessionId, throughSeq: result.throughSeq },
         },
       } as Partial<ProducerMessage>, false, { persist: false });
-      // No idle row either: the fork's history ends where the source's did,
-      // so apps open it already at the bottom.
 
       // 4. Copied mid-turn: the copy's turn will never finish. Say so instead
       // of leaving a question that looks like it is still being answered.
       if (result.sourceWasRunning) this.closeForkedOpenTurn(newId);
 
+      // Again after: older apps reset a session to "running, untitled" on
+      // session_created; this restores it.
       this.broadcastSessionList();
       logger.info({ sourceSessionId, newId, ms: Date.now() - started }, 'Session forked');
     } catch (err) {

@@ -211,15 +211,6 @@ export interface SessionCreatedMessage extends BaseEnvelope {
     lastSeq?: number;
     /** Permission mode the session starts in (wire name). */
     mode?: import('./sessions.js').WireSessionMode;
-    /** Forks only: the session arrives complete. `state` is its state (a new
-     *  session is `active`), `title` its name, `preview` its last message. */
-    state?: 'active' | 'idle';
-    title?: string;
-    preview?: import('./sessions.js').SessionPreviewDigest;
-    /** Forks only: rows 1…throughSeq are the source's rows (same content,
-     *  this session's id), so apps can copy them from their cache. A fork's
-     *  session_created is an announcement (seq 0), not a spine row. */
-    forkedFrom?: { sessionId: string; throughSeq: number };
   };
 }
 

@@ -927,6 +927,7 @@ final class CommandSender {
         pendingCreateRequests[requestId] = ""
         pendingPlaceholderIds[requestId] = placeholderId
         deferredForks.insert(requestId)
+        forkSources[requestId] = sessionId
 
         if let appState {
             appState.sessionStore.addPendingSession(placeholderId)
@@ -954,6 +955,8 @@ final class CommandSender {
         ], sessionId: sessionId)
     }
 
+    /// Fork requests → their source session (to seed the fork's history).
+    var forkSources: [String: String] = [:]
     /// Forks whose placeholder page is deferred (by requestId), and the
     /// placeholders that were actually shown.
     private var deferredForks: Set<String> = []
@@ -1298,6 +1301,7 @@ final class CommandSender {
             appState.sessionStore.navigateToSession = sessionId
             #endif
         }
+        forkSources.removeValue(forKey: requestId)
         if let prompt = pendingCreateRequests.removeValue(forKey: requestId) {
             // If we had a prompt, send it now
             if !prompt.isEmpty {
@@ -1322,6 +1326,7 @@ final class CommandSender {
         }
         pendingCreateRequests.removeValue(forKey: requestId)
         pendingCreateTitles.removeValue(forKey: requestId)
+        forkSources.removeValue(forKey: requestId)
     }
 
     func reset() {
@@ -1334,6 +1339,7 @@ final class CommandSender {
         pendingCreateTitles.removeAll()
         pendingPlaceholderIds.removeAll()
         deferredForks.removeAll()
+        forkSources.removeAll()
         placeholdersShown.removeAll()
         timedOutCreatePrompts.removeAll()
         pendingModeChanges.removeAll()

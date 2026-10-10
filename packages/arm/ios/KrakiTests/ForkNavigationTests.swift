@@ -41,21 +41,25 @@ final class ForkNavigationTests: XCTestCase {
         XCTAssertTrue(app.sessionStore.navigationReplacesPlaceholder)
     }
 
-    func testForkAnnouncementSeedsHistoryFromTheSourceCache() throws {
+    func testForkAnnouncementKeepsListStateAndSeedsHistory() throws {
         let app = makeApp()
         let rows = (1...3).map { ChatMessage(type: $0 == 2 ? "agent_message" : "user_message", seq: $0, sessionId: "src",
                                               deviceId: "d", timestamp: nil, payload: ["content": AnyCodable("m\($0)")]) }
         try app.messageStore.db.insert("src", rows)
-        let json = try JSONSerialization.data(withJSONObject: [
+        app.commandSender?.forkSession(sessionId: "src")
+        let rid = try requestId(app)
+        // The session list (sent first) already has the fork, named and idle.
+        app.sessionStore.upsertSession(SessionInfo(
+            id: "fork", deviceId: "d", deviceName: "D", agent: "pi", title: "Fork of Plan",
+            state: .idle, mode: .auto, lastSeq: 3, readSeq: 3, messageCount: 3,
+            createdAt: Date(), pinned: false))
+        app.messageRouter?.handleDataMessage(try JSONSerialization.data(withJSONObject: [
             "type": "session_created", "sessionId": "fork", "deviceId": "d", "seq": 0,
-            "payload": ["agent": "pi", "lastSeq": 3, "state": "idle", "title": "Fork of Plan",
-                        "preview": ["text": "m3", "type": "message", "timestamp": "2026-10-10T00:00:00Z"],
-                        "forkedFrom": ["sessionId": "src", "throughSeq": 3]],
-        ])
-        app.messageRouter?.handleDataMessage(json)
+            "payload": ["agent": "pi", "lastSeq": 3, "requestId": rid],
+        ]))
         XCTAssertEqual(app.messageStore.dbLastSeq("fork"), 3)
         XCTAssertEqual(app.sessionStore.sessions["fork"]?.state, .idle)
         XCTAssertEqual(app.sessionStore.sessions["fork"]?.title, "Fork of Plan")
-        XCTAssertEqual(app.sessionStore.sessionPreviews["fork"]?.text, "m3")
+        XCTAssertEqual(app.sessionStore.navigateToSession, "fork")
     }
 }
