@@ -86,13 +86,13 @@ enum VoiceConsent {
     static let title = "Voice input uses cloud services"
     static let message = """
     Unlike your chats, which are end-to-end encrypted, voice input is processed \
-    in the cloud: your recording goes to Kraki's speech recognition service to \
-    turn it into text.
+    in the cloud: your recording is sent through Kraki's voice service to a \
+    third-party speech recognition provider to turn it into text.
 
     With Correct Transcripts on, the text, your Custom Words and some \
     conversation context (the title, agent, model and names or terms from \
     recent messages; never whole messages or anything that looks like a key or \
-    password) are sent to an AI model that fixes mistakes.
+    password) are sent to a third-party AI service that fixes mistakes.
 
     You can turn these off in Settings → Voice Input.
     """
@@ -540,10 +540,10 @@ struct VoiceVocabularyMacSection: View {
 enum VoiceInputCopy {
     static let title = "Voice Input"
     static let correction = "Correct Transcripts"
-    static let correctionFooter = "After you finish speaking, an AI model in the cloud fixes recognition mistakes such as names, terms and punctuation. Turn off to use exactly what was recognized; your recording is still transcribed in the cloud."
+    static let correctionFooter = "After you finish speaking, a third-party AI service fixes recognition mistakes such as names, terms and punctuation; the transcript and your Custom Words are sent to it. Turn off to use exactly what was recognized; your recording is still transcribed by a third-party speech recognition provider."
     static let unavailable = "Voice input isn't available with this relay. Your Custom Words still sync to your other devices."
     static let context = "Use Conversation Context"
-    static let contextFooter = "Sends the conversation title, agent and model, and names or terms that appear in recent messages, to the correction service so names you are discussing are spelled right. Whole messages and anything that looks like a key, token, password or file path are never sent."
+    static let contextFooter = "Sends the conversation title, agent and model, and names or terms that appear in recent messages, to the third-party correction service so names you are discussing are spelled right. Whole messages and anything that looks like a key, token, password or file path are never sent."
 }
 
 #if os(iOS)

@@ -33,9 +33,9 @@ export const voiceSettings = {
 };
 
 export const CONSENT_TITLE = 'Voice input uses cloud services';
-export const CONSENT_MESSAGE = `Unlike your chats, which are end-to-end encrypted, voice input is processed in the cloud: your recording goes to Kraki's speech recognition service to turn it into text.
+export const CONSENT_MESSAGE = `Unlike your chats, which are end-to-end encrypted, voice input is processed in the cloud: your recording is sent through Kraki's voice service to a third-party speech recognition provider to turn it into text.
 
-With Correct Transcripts on, the text, your Custom Words and some conversation context (the title, agent, model and names or terms from recent messages; never whole messages or anything that looks like a key or password) are sent to an AI model that fixes mistakes.
+With Correct Transcripts on, the text, your Custom Words and some conversation context (the title, agent, model and names or terms from recent messages; never whole messages or anything that looks like a key or password) are sent to a third-party AI service that fixes mistakes.
 
 You can turn these off in Settings → Voice Input.`;
 

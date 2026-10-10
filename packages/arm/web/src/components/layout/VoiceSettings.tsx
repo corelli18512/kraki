@@ -42,20 +42,20 @@ export function VoiceSettings() {
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-sm text-text-primary">Correct transcripts</p>
-            <p className="text-[11px] text-text-muted">An AI model fixes names and mistakes. Off: exactly what speech recognition heard.</p>
+            <p className="text-[11px] text-text-muted">A third-party AI service fixes names and mistakes; the transcript and your custom words are sent to it. Off: exactly what speech recognition heard.</p>
           </div>
           <Switch label="Correct transcripts" testId="voice-correction" on={voiceSettings.correction} onChange={(v) => { voiceSettings.correction = v; }} />
         </div>
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-sm text-text-primary">Use conversation context</p>
-            <p className="text-[11px] text-text-muted">The title, agent, model and names from recent messages help correction. Never whole messages or anything like a key.</p>
+            <p className="text-[11px] text-text-muted">The title, agent, model and names from recent messages are sent to the correction service. Never whole messages or anything like a key.</p>
           </div>
           <Switch label="Use conversation context" testId="voice-context" on={voiceSettings.shareContext} onChange={(v) => { voiceSettings.shareContext = v; }} />
         </div>
         <div>
           <p className="text-sm text-text-primary">Custom words</p>
-          <p className="text-[11px] text-text-muted">Names and terms you use, and how they're often misheard. Synced to your account.</p>
+          <p className="text-[11px] text-text-muted">Names and terms you use, and how they're often misheard. Synced to your account and sent to the correction service when you dictate.</p>
           <ul className="mt-2 divide-y divide-border-primary rounded-lg bg-surface-secondary" data-testid="voice-words">
             {words.map((w) => (
               <li key={w.term} className="flex items-center gap-2 px-3 py-1.5 text-[13px]">

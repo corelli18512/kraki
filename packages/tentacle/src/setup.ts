@@ -22,7 +22,7 @@ import {
   getConfigPath,
   loadConfig,
 } from './config.js';
-import { SETUP_AGENTS, probeFdaAsApp, pollFda, ensureTccBundleRegistered, openTccPane, revealKrakiApp, getKrakiAppBundlePath, refreshPathOnWindows } from './checks.js';
+import { SETUP_AGENTS, probeFdaAsApp, pollFda, ensureTccBundleRegistered, openTccPane, revealKrakiApp, getKrakiAppBundlePath, refreshPathOnWindows, githubLoginOnlyFromEnv } from './checks.js';
 import { printAnimatedBanner } from './banner.js';
 import { termLink } from './term-link.js';
 import { findMacAppWithBuiltIn } from './managed.js';
@@ -512,7 +512,18 @@ export async function printAgentsCheck(all = false): Promise<void> {
   const results = await setupDeps.checkAgents();
   spinner.stop();
   printAgentList(results, all);
+  printEnvTokenHint();
   console.log('');
+}
+
+/** The daemon does not keep GITHUB_TOKEN / GH_TOKEN; say so when this
+ *  shell's GitHub access depends on them. */
+function printEnvTokenHint(): void {
+  if (!setupDeps.githubLoginOnlyFromEnv()) return;
+  console.log('');
+  console.log(`    ${chalk.yellow('!')} GitHub access here comes only from GITHUB_TOKEN / GH_TOKEN in this shell.`);
+  console.log(chalk.dim('      Kraki runs in the background without them, so agents there (Copilot, gh) will be signed out.'));
+  console.log(chalk.dim(`      Run ${chalk.bold('gh auth login')} once to save a login they can use.`));
 }
 
 /**
@@ -546,6 +557,7 @@ function printAgentList(results: AgentCheckResult[], all = false): void {
 /** Overridable in tests. */
 export const setupDeps = {
   checkAgents: (): Promise<AgentCheckResult[]> => runAgentsCheckChild(),
+  githubLoginOnlyFromEnv: (): boolean => githubLoginOnlyFromEnv(),
 };
 
 /**

@@ -435,10 +435,14 @@ describe('startDaemon()', () => {
     killSpy.mockRestore();
   });
 
-  it('does not persist a Copilot session-scoped gho_ token in launchd', async () => {
+  it('never persists GitHub tokens in launchd (proxy settings still go)', async () => {
     vi.useFakeTimers();
     const previous = process.env.GITHUB_TOKEN;
+    const previousGh = process.env.GH_TOKEN;
+    const previousProxy = process.env.HTTPS_PROXY;
     process.env.GITHUB_TOKEN = 'gho_session_only';
+    process.env.GH_TOKEN = 'ghp_personal_token';
+    process.env.HTTPS_PROXY = 'http://proxy.local:8080';
     mockGetKrakiAppBundlePath.mockReturnValue('/Applications/Kraki.app');
     mockLoadDaemonPid.mockReturnValue(null);
     mockExecFileSync.mockImplementation((command: string) => {
@@ -455,10 +459,14 @@ describe('startDaemon()', () => {
       const plistArg = mockWriteFileSync.mock.calls
         .find((call: unknown[]) => call[0] === expectedPlistPath)?.[1] as string;
       expect(plistArg).not.toContain('gho_session_only');
+      expect(plistArg).not.toContain('ghp_personal_token');
       expect(plistArg).not.toContain('<key>GITHUB_TOKEN</key>');
+      expect(plistArg).not.toContain('<key>GH_TOKEN</key>');
+      expect(plistArg).toContain('http://proxy.local:8080');
     } finally {
-      if (previous === undefined) delete process.env.GITHUB_TOKEN;
-      else process.env.GITHUB_TOKEN = previous;
+      for (const [k, v] of [['GITHUB_TOKEN', previous], ['GH_TOKEN', previousGh], ['HTTPS_PROXY', previousProxy]] as const) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
     }
   });
 

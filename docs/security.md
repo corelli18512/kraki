@@ -192,8 +192,8 @@ The relay sees the same opaque encrypted payloads it sees for any other message,
 
 Voice input is the one feature that is **not** end-to-end encrypted. The first time someone dictates, the app says so and asks them to continue.
 
-- **Audio** goes to Kraki's cloud speech service (a `wss://*.kraki.chat` broker; the apps refuse any other broker the relay might advertise). It is transcribed by a cloud speech-recognition provider.
-- **Correct Transcripts** (on by default): the transcript is sent to an AI model that fixes recognition mistakes. With it go the user's Custom Words and, if **Use Conversation Context** is on (default), the conversation title, agent, model and up to 32 names or terms taken from the last 12 messages.
+- **Audio** goes to Kraki's cloud speech service (a `wss://*.kraki.chat` broker; the apps refuse any other broker the relay might advertise). It is transcribed by a third-party cloud speech-recognition provider.
+- **Correct Transcripts** (on by default): the transcript is sent to a third-party AI service that fixes recognition mistakes. With it go the user's Custom Words and, if **Use Conversation Context** is on (default), the conversation title, agent, model and up to 32 names or terms taken from the last 12 messages.
 - Conversation terms are filtered on the device: whole messages are never sent, and anything shaped like a credential (GitHub/Slack/OpenAI-style tokens, AWS key ids, JWTs, PEM blocks), a URL, host:port, e-mail address, file path, long hex string or high-entropy token is dropped. See `VoiceContextTermFilter`.
 - Both switches are in Settings → Voice Input. With context off, only Custom Words and the locale accompany the transcript.
 - The relay authorizes each voice connection with a signed, quota-limited lease.

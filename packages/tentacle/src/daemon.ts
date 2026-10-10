@@ -619,23 +619,21 @@ export async function startDaemonLaunchctl(
   ];
   if (process.env.KRAKI_RELAY_URL) envEntries.push(['KRAKI_RELAY_URL', process.env.KRAKI_RELAY_URL]);
 
-  // Forward proxy and GitHub auth variables so the daemon keeps the same
-  // credential behavior as before. Values live only in launchd's
-  // EnvironmentVariables dictionary; `open` and the app it launches inherit
-  // them without exposing them in the long-lived command line.
+  // Forward proxy variables so the daemon reaches the network the same way.
+  // Values live only in launchd's EnvironmentVariables dictionary; `open` and
+  // the app it launches inherit them without exposing them in the long-lived
+  // command line. GitHub tokens (GITHUB_TOKEN / GH_TOKEN) are NOT persisted:
+  // Kraki signs in with its own saved token (~/.kraki/github-token), and
+  // agents use their own logins (gh, Copilot), so a plaintext copy in the
+  // plist only exposed the user's token. `kraki agents` points people who
+  // relied on the variable to `gh auth login`.
   const forwardVars = [
     'HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy',
     'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy',
-    'GITHUB_TOKEN', 'GH_TOKEN',
   ];
   for (const key of forwardVars) {
     const value = process.env[key];
-    if (!value) continue;
-    // Copilot CLI can inject a session-scoped gho_ token into its child
-    // environment. It is not valid for an independently launched daemon and
-    // must not be persisted in a launchd plist.
-    if ((key === 'GITHUB_TOKEN' || key === 'GH_TOKEN') && value.startsWith('gho_')) continue;
-    envEntries.push([key, value]);
+    if (value) envEntries.push([key, value]);
   }
 
   const appBundle = getKrakiAppBundlePath();
