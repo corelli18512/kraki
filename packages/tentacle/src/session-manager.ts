@@ -585,6 +585,7 @@ export class SessionManager {
   deleteSession(sessionId: string): void {
     if (!isSafeId(sessionId)) return;
     this.inputLedgerCache.delete(sessionId);
+    this.cancelledAttachmentLinks.add(sessionId);
     const dir = this.sessionDir(sessionId);
     if (existsSync(dir)) {
       rmSync(dir, { recursive: true });
@@ -693,6 +694,9 @@ export class SessionManager {
   }
 
 
+  /** Forks deleted while their attachments were being linked. */
+  private cancelledAttachmentLinks = new Set<string>();
+
   /** Forks whose attachments are still being linked (one job per fork). */
   private attachmentLinkJobs = new Map<string, Promise<void>>();
 
@@ -707,12 +711,15 @@ export class SessionManager {
     const job = (async () => {
       const from = join(this.sessionDir(sourceId), 'attachments');
       const to = join(this.sessionDir(forkId), 'attachments');
+      // Stop if the fork was deleted (a failed fork); never recreate it.
+      const gone = () => this.cancelledAttachmentLinks.has(forkId) || !existsSync(join(this.sessionDir(forkId), 'meta.json'));
+      if (gone()) return;
       await fsp.mkdir(to, { recursive: true });
       let names: string[] = [];
       try { names = await fsp.readdir(from); } catch { /* source gone */ }
       const queue = [...names];
       const worker = async () => {
-        for (let name = queue.pop(); name !== undefined; name = queue.pop()) {
+        for (let name = queue.pop(); name !== undefined && !gone(); name = queue.pop()) {
           const src = join(from, name);
           const dst = join(to, name);
           try { await fsp.link(src, dst); } catch (err) {
@@ -729,6 +736,7 @@ export class SessionManager {
       }
     })().catch(() => { /* retried at the next start */ }).finally(() => {
       this.attachmentLinkJobs.delete(forkId);
+      this.cancelledAttachmentLinks.delete(forkId);
     });
     this.attachmentLinkJobs.set(forkId, job);
     return job;

@@ -1636,3 +1636,18 @@ describe('SessionManager meta cache', () => {
     expect(sm.getMeta(sessionId)?.title).toBeUndefined();
   });
 });
+
+describe('SessionManager fork attachment linking', () => {
+  it('stops and never recreates a fork that was deleted while linking', async () => {
+    const dir = tmpSessionsDir();
+    const sm = new SessionManager(dir);
+    const { sessionId } = sm.createSession('pi');
+    mkdirSync(join(dir, sessionId, 'attachments'), { recursive: true });
+    for (let i = 0; i < 200; i++) writeFileSync(join(dir, sessionId, 'attachments', `a${i}.json`), '{}');
+    const fork = sm.forkSession(sessionId)!;
+    sm.deleteSession(fork.sessionId);
+    await sm.linkForkAttachments(fork.sessionId, sessionId);
+    expect(existsSync(join(dir, fork.sessionId))).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
