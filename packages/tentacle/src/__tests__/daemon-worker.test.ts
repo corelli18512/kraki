@@ -78,6 +78,7 @@ vi.mock('../mcp/index.js', () => ({
 
 vi.mock('../attachment-store.js', () => ({
   AttachmentStore: vi.fn().mockImplementation(() => ({
+    setFallback: vi.fn(),
     put: vi.fn(),
     has: vi.fn().mockReturnValue(false),
     read: vi.fn().mockReturnValue(null),

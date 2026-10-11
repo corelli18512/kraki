@@ -302,16 +302,16 @@ struct SessionInfoSheet: View {
 
     private var forkButton: some View {
         Button {
-            // `forkSession` is fully optimistic — `CommandSender` adds
-            // a pending placeholder to the session store and assigns
-            // it to `navigateToSession`, which `MainTabView` watches.
-            // That pop-then-push lands the user on the new session's
-            // "Starting session…" placeholder while the tentacle
-            // works. We dismiss this sheet right after so the user
-            // sees the placeholder chat, not the info sheet, when
-            // the navigation completes.
-            appState.commandSender?.forkSession(sessionId: session.id)
+            // Close the sheet first; the fork opens as a push on top of this
+            // chat when it is ready (usually one round trip), so the two
+            // transitions never overlap.
+            let sourceId = session.id
+            let sender = appState.commandSender
             dismiss()
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(150))
+                sender?.forkSession(sessionId: sourceId)
+            }
         } label: {
             HStack(spacing: 5) {
                 LucideIcon(.gitFork, size: 16, color: .krakiPrimary)

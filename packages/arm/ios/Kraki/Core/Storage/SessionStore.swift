@@ -247,6 +247,9 @@ final class SessionStore {
     /// pending placeholder (create/fork/import resolved). The navigation layer
     /// then swaps the top route in place instead of pop-to-root + push.
     var navigationReplacesPlaceholder = false
+    /// Set with `navigateToSession` to push the target on top of the current
+    /// page (a fork opened from its source) instead of resetting the stack.
+    var navigationPushesOnTop = false
     /// Session the macOS sidebar should bring into view (minimal scroll, never
     /// a jump to the top) after a create/fork/import resolves. The iOS list
     /// does not move: the user is already inside the new Session.
@@ -1144,6 +1147,7 @@ final class SessionStore {
         draftRevisions.removeAll()
         navigateToSession = nil
         navigationReplacesPlaceholder = false
+        navigationPushesOnTop = false
         sessionListRevealId = nil
         loadingSessions.removeAll()
         loadFailedSessions.removeAll()
@@ -1174,7 +1178,12 @@ final class SessionStore {
     func removePendingSession(_ id: String) {
         pendingSessions.remove(id)
         pendingSessionErrors.removeValue(forKey: id)
+        pendingSessionTitles.removeValue(forKey: id)
     }
+
+    /// Title for a placeholder page (e.g. "Fork of Plan" while a fork is
+    /// made); nil shows "New Session".
+    var pendingSessionTitles: [String: String] = [:]
 
     /// Record a server-side error reason for a pending session so the
     /// placeholder view can render a friendly error state.

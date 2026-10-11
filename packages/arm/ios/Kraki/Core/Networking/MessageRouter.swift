@@ -880,26 +880,40 @@ final class MessageRouter {
         // Use it instead of the receiver's wall clock so ordering remains
         // stable and the metadata survives the first session_list reconcile.
         let createdAt = (dict["timestamp"] as? String).flatMap(ISO8601.parse) ?? Date()
-        let session = SessionInfo(
-            id: sessionId,
-            deviceId: deviceId,
-            deviceName: device?.name ?? deviceId,
-            agent: payload?["agent"] as? String ?? "",
-            model: payload?["model"] as? String,
-            reasoningEffort: (payload?["reasoningEffort"] as? String)
-                .flatMap(ReasoningEffort.init(rawValue:)),
-            title: nil,
-            autoTitle: nil,
-            state: .active,
-            mode: SessionMode(rawValue: modeStr) ?? .default,
-            lastSeq: 0,
-            readSeq: 0,
-            messageCount: 0,
-            createdAt: createdAt,
-            usage: nil,
-            pinned: false
-        )
-        appState.sessionStore.upsertSession(session)
+        // A fork is announced after the session list that already carries
+        // it (name, idle state, preview): keep that, don't reset it to a
+        // fresh untitled session.
+        let known = appState.sessionStore.sessions[sessionId]
+        if known == nil {
+            let session = SessionInfo(
+                id: sessionId,
+                deviceId: deviceId,
+                deviceName: device?.name ?? deviceId,
+                agent: payload?["agent"] as? String ?? "",
+                model: payload?["model"] as? String,
+                reasoningEffort: (payload?["reasoningEffort"] as? String)
+                    .flatMap(ReasoningEffort.init(rawValue:)),
+                title: nil,
+                autoTitle: nil,
+                state: .active,
+                mode: SessionMode(rawValue: modeStr) ?? .default,
+                lastSeq: 0,
+                readSeq: 0,
+                messageCount: 0,
+                createdAt: createdAt,
+                usage: nil,
+                pinned: false
+            )
+            appState.sessionStore.upsertSession(session)
+        }
+
+        // A fork this device asked for starts with the source's rows
+        // 1…lastSeq: take them from the local cache so it opens instantly.
+        let lastSeq = payload?["lastSeq"] as? Int ?? 0
+        if lastSeq > 0, let requestId = payload?["requestId"] as? String,
+           let source = appState.commandSender?.forkSources[requestId] {
+            appState.messageStore.seedFork(sessionId, from: source, throughSeq: lastSeq)
+        }
 
         // Store the raw message
         if let json = try? JSONSerialization.data(withJSONObject: dict) {
@@ -909,18 +923,20 @@ final class MessageRouter {
         // Seed an initial preview so the new card has a timestamp and
         // sorts to the top of the list, mirroring the web client.
         // The text mirrors what we render in the empty-preview branch
-        // of `SessionCardView.previewText`.
-        let timestamp = dict["timestamp"] as? String
-            ?? ISO8601DateFormatter().string(from: Date())
-        updatePreview(
-            sessionId,
-            text: "Session created",
-            type: "session_created",
-            timestamp: timestamp,
-            notify: false
-        )
+        // of `SessionCardView.previewText`. (A fork already has its preview
+        // from the session list.)
+        if known == nil {
+            let timestamp = dict["timestamp"] as? String
+                ?? ISO8601DateFormatter().string(from: Date())
+            updatePreview(
+                sessionId,
+                text: "Session created",
+                type: "session_created",
+                timestamp: timestamp,
+                notify: false
+            )
+        }
 
-        let lastSeq = payload?["lastSeq"] as? Int ?? 0
         appState.messageProvider?.setTentacleInfo(
             sessionId: sessionId, lastSeq: lastSeq, deviceId: deviceId
         )

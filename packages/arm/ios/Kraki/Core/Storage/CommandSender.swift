@@ -926,10 +926,26 @@ final class CommandSender {
         let placeholderId = "pending-\(UUID().uuidString.lowercased())"
         pendingCreateRequests[requestId] = ""
         pendingPlaceholderIds[requestId] = placeholderId
+        deferredForks.insert(requestId)
+        forkSources[requestId] = sessionId
 
         if let appState {
             appState.sessionStore.addPendingSession(placeholderId)
-            appState.sessionStore.navigateToSession = placeholderId
+            let source = appState.sessionStore.sessions[sessionId]
+            if let title = source?.title ?? source?.autoTitle, !title.isEmpty {
+                appState.sessionStore.pendingSessionTitles[placeholderId] = title.hasPrefix("Fork") ? title : "Fork of \(title)"
+            }
+            // A fork is usually ready within a round trip: open it directly
+            // then. Only a slow fork shows the "Copying…" page first, so the
+            // common case has no placeholder flash.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(450))
+                guard let self, self.pendingPlaceholderIds[requestId] == placeholderId,
+                      let appState = self.appState, appState.sessionStore.isPending(placeholderId) else { return }
+                self.placeholdersShown.insert(placeholderId)
+                appState.sessionStore.navigationPushesOnTop = true
+                appState.sessionStore.navigateToSession = placeholderId
+            }
             schedulePendingTimeout(requestId: requestId)
         }
 
@@ -938,6 +954,13 @@ final class CommandSender {
             "payload": ["requestId": requestId, "sourceSessionId": sessionId],
         ], sessionId: sessionId)
     }
+
+    /// Fork requests → their source session (to seed the fork's history).
+    var forkSources: [String: String] = [:]
+    /// Forks whose placeholder page is deferred (by requestId), and the
+    /// placeholders that were actually shown.
+    private var deferredForks: Set<String> = []
+    private var placeholdersShown: Set<String> = []
 
     /// Import a local session into the tentacle. The `localSessionId`
     /// also serves as the future session id, so we can mark it
@@ -1249,7 +1272,13 @@ final class CommandSender {
             // The placeholder route removes its pending mark when the user
             // backs out of "Starting session…". In that case the new Session
             // only appears in the list; it must not pull the user back in.
+            // A fork's placeholder is only shown when the fork is slow; if it
+            // never was, open the fork as a normal push (nothing to replace).
+            let isDeferredFork = deferredForks.remove(requestId) != nil
+            let placeholderShown = placeholdersShown.remove(placeholderId) != nil
             let stillOnPlaceholder = appState.sessionStore.isPending(placeholderId)
+                && (!isDeferredFork || placeholderShown)
+            let openWithoutPlaceholder = isDeferredFork && !placeholderShown
             if placeholderId != sessionId {
                 appState.sessionStore.removePendingSession(placeholderId)
             } else {
@@ -1261,6 +1290,9 @@ final class CommandSender {
             if stillOnPlaceholder {
                 appState.sessionStore.navigationReplacesPlaceholder = true
                 appState.sessionStore.navigateToSession = sessionId
+            } else if openWithoutPlaceholder {
+                appState.sessionStore.navigationPushesOnTop = true
+                appState.sessionStore.navigateToSession = sessionId
             }
             #else
             // The sidebar may be scrolled away from the new row (e.g. below
@@ -1269,6 +1301,7 @@ final class CommandSender {
             appState.sessionStore.navigateToSession = sessionId
             #endif
         }
+        forkSources.removeValue(forKey: requestId)
         if let prompt = pendingCreateRequests.removeValue(forKey: requestId) {
             // If we had a prompt, send it now
             if !prompt.isEmpty {
@@ -1284,9 +1317,16 @@ final class CommandSender {
         guard let appState else { return }
         if let placeholderId = pendingPlaceholderIds.removeValue(forKey: requestId) {
             appState.sessionStore.setPendingError(placeholderId, reason: reason)
+            // A fast-failing fork never showed its page: show it now, with
+            // the error, so the failure isn't silent.
+            if deferredForks.remove(requestId) != nil, placeholdersShown.remove(placeholderId) == nil {
+                appState.sessionStore.navigationPushesOnTop = true
+                appState.sessionStore.navigateToSession = placeholderId
+            }
         }
         pendingCreateRequests.removeValue(forKey: requestId)
         pendingCreateTitles.removeValue(forKey: requestId)
+        forkSources.removeValue(forKey: requestId)
     }
 
     func reset() {
@@ -1298,6 +1338,9 @@ final class CommandSender {
         pendingCreateRequests.removeAll()
         pendingCreateTitles.removeAll()
         pendingPlaceholderIds.removeAll()
+        deferredForks.removeAll()
+        forkSources.removeAll()
+        placeholdersShown.removeAll()
         timedOutCreatePrompts.removeAll()
         pendingModeChanges.removeAll()
         #if DEBUG

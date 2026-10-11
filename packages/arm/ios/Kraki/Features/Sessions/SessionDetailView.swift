@@ -49,7 +49,7 @@ struct SessionDetailView: View {
                         if !Task.isCancelled, isCatchingUp { showsSyncing = true }
                     }
             } else if sessionStore.isPending(sessionId) {
-                pageWithHeader(title: "New Session", opensInfo: false) { pendingView }
+                pageWithHeader(title: sessionStore.pendingSessionTitles[sessionId] ?? "New Session", opensInfo: false) { pendingView }
             } else {
                 pageWithHeader(title: "", opensInfo: false) { notFoundView }
             }
@@ -267,7 +267,7 @@ struct SessionDetailView: View {
                 Image(systemName: "exclamationmark.circle")
                     .font(.system(size: 32))
                     .foregroundStyle(.red)
-                Text("Couldn't start session")
+                Text(sessionStore.pendingSessionTitles[sessionId] != nil ? "Couldn't fork session" : "Couldn't start session")
                     .font(.subheadline)
                     .fontWeight(.semibold)
                     .foregroundStyle(.primary)
@@ -280,7 +280,7 @@ struct SessionDetailView: View {
                 ProgressView()
                     .controlSize(.large)
                     .tint(.krakiPrimary)
-                Text("Starting session…")
+                Text(sessionStore.pendingSessionTitles[sessionId] != nil ? "Copying session…" : "Starting session…")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }

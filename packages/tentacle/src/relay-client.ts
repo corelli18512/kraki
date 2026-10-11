@@ -2008,64 +2008,86 @@ export class RelayClient {
     }
   }
 
+  /** Forks in progress: their adapter's onSessionCreated must not announce
+   *  them; handleForkSession does, with the fork's full state. */
+  private forkingSessions = new Set<string>();
+
   private async handleForkSession(msg: ConsumerMessage): Promise<void> {
     if (msg.type !== 'fork_session') return;
     const { sourceSessionId, requestId } = msg.payload;
+    const started = Date.now();
+    let newId: string | undefined;
 
     try {
-      // 1. Fork kraki session files (meta, context, messages)
+      // 1. Kraki's own copy (meta, spine, trace; attachments link later).
       const result = this.sessionManager.forkSession(sourceSessionId);
       if (!result) throw new Error(`Source session not found: ${sourceSessionId}`);
+      newId = result.sessionId;
+      this.forkingSessions.add(newId);
 
-      const { sessionId: newId } = result;
-      if (requestId) {
-        this.pendingRequestIds.set(newId, requestId);
-      }
-
-      // 2. Fork SDK session state and resume. Some adapters (currently
-      // Copilot) emit onSessionCreated themselves, while others (Pi) only
-      // return after the fork is ready. If the adapter did not consume the
-      // pending requestId through that callback, publish session_created here
-      // so the requesting Arm can clear its pending state and navigate.
+      // 2. The agent's copy (transcript or thread), resumed lazily.
       await this.adapter.forkSession(sourceSessionId, newId);
-      const forkedMode = this.sessionManager.getMeta(newId)?.mode;
-      if (forkedMode) this.adapter.setSessionMode(newId, forkedMode);
-      const pendingRequestId = this.pendingRequestIds.get(newId);
-      if (pendingRequestId) {
-        this.pendingRequestIds.delete(newId);
-        const meta = this.sessionManager.getMeta(newId);
-        this.send({
-          type: 'session_created',
-          sessionId: newId,
-          payload: {
-            agent: meta?.agent,
-            model: meta?.model,
-            requestId: pendingRequestId,
-            lastSeq: meta?.lastSeq ?? 0,
-            ...(meta?.mode && { mode: toWireSessionMode(meta.mode) }),
-          },
-        } as Partial<ProducerMessage>);
-      }
+      const meta = this.sessionManager.getMeta(newId);
+      if (meta?.mode) this.adapter.setSessionMode(newId, meta.mode);
+      this.forkingSessions.delete(newId);
 
-      // 3. Forked session is idle until the user sends a message
+      // 3. Announce the fork. The session list goes first: every app then
+      // already knows the fork's name, state and preview when
+      // session_created arrives (the requester navigates on it). The
+      // announcement is not a spine row (seq 0): the fork's history ends
+      // where the source's did.
       this.sessionManager.markIdle(newId);
-      this.send({ type: 'idle', sessionId: newId, payload: {} });
-      // Every app learns the fork's name and preview now (others only got
-      // session_created, and showed an untitled "New Session").
       this.broadcastSessionList();
+      this.send({
+        type: 'session_created',
+        sessionId: newId,
+        payload: {
+          agent: meta?.agent,
+          model: meta?.model,
+          reasoningEffort: meta?.reasoningEffort,
+          requestId,
+          lastSeq: meta?.lastSeq ?? 0,
+          ...(meta?.mode && { mode: toWireSessionMode(meta.mode) }),
+        },
+      } as Partial<ProducerMessage>, false, { persist: false });
 
+      // 4. Copied mid-turn: the copy's turn will never finish. Say so instead
+      // of leaving a question that looks like it is still being answered.
+      if (result.sourceWasRunning) this.closeForkedOpenTurn(newId);
+
+      // Again after: older apps reset a session to "running, untitled" on
+      // session_created; this restores it.
+      this.broadcastSessionList();
+      logger.info({ sourceSessionId, newId, ms: Date.now() - started }, 'Session forked');
     } catch (err) {
-      for (const [sessionId, pendingId] of this.pendingRequestIds) {
-        if (pendingId === requestId) this.pendingRequestIds.delete(sessionId);
+      if (newId) {
+        this.forkingSessions.delete(newId);
+        // Never leave a half-made copy behind (it showed as a session that
+        // spun forever).
+        this.purgeSessionToolState(newId);
+        this.sessionManager.deleteSession(newId);
       }
       logger.error({ err, sourceSessionId }, 'Fork session failed');
-      const errorMsg = `Couldn't copy the session: ${(err as Error).message}`;
       this.send({
         type: 'error',
         sessionId: '',
-        payload: { message: errorMsg, ...(requestId && { requestId }) },
+        payload: { message: `Couldn't copy the session: ${(err as Error).message}`, ...(requestId && { requestId }) },
       });
     }
+  }
+
+  /** Close the turn a fork copied while it was running. */
+  private closeForkedOpenTurn(sessionId: string): void {
+    // Shown like a turn the user stopped ("Stopped"): the copy simply ends
+    // here; nothing failed.
+    this.finishTurnWithStatus(sessionId, {
+      type: 'user_abort',
+      payload: { abortedAt: new Date().toISOString() },
+    });
+    this.sendTurnIdle(sessionId, {}, null);
+    // The note is about the copy itself, not news for the user.
+    const lastSeq = this.sessionManager.getMeta(sessionId)?.lastSeq;
+    if (lastSeq) this.sessionManager.markRead(sessionId, lastSeq);
   }
 
   // ── Local session sync handlers ───────────────────────
@@ -2294,6 +2316,7 @@ export class RelayClient {
 
   private wireAdapterEvents(): void {
     this.adapter.onSessionCreated = (event) => {
+      if (this.forkingSessions.has(event.sessionId)) return;
       // Track in SessionManager if not already tracked (from resume)
       if (!this.sessionManager.getMeta(event.sessionId)) {
         this.sessionManager.createSession(
@@ -3538,7 +3561,7 @@ export class RelayClient {
   // TODO: Make send() accept a discriminated union of ProducerMessage types
   // instead of Partial<ProducerMessage> so TypeScript enforces correct payload
   // shape per message type (e.g. user_message must have payload.content).
-  private send(msg: Partial<ProducerMessage>, createsUnread = false): void {
+  private send(msg: Partial<ProducerMessage>, createsUnread = false, opts: { persist?: boolean } = {}): void {
     // Durable outcomes must reach the local spine even while the relay is
     // offline. Reconnect replay pulls from that spine; there is no event queue
     // to recover a reply discarded here. Only live-only deltas may be dropped.
@@ -3621,7 +3644,11 @@ export class RelayClient {
         if (p && typeof p === 'object') p.steps = this.turnStepCounts.get(sessionId) ?? 0;
       }
     }
-    if (sessionId && RelayClient.PERSISTENT_TYPES.has(type)) {
+    if (opts.persist === false) {
+      // Announcement only (a fork's session_created): no spine row. Seq 0
+      // tells apps not to store it as history either.
+      enriched.seq = 0;
+    } else if (sessionId && RelayClient.PERSISTENT_TYPES.has(type)) {
       enriched.seq = this.sessionManager.appendMessage(
         sessionId,
         type,

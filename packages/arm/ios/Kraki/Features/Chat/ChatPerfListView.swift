@@ -2767,6 +2767,12 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
         paginationSnapshotDeferred = false
         let newCount = newIds.count
+        // A batch can reveal buffered older rows AND append new ones (a message
+        // sent while older history was waiting to be shown). The front shift
+        // below keeps the reading position; if the reader was at the bottom,
+        // the new rows must also be followed, or they land under the composer.
+        let followNewTail = iB > 0 && followingBottom
+            && !collectionView.isDragging && !collectionView.isDecelerating
 
         UIView.performWithoutAnimation {
             // Settle pending layout (e.g. the scroll step that triggered this
@@ -2818,6 +2824,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             // corrects any remaining difference (absolute, never additive).
             let uikitDrift = collectionView.contentOffset.y - offsetBeforeBatch
             applyFrontShift(frontDelta - uikitDrift, gestureDelta: frontDelta)
+            if followNewTail { pinToBottom(reason: "edges-new-tail") }
         }
 
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000

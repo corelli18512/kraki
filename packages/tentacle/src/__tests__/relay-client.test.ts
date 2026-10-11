@@ -637,10 +637,11 @@ describe('RelayClient fork session confirmation', () => {
     vi.useFakeTimers();
   });
 
-  function connectForkClient(emitCreatedFromAdapter: boolean) {
+  function connectForkClient(emitCreatedFromAdapter: boolean, opts: { running?: boolean; adapterFails?: boolean } = {}) {
     const adapter = {
       ...createAdapter(),
       forkSession: vi.fn(async (_sourceSessionId: string, newSessionId: string) => {
+        if (opts.adapterFails) throw new Error('thread not found');
         if (emitCreatedFromAdapter) {
           (adapter.onSessionCreated as ((event: { sessionId: string; agent: string; model?: string }) => void) | null)?.({
             sessionId: newSessionId,
@@ -659,9 +660,11 @@ describe('RelayClient fork session confirmation', () => {
     };
     const sm = {
       ...createSessionManager(),
-      forkSession: vi.fn(() => ({ sessionId: 'source-forked1', runId: 'run_001' })),
+      forkSession: vi.fn(() => ({ sessionId: 'source-forked1', runId: 'run_001', throughSeq: 42, sourceWasRunning: !!opts.running })),
+      deleteSession: vi.fn(),
+      markRead: vi.fn(),
       getMeta: vi.fn((sessionId: string) => sessionId === 'source-forked1'
-        ? { id: sessionId, agent: emitCreatedFromAdapter ? 'copilot' : 'pi', model: 'test/model', lastSeq: 42, state: 'active' }
+        ? { id: sessionId, agent: emitCreatedFromAdapter ? 'copilot' : 'pi', model: 'test/model', lastSeq: 42, state: 'active', title: 'Fork of Plan' }
         : { id: sessionId, agent: 'pi', model: 'test/model', lastSeq: 42, state: 'idle' }),
     };
     const client = new RelayClient(
@@ -688,6 +691,7 @@ describe('RelayClient fork session confirmation', () => {
       type: 'device_joined',
       device: { id: 'arm_1', role: 'app', encryptionKey: 'arm-pub' },
     })));
+    return { sm, adapter };
   }
 
   function sendForkRequest(requestId: string): void {
@@ -727,7 +731,7 @@ describe('RelayClient fork session confirmation', () => {
     sendForkRequest('req_fork_list');
     await vi.runAllTimersAsync();
     const types = decodePulseSends(sockets[0].sent).map((msg) => msg.type);
-    expect(types.indexOf('session_list')).toBeGreaterThan(types.indexOf('session_created'));
+    expect(types.lastIndexOf('session_list')).toBeGreaterThan(types.indexOf('session_created'));
   });
 
   it('does not duplicate session_created when the adapter emits its own callback', async () => {
@@ -742,6 +746,38 @@ describe('RelayClient fork session confirmation', () => {
       sessionId: 'source-forked1',
       payload: { requestId: 'req_fork_copilot', lastSeq: 42 },
     });
+  });
+
+  it('sends the session list before announcing the fork, and the announcement is no spine row', async () => {
+    connectForkClient(true);
+    sockets[0].sent.length = 0;
+    sendForkRequest('req_fork_order');
+    await vi.runAllTimersAsync();
+    const sent = decodePulseSends(sockets[0].sent);
+    const created = sent.findIndex((m) => m.type === 'session_created');
+    expect(sent.findIndex((m) => m.type === 'session_list')).toBeLessThan(created);
+    expect(sent[created].seq).toBe(0);
+  });
+
+  it('closes a turn that was copied mid-run instead of leaving it open', async () => {
+    const { sm } = connectForkClient(false, { running: true });
+    sendForkRequest('req_fork_running');
+    await vi.runAllTimersAsync();
+    const sent = decodePulseSends(sockets[0].sent);
+    const status = sent.find((msg) => msg.type === 'turn_status' && msg.sessionId === 'source-forked1');
+    expect((status?.payload as { action: { type: string } }).action.type).toBe('user_abort');
+    expect(sent.findIndex((m) => m.type === 'turn_status')).toBeGreaterThan(sent.findIndex((m) => m.type === 'session_created'));
+    expect(sm.markRead).toHaveBeenCalled();
+  });
+
+  it('removes the half-made copy when the agent cannot fork', async () => {
+    const { sm } = connectForkClient(false, { adapterFails: true });
+    sendForkRequest('req_fork_fail');
+    await vi.runAllTimersAsync();
+    expect(sm.deleteSession).toHaveBeenCalledWith('source-forked1');
+    const sent = decodePulseSends(sockets[0].sent);
+    expect(sent.some((m) => m.type === 'session_created')).toBe(false);
+    expect(sent.find((m) => m.type === 'error')?.payload).toMatchObject({ requestId: 'req_fork_fail' });
   });
 });
 
