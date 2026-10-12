@@ -1,0 +1,50 @@
+# SwiftLint for the Kraki iOS/Mac app. CI gate: scripts/ci/swiftlint-ratchet.mjs
+#
+#   node scripts/ci/swiftlint-ratchet.mjs           # check (what CI runs)
+#   node scripts/ci/swiftlint-ratchet.mjs --update  # rewrite the baseline
+#
+# Existing violations are listed in .swiftlint-baseline.json and are allowed
+# to stay or shrink. A new violation, or an existing one that grows (a long
+# file, type or function getting longer), fails CI.
+#
+# After splitting a file, code that moved to a new file shows up as new:
+# run --update in the same PR and check the baseline diff only moves entries
+# (and lowers sizes). Never --update to make a real new violation pass.
+#
+# Sizes count code lines only (no comments, no blank lines). Thresholds were
+# picked from the code as of 2026-10: ~98 % of functions and ~95 % of files
+# are already under them.
+
+included:
+  - Kraki
+  - KrakiTests
+  - KrakiMacTests
+  - KrakiNotification
+excluded:
+  - Vendor
+  - build
+  - Kraki.xcodeproj
+
+only_rules:
+  - file_length
+  - type_body_length
+  - function_body_length
+  - cyclomatic_complexity
+  - force_try
+  - force_cast
+  - force_unwrapping
+
+file_length:
+  warning: 800
+  error: 1500
+  ignore_comment_only_lines: true
+type_body_length:
+  warning: 500
+  error: 1000
+function_body_length:
+  warning: 80
+  error: 150
+cyclomatic_complexity:
+  warning: 20
+  error: 30
+  ignores_case_statements: true
