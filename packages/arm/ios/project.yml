@@ -289,6 +289,8 @@ targets:
       - path: Kraki/Shared/ToolStatusIcon.swift
       - path: Kraki/Shared/PermissionDiffPreview.swift
       - path: Kraki/Shared/DiagnosticsSummary.swift
+      # Session list UI shared by iOS and Mac (status glyphs, metadata row, update badges).
+      - path: Kraki/Shared/SessionUI
       # AppState is platformized (push + willTerminate guarded).
       - path: Kraki/App/AppState.swift
       - path: Kraki/App/AppState+AccountDeletion.swift

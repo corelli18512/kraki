@@ -36,14 +36,14 @@ struct SessionPreviewStatusGlyph: View {
 /// Visibility reconciliation is deliberately low frequency (not an animation
 /// driver). It covers retained/reused list cells and hidden/occluded windows,
 /// without observing per-frame scroll offsets or invalidating SwiftUI layout.
-final class PreviewGlyphHost: PreviewPlatformView {
+final class PreviewGlyphHost: PreviewPlatformView, VisibilityTickClient {
     let renderer = SessionPreviewGlyphLayer()
     private var kind: SessionPreviewGlyphKind = .compacting
     private var color: CGColor = CGColor(gray: 0, alpha: 1)
     private var image: CGImage?
     private var imageKey = ""
     private var enabled = false
-    private var visibilityTimer: Timer?
+    private var ticking = false
 
     #if os(macOS)
     override var isFlipped: Bool { true }
@@ -61,7 +61,10 @@ final class PreviewGlyphHost: PreviewPlatformView {
     override func layoutSubviews() { super.layoutSubviews(); reconcile() }
     #endif
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    deinit { visibilityTimer?.invalidate() }
+    // No deinit cleanup: the ticker holds hosts weakly and stops itself on the
+    // first tick that finds none left.
+
+    func visibilityTick() { reconcile() }
 
     func configure(kind: SessionPreviewGlyphKind, color: CGColor, enabled: Bool) {
         self.kind = kind; self.color = color; self.enabled = enabled
@@ -116,14 +119,10 @@ final class PreviewGlyphHost: PreviewPlatformView {
         CATransaction.commit()
         renderer.configure(kind: kind, color: color, image: kind == .compacting ? nil : image,
                            displayScale: scale, animate: enabled && visible)
-        if window != nil && enabled && kind.animates {
-            if visibilityTimer == nil {
-                let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.reconcile() }
-                RunLoop.main.add(timer, forMode: .common)
-                visibilityTimer = timer
-            }
-        } else {
-            visibilityTimer?.invalidate(); visibilityTimer = nil
+        let wantsTick = window != nil && enabled && kind.animates
+        if wantsTick != ticking {
+            ticking = wantsTick
+            if wantsTick { VisibilityTicker.shared.add(self) } else { VisibilityTicker.shared.remove(self) }
         }
     }
 }

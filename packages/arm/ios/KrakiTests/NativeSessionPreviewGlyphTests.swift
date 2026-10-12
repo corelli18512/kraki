@@ -332,6 +332,110 @@ import UIKit
         sender.clearPending(sid, clientId: failedId)
     }
 
+    /// A row scrolled out of a real lazy list stops its glyph; scrolled back,
+    /// the glyph animates again even if the system dropped the animation
+    /// while it was away (the "glyph frozen after scrolling" bug).
+    func testGlyphInLazyListResumesAfterScrollingAwayAndBack() throws {
+        try requireForegroundUITests()
+        struct Rows: View {
+            var body: some View {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(0..<80, id: \.self) { i in
+                            HStack {
+                                if i == 0 { SessionPreviewStatusGlyph(kind: .compacting) } else { Color.clear.frame(width: 16, height: 16) }
+                                Text("Session \(i)"); Spacer()
+                            }.frame(height: 48)
+                        }
+                    }
+                }
+                // A bare hosting view has no scene; the app's rows are in an active one.
+                .environment(\.scenePhase, .active)
+            }
+        }
+        func hosts(_ view: PreviewPlatformView) -> [PreviewGlyphHost] {
+            (view as? PreviewGlyphHost).map { [$0] } ?? view.subviews.flatMap { hosts($0) }
+        }
+        func settle(_ s: Double = 0.6) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
+        func planesAnimating(_ host: PreviewGlyphHost) -> Bool {
+            host.renderer.isAnimating && (host.renderer.sublayers ?? []).contains { !($0.animationKeys() ?? []).isEmpty }
+        }
+        #if os(macOS)
+        let root = NSHostingView(rootView: Rows())
+        // Test windows aren't reliably reported as unoccluded; the real-occlusion path is covered above.
+        let window = GlyphTestWindow(contentRect: CGRect(x: 50, y: 50, width: 300, height: 240), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = root; window.orderFrontRegardless()
+        defer { window.orderOut(nil); window.contentView = nil }
+        let rootView: NSView = root
+        func scroll(toBottom: Bool) throws {
+            func find(_ v: NSView) -> NSScrollView? { (v as? NSScrollView) ?? v.subviews.lazy.compactMap(find).first }
+            let sv = try XCTUnwrap(find(rootView)), doc = try XCTUnwrap(sv.documentView)
+            let y = toBottom ? max(0, doc.frame.height - sv.contentView.bounds.height) : 0
+            sv.contentView.scroll(to: CGPoint(x: 0, y: y)); sv.reflectScrolledClipView(sv.contentView)
+        }
+        #else
+        let controller = UIHostingController(rootView: Rows())
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 300, height: 240)
+        window.rootViewController = controller; window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let rootView = controller.view!
+        func scroll(toBottom: Bool) throws {
+            func find(_ v: UIView) -> UIScrollView? { (v as? UIScrollView) ?? v.subviews.lazy.compactMap(find).first }
+            let sv = try XCTUnwrap(find(rootView))
+            let y = toBottom ? max(0, sv.contentSize.height - sv.bounds.height) : 0
+            sv.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+        }
+        #endif
+        settle()
+        let first = try XCTUnwrap(hosts(rootView).first, "glyph row rendered")
+        XCTAssertTrue(planesAnimating(first), "visible glyph animates")
+        try scroll(toBottom: true); settle()
+        for host in hosts(rootView) {
+            XCTAssertFalse(host.renderer.isAnimating, "a glyph scrolled away stops")
+            host.renderer.sublayers?.forEach { $0.removeAllAnimations() } // system dropping the timeline
+        }
+        try scroll(toBottom: false); settle()
+        let back = try XCTUnwrap(hosts(rootView).first { $0.renderer.kind == .compacting }, "glyph row back")
+        XCTAssertTrue(planesAnimating(back), "glyph animates again after scrolling back")
+    }
+
+    func testVisibilityTickerIsSharedAndStopsWhenNoGlyphAnimates() throws {
+        try requireForegroundUITests()
+        let ticker = VisibilityTicker.shared
+        XCTAssertFalse(ticker.isRunning, "No animating glyph, no timer")
+        let blue = CGColor(red: 0, green: 0, blue: 1, alpha: 1)
+        #if os(macOS)
+        let window = NSWindow(contentRect: CGRect(x: 50, y: 50, width: 200, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        let container = NSView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        window.contentView = container; window.orderFrontRegardless()
+        defer { window.orderOut(nil); window.contentView = nil }
+        #else
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        let vc = UIViewController(); window.rootViewController = vc; window.makeKeyAndVisible()
+        let container = vc.view!
+        defer { window.isHidden = true; window.rootViewController = nil }
+        #endif
+        var hosts: [PreviewGlyphHost] = (0..<5).map { i in
+            let host = PreviewGlyphHost(frame: CGRect(x: 10 + i * 20, y: 10, width: 16, height: 16))
+            container.addSubview(host)
+            host.configure(kind: .compacting, color: blue, enabled: true)
+            return host
+        }
+        XCTAssertTrue(ticker.isRunning)
+        XCTAssertEqual(ticker.clientCount, 5, "Five animating rows share one timer")
+        hosts[0].configure(kind: .delivery(.failed), color: blue, enabled: true) // static glyph
+        XCTAssertEqual(ticker.clientCount, 4)
+        hosts[1].removeFromSuperview()
+        XCTAssertEqual(ticker.clientCount, 3)
+        hosts.removeAll() // views released without unregistering
+        container.subviews.forEach { $0.removeFromSuperview() }
+        ticker.tick()
+        XCTAssertFalse(ticker.isRunning, "Timer stops once no glyph animates")
+        XCTAssertEqual(ticker.clientCount, 0)
+    }
+
     func testNativeHostStopsWhenHiddenDetachedOrOffscreenAndResumes() throws {
         try requireForegroundUITests()
         let host = PreviewGlyphHost(frame: CGRect(x: 10, y: 10, width: 16, height: 16))

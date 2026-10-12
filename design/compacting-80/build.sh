@@ -33,7 +33,7 @@ files = [core/'SessionPreviewGlyphLayer.swift', root/'packages/arm/ios/Kraki/Sha
 (out/'provenance.json').write_text(json.dumps({'baseline':'V2: exact prior renderer captured in PreviousGlyphSource.swift; bottom row adds compacting 1.20x/1.10y and authorization 1.10; assistant/user unchanged' ,'base_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root).decode().strip(),'renderer':'Production CALayer render(in:) at matching expanded phase; SwiftUI ImageRenderer; native Lucide and SF neighbors; not a full session-row screenshot','files':{str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in files}},indent=2))
 PY
 xcrun swiftc -O -swift-version 5 -parse-as-library -target arm64-apple-macos15.0 \
-  "$ROOT/packages/arm/ios/Kraki/Core/Protocol/SessionPreviewGlyphLayer.swift" \
+  "$ROOT/packages/arm/ios/Kraki/Shared/SessionUI/SessionPreviewGlyphLayer.swift" \
   "$ROOT/packages/arm/ios/Kraki/Shared/LucideIcon.swift" \
   "$ROOT/packages/arm/ios/Kraki/Shared/ThemePlatform.swift" \
   "$OUT/Baseline.swift" "$OUT/Previous.swift" "$OUT/Support.swift" "$D/Preview.swift" \
