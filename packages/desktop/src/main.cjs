@@ -10,7 +10,7 @@ const { existsSync, readFileSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const os = require('node:os');
-const { BuiltInKraki } = require('./tentacle.cjs');
+const { BuiltInKraki, readLocalLinkDiscovery } = require('./tentacle.cjs');
 const presence = require('./presence.cjs');
 const permissions = require('./permissions.cjs');
 
@@ -381,6 +381,7 @@ const safely = (fn) => async (...args) => {
   try { return { ok: true, ...(await fn(...args)) }; } catch (err) { return { ok: false, error: String(err?.message ?? err) }; }
 };
 
+ipcMain.handle('kraki:local-link-discovery', () => readLocalLinkDiscovery());
 ipcMain.handle('kraki:builtin-state', () => builtIn?.state() ?? null);
 ipcMain.handle('kraki:builtin-agents', async () => builtIn.checkAgents((e) => send('kraki:builtin-agent-event', e)));
 ipcMain.handle('kraki:builtin-setup', async (_e, opts) => builtIn.setup({

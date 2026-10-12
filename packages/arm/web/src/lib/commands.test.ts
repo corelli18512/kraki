@@ -83,3 +83,15 @@ describe('deny with a reason', () => {
     expect(sent[1]).toEqual({ type: 'deny', sessionId: 's1', payload: { permissionId: 'p2' } });
   });
 });
+
+describe('forkSession', () => {
+  it('records the source of each fork request, cleared with the request', () => {
+    const state = new commands.CommandState();
+    const sent: Array<Record<string, unknown>> = [];
+    commands.forkSession('src-1', (m) => sent.push(m), state);
+    const requestId = (sent[0]!.payload as { requestId: string }).requestId;
+    expect(state.forkSources.get(requestId)).toBe('src-1');
+    state.clearRequest(requestId);
+    expect(state.forkSources.has(requestId)).toBe(false);
+  });
+});

@@ -71,6 +71,9 @@ vi.mock('./encryption', () => ({
     async encryptForDevice(msg: Record<string, unknown>, targetDeviceId: string) {
       return { blob: JSON.stringify(msg), keys: {}, to: targetDeviceId };
     }
+    async decryptBlob(blob: string) {
+      return JSON.parse(blob);
+    }
     async drainEncryptedQueue() {}
   },
 }));
@@ -1878,6 +1881,89 @@ describe('KrakiWSClient', () => {
         expect(sent.filter((m) => m.type === 'send_input').map((m) => (m.payload as { clientId: string }).clientId)).toEqual([clientId]);
       });
       outbox.reset();
+    });
+  });
+});
+
+
+describe('desktop local link routing (fake link)', () => {
+  type FakeLink = { isLinked: (id: string | null | undefined) => boolean; send: (p: string, to: string, r: boolean) => boolean; start(): void; poke(): void; stop(): void; stats: Record<string, number> };
+  async function setup() {
+    const client = new KrakiWSClient('ws://localhost:9999');
+    const linkSends: Array<{ type: string; replayable: boolean }> = [];
+    let linked = true;
+    const fake: FakeLink = {
+      // The encryption mock addresses session commands to 'test-tentacle'.
+      isLinked: (id) => linked && (id === 'dev-1' || id === 'test-tentacle'),
+      send: (payload, _to, replayable) => {
+        linkSends.push({ type: (JSON.parse(JSON.parse(payload).blob) as { type: string }).type, replayable });
+        return true;
+      },
+      start() {}, poke() {}, stop() {},
+      stats: { staleHeadFrames: 0 },
+    };
+    (client as unknown as { localLink: FakeLink }).localLink = fake;
+    client.connect();
+    await vi.waitFor(() => expect(lastWsInstance.sentMessages.length).toBeGreaterThan(0));
+    lastWsInstance._receive({
+      type: 'auth_ok', deviceId: 'dev-web-123',
+      devices: [{ id: 'dev-1', name: 'This PC', role: 'tentacle', online: true, encryptionKey: 'mock-key' }],
+    });
+    const deliver = (inner: Record<string, unknown>, route: 'head' | 'link') =>
+      (client as unknown as { handlePulseDelivered: (p: string, r: string) => void })
+        .handlePulseDelivered(JSON.stringify({ blob: JSON.stringify(inner), keys: {}, src: 'dev-1' }), route);
+    deliver({
+      type: 'session_list', deviceId: 'dev-1', seq: 1, timestamp: '',
+      payload: { sessions: [{ id: 'sess-1', agent: 'pi', state: 'active', mode: 'execute', lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: '' }] },
+    }, 'link');
+    await vi.waitFor(() => expect(useStore.getState().sessions.has('sess-1')).toBe(true));
+    return { client, linkSends, deliver, fake, unlink: () => { linked = false; } };
+  }
+
+  it('sends commands for the linked Tentacle over the link, marking replayable ones', async () => {
+    const { client, linkSends } = await setup();
+    const headDataBefore = lastWsInstance.sentMessages.map(decodePulseSend).filter((m) => m && typeof m.type === 'string').length;
+    client.renameSession('sess-1', 'New name');
+    client.abortSession('sess-1');
+    await vi.waitFor(() => expect(linkSends.map((s) => s.type)).toEqual(expect.arrayContaining(['rename_session', 'abort_session'])));
+    expect(linkSends.find((s) => s.type === 'rename_session')?.replayable).toBe(true);
+    expect(linkSends.find((s) => s.type === 'abort_session')?.replayable).toBe(false);
+    const headDataAfter = lastWsInstance.sentMessages.map(decodePulseSend).filter((m) => m && typeof m.type === 'string').length;
+    expect(headDataAfter).toBe(headDataBefore);
+  });
+
+  it('drops stale live frames that come through the Head from the linked Tentacle, keeps spine', async () => {
+    const { client, deliver, fake } = await setup();
+    client.setDesiredSession('sess-1');
+    await vi.waitFor(() => expect(client['localLink']).toBeTruthy());
+    deliver({
+      type: 'session_subscription_set', deviceId: 'dev-1', seq: 2, timestamp: '',
+      payload: { accepted: true, sessionId: 'sess-1', snapshot: { digest: { id: 'sess-1', agent: 'pi', state: 'active', mode: 'execute', lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: '' }, spineHeadSeq: 0, card: { draft: '', action: null } } },
+    }, 'link');
+    await vi.waitFor(() => expect(client.isLiveReady('sess-1')).toBe(true));
+    deliver({ type: 'agent_message_delta', deviceId: 'dev-1', sessionId: 'sess-1', seq: 0, timestamp: '', payload: { content: 'via link ' } }, 'link');
+    deliver({ type: 'agent_message_delta', deviceId: 'dev-1', sessionId: 'sess-1', seq: 0, timestamp: '', payload: { content: 'STALE' } }, 'head');
+    deliver({ type: 'agent_message', deviceId: 'dev-1', sessionId: 'sess-1', seq: 1, timestamp: new Date().toISOString(), payload: { content: 'spine via head' } }, 'head');
+    await vi.waitFor(() => expect(useStore.getState().messages.get('sess-1')?.length).toBe(1));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(JSON.stringify(useStore.getState().cards ?? {})).not.toContain('STALE');
+    expect(fake.stats.staleHeadFrames).toBe(1);
+  });
+
+  it('a Head device_left for the linked Tentacle does not take it offline', async () => {
+    await setup();
+    lastWsInstance._receive({ type: 'device_left', deviceId: 'dev-1' });
+    expect(useStore.getState().devices.get('dev-1')?.online).toBe(true);
+  });
+
+  it('a link drop re-sends unconfirmed commands through the Head', async () => {
+    const { client, unlink } = await setup();
+    unlink();
+    (client as unknown as { onLocalLinkChange: (t: string, l: boolean, u: Array<{ payload: string; target: string }>) => void })
+      .onLocalLinkChange('dev-1', false, [{ payload: JSON.stringify({ blob: JSON.stringify({ type: 'approve', payload: { permissionId: 'p1' } }), keys: {} }), target: 'dev-1' }]);
+    await vi.waitFor(() => {
+      const sent = lastWsInstance.sentMessages.map(decodePulseSend).filter(Boolean);
+      expect(sent.some((m) => m?.type === 'approve')).toBe(true);
     });
   });
 });

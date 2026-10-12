@@ -64,6 +64,9 @@ export interface KrakiDesktopBridge {
   setNeedsYou?: (list: { id: string; title: string; reason: string }[]) => void;
   /** Tray › Account Usage / Settings… */
   onOpen?: (what: 'usage' | 'settings', handler: () => void) => () => void;
+  /** Contents of `<KRAKI_HOME>/local-link.json` (the Tentacle on this
+   *  machine), or null. Absent in shells without local-link support. */
+  localLinkDiscovery?: () => Promise<string | null>;
 }
 
 declare global {

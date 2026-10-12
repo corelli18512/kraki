@@ -37,6 +37,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { importPublicKey, signChallenge, verifyChallenge } from "@kraki/crypto";
 import { WebSocket, WebSocketServer } from "ws";
+import { renameWithRetry } from "./fs-retry.js";
 import { createLogger } from "./logger.js";
 import { TentaclePulse } from "./tentacle-pulse.js";
 
@@ -44,6 +45,8 @@ const logger = createLogger("local-link");
 
 export const LOCAL_LINK_VERSION = 1;
 export const LOCAL_LINK_FILE = "local-link.json";
+/** Origin of the Kraki desktop shell's page (packages/desktop, app://kraki). */
+export const DESKTOP_APP_ORIGIN = "app://kraki";
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 /** Unauthenticated connections allowed at once (any local process can connect). */
 const MAX_PENDING = 16;
@@ -144,8 +147,10 @@ export class LocalLinkServer {
 			port: Number(process.env.KRAKI_LOCAL_LINK_PORT ?? 0),
 			maxPayload: MAX_PAYLOAD,
 			// A browser page can open ws://127.0.0.1 too. Native clients send no
-			// Origin; refuse anything that does before any handshake work.
-			verifyClient: (info: { origin?: string }) => !info.origin,
+			// Origin; the desktop shell's page sends its own `app://kraki`, which
+			// no web page can claim. Refuse every other origin before any work.
+			verifyClient: (info: { origin?: string }) =>
+				!info.origin || info.origin === DESKTOP_APP_ORIGIN,
 		});
 		this.wss = wss;
 		await new Promise<void>((resolve, reject) => {
@@ -254,7 +259,13 @@ export class LocalLinkServer {
 		} finally {
 			closeSync(fd);
 		}
-		renameSync(tmp, this.filePath);
+		try {
+			// Windows: replacing fails briefly while a reader has the file open.
+			renameWithRetry(tmp, this.filePath);
+		} catch (err) {
+			rmSync(tmp, { force: true });
+			throw err;
+		}
 	}
 
 	private pingPeers(): void {

@@ -129,3 +129,65 @@ describe('SessionSubscriptionController', () => {
     expect(sends).toHaveLength(1); // disconnected host does not send
   });
 });
+
+describe('SessionSubscriptionController with the desktop local link', () => {
+  function linkSetup() {
+    let connected = true;
+    const independent = new Set<string>(['T1']);
+    const sends: Array<[string, string | null, string]> = [];
+    const controller = new SessionSubscriptionController({
+      isConnected: () => connected,
+      resolveTentacle: (sessionId) => ({ A: 'T1', B: 'T1', D: 'T2' } as Record<string, string>)[sessionId],
+      send: async (tentacleId, sessionId, requestId) => { sends.push([tentacleId, sessionId, requestId]); return true; },
+      isRouteIndependent: (id) => independent.has(id),
+      applySnapshot: vi.fn(),
+      reportError: vi.fn(),
+    });
+    const withId = (m: SessionSubscriptionSetMessage, requestId: string) =>
+      ({ ...m, payload: { ...m.payload, requestId } }) as SessionSubscriptionSetMessage;
+    return { controller, sends, withId, setConnected: (v: boolean) => { connected = v; } };
+  }
+
+  it('keeps the linked Tentacle subscription across a Head disconnect', async () => {
+    const { controller, sends, setConnected } = linkSetup();
+    controller.setDesired('A'); controller.onSessionList('T1'); await Promise.resolve();
+    controller.onAck(ack('T1', 'A'));
+    setConnected(false); controller.onDisconnected();
+    expect(controller.liveReady).toBe(true);
+    setConnected(true); controller.resume(); await Promise.resolve();
+    expect(sends.length).toBe(1);
+  });
+
+  it('can navigate on the linked Tentacle while the Head is down', async () => {
+    const { controller, sends, setConnected } = linkSetup();
+    controller.setDesired('A'); controller.onSessionList('T1'); await Promise.resolve();
+    controller.onAck(ack('T1', 'A'));
+    setConnected(false); controller.onDisconnected();
+    controller.setDesired('B'); await Promise.resolve();
+    expect(sends.at(-1)?.slice(0, 2)).toEqual(['T1', 'B']);
+  });
+
+  it('a Head-routed Tentacle still resets and is not driven while the Head is down', async () => {
+    const { controller, sends, setConnected } = linkSetup();
+    controller.onSessionList('T2'); controller.setDesired('D'); await Promise.resolve();
+    controller.onAck(ack('T2', 'D'));
+    setConnected(false); controller.onDisconnected();
+    expect(controller.liveReady).toBe(false);
+    const n = sends.length;
+    controller.resume(); await Promise.resolve();
+    expect(sends.length).toBe(n);
+  });
+
+  it('ignores an ACK that echoes an earlier request id; accepts one without an id (older Tentacle)', async () => {
+    const { controller, sends, withId } = linkSetup();
+    controller.setDesired('A'); controller.onSessionList('T1'); await Promise.resolve();
+    const first = sends.at(-1)![2];
+    controller.onTentacleAuthorityReset('T1'); controller.onSessionList('T1'); await Promise.resolve();
+    const second = sends.at(-1)![2];
+    expect(second).not.toBe(first);
+    controller.onAck(withId(ack('T1', 'A'), first));
+    expect(controller.liveReady).toBe(false);
+    controller.onAck(withId(ack('T1', 'A'), second));
+    expect(controller.liveReady).toBe(true);
+  });
+});

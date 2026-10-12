@@ -243,11 +243,23 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       }
       // Set tentacle info so message provider can route replay requests
       messageProvider.setTentacleInfo(sid, lastSeq ?? 0, msg.deviceId);
+      const reqId = msg.payload.requestId;
+      const forkSource = reqId ? ctx.cmdState.forkSources.get(reqId) : undefined;
+      if (reqId) ctx.cmdState.forkSources.delete(reqId);
       if (lastSeq && lastSeq > 0) {
         const fromSeq = Math.max(1, lastSeq - 49);
-        messageProvider.fetchRange(sid, fromSeq, lastSeq, { initial: true });
+        const load = () => messageProvider.fetchRange(sid, fromSeq, lastSeq, { initial: true });
+        // Our own fork: seed it from our copy of the source first (as on Mac/iOS),
+        // so the load finds it locally; anything missing is still fetched.
+        if (forkSource) {
+          void import('./message-db')
+            .then((db) => db.seedFork(sid, forkSource, fromSeq, lastSeq))
+            .catch(() => 0)
+            .finally(load);
+        } else {
+          load();
+        }
       }
-      const reqId = msg.payload.requestId;
       const wasOurRequest = reqId ? ctx.cmdState.pendingCreateRequests.delete(reqId) : false;
       // The first prompt of a session we created goes out as an ordinary
       // message now that the session exists (as on iOS/Mac).

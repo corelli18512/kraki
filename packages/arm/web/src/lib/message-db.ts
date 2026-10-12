@@ -180,6 +180,21 @@ export async function putMessages(sessionId: string, messages: ChatMessage[]): P
 }
 
 /**
+ * A fork starts with its source's rows 1…throughSeq (only the session id
+ * differs). Copy the cached ones in [fromSeq, throughSeq] so the fork opens
+ * from this device's own record instead of fetching history it already has.
+ * Never touches a fork that already has rows. Returns how many were copied.
+ */
+export async function seedFork(forkId: string, sourceId: string, fromSeq: number, throughSeq: number): Promise<number> {
+  if (throughSeq <= 0 || (await getLastSeq(forkId)) > 0) return 0;
+  const rows = (await getMessagesInRange(sourceId, Math.max(1, fromSeq), throughSeq))
+    .map((m) => ({ ...m, sessionId: forkId }) as ChatMessage);
+  if (rows.length === 0) return 0;
+  await putMessages(forkId, rows);
+  return rows.length;
+}
+
+/**
  * Store a single message. Filters out transient types (the caller in useStore
  * already gates on isTransient, but this is the authoritative guard).
  */

@@ -120,3 +120,23 @@ describe('message-db transient filtering on read (defense-in-depth)', () => {
     expect(await db.getLastSeq('sess-read-range-1')).toBe(12);
   });
 });
+
+describe('seedFork', () => {
+  it('copies the source rows in range into the fork, with the fork id', async () => {
+    const db = await freshModule();
+    await db.putMessages('src-sf-1', [1, 2, 3, 4].map((seq) => ({ type: 'agent_message', seq, sessionId: 'src-sf-1', payload: { content: `m${seq}` } }) as Msg));
+    expect(await db.seedFork('fork-sf-1', 'src-sf-1', 2, 3)).toBe(2);
+    const rows = await db.getMessages('fork-sf-1');
+    expect(rows.map((r) => (r as Msg).seq)).toEqual([2, 3]);
+    expect(rows.every((r) => (r as Msg).sessionId === 'fork-sf-1')).toBe(true);
+  });
+
+  it('never overwrites a fork that already has rows, and is a no-op without source rows', async () => {
+    const db = await freshModule();
+    await db.putMessages('src-sf-2', [{ type: 'agent_message', seq: 1, payload: { content: 'source' } } as Msg]);
+    await db.putMessages('fork-sf-2', [{ type: 'agent_message', seq: 1, payload: { content: 'own' } } as Msg]);
+    expect(await db.seedFork('fork-sf-2', 'src-sf-2', 1, 1)).toBe(0);
+    expect(((await db.getMessages('fork-sf-2'))[0] as Msg).payload?.content).toBe('own');
+    expect(await db.seedFork('fork-sf-3', 'missing-src', 1, 5)).toBe(0);
+  });
+});

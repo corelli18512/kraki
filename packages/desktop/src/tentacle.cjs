@@ -355,4 +355,19 @@ class BuiltInKraki {
   }
 }
 
-module.exports = { BuiltInKraki, OWNER, currentPath, mergePath, parseRegistryPath, recordedPid };
+/**
+ * The local-link discovery record of the Tentacle on this machine (written by
+ * the daemon, 0600 in the user's KRAKI_HOME), for the Web client to connect to
+ * it directly. Only a small JSON file is ever returned, never other paths.
+ */
+function readLocalLinkDiscovery(home = krakiHome()) {
+  try {
+    const file = path.join(home, 'local-link.json');
+    if (statSync(file).size > 4096) return null;
+    return readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { BuiltInKraki, OWNER, currentPath, mergePath, parseRegistryPath, readLocalLinkDiscovery, recordedPid };

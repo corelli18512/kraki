@@ -115,7 +115,7 @@ export interface RelayClientOptions {
   /** Persist a new auto-archive setting chosen from an app. */
   saveAutoArchiveDays?: (days: number) => void;
   /** Serve same-machine Apps over a loopback link instead of the Head.
-   *  Default: on for macOS unless KRAKI_LOCAL_LINK=0; off elsewhere. */
+   *  Default: on unless KRAKI_LOCAL_LINK=0. */
   localLink?: boolean;
 }
 
@@ -3634,9 +3634,8 @@ export class RelayClient {
 
   private ensureLocalLink(): void {
     if (this.localLink || !this.keyManager || !this.authInfo) return;
-    // Only Kraki for Mac connects to it, so other platforms do not listen.
-    const enabled = this.options.localLink
-      ?? (process.platform === 'darwin' && process.env.KRAKI_LOCAL_LINK !== '0');
+    // Kraki for Mac and the Windows/Linux desktop app connect to it.
+    const enabled = this.options.localLink ?? process.env.KRAKI_LOCAL_LINK !== '0';
     if (!enabled) return;
     const server = new LocalLinkServer({
       tentacleId: () => this.authInfo?.deviceId,

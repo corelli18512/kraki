@@ -3,7 +3,10 @@ import type { SessionSubscriptionSetMessage } from '@kraki/protocol';
 export interface SubscriptionControllerHost {
   isConnected(): boolean;
   resolveTentacle(sessionId: string): string | undefined;
-  send(tentacleId: string, sessionId: string | null): Promise<boolean>;
+  send(tentacleId: string, sessionId: string | null, requestId: string): Promise<boolean>;
+  /** True when this Tentacle is reached without the Head (desktop local link):
+   *  its authority survives a Head disconnect and it can be driven meanwhile. */
+  isRouteIndependent?(tentacleId: string): boolean;
   applySnapshot(msg: SessionSubscriptionSetMessage): void;
   reportError(message: string): void;
 }
@@ -11,6 +14,13 @@ export interface SubscriptionControllerHost {
 interface InFlight {
   tentacleId: string;
   sessionId: string | null;
+  requestId: string;
+}
+
+function newRequestId(): string {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `r-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 /**
@@ -52,11 +62,19 @@ export class SessionSubscriptionController {
 
   /** Reset connection-scoped authority while retaining the page's desired value. */
   onDisconnected(): void {
-    this.confirmedSessionId = null;
-    this.confirmedTentacleId = null;
-    this.inFlight = null;
-    this.barriers.clear();
+    const keeps = (id: string) => this.host.isRouteIndependent?.(id) === true;
+    if (!this.confirmedTentacleId || !keeps(this.confirmedTentacleId)) {
+      this.confirmedSessionId = null;
+      this.confirmedTentacleId = null;
+    }
+    if (this.inFlight && !keeps(this.inFlight.tentacleId)) this.inFlight = null;
+    for (const id of [...this.barriers]) if (!keeps(id)) this.barriers.delete(id);
     this.blockedDesired = null;
+  }
+
+  /** Re-evaluate after the Head reconnects. */
+  resume(): void {
+    this.drive();
   }
 
   /** A tentacle connection epoch ended or was replaced while the Arm stayed
@@ -94,6 +112,11 @@ export class SessionSubscriptionController {
     if (!flight) return;
     if (msg.deviceId !== flight.tentacleId) return;
     if (msg.payload.sessionId !== flight.sessionId) return;
+    // A newer Tentacle echoes the request id; an ACK of an earlier request to
+    // the same target (still in flight on a replaced route) is stale. Older
+    // Tentacles echo nothing and are matched as before.
+    const echoed = (msg.payload as { requestId?: string }).requestId;
+    if (echoed !== undefined && echoed !== flight.requestId) return;
 
     this.inFlight = null;
     if (!msg.payload.accepted) {
@@ -117,10 +140,16 @@ export class SessionSubscriptionController {
   }
 
   private drive(): void {
-    if (!this.host.isConnected() || this.inFlight) return;
+    if (this.inFlight) return;
 
     const desired = this.desiredSessionId;
     const desiredTentacle = desired ? this.host.resolveTentacle(desired) : undefined;
+    const independent = (id: string | null | undefined) => !!id && this.host.isRouteIndependent?.(id) === true;
+    const connected = this.host.isConnected();
+    // While the Head is down only a Head-independent route can be driven.
+    if (!connected && !independent(desiredTentacle)) return;
+    if (!connected && this.confirmedTentacleId && this.confirmedTentacleId !== desiredTentacle
+      && !independent(this.confirmedTentacleId)) return;
 
     // Leave the old tentacle before moving to another one.
     if (this.confirmedTentacleId && this.confirmedTentacleId !== desiredTentacle) {
@@ -137,10 +166,11 @@ export class SessionSubscriptionController {
   }
 
   private issue(tentacleId: string, sessionId: string | null): void {
-    this.inFlight = { tentacleId, sessionId };
-    void this.host.send(tentacleId, sessionId).then((sent) => {
+    const flight = { tentacleId, sessionId, requestId: newRequestId() };
+    this.inFlight = flight;
+    void this.host.send(tentacleId, sessionId, flight.requestId).then((sent) => {
       if (sent) return;
-      if (this.inFlight?.tentacleId === tentacleId && this.inFlight.sessionId === sessionId) {
+      if (this.inFlight === flight) {
         this.inFlight = null;
         this.blockedDesired = sessionId;
         this.host.reportError('Cannot set live session subscription: target is unavailable.');

@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('krakiDesktop', {
     openLogs: () => ipcRenderer.send('kraki:builtin-open-logs'),
   } : undefined,
   setNeedsYou: (list) => ipcRenderer.send('kraki:needs-you', list),
+  localLinkDiscovery: () => ipcRenderer.invoke('kraki:local-link-discovery'),
   /** Tray › Account Usage / Settings… */
   onOpen: (what, handler) => {
     const channel = what === 'usage' ? 'kraki:open-usage' : 'kraki:open-settings';
