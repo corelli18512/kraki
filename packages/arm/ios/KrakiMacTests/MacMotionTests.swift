@@ -60,6 +60,11 @@ final class MacMotionTests: MacChatUXTestCase {
             }
             return worst
         }
+        /// Seconds from the first sample until the value is at most `limit`.
+        func time(untilAtMost limit: CGFloat) -> CFTimeInterval {
+            guard let first = samples.first else { return 0 }
+            return (samples.first { $0.y <= limit }?.t ?? first.t) - first.t
+        }
         var travel: CGFloat { abs((samples.first?.y ?? 0) - (samples.last?.y ?? 0)) }
         /// Sampling gaps over 12 ms: the main thread was busy (dropped frames).
         var stalls: Int {
@@ -100,11 +105,45 @@ final class MacMotionTests: MacChatUXTestCase {
         let settledHidden = hiddenBelowComposer(fx)
         print(String(format: "MOTION stream refreshStep=%.1f reversal=%.1f stalls=%d worstHidden=%.1f settledHidden=%.1f",
                      sampler.worstRefreshStep, sampler.worstReversal, sampler.stalls, worstHidden, settledHidden))
-        // A streamed line is ≥ 18 pt; it used to move in one refresh.
-        XCTAssertLessThanOrEqual(sampler.worstRefreshStep, 16, "a new line glides the conversation up, it never jumps")
+        // A streamed line used to move in one refresh (36 pt). Gliding moves
+        // ≤ ~10 pt a refresh; up to 24 allows the sampler's own timer jitter.
+        XCTAssertLessThanOrEqual(sampler.worstRefreshStep, 24, "a new line glides the conversation up, it never jumps")
         XCTAssertLessThanOrEqual(sampler.worstReversal, 0.5, "never pulled back down")
         XCTAssertLessThanOrEqual(settledHidden, 1, "once settled the newest line is above the composer")
         XCTAssertLessThanOrEqual(worstHidden, MacTailMotion.maxLag + 8, "only the lines gliding in are briefly under the composer")
+    }
+
+    /// ↓ from far up while a reply streams: one glide to the bottom, not cut
+    /// short by the streaming follow (which would cover the rest in a frame).
+    func testJumpToBottomWhileStreamingGlides() throws {
+        let fx = try makeFixture(total: 60)
+        drain(1_200)
+        try startTurn(fx, seq: 61)
+        let chars = Array(Self.zh + Self.zh + Self.zh + "\n\n" + Self.list + "\n\n" + Self.zh + Self.zh + Self.en + Self.en)
+        var i = 0
+        func stream(_ n: Int) {
+            for _ in 0..<n where i < chars.count {
+                fx.app.messageStore.applyCardMessage(sid, String(chars[i..<min(i + 8, chars.count)]), reset: false)
+                i += 8
+                drain(40)
+            }
+        }
+        stream(4)
+        for _ in 0..<30 { _ = fx.sv.automationPreciseScrollPacket(deltaY: 40); drain(8) }
+        drain(600)
+        XCTAssertGreaterThan(distanceToBottom(fx), 600, "fixture: scrolled far up")
+        let sampler = Sampler({ [weak self] in self.map { $0.distanceToBottom(fx) } })
+        sampler.start()
+        fx.sv.automationTapDown()
+        stream(25)
+        drain(500)
+        sampler.stop()
+        let nearBottom = sampler.time(untilAtMost: 3 * MacTailMotion.maxLag + 10)
+        print(String(format: "MOTION jump nearBottom=%.0fms dist=%.1f", nearBottom * 1000, distanceToBottom(fx)))
+        // The 0.28 s ease-out glide covers 90 % in ~150 ms. Cut short by the
+        // streaming follow it got there in a few frames (~30 ms).
+        XCTAssertGreaterThanOrEqual(nearBottom, 0.1, "↓ glides all the way, it is never cut into a jump")
+        XCTAssertLessThanOrEqual(distanceToBottom(fx), 1)
     }
 
     func testAReplyArrivingWholeGlidesIn() throws {

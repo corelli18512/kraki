@@ -3925,7 +3925,12 @@ final class MacChatScrollView: MacSmoothScrollView {
     /// per line).
     private func followTailSmoothly() {
         guard landOnFirstUnreadIfNeeded() == false else { return }
-        if scrollAnimation?.follow == true { return }
+        if let running = scrollAnimation {
+            // Already following; or a long glide to the bottom (↓, a send)
+            // that re-targets anyway — following takes over only near the
+            // end, so the long glide is never cut into a jump.
+            if running.follow || distanceToBottom > 3 * MacTailMotion.maxLag { return }
+        }
         animateScroll(follow: true, to: { [weak self] in
             guard let self else { return 0 }
             return self.chatDocumentView.frame.height - self.contentView.bounds.height
@@ -4561,7 +4566,9 @@ enum MacTailMotion {
         guard abs(remaining) > 0.5 else { return remaining }
         let distance = abs(remaining)
         let tau = distance > maxLag ? followTau * Double((maxLag / distance).squareRoot()) : followTau
-        let dt = max(0, min(elapsed, 0.05))
+        // After a main-thread stall, continue at the normal pace rather than
+        // catching up the whole stall in one frame (that reads as a jump).
+        let dt = max(0, min(elapsed, 1.0 / 60.0))
         // Exponential approach, with a small minimum speed so the last
         // fraction of a point does not linger.
         let moved = max(distance * CGFloat(1 - exp(-dt / tau)), min(distance, minimumFollowSpeed * CGFloat(dt)))
