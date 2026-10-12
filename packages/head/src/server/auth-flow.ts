@@ -1,0 +1,362 @@
+/** The WebSocket auth handshake: token / challenge auth, pairing tokens, replacing an older connection. */
+
+import { WebSocket } from 'ws';
+import type { AuthMessage, AuthErrorCode, DeviceSummary } from '@kraki/protocol';
+import { DEVICE_REPLACED_CLOSE_CODE } from '@kraki/protocol';
+import { PULSE_ACK_EVERY_BYTES } from '../pulse-hub.js';
+import { getLogger } from '../logger.js';
+import { trace } from '../trace.js';
+import type { AuthBackend, AuthOutcome } from '../auth-backend.js';
+import type { HeadServer } from '../server.js';
+import { broadcastDeviceJoined, getDeviceSummaries } from './presence.js';
+import { publicPreferences, type ClientState } from './shared.js';
+
+export function sendAuthError(server: HeadServer, ws: WebSocket, code: AuthErrorCode, message: string, redirect?: string, deviceId?: string): void {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'auth_error', code, message, ...(redirect && { redirect }), ...(deviceId && { deviceId }) }));
+  }
+}
+
+export async function handleAuth(server: HeadServer, ws: WebSocket, state: ClientState, msg: AuthMessage): Promise<void> {
+  state.pulseProgressAck = msg.device?.pulseProgressAck === true;
+  const logger = getLogger();
+  const { auth } = msg;
+  // One auth attempt per socket at a time: a second `auth` while the first
+  // is awaiting its backend would register the device twice.
+  if (state.authInFlight || state.pendingNonce) {
+    // Ignored rather than answered with auth_error: clients treat auth
+    // errors as credential failures, and this one is just a duplicate.
+    logger.warn('Ignoring duplicate auth while one is in progress', { ip: state.ip });
+    return;
+  }
+  state.authInFlight = true;
+  try {
+    if (auth.method === 'challenge') {
+      // Challenge is multi-step — start here, verify in handleChallengeResponse
+      const result = await server.authBackend.startChallenge(
+        auth.deviceId,
+        msg.device.encryptionKey,
+        server.options.region,
+      );
+      if (!socketStillAuthenticating(server, ws, state)) return;
+      if (!result.ok) {
+        sendAuthError(server, ws, result.code as AuthErrorCode, result.message,
+          result.code === 'wrong_region' ? (result as { redirect?: string }).redirect : undefined);
+        return;
+      }
+      state.pendingNonce = result.nonce;
+      state.pendingDeviceId = result.deviceId;
+      state.pendingDeviceInfo = { encryptionKey: msg.device.encryptionKey };
+      state.pendingAuthMethod = 'challenge';
+      logger.debug('Issuing auth challenge', { deviceId: auth.deviceId });
+      ws.send(JSON.stringify({ type: 'auth_challenge', nonce: result.nonce }));
+      return;
+    }
+
+    const result = await server.authBackend.authenticate(auth, msg.device, server.options.region, state.ip);
+    if (!socketStillAuthenticating(server, ws, state)) return;
+    handleBackendAuthResult(server, ws, state, result);
+  } finally {
+    state.authInFlight = false;
+  }
+}
+
+/** After an awaited auth step: is this socket still open, still ours and
+ *  still unauthenticated? The auth deadline may have closed it meanwhile;
+ *  registering a dead socket would evict the device's live connection. */
+export function socketStillAuthenticating(server: HeadServer, ws: WebSocket, state: ClientState): boolean {
+  return ws.readyState === WebSocket.OPEN && server.clients.get(ws) === state && !state.authenticated;
+}
+
+export function handleChallengeResponse(server: HeadServer, ws: WebSocket, state: ClientState, msg: { deviceId: string; signature: string }): void {
+  const logger = getLogger();
+  const deviceId = state.pendingDeviceId;
+  const nonce = state.pendingNonce;
+  const pendingInfo = state.pendingDeviceInfo;
+
+  state.pendingNonce = undefined;
+  state.pendingDeviceId = undefined;
+  state.pendingDeviceInfo = undefined;
+
+  if (!deviceId || !nonce) {
+    sendAuthError(server, ws, 'no_pending_challenge', 'No pending challenge');
+    return;
+  }
+
+  state.authInFlight = true;
+  server.authBackend.verifyChallenge(
+    deviceId, nonce, msg.signature,
+    pendingInfo?.encryptionKey,
+    server.options.region,
+  ).then(result => {
+    if (!socketStillAuthenticating(server, ws, state)) return;
+    handleBackendAuthResult(server, ws, state, result);
+  }).catch(err => {
+    // A thrown error means the auth backend itself was unreachable / timed
+    // out (network, 5xx, abort) — NOT that the signature was invalid. A
+    // deterministic auth failure comes back as a resolved AuthError outcome
+    // above. Reporting this as auth_rejected made the arm treat a transient
+    // backend outage as a permanent credential failure and wipe the paired
+    // device, forcing a full re-pair. Surface it as auth_unavailable so the
+    // client retries instead of destroying a valid session.
+    logger.error('Auth backend verifyChallenge failed', { error: (err as Error).message });
+    if (socketStillAuthenticating(server, ws, state)) {
+      sendAuthError(server, ws, 'service_unavailable', 'Authentication service unavailable');
+    }
+  }).finally(() => {
+    state.authInFlight = false;
+  });
+}
+
+/**
+ * Handle a result from AuthBackend — registers connection state and sends response.
+ * Used for both initial auth and challenge-response verification.
+ */
+export function handleBackendAuthResult(server: HeadServer, ws: WebSocket, state: ClientState, result: AuthOutcome): void {
+  const logger = getLogger();
+
+  if (!result.ok) {
+    const redirect = result.code === 'wrong_region' ? (result as { redirect?: string }).redirect : undefined;
+    const deviceId = result.code === 'wrong_region' ? (result as { deviceId?: string }).deviceId : undefined;
+    sendAuthError(server, ws, result.code as AuthErrorCode, result.message, redirect, deviceId);
+    return;
+  }
+
+  // Register connection
+  state.authenticated = true;
+  state.authenticatedAt = Date.now();
+  if (state.authTimer) { clearTimeout(state.authTimer); state.authTimer = undefined; }
+  state.deviceId = result.deviceId;
+  state.userId = result.userId;
+  evictPreviousConnection(server, result.deviceId, ws);
+  server.connections.set(result.deviceId, ws);
+  server.userByDevice.set(result.deviceId, result.userId);
+  trace('DEV-CONNECT', { device: result.deviceId, user: result.userId, auth: 'backend' });
+
+  logger.info('Device authenticated (via backend)', {
+    deviceId: result.deviceId,
+    user: result.user.login,
+    method: result.authMethod,
+    ip: state.ip,
+  });
+
+  // Mirror user + devices into local storage so edge-local operations
+  // (broadcastDeviceJoined, getDeviceSummaries, etc.) work even when auth
+  // is delegated to a remote backend.
+  try {
+    server.storage.upsertUser(
+      result.user.id, result.user.login, result.user.provider, result.user.email,
+    );
+    for (const d of result.devices) {
+      try {
+        server.storage.upsertDevice(
+          d.id, result.userId, d.name, d.role,
+          d.kind ?? undefined, d.publicKey ?? undefined, d.encryptionKey ?? undefined,
+        );
+      } catch (err) {
+        logger.warn('Failed to mirror device locally', { deviceId: d.id, error: (err as Error).message });
+      }
+    }
+  } catch (err) {
+    logger.warn('Failed to mirror user locally', { userId: result.userId, error: (err as Error).message });
+  }
+
+  completeAuthHandshake(server, ws, {
+    deviceId: result.deviceId,
+    userId: result.userId,
+    user: result.user,
+    authMethod: result.authMethod,
+    devices: result.devices,
+    githubClientId: result.githubClientId,
+    vapidPublicKey: result.vapidPublicKey,
+  });
+}
+
+/**
+ * Common post-auth completion logic, used by every auth path.
+ *
+ * Responsibilities:
+ *  - Read user preferences from local storage and merge into the user object.
+ *  - Flush any locally-queued pending messages for this device (offline-queue).
+ *  - Build and send the `auth_ok` response.
+ *  - Broadcast `device_joined` to the user's other connected devices.
+ *
+ * Each caller is responsible for path-specific work BEFORE calling this:
+ * validating credentials, persisting user/device records, setting up
+ * ClientState, populating `connections` / `userByDevice` maps, and logging
+ * the path-specific "authenticated via X" line.
+ *
+ * Centralising the tail eliminates a class of bugs where new auth paths
+ * (notably the multi-region delegated-backend path) silently diverge from
+ * the established post-auth flow.
+ */
+export function completeAuthHandshake(
+  server: HeadServer,
+  ws: WebSocket,
+  params: {
+    /** The authenticated device's ID. */
+    deviceId: string;
+    /** The authenticated user's ID. */
+    userId: string;
+    /** Identity fields from the auth source (local DB or remote backend).
+     *  `preferences` and `region` are optional and only meaningful from the
+     *  delegated-backend path — local paths leave them undefined and the
+     *  helper reads preferences from local storage instead. */
+    user: {
+      id: string;
+      login: string;
+      provider: string;
+      email?: string;
+      preferences?: Record<string, unknown>;
+      region?: string;
+    };
+    /** Auth method, echoed back in auth_ok. */
+    authMethod: string;
+    /** Devices list to include in auth_ok. If omitted, derived from local storage.
+     *  Edge mode supplies this from the remote backend's view. */
+    devices?: DeviceSummary[];
+    /** Override of the backend's GitHub client id (used when delegated). */
+    githubClientId?: string;
+    /** Override of `getVapidPublicKey()` (used when delegated). */
+    vapidPublicKey?: string;
+  },
+): void {
+  // Merge preferences. Local storage takes precedence (it captures per-edge
+  // overrides the backend might not know about), but fall back to the
+  // backend-supplied preferences if local has none — e.g. on a user's very
+  // first auth to this edge, before upsertUser has been called or when the
+  // backend is the canonical source of truth.
+  //
+  // Why this matters: storage.upsertUser only writes username/provider/email,
+  // NOT preferences. So a brand-new user record reads back with
+  // preferences=undefined. Without this fallback, backend preferences would
+  // be silently dropped at every first auth.
+  const fullUser = server.storage.getUser(params.userId);
+  const userResponse = {
+    ...params.user,
+    preferences: publicPreferences(fullUser?.preferences ?? params.user.preferences),
+  };
+
+  // Devices list. If the caller provided one (edge mode), recompute online
+  // status against our current connections map. Otherwise derive locally.
+  const devices = params.devices
+    ? params.devices.map(d => ({ ...d, online: server.connections.has(d.id) }))
+    : getDeviceSummaries(server, params.userId);
+  const deviceRole = devices.find((device) => device.id === params.deviceId)?.role
+    ?? server.storage.getDevice(params.deviceId)?.role;
+
+  ws.send(JSON.stringify({
+    type: 'auth_ok',
+    deviceId: params.deviceId,
+    authMethod: params.authMethod,
+    user: userResponse,
+    devices,
+    githubClientId: params.githubClientId ?? server.authBackend.getAuthInfo().githubClientId,
+    vapidPublicKey: params.vapidPublicKey ?? server.getVapidPublicKey(),
+    relayVersion: server.options.version,
+    pulseAckBytes: PULSE_ACK_EVERY_BYTES,
+    // Apps only: a tentacle has no use for the user's word list.
+    ...(deviceRole === 'app' && { voiceVocabulary: server.storage.getVoiceVocabulary(params.userId) }),
+    ...(server.getVoiceCapability() && { voice: server.getVoiceCapability() }),
+  }));
+
+  // Clients only accept Pulse envelopes after processing auth_ok. Starting
+  // the endpoint before auth_ok loses the initial hello, leaving peerEpoch
+  // empty and making a later relay restart indistinguishable from the first
+  // connection. That stale recvCursor then drops the restarted seq=1..N as
+  // duplicates. Keep this ordering centralized for every auth path.
+  //
+  // Apps have explicit reconnect authorities (fresh session_list,
+  // subscription snapshot, and history ranges). If their HELLO carries a new
+  // process epoch, fence the preceding process's non-durable downlink so the
+  // new UI cannot animate through old live events. Tentacle downlinks carry
+  // commands and retain ordinary Pulse resume semantics across process epochs.
+  server.pulseHub.onDeviceConnected(params.deviceId, {
+    discardPreviousProcessNonDurable: deviceRole === 'app',
+  });
+  broadcastDeviceJoined(server, params.userId, params.deviceId);
+}
+
+/**
+ * A device is about to register `ws` as its connection. If the SAME device id
+ * already had a socket, that older socket is now orphaned: once we overwrite
+ * the map entry its close handler hits the reconnect-guard and skips cleanup,
+ * and the ping timer (which only walks `connections`) never visits it again.
+ * It would sit in `clients` holding its ClientState until TCP finally gives
+ * up. Retire both the WebSocket and its Pulse link explicitly before the new
+ * connection is installed.
+ *
+ * Must be called BEFORE `connections.set(deviceId, ws)`.
+ */
+export function evictPreviousConnection(server: HeadServer, deviceId: string, ws: WebSocket): void {
+  const previous = server.connections.get(deviceId);
+  if (!previous || previous === ws) return;
+  getLogger().info('Replacing existing connection for device', { deviceId });
+  // The old close callback will see the replacement in `connections` and skip
+  // its guarded cleanup. Publish the Pulse disconnect here so capability and
+  // connection-scoped state cannot leak across the replacement boundary.
+  server.pulseHub.onDeviceDisconnected(deviceId);
+  const previousState = server.clients.get(previous);
+  if (previousState) previousState.evicted = true;
+  server.clients.delete(previous);
+  // Say why (a bare terminate() reads as a network drop, and a client that
+  // reconnects on it evicts this new connection in turn). Force the TCP
+  // teardown shortly after in case the old peer never completes the close.
+  try { previous.close(DEVICE_REPLACED_CLOSE_CODE, 'replaced'); } catch { /* best effort */ }
+  const force = setTimeout(() => { try { previous.terminate(); } catch { /* already gone */ } }, 2_000);
+  force.unref?.();
+  previous.once('close', () => clearTimeout(force));
+}
+
+export async function handleCreatePairingToken(server: HeadServer, ws: WebSocket, state: ClientState): Promise<void> {
+  const logger = getLogger();
+  if (!(server.options.pairingEnabled ?? true)) {
+    server.sendError(ws, 'Pairing is disabled on this relay');
+    return;
+  }
+  if (!state.userId) {
+    server.sendError(ws, 'Not authenticated');
+    return;
+  }
+  try {
+    // A remote (edge) backend creates tokens on the account service.
+    const backend = server.authBackend as AuthBackend & {
+      createPairingTokenAsync?: (userId: string) => Promise<{ token: string; expiresIn: number }>;
+    };
+    const result = backend.createPairingTokenAsync
+      ? await backend.createPairingTokenAsync(state.userId)
+      : backend.createPairingToken(state.userId);
+    if (!result?.token) throw new Error('no token returned');
+    logger.info('Pairing token created', { userId: state.userId });
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'pairing_token_created', token: result.token, expiresIn: result.expiresIn }));
+    }
+  } catch (err) {
+    logger.warn('Pairing token creation failed', { userId: state.userId, error: (err as Error).message });
+    server.sendError(ws, 'Pairing is temporarily unavailable');
+  }
+}
+
+export async function handleRequestPairingToken(server: HeadServer, ws: WebSocket, state: ClientState, msg: { token?: string }): Promise<void> {
+  const logger = getLogger();
+  if (!(server.options.pairingEnabled ?? true)) {
+    server.sendError(ws, 'Pairing is disabled on this relay');
+    return;
+  }
+  if (!msg.token) {
+    server.sendError(ws, 'Token required for pairing request');
+    return;
+  }
+  const result = await server.authBackend.requestPairingToken(msg.token, state.ip);
+  if (ws.readyState !== WebSocket.OPEN) return;
+  if (!result.ok) {
+    sendAuthError(server, ws, result.code as AuthErrorCode, result.message);
+    return;
+  }
+  logger.info('Pairing token created (one-shot)', { userId: result.userId });
+  ws.send(JSON.stringify({
+    type: 'pairing_token_created',
+    token: result.pairingToken,
+    expiresIn: result.expiresIn,
+  }));
+}
