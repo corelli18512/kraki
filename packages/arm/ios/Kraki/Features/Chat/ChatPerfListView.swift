@@ -21,298 +21,17 @@ import os
 // comments at each `items =` assignment before changing them.
 // =====================================================================
 
-/// Perf logger. Mirrors every line to BOTH the unified-logging store (for
-/// `log stream` on the simulator) AND `print` (stdout) — the latter so
-/// `devicectl device process launch --console` streams the lines live over
-/// the CoreDevice tunnel on a physical device. (idevicesyslog can't see
-/// `os.Logger`/`NSLog` output on modern iOS, and `log collect` needs root.)
-/// Debug harness only.
-private final class ChatPerfLog {
-    private let logger = Logger(subsystem: "chat.kraki.ios", category: "chatperf")
-    private let enabled = ProcessInfo.processInfo.environment["KRAKI_CHAT_PERF_OVERLAY"] == "1"
-        || ProcessInfo.processInfo.environment["KRAKI_CHAT_PERF_LOG"] == "1"
-    private let queue = DispatchQueue(label: "chatperf.filelog")
-    private let handle: FileHandle?
-    /// Sandbox path (pull with `devicectl device copy from`):
-    /// Documents/chatperf.log on iOS (~/Library/Logs/<bundle id>/ on macOS) —
-    /// a durable sink that survives USB/syslog drops.
-    static let fileURL = KrakiDiagnosticFiles.url("chatperf.log")
-
-    init() {
-        guard enabled else {
-            handle = nil
-            return
-        }
-        // Fresh file each diagnostic launch so a pull only sees this session.
-        let url = Self.fileURL
-        try? FileManager.default.removeItem(at: url)
-        FileManager.default.createFile(atPath: url.path, contents: nil)
-        handle = try? FileHandle(forWritingTo: url)
-    }
-
-    func log(_ message: String) {
-        guard enabled else { return }
-        logger.log("\(message, privacy: .public)")
-        let t = CFAbsoluteTimeGetCurrent().truncatingRemainder(dividingBy: 100)
-        let line = "[chatperf] \(String(format: "%07.3f", t)) \(message)\n"
-        print(line, terminator: "")
-        queue.async { [handle] in
-            if let data = line.data(using: .utf8) { handle?.write(data) }
-        }
-    }
-}
-private let chatPerfLog = ChatPerfLog()
-
-// MARK: - Cells
-
-/// Production chat uses one TextKit-backed cell path. Keeping a single
-/// renderer prevents sizing and interaction drift.
-
-// MARK: - Inline loading spinner (section header/footer)
-
-/// A supplementary view holding a centered spinner. Used as the section
-/// header (top / loadOlder) and footer (bottom / loadNewer) so the
-/// loading indicator lives INSIDE the scroll content — level with the
-/// bubbles and scrolling with them — instead of floating over the view.
-private final class SpinnerReusableView: UICollectionReusableView {
-    static let reuseID = "SpinnerReusableView"
-    private let spinner = UIActivityIndicatorView(style: .medium)
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        spinner.translatesAutoresizingMaskIntoConstraints = false
-        spinner.hidesWhenStopped = false
-        addSubview(spinner)
-        NSLayoutConstraint.activate([
-            spinner.centerXAnchor.constraint(equalTo: centerXAnchor),
-            spinner.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-        spinner.startAnimating()
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        spinner.startAnimating()
-    }
-}
-
-// MARK: - Height cache (REAL self-size, measure once, reuse forever)
-
-/// Computes a message's rendered height EXACTLY as the live cell self-sizes
-/// it — by configuring a reusable offscreen `UICollectionViewListCell` with
-/// the SAME `ChatPerfCellContent` hosting config and asking it to
-/// `systemLayoutSizeFitting`. This is the production measurement path (see
-/// the production TextKit sizer), so the cached height is identical
-/// to what UIKit would self-size — no drift, no jump.
-///
-/// It is also the EXPENSIVE path (15–60 ms for a rich markdown cell), which
-/// is the whole point of phase 2: we pay the real cost, then hide it behind
-/// measure-ahead (the scheduler pre-warms the cache off the critical frame).
-/// Because the flow layout uses `estimatedItemSize = .zero`, the height we
-/// return is definitive once the row is warm. Cold rows use a lightweight
-/// estimate during entry, then the same cache is upgraded by the scheduler;
-/// layout and anchor correction read that single source of truth thereafter.
-///
-/// `container` must be installed in the view hierarchy by the VC so traits
-/// (Dynamic Type, interface style) resolve identically to the live list.
-private final class RealCellSizer {
-    private var cache: [String: CGFloat] = [:]
-    private var estimateCache: [String: CGFloat] = [:]
-    private var measuredWidth: CGFloat = 0
-
-    /// Real session id / agent so the offscreen measure renders the SAME
-    /// TextKit config the live cell uses. Set by the VC right after init.
-    var sessionId: String = "perf"
-    var agent: String = "claude"
-    /// Builds the same geometry description used by a visible cell.
-    var contentBuilder: ((ChatMessage) -> TKBubbleContent)?
-    var onHeightReady: ((String) -> Void)?
-
-    /// Container whose safe-area insets are forced to zero — a real list
-    /// cell self-sizes with none, but an offscreen view pinned into the VC
-    /// inherits the screen insets, biasing every measurement. Mirrors the
-    /// production safe-area-neutral sizer.
-    private final class SafeAreaZeroingView: UIView {
-        override var safeAreaInsets: UIEdgeInsets { .zero }
-    }
-
-    let container: UIView = {
-        let v = SafeAreaZeroingView()
-        v.alpha = 0
-        v.isUserInteractionEnabled = false
-        v.translatesAutoresizingMaskIntoConstraints = false
-        return v
-    }()
-
-    /// The single cell reused for every measurement — a plain list cell, so
-    /// it always runs the REAL self-size (never a cache short-circuit).
-    /// Reused UILabel for the pure-UIKit A/B arm. Measuring with the SAME
-    /// label config the live `ChatPerfUIKitCell` renders guarantees the cached
-    /// height matches what's drawn — otherwise frontDelta (the anchor
-    /// correction) is computed from SwiftUI-measured heights while UIKit lays
-    /// out different ones, and every page insert visibly jumps.
-    private let measureLabel: UILabel = {
-        let l = UILabel()
-        l.numberOfLines = 0
-        l.font = .preferredFont(forTextStyle: .subheadline)
-        return l
-    }()
-
-    init() {}
-
-    /// Drop the cache when the measure width changes (rotation / split).
-    private func resetIfWidthChanged(_ width: CGFloat) {
-        if width != measuredWidth {
-            cache.removeAll(keepingCapacity: true)
-            estimateCache.removeAll(keepingCapacity: true)
-            measuredWidth = width
-        }
-    }
-
-    func cached(_ id: String) -> CGFloat? { cache[id] }
-
-    func prepare(width: CGFloat) {
-        guard width > 0 else { return }
-        resetIfWidthChanged(width)
-    }
-
-    /// Cheap first-pass geometry for rows that have not been measured yet.
-    /// This path must stay free of Markdown, TextKit, image decoding, and
-    /// SwiftUI host measurement because UICollectionView asks for every row
-    /// during the initial layout.
-    func estimatedHeight(for t: ChatMessage, width: CGFloat) -> CGFloat {
-        guard width > 0 else { return 44 }
-        resetIfWidthChanged(width)
-        if let cached = estimateCache[t.id] { return cached }
-
-        let isUser = t.type == "user_message" || t.type == "send_input" || t.type == "pending_input"
-        let usable = width - TKMetrics.outerH * 2
-        let bubbleWidth = isUser
-            ? usable - width * TKMetrics.userLeadingGapFraction
-            : usable - width * TKMetrics.trailingGapFraction
-        let bodyWidth = max(80, bubbleWidth - TKMetrics.msgPadH * 2)
-        let text = t.imageUnavailable ? ChatMessage.imageUnavailableText : (t.content ?? t.result ?? t.interruptedDraft ?? "")
-        let bodyHeight: CGFloat
-        if text.isEmpty || text == "[image]" {
-            bodyHeight = 0
-        } else {
-            // Structure-aware (line breaks, code, tables, lists, CJK) but free
-            // of Markdown/TextKit work: every loaded row is asked during layout.
-            bodyHeight = ChatHeightEstimator.bodyHeight(text, bodyWidth: bodyWidth)
-        }
-
-        var height = bodyHeight > 0 ? bodyHeight + 32 : 1
-        let attachmentCount = t.contentRefAttachments.count
-            + (t.attachments?.filter { $0.type == "image" }.count ?? 0)
-        if attachmentCount > 0 {
-            let imageWidth = max(80, min(bodyWidth, 280))
-            let imageHeight = min(240, imageWidth * 0.66)
-            height += bodyHeight > 0 ? 6 : 16
-            height += imageHeight * CGFloat(min(attachmentCount, 3))
-            height += CGFloat(max(0, min(attachmentCount, 3) - 1)) * 6
-        }
-        if t.type == "turn_status" || t.type == "interrupted_turn" {
-            height += 44
-        }
-        let result = min(max(ceil(height), 1), 1_600)
-        estimateCache[t.id] = result
-        return result
-    }
-
-    /// Cache-or-measure. A miss measures SYNCHRONOUSLY on the calling
-    /// thread — when that caller is `sizeForItemAt` during a scroll, the
-    /// cost lands on the scroll frame, so we log it as the key jank signal.
-    func height(for t: ChatMessage, width: CGFloat) -> CGFloat {
-        guard width > 0 else { return 44 }
-        resetIfWidthChanged(width)
-        if let h = cache[t.id] { return h }
-        let t0 = CFAbsoluteTimeGetCurrent()
-        let h = measure(t, width: width)
-        cache[t.id] = h
-        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-        chatPerfLog.log("[size] sync-miss id=\(t.id) ms=\(String(format: "%.1f", ms))")
-        return h
-    }
-
-    /// Warm path: measure + cache off the critical frame (called by the
-    /// scheduler). Cheap no-op if already cached. No sync-miss log — this is
-    /// the intended, budget-sliced measurement.
-    func prime(_ t: ChatMessage, width: CGFloat, notify: Bool = true) {
-        guard width > 0 else { return }
-        resetIfWidthChanged(width)
-        if cache[t.id] != nil { return }
-        let t0 = CFAbsoluteTimeGetCurrent()
-        cache[t.id] = measure(t, width: width)
-        if notify { onHeightReady?(t.id) }
-        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-        if ms > 8 {
-            chatPerfLog.log("[prime] slow id=\(t.id) ms=\(String(format: "%.1f", ms))")
-        }
-    }
-
-    /// Re-measure a row whose content changed under a stable id (an
-    /// optimistic voice bubble streaming its correction). True if it moved.
-    @discardableResult
-    func remeasure(_ t: ChatMessage, width: CGFloat, allowShrink: Bool = true) -> Bool {
-        guard width > 0 else { return false }
-        resetIfWidthChanged(width)
-        let old = cache[t.id]
-        var new = measure(t, width: width)
-        if !allowShrink, let old { new = max(old, new) }
-        cache[t.id] = new
-        estimateCache.removeValue(forKey: t.id)
-        return old != new
-    }
-
-    /// The real self-size: configure the offscreen cell exactly like the
-    /// live one and ask UIKit for its fitting height.
-    private func measure(_ t: ChatMessage, width: CGFloat) -> CGFloat {
-        (contentBuilder?(t) ?? TKBubbleContent.make(message: t, sessionId: sessionId, agent: agent))
-            .cellHeight(cellWidth: width)
-    }
-}
-
-// MARK: - Pagination transaction (txn) — log-based correctness/timing trace
-
-/// One pagination cycle threaded across its async/deferred phases (trigger →
-/// rawLoad → snapshot refresh → reconcile → measure → apply) so the log reads as a
-/// single `[txn N]` transaction. `lap()` returns ms since the previous lap;
-/// `mark()` resets the lap clock (used to drop idle wait between phases).
-private final class PaginateTxn {
-    let id: Int
-    let kind: String
-    private let t0: CFAbsoluteTime
-    private var last: CFAbsoluteTime
-    init(id: Int, kind: String) {
-        self.id = id
-        self.kind = kind
-        let now = CFAbsoluteTimeGetCurrent()
-        self.t0 = now
-        self.last = now
-    }
-    func mark() { last = CFAbsoluteTimeGetCurrent() }
-    func lap() -> Double {
-        let now = CFAbsoluteTimeGetCurrent()
-        let d = (now - last) * 1000
-        last = now
-        return d
-    }
-    func total() -> Double { (CFAbsoluteTimeGetCurrent() - t0) * 1000 }
-}
-
 // MARK: - View controller (clean-room collection view)
 
 final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
 
-    private let sizer = RealCellSizer()
+    let sizer = RealCellSizer()
 
     /// Upgrades only the currently visible height cache after entry or scroll
     /// settling, ≤budget ms per frame. Pending jobs are discarded as soon as a
     /// gesture or navigation transition begins so exact measurement never owns
     /// an interaction frame.
-    private let warmer = HeightMeasurementScheduler(budgetMs: 4.0)
+    let warmer = HeightMeasurementScheduler(budgetMs: 4.0)
 
     /// Dedicated scheduler for the ONE page a pending paginate is about to
     /// prepend/append. Unlike `warmer` it is NEVER paused: a loadOlder's
@@ -320,13 +39,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// the measurement across a few frames behind the spinner than pay it as
     /// one synchronous ~60ms freeze on the apply frame. Runs only during the
     /// brief load window, so the reduced scroll headroom is barely felt.
-    private let pager = HeightMeasurementScheduler(budgetMs: 4.0)
+    let pager = HeightMeasurementScheduler(budgetMs: 4.0)
 
     /// Injected identity. The real session id + agent so cells render the
     /// production TextKit bubble with correct tint, and so the view model can
     /// preload this session's history from GRDB.
-    private let sessionId: String
-    private let agentName: String
+    let sessionId: String
+    let agentName: String
     var bottomContentInset: CGFloat
     /// How far the floating composer rises above its resting footprint. Added
     /// to the scrollable range only, so the bubbles it covers can be scrolled
@@ -338,30 +57,30 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// to the AppKit adapter through this platform-neutral state machine.
     var scrollPolicy = ChatScrollPolicy()
     /// Read position this Session was entered with (new messages / notification).
-    private let unreadEntryBoundary: Int?
+    let unreadEntryBoundary: Int?
     /// The first new message held under the top glass (UnreadEntry.anchored).
-    private var unreadAnchorID: String?
-    private var followingBottom: Bool { scrollPolicy.followingTail }
+    var unreadAnchorID: String?
+    var followingBottom: Bool { scrollPolicy.followingTail }
     private var entryBottomLocked: Bool { scrollPolicy.entryBottomLocked }
-    private var allowsEdgePaging: Bool { scrollPolicy.allowsEdgePaging }
+    var allowsEdgePaging: Bool { scrollPolicy.allowsEdgePaging }
     private var scrollingTowardOlder: Bool { scrollPolicy.scrollingTowardOlder }
-    private var lastPinnedViewportSize: CGSize = .zero
-    private var lastPinnedAdjustedInsets: UIEdgeInsets = .zero
-    private var isPinningBottom = false
-    private static let liveCardID = "__live_card__"
+    var lastPinnedViewportSize: CGSize = .zero
+    var lastPinnedAdjustedInsets: UIEdgeInsets = .zero
+    var isPinningBottom = false
+    static let liveCardID = "__live_card__"
 
     // MARK: New bubble entrance (parity with Mac `MacChatDocumentView`)
 
     /// Bubbles newly added at the tail that should make an entrance the first
     /// time they are displayed: the user's from the trailing edge, the AI's
     /// from the leading edge. Expire if never shown.
-    private var pendingEntrances: [String: (fromTrailing: Bool, deadline: CFTimeInterval)] = [:]
+    var pendingEntrances: [String: (fromTrailing: Bool, deadline: CFTimeInterval)] = [:]
     static let entranceDuration: CFTimeInterval = 0.32
     static let entranceOffset: CGFloat = 48
-    private static let entranceTiming = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+    static let entranceTiming = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
     #if DEBUG
-    private(set) var entranceLog: [(id: String, fromTrailing: Bool)] = []
-    private(set) var arrivalGlideLog: [CGFloat] = []
+    var entranceLog: [(id: String, fromTrailing: Bool)] = []
+    var arrivalGlideLog: [CGFloat] = []
     #endif
     var onResolvePermission: (String, String?, String) -> Void = { _, _, _ in }
     var onAnswerQuestion: (String, String) -> Void = { _, _ in }
@@ -370,8 +89,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
     /// Flat pure-spine data source. `vm.displayMessages` contains one item per renderable persisted message; paging moves the raw seq window,
     /// then `refreshSpineSnapshot()` snapshots it off the scroll frame.
-    private let vm: ChatViewModel
-    private let appState: AppState
+    let vm: ChatViewModel
+    let appState: AppState
     private(set) var collectionView: UICollectionView!
     private let scrollIndicator = IOSTransientScrollIndicator()
 
@@ -391,7 +110,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
     /// View-local flat-spine snapshot, refreshed only outside scroll frames so
     /// cell and size lookup stay O(1).
-    private var messages: [ChatMessage] = []
+    var messages: [ChatMessage] = []
     private var byId: [String: ChatMessage] = [:]
 
     init(sessionId: String, appState: AppState, agent: String, bottomContentInset: CGFloat,
@@ -443,26 +162,26 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     // MARK: - Data snapshot
 
     /// Turn ids in the current snapshot (oldest→newest). The engine's diff key.
-    private var ids: [String] {
+    var ids: [String] {
         var result = messages.map(\.id)
         if vm.card?.text.isEmpty == false || vm.card?.action != nil { result.append(Self.liveCardID) }
         return result
     }
-    private var messageCount: Int { messages.count }
+    var messageCount: Int { messages.count }
     /// Edge indicators describe pagination of an already materialized window.
     /// They must stay off during the empty initial bootstrap; otherwise the
     /// unknown window is rendered as two permanent loading states.
-    private var hasLoadedWindow: Bool { !items.isEmpty && vm.windowTopSeq > 0 }
-    private func message(_ id: String) -> ChatMessage? { byId[id] }
-    private var atOldest: Bool { vm.atHistoryStart }
-    private var atNewest: Bool { vm.atHead }
+    var hasLoadedWindow: Bool { !items.isEmpty && vm.windowTopSeq > 0 }
+    func message(_ id: String) -> ChatMessage? { byId[id] }
+    var atOldest: Bool { vm.atHistoryStart }
+    var atNewest: Bool { vm.atHead }
     /// The bottom spinner means "newer rows from this device's own history
     /// are being paged in". Messages still arriving from the network land at
     /// the tail silently, as in any chat app, so they never show it.
-    private var showsNewerSpinner: Bool { hasLoadedWindow && vm.hasNewerLocalRows }
+    var showsNewerSpinner: Bool { hasLoadedWindow && vm.hasNewerLocalRows }
 
     /// Refresh the flat message snapshot at rest, never on a scroll frame.
-    private func refreshSpineSnapshot() {
+    func refreshSpineSnapshot() {
         vm.refreshMessageCache()
         // Pure spine is already flat: every renderable persisted message is one
         // standalone bubble. Tool/narration/action detail lives off-spine and
@@ -483,101 +202,26 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
     // MARK: - Correctness checks (log-based debug)
 
-    private var nextTxnId = 0
-    private func newTxn(_ kind: String) -> PaginateTxn {
-        nextTxnId += 1
-        return PaginateTxn(id: nextTxnId, kind: kind)
-    }
-
-    private func f1(_ d: Double) -> String { String(format: "%.1f", d) }
-    private func yn(_ b: Bool) -> String { b ? "Y" : "N" }
-
-    /// First index where two id slices differ (for the reconcile-invalid dump).
-    private func firstMismatch(_ a: [String], _ b: [String]) -> (idx: Int, a: String, b: String) {
-        let n = min(a.count, b.count)
-        for i in 0..<n where a[i] != b[i] { return (i, a[i], b[i]) }
-        return (n, a.count > n ? a[n] : "—", b.count > n ? b[n] : "—")
-    }
-
-
+    var nextTxnId = 0
     /// Manual model array (window seqs). Replaces the diffable data
     /// source: a sliding window shifts every retained item's index, which
     /// diffable interprets as ~70 "moves" per page (~20ms apply). Manual
     /// front/back insert+delete lets UIKit shift the middle implicitly —
     /// no move enumeration — which is what makes fast paging silky.
-    private var items: [String] = []
-
+    var items: [String] = []
     /// Signature of the last refresh the spine snapshot (window count + bottom seq + streaming).
     /// `updateUIViewController` compares it to detect new live messages.
-    private var lastSyncedSignature = ""
-    private var lastPendingSignature = ""
-    private var lastLiveCardSignature = ""
-    private var lastEntryDiagnosticSignature = ""
+    var lastSyncedSignature = ""
+    var lastPendingSignature = ""
+    var lastLiveCardSignature = ""
+    var lastEntryDiagnosticSignature = ""
     #if DEBUG
-    private var alignmentRevision = 0
-    private var alignmentLoggingEnabled: Bool {
-        ProcessInfo.processInfo.environment["KRAKI_IOS_CHAT_ALIGNMENT_PREVIEW"] == "1"
-    }
+    var alignmentRevision = 0
     #endif
-
-    private func logEntryState(_ reason: String) {
-        let collectionCount = collectionView?.numberOfItems(inSection: 0) ?? -1
-        let signature = [
-            "session=\(sessionId)",
-            "attached=\(viewIfLoaded?.window == nil ? 0 : 1)",
-            "hidden=\(viewIfLoaded?.isHidden == true ? 1 : 0)",
-            "alpha=\(String(format: "%.1f", viewIfLoaded?.alpha ?? -1))",
-            "gate=\(vm.isWaitingForLatestBubble ? 1 : 0)",
-            "metaHead=\(vm.session?.lastSeq ?? 0)",
-            "providerHead=\(vm.sessionLastSeq)",
-            "window=\(vm.windowTopSeq)-\(vm.windowBottomSeq)",
-            "raw=\(vm.filteredMessages.count)",
-            "projected=\(messages.count)",
-            "items=\(items.count)",
-            "collection=\(collectionCount)",
-            "atHead=\(vm.atHead ? 1 : 0)",
-            "card=\(vm.card == nil ? 0 : 1)",
-        ].joined(separator: " ")
-        guard signature != lastEntryDiagnosticSignature else { return }
-        lastEntryDiagnosticSignature = signature
-        KLog.chatEntry("list reason=\(reason) \(signature)")
-    }
-
     /// One live-card content object per card revision. sizeForItemAt, cell
     /// configuration and geometry invalidation all read the same instance, so
     /// its height is measured once per revision.
-    private var liveContentMemo: (signature: String, width: CGFloat, content: TKBubbleContent)?
-
-    private func liveContent(_ card: MessageStore.SessionCard) -> TKBubbleContent {
-        let signature = liveCardSignature
-        let width = collectionView?.bounds.width ?? 0
-        if let memo = liveContentMemo, memo.signature == signature, memo.width == width {
-            return memo.content
-        }
-        let content = TKBubbleContent.live(card: card, agent: agentName,
-                                           sessionId: sessionId, steps: vm.lastUserStepsHint)
-        liveContentMemo = (signature, width, content)
-        return content
-    }
-
-    private var liveCardSignature: String {
-        // Hash the streaming text instead of inlining it: syncLive fires on
-        // every frame while idle (≈10–20 Hz), so embedding the full draft text
-        // into the signature string wasted memory + made logs unreadable. A
-        // stable hash captures "did the text change" at a fraction of the cost.
-        let text = vm.card?.text ?? ""
-        var hasher = Hasher()
-        hasher.combine(text)
-        hasher.combine(vm.card?.action?.id ?? "")
-        hasher.combine(vm.card?.action?.type ?? "")
-        hasher.combine(vm.card?.action?.payload["decision"]?.stringValue ?? "")
-        hasher.combine(vm.card?.action?.payload["localPending"]?.boolValue ?? false)
-        hasher.combine(vm.card?.action?.payload["localError"]?.stringValue ?? "")
-        hasher.combine(vm.card?.action?.payload["retained"]?.boolValue ?? false)
-        hasher.combine(vm.card?.action?.cancelled ?? false)
-        return String(hasher.finalize(), radix: 16)
-    }
-
+    var liveContentMemo: (signature: String, width: CGFloat, content: TKBubbleContent)?
     /// In-flight guards, per edge. While a page is being "fetched"
     /// (simulated latency) we keep the edge gated so scrolling doesn't
     /// spawn duplicate loads, and we show that edge's spinner.
@@ -588,68 +232,42 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// header/footer beyond the loaded rows, and auto-managed inside
     /// `applyEdges` (no longer fetch gates). Serialising the fetches are
     /// `fetchingOlder`/`fetchingNewer` below.
-    private var loadingOlder = false
-    private var loadingNewer = false
+    var loadingOlder = false
+    var loadingNewer = false
     /// A fetch round-trip is in flight (serializes fetches per edge, one at a
     /// time). Separate from the now-persistent edge spinners.
-    private var fetchingOlder = false
-    private var fetchingNewer = false
+    var fetchingOlder = false
+    var fetchingNewer = false
     /// A fetched page is still queued for exact measurement. Keep this state
     /// separate from the DB read so live synchronization cannot reveal cold
     /// rows in the gap between fetch completion and the pager barrier.
-    private var measuringOlderPage = false
-    private var measuringNewerPage = false
+    var measuringOlderPage = false
+    var measuringNewerPage = false
     private var paginationResumeScheduled = false
     /// The model snapshot has advanced past `items`, but those edge rows are
     /// intentionally buffered until measurement and a stable anchored apply.
-    private var paginationSnapshotDeferred = false
-    private var didInitialScroll = false
-
+    var paginationSnapshotDeferred = false
+    var didInitialScroll = false
     /// Bumped on every re-anchor (jump-to-latest) so a fetch that was already
     /// in flight when the window was reset can detect it is stale and bail
     /// instead of applying against the fresh window. (The provider's DB read
     /// already re-validates `topSeq`, so it won't mutate the store across a
     /// reset; this token guards the grouping/flush that follows.)
-    private var pagingGeneration = 0
-
-    /// Animated user navigation is owned by the shared policy. UIKit only
-    /// executes the offset animation and reports its end/cancellation.
-    private var suppressPagingForBottom: Bool { scrollPolicy.suppressesEdgePaging }
-
+    var pagingGeneration = 0
     /// Two floating navigation controls share the same lower-right rail:
     /// "latest message start" places the newest bubble below the top chrome,
     /// while "latest" keeps the existing live-tail behavior. They are UIKit
     /// siblings of the collection view so the SwiftUI wrapper stays simple.
-    private let jumpButton = UIButton(type: .system)
-    private let latestMessageStartButton = UIButton(type: .system)
-    private var jumpButtonBlur: UIVisualEffectView?
-    private var latestMessageStartButtonBlur: UIVisualEffectView?
-    private var jumpButtonBottomConstraint: NSLayoutConstraint?
+    let jumpButton = UIButton(type: .system)
+    let latestMessageStartButton = UIButton(type: .system)
+    var jumpButtonBlur: UIVisualEffectView?
+    var latestMessageStartButtonBlur: UIVisualEffectView?
+    var jumpButtonBottomConstraint: NSLayoutConstraint?
     /// ↑ rests in ↓'s slot while ↓ is hidden and is pushed up when ↓ appears.
-    private var latestStartBottomConstraint: NSLayoutConstraint?
-    private var jumpButtonVisibilityTargets: [ObjectIdentifier: Bool] = [:]
-    private var jumpButtonVisibilityGenerations: [ObjectIdentifier: Int] = [:]
-    /// Reading line for navigation landings: status bar (≈62) + chat header
-    /// (54) + the same 8pt gap used above the first message.
-    private static let latestMessageTopPadding: CGFloat = 124
-    /// Round navigation controls: iOS minimum comfortable tap target.
-    private static let jumpControlSize: CGFloat = 44
-    /// The ↓ control sits above the composer's 44 pt send circle, which stays
-    /// on the composer's bottom row. Its position is fixed to the ONE-LINE
-    /// composer (48 pt capsule + 6 pt padding each side = 60 pt), so a growing
-    /// composer (multi-line text, dictation) never pushes it up. The circle
-    /// top is 8 pt below that line; 1 extra pt balances the bordered glass
-    /// controls against the solid send circle.
-    private static let oneLineComposerHeight: CGFloat = 60
-    private static func jumpBottomGap(_ composerInset: CGFloat) -> CGFloat {
-        composerInset <= 0 ? 16 : oneLineComposerHeight + (IOSComposerMetrics.stackGap - 8)
-    }
-    private let unseenBadge = UIView()
-    /// The chat header (back / title / more) is part of the page, drawn by
-    /// SessionDetailView over the top glass band, not a system navigation
-    /// bar; reserve its height plus breathing room under it.
-    private static let topContentPadding: CGFloat = ChatHeaderMetrics.height + 16
-
+    var latestStartBottomConstraint: NSLayoutConstraint?
+    var jumpButtonVisibilityTargets: [ObjectIdentifier: Bool] = [:]
+    var jumpButtonVisibilityGenerations: [ObjectIdentifier: Int] = [:]
+    let unseenBadge = UIView()
     /// Flip to `true` for the spinner-free local-seamless experiment.
     /// `false` = the robust, production-style experience: show a loading
     /// spinner at the edge the moment pagination triggers, keep it up through
@@ -657,36 +275,31 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// spinner row sits above/below the viewport, so a fling that outruns the
     /// load lands on the spinner (a real loading indicator) instead of blank.
     private let localSeamless = false
-
     // The status-bar "tap to scroll to top" gesture animates contentOffset to
     // 0. In a paginated list that target keeps chasing the top, so each
     // prepend is immediately undone by the animation and the trigger band is
     // re-entered → runaway loadOlder. While this gesture is in flight we
     // suppress pagination entirely: it simply glides to the top of the
     // currently-loaded content and stops.
-    private var scrollingToTop = false
-
+    var scrollingToTop = false
     /// A page that "arrived" while the list was coasting on natural
     /// momentum. We must NOT re-base contentOffset under an in-flight
     /// deceleration (its absolute target would snap the content), so we
     /// stash the apply here and run it the moment the slide settles
     /// (didEndDecelerating) — keeping the fling perfectly natural.
-    private var pendingApply: (() -> Void)?
-
+    var pendingApply: (() -> Void)?
     // Frame-time monitor.
-    private var displayLink: CADisplayLink?
-    private var warmKickWork: DispatchWorkItem?
-    private var isLeavingView = false
-    private var lastFrameTs: CFTimeInterval = 0
-    private var hitchCount = 0
-    private var worstFrameMs: Double = 0
-
-    private let overlay = UILabel()
+    var displayLink: CADisplayLink?
+    var warmKickWork: DispatchWorkItem?
+    var isLeavingView = false
+    var lastFrameTs: CFTimeInterval = 0
+    var hitchCount = 0
+    var worstFrameMs: Double = 0
+    let overlay = UILabel()
     private var codeHighlightObserver: NSObjectProtocol?
     private var composerSubmitObserver: NSObjectProtocol?
     private var codeHighlightSettleWork: DispatchWorkItem?
     private var pendingCodeHighlightRefresh = false
-
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
@@ -858,10 +471,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         ])
     }
 
-    private let spinnerRowHeight: CGFloat = 44
+    let spinnerRowHeight: CGFloat = 44
     /// Headroom (pt from the top edge) that defines the "near top" reveal line
     /// for older pagination. Mirrors the test page's `pageTriggerHeadroom`.
-    private let pageTriggerHeadroom = ChatScrollPolicy.edgeTriggerDistance
+    let pageTriggerHeadroom = ChatScrollPolicy.edgeTriggerDistance
 
     // MARK: Data source (manual)
 
@@ -869,7 +482,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         items.count
     }
 
-    private var hasLiveCardItem: Bool { items.last == Self.liveCardID }
+    var hasLiveCardItem: Bool { items.last == Self.liveCardID }
     private func isLiveCard(_ index: Int) -> Bool { index < items.count && items[index] == Self.liveCardID }
 
     /// A frozen card (`turn_status` / `interrupted_turn`, or a question)
@@ -985,7 +598,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// Configure `cell` for the row at `indexPath`. Shared by dequeue and by
     /// in-place tail updates (which re-point an existing visible cell at a new
     /// row identity instead of reloading the list).
-    private func configureCell(_ cell: TKBubbleCell, at indexPath: IndexPath) {
+    func configureCell(_ cell: TKBubbleCell, at indexPath: IndexPath) {
         cell.sessionMode = vm.session?.mode ?? .auto
         cell.attachmentStore = appState.attachmentStore
         cell.onResolvePermission = onResolvePermission
@@ -1069,7 +682,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         return CGSize(width: w, height: height)
     }
 
-    private func presentLiveSteps() {
+    func presentLiveSteps() {
         guard let userSeq = vm.lastUserMessage?.seq else { return }
         // Running turn: request now so the trace starts loading while the sheet
         // animates up; the sheet's `.onAppear` also re-pulls on every open so
@@ -1134,7 +747,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             for: indexPath)
     }
 
-    private static let perfOverlayEnabled =
+    static let perfOverlayEnabled =
         ProcessInfo.processInfo.environment["KRAKI_CHAT_PERF_OVERLAY"] == "1"
 
     private func setupOverlay() {
@@ -1153,589 +766,11 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         ])
     }
 
-    // MARK: - Jump-to-latest button
-
-    /// Agent-hue tint for the jump button, matching `ChatView.agentTintColor`
-    /// (per-session hue, brighter in dark mode). Dynamic so it follows the
-    /// interface style.
-    private func agentTint() -> UIColor {
-        let sid = sessionId
-        return UIColor { tc in
-            let dark = tc.userInterfaceStyle == .dark
-            let hue = stringToHue(sid) / 360
-            let (h, s, b) = hslToHSB(h: hue, s: dark ? 0.75 : 0.70, l: dark ? 0.65 : 0.45)
-            return UIColor(hue: CGFloat(h), saturation: CGFloat(s), brightness: CGFloat(b), alpha: 1)
-        }
-    }
-
-    /// The ↑/↓ controls use the same regular Liquid Glass as the composer
-    /// capsule (they only show away from the conversation bottom). Glass must not
-    /// be clipped with masksToBounds, stroked, or faded through alpha — each
-    /// makes it fall back to an opaque fill. It is shaped with a capsule
-    /// corner configuration and shown/hidden by setting its effect.
-    private static var jumpControlEffect: UIVisualEffect {
-        if #available(iOS 26.0, *) { return UIGlassEffect(style: .regular) }
-        return UIBlurEffect(style: .systemUltraThinMaterial)
-    }
-
-    private static func makeJumpControlBackground(tint: UIColor) -> UIVisualEffectView {
-        let view = UIVisualEffectView(effect: jumpControlEffect)
-        if #available(iOS 26.0, *) {
-            view.cornerConfiguration = .capsule()
-        } else {
-            view.layer.cornerRadius = jumpControlSize / 2
-            view.layer.masksToBounds = true
-            view.layer.borderWidth = 0.5
-            view.layer.borderColor = tint.withAlphaComponent(0.25).cgColor
-        }
-        return view
-    }
-
-    private static func prepareHiddenJumpMaterial(_ view: UIVisualEffectView) {
-        if #available(iOS 26.0, *) {} else { view.alpha = 0 }
-        view.isHidden = true
-    }
-
-    private func setupJumpButton() {
-        let tint = agentTint()
-        let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
-
-        let blur = Self.makeJumpControlBackground(tint: tint)
-        blur.translatesAutoresizingMaskIntoConstraints = false
-        blur.isUserInteractionEnabled = false
-        Self.prepareHiddenJumpMaterial(blur)
-
-        jumpButton.translatesAutoresizingMaskIntoConstraints = false
-        // Keep the material view OUTSIDE the UIButton. UIKit may reorder a
-        // button's internal image view during layout; when the blur is a
-        // button subview it can end up covering an otherwise valid symbol.
-        jumpButton.setImage(
-            // Double chevron: "all the way to the newest", distinct from the
-            // single-step ↑ control above it.
-            // Smaller point size: the stacked glyph is ~19×19 at 16pt vs the
-            // single chevron's ~19×12; 13pt gives the same visual footprint.
-            UIImage(systemName: "chevron.down.2",
-                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
-                ?? UIImage(systemName: "chevron.down", withConfiguration: symbolConfiguration),
-            for: .normal
-        )
-        jumpButton.tintColor = tint
-        jumpButton.contentHorizontalAlignment = .center
-        jumpButton.contentVerticalAlignment = .center
-        jumpButton.imageView?.contentMode = .scaleAspectFit
-        jumpButton.addTarget(self, action: #selector(onBottomTapped), for: .touchUpInside)
-        jumpButton.alpha = 0
-        jumpButton.isHidden = true
-        jumpButton.accessibilityLabel = "Jump to latest"
-
-        blur.accessibilityIdentifier = "jump-latest-material"
-        view.addSubview(blur)
-        view.addSubview(jumpButton)
-        jumpButtonBlur = blur
-
-        let bottom = jumpButton.bottomAnchor.constraint(
-            equalTo: view.safeAreaLayoutGuide.bottomAnchor,
-            constant: -Self.jumpBottomGap(bottomContentInset)
-        )
-        jumpButtonBottomConstraint = bottom
-        NSLayoutConstraint.activate([
-            jumpButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            bottom,
-            jumpButton.widthAnchor.constraint(equalToConstant: Self.jumpControlSize),
-            jumpButton.heightAnchor.constraint(equalToConstant: Self.jumpControlSize),
-            blur.leadingAnchor.constraint(equalTo: jumpButton.leadingAnchor),
-            blur.trailingAnchor.constraint(equalTo: jumpButton.trailingAnchor),
-            blur.topAnchor.constraint(equalTo: jumpButton.topAnchor),
-            blur.bottomAnchor.constraint(equalTo: jumpButton.bottomAnchor),
-        ])
-
-        let latestStart = latestMessageStartButton.bottomAnchor.constraint(equalTo: jumpButton.bottomAnchor)
-        latestStartBottomConstraint = latestStart
-        let startBlur = Self.makeJumpControlBackground(tint: tint)
-        startBlur.translatesAutoresizingMaskIntoConstraints = false
-        startBlur.isUserInteractionEnabled = false
-        Self.prepareHiddenJumpMaterial(startBlur)
-
-        latestMessageStartButton.translatesAutoresizingMaskIntoConstraints = false
-        latestMessageStartButton.setImage(
-            UIImage(systemName: "chevron.up", withConfiguration: symbolConfiguration)
-                ?? UIImage(systemName: "arrow.up", withConfiguration: symbolConfiguration),
-            for: .normal
-        )
-        latestMessageStartButton.tintColor = tint
-        latestMessageStartButton.contentHorizontalAlignment = .center
-        latestMessageStartButton.contentVerticalAlignment = .center
-        latestMessageStartButton.imageView?.contentMode = .scaleAspectFit
-        latestMessageStartButton.addTarget(self, action: #selector(onLatestMessageStartTapped), for: .touchUpInside)
-        latestMessageStartButton.alpha = 0
-        latestMessageStartButton.isHidden = true
-        latestMessageStartButton.accessibilityLabel = "Jump to previous reply start"
-
-        startBlur.accessibilityIdentifier = "jump-start-material"
-        view.addSubview(startBlur)
-        view.addSubview(latestMessageStartButton)
-        latestMessageStartButtonBlur = startBlur
-
-        // Unseen reply: a plain red dot on the round ↓ control (there is at
-        // most one reply to catch up on, so no count).
-        unseenBadge.translatesAutoresizingMaskIntoConstraints = false
-        unseenBadge.backgroundColor = .systemRed
-        unseenBadge.layer.cornerRadius = 6.5
-        unseenBadge.layer.borderWidth = 1.5
-        unseenBadge.layer.borderColor = UIColor.systemBackground.cgColor
-        unseenBadge.isHidden = true
-        unseenBadge.isUserInteractionEnabled = false
-        unseenBadge.isAccessibilityElement = false
-        jumpButton.addSubview(unseenBadge)
-        NSLayoutConstraint.activate([
-            unseenBadge.widthAnchor.constraint(equalToConstant: 13),
-            unseenBadge.heightAnchor.constraint(equalToConstant: 13),
-            unseenBadge.centerXAnchor.constraint(equalTo: jumpButton.trailingAnchor, constant: -5),
-            unseenBadge.centerYAnchor.constraint(equalTo: jumpButton.topAnchor, constant: 5),
-        ])
-
-        NSLayoutConstraint.activate([
-            latestMessageStartButton.trailingAnchor.constraint(equalTo: jumpButton.trailingAnchor),
-            latestStart,
-            latestMessageStartButton.widthAnchor.constraint(equalToConstant: Self.jumpControlSize),
-            latestMessageStartButton.heightAnchor.constraint(equalTo: jumpButton.heightAnchor),
-            startBlur.leadingAnchor.constraint(equalTo: latestMessageStartButton.leadingAnchor),
-            startBlur.trailingAnchor.constraint(equalTo: latestMessageStartButton.trailingAnchor),
-            startBlur.topAnchor.constraint(equalTo: latestMessageStartButton.topAnchor),
-            startBlur.bottomAnchor.constraint(equalTo: latestMessageStartButton.bottomAnchor),
-        ])
-    }
-
-    // MARK: Navigation targets (confirmed rule: step back through AI replies)
-
-    /// Rows that count as "AI replies" for upward navigation: completed agent
-    /// answers, frozen terminal cards and the streaming live card. User
-    /// messages, system notices and errors are skipped.
-    private func isReplyItem(_ id: String) -> Bool {
-        if id == Self.liveCardID { return true }
-        guard let message = message(id) else { return false }
-        return message.type == "agent_message"
-            || message.type == "turn_status"
-            || message.type == "interrupted_turn"
-    }
-
-    /// Content-space y of the reading line just below the top navigation glass.
-    private var readableTopY: CGFloat {
-        collectionView.contentOffset.y + Self.latestMessageTopPadding - 8
-    }
-
-    func maximumOffsetY() -> CGFloat {
-        max(-collectionView.adjustedContentInset.top,
-            collectionView.contentSize.height - collectionView.bounds.height
-                + tailAdjustedInsets.bottom)
-    }
-
-    private func landingOffset(forRowStart minY: CGFloat) -> CGFloat {
-        min(maximumOffsetY(), max(-collectionView.adjustedContentInset.top,
-                                  minY - Self.latestMessageTopPadding))
-    }
-
-    /// Index of the reply whose start the ↑ control goes to: the nearest AI
-    /// reply whose start lies above the reading line. If the reply being read
-    /// has its start cut off, that is this reply; if its start is visible, it
-    /// is the previous reply. Nil when no loaded reply qualifies.
-    private func previousReplyTarget() -> Int? {
-        let line = readableTopY - 2
-        var index = items.count - 1
-        while index >= 0 {
-            if isReplyItem(items[index]),
-               let frame = collectionView.layoutAttributesForItem(at: IndexPath(item: index, section: 0))?.frame,
-               frame.minY < line,
-               landingOffset(forRowStart: frame.minY) < collectionView.contentOffset.y - 1 {
-                return index
-            }
-            index -= 1
-        }
-        return nil
-    }
-
-    /// Distance to the end of the WHOLE conversation (not just the loaded
-    /// window). Unloaded newer history counts as "not at bottom".
-    private var isAtConversationBottom: Bool {
-        atNewest && distanceToBottom() <= 8
-    }
-
     /// Replies/messages that landed below while the reader was away from the
     /// bottom; shown on the ↓ control and cleared on reaching the bottom.
-    private var unseenArrivals = 0
-
-    private func noteArrivalsWhileAway(old: [String], new: [String]) {
-        let known = Set(old)
-        // Count replies the reader has not seen; the reader's own echoed
-        // sends are not "new".
-        let arrived = new.filter { id in
-            guard !known.contains(id), id != Self.liveCardID, !id.contains(":pending:"),
-                  let message = message(id) else { return false }
-            return message.type != "user_message" && message.type != "send_input"
-        }
-        guard !arrived.isEmpty else { return }
-        unseenArrivals += arrived.count
-        refreshJumpButtonTitle()
-    }
-
-    private func refreshJumpButtonTitle() {
-        if unseenArrivals > 0 {
-            unseenBadge.layer.borderColor = UIColor.systemBackground
-                .resolvedColor(with: traitCollection).cgColor
-            unseenBadge.isHidden = false
-            jumpButton.accessibilityValue = "\(unseenArrivals) new"
-        } else {
-            unseenBadge.isHidden = true
-            jumpButton.accessibilityValue = nil
-        }
-    }
-
-    /// The ↑/↓ controls keep the state they had before the list started
-    /// moving (finger drag, momentum, a jump glide or its history load) and
-    /// are re-evaluated once it settles, so they never flicker mid-scroll.
-    private var jumpControlsFrozen: Bool {
-        collectionView.isDragging || collectionView.isDecelerating || scrollingToTop
-            || scrollPolicy.navigationActive || navigationLoadInFlight
-    }
-
-    func updateJumpButtonVisibility() {
-        guard collectionView != nil else { return }
-        if isAtConversationBottom, unseenArrivals > 0 {
-            unseenArrivals = 0
-            refreshJumpButtonTitle()
-        }
-        guard !jumpControlsFrozen else { return }
-        let showTail = !isAtConversationBottom
-        // ↑ stays available at the bottom (resting in ↓'s slot) unless the
-        // newest item is the user's own message: there is nothing new to read
-        // back to yet, and a right-aligned user bubble sits under the slot.
-        // Accepted trade-off (user-confirmed): at rest it may cover the bottom
-        // trailing corner of a full-width AI reply. Mac parity (#330).
-        let showUp = !(isAtConversationBottom && latestItemIsUser)
-            && (previousReplyTarget() != nil || (!atOldest && hasLoadedWindow))
-        let slotChanged = jumpButtonVisibilityTargets[ObjectIdentifier(jumpButton)] != showTail
-        setJumpButtonVisibility(jumpButton, material: jumpButtonBlur, shouldShow: showTail)
-        setJumpButtonVisibility(latestMessageStartButton, material: latestMessageStartButtonBlur,
-                                shouldShow: showUp)
-        if slotChanged { placeLatestStartButton(aboveTail: showTail) }
-    }
-
-    /// ↑ sits in ↓'s slot when ↓ is hidden; ↓ appearing pushes it up (and it
-    /// drops back down when ↓ leaves), with a gentle spring.
-    private func placeLatestStartButton(aboveTail: Bool) {
-        let constant = aboveTail ? -(Self.jumpControlSize + 8) : 0
-        guard let constraint = latestStartBottomConstraint, constraint.constant != constant else { return }
-        constraint.constant = constant
-        guard view.window != nil,
-              jumpButtonVisibilityTargets[ObjectIdentifier(latestMessageStartButton)] == true else {
-            view.layoutIfNeeded(); return
-        }
-        UIView.animate(withDuration: 0.38, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0,
-                       options: [.allowUserInteraction, .beginFromCurrentState]) {
-            self.view.layoutIfNeeded()
-        }
-    }
-
-    private func setJumpButtonVisibility(
-        _ button: UIButton,
-        material: UIVisualEffectView?,
-        shouldShow: Bool
-    ) {
-        let key = ObjectIdentifier(button)
-        guard jumpButtonVisibilityTargets[key] != shouldShow else { return }
-        jumpButtonVisibilityTargets[key] = shouldShow
-        let generation = (jumpButtonVisibilityGenerations[key] ?? 0) + 1
-        jumpButtonVisibilityGenerations[key] = generation
-        button.layer.removeAllAnimations()
-        material?.layer.removeAllAnimations()
-        if shouldShow {
-            material?.isHidden = false
-            button.isHidden = false
-        }
-        UIView.animate(
-            withDuration: ChatScrollPolicy.navigationControlAnimationDurationSeconds
-        ) { [weak button, weak material] in
-            button?.alpha = shouldShow ? 1 : 0
-            // Glass keeps its effect and full alpha (a faded glass view
-            // renders opaque); it only appears/disappears via isHidden.
-            if #available(iOS 26.0, *) {} else { material?.alpha = shouldShow ? 1 : 0 }
-        } completion: { [weak self, weak button, weak material] finished in
-            guard let self, let button,
-                  finished,
-                  self.jumpButtonVisibilityTargets[key] == shouldShow,
-                  self.jumpButtonVisibilityGenerations[key] == generation else { return }
-            if !shouldShow {
-                button.isHidden = true
-                material?.isHidden = true
-            }
-        }
-    }
-
-    @objc private func onBottomTapped() {
-        unseenArrivals = 0
-        refreshJumpButtonTitle()
-        jumpToLiveBottom(animated: true)
-    }
-
-    @objc private func onLatestMessageStartTapped() {
-        navigateToPreviousReplyStart()
-    }
-
-    private var navigationLoadInFlight = false
-    private var navigationLoadTask: Task<Void, Never>?
-
-    /// ↑ control. Loads older history first when no loaded reply qualifies
-    /// ("not loaded" is never treated as "none"), then glides to the target on
-    /// exact geometry.
-    private func navigateToPreviousReplyStart() {
-        if let target = previousReplyTarget() {
-            glideToReplyStart(target)
-            return
-        }
-        guard !atOldest, !navigationLoadInFlight else {
-            updateJumpButtonVisibility()
-            return
-        }
-        navigationLoadInFlight = true
-        updateJumpButtonVisibility()
-        let generation = pagingGeneration
-        navigationLoadTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer {
-                self.navigationLoadInFlight = false
-                self.updateJumpButtonVisibility()
-            }
-            for _ in 0..<8 {
-                guard generation == self.pagingGeneration, !self.isLeavingView,
-                      !self.collectionView.isTracking else { return }
-                var moved = await self.vm.pageOlderRaw()
-                if !moved {
-                    // DB exhausted: the Relay history request lands later.
-                    let before = self.vm.windowTopSeq
-                    for _ in 0..<30 where !moved && !self.atOldest {
-                        try? await Task.sleep(for: .milliseconds(50))
-                        moved = self.vm.windowTopSeq != before
-                    }
-                }
-                guard moved, generation == self.pagingGeneration,
-                      !self.collectionView.isTracking else { return }
-                self.refreshSpineSnapshot()
-                let buffered = self.bufferedOlderCount()
-                if buffered > 0 {
-                    let width = self.collectionView.bounds.width
-                    for message in self.messages.prefix(buffered) {
-                        self.sizer.prime(message, width: width, notify: false)
-                    }
-                    self.applyEdges(reason: "nav-older")
-                }
-                if let target = self.previousReplyTarget() {
-                    self.navigationLoadInFlight = false
-                    self.glideToReplyStart(target)
-                    return
-                }
-                if self.atOldest { return }
-            }
-        }
-    }
-
-    private func glideToReplyStart(_ index: Int) {
-        let width = collectionView.bounds.width
-        sizer.prepare(width: width)
-        // Exact geometry at the landing viewport before moving: the target and
-        // the rows that will fill the screen below it. Their height changes
-        // above the current viewport are anchor-compensated.
-        let anchor = readingAnchor()
-        let anchorID = anchor.flatMap { $0.0.item < items.count ? items[$0.0.item] : nil }
-        var covered: CGFloat = 0
-        var i = index
-        var changed = false
-        while i < items.count, covered < collectionView.bounds.height * 1.2 {
-            if let message = message(items[i]) {
-                if sizer.cached(message.id) == nil { changed = true }
-                sizer.prime(message, width: width, notify: false)
-                appliedHeightIDs.insert(message.id)
-                covered += sizer.cached(message.id) ?? 0
-            } else {
-                covered += 200
-            }
-            i += 1
-        }
-        if changed {
-            let context = UICollectionViewFlowLayoutInvalidationContext()
-            context.invalidateFlowLayoutDelegateMetrics = true
-            context.invalidateFlowLayoutAttributes = true
-            collectionView.collectionViewLayout.invalidateLayout(with: context)
-            collectionView.layoutIfNeeded()
-            if let anchor, let anchorID, let row = items.firstIndex(of: anchorID),
-               let frame = collectionView.layoutAttributesForItem(at: IndexPath(item: row, section: 0))?.frame {
-                collectionView.contentOffset.y += frame.minY - anchor.1
-            }
-        }
-        guard let frame = collectionView.layoutAttributesForItem(at: IndexPath(item: index, section: 0))?.frame else {
-            return
-        }
-        scrollPolicy.beginLatestMessageStartNavigation()
-        let target = landingOffset(forRowStart: frame.minY)
-        let distance = abs(collectionView.contentOffset.y - target)
-        updateJumpButtonVisibility()
-        if distance > collectionView.bounds.height * 2.5 {
-            // Long hops: jump most of the way instantly, then glide the last
-            // stretch so the motion stays legible without animating across
-            // dozens of screens.
-            let direction: CGFloat = target < collectionView.contentOffset.y ? 1 : -1
-            collectionView.contentOffset.y = target + direction * collectionView.bounds.height * 0.6
-        }
-        collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: target), animated: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            self?.endBottomGlide()
-        }
-    }
-
-    #if DEBUG
-    var automationUpTargetItem: Int? { previousReplyTarget() }
-    var automationItemIDs: [String] { items }
-    func automationTapUp() { navigateToPreviousReplyStart() }
-    func automationTapDown() { onBottomTapped() }
-    var automationControlsVisible: (up: Bool, down: Bool) {
-        (jumpButtonVisibilityTargets[ObjectIdentifier(latestMessageStartButton)] == true,
-         jumpButtonVisibilityTargets[ObjectIdentifier(jumpButton)] == true)
-    }
-    var automationUnseenArrivals: Int { unseenArrivals }
-    /// Control frames in the list controller's view.
-    var automationControlFrames: (up: CGRect, down: CGRect) {
-        view.layoutIfNeeded()
-        return (latestMessageStartButton.convert(latestMessageStartButton.bounds, to: view),
-                jumpButton.convert(jumpButton.bounds, to: view))
-    }
-    var automationJumpControlSizes: (up: CGSize, down: CGSize) {
-        view.layoutIfNeeded()
-        return (latestMessageStartButton.bounds.size, jumpButton.bounds.size)
-    }
-    var automationUnseenDotVisible: Bool { !unseenBadge.isHidden }
-    var automationJumpControlFrames: (up: CGRect, down: CGRect) {
-        view.layoutIfNeeded()
-        return (latestMessageStartButton.frame, jumpButton.frame)
-    }
-    #endif
-
-    /// Re-anchor at the chat's true newest end, then pin the viewport to the
-    /// bottom. Without the window reset, ↓Bottom would only reach the bottom of
-    /// whatever window paging happens to have loaded — not the whole chat's
-    /// newest message. Mirrors the sim-validated test-page `reanchorNewest`.
-    ///
-    /// PREFER sliding the already-loaded tail UP to the head (`pageNewerRaw`
-    /// extends the bottom while the px-cap trims the top): this keeps the warm,
-    /// already-measured ~14-screen window, so the jump glides over real content
-    /// with no cold-cell refill. `jumpToHead` (nuke + reload the compact tail)
-    /// collapses the window to a 1-2 turn stub, and the paging engine then
-    /// storms ~13 screens of cold older-refill (~20 × 30ms hitches) — so it's
-    /// used only when there's no window yet or the gap is too big to bridge.
-    private static let reanchorSlideMaxGap = 2000     // seqs; bigger ⇒ jumpToHead
-    private static let reanchorSlideMaxPages = 12      // safety cap on the slide loop
-    private func reanchorNewest() {
-        let head = vm.sessionLastSeq
-        let bottom = vm.windowBottomSeq
-        let gap = head - bottom
-        if bottom > 0, head > 0, gap <= Self.reanchorSlideMaxGap {
-            var iter = 0
-            while vm.windowBottomSeq < head, iter < Self.reanchorSlideMaxPages {
-                guard vm.pageNewerRaw() else { break }   // DB exhausted → WS will fill
-                iter += 1
-            }
-            chatPerfLog.log("[reanchor] slide gap=\(gap) iters=\(iter)")
-        } else {
-            vm.jumpToHead()                              // no window / large gap → instant reload
-            chatPerfLog.log("[reanchor] jumpToHead gap=\(gap)")
-        }
-        refreshSpineSnapshot()                       // rebuild turns/byId/seqMap from it
-        items = ids
-        // Drop any in-flight paging so the freshly-anchored window can't be
-        // clobbered by a stale fetch/apply that targeted the old window.
-        pagingGeneration += 1
-        cancelPageMeasurements()
-        pendingApply = nil
-        fetchingOlder = false
-        fetchingNewer = false
-        loadingOlder = hasLoadedWindow && !atOldest
-        loadingNewer = showsNewerSpinner
-        collectionView.reloadData()
-        primeTailViewport()
-        warmWindow()
-        lastReason = "reanchor"
-        updateOverlay()
-        chatPerfLog.log("[reanchor] win=[\(vm.windowTopSeq),\(vm.windowBottomSeq)] n=\(items.count) atNewest=\(atNewest)")
-    }
-
-    private func jumpToLiveBottom(animated: Bool) {
-        scrollPolicy.beginTailNavigation(
-            offset: collectionView.contentOffset.y,
-            distanceToBottom: distanceToBottom()
-        )
-        // Suppress edge paging for the duration of the glide: right after the
-        // reanchor's reloadData the offset is 0 (tail window's TOP), and any
-        // scroll callback there would fire an older-fetch that drags the window
-        // back up before the animation reaches the bottom. Cleared on animation
-        // end / user touch / a safety timeout.
-        if !atNewest {
-            reanchorNewest()
-        } else {
-            chatPerfLog.log("[bottom] already-newest scroll")
-        }
-        if animated {
-            updateJumpButtonVisibility()
-            if distanceToBottom() > collectionView.bounds.height * 2.5 {
-                collectionView.contentOffset.y = maximumOffsetY() - collectionView.bounds.height * 0.6
-            }
-            scrollToBottom(animated: true)
-            // Guarantee the gate lifts even if no didEndScrollingAnimation fires
-            // (e.g. the target was already visible so UIKit skipped the anim).
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + 1.2
-            ) { [weak self] in
-                self?.endBottomGlide()
-            }
-        } else {
-            scrollToBottom(animated: false)
-            scrollPolicy.endNavigation()
-            updateJumpButtonVisibility()
-        }
-    }
-
-    /// Confirmed rule: sending a new message returns to the bottom of the whole
-    /// conversation, regardless of where the reader was. The optimistic bubble
-    /// is materialized first so the glide lands on it.
-    func returnToNewestAfterLocalSubmit() {
-        scrollPolicy.cancelUnreadEntry()
-        navigationLoadTask?.cancel()
-        navigationLoadInFlight = false
-        syncLiveUpdates()
-        // The controls must not ride over the message being sent: ↓ goes now
-        // (we are heading to the bottom) and ↑ drops to the low slot, hidden
-        // while the newest item is the user's own message. Applied before the
-        // glide freezes control updates. Mac parity (#330).
-        setJumpButtonVisibility(jumpButton, material: jumpButtonBlur, shouldShow: false)
-        setJumpButtonVisibility(latestMessageStartButton, material: latestMessageStartButtonBlur, shouldShow: false)
-        placeLatestStartButton(aboveTail: false)
-        unseenArrivals = 0
-        refreshJumpButtonTitle()
-        if isAtConversationBottom {
-            scrollPolicy.pinToTail(observedOffset: collectionView.contentOffset.y)
-            return
-        }
-        jumpToLiveBottom(animated: true)
-    }
-
-    /// Lift the ↓Bottom paging gate and resume normal edge paging at rest.
-    private func endBottomGlide() {
-        guard suppressPagingForBottom else { return }
-        scrollPolicy.endNavigation()
-        chatPerfLog.log("[bottom] glide-end win=[\(vm.windowTopSeq),\(vm.windowBottomSeq)] off=\(Int(collectionView.contentOffset.y))")
-        settleEdges()
-        updateOverlay()
-        updateJumpButtonVisibility()
-        updateJumpButtonVisibility()
-    }
-
+    var unseenArrivals = 0
+    var navigationLoadInFlight = false
+    var navigationLoadTask: Task<Void, Never>?
     /// Keep existing content visually pinned after the height ABOVE the
     /// viewport changes by `delta` (older items prepended/trimmed, or the
     /// top spinner row toggled). We move `contentOffset` by the same amount
@@ -1751,816 +786,22 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// When fully at rest, the plain offset write is already jump-free.
     /// Last laid-out live card height (see sizeForItemAt).
     private var lastLiveCardHeight: CGFloat?
-
     /// True while this controller writes contentOffset to keep content
     /// anchored; such writes must not be read as user scroll direction.
-    private var applyingProgrammaticShift = false
-
-    private func applyFrontShift(_ delta: CGFloat, gestureDelta: CGFloat? = nil) {
-        let gestureDelta = gestureDelta ?? delta
-        guard delta != 0 || gestureDelta != 0 else { return }
-        let dragging = collectionView.isDragging || collectionView.isTracking
-        applyingProgrammaticShift = true
-        collectionView.contentOffset.y += delta
-        applyingProgrammaticShift = false
-        // Re-base the direction baseline: compensation is not user movement.
-        scrollPolicy.rememberOffset(collectionView.contentOffset.y)
-        if dragging {
-            // Finger is down: next touch-move would recompute the offset as
-            // (touchDownOffset − translation) and erase our write. Push the
-            // translation baseline by the same delta so the recompute keeps
-            // our shift — the gesture is never cut, the drag stays live.
-            // (offset = touchDownOffset − translation ⇒ to raise offset by
-            // delta we lower translation by delta.)
-            // The gesture baseline must absorb the whole content shift, including
-            // any part UIKit already applied to the offset during the batch.
-            let pan = collectionView.panGestureRecognizer
-            var t = pan.translation(in: collectionView)
-            t.y -= gestureDelta
-            pan.setTranslation(t, in: collectionView)
-        }
-    }
-
-    /// Run `work` ONLY at true rest; otherwise stash it until the list fully
-    /// settles. `work` here is the heavy STEP-2 path (full-window snapshot refresh +
-    /// reconcile + measure + apply), so unlike a cheap offset write it must NOT
-    /// run on a scroll frame — neither during an active finger drag NOR during
-    /// coasting deceleration NOR under a status-bar scroll-to-top. Deferring to
-    /// rest keeps the ~30-40ms grouping behind the spinner, off every scroll
-    /// frame. The stash is flushed by the motion-stop delegates.
-    private func applyWhenStable(_ work: @escaping () -> Void) {
-        if collectionView.isDragging || collectionView.isDecelerating || scrollingToTop {
-            pendingApply = work
-        } else {
-            work()
-        }
-    }
-
-    private func flushPendingApply() {
-        guard !isLeavingView, viewIfLoaded?.window != nil,
-              collectionView.bounds.width > 0,
-              !collectionView.isDragging,
-              !collectionView.isDecelerating,
-              !scrollingToTop,
-              let work = pendingApply else { return }
-        sizer.prepare(width: collectionView.bounds.width)
-        // A Relay history response can extend the buffered edge after this
-        // apply was first deferred. Never let that larger, colder buffer slip
-        // through the old barrier and synchronously self-size in applyEdges.
-        //
-        // An in-flight edge owns the completion that will call us again. Do not
-        // ask the opposite, already-warm edge to install another barrier here:
-        // `measurePage` completes a warm page synchronously, which used to loop
-        // back through finish → flush while the first edge was still measuring
-        // and eventually overflow the main-thread stack.
-        if measuringOlderPage || measuringNewerPage { return }
-        if bufferedOlderNeedsMeasurement() || bufferedNewerNeedsMeasurement() {
-            resumeBufferedPageMeasurements()
-            return
-        }
-        pendingApply = nil
-        work()
-    }
-
-    // MARK: Window apply (manual batch updates)
-
-    /// First load: fill the model and jump to the newest end (bottom).
-    private func applyInitial() {
-        let t0 = CFAbsoluteTimeGetCurrent()
-        items = ids
-        chatPerfLog.log("[diag] applyInitial items=\(items.count) turns=\(messages.count) cvFrame=\(Int(view.bounds.width))x\(Int(view.bounds.height)) cvCount=\(collectionView.numberOfItems(inSection: 0))")
-        // Persistent edge spinners: show "loading earlier messages" as long as
-        // older history remains undisplayed (header above the oldest loaded
-        // row), and "loading newer messages" while newer history remains below
-        // (footer below the newest loaded row). Both auto-managed in applyEdges
-        // thereafter. Set BEFORE the first layout so they're part of the initial
-        // content - we anchor at the bottom, so the off-screen top header needs
-        // no front-shift, and the footer is usually hidden on open (at head).
-        loadingOlder = hasLoadedWindow && !atOldest
-        loadingNewer = showsNewerSpinner
-        collectionView.reloadData()
-        if !items.isEmpty {
-            // Position the first layout at the tail. Laying out at offset zero
-            // first creates the oldest visible rich cells only to discard them
-            // when pinToBottom runs, adding hundreds of milliseconds to entry.
-            collectionView.scrollToItem(
-                at: IndexPath(item: items.count - 1, section: 0),
-                at: .bottom,
-                animated: false
-            )
-        }
-        collectionView.layoutIfNeeded()
-        didInitialScroll = true
-        pinToBottom(reason: "initial")
-        lastReason = "initial"
-        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-        chatPerfLog.log("[entry] applyInitial ms=\(String(format: "%.1f", ms)) items=\(items.count)")
-        KLog.chat("📥 [chat-entry] applyInitial session=\(sessionId.prefix(12)) items=\(items.count) win=[\(vm.windowTopSeq),\(vm.windowBottomSeq)] head=\(vm.sessionLastSeq) atNewest=\(atNewest) ms=\(String(format: "%.1f", ms))")
-        logEntryState("applyInitial")
-        updateOverlay()
-        updateJumpButtonVisibility()
-    }
-
-    /// Resolve the bottom viewport before UIKit presents the navigation
-    /// transition. The list can cheaply estimate every loaded row, but exposing
-    /// those estimates makes the final bubble (or the rows immediately above a
-    /// live card) appear clipped until the async warmer expands them. Measuring
-    /// only the already-visible tail here keeps entry bounded while ensuring
-    /// the first composited frame uses the same exact geometry as the cells.
-    private func settleInitialVisibleGeometryBeforePresentation() {
-        guard !initialVisibleGeometrySettled,
-              !isSettlingInitialVisibleGeometry,
-              collectionView != nil,
-              !items.isEmpty else { return }
-        let width = collectionView.bounds.width
-        guard width > 0 else { return }
-
-        isSettlingInitialVisibleGeometry = true
-        defer { isSettlingInitialVisibleGeometry = false }
-        let started = CFAbsoluteTimeGetCurrent()
-        let oldContentHeight = collectionView.contentSize.height
-        sizer.prepare(width: width)
-        lastWarmWidth = width
-        collectionView.layoutIfNeeded()
-
-        var measuredIDs = Set<String>()
-        // A height correction can slightly change which older row intersects
-        // the top edge. Iterate a small bounded number of times so every row in
-        // the final first viewport is exact without warming the whole window.
-        for _ in 0..<3 {
-            let cold = collectionView.indexPathsForVisibleItems
-                .sorted()
-                .compactMap { indexPath -> ChatMessage? in
-                    guard indexPath.item < items.count,
-                          let message = message(items[indexPath.item]),
-                          sizer.cached(message.id) == nil else { return nil }
-                    return message
-                }
-            guard !cold.isEmpty else { break }
-            for message in cold {
-                sizer.prime(message, width: width, notify: false)
-                measuredIDs.insert(message.id)
-            }
-            let context = UICollectionViewFlowLayoutInvalidationContext()
-            context.invalidateFlowLayoutDelegateMetrics = true
-            context.invalidateFlowLayoutAttributes = true
-            collectionView.collectionViewLayout.invalidateLayout(with: context)
-            collectionView.layoutIfNeeded()
-            if followingBottom {
-                pinToBottom(reason: "entry-exact")
-            }
-        }
-
-        let hasColdVisibleMessage = collectionView.indexPathsForVisibleItems.contains { indexPath in
-            guard indexPath.item < items.count,
-                  let message = message(items[indexPath.item]) else { return false }
-            return sizer.cached(message.id) == nil
-        }
-        guard !hasColdVisibleMessage else { return }
-        appliedHeightIDs.formUnion(measuredIDs)
-        initialVisibleGeometrySettled = true
-        let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1_000
-        chatPerfLog.log(
-            "[entry] exact-visible n=\(measuredIDs.count) "
-                + "content=\(String(format: "%.1f", oldContentHeight))"
-                + "→\(String(format: "%.1f", collectionView.contentSize.height)) "
-                + "ms=\(String(format: "%.1f", elapsed)) live=\(hasLiveCardItem ? 1 : 0)"
-        )
-    }
-
+    var applyingProgrammaticShift = false
     /// Pre-measure heights OFF the scroll critical path. Warm the loaded
     /// window's turns during idle so on-screen scrolling never pays a
     /// synchronous self-size. Unlike the old preload-everything provider we
     /// only have the current seq-window in memory; the NEXT page's heights are
     /// measured by `pager` behind the spinner after `loadOlder`/`loadNewer`
     /// brings them in. Paused while the finger or momentum is moving.
-    private var warmEnqueued = Set<String>()
-    private var appliedHeightIDs = Set<String>()
-    private var lastWarmWidth: CGFloat = 0
-    private var initialVisibleGeometrySettled = false
-    private var isSettlingInitialVisibleGeometry = false
-    private var pendingHeightRefreshIDs = Set<String>()
-    private var heightRefreshScheduled = false
-    /// Keep one compact screen of nearby rows hot after entry/settling. The
-    /// initial window is only 30 persistent messages, so eight neighbors cover
-    /// typical real Sessions without restoring the old whole-history warm storm.
-    /// Warm the WHOLE loaded window at rest, nearest rows first. Pages enter
-    /// already measured, so the window is the only source of cold rows; keeping
-    /// it fully exact means a fling never exposes an estimated height.
-    private static let warmRadius = 400
-
-    private func scheduleWarmKick() {
-        warmKickWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.viewIfLoaded?.window != nil else { return }
-            self.warmKickWork = nil
-            self.warmWindow()
-        }
-        warmKickWork = work
-        // Let the navigation transition and the first back/tap opportunity
-        // settle before any atomic TextKit measurement reaches the main actor.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
-    }
-
-    private func cancelPendingWarm() {
-        warmer.cancelAll()
-        warmEnqueued = Set(warmEnqueued.filter { sizer.cached($0) != nil })
-        pendingHeightRefreshIDs.removeAll(keepingCapacity: true)
-    }
-
-    /// Coalesce exact-height upgrades into one layout pass. When the user is
-    /// following the newest tail, repin after the pass; otherwise preserve the
-    /// first visible item's screen position while rows above it change height.
-    private func scheduleHeightRefresh(for id: String) {
-        guard collectionView != nil else { return }
-        pendingHeightRefreshIDs.insert(id)
-        guard !heightRefreshScheduled else { return }
-        heightRefreshScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.heightRefreshScheduled = false
-            let ids = self.pendingHeightRefreshIDs
-            self.pendingHeightRefreshIDs.removeAll(keepingCapacity: true)
-            guard !ids.isEmpty,
-                  !self.isLeavingView,
-                  self.collectionView != nil,
-                  self.viewIfLoaded?.window != nil else { return }
-
-            let anchor = self.readingAnchor(excluding: ids)
-            let context = UICollectionViewFlowLayoutInvalidationContext()
-            let applicableIDs = ids.filter { self.items.contains($0) }
-            let paths = applicableIDs.compactMap { id in
-                self.items.firstIndex(of: id).map { IndexPath(item: $0, section: 0) }
-            }
-            guard !paths.isEmpty else { return }
-            let layoutStarted = CFAbsoluteTimeGetCurrent()
-            let oldContentHeight = self.collectionView.contentSize.height
-            let oldHeights = Dictionary(paths.map { path in
-                (path, self.collectionView.layoutAttributesForItem(at: path)?.frame.height ?? -1)
-            }, uniquingKeysWith: { first, _ in first })
-            let contentHeightDelta = paths.reduce(CGFloat.zero) { total, path in
-                let old = oldHeights[path] ?? 0
-                guard path.item < self.items.count,
-                      let new = self.sizer.cached(self.items[path.item]), old >= 0 else { return total }
-                return total + new - old
-            }
-            if self.followingBottom, abs(contentHeightDelta) > 0.5 {
-                // Rebase the scroll offset inside the same FlowLayout
-                // invalidation transaction that changes content height. Laying
-                // out first and pinning second briefly exposes an earlier,
-                // clipped viewport when nearby rows warm after entry.
-                context.contentOffsetAdjustment = CGPoint(x: 0, y: contentHeightDelta)
-            }
-            // `sizeForItemAt` is a FlowLayout delegate metric. Invalidating only
-            // item attributes can leave the old estimated height cached until a
-            // user scroll starts another layout cycle, producing the observed
-            // "broken on entry, fixed after one swipe" state. Force FlowLayout
-            // to re-read the now-exact sizer cache in this same settled pass.
-            context.invalidateFlowLayoutDelegateMetrics = true
-            context.invalidateFlowLayoutAttributes = true
-            self.collectionView.collectionViewLayout.invalidateLayout(with: context)
-            self.collectionView.layoutIfNeeded()
-
-            if self.followingBottom {
-                self.lastPinnedViewportSize = self.collectionView.bounds.size
-                self.lastPinnedAdjustedInsets = self.tailAdjustedInsets
-            } else if let anchor,
-                      let newFrame = self.collectionView.layoutAttributesForItem(at: anchor.0)?.frame {
-                self.collectionView.contentOffset.y += newFrame.minY - anchor.1
-            }
-            self.appliedHeightIDs.formUnion(applicableIDs)
-            let layoutMs = (CFAbsoluteTimeGetCurrent() - layoutStarted) * 1_000
-            let changed = paths.reduce(into: 0) { count, path in
-                let old = oldHeights[path] ?? -1
-                let new = self.collectionView.layoutAttributesForItem(at: path)?.frame.height ?? -1
-                if abs(new - old) > 0.5 { count += 1 }
-            }
-            if layoutMs > 4 || changed > 0 {
-                chatPerfLog.log(
-                    "[height] apply n=\(paths.count) changed=\(changed) "
-                        + "content=\(String(format: "%.1f", oldContentHeight))"
-                        + "→\(String(format: "%.1f", self.collectionView.contentSize.height)) "
-                        + "off=\(String(format: "%.1f", self.collectionView.contentOffset.y)) "
-                        + "distBottom=\(String(format: "%.1f", self.distanceToBottom())) "
-                        + "ms=\(String(format: "%.1f", layoutMs))"
-                )
-            }
-        }
-    }
-
-    /// The row the reader is looking at: the visible row closest to the middle
-    /// of the unobstructed viewport whose height is NOT about to change. Using
-    /// "first visible row" as the anchor made every correction of that (often
-    /// partially visible, still estimated) row shift everything being read.
-    private func readingAnchor(excluding changing: Set<String> = []) -> (IndexPath, CGFloat)? {
-        // Landed on the first new message: it is what the reader is reading,
-        // so height corrections above it must not move it.
-        if scrollPolicy.unreadEntry == .anchored, let index = heldUnreadIndex(),
-           let frame = collectionView.layoutAttributesForItem(at: IndexPath(item: index, section: 0))?.frame {
-            return (IndexPath(item: index, section: 0), frame.minY)
-        }
-        let top = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
-        let bottom = collectionView.contentOffset.y + collectionView.bounds.height
-            - collectionView.adjustedContentInset.bottom
-        let middle = (top + bottom) / 2
-        var best: (IndexPath, CGFloat, CGFloat)?
-        var fallback: (IndexPath, CGFloat, CGFloat)?
-        for indexPath in collectionView.indexPathsForVisibleItems {
-            guard indexPath.item < items.count,
-                  let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame,
-                  frame.maxY > top + 1, frame.minY < bottom - 1 else { continue }
-            let id = items[indexPath.item]
-            let distance = abs(frame.midY - middle)
-            let stable = !changing.contains(id)
-                && (id == Self.liveCardID || sizer.cached(id) != nil)
-            if stable {
-                if best == nil || distance < best!.2 { best = (indexPath, frame.minY, distance) }
-            } else if fallback == nil || distance < fallback!.2 {
-                fallback = (indexPath, frame.minY, distance)
-            }
-        }
-        if let best { return (best.0, best.1) }
-        return fallback.map { ($0.0, $0.1) }
-    }
-
-    /// Make every visible row exact before the frame is composited. Used after
-    /// any reload that can introduce new row identities (stream → landed
-    /// message, pending → echoed message, jump re-anchor). Follows the tail
-    /// when pinned; otherwise preserves the reading anchor.
-    @discardableResult
-    private func exactVisibleRows() -> Int {
-        let width = collectionView.bounds.width
-        guard width > 0, !items.isEmpty else { return 0 }
-        sizer.prepare(width: width)
-        var measured = 0
-        for _ in 0..<4 {
-            // Ask the layout, not the cell pool: right after reloadData + a
-            // programmatic offset change no cells exist yet for the new rect.
-            collectionView.layoutIfNeeded()
-            let cold = visibleIndexPathsFromLayout().compactMap { indexPath -> ChatMessage? in
-                guard indexPath.item < items.count,
-                      let message = message(items[indexPath.item]),
-                      sizer.cached(message.id) == nil else { return nil }
-                return message
-            }
-            guard !cold.isEmpty else { break }
-            let coldIDs = Set(cold.map(\.id))
-            let anchor = followingBottom ? nil : readingAnchor(excluding: coldIDs)
-            for message in cold {
-                sizer.prime(message, width: width, notify: false)
-                appliedHeightIDs.insert(message.id)
-                measured += 1
-            }
-            let context = UICollectionViewFlowLayoutInvalidationContext()
-            context.invalidateFlowLayoutDelegateMetrics = true
-            context.invalidateFlowLayoutAttributes = true
-            collectionView.collectionViewLayout.invalidateLayout(with: context)
-            collectionView.layoutIfNeeded()
-            if followingBottom {
-                pinToBottom(reason: "exact-visible")
-            } else if let anchor,
-                      let frame = collectionView.layoutAttributesForItem(at: anchor.0)?.frame {
-                collectionView.contentOffset.y += frame.minY - anchor.1
-            }
-        }
-        return measured
-    }
-
-    private func visibleIndexPathsFromLayout() -> [IndexPath] {
-        let rect = CGRect(origin: collectionView.contentOffset, size: collectionView.bounds.size)
-        return (collectionView.collectionViewLayout.layoutAttributesForElements(in: rect) ?? [])
-            .filter { $0.representedElementCategory == .cell }
-            .map(\.indexPath)
-            .sorted()
-    }
-
-    /// Measure the rows that will fill the viewport at the newest edge, so a
-    /// jump to latest lands on exact geometry instead of correcting afterwards.
-    private func primeTailViewport() {
-        let width = collectionView.bounds.width
-        guard width > 0 else { return }
-        sizer.prepare(width: width)
-        var covered: CGFloat = 0
-        let target = collectionView.bounds.height * 1.25
-        for id in items.reversed() {
-            guard covered < target else { break }
-            if id == Self.liveCardID { covered += 200; continue }
-            guard let message = message(id) else { continue }
-            sizer.prime(message, width: width, notify: false)
-            appliedHeightIDs.insert(id)
-            covered += sizer.cached(id) ?? 0
-        }
-        let context = UICollectionViewFlowLayoutInvalidationContext()
-        context.invalidateFlowLayoutDelegateMetrics = true
-        collectionView.collectionViewLayout.invalidateLayout(with: context)
-        collectionView.layoutIfNeeded()
-    }
-
-    private func warmWindow(radius requestedRadius: Int? = nil) {
-        let width = collectionView.bounds.width
-        guard width > 0,
-              !items.isEmpty,
-              !isLeavingView,
-              viewIfLoaded?.window != nil else { return }
-        // Width changed (rotation / split): cancel jobs measured for the old
-        // geometry before clearing the cache and restarting the warm pass.
-        if width != lastWarmWidth {
-            lastWarmWidth = width
-            cancelPendingWarm()
-            warmEnqueued.removeAll(keepingCapacity: true)
-            appliedHeightIDs.removeAll(keepingCapacity: true)
-        }
-        sizer.prepare(width: width)
-
-        let visible = collectionView.indexPathsForVisibleItems.map(\.item).sorted()
-        var candidates = visible.isEmpty ? [items.count - 1] : visible
-        let radius = requestedRadius ?? Self.warmRadius
-        if radius > 0, let first = visible.first, let last = visible.last {
-            for distance in 1...radius {
-                let before = first - distance
-                let after = last + distance
-                if before >= 0 { candidates.append(before) }
-                if after < items.count { candidates.append(after) }
-            }
-        }
-
-        var seen = Set<Int>()
-        var jobs: [() -> Void] = []
-        for index in candidates where seen.insert(index).inserted {
-            guard index >= 0, index < items.count,
-                  let message = message(items[index]) else { continue }
-            if sizer.cached(message.id) != nil {
-                if !appliedHeightIDs.contains(message.id) {
-                    scheduleHeightRefresh(for: message.id)
-                }
-                continue
-            }
-            guard !warmEnqueued.contains(message.id) else { continue }
-            warmEnqueued.insert(message.id)
-            jobs.append { [weak self] in self?.sizer.prime(message, width: width) }
-        }
-        guard !jobs.isEmpty else { return }
-        chatPerfLog.log("[warm] enqueue n=\(jobs.count) visible=\(visible.first ?? -1)-\(visible.last ?? -1)")
-        warmer.enqueue(jobs)
-    }
-
-    /// Apply a window slide as explicit edge edits, optionally collapsing
-    /// the loading spinner row in the SAME pass. The change in content
-    /// height ABOVE the viewport (`frontDelta`) is handed to the layout, so
-    /// UIKit shifts the viewport itself during the update cycle — keeping
-    /// existing bubbles visually pinned without a hand-written contentOffset
-    /// that would fight an in-flight drag or the top rubber-band.
-    ///
-    /// Index spaces: deletes use the OLD index space, inserts the NEW —
-    /// exactly what `performBatchUpdates` expects.
-    /// Refresh the flat spine snapshot + reload when new messages have landed on the spine since the
-    /// last sync. Called from the SwiftUI representable's `updateUIViewController`
-    /// (which fires on every `@Observable` store change) so live arrivals render.
-    /// No-op when nothing changed.
-    /// Keep the newest edge anchored when the fixed composer/status clearance
-    /// changes (e.g. device availability). Expansion of the floating composer
-    /// never reaches this path; older-history reading remains independent.
-    private var shouldFollowLiveTail: Bool {
-        scrollPolicy.shouldFollowTail(distanceToBottom: distanceToBottom())
-    }
-
-    func updateBottomContentInset(_ value: CGFloat) {
-        guard abs(value - bottomContentInset) > 0.5 else { return }
-        // Preserve semantic follow state while still tolerating tiny geometry
-        // drift. Explicit older-history intent wins over the 24pt tolerance.
-        let shouldFollow = shouldFollowLiveTail
-        let delta = abs(value - bottomContentInset)
-        bottomContentInset = value
-        let apply = {
-            self.collectionView.contentInset.bottom = value + self.composerOverlayInset
-            self.collectionView.verticalScrollIndicatorInsets.bottom = value + self.composerOverlayInset
-            self.jumpButtonBottomConstraint?.constant = -Self.jumpBottomGap(value)
-            self.view.layoutIfNeeded()
-            self.scrollPolicy.setFollowingTail(shouldFollow)
-            if shouldFollow {
-                self.pinToBottom(reason: "composer-inset")
-            }
-        }
-        // Animate genuine obstruction changes (e.g. the compaction status row).
-        // Recording/multiline growth never changes this resting clearance.
-        if delta > 30, view.window != nil {
-            UIView.animate(withDuration: 0.34, delay: 0, usingSpringWithDamping: 0.9,
-                           initialSpringVelocity: 0, options: [.allowUserInteraction, .beginFromCurrentState],
-                           animations: apply)
-        } else {
-            apply()
-        }
-        updateJumpButtonVisibility()
-    }
-
-    private func refreshVisibleLiveCard(at index: Int, duringPaging: Bool) {
-        guard index < collectionView.numberOfItems(inSection: 0),
-              let card = vm.card else { return }
-        let indexPath = IndexPath(item: index, section: 0)
-        if let cell = collectionView.cellForItem(at: indexPath) as? TKBubbleCell {
-            let content = liveContent(card)
-            cell.configure(content, cellWidth: collectionView.bounds.width)
-            cell.onOpenSteps = { [weak self] _ in self?.presentLiveSteps() }
-            #if DEBUG
-            if alignmentLoggingEnabled {
-                alignmentRevision += 1
-                let presentationHeight = cell.layer.presentation()?.frame.height ?? cell.frame.height
-                IOSChatAlignmentLog.write(
-                    "revision=\(alignmentRevision) cell=\(ObjectIdentifier(cell)) oldHeight=\(String(format: "%.2f", cell.bounds.height)) presentationHeight=\(String(format: "%.2f", presentationHeight)) targetHeight=\(String(format: "%.2f", content.cellHeight(cellWidth: collectionView.bounds.width))) pinned=\(followingBottom ? 1 : 0)"
-                )
-            }
-            #endif
-        }
-        animateItemGeometry(at: indexPath, animated: !duringPaging)
-    }
-
-    private func animateHeightChange(for cell: TKBubbleCell) {
-        guard let indexPath = collectionView.indexPath(for: cell) else {
-            collectionView.collectionViewLayout.invalidateLayout()
-            return
-        }
-        animateItemGeometry(at: indexPath, animated: true)
-    }
-
-    private func animateItemGeometry(at indexPath: IndexPath, animated: Bool) {
-        let shouldFollow = shouldFollowLiveTail
-        let context = UICollectionViewFlowLayoutInvalidationContext()
-        context.invalidateItems(at: [indexPath])
-        // An item-only invalidation updates FlowLayout's content size but NOT
-        // UIScrollView.contentSize (every tail pin / distance reads the latter).
-        // Report the growth PLUS any drift already present, so the scroll view
-        // always converges on the layout's truth instead of accumulating error
-        // (which showed as a gap under the bubble after a table rendered).
-        let layoutHeight = collectionView.collectionViewLayout.collectionViewContentSize.height
-        let drift = layoutHeight - collectionView.contentSize.height
-        let oldItemHeight = collectionView.layoutAttributesForItem(at: indexPath)?.frame.height ?? 0
-        let newItemHeight = self.collectionView(
-            collectionView,
-            layout: collectionView.collectionViewLayout,
-            sizeForItemAt: indexPath
-        ).height
-        let adjustment = (newItemHeight - oldItemHeight) + drift
-        if abs(adjustment) > 0.01 {
-            context.contentSizeAdjustment = CGSize(width: 0, height: adjustment)
-        }
-        collectionView.collectionViewLayout.invalidateLayout(with: context)
-
-        let updates = {
-            self.collectionView.layoutIfNeeded()
-            if shouldFollow {
-                let maxY = self.followPinOffset(keepingRevealed: true)
-                self.collectionView.contentOffset.y = maxY
-                self.scrollPolicy.pinToTail(observedOffset: maxY)
-            }
-        }
-        guard animated, collectionView.window != nil else {
-            UIView.performWithoutAnimation(updates)
-            return
-        }
-        UIView.animate(
-            withDuration: 0.22,
-            delay: 0,
-            options: [.beginFromCurrentState, .curveEaseOut, .allowUserInteraction],
-            animations: updates
-        ) { [weak self] finished in
-            #if DEBUG
-            guard let self, self.alignmentLoggingEnabled else { return }
-            let height = self.collectionView.layoutAttributesForItem(at: indexPath)?.frame.height ?? -1
-            IOSChatAlignmentLog.write(
-                "animation item=\(indexPath.item) finished=\(finished ? 1 : 0) height=\(String(format: "%.2f", height)) bottomDistance=\(String(format: "%.2f", self.distanceToBottom()))"
-            )
-            #endif
-        }
-    }
-
-    func syncLiveUpdates() {
-        #if KRAKI_DIAG
-        let diagWork = KrakiDiag.beginWork()
-        defer { KrakiDiag.endWork(diagWork, source: "ios.list_sync", session: sessionId) }
-        #endif
-        let cardSig = liveCardSignature
-        let cardChanged = cardSig != lastLiveCardSignature
-        let pendingSig = vm.pendingSignature
-        // Captured before refreshSpineSnapshot() records the new signature.
-        let previousPendingSig = lastPendingSignature
-        let sig = "\(vm.filteredMessages.count)|\(vm.windowTopSeq)|\(vm.windowBottomSeq)|\(vm.sessionLastSeq)|\(cardSig)|\(pendingSig)"
-        chatPerfLog.log("[diag] syncLive sig=\(sig) last=\(lastSyncedSignature) items=\(items.count)")
-        logEntryState("syncBefore")
-        guard sig != lastSyncedSignature else { return }
-        lastSyncedSignature = sig
-        // If a pagination batch is mid-flight, a `reloadData()` here would
-        // desync `items` from the batch's view of the data source and surface
-        // as empty-cell (OOB guard) flashes. Defer the spine reload until the
-        // page settles; `cardChanged` (streaming tail) still reconfigures the
-        // single live-card cell cheaply so the tail keeps updating live.
-        let pagingInFlight = fetchingOlder || fetchingNewer
-            || measuringOlderPage || measuringNewerPage
-            || paginationSnapshotDeferred || pendingApply != nil
-        if pagingInFlight {
-            refreshSpineSnapshot()
-            if cardChanged, let idx = items.firstIndex(of: Self.liveCardID) {
-                lastLiveCardSignature = cardSig
-                refreshVisibleLiveCard(at: idx, duringPaging: true)
-            }
-            return
-        }
-        refreshSpineSnapshot()
-        // A network `.before` response may advance the raw window after the
-        // initiating DB-first task has already returned. Treat that external
-        // front growth as the same buffered pagination transaction rather than
-        // reloading cold rows directly from this observation callback.
-        if !items.isEmpty,
-           let edge = reconcileEdges(old: items, new: ids),
-           edge.insertFront > 0 {
-            paginationSnapshotDeferred = true
-            resumeBufferedPageMeasurements()
-            return
-        }
-        // Tail append (including the important empty → first-message
-        // transition): reconcile items → ids and reload. Head metadata can
-        // also change without changing ids; refresh the footer/jump state so
-        // an initially unknown head does not leave a permanent newer spinner.
-        let newIds = ids
-        let showOlderSpinner = hasLoadedWindow && !atOldest
-        // Network catch-up lands silently; the bottom spinner is only for
-        // newer rows paged back in from this device's own history.
-        let showNewerSpinner = showsNewerSpinner
-        let edgeStateChanged = loadingOlder != showOlderSpinner || loadingNewer != showNewerSpinner
-        loadingOlder = showOlderSpinner
-        loadingNewer = showNewerSpinner
-        let idsChanged = items != newIds
-        let pendingStateChanged = pendingSig != previousPendingSig
-        lastPendingSignature = pendingSig
-        if !idsChanged, !edgeStateChanged, pendingStateChanged {
-            // Same rows, new delivery state: reconfigure in place (no reload).
-            reconfigureVisiblePendingRows()
-        }
-        if idsChanged || edgeStateChanged {
-            // Full reload only when the spine item set or edge spinners moved.
-            let wasAtBottom = shouldFollowLiveTail
-            let isFirstMaterialization = items.isEmpty && !newIds.isEmpty
-            let oldItemsForArrivals = items
-            let anchor = wasAtBottom ? nil : readingAnchor()
-            let anchorID = anchor.flatMap { $0.0.item < items.count ? items[$0.0.item] : nil }
-            let oldItems = items
-            lastLiveCardSignature = cardSig
-            liveContentMemo = nil
-            let entrances = didInitialScroll && !isFirstMaterialization
-                ? recordEntrances(old: oldItems, new: newIds) : 0
-            let offsetBeforeArrival = collectionView.contentOffset.y
-            if edgeStateChanged || isFirstMaterialization || !applyTailInPlace(old: oldItems, new: newIds) {
-                items = newIds
-                collectionView.reloadData()
-            }
-            collectionView.layoutIfNeeded()
-            if !items.isEmpty, !didInitialScroll || wasAtBottom {
-                pinToBottom(reason: "live-update", animated: false)
-                if entrances > 0, wasAtBottom {
-                    glideArrival(from: offsetBeforeArrival)
-                }
-            } else if let anchor, let anchorID, let index = items.firstIndex(of: anchorID),
-                      let frame = collectionView.layoutAttributesForItem(at: IndexPath(item: index, section: 0))?.frame {
-                // A reload must not move what the reader is looking at.
-                collectionView.contentOffset.y += frame.minY - anchor.1
-            }
-            if didInitialScroll, !isFirstMaterialization {
-                // New identities (landed answer, echoed send) must never be
-                // composited with an estimated height.
-                exactVisibleRows()
-                if !wasAtBottom { noteArrivalsWhileAway(old: oldItemsForArrivals, new: items) }
-            }
-            // If the controller was created while its DB window was still
-            // empty, this observation is its real first frame. Settle that tail
-            // synchronously in the same run-loop turn before it can be shown.
-            if isFirstMaterialization {
-                initialVisibleGeometrySettled = false
-                settleInitialVisibleGeometryBeforePresentation()
-            }
-        } else if cardChanged {
-            // Only the streaming tail cell's content changed (same item set).
-            // Avoid the full reloadData()+layoutIfNeeded() storm that fired
-            // once per streaming chunk and fought scroll/gesture state - just
-            // reconfigure the live-card cell (and re-pin only if we're
-            // following, so a growing tail stays visible without yanking a
-            // user who scrolled up).
-            lastLiveCardSignature = cardSig
-            scheduleLiveRender()
-        }
-        updateJumpButtonVisibility()
-        updateOverlay()
-        logEntryState("syncAfter")
-    }
-
-    private func handlePendingAction(clientId: String, action: TKBubbleCell.PendingAction) {
-        guard let sender = appState.commandSender else { return }
-        switch action {
-        case .retry:
-            if sender.isStaged(sessionId: sessionId, clientId: clientId) {
-                // "Send original": don't wait for the voice correction.
-                sender.dispatchStagedInput(sessionId: sessionId, clientId: clientId,
-                                           text: sender.originalText(sessionId: sessionId, clientId: clientId) ?? "")
-            } else {
-                sender.retryPending(sessionId: sessionId, clientId: clientId)
-            }
-        case .delete:
-            sender.discardPending(sessionId: sessionId, clientId: clientId)
-        }
-        syncLiveUpdates()
-    }
-
-    /// Mirrors Mac `recordEntrances`: only new rows after the last surviving
-    /// old row, at most two (a catch-up burst is not a conversation beat), and
-    /// a row that only changes identity (pending → echoed message, live card →
-    /// landed answer) replaces an old tail row of the same role and does not
-    /// enter again. Session entry and older pages never get here.
-    @discardableResult
-    private func recordEntrances(old: [String], new: [String]) -> Int {
-        let now = CACurrentMediaTime()
-        pendingEntrances = pendingEntrances.filter { $0.value.deadline > now }
-        guard !old.isEmpty, !UIAccessibility.isReduceMotionEnabled else { return 0 }
-        let oldSet = Set(old), newSet = Set(new)
-        // Rows added at the top are older history, not an arrival.
-        if let first = old.first, let firstInNew = new.firstIndex(of: first), firstInNew > 0 { return 0 }
-        var removedUser = 0, removedReply = 0
-        for id in old where !newSet.contains(id) {
-            switch entranceRole(id) {
-            case .user?: removedUser += 1
-            case .reply?: removedReply += 1
-            case nil: break
-            }
-        }
-        guard let survivingTail = new.lastIndex(where: { oldSet.contains($0) }) else { return 0 }
-        let appended = new[(survivingTail + 1)...].compactMap { id in entranceRole(id).map { (id, $0) } }
-        guard !appended.isEmpty, appended.count <= 2 else { return 0 }
-        var recorded = 0
-        for (id, role) in appended {
-            switch role {
-            case .user where removedUser > 0: removedUser -= 1; continue
-            case .reply where removedReply > 0: removedReply -= 1; continue
-            default: break
-            }
-            pendingEntrances[id] = (role == .user, now + 0.8)
-            recorded += 1
-        }
-        return recorded
-    }
-
-    private enum EntranceRole { case user, reply }
-
-    private var latestItemIsUser: Bool {
-        items.last.flatMap(entranceRole) == .user
-    }
-
-    private func entranceRole(_ id: String) -> EntranceRole? {
-        if id == Self.liveCardID { return .reply }
-        guard let message = message(id) else { return nil }
-        if ["user_message", "send_input", "pending_input"].contains(message.type) { return .user }
-        if message.type == "agent_message" || message.frozenCard != nil { return .reply }
-        return nil
-    }
-
-    /// The bubble slides in from its side while fading in. Additive on the
-    /// cell's presentation only, so frame/height updates while streaming never
-    /// fight it.
-    private func runEntranceIfPending(_ cell: UICollectionViewCell, id: String) {
-        guard let entrance = pendingEntrances.removeValue(forKey: id),
-              entrance.deadline > CACurrentMediaTime() else { return }
-        let slide = CABasicAnimation(keyPath: "transform.translation.x")
-        slide.fromValue = (entrance.fromTrailing ? 1 : -1) * Self.entranceOffset
-        slide.toValue = 0
-        slide.isAdditive = true
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 0
-        fade.toValue = 1
-        let group = CAAnimationGroup()
-        group.animations = [slide, fade]
-        group.duration = Self.entranceDuration
-        group.timingFunction = Self.entranceTiming
-        group.fillMode = .backwards
-        cell.layer.add(group, forKey: "kraki.entrance")
-        #if DEBUG
-        entranceLog.append((id, entrance.fromTrailing))
-        #endif
-    }
-
-    /// The list glides up to make room for an arrival. The real offset is
-    /// already pinned to the bottom; only the presentation starts from the old
-    /// position, so later streaming pins compose with it instead of cutting it.
-    private func glideArrival(from oldOffset: CGFloat) {
-        let delta = collectionView.contentOffset.y - oldOffset
-        guard delta > 0.5, collectionView.window != nil else { return }
-        let glide = CABasicAnimation(keyPath: "sublayerTransform.translation.y")
-        glide.fromValue = delta
-        glide.toValue = 0
-        glide.isAdditive = true
-        glide.duration = Self.entranceDuration
-        glide.timingFunction = Self.entranceTiming
-        collectionView.layer.add(glide, forKey: "kraki.arrivalGlide")
-        #if DEBUG
-        arrivalGlideLog.append(delta)
-        #endif
-    }
-
+    var warmEnqueued = Set<String>()
+    var appliedHeightIDs = Set<String>()
+    var lastWarmWidth: CGFloat = 0
+    var initialVisibleGeometrySettled = false
+    var isSettlingInitialVisibleGeometry = false
+    var pendingHeightRefreshIDs = Set<String>()
+    var heightRefreshScheduled = false
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell,
                         forItemAt indexPath: IndexPath) {
         // A reused cell must not carry another row's unfinished entrance.
@@ -2568,448 +809,11 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         guard !pendingEntrances.isEmpty, indexPath.item < items.count else { return }
         runEntranceIfPending(cell, id: items[indexPath.item])
     }
-
-    /// Apply a change confined to the newest rows (send, echo, stream start,
-    /// answer landing) without `reloadData()`: rows are inserted/deleted
-    /// without animation and rows whose identity changed in place (pending →
-    /// echoed message, live card → landed answer) keep their existing cell and
-    /// are simply reconfigured. A reload re-dequeues every visible cell, which
-    /// re-assigns all text and backgrounds and reads as a flash.
-    private func applyTailInPlace(old: [String], new: [String]) -> Bool {
-        guard !old.isEmpty, !new.isEmpty, collectionView.window != nil else { return false }
-        let shared = min(old.count, new.count)
-        var prefix = 0
-        while prefix < shared, old[prefix] == new[prefix] { prefix += 1 }
-        let oldTail = old.count - prefix
-        let newTail = new.count - prefix
-        guard oldTail <= 12, newTail <= 12, prefix > 0 || old.count <= 12 else { return false }
-        let replaced = min(oldTail, newTail)
-
-        // Exact heights for every new identity before any layout sees it.
-        let width = collectionView.bounds.width
-        sizer.prepare(width: width)
-        for id in new[prefix...] where id != Self.liveCardID {
-            guard let message = message(id) else { continue }
-            sizer.prime(message, width: width, notify: false)
-            appliedHeightIDs.insert(id)
-        }
-
-        // The tail swap is applied model-first: the replaced rows are
-        // reconfigured explicitly below, and the OLD model is not layout-safe
-        // here (a just-cleared live card has no content to size), because
-        // performBatchUpdates computes pre-update attributes before running
-        // its block. Pagination (applyEdges) swaps INSIDE the block instead:
-        // there the old rows are intact and the swap must not be visible to
-        // the pre-update pass. Invariant for this path: nothing may lay out
-        // between this assignment and performBatchUpdates (no layoutIfNeeded,
-        // no run-loop turn); invalidateLayout below is lazy.
-        items = new
-        UIView.performWithoutAnimation {
-            let context = UICollectionViewFlowLayoutInvalidationContext()
-            context.invalidateFlowLayoutDelegateMetrics = true
-            collectionView.collectionViewLayout.invalidateLayout(with: context)
-            collectionView.performBatchUpdates {
-                if oldTail > newTail {
-                    collectionView.deleteItems(at: ((prefix + replaced)..<old.count).map { IndexPath(item: $0, section: 0) })
-                }
-                if newTail > oldTail {
-                    collectionView.insertItems(at: ((prefix + replaced)..<new.count).map { IndexPath(item: $0, section: 0) })
-                }
-            }
-            for index in prefix..<(prefix + replaced) {
-                let indexPath = IndexPath(item: index, section: 0)
-                guard let cell = collectionView.cellForItem(at: indexPath) as? TKBubbleCell else { continue }
-                configureCell(cell, at: indexPath)
-                cell.setNeedsLayout()
-            }
-            collectionView.layoutIfNeeded()
-        }
-        chatPerfLog.log("[apply] tail-in-place prefix=\(prefix) replaced=\(replaced) old=\(oldTail) new=\(newTail)")
-        return true
-    }
-
-    private func reconfigureVisiblePendingRows() {
-        let width = collectionView.bounds.width
-        sizer.prepare(width: width)
-        var heightChanged = false
-        for (index, id) in items.enumerated() where id.contains(":pending:") {
-            guard let message = message(id) else { continue }
-            // Correcting voice text changes in place. The bubble keeps its
-            // size while it is corrected (it may grow, never shrink/jump).
-            let correcting = message.payload["localState"]?.stringValue == "correcting"
-            if sizer.remeasure(message, width: width, allowShrink: !correcting) { heightChanged = true }
-            let indexPath = IndexPath(item: index, section: 0)
-            guard let cell = collectionView.cellForItem(at: indexPath) as? TKBubbleCell else { continue }
-            cell.configure(TKBubbleContent.make(message: message, sessionId: sessionId, agent: agentName),
-                           cellWidth: width)
-            cell.setNeedsLayout()
-        }
-        guard heightChanged else { return }
-        let wasAtBottom = shouldFollowLiveTail
-        UIView.performWithoutAnimation {
-            let context = UICollectionViewFlowLayoutInvalidationContext()
-            context.invalidateFlowLayoutDelegateMetrics = true
-            collectionView.collectionViewLayout.invalidateLayout(with: context)
-            collectionView.layoutIfNeeded()
-        }
-        if wasAtBottom { pinToBottom(reason: "pending-resize", animated: false) }
-    }
-
     // MARK: Streaming render pacing
 
-    private var liveRenderScheduled = false
-    private var lastLiveRenderAt: CFTimeInterval = 0
-    private var lastLiveRenderCost: CFTimeInterval = 0
-
-    /// Coalesce streaming revisions into at most one render per display frame,
-    /// and back off adaptively when a render is expensive (very long answers,
-    /// slow devices) or while the user is scrolling, so scroll frames keep
-    /// priority. Data reception is never paused; only presentation is paced.
-    private func scheduleLiveRender() {
-        guard !liveRenderScheduled else { return }
-        let now = CACurrentMediaTime()
-        let interacting = collectionView.isDragging || collectionView.isDecelerating
-        let floor: CFTimeInterval = interacting ? 1.0 / 30.0 : 1.0 / 60.0
-        let interval = max(floor, min(0.15, lastLiveRenderCost * 3))
-        let wait = max(0, lastLiveRenderAt + interval - now)
-        liveRenderScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
-            self?.performLiveRender()
-        }
-    }
-
-    private func performLiveRender() {
-        liveRenderScheduled = false
-        guard !isLeavingView, collectionView != nil,
-              let index = items.firstIndex(of: Self.liveCardID),
-              vm.card != nil else { return }
-        let started = CACurrentMediaTime()
-        refreshVisibleLiveCard(at: index, duringPaging: false)
-        if followingBottom, !items.isEmpty {
-            pinToBottom(reason: "live-tail", animated: false)
-        }
-        updateJumpButtonVisibility()
-        let finished = CACurrentMediaTime()
-        lastLiveRenderCost = finished - started
-        lastLiveRenderAt = finished
-    }
-
-    #if DEBUG
-    var automationLastLiveRenderCostMs: Double { lastLiveRenderCost * 1_000 }
-    #endif
-
-    private func applyEdges(txn: PaginateTxn? = nil,
-                            reason: String,
-                            insertFront: Int = 0, deleteFront: Int = 0,
-                            insertBack: Int = 0, deleteBack: Int = 0) {
-        let t0 = CFAbsoluteTimeGetCurrent()
-        let oldCount = items.count
-        let newIds = ids
-
-        // AUTHORITATIVE EDGES (race-proof): the `insert*/delete*` deltas handed
-        // in were computed EARLIER — in the caller's reconcile, before an async
-        // `measurePage` gap. During that gap the OTHER pagination direction's
-        // `refreshSpineSnapshot()` can mutate `turns`/`ids`, so the passed deltas may no
-        // longer describe the live `items → ids` transition. Applying a batch
-        // update whose deltas disagree with `items.count` desyncs the collection
-        // view from the data source → `cellForItemAt` indexes `items` out of
-        // bounds → SIGTRAP. So we RE-DERIVE the edits here, atomically, against
-        // the current arrays, and ignore the (logging-only) parameters.
-        guard let e = reconcileEdges(old: items, new: newIds) else {
-            // No common anchor (buffer too deep / full replace) → safe reload.
-            // Loses the scroll anchor (rare), but never crashes. The deepEnough
-            // buffer hold keeps this practically unreachable.
-            chatPerfLog.log("[apply] \(reason) NO-COMMON reload old=\(oldCount) new=\(newIds.count)")
-            UIView.performWithoutAnimation {
-                loadingOlder = hasLoadedWindow && !atOldest
-                loadingNewer = showsNewerSpinner
-                items = newIds
-                paginationSnapshotDeferred = false
-                collectionView.reloadData()
-                collectionView.layoutIfNeeded()
-            }
-            warmWindow()
-            return
-        }
-        let iF = e.insertFront, dF = e.deleteFront, iB = e.insertBack, dB = e.deleteBack
-
-        // FRONT-SHIFT via SIZER-SUM (faithful 1:1 port of the validated test-page
-        // engine; replaces the geometry-anchor variant production had diverged
-        // into). Sum the heights of everything ABOVE the anchor that this edit
-        // changes — older turns prepended push content down (+), trimmed-front
-        // turns pull it up (−) — plus the ±44pt top-spinner toggle, and apply it
-        // as ONE atomic contentOffset shift right after the batch, with NO
-        // intervening `layoutIfNeeded`.
-        //
-        // Why this kills the blank-cell flash: the anchor variant read the turn's
-        // post-layout position to self-correct, which forced a `layoutIfNeeded`
-        // at the STILL-UNSHIFTED offset; on a far-end trim while parked at the
-        // bottom that layout saw the offset pointing past the now-shorter content
-        // and requested beyond-count cells → the OOB guard flashed blank cells.
-        // The sizer-sum is precomputed and never touches a stale-offset layout,
-        // so the artefact cannot occur — exactly why the test page never showed
-        // it. Render units are identical to the test page (same grouper + same
-        // block→[opener,block] split), so the sum is computed over the SAME turn
-        // cells. Boundary reshape stays exact because reconcileEdges encodes it as
-        // deleteFront(old id) + insertFront(new id): the old height leaves the sum
-        // (cached) and the new height enters it (fresh measure), and the SAME
-        // RealCellSizer feeds both this sum and the layout.
-        let measureWidth = collectionView.bounds.width
-        var frontDelta: CGFloat = 0
-        for id in newIds.prefix(iF) {           // older turns prepended → push down (+)
-            if let message = message(id) { frontDelta += sizer.height(for: message, width: measureWidth) }
-            else if let c = sizer.cached(id) { frontDelta += c }
-        }
-        for id in items.prefix(dF) {            // front turns trimmed → pull up (−); `items` still OLD
-            frontDelta -= sizer.cached(id) ?? 0
-        }
-        // Auto-manage the PERSISTENT edge spinners. The top "loading earlier"
-        // header lives ABOVE the anchor, so fold its ±44pt show/hide into this
-        // same front shift; the bottom "loading newer" footer sits BELOW the
-        // viewport, so toggling it costs no shift (the free side). Each appears
-        // the instant we trim back into unloaded history on its side and
-        // disappears the instant that side's true boundary lands.
-        let showOlderSpinner = !atOldest
-        let showNewerSpinner = showsNewerSpinner
-        let olderSpinnerChanged = showOlderSpinner != loadingOlder
-        let newerSpinnerChanged = showNewerSpinner != loadingNewer
-        if olderSpinnerChanged {
-            frontDelta += showOlderSpinner ? spinnerRowHeight : -spinnerRowHeight
-        }
-
-        paginationSnapshotDeferred = false
-        let newCount = newIds.count
-        // A batch can reveal buffered older rows AND append new ones (a message
-        // sent while older history was waiting to be shown). The front shift
-        // below keeps the reading position; if the reader was at the bottom,
-        // the new rows must also be followed, or they land under the composer.
-        let followNewTail = iB > 0 && followingBottom
-            && !collectionView.isDragging && !collectionView.isDecelerating
-
-        UIView.performWithoutAnimation {
-            // Settle pending layout (e.g. the scroll step that triggered this
-            // flush) against the OLD model, and swap the model only inside the
-            // batch: UIKit lays out once before applying updates, and doing that
-            // with the new model put the inserted rows' content into cells of
-            // the old index paths (a bubble showing another message, wrong
-            // height) during continuous scrolling.
-            collectionView.layoutIfNeeded()
-            // Fold the spinner header/footer size change into the SAME layout pass
-            // as the item edits, so there's no intermediate frame where the row is
-            // gone/added but the offset hasn't caught up.
-            if olderSpinnerChanged || newerSpinnerChanged {
-                if olderSpinnerChanged { loadingOlder = showOlderSpinner }
-                if newerSpinnerChanged { loadingNewer = showNewerSpinner }
-                let ctx = UICollectionViewFlowLayoutInvalidationContext()
-                ctx.invalidateFlowLayoutDelegateMetrics = true
-                collectionView.collectionViewLayout.invalidateLayout(with: ctx)
-            }
-            let offsetBeforeBatch = collectionView.contentOffset.y
-            // Tell UIKit where the batch must land. Otherwise FlowLayout picks
-            // its own target offset mid-update (seen: +357pt), builds cells for
-            // that viewport, then remaps them by the insertion delta, leaving a
-            // cell showing another row's content (wrong bubble, wrong height).
-            let chatLayout = collectionView.collectionViewLayout as? ChatFlowLayout
-            if abs(frontDelta) > 0.5 {
-                chatLayout?.pendingUpdateOffsetY = offsetBeforeBatch + frontDelta
-            }
-            defer { chatLayout?.pendingUpdateOffsetY = nil }
-            collectionView.performBatchUpdates {
-                self.items = newIds
-                if dF > 0 {
-                    collectionView.deleteItems(at: (0..<dF).map { IndexPath(item: $0, section: 0) })
-                }
-                if dB > 0 {
-                    collectionView.deleteItems(at: ((oldCount - dB)..<oldCount).map { IndexPath(item: $0, section: 0) })
-                }
-                if iF > 0 {
-                    collectionView.insertItems(at: (0..<iF).map { IndexPath(item: $0, section: 0) })
-                }
-                if iB > 0 {
-                    collectionView.insertItems(at: ((newCount - iB)..<newCount).map { IndexPath(item: $0, section: 0) })
-                }
-            }
-            // Re-pin the viewport against the now-updated content size and reset
-            // any in-flight drag/bounce so it doesn't snap back. No layoutIfNeeded:
-            // the shift is precomputed from the sizer, never read post-layout.
-            // Normally UIKit already landed on the target above; this only
-            // corrects any remaining difference (absolute, never additive).
-            let uikitDrift = collectionView.contentOffset.y - offsetBeforeBatch
-            applyFrontShift(frontDelta - uikitDrift, gestureDelta: frontDelta)
-            if followNewTail { pinToBottom(reason: "edges-new-tail") }
-        }
-
-        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-        let state = collectionView.isDragging ? "drag" : (collectionView.isDecelerating ? "decel" : "rest")
-        let offNow = collectionView.contentOffset.y
-        if let txn {
-            // Final reconciliation: did the manual batch edits land the
-            // collection view EXACTLY on the grouper truth?
-            let match = (items == ids)
-            let cv = collectionView.numberOfItems(inSection: 0)
-            chatPerfLog.log("[txn \(txn.id)] apply count=\(self.messageCount) win=[\(self.vm.windowTopSeq),\(self.vm.windowBottomSeq)] frontDelta=\(String(format: "%.0f", frontDelta)) state=\(state) itemsMatchIds=\(yn(match)) cv=\(cv) dt=\(f1(ms))")
-            chatPerfLog.log("[txn \(txn.id)] END total=\(f1(txn.total()))")
-        } else {
-            chatPerfLog.log("[apply] \(reason) count=\(self.messageCount) win=[\(self.vm.windowTopSeq),\(self.vm.windowBottomSeq)] ms=\(String(format: "%.1f", ms)) frontDelta=\(String(format: "%.0f", frontDelta)) state=\(state) offNow=\(String(format: "%.0f", offNow))")
-        }
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            chatPerfLog.log("[apply] \(reason) settled offY=\(String(format: "%.0f", self.collectionView.contentOffset.y))")
-            // A live update may have been deferred while this pagination batch
-            // was in flight. Re-run now that items/byId are settled so the
-            // spine catches up to any card/message changes that arrived mid-page.
-            self.syncLiveUpdates()
-        }
-        lastApplyMs = ms
-        lastReason = reason
-        updateOverlay()
-        warmWindow()
-        updateJumpButtonVisibility()
-    }
-
-    #if DEBUG
-    var automationContentSizeMismatch: CGFloat {
-        collectionView.contentSize.height - collectionView.collectionViewLayout.collectionViewContentSize.height
-    }
-    #endif
-
-    private func pinToBottom(reason: String, animated: Bool = false) {
-        guard collectionView.numberOfItems(inSection: 0) > 0 else { return }
-        if !animated, landOnFirstUnreadIfNeeded(reason: reason) { return }
-        isPinningBottom = true
-        collectionView.layoutIfNeeded()
-        let maxY = followPinOffset(keepingRevealed: reason != "explicit")
-        lastPinnedViewportSize = collectionView.bounds.size
-        lastPinnedAdjustedInsets = tailAdjustedInsets
-        scrollPolicy.pinToTail(observedOffset: maxY)
-        let targetText = String(format: "%.1f", maxY)
-        let currentText = String(format: "%.1f", collectionView.contentOffset.y)
-        let contentText = String(format: "%.1f", collectionView.contentSize.height)
-        let viewportText = String(format: "%.1f", collectionView.bounds.height)
-        let insetText = String(format: "%.1f", collectionView.adjustedContentInset.bottom)
-        chatPerfLog.log("[bottom] pin reason=\(reason) target=\(targetText) current=\(currentText) content=\(contentText) viewport=\(viewportText) inset=\(insetText)")
-        collectionView.setContentOffset(
-            CGPoint(x: collectionView.contentOffset.x, y: maxY),
-            animated: animated)
-        isPinningBottom = false
-    }
-
-    private func scrollToBottom(animated: Bool) {
-        scrollPolicy.cancelUnreadEntry()
-        pinToBottom(reason: "explicit", animated: animated)
-    }
-
-    /// Entered with new messages and the user hasn't scrolled: every entry pin
-    /// asks whether the first new message's start would still be readable at
-    /// the tail. Once it isn't (on entry, when a cold start's sync lands, or as
-    /// a reply streams), that start is held at the top instead and the list
-    /// stops following — the same landing ↑ uses (ChatScrollPolicy.UnreadEntry).
-    private func landOnFirstUnreadIfNeeded(reason: String) -> Bool {
-        guard !items.isEmpty, collectionView.bounds.width > 0 else { return false }
-        if scrollPolicy.unreadEntry == .anchored {
-            // Held: an entry pin (layout, a near-tail re-pin, arrivals) keeps
-            // the first new message where it is instead of going to the tail.
-            guard let index = heldUnreadIndex() else { return false }
-            collectionView.layoutIfNeeded()
-            guard let frame = collectionView.layoutAttributesForItem(at: IndexPath(item: index, section: 0))?.frame
-            else { return false }
-            let landing = landingOffset(forRowStart: frame.minY)
-            if landing >= maximumOffsetY() - 1, let boundary = unreadEntryBoundary {
-                // Measured: it fits after all. Follow the tail again.
-                scrollPolicy.releaseUnreadAnchor(boundary: boundary)
-                unreadAnchorID = nil
-                return false
-            }
-            if abs(collectionView.contentOffset.y - landing) > 0.5 {
-                isPinningBottom = true
-                collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: landing), animated: false)
-                isPinningBottom = false
-            }
-            scrollPolicy.rememberOffset(landing)
-            lastPinnedViewportSize = collectionView.bounds.size
-            lastPinnedAdjustedInsets = tailAdjustedInsets
-            return true
-        }
-        guard let boundary = scrollPolicy.unreadEntryBoundary else { return false }
-        let rows = items.map { id -> (id: String, seq: Int?) in
-            guard let message = message(id), message.seq > 0 else { return (id, nil) }
-            return (id, message.seq)
-        }
-        guard let targetID = ChatScrollPolicy.firstUnreadRow(rows, after: boundary),
-              let index = items.firstIndex(of: targetID) else { return false }
-        // Exact heights for the first new message and the screen below it, so
-        // "does it fit" is decided on real geometry. Not inside a layout pass.
-        if reason != "layout" {
-            let width = collectionView.bounds.width
-            sizer.prepare(width: width)
-            var changed = false
-            var covered: CGFloat = 0
-            var i = index
-            while i < items.count, covered < collectionView.bounds.height * 1.2 {
-                if let row = message(items[i]) {
-                    if sizer.cached(row.id) == nil {
-                        sizer.prime(row, width: width, notify: false)
-                        appliedHeightIDs.insert(row.id)
-                        changed = true
-                    }
-                    covered += sizer.cached(row.id) ?? 0
-                } else {
-                    covered += 200
-                }
-                i += 1
-            }
-            if changed {
-                let context = UICollectionViewFlowLayoutInvalidationContext()
-                context.invalidateFlowLayoutDelegateMetrics = true
-                context.invalidateFlowLayoutAttributes = true
-                collectionView.collectionViewLayout.invalidateLayout(with: context)
-            }
-        }
-        collectionView.layoutIfNeeded()
-        guard let frame = collectionView.layoutAttributesForItem(at: IndexPath(item: index, section: 0))?.frame,
-              let landing = ChatScrollPolicy.unreadEntryLanding(
-                rowStartLanding: landingOffset(forRowStart: frame.minY),
-                tailOffset: maximumOffsetY()
-              ) else { return false }
-        isPinningBottom = true
-        collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: landing), animated: false)
-        isPinningBottom = false
-        scrollPolicy.anchorAtFirstUnread(offset: landing)
-        unreadAnchorID = targetID
-        lastPinnedViewportSize = collectionView.bounds.size
-        lastPinnedAdjustedInsets = tailAdjustedInsets
-        KLog.chat("📌 [chat-entry] first-unread session=\(sessionId.prefix(12)) reason=\(reason) boundary=\(boundary) row=\(targetID.prefix(16)) landing=\(Int(landing)) tail=\(Int(maximumOffsetY()))")
-        updateJumpButtonVisibility()
-        return true
-    }
-
-    /// The held first new row. A turn that concludes folds its mid-turn
-    /// messages into Steps: then the first new row still shown takes over.
-    private func heldUnreadIndex() -> Int? {
-        if let id = unreadAnchorID, let index = items.firstIndex(of: id) { return index }
-        guard let boundary = unreadEntryBoundary else { return nil }
-        let rows = items.map { id -> (id: String, seq: Int?) in
-            guard let message = message(id), message.seq > 0 else { return (id, nil) }
-            return (id, message.seq)
-        }
-        guard let id = ChatScrollPolicy.firstUnreadRow(rows, after: boundary) else { return nil }
-        unreadAnchorID = id
-        return items.firstIndex(of: id)
-    }
-
-    #if DEBUG
-    var automationUnreadEntry: ChatScrollPolicy.UnreadEntry { scrollPolicy.unreadEntry }
-    #endif
-
-    // MARK: Scroll-driven pagination
-
-    private func noteUserScrollOffset(_ offsetY: CGFloat) {
-        scrollPolicy.observeUserOffset(
-            offsetY,
-            distanceToBottom: distanceToBottom()
-        )
-    }
-
+    var liveRenderScheduled = false
+    var lastLiveRenderAt: CFTimeInterval = 0
+    var lastLiveRenderCost: CFTimeInterval = 0
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         scrollIndicator.didScroll()
         // Finger drag AND its momentum are the user's scroll (momentum toward
@@ -3025,25 +829,6 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         // batch application; the shared policy decides when to page.
         driveEdges()
     }
-
-    /// Drive both edges from one place: prefetch + flush whichever edge the
-    /// viewport is approaching. Mirror-symmetric — older (top) and newer
-    /// (bottom) run the identical buffered/coalesced path, opposite sign.
-    private func driveEdges() {
-        guard allowsEdgePaging, !scrollingToTop else { return }
-        updateJumpButtonVisibility()
-        guard !suppressPagingForBottom else { return }
-        if !atOldest {
-            prefetchOlderIfNeeded()
-            resumePageMeasurementAtOlderEdgeIfWaiting()
-            maybeFlushOlder(reason: "scroll")
-        }
-        if !atNewest {
-            prefetchNewerIfNeeded()
-            maybeFlushNewer(reason: "scroll")
-        }
-    }
-
     // A page that arrived mid-fling was stashed in `pendingApply`; run it
     // the instant the natural slide settles, so the window grows without
     // ever interrupting the user's momentum.
@@ -3081,128 +866,13 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             DispatchQueue.main.async { [weak self] in self?.updateJumpButtonVisibility() }
         }
     }
-
-    /// At rest: flush whatever each edge has buffered (jump-free now) and keep
-    /// the approaching buffer topped up. Mirror-symmetric over both edges.
-    private func settleEdges() {
-        maybeFlushOlder(reason: "settle")
-        prefetchOlderIfNeeded()
-        maybeFlushNewer(reason: "settle")
-        prefetchNewerIfNeeded()
-        updateJumpButtonVisibility()
-    }
-
     #if DEBUG
     /// Focus-free integration probe equivalent of the first real drag packet.
     /// It changes only the production follow-state latch; pagination, sizing,
     /// batch updates, and anchor correction still run through their normal paths.
     /// Unit tests: treat offset changes as a user drag (isDragging is not settable).
     var automationUserScrollActive = false
-    var automationPolicy: ChatScrollPolicy { scrollPolicy }
-
-    /// Read-only barrier for geometry tests: initial offscreen height upgrades
-    /// legitimately change contentSize/offset while preserving screen anchors.
-    /// Wait for them before attributing any later geometry change to a composer.
-    var automationHeightMeasurementsSettled: Bool {
-        !items.isEmpty && warmKickWork == nil && warmer.pendingCount == 0
-            && !heightRefreshScheduled && pendingHeightRefreshIDs.isEmpty
-            && items.allSatisfy { $0 == Self.liveCardID || (sizer.cached($0) != nil && appliedHeightIDs.contains($0)) }
-    }
-
-    func automationMarkUserScrolledAway() {
-        scrollPolicy.beginUserInteraction(
-            offset: collectionView?.contentOffset.y ?? 0,
-            distanceToBottom: distanceToBottom()
-        )
-        scrollPolicy.recordUserIntent(
-            .older,
-            offset: collectionView?.contentOffset.y,
-            distanceToBottom: distanceToBottom()
-        )
-    }
-
-    func automationMarkUserScrollingTowardNewer() {
-        scrollPolicy.beginUserInteraction(
-            offset: collectionView?.contentOffset.y ?? 0,
-            distanceToBottom: distanceToBottom()
-        )
-        scrollPolicy.recordUserIntent(
-            .newer,
-            offset: collectionView?.contentOffset.y,
-            distanceToBottom: distanceToBottom()
-        )
-    }
-
-    var automationPaginationState: (measuring: Bool, jobs: Int, deferred: Bool) {
-        (measuringOlderPage || measuringNewerPage, pager.pendingCount,
-         paginationSnapshotDeferred || pendingApply != nil)
-    }
-
-    /// Stage an already-measured buffered row using the real collection model.
-    /// Lifecycle recovery must reveal it even though no measurement is needed.
-    func automationStageWarmBufferedOlderPage(pending: Bool) {
-        guard let first = messages.first, messages.count > 1 else { return }
-        pager.cancelAll()
-        measuringOlderPage = false
-        measuringNewerPage = false
-        sizer.prime(first, width: collectionView.bounds.width, notify: false)
-        items = Array(ids.dropFirst())
-        paginationSnapshotDeferred = true
-        collectionView.delegate = nil
-        collectionView.reloadData()
-        collectionView.setContentOffset(
-            CGPoint(x: 0, y: -collectionView.adjustedContentInset.top), animated: false
-        )
-        collectionView.layoutIfNeeded()
-        collectionView.delegate = self
-        pendingApply = pending ? { [weak self] in self?.flushOlder(reason: "warm-resume-probe") } : nil
-    }
-
-    /// Reproduces the build-24 crash state without synthetic scroll machinery:
-    /// a pending stable apply, one active edge measurement, and an already-warm
-    /// opposite buffer. The old implementation synchronously re-entered
-    /// flush → resume → measurePage → finish until stack overflow.
-    func automationProbeCrossEdgeMeasurementBarrier(olderActive: Bool = false)
-        -> (waitedForActiveEdge: Bool, appliedExactlyOnce: Bool) {
-        guard let warmRow = olderActive ? messages.last : messages.first,
-              messages.count > 1,
-              collectionView.bounds.width > 0 else { return (false, false) }
-
-        sizer.prime(warmRow, width: collectionView.bounds.width, notify: false)
-        let savedItems = items
-        let savedPendingApply = pendingApply
-        let savedMeasuringOlderPage = measuringOlderPage
-        let savedMeasuringNewerPage = measuringNewerPage
-        let savedPaginationSnapshotDeferred = paginationSnapshotDeferred
-        defer {
-            items = savedItems
-            pendingApply = savedPendingApply
-            measuringOlderPage = savedMeasuringOlderPage
-            measuringNewerPage = savedMeasuringNewerPage
-            paginationSnapshotDeferred = savedPaginationSnapshotDeferred
-        }
-
-        // Expose one warm older row without mutating the backing message
-        // snapshot or UICollectionView. The probe ends before another layout.
-        items = olderActive ? Array(ids.dropLast()) : Array(ids.dropFirst())
-        var applyCount = 0
-        pendingApply = { applyCount += 1 }
-        measuringOlderPage = olderActive
-        measuringNewerPage = !olderActive
-
-        flushPendingApply()
-        let waited = applyCount == 0
-            && pendingApply != nil
-            && (olderActive ? !measuringNewerPage : !measuringOlderPage)
-
-        measuringOlderPage = false
-        measuringNewerPage = false
-        flushPendingApply()
-        let applied = applyCount == 1 && pendingApply == nil
-        return (waited, applied)
-    }
     #endif
-
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         scrollIndicator.beginScrolling()
         KLog.chat("📜 [scroll] drag-begin session=\(sessionId.prefix(12)) off=\(Int(scrollView.contentOffset.y)) content=\(Int(scrollView.contentSize.height)) following=\(followingBottom)")
@@ -3271,537 +941,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         maybeFlushOlder(reason: "scrolledTop")
         prefetchOlderIfNeeded()
     }
-
-    /// Check both buffered edges before applying. Cold pages are measured by
-    /// the pager at rest; ready pages settle without installing a new barrier.
-    private func bufferedOlderNeedsMeasurement() -> Bool {
-        let count = bufferedOlderCount()
-        guard count > 0 else { return false }
-        return messages.prefix(count).contains { sizer.cached($0.id) == nil }
-    }
-
-    private func bufferedNewerNeedsMeasurement() -> Bool {
-        let count = bufferedNewerCount()
-        guard count > 0 else { return false }
-        return messages.suffix(count).contains { sizer.cached($0.id) == nil }
-    }
-
-    private func cancelPageMeasurements() {
-        pager.cancelAll()
-        measuringOlderPage = false
-        measuringNewerPage = false
-    }
-
-    private func finishPageMeasurement(older: Bool) {
-        if older { measuringOlderPage = false } else { measuringNewerPage = false }
-        // The buffer/width can change while jobs run. Re-evaluate both edges;
-        // an active opposite edge still owns its completion barrier.
-        resumeBufferedPageMeasurements()
-    }
-
-    private func resumeBufferedPageMeasurements() {
-        guard !isLeavingView, viewIfLoaded?.window != nil,
-              collectionView.bounds.width > 0 else { return }
-        sizer.prepare(width: collectionView.bounds.width)
-        let older = bufferedOlderCount()
-        if older > 0, !measuringOlderPage, bufferedOlderNeedsMeasurement() {
-            paginationSnapshotDeferred = true
-            measuringOlderPage = true
-            if !measurePage(messages.prefix(older), then: { [weak self] in
-                self?.finishPageMeasurement(older: true)
-            }) { measuringOlderPage = false }
-        }
-        let newer = bufferedNewerCount()
-        if newer > 0, !measuringNewerPage, bufferedNewerNeedsMeasurement() {
-            paginationSnapshotDeferred = true
-            measuringNewerPage = true
-            if !measurePage(messages.suffix(newer), then: { [weak self] in
-                self?.finishPageMeasurement(older: false)
-            }) { measuringNewerPage = false }
-        }
-
-        // Readiness and measurement are separate phases. Warm pages (including
-        // a cancelled final barrier on navigation) still need to settle, but
-        // must not create another synchronous measure -> finish -> flush loop.
-        guard !measuringOlderPage, !measuringNewerPage,
-              !bufferedOlderNeedsMeasurement(), !bufferedNewerNeedsMeasurement() else { return }
-        if pendingApply != nil {
-            flushPendingApply()
-        } else if paginationSnapshotDeferred || older > 0 || newer > 0 {
-            settleEdges()
-        }
-        if items == ids { paginationSnapshotDeferred = false }
-    }
-
-    /// Returns false if no barrier can be owned yet (hidden or zero width).
-    private func measurePage(_ page: ArraySlice<ChatMessage>, then apply: @escaping () -> Void) -> Bool {
-        guard !isLeavingView, viewIfLoaded?.window != nil else { return false }
-        let width = collectionView.bounds.width
-        guard width > 0 else { return false }
-        var jobs: [() -> Void] = []
-        for t in page where sizer.cached(t.id) == nil {
-            jobs.append { [weak self] in self?.sizer.prime(t, width: width) }
-        }
-        if jobs.isEmpty { apply(); return true }
-        chatPerfLog.log("[page] measure n=\(jobs.count)")
-        jobs.append(apply)
-        pager.enqueue(jobs)
-        return true
-    }
-
-    /// Reconcile two window snapshots (old → new) into edge edits by diffing
-    /// `ChatMessage.id`. Robust to the BOUNDARY-MERGE case: when older history is
-    /// paged in, the window's top turn (often a half-captured block) refreshes the snapshot
-    /// into a NEW combined turn with a different id — so an exact "is old-first
-    /// still present?" check fails. Instead we anchor on the contiguous COMMON
-    /// MIDDLE (turns present in both, unchanged by paging) and express the
-    /// boundary reshape as delete-old-edge + insert-new-edge at each end:
-    ///   • insertFront = new turns before the first common id
-    ///   • deleteFront = old turns before the first common id (merged-away)
-    ///   • insertBack  = new turns after the last common id
-    ///   • deleteBack  = old turns after the last common id (trimmed/merged)
-    /// Returns nil only when the two snapshots share NO turn at all (→ caller
-    /// does a full reload rather than risk a bad batch update).
-    private func reconcileEdges(old: [String], new: [String])
-        -> (insertFront: Int, deleteFront: Int, insertBack: Int, deleteBack: Int)? {
-        if old.isEmpty { return (new.count, 0, 0, 0) }
-        if new.isEmpty { return (0, old.count, 0, 0) }
-        let newSet = Set(new)
-        let oldSet = Set(old)
-        guard let firstCommonOldIdx = old.firstIndex(where: { newSet.contains($0) }),
-              let firstCommonNewIdx = new.firstIndex(of: old[firstCommonOldIdx]),
-              let lastCommonNewIdx = new.lastIndex(where: { oldSet.contains($0) }),
-              let lastCommonOldIdx = old.lastIndex(of: new[lastCommonNewIdx])
-        else { return nil }
-        let insertFront = firstCommonNewIdx
-        let deleteFront = firstCommonOldIdx
-        let insertBack = new.count - 1 - lastCommonNewIdx
-        let deleteBack = old.count - 1 - lastCommonOldIdx
-        return (insertFront, deleteFront, insertBack, deleteBack)
-    }
-
-    // MARK: Newer pagination — SYMMETRIC mirror of the older buffered engine
-    //
-    // Exact sign-flip of the older path (fetchOlder/prefetch/maybeFlush/flush):
-    // approach the BOTTOM → prefetch newer pages into a buffer → reveal the
-    // whole buffer in ONE coalesced batch via `applyWhenStable`. Going newer the
-    // costly above-viewport op is the FRONT-TRIM (maxWindow slides the top out),
-    // but `applyEdges`'s geometry anchor pins it jump-free exactly like the
-    // older prepend — so DOWN now feels identical to UP (validated in the test
-    // page). Data source: `vm.pageNewerRaw()` (sync DB read) + `refreshSpineSnapshot()`.
-
-    /// Newer turns grouped into the model but not yet revealed in `items`.
-    private func bufferedNewerCount() -> Int {
-        guard let e = reconcileEdges(old: items, new: ids) else { return messages.count }
-        return e.insertBack
-    }
-    private func bufferedNewerHeight() -> CGFloat {
-        let n = bufferedNewerCount()
-        guard n > 0 else { return 0 }
-        let w = collectionView.bounds.width
-        return messages.suffix(n).reduce(0) { total, message in
-            total + (sizer.cached(message.id) ?? sizer.estimatedHeight(for: message, width: w))
-        }
-    }
-    /// Distance from the viewport to the bottom of loaded content (px).
-    private func distanceToBottom() -> CGFloat {
-        collectionView.contentSize.height + tailAdjustedInsets.bottom
-            - collectionView.bounds.height - collectionView.contentOffset.y
-    }
-
-    /// Fire one page fetch into the newer buffer (serialized). On return it
-    /// refreshes the snapshot, measures the buffered page off-frame, then re-evaluates flush +
-    /// prefetch. Mirror of `fetchOlder`.
-    private func fetchNewer() {
-        guard !fetchingNewer, !measuringNewerPage, !atNewest, !scrollingToTop else { return }
-        fetchingNewer = true
-        KLog.chat("📤 [page] fetch-newer session=\(sessionId.prefix(12)) win=[\(vm.windowTopSeq),\(vm.windowBottomSeq)] head=\(vm.sessionLastSeq) distBottom=\(Int(distanceToBottom()))")
-        let gen = pagingGeneration
-        let txn = newTxn("newer")
-        let winBefore = vm.windowBottomSeq
-        // The bottom spinner is persistent while newer history remains
-        // (auto-managed in applyEdges via showsNewerSpinner), so nothing to toggle.
-        chatPerfLog.log("[txn \(txn.id) fetch] newer y=\(String(format: "%.0f", collectionView.contentOffset.y)) buf=\(bufferedNewerCount()) drag=\(yn(collectionView.isDragging)) decel=\(yn(collectionView.isDecelerating))")
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            txn.mark()
-            let moved = self.vm.pageNewerRaw()
-            self.fetchingNewer = false
-            // Stale across a re-anchor (jump-to-latest) → this page targeted the
-            // old window; snapshot refresh/flushing it now would fight the fresh one.
-            guard gen == self.pagingGeneration else {
-                chatPerfLog.log("[txn \(txn.id)] STALE newer gen=\(gen) cur=\(self.pagingGeneration) — drop")
-                return
-            }
-            chatPerfLog.log("[txn \(txn.id)] raw bot \(winBefore)→\(self.vm.windowBottomSeq) moved=\(self.yn(moved)) dt=\(self.f1(txn.lap()))")
-            guard moved else {
-                chatPerfLog.log("[txn \(txn.id)] END noop moved=false total=\(self.f1(txn.total()))")
-                return
-            }
-            self.paginationSnapshotDeferred = true
-            self.refreshSpineSnapshot()
-            let n = self.bufferedNewerCount()
-            if self.items == self.ids { self.paginationSnapshotDeferred = false }
-            chatPerfLog.log("[txn \(txn.id)] group buf=\(n) dt=\(self.f1(txn.lap()))")
-            self.resumeBufferedPageMeasurements()
-        }
-    }
-
-    /// Top up the newer buffer while approaching the bottom, until it can clear
-    /// the band. Mirror of `prefetchOlderIfNeeded`.
-    private func prefetchNewerIfNeeded() {
-        guard viewIfLoaded?.window != nil,
-              pendingApply == nil,
-              bufferedNewerHeight() < olderBufferTargetHeight else { return }
-        let isLoading = fetchingNewer || measuringNewerPage
-        guard scrollPolicy.shouldRequestNewerPage(
-            distanceToNewerEdge: distanceToBottom(),
-            hasNewer: !atNewest,
-            isLoading: isLoading,
-            externallySuppressed: scrollingToTop
-        ) else { return }
-        fetchNewer()
-    }
-
-    /// Reveal the buffered newer pages in ONE batch update when due. Mirror of
-    /// `maybeFlushOlder` (near the BOTTOM instead of the top).
-    private func maybeFlushNewer(reason: String) {
-        guard !suppressPagingForBottom else { return }
-        guard pendingApply == nil, !measuringNewerPage else { return }
-        let n = bufferedNewerCount()
-        guard n > 0, !scrollingToTop else { return }
-        let atRest = !collectionView.isDragging && !collectionView.isDecelerating
-        let nearBottom = distanceToBottom() < pageTriggerHeadroom
-        let deepEnough = bufferedNewerHeight() >= olderBufferTargetHeight
-        let cap = n >= 120
-        guard (nearBottom && (deepEnough || atNewest))
-                || (atRest && nearBottom)
-                || cap else { return }
-        flushNewer(reason: reason)
-    }
-
-    /// Reveal the buffered newer turns into `items` in one anchored batch update
-    /// (deferred to rest by `applyWhenStable`). The far-edge front-trim is
-    /// pinned jump-free by the geometry anchor in `applyEdges`; the bottom
-    /// spinner is auto-managed there (`showsNewerSpinner`). Mirror of `flushOlder`.
-    private func flushNewer(reason: String) {
-        let old = items
-        let new = ids
-        guard let e = reconcileEdges(old: old, new: new) else {
-            chatPerfLog.log("[flush \(reason)] NO-COMMON reload old=\(old.count) new=\(new.count)")
-            loadingNewer = showsNewerSpinner
-            items = new
-            paginationSnapshotDeferred = false
-            collectionView.reloadData()
-            warmWindow()
-            return
-        }
-        guard e.insertFront > 0 || e.deleteFront > 0 || e.insertBack > 0 || e.deleteBack > 0 else { return }
-        let survOld = Array(old[e.deleteFront ..< (old.count - e.deleteBack)])
-        let survNew = Array(new[e.insertFront ..< (new.count - e.insertBack)])
-        guard survOld == survNew else {
-            let mm = firstMismatch(survOld, survNew)
-            chatPerfLog.log("[flush \(reason)] midInvalid mismatch=\(mm.idx) → reload")
-            loadingNewer = showsNewerSpinner
-            items = new
-            paginationSnapshotDeferred = false
-            collectionView.reloadData()
-            warmWindow()
-            return
-        }
-        chatPerfLog.log("[flush \(reason)] iF=\(e.insertFront) dF=\(e.deleteFront) iB=\(e.insertBack) dB=\(e.deleteBack)")
-        applyWhenStable {
-            self.applyEdges(reason: "loadNewer",
-                            insertFront: e.insertFront, deleteFront: e.deleteFront,
-                            insertBack: e.insertBack, deleteBack: e.deleteBack)
-        }
-    }
-
-    // MARK: Older pagination — decoupled fetch / apply (buffered coalescing)
-    //
-    // Copied 1:1 (in structure) from the validated ScrollPerfTest engine; only
-    // the DATA SOURCE is swapped:
-    //   • test page  `provider.loadOlder()` (sync slide of a mock window)
-    //   • production `await vm.pageOlderRaw()` + `refreshSpineSnapshot()` (off-main DB page,
-    //                then re-group the raw window into turns).
-    // The buffer = the grouped model (`turns`) advanced past the applied cells
-    // (`items`). Boundary-merge safe: its depth is the new-front count from
-    // `reconcileEdges(old: items, new: ids)` (the oldest applied turn may merge
-    // into a new id when older history arrives), NOT raw seq arithmetic.
-    //
-    // Why this cannot run away (the 370-fetch/3-apply bug): DB fetches are
-    // serialized, and each 10-row page extends one shared buffer. Short rows may
-    // require a few compact pages, but prefetch stops as soon as buffered height
-    // reaches `olderBufferTargetHeight`; a reveal then drains the whole buffer in
-    // one apply instead of fetching once per scroll frame.
-
-    /// Older turns grouped into the model but not yet revealed in `items`.
-    private func bufferedOlderCount() -> Int {
-        guard let e = reconcileEdges(old: items, new: ids) else { return messages.count }
-        return e.insertFront
-    }
-    private func bufferedOlderHeight() -> CGFloat {
-        let n = bufferedOlderCount()
-        guard n > 0 else { return 0 }
-        let w = collectionView.bounds.width
-        return messages.prefix(n).reduce(0) { total, message in
-            total + (sizer.cached(message.id) ?? sizer.estimatedHeight(for: message, width: w))
-        }
-    }
-    /// Keep filling the buffer until it can cover this much content above the
-    /// viewport — enough to clear the trigger band in one reveal (+ margin).
-    private var olderBufferTargetHeight: CGFloat { pageTriggerHeadroom + 600 }
-    /// Fire one page fetch into the buffer (serialized). On return it refreshes the snapshot
-    /// (advances the model), measures the buffered page off-frame, then
-    /// re-evaluates flush + prefetch.
-    private func fetchOlder() {
-        guard !fetchingOlder, !measuringOlderPage, !vm.isLoadingOlder,
-              !atOldest, !scrollingToTop else { return }
-        fetchingOlder = true
-        KLog.chat("📤 [page] fetch-older session=\(sessionId.prefix(12)) win=[\(vm.windowTopSeq),\(vm.windowBottomSeq)] head=\(vm.sessionLastSeq) off=\(Int(collectionView.contentOffset.y))")
-        let gen = pagingGeneration
-        let txn = newTxn("older")
-        let winBefore = vm.windowTopSeq
-        // The top spinner is persistent while older history remains (set in
-        // applyInitial, removed only at the true oldest), so nothing to toggle.
-        chatPerfLog.log("[txn \(txn.id) fetch] older y=\(String(format: "%.0f", collectionView.contentOffset.y)) buf=\(bufferedOlderCount()) drag=\(yn(collectionView.isDragging)) decel=\(yn(collectionView.isDecelerating))")
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            txn.mark()
-            let moved = await self.vm.pageOlderRaw()
-            self.fetchingOlder = false
-            // Stale across a re-anchor (jump-to-latest) → this page targeted the
-            // old window; snapshot refresh/flushing it now would slide the freshly
-            // pinned window off the tail. (The provider's DB read already
-            // re-validates topSeq, so the store isn't mutated across a reset —
-            // this just skips the now-meaningless grouping/flush.)
-            guard gen == self.pagingGeneration else {
-                chatPerfLog.log("[txn \(txn.id)] STALE older gen=\(gen) cur=\(self.pagingGeneration) — drop")
-                return
-            }
-            chatPerfLog.log("[txn \(txn.id)] raw top \(winBefore)→\(self.vm.windowTopSeq) moved=\(self.yn(moved)) dt=\(self.f1(txn.lap()))")
-            guard moved else {
-                chatPerfLog.log("[txn \(txn.id)] END noop moved=false total=\(self.f1(txn.total()))")
-                return
-            }
-            // Advance the grouped model — the buffer grows. (The test page's
-            // `provider.loadOlder()` is the analog; snapshot refresh is the cost the mock
-            // window doesn't have, kept here off the REVEAL.)
-            self.paginationSnapshotDeferred = true
-            self.refreshSpineSnapshot()
-            let n = self.bufferedOlderCount()
-            if self.items == self.ids { self.paginationSnapshotDeferred = false }
-            chatPerfLog.log("[txn \(txn.id)] group buf=\(n) dt=\(self.f1(txn.lap()))")
-            // Warm the buffered turns off-frame; only THEN are their heights
-            // known, so flush/prefetch decisions read a hot cache.
-            self.resumeBufferedPageMeasurements()
-        }
-    }
-
-    /// Page measurement is paused during a gesture so it never competes with
-    /// scroll frames. When the reader is already at the loaded top waiting for
-    /// the next page, keep measuring it (budgeted per frame) so continuous
-    /// scrolling keeps revealing history instead of stalling until lift-off.
-    private func resumePageMeasurementAtOlderEdgeIfWaiting() {
-        guard measuringOlderPage, pager.pendingCount > 0 else { return }
-        let distanceToOlderEdge = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
-        guard distanceToOlderEdge < collectionView.bounds.height else { return }
-        pager.resume()
-    }
-
-    /// Top up the buffer while approaching the top, until it can clear the band.
-    private func prefetchOlderIfNeeded() {
-        guard viewIfLoaded?.window != nil,
-              pendingApply == nil,
-              bufferedOlderHeight() < olderBufferTargetHeight else { return }
-        let isLoading = fetchingOlder || measuringOlderPage || vm.isLoadingOlder
-        let distanceToOlderEdge = max(
-            0,
-            collectionView.contentOffset.y + collectionView.adjustedContentInset.top
-        )
-        guard scrollPolicy.shouldRequestOlderPage(
-            distanceToOlderEdge: distanceToOlderEdge,
-            viewportLength: collectionView.bounds.height,
-            hasOlder: !atOldest,
-            isLoading: isLoading,
-            externallySuppressed: scrollingToTop
-        ) else { return }
-        fetchOlder()
-    }
-
-    /// Reveal the buffered pages in ONE batch update when it's due. The key to
-    /// coalescing: do NOT flush a shallow buffer just because we reached the
-    /// trigger line — hold until the buffer is deep enough to clear the band in
-    /// one shot (or we've stopped / hit the true oldest). While holding near the
-    /// top the loaded content still fills the viewport, so we WAIT for enough
-    /// older rows to arrive instead of washboarding one tiny page per frame.
-    private func maybeFlushOlder(reason: String) {
-        guard !suppressPagingForBottom else { return }
-        guard pendingApply == nil, !measuringOlderPage else { return }
-        let n = bufferedOlderCount()
-        guard n > 0, !scrollingToTop else { return }
-        let y = collectionView.contentOffset.y
-        let atRest = !collectionView.isDragging && !collectionView.isDecelerating
-        let nearTop = y < pageTriggerHeadroom
-        let deepEnough = bufferedOlderHeight() >= olderBufferTargetHeight
-        let cap = n >= 120                            // hard memory bound
-        guard (nearTop && (deepEnough || atOldest))
-                || (atRest && nearTop)
-                || cap else { return }
-        flushOlder(reason: reason)
-    }
-
-    /// Arbitrary (non-edge) model change applied as one batch update that keeps
-    /// the row being read at the same screen position. The landing offset is
-    /// computed before the batch from the same heights `sizeForItemAt` uses
-    /// and handed to the layout, so UIKit builds cells for the final viewport.
-    private func applyAnchoredDiff(old: [String], new: [String]) -> Bool {
-        guard collectionView.window != nil, !old.isEmpty, !new.isEmpty else { return false }
-        let newSet = Set(new)
-        let visible = collectionView.indexPathsForVisibleItems.sorted()
-        guard let anchorPath = visible.first(where: {
-                  $0.item < old.count && old[$0.item] != Self.liveCardID && newSet.contains(old[$0.item])
-              }),
-              let anchorFrame = collectionView.layoutAttributesForItem(at: anchorPath)?.frame,
-              let newAnchorIndex = new.firstIndex(of: old[anchorPath.item]) else { return false }
-        let width = collectionView.bounds.width
-        sizer.prepare(width: width)
-        func height(_ id: String) -> CGFloat {
-            if id == Self.liveCardID, let card = vm.card { return liveContent(card).cellHeight(cellWidth: width) }
-            guard let message = message(id) else { return 44 }
-            return sizer.cached(message.id) ?? sizer.height(for: message, width: width)
-        }
-        let showOlderSpinner = !atOldest
-        let newHeader: CGFloat = showOlderSpinner ? spinnerRowHeight : 0
-        let newAnchorY = newHeader + new[..<newAnchorIndex].reduce(CGFloat(0)) { $0 + height($1) }
-        let delta = newAnchorY - anchorFrame.minY
-        let diff = new.difference(from: old)
-        var removals: [IndexPath] = [], insertions: [IndexPath] = []
-        for change in diff {
-            switch change {
-            case .remove(let offset, _, _): removals.append(IndexPath(item: offset, section: 0))
-            case .insert(let offset, _, _): insertions.append(IndexPath(item: offset, section: 0))
-            }
-        }
-        let offsetBefore = collectionView.contentOffset.y
-        let chatLayout = collectionView.collectionViewLayout as? ChatFlowLayout
-        UIView.performWithoutAnimation {
-            collectionView.layoutIfNeeded()
-            if loadingOlder != showOlderSpinner {
-                loadingOlder = showOlderSpinner
-                let ctx = UICollectionViewFlowLayoutInvalidationContext()
-                ctx.invalidateFlowLayoutDelegateMetrics = true
-                collectionView.collectionViewLayout.invalidateLayout(with: ctx)
-            }
-            chatLayout?.pendingUpdateOffsetY = offsetBefore + delta
-            collectionView.performBatchUpdates {
-                self.items = new
-                self.paginationSnapshotDeferred = false
-                collectionView.deleteItems(at: removals)
-                collectionView.insertItems(at: insertions)
-            }
-            chatLayout?.pendingUpdateOffsetY = nil
-            let drift = collectionView.contentOffset.y - offsetBefore
-            applyFrontShift(delta - drift, gestureDelta: delta)
-        }
-        warmWindow()
-        return true
-    }
-
-    /// Reveal the buffered older turns into `items` in one anchored batch update
-    /// (deferred to rest by `applyWhenStable`, like the test page). The exact
-    /// edge edits come from `reconcileEdges` so the boundary-merge case is
-    /// handled; the persistent top spinner is auto-managed inside `applyEdges`.
-    private func flushOlder(reason: String) {
-        let old = items
-        let new = ids
-        guard let e = reconcileEdges(old: old, new: new) else {
-            // No common turn (buffer too deep / full replace) → safe reload.
-            // deepEnough-hold keeps the buffer shallow, so this is a last resort.
-            chatPerfLog.log("[flush \(reason)] NO-COMMON reload old=\(old.count) new=\(new.count)")
-            loadingOlder = !atOldest
-            items = new
-            paginationSnapshotDeferred = false
-            collectionView.reloadData()
-            warmWindow()
-            return
-        }
-        guard e.insertFront > 0 || e.deleteFront > 0 || e.insertBack > 0 || e.deleteBack > 0 else { return }
-        let survOld = Array(old[e.deleteFront ..< (old.count - e.deleteBack)])
-        let survNew = Array(new[e.insertFront ..< (new.count - e.insertBack)])
-        guard survOld == survNew else {
-            let mm = firstMismatch(survOld, survNew)
-            chatPerfLog.log("[flush \(reason)] midInvalid mismatch=\(mm.idx) → anchored diff")
-            // Typical cause: the window trimmed its newest rows while the live
-            // card stays last, so the deletion is not at an edge. A plain
-            // reload here lost the reading position (a whole page jump).
-            if applyAnchoredDiff(old: old, new: new) { return }
-            loadingOlder = !atOldest
-            items = new
-            paginationSnapshotDeferred = false
-            collectionView.reloadData()
-            warmWindow()
-            return
-        }
-        chatPerfLog.log("[flush \(reason)] iF=\(e.insertFront) dF=\(e.deleteFront) iB=\(e.insertBack) dB=\(e.deleteBack)")
-        applyWhenStable {
-            // The top spinner is auto-managed inside applyEdges from !atOldest:
-            // it stays put across normal reveals and collapses itself the
-            // instant this reveal brings in the true oldest.
-            self.applyEdges(reason: "loadOlder",
-                            insertFront: e.insertFront, deleteFront: e.deleteFront,
-                            insertBack: e.insertBack, deleteBack: e.deleteBack)
-        }
-    }
-
     // MARK: Frame-time monitor
 
-    private var lastApplyMs: Double = 0
-    private var lastReason: String = "initial"
-
-    private func startHitchMonitor() {
-        let link = CADisplayLink(target: self, selector: #selector(onFrame(_:)))
-        link.add(to: .main, forMode: .common)
-        displayLink = link
-    }
-
-    private func startFrameMonitor() {
-        let link = CADisplayLink(target: self, selector: #selector(onFrame(_:)))
-        link.add(to: .main, forMode: .common)
-        displayLink = link
-    }
-
-    @objc private func onFrame(_ link: CADisplayLink) {
-        defer { lastFrameTs = link.timestamp }
-        guard lastFrameTs != 0 else { return }
-        // Only judge smoothness while actively scrolling. When idle,
-        // ProMotion ramps the refresh rate down (10–24 Hz), so frame gaps
-        // grow legitimately and would otherwise be miscounted as hitches.
-        guard collectionView.isDragging || collectionView.isDecelerating else { return }
-        let dtMs = (link.timestamp - lastFrameTs) * 1000
-        // Expected frame ≈ link.targetTimestamp - link.timestamp. A frame
-        // is "dropped" when the gap is meaningfully longer than expected.
-        let expectedMs = (link.targetTimestamp - link.timestamp) * 1000
-        if dtMs > max(12, expectedMs * 1.6) {
-            hitchCount += 1
-            if dtMs > worstFrameMs { worstFrameMs = dtMs }
-            chatPerfLog.log("[hitch] \(String(format: "%.1f", dtMs))ms during=\(self.lastReason)")
-            updateOverlay()
-        }
-    }
-
-    private func updateOverlay() {
-        guard Self.perfOverlayEnabled else { return }
-        let loading = [loadingOlder ? "▲older" : nil, loadingNewer ? "▼newer" : nil]
-            .compactMap { $0 }.joined(separator: " ")
-        overlay.text = """
-        win [\(vm.windowTopSeq),\(vm.windowBottomSeq)] head=\(vm.sessionLastSeq) n=\(messageCount)
-        old:\(atOldest ? "✓" : "·") new:\(atNewest ? "✓" : "·")
-        last: \(lastReason) \(String(format: "%.1f", lastApplyMs))ms
-        hitches: \(hitchCount) worst:\(String(format: "%.0f", worstFrameMs))ms
-        loading: \(loading.isEmpty ? "—" : loading)
-        """
-    }
+    var lastApplyMs: Double = 0
+    var lastReason: String = "initial"
 }
 
 // MARK: - SwiftUI bridge
@@ -3852,7 +995,6 @@ final class ChatFlowLayout: UICollectionViewFlowLayout {
         return super.targetContentOffset(forProposedContentOffset: proposedContentOffset)
     }
 }
-
 
 /// Lets the "end selection" tap observe touches without blocking anything.
 private final class SimultaneousTapDelegate: NSObject, UIGestureRecognizerDelegate {
