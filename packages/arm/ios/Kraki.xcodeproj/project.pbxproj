@@ -84,6 +84,7 @@
 		1F48BE5D37814D8EEB75F5DF /* BackgroundVoiceFinisherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EC5DD15AEE6A9C7DB3B590B /* BackgroundVoiceFinisherTests.swift */; };
 		1FA04773E415B708A7C36B46 /* DevicesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F1C34007991B7E9D900DBF /* DevicesPane.swift */; };
 		20244E41A261DC881CCEDA17 /* UsagePeekHotKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C72F9E868EE4A250EB16AC4 /* UsagePeekHotKey.swift */; };
+		20392AD15A458E73F3DB1792 /* MacChatScenarioCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57DFD94E5939F03A4A3B51AA /* MacChatScenarioCatalog.swift */; };
 		20B41687BB12DE58A87BCDB0 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96154D6C2A9CDBEB4E0EE2F7 /* RootView.swift */; };
 		20B5C091B89CF5A2254825F8 /* MacAutomationDriver+Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AA635DC1CA0CFAA6B476952 /* MacAutomationDriver+Commands.swift */; };
 		20BA6B1455F6632AA7D2C682 /* MacChatBubbleCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D720ACC636683293D505371 /* MacChatBubbleCell.swift */; };
@@ -194,6 +195,7 @@
 		5140DE3F2876AC1AA96FE488 /* ComposerHitAreaUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A130A3774A3144CDA4C6023 /* ComposerHitAreaUITests.swift */; };
 		517FBFF724C37803322FF32B /* MacTables.swift in Sources */ = {isa = PBXBuildFile; fileRef = D546816336FD2098D82DEB04 /* MacTables.swift */; };
 		51B6F1F4D09F0DD52D0E8285 /* MacChatTestPages.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7EEFA1D37EABA740112779F /* MacChatTestPages.swift */; };
+		521A31B2196CCEDB8F937E73 /* MacChatScenarioCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57DFD94E5939F03A4A3B51AA /* MacChatScenarioCatalog.swift */; };
 		52731419E058315E90679796 /* FailedTurnVisibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 813D862554B016FC9E0B527E /* FailedTurnVisibilityTests.swift */; };
 		52884F019776B2D42A94782B /* Messages.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BC3B39CCEB12DE1DD65808 /* Messages.swift */; };
 		5294ABB3C1CF9D77CD60F131 /* MacToolActivityRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E5E8774CBFF404F8D467E90 /* MacToolActivityRow.swift */; };
@@ -701,6 +703,7 @@
 		5469FDA14AA91327B6DF4400 /* MainWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowView.swift; sourceTree = "<group>"; };
 		5626ED6495E1877F3D9A7F74 /* ChatPlaceholderView+macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatPlaceholderView+macOS.swift"; sourceTree = "<group>"; };
 		56FE3464DA3DC8C37A09F34F /* SessionCardMetadataRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCardMetadataRow.swift; sourceTree = "<group>"; };
+		57DFD94E5939F03A4A3B51AA /* MacChatScenarioCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatScenarioCatalog.swift; sourceTree = "<group>"; };
 		580633A6385D5F9C85E09B7C /* IOSComposerGrowthShots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSComposerGrowthShots.swift; sourceTree = "<group>"; };
 		593F51D017203A91FAB57F80 /* ThisMacSetupSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThisMacSetupSnapshot.swift; sourceTree = "<group>"; };
 		59694366DCD0EF98D143260B /* AttachmentRequestModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentRequestModifier.swift; sourceTree = "<group>"; };
@@ -991,6 +994,7 @@
 				28D15C4DAE8AB0534C9C6226 /* MacBubbleTestView.swift */,
 				B1C5D0987ED225B3C748129E /* MacBubbleTextView.swift */,
 				92398F20B425BB1B9F83DB93 /* MacChatMockSnapshot.swift */,
+				57DFD94E5939F03A4A3B51AA /* MacChatScenarioCatalog.swift */,
 				C7EEFA1D37EABA740112779F /* MacChatTestPages.swift */,
 				77830CCB7D008C4059FE3E0D /* MacCodeHighlighter.swift */,
 				6D80A4B531EA5EBD081A0626 /* MacLaunchActivityIndicator.swift */,
@@ -2114,6 +2118,7 @@
 				226032B5BD7A32637798C396 /* MacChatDocumentView.swift in Sources */,
 				828CD8664BFBCDFF18D3108F /* MacChatListRepresentable.swift in Sources */,
 				DFA7C9DEE69AE83C1C88F2AE /* MacChatMockSnapshot.swift in Sources */,
+				521A31B2196CCEDB8F937E73 /* MacChatScenarioCatalog.swift in Sources */,
 				5DD452F9F5F5D32C05AB458C /* MacChatScrollView+BubbleActions.swift in Sources */,
 				ADE779B797D83D73F65891F3 /* MacChatScrollView+ComposerOverlay.swift in Sources */,
 				BE7892DC333CB62B0A03E21B /* MacChatScrollView+Navigation.swift in Sources */,
@@ -2335,6 +2340,7 @@
 				ACCC4EFF07C66FF2D6FF0822 /* MacChatDocumentView.swift in Sources */,
 				F3FA73B37DECCA3356FA5089 /* MacChatListRepresentable.swift in Sources */,
 				C6BB0C7305CBF9BC6A9C8A4E /* MacChatMockSnapshot.swift in Sources */,
+				20392AD15A458E73F3DB1792 /* MacChatScenarioCatalog.swift in Sources */,
 				6AB361830BF81A3CE2DEB493 /* MacChatScrollView+BubbleActions.swift in Sources */,
 				19A89E417A3443FAED6FBB69 /* MacChatScrollView+ComposerOverlay.swift in Sources */,
 				061DDAA234292B4B0EBD25F0 /* MacChatScrollView+Navigation.swift in Sources */,
