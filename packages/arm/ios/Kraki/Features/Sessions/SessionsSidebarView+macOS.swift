@@ -735,12 +735,12 @@ private struct MacSessionActivityDots: NSViewRepresentable {
     }
 }
 
-private final class MacSessionActivityDotsView: NSView {
+private final class MacSessionActivityDotsView: NSView, VisibilityTickClient {
     private let dotLayers: [CALayer] = (0..<3).map { _ in CALayer() }
     private var reduceMotion = false
     private weak var observedClipView: NSClipView?
     private var clipBoundsObserver: NSObjectProtocol?
-    private var visibilityTimer: Timer?
+    private var ticking = false
     private var wasVisibleInClip = false
 
     override init(frame frameRect: NSRect) {
@@ -761,7 +761,6 @@ private final class MacSessionActivityDotsView: NSView {
         if let clipBoundsObserver {
             NotificationCenter.default.removeObserver(clipBoundsObserver)
         }
-        visibilityTimer?.invalidate()
     }
 
     override var intrinsicContentSize: NSSize { NSSize(width: 14, height: 14) }
@@ -829,18 +828,13 @@ private final class MacSessionActivityDotsView: NSView {
     }
 
     private func updateVisibilityTimer() {
-        guard window != nil, observedClipView != nil else {
-            visibilityTimer?.invalidate()
-            visibilityTimer = nil
-            return
-        }
-        guard visibilityTimer == nil else { return }
-        let timer = Timer(timeInterval: 0.20, repeats: true) { [weak self] _ in
-            self?.updateViewportVisibility()
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        visibilityTimer = timer
+        let wantsTick = window != nil && observedClipView != nil
+        guard wantsTick != ticking else { return }
+        ticking = wantsTick
+        if wantsTick { VisibilityTicker.shared.add(self) } else { VisibilityTicker.shared.remove(self) }
     }
+
+    func visibilityTick() { updateViewportVisibility() }
 
     private func updateViewportVisibility() {
         let isVisible = window != nil && observedClipView != nil && !visibleRect.isEmpty
