@@ -165,4 +165,26 @@ final class LocalLinkRouteTests: XCTestCase {
         for bytes in toLink { link.onFrame(Data(bytes).base64EncodedString()) }
         XCTAssertTrue(link.drainUnackedReplayable().isEmpty)
     }
+
+    @MainActor
+    func testRouteChangeReRequestsTheInFlightAttachmentChunkImmediately() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ll-att-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var requests: [Int] = []
+        let store = AttachmentStore(cacheDirectory: dir, visibleDwell: 0, chunkTimeout: 30) { _, _, index in
+            requests.append(index)
+            return true
+        }
+        store.setTransportReady(true)
+        let id = String(repeating: "a", count: 32)
+        store.requestIfNeeded(id: id, sessionId: "S", priority: .userOpened)
+        XCTAssertEqual(requests, [0])
+        // The link carrying that request died; the connection is still up.
+        store.routeChanged()
+        XCTAssertEqual(requests, [0, 0], "re-requested at once, not after the 30 s chunk timeout")
+        // Nothing in flight: a route change is a no-op.
+        let idle = AttachmentStore(cacheDirectory: dir, visibleDwell: 0) { _, _, _ in XCTFail(); return true }
+        idle.setTransportReady(true)
+        idle.routeChanged()
+    }
 }

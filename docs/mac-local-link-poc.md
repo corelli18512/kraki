@@ -311,6 +311,22 @@ Real-App acceptance (headless Debug app, isolated stack):
 
 Suites: integration 84, tentacle 1339, head 347, Mac 166, iOS 449.
 
+## Attachments (2026-10-12)
+
+Real-App checks, using a Debug-only `attachmentProbe` automation command:
+- **Agent `show_image` (600 KB, 5 chunks) and `show_report` (167 KB HTML):**
+  both fetched over the link. The SHA-256 of the bytes the App received
+  matches the source files.
+- **Link dropped mid-download:** 3 MB images (23 chunks), with 1 and with 3
+  drops. Byte-exact every time. This found a bug: the chunk request in
+  flight on the dead link was never answered, so the download stalled until
+  the 30 s chunk timeout (31 s instead of under 1 s). **Fixed:**
+  `AttachmentStore.routeChanged()` re-requests the in-flight chunk when the
+  route switches. With the fix the same drop costs 2.3 s. Unit test added.
+- **App → Tentacle image upload:** sent normally, and with the link dropped
+  right after sending (re-sent through the Head). Each arrived exactly once
+  and byte-exact in the Tentacle's record.
+
 ## Known gaps / next steps
 
 - **No offline mode yet.** The Tentacle already serves linked Apps while its

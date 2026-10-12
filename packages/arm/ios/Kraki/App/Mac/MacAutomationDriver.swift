@@ -2,6 +2,7 @@
 import AppKit
 import Darwin
 import Foundation
+import CryptoKit
 import SwiftUI
 import WebKit
 
@@ -666,6 +667,48 @@ final class MacAutomationDriver {
             }
         case "wait":
             wait(params: params, id: id, connection: connection)
+        case "attachmentProbe":
+            // Debug-only: exercise attachments without a visible window.
+            //  - send: {sessionId, text, imagePath, mimeType} → input with an image
+            //  - request: {sessionId, id, priority:"visible"|"opened"} → fetch bytes
+            //  - state: {id} → fetch state, size, sha256 of received bytes
+            guard let appState else {
+                send(error: "invalid_state", message: "AppState is unavailable", id: id, on: connection); return
+            }
+            switch params["action"] as? String ?? "state" {
+            case "send":
+                guard let sessionId = params["sessionId"] as? String,
+                      let path = params["imagePath"] as? String,
+                      let bytes = FileManager.default.contents(atPath: path) else {
+                    send(error: "invalid_params", message: "sessionId and readable imagePath required", id: id, on: connection); return
+                }
+                let attachment = ImageAttachment(type: "image", mimeType: params["mimeType"] as? String ?? "image/png", data: bytes.base64EncodedString())
+                let ok = appState.commandSender?.sendInput(sessionId: sessionId, text: params["text"] as? String ?? "", attachments: [attachment]) ?? false
+                send(result: ["accepted": ok, "bytes": bytes.count], id: id, on: connection)
+            case "request":
+                guard let sessionId = params["sessionId"] as? String, let attachmentId = params["id"] as? String else {
+                    send(error: "invalid_params", message: "sessionId and id required", id: id, on: connection); return
+                }
+                let priority: AttachmentPriority = params["priority"] as? String == "opened" ? .userOpened : .visible
+                appState.attachmentStore.requestIfNeeded(id: attachmentId, sessionId: sessionId, priority: priority)
+                send(result: ["requested": true], id: id, on: connection)
+            default:
+                guard let attachmentId = params["id"] as? String else {
+                    send(error: "invalid_params", message: "id required", id: id, on: connection); return
+                }
+                var result: [String: Any] = ["state": "none"]
+                switch appState.attachmentStore.state(for: attachmentId) {
+                case .ready(let mime, let data)?:
+                    result = ["state": "ready", "mimeType": mime, "bytes": data.count,
+                              "sha256": SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()]
+                case .awaitingChunks(let received, let total)?:
+                    result = ["state": "awaitingChunks", "received": received, "total": total ?? NSNull()]
+                case .fetching?: result = ["state": "fetching"]
+                case .error(let reason)?: result = ["state": "error", "reason": reason]
+                case nil: break
+                }
+                send(result: result, id: id, on: connection)
+            }
         case "localLinkProbe":
             // Debug-only fault injection for local-link tests.
             guard let appState else {

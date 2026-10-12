@@ -1400,6 +1400,13 @@ extension AppState: SessionSubscriptionHost {
     /// barrier), re-declare features and re-send inputs still waiting.
     func localLinkDidChange(tentacleId: String, linked: Bool) {
         sessionSubscriptionController.onTentacleUnavailable(tentacleId)
+        if let store = attachmentStore {
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { store.routeChanged() }
+            } else {
+                Task { @MainActor in store.routeChanged() }
+            }
+        }
         if linked || deviceStore.devices[tentacleId]?.online == true {
             messageRouter?.declareClientFeatures(to: tentacleId)
             commandSender?.resendPendingInputs(
