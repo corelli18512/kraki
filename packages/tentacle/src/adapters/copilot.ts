@@ -13,366 +13,51 @@
  *    remote user approves/denies/answers via the tentacle runtime.
  */
 
-import type {
-  CopilotClient as CopilotClientType,
-  CopilotSession,
-  SessionConfig,
-  ResumeSessionConfig,
-  MessageOptions,
-  PermissionRequest,
-  PermissionRequestResult,
-  SessionMetadata,
-  MCPServerConfig,
-  ContextTier,
-} from '@github/copilot-sdk';
+import type { CopilotClient as CopilotClientType, CopilotSession, SessionConfig, MessageOptions, PermissionRequestResult, SessionMetadata, MCPServerConfig, ContextTier } from '@github/copilot-sdk';
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdtempSync, mkdirSync, unlinkSync, readdirSync, symlinkSync, lstatSync, statSync, renameSync } from 'node:fs';
-import * as moduleApi from 'node:module';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, basename } from 'node:path';
+import { dirname, join } from 'node:path';
 import { getKrakiHome } from '../config.js';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isSea } from 'node:sea';
-import { linkIntoShadow } from './shadow-link.js';
 import { cloneTree } from '../fs-clone.js';
-import {
-  AgentAdapter,
-  type CreateSessionConfig,
-  type SessionInfo,
-  type PermissionDecision,
-  type QuestionAnswer,
-  type QuestionResponseResult,
-  type PermissionResponseResult,
-  type SendMessageOptions,
-} from './base.js';
-import { parsePermission } from '../parse-permission.js';
-import { createLogger } from '../logger.js';
-import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
-import { canonicalArtifactToolName } from './tool-name.js';
+import { AgentAdapter, type CreateSessionConfig, type SessionInfo, type PermissionDecision, type QuestionAnswer, type QuestionResponseResult, type PermissionResponseResult, type SendMessageOptions } from './base.js';
 import { DEFAULT_SESSION_MODE } from '@kraki/protocol';
 import { TurnTracker } from './turn-tracker.js';
-import { KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMode, type ToolKind } from './permission-policy.js';
+import { KRAKI_MODES_PROMPT, modeChangeSignal, type SessionMode } from './permission-policy.js';
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
-
-const logger = createLogger('copilot-adapter');
-
-/** Copilot permission request kinds → Kraki policy kinds. */
-function copilotToolKind(kind: string): ToolKind {
-  switch (kind) {
-    case 'read': return 'read';
-    case 'url': return 'url';
-    case 'write': return 'write';
-    case 'shell': return 'shell';
-    case 'mcp': return 'mcp';
-    default: return 'other';
-  }
-}
-type CopilotSdkModule = typeof import('@github/copilot-sdk');
-let copilotSdkPromise: Promise<CopilotSdkModule> | null = null;
-
-const VSCODE_JSONRPC_NODE_SPECIFIER = 'vscode-jsonrpc/node';
-const VSCODE_JSONRPC_NODE_JS_SPECIFIER = 'vscode-jsonrpc/node.js';
-const COPILOT_SDK_COMPATIBILITY_LOADER_SOURCE = `
-export async function resolve(specifier, context, nextResolve) {
-  if (specifier === ${JSON.stringify(VSCODE_JSONRPC_NODE_SPECIFIER)}) {
-    return nextResolve(${JSON.stringify(VSCODE_JSONRPC_NODE_JS_SPECIFIER)}, context);
-  }
-  return nextResolve(specifier, context);
-}
-`.trim();
-
-type ModuleApiCompat = typeof moduleApi & {
-  register?: (specifier: string, parentURL?: string) => void;
-  registerHooks?: (hooks: {
-    resolve: (
-      specifier: string,
-      context: Readonly<Record<string, unknown>>,
-      nextResolve: (
-        specifier: string,
-        context: Readonly<Record<string, unknown>>,
-      ) => unknown,
-    ) => unknown;
-  }) => void;
-};
-
-const moduleCompat = moduleApi as ModuleApiCompat;
-
-// ── Local type aliases for SDK handler params ───────────
-// (UserInputRequest / UserInputResponse are not re-exported by the SDK)
-
-interface UserInputRequest {
-  question: string;
-  choices?: string[];
-  allowFreeform?: boolean;
-}
-
-interface UserInputResponse {
-  answer: string;
-  wasFreeform: boolean;
-}
-
-// ── Types for internal bookkeeping ──────────────────────
-
-/** Resolve function stored while a permission request is pending. */
-interface PendingPermission {
-  resolve: (result: PermissionRequestResult) => void;
-  /** Tool kind from the SDK request (e.g. 'shell', 'write', 'read') */
-  toolKind: string;
-}
-
-/** Resolve function stored while a question is pending. */
-interface PendingQuestion {
-  resolve: (result: UserInputResponse) => void;
-}
-
-/** Everything we track per session. */
-interface SessionEntry {
-  session: CopilotSession;
-  pendingPermissions: Map<string, PendingPermission>;
-  pendingQuestions: Map<string, PendingQuestion>;
-  /** Kraki's view of the current turn: prose (narration vs reply), user stop,
-   *  idle once. Survives a resume of the SDK session mid-turn. */
-  turn: TurnTracker;
-}
-
-// ── Helpers ─────────────────────────────────────────────
-
-function makeId(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function getErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
-
-function getRuntimeUrl(): string {
-  const scriptPath = process.argv[1];
-  return pathToFileURL(scriptPath ?? process.execPath).href;
-}
-
-function resolveExecutableFromPath(commandName: string): string | undefined {
-  const lookupCommand =
-    process.platform === 'win32'
-      ? `where.exe ${commandName}`
-      : `command -v ${commandName}`;
-
-  try {
-    const output = execSync(lookupCommand, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-    return output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((candidate) => candidate.length > 0 && existsSync(candidate));
-  } catch {
-    return undefined;
-  }
-}
-
-export function resolveCopilotCliPath(): string | undefined {
-  return resolveExecutableFromPath('copilot');
-}
-
-
-
-/**
- * Repair known Copilot CLI writer-side schema violations in an events.jsonl
- * file so the SDK's loader-side validator accepts it on `session.resume()`.
- *
- * Returns the number of lines fixed. 0 means the file was already valid
- * (or did not exist) and was not rewritten.
- *
- * Known fixups:
- *   - `data.tokensRemoved` on `session.compaction_complete`: the schema
- *     requires `>= 0` but the writer sometimes produces negatives like -2098.
- *     We clamp to 0. This is metadata accounting only — does not affect
- *     conversation history or agent behaviour.
- *
- * Atomic file replace via tmp+rename. On any I/O error the original file is
- * left untouched and 0 is returned.
- *
- * Add new fixups here as more writer-side bugs are identified upstream
- * (github/copilot-cli has a recurring pattern of these: #3454, #3432, #3520).
- *
- * Exported for unit testing — production code should call the wrapper on
- * CopilotAdapter so the log line is attached to a sessionId.
- */
-export function sanitizeCopilotEventsFile(eventsPath: string): number {
-  if (!existsSync(eventsPath)) return 0;
-
-  let raw: string;
-  try {
-    raw = readFileSync(eventsPath, 'utf8');
-  } catch {
-    return 0;
-  }
-
-  const lines = raw.split('\n');
-  let fixed = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line) continue;
-    try {
-      const ev = JSON.parse(line) as Record<string, unknown>;
-      const data = ev?.data as Record<string, unknown> | undefined;
-      if (data && typeof data === 'object') {
-        // github/copilot-cli: negative `tokensRemoved` on
-        // session.compaction_complete violates the schema's `>= 0`
-        // constraint. Clamp to 0.
-        if (typeof data.tokensRemoved === 'number' && data.tokensRemoved < 0) {
-          data.tokensRemoved = 0;
-          lines[i] = JSON.stringify(ev);
-          fixed++;
-        }
-      }
-    } catch {
-      // Malformed line — leave verbatim. The SDK will report its own error
-      // with the original line number, which we want to preserve.
-    }
-  }
-
-  if (fixed === 0) return 0;
-
-  const tmpPath = `${eventsPath}.kraki-sanitize.tmp`;
-  try {
-    writeFileSync(tmpPath, lines.join('\n'), 'utf8');
-    renameSync(tmpPath, eventsPath);
-    return fixed;
-  } catch {
-    try { unlinkSync(tmpPath); } catch { /* ignore */ }
-    return 0;
-  }
-}
-
-/** Defensive basename — strips any leading directory components and never
- *  throws. Used to populate ContentRef.name from the absolute path the
- *  agent passed to show_image. */
-function basenameSafe(p: string): string {
-  try {
-    return basename(p) || 'image';
-  } catch {
-    return 'image';
-  }
-}
-
-// ── Copilot configDir shadow ────────────────────────────
-//
-// The Copilot CLI loads persistent tool approval rules from
-// ~/.copilot/permissions-config.json. When those rules include
-// {kind:"write"}, the CLI auto-approves writes *without* calling
-// the SDK's onPermissionRequest handler — bypassing Kraki's mode
-// enforcement entirely.
-//
-// To ensure every permission flows through Kraki, we create a
-// shadow configDir that symlinks all user config (MCP, hooks, etc.)
-// but replaces permissions-config.json with an empty one.
-
-const PERMISSIONS_CONFIG_FILE = 'permissions-config.json';
-const EMPTY_PERMISSIONS = JSON.stringify({ locations: {} });
-let cachedCopilotConfigDir: string | null = null;
-
-function getCopilotConfigDir(): string {
-  if (cachedCopilotConfigDir && existsSync(cachedCopilotConfigDir)) {
-    return cachedCopilotConfigDir;
-  }
-
-  const realCopilotDir = join(homedir(), '.copilot');
-  const shadowDir = join(getKrakiHome(), 'copilot-config');
-  mkdirSync(shadowDir, { recursive: true });
-
-  // Symlink every entry from ~/.copilot except permissions-config*
-  if (existsSync(realCopilotDir)) {
-    try {
-      for (const entry of readdirSync(realCopilotDir)) {
-        if (entry.startsWith('permissions-config')) continue;
-        // Junction/hard-link fallback on Windows without Developer Mode,
-        // where a plain symlink fails and the user's config would vanish.
-        if (!linkIntoShadow(join(realCopilotDir, entry), join(shadowDir, entry))) {
-          logger.warn({ entry }, 'Could not share a Copilot config entry with Kraki sessions');
-        }
-      }
-    } catch (err) {
-      logger.warn(`Failed to set up shadow copilot config: ${(err as Error).message}`);
-    }
-  }
-
-  // Write an empty permissions config so the CLI starts with no pre-approved rules
-  writeFileSync(join(shadowDir, PERMISSIONS_CONFIG_FILE), EMPTY_PERMISSIONS);
-
-  cachedCopilotConfigDir = shadowDir;
-  logger.debug({ shadowDir }, 'Using shadow copilot configDir (no stored tool approvals)');
-  return shadowDir;
-}
-
-export function installCopilotSdkImportCompatibility(currentUrl: string = getRuntimeUrl()): 'hook' | null {
-  if (typeof moduleCompat.registerHooks === 'function') {
-    moduleCompat.registerHooks({
-      resolve(specifier, context, nextResolve) {
-        if (specifier === VSCODE_JSONRPC_NODE_SPECIFIER) {
-          return nextResolve(VSCODE_JSONRPC_NODE_JS_SPECIFIER, context);
-        }
-        return nextResolve(specifier, context);
-      },
-    });
-    return 'hook';
-  }
-
-  if (typeof moduleCompat.register === 'function') {
-    moduleCompat.register(
-      `data:text/javascript,${encodeURIComponent(COPILOT_SDK_COMPATIBILITY_LOADER_SOURCE)}`,
-      currentUrl,
-    );
-    return 'hook';
-  }
-
-  // Node ≥ 22.19 (our engines floor) always has a module hook API, so the
-  // SDK file is never rewritten on disk.
-  return null;
-}
-
-async function loadCopilotSdk(): Promise<CopilotSdkModule> {
-  if (!copilotSdkPromise) {
-    copilotSdkPromise = (async () => {
-      const compatibility = installCopilotSdkImportCompatibility();
-      if (compatibility === 'hook') {
-        logger.debug('Installed @github/copilot-sdk ESM import compatibility hook');
-      } else if (compatibility === 'patch') {
-        logger.debug('Patched @github/copilot-sdk ESM import compatibility');
-      }
-
-      try {
-        return await import('@github/copilot-sdk');
-      } catch (err) {
-        copilotSdkPromise = null;
-        throw err;
-      }
-    })();
-  }
-
-  return copilotSdkPromise;
-}
+import { wireEvents } from './copilot-events.js';
+import { startEvictionSweep, stopEvictionSweep, touchSession } from './copilot-eviction.js';
+import { makePermissionHandler, makeQuestionHandler, cleanupSessionPermissions, broadcastPendingResolutions } from './copilot-permissions.js';
+import { resumeTrackedSession, handleUnavailableSession, linkCopilotStore } from './copilot-resume.js';
+import { resolveCopilotCliPath, getCopilotConfigDir } from './copilot-paths.js';
+import { loadCopilotSdk } from './copilot-sdk.js';
+import { logger, type PendingPermission, type PendingQuestion, type SessionEntry, getErrorMessage } from './copilot-session.js';
+export { resolveCopilotCliPath, sanitizeCopilotEventsFile } from './copilot-paths.js';
+export { installCopilotSdkImportCompatibility } from './copilot-sdk.js';
 
 // ── Adapter ─────────────────────────────────────────────
 
 export class CopilotAdapter extends AgentAdapter {
-  private client: CopilotClientType | null = null;
+  client: CopilotClientType | null = null;
   /** Serialises rebuildClient() so concurrent callers don't spawn multiple runtimes. */
   private rebuildingClient: Promise<void> | null = null;
-  private sessions = new Map<string, SessionEntry>();
+  sessions = new Map<string, SessionEntry>();
   private cliPath: string | undefined;
   /** Per-session auto-approve sets (populated by "Always Allow" clicks) */
   /** Session permission mode */
-  private sessionModes = new Map<string, SessionMode>();
+  sessionModes = new Map<string, SessionMode>();
   /** Sessions with a pending mode change to prepend on next user message */
-  private pendingModeSignals = new Map<string, string>();
+  pendingModeSignals = new Map<string, string>();
   /** Per-session cumulative token usage */
-  private sessionUsage = new Map<string, import('@kraki/protocol').SessionUsage>();
+  sessionUsage = new Map<string, import('@kraki/protocol').SessionUsage>();
   /** Track tool start args by toolCallId for correlating with tool_complete */
-  private pendingToolArgs = new Map<string, Record<string, unknown>>();
+  pendingToolArgs = new Map<string, Record<string, unknown>>();
   /** Subagents by the toolCallId of the task call that dispatched them. */
-  private subagents = new Map<string, import('@kraki/protocol').SubagentInfo>();
+  subagents = new Map<string, import('@kraki/protocol').SubagentInfo>();
   /** A subagent's latest prose, held until a further step shows it was
    *  narration (its final words are its report = the task's result). */
-  private subagentDrafts = new Map<string, { sessionId: string; text: string }>();
+  subagentDrafts = new Map<string, { sessionId: string; text: string }>();
   /**
    * Tool identity captured at tool.execution_start, keyed by toolCallId.
    * The Copilot SDK omits these fields from tool.execution_complete events —
@@ -380,7 +65,7 @@ export class CopilotAdapter extends AgentAdapter {
    * them up on complete (especially for `mcpServerName`/`mcpToolName`, which
    * we use to recognise our own MCP presenter tools).
    */
-  private pendingToolIdentity = new Map<string, {
+  pendingToolIdentity = new Map<string, {
     toolName?: string;
     mcpServerName?: string;
     mcpToolName?: string;
@@ -391,17 +76,17 @@ export class CopilotAdapter extends AgentAdapter {
    * tool call completing (kill, abort, error mid-flight). Without this the
    * two maps grow unbounded over a long-lived daemon.
    */
-  private sessionToolCallIds = new Map<string, Set<string>>();
+  sessionToolCallIds = new Map<string, Set<string>>();
   /** Expected model per session — detects involuntary model fallbacks by the CLI */
-  private expectedModels = new Map<string, string>();
+  expectedModels = new Map<string, string>();
   /** User's originally requested model — never updated on involuntary fallbacks */
-  private userRequestedModels = new Map<string, string>();
+  userRequestedModels = new Map<string, string>();
   /** Latest title Copilot generated itself (session.title_changed). */
-  private nativeTitles = new Map<string, string>();
+  nativeTitles = new Map<string, string>();
   /** Whether the current turn has produced any output (message or tool call) */
-  private turnHasOutput = new Map<string, boolean>();
+  turnHasOutput = new Map<string, boolean>();
   /** Whether an error was already reported for the current turn */
-  private turnErrorReported = new Map<string, boolean>();
+  turnErrorReported = new Map<string, boolean>();
 
   /** Max time to wait for a single session.abort() during adapter.stop().
    *  If exceeded we fall through and let client.stop() kill the SDK process.
@@ -425,14 +110,14 @@ export class CopilotAdapter extends AgentAdapter {
   //   - evict sessions that have been quiet longer than IDLE_TTL_MS
   // The evicted session's on-disk state is intact; next user interaction
   // triggers the existing lazy-resume path (relay-client ensureSessionResumed).
-  private static readonly EVICTION_SCAN_INTERVAL_MS = 5 * 60_000;
-  private static readonly EVICTION_RSS_THRESHOLD_MB = 2048;
-  private static readonly EVICTION_IDLE_TTL_MS = 30 * 60_000;
+  static readonly EVICTION_SCAN_INTERVAL_MS = 5 * 60_000;
+  static readonly EVICTION_RSS_THRESHOLD_MB = 2048;
+  static readonly EVICTION_IDLE_TTL_MS = 30 * 60_000;
   /** Per-session "last time anything happened" timestamp (ms epoch). Used
    *  by the eviction sweep to identify candidates. Updated by sendMessage,
    *  every SDK event handler, and permission/question responses. */
-  private lastActivityAt = new Map<string, number>();
-  private evictionTimer: ReturnType<typeof setInterval> | null = null;
+  lastActivityAt = new Map<string, number>();
+  evictionTimer: ReturnType<typeof setInterval> | null = null;
 
   /** Models known to support long_context tier (updated from Copilot docs).
    *  Used to populate supportedContextTiers in model details. */
@@ -481,26 +166,26 @@ export class CopilotAdapter extends AgentAdapter {
     return this.sessions.get(sessionId)?.turn.isSettled === true;
   }
 
-  private lifecycleEvent(sessionId: string): { turnId?: string } {
+  lifecycleEvent(sessionId: string): { turnId?: string } {
     return this.sessions.get(sessionId)?.turn.event() ?? {};
   }
 
   /** session.error reports still deciding whether it is a sign-out. */
-  private pendingErrorReports = new Map<string, Promise<void>>();
+  pendingErrorReports = new Map<string, Promise<void>>();
 
-  private emitError(sessionId: string, message: string): void {
+  emitError(sessionId: string, message: string): void {
     this.onError?.(sessionId, { message, ...this.lifecycleEvent(sessionId) });
   }
 
 
-  private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
-  private readonly krakiMcp?: {
+  readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
+  readonly krakiMcp?: {
     urlForSession: (sessionId: string) => string;
     tokenForSession: (sessionId: string) => string;
   };
 
   /** System prompt appended to the SDK's built-in prompt. See system-prompt.md for docs. */
-  private static readonly SYSTEM_PROMPT = [
+  static readonly SYSTEM_PROMPT = [
     'You are running inside Kraki, a remote control platform. A human operator is',
     'monitoring and controlling your session from a separate device through an',
     'encrypted relay. Your tool calls are routed through a permission system that',
@@ -514,7 +199,7 @@ export class CopilotAdapter extends AgentAdapter {
    * Tools are exposed to the model with display names of the form
    * `<server>-<tool>` (dash), confirmed via a live SDK spike.
    */
-  private static readonly KRAKI_MCP_PROMPT = [
+  static readonly KRAKI_MCP_PROMPT = [
     'You have access to a Kraki MCP server. Its tools are visible with names',
     'beginning with "kraki-".',
     '',
@@ -627,12 +312,12 @@ export class CopilotAdapter extends AgentAdapter {
     this.client = new CopilotClient(opts);
     await this.client.start();
     if (restoreExecPath) restoreExecPath();
-    this.startEvictionSweep();
+    startEvictionSweep(this);
     logger.debug('started');
   }
 
   async stop(): Promise<void> {
-    this.stopEvictionSweep();
+    stopEvictionSweep(this);
 
     // Abort all active sessions first so the SDK writes a clean `abort` event
     // to events.jsonl for any in-flight tool_use. Without this, killing the
@@ -688,7 +373,7 @@ export class CopilotAdapter extends AgentAdapter {
         // BEFORE clearing the entries — otherwise the arm UI stays stuck on
         // a request that will never be answered (the old runtime is dead).
         for (const sessionId of this.sessions.keys()) {
-          this.broadcastPendingResolutions(sessionId);
+          broadcastPendingResolutions(this, sessionId);
         }
         if (this.client) {
           try { await this.client.stop(); } catch { /* old client may already be dead */ }
@@ -707,130 +392,6 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   // ── Idle-session eviction ────────────────────────────
-
-  /**
-   * Sum RSS (MB) of this process plus every descendant. The real memory
-   * consumer is the native `copilot-darwin-arm64` grandchild, not the
-   * daemon's Node heap — so we walk the whole tree and report the total.
-   *
-   * Returns null on Windows (no pgrep) or when the descendant walk fails;
-   * callers treat null as "skip eviction this cycle" (fail-safe).
-   */
-  private getRuntimeRssMB(): number | null {
-    if (process.platform === 'win32') return null;
-    const descendants: number[] = [];
-    const queue: number[] = [process.pid];
-    while (queue.length) {
-      const pid = queue.shift()!;
-      try {
-        const out = execSync(`pgrep -P ${pid}`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-        if (!out) continue;
-        for (const line of out.split('\n')) {
-          const child = parseInt(line, 10);
-          if (!isNaN(child)) {
-            descendants.push(child);
-            queue.push(child);
-          }
-        }
-      } catch { /* pgrep exits non-zero when no children — normal */ }
-    }
-    if (descendants.length === 0) return 0;
-    try {
-      const out = execSync(`ps -o rss= -p ${descendants.join(',')}`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-      const kb = out.split('\n')
-        .map((s) => parseInt(s.trim(), 10))
-        .reduce((acc, v) => acc + (isNaN(v) ? 0 : v), 0);
-      return Math.round(kb / 1024);
-    } catch {
-      return null;
-    }
-  }
-
-  private startEvictionSweep(): void {
-    if (this.evictionTimer) return;
-    this.evictionTimer = setInterval(() => {
-      this.evictIdleSessions().catch((err) => {
-        logger.warn({ err }, 'eviction sweep threw');
-      });
-    }, CopilotAdapter.EVICTION_SCAN_INTERVAL_MS);
-    // Don't block process exit on the timer
-    this.evictionTimer.unref?.();
-  }
-
-  private stopEvictionSweep(): void {
-    if (this.evictionTimer) {
-      clearInterval(this.evictionTimer);
-      this.evictionTimer = null;
-    }
-  }
-
-  /**
-   * Periodic sweep: if total runtime RSS is over threshold, evict any
-   * loaded session that has been quiet > IDLE_TTL_MS and is safe to drop
-   * (not mid-turn, no pending permission/question).
-   *
-   * Eviction is purely a memory hygiene operation; the user-visible session
-   * is unaffected because the next interaction triggers lazy resume.
-   */
-  private async evictIdleSessions(): Promise<void> {
-    if (this.sessions.size === 0) return;
-    const rssMB = this.getRuntimeRssMB();
-    if (rssMB === null || rssMB < CopilotAdapter.EVICTION_RSS_THRESHOLD_MB) {
-      // Under the threshold (or measurement unavailable) — do nothing.
-      // This is deliberately adaptive: when memory is fine, never evict.
-      return;
-    }
-
-    const now = Date.now();
-    const ttl = CopilotAdapter.EVICTION_IDLE_TTL_MS;
-    const candidates: string[] = [];
-    for (const [sessionId, entry] of this.sessions) {
-      if (entry.pendingPermissions.size > 0 || entry.pendingQuestions.size > 0) continue;
-      // turnHasOutput.get(sessionId) === true => a turn is currently in flight
-      if (this.turnHasOutput.get(sessionId)) continue;
-      const lastAt = this.lastActivityAt.get(sessionId) ?? 0;
-      if (now - lastAt < ttl) continue;
-      candidates.push(sessionId);
-    }
-    if (candidates.length === 0) {
-      logger.info({ rssMB, loaded: this.sessions.size }, 'eviction: over threshold but no eligible candidates');
-      return;
-    }
-    logger.info(
-      { rssMB, threshold: CopilotAdapter.EVICTION_RSS_THRESHOLD_MB, candidates: candidates.length, loaded: this.sessions.size },
-      'eviction: sweeping idle sessions',
-    );
-    for (const sessionId of candidates) {
-      await this.evictSession(sessionId);
-    }
-  }
-
-  /**
-   * Release an idle SDK session handle so the runtime can reclaim its
-   * memory. The on-disk session is intact; lazy resume picks it up on
-   * next interaction. Fires {@link onSessionEvicted} so the relay-client
-   * can mark the meta state `disconnected` for invariant consistency.
-   */
-  private async evictSession(sessionId: string): Promise<void> {
-    const entry = this.sessions.get(sessionId);
-    if (!entry) return;
-    try {
-      await entry.session.disconnect();
-    } catch (err) {
-      logger.warn({ err, sessionId }, 'evictSession: disconnect failed, removing entry anyway');
-    }
-    this.sessions.delete(sessionId);
-    this.lastActivityAt.delete(sessionId);
-    // Note: we intentionally do NOT clear sessionModes / sessionUsage /
-    // expectedModels — those represent persistent per-session preferences
-    // that should survive the unload/reload cycle.
-    logger.info({ sessionId }, 'session evicted from runtime (idle, over RSS threshold)');
-    this.onSessionEvicted?.(sessionId);
-  }
-
-  private touchSession(sessionId: string): void {
-    this.lastActivityAt.set(sessionId, Date.now());
-  }
 
   // ── Session management ──────────────────────────────
 
@@ -915,17 +476,17 @@ export class CopilotAdapter extends AgentAdapter {
       ...(mcpServers && { mcpServers }),
       systemMessage: { mode: 'append' as const, content: systemPromptContent },
       streaming: true,
-      onPermissionRequest: this.makePermissionHandler(pendingPermissions),
-      onUserInputRequest: this.makeQuestionHandler(pendingQuestions),
+      onPermissionRequest: makePermissionHandler(this, pendingPermissions),
+      onUserInputRequest: makeQuestionHandler(this, pendingQuestions),
     };
 
     const session = await this.client!.createSession(sessionConfig);
     const sid = session.sessionId;
 
     this.sessions.set(sid, { session, pendingPermissions, pendingQuestions, turn: new TurnTracker(this, sid) });
-    this.touchSession(sid);
-    this.wireEvents(sid, session);
-    this.linkCopilotStore(sid);
+    touchSession(this, sid);
+    wireEvents(this, sid, session);
+    linkCopilotStore(this, sid);
     logger.info(`session created: ${sid} (model: ${config.model ?? 'default'})`);
     if (config.model) {
       this.expectedModels.set(sid, config.model);
@@ -942,7 +503,7 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   async resumeSession(sessionId: string): Promise<{ sessionId: string }> {
-    await this.resumeTrackedSession(sessionId);
+    await resumeTrackedSession(this, sessionId);
     return { sessionId };
   }
 
@@ -974,7 +535,7 @@ export class CopilotAdapter extends AgentAdapter {
     }
 
     // Resume the forked session via SDK
-    await this.resumeTrackedSession(newSessionId);
+    await resumeTrackedSession(this, newSessionId);
     logger.info({ sourceSessionId, newSessionId }, 'session forked');
 
     // Notify relay so it broadcasts session_created to all arms
@@ -999,7 +560,7 @@ export class CopilotAdapter extends AgentAdapter {
       this.turnErrorReported.set(sessionId, false);
       turn?.beginTurn();
     }
-    this.touchSession(sessionId);
+    touchSession(this, sessionId);
 
     // Prepend mode-switch signal if mode changed since last message
     const pendingMode = this.pendingModeSignals.get(sessionId);
@@ -1078,11 +639,11 @@ export class CopilotAdapter extends AgentAdapter {
         logger.warn({ err, sessionId }, 'Runtime died mid-send; rebuilding client');
         try {
           await this.rebuildClient();
-          entry = await this.resumeTrackedSession(sessionId);
+          entry = await resumeTrackedSession(this, sessionId);
           await entry.session.send(opts);
           return;
         } catch (rebuildErr) {
-          this.handleUnavailableSession(sessionId, rebuildErr);
+          handleUnavailableSession(this, sessionId, rebuildErr);
           throw rebuildErr;
         }
       }
@@ -1091,9 +652,9 @@ export class CopilotAdapter extends AgentAdapter {
       logger.warn({ err, sessionId }, 'Session send failed; attempting resume');
 
       try {
-        entry = await this.resumeTrackedSession(sessionId);
+        entry = await resumeTrackedSession(this, sessionId);
       } catch (resumeErr) {
-        this.handleUnavailableSession(sessionId, resumeErr);
+        handleUnavailableSession(this, sessionId, resumeErr);
         throw resumeErr;
       }
 
@@ -1105,7 +666,7 @@ export class CopilotAdapter extends AgentAdapter {
         if (retryHealth === 'auth_error') {
           this.fireAuthError(sessionId, retryErr);
         } else {
-          this.handleUnavailableSession(sessionId, retryErr);
+          handleUnavailableSession(this, sessionId, retryErr);
         }
         throw retryErr;
       }
@@ -1134,7 +695,7 @@ export class CopilotAdapter extends AgentAdapter {
       : reason ? { kind: 'reject', feedback: `Denied by user: ${reason}` } : { kind: 'reject' };
     pending.resolve(result);
     entry.pendingPermissions.delete(permissionId);
-    this.touchSession(sessionId);
+    touchSession(this, sessionId);
     logger.debug({ permissionId, sessionId, decision }, 'permission resolved');
     return 'accepted';
   }
@@ -1160,19 +721,19 @@ export class CopilotAdapter extends AgentAdapter {
     const answerText = answerValue.text || (answerValue.attachments?.length ? 'The user answered with image attachment(s).' : '');
     pending.resolve({ answer: answerText, wasFreeform });
     entry.pendingQuestions.delete(questionId);
-    this.touchSession(sessionId);
+    touchSession(this, sessionId);
     return 'accepted';
   }
 
   async killSession(sessionId: string): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (entry) {
-      this.broadcastPendingResolutions(sessionId);
+      broadcastPendingResolutions(this, sessionId);
       await entry.session.abort().catch(() => {});
       await entry.session.disconnect();
       this.sessions.delete(sessionId);
     }
-    this.cleanupSessionPermissions(sessionId);
+    cleanupSessionPermissions(this, sessionId);
     try { unlinkSync(join(getKrakiHome(), 'sessions', sessionId, 'copilot.jsonl')); } catch { /* no link */ }
     this.onSessionEnded?.(sessionId, { reason: 'killed' });
     logger.info(`session killed: ${sessionId}`);
@@ -1187,7 +748,7 @@ export class CopilotAdapter extends AgentAdapter {
       // (depending on SDK timing) and a false empty-cycle error would
       // beat us.
       entry.turn.abort();
-      this.broadcastPendingResolutions(sessionId);
+      broadcastPendingResolutions(this, sessionId);
       await entry.session.abort();
       logger.debug({ sessionId }, 'session aborted');
     }
@@ -1282,62 +843,9 @@ export class CopilotAdapter extends AgentAdapter {
     this.sessionUsage.set(sessionId, { ...usage });
   }
 
-  /** Clean up session-scoped permission state */
-  private cleanupSessionPermissions(sessionId: string): void {
-    this.sessionModes.delete(sessionId);
-    this.pendingModeSignals.delete(sessionId);
-    this.sessionUsage.delete(sessionId);
-    this.expectedModels.delete(sessionId);
-    this.userRequestedModels.delete(sessionId);
-    this.nativeTitles.delete(sessionId);
-    this.turnHasOutput.delete(sessionId);
-    this.turnErrorReported.delete(sessionId);
-    const inflight = this.sessionToolCallIds.get(sessionId);
-    if (inflight) {
-      for (const id of inflight) {
-        this.pendingToolArgs.delete(id);
-        this.pendingToolIdentity.delete(id);
-      }
-      this.sessionToolCallIds.delete(sessionId);
-    }
-  }
 
 
-
-  /**
-   * Wait for the SDK to finish writing to events.jsonl after a turn completes,
-   * then fire onFlushComplete. Uses offset-based stabilization: stat the file
-   * size and compare to the previous reading. If stable, fire immediately.
-   * Otherwise retry a few times (max ~600ms total).
-   */
-  /**
-   * Co-located store pointer. Copilot's SDK ties its session-state to the
-   * client (COPILOT_HOME), not to an individual session, so — unlike pi and
-   * claude — its private transcript can't be physically relocated into the
-   * Kraki session dir without a per-session client (rejected: too invasive for
-   * the shared-client pool). Instead we drop a symlink inside the session dir
-   * pointing at the real events.jsonl, so the session dir is self-describing
-   * (Option A's discoverability intent) with zero risk to the write path.
-   */
-  private copilotEventsPath(sessionId: string): string {
-    return join(homedir(), '.copilot', 'session-state', sessionId, 'events.jsonl');
-  }
-
-  private linkCopilotStore(sessionId: string): void {
-    try {
-      const dir = join(getKrakiHome(), 'sessions', sessionId);
-      mkdirSync(dir, { recursive: true });
-      const link = join(dir, 'copilot.jsonl');
-      try { lstatSync(link); unlinkSync(link); } catch { /* no stale link */ }
-      // Target may not exist yet (SDK writes lazily) — a dangling symlink is
-      // fine and resolves once the first events are written.
-      symlinkSync(this.copilotEventsPath(sessionId), link);
-    } catch (err) {
-      logger.debug({ err: (err as Error).message, sessionId }, 'linkCopilotStore failed');
-    }
-  }
-
-  private signalFlushComplete(sessionId: string): void {
+  signalFlushComplete(sessionId: string): void {
     const eventsPath = join(homedir(), '.copilot', 'session-state', sessionId, 'events.jsonl');
     const MAX_CHECKS = 3;
     const CHECK_INTERVAL_MS = 200;
@@ -1365,127 +873,6 @@ export class CopilotAdapter extends AgentAdapter {
     setTimeout(check, CHECK_INTERVAL_MS);
   }
 
-  /** Resolve all pending permissions/questions and fire callbacks so relay-client broadcasts resolutions. */
-  private broadcastPendingResolutions(sessionId: string): void {
-    const entry = this.sessions.get(sessionId);
-    if (!entry) return;
-    for (const [permId, p] of entry.pendingPermissions) {
-      p.resolve({ kind: 'reject' });
-      this.onPermissionAutoResolved?.(sessionId, permId, 'cancelled');
-    }
-    entry.pendingPermissions.clear();
-    for (const [qId, q] of entry.pendingQuestions) {
-      q.resolve({ answer: '', wasFreeform: true });
-      this.onQuestionAutoResolved?.(sessionId, qId);
-    }
-    entry.pendingQuestions.clear();
-  }
-
-  private makeResumeConfig(
-    sessionId: string,
-    pendingPermissions: Map<string, PendingPermission>,
-    pendingQuestions: Map<string, PendingQuestion>,
-  ): ResumeSessionConfig {
-    // Load MCP servers for resumed sessions too
-    const mcpConfigPath = join(homedir(), '.copilot', 'mcp-config.json');
-    let mcpServers: Record<string, MCPServerConfig> | undefined;
-    if (existsSync(mcpConfigPath)) {
-      try {
-        const rawServers = JSON.parse(readFileSync(mcpConfigPath, 'utf8')).mcpServers ?? {};
-        if (Object.keys(rawServers).length > 0) {
-          mcpServers = {};
-          for (const [name, cfg] of Object.entries(rawServers)) {
-            mcpServers[name] = { ...(cfg as MCPServerConfig), tools: (cfg as MCPServerConfig & { tools?: string[] }).tools ?? ['*'] };
-          }
-        }
-      } catch { /* ignore parse errors on resume */ }
-    }
-
-    // Wire Kraki MCP into resumed sessions, scoped by the session id.
-    if (this.krakiMcp) {
-      const krakiEntry: MCPServerConfig = {
-        type: 'http' as const,
-        url: this.krakiMcp.urlForSession(sessionId),
-        headers: { Authorization: `Bearer ${this.krakiMcp.tokenForSession(sessionId)}` },
-        tools: ['*'],
-      } as MCPServerConfig;
-      mcpServers = { ...(mcpServers ?? {}), kraki: krakiEntry };
-    }
-
-    const systemPromptContent = this.krakiMcp
-      ? `${CopilotAdapter.SYSTEM_PROMPT}\n\n${CopilotAdapter.KRAKI_MCP_PROMPT}`
-      : CopilotAdapter.SYSTEM_PROMPT;
-
-    return {
-      configDirectory: getCopilotConfigDir(),
-      streaming: true,
-      ...(mcpServers && { mcpServers }),
-      systemMessage: { mode: 'append' as const, content: systemPromptContent },
-      onPermissionRequest: this.makePermissionHandler(pendingPermissions),
-      onUserInputRequest: this.makeQuestionHandler(pendingQuestions),
-    };
-  }
-
-  private async resumeTrackedSession(sessionId: string): Promise<SessionEntry> {
-    this.ensureClient();
-
-    this.sanitizeEventsBeforeResume(sessionId);
-
-    const pendingPermissions = new Map<string, PendingPermission>();
-    const pendingQuestions = new Map<string, PendingQuestion>();
-    const session = await this.client!.resumeSession(
-      sessionId,
-      this.makeResumeConfig(sessionId, pendingPermissions, pendingQuestions),
-    );
-    // A resume during a running turn (send recovery) keeps that turn.
-    const previous = this.sessions.get(sessionId)?.turn;
-    const entry = { session, pendingPermissions, pendingQuestions, turn: previous ?? new TurnTracker(this, sessionId) };
-
-    this.sessions.set(sessionId, entry);
-    this.touchSession(sessionId);
-    this.wireEvents(sessionId, session);
-    this.linkCopilotStore(sessionId);
-    logger.debug({ sessionId }, 'session resumed');
-
-    return entry;
-  }
-
-  /**
-   * Pre-scan events.jsonl for known Copilot CLI writer-side bugs that cause
-   * the SDK's loader-side Zod validation to throw "Session file is corrupted"
-   * on resume.
-   *
-   * The CLI has a recurring pattern: its writer produces values that fail
-   * its own bundled schema (github/copilot-cli #3454 exitCode<0,
-   * #3432 totalPremiumRequests as float, #3520 ephemeral missing). When this
-   * happens, `session.resume()` rejects the whole file and every conversation
-   * turn is lost.
-   *
-   * We clamp known-bad values to schema-valid equivalents before resume so
-   * the SDK accepts the file. Atomic file replace; no-op (fast read-only
-   * scan) when nothing is wrong.
-   */
-  private sanitizeEventsBeforeResume(sessionId: string): void {
-    const eventsPath = join(homedir(), '.copilot', 'session-state', sessionId, 'events.jsonl');
-    const fixed = sanitizeCopilotEventsFile(eventsPath);
-    if (fixed > 0) {
-      logger.info({ sessionId, fixed }, 'sanitized Copilot events.jsonl before resume');
-    }
-  }
-
-  private handleUnavailableSession(sessionId: string, err: unknown): void {
-    this.broadcastPendingResolutions(sessionId);
-
-    this.cleanupSessionPermissions(sessionId);
-    logger.warn({ err, sessionId }, 'Session became unavailable');
-    this.emitError(sessionId, `Copilot could not reopen this session: ${getErrorMessage(err)}`);
-    this.sessions.delete(sessionId);
-    // Not terminal: the on-disk session may still be resumable (runtime
-    // restart, transient corruption fixed by sanitize). Mark it evicted so the
-    // next message retries a lazy resume instead of hitting a zombie.
-    this.onSessionEvicted?.(sessionId);
-  }
-
   /**
    * Probe the runtime to determine its health after an error.
    *
@@ -1499,7 +886,7 @@ export class CopilotAdapter extends AgentAdapter {
    *  - `'auth_error'`  — runtime is up but auth failed
    *  - `'dead'`        — runtime process is gone, wedged, or timed out
    */
-  private async probeRuntime(): Promise<'alive' | 'auth_error' | 'dead'> {
+  async probeRuntime(): Promise<'alive' | 'auth_error' | 'dead'> {
     if (!this.client) return 'dead';
     let timer: ReturnType<typeof setTimeout> | null = null;
     try {
@@ -1521,7 +908,7 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   /** Fire onError with a clear, actionable auth-error message. */
-  private fireAuthError(sessionId: string, err: unknown): void {
+  fireAuthError(sessionId: string, err: unknown): void {
     const raw = getErrorMessage(err);
     logger.error({ sessionId, err }, 'Authentication error detected');
     this.emitError(sessionId, `GitHub credential expired or invalid: ${raw}\n\nRun one of the following on the host machine to re-authenticate:\n• \`copilot /login\`\n• \`gh auth login\``);
@@ -1530,457 +917,17 @@ export class CopilotAdapter extends AgentAdapter {
   // ── SDK → callback wiring ─────────────────────────
 
   /** A tool follows: the prose before it was narration. */
-  private flushNarration(sessionId: string): void {
+  flushNarration(sessionId: string): void {
     this.sessions.get(sessionId)?.turn.toolStarted();
-  }
-
-  private wireEvents(sessionId: string, session: CopilotSession): void {
-    if (!this.turnErrorReported.has(sessionId)) {
-      this.turnErrorReported.set(sessionId, false);
-    }
-
-    // Events from a subagent (task tool) carry a top-level `agentId`; the root
-    // agent's never do. A subagent's prose, turn boundaries and errors are its
-    // own — it reports back through the task tool's result — so they must not
-    // reach the parent's reply or turn state. Its tool calls still show as steps.
-    const fromSubagent = (event: unknown) => !!(event as { agentId?: string }).agentId;
-    // The subagent instance id is the toolCallId of the task call that started it.
-    const parentOf = (event: unknown): string | undefined => {
-      const e = event as { agentId?: string; data?: { parentToolCallId?: string } };
-      return e.agentId || e.data?.parentToolCallId || undefined;
-    };
-
-    // Subagent lifecycle: name the dispatching task step and track its status.
-    const subagentEvent = (status: 'running' | 'completed' | 'failed') => (event: unknown) => {
-      const d = (event as { data?: Record<string, unknown> }).data ?? {};
-      const id = typeof d.toolCallId === 'string' ? d.toolCallId : '';
-      if (!id) return;
-      const prev = this.subagents.get(id);
-      const name = (typeof d.agentDisplayName === 'string' && d.agentDisplayName)
-        || (typeof d.agentName === 'string' && d.agentName) || prev?.name || 'subagent';
-      this.subagents.set(id, {
-        ...prev,
-        name: prev?.name ?? name,
-        status,
-        ...(typeof d.totalTokens === 'number' && { tokens: d.totalTokens }),
-        ...(typeof d.totalToolCalls === 'number' && { toolCount: d.totalToolCalls }),
-        ...(typeof d.durationMs === 'number' && { durationMs: d.durationMs }),
-      });
-    };
-    session.on('subagent.started' as never, subagentEvent('running') as never);
-    session.on('subagent.completed' as never, subagentEvent('completed') as never);
-    session.on('subagent.failed' as never, subagentEvent('failed') as never);
-
-    session.on('assistant.message_delta', (event) => {
-      if (fromSubagent(event)) return;
-      this.onMessageDelta?.(sessionId, { content: event.data.deltaContent, ...this.lifecycleEvent(sessionId) });
-    });
-
-    session.on('assistant.message', (event) => {
-      // A subagent's prose is shown in its own steps, never in the reply.
-      if (event.data.content && fromSubagent(event)) {
-        const owner = parentOf(event);
-        if (owner) {
-          const prev = this.subagentDrafts.get(owner)?.text;
-          this.subagentDrafts.set(owner, { sessionId, text: prev ? `${prev}\n${event.data.content}` : event.data.content });
-        }
-        return;
-      }
-      // Skip empty messages (SDK sends these before tool calls)
-      if (event.data.content && !fromSubagent(event)) {
-        this.turnHasOutput.set(sessionId, true);
-        this.touchSession(sessionId);
-        // Draft-bubble model: buffer prose instead of graduating each message
-        // to its own permanent bubble. Accumulate consecutive messages so a
-        // multi-part answer isn't lost. Flushed as narration (if a tool
-        // follows) or as the single conclusion bubble (at turn end/idle).
-        this.sessions.get(sessionId)?.turn.appendProse(event.data.content);
-      }
-    });
-
-    session.on('tool.execution_start', (event) => {
-      const data = event.data as unknown as Record<string, unknown>;
-      // report_intent is a UI hint only — drop it from the message stream.
-      if (data.toolName === 'report_intent') return;
-      // A tool follows any buffered prose → that prose was narration.
-      // A subagent's tool says nothing about the parent's draft.
-      if (!fromSubagent(event)) this.flushNarration(sessionId);
-      this.turnHasOutput.set(sessionId, true);
-      this.touchSession(sessionId);
-      if (data.mcpServerName) {
-        logger.info({ mcpServer: data.mcpServerName, mcpTool: data.mcpToolName }, `[MCP tool] ${data.mcpServerName}/${data.mcpToolName}`);
-      }
-      const args = (data.args ?? data.arguments ?? {}) as Record<string, unknown>;
-      const toolCallId = data.toolCallId as string | undefined;
-      if (toolCallId) {
-        this.pendingToolArgs.set(toolCallId, args);
-        // Stash tool identity for tool.execution_complete, which only carries
-        // toolCallId (verified via live SDK spike).
-        this.pendingToolIdentity.set(toolCallId, {
-          toolName: data.toolName as string | undefined,
-          mcpServerName: data.mcpServerName as string | undefined,
-          mcpToolName: data.mcpToolName as string | undefined,
-        });
-        let inflight = this.sessionToolCallIds.get(sessionId);
-        if (!inflight) {
-          inflight = new Set();
-          this.sessionToolCallIds.set(sessionId, inflight);
-        }
-        inflight.add(toolCallId);
-      }
-      const protocolToolName = canonicalArtifactToolName(
-        data.toolName as string,
-        data.mcpServerName as string | undefined,
-        data.mcpToolName as string | undefined,
-      );
-      // A task call that started a subagent (subagent.started precedes it).
-      let subagent = toolCallId ? this.subagents.get(toolCallId) : undefined;
-      if (toolCallId && (subagent || data.toolName === 'task')) {
-        const task = typeof args.description === 'string' ? args.description : undefined;
-        subagent = { name: subagent?.name ?? (typeof args.agent_type === 'string' ? args.agent_type : 'subagent'), ...subagent, ...(task && { task }), status: 'running' };
-        this.subagents.set(toolCallId, subagent);
-      }
-      const parentToolCallId = parentOf(event);
-      const draft = parentToolCallId ? this.subagentDrafts.get(parentToolCallId) : undefined;
-      if (parentToolCallId && draft) {
-        this.subagentDrafts.delete(parentToolCallId);
-        this.onNarrationTrace?.(sessionId, { content: draft.text, parentToolCallId, ...this.lifecycleEvent(sessionId) });
-      }
-      this.onToolStart?.(sessionId, {
-        ...this.lifecycleEvent(sessionId),
-        toolName: protocolToolName,
-        args,
-        toolCallId,
-        ...(parentToolCallId && { parentToolCallId }),
-        ...(subagent && { subagent }),
-      });
-    });
-
-    session.on('tool.execution_complete', (event) => {
-      const data = event.data as unknown as Record<string, unknown>;
-      const toolCallId = data.toolCallId as string | undefined;
-      const identity = toolCallId ? this.pendingToolIdentity.get(toolCallId) : undefined;
-      const rawToolName = identity?.toolName ?? (data.toolName as string | undefined) ?? 'tool';
-      const toolName = canonicalArtifactToolName(rawToolName, identity?.mcpServerName, identity?.mcpToolName);
-      const clearInflight = () => {
-        if (!toolCallId) return;
-        this.pendingToolIdentity.delete(toolCallId);
-        this.pendingToolArgs.delete(toolCallId);
-        const inflight = this.sessionToolCallIds.get(sessionId);
-        if (inflight) {
-          inflight.delete(toolCallId);
-          if (inflight.size === 0) this.sessionToolCallIds.delete(sessionId);
-        }
-      };
-      if (toolName === 'report_intent') {
-        clearInflight();
-        return;
-      }
-      const rawResult = data.result;
-      const resultObj = typeof rawResult === 'object' && rawResult !== null
-        ? rawResult as Record<string, unknown>
-        : null;
-      let result = resultObj?.content as string ?? (typeof rawResult === 'string' ? rawResult : (data.output as string ?? ''));
-      if (!result && data.error) {
-        const errObj = typeof data.error === 'object' && data.error !== null
-          ? data.error as Record<string, unknown>
-          : null;
-        result = (errObj?.message as string) ?? (typeof data.error === 'string' ? data.error : '');
-      }
-
-      // Extract image content blocks — ONLY for the kraki-show_image MCP tool.
-      // All other tools' image bytes (notably `view` on a .png) are deliberately
-      // dropped here per the v1 design: only `kraki-show_image` surfaces images
-      // to the client. The file-path fallback (re-read image from disk when SDK
-      // strips bytes) has been removed.
-      const isKrakiShowImage =
-        identity?.mcpServerName === 'kraki' && identity?.mcpToolName === 'show_image';
-
-      let attachments: import('@kraki/protocol').Attachment[] | undefined;
-      if (isKrakiShowImage && this.attachmentStore) {
-        const contentBlocks = resultObj?.contents as Array<Record<string, unknown>> | undefined;
-        const args = toolCallId ? this.pendingToolArgs.get(toolCallId) ?? {} : {};
-        const caption = typeof args.caption === 'string' && args.caption.trim()
-          ? args.caption.trim()
-          : undefined;
-        const path = typeof args.path === 'string' ? args.path : undefined;
-        const refs: import('@kraki/protocol').ContentRef[] = [];
-        if (Array.isArray(contentBlocks)) {
-          for (const block of contentBlocks) {
-            if (
-              block.type === 'image' &&
-              typeof block.data === 'string' &&
-              typeof block.mimeType === 'string'
-            ) {
-              try {
-                const bytes = Buffer.from(block.data, 'base64');
-                const ref = this.attachmentStore.put(sessionId, bytes, block.mimeType, {
-                  ...(path && { name: basenameSafe(path) }),
-                  ...(caption && { caption }),
-                });
-                refs.push(ref);
-              } catch (err) {
-                logger.warn({ err, sessionId }, 'failed to store show_image attachment');
-              }
-            }
-          }
-        }
-        if (refs.length > 0) {
-          attachments = refs;
-        }
-      }
-
-      // Clean up tracked state for this tool call
-      clearInflight();
-
-      let subagent = toolCallId ? this.subagents.get(toolCallId) : undefined;
-      if (toolCallId) this.subagentDrafts.delete(toolCallId);
-      if (subagent && toolCallId) {
-        if (subagent.status === 'running') subagent = { ...subagent, status: data.success === false ? 'failed' : 'completed' };
-        this.subagents.delete(toolCallId);
-      }
-      const parentToolCallId = parentOf(event);
-      this.onToolComplete?.(sessionId, {
-        ...this.lifecycleEvent(sessionId),
-        toolName,
-        result,
-        toolCallId,
-        success: data.success as boolean | undefined,
-        attachments,
-        ...(parentToolCallId && { parentToolCallId }),
-        ...(subagent && { subagent }),
-      });
-    });
-
-    session.on('session.idle', () => {
-      const turn = this.sessions.get(sessionId)?.turn;
-      if (!turn) return;
-      if (turn.isAborted) {
-        // RelayClient owns a user stop's terminal boundary (turn_status
-        // user_abort + idle aborted). Settle silently: the half-written draft
-        // is not a reply, and an idle here would land before the abort status.
-        turn.settleSilently();
-        this.signalFlushComplete(sessionId);
-        return;
-      }
-
-      // The buffered prose becomes the turn's reply, then idle (once). An
-      // error still being classified must be reported first, or the turn ends
-      // looking clean. Copilot reports errors as they happen (session.error),
-      // so a reply it still produced afterwards is kept.
-      const finish = () => {
-        turn.finish();
-        this.signalFlushComplete(sessionId);
-      };
-      const pendingError = this.pendingErrorReports.get(sessionId);
-      if (pendingError) void pendingError.finally(finish);
-      else finish();
-    });
-
-    session.on('assistant.turn_start', (event) => {
-      if (fromSubagent(event)) return;
-      this.sessions.get(sessionId)?.turn.captureTurnId();
-      this.turnHasOutput.set(sessionId, false);
-      // Only reset if no error was reported before this turn started
-      // (session.error can fire before turn_start in error recovery paths)
-      if (!this.turnErrorReported.get(sessionId)) {
-        this.turnErrorReported.set(sessionId, false);
-      }
-    });
-
-    session.on('session.error', async (event) => {
-      const data = event.data as unknown as Record<string, unknown>;
-      const message = (data.message as string) ?? 'Unknown session error';
-      const errorType = data.errorType as string | undefined;
-      logger.error({ sessionId, errorType, statusCode: data.statusCode, agentId: (event as { agentId?: string }).agentId }, `session.error: ${message}`);
-      // A subagent's failure reaches the parent as the task tool's result.
-      if (fromSubagent(event)) return;
-      if (!this.turnErrorReported.get(sessionId)) {
-        this.turnErrorReported.set(sessionId, true);
-        const status = typeof data.statusCode === 'number' ? data.statusCode : undefined;
-        // A request the service answered (bad model, rate limit, outage) is
-        // reported as is, at once. Only a possible sign-out needs the probe.
-        if (status !== undefined && status !== 401 && status !== 403) {
-          this.emitError(sessionId, message);
-          return;
-        }
-        const report = (async () => {
-          if (await this.probeRuntime() === 'auth_error') this.fireAuthError(sessionId, message);
-          else this.emitError(sessionId, message);
-        })();
-        this.pendingErrorReports.set(sessionId, report);
-        try { await report; } finally {
-          if (this.pendingErrorReports.get(sessionId) === report) this.pendingErrorReports.delete(sessionId);
-        }
-      }
-    });
-
-    // Which model Copilot actually runs is Copilot's decision (`auto`, plan
-    // limits, fallbacks). Kraki relays; it never aborts a turn over it.
-    session.on((event) => {
-      if (event.type !== 'session.tools_updated') return;
-      const actualModel = (event.data as unknown as Record<string, unknown>)?.model as string | undefined;
-      const requested = this.userRequestedModels.get(sessionId);
-      if (actualModel && requested && actualModel !== requested) {
-        logger.info({ sessionId, requested, actualModel }, 'Copilot is running a different model than requested');
-      }
-    });
-
-    session.on('session.info', (event) => {
-      const data = event.data as unknown as Record<string, unknown>;
-      const category = data.category as string | undefined;
-      if (category === 'mcp') {
-        logger.info(`[MCP] ${data.message}`);
-      } else {
-        logger.debug(`[info:${category}] ${data.message}`);
-      }
-    });
-
-    session.on('session.warning', (event) => {
-      const data = event.data as unknown as Record<string, unknown>;
-      const category = data.category as string | undefined;
-      logger.warn(`[warning:${category}] ${data.message}`);
-    });
-
-    session.on('assistant.turn_end', async (event) => {
-      const data = event.data as unknown as Record<string, unknown>;
-      const reason = data?.reason;
-      if (fromSubagent(event)) {
-        // The parent sees the failure as the task tool's result.
-        if (reason === 'error') logger.warn({ sessionId, agentId: (event as { agentId?: string }).agentId, error: data?.error }, 'Copilot subagent turn ended with error');
-        return;
-      }
-      if (reason === 'error') {
-        const errorMsg = (data?.error as string) ?? 'Unknown agent error';
-        this.turnErrorReported.set(sessionId, true);
-        if (await this.probeRuntime() === 'auth_error') {
-          this.fireAuthError(sessionId, errorMsg);
-        } else {
-          this.emitError(sessionId, errorMsg);
-        }
-      }
-
-    });
-
-    session.on('session.title_changed', (event) => {
-      const data = event.data as unknown as Record<string, unknown>;
-      const title = data?.title as string | undefined;
-      if (title) {
-        this.nativeTitles.set(sessionId, title);
-        this.onTitleChanged?.(sessionId, title);
-      }
-    });
-
-    session.on('assistant.usage', (event) => {
-      const data = event.data as unknown as Record<string, unknown>;
-      const owner = fromSubagent(event) ? parentOf(event) : undefined;
-      const sub = owner ? this.subagents.get(owner) : undefined;
-      if (owner && sub) {
-        const used = ((data.inputTokens as number) ?? 0) + ((data.outputTokens as number) ?? 0);
-        this.subagents.set(owner, { ...sub, tokens: (sub.tokens ?? 0) + used });
-      }
-      const prev = this.sessionUsage.get(sessionId) ?? {
-        inputTokens: 0, outputTokens: 0,
-        cacheReadTokens: 0, cacheWriteTokens: 0,
-        totalCost: 0, totalDurationMs: 0,
-      };
-      const updated = {
-        inputTokens: prev.inputTokens + ((data.inputTokens as number) ?? 0),
-        outputTokens: prev.outputTokens + ((data.outputTokens as number) ?? 0),
-        cacheReadTokens: prev.cacheReadTokens + ((data.cacheReadTokens as number) ?? 0),
-        cacheWriteTokens: prev.cacheWriteTokens + ((data.cacheWriteTokens as number) ?? 0),
-        totalCost: prev.totalCost + ((data.cost as number) ?? 0),
-        totalDurationMs: prev.totalDurationMs + ((data.duration as number) ?? 0),
-        // A subagent's prompt is its own window, not the parent's.
-        contextTokens: fromSubagent(event) ? prev.contextTokens : (data.inputTokens as number) ?? prev.contextTokens,
-      };
-      this.sessionUsage.set(sessionId, updated);
-      this.onUsageUpdate?.(sessionId, updated);
-    });
   }
 
   // ── Permission handler factory ────────────────────
 
-  private makePermissionHandler(pending: Map<string, PendingPermission>) {
-    return (req: PermissionRequest, invocation: { sessionId: string }): Promise<PermissionRequestResult> | PermissionRequestResult => {
-      const sessionId = invocation.sessionId;
-      const toolKind = req.kind; // e.g. 'shell', 'write', 'read', 'url', 'mcp'
-      const mode = this.sessionModes.get(sessionId) ?? DEFAULT_SESSION_MODE;
-
-      const rawRequest = req as PermissionRequest & Record<string, unknown>;
-      if (toolKind === 'shell' && isKrakiSelfManagementCommand(shellCommandFromInput(rawRequest))) {
-        logger.warn({ sessionId }, 'blocked tentacle self-management command');
-        return { kind: 'reject', feedback: SELF_MANAGEMENT_DENIAL_REASON };
-      }
-
-      if (krakiAutoApproves(mode, copilotToolKind(toolKind))) {
-        logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
-        return { kind: 'approve-once' };
-      }
-
-      // Not auto-approved — send to relay for user decision
-      const permId = makeId('perm');
-      const parsed = parsePermission(req);
-
-      logger.debug({
-        permissionId: permId,
-        sessionId,
-        toolKind,
-        toolName: parsed.toolArgs.toolName,
-      }, 'permission requested');
-
-      this.onPermissionRequest?.(sessionId, {
-        ...this.lifecycleEvent(sessionId),
-        id: permId,
-        ...parsed,
-      });
-
-      const promise = new Promise<PermissionRequestResult>((resolve) => {
-        pending.set(permId, { resolve, toolKind });
-      });
-
-      return promise;
-    };
-  }
-
   // ── Question handler factory ──────────────────────
-
-  private makeQuestionHandler(pending: Map<string, PendingQuestion>) {
-    return (req: UserInputRequest, invocation: { sessionId: string }): Promise<UserInputResponse> | UserInputResponse => {
-      const sessionId = invocation.sessionId;
-      const mode = this.sessionModes.get(sessionId) ?? DEFAULT_SESSION_MODE;
-
-      // Delegate mode: auto-answer questions
-      if (mode === 'delegate') {
-        logger.debug({ sessionId }, 'question auto-answered (delegate mode)');
-        return { answer: 'proceed with your best judgment', wasFreeform: true };
-      }
-
-      const qId = makeId('q');
-
-      logger.debug({
-        questionId: qId,
-        sessionId,
-        choicesCount: req.choices?.length ?? 0,
-        allowFreeform: req.allowFreeform !== false,
-      }, 'question requested');
-
-      this.onQuestionRequest?.(sessionId, {
-        ...this.lifecycleEvent(sessionId),
-        id: qId,
-        question: req.question ?? '',
-        choices: req.choices ?? undefined,
-      });
-
-      return new Promise<UserInputResponse>((resolve) => {
-        pending.set(qId, { resolve });
-      });
-    };
-  }
 
   // ── Guards ────────────────────────────────────────
 
-  private ensureClient(): void {
+  ensureClient(): void {
     if (!this.client) throw new Error('Adapter not started — call start() first');
   }
 
