@@ -10,6 +10,7 @@ export default defineConfig({
   },
   resolve: { alias: {
     '@kraki/crypto': resolve(__dirname, '../crypto/src/index.ts'),
+    '@kraki/protocol/schemas': resolve(__dirname, '../protocol/src/schemas.ts'),
     '@kraki/protocol': resolve(__dirname, '../protocol/src/index.ts'),
   } },
 });

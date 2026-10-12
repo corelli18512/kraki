@@ -4371,6 +4371,69 @@ describe('RelayClient rejects unauthenticated consumer input', () => {
   });
 });
 
+describe('RelayClient checks app message fields', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+  });
+
+  function connected() {
+    const adapter = { ...createAdapter(), sendMessage: vi.fn(() => Promise.resolve()), setSessionMode: vi.fn() };
+    const sm = {
+      ...createSessionManager(),
+      getMeta: vi.fn(() => ({ id: 'sess_1', state: 'idle', mode: 'safe' })),
+      setPin: vi.fn(),
+      markActive: vi.fn(),
+      appendMessage: vi.fn(() => 1),
+    };
+    const client = new RelayClient(adapter as unknown as Parameters<typeof RelayClient>[0], sm as unknown as Parameters<typeof RelayClient>[1], {
+      relayUrl: 'ws://localhost:4000', authMethod: 'open', device: { name: 'Test', role: 'tentacle' }, reconnectDelay: 10,
+    }, createKeyManager());
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_1', authMethod: 'open', user: { id: 'u1', login: 'test', provider: 'open' }, devices: [],
+    })));
+    const deliver = (inner: Record<string, unknown>) =>
+      (client as unknown as { handlePulseDelivered(json: string): void }).handlePulseDelivered(JSON.stringify({ src: 'app_1', blob: JSON.stringify(inner), keys: {} }));
+    const persistedTypes = () => (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => { try { return JSON.parse(c[1] as string).type ?? c[1]; } catch { return c[1]; } });
+    return { adapter, sm, deliver, persistedTypes };
+  }
+  const base = { sessionId: 'sess_1', deviceId: 'app_1', seq: 1, timestamp: new Date().toISOString() };
+
+  it('a malformed send_input never reaches the agent or the history, and says why in the chat', async () => {
+    const { adapter, sm, deliver } = connected();
+    deliver({ ...base, type: 'send_input', payload: { text: 'look', clientId: 'c1', attachments: [{ type: 'image', mimeType: 'image/png' }] } });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(adapter.sendMessage).not.toHaveBeenCalled();
+    const calls = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[1]) + String(c[2] ?? ''));
+    expect(calls.some((c) => c.includes('user_message'))).toBe(false);
+    expect(calls.some((c) => c.includes('could not read that message'))).toBe(true);
+  });
+
+  it('a wrongly typed field that would be stored is dropped (pinned)', () => {
+    const { sm, deliver } = connected();
+    deliver({ ...base, type: 'pin_session', payload: { pinned: 'yes' } });
+    expect(sm.setPin).not.toHaveBeenCalled();
+    deliver({ ...base, type: 'pin_session', payload: { pinned: true } });
+    expect(sm.setPin).toHaveBeenCalledWith('sess_1', true);
+  });
+
+  it('an unknown message type (from a newer app) is ignored without an error in the chat', async () => {
+    const { adapter, sm, deliver } = connected();
+    deliver({ ...base, type: 'brand_new_feature', payload: { x: 1 } });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(adapter.sendMessage).not.toHaveBeenCalled();
+    expect(sm.appendMessage).not.toHaveBeenCalled();
+  });
+
+  it('a well-formed send_input with fields this tentacle does not know still goes through', async () => {
+    const { adapter, deliver } = connected();
+    deliver({ ...base, type: 'send_input', payload: { text: 'hi', clientId: 'c2', futureField: { a: 1 } } });
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalled());
+  });
+});
+
 describe('RelayClient permission decisions', () => {
   beforeEach(() => {
     sockets.length = 0;
