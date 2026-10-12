@@ -186,6 +186,9 @@ final class MacChatDocumentView: NSView {
     private var minimumContentHeight: CGFloat = 0
     private let minimumBottomBreathingRoom: CGFloat = 24
     private var bottomSafeArea: CGFloat = 24
+    /// Floating Composer growth above its resting footprint (scroll reach
+    /// only, never the newest edge): MacChatScrollView+ComposerOverlay.swift.
+    var composerOverlay: CGFloat = 0
     private var showsOlderSpinner = false
     private var showsNewerSpinner = false
     private let topSpinner = NSProgressIndicator()
@@ -1395,10 +1398,8 @@ final class MacChatDocumentView: NSView {
         warmer.enqueue([job])
     }
 
-    private func rebuildFrames() {
-        let heights = contents.map { item in
-            heightCache[cacheKey(item)] ?? item.estimatedHeight
-        }
+    func rebuildFrames() {
+        let heights = contents.map { heightCache[cacheKey($0)] ?? $0.estimatedHeight }
         let rawHeight = heights.reduce(0, +)
             + (showsOlderSpinner ? 44 : 0)
             + (showsNewerSpinner ? 44 : 0)
@@ -1418,7 +1419,7 @@ final class MacChatDocumentView: NSView {
         }
         y += bottomSafeArea
         let previousFrame = frame
-        frame = NSRect(x: 0, y: 0, width: documentWidth, height: max(y, minimumContentHeight))
+        frame = NSRect(x: 0, y: 0, width: documentWidth, height: max(y, minimumContentHeight) + composerOverlay)
         if abs(previousFrame.height - frame.height) > 0.5 {
             enclosingScrollView?.needsLayout = true
         }
@@ -2324,7 +2325,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     private var bottomContentInset: CGFloat = 0
     /// The list extends under the floating header; the first message rests
     /// below it instead of colliding with the title.
-    private let topContentInset: CGFloat = MacChatHeaderMetrics.listTopInset
+    let topContentInset: CGFloat = MacChatHeaderMetrics.listTopInset
     private var loadingOlder = false
     private var loadingNewer = false
     private var hasUnloadedNewer = false
@@ -3082,7 +3083,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         if isEntryBottomLocked, !bottomGlideActive, distanceToBottom > 0.5 {
             let bottom = max(
                 -topContentInset,
-                chatDocumentView.frame.height - contentView.bounds.height
+                chatDocumentView.tailHeight - contentView.bounds.height
             )
             contentView.bounds.origin.y = bottom
             scrollPolicy.pinToTail(observedOffset: bottom)
@@ -3157,7 +3158,7 @@ final class MacChatScrollView: MacSmoothScrollView {
 
     private func landingOffset(forRowStart minY: CGFloat) -> CGFloat {
         let minimumY = -topContentInset
-        let maximumY = max(minimumY, chatDocumentView.frame.height - contentView.bounds.height)
+        let maximumY = max(minimumY, chatDocumentView.tailHeight - contentView.bounds.height)
         return min(maximumY, max(minimumY, minY - latestMessageTopPadding))
     }
 
@@ -3460,7 +3461,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         resetSmoothWheelAnimation()
         scrollPolicy.leaveTailForUserNavigation(offset: contentView.bounds.minY)
         let minimumY = -contentInsets.top
-        let maximumY = max(minimumY, chatDocumentView.frame.height - contentView.bounds.height)
+        let maximumY = max(minimumY, chatDocumentView.tailHeight - contentView.bounds.height)
         contentView.bounds.origin.y = min(maximumY, max(minimumY, frame.minY - screenY))
         super.reflectScrolledClipView(contentView)
         _ = chatDocumentView.updateVisibleCells(in: contentView.bounds, runwayOverride: 0)
@@ -3715,7 +3716,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     }
 
     var distanceToBottom: CGFloat {
-        max(0, chatDocumentView.frame.height - contentView.bounds.maxY)
+        max(0, chatDocumentView.tailHeight - contentView.bounds.maxY)
     }
 
     var isPinnedToBottom: Bool {
@@ -3728,7 +3729,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         let minimumY = -topContentInset
         let maximumY = max(
             minimumY,
-            chatDocumentView.frame.height - contentView.bounds.height
+            chatDocumentView.tailHeight - contentView.bounds.height
         )
         let desired = frame.minY - latestMessageTopPadding
         return min(maximumY, max(minimumY, desired))
@@ -3761,7 +3762,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     /// The ↑/↓ controls keep their pre-motion state while the list moves
     /// (wheel/trackpad, momentum, a jump glide or its history load) and are
     /// re-evaluated once it settles.
-    private func updateJumpButtonVisibility(animated: Bool) {
+    func updateJumpButtonVisibility(animated: Bool) {
         guard !isDeallocating else { return }
         if isAtConversationBottom, unseenReplies > 0 { unseenReplies = 0 }
         let moving = scrollPolicy.navigationActive || navigationLoadInFlight || isProgrammaticScrollActive
@@ -3873,7 +3874,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         guard !applyingUnreadEntry else { return false }
         applyingUnreadEntry = true
         defer { applyingUnreadEntry = false }
-        let tail = max(-topContentInset, chatDocumentView.frame.height - contentView.bounds.height)
+        let tail = max(-topContentInset, chatDocumentView.tailHeight - contentView.bounds.height)
         switch scrollPolicy.unreadEntry {
         case .none:
             return false
@@ -3933,7 +3934,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         }
         animateScroll(follow: true, to: { [weak self] in
             guard let self else { return 0 }
-            return self.chatDocumentView.frame.height - self.contentView.bounds.height
+            return self.followTailTarget()
         }, completion: { [weak self] in
             guard let self else { return }
             self.scrollPolicy.pinToTail(observedOffset: self.contentView.bounds.minY)
@@ -3958,17 +3959,12 @@ final class MacChatScrollView: MacSmoothScrollView {
             scrollPolicy.pinToTail(observedOffset: contentView.bounds.minY)
             return
         }
-        let bottom = max(
-            -topContentInset,
-            chatDocumentView.frame.height - contentView.bounds.height
-        )
-        let point = NSPoint(x: 0, y: bottom)
         if animated {
             // Re-targets every frame, so content appended during the glide
             // (the message just sent, a landing answer) is still reached.
             animateScroll(to: { [weak self] in
                 guard let self else { return 0 }
-                return self.chatDocumentView.frame.height - self.contentView.bounds.height
+                return self.chatDocumentView.tailHeight - self.contentView.bounds.height
             }, completion: { [weak self] in
                 guard let self else { return }
                 self.scrollPolicy.pinToTail(observedOffset: self.contentView.bounds.minY)
@@ -3977,7 +3973,7 @@ final class MacChatScrollView: MacSmoothScrollView {
             bottomGlideActive = true
         } else {
             cancelScrollAnimation()
-            contentView.bounds.origin = point
+            contentView.bounds.origin = NSPoint(x: 0, y: followTailTarget())
         }
         scrollPolicy.pinToTail(observedOffset: contentView.bounds.minY)
         updateJumpButtonVisibility(animated: animated)
@@ -4067,6 +4063,8 @@ struct MacChatListRepresentable: NSViewRepresentable {
     /// Read position this Session was entered with (lands on the first new message).
     var unreadEntryBoundary: Int? = nil
     let bottomContentInset: CGFloat
+    /// Floating Composer growth above its resting footprint (scroll reach only).
+    var composerOverlayInset: CGFloat = 0
     let isLoadingOlder: Bool
     let isLoadingNewer: Bool
     var hasNewerLocalRows: Bool = true
@@ -4256,7 +4254,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
                 documentWidth: max(documentWidth, 1),
                 sessionMode: sessionMode
             )
-            scrollView.setBottomContentInset(bottomContentInset)
+            scrollView.setBottomContentInset(bottomContentInset, composerOverlay: composerOverlayInset)
             let hasPageableContent = !builtItems.isEmpty
             scrollView.setLoading(
                 // An empty Session has no edge rows to paginate. Until now its

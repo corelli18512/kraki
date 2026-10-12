@@ -50,15 +50,26 @@ enum ChatEntryLoading {
 
 enum ChatBottomObstruction {
     /// Reserve the resting capsule, not its expanding glass surface. The visible
-    /// gap above the capsule equals its bottom padding; the last cell already
-    /// contributes `bubbleBottomPadding` to that gap. System safe area is added
-    /// separately by the platform and must not be counted a second time.
+    /// gap between the last bubble and the capsule matches the gap between two
+    /// bubbles (each cell pads `bubbleBottomPadding` above and below its
+    /// bubble); the last cell already contributes its bottom padding to that
+    /// gap. System safe area is added separately by the platform and must not
+    /// be counted a second time.
     static func composerClearance(
         capsuleHeight: CGFloat,
         bottomPadding: CGFloat,
         bubbleBottomPadding: CGFloat
     ) -> CGFloat {
-        max(0, capsuleHeight + bottomPadding * 2 - bubbleBottomPadding)
+        max(0, capsuleHeight + bottomPadding + bubbleBottomPadding)
+    }
+
+    /// How far the floating composer currently rises above its resting
+    /// footprint (dictation, a multi-line draft, a failure row). The list may
+    /// scroll this much further so the bubbles it covers can be revealed, but
+    /// nothing follows it: the conversation does not move when it grows.
+    static func composerOverlay(measuredHeight: CGFloat, restingHeight: CGFloat) -> CGFloat {
+        let extra = measuredHeight - restingHeight
+        return extra > 0.5 ? extra.rounded(.up) : 0
     }
 
     static func height(
