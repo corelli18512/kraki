@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { KRAKI_SYSTEM_PROMPT, PiAdapter, summarizeCrash } from '../adapters/pi.js';
+import { handleEvent } from '../adapters/pi-events.js';
 import { turnFixture } from './helpers/turn-fixture.js';
 import { PI_KRAKI_TOOLS_SOURCE } from '../adapters/pi-kraki-tools.js';
 
@@ -61,7 +62,7 @@ function makeAdapter(promptWatchdog?: {
   };
   (adapter as unknown as { sessions: Map<string, unknown> }).sessions.set(sid, session);
   const emit = (e: Record<string, unknown>) =>
-    (adapter as unknown as { handleEvent: (sid: string, e: Record<string, unknown>) => void }).handleEvent(sid, e);
+    handleEvent(adapter, sid, e);
   const narrate = (text: string) =>
     emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }], stopReason: 'stop' } });
   return { adapter, sid, proc, session, emit, narrate };
@@ -603,7 +604,7 @@ describe('pi outbound images (tool result → attachment store)', () => {
       turn: turnFixture(adapter, sid, { open: true }), lastStopReason: undefined, aborting: false,
     });
     const emit = async (e: Record<string, unknown>) =>
-      await (adapter as unknown as { handleEvent: (sid: string, e: Record<string, unknown>) => Promise<void> }).handleEvent(sid, e);
+      await handleEvent(adapter, sid, e);
     return { adapter, emit, put };
   }
 

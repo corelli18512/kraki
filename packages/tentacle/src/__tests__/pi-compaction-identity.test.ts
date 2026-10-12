@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PiAdapter } from '../adapters/pi.js';
+import { handleEvent } from '../adapters/pi-events.js';
 import { turnFixture } from './helpers/turn-fixture.js';
 import { RelayClient } from '../relay-client.js';
 import { beginAdapterTurn } from '../relay/turns.js';
@@ -28,7 +29,6 @@ function setup() {
   };
   const internal = adapter as unknown as {
     sessions: Map<string, typeof session>;
-    handleEvent: (id: string, event: Record<string, unknown>) => Promise<void>;
   };
   internal.sessions.set(sid, session);
   const manager = { getMeta: () => ({ state: 'active' }) };
@@ -46,7 +46,7 @@ function setup() {
   adapter.onError = vi.fn();
   adapter.onIdle = vi.fn();
   adapter.onMessageDelta = vi.fn();
-  const emit = (event: Record<string, unknown>) => internal.handleEvent(sid, event);
+  const emit = (event: Record<string, unknown>) => handleEvent(adapter, sid, event);
   const begin = (turnId: string) => beginAdapterTurn(client, sid, turnId);
   begin('previous');
   // handleEvent runs synchronously up to the first await (agent_start has none).
