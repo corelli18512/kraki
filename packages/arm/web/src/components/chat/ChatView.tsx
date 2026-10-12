@@ -178,6 +178,13 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
     requestAnimationFrame(() => scrollToBottom(true));
   }, [scrollToBottom]);
 
+  // New bubbles enter from their side; older pages and the live → landed
+  // handoff do not (ChatScroller.newTailKeys).
+  const entranceSide = useCallback((row: ChatRow) => {
+    const side = rowSide(row);
+    return side === 'user' ? 'right' : side === 'agent' ? 'left' : null;
+  }, []);
+
   // ── Older pages ──
   const lowSeq = lowestSeq(messages);
   const hasOlder = lowSeq > 1;
@@ -275,6 +282,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
         onScroll={measureUp}
         unreadTarget={entry.current.boundary === null ? undefined : unreadTarget}
         onUnreadEntryEnd={() => setUnreadEntryLive(false)}
+        entranceSide={entranceSide}
       />
       {rows.length === 0 && (
         <div className="kchat-empty" style={{ paddingTop: topInset }}>

@@ -398,7 +398,10 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
             if sent, CACurrentMediaTime() - sentAt > 0.45 { worst = max(worst, distanceToBottom(fx)) }
         }
         drain(600)
-        XCTAssertLessThanOrEqual(worst, 1, "after the send glide the Chat keeps following the streaming reply")
+        // Following glides: the newest lines trail by a few lines at most —
+        // this stream is ~900 characters/s, far faster than an agent writes —
+        // and are never left behind (the bug: 1,857 pt and growing).
+        XCTAssertLessThanOrEqual(worst, 3 * MacTailMotion.maxLag, "after the send glide the Chat keeps following the streaming reply")
         XCTAssertLessThanOrEqual(distanceToBottom(fx), 1)
         XCTAssertFalse(fx.sv.automationControlsVisible.down)
     }
@@ -530,7 +533,9 @@ final class MacChatUXRegressionTests: MacChatUXTestCase {
         XCTAssertEqual(entrances(fx).last?.key, "__live__")
         XCTAssertGreaterThan(fx.sv.contentView.bounds.minY, before)
         XCTAssertLessThanOrEqual(back2, 0.5, "streaming during the arrival glide never pulls the list back")
-        XCTAssertLessThanOrEqual(distanceToBottom(fx), 1, "the streaming reply stays followed")
+        XCTAssertLessThanOrEqual(distanceToBottom(fx), 2 * MacTailMotion.maxLag, "the streaming reply stays followed")
+        drain(300)
+        XCTAssertLessThanOrEqual(distanceToBottom(fx), 1, "and the glide settles on the bottom")
 
         try land(fx, seq: 62, text: Self.zh + Self.zh)
         fx.app.sessionStore.sessions[sid]?.state = .idle
