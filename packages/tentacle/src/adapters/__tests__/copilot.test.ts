@@ -152,6 +152,7 @@ const mockedExecSync = realExecSync as unknown as Mock;
 // ── Import after mocking ────────────────────────────────
 
 import { CopilotAdapter, AgentAdapter } from '../index.js';
+import { evictIdleSessions } from '../copilot-eviction.js';
 import {
   installCopilotSdkImportCompatibility,
   resolveCopilotCliPath,
@@ -1723,7 +1724,6 @@ describe('CopilotAdapter', () => {
       sessions: Map<string, { pendingPermissions: Map<string, unknown>; pendingQuestions: Map<string, unknown>; session: { disconnect: Mock } }>;
       lastActivityAt: Map<string, number>;
       turnHasOutput: Map<string, boolean>;
-      evictIdleSessions: () => Promise<void>;
     };
 
     // Helper: configure execSync to report the given total RSS (MB).
@@ -1761,7 +1761,7 @@ describe('CopilotAdapter', () => {
       // Report RSS = 500 MB — well under threshold.
       mockRuntimeRssMB(500, 2);
 
-      await internals.evictIdleSessions();
+      await evictIdleSessions(adapter);
 
       expect(internals.sessions.size).toBe(2);
       expect(mockSessions[0].disconnect).not.toHaveBeenCalled();
@@ -1781,7 +1781,7 @@ describe('CopilotAdapter', () => {
 
       mockRuntimeRssMB(3000, 2); // 3 GB > 2 GB threshold
 
-      await internals.evictIdleSessions();
+      await evictIdleSessions(adapter);
 
       expect(mockSessions[0].disconnect).toHaveBeenCalled();
       expect(mockSessions[1].disconnect).not.toHaveBeenCalled();
@@ -1800,7 +1800,7 @@ describe('CopilotAdapter', () => {
 
       mockRuntimeRssMB(3000, 1);
 
-      await internals.evictIdleSessions();
+      await evictIdleSessions(adapter);
 
       expect(mockSessions[0].disconnect).not.toHaveBeenCalled();
       expect(internals.sessions.has(blocked.sessionId)).toBe(true);
@@ -1816,7 +1816,7 @@ describe('CopilotAdapter', () => {
 
       mockRuntimeRssMB(3000, 1);
 
-      await internals.evictIdleSessions();
+      await evictIdleSessions(adapter);
 
       expect(mockSessions[0].disconnect).not.toHaveBeenCalled();
       expect(internals.sessions.has(turning.sessionId)).toBe(true);
@@ -1834,7 +1834,7 @@ describe('CopilotAdapter', () => {
 
       mockRuntimeRssMB(3000, 1);
 
-      await internals.evictIdleSessions();
+      await evictIdleSessions(adapter);
 
       expect(evictedSpy).toHaveBeenCalledWith(s.sessionId);
     });

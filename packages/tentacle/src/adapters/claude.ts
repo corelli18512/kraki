@@ -13,508 +13,55 @@
  */
 
 import type { SessionUsage, ModelDetail, Attachment } from '@kraki/protocol';
-import {
-  AgentAdapter,
-  type CreateSessionConfig,
-  type SessionInfo,
-  type PermissionDecision,
-  type QuestionAnswer,
-  type QuestionResponseResult,
-  type PermissionResponseResult,
-  type SendMessageOptions,
-} from './base.js';
-import type { SessionContext } from '../session-manager.js';
-import { createLogger } from '../logger.js';
-import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, symlinkSync, lstatSync, unlinkSync, rmSync, rmdirSync, statSync, linkSync, copyFileSync } from 'node:fs';
+import { AgentAdapter, type CreateSessionConfig, type SessionInfo, type PermissionDecision, type QuestionAnswer, type QuestionResponseResult, type PermissionResponseResult, type SendMessageOptions } from './base.js';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getConfigDir } from '../config.js';
-import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
-import { canonicalArtifactToolName } from './tool-name.js';
 import { DEFAULT_SESSION_MODE } from '@kraki/protocol';
 import { TurnTracker } from './turn-tracker.js';
-import { KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMode, type ToolKind } from './permission-policy.js';
+import { KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMode } from './permission-policy.js';
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
-
-const logger = createLogger('claude-adapter');
-
-/**
- * Load `env` overrides from `~/.claude/settings.json` (the same file
- * Claude Code itself reads) and merge them into `process.env`.
- *
- * This lets users running kraki as a launchd / systemd daemon — which
- * does not inherit their interactive shell environment — point the
- * Claude SDK at custom Anthropic-compatible providers (e.g. DeepSeek,
- * a self-hosted gateway) by writing standard ANTHROPIC_* keys into
- * settings.json instead of a shell rc file.
- *
- * Existing values in `process.env` win, so a user who *does* have the
- * vars exported (e.g. via plist EnvironmentVariables) keeps that
- * behaviour.
- *
- * Errors are non-fatal — a missing or malformed file just means we
- * fall back to whatever is already in `process.env`.
- */
-export function loadClaudeSettingsEnv(configDir: string): Record<string, string> {
-  const settingsPath = join(configDir, 'settings.json');
-  const out: Record<string, string> = {};
-  if (!existsSync(settingsPath)) return out;
-  try {
-    const raw = readFileSync(settingsPath, 'utf8');
-    const parsed = JSON.parse(raw) as { env?: Record<string, unknown> };
-    const env = parsed.env;
-    if (!env || typeof env !== 'object') return out;
-    for (const [key, value] of Object.entries(env)) {
-      if (typeof value !== 'string') continue;
-      if (process.env[key] !== undefined) continue;
-      out[key] = value;
-    }
-    if (Object.keys(out).length > 0) {
-      logger.debug({ path: settingsPath, count: Object.keys(out).length }, 'Loaded env from Claude settings.json');
-    }
-  } catch (err) {
-    logger.warn(
-      { error: (err as Error).message, path: settingsPath },
-      'Failed to load Claude settings.json env (continuing with process env only)',
-    );
-  }
-  return out;
-}
-
 import { linkIntoShadow } from './shadow-link.js';
 import { cloneTree } from '../fs-clone.js';
+import { handleSDKMessage } from './claude-messages.js';
+import { makeCanUseToolHandler, emitQuestionCard, broadcastPendingResolutions } from './claude-permissions.js';
+import { resetSubagentPhase } from './claude-subagents.js';
+import { loadClaudeSettingsEnv, claudeConfigSource, secureStorageEnv, isClaudeLoggedOut, aliasEnvKey } from './claude-env.js';
+import { getErrorMessage } from './claude-errors.js';
+import { logger, type SDKMessage, type SDKSystemMessage, type SDKUserMessage, type Options, type PermissionMode, type Query, type PendingPermission, type PendingQuestion, type SessionEntry, createInputChannel } from './claude-session.js';
+import { toolNameToKind } from './claude-tools.js';
+export { loadClaudeSettingsEnv, claudeConfigSource, secureStorageEnv, isClaudeLoggedOut } from './claude-env.js';
+export { normalizeClaudeSDKError } from './claude-errors.js';
+export { toolNameToKind, editsToDiff } from './claude-tools.js';
 
 export { linkIntoShadow };
-
-/** The user's real Claude Code config root: an explicit CLAUDE_CONFIG_DIR,
- *  otherwise ~/.claude. Kraki's per-session shadow homes are built FROM this. */
-export function claudeConfigSource(): { dir: string; explicit: boolean } {
-  const explicit = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return explicit ? { dir: explicit, explicit: true } : { dir: join(homedir(), '.claude'), explicit: false };
-}
-
-/**
- * Claude Code names its macOS Keychain credential item after the config dir:
- * `Claude Code-credentials` for the default dir, `...-<sha256(dir)[:8]>` once
- * CLAUDE_CONFIG_DIR is set (verified in Claude Code 2.1.220). Kraki's shadow
- * CLAUDE_CONFIG_DIR would therefore look up a Keychain item that does not
- * exist, and subscription (OAuth) logins could never work. The CLI's
- * CLAUDE_SECURESTORAGE_CONFIG_DIR pins secure storage to the REAL config root
- * (empty string = the default, unsuffixed item).
- */
-export function secureStorageEnv(): Record<string, string> {
-  if (process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR !== undefined) return {};
-  const source = claudeConfigSource();
-  return { CLAUDE_SECURESTORAGE_CONFIG_DIR: source.explicit ? source.dir : '' };
-}
-
-/** True when SDK accountInfo proves no credential is configured at all. */
-export function isClaudeLoggedOut(info: unknown): boolean {
-  if (!info || typeof info !== 'object') return false;
-  const a = info as { email?: string; apiKeySource?: string; tokenSource?: string; apiProvider?: string };
-  if (a.apiProvider && a.apiProvider !== 'firstParty') return false; // Bedrock/Vertex/… auth is external
-  return !a.email && !a.apiKeySource && (!a.tokenSource || a.tokenSource === 'none');
-}
-
-/** Map an SDK model alias (`opus`, `opus[1m]`, …) to its ANTHROPIC_* override key. */
-function aliasEnvKey(alias: string): string | undefined {
-  const base = alias.replace(/\[[^\]]*\]$/, '');
-  return ({
-    default: 'ANTHROPIC_MODEL',
-    opus: 'ANTHROPIC_DEFAULT_OPUS_MODEL',
-    sonnet: 'ANTHROPIC_DEFAULT_SONNET_MODEL',
-    haiku: 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-  } as Record<string, string>)[base];
-}
-
-// ── Lazy SDK import types ───────────────────────────────
-// We import the SDK dynamically so the module can be loaded even when
-// @anthropic-ai/claude-agent-sdk is not installed — the adapter simply
-// throws at start() in that case.
-
-type SDKMessage = import('@anthropic-ai/claude-agent-sdk').SDKMessage;
-type SDKAssistantMessage = import('@anthropic-ai/claude-agent-sdk').SDKAssistantMessage;
-type SDKResultMessage = import('@anthropic-ai/claude-agent-sdk').SDKResultMessage;
-type SDKSystemMessage = import('@anthropic-ai/claude-agent-sdk').SDKSystemMessage;
-type SDKPartialAssistantMessage = import('@anthropic-ai/claude-agent-sdk').SDKPartialAssistantMessage;
-type SDKUserMessage = import('@anthropic-ai/claude-agent-sdk').SDKUserMessage;
-type Options = import('@anthropic-ai/claude-agent-sdk').Options;
-type PermissionMode = import('@anthropic-ai/claude-agent-sdk').PermissionMode;
-type Query = import('@anthropic-ai/claude-agent-sdk').Query;
-
-/** Re-export the SDK's discriminated union for canUseTool return values. */
-type PermissionResult = import('@anthropic-ai/claude-agent-sdk').PermissionResult;
-
-// ── Types for internal bookkeeping ──────────────────────
-
-interface PendingPermission {
-  resolve: (result: PermissionResult) => void;
-  toolKind: string;
-  /** The tool call's original input. `updatedInput` REPLACES the tool's
-   *  arguments, so an approval must hand the original input back. */
-  input: Record<string, unknown>;
-}
-
-/** One AskUserQuestion entry from the SDK's `questions` array. */
-interface AskUserQuestionItem {
-  question: string;
-  options?: Array<{ label: string; description?: string; preview?: string }>;
-  multiSelect?: boolean;
-  header?: string;
-}
-
-interface PendingQuestion {
-  resolve: (result: PermissionResult) => void;
-  questionId: string;
-  /** Original questions payload from the SDK, echoed back in the answer.
-   *  The SDK's AskUserQuestion `answers` map is keyed by each question's
-   *  `question` text, so we need this to build the answer. */
-  questions?: AskUserQuestionItem[];
-  /** Index (into `questions`) of the question THIS card represents. The SDK
-   *  may ask 1–4 questions per call; kraki surfaces them to the user one card
-   *  at a time and advances on each answer. */
-  qIndex?: number;
-  /** Answers collected so far across the serial cards of one AskUserQuestion
-   *  call, keyed by question text. Shared (mutated) across the chain. */
-  collected?: Record<string, string>;
-}
-
-/** A message pushed into the streaming input channel. */
-interface InputChannel {
-  push(msg: SDKUserMessage): void;
-  end(): void;
-}
-
-interface NormalizedClaudeError {
-  message: string;
-  status?: number;
-  requestId?: string;
-  quality: number;
-}
-
-/** Everything we track per session. */
-interface SessionEntry {
-  query: Query | null;
-  abortController: AbortController;
-  inputChannel: InputChannel;
-  inputIterable: AsyncIterable<SDKUserMessage>;
-  pendingPermissions: Map<string, PendingPermission>;
-  pendingQuestions: Map<string, PendingQuestion>;
-  sessionId: string;
-  model?: string;
-  consumerLoop: Promise<void>;
-  /** Deferred config — used to lazily spawn query() on first sendMessage */
-  deferredConfig?: CreateSessionConfig & { resume?: string; fork?: boolean };
-  /** Kraki's view of the current turn: prose (narration vs reply), user stop,
-   *  idle once. Created with the Kraki session id. */
-  turn: TurnTracker;
-  /** Best error seen this turn (Claude reports several; keep the most useful). */
-  pendingError?: NormalizedClaudeError;
-  /** Results still owed by user-stopped turns whose SDK result had not
-   *  arrived when the next prompt was sent. The SDK processes input in order,
-   *  so the next N results (and prose before them) belong to those turns. */
-  staleResults?: number;
-  /** Claude Code reported status=compacting and no end has been seen yet. */
-  compacting?: boolean;
-  /** Subagent tasks (Agent/Task tool) still running, by SDK task id. Claude
-   *  Code runs them in the background by default and, when one finishes,
-   *  wakes the parent with a new provider turn on its own. */
-  runningSubagents?: Set<string>;
-  /** Subagent task id (= canUseTool agentID) → its task description. */
-  subagentLabels?: Map<string, string>;
-  /** Agent/Task tool calls that dispatched a subagent, by tool_use id. */
-  dispatches?: Map<string, ClaudeDispatch>;
-  /** Subagent task id → dispatching tool_use id. */
-  taskDispatch?: Map<string, string>;
-  /** Each subagent's latest prose, held until a further step shows it was
-   *  narration — its final words are its report (the dispatch's result). */
-  subagentDrafts?: Map<string, string>;
-  /** The parent's provider turn ended while subagents were still running;
-   *  the Kraki turn stays open for the continuation Claude Code starts. */
-  awaitingSubagents?: boolean;
-  /** Fallback settle when subagents finished but no continuation came. */
-  subagentSettleTimer?: ReturnType<typeof setTimeout>;
-  /** The Kraki turn has been held open at least once for subagents; it stays
-   *  set across Claude Code's continuation turns until the turn settles. */
-  subagentPhase?: boolean;
-  /** Subagent completions seen during the phase whose continuation turn has
-   *  not finished yet (Claude Code wakes the parent once per completion). */
-  owedContinuations?: number;
-  reasoningEffort?: string;
-}
-
-/** One Agent/Task tool call and the subagent it started. */
-interface ClaudeDispatch {
-  info: import('@kraki/protocol').SubagentInfo;
-  /** The SDK task running it (background agents report through it). */
-  taskId?: string;
-  /** The tool already returned a background launch receipt. */
-  receipt?: boolean;
-  /** Its terminal tool_complete was emitted. */
-  done?: boolean;
-  /** Report text from task_notification (background agents). */
-  summary?: string;
-}
-
-/** Tools that dispatch a Claude Code subagent. */
-const CLAUDE_DISPATCH_TOOLS = new Set(['Agent', 'Task']);
-
-// ── Helpers ─────────────────────────────────────────────
-
-function makeId(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function getErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
-
-function meaningfulClaudeErrorText(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const text = value.trim();
-  if (!text || /^(success|unknown|error_during_execution)$/i.test(text)) return undefined;
-  return text;
-}
-
-function assistantText(message: unknown): string | undefined {
-  const content = (message as { content?: unknown } | null)?.content;
-  if (!Array.isArray(content)) return undefined;
-  const text = content
-    .filter((block): block is { type: string; text: string } =>
-      !!block && typeof block === 'object' && (block as { type?: unknown }).type === 'text'
-      && typeof (block as { text?: unknown }).text === 'string')
-    .map((block) => block.text)
-    .join('\n')
-    .trim();
-  return meaningfulClaudeErrorText(text);
-}
-
-export function normalizeClaudeSDKError(value: Record<string, unknown>): NormalizedClaudeError {
-  const errors = Array.isArray(value.errors)
-    ? value.errors.map(meaningfulClaudeErrorText).filter((item): item is string => !!item)
-    : [];
-  const text = errors.join('; ')
-    || assistantText(value.message)
-    || meaningfulClaudeErrorText(value.result)
-    || meaningfulClaudeErrorText(value.error_message);
-  const statusCandidate = value.api_error_status ?? value.apiErrorStatus ?? value.status ?? value.statusCode;
-  const status = typeof statusCandidate === 'number' ? statusCandidate : undefined;
-  const requestIdCandidate = value.request_id ?? value.requestId;
-  const requestId = typeof requestIdCandidate === 'string' ? requestIdCandidate : undefined;
-  const category = meaningfulClaudeErrorText(value.error);
-  const fallback = status ? `Claude API error (HTTP ${status})` : category ? `Claude API error: ${category}` : 'Claude API request failed';
-  const message = text ?? fallback;
-  const quality = text ? (status ? 4 : 3) : status ? 2 : category ? 1 : 0;
-  return { message, ...(status ? { status } : {}), ...(requestId ? { requestId } : {}), quality };
-}
-
-function preferClaudeError(
-  current: NormalizedClaudeError | undefined,
-  candidate: NormalizedClaudeError,
-): NormalizedClaudeError {
-  return !current || candidate.quality > current.quality ? candidate : current;
-}
-
-/**
- * Map Claude SDK tool names to Kraki tool kinds (for permission tracking).
- * Returns the general category for "Always Allow" grouping.
- */
-export function toolNameToKind(toolName: string): ToolKind {
-  switch (toolName) {
-    case 'Bash':
-    case 'BashOutput':
-    case 'KillShell':
-      return 'shell';
-    case 'Write':
-    case 'Edit':
-    case 'MultiEdit':
-    case 'NotebookEdit':
-      return 'write';
-    case 'Read':
-    case 'Glob':
-    case 'Grep':
-    case 'LS':
-      return 'read';
-    case 'WebSearch':
-    case 'WebFetch':
-      return 'url';
-    case 'TodoWrite':
-    case 'Task':
-    case 'Agent':
-    case 'ExitPlanMode':
-      return 'meta';
-    default:
-      return toolName.startsWith('mcp__') ? 'mcp' : 'other';
-  }
-}
-
-/** Minimal unified-style diff of Claude Edit/MultiEdit replacements. */
-export function editsToDiff(path: string, edits: Array<{ old_string?: unknown; new_string?: unknown }>): string {
-  const lines = [`--- ${path}`, `+++ ${path}`];
-  for (const edit of edits) {
-    const before = typeof edit.old_string === 'string' ? edit.old_string : '';
-    const after = typeof edit.new_string === 'string' ? edit.new_string : '';
-    lines.push('@@');
-    if (before) for (const l of before.split('\n')) lines.push(`-${l}`);
-    if (after) for (const l of after.split('\n')) lines.push(`+${l}`);
-  }
-  const diff = lines.join('\n');
-  return diff.length > 16_000 ? `${diff.slice(0, 16_000)}\n… (truncated)` : diff;
-}
-
-/**
- * Parse a Claude SDK tool call into Kraki protocol ToolArgs + description.
- */
-function parseClaudeToolCall(toolName: string, input: Record<string, unknown>): {
-  toolArgs: import('@kraki/protocol').ToolArgs;
-  description: string;
-} {
-  switch (toolName) {
-    case 'Bash': {
-      const command = (input.command ?? input.cmd ?? '') as string;
-      return {
-        toolArgs: { toolName: 'shell', args: { command } },
-        description: `Run: ${command}`,
-      };
-    }
-    case 'Write': {
-      const path = (input.file_path ?? input.path ?? '') as string;
-      return {
-        toolArgs: { toolName: 'write_file', args: { path, content: (input.content ?? '') as string } },
-        description: `Write: ${path}`,
-      };
-    }
-    case 'Edit':
-    case 'MultiEdit': {
-      const path = (input.file_path ?? input.path ?? '') as string;
-      // Show what changes, like Codex/Copilot cards do, so a `safe` approval
-      // is not blind. Same `content` slot the clients already render.
-      const edits = toolName === 'MultiEdit' && Array.isArray(input.edits)
-        ? input.edits as Array<{ old_string?: unknown; new_string?: unknown }>
-        : [{ old_string: input.old_string, new_string: input.new_string }];
-      return {
-        toolArgs: { toolName: 'write_file', args: { path, content: editsToDiff(path, edits) } },
-        description: `Edit: ${path}`,
-      };
-    }
-    case 'Read': {
-      const path = (input.file_path ?? input.path ?? '') as string;
-      return {
-        toolArgs: { toolName: 'read_file', args: { path } },
-        description: `Read: ${path}`,
-      };
-    }
-    case 'Glob':
-    case 'Grep':
-    case 'LS': {
-      const path = (input.path ?? input.pattern ?? '') as string;
-      return {
-        toolArgs: { toolName: 'read_file', args: { path } },
-        description: `${toolName}: ${path}`,
-      };
-    }
-    case 'WebSearch':
-    case 'WebFetch': {
-      const url = (input.url ?? input.query ?? '') as string;
-      return {
-        toolArgs: { toolName: 'fetch_url', args: { url } },
-        description: `${toolName}: ${url}`,
-      };
-    }
-    default: {
-      if (toolName.startsWith('mcp__')) {
-        const parts = toolName.split('__');
-        const server = parts[1] ?? 'unknown';
-        const tool = parts.slice(2).join('__') || 'unknown';
-        return {
-          toolArgs: { toolName: 'mcp', args: { server, tool, params: input } },
-          description: `MCP tool: ${tool} on ${server}`,
-        };
-      }
-      return {
-        toolArgs: { toolName, args: input },
-        description: `${toolName}: ${JSON.stringify(input).slice(0, 200)}`,
-      };
-    }
-  }
-}
-
-/**
- * Create a streaming input channel (AsyncIterable<SDKUserMessage>).
- * Messages pushed via `push()` are yielded by the async iterator.
- * Call `end()` to close the channel.
- */
-function createInputChannel(): { iterable: AsyncIterable<SDKUserMessage>; channel: InputChannel } {
-  let resolve: ((value: IteratorResult<SDKUserMessage>) => void) | null = null;
-  const queue: SDKUserMessage[] = [];
-  let done = false;
-
-  const iterable: AsyncIterable<SDKUserMessage> = {
-    [Symbol.asyncIterator]() {
-      return {
-        next(): Promise<IteratorResult<SDKUserMessage>> {
-          if (queue.length > 0) {
-            return Promise.resolve({ value: queue.shift()!, done: false });
-          }
-          if (done) {
-            return Promise.resolve({ value: undefined as unknown as SDKUserMessage, done: true });
-          }
-          return new Promise<IteratorResult<SDKUserMessage>>((r) => { resolve = r; });
-        },
-      };
-    },
-  };
-
-  const channel: InputChannel = {
-    push(msg: SDKUserMessage) {
-      if (done) return;
-      if (resolve) {
-        const r = resolve;
-        resolve = null;
-        r({ value: msg, done: false });
-      } else {
-        queue.push(msg);
-      }
-    },
-    end() {
-      done = true;
-      if (resolve) {
-        const r = resolve;
-        resolve = null;
-        r({ value: undefined as unknown as SDKUserMessage, done: true });
-      }
-    },
-  };
-
-  return { iterable, channel };
-}
 
 // ── Adapter ─────────────────────────────────────────────
 
 export class ClaudeAdapter extends AgentAdapter {
-  private sessions = new Map<string, SessionEntry>();
+  sessions = new Map<string, SessionEntry>();
   /** Per-session auto-approve sets (populated by "Always Allow" clicks) */
   /** Session permission mode */
-  private sessionModes = new Map<string, SessionMode>();
+  sessionModes = new Map<string, SessionMode>();
   /** Sessions with a pending mode change to prepend on next user message */
   private pendingModeSignals = new Map<string, string>();
   /** Last API response id whose usage was counted, per session. */
-  private lastCountedResponse = new Map<string, string>();
+  lastCountedResponse = new Map<string, string>();
   /** Last `total_cost_usd` reported by the session's current query. */
-  private lastQueryCost = new Map<string, number>();
+  lastQueryCost = new Map<string, number>();
   /** Per-session cumulative token usage */
-  private sessionUsage = new Map<string, SessionUsage>();
+  sessionUsage = new Map<string, SessionUsage>();
   /** Cached model list from last session init */
   private cachedModels: ModelDetail[] = [];
   /** Map resolved display name → SDK alias for env-overridden models */
   private modelAliasMap = new Map<string, string>();
   /** Track in-flight tool_use IDs per session for correlating tool_complete */
-  private pendingToolCalls = new Map<string, Map<string, { toolName: string; args: Record<string, unknown>; parentToolCallId?: string }>>();
+  pendingToolCalls = new Map<string, Map<string, { toolName: string; args: Record<string, unknown>; parentToolCallId?: string }>>();
   /** Map Kraki session ID → SDK session UUID (resume/fork). */
-  private sdkSessionIds = new Map<string, string>();
+  sdkSessionIds = new Map<string, string>();
 
-  private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
+  readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
   private readonly krakiMcp?: {
     urlForSession: (sessionId: string) => string;
     tokenForSession: (sessionId: string) => string;
@@ -604,7 +151,7 @@ export class ClaudeAdapter extends AgentAdapter {
     return this.modelAliasMap.get(model) ?? model;
   }
 
-  private persistMeta(sessionId: string, meta: { cwd?: string; sdkSessionId?: string; model?: string; reasoningEffort?: string; forkFrom?: string }): void {
+  persistMeta(sessionId: string, meta: { cwd?: string; sdkSessionId?: string; model?: string; reasoningEffort?: string; forkFrom?: string }): void {
     try {
       mkdirSync(this.storeDir(sessionId), { recursive: true });
       const prev = this.loadMeta(sessionId) ?? {};
@@ -738,7 +285,7 @@ export class ClaudeAdapter extends AgentAdapter {
   async stop(): Promise<void> {
     for (const [sessionId, entry] of this.sessions) {
       try {
-        this.broadcastPendingResolutions(sessionId);
+        broadcastPendingResolutions(this, sessionId);
         entry.inputChannel.end();
         entry.abortController.abort();
       } catch {
@@ -909,7 +456,7 @@ export class ClaudeAdapter extends AgentAdapter {
     if (options?.delivery !== 'steer' || entry.turn.isSettled) {
       if (entry.turn.isAborted && !entry.turn.isSettled) entry.staleResults = (entry.staleResults ?? 0) + 1;
       entry.pendingError = undefined;
-      this.resetSubagentPhase(entry);
+      resetSubagentPhase(this, entry);
       // A new logical turn owns every event from here on. The SDK does not
       // echo prompts back, and only tool turns produce SDK 'user' messages,
       // so waiting for one left text-only turns tagged with the PREVIOUS
@@ -983,7 +530,7 @@ export class ClaudeAdapter extends AgentAdapter {
     return this.sessions.get(sessionId)?.turn.isSettled === true;
   }
 
-  private lifecycleEvent(entry?: SessionEntry): { turnId?: string } {
+  lifecycleEvent(entry?: SessionEntry): { turnId?: string } {
     return entry ? entry.turn.event() : {};
   }
 
@@ -992,7 +539,7 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   /** End the turn: reply (or the held error), then idle — once. */
-  private finishTurn(entry: SessionEntry): boolean {
+  finishTurn(entry: SessionEntry): boolean {
     const error = entry.pendingError?.message;
     entry.pendingError = undefined;
     return entry.turn.finish({ error });
@@ -1052,7 +599,7 @@ export class ClaudeAdapter extends AgentAdapter {
       // what each subagent said in its own steps. Display-only: it does not
       // change how Claude Code runs.
       forwardSubagentText: true,
-      canUseTool: this.makeCanUseToolHandler(sessionId, entry.pendingPermissions, entry.pendingQuestions),
+      canUseTool: makeCanUseToolHandler(this, sessionId, entry.pendingPermissions, entry.pendingQuestions),
       // Kraki's mode is the authority on asking. In `safe`, a local Claude
       // ALLOW rule (settings / "always allow" clicked in the terminal) must not
       // let a side-effecting tool skip the operator; forcing `ask` routes it to
@@ -1149,7 +696,7 @@ export class ClaudeAdapter extends AgentAdapter {
 
     const nextIndex = index + 1;
     if (nextIndex < qs.length) {
-      this.emitQuestionCard(sessionId, pending.resolve, qs, nextIndex, collected, entry.pendingQuestions);
+      emitQuestionCard(this, sessionId, pending.resolve, qs, nextIndex, collected, entry.pendingQuestions);
       logger.debug({ questionId, sessionId, index, nextIndex, total: qs.length }, 'question answered, advancing');
       return 'accepted';
     }
@@ -1165,7 +712,7 @@ export class ClaudeAdapter extends AgentAdapter {
   async killSession(sessionId: string): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (entry) {
-      this.broadcastPendingResolutions(sessionId);
+      broadcastPendingResolutions(this, sessionId);
       entry.inputChannel.end();
       entry.abortController.abort();
       this.sessions.delete(sessionId);
@@ -1186,11 +733,11 @@ export class ClaudeAdapter extends AgentAdapter {
         // No provider turn is in flight (it ended; only subagents run), so no
         // result will come for it. Settle silently — RelayClient owns the
         // aborted boundary.
-        this.resetSubagentPhase(entry);
+        resetSubagentPhase(this, entry);
         entry.turn.settleSilently();
         entry.pendingError = undefined;
       } else if (entry.query && !entry.turn.isSettled) {
-        this.resetSubagentPhase(entry);
+        resetSubagentPhase(this, entry);
         entry.turn.abort();
         entry.pendingError = undefined;
       }
@@ -1199,7 +746,7 @@ export class ClaudeAdapter extends AgentAdapter {
       if (entry.query && entry.runningSubagents?.size) {
         for (const taskId of entry.runningSubagents) entry.query.stopTask(taskId).catch(() => {});
       }
-      this.broadcastPendingResolutions(sessionId);
+      broadcastPendingResolutions(this, sessionId);
       if (entry.query) {
         try {
           await entry.query.interrupt();
@@ -1367,7 +914,7 @@ export class ClaudeAdapter extends AgentAdapter {
     try {
       for await (const msg of q) {
         try {
-          this.handleSDKMessage(sessionId, msg);
+          handleSDKMessage(this, sessionId, msg);
         } catch (err) {
           logger.error({ err, sessionId, type: msg.type }, 'Error handling SDK message');
         }
@@ -1377,7 +924,7 @@ export class ClaudeAdapter extends AgentAdapter {
       // boundary; only fall back here when the SDK ended without one.
       const entry = this.sessions.get(sessionId);
       if (entry) {
-        this.resetSubagentPhase(entry);
+        resetSubagentPhase(this, entry);
         this.finishTurn(entry); // a user stop settles silently
       } else {
         this.onIdle?.(sessionId);
@@ -1387,7 +934,7 @@ export class ClaudeAdapter extends AgentAdapter {
       // push the next message into a channel nobody reads; evict it so the
       // next message resumes the session, as the error path does.
       if (entry && this.sessions.get(sessionId) === entry && !abortController?.signal.aborted) {
-        this.broadcastPendingResolutions(sessionId);
+        broadcastPendingResolutions(this, sessionId);
         try { entry.inputChannel.end(); } catch { /* already closed */ }
         this.sessions.delete(sessionId);
         this.onSessionEvicted?.(sessionId);
@@ -1402,7 +949,7 @@ export class ClaudeAdapter extends AgentAdapter {
       }
       logger.error({ err, sessionId }, 'Session consumer loop error');
       const entry = this.sessions.get(sessionId);
-      if (entry) this.resetSubagentPhase(entry);
+      if (entry) resetSubagentPhase(this, entry);
       if (entry) {
         // Settle the turn that was running when the process died so the
         // relay freezes it as failed instead of waiting forever. (A user stop
@@ -1413,7 +960,7 @@ export class ClaudeAdapter extends AgentAdapter {
           entry.pendingError = undefined;
           entry.turn.finish({ error: message });
         }
-        this.broadcastPendingResolutions(sessionId);
+        broadcastPendingResolutions(this, sessionId);
         try { entry.inputChannel.end(); } catch { /* already closed */ }
         // The process is gone but the transcript is intact. Drop the dead
         // entry and report an eviction (like Pi/Codex), so the next message
@@ -1427,11 +974,11 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   /** A tool (or question) follows: the prose before it was narration. */
-  private flushNarration(sessionId: string): void {
+  flushNarration(sessionId: string): void {
     this.sessions.get(sessionId)?.turn.toolStarted();
   }
 
-  private emitCompaction(sessionId: string, event: Omit<import('./base.js').CompactionEvent, 'turnId'>): void {
+  emitCompaction(sessionId: string, event: Omit<import('./base.js').CompactionEvent, 'turnId'>): void {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
     if (event.phase === 'start') {
@@ -1444,595 +991,9 @@ export class ClaudeAdapter extends AgentAdapter {
     this.onCompaction?.(sessionId, { ...event, ...this.lifecycleEvent(entry) });
   }
 
-  private stopAwaitingSubagents(entry: SessionEntry): void {
-    entry.awaitingSubagents = false;
-    if (entry.subagentSettleTimer) clearTimeout(entry.subagentSettleTimer);
-    entry.subagentSettleTimer = undefined;
-  }
-
-  /** Track subagent tasks; once none run while the turn is held open, give
-   *  Claude Code a moment to start its continuation, else settle the turn. */
-  private trackSubagentTask(sessionId: string, msg: Record<string, unknown>): void {
-    const entry = this.sessions.get(sessionId);
-    if (!entry) return;
-    const taskId = typeof msg.task_id === 'string' ? msg.task_id : '';
-    if (!taskId) return;
-    const running = entry.runningSubagents ??= new Set();
-    if (msg.subtype === 'task_started') {
-      // Only subagents: a background shell (e.g. a dev server) may never end.
-      const isAgent = typeof msg.task_type === 'string' ? msg.task_type === 'local_agent' : !!msg.subagent_type;
-      if (isAgent) running.add(taskId);
-      if (typeof msg.description === 'string' && msg.description) (entry.subagentLabels ??= new Map()).set(taskId, msg.description);
-      const toolUseId = typeof msg.tool_use_id === 'string' ? msg.tool_use_id : '';
-      const dispatch = toolUseId ? entry.dispatches?.get(toolUseId) : undefined;
-      if (dispatch) {
-        dispatch.taskId = taskId;
-        (entry.taskDispatch ??= new Map()).set(taskId, toolUseId);
-      }
-      return;
-    }
-    if (msg.subtype === 'task_notification') this.reportSubagentTask(sessionId, entry, taskId, msg);
-    const status = msg.subtype === 'task_notification'
-      ? msg.status
-      : (msg.patch as { status?: unknown } | undefined)?.status;
-    if (!['completed', 'failed', 'stopped', 'killed'].includes(String(status))) return;
-    const wasRunning = running.delete(taskId);
-    // Count each completion once (task_notification), and only while the turn
-    // is in its subagent phase: earlier ones are folded into the live turn.
-    if (msg.subtype === 'task_notification' && entry.subagentPhase) entry.owedContinuations = (entry.owedContinuations ?? 0) + 1;
-    if (wasRunning && running.size === 0 && entry.awaitingSubagents) this.armSubagentGrace(sessionId, entry);
-  }
-
-  /** A subagent task finished: record its usage/status, and for a background
-   *  subagent (whose tool only returned a receipt) complete its step now,
-   *  with its report as the result. */
-  private reportSubagentTask(sessionId: string, entry: SessionEntry, taskId: string, msg: Record<string, unknown>): void {
-    const toolUseId = entry.taskDispatch?.get(taskId) ?? (typeof msg.tool_use_id === 'string' ? msg.tool_use_id : '');
-    const dispatch = toolUseId ? entry.dispatches?.get(toolUseId) : undefined;
-    if (!dispatch) return;
-    const usage = msg.usage as { total_tokens?: number; tool_uses?: number; duration_ms?: number } | undefined;
-    const status = msg.status === 'completed' ? 'completed' : msg.status === 'failed' ? 'failed' : 'stopped';
-    dispatch.info = {
-      ...dispatch.info,
-      status,
-      ...(typeof usage?.total_tokens === 'number' && { tokens: usage.total_tokens }),
-      ...(typeof usage?.tool_uses === 'number' && { toolCount: usage.tool_uses }),
-      ...(typeof usage?.duration_ms === 'number' && { durationMs: usage.duration_ms }),
-    };
-    if (typeof msg.summary === 'string') dispatch.summary = msg.summary;
-    if (!dispatch.receipt || dispatch.done) return;
-    dispatch.done = true;
-    entry.subagentDrafts?.delete(toolUseId);
-    this.onToolComplete?.(sessionId, {
-      ...this.lifecycleEvent(entry),
-      toolName: 'Agent',
-      result: dispatch.summary ?? '',
-      toolCallId: toolUseId,
-      success: status === 'completed',
-      subagent: dispatch.info,
-    });
-  }
-
-  private resetSubagentPhase(entry: SessionEntry): void {
-    this.stopAwaitingSubagents(entry);
-    entry.subagentPhase = false;
-    entry.owedContinuations = 0;
-  }
-
-  private armSubagentGrace(sessionId: string, entry: SessionEntry): void {
-    if (entry.subagentSettleTimer) clearTimeout(entry.subagentSettleTimer);
-    entry.subagentSettleTimer = setTimeout(() => {
-      if (!entry.awaitingSubagents || this.sessions.get(sessionId) !== entry) return;
-      logger.info({ sessionId }, 'Claude subagents finished without a continuation turn; settling');
-      this.resetSubagentPhase(entry);
-      this.finishTurn(entry);
-    }, ClaudeAdapter.SUBAGENT_CONTINUATION_GRACE_MS);
-  }
-
   static SUBAGENT_CONTINUATION_GRACE_MS = 5_000;
 
-  /**
-   * Route a single SDKMessage to the appropriate adapter callback.
-   */
-  private handleSDKMessage(sessionId: string, msg: SDKMessage): void {
-    // Held-open turn: any parent activity means Claude Code started the
-    // continuation turn, which now runs (and settles) like a normal turn.
-    const held = this.sessions.get(sessionId);
-    if (held?.awaitingSubagents) {
-      const m = msg as unknown as { type: string; subtype?: string; parent_tool_use_id?: string | null };
-      const parentActivity = (m.type === 'system' && (m.subtype === 'init' || (m.subtype === 'status' && (msg as unknown as { status?: string }).status === 'requesting')))
-        || ((m.type === 'assistant' || m.type === 'stream_event') && !m.parent_tool_use_id)
-        || m.type === 'result';
-      if (parentActivity) this.stopAwaitingSubagents(held);
-    }
-    switch (msg.type) {
-      case 'system': {
-        const sysMsg = msg as SDKSystemMessage & { subtype?: string };
-        if (sysMsg.subtype === 'init') {
-          const sdkSessionId = sysMsg.session_id;
-          if (sdkSessionId) {
-            this.sdkSessionIds.set(sessionId, sdkSessionId);
-            // Persist the SDK's own session UUID — the value its `resume`
-            // option expects — so a fresh daemon can re-attach this transcript.
-            this.persistMeta(sessionId, { sdkSessionId, forkFrom: undefined });
-            if (sdkSessionId !== sessionId) {
-              const entry = this.sessions.get(sessionId);
-              if (entry) entry.sessionId = sdkSessionId;
-            }
-          }
-          this.cacheModelsFromInit(sysMsg);
-          logger.debug({ sessionId, sdkSessionId }, 'SDK session initialized');
-        } else if (sysMsg.subtype === 'status') {
-          // Claude Code's native compaction state (SDKStatusMessage).
-          const st = msg as unknown as { status?: string | null; compact_result?: string; compact_error?: string };
-          if (st.status === 'compacting') {
-            this.emitCompaction(sessionId, { phase: 'start', reason: 'threshold' });
-          } else if (st.compact_result) {
-            this.emitCompaction(sessionId, {
-              phase: 'end',
-              ...(st.compact_result === 'failed' && { aborted: true, errorMessage: st.compact_error ?? 'Compaction failed' }),
-            });
-          }
-        } else if ((sysMsg.subtype as string) === 'compact_boundary') {
-          const meta = (msg as unknown as { compact_metadata?: { trigger?: string } }).compact_metadata;
-          const reason = meta?.trigger === 'manual' ? 'manual' as const : 'threshold' as const;
-          // A boundary without a preceding status still completes a compaction.
-          this.emitCompaction(sessionId, { phase: 'start', reason });
-          this.emitCompaction(sessionId, { phase: 'end', reason });
-        } else if (['task_started', 'task_notification', 'task_updated'].includes(sysMsg.subtype as string)) {
-          this.trackSubagentTask(sessionId, msg as unknown as Record<string, unknown>);
-        } else if (sysMsg.subtype === 'files_persisted') {
-          // The SDK finished writing session files to disk — safe to
-          // resume watching the session directory for external changes.
-          this.onFlushComplete?.(sessionId);
-        }
-        break;
-      }
-
-      case 'assistant': {
-        const assistantMsg = msg as SDKAssistantMessage;
-        // A subagent (Task/Agent tool) message: it carries the dispatching
-        // tool call's id. Its prose and errors belong to the subagent, never
-        // to the parent's reply; its tool calls still show as steps.
-        const fromSubagent = !!assistantMsg.parent_tool_use_id;
-        if (assistantMsg.error) {
-          if (fromSubagent) break;
-          const entry = this.sessions.get(sessionId);
-          const normalized = normalizeClaudeSDKError(assistantMsg as unknown as Record<string, unknown>);
-          if (entry) entry.pendingError = preferClaudeError(entry.pendingError, normalized);
-          break;
-        }
-
-        const betaMessage = assistantMsg.message;
-        if (!betaMessage?.content) break;
-
-        const entry = this.sessions.get(sessionId);
-        for (const block of betaMessage.content) {
-          if (block.type === 'text' && (block as { text?: string }).text) {
-            if (fromSubagent) {
-              // forwardSubagentText: the subagent's own prose, shown in its steps.
-              if (entry) {
-                const drafts = entry.subagentDrafts ??= new Map();
-                const owner = assistantMsg.parent_tool_use_id!;
-                const prev = drafts.get(owner);
-                const text = (block as { text: string }).text;
-                drafts.set(owner, prev ? `${prev}\n${text}` : text);
-              }
-              continue;
-            }
-            // Draft-bubble model: buffer prose instead of graduating each block
-            // to its own permanent bubble. Accumulate consecutive text blocks so
-            // multi-block answers aren't lost. Flushed as narration (if a tool
-            // follows) or as the single conclusion bubble (at turn end).
-            if (entry) {
-              entry.turn.appendProse((block as { text: string }).text);
-            } else {
-              // No session entry (shouldn't happen) — fall back to direct bubble.
-              this.onMessage?.(sessionId, { content: (block as { text: string }).text });
-            }
-          } else if (block.type === 'tool_use') {
-            // A tool follows the buffered prose → that prose was narration.
-            // A subagent's tool says nothing about the parent's draft.
-            if (!fromSubagent) this.flushNarration(sessionId);
-            const toolBlock = block as { name: string; input?: Record<string, unknown>; id: string };
-            const args = (toolBlock.input ?? {}) as Record<string, unknown>;
-
-            // Track tool call for correlating with tool result
-            let sessionTools = this.pendingToolCalls.get(sessionId);
-            if (!sessionTools) {
-              sessionTools = new Map();
-              this.pendingToolCalls.set(sessionId, sessionTools);
-            }
-            const canonicalToolName = canonicalArtifactToolName(toolBlock.name);
-            const parentToolCallId = assistantMsg.parent_tool_use_id ?? undefined;
-            const draft = parentToolCallId ? entry?.subagentDrafts?.get(parentToolCallId) : undefined;
-            if (parentToolCallId && draft) {
-              entry!.subagentDrafts!.delete(parentToolCallId);
-              this.onNarrationTrace?.(sessionId, { ...this.lifecycleEvent(entry), content: draft, parentToolCallId });
-            }
-            sessionTools.set(toolBlock.id, { toolName: canonicalToolName, args, ...(parentToolCallId && { parentToolCallId }) });
-
-            let subagent: import('@kraki/protocol').SubagentInfo | undefined;
-            if (entry && CLAUDE_DISPATCH_TOOLS.has(toolBlock.name)) {
-              const task = typeof args.description === 'string' ? args.description : undefined;
-              const name = typeof args.subagent_type === 'string' && args.subagent_type ? args.subagent_type : 'subagent';
-              subagent = { name, ...(task && { task }), status: 'running' };
-              (entry.dispatches ??= new Map()).set(toolBlock.id, { info: subagent });
-            }
-
-            this.onToolStart?.(sessionId, {
-              ...this.lifecycleEvent(entry),
-              toolName: canonicalToolName,
-              args,
-              toolCallId: toolBlock.id,
-              ...(parentToolCallId && { parentToolCallId }),
-              ...(subagent && { subagent }),
-            });
-          }
-        }
-
-        // Track usage. The SDK splits one API response into several
-        // assistant messages (one per content block) that all carry the
-        // response's full usage: count each response id once.
-        const responseId = (betaMessage as { id?: string }).id;
-        if (betaMessage.usage && (!responseId || this.lastCountedResponse.get(sessionId) !== responseId)) {
-          if (responseId) this.lastCountedResponse.set(sessionId, responseId);
-          this.updateUsage(sessionId, betaMessage.usage as unknown as Record<string, unknown>, fromSubagent);
-        }
-        break;
-      }
-
-      case 'stream_event': {
-        const partial = msg as SDKPartialAssistantMessage;
-        // Subagent stream (forwardSubagentText): not the parent's reply.
-        if (partial.parent_tool_use_id) break;
-        const event = partial.event as unknown as Record<string, unknown>;
-
-        if (event.type === 'content_block_delta') {
-          const delta = event.delta as Record<string, unknown> | undefined;
-          if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
-            this.onMessageDelta?.(sessionId, { content: delta.text, ...this.lifecycleEvent(this.sessions.get(sessionId)) });
-          }
-        }
-        break;
-      }
-
-      case 'result': {
-        const result = msg as SDKResultMessage;
-        const resultAny = result as unknown as Record<string, unknown>;
-        const entry = this.sessions.get(sessionId);
-        if (entry?.staleResults) {
-          // Late result of a stopped turn: it must not settle the new turn.
-          entry.staleResults -= 1;
-          entry.turn.discardProse();
-          entry.pendingError = undefined;
-          break;
-        }
-        if (entry?.turn.isSettled) break;
-        if (entry?.compacting) this.emitCompaction(sessionId, { phase: 'end' });
-        // A result during the subagent phase ends one continuation turn.
-        if (entry?.subagentPhase && entry.owedContinuations) entry.owedContinuations -= 1;
-        const holdForSubagents = !resultAny.is_error && !entry?.turn.isAborted
-          && (!!entry?.runningSubagents?.size || !!entry?.owedContinuations);
-        if (entry && !holdForSubagents) this.resetSubagentPhase(entry);
-
-        if (entry?.turn.isAborted) {
-          // RelayClient owns this turn's terminal boundary (see abortSession).
-          entry.pendingError = undefined;
-          entry.turn.settleSilently();
-          break;
-        }
-
-        if (resultAny.is_error) {
-          const normalized = normalizeClaudeSDKError(resultAny);
-          const error = preferClaudeError(entry?.pendingError, normalized);
-          if (entry) entry.pendingError = error;
-          else this.onError?.(sessionId, { message: error.message });
-        } else {
-          if (entry) entry.pendingError = undefined;
-          // Prose so far ("waiting for the subagent…") is an intermediate step.
-          if (holdForSubagents) entry?.turn.holdOpen();
-        }
-
-        // Update final usage
-        if (resultAny.usage) {
-          const u = resultAny.usage as Record<string, unknown>;
-          const prev = this.sessionUsage.get(sessionId) ?? {
-            inputTokens: 0, outputTokens: 0,
-            cacheReadTokens: 0, cacheWriteTokens: 0,
-            totalCost: 0, totalDurationMs: 0,
-          };
-          void u;
-          // Token counters are accumulated per assistant message (updateUsage).
-          // Replacing them with this turn's result usage threw away every
-          // earlier turn; the result only adds cost and duration.
-          // total_cost_usd is cumulative for the current query, which starts
-          // over when the query restarts (lastQueryCost is reset then): add
-          // only what it grew by. It used to replace the session total.
-          const queryCost = resultAny.total_cost_usd as number | undefined;
-          const lastQueryCost = this.lastQueryCost.get(sessionId) ?? 0;
-          const addedCost = typeof queryCost === 'number' ? Math.max(0, queryCost - lastQueryCost) : 0;
-          if (typeof queryCost === 'number') this.lastQueryCost.set(sessionId, queryCost);
-          const updated: SessionUsage = {
-            ...prev,
-            totalCost: (prev.totalCost ?? 0) + addedCost,
-            totalDurationMs: ((resultAny.duration_ms as number) ?? 0) + (prev.totalDurationMs ?? 0),
-          };
-          this.sessionUsage.set(sessionId, updated);
-          this.onUsageUpdate?.(sessionId, updated);
-        }
-
-        // Background subagents are still running: Claude Code will wake the
-        // parent when they finish. Keep the Kraki turn open for that answer.
-        if (holdForSubagents && entry) {
-          entry.awaitingSubagents = true;
-          entry.subagentPhase = true;
-          if (!entry.runningSubagents?.size) this.armSubagentGrace(sessionId, entry);
-          logger.info({ sessionId, running: entry.runningSubagents?.size }, 'Claude turn held open for background subagents');
-          break;
-        }
-
-        // The result is the authoritative turn boundary: the reply (or the
-        // error), then idle. A tool-only turn is anchored centrally by RelayClient.
-        if (entry) this.finishTurn(entry);
-        else this.onIdle?.(sessionId);
-
-        break;
-      }
-
-      case 'user': {
-        const entry = this.sessions.get(sessionId);
-        entry?.turn.captureTurnId();
-        // User messages include tool_result content blocks when tools complete.
-        // Extract tool results and fire tool_complete callbacks.
-        const userMsg = msg as SDKUserMessage;
-        const userMessage = userMsg.message as { content?: unknown };
-        if (Array.isArray(userMessage?.content)) {
-          for (const block of userMessage.content) {
-            const b = block as Record<string, unknown>;
-            if (b.type === 'tool_result' && typeof b.tool_use_id === 'string') {
-              const toolCallId = b.tool_use_id;
-              const tracked = this.pendingToolCalls.get(sessionId)?.get(toolCallId);
-
-              let result = '';
-              const imageAttachments: import('@kraki/protocol').Attachment[] = [];
-              if (typeof b.content === 'string') {
-                result = b.content;
-              } else if (Array.isArray(b.content)) {
-                const blocks = b.content as Array<Record<string, unknown>>;
-                result = blocks
-                  .filter(c => c.type === 'text' && typeof c.text === 'string')
-                  .map(c => c.text as string)
-                  .join('\n');
-
-                // Extract image blocks only from Kraki's explicit show_image
-                // tool. Other tools may return image-shaped diagnostic blocks,
-                // but they do not own user-visible artifact semantics.
-                const isKrakiShowImage = tracked?.toolName === 'show_image';
-                if (this.attachmentStore && isKrakiShowImage) {
-                  for (const c of blocks) {
-                    if (c.type === 'image' && typeof c.data === 'string' && typeof c.mimeType === 'string') {
-                      try {
-                        const bytes = Buffer.from(c.data, 'base64');
-                        const ref = this.attachmentStore.put(sessionId, bytes, c.mimeType, {});
-                        imageAttachments.push(ref);
-                      } catch (err) {
-                        logger.warn({ err, sessionId }, 'failed to store image attachment');
-                      }
-                    }
-                    // Also handle Anthropic API image format: { type: 'image', source: { type: 'base64', media_type, data } }
-                    if (c.type === 'image' && typeof c.source === 'object' && c.source !== null) {
-                      const src = c.source as Record<string, unknown>;
-                      if (src.type === 'base64' && typeof src.data === 'string' && typeof src.media_type === 'string') {
-                        try {
-                          const bytes = Buffer.from(src.data, 'base64');
-                          const ref = this.attachmentStore.put(sessionId, bytes, src.media_type, {});
-                          imageAttachments.push(ref);
-                        } catch (err) {
-                          logger.warn({ err, sessionId }, 'failed to store image attachment');
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-
-              const dispatch = entry?.dispatches?.get(toolCallId);
-              if (dispatch && !(dispatch.taskId && entry?.runningSubagents?.has(dispatch.taskId))) entry?.subagentDrafts?.delete(toolCallId);
-              if (dispatch && dispatch.taskId && entry?.runningSubagents?.has(dispatch.taskId) && !b.is_error) {
-                // Background subagent: this is only its launch receipt. The
-                // step stays running until the task reports (task_notification).
-                dispatch.receipt = true;
-                this.pendingToolCalls.get(sessionId)?.delete(toolCallId);
-                continue;
-              }
-              if (dispatch) {
-                dispatch.done = true;
-                dispatch.info = { ...dispatch.info, status: b.is_error ? 'failed' : dispatch.info.status === 'running' ? 'completed' : dispatch.info.status };
-              }
-              this.onToolComplete?.(sessionId, {
-                ...this.lifecycleEvent(entry),
-                toolName: tracked?.toolName ?? 'tool',
-                result,
-                toolCallId,
-                success: !b.is_error,
-                ...(tracked?.parentToolCallId && { parentToolCallId: tracked.parentToolCallId }),
-                ...(dispatch && { subagent: dispatch.info }),
-                ...(imageAttachments.length > 0 && { attachments: imageAttachments }),
-              });
-
-              this.pendingToolCalls.get(sessionId)?.delete(toolCallId);
-            }
-          }
-        }
-        break;
-      }
-
-      default:
-        // Ignore other message types (status, auth_status, etc.)
-        break;
-    }
-  }
-
   // ── Permission handler ────────────────────────────
-
-  /**
-   * Create the `canUseTool` callback for the Claude Agent SDK.
-   * Implements Kraki's 4-mode permission system.
-   */
-  private makeCanUseToolHandler(
-    sessionId: string,
-    pendingPermissions: Map<string, PendingPermission>,
-    pendingQuestions: Map<string, PendingQuestion>,
-  ) {
-    return async (
-      toolName: string,
-      input: Record<string, unknown>,
-      options: {
-        signal: AbortSignal;
-        suggestions?: Array<{ type: string; [key: string]: unknown }>;
-        title?: string;
-        displayName?: string;
-        description?: string;
-        toolUseID: string;
-        agentID?: string;
-      },
-    ): Promise<PermissionResult> => {
-
-      // Handle AskUserQuestion tool → bridge to onQuestionRequest
-      if (toolName === 'AskUserQuestion') {
-        return this.handleAskUserQuestion(sessionId, input, pendingQuestions);
-      }
-
-      if (isKrakiSelfManagementCommand(shellCommandFromInput(input))) {
-        logger.warn({ sessionId, toolName }, 'blocked tentacle self-management command');
-        return { behavior: 'deny', message: SELF_MANAGEMENT_DENIAL_REASON };
-      }
-
-      const toolKind = toolNameToKind(toolName);
-      const mode = this.sessionModes.get(sessionId) ?? DEFAULT_SESSION_MODE;
-
-      if (krakiAutoApproves(mode, toolKind)) {
-        logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
-        return { behavior: 'allow', updatedInput: input };
-      }
-
-      // Not auto-approved — send to relay for user decision
-      const permId = makeId('perm');
-      const parsed = parseClaudeToolCall(toolName, input);
-
-      logger.debug({
-        permissionId: permId,
-        sessionId,
-        toolKind,
-        toolName,
-      }, 'permission requested');
-
-      // Register BEFORE announcing: a response may arrive synchronously.
-      const decision = new Promise<PermissionResult>((resolve) => {
-        pendingPermissions.set(permId, { resolve, toolKind, input });
-      });
-      // Approval cards raised by a subagent say so.
-      let parentToolCallId: string | undefined;
-      if (options.agentID) {
-        const owner = this.sessions.get(sessionId);
-        const label = owner?.subagentLabels?.get(options.agentID) ?? 'subagent';
-        parsed.description = `Subagent ${label} — ${parsed.description}`;
-        parentToolCallId = owner?.taskDispatch?.get(options.agentID);
-      }
-      this.onPermissionRequest?.(sessionId, {
-        ...this.lifecycleEvent(this.sessions.get(sessionId)),
-        id: permId,
-        ...parsed,
-        ...(parentToolCallId && { parentToolCallId }),
-      });
-      return decision;
-    };
-  }
-
-  /**
-   * Handle the AskUserQuestion tool by bridging to onQuestionRequest.
-   */
-  private handleAskUserQuestion(
-    sessionId: string,
-    input: Record<string, unknown>,
-    pendingQuestions: Map<string, PendingQuestion>,
-  ): Promise<PermissionResult> {
-    const mode = this.sessionModes.get(sessionId) ?? DEFAULT_SESSION_MODE;
-
-    // Delegate mode: auto-answer questions
-    if (mode === 'delegate') {
-      logger.debug({ sessionId }, 'question auto-answered (delegate mode)');
-      // Key each answer by its question TEXT (SDK schema), not a literal
-      // "answer" key — otherwise the SDK sees every question as unanswered.
-      const qs = (input.questions as AskUserQuestionItem[] | undefined) ?? [];
-      const answers: Record<string, string> = {};
-      for (const q of qs) {
-        if (q?.question) answers[q.question] = 'proceed with your best judgment';
-      }
-      return Promise.resolve({
-        behavior: 'allow',
-        updatedInput: { questions: qs, answers },
-      });
-    }
-
-    const questions = input.questions as AskUserQuestionItem[] | undefined;
-
-    return new Promise<PermissionResult>((resolve) => {
-      const qs = questions ?? [];
-      if (qs.length === 0) {
-        // Malformed AskUserQuestion with no questions: surface a single
-        // best-effort prompt so the user isn't stuck, resolve empty.
-        const qId = makeId('q');
-        this.onQuestionRequest?.(sessionId, {
-          ...this.lifecycleEvent(this.sessions.get(sessionId)),
-          id: qId,
-          question: (input.question as string) ?? 'The agent has a question',
-          choices: undefined,
-        });
-        pendingQuestions.set(qId, { resolve, questionId: qId, questions: qs, qIndex: 0, collected: {} });
-        return;
-      }
-      // Surface the first question; subsequent questions are emitted one at a
-      // time as each is answered (see respondToQuestion).
-      this.emitQuestionCard(sessionId, resolve, qs, 0, {}, pendingQuestions);
-    });
-  }
-
-  /**
-   * Emit a single AskUserQuestion card (question[index]) to the app and record
-   * a pending entry. Shared by the initial emit and the serial advance in
-   * respondToQuestion.
-   */
-  private emitQuestionCard(
-    sessionId: string,
-    resolve: (result: PermissionResult) => void,
-    questions: AskUserQuestionItem[],
-    index: number,
-    collected: Record<string, string>,
-    pendingQuestions: Map<string, PendingQuestion>,
-  ): void {
-    const qId = makeId('q');
-    const q = questions[index];
-    const choices = q?.options?.map(o => o.label);
-
-    logger.debug({
-      questionId: qId,
-      sessionId,
-      index,
-      total: questions.length,
-      choicesCount: choices?.length ?? 0,
-    }, 'question requested');
-
-    this.onQuestionRequest?.(sessionId, {
-      ...this.lifecycleEvent(this.sessions.get(sessionId)),
-      id: qId,
-      question: q?.question ?? 'The agent has a question',
-      choices,
-    });
-
-    pendingQuestions.set(qId, { resolve, questionId: qId, questions, qIndex: index, collected });
-  }
 
   // ── Helpers ───────────────────────────────────────
 
@@ -2048,29 +1009,7 @@ export class ClaudeAdapter extends AgentAdapter {
     this.sdkSessionIds.delete(sessionId);
   }
 
-  private broadcastPendingResolutions(sessionId: string): void {
-    const entry = this.sessions.get(sessionId);
-    if (!entry) return;
-    for (const [permId, p] of entry.pendingPermissions) {
-      p.resolve({ behavior: 'deny', message: 'Session ended' });
-      this.onPermissionAutoResolved?.(sessionId, permId, 'cancelled');
-    }
-    entry.pendingPermissions.clear();
-    for (const [qId, q] of entry.pendingQuestions) {
-      // Session ending with a question still open: echo `questions` back
-      // (required by the SDK schema) with whatever answers were collected so
-      // far in this serial chain (empty if none), so the SDK renders the rest
-      // as unanswered rather than throwing on a missing `questions` field.
-      q.resolve({
-        behavior: 'allow',
-        updatedInput: { questions: q.questions ?? [], answers: q.collected ?? {} },
-      });
-      this.onQuestionAutoResolved?.(sessionId, qId);
-    }
-    entry.pendingQuestions.clear();
-  }
-
-  private updateUsage(sessionId: string, usage: Record<string, unknown>, fromSubagent = false): void {
+  updateUsage(sessionId: string, usage: Record<string, unknown>, fromSubagent = false): void {
     const prev = this.sessionUsage.get(sessionId) ?? {
       inputTokens: 0, outputTokens: 0,
       cacheReadTokens: 0, cacheWriteTokens: 0,
@@ -2093,7 +1032,7 @@ export class ClaudeAdapter extends AgentAdapter {
     this.onUsageUpdate?.(sessionId, updated);
   }
 
-  private cacheModelsFromInit(sysMsg: SDKSystemMessage): void {
+  cacheModelsFromInit(sysMsg: SDKSystemMessage): void {
     try {
       const models = (sysMsg as unknown as { models?: Array<{ id: string; name?: string }> }).models;
       // start() already built the resolved, de-duplicated catalog (aliases,

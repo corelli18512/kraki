@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ClaudeAdapter, normalizeClaudeSDKError } from '../adapters/claude.js';
+import { handleSDKMessage } from '../adapters/claude-messages.js';
 import { TurnTracker } from '../adapters/turn-tracker.js';
 
 type Entry = {
@@ -22,9 +23,7 @@ function setup() {
   };
   entry.turn.beginTurn(); // a turn is running
   (adapter as unknown as { sessions: Map<string, Entry> }).sessions.set('s1', entry);
-  const handle = (msg: Record<string, unknown>) =>
-    (adapter as unknown as { handleSDKMessage: (sessionId: string, msg: Record<string, unknown>) => void })
-      .handleSDKMessage('s1', msg);
+  const handle = (msg: Record<string, unknown>) => handleSDKMessage(adapter, 's1', msg as never);
   return { adapter, entry, handle };
 }
 

@@ -6,6 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PiAdapter } from '../adapters/pi.js';
+import { handleEvent } from '../adapters/pi-events.js';
 import { turnFixture } from './helpers/turn-fixture.js';
 
 vi.mock('../logger.js', () => ({
@@ -27,7 +28,6 @@ function setup() {
   };
   const internal = adapter as unknown as {
     sessions: Map<string, typeof session>;
-    handleEvent: (id: string, event: Record<string, unknown>) => Promise<void>;
   };
   internal.sessions.set(sid, session);
   const calls: Array<[string, unknown]> = [];
@@ -35,7 +35,7 @@ function setup() {
     (adapter as unknown as Record<string, unknown>)[k] = (_sid: string, e: unknown) => calls.push([k, e]);
   }
   (adapter as unknown as { refreshUsage: () => Promise<void> }).refreshUsage = async () => {};
-  const emit = (event: Record<string, unknown>) => internal.handleEvent(sid, event);
+  const emit = (event: Record<string, unknown>) => handleEvent(adapter, sid, event);
   const assistant = async (text: string, stopReason = 'stop') => {
     await emit({ type: 'message_start', message: { role: 'assistant', content: [] } });
     await emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }], stopReason } });
