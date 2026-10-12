@@ -6,6 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.81</title>
+            <pubDate>Mon, 12 Oct 2026 06:15:12 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.81</sparkle:fullReleaseNotesLink>
+            <sparkle:version>83</sparkle:version>
+            <sparkle:shortVersionString>0.2.81</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's new in Kraki 0.2.81
+
+- **Faster on this Mac:** when the agent runs on the same Mac as the Kraki app, the two now talk to each other directly instead of going through the Kraki server. Replies, streaming text, tool steps and images from this Mac arrive with no network round trip.
+- **Steadier on a shaky connection:** if your Mac's internet blips, the agent's live replies from this Mac keep arriving, and its notifications show up on time instead of in a pile of outdated ones when the connection comes back.
+- **Other devices are unchanged:** your iPhone and your other computers keep working exactly as before and see everything that happens on this Mac.
+- **Fix:** a short piece of the agent's live text could occasionally show up twice right after opening a conversation.
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.81/Kraki.app.zip" length="92910495" type="application/octet-stream" sparkle:edSignature="Qhucxk+6oQnG+9ihQ9fA9l+YOhNRipFmYpdQZ90aiZRxFgiqu5DCglqUV3UhI3gqEid5fmZICJ3/ND/TXc2wAw=="/>
+        </item>
+        <item>
             <title>0.2.80</title>
             <pubDate>Sun, 11 Oct 2026 12:38:17 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -38,24 +55,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.79/Kraki.app.zip" length="92831058" type="application/octet-stream" sparkle:edSignature="pBegvjyi/BF2wfOQCTGz7nQoARHK34NrTTlFHThEI3kksDY8gEwa1cEQv59trv8xQrees3D7yHowPmYvTjipAg=="/>
         </item>
-        <item>
-            <title>0.2.78</title>
-            <pubDate>Thu, 08 Oct 2026 15:55:22 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.78</sparkle:fullReleaseNotesLink>
-            <sparkle:version>80</sparkle:version>
-            <sparkle:shortVersionString>0.2.78</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's new in Kraki 0.2.78
-
-- **Updating from your phone** no longer stops on "Quit Kraki and take this Mac offline?" on this Mac, and always installs the newest version.
-- **Sessions waiting for your answer** no longer hold back an update: answer them afterwards and they carry on.
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.78/Kraki.app.zip" length="92810506" type="application/octet-stream" sparkle:edSignature="Snae5EUKhc++q1n4eznTUAuxBD8JZls+/hLokdItrZVLaLxNE5bb0rQK9EAsaAG2OFt8AyxiJPqHvolZRQebBQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: EMB4+VvmwU0N+iRIbeVS1kvwmgmG9li9F5TeLT+mcIP17X/55AZIiFPi7jVryCdo/bTMI5z+2kgaXDyIfMRoBg==
-length: 4514
+edSignature: HXhl9tfvFXZAFu8PF7RcfFODF0MYxZc3G/KdcohUuktfYvat0vbOC1IFRYrh8qXIXMJ9Gm+Bp6xttHDgn17GCw==
+length: 5015
 -->
