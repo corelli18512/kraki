@@ -239,7 +239,7 @@ final class MessageRouter {
                 return
             }
             Task { @MainActor in
-                MacNotifications.shared.present(decryptedPreview: text, appState: appState)
+                MacNotifications.shared.present(decryptedPreview: text, appState: appState, route: "head")
             }
             #endif
 
@@ -325,6 +325,17 @@ final class MessageRouter {
         KLog.d("📨 Inner message: \(type)")
 
         // ── Messages without a sessionId ─────────────────────────────────
+
+        if type == "local_notification" {
+            // Same preview the Head forwards as `notification_preview`, sent
+            // straight over the local link. MacNotifications posts each `nid` once.
+            #if os(macOS)
+            if let preview = (dict["payload"] as? [String: Any])?["preview"] as? String {
+                MacNotifications.shared.present(decryptedPreview: preview, appState: appState, route: "link")
+            }
+            #endif
+            return
+        }
 
         if type == "session_subscription_set" {
             handleSessionSubscriptionSet(dict)
@@ -842,7 +853,8 @@ final class MessageRouter {
             sessionId: sessionId,
             accepted: accepted,
             snapshot: payload["snapshot"] as? [String: Any],
-            errorMessage: error
+            errorMessage: error,
+            requestId: payload["requestId"] as? String
         )
         // Some Tentacles acknowledge a subscription without an inline digest
         // snapshot. Reconcile before handing the ACK to the controller so that
@@ -1025,7 +1037,7 @@ final class MessageRouter {
 
     /// Tell a Tentacle (that advertised `fragments`) this app reassembles
     /// fragments, so it may send large payloads in small parts.
-    private func declareClientFeatures(to deviceId: String) {
+    func declareClientFeatures(to deviceId: String) {
         guard let appState else { return }
         _ = appState.sendEncryptedMessage([
             "type": "client_features",

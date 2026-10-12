@@ -93,12 +93,19 @@ final class SessionSubscriptionControllerTests: XCTestCase {
         var snapshots: [SessionSubscriptionAck] = []
         var errors: [String] = []
         var offline: Set<String> = []
+        var independent: Set<String> = []
         func isTentacleOnline(_ tentacleId: String) -> Bool { !offline.contains(tentacleId) }
+        func tentacleRouteIsIndependent(_ tentacleId: String) -> Bool { independent.contains(tentacleId) }
 
         func resolveTentacle(for sessionId: String) -> String? { routes[sessionId] }
+        var requestIds: [String] = []
         func sendSessionSubscription(to tentacleId: String, sessionId: String?) -> Bool {
             sends.append((tentacleId, sessionId))
             return true
+        }
+        func sendSessionSubscription(to tentacleId: String, sessionId: String?, requestId: String) -> Bool {
+            requestIds.append(requestId)
+            return sendSessionSubscription(to: tentacleId, sessionId: sessionId)
         }
         func applySessionSubscriptionSnapshot(_ ack: SessionSubscriptionAck) {
             snapshots.append(ack)
@@ -290,6 +297,133 @@ final class SessionSubscriptionControllerTests: XCTestCase {
         host.subscriptionConnected = true
         controller.onSessionList(tentacleId: "T1")
         XCTAssertEqual(host.sends.count, 2)
+        controller.onAck(ack("T1", "A"))
+        XCTAssertTrue(controller.liveReady)
+    }
+
+    // MARK: Local link (Head-independent route)
+
+    func testLinkedTentacleSubscriptionSurvivesHeadDisconnect() {
+        let host = Host()
+        host.independent = ["T1"]
+        let controller = SessionSubscriptionController(host: host)
+        controller.onSessionList(tentacleId: "T1")
+        controller.setDesired("A")
+        controller.onAck(ack("T1", "A"))
+        host.subscriptionConnected = false
+        controller.onDisconnected()
+        XCTAssertTrue(controller.liveReady)
+        XCTAssertTrue(controller.acceptsLive("A"))
+        host.subscriptionConnected = true
+        controller.resume()
+        XCTAssertEqual(host.sends.count, 1, "no redundant resubscribe after the Head returns")
+        XCTAssertTrue(controller.liveReady)
+    }
+
+    func testNavigationOnLinkedTentacleWorksDuringHeadOutage() {
+        let host = Host()
+        host.independent = ["T1"]
+        let controller = SessionSubscriptionController(host: host)
+        controller.onSessionList(tentacleId: "T1")
+        controller.setDesired("A")
+        controller.onAck(ack("T1", "A"))
+        host.subscriptionConnected = false
+        controller.onDisconnected()
+        controller.setDesired("B")
+        XCTAssertEqual(host.sends.last?.0, "T1")
+        XCTAssertEqual(host.sends.last?.1, "B")
+        controller.onAck(ack("T1", "B"))
+        XCTAssertTrue(controller.liveReady)
+    }
+
+    func testInFlightRequestOnLinkSurvivesHeadDisconnect() {
+        let host = Host()
+        host.independent = ["T1"]
+        let controller = SessionSubscriptionController(host: host)
+        controller.onSessionList(tentacleId: "T1")
+        controller.setDesired("A")
+        host.subscriptionConnected = false
+        controller.onDisconnected()
+        controller.onAck(ack("T1", "A"))
+        XCTAssertTrue(controller.liveReady, "ack arriving over the link must still be accepted")
+    }
+
+    func testHeadRoutedTentacleStillResetsWhileLinkedOneSurvives() {
+        let host = Host()
+        host.independent = ["T1"]
+        host.routes = ["A": "T1", "D": "T2"]
+        let controller = SessionSubscriptionController(host: host)
+        controller.onSessionList(tentacleId: "T1")
+        controller.onSessionList(tentacleId: "T2")
+        controller.setDesired("D")
+        controller.onAck(ack("T2", "D"))
+        XCTAssertTrue(controller.liveReady)
+        host.subscriptionConnected = false
+        controller.onDisconnected()
+        XCTAssertFalse(controller.liveReady)
+        let sent = host.sends.count
+        controller.resume()
+        XCTAssertEqual(host.sends.count, sent, "Head route cannot be driven while the Head is down")
+        host.subscriptionConnected = true
+        controller.resume()
+        XCTAssertEqual(host.sends.count, sent, "Head route still needs a fresh barrier")
+        controller.onSessionList(tentacleId: "T2")
+        XCTAssertEqual(host.sends.last?.0, "T2")
+    }
+
+    func testCrossingFromHeadTentacleToLinkedOneDuringOutageWaitsForHead() {
+        let host = Host()
+        host.independent = ["T1"]
+        host.routes = ["A": "T1", "D": "T2"]
+        let controller = SessionSubscriptionController(host: host)
+        controller.onSessionList(tentacleId: "T1")
+        controller.onSessionList(tentacleId: "T2")
+        controller.setDesired("D")
+        controller.onAck(ack("T2", "D"))
+        host.subscriptionConnected = false
+        controller.onDisconnected()
+        // T2's authority was retired on disconnect, so the linked T1 can be
+        // subscribed right away; T2 is released after its next barrier.
+        controller.setDesired("A")
+        XCTAssertEqual(host.sends.last?.0, "T1")
+        XCTAssertEqual(host.sends.last?.1, "A")
+        controller.onAck(ack("T1", "A"))
+        XCTAssertTrue(controller.liveReady)
+        host.subscriptionConnected = true
+        controller.onSessionList(tentacleId: "T2")
+        XCTAssertEqual(host.sends.last?.0, "T2")
+        XCTAssertNil(host.sends.last?.1)
+    }
+
+    func testAckForAnEarlierRequestWithTheSameTargetIsIgnored() {
+        // A → B → A: the first A's ACK, still in flight on a replaced route,
+        // must not complete the second A request (its snapshot is stale).
+        let host = Host()
+        host.independent = ["T1"]
+        let controller = SessionSubscriptionController(host: host)
+        controller.onSessionList(tentacleId: "T1")
+        controller.setDesired("A")
+        let firstA = host.requestIds.last!
+        controller.onTentacleUnavailable("T1")       // route switch drops authority
+        controller.onSessionList(tentacleId: "T1")    // new route's barrier: re-issue
+        let secondA = host.requestIds.last!
+        XCTAssertNotEqual(firstA, secondA)
+        var stale = ack("T1", "A")
+        stale.requestId = firstA
+        controller.onAck(stale)
+        XCTAssertFalse(controller.liveReady, "stale ACK accepted")
+        XCTAssertTrue(host.snapshots.isEmpty)
+        var fresh = ack("T1", "A")
+        fresh.requestId = secondA
+        controller.onAck(fresh)
+        XCTAssertTrue(controller.liveReady)
+    }
+
+    func testAckWithoutRequestIdFromOlderTentacleStillMatches() {
+        let host = Host()
+        let controller = SessionSubscriptionController(host: host)
+        controller.onSessionList(tentacleId: "T1")
+        controller.setDesired("A")
         controller.onAck(ack("T1", "A"))
         XCTAssertTrue(controller.liveReady)
     }

@@ -666,6 +666,31 @@ final class MacAutomationDriver {
             }
         case "wait":
             wait(params: params, id: id, connection: connection)
+        case "localLinkProbe":
+            // Debug-only fault injection for local-link tests.
+            guard let appState else {
+                send(error: "invalid_state", message: "AppState is unavailable", id: id, on: connection); return
+            }
+            switch params["action"] as? String ?? "status" {
+            case "relayBlip": appState.wsClient?.recover(reason: "automation_relay_blip")
+            case "linkDrop": appState.localLink?.debugDrop()
+            case "subscribe": appState.sessionSubscriptionController.setDesired(params["sessionId"] as? String)
+            default: break
+            }
+            let sub = appState.sessionSubscriptionController
+            let card: MessageStore.SessionCard? = sub?.desiredSessionId.flatMap { appState.messageStore.cards[$0] }
+            let cardText: String = card?.text ?? ""
+            let cardAction: String = card?.action.map { String(describing: $0.type) } ?? ""
+            send(result: [
+                "connection": String(describing: appState.connectionStatus),
+                "localLink": appState.localLink?.diagnostics ?? NSNull(),
+                "desired": sub?.desiredSessionId ?? NSNull(),
+                "confirmed": sub?.confirmedSessionId ?? NSNull(),
+                "confirmedTentacle": sub?.confirmedTentacleId ?? NSNull(),
+                "liveReady": sub?.liveReady ?? false,
+                "cardText": cardText,
+                "cardAction": cardAction,
+            ], id: id, on: connection)
         case "shutdown":
             send(result: ["stopped": true], id: id, on: connection)
             Task { @MainActor in self.stop() }
@@ -2097,6 +2122,7 @@ final class MacAutomationDriver {
             "hasMainWindow": NSApp.mainWindow != nil,
             "connection": String(describing: appState.connectionStatus),
             "relayURL": appState.relayURL,
+            "localLink": appState.localLink?.diagnostics ?? NSNull(),
             "selectedSessionId": selectedSessionId ?? NSNull(),
             "devices": devices,
             "sessions": sessions,

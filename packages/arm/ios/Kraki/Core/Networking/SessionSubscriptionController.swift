@@ -8,6 +8,8 @@ struct SessionSubscriptionAck {
     let accepted: Bool
     let snapshot: [String: Any]?
     let errorMessage: String?
+    /// Echo of the request's id (absent from older Tentacles).
+    var requestId: String? = nil
 }
 
 protocol SessionSubscriptionHost: AnyObject {
@@ -15,8 +17,20 @@ protocol SessionSubscriptionHost: AnyObject {
     func resolveTentacle(for sessionId: String) -> String?
     func isTentacleOnline(_ tentacleId: String) -> Bool
     func sendSessionSubscription(to tentacleId: String, sessionId: String?) -> Bool
+    func sendSessionSubscription(to tentacleId: String, sessionId: String?, requestId: String) -> Bool
     func applySessionSubscriptionSnapshot(_ ack: SessionSubscriptionAck)
     func reportSessionSubscriptionError(_ message: String)
+    /// True when this Tentacle is reached over a route that does not depend
+    /// on the Head socket (the Mac local link). Its authority survives a Head
+    /// disconnect, and it can be driven while the Head is down.
+    func tentacleRouteIsIndependent(_ tentacleId: String) -> Bool
+}
+
+extension SessionSubscriptionHost {
+    func tentacleRouteIsIndependent(_ tentacleId: String) -> Bool { false }
+    func sendSessionSubscription(to tentacleId: String, sessionId: String?, requestId: String) -> Bool {
+        sendSessionSubscription(to: tentacleId, sessionId: sessionId)
+    }
 }
 
 /// Serial single-session subscription assurance.
@@ -33,6 +47,7 @@ final class SessionSubscriptionController {
     private struct InFlight: Equatable {
         let tentacleId: String
         let sessionId: String?
+        let requestId: String
     }
 
     private weak var host: SessionSubscriptionHost?
@@ -68,13 +83,24 @@ final class SessionSubscriptionController {
     /// Reset connection-scoped authority but retain the visible page's desired
     /// session so reconnect can reassert it after the new session_list barrier.
     func onDisconnected() {
-        if let confirmedTentacleId { retiredTentacles.insert(confirmedTentacleId) }
-        if let inFlight { retiredTentacles.insert(inFlight.tentacleId) }
-        confirmedSessionId = nil
-        confirmedTentacleId = nil
-        inFlight = nil
-        barriers.removeAll()
+        let keeps = { (id: String) in self.host?.tentacleRouteIsIndependent(id) == true }
+        if let confirmedTentacleId, !keeps(confirmedTentacleId) {
+            retiredTentacles.insert(confirmedTentacleId)
+            confirmedSessionId = nil
+            self.confirmedTentacleId = nil
+        }
+        if let inFlight, !keeps(inFlight.tentacleId) {
+            retiredTentacles.insert(inFlight.tentacleId)
+            self.inFlight = nil
+        }
+        barriers = barriers.filter(keeps)
         blockedDesired = nil
+    }
+
+    /// Re-evaluate after the Head reconnects: a desired change made during
+    /// the outage may now be issuable without waiting for a new barrier.
+    func resume() {
+        drive()
     }
 
     func onTentacleUnavailable(_ tentacleId: String) {
@@ -114,6 +140,10 @@ final class SessionSubscriptionController {
         guard let flight = inFlight else { return }
         guard ack.tentacleId == flight.tentacleId else { return }
         guard ack.sessionId == flight.sessionId else { return }
+        // A newer Tentacle echoes the request id: an ACK for an earlier request
+        // with the same target (e.g. still in flight on a replaced route) must
+        // not satisfy this one. Older Tentacles send none; keep the old match.
+        if let echoed = ack.requestId, echoed != flight.requestId { return }
 
         inFlight = nil
         guard ack.accepted else {
@@ -159,10 +189,16 @@ final class SessionSubscriptionController {
     }
 
     private func drive() {
-        guard let host, host.subscriptionConnected, inFlight == nil else { return }
+        guard let host, inFlight == nil else { return }
 
         let desired = desiredSessionId
         let desiredTentacle = desired.flatMap { host.resolveTentacle(for: $0) }
+        // While the Head is down, only a Head-independent route can be driven.
+        guard host.subscriptionConnected
+            || (desiredTentacle.map { host.tentacleRouteIsIndependent($0) } ?? false) else { return }
+        if !host.subscriptionConnected,
+           let confirmedTentacleId, confirmedTentacleId != desiredTentacle,
+           !host.tentacleRouteIsIndependent(confirmedTentacleId) { return }
 
         if let retired = retiredTentacles.sorted().first(where: {
             $0 != desiredTentacle && barriers.contains($0) && host.isTentacleOnline($0)
@@ -187,10 +223,10 @@ final class SessionSubscriptionController {
     }
 
     private func issue(tentacleId: String, sessionId: String?) {
-        let flight = InFlight(tentacleId: tentacleId, sessionId: sessionId)
+        let flight = InFlight(tentacleId: tentacleId, sessionId: sessionId, requestId: UUID().uuidString)
         inFlight = flight
         KLog.diag("🔔 [subscription] issue tentacle=\(tentacleId.prefix(12)) session=\(sessionId?.prefix(12) ?? "nil") desired=\(desiredSessionId?.prefix(12) ?? "nil")")
-        guard host?.sendSessionSubscription(to: tentacleId, sessionId: sessionId) == true else {
+        guard host?.sendSessionSubscription(to: tentacleId, sessionId: sessionId, requestId: flight.requestId) == true else {
             if inFlight == flight {
                 inFlight = nil
                 blockedDesired = sessionId

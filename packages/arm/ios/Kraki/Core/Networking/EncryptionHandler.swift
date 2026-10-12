@@ -21,6 +21,7 @@ enum EncryptionError: Error, CustomStringConvertible {
     case invalidEnvelope
     case notAddressedToUs
     case senderMismatch
+    case staleRoute
 
     var description: String {
         switch self {
@@ -33,6 +34,7 @@ enum EncryptionError: Error, CustomStringConvertible {
         case .invalidEnvelope:  return "Encrypted envelope is malformed"
         case .notAddressedToUs: return "Envelope does not contain a key for this device"
         case .senderMismatch:   return "Message deviceId does not match the relay-stamped sender"
+        case .staleRoute:       return "Connection-scoped message arrived on a replaced route"
         }
     }
 }
@@ -98,6 +100,11 @@ final class EncryptionHandler {
     ///
     /// - Returns: The inner plaintext JSON and the `sessionId` extracted from it
     ///   (if present).
+    static let staleRouteKey = "krakiStaleRoute"
+    static let connectionScopedTypes: Set<String> = [
+        "agent_message_delta", "card_action", "session_subscription_set",
+    ]
+
     func submitForDecryption(_ envelope: Data) {
         decryptQueue.async { [weak self] in
             guard let self else { return }
@@ -113,6 +120,8 @@ final class EncryptionHandler {
         do {
             let result = try decryptInbound(envelope)
             onDecrypted?(result.message)
+        } catch EncryptionError.staleRoute {
+            return
         } catch EncryptionError.notAddressedToUs {
             KLog.d("📭 Envelope not addressed to us — skipping")
         } catch {
@@ -183,6 +192,15 @@ final class EncryptionHandler {
            !claimed.isEmpty, claimed != sender {
             KLog.d("⚠️ Dropped message whose deviceId does not match its sender")
             throw EncryptionError.senderMismatch
+        }
+        // Delivered by a route that has since been replaced (a Head frame from
+        // the Tentacle this Mac is now linked to). Connection-scoped live state
+        // from it would land after the new route's snapshot; drop just those.
+        if json[Self.staleRouteKey] as? Bool == true,
+           let type = innerJson?["type"] as? String,
+           Self.connectionScopedTypes.contains(type) {
+            KLog.d("🔗 Dropped stale-route \(type)")
+            throw EncryptionError.staleRoute
         }
         let sessionId = innerJson?["sessionId"] as? String
 

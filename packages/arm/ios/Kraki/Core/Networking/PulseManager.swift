@@ -28,6 +28,21 @@ final class PulseManager {
     /// If their frame was not ACKed before disconnect, purge it rather than
     /// replaying it into a later turn after reconnect.
     private var connectionScopedLiveSeqs = Set<UInt64>()
+    /// Live seqs whose command is safe to deliver again over another route if
+    /// this one dies before acknowledging them (see `drainUnackedReplayable`).
+    /// Replayable commands not yet fully acknowledged, whole (not per
+    /// fragment), in send order. A command is tracked from `sendEncrypted`
+    /// until every Pulse seq carrying it is ACKed, including while it still
+    /// waits in `outQueue` behind a paced upload.
+    private struct Replayable {
+        let payload: Data
+        let target: String?
+        var queuedParts: Int
+        var seqs: Set<UInt64>
+    }
+    private var replayables: [Replayable] = []
+    private var replayableIndex: [UUID: Int] { Dictionary(uniqueKeysWithValues: replayableIds.enumerated().map { ($1, $0) }) }
+    private var replayableIds: [UUID] = []
 
     #if DEBUG
     var liveOutboxSizeForTesting: Int { live.outboxSize }
@@ -95,6 +110,8 @@ final class PulseManager {
         cancelTick()
         targetByStream.removeAll()
         connectionScopedLiveSeqs.removeAll()
+        replayables.removeAll()
+        replayableIds.removeAll()
         outQueue.removeAll()
         inflight.removeAll()
         (live, streams) = Self.makeEndpoints()
@@ -109,7 +126,8 @@ final class PulseManager {
         keys: [String: String],
         target: String?,
         connectionScoped: Bool = false,
-        fragment: Bool = false
+        fragment: Bool = false,
+        replayable: Bool = false
     ) {
         guard let payload = try? JSONSerialization.data(
             withJSONObject: ["blob": blob, "keys": keys]
@@ -117,18 +135,69 @@ final class PulseManager {
         // Large payloads to a Tentacle that reassembles go as small ordered
         // parts so a slow uplink keeps showing progress. Connection-scoped
         // commands stay whole: a purge on disconnect must not leave a partial.
+        let token: UUID? = (replayable && !connectionScoped) ? track(payload: payload, target: target) : nil
         if fragment, !connectionScoped, target != nil, let parts = PayloadFragments.split(payload) {
-            for part in parts { outQueue.append(Queued(payload: part, target: target, connectionScoped: false)) }
+            if let token { replayables[replayableIndex[token]!].queuedParts = parts.count }
+            for part in parts { outQueue.append(Queued(payload: part, target: target, connectionScoped: false, token: token)) }
             pumpOutQueue()
             return
         }
         // Keep order: nothing overtakes parts of an earlier payload still queued.
         if !outQueue.isEmpty {
-            outQueue.append(Queued(payload: payload, target: target, connectionScoped: connectionScoped))
+            if let token { replayables[replayableIndex[token]!].queuedParts = 1 }
+            outQueue.append(Queued(payload: payload, target: target, connectionScoped: connectionScoped, token: token))
             pumpOutQueue()
             return
         }
-        sendPayload(payload, target: target, connectionScoped: connectionScoped)
+        let seq = sendPayload(payload, target: target, connectionScoped: connectionScoped)
+        if let token { replayables[replayableIndex[token]!].seqs.insert(seq) }
+    }
+
+    private func track(payload: Data, target: String?) -> UUID {
+        let id = UUID()
+        replayableIds.append(id)
+        replayables.append(Replayable(payload: payload, target: target, queuedParts: 0, seqs: []))
+        return id
+    }
+
+    /// A queued part of a tracked command entered Pulse as `seq`.
+    private func admitted(_ token: UUID?, seq: UInt64) {
+        guard let token, let i = replayableIndex[token] else { return }
+        replayables[i].queuedParts -= 1
+        replayables[i].seqs.insert(seq)
+    }
+
+    /// Forget commands whose every part is in Pulse and acknowledged.
+    private func pruneReplayables(acked seqUpTo: UInt64?, dropped: Set<UInt64> = []) {
+        for i in replayables.indices {
+            if let seqUpTo { replayables[i].seqs = replayables[i].seqs.filter { $0 > seqUpTo } }
+            replayables[i].seqs.subtract(dropped)
+        }
+        let keep = replayables.indices.filter { replayables[$0].queuedParts > 0 || !replayables[$0].seqs.isEmpty }
+        replayables = keep.map { replayables[$0] }
+        replayableIds = keep.map { replayableIds[$0] }
+    }
+
+    /// Unacknowledged replayable payloads, in send order, removed from this
+    /// endpoint. Used when a route is abandoned so its accepted-but-unconfirmed
+    /// commands can be delivered over the remaining route.
+    func drainUnackedReplayable() -> [(payload: Data, target: String?)] {
+        // Whole commands, never fragments: a part of a set re-sent alone could
+        // not be reassembled on the other route.
+        let out = replayables.map { ($0.payload, $0.target) }
+        replayables.removeAll()
+        replayableIds.removeAll()
+        return out
+    }
+
+    /// Re-send an opaque payload drained from another route.
+    func resend(payload: Data, target: String?) {
+        if !outQueue.isEmpty {
+            outQueue.append(Queued(payload: payload, target: target, connectionScoped: false))
+            pumpOutQueue()
+            return
+        }
+        sendPayload(payload, target: target, connectionScoped: false)
     }
 
     // MARK: - Flow control for fragmented uploads
@@ -140,7 +209,12 @@ final class PulseManager {
     // payload is unacknowledged by the Relay at a time; each Pulse ACK frees
     // room (and is itself proof the link is moving).
 
-    private struct Queued { let payload: Data; let target: String?; let connectionScoped: Bool }
+    private struct Queued {
+        let payload: Data
+        let target: String?
+        let connectionScoped: Bool
+        var token: UUID? = nil
+    }
     static let windowBytes = 100 * 1024  // three 32 KiB parts with their envelopes
     /// Fail open if the Relay stops acknowledging (it never should).
     static let windowStallSeconds: TimeInterval = 120
@@ -159,7 +233,8 @@ final class PulseManager {
         if !acksPromptly {
             while let next = outQueue.first {
                 outQueue.removeFirst()
-                sendPayload(next.payload, target: next.target, connectionScoped: next.connectionScoped)
+                let seq = sendPayload(next.payload, target: next.target, connectionScoped: next.connectionScoped)
+                admitted(next.token, seq: seq)
             }
             inflight.removeAll()
             return
@@ -172,6 +247,7 @@ final class PulseManager {
             if !inflight.isEmpty, used + next.payload.count > Self.windowBytes { break }
             outQueue.removeFirst()
             let seq = sendPayload(next.payload, target: next.target, connectionScoped: next.connectionScoped)
+            admitted(next.token, seq: seq)
             inflight.append((seq, next.payload.count, Date()))
         }
     }
@@ -289,7 +365,9 @@ final class PulseManager {
                 lastDeliveryAt = Date()
                 let (isFragment, whole) = assembler.accept(payload)
                 if isFragment {
-                    if let whole { host?.onDelivered(json: whole) }
+                    // The Head stamps the sender on every part; carry it to the
+                    // reassembled payload so sender checks still apply.
+                    if let whole { host?.onDelivered(json: Self.stampSender(whole, from: payload)) }
                 } else {
                     host?.onDelivered(json: String(decoding: payload, as: UTF8.self))
                 }
@@ -298,6 +376,7 @@ final class PulseManager {
                 // has no outbound DATA, so an acked effect is necessarily live.
                 pruneTargets(stream: Self.liveStream, through: seqUpTo)
                 connectionScopedLiveSeqs = connectionScopedLiveSeqs.filter { $0 > seqUpTo }
+                pruneReplayables(acked: seqUpTo)
                 host?.onAcked(seqUpTo: seqUpTo)
                 inflight.removeAll { $0.seq <= seqUpTo }
                 pumpOutQueue()
@@ -327,6 +406,7 @@ final class PulseManager {
                     liveTargets.removeValue(forKey: seq)
                     connectionScopedLiveSeqs.remove(seq)
                 }
+                pruneReplayables(acked: nil, dropped: Set(droppedSeqs))
                 targetByStream[Self.liveStream] = liveTargets.isEmpty ? nil : liveTargets
                 let dropped = Set(droppedSeqs)
                 inflight.removeAll { dropped.contains($0.seq) }
@@ -334,6 +414,18 @@ final class PulseManager {
                 break  // Arm is not durable-supported.
             }
         }
+    }
+
+    static func stampSender(_ whole: String, from part: [UInt8]) -> String {
+        guard let partObject = try? JSONSerialization.jsonObject(with: Data(part)) as? [String: Any],
+              let src = partObject["src"] as? String,
+              let data = whole.data(using: .utf8),
+              var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["src"] == nil else { return whole }
+        object["src"] = src
+        guard let stamped = try? JSONSerialization.data(withJSONObject: object),
+              let string = String(data: stamped, encoding: .utf8) else { return whole }
+        return string
     }
 
     private func recoverTarget(forBytes bytes: [UInt8]) -> String? {
