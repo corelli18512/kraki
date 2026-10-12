@@ -85,4 +85,9 @@ final class LocalLinkHandshakeTests: XCTestCase {
         var m2 = machine()
         guard case .fail = m2.receive(["type": "error", "code": "unknown_device"]) else { return XCTFail() }
     }
+
+    func testFailedAttemptsBackOffFromTwoSecondsToAMinute() {
+        XCTAssertEqual([1, 2, 3, 4, 5, 6, 7, 20].map { LocalLinkClient.backoff(failures: $0) },
+                       [2, 4, 8, 16, 32, 60, 60, 60])
+    }
 }

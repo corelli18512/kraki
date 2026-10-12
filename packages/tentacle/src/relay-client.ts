@@ -198,7 +198,7 @@ export class RelayClient {
   /** Registered signing keys (compact SPKI) of this account's App devices —
    *  used to authenticate same-machine Apps on the local link. */
   private appSigningKeys = new Map<string, string>();
-  /** Same-machine loopback transport to local Apps (POC). Lazily started on
+  /** Same-machine loopback transport to local Apps. Lazily started on
    *  the first auth_ok, when this device's identity is confirmed. */
   private localLink: LocalLinkServer | null = null;
   /** Accepted in-memory single-session subscription for each connected Arm. */
@@ -4400,6 +4400,12 @@ export class RelayClient {
           }
         }
       }
+    }
+    // A linked App that is no longer an App of this account (removed while
+    // this Tentacle could not hear device_removed) must not keep its link.
+    const appIds = new Set(devices.filter((d) => d.role === 'app').map((d) => d.id));
+    for (const id of localIds) {
+      if (!appIds.has(id)) this.localLink?.disconnectPeer(id, 'device_removed');
     }
   }
 

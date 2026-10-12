@@ -125,6 +125,10 @@ final class LocalLinkClient: NSObject, PulseHost {
         if let target, target == linkedTentacleId { stats.headFramesToLinked += 1 }
     }
 
+    static func backoff(failures: Int) -> TimeInterval {
+        min(60, pollInterval * pow(2, Double(max(0, failures - 1))))
+    }
+
     static func tentacleProof(appNonce: String, appId: String, tentacleId: String) -> String {
         "kraki-local-link/v\(version)/tentacle\n\(appNonce)\n\(appId)\n\(tentacleId)"
     }
@@ -158,6 +162,12 @@ final class LocalLinkClient: NSObject, PulseHost {
     private var expectedTentacleId: String?
     private var handshake: LocalLinkHandshake?
     private var started = false
+    /// Backoff after failed attempts (refused, rejected, stale discovery):
+    /// 2 s doubling to 60 s. Reset by a successful link or a new discovery file.
+    private var failures = 0
+    private var nextAttemptAt = Date.distantPast
+    private var lastDiscovery: Discovery?
+    private var everLinkedThisAttempt = false
 
     /// The Tentacle currently served over the link (nil when not linked).
     private(set) var linkedTentacleId: String?
@@ -178,6 +188,9 @@ final class LocalLinkClient: NSObject, PulseHost {
     func start() {
         guard Self.enabled, !started else { return }
         started = true
+        failures = 0
+        nextAttemptAt = .distantPast
+        lastDiscovery = nil
         pollTimer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
             self?.poll()
         }
@@ -199,6 +212,12 @@ final class LocalLinkClient: NSObject, PulseHost {
               let discovery = try? JSONDecoder().decode(Discovery.self, from: data),
               discovery.v == Self.version, discovery.port > 0,
               let tentacleId = discovery.tentacleId else { return }
+        if discovery != lastDiscovery {
+            lastDiscovery = discovery
+            failures = 0
+            nextAttemptAt = .distantPast
+        }
+        guard Date() >= nextAttemptAt else { return }
         // Only Tentacles of this account (known to the Head) are eligible:
         // their registered key is what authenticates the loopback peer.
         guard let device = appState.deviceStore.devices[tentacleId], device.role == .tentacle,
@@ -214,6 +233,7 @@ final class LocalLinkClient: NSObject, PulseHost {
         let appNonce = Self.randomNonce()
         handshake = makeHandshake(appId: appId, tentacleId: tentacleId, appNonce: appNonce)
         guard handshake != nil else { return }
+        everLinkedThisAttempt = false
         let configuration = URLSessionConfiguration.ephemeral
         configuration.connectionProxyDictionary = [:]  // loopback: never through a proxy
         let session = URLSession(configuration: configuration, delegate: nil, delegateQueue: .main)
@@ -291,6 +311,9 @@ final class LocalLinkClient: NSObject, PulseHost {
         // Only the handshake machine can get here, and only after both proofs.
         guard handshake?.phase == .ready,
               let tentacleId = expectedTentacleId, linkedTentacleId == nil else { return }
+        everLinkedThisAttempt = true
+        failures = 0
+        nextAttemptAt = .distantPast
         handshakeTimer?.invalidate()
         handshakeTimer = nil
         lastError = nil
@@ -313,6 +336,10 @@ final class LocalLinkClient: NSObject, PulseHost {
     }
 
     private func teardown(reason: String) {
+        if task != nil, !everLinkedThisAttempt {
+            failures += 1
+            nextAttemptAt = Date().addingTimeInterval(Self.backoff(failures: failures))
+        }
         generation += 1
         handshake = nil
         handshakeTimer?.invalidate()

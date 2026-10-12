@@ -25,7 +25,14 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { closeSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
+import {
+	closeSync,
+	openSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeSync,
+} from "node:fs";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { importPublicKey, signChallenge, verifyChallenge } from "@kraki/crypto";
@@ -190,7 +197,8 @@ export class LocalLinkServer {
 		// record: only remove the file if it is still ours.
 		try {
 			const current = JSON.parse(readFileSync(this.filePath, "utf8"));
-			if (current?.instance === this.instance) rmSync(this.filePath, { force: true });
+			if (current?.instance === this.instance)
+				rmSync(this.filePath, { force: true });
 		} catch {
 			/* missing or unreadable: nothing of ours to remove */
 		}
@@ -269,16 +277,16 @@ export class LocalLinkServer {
 	}
 
 	private accept(ws: WebSocket): void {
-		// Bound unauthenticated connections. When full, evict the oldest one
-		// rather than refusing the newcomer: idle squatters cannot lock the
-		// real App out (its handshake completes in milliseconds).
-		// Prefer evicting connections that have not even said hello: a real App
-		// sends hello immediately, so silent squatters go first and an App
-		// already in the challenge exchange survives a flood of new sockets.
+		// Bound unauthenticated connections. When full, evict one rather than
+		// refuse the newcomer, so squatters cannot lock the real App out:
+		// sockets that never said hello go first (a real App says hello at
+		// once), so an App already in the challenge survives a flood.
 		if (this.pendingOrder.length >= MAX_PENDING) {
 			const silent = this.pendingOrder.find((c) => !this.greeted.has(c));
 			const victim = silent ?? this.pendingOrder[0];
-			logger.warn("Local link: too many unauthenticated connections; evicting one");
+			logger.warn(
+				"Local link: too many unauthenticated connections; evicting one",
+			);
 			const i = this.pendingOrder.indexOf(victim);
 			if (i >= 0) this.pendingOrder.splice(i, 1);
 			victim.terminate();
