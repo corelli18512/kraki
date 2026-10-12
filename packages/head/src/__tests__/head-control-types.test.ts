@@ -27,7 +27,10 @@ describe('head control types', () => {
   });
 
   it('the Mac/iOS app accepts the same types', () => {
-    const swift = readFileSync(new URL('../../../arm/ios/Kraki/App/AppState.swift', import.meta.url), 'utf8');
+    // AppState and its extensions (AppState+*.swift).
+    const appDir = new URL('../../../arm/ios/Kraki/App/', import.meta.url);
+    const swift = readdirSync(appDir).filter((f) => /^AppState(\+.*)?\.swift$/.test(f))
+      .map((f) => readFileSync(new URL(f, appDir), 'utf8')).join('\n');
     const block = swift.match(/static let headControlTypes: Set<String> = \[([\s\S]*?)\]/)?.[1] ?? '';
     const native = new Set([...block.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]));
     expect([...native].sort()).toEqual([...HEAD_CONTROL_TYPES].sort());
