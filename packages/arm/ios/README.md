@@ -42,3 +42,16 @@ Project files:
   `development` APNs environment and `?mode=developer` associated
   domains; Release uses `production` APNs and the bare domain.
 
+
+## Lint (SwiftLint)
+
+CI runs SwiftLint (`.swiftlint.yml`) against a ratchet baseline: existing
+violations may stay or shrink, new ones — or a long file/type/function getting
+longer — fail. Locally (`brew install swiftlint`):
+
+```sh
+node scripts/ci/swiftlint-ratchet.mjs           # what CI checks
+node scripts/ci/swiftlint-ratchet.mjs --update  # after a split that only moved code
+```
+
+It is not part of the Xcode build.
