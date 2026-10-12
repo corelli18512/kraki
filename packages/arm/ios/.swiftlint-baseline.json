@@ -1,8 +1,7 @@
 [
-{"rule":"cyclomatic_complexity","file":"Kraki/App/AppState.swift","subject":"private func startStabilityTracking() {","size":21},
-{"rule":"file_length","file":"Kraki/App/AppState.swift","subject":"","size":1220},
-{"rule":"function_body_length","file":"Kraki/App/AppState.swift","subject":"func sendEncryptedMessage(","size":93},
-{"rule":"type_body_length","file":"Kraki/App/AppState.swift","subject":"final class AppState {","size":971},
+{"rule":"cyclomatic_complexity","file":"Kraki/App/AppState.swift","subject":"func startStabilityTracking() {","size":21},
+{"rule":"type_body_length","file":"Kraki/App/AppState.swift","subject":"final class AppState {","size":560},
+{"rule":"function_body_length","file":"Kraki/App/AppState+Sending.swift","subject":"func sendEncryptedMessage(","size":93},
 {"rule":"function_body_length","file":"Kraki/App/Mac/MacAppDelegate.swift","subject":"func applicationDidFinishLaunching(_ notification: Notification) {","size":103},
 {"rule":"function_body_length","file":"Kraki/App/Mac/MacAppDelegate+Benchmarks.swift","subject":"func runCoreTextBenchmark() {","size":168},
 {"rule":"function_body_length","file":"Kraki/App/Mac/MacAppDelegate+Benchmarks.swift","subject":"func runCoreTextScrollBenchmark() {","size":169},

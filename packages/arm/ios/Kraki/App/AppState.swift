@@ -17,7 +17,7 @@ final class AppState {
     // MARK: - Networking
     private(set) var wsClient: WebSocketClient?
     private(set) var authManager: AuthManager?
-    private(set) var messageRouter: MessageRouter?
+    var messageRouter: MessageRouter?
     private(set) var commandSender: CommandSender?
     private(set) var messageProvider: MessageProvider?
     #if DEBUG
@@ -43,7 +43,7 @@ final class AppState {
     /// Direct loopback route to the Tentacle on this Mac (POC). Nil in tests.
     @ObservationIgnored private(set) var localLink: LocalLinkClient?
     #endif
-    private(set) var sessionSubscriptionController: SessionSubscriptionController!
+    var sessionSubscriptionController: SessionSubscriptionController!
     /// Region-advertised voice capability from the latest authenticated
     /// handshake. Nil means the microphone affordance stays hidden.
     var voiceCapability: VoiceCapability?
@@ -52,8 +52,8 @@ final class AppState {
     #if os(iOS)
     /// Lets a sent voice message finish its correction after the app is
     /// backgrounded instead of failing it at once (see BackgroundVoiceFinisher).
-    @ObservationIgnored private var backgroundVoiceClientID: String?
-    @ObservationIgnored private lazy var backgroundVoiceFinisher = BackgroundVoiceFinisher(hooks: .init(
+    @ObservationIgnored var backgroundVoiceClientID: String?
+    @ObservationIgnored lazy var backgroundVoiceFinisher = BackgroundVoiceFinisher(hooks: .init(
         isFinishing: { [weak self] in
             if case .staged = self?.iosVoiceComposer.operation?.phase { return true }
             return false
@@ -303,7 +303,7 @@ final class AppState {
     /// Auth and sign-out run on the main thread; run MacNotifications work
     /// synchronously there so a sign-out unregister goes out before the
     /// socket closes, and hop to the main actor otherwise.
-    private static func onMacNotificationsMain(_ work: @escaping @MainActor (MacNotifications) -> Void) {
+    static func onMacNotificationsMain(_ work: @escaping @MainActor (MacNotifications) -> Void) {
         if Thread.isMainThread {
             MainActor.assumeIsolated { work(MacNotifications.shared) }
         } else {
@@ -338,7 +338,7 @@ final class AppState {
 
     /// Persistence is isolated by app identity on macOS so the stable Prod
     /// app and the local Debug app can run against the same relay concurrently.
-    private static let sharedDefaults: UserDefaults = {
+    static let sharedDefaults: UserDefaults = {
         #if KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY && os(iOS)
         return UserDefaults(suiteName: "group.chat.kraki.ios.diag") ?? .standard
         #elseif KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY
@@ -355,9 +355,9 @@ final class AppState {
     }()
     /// Key for the persisted relay URL. Set after a successful auth or a
     /// `wrong_region` redirect so we can skip the redirect dance on cold launch.
-    private static let relayURLKey = "kraki.relayURL"
+    static let relayURLKey = "kraki.relayURL"
 
-    private static let defaultRelayURL = "wss://relay.kraki.chat"
+    static let defaultRelayURL = "wss://relay.kraki.chat"
 
     /// The relay URL the app will connect to.
     ///
@@ -532,7 +532,7 @@ final class AppState {
 
     /// Starts the opening record: the first call per process is a cold start,
     /// later ones only after the app was hidden or the Mac slept.
-    private func noteVisible() {
+    func noteVisible() {
         stability.appVisible(
             hasCachedContent: !sessionStore.sessions.isEmpty,
             viewing: sessionStore.activeSessionId != nil
@@ -542,7 +542,7 @@ final class AppState {
 
     /// The app leaves the screen in an orderly way (background, sleep, quit):
     /// the next launch will not report an unclean exit.
-    private func noteOrderlyExit() {
+    func noteOrderlyExit() {
         exitMarker.leftForeground()
     }
 
@@ -578,7 +578,7 @@ final class AppState {
 
     @ObservationIgnored private var stabilityStarted = false
 
-    private func startStabilityTracking() {
+    func startStabilityTracking() {
         guard !stabilityStarted else { return }
         stabilityStarted = true
         #if KRAKI_DIAG || DEBUG
@@ -753,895 +753,31 @@ final class AppState {
     }
 
     #if os(macOS)
-    private var cliLoginInFlight = false
-
-    /// Sign Out on this Mac. The app signs in with the built-in Kraki's own
-    /// login, which stays (this Mac keeps serving its agents, like Kraki for
-    /// Windows), so until the person signs in again the app must not quietly
-    /// reuse it: not at launch, not from the sign-in watchdog.
-    static let signedOutByUserKey = "mac.signedOutByUser"
-    static let signedOutAtKey = "mac.signedOutAt"
-    var signedOutByUser: Bool {
-        get { signedOutDefaults.bool(forKey: Self.signedOutByUserKey) }
-        set {
-            signedOutDefaults.set(newValue, forKey: Self.signedOutByUserKey)
-            if newValue { signedOutDefaults.set(Date().timeIntervalSince1970, forKey: Self.signedOutAtKey) }
-            else { signedOutDefaults.removeObject(forKey: Self.signedOutAtKey) }
-        }
-    }
-
-    /// Signed out, and no new sign-in since. A GitHub sign-in saved by the
-    /// local Kraki afterwards (`kraki connect` in Terminal, or setup) is the
-    /// person signing in again: it ends the Sign Out, so returning from
-    /// Terminal still signs in by itself.
-    var staysSignedOut: Bool {
-        guard signedOutByUser else { return false }
-        let at = signedOutDefaults.double(forKey: Self.signedOutAtKey)
-        if at > 0, let signIn = AuthManager.cliSignInDate(), signIn.timeIntervalSince1970 > at {
-            signedOutByUser = false
-            return false
-        }
-        return true
-    }
+    var cliLoginInFlight = false
     /// Test graphs use their own store, so one test's Sign Out never leaks.
     @ObservationIgnored var signedOutDefaults: UserDefaults = .standard
-
-    /// Reuse the locally-installed `kraki` CLI's login (relay + GitHub token
-    /// from `~/.kraki` / `gh auth token`) to authenticate this Mac as an arm
-    /// device — no manual pairing required. Returns true when a CLI login was
-    /// found and a connection has been started; false when the CLI isn't
-    /// installed/logged in (caller falls back to the login screen).
-    @discardableResult
-    func attemptCLILogin(ghDeadline: TimeInterval = AuthManager.launchGhDeadline) async -> Bool {
-        if staysSignedOut {
-            KLog.diag("Mac CLI login skipped: signed out on this Mac")
-            return false
-        }
-        // SwiftUI WindowGroup tasks can be recreated while the app is already
-        // connecting/authenticating. Loading the CLI token twice used to call
-        // connect twice and leave parallel sockets behind.
-        if cliLoginInFlight { return true }
-        startAuthRecoveryWatchdog()
-        if authManager?.cliGitHubToken != nil {
-            switch connectionStatus {
-            case .connected, .authenticating:
-                return true
-            default:
-                // A token is loaded but the socket is not signed in with it
-                // (e.g. still open from a failed attempt): connect() alone is
-                // a no-op on an open socket, so replace it.
-                reconnectForNewCredentials(reason: "cli_token_retry")
-                return true
-            }
-        }
-        cliLoginInFlight = true
-        defer { cliLoginInFlight = false }
-        guard let creds = await AuthManager.loadCLICredentials(ghDeadline: ghDeadline) else {
-            // The quick launch probe can time out on a cold `gh` (first run
-            // after an OS update). Keep looking in the background with a
-            // realistic deadline instead of giving up for this process.
-            if ghDeadline < AuthManager.recoveryGhDeadline {
-                Task { @MainActor [weak self] in
-                    await self?.recoverCLIAuthentication(reason: "launch_probe_timeout")
-                }
-            }
-            return false
-        }
-        adoptCLICredentials(creds)
-        return true
-    }
-
-    /// Use a CLI credential now: token auth with process-local keys, on a
-    /// fresh socket unless the current one is already signed in.
-    private func adoptCLICredentials(_ creds: (relay: String, token: String)) {
-        // Token auth is independent of the old device's Keychain ACL. Use
-        // process-local keys so a denied Keychain prompt cannot strand the
-        // Mac before the relay refreshes this device's public keys.
-        authManager?.useEphemeralKeysForCurrentProcess()
-        if creds.relay != relayURL { relayURL = creds.relay }
-        // Sign Out resets AppState's relay but not the socket's, so compare
-        // with the socket: only a real change schedules a new connection.
-        let socketRelayChanged = wsClient.map { $0.relayURL != creds.relay } ?? false
-        if socketRelayChanged { wsClient?.setRelayURL(creds.relay) }
-        authManager?.cliGitHubToken = creds.token
-        KLog.diag("Auth: using local CLI login")
-        // setRelayURL schedules the replacement connection itself. Calling
-        // connect again here would briefly create two authenticated sockets.
-        guard !socketRelayChanged, connectionStatus != .connected else { return }
-        reconnectForNewCredentials(reason: "cli_token")
-    }
-
-    /// `connect()` is ensure-connected: it does nothing while a socket is
-    /// already open, so a credential obtained mid-attempt was never sent.
-    private func reconnectForNewCredentials(reason: String) {
-        guard let wsClient else { return }
-        if wsClient.state == .disconnected {
-            connect()
-        } else {
-            KLog.diag("Auth: reconnecting to sign in with new credentials (\(reason))")
-            connectionStatus = .connecting
-            wsClient.resetBackoffAndReconnect()
-        }
-    }
-
-    private var cliRecoveryInFlight = false
-
-    /// Find the local CLI login with a realistic `gh` deadline and sign in
-    /// with it. Falls back to the relay login flow when there is none.
-    func recoverCLIAuthentication(reason: String) async {
-        guard !cliRecoveryInFlight, connectionStatus != .connected, !staysSignedOut else { return }
-        cliRecoveryInFlight = true
-        defer { cliRecoveryInFlight = false }
-        KLog.diag("Auth: recovering sign-in (\(reason))")
-        if authManager?.cliGitHubToken == nil,
-           let creds = await AuthManager.loadCLICredentials(ghDeadline: AuthManager.recoveryGhDeadline) {
-            guard connectionStatus != .connected else { return }
-            adoptCLICredentials(creds)
-            return
-        }
-        guard connectionStatus != .connected else { return }
-        if authManager?.cliGitHubToken != nil || hasStoredCredentials {
-            reconnectForNewCredentials(reason: reason)
-        } else if connectionStatus == .awaitingLogin, wsClient?.state != .disconnected {
-            KLog.diag("Auth: no CLI login found — showing login")
-            authManager?.requestAuthInfo()
-        }
-    }
-
+    var cliRecoveryInFlight = false
     // MARK: Sign-in watchdog
 
     /// When the window holds credentials but has not signed in for a while
     /// (a socket open yet unauthenticated, or no CLI token found at launch),
     /// retry automatically with growing intervals. Ordinary outages are left
     /// to the WebSocket's own reconnect backoff.
-    private var authWatchdogTask: Task<Void, Never>?
+    var authWatchdogTask: Task<Void, Never>?
     @ObservationIgnored var notConnectedSince: Date?
     @ObservationIgnored var authRecoveryAttempts = 0
-    @ObservationIgnored private var lastAuthRecoveryAt: Date?
+    @ObservationIgnored var lastAuthRecoveryAt: Date?
     #if DEBUG
     @ObservationIgnored var authWatchdogInterval: TimeInterval = 5
     @ObservationIgnored var authStuckThreshold: TimeInterval = 10
     #else
-    private let authWatchdogInterval: TimeInterval = 5
-    private let authStuckThreshold: TimeInterval = 10
+    let authWatchdogInterval: TimeInterval = 5
+    let authStuckThreshold: TimeInterval = 10
     #endif
-
-    func startAuthRecoveryWatchdog() {
-        guard authWatchdogTask == nil else { return }
-        authWatchdogTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                let interval = self?.authWatchdogInterval ?? 5
-                try? await Task.sleep(for: .seconds(interval))
-                guard let self else { return }
-                await self.authWatchdogTick()
-            }
-        }
-    }
-
-    func authWatchdogTick() async {
-        guard !isInBackground, connectionStatus != .connected,
-              isSigningInWithCredentials,
-              let since = notConnectedSince else { return }
-        let transportOpen = wsClient?.state == .connected
-        let missingToken = authManager?.cliGitHubToken == nil
-        // A plain outage (no transport) with a token is the socket's job.
-        guard transportOpen || missingToken else { return }
-        let backoff = min(authStuckThreshold * pow(2, Double(authRecoveryAttempts)), 60)
-        let reference = max(since, lastAuthRecoveryAt ?? .distantPast)
-        guard Date().timeIntervalSince(reference) >= backoff else { return }
-        authRecoveryAttempts += 1
-        lastAuthRecoveryAt = Date()
-        await recoverCLIAuthentication(reason: transportOpen ? "stuck_unauthenticated" : "no_cli_token")
-    }
     #endif
-
-    /// Connect to local relay with open auth — DEBUG only.
-    /// Bypasses pairing and OAuth for fast dev iteration.
-    ///
-    /// The default `relayURL` is `wss://relay.kraki.chat` (prod) for
-    /// all build configurations, so this dev path explicitly forces
-    /// the URL to the local `pnpm dev` relay (`ws://localhost:4400`,
-    /// matching `scripts/dev-local.ts`'s default relay port). On the iOS
-    /// Simulator `localhost` resolves to the host Mac, so this just
-    /// works when the dev daemon is up.
-    func devConnect(port overridePort: Int? = nil) {
-        #if DEBUG
-        // Local dev is a process-scoped open-auth identity. Keep production
-        // pairing/device credentials and RSA keys intact so entering dev mode
-        // cannot sign the user's real app out.
-        authManager?.pairingToken = nil
-        authManager?.usesEphemeralOpenAuth = true
-        // `KRAKI_LOCAL_RELAY_PORT` env override matches `scripts/dev-local.ts`.
-        let port = overridePort.map(String.init) ?? ProcessInfo.processInfo.environment["KRAKI_LOCAL_RELAY_PORT"] ?? "4400"
-        let devURL = "ws://localhost:\(port)"
-        relayURL = devURL
-        // Intentionally NOT persisting to App Group — the dev URL is
-        // ephemeral; cold launch should always default back to prod.
-        // Otherwise a debug install can leave `ws://localhost:4000`
-        // baked into shared defaults on a physical phone where it
-        // can never resolve.
-        connectionStatus = .connecting
-        if wsClient?.relayURL != devURL {
-            // setRelayURL tears down the old socket and schedules the replacement
-            // on the next runloop. Do not also call connect() here: that creates
-            // two local sockets with different open-auth device IDs/Pulse epochs.
-            wsClient?.setRelayURL(devURL)
-        } else {
-            wsClient?.connect()
-        }
-        #endif
-    }
-
-    func disconnect() {
-        wsClient?.disconnect()
-        connectionStatus = .disconnected
-    }
-
-    /// Switch to a new relay URL (e.g. after a `wrong_region` redirect),
-    /// persist it across launches, and reconnect.
-    func redirectToRelay(_ newURL: String) {
-        KLog.d("🔀 Redirecting to relay: \(newURL)")
-        relayURL = newURL
-        Self.sharedDefaults.set(newURL, forKey: Self.relayURLKey)
-        wsClient?.setRelayURL(newURL)
-    }
-
-    /// Clear any persisted relay URL so the next launch falls back to the
-    /// default. Used during logout so a fresh login goes through the
-    /// dispatcher and gets re-pinned to the correct region.
-    func clearStoredRelayURL() {
-        Self.sharedDefaults.removeObject(forKey: Self.relayURLKey)
-        relayURL = Self.defaultRelayURL
-    }
-
-    /// Sign the user out: drop the WS, wipe stored credentials, and
-    /// reset everything to the pre-login state so RootView routes
-    /// back to the login screen.
-    func logout() {
-        #if KRAKI_DIAG
-        KrakiDiag.phase("logout")
-        #endif
-        #if os(iOS)
-        // Before the socket closes: stop pushes to this device, clear its
-        // notifications (C2 of the 2026-10-01 review).
-        pushManager?.handleSignOut()
-        #elseif os(macOS)
-        Self.onMacNotificationsMain { $0.handleSignOut(appState: self) }
-        #endif
-        #if os(macOS)
-        signedOutByUser = true
-        #endif
-        wsClient?.disconnect()
-        #if os(macOS)
-        localLink?.stop()
-        #endif
-        pulseManager?.resetForIdentityChange()
-        // The old decrypt pipeline may already have queued main-actor work.
-        // Retire its router as well as the transport before clearing stores.
-        messageRouter?.retireIdentity()
-        let router = MessageRouter(appState: self)
-        messageRouter = router
-        wsClient?.onMessage = { [weak router] data in router?.handleRawMessage(data) }
-        authManager?.clearStoredCredentials()
-        preferencesManager?.resetVocabulary()
-        clearStoredRelayURL()
-        deviceId = nil
-        user = nil
-        githubClientId = nil
-        relayVersion = nil
-        voiceCapability = nil
-        iosVoiceComposer.discard()
-        voiceInputController.forgetLease()
-        #if os(iOS)
-        pushManager?.syncApplicationBadge(unreadSessionIDs: [])
-        #endif
-        lastError = nil
-        reconnectAttempt = 0
-        hasCompletedInitialConnect = false
-        connectionStatus = .awaitingLogin
-        sessionStore.reset()
-        deviceStore.reset()
-        messageStore.reset()
-        commandSender?.reset()
-        messageProvider?.clear()
-        sessionSubscriptionController = SessionSubscriptionController(host: self)
-    }
-
-    /// Called when the app returns to foreground. Reset backoff and
-    /// kick a fresh connect immediately so the user doesn't have to
-    /// wait out a long backoff timer that started in the background.
-    func handleForegroundRehydrate(forceReconnect: Bool = false) {
-        #if os(iOS)
-        // Back before a deferred teardown ran: nothing was closed.
-        if backgroundVoiceFinisher.isActive { backgroundVoiceFinisher.cancel(); backgroundVoiceClientID = nil }
-        #endif
-        if isInBackground {
-            isInBackground = false
-            // The debounce restarts now: a quick foreground reconnect never
-            // shows "Reconnecting".
-            updateReconnectingIndicator()
-        }
-        #if KRAKI_DIAG
-        KrakiDiag.phase("active")
-        #endif
-        noteVisible()
-        updateReadVisibility(appForeground: true, conversationVisible: true)
-        #if os(iOS)
-        Task { await pushManager?.handleForeground() }
-        #endif
-        voiceInputController.resumeWarmConnection()
-        guard hasCompletedInitialConnect else { return }
-        if !forceReconnect, let wsClient, wsClient.state != .disconnected { return }
-        wsClient?.resetBackoffAndReconnect()
-    }
-
-    /// Called when the app moves to background. Close the WS so the
-    /// relay marks this device offline immediately and starts routing
-    /// to APNs. Otherwise the relay would skip APNs for ~30s while it
-    /// waits for a pong from the dead socket.
-    ///
-    /// Called when the app moves to background. We pre-empt the
-    /// system-level idle-timeout disconnect by tearing down the WS
-    /// before iOS suspends us. That way the relay marks this device
-    /// offline immediately and starts routing to APNs. Otherwise the
-    /// relay would skip APNs for ~30s while it waits for a pong from
-    /// the dead socket.
-    ///
-    /// GRDB DatabasePool checkpoints WAL on its own — no explicit
-    /// flush needed for messages. We still flush the SessionStore /
-    /// DeviceStore JSON snapshots so debounced writes don't get lost.
-    func handleInactive() {
-        #if KRAKI_DIAG
-        KrakiDiag.phase("inactive")
-        #endif
-        #if os(iOS)
-        if let owner = iosVoiceComposer.sessionID { iosVoiceComposer.depart(sessionID: owner) }
-        #endif
-        updateReadVisibility(appForeground: false, conversationVisible: false)
-    }
 
     /// Between handleBackground and handleForegroundRehydrate.
-    private(set) var isInBackground = false
-
-    func handleBackground() {
-        isInBackground = true
-        stability.appHidden()
-        noteOrderlyExit()
-        updateReconnectingIndicator()
-        #if KRAKI_DIAG
-        KrakiDiag.phase("background", pending: commandSender?.outbox.values.reduce(0) { $0 + $1.count } ?? 0)
-        #endif
-        updateReadVisibility(appForeground: false, conversationVisible: false)
-        sessionStore.flushCache()
-        deviceStore.flushCache()
-        #if os(iOS)
-        // A sent voice message still being corrected: keep the voice and relay
-        // sockets for a short background task so it goes out as it would in
-        // the foreground. Otherwise (or if that runs out) keep everything
-        // heard — a draft, or a not-sent bubble with the original transcript.
-        if case .staged(let clientID) = iosVoiceComposer.operation?.phase {
-            backgroundVoiceClientID = clientID
-            if backgroundVoiceFinisher.beginIfNeeded() { return }
-        }
-        iosVoiceComposer.retireKeepingDraft()
-        #endif
-        tearDownForBackground()
-    }
-
-    /// Close the voice and relay sockets for the background (APNs takes over).
-    private func tearDownForBackground() {
-        voiceInputController.suspendWarmConnection()
-        wsClient?.disconnect()
-    }
-
-    /// Called by the WS client whenever it bumps its retry counter.
-    func updateReconnectAttempt(_ attempt: Int) {
-        reconnectAttempt = attempt
-    }
-
-    private func handleConnectionStateChange(_ state: WebSocketState) {
-        #if KRAKI_DIAG
-        let diagState: String
-        switch state {
-        case .connected: diagState = "connected"
-        case .disconnected: diagState = "disconnected"
-        case .connecting: diagState = "connecting"
-        }
-        KrakiDiag.record(.connection, [.state: .tag(diagState), .attempt: .int(reconnectAttempt)])
-        #endif
-        switch state {
-        case .connected: stability.socketOpen()
-        case .connecting:
-            // Every connection path (launch, CLI login, relay switch, dev)
-            // passes here: the first attempt of the process opens the cold
-            // record.
-            startStabilityTracking()
-            if !isInBackground { noteVisible() }
-            stability.connecting()
-        case .disconnected: break
-        }
-        switch state {
-        case .connected:
-            connectionStatus = .authenticating
-            authManager?.bootstrapAuth()
-        case .disconnected:
-            sessionSubscriptionController?.onDisconnected()
-            messageProvider?.onDisconnected()
-            if connectionStatus == .connected {
-                connectionStatus = .disconnected
-            }
-            pulseManager?.onDisconnected()
-        case .connecting:
-            connectionStatus = .connecting
-        }
-    }
-
-    /// Called by AuthManager after the relay answers a pre-auth
-    /// `auth_info` query. Stashes the GitHub OAuth client id and drops
-    /// the connection status back to `.awaitingLogin` so the LoginView
-    /// becomes interactive (otherwise it would be stuck on the
-    /// "Signing you in…" panel waiting for an auth handshake that
-    /// hasn't been initiated yet).
-    func onAuthInfoReceived(githubClientId: String?) {
-        self.githubClientId = githubClientId
-        // If a user-initiated auth (OAuth code, pairing token) raced
-        // ahead of this response, leave its `.authenticating` in place.
-        if connectionStatus == .authenticating {
-            connectionStatus = .awaitingLogin
-        }
-    }
-
-    // Called by AuthManager after successful auth
-    func onAuthenticated(deviceId: String, user: UserInfo?, devices: [DeviceSummary], githubClientId: String?, relayVersion: String?) {
-        self.deviceId = deviceId
-        self.user = user
-        self.githubClientId = githubClientId
-        self.relayVersion = relayVersion
-        self.connectionStatus = .connected
-        self.reconnectAttempt = 0
-        self.lastError = nil
-        // First-time login crosses the line into MainTabView. Mid-
-        // session reconnects re-enter this method too, which is fine
-        // — setting it to true again is a no-op.
-        self.hasCompletedInitialConnect = true
-        stability.authenticated()
-
-        // The relay rejects Pulse frames before auth and only starts its peer
-        // endpoint after sending auth_ok. Start our endpoint at the same
-        // boundary; doing this on raw WebSocket connect loses the hello on a
-        // challenge reconnect and leaves session_list/history requests stuck.
-        pulseManager?.onConnected()
-
-        deviceStore.setDevices(devices)
-
-        // Drain any queued encrypted messages
-        messageRouter?.drainQueue()
-
-        #if os(macOS)
-        localLink?.start()
-        #endif
-        sessionSubscriptionController?.resume()
-
-        // Re-register push token if user has it enabled
-        #if os(iOS)
-        pushManager?.onAuthenticated()
-        #elseif os(macOS)
-        Self.onMacNotificationsMain { $0.onAuthenticated(appState: self) }
-        #endif
-        voiceInputController.prepare()
-    }
-
-    func onAuthFailed(error: String) {
-        self.lastError = error
-        self.connectionStatus = .awaitingLogin
-    }
-
-    /// Send an encrypted message over the Pulse reliable-transport layer.
-    /// E2E-encrypts the inner message to `{blob, keys}`, then hands the pair to
-    /// the pulse endpoint, which frames it and sends the OUTER relay envelope
-    /// `{type:"unicast"|"broadcast", pulse:b64, blob:"", keys:{}}` — the
-    /// ciphertext rides inside the pulse frame, transparent to the relay.
-    @discardableResult
-    func sendEncryptedMessage(
-        _ message: [String: Any],
-        routingTarget: String? = nil,
-        connectionScoped: Bool = false
-    ) -> Bool {
-        #if DEBUG
-        if let testOutboundMessageHandler {
-            return testOutboundMessageHandler(message, routingTarget, connectionScoped)
-        }
-        #endif
-        guard deviceId != nil else {
-            KLog.d("⚠️ sendEncrypted: no deviceId")
-            return false
-        }
-
-        guard let innerData = try? JSONSerialization.data(withJSONObject: message),
-              let innerString = String(data: innerData, encoding: .utf8) else {
-            KLog.d("⚠️ sendEncrypted: failed to serialize message")
-            return false
-        }
-
-        // Determine target tentacle device. Prefer an explicit
-        // `targetDeviceId` in the envelope (e.g. import or
-        // request_local_sessions, both of which target a specific
-        // tentacle without a sessionId). Fall back to the session's
-        // owning device when a sessionId is present, else broadcast.
-        let sessionId = message["sessionId"] as? String
-        let explicitTarget = message["targetDeviceId"] as? String
-        // Commands such as create_session and request_local_sessions carry
-        // their target inside the protocol payload, but relay routing happens
-        // before decryption and therefore needs the same target separately.
-        // Resolve both shapes so a targeted command is encrypted to, and
-        // delivered by the relay to, the intended Tentacle.
-        let payloadTarget = (message["payload"] as? [String: Any])?["targetDeviceId"] as? String
-        let targetDeviceId: String?
-        if let routingTarget {
-            targetDeviceId = routingTarget
-        } else if let explicitTarget {
-            targetDeviceId = explicitTarget
-        } else if let payloadTarget {
-            targetDeviceId = payloadTarget
-        } else if let sessionId {
-            // A session's messages go only to the computer that owns it. An
-            // unknown session must not fall back to every computer: that would
-            // encrypt this command for machines that have nothing to do with it.
-            guard let owner = sessionStore.sessions[sessionId]?.deviceId
-                    ?? sessionStore.archivedSessionInfo(sessionId)?.deviceId else {
-                KLog.d("⚠️ Not sending \(message["type"] as? String ?? "?"): unknown session")
-                return false
-            }
-            targetDeviceId = owner
-        } else {
-            targetDeviceId = nil
-        }
-
-        // Collect recipient encryption keys
-        var recipients: [RecipientKey] = []
-        let crypto = CryptoManager()
-
-        if let targetDeviceId {
-            guard let device = deviceStore.devices[targetDeviceId],
-                  let encKeyB64 = device.encryptionKey ?? device.publicKey else {
-                KLog.d("⚠️ sendEncrypted: target unavailable \(targetDeviceId.prefix(12))")
-                return false
-            }
-            do {
-                let pubKey = try crypto.importPublicKeyFromSPKI(encKeyB64)
-                recipients.append(RecipientKey(deviceId: targetDeviceId, publicKey: pubKey))
-            } catch {
-                KLog.d("❌ sendEncrypted: can't import key for \(targetDeviceId.prefix(12)): \(error)")
-                return false
-            }
-        } else {
-            // Broadcast to all tentacle devices
-            for device in deviceStore.devices.values where device.role == .tentacle {
-                guard let encKeyB64 = device.encryptionKey ?? device.publicKey else { continue }
-                do {
-                    let pubKey = try crypto.importPublicKeyFromSPKI(encKeyB64)
-                    recipients.append(RecipientKey(deviceId: device.id, publicKey: pubKey))
-                } catch {
-                    KLog.d("⚠️ sendEncrypted: can't import key for \(device.id.prefix(12))")
-                }
-            }
-        }
-
-        guard !recipients.isEmpty else {
-            KLog.d("⚠️ sendEncrypted: no recipients found")
-            return false
-        }
-
-        do {
-            let blob = try crypto.encryptToBlob(innerString, recipients: recipients)
-            #if os(macOS)
-            // The Tentacle on this Mac is reached over loopback, not the Head.
-            if let targetDeviceId, let localLink,
-               localLink.sendEncrypted(
-                   blob: blob.blob, keys: blob.keys, to: targetDeviceId,
-                   connectionScoped: connectionScoped,
-                   replayable: Self.replayableAcrossRoutes.contains(message["type"] as? String ?? "")
-               ) {
-                KLog.d("📤🔒 local link → \(targetDeviceId.prefix(12))...")
-                return true
-            }
-            #endif
-            KLog.d("📤🔒 pulse → \(targetDeviceId?.prefix(12) ?? "broadcast")...")
-            guard let pulseManager else { return false }
-            pulseManager.sendEncrypted(
-                blob: blob.blob,
-                keys: blob.keys,
-                target: targetDeviceId,
-                connectionScoped: connectionScoped,
-                fragment: targetDeviceId.map {
-                    deviceStore.deviceFeatures[$0]?.contains(PayloadFragments.feature) == true
-                } ?? false
-            )
-            return true
-        } catch {
-            KLog.d("❌ sendEncrypted: encryption failed: \(error)")
-            return false
-        }
-    }
-}
-
-// MARK: - Session subscription
-
-extension AppState: SessionSubscriptionHost {
-    var subscriptionConnected: Bool { connectionStatus == .connected }
-
-    func resolveTentacle(for sessionId: String) -> String? {
-        sessionStore.sessions[sessionId]?.deviceId
-    }
-
-    func isTentacleOnline(_ tentacleId: String) -> Bool {
-        #if os(macOS)
-        if localLink?.isLinked(tentacleId) == true { return true }
-        #endif
-        return deviceStore.devices[tentacleId]?.online == true
-    }
-
-    /// Commands the Tentacle handles idempotently (client ids, permission ids,
-    /// absolute settings), so a copy delivered again over the Head after the
-    /// link died unconfirmed is harmless. Not here: create/fork (would create
-    /// twice), connection-scoped commands (abort, subscription), which must
-    /// not outlive their connection, and `mark_unread`, which is relative to
-    /// the read cursor: a late copy would undo a read that happened since.
-    static let replayableAcrossRoutes: Set<String> = [
-        "send_input", "approve", "deny", "always_allow",
-        "set_session_mode", "set_session_model", "rename_session", "pin_session",
-        "mark_read", "archive_session", "delete_session", "kill_session",
-    ]
-
-    #if os(macOS)
-    /// The route to `tentacleId` switched between the Head and the local link.
-    /// Like a Tentacle (re)join: drop connection-scoped subscription authority
-    /// (the Tentacle re-sends session_list on the new route, which is the new
-    /// barrier), re-declare features and re-send inputs still waiting.
-    func localLinkDidChange(tentacleId: String, linked: Bool) {
-        sessionSubscriptionController.onTentacleUnavailable(tentacleId)
-        if let store = attachmentStore {
-            if Thread.isMainThread {
-                MainActor.assumeIsolated { store.routeChanged() }
-            } else {
-                Task { @MainActor in store.routeChanged() }
-            }
-        }
-        if linked || deviceStore.devices[tentacleId]?.online == true {
-            messageRouter?.declareClientFeatures(to: tentacleId)
-            commandSender?.resendPendingInputs(
-                deviceId: tentacleId,
-                reason: linked ? "local_link_up" : "local_link_down"
-            )
-        }
-    }
-    #endif
-
-    func sendSessionSubscription(to tentacleId: String, sessionId: String?) -> Bool {
-        sendSessionSubscription(to: tentacleId, sessionId: sessionId, requestId: UUID().uuidString)
-    }
-
-    func sendSessionSubscription(to tentacleId: String, sessionId: String?, requestId: String) -> Bool {
-        var payload: [String: Any] = [:]
-        payload["sessionId"] = sessionId ?? NSNull()
-        payload["requestId"] = requestId
-        return sendEncryptedMessage([
-            "type": "set_session_subscription",
-            "deviceId": deviceId ?? "",
-            "seq": 0,
-            "timestamp": ISO8601.now(),
-            "payload": payload,
-        ], routingTarget: tentacleId, connectionScoped: true)
-    }
-
-    func applySessionSubscriptionSnapshot(_ ack: SessionSubscriptionAck) {
-        guard let sessionId = ack.sessionId,
-              let snapshot = ack.snapshot,
-              let digestJSON = snapshot["digest"] as? [String: Any],
-              let digest = SessionDigest(json: digestJSON) else { return }
-
-        let device = deviceStore.device(for: ack.tentacleId)
-        sessionStore.upsertSession(
-            digest,
-            deviceId: ack.tentacleId,
-            deviceName: device?.name ?? ack.tentacleId
-        )
-        sessionStore.setMode(sessionId, digest.mode)
-        if let usage = digest.usage { sessionStore.setUsage(sessionId, usage) }
-        if let preview = digest.preview {
-            sessionStore.setPreview(
-                sessionId,
-                text: preview.text,
-                type: preview.type,
-                timestamp: preview.timestamp
-            )
-        }
-
-        if digest.runtimeStatus?.status == "compacting" {
-            let reason = digest.runtimeStatus?.reason.flatMap(CompactionReason.init(rawValue:))
-            messageStore.setCompacting(sessionId, reason: reason)
-        } else {
-            switch digest.state {
-            case .compacting:
-                messageStore.setCompacting(sessionId, reason: nil)
-            case .idle, .active:
-                messageStore.clearRuntimeStatus(sessionId)
-            }
-        }
-
-        let cardJSON = snapshot["card"] as? [String: Any] ?? [:]
-        let draft = cardJSON["draft"] as? String ?? ""
-        let actionPayload = cardJSON["action"].map { ["action": $0] }
-        let action = MessageRouter.decodeCardAction(actionPayload)
-        messageStore.replaceCardFromSubscription(
-            sessionId,
-            draft: draft,
-            action: action,
-            state: digest.state
-        )
-
-        let spineHeadSeq = snapshot["spineHeadSeq"] as? Int ?? digest.lastSeq
-        // The card belongs to the turn after `spineHeadSeq`: show it only once
-        // this device has the messages up to there (catch-up comes next).
-        messageStore.holdCard(sessionId, untilSeq: spineHeadSeq)
-        messageProvider?.setTentacleInfo(
-            sessionId: sessionId,
-            lastSeq: spineHeadSeq,
-            deviceId: ack.tentacleId
-        )
-        messageProvider?.ensureLoaded(
-            sessionId: sessionId,
-            reason: "subscriptionSnapshot"
-        )
-    }
-
-    func reportSessionSubscriptionError(_ message: String) {
-        lastError = message
-    }
-
-    func tentacleRouteIsIndependent(_ tentacleId: String) -> Bool {
-        #if os(macOS)
-        return localLink?.isLinked(tentacleId) == true
-        #else
-        return false
-        #endif
-    }
-}
-
-// MARK: - Voice input host
-
-extension AppState: KrakiVoiceInputHost {
-    static let headPulseTarget = "@head"
-
-    /// The only message types the head sends inside a plaintext
-    /// `{from:"@head", msg}` Pulse wrapper (mirrors `HEAD_CONTROL_TYPES` in
-    /// packages/protocol). Anything else arriving that way, notably `auth_ok`,
-    /// `auth_error` and consumer/producer messages, is forged and dropped.
-    static let headControlTypes: Set<String> = [
-        "device_joined", "device_left", "device_removed", "device_pending",
-        "preferences_updated", "push_token_registered", "notification_preview",
-        "voice_lease_grant", "voice_lease_denied", "voice_vocabulary_updated",
-    ]
-
-    /// The inner message of a `{from:"@head", msg}` wrapper, or nil when it is
-    /// not one of the head's own control types.
-    static func headControlMessage(in wrapper: [String: Any]) -> [String: Any]? {
-        guard wrapper["from"] as? String == headPulseTarget,
-              let message = wrapper["msg"] as? [String: Any],
-              let type = message["type"] as? String,
-              headControlTypes.contains(type) else { return nil }
-        return message
-    }
-
-    var voiceUserID: String? { user?.id }
-    var voiceDeviceID: String? { deviceId }
-    var voiceTransportReady: Bool { connectionStatus == .connected }
-
-    @discardableResult
-    func requestVoiceLease(resource: String) -> Bool {
-        guard connectionStatus == .connected, let deviceId, let wsClient,
-              JSONSerialization.isValidJSONObject([
-                "type": "request_voice_lease",
-                "deviceId": deviceId,
-                "resource": resource,
-              ]),
-              let data = try? JSONSerialization.data(withJSONObject: [
-                "type": "request_voice_lease",
-                "deviceId": deviceId,
-                "resource": resource,
-              ]),
-              let string = String(data: data, encoding: .utf8) else {
-            KLog.d("🎙️ Voice lease request blocked: transport unavailable")
-            return false
-        }
-        // Voice authorization is connection-scoped. The controller requests a
-        // lease during foreground warm-up and reuses it across sequential
-        // recordings until expiry or reconnect replacement.
-        wsClient.sendRaw(string)
-        KLog.d("🎙️ Voice lease request sent resource=\(resource)")
-        return true
-    }
-}
-
-// MARK: - PulseHost
-
-extension AppState: PulseHost {
-    func sendPulseFrame(_ b64: String, target: String?) {
-        // Outer relay envelope carrying the pulse frame; blob/keys are empty
-        // (the ciphertext lives inside the pulse frame's payload).
-        var envelope: [String: Any] = ["pulse": b64, "blob": "", "keys": [String: String]()]
-        if let target {
-            envelope["type"] = "unicast"
-            envelope["to"] = target
-            if target == Self.headPulseTarget {
-                KLog.d("🎙️ Voice control Pulse frame → @head bytes=\(b64.utf8.count)")
-            }
-        } else {
-            envelope["type"] = "broadcast"
-        }
-        guard let data = try? JSONSerialization.data(withJSONObject: envelope),
-              let str = String(data: data, encoding: .utf8) else { return }
-        #if os(macOS)
-        localLink?.noteHeadFrame(target: target)
-        #endif
-        wsClient?.sendRaw(str)
-    }
-
-    func onDelivered(json: String) {
-        guard let data = json.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return
-        }
-
-        // Head-originated control (presence, preferences, voice lease) is
-        // intentionally plaintext inside ordered Pulse. Route its inner message
-        // through the same control dispatcher as a raw WebSocket frame.
-        if object["from"] as? String == Self.headPulseTarget {
-            guard let message = Self.headControlMessage(in: object),
-                  let messageData = try? JSONSerialization.data(withJSONObject: message) else {
-                KLog.d("⚠️ Dropped non-control message in head pulse wrapper")
-                return
-            }
-            KLog.d("🎙️ Head control delivered type=\(message["type"] as? String ?? "")")
-            messageRouter?.handleRawMessage(messageData)
-            return
-        }
-
-        #if os(macOS)
-        // While this Mac is linked to a Tentacle, that Tentacle sends it nothing
-        // through the Head. A Head frame from it was sent before the switch and
-        // is stale. Its connection-scoped live state (deltas, card, subscription
-        // acks) would land after the link's fresh snapshot and duplicate or
-        // revert the card, so those are dropped after decryption; everything
-        // else (session_list, spine) is idempotent and still applied.
-        if let src = object["src"] as? String, let localLink, localLink.isLinked(src) {
-            localLink.noteStaleHeadFrameDropped()
-            var marked = object
-            marked[EncryptionHandler.staleRouteKey] = true
-            if let markedData = try? JSONSerialization.data(withJSONObject: marked) {
-                messageRouter?.encryptionHandler.submitForDecryption(markedData)
-            }
-            return
-        }
-        #endif
-
-        // All other delivered payloads are `{blob, keys}` E2E ciphertext from a
-        // tentacle. Submit to the ordered background decrypt pipeline so RSA
-        // work never competes with AppKit scrolling on the main thread.
-        messageRouter?.encryptionHandler.submitForDecryption(data)
-    }
-
-    func onAcked(seqUpTo: UInt64) {
-        commandSender?.resolvePulseAcked(seqUpTo: seqUpTo)
-    }
-
-    func onResetInbound(fromSeq: UInt64, epoch: String) {
-        KLog.d("⚠️ pulse reset-inbound from=\(fromSeq) epoch=\(epoch)")
-    }
-
-    func requestConnect() { wsClient?.connect() }
-    func requestDisconnect() { wsClient?.disconnect() }
-    func requestPulseRecovery() { wsClient?.recover(reason: "pulse_progress_timeout") }
+    var isInBackground = false
 }
 
 // MARK: - Types
