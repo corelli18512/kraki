@@ -588,7 +588,10 @@ export class SessionManager {
     this.cancelledAttachmentLinks.add(sessionId);
     const dir = this.sessionDir(sessionId);
     if (existsSync(dir)) {
-      rmSync(dir, { recursive: true });
+      // A fork's attachments may still be linking in the background (up to 16
+      // links in flight): one landing mid-delete makes rmdir fail ENOTEMPTY.
+      // Retry; the linker stops once it sees the fork is gone.
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     }
   }
 
