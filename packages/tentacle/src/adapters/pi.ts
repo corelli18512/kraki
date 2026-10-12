@@ -40,6 +40,7 @@ const LEGACY_SHOW_HTML_MAX_BYTES = 10 * 1024 * 1024;
 import { getKrakiHome, getConfigDir } from '../config.js';
 import { PI_KRAKI_TOOLS_SOURCE } from './pi-kraki-tools.js';
 import { DEFAULT_SESSION_MODE, normalizeSessionMode } from '@kraki/protocol';
+import { TurnTracker } from './turn-tracker.js';
 import { KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMode, type ToolKind } from './permission-policy.js';
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 import { tmpdir } from 'node:os';
@@ -403,10 +404,9 @@ interface PiSession {
   sessionFile?: string;
   usage: SessionUsage;
   lastActivity: number;
-  /** Relay-owned logical turn identity for the next accepted prompt. */
-  relayTurnId?: string;
-  /** Identity captured when the provider run started. */
-  eventTurnId?: string;
+  /** Kraki's view of the current turn: prose segments (narration vs reply),
+   *  the held provider error, idle once, and the turn id to stamp. */
+  turn: TurnTracker;
   /** Fresh prompt ownership before agent_start. Only preflight maintenance may
    *  use this identity; late provider callbacks must keep eventTurnId. */
   promptPreflight?: { turnId?: string };
@@ -420,37 +420,13 @@ interface PiSession {
   /** Outstanding ask_user questions (questionId → pi's UI request id). Mirrors
    *  pendingPerms — cleared on answer / kill / respawn. */
   pendingQuestions: Map<string, string>;
-  /** Number of narration segments (non-empty assistant prose at message_end)
-   *  produced since the current user message. */
-  narrationSegments: number;
-  /** True once a real tool ran AFTER the most recent narration segment (reset to
-   *  false whenever a narration finalizes). If the turn ends on a tool, the last
-   *  narration isn't a trailing reply — the turn is just its Steps. */
-  toolSinceLastNarration: boolean;
-  /** The most recent narration segment's finalized prose — the kept "draft" text
-   *  (keep-last); becomes the reply when no tool follows it. */
-  lastNarration: string;
   /** stopReason of the most recent assistant message_end this turn ('stop' |
    *  'error' | 'aborted' | 'toolUse' | …). 'error'/'aborted' mean the run did
    *  NOT produce a real answer → just idle. */
   lastStopReason: string | undefined;
-  /** Backend error held until agent_end says whether Pi will retry. */
-  pendingError: string | undefined;
-  /** Monotonic logical turn identity. Active-turn steer keeps this identity;
-   * post-settlement steer opens a new one. */
-  logicalTurn: number;
-  /** The logical turn whose terminal callbacks have been emitted, if any. */
-  settledTurn: number | undefined;
   /** Pi emitted a non-retrying agent_end, so a following non-retry compaction
    *  may settle the conversational answer before agent_settled. */
   pendingMaintenanceIdle: boolean;
-  /** The most recent narration segment whose TRACE mirror is still DEFERRED —
-   *  not yet emitted as an `agent_narration` step because it might still
-   *  graduate verbatim into the concluding bubble. It is FLUSHED to the trace (a confirmed intermediate
-   *  step) when superseded by a newer narration or by a following tool, and
-   *  DISCARDED (never traced) when it becomes the bubble — so the trailing reply
-   *  never shows twice (last Step + bubble). Empty when nothing is pending. */
-  pendingNarration: string;
   /** Cancellation handle for a normal prompt whose RPC ACK is still waiting on
    *  Pi preflight (most notably auto-compaction). Pi's generic abort RPC does
    *  not cancel compaction or that queued prompt, so explicit user abort must
@@ -920,7 +896,11 @@ export class PiAdapter extends AgentAdapter {
       extensionPath: this.ensureToolsExtension(),
       env,
     });
-    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), relayTurnId: undefined, eventTurnId: undefined, exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 0, settledTurn: 0, pendingMaintenanceIdle: false, pendingNarration: '', aborting: false };
+    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), turn: new TurnTracker(this, sessionId), exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), lastStopReason: undefined, pendingMaintenanceIdle: false, aborting: false };
+    // A respawn (lazy resume) keeps the relay turn assigned before it: the
+    // prompt that follows belongs to it. Only the id carries over — a late exit
+    // event of the old process must not touch the new process's turn.
+    sess.turn.relayTurnId = this.sessions.get(sessionId)?.turn.relayTurnId;
     // Events are handled strictly in order: handleEvent awaits (image resize
     // on tool_execution_end), and an unawaited dispatch let a later
     // message_end/agent_settled settle the turn before that tool_complete,
@@ -949,18 +929,23 @@ export class PiAdapter extends AgentAdapter {
     this.pendingModeSignals.delete(sessionId);
     // A concrete provider error must cross the adapter boundary before idle;
     // otherwise Relay would freeze the turn as successful on process death.
-    if (sess.pendingError) {
-      this.emitError(sessionId, sess, sess.pendingError);
-      sess.pendingError = undefined;
-    } else if (!sess.aborting && sess.settledTurn !== sess.logicalTurn) {
+    let error = sess.turn.pendingError;
+    if (!error && !sess.aborting && !sess.turn.isSettled) {
       // Pi died mid-turn (crash, killed, broken runtime). Without this the
       // turn ends silently and clients show an empty "no reply" turn.
       const reason = sess.proc.crashReason();
       const exit = code === null ? '' : ` (exit code ${code})`;
       logger.warn({ sessionId, code, reason }, 'pi exited during a turn');
-      this.emitError(sessionId, sess, `Pi stopped unexpectedly${exit}${reason ? `: ${reason}` : ''}`);
+      error = `Pi stopped unexpectedly${exit}${reason ? `: ${reason}` : ''}`;
     }
-    this.emitIdleOnce(sessionId, sess);
+    sess.turn.clearError();
+    if (sess.turn.isSettled) {
+      if (error) this.emitError(sessionId, sess, error);
+    } else {
+      // Unfinished prose is never a reply when the process died.
+      sess.turn.discardProse();
+      sess.turn.finish({ error });
+    }
     this.onSessionEvicted?.(sessionId);
   }
 
@@ -991,16 +976,6 @@ export class PiAdapter extends AgentAdapter {
     if (s) s.lastActivity = Date.now();
   }
 
-  /** Emit the DEFERRED narration segment (if any) to the TRACE axis — it is now
-   *  a confirmed intermediate step (superseded by a newer narration or a tool),
-   *  so it can never be the graduating reply. Clears the pending slot. */
-  private flushPendingNarration(sessionId: string, s: PiSession): void {
-    if (s.pendingNarration) {
-      this.onNarrationTrace?.(sessionId, { content: s.pendingNarration, ...this.lifecycleEvent(s) });
-      s.pendingNarration = '';
-    }
-  }
-
   private setCompacting(
     sessionId: string,
     active: boolean,
@@ -1026,24 +1001,11 @@ export class PiAdapter extends AgentAdapter {
   }
 
   private lifecycleEvent(s?: PiSession): { turnId?: string } {
-    const turnId = s?.eventTurnId ?? s?.relayTurnId;
-    return turnId ? { turnId } : {};
-  }
-
-  private emitMessage(sessionId: string, s: PiSession, content: string): void {
-    this.onMessage?.(sessionId, { content, ...this.lifecycleEvent(s) });
+    return s ? s.turn.event() : {};
   }
 
   private emitError(sessionId: string, s: PiSession, message: string): void {
     this.onError?.(sessionId, { message, ...this.lifecycleEvent(s) });
-  }
-
-  private emitIdleOnce(sessionId: string, s: PiSession): void {
-    if (s.settledTurn === s.logicalTurn) return;
-    s.settledTurn = s.logicalTurn;
-    const event = this.lifecycleEvent(s);
-    if (event.turnId) this.onIdle?.(sessionId, event);
-    else this.onIdle?.(sessionId);
   }
 
   private subagentTracker(sessionId: string): PiSubagentTracker {
@@ -1077,9 +1039,7 @@ export class PiAdapter extends AgentAdapter {
     const tracker = this.subagentTrackers.get(sessionId);
     if (!tracker || tracker.activeAsyncRuns() === 0) return false;
     // Prose so far ("started…") is an intermediate step, not the reply.
-    this.flushPendingNarration(sessionId, s);
-    s.lastNarration = '';
-    s.toolSinceLastNarration = false;
+    s.turn.holdOpen();
     s.awaitingSubagents = true;
     logger.info({ sessionId, running: tracker.activeAsyncRuns() }, 'pi turn held open for background subagents');
     return true;
@@ -1093,7 +1053,7 @@ export class PiAdapter extends AgentAdapter {
       if (!s.awaitingSubagents || this.sessions.get(sessionId) !== s) return;
       logger.info({ sessionId }, 'pi background subagents finished without a wake run; settling');
       this.stopAwaitingSubagents(s);
-      this.emitIdleOnce(sessionId, s);
+      s.turn.finish();
     }, PiAdapter.SUBAGENT_CONTINUATION_GRACE_MS);
   }
 
@@ -1108,21 +1068,16 @@ export class PiAdapter extends AgentAdapter {
   private settleConversationalTurnAtAgentEnd(sessionId: string, s: PiSession, willRetry: boolean): void {
     // agent_end.willRetry covers transient retries, NOT every compaction
     // recovery. Only a completed answer may settle before agent_settled.
-    if (willRetry || s.aborting || s.settledTurn === s.logicalTurn || s.lastStopReason !== 'stop') return;
+    if (willRetry || s.aborting || s.turn.isSettled || s.lastStopReason !== 'stop') return;
     if (this.subagentTrackers.get(sessionId)?.activeAsyncRuns()) return;
-
-    const reply = s.lastNarration.trim();
-    if (s.toolSinceLastNarration || !reply) return;
-
-    s.pendingNarration = '';
-    this.emitMessage(sessionId, s, reply);
-    this.emitIdleOnce(sessionId, s);
+    if (!s.turn.hasReply) return;
+    s.turn.finish();
   }
 
   setTurnIdentity(sessionId: string, turnId: string): void {
     const s = this.sessions.get(sessionId);
     if (!s) return;
-    s.relayTurnId = turnId;
+    s.turn.relayTurnId = turnId;
     // A new prompt captures its identity at agent_start. Keep the previous
     // snapshot until that boundary so a late callback from the old run cannot
     // fall back to this newly assigned relayTurnId.
@@ -1130,20 +1085,15 @@ export class PiAdapter extends AgentAdapter {
 
   isTurnSettled(sessionId: string): boolean {
     const s = this.sessions.get(sessionId);
-    return !!s && s.settledTurn === s.logicalTurn;
+    return !!s && s.turn.isSettled;
   }
 
+  /** A new logical turn (prompt, follow-up, or a steer after the last settled). */
   private resetTurnTracking(s: PiSession): void {
     this.stopAwaitingSubagents(s);
-    s.logicalTurn += 1;
-    s.settledTurn = undefined;
-    s.narrationSegments = 0;
-    s.toolSinceLastNarration = false;
-    s.lastNarration = '';
+    s.turn.beginTurn();
     s.lastStopReason = undefined;
-    s.pendingError = undefined;
     s.pendingMaintenanceIdle = false;
-    s.pendingNarration = '';
     s.aborting = false;
   }
 
@@ -1152,7 +1102,7 @@ export class PiAdapter extends AgentAdapter {
    *  Queued/handled/rejected commands retire the scope at ACK; agent_start may
    *  retire it earlier. A late ACK must not clear a newer submission's scope. */
   private async withPromptPreflight(s: PiSession, submit: () => Promise<unknown>): Promise<void> {
-    const preflight = s.relayTurnId ? { turnId: s.relayTurnId } : {};
+    const preflight = s.turn.relayTurnId ? { turnId: s.turn.relayTurnId } : {};
     s.promptPreflight = preflight;
     try {
       await submit();
@@ -1273,7 +1223,7 @@ export class PiAdapter extends AgentAdapter {
         // continues the same Kraki turn.
         if (s?.awaitingSubagents) this.stopAwaitingSubagents(s);
         if (s) {
-          s.eventTurnId = s.relayTurnId;
+          s.turn.captureTurnId();
           s.promptPreflight = undefined;
           s.pendingMaintenanceIdle = false;
         }
@@ -1318,10 +1268,10 @@ export class PiAdapter extends AgentAdapter {
               // A failure without an errorMessage is still a failure: keep a
               // non-empty message so it is reported instead of ending as a
               // silent reply-less turn.
-              s.pendingError = m.errorMessage?.trim()
-                || 'The model request failed without an error message. Try sending again.';
+              s.turn.setError(m.errorMessage?.trim()
+                || 'The model request failed without an error message. Try sending again.');
             } else {
-              s.pendingError = undefined;
+              s.turn.clearError();
             }
           }
           const prose = (m.content ?? [])
@@ -1329,26 +1279,10 @@ export class PiAdapter extends AgentAdapter {
             .map((c) => c.text as string)
             .join('')
             .trim();
-          if (m.stopReason !== 'error' && prose) {
-            if (s) {
-              // Ordinary NARRATION: streams live to the draft bubble (see
-              // message_update). RECONCILE the live draft NOW on every segment
-              // (onNarration → card.onNarrationFinal) so the throttled draft is
-              // squared with the finalized prose before the bubble lands — no
-              // draft→spine size-jump. But DEFER the TRACE mirror: this segment
-              // might still graduate verbatim into the concluding bubble, so we
-              // hold it as `pendingNarration` and only trace it once it is
-              // confirmed intermediate (a newer narration or a tool follows) —
-              // never the trailing reply. Flush the PREVIOUS pending here (a new
-              // segment supersedes it). Tracked to decide the reply at agent_end.
-              this.onNarration?.(sessionId, { content: prose, ...this.lifecycleEvent(s) });
-              this.flushPendingNarration(sessionId, s);
-              s.pendingNarration = prose;
-              s.narrationSegments += 1;
-              s.lastNarration = prose;
-              s.toolSinceLastNarration = false;
-            }
-          }
+          // A finished prose segment: it reconciles the live draft now and
+          // becomes a step only once a newer segment or a tool follows; the
+          // last one is the reply (see TurnTracker).
+          if (m.stopReason !== 'error' && prose && s) s.turn.proseSegment(prose);
           void this.refreshUsage(sessionId);
         }
         break;
@@ -1364,10 +1298,7 @@ export class PiAdapter extends AgentAdapter {
         // The pending narration is now confirmed intermediate (a tool follows it),
         // so FLUSH it to the trace BEFORE the tool step to keep chronological order.
         const s = this.sessions.get(sessionId);
-        if (s) {
-          this.flushPendingNarration(sessionId, s);
-          s.toolSinceLastNarration = true;
-        }
+        s?.turn.toolStarted();
         const subagent = toolName === PI_SUBAGENT_TOOL && typeof e.toolCallId === 'string'
           ? this.subagentTracker(sessionId).onStart(e.toolCallId, (e.args as Record<string, unknown>) ?? {})
           : undefined;
@@ -1476,7 +1407,7 @@ export class PiAdapter extends AgentAdapter {
         void this.refreshUsage(sessionId);
         logger.info({
           sessionId,
-          turnId: this.sessions.get(sessionId)?.logicalTurn,
+          turnId: this.sessions.get(sessionId)?.turn.event().turnId,
           phase: 'agent_end',
           attempt: typeof e.attempt === 'number' ? e.attempt : undefined,
           willRetry: e.willRetry === true,
@@ -1495,7 +1426,7 @@ export class PiAdapter extends AgentAdapter {
         void this.refreshUsage(sessionId);
         logger.info({
           sessionId,
-          turnId: this.sessions.get(sessionId)?.logicalTurn,
+          turnId: this.sessions.get(sessionId)?.turn.event().turnId,
           phase: 'agent_settled',
           attempt: typeof e.attempt === 'number' ? e.attempt : undefined,
           willRetry: false,
@@ -1508,39 +1439,26 @@ export class PiAdapter extends AgentAdapter {
         s.pendingMaintenanceIdle = false;
         // A duplicate settled callback must not crystallize the same logical turn
         // twice. The identity is reset only when a new prompt is accepted.
-        if (s.settledTurn === s.logicalTurn) break;
+        if (s.turn.isSettled) break;
         if (s.aborting) {
           // abortSession owns the terminal idle(reason=aborted) notification.
-          s.pendingNarration = '';
+          s.turn.discardProse();
           break;
         }
         // Resolve a provisional backend failure only at this authoritative run
         // boundary. Recoverable attempts were suppressed by willRetry above.
         if (s.lastStopReason === 'error' || s.lastStopReason === 'aborted') {
-          s.pendingNarration = '';
-          if (s.lastStopReason === 'error' && s.pendingError) {
-            this.emitError(sessionId, s, s.pendingError);
-            s.pendingError = undefined;
-          }
-          this.emitIdleOnce(sessionId, s);
+          s.turn.discardProse();
+          if (s.lastStopReason !== 'error') s.turn.clearError();
+          s.turn.finish(); // the held error, if any, then idle
           break;
         }
         if (this.holdForSubagents(sessionId, s)) break;
-        // A natural closing answer: the last narration was not followed by a
-        // tool, so it IS the model's final reply — graduate it verbatim (and
-        // discard its deferred trace so it isn't ALSO the last Step).
-        if (!s.toolSinceLastNarration && s.lastNarration.trim()) {
-          s.pendingNarration = '';
-          this.emitMessage(sessionId, s, s.lastNarration.trim());
-          this.emitIdleOnce(sessionId, s);
-          break;
-        }
-        // The run ended on a tool call with no closing prose. Kraki relays that
-        // as-is: the turn is its Steps, with no extra model call and nothing
-        // injected into the user's pi session. (A closing summary, if wanted,
-        // belongs in the user's own pi configuration.)
-        this.flushPendingNarration(sessionId, s);
-        this.emitIdleOnce(sessionId, s);
+        // The last prose with no tool after it is the reply; a run that ended
+        // on a tool is just its Steps. Kraki relays that as-is: no extra model
+        // call and nothing injected into the user's pi session. (A closing
+        // summary, if wanted, belongs in the user's own pi configuration.)
+        s.turn.finish();
         break;
       }
       case 'session_shutdown':
@@ -1739,7 +1657,7 @@ export class PiAdapter extends AgentAdapter {
       // A steer is only an interjection while this logical turn is active. Once
       // Pi has settled it, explicitly convert the late steer into a fresh prompt
       // so it cannot inherit the previous turn's narration/finalization state.
-      if (s.settledTurn === s.logicalTurn) {
+      if (s.turn.isSettled) {
         this.resetTurnTracking(s);
         await this.withPromptPreflight(s, () => s.proc.request('prompt', promptPayload, { timeoutMs: null }));
       } else {
@@ -1797,10 +1715,14 @@ export class PiAdapter extends AgentAdapter {
         return;
       }
       logger.warn({ sessionId, err: message }, 'pi prompt request failed');
-      this.emitError(sessionId, s, message);
       // Unexpected process exit owns its terminal idle in proc.onExit. Other
       // transport/watchdog failures still need to release the active UI here.
-      if (!s.exitObserved) this.emitIdleOnce(sessionId, s);
+      if (s.exitObserved || s.turn.isSettled) {
+        this.emitError(sessionId, s, message);
+      } else {
+        s.turn.discardProse();
+        s.turn.finish({ error: message });
+      }
       // RelayClient records this as rejected, making a replay with the same
       // clientId retry the already-persisted transcript row. Do not turn an
       // unacknowledged adapter request into a falsely delivered input.
@@ -1850,7 +1772,7 @@ export class PiAdapter extends AgentAdapter {
       // RelayClient owns the visible aborted idle boundary, but the adapter must
       // still record that this logical turn is terminal. Otherwise the stricter
       // idle-eviction gate would retain an acknowledged-aborted Pi forever.
-      s.settledTurn = s.logicalTurn;
+      s.turn.settleSilently();
 
       const pendingAcceptance = s.promptAcceptanceAbort;
       if (pendingAcceptance) {
@@ -2254,7 +2176,7 @@ export class PiAdapter extends AgentAdapter {
     for (const [id, s] of this.sessions) {
       if (
         s.proc.alive
-        && s.settledTurn === s.logicalTurn
+        && s.turn.isSettled
         && !this.compactingSessions.has(id)
         && s.pendingQuestions.size === 0
         && s.pendingPerms.size === 0

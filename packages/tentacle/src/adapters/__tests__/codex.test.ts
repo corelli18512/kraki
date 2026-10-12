@@ -187,8 +187,11 @@ describe('CodexAdapter (fake app-server child process)', () => {
     expect(h.of('permission')).toHaveLength(0);
     expect(h.replies().some((r) => r.result!.decision === 'accept')).toBe(true);
     const order = h.events.filter((e) => ['narration', 'tool_start', 'tool_complete', 'message'].includes(e.type)).map((e) => e.type);
-    expect(order).toEqual(['narration', 'tool_start', 'tool_complete', 'message']);
+    // Every finished prose segment reconciles the live draft (narration); the
+    // last one then graduates to the reply and is never recorded as a step.
+    expect(order).toEqual(['narration', 'tool_start', 'tool_complete', 'narration', 'message']);
     expect(h.of('narration')[0].content).toBe('Let me clean the build.');
+    expect(h.of('narration_trace').map((e) => e.content)).toEqual(['Let me clean the build.']);
     expect(h.of('tool_start')[0]).toMatchObject({ toolName: 'shell', args: { command: 'rm -rf build', cwd: '/tmp' } });
     expect(h.of('tool_complete')[0]).toMatchObject({ toolName: 'shell', result: 'removed', success: true });
     expect(h.of('message')[0].content).toBe('shell decision: accept');

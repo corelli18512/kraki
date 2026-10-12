@@ -32,6 +32,7 @@ import { getConfigDir } from '../config.js';
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 import { canonicalArtifactToolName } from './tool-name.js';
 import { DEFAULT_SESSION_MODE } from '@kraki/protocol';
+import { TurnTracker } from './turn-tracker.js';
 import { KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMode, type ToolKind } from './permission-policy.js';
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 
@@ -204,23 +205,11 @@ interface SessionEntry {
   consumerLoop: Promise<void>;
   /** Deferred config — used to lazily spawn query() on first sendMessage */
   deferredConfig?: CreateSessionConfig & { resume?: string; fork?: boolean };
-  /**
-   * Buffered assistant prose for the current turn (draft-bubble model).
-   * Accumulates text blocks; flushed as narration when a tool follows, or as
-   * the single conclusion bubble (onMessage) when the turn ends.
-   */
-  pendingText?: string;
+  /** Kraki's view of the current turn: prose (narration vs reply), user stop,
+   *  idle once. Created with the Kraki session id. */
+  turn: TurnTracker;
+  /** Best error seen this turn (Claude reports several; keep the most useful). */
   pendingError?: NormalizedClaudeError;
-  /** Relay-owned logical turn identity for the next accepted prompt. */
-  relayTurnId?: string;
-  /** Identity captured when the SDK delivers the user message that starts
-   * the provider turn. */
-  eventTurnId?: string;
-  turnFinalized?: boolean;
-  /** The current turn was stopped by the user. RelayClient owns that terminal
-   *  boundary (turn_status user_abort + idle aborted): the adapter settles the
-   *  turn silently — no conclusion bubble, error or idle for it. */
-  userAborted?: boolean;
   /** Results still owed by user-stopped turns whose SDK result had not
    *  arrived when the next prompt was sent. The SDK processes input in order,
    *  so the next N results (and prose before them) belong to those turns. */
@@ -781,7 +770,7 @@ export class ClaudeAdapter extends AgentAdapter {
       reasoningEffort: config.reasoningEffort,
       consumerLoop: Promise.resolve(),
       deferredConfig: config,
-      eventTurnId: undefined,
+      turn: new TurnTracker(this, sessionId),
     };
 
     this.sessions.set(sessionId, entry);
@@ -826,7 +815,7 @@ export class ClaudeAdapter extends AgentAdapter {
       model: meta?.model,
       reasoningEffort: meta?.reasoningEffort,
       consumerLoop: Promise.resolve(),
-      eventTurnId: undefined,
+      turn: new TurnTracker(this, sessionId),
       deferredConfig: {
         // A fork that never ran yet still has to be made from its source.
         ...(!meta?.sdkSessionId && meta?.forkFrom && { fork: true }),
@@ -873,7 +862,7 @@ export class ClaudeAdapter extends AgentAdapter {
       pendingQuestions,
       sessionId: newSessionId,
       consumerLoop: Promise.resolve(),
-      eventTurnId: undefined,
+      turn: new TurnTracker(this, newSessionId),
       deferredConfig: {
         resume: resumeId,
         fork: true,
@@ -917,23 +906,20 @@ export class ClaudeAdapter extends AgentAdapter {
     // Keep the active draft for an interjection. A steer arriving after the
     // authoritative result belongs to a new logical turn and must re-arm the
     // terminal callback guard before it enters the SDK input channel.
-    if (options?.delivery !== 'steer' || entry.turnFinalized) {
-      if (entry.userAborted && !entry.turnFinalized) entry.staleResults = (entry.staleResults ?? 0) + 1;
-      entry.pendingText = '';
+    if (options?.delivery !== 'steer' || entry.turn.isSettled) {
+      if (entry.turn.isAborted && !entry.turn.isSettled) entry.staleResults = (entry.staleResults ?? 0) + 1;
       entry.pendingError = undefined;
-      entry.turnFinalized = false;
-      entry.userAborted = false;
       this.resetSubagentPhase(entry);
       // A new logical turn owns every event from here on. The SDK does not
       // echo prompts back, and only tool turns produce SDK 'user' messages,
       // so waiting for one left text-only turns tagged with the PREVIOUS
       // turn's id — RelayClient then dropped their reply and idle as late.
-      entry.eventTurnId = entry.relayTurnId;
+      entry.turn.beginTurn({ captureNow: true });
     } else if (entry.awaitingSubagents) {
       // An interjection while the turn is held for background subagents: no
       // provider turn is in flight, so this message starts the next one and
       // every event from here on belongs to the interjecting relay turn.
-      entry.eventTurnId = entry.relayTurnId;
+      entry.turn.captureTurnId();
     }
 
     // Prepend mode-switch signal if mode changed since last message
@@ -988,32 +974,28 @@ export class ClaudeAdapter extends AgentAdapter {
   setTurnIdentity(sessionId: string, turnId: string): void {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
-    entry.relayTurnId = turnId;
+    entry.turn.relayTurnId = turnId;
     // Keep the previous provider-run snapshot until the next SDK user event;
     // a late callback in the handoff window must not inherit this new ID.
   }
 
   isTurnSettled(sessionId: string): boolean {
-    return this.sessions.get(sessionId)?.turnFinalized === true;
+    return this.sessions.get(sessionId)?.turn.isSettled === true;
   }
 
   private lifecycleEvent(entry?: SessionEntry): { turnId?: string } {
-    const turnId = entry?.eventTurnId ?? entry?.relayTurnId;
-    return turnId ? { turnId } : {};
-  }
-
-  private emitMessage(sessionId: string, entry: SessionEntry, content: string): void {
-    this.onMessage?.(sessionId, { content, ...this.lifecycleEvent(entry) });
+    return entry ? entry.turn.event() : {};
   }
 
   private emitError(sessionId: string, entry: SessionEntry, message: string): void {
     this.onError?.(sessionId, { message, ...this.lifecycleEvent(entry) });
   }
 
-  private emitIdle(sessionId: string, entry: SessionEntry): void {
-    const event = this.lifecycleEvent(entry);
-    if (event.turnId) this.onIdle?.(sessionId, event);
-    else this.onIdle?.(sessionId);
+  /** End the turn: reply (or the held error), then idle — once. */
+  private finishTurn(entry: SessionEntry): boolean {
+    const error = entry.pendingError?.message;
+    entry.pendingError = undefined;
+    return entry.turn.finish({ error });
   }
 
   private async spawnQuery(sessionId: string, initialPrompt: string | Array<Record<string, unknown>>): Promise<void> {
@@ -1205,13 +1187,11 @@ export class ClaudeAdapter extends AgentAdapter {
         // result will come for it. Settle silently — RelayClient owns the
         // aborted boundary.
         this.resetSubagentPhase(entry);
-        entry.turnFinalized = true;
-        entry.pendingText = '';
+        entry.turn.settleSilently();
         entry.pendingError = undefined;
-      } else if (entry.query && entry.turnFinalized === false) {
+      } else if (entry.query && !entry.turn.isSettled) {
         this.resetSubagentPhase(entry);
-        entry.userAborted = true;
-        entry.pendingText = '';
+        entry.turn.abort();
         entry.pendingError = undefined;
       }
       // Stop means stop the delegated work too: a subagent finishing later
@@ -1396,18 +1376,11 @@ export class ClaudeAdapter extends AgentAdapter {
       // Query completed normally. A result event is the authoritative turn
       // boundary; only fall back here when the SDK ended without one.
       const entry = this.sessions.get(sessionId);
-      if (entry) this.resetSubagentPhase(entry);
-      if (entry?.userAborted && !entry.turnFinalized) {
-        entry.turnFinalized = true;
-      } else if (!entry?.turnFinalized) {
-        if (entry?.pendingError) this.emitError(sessionId, entry, entry.pendingError.message);
-        else this.flushConclusion(sessionId);
-        if (entry) {
-          entry.turnFinalized = true;
-          this.emitIdle(sessionId, entry);
-        } else {
-          this.onIdle?.(sessionId);
-        }
+      if (entry) {
+        this.resetSubagentPhase(entry);
+        this.finishTurn(entry); // a user stop settles silently
+      } else {
+        this.onIdle?.(sessionId);
       }
       // Input is a long-lived stream, so a normal end means the CLI process
       // exited (killSession removes its entry first). Keeping the entry would
@@ -1431,12 +1404,14 @@ export class ClaudeAdapter extends AgentAdapter {
       const entry = this.sessions.get(sessionId);
       if (entry) this.resetSubagentPhase(entry);
       if (entry) {
-        this.emitError(sessionId, entry, getErrorMessage(err));
         // Settle the turn that was running when the process died so the
-        // relay freezes it as failed instead of waiting forever.
-        if (!entry.turnFinalized && !entry.userAborted) {
-          entry.turnFinalized = true;
-          this.emitIdle(sessionId, entry);
+        // relay freezes it as failed instead of waiting forever. (A user stop
+        // settles silently; a settled turn still gets the error reported.)
+        const message = getErrorMessage(err);
+        if (entry.turn.isSettled) this.emitError(sessionId, entry, message);
+        else {
+          entry.pendingError = undefined;
+          entry.turn.finish({ error: message });
         }
         this.broadcastPendingResolutions(sessionId);
         try { entry.inputChannel.end(); } catch { /* already closed */ }
@@ -1451,32 +1426,9 @@ export class ClaudeAdapter extends AgentAdapter {
     }
   }
 
-  /**
-   * Flush buffered assistant prose as intermediate narration (draft/status,
-   * NOT a permanent spine bubble). Called when a tool follows the prose.
-   */
+  /** A tool (or question) follows: the prose before it was narration. */
   private flushNarration(sessionId: string): void {
-    const entry = this.sessions.get(sessionId);
-    if (!entry) return;
-    const text = (entry.pendingText ?? '').trim();
-    entry.pendingText = '';
-    if (text) {
-      this.onNarration?.(sessionId, { content: text, ...this.lifecycleEvent(entry) });
-      this.onNarrationTrace?.(sessionId, { content: text, ...this.lifecycleEvent(entry) });
-    }
-  }
-
-  /**
-   * Flush buffered assistant prose as the turn's single conclusion bubble
-   * (onMessage → permanent spine bubble). Called at turn end.
-   */
-  private flushConclusion(sessionId: string): boolean {
-    const entry = this.sessions.get(sessionId);
-    if (!entry) return false;
-    const text = (entry.pendingText ?? '').trim();
-    entry.pendingText = '';
-    if (text) this.emitMessage(sessionId, entry, text);
-    return !!text;
+    this.sessions.get(sessionId)?.turn.toolStarted();
   }
 
   private emitCompaction(sessionId: string, event: Omit<import('./base.js').CompactionEvent, 'turnId'>): void {
@@ -1573,9 +1525,7 @@ export class ClaudeAdapter extends AgentAdapter {
       if (!entry.awaitingSubagents || this.sessions.get(sessionId) !== entry) return;
       logger.info({ sessionId }, 'Claude subagents finished without a continuation turn; settling');
       this.resetSubagentPhase(entry);
-      entry.turnFinalized = true;
-      this.flushConclusion(sessionId);
-      this.emitIdle(sessionId, entry);
+      this.finishTurn(entry);
     }, ClaudeAdapter.SUBAGENT_CONTINUATION_GRACE_MS);
   }
 
@@ -1675,8 +1625,7 @@ export class ClaudeAdapter extends AgentAdapter {
             // multi-block answers aren't lost. Flushed as narration (if a tool
             // follows) or as the single conclusion bubble (at turn end).
             if (entry) {
-              const text = (block as { text: string }).text;
-              entry.pendingText = entry.pendingText ? `${entry.pendingText}\n${text}` : text;
+              entry.turn.appendProse((block as { text: string }).text);
             } else {
               // No session entry (shouldn't happen) — fall back to direct bubble.
               this.onMessage?.(sessionId, { content: (block as { text: string }).text });
@@ -1755,44 +1704,34 @@ export class ClaudeAdapter extends AgentAdapter {
         if (entry?.staleResults) {
           // Late result of a stopped turn: it must not settle the new turn.
           entry.staleResults -= 1;
-          entry.pendingText = '';
+          entry.turn.discardProse();
           entry.pendingError = undefined;
           break;
         }
-        if (entry?.turnFinalized) break;
+        if (entry?.turn.isSettled) break;
         if (entry?.compacting) this.emitCompaction(sessionId, { phase: 'end' });
         // A result during the subagent phase ends one continuation turn.
         if (entry?.subagentPhase && entry.owedContinuations) entry.owedContinuations -= 1;
-        const holdForSubagents = !resultAny.is_error && !entry?.userAborted
+        const holdForSubagents = !resultAny.is_error && !entry?.turn.isAborted
           && (!!entry?.runningSubagents?.size || !!entry?.owedContinuations);
         if (entry && !holdForSubagents) this.resetSubagentPhase(entry);
 
-        if (entry?.userAborted) {
+        if (entry?.turn.isAborted) {
           // RelayClient owns this turn's terminal boundary (see abortSession).
-          entry.pendingText = '';
           entry.pendingError = undefined;
-          entry.turnFinalized = true;
+          entry.turn.settleSilently();
           break;
         }
 
         if (resultAny.is_error) {
           const normalized = normalizeClaudeSDKError(resultAny);
           const error = preferClaudeError(entry?.pendingError, normalized);
-          if (entry) {
-            entry.pendingError = error;
-            entry.pendingText = '';
-          }
-          if (entry) this.emitError(sessionId, entry, error.message);
+          if (entry) entry.pendingError = error;
           else this.onError?.(sessionId, { message: error.message });
         } else {
           if (entry) entry.pendingError = undefined;
-          if (holdForSubagents) {
-            // Prose so far ("waiting for the subagent…") is an intermediate step.
-            this.flushNarration(sessionId);
-          } else {
-            // A tool-only turn is anchored centrally by RelayClient.
-            this.flushConclusion(sessionId);
-          }
+          // Prose so far ("waiting for the subagent…") is an intermediate step.
+          if (holdForSubagents) entry?.turn.holdOpen();
         }
 
         // Update final usage
@@ -1833,20 +1772,17 @@ export class ClaudeAdapter extends AgentAdapter {
           break;
         }
 
-        // The result is the authoritative turn boundary.
-        if (entry) {
-          entry.turnFinalized = true;
-          this.emitIdle(sessionId, entry);
-        } else {
-          this.onIdle?.(sessionId);
-        }
+        // The result is the authoritative turn boundary: the reply (or the
+        // error), then idle. A tool-only turn is anchored centrally by RelayClient.
+        if (entry) this.finishTurn(entry);
+        else this.onIdle?.(sessionId);
 
         break;
       }
 
       case 'user': {
         const entry = this.sessions.get(sessionId);
-        if (entry) entry.eventTurnId = entry.relayTurnId;
+        entry?.turn.captureTurnId();
         // User messages include tool_result content blocks when tools complete.
         // Extract tool results and fire tool_complete callbacks.
         const userMsg = msg as SDKUserMessage;

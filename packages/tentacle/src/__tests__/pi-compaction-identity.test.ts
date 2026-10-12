@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PiAdapter } from '../adapters/pi.js';
+import { turnFixture } from './helpers/turn-fixture.js';
 import { RelayClient } from '../relay-client.js';
 
 vi.mock('../logger.js', () => ({
@@ -21,8 +22,7 @@ function setup() {
   const sid = 'warm-session';
   const proc = { alive: true, request: vi.fn().mockResolvedValue({}), kill: vi.fn() };
   const session = {
-    proc, logicalTurn: 1, settledTurn: 1 as number | undefined,
-    relayTurnId: undefined as string | undefined, eventTurnId: undefined as string | undefined,
+    proc, turn: turnFixture(adapter, sid), // the previous run has settled
     pendingPerms: new Map(), pendingQuestions: new Map(),
   };
   const internal = adapter as unknown as {
@@ -66,14 +66,14 @@ describe('Pi compaction ownership across prompt preflight', () => {
       try {
         await emit({ type: 'compaction_start', reason: 'threshold' });
         await emit({ type: 'compaction_start', reason: 'threshold' });
-        expect(session.eventTurnId).toBe('previous');
+        expect(session.turn.eventTurnId).toBe('previous');
         expect(onCompaction).toHaveBeenCalledExactlyOnceWith(sid, { phase: 'start', reason: 'threshold', turnId: 'next' });
         expect(send).toHaveBeenCalledExactlyOnceWith({ type: 'compacting', sessionId: sid, payload: { phase: 'start', reason: 'threshold' } });
         await emit({ type: 'compaction_end', reason: 'threshold', aborted: false, willRetry: false });
         expect(onCompaction.mock.calls[1][1].turnId).toBe('next');
         expect(send.mock.calls[1][0]).toMatchObject({ type: 'compacting', payload: { phase: 'end', nextState: 'active' } });
         await emit({ type: 'agent_start' });
-        expect(session.eventTurnId).toBe('next');
+        expect(session.turn.eventTurnId).toBe('next');
         expect(proc.request.mock.calls.filter(c => c[0] === 'prompt')).toHaveLength(1);
       } finally {
         ack.resolve();
@@ -121,7 +121,7 @@ describe('Pi compaction ownership across prompt preflight', () => {
   it('does not relabel late provider callbacks just because Relay has selected a new turn', async () => {
     const { adapter, sid, session, begin, emit, send, onCompaction } = setup();
     begin('next');
-    session.settledTurn = undefined; // Still steering the existing provider run.
+    session.turn.beginTurn(); // Still steering the existing provider run.
     await adapter.sendMessage(sid, 'interjection', undefined, { delivery: 'steer' });
     await emit({ type: 'compaction_start', reason: 'overflow' });
     expect(onCompaction.mock.calls[0][1].turnId).toBe('previous');
@@ -137,7 +137,7 @@ describe('Pi compaction ownership across prompt preflight', () => {
     begin('first');
     const firstSend = adapter.sendMessage(sid, 'first work');
     await emit({ type: 'agent_start' });
-    session.settledTurn = session.logicalTurn;
+    session.turn.settleSilently();
     begin('next');
     const nextSend = adapter.sendMessage(sid, 'next work');
     try {

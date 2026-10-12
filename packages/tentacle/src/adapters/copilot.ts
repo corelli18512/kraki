@@ -50,6 +50,7 @@ import { createLogger } from '../logger.js';
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 import { canonicalArtifactToolName } from './tool-name.js';
 import { DEFAULT_SESSION_MODE } from '@kraki/protocol';
+import { TurnTracker } from './turn-tracker.js';
 import { KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMode, type ToolKind } from './permission-policy.js';
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 
@@ -129,12 +130,9 @@ interface SessionEntry {
   session: CopilotSession;
   pendingPermissions: Map<string, PendingPermission>;
   pendingQuestions: Map<string, PendingQuestion>;
-  /** Relay-owned logical turn identity for the next accepted prompt. */
-  relayTurnId?: string;
-  /** Identity captured at assistant.turn_start and used by all events in that
-   * provider cycle. */
-  eventTurnId?: string;
-  turnSettled?: boolean;
+  /** Kraki's view of the current turn: prose (narration vs reply), user stop,
+   *  idle once. Survives a resume of the SDK session mid-turn. */
+  turn: TurnTracker;
 }
 
 // ── Helpers ─────────────────────────────────────────────
@@ -404,15 +402,6 @@ export class CopilotAdapter extends AgentAdapter {
   private turnHasOutput = new Map<string, boolean>();
   /** Whether an error was already reported for the current turn */
   private turnErrorReported = new Map<string, boolean>();
-  /** Whether the current cycle was interrupted by an explicit user-initiated
-   *  abort — RelayClient then owns its terminal boundary. */
-  private cycleUserAborted = new Map<string, boolean>();
-  /**
-   * Buffered assistant prose for the current turn (draft-bubble model).
-   * Accumulates assistant.message content; flushed as narration when a tool
-   * follows, or as the single conclusion bubble (onMessage) when the turn ends.
-   */
-  private pendingNarration = new Map<string, string>();
 
   /** Max time to wait for a single session.abort() during adapter.stop().
    *  If exceeded we fall through and let client.stop() kill the SDK process.
@@ -483,26 +472,17 @@ export class CopilotAdapter extends AgentAdapter {
 
   setTurnIdentity(sessionId: string, turnId: string): void {
     const entry = this.sessions.get(sessionId);
-    if (entry) {
-      entry.relayTurnId = turnId;
-      // Keep the previous provider-run snapshot until assistant.turn_start;
-      // callbacks in the handoff window must not inherit the new ID.
-      entry.turnSettled = false;
-    }
+    // Keep the previous provider-run snapshot until assistant.turn_start;
+    // callbacks in the handoff window must not inherit the new ID.
+    if (entry) entry.turn.relayTurnId = turnId;
   }
 
   isTurnSettled(sessionId: string): boolean {
-    return this.sessions.get(sessionId)?.turnSettled === true;
+    return this.sessions.get(sessionId)?.turn.isSettled === true;
   }
 
   private lifecycleEvent(sessionId: string): { turnId?: string } {
-    const entry = this.sessions.get(sessionId);
-    const turnId = entry?.eventTurnId ?? entry?.relayTurnId;
-    return turnId ? { turnId } : {};
-  }
-
-  private emitMessage(sessionId: string, content: string): void {
-    this.onMessage?.(sessionId, { content, ...this.lifecycleEvent(sessionId) });
+    return this.sessions.get(sessionId)?.turn.event() ?? {};
   }
 
   /** session.error reports still deciding whether it is a sign-out. */
@@ -512,21 +492,6 @@ export class CopilotAdapter extends AgentAdapter {
     this.onError?.(sessionId, { message, ...this.lifecycleEvent(sessionId) });
   }
 
-  /** End a user-stopped cycle without any conclusion or idle callback. */
-  private settleSilently(sessionId: string): void {
-    this.pendingNarration.delete(sessionId);
-    const entry = this.sessions.get(sessionId);
-    if (entry) entry.turnSettled = true;
-    this.signalFlushComplete(sessionId);
-  }
-
-  private emitIdle(sessionId: string): void {
-    const entry = this.sessions.get(sessionId);
-    if (entry) entry.turnSettled = true;
-    const event = this.lifecycleEvent(sessionId);
-    if (event.turnId) this.onIdle?.(sessionId, event);
-    else this.onIdle?.(sessionId);
-  }
 
   private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
   private readonly krakiMcp?: {
@@ -957,7 +922,7 @@ export class CopilotAdapter extends AgentAdapter {
     const session = await this.client!.createSession(sessionConfig);
     const sid = session.sessionId;
 
-    this.sessions.set(sid, { session, pendingPermissions, pendingQuestions, relayTurnId: undefined, eventTurnId: undefined });
+    this.sessions.set(sid, { session, pendingPermissions, pendingQuestions, turn: new TurnTracker(this, sid) });
     this.touchSession(sid);
     this.wireEvents(sid, session);
     this.linkCopilotStore(sid);
@@ -1027,12 +992,12 @@ export class CopilotAdapter extends AgentAdapter {
     attachments?: import('@kraki/protocol').Attachment[],
     options?: SendMessageOptions,
   ): Promise<void> {
-    if (options?.delivery !== 'steer') {
+    const turn = this.sessions.get(sessionId)?.turn;
+    if (options?.delivery !== 'steer' || turn?.isSettled) {
       // A normal prompt starts a fresh cycle. An immediate interjection remains
       // part of the active cycle and must not reset its output/error tracking.
       this.turnErrorReported.set(sessionId, false);
-      this.cycleUserAborted.delete(sessionId);
-      this.pendingNarration.delete(sessionId);
+      turn?.beginTurn();
     }
     this.touchSession(sessionId);
 
@@ -1221,8 +1186,7 @@ export class CopilotAdapter extends AgentAdapter {
       // after session.abort() resolved, the idle event could fire first
       // (depending on SDK timing) and a false empty-cycle error would
       // beat us.
-      this.cycleUserAborted.set(sessionId, true);
-      this.pendingNarration.delete(sessionId);
+      entry.turn.abort();
       this.broadcastPendingResolutions(sessionId);
       await entry.session.abort();
       logger.debug({ sessionId }, 'session aborted');
@@ -1328,8 +1292,6 @@ export class CopilotAdapter extends AgentAdapter {
     this.nativeTitles.delete(sessionId);
     this.turnHasOutput.delete(sessionId);
     this.turnErrorReported.delete(sessionId);
-    this.cycleUserAborted.delete(sessionId);
-    this.pendingNarration.delete(sessionId);
     const inflight = this.sessionToolCallIds.get(sessionId);
     if (inflight) {
       for (const id of inflight) {
@@ -1475,7 +1437,9 @@ export class CopilotAdapter extends AgentAdapter {
       sessionId,
       this.makeResumeConfig(sessionId, pendingPermissions, pendingQuestions),
     );
-    const entry = { session, pendingPermissions, pendingQuestions, relayTurnId: undefined, eventTurnId: undefined };
+    // A resume during a running turn (send recovery) keeps that turn.
+    const previous = this.sessions.get(sessionId)?.turn;
+    const entry = { session, pendingPermissions, pendingQuestions, turn: previous ?? new TurnTracker(this, sessionId) };
 
     this.sessions.set(sessionId, entry);
     this.touchSession(sessionId);
@@ -1565,27 +1529,9 @@ export class CopilotAdapter extends AgentAdapter {
 
   // ── SDK → callback wiring ─────────────────────────
 
-  /**
-   * Flush buffered assistant prose as intermediate narration (draft/status,
-   * NOT a permanent spine bubble). Called when a tool follows the prose.
-   */
+  /** A tool follows: the prose before it was narration. */
   private flushNarration(sessionId: string): void {
-    const text = (this.pendingNarration.get(sessionId) ?? '').trim();
-    this.pendingNarration.delete(sessionId);
-    if (text) {
-      this.onNarration?.(sessionId, { content: text, ...this.lifecycleEvent(sessionId) });
-      this.onNarrationTrace?.(sessionId, { content: text, ...this.lifecycleEvent(sessionId) });
-    }
-  }
-
-  /**
-   * Flush buffered assistant prose as the turn's single conclusion bubble
-   * (onMessage → permanent spine bubble). Called at turn end / idle.
-   */
-  private flushConclusion(sessionId: string): void {
-    const text = (this.pendingNarration.get(sessionId) ?? '').trim();
-    this.pendingNarration.delete(sessionId);
-    if (text) this.emitMessage(sessionId, text);
+    this.sessions.get(sessionId)?.turn.toolStarted();
   }
 
   private wireEvents(sessionId: string, session: CopilotSession): void {
@@ -1648,8 +1594,7 @@ export class CopilotAdapter extends AgentAdapter {
         // to its own permanent bubble. Accumulate consecutive messages so a
         // multi-part answer isn't lost. Flushed as narration (if a tool
         // follows) or as the single conclusion bubble (at turn end/idle).
-        const prev = this.pendingNarration.get(sessionId);
-        this.pendingNarration.set(sessionId, prev ? `${prev}\n${event.data.content}` : event.data.content);
+        this.sessions.get(sessionId)?.turn.appendProse(event.data.content);
       }
     });
 
@@ -1808,26 +1753,23 @@ export class CopilotAdapter extends AgentAdapter {
     });
 
     session.on('session.idle', () => {
-
-      const wasAborted = this.cycleUserAborted.get(sessionId);
-      // Clear the abort flag — next sendMessage starts a fresh cycle anyway,
-      // but clearing here keeps state tidy if no new sendMessage follows.
-      this.cycleUserAborted.delete(sessionId);
-
-      if (wasAborted) {
+      const turn = this.sessions.get(sessionId)?.turn;
+      if (!turn) return;
+      if (turn.isAborted) {
         // RelayClient owns a user stop's terminal boundary (turn_status
         // user_abort + idle aborted). Settle silently: the half-written draft
         // is not a reply, and an idle here would land before the abort status.
-        this.settleSilently(sessionId);
+        turn.settleSilently();
+        this.signalFlushComplete(sessionId);
         return;
       }
 
-      // Flush any buffered prose as the turn's single conclusion bubble
-      // before going idle (draft-bubble model). An error still being
-      // classified must be reported first, or the turn ends looking clean.
+      // The buffered prose becomes the turn's reply, then idle (once). An
+      // error still being classified must be reported first, or the turn ends
+      // looking clean. Copilot reports errors as they happen (session.error),
+      // so a reply it still produced afterwards is kept.
       const finish = () => {
-        this.flushConclusion(sessionId);
-        this.emitIdle(sessionId);
+        turn.finish();
         this.signalFlushComplete(sessionId);
       };
       const pendingError = this.pendingErrorReports.get(sessionId);
@@ -1837,8 +1779,7 @@ export class CopilotAdapter extends AgentAdapter {
 
     session.on('assistant.turn_start', (event) => {
       if (fromSubagent(event)) return;
-      const entry = this.sessions.get(sessionId);
-      if (entry) entry.eventTurnId = entry.relayTurnId;
+      this.sessions.get(sessionId)?.turn.captureTurnId();
       this.turnHasOutput.set(sessionId, false);
       // Only reset if no error was reported before this turn started
       // (session.error can fire before turn_start in error recovery paths)
