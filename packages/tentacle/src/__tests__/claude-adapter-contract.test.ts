@@ -10,6 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ClaudeAdapter, secureStorageEnv, isClaudeLoggedOut } from '../adapters/claude.js';
+import { handleSDKMessage } from '../adapters/claude-messages.js';
 
 const sdk = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: sdk.query }));
@@ -45,7 +46,10 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function cc() { return claude as unknown as ClaudeInternals; }
+function cc(): ClaudeInternals {
+  const { sessions } = claude as unknown as Pick<ClaudeInternals, 'sessions'>;
+  return { sessions, handleSDKMessage: (id, msg) => handleSDKMessage(claude, id, msg as never) };
+}
 async function createClaude() { await claude.createSession({ sessionId: 's', cwd: root, model: 'sonnet', reasoningEffort: 'low' }); }
 const nextTick = () => new Promise((r) => setTimeout(r, 0));
 
