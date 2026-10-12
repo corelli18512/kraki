@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PiAdapter } from '../adapters/pi.js';
 import { turnFixture } from './helpers/turn-fixture.js';
 import { RelayClient } from '../relay-client.js';
+import { beginAdapterTurn } from '../relay/turns.js';
 
 vi.mock('../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -35,7 +36,6 @@ function setup() {
     relayUrl: 'ws://unused', authMethod: 'open', device: { name: 'Test', role: 'tentacle' },
   });
   const relay = client as unknown as {
-    beginAdapterTurn: (id: string, turnId: string) => void;
     send: ReturnType<typeof vi.fn>;
   };
   const send = vi.fn();
@@ -47,7 +47,7 @@ function setup() {
   adapter.onIdle = vi.fn();
   adapter.onMessageDelta = vi.fn();
   const emit = (event: Record<string, unknown>) => internal.handleEvent(sid, event);
-  const begin = (turnId: string) => relay.beginAdapterTurn(sid, turnId);
+  const begin = (turnId: string) => beginAdapterTurn(client, sid, turnId);
   begin('previous');
   // handleEvent runs synchronously up to the first await (agent_start has none).
   void emit({ type: 'agent_start' });
