@@ -8,7 +8,6 @@ import type { RecipientKey } from '@kraki/crypto';
 import { toWellFormedText } from '../session-manager.js';
 import { markdownToPlainText, truncateUtf8, PUSH_SUMMARY_MAX_BYTES } from '../push-preview-text.js';
 import type { RelayClient } from '../relay-client.js';
-import { sendTurnIdle } from './turns.js';
 import { logger, traceLog } from './shared.js';
 
 /** Build and dispatch an encrypted push preview over the Head self-channel.

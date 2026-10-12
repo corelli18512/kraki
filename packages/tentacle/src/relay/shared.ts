@@ -1,6 +1,5 @@
 /** Shared by RelayClient and its modules: options, loggers, error wording, coalescing and redirect rules. */
 
-import { WebSocket } from 'ws';
 import type { ProducerMessage, DeviceInfo, AuthMethod } from '@kraki/protocol';
 import { createLogger } from '../logger.js';
 

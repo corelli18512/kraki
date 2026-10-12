@@ -1,6 +1,5 @@
 /** Per-session state of the Pi adapter and its timing constants, system prompt and limits. */
 
-import { spawn } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import type { SessionUsage } from '@kraki/protocol';

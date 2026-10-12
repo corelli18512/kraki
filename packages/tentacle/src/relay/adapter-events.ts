@@ -1,12 +1,9 @@
 /** Agent adapter callbacks → spine, live card and trace (wireAdapterEvents). */
 
 import { DEFAULT_SESSION_MODE, toWireSessionMode } from '@kraki/protocol';
-import { type SessionManager } from '../session-manager.js';
 import { makeHeadline } from '../tool-headline.js';
 import { RelayClient } from '../relay-client.js';
 import { addOpenQuestion, removeOpenQuestion, soleOpenQuestion } from './questions.js';
-import { handleCreateSession, handleImportSession } from './session-commands.js';
-import { ensureSessionResumed } from './session-resume.js';
 import { acceptsAdapterEvent, acceptsAdapterTurn, clearCompacting, purgeSessionToolState, resolveTurnIdle, setCompacting, settleAdapterIdle } from './turns.js';
 import { logger, normalizeTerminalErrorMessage } from './shared.js';
 

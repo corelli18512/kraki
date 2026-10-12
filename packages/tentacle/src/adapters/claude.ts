@@ -29,7 +29,7 @@ import { makeCanUseToolHandler, emitQuestionCard, broadcastPendingResolutions } 
 import { resetSubagentPhase } from './claude-subagents.js';
 import { loadClaudeSettingsEnv, claudeConfigSource, secureStorageEnv, isClaudeLoggedOut, aliasEnvKey } from './claude-env.js';
 import { getErrorMessage } from './claude-errors.js';
-import { logger, type SDKMessage, type SDKSystemMessage, type SDKUserMessage, type Options, type PermissionMode, type Query, type PendingPermission, type PendingQuestion, type SessionEntry, createInputChannel } from './claude-session.js';
+import { logger, type SDKSystemMessage, type SDKUserMessage, type Options, type PermissionMode, type Query, type PendingPermission, type PendingQuestion, type SessionEntry, createInputChannel } from './claude-session.js';
 import { toolNameToKind } from './claude-tools.js';
 export { loadClaudeSettingsEnv, claudeConfigSource, secureStorageEnv, isClaudeLoggedOut } from './claude-env.js';
 export { normalizeClaudeSDKError } from './claude-errors.js';

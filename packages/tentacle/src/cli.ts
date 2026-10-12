@@ -16,7 +16,6 @@
 
 import { applyProcessProxy } from './proxy.js';
 import chalk from 'chalk';
-import { join } from 'node:path';
 import { loadConfig, getConfigPath, getVersion } from './config.js';
 import { INTERNAL_DAEMON_WORKER_COMMAND, INTERNAL_DAEMON_SMOKE_COMMAND, prepareDaemonWorkerBootstrap, runDaemonReleaseSmoke } from './daemon.js';
 import { runSetup } from './setup.js';
