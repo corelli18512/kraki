@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ClaudeAdapter } from '../adapters/claude.js';
+import { broadcastPendingResolutions, handleAskUserQuestion } from '../adapters/claude-permissions.js';
 import { TurnTracker } from '../adapters/turn-tracker.js';
 
 type CapturedResult = {
@@ -95,15 +96,7 @@ describe('Claude AskUserQuestion answers key', () => {
     asModes(adapter).set('s1', 'delegate');
     const input = { questions: [{ question: 'Q one' }, { question: 'Q two' }] };
 
-    const res = await (
-      adapter as unknown as {
-        handleAskUserQuestion: (
-          s: string,
-          i: Record<string, unknown>,
-          p: Map<string, PendingLike>,
-        ) => Promise<CapturedResult>;
-      }
-    ).handleAskUserQuestion('s1', input, new Map());
+    const res = await handleAskUserQuestion(adapter, 's1', input, new Map() as never) as CapturedResult;
 
     expect(res.behavior).toBe('allow');
     expect(res.updatedInput?.questions).toEqual(input.questions);
@@ -122,8 +115,7 @@ describe('Claude AskUserQuestion answers key', () => {
     ]);
     asSessions(adapter).set('s1', { pendingPermissions: new Map(), pendingQuestions, turn: new TurnTracker(adapter, 's1') });
 
-    (adapter as unknown as { broadcastPendingResolutions: (s: string) => void })
-      .broadcastPendingResolutions('s1');
+    broadcastPendingResolutions(adapter, 's1');
 
     expect(captured?.behavior).toBe('allow');
     expect(captured?.updatedInput?.questions).toEqual(questions);
@@ -146,13 +138,7 @@ describe('Claude AskUserQuestion answers key', () => {
         { question: 'Which cache?', options: [{ label: 'redis' }] },
       ],
     };
-    const permission = (adapter as unknown as {
-      handleAskUserQuestion: (
-        s: string,
-        i: Record<string, unknown>,
-        p: Map<string, PendingLike>,
-      ) => Promise<CapturedResult>;
-    }).handleAskUserQuestion('s1', input, pendingQuestions);
+    const permission = handleAskUserQuestion(adapter, 's1', input, pendingQuestions as never) as Promise<CapturedResult>;
 
     // Only the first question surfaces initially.
     expect(emitted).toHaveLength(1);
