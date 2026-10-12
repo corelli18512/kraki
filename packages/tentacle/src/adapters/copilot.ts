@@ -362,7 +362,6 @@ export class CopilotAdapter extends AgentAdapter {
   private sessions = new Map<string, SessionEntry>();
   private cliPath: string | undefined;
   /** Per-session auto-approve sets (populated by "Always Allow" clicks) */
-  private sessionAllowSets = new Map<string, Set<string>>();
   /** Session permission mode */
   private sessionModes = new Map<string, SessionMode>();
   /** Sessions with a pending mode change to prepend on next user message */
@@ -1165,35 +1164,10 @@ export class CopilotAdapter extends AgentAdapter {
       return 'not_found';
     }
 
-    // For always_allow: add tool kind to session-scope allow set
-    if (decision === 'always_allow' && pending.toolKind) {
-      if (!this.sessionAllowSets.has(sessionId)) {
-        this.sessionAllowSets.set(sessionId, new Set());
-      }
-      this.sessionAllowSets.get(sessionId)!.add(pending.toolKind);
-      logger.debug({ sessionId, toolKind: pending.toolKind }, 'Always allow enabled for tool kind');
-
-      // Auto-approve any OTHER pending permissions of the same tool kind in this session
-      for (const [otherId, otherPending] of entry.pendingPermissions) {
-        if (otherId !== permissionId && otherPending.toolKind === pending.toolKind) {
-          otherPending.resolve({ kind: 'approve-once' });
-          entry.pendingPermissions.delete(otherId);
-          this.onPermissionAutoResolved?.(sessionId, otherId, 'approved');
-          logger.debug({ permissionId: otherId, sessionId, toolKind: pending.toolKind }, 'permission auto-approved');
-        }
-      }
-    }
-
-    const kindMap: Record<PermissionDecision, PermissionRequestResult> = {
-      approve: { kind: 'approve-once' },
-      deny: { kind: 'reject' },
-      always_allow: { kind: 'approve-once' },
-    };
-
-    const result = decision === 'deny' && reason
-      ? { kind: 'reject' as const, feedback: `Denied by user: ${reason}` }
-      : kindMap[decision] ?? { kind: 'reject' };
-    pending.resolve(result as PermissionRequestResult);
+    const result: PermissionRequestResult = decision === 'approve'
+      ? { kind: 'approve-once' }
+      : reason ? { kind: 'reject', feedback: `Denied by user: ${reason}` } : { kind: 'reject' };
+    pending.resolve(result);
     entry.pendingPermissions.delete(permissionId);
     this.touchSession(sessionId);
     logger.debug({ permissionId, sessionId, decision }, 'permission resolved');
@@ -1346,7 +1320,6 @@ export class CopilotAdapter extends AgentAdapter {
 
   /** Clean up session-scoped permission state */
   private cleanupSessionPermissions(sessionId: string): void {
-    this.sessionAllowSets.delete(sessionId);
     this.sessionModes.delete(sessionId);
     this.pendingModeSignals.delete(sessionId);
     this.sessionUsage.delete(sessionId);
@@ -2001,10 +1974,6 @@ export class CopilotAdapter extends AgentAdapter {
 
       if (krakiAutoApproves(mode, copilotToolKind(toolKind))) {
         logger.debug({ sessionId, toolKind, mode }, 'permission auto-approved');
-        return { kind: 'approve-once' };
-      }
-      if (this.sessionAllowSets.get(sessionId)?.has(toolKind)) {
-        logger.debug({ sessionId, toolKind }, 'permission auto-approved (session allow set)');
         return { kind: 'approve-once' };
       }
 

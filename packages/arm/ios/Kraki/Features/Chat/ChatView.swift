@@ -310,12 +310,6 @@ struct ChatView: View {
         switch decision {
         case "approve":
             appState.commandSender?.approve(sessionId: sessionId, permissionId: permissionId)
-        case "always_allow":
-            appState.commandSender?.alwaysAllow(
-                sessionId: sessionId,
-                permissionId: permissionId,
-                toolKind: toolName
-            )
         case "deny":
             appState.commandSender?.deny(sessionId: sessionId, permissionId: permissionId)
         default:

@@ -1460,8 +1460,8 @@ export class RelayClient {
    * stop showing it; a duplicate of an earlier decision (Pulse resend) is
    * ignored and never overrides the announced outcome.
    */
-  private resolvePermission(sessionId: string, permissionId: string, decision: 'approve' | 'deny' | 'always_allow', reason: string): void {
-    const verb = { approve: 'approve', deny: 'deny', always_allow: 'set always-allow for' }[decision];
+  private resolvePermission(sessionId: string, permissionId: string, decision: 'approve' | 'deny', reason: string): void {
+    const verb = decision;
     (reason
       ? this.adapter.respondToPermission(sessionId, permissionId, decision, reason)
       : this.adapter.respondToPermission(sessionId, permissionId, decision))
@@ -1479,9 +1479,7 @@ export class RelayClient {
         this.recordTrace({ type: 'permission', sessionId, payload: { id: permissionId, description: '', toolName: '', args: {}, decision, ...(decision === 'deny' && reason && { reason }) } });
         const resolution = decision === 'approve'
           ? { resolution: 'approved' as const }
-          : decision === 'deny'
-            ? { resolution: 'denied' as const, ...(reason && { reason }) }
-            : { resolution: 'always_allowed' as const };
+          : { resolution: 'denied' as const, ...(reason && { reason }) };
         this.send({ type: 'permission_resolved', sessionId, payload: { permissionId, ...resolution } });
       })
       .catch((err) => {
@@ -1846,7 +1844,10 @@ export class RelayClient {
         case 'approve':
         case 'deny':
         case 'always_allow': {
-          const decision = msg.type;
+          // `always_allow` is retired: no app offers it any more, and a
+          // session-wide grant was broader than the operator could see. An
+          // older app that still sends it approves this one request only.
+          const decision = msg.type === 'deny' ? 'deny' : 'approve';
           const reason = decision === 'deny' && typeof (msg.payload as { reason?: unknown }).reason === 'string'
             ? ((msg.payload as { reason: string }).reason).trim().slice(0, 2000)
             : '';

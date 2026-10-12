@@ -4397,7 +4397,7 @@ describe('RelayClient permission decisions', () => {
     });
     sockets[0].sent.length = 0;
     // Consumer messages arrive as E2E envelopes (the crypto mock returns the blob).
-    const decide = (type: 'approve' | 'deny' = 'approve', reason?: string) => sockets[0].emit('message', Buffer.from(JSON.stringify({
+    const decide = (type: 'approve' | 'deny' | 'always_allow' = 'approve', reason?: string) => sockets[0].emit('message', Buffer.from(JSON.stringify({
       type: 'unicast', to: 'tentacle-dev', keys: {},
       blob: JSON.stringify({ type, sessionId: 'sess_1', deviceId: 'app_1', seq: 1, timestamp: '', payload: { permissionId: 'perm_1', ...(reason && { reason }) } }),
     })));
@@ -4421,6 +4421,14 @@ describe('RelayClient permission decisions', () => {
     const { decide, resolutions } = connected(['accepted']);
     decide();
     await vi.waitFor(() => expect(resolutions()).toEqual(['approved']));
+  });
+
+  it('treats a retired always_allow from an old app as approving this request only', async () => {
+    const { decide, resolutions, respond, traced } = connected(['accepted']);
+    decide('always_allow');
+    await vi.waitFor(() => expect(resolutions()).toEqual(['approved']));
+    expect(respond).toHaveBeenCalledWith('sess_1', 'perm_1', 'approve');
+    expect(traced().at(-1)).toMatchObject({ id: 'perm_1', decision: 'approve' });
   });
 
   it('closes a prompt that expired at the agent as cancelled, not approved', async () => {

@@ -50,7 +50,7 @@ interface CardState {
 }
 
 /** How a permission was resolved (threaded through from the arm). */
-export type PromptResolution = { decision: 'approve' | 'deny' | 'always_allow' };
+export type PromptResolution = { decision: 'approve' | 'deny' };
 
 /**
  * Owns the per-session status card + draft bubble the tentacle broadcasts to

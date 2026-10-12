@@ -210,7 +210,6 @@ interface CodexSession {
   tools: Map<string, { toolName: string; args: Record<string, unknown> }>;
   pendingPermissions: Map<string, PendingPermission>;
   pendingQuestions: Map<string, PendingQuestion>;
-  allowKinds: Set<'shell' | 'write'>;
   queue: QueuedInput[];
   usage?: SessionUsage;
 }
@@ -481,7 +480,6 @@ export class CodexAdapter extends AgentAdapter {
       tools: new Map(),
       pendingPermissions: new Map(),
       pendingQuestions: new Map(),
-      allowKinds: new Set(),
       queue: [],
       ...init,
     };
@@ -857,8 +855,6 @@ export class CodexAdapter extends AgentAdapter {
     if (!s) return;
     if (s.mode !== mode) s.modeSignal = mode;
     s.mode = mode;
-    // A downgrade must not inherit "always allow" grants made in a looser mode.
-    if (mode === 'safe') s.allowKinds.clear();
   }
 
   async setSessionModel(sessionId: string, model: string, reasoningEffort?: string): Promise<void> {
@@ -939,7 +935,7 @@ export class CodexAdapter extends AgentAdapter {
       return 'not_found';
     }
     s.pendingPermissions.delete(permissionId);
-    const allow = decision === 'approve' || decision === 'always_allow';
+    const allow = decision === 'approve';
     this.answerPermission(pending, allow);
     // Codex's decline carries no text; relay the operator's reason as a steer
     // into the running turn so the model learns why.
@@ -951,15 +947,6 @@ export class CodexAdapter extends AgentAdapter {
       }).catch((err) => logger.debug({ sessionId, err: errMessage(err) }, 'codex deny-reason steer failed'));
     }
 
-    if (decision === 'always_allow') {
-      s.allowKinds.add(pending.toolKind);
-      for (const [otherId, other] of s.pendingPermissions) {
-        if (other.toolKind !== pending.toolKind) continue;
-        s.pendingPermissions.delete(otherId);
-        this.answerPermission(other, true);
-        this.onPermissionAutoResolved?.(sessionId, otherId, 'approved');
-      }
-    }
     return 'accepted';
   }
 
@@ -1180,7 +1167,7 @@ export class CodexAdapter extends AgentAdapter {
     paths: string[],
     card: { toolArgs: ToolArgs; description: string },
   ): void {
-    if (codexShouldAutoApprove(s.mode, pending.toolKind) || s.allowKinds.has(pending.toolKind)) {
+    if (codexShouldAutoApprove(s.mode, pending.toolKind)) {
       this.answerPermission(pending, true);
       return;
     }

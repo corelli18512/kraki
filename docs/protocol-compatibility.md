@@ -27,6 +27,7 @@ A peer must never send a behaviour the other side has not advertised.
 |---|---|---|---|
 | `request_session_replay` (app → tentacle) | `request_session_messages` / `request_session_messages_range` | no current client (iOS/Mac removed the unused sender in the 2026-10 review; web never sent it) | the oldest supported iOS/Mac build is from after 2026-10 **and** the tentacle has logged no "deprecated request_session_replay" warning for a release cycle |
 | `session_replay_batch` (tentacle → app) | `session_messages_batch` | the tentacle only in answer to `request_session_replay` (import no longer broadcasts it) | together with `request_session_replay`; then drop `handleReplayBatch` in iOS/Mac |
+| `always_allow` (app → tentacle), decision `always_allow`, resolution `always_allowed` | `approve` (per request; switch the session to `auto` to stop being asked) | no current client (no app has shown the button since 2026-10); tentacle ≥ 0.38.7 treats it as `approve` for that one request | the oldest supported app build is from after 2026-10. Keep *rendering* `always_allow` / `always_allowed` in history (old spine rows) |
 | Session mode wire name `execute` | `auto` | emitters while `EMIT_LEGACY_MODE_NAMES` is `true` (protocol `sessions.ts`) | every supported tentacle, app and web build reads `auto` (all current ones do). Flip the switch to `false`; keep *reading* `execute` one more release |
 
 ## How to remove a legacy path

@@ -1874,10 +1874,7 @@ export class PiAdapter extends AgentAdapter {
       logger.warn({ sessionId, permissionId }, 'respondToPermission: no pending permission');
       return 'not_found';
     }
-    // 'approve' and 'always_allow' both run the tool this time. Per-session
-    // "always allow" persistence is a future enhancement — for now it behaves
-    // like a one-off approve.
-    const confirmed = decision !== 'deny';
+    const confirmed = decision === 'approve';
     s.proc.sendRaw({ type: 'extension_ui_response', id: permissionId, confirmed });
     // pi's confirm channel is boolean; relay the reason as a steer into the
     // active run so the model learns why the tool was blocked.

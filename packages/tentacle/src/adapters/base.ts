@@ -125,7 +125,7 @@ export interface SessionInfo {
 
 // ── Permission decision type ────────────────────────────
 
-export type PermissionDecision = 'approve' | 'deny' | 'always_allow';
+export type PermissionDecision = 'approve' | 'deny';
 
 export interface QuestionAnswer {
   text: string;
@@ -167,7 +167,7 @@ export abstract class AgentAdapter {
    *  Step and once as the bubble). */
   onNarrationTrace: ((sessionId: string, event: MessageEvent) => void) | null = null;
   onPermissionRequest: ((sessionId: string, event: PermissionRequestEvent) => void) | null = null;
-  /** Called when a permission is auto-resolved (e.g. by "Always Allow" for same tool kind, or cancelled on cleanup) */
+  /** Called when a permission is resolved without the operator: approved by a switch to an automatic mode, or cancelled on cleanup. */
   onPermissionAutoResolved: ((sessionId: string, permissionId: string, resolution: 'approved' | 'cancelled') => void) | null = null;
   onQuestionAutoResolved: ((sessionId: string, questionId: string) => void) | null = null;
   onQuestionRequest: ((sessionId: string, event: QuestionRequestEvent) => void) | null = null;

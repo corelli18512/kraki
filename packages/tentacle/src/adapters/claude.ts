@@ -506,7 +506,6 @@ function createInputChannel(): { iterable: AsyncIterable<SDKUserMessage>; channe
 export class ClaudeAdapter extends AgentAdapter {
   private sessions = new Map<string, SessionEntry>();
   /** Per-session auto-approve sets (populated by "Always Allow" clicks) */
-  private sessionAllowSets = new Map<string, Set<string>>();
   /** Session permission mode */
   private sessionModes = new Map<string, SessionMode>();
   /** Sessions with a pending mode change to prepend on next user message */
@@ -1121,25 +1120,7 @@ export class ClaudeAdapter extends AgentAdapter {
       return 'not_found';
     }
 
-    // For always_allow: add tool kind to session-scope allow set
-    if (decision === 'always_allow' && pending.toolKind) {
-      if (!this.sessionAllowSets.has(sessionId)) {
-        this.sessionAllowSets.set(sessionId, new Set());
-      }
-      this.sessionAllowSets.get(sessionId)!.add(pending.toolKind);
-      logger.debug({ sessionId, toolKind: pending.toolKind }, 'Always allow enabled for tool kind');
-
-      // Auto-approve other pending permissions of the same tool kind
-      for (const [otherId, otherPending] of entry.pendingPermissions) {
-        if (otherId !== permissionId && otherPending.toolKind === pending.toolKind) {
-          otherPending.resolve({ behavior: 'allow', updatedInput: otherPending.input });
-          entry.pendingPermissions.delete(otherId);
-          this.onPermissionAutoResolved?.(sessionId, otherId, 'approved');
-        }
-      }
-    }
-
-    if (decision === 'approve' || decision === 'always_allow') {
+    if (decision === 'approve') {
       pending.resolve({ behavior: 'allow', updatedInput: pending.input });
     } else {
       pending.resolve({ behavior: 'deny', message: reason ? `Denied by user: ${reason}` : 'Denied by user' });
@@ -2000,12 +1981,6 @@ export class ClaudeAdapter extends AgentAdapter {
         return { behavior: 'allow', updatedInput: input };
       }
 
-      // Check session-scoped always-allow sets
-      if (this.sessionAllowSets.get(sessionId)?.has(toolKind)) {
-        logger.debug({ sessionId, toolKind }, 'permission auto-approved (session allow set)');
-        return { behavior: 'allow', updatedInput: input };
-      }
-
       // Not auto-approved — send to relay for user decision
       const permId = makeId('perm');
       const parsed = parseClaudeToolCall(toolName, input);
@@ -2128,7 +2103,6 @@ export class ClaudeAdapter extends AgentAdapter {
   private cleanupSessionState(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
     if (entry?.subagentSettleTimer) clearTimeout(entry.subagentSettleTimer);
-    this.sessionAllowSets.delete(sessionId);
     this.sessionModes.delete(sessionId);
     this.pendingModeSignals.delete(sessionId);
     this.sessionUsage.delete(sessionId);

@@ -2,7 +2,7 @@ import { Check, CircleCheck, CircleStop, CircleX, Lock, OctagonX, X } from 'luci
 import type { CardActionState } from '@kraki/protocol';
 import type { CardAction } from '../../lib/chat/spine';
 
-export type PermissionDecision = 'approve' | 'always_allow' | 'deny';
+export type PermissionDecision = 'approve' | 'deny';
 
 /** Anything the bubble's lower action slot can show: the live card's action
  *  (tool / batch / permission) or a frozen row's (question choices /

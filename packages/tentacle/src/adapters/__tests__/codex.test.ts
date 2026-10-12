@@ -259,21 +259,15 @@ describe('CodexAdapter (fake app-server child process)', () => {
     expect(h.of('tool_complete')[0]).toMatchObject({ success: false });
   });
 
-  it('always_allow grants the tool kind for later calls; switching to safe revokes it', async () => {
+  it('an approval covers that one call: the next shell call in safe mode asks again', async () => {
     await started();
     const sid = await session('safe');
     await turn(sid, 'SHELL', 'rt-1');
     const perm = await h.waitFor((e) => e.type === 'permission', 'permission');
-    await h.adapter.respondToPermission(sid, perm.id as string, 'always_allow');
+    await h.adapter.respondToPermission(sid, perm.id as string, 'approve');
     await h.idleCount(1);
+    expect(h.of('message')[0].content).toBe('shell decision: accept');
     await turn(sid, 'SHELL again', 'rt-2');
-    await h.idleCount(2);
-    expect(h.of('permission')).toHaveLength(1);
-    expect(h.of('message')[1].content).toBe('shell decision: accept');
-
-    h.adapter.setSessionMode(sid, 'auto');
-    h.adapter.setSessionMode(sid, 'safe');
-    await turn(sid, 'SHELL third', 'rt-3');
     await h.waitFor(() => h.of('permission').length === 2, 'second permission');
   });
 

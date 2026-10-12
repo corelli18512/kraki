@@ -789,11 +789,11 @@ private final class MacChatScenarioHarness {
             }
             return true
 
-        case "approve", "deny", "always_allow":
+        case "approve", "deny":
             guard let sessionID,
                   let payload = message["payload"] as? [String: Any],
                   let permissionID = payload["permissionId"] as? String else { return true }
-            let decision = type == "always_allow" ? "always_allow" : type
+            let decision = type
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(180))
                 self?.resolvePermission(sessionID: sessionID, permissionID: permissionID, decision: decision)

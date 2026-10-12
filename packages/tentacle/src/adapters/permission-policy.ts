@@ -10,8 +10,9 @@
  *
  * The user's local agent configuration still applies in one direction only:
  * local DENY rules keep blocking, local ALLOW / "always allow" rules never
- * bypass a Kraki `safe` prompt. "Always allow" clicked in Kraki is scoped to
- * the session and never written back to the agent's config.
+ * bypass a Kraki `safe` prompt. Kraki itself has no "always allow": in `safe`
+ * every side-effecting call is asked about; to stop being asked, switch the
+ * session to `auto`. (An `always_allow` from an old app approves that one call.)
  */
 
 import { normalizeSessionMode, type SessionMode } from '@kraki/protocol';
