@@ -113,7 +113,7 @@ export const consumerMessageSchema = z.discriminatedUnion('type', [
     }).optional(),
   })),
   message('request_attachment', z.looseObject({ id: str, sessionId: str, mode: optStr, index: optNum })),
-  message('set_session_subscription', z.looseObject({ sessionId: z.string().nullish() })),
+  message('set_session_subscription', z.looseObject({ sessionId: z.string().nullish(), requestId: optStr })),
   // Unknown feature names are ignored by the handler, so any array passes.
   message('client_features', z.looseObject({ features: z.array(z.unknown()).optional() }).optional()),
   message('request_usage_history', z.looseObject({ since: optNum }).optional()),

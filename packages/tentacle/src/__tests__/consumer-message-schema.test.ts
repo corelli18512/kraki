@@ -42,6 +42,7 @@ const SENT_BY_APPS: Array<[string, Record<string, unknown>]> = [
   ['ios request_attachment', { deviceId: 'app_1', type: 'request_attachment', sessionId: 's1', payload: { id: 'a1', sessionId: 's1', mode: 'paced', index: 3 } }],
   ['ios set_session_subscription', { ...env, type: 'set_session_subscription', payload: { sessionId: 's1' } }],
   ['ios set_session_subscription none', { ...env, type: 'set_session_subscription', payload: { sessionId: null } }],
+  ['mac set_session_subscription with requestId (local link)', { ...env, type: 'set_session_subscription', payload: { sessionId: 's1', requestId: 'sub-3' } }],
   ['ios client_features', { ...env, type: 'client_features', payload: { features: ['fragments'] } }],
   ['web request_usage_history', { ...env, type: 'request_usage_history', payload: { since: 0 } }],
   ['ios refresh_account_usage', { ...env, type: 'refresh_account_usage', targetDeviceId: 't1', payload: { requestId: 'u1' } }],
