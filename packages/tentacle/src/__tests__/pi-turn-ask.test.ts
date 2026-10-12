@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { KRAKI_SYSTEM_PROMPT, PiAdapter, summarizeCrash } from '../adapters/pi.js';
+import { turnFixture } from './helpers/turn-fixture.js';
 import { PI_KRAKI_TOOLS_SOURCE } from '../adapters/pi-kraki-tools.js';
 
 interface StubProc {
@@ -50,18 +51,11 @@ function makeAdapter(promptWatchdog?: {
     mode: 'auto',
     usage: {},
     lastActivity: Date.now(),
-    relayTurnId: undefined as string | undefined,
+    turn: turnFixture(adapter, sid, { open: true }),
     exitObserved: false,
     pendingPerms: new Map<string, string>(),
     pendingQuestions: new Map<string, string>(),
-    narrationSegments: 0,
-    toolSinceLastNarration: false,
-    lastNarration: '',
-    pendingNarration: '',
     lastStopReason: undefined,
-    pendingError: undefined,
-    logicalTurn: 1,
-    settledTurn: undefined,
     pendingMaintenanceIdle: false,
     aborting: false,
   };
@@ -85,7 +79,7 @@ describe('pi idle eviction lifecycle', () => {
     session.lastActivity = Date.now() - 30 * 60_000 - 1;
     (adapter as unknown as { sweepIdle: () => void }).sweepIdle();
 
-    expect(session.settledTurn).toBeUndefined();
+    expect(session.turn.isSettled).toBe(false);
     expect(proc.kill).not.toHaveBeenCalled();
     expect(onSessionEvicted).not.toHaveBeenCalledWith(sid);
   });
@@ -94,7 +88,7 @@ describe('pi idle eviction lifecycle', () => {
     const { adapter, proc, session, emit } = makeAdapter();
     const onSessionEvicted = vi.fn();
     adapter.onSessionEvicted = onSessionEvicted;
-    session.settledTurn = session.logicalTurn;
+    session.turn.settleSilently();
     emit({ type: 'compaction_start', reason: 'threshold' });
     session.lastActivity = Date.now() - 30 * 60_000 - 1;
 
@@ -108,7 +102,7 @@ describe('pi idle eviction lifecycle', () => {
     const { adapter, sid, proc, session } = makeAdapter();
     const onSessionEvicted = vi.fn();
     adapter.onSessionEvicted = onSessionEvicted;
-    session.settledTurn = session.logicalTurn;
+    session.turn.settleSilently();
     session.lastActivity = Date.now() - 30 * 60_000 - 1;
 
     (adapter as unknown as { sweepIdle: () => void }).sweepIdle();
@@ -137,10 +131,7 @@ describe('pi narration → draft + TRACE', () => {
     expect(onNarrationTrace).not.toHaveBeenCalled();
     // Narration is NOT itself a spine bubble — it graduates at idle.
     expect(onMessage).not.toHaveBeenCalled();
-    expect(session.narrationSegments).toBe(1);
-    expect(session.lastNarration).toBe('let me think...');
-    expect(session.pendingNarration).toBe('let me think...');
-    expect(session.toolSinceLastNarration).toBe(false);
+    expect(session.turn.hasReply).toBe(true);
   });
 
   it('text_delta streams to the draft bubble (onMessageDelta)', () => {
@@ -155,7 +146,7 @@ describe('pi narration → draft + TRACE', () => {
     const { adapter, session, narrate } = makeAdapter();
     adapter.onNarration = vi.fn();
     narrate('   ');
-    expect(session.narrationSegments).toBe(0);
+    expect(session.turn.hasReply).toBe(false);
   });
 
   it('message_end stopReason error stays provisional and does NOT narrate', () => {
@@ -167,11 +158,11 @@ describe('pi narration → draft + TRACE', () => {
     emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'partial' }], stopReason: 'error', errorMessage: 'boom' } });
     expect(onNarration).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
-    expect(session.pendingError).toBe('boom');
-    expect(session.narrationSegments).toBe(0);
+    expect(session.turn.pendingError).toBe('boom');
+    expect(session.turn.hasReply).toBe(false);
   });
 
-  it('a real tool marks toolSinceLastNarration and FLUSHES the pending narration to TRACE', () => {
+  it('a real tool marks the turn as ending on a tool and FLUSHES the pending narration to TRACE', () => {
     const { adapter, session, emit, narrate } = makeAdapter();
     const onToolStart = vi.fn();
     const onToolComplete = vi.fn();
@@ -180,17 +171,16 @@ describe('pi narration → draft + TRACE', () => {
     adapter.onToolComplete = onToolComplete;
     adapter.onNarrationTrace = onNarrationTrace;
     narrate('working on it');
-    expect(session.toolSinceLastNarration).toBe(false);
+    expect(session.turn.endedOnTool).toBe(false);
     expect(onNarrationTrace).not.toHaveBeenCalled(); // still deferred
     emit({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'ls' }, toolCallId: 't9' });
     // A tool follows → the narration is confirmed intermediate → traced now,
     // BEFORE the tool step so trace order is chronological, and pending cleared.
     expect(onNarrationTrace).toHaveBeenCalledWith('s1', { content: 'working on it' });
-    expect(session.pendingNarration).toBe('');
     emit({ type: 'tool_execution_end', toolName: 'bash', result: 'files', toolCallId: 't9', isError: false });
     expect(onToolStart).toHaveBeenCalledTimes(1);
     expect(onToolComplete).toHaveBeenCalledTimes(1);
-    expect(session.toolSinceLastNarration).toBe(true);
+    expect(session.turn.endedOnTool).toBe(true);
   });
 });
 
@@ -211,7 +201,7 @@ describe('pi abort', () => {
     acknowledge();
     await aborting;
     expect(resolved).toBe(true);
-    expect(session.settledTurn).toBe(session.logicalTurn);
+    expect(session.turn.isSettled).toBe(true);
     expect(proc.kill).not.toHaveBeenCalled();
   });
 
@@ -222,7 +212,7 @@ describe('pi abort', () => {
     await expect(adapter.abortSession(sid)).rejects.toThrow('queue unavailable');
     expect(proc.sendRaw).not.toHaveBeenCalled();
     expect(session.pendingQuestions.has('q1')).toBe(true);
-    expect(session.settledTurn).not.toBe(session.logicalTurn);
+    expect(session.turn.isSettled).toBe(false);
     expect(session.aborting).toBe(false);
   });
 
@@ -420,9 +410,9 @@ describe('pi prompt recovery', () => {
   });
 
   it('uses race-safe prompt steering without resetting the active turn', async () => {
-    const { adapter, proc, session } = makeAdapter();
-    session.narrationSegments = 2;
-    session.lastNarration = 'working';
+    const { adapter, proc, session, narrate } = makeAdapter();
+    adapter.onNarration = vi.fn();
+    narrate('working');
 
     await adapter.sendMessage('s1', 'check the other file', undefined, { delivery: 'steer' });
 
@@ -430,14 +420,15 @@ describe('pi prompt recovery', () => {
       message: 'check the other file',
       streamingBehavior: 'steer',
     }, { timeoutMs: null });
-    expect(session.narrationSegments).toBe(2);
-    expect(session.lastNarration).toBe('working');
+    // Still the same turn: its prose is still the reply-to-be.
+    expect(session.turn.isSettled).toBe(false);
+    expect(session.turn.hasReply).toBe(true);
   });
 
   it('queues a fresh turn through Pi followUp during background compaction', async () => {
-    const { adapter, proc, session } = makeAdapter();
-    session.narrationSegments = 2;
-    session.lastNarration = 'old turn';
+    const { adapter, proc, session, narrate } = makeAdapter();
+    adapter.onNarration = vi.fn();
+    narrate('old turn');
 
     await adapter.sendMessage('s1', 'new turn', undefined, { delivery: 'follow_up' });
 
@@ -446,8 +437,7 @@ describe('pi prompt recovery', () => {
       streamingBehavior: 'followUp',
     }, { timeoutMs: null });
     expect(proc.request).not.toHaveBeenCalledWith('abort');
-    expect(session.narrationSegments).toBe(0);
-    expect(session.lastNarration).toBe('');
+    expect(session.turn.hasReply).toBe(false); // a fresh turn
   });
 
   it('treats isStreaming as accepted while retaining the late ACK cleanup', async () => {
@@ -609,8 +599,8 @@ describe('pi outbound images (tool result → attachment store)', () => {
     const proc: StubProc = { alive: true, send: vi.fn(), sendRaw: vi.fn(), request: vi.fn().mockResolvedValue({}) };
     (adapter as unknown as { sessions: Map<string, unknown> }).sessions.set(sid, {
       proc, cwd: '/tmp', model: 'm', mode: 'auto', usage: {}, lastActivity: Date.now(),
-      pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0,
-      toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 1, settledTurn: undefined, pendingNarration: '', aborting: false, finalizing: false, finalizeAttempt: 0,
+      pendingPerms: new Map(), pendingQuestions: new Map(),
+      turn: turnFixture(adapter, sid, { open: true }), lastStopReason: undefined, aborting: false,
     });
     const emit = async (e: Record<string, unknown>) =>
       await (adapter as unknown as { handleEvent: (sid: string, e: Record<string, unknown>) => Promise<void> }).handleEvent(sid, e);
@@ -781,7 +771,7 @@ describe('pi trailing narration → direct reply', () => {
     expect(onCompaction).toHaveBeenCalledWith('s1', { phase: 'start', reason: 'threshold' });
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'The first answer is complete.' });
     expect(onIdle).toHaveBeenCalledTimes(1);
-    expect(session.settledTurn).toBe(session.logicalTurn);
+    expect(session.turn.isSettled).toBe(true);
 
     await adapter.sendMessage('s1', 'continue after compaction', undefined, { delivery: 'follow_up' });
     expect(proc.request).toHaveBeenCalledWith(
@@ -789,7 +779,7 @@ describe('pi trailing narration → direct reply', () => {
       { message: 'continue after compaction', streamingBehavior: 'followUp' },
       { timeoutMs: null },
     );
-    expect(session.settledTurn).not.toBe(session.logicalTurn);
+    expect(session.turn.isSettled).toBe(false);
 
     await emit({ type: 'compaction_end', reason: 'threshold', aborted: false, willRetry: false });
     narrate('The queued follow-up is now active.');
@@ -980,7 +970,7 @@ describe('pi turn conclusion (relayed as-is, no injected rounds)', () => {
     adapter.onError = onError;
     adapter.onIdle = onIdle;
     adapter.setTurnIdentity(sid, 's1:turn-exit');
-    session.pendingError = 'provider failed before settlement';
+    session.turn.setError('provider failed before settlement');
 
     (adapter as unknown as { handleProcessExit: (sessionId: string, value: typeof session) => void })
       .handleProcessExit(sid, session);
@@ -989,7 +979,7 @@ describe('pi turn conclusion (relayed as-is, no injected rounds)', () => {
       'error:provider failed before settlement:s1:turn-exit',
       'idle:s1:turn-exit',
     ]);
-    expect(session.pendingError).toBeUndefined();
+    expect(session.turn.pendingError).toBeUndefined();
     expect(session.exitObserved).toBe(true);
   });
 
@@ -1000,7 +990,7 @@ describe('pi turn conclusion (relayed as-is, no injected rounds)', () => {
     adapter.onError = onError;
     adapter.onIdle = onIdle;
     adapter.setTurnIdentity(sid, 's1:turn-crash');
-    (session as unknown as { settledTurn: number | undefined; logicalTurn: number }).settledTurn = undefined;
+    session.turn.beginTurn(); // a turn is running
     (session.proc as unknown as { crashReason: () => string }).crashReason = () => 'TypeError: zlib.createZstdDecompress is not a function';
 
     (adapter as unknown as { handleProcessExit: (sessionId: string, value: typeof session, code: number) => void })
@@ -1151,12 +1141,12 @@ describe('pi ask_user → question card', () => {
     expect(onMessage).not.toHaveBeenCalled();
   });
 
-  it('ask_user does NOT set toolSinceLastNarration (not a real tool)', () => {
+  it('ask_user is not a real tool: the prose before it can still be the reply', () => {
     const { adapter, session, narrate, emit } = makeAdapter();
     adapter.onNarration = vi.fn();
     narrate('one line');
     emit({ type: 'tool_execution_start', toolName: 'ask_user', args: { question: 'x' }, toolCallId: 't1' });
-    expect(session.toolSinceLastNarration).toBe(false);
+    expect(session.turn.endedOnTool).toBe(false);
   });
 
   it('respondToQuestion sends a structured extension_ui_response and clears pending', async () => {
@@ -1200,7 +1190,7 @@ describe('pi agent lifecycle boundaries', () => {
     const onIdle = vi.fn();
     adapter.onMessage = onMessage;
     adapter.onIdle = onIdle;
-    session.settledTurn = session.logicalTurn;
+    session.turn.settleSilently();
 
     await adapter.sendMessage('s1', 'steer text', undefined, { delivery: 'steer' });
     expect(proc.request).toHaveBeenCalledWith(
@@ -1208,8 +1198,7 @@ describe('pi agent lifecycle boundaries', () => {
       { message: 'steer text' },
       { timeoutMs: null },
     );
-    expect(session.logicalTurn).toBe(2);
-    expect(session.settledTurn).toBeUndefined();
+    expect(session.turn.isSettled).toBe(false); // a fresh turn
 
     await emit({
       type: 'message_end',
@@ -1223,7 +1212,7 @@ describe('pi agent lifecycle boundaries', () => {
 
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'steered reply' });
     expect(onIdle).toHaveBeenCalledTimes(1);
-    expect(session.settledTurn).toBe(session.logicalTurn);
+    expect(session.turn.isSettled).toBe(true);
   });
 
   it('does not terminalize a provisional error when agent_end will retry', () => {
@@ -1234,7 +1223,7 @@ describe('pi agent lifecycle boundaries', () => {
     adapter.onIdle = onIdle;
     emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'temporary failure' } });
     emit({ type: 'agent_end', willRetry: true });
-    expect(session.pendingError).toBe('temporary failure');
+    expect(session.turn.pendingError).toBe('temporary failure');
     expect(onError).not.toHaveBeenCalled();
     expect(onIdle).not.toHaveBeenCalled();
   });
@@ -1250,7 +1239,7 @@ describe('pi agent lifecycle boundaries', () => {
     emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'temporary failure' } });
     emit({ type: 'agent_end', willRetry: true });
     emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'recovered' }], stopReason: 'stop' } });
-    expect(session.pendingError).toBeUndefined();
+    expect(session.turn.pendingError).toBeUndefined();
     emit({ type: 'agent_settled' });
     expect(onError).not.toHaveBeenCalled();
     expect(onMessage).toHaveBeenCalledWith('s1', { content: 'recovered' });

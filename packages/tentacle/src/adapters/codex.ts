@@ -50,6 +50,7 @@ import {
 } from '../self-management-guard.js';
 import { showImageHandler, showImageTool } from '../mcp/tools/show-image.js';
 import { DEFAULT_SESSION_MODE } from '@kraki/protocol';
+import { TurnTracker } from './turn-tracker.js';
 import { DELEGATE_ANSWER, KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMode } from './permission-policy.js';
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 import { tmpdir } from 'node:os';
@@ -192,21 +193,15 @@ interface CodexSession {
   starting: boolean;
   /** Abort requested before the Codex turn id was known. */
   abortPending: boolean;
-  /** The current turn was stopped by the user. RelayClient owns that terminal
-   *  boundary (turn_status user_abort + idle aborted), so the adapter settles
-   *  its own state silently: no onMessage / onIdle for the aborted turn. */
-  userAborted: boolean;
   /** Recently settled Codex turn ids — late events for them are dropped. */
   settledTurns: string[];
   /** commandExecution item ids started by the current turn. Codex's
    *  turn/interrupt leaves running commands alive (verified 0.157.1), so
    *  abort terminates exactly these via thread/backgroundTerminals. */
   turnCommandItems: Set<string>;
-  relayTurnId?: string;
-  eventTurnId?: string;
-  turnFinalized: boolean;
-  pendingText: string;
-  pendingError?: string;
+  /** Kraki's view of the current turn: reply vs narration, error, user stop,
+   *  idle once. A queued steer of the same relay turn continues it. */
+  turn: TurnTracker;
   tools: Map<string, { toolName: string; args: Record<string, unknown> }>;
   pendingPermissions: Map<string, PendingPermission>;
   pendingQuestions: Map<string, PendingQuestion>;
@@ -443,10 +438,7 @@ export class CodexAdapter extends AgentAdapter {
         s.activeTurnId = undefined;
         s.starting = false;
         this.dropPendingCards(s, false);
-        if (!s.turnFinalized) {
-          this.onError?.(s.sessionId, { message: 'Codex app-server exited unexpectedly', ...this.turnEvent(s) });
-          this.finalizeTurn(s);
-        }
+        this.finalizeTurn(s, 'Codex app-server exited unexpectedly');
       }
     }
   }
@@ -472,11 +464,9 @@ export class CodexAdapter extends AgentAdapter {
       mode: DEFAULT_MODE,
       starting: false,
       abortPending: false,
-      userAborted: false,
       settledTurns: [],
       turnCommandItems: new Set(),
-      turnFinalized: true,
-      pendingText: '',
+      turn: new TurnTracker(this, sessionId),
       tools: new Map(),
       pendingPermissions: new Map(),
       pendingQuestions: new Map(),
@@ -616,16 +606,15 @@ export class CodexAdapter extends AgentAdapter {
 
   setTurnIdentity(sessionId: string, turnId: string): void {
     const s = this.sessions.get(sessionId);
-    if (s) s.relayTurnId = turnId;
+    if (s) s.turn.relayTurnId = turnId;
   }
 
   isTurnSettled(sessionId: string): boolean {
-    return this.sessions.get(sessionId)?.turnFinalized === true;
+    return this.sessions.get(sessionId)?.turn.isSettled === true;
   }
 
   private turnEvent(s: CodexSession): { turnId?: string } {
-    const turnId = s.eventTurnId ?? s.relayTurnId;
-    return turnId ? { turnId } : {};
+    return s.turn.event();
   }
 
   private buildInput(s: CodexSession, text: string, attachments?: Attachment[]): unknown[] {
@@ -678,27 +667,25 @@ export class CodexAdapter extends AgentAdapter {
         // start a fresh turn with this input.
         logger.debug({ sessionId, err: errMessage(err) }, 'codex steer rejected; starting new turn');
         if (s.activeTurnId || s.starting) {
-          s.queue.push({ text, attachments, relayTurnId: s.relayTurnId });
+          s.queue.push({ text, attachments, relayTurnId: s.turn.relayTurnId });
           return;
         }
       }
     } else if (busy) {
       // prompt/follow_up while a turn runs: run it right after the active turn.
-      s.queue.push({ text, attachments, relayTurnId: s.relayTurnId });
+      s.queue.push({ text, attachments, relayTurnId: s.turn.relayTurnId });
       return;
     }
 
-    await this.startTurn(s, { text, attachments, relayTurnId: s.relayTurnId });
+    await this.startTurn(s, { text, attachments, relayTurnId: s.turn.relayTurnId });
   }
 
   private async startTurn(s: CodexSession, input: QueuedInput): Promise<void> {
     s.starting = true;
-    s.turnFinalized = false;
-    s.userAborted = false;
     s.turnCommandItems = new Set();
-    s.pendingText = '';
-    s.pendingError = undefined;
-    s.eventTurnId = input.relayTurnId;
+    s.turn.beginTurn();
+    // A queued input keeps the relay turn it was sent in.
+    s.turn.eventTurnId = input.relayTurnId;
     try {
       const rpc = await this.ensureLoaded(s);
       const res = await rpc.request<{ turn: { id: string; status?: string } }>('turn/start', {
@@ -709,12 +696,12 @@ export class CodexAdapter extends AgentAdapter {
         approvalPolicy: 'untrusted',
       });
       // turn/completed may already have landed for an instantly-failing turn.
-      if (!s.turnFinalized && res?.turn?.id) s.activeTurnId = res.turn.id;
+      if (!s.turn.isSettled && res?.turn?.id) s.activeTurnId = res.turn.id;
     } catch (err) {
       s.starting = false;
       s.abortPending = false;
       s.activeTurnId = undefined;
-      s.turnFinalized = true;
+      s.turn.settleSilently(); // the caller reports the failure
       throw err;
     }
     s.starting = false;
@@ -739,10 +726,10 @@ export class CodexAdapter extends AgentAdapter {
     return !!s.activeTurnId && s.activeTurnId !== codexTurnId;
   }
 
-  /** Settle the current turn exactly once and run the next queued input. */
-  private finalizeTurn(s: CodexSession): void {
-    if (s.turnFinalized) return;
-    s.turnFinalized = true;
+  /** Settle the current turn exactly once — its reply (or `error`), then idle —
+   *  and run the next queued input. */
+  private finalizeTurn(s: CodexSession, error?: string): void {
+    if (s.turn.isSettled) return;
     s.abortPending = false;
     if (s.activeTurnId) {
       s.settledTurns.push(s.activeTurnId);
@@ -754,10 +741,8 @@ export class CodexAdapter extends AgentAdapter {
     // A queued steer belongs to the relay turn that is ending here: Codex runs
     // it as a new turn, but for the relay it is the same logical turn. Settling
     // that turn now would make the relay drop everything the steer produces.
-    const continuesSameTurn = !!next?.relayTurnId && next.relayTurnId === ev.turnId && !s.userAborted;
-    if (!s.userAborted && !continuesSameTurn) {
-      if (ev.turnId) this.onIdle?.(s.sessionId, ev); else this.onIdle?.(s.sessionId);
-    }
+    const continuesSameTurn = !!next?.relayTurnId && next.relayTurnId === ev.turnId && !s.turn.isAborted;
+    s.turn.finish({ error, idle: !continuesSameTurn });
     this.onFlushComplete?.(s.sessionId);
     if (next) {
       this.startTurn(s, next).catch((err) => {
@@ -770,25 +755,16 @@ export class CodexAdapter extends AgentAdapter {
     }
   }
 
+  /** A tool / question / subagent follows: prose before it was narration. */
   private flushNarration(s: CodexSession): void {
-    const text = s.pendingText.trim();
-    s.pendingText = '';
-    if (!text) return;
-    this.onNarration?.(s.sessionId, { content: text, ...this.turnEvent(s) });
-    this.onNarrationTrace?.(s.sessionId, { content: text, ...this.turnEvent(s) });
-  }
-
-  private flushConclusion(s: CodexSession): void {
-    const text = s.pendingText.trim();
-    s.pendingText = '';
-    if (text) this.onMessage?.(s.sessionId, { content: text, ...this.turnEvent(s) });
+    s.turn.toolStarted();
   }
 
   async abortSession(sessionId: string): Promise<void> {
     const s = this.sessions.get(sessionId);
     if (!s) return;
     s.queue = [];
-    if (!s.turnFinalized) s.userAborted = true;
+    s.turn.abort();
     this.dropPendingCards(s, true);
     const commandItems = [...s.turnCommandItems];
     if (s.activeTurnId) await this.interruptActive(s);
@@ -796,7 +772,7 @@ export class CodexAdapter extends AgentAdapter {
     else if (s.starting) s.abortPending = true;
     if (commandItems.length > 0) await this.terminateTurnCommands(s, new Set(commandItems));
     // turn/completed(interrupted) finalizes; if the turn is already gone, do it now.
-    if (!s.activeTurnId && !s.starting && !s.turnFinalized) this.finalizeTurn(s);
+    if (!s.activeTurnId && !s.starting && !s.turn.isSettled) this.finalizeTurn(s);
   }
 
   /** Stop means stop: kill commands this turn started that Codex left running.
@@ -1291,7 +1267,7 @@ export class CodexAdapter extends AgentAdapter {
     switch (n.method) {
       case 'turn/started': {
         const turn = params.turn as { id?: string } | undefined;
-        if (turn?.id && !s.turnFinalized) {
+        if (turn?.id && !s.turn.isSettled) {
           s.activeTurnId = turn.id;
           if (s.abortPending) void this.interruptActive(s);
         }
@@ -1314,7 +1290,7 @@ export class CodexAdapter extends AgentAdapter {
 
       case 'error': {
         const error = params.error as { message?: string } | undefined;
-        if (params.willRetry !== true && error?.message) s.pendingError = error.message;
+        if (params.willRetry !== true && error?.message) s.turn.setError(error.message);
         break;
       }
 
@@ -1383,10 +1359,9 @@ export class CodexAdapter extends AgentAdapter {
     };
     switch (item.type) {
       case 'agentMessage':
-        // Only the LAST agent message of a turn is the reply. Codex often emits
-        // a commentary message and then the final answer with no tool between
-        // them, so a new message graduates the buffered one to narration.
-        this.flushNarration(s);
+        // Each agent message is one prose segment (see item/completed). Only
+        // the LAST of a turn is the reply: Codex often emits a commentary
+        // message and then the final answer with no tool between them.
         break;
       case 'contextCompaction':
         this.onCompaction?.(s.sessionId, { phase: 'start', ...this.turnEvent(s) });
@@ -1530,11 +1505,9 @@ export class CodexAdapter extends AgentAdapter {
       this.onToolComplete?.(s.sessionId, { toolName: tracked.toolName, result, success, toolCallId: id, ...this.turnEvent(s) });
     };
     switch (item.type) {
-      case 'agentMessage': {
-        const text = str(item.text);
-        if (text) s.pendingText = s.pendingText ? `${s.pendingText}\n\n${text}` : text;
+      case 'agentMessage':
+        s.turn.proseSegment(str(item.text));
         break;
-      }
       case 'contextCompaction':
         this.onCompaction?.(s.sessionId, { phase: 'end', ...this.turnEvent(s) });
         break;
@@ -1547,7 +1520,7 @@ export class CodexAdapter extends AgentAdapter {
   }
 
   private handleTurnCompleted(s: CodexSession, turn: Record<string, unknown> | undefined): void {
-    if (s.turnFinalized) return;
+    if (s.turn.isSettled) return;
     const status = str(turn?.status);
     const turnError = (turn?.error as { message?: string } | null | undefined)?.message;
 
@@ -1558,20 +1531,17 @@ export class CodexAdapter extends AgentAdapter {
     }
     s.tools.clear();
 
-    if (s.userAborted) {
-      // RelayClient already snapshotted the draft into turn_status(user_abort).
-      s.pendingText = '';
-    } else if (status === 'failed') {
-      s.pendingText = '';
-      this.onError?.(s.sessionId, { message: turnError || s.pendingError || 'Codex turn failed', ...this.turnEvent(s) });
-    } else {
-      this.flushConclusion(s);
-    }
+    // A user stop ends silently (RelayClient owns it); a failed turn reports
+    // its error instead of a reply; a completed turn's reply wins over an
+    // error Codex recovered from.
+    const failed = status === 'failed';
+    const error = failed ? (turnError || s.turn.pendingError || 'Codex turn failed') : undefined;
+    if (!failed) s.turn.clearError();
     const duration = typeof turn?.durationMs === 'number' ? turn.durationMs : 0;
     if (duration && s.usage) {
       s.usage = { ...s.usage, totalDurationMs: s.usage.totalDurationMs + duration };
       this.onUsageUpdate?.(s.sessionId, s.usage);
     }
-    this.finalizeTurn(s);
+    this.finalizeTurn(s, error);
   }
 }

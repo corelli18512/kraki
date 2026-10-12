@@ -6,6 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PiAdapter } from '../adapters/pi.js';
+import { turnFixture } from './helpers/turn-fixture.js';
 
 vi.mock('../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -18,11 +19,10 @@ function setup() {
   const sid = 's';
   const proc = { alive: true, request: vi.fn().mockResolvedValue({}), kill: vi.fn(), sendRaw: vi.fn() };
   const session = {
-    proc, logicalTurn: 1, settledTurn: undefined as number | undefined,
-    relayTurnId: 'turn-1', eventTurnId: 'turn-1',
+    proc, turn: turnFixture(adapter, sid, { open: true, relayTurnId: 'turn-1', eventTurnId: 'turn-1' }),
     pendingPerms: new Map(), pendingQuestions: new Map(),
-    narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined as string | undefined,
-    pendingError: undefined, pendingMaintenanceIdle: false, pendingNarration: '', aborting: false,
+    lastStopReason: undefined as string | undefined,
+    pendingMaintenanceIdle: false, aborting: false,
     usage: {}, lastActivity: Date.now(), exitObserved: false, mode: 'auto',
   };
   const internal = adapter as unknown as {

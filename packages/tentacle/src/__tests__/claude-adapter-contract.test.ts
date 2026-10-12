@@ -15,7 +15,7 @@ const sdk = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: sdk.query }));
 
 type RecordMessage = Record<string, unknown>;
-interface ClaudeEntry { query: object | null; inputIterable: AsyncIterable<RecordMessage>; model?: string; turnFinalized?: boolean }
+interface ClaudeEntry { query: object | null; inputIterable: AsyncIterable<RecordMessage>; model?: string; turn: { isSettled: boolean } }
 interface ClaudeInternals { sessions: Map<string, ClaudeEntry>; handleSDKMessage: (id: string, msg: RecordMessage) => void }
 
 let root: string, saved: Record<string, string | undefined>, claude: ClaudeAdapter;
@@ -52,6 +52,7 @@ const nextTick = () => new Promise((r) => setTimeout(r, 0));
 describe('ClaudeAdapter — audit findings C1–C7', () => {
   it('maps normal streamed text and the authoritative result to one conclusion', async () => {
     await createClaude(); claude.onMessageDelta = vi.fn(); claude.onMessage = vi.fn(); claude.onIdle = vi.fn();
+    (cc().sessions.get('s')!.turn as unknown as { beginTurn(): void }).beginTurn(); // a prompt is running
     cc().handleSDKMessage('s', { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hi' } } });
     cc().handleSDKMessage('s', { type: 'assistant', message: { content: [{ type: 'text', text: 'Hi' }] } });
     cc().handleSDKMessage('s', { type: 'result', is_error: false });
@@ -253,7 +254,7 @@ describe('ClaudeAdapter — turn lifecycle', () => {
   it('stopping an idle session does not arm the stop flag', async () => {
     await createClaude(); claude.onIdle = vi.fn();
     cc().sessions.get('s')!.query = { interrupt: vi.fn() };
-    cc().sessions.get('s')!.turnFinalized = true;
+    expect(cc().sessions.get('s')!.turn.isSettled).toBe(true); // no turn yet
     await claude.abortSession('s');
     cc().handleSDKMessage('s', { type: 'result', is_error: false });
     // Already finalized → ignored either way; no crash, no spurious idle.
