@@ -294,6 +294,12 @@ targets:
       # AppState is platformized (push + willTerminate guarded).
       - path: Kraki/App/AppState.swift
       - path: Kraki/App/AppState+AccountDeletion.swift
+      - path: Kraki/App/AppState+Lifecycle.swift
+      - path: Kraki/App/AppState+MacSignIn.swift
+      - path: Kraki/App/AppState+Pulse.swift
+      - path: Kraki/App/AppState+Sending.swift
+      - path: Kraki/App/AppState+SessionSubscription.swift
+      - path: Kraki/App/AppState+VoiceInput.swift
       # Mac-only app shell, scenes, commands.
       - path: Kraki/App/Mac
         excludes:
