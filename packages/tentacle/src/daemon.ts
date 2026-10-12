@@ -33,7 +33,10 @@ import {
   clearDaemonIdentity,
   loadDaemonReady,
   clearDaemonReady,
+  loadDaemonSupervisorPid,
+  clearDaemonSupervisorPid,
 } from './config.js';
+import { SUPERVISE_ENV, SUPERVISED_ENV } from './daemon-supervisor.js';
 import { getKrakiAppBundlePath, getProcessBundleIdentity, KRAKI_BUNDLE_ID } from './checks.js';
 import { MAC_APP_OWNER } from './managed.js';
 
@@ -324,6 +327,9 @@ function waitForDaemonBootstrap(
   child: ChildProcess,
   bootstrapLogPath: string,
   timeoutMs = DAEMON_READY_TIMEOUT_MS,
+  // Ready once the launched process published readiness. Under a supervisor
+  // the worker is its child: ready once the worker that owns daemon.pid did.
+  isReady: () => boolean = () => !!child.pid && loadDaemonReady() === child.pid,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let poll: NodeJS.Timeout | undefined;
@@ -354,7 +360,7 @@ function waitForDaemonBootstrap(
     }, timeoutMs);
 
     poll = setInterval(() => {
-      if (child.pid && loadDaemonReady() === child.pid) {
+      if (isReady()) {
         cleanup();
         resolve();
       }
@@ -738,6 +744,12 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
 
   const launch = resolveDaemonLaunch(cliEntryPath);
   launch.env.LOG_LEVEL = getLogVerbosity(config) === 'verbose' ? 'debug' : 'info';
+  // Run the worker under a supervisor that restarts it after a crash
+  // (daemon-supervisor.ts). An inherited KRAKI_SUPERVISED (`kraki start` typed
+  // in a terminal opened by a supervised agent) must not suppress that.
+  launch.env[SUPERVISE_ENV] = '1';
+  delete launch.env[SUPERVISED_ENV];
+  clearDaemonSupervisorPid();
   const bootstrapLogPath = getDaemonBootstrapLogPath();
   mkdirSync(dirname(bootstrapLogPath), { recursive: true });
   const bootstrapFd = openSync(bootstrapLogPath, 'w');
@@ -756,10 +768,18 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
     throw new Error(`Kraki failed to start: no daemon PID returned. Check ${bootstrapLogPath}`);
   }
 
+  // `child` is the supervisor; the worker publishes its own PID and readiness.
+  const workerReady = () => {
+    const ready = loadDaemonReady();
+    return ready !== null && ready === loadDaemonPid();
+  };
   try {
-    await waitForDaemonBootstrap(child, bootstrapLogPath);
+    await waitForDaemonBootstrap(child, bootstrapLogPath, DAEMON_READY_TIMEOUT_MS, workerReady);
   } catch (err) {
+    // Ending the supervisor ends its worker (SIGTERM is forwarded; Windows
+    // kills the whole tree; a worker whose supervisor is gone exits).
     const terminated = await terminateFailedDaemon(child.pid);
+    clearDaemonSupervisorPid();
     if (!terminated) {
       saveDaemonPid(child.pid);
       throw new Error(
@@ -774,9 +794,31 @@ export async function startDaemon(config: KrakiConfig, cliEntryPath?: string): P
   }
 
   child.unref();
-  saveDaemonPid(child.pid);
+  const workerPid = loadDaemonPid();
   if (process.platform === 'win32') enableWindowsAutostart();
-  return child.pid;
+  return workerPid ?? child.pid;
+}
+
+/**
+ * Stop the supervisor of a `kraki start` daemon before its worker, so the
+ * worker ending is not taken for a crash and restarted. POSIX: SIGTERM, which
+ * the supervisor forwards to the worker. Windows: end the supervisor's tree
+ * (worker included). Fails closed when the recorded PID can't be identified.
+ */
+function stopDaemonSupervisor(platform: NodeJS.Platform): 'none' | 'stopped' | 'unknown' {
+  const pid = loadDaemonSupervisorPid();
+  if (pid == null) return 'none';
+  const identity = inspectDaemonProcess(pid);
+  if (identity === 'unknown') return 'unknown';
+  if (identity === 'daemon') {
+    try { killProcessTree(pid, 'SIGTERM', platform); } catch { /* already gone */ }
+    // Give it up to 2s to stop; the worker wait below does the rest.
+    const idle = new Int32Array(new SharedArrayBuffer(4));
+    const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    for (let i = 0; i < 40 && alive(); i++) Atomics.wait(idle, 0, 0, 50);
+  }
+  clearDaemonSupervisorPid();
+  return identity === 'daemon' ? 'stopped' : 'none';
 }
 
 export async function runDaemonReleaseSmoke(config: KrakiConfig): Promise<number> {
@@ -828,6 +870,25 @@ export async function runDaemonReleaseSmoke(config: KrakiConfig): Promise<number
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
+    // A crashed worker must come back by itself (the CLI-started supervisor;
+    // the macOS binary runs under launchd and is not covered here).
+    if (process.platform !== 'darwin') {
+      const crashed = pid;
+      try { process.kill(crashed, 'SIGKILL'); } catch { /* already gone */ }
+      const recoverDeadline = Date.now() + 60_000;
+      let recovered: number | null = null;
+      while (Date.now() < recoverDeadline) {
+        const readyPid = loadDaemonReady();
+        if (readyPid !== null && readyPid !== crashed && readyPid === loadDaemonPid()
+          && inspectDaemonProcess(readyPid) === 'daemon') { recovered = readyPid; break; }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      if (recovered === null) {
+        throw new Error(`Daemon release smoke: worker ${crashed} was killed and not restarted within 60s`);
+      }
+      pid = recovered;
+    }
+
     if (!stopDaemon()) {
       throw new Error(`Daemon release smoke could not stop PID ${pid}`);
     }
@@ -851,6 +912,10 @@ export function stopDaemon(
   platform = process.platform,
   uid: number | undefined = process.getuid?.(),
 ): boolean {
+  // A `kraki start` daemon runs under a supervisor; stop it first, or it would
+  // restart the worker we are about to end (also when the worker is between
+  // restarts and has no live PID).
+  if (stopDaemonSupervisor(platform) === 'unknown') return false;
   const pid = loadDaemonPid();
   if (pid === null) {
     // A loaded launchd job without a PID is ambiguous: LaunchServices may still

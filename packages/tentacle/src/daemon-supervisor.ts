@@ -1,5 +1,9 @@
 /**
- * In-job supervisor for the daemon started by Kraki for Mac.
+ * Supervisor for the daemon worker: restarts it after a crash.
+ *
+ * Used by Kraki for Mac's and Kraki for Windows' jobs, and by `kraki start`
+ * on every platform except the macOS binary (which runs under launchd). The
+ * Mac story below is why it exists at all:
  *
  * Kraki for Mac's launchd job has KeepAlive, but launchd only honours it while
  * the user's launchd domain is in its normal mode. After an interrupted
@@ -18,10 +22,17 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export const SUPERVISED_ENV = 'KRAKI_SUPERVISED';
+
+/** Set by `kraki start` on the worker it launches: run under a supervisor. */
+export const SUPERVISE_ENV = 'KRAKI_SUPERVISE';
+
+/** A worker exit code meaning "restarting won't help" (no config): the
+ *  supervisor stops instead of retrying forever. EX_CONFIG from sysexits.h. */
+export const PERMANENT_EXIT_CODE = 78;
 
 /** Restart delay after the n-th consecutive quick failure (1s, 2s, 4s … 60s). */
 export function restartDelayMs(consecutiveFailures: number): number {
@@ -40,6 +51,8 @@ export interface SupervisorOptions {
   args: string[];
   env?: NodeJS.ProcessEnv;
   logFile?: string;
+  /** Record this supervisor's PID here while it runs (`kraki stop` reads it). */
+  pidFile?: string;
   /** For tests: stop after this many worker starts. */
   maxStarts?: number;
   delay?: (n: number) => number;
@@ -58,9 +71,15 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
   let starts = 0;
   let timer: NodeJS.Timeout | null = null;
 
+  if (opts.pidFile) {
+    try { mkdirSync(dirname(opts.pidFile), { recursive: true }); writeFileSync(opts.pidFile, String(process.pid)); } catch { /* best effort */ }
+  }
   return new Promise((resolve) => {
     const finish = (code: number) => {
       for (const s of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.removeListener(s, onSignal);
+      if (opts.pidFile) {
+        try { if (readFileSync(opts.pidFile, 'utf8').trim() === String(process.pid)) unlinkSync(opts.pidFile); } catch { /* gone */ }
+      }
       resolve(code);
     };
 
@@ -90,6 +109,11 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
         if (stopping || isCleanExit(code, signal)) {
           log(`worker exited cleanly (code=${code} signal=${signal})`);
           finish(0);
+          return;
+        }
+        if (code === PERMANENT_EXIT_CODE) {
+          log(`worker exited with code ${code} (restarting won't help); stopping`);
+          finish(code);
           return;
         }
         failures = Date.now() - startedAt >= HEALTHY_UPTIME_MS ? 1 : failures + 1;
