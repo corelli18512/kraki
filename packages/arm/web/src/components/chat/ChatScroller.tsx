@@ -1,3 +1,4 @@
+import { unreadLanding } from '../../lib/chat/unread-entry';
 import {
   forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, type ReactNode,
 } from 'react';
@@ -40,13 +41,38 @@ interface Props<Row extends ScrollerRow> {
   /** Near the oldest rendered row (load / reveal older). */
   onNearTop?: () => void;
   onScroll?: () => void;
+  /** Entered with new messages: the first new row's key (see unread-entry.ts).
+   *  Read on every settle until the reader scrolls, ↓ or sends. */
+  unreadTarget?: string | null;
+  /** Called when the reader takes over (the landing no longer applies). */
+  onUnreadEntryEnd?: () => void;
+  /** Side a newly arrived row slides in from (null: no entrance). */
+  entranceSide?: (row: Row) => 'left' | 'right' | null;
 }
 
 const PIN_THRESHOLD = 4;
+/** Layout settling right after a Session opens is applied at once. */
+const ENTRY_SETTLE_MS = 400;
+/** Bottom-follow time constant: ~95 % of a new line / bubble in ~0.24 s. */
+const FOLLOW_TAU_MS = 80;
+
+/** Fraction of the remaining distance to close after `dt` ms. */
+export function followProgress(dt: number): number {
+  return 1 - Math.exp(-Math.max(0, Math.min(dt, 64)) / FOLLOW_TAU_MS);
+}
+
+/** Keys newly added at the end: as many as the list grew by (a same-length
+ *  change at the tail is a row changing identity, not a new row). */
+export function newTailKeys(before: string[], after: string[]): string[] {
+  const grew = after.length - before.length;
+  if (grew <= 0) return [];
+  const known = new Set(before);
+  return after.slice(after.length - grew).filter((key) => !known.has(key));
+}
 const NEAR_TOP = 900;
 
 function ChatScrollerInner<Row extends ScrollerRow>(
-  { rows, renderRow, topInset, bottomInset, header, onAtBottomChange, onNearTop, onScroll }: Props<Row>,
+  { rows, renderRow, topInset, bottomInset, header, onAtBottomChange, onNearTop, onScroll, unreadTarget, onUnreadEntryEnd, entranceSide }: Props<Row>,
   ref: React.Ref<ChatScrollerHandle>,
 ) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -55,8 +81,17 @@ function ChatScrollerInner<Row extends ScrollerRow>(
   const anchor = useRef<{ key: string; offset: number } | null>(null);
   const lastBottom = useRef<boolean | null>(null);
   const programmatic = useRef(false);
-  const callbacks = useRef({ onAtBottomChange, onNearTop, onScroll });
-  callbacks.current = { onAtBottomChange, onNearTop, onScroll };
+  const callbacks = useRef({ onAtBottomChange, onNearTop, onScroll, onUnreadEntryEnd });
+  callbacks.current = { onAtBottomChange, onNearTop, onScroll, onUnreadEntryEnd };
+  /** none | armed (following while it fits) | anchored (held at the top). */
+  const unread = useRef<'none' | 'armed' | 'anchored'>(unreadTarget !== undefined ? 'armed' : 'none');
+  const unreadTargetRef = useRef(unreadTarget ?? null);
+  unreadTargetRef.current = unreadTarget ?? null;
+  const endUnreadEntry = () => {
+    if (unread.current === 'none') return;
+    unread.current = 'none';
+    callbacks.current.onUnreadEntryEnd?.();
+  };
 
   const rowElement = (key: string) =>
     content.current?.querySelector<HTMLElement>(`[data-scroll-key="${CSS.escape(key)}"]`) ?? null;
@@ -87,12 +122,73 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     }
   }, []);
 
+  /** Unread entry: land on (or keep) the first new row's start under the
+   *  header when it isn't readable at the newest edge. True when it applied. */
+  const applyUnreadEntry = useCallback((): boolean => {
+    const el = scroller.current;
+    const key = unreadTargetRef.current;
+    if (!el || unread.current === 'none' || !key) return false;
+    const node = rowElement(key);
+    if (!node) return false;
+    const tail = el.scrollHeight - el.clientHeight;
+    const rowStart = el.scrollTop + node.getBoundingClientRect().top - (el.getBoundingClientRect().top + topInset + 8);
+    const landing = unreadLanding(Math.max(0, Math.min(tail, rowStart)), tail);
+    if (landing === null) {
+      // Fits (again, with real heights): follow the newest edge.
+      if (unread.current === 'anchored') { unread.current = 'armed'; pinned.current = true; }
+      return false;
+    }
+    unread.current = 'anchored';
+    pinned.current = false;
+    if (Math.abs(el.scrollTop - landing) >= 0.5) el.scrollTop = landing;
+    anchor.current = { key, offset: 8 };
+    return true;
+  }, [topInset]);
+
+  // ── Following the bottom smoothly ──
+  // Content arriving at the followed bottom (a streamed line, a new bubble)
+  // glides the conversation up instead of jumping in one frame: each frame
+  // closes part of the remaining distance, re-targeting as content keeps
+  // growing. Entry and layout settling stay instant.
+  const following = useRef(false);
+  const followFrame = useRef(0);
+  const mountedAt = useRef(performance.now());
+  const stopFollow = () => {
+    if (followFrame.current) cancelAnimationFrame(followFrame.current);
+    followFrame.current = 0;
+    following.current = false;
+  };
+  const followBottom = useCallback(() => {
+    const el = scroller.current;
+    if (!el || following.current) return;
+    following.current = true;
+    let last = performance.now();
+    const step = (now: number) => {
+      const target = el.scrollHeight - el.clientHeight;
+      const remaining = target - el.scrollTop;
+      if (!pinned.current || remaining <= 0.5) {
+        if (pinned.current) el.scrollTop = target;
+        stopFollow();
+        reportBottom();
+        return;
+      }
+      el.scrollTop += remaining * followProgress(now - last);
+      last = now;
+      followFrame.current = requestAnimationFrame(step);
+    };
+    followFrame.current = requestAnimationFrame(step);
+  }, [reportBottom]);
+  useEffect(() => () => stopFollow(), []);
+
   /** Re-apply pin / anchor after anything changed geometry. */
-  const settle = useCallback(() => {
+  const settle = useCallback((instant = false) => {
     const el = scroller.current;
     if (!el) return;
-    if (pinned.current) {
-      el.scrollTop = el.scrollHeight;
+    if (applyUnreadEntry()) {
+      // Held on the first new message.
+    } else if (pinned.current) {
+      const settling = performance.now() - mountedAt.current < ENTRY_SETTLE_MS;
+      if (instant || settling) { stopFollow(); el.scrollTop = el.scrollHeight; } else followBottom();
     } else if (anchor.current) {
       const node = rowElement(anchor.current.key);
       if (node) {
@@ -102,10 +198,33 @@ function ChatScrollerInner<Row extends ScrollerRow>(
       }
     }
     reportBottom();
-  }, [topInset, reportBottom]);
+  }, [topInset, reportBottom, applyUnreadEntry, followBottom]);
+
+  // New rows at the end enter from their side (once): not on entry, not
+  // older pages, and not a row that only changed identity (sending → sent,
+  // streaming → landed), which keeps its place.
+  const previousKeys = useRef<string[] | null>(null);
+  useLayoutEffect(() => {
+    const keys = rows.map((r) => r.key);
+    const before = previousKeys.current;
+    previousKeys.current = keys;
+    if (!before || !entranceSide) return;
+    for (const key of newTailKeys(before, keys)) {
+      const row = rows.find((r) => r.key === key);
+      const side = row ? entranceSide(row) : null;
+      const node = side ? rowElement(key) : null;
+      if (!node) continue;
+      node.classList.remove('kenter-left', 'kenter-right');
+      void node.offsetWidth;
+      node.classList.add(side === 'left' ? 'kenter-left' : 'kenter-right');
+      node.addEventListener('animationend', () => node.classList.remove('kenter-left', 'kenter-right'), { once: true });
+    }
+  }, [rows, entranceSide]);
 
   // Rows changed: restore before the browser paints.
-  useLayoutEffect(() => { settle(); }, [rows, bottomInset, settle]);
+  useLayoutEffect(() => { settle(); }, [rows, settle]);
+  // The composer changed height: keep the bottom in place at once.
+  useLayoutEffect(() => { settle(true); }, [bottomInset, settle]);
 
   // Size changes inside rows (images, fonts, highlighted code, streaming).
   useLayoutEffect(() => {
@@ -121,31 +240,38 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     if (!el) return;
     const onScrollEvent = () => {
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (!programmatic.current) pinned.current = distance <= PIN_THRESHOLD;
+      if (!programmatic.current && !following.current) pinned.current = distance <= PIN_THRESHOLD;
       captureAnchor();
       reportBottom();
       if (el.scrollTop < NEAR_TOP) callbacks.current.onNearTop?.();
       callbacks.current.onScroll?.();
     };
-    // A user gesture always takes over from a programmatic glide.
-    const onUser = () => { programmatic.current = false; };
+    // A user gesture always takes over from a programmatic glide, and from
+    // the unread-entry landing.
+    const onUser = () => { programmatic.current = false; stopFollow(); endUnreadEntry(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End', ' '].includes(e.key)) onUser();
+    };
     el.addEventListener('scroll', onScrollEvent, { passive: true });
     el.addEventListener('wheel', onUser, { passive: true });
     el.addEventListener('touchstart', onUser, { passive: true });
     el.addEventListener('pointerdown', onUser, { passive: true });
+    el.addEventListener('keydown', onKey);
     return () => {
       el.removeEventListener('scroll', onScrollEvent);
       el.removeEventListener('wheel', onUser);
       el.removeEventListener('touchstart', onUser);
       el.removeEventListener('pointerdown', onUser);
+      el.removeEventListener('keydown', onKey);
     };
   }, [captureAnchor, reportBottom]);
 
-  // Open at the newest edge.
+  // Open at the newest edge (or the first new message, see settle).
   useLayoutEffect(() => {
     pinned.current = true;
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
+    settle();
   }, []);
 
   const glide = (top: number, smooth: boolean) => {
@@ -163,6 +289,8 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     scrollToBottom: (smooth) => {
       const el = scroller.current;
       if (!el) return;
+      stopFollow();
+      endUnreadEntry();
       pinned.current = true;
       glide(el.scrollHeight, smooth);
     },
@@ -170,6 +298,8 @@ function ChatScrollerInner<Row extends ScrollerRow>(
       const el = scroller.current;
       const node = rowElement(key);
       if (!el || !node) return;
+      stopFollow();
+      endUnreadEntry();
       pinned.current = false;
       const delta = node.getBoundingClientRect().top - (el.getBoundingClientRect().top + topInset + 8);
       glide(el.scrollTop + delta, smooth);

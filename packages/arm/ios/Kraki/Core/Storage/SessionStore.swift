@@ -435,13 +435,25 @@ final class SessionStore {
     /// view renders this string in the error state.
     var pendingSessionErrors: [String: String] = [:]
 
-    /// Snapshot of "was this session unread when we opened it?",
-    /// captured synchronously by `SessionDetailView` before it
-    /// schedules markRead. Lets `ChatView`'s R3 entry-scroll branch
-    /// on the original unread state even though markRead runs first.
-    /// ChatView consumes (and clears) the entry it owns at the start
-    /// of `performEntryScroll`.
-    var entryUnreadSnapshots: [String: Bool] = [:]
+    /// The read position (readSeq) a Session was entered with, when it had
+    /// new messages (red dot) or was opened from a notification. The chat
+    /// lands on the first message after it (ChatScrollPolicy.UnreadEntry).
+    /// Captured before the entry marks the Session read; written or cleared on
+    /// every entry, so it never carries over to a later one.
+    var entryUnreadBoundaries: [String: Int] = [:]
+    /// Sessions about to be opened from a notification tap. A cold start's
+    /// cached list may not know yet that the Session has new messages.
+    var notificationEntrySessions: Set<String> = []
+
+    func captureEntryUnreadBoundary(_ id: String) {
+        let fromNotification = notificationEntrySessions.remove(id) != nil
+        guard let session = sessions[id], session.readSeq > 0,
+              isUnread(id) || fromNotification else {
+            entryUnreadBoundaries.removeValue(forKey: id)
+            return
+        }
+        entryUnreadBoundaries[id] = session.readSeq
+    }
 
     /// Sessions currently fetching messages from tentacle (per-session
     /// in-flight set). Maintained by MessageProvider; views read it to
@@ -1151,7 +1163,8 @@ final class SessionStore {
         sessionListRevealId = nil
         loadingSessions.removeAll()
         loadFailedSessions.removeAll()
-        entryUnreadSnapshots.removeAll()
+        entryUnreadBoundaries.removeAll()
+        notificationEntrySessions.removeAll()
         lastSessionListSnapshotAt.removeAll()
         clearPersistentSnapshot()
     }

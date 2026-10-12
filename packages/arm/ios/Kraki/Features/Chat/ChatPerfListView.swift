@@ -332,6 +332,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// anchoring, and animation; entry/follow/intent/paging rules are identical
     /// to the AppKit adapter through this platform-neutral state machine.
     private var scrollPolicy = ChatScrollPolicy()
+    /// Read position this Session was entered with (new messages / notification).
+    private let unreadEntryBoundary: Int?
+    /// The first new message held under the top glass (UnreadEntry.anchored).
+    private var unreadAnchorID: String?
     private var followingBottom: Bool { scrollPolicy.followingTail }
     private var entryBottomLocked: Bool { scrollPolicy.entryBottomLocked }
     private var allowsEdgePaging: Bool { scrollPolicy.allowsEdgePaging }
@@ -398,9 +402,11 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         self.onOpenImage = onOpenImage
         self.onOpenHTMLArtifact = onOpenHTMLArtifact
         self.vm = ChatViewModel(sessionId: sessionId, appState: appState)
+        self.unreadEntryBoundary = appState.sessionStore.entryUnreadBoundaries[sessionId]
         self.appState = appState
         self.store = appState.messageStore
         super.init(nibName: nil, bundle: nil)
+        scrollPolicy.resetForEntry(unreadBoundary: unreadEntryBoundary)
         sizer.sessionId = sessionId
         sizer.agent = agent
         sizer.contentBuilder = { [weak self] message in
@@ -781,7 +787,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         logEntryState("layout")
         guard collectionView != nil,
               didInitialScroll,
-              (entryBottomLocked || followingBottom),
+              (entryBottomLocked || followingBottom || scrollPolicy.unreadEntry == .anchored),
               !scrollingTowardOlder,
               !isPinningBottom else { return }
         let viewportChanged = collectionView.bounds.size != lastPinnedViewportSize
@@ -1694,6 +1700,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// conversation, regardless of where the reader was. The optimistic bubble
     /// is materialized first so the glide lands on it.
     func returnToNewestAfterLocalSubmit() {
+        scrollPolicy.cancelUnreadEntry()
         navigationLoadTask?.cancel()
         navigationLoadInFlight = false
         syncLiveUpdates()
@@ -2041,6 +2048,12 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// "first visible row" as the anchor made every correction of that (often
     /// partially visible, still estimated) row shift everything being read.
     private func readingAnchor(excluding changing: Set<String> = []) -> (IndexPath, CGFloat)? {
+        // Landed on the first new message: it is what the reader is reading,
+        // so height corrections above it must not move it.
+        if scrollPolicy.unreadEntry == .anchored, let index = heldUnreadIndex(),
+           let frame = collectionView.layoutAttributesForItem(at: IndexPath(item: index, section: 0))?.frame {
+            return (IndexPath(item: index, section: 0), frame.minY)
+        }
         let top = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
         let bottom = collectionView.contentOffset.y + collectionView.bounds.height
             - collectionView.adjustedContentInset.bottom
@@ -2863,6 +2876,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
     private func pinToBottom(reason: String, animated: Bool = false) {
         guard collectionView.numberOfItems(inSection: 0) > 0 else { return }
+        if !animated, landOnFirstUnreadIfNeeded(reason: reason) { return }
         isPinningBottom = true
         collectionView.layoutIfNeeded()
         let minY = -collectionView.adjustedContentInset.top
@@ -2886,8 +2900,111 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
 
     private func scrollToBottom(animated: Bool) {
+        scrollPolicy.cancelUnreadEntry()
         pinToBottom(reason: "explicit", animated: animated)
     }
+
+    /// Entered with new messages and the user hasn't scrolled: every entry pin
+    /// asks whether the first new message's start would still be readable at
+    /// the tail. Once it isn't (on entry, when a cold start's sync lands, or as
+    /// a reply streams), that start is held at the top instead and the list
+    /// stops following — the same landing ↑ uses (ChatScrollPolicy.UnreadEntry).
+    private func landOnFirstUnreadIfNeeded(reason: String) -> Bool {
+        guard !items.isEmpty, collectionView.bounds.width > 0 else { return false }
+        if scrollPolicy.unreadEntry == .anchored {
+            // Held: an entry pin (layout, a near-tail re-pin, arrivals) keeps
+            // the first new message where it is instead of going to the tail.
+            guard let index = heldUnreadIndex() else { return false }
+            collectionView.layoutIfNeeded()
+            guard let frame = collectionView.layoutAttributesForItem(at: IndexPath(item: index, section: 0))?.frame
+            else { return false }
+            let landing = landingOffset(forRowStart: frame.minY)
+            if landing >= maximumOffsetY() - 1, let boundary = unreadEntryBoundary {
+                // Measured: it fits after all. Follow the tail again.
+                scrollPolicy.releaseUnreadAnchor(boundary: boundary)
+                unreadAnchorID = nil
+                return false
+            }
+            if abs(collectionView.contentOffset.y - landing) > 0.5 {
+                isPinningBottom = true
+                collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: landing), animated: false)
+                isPinningBottom = false
+            }
+            scrollPolicy.rememberOffset(landing)
+            lastPinnedViewportSize = collectionView.bounds.size
+            lastPinnedAdjustedInsets = collectionView.adjustedContentInset
+            return true
+        }
+        guard let boundary = scrollPolicy.unreadEntryBoundary else { return false }
+        let rows = items.map { id -> (id: String, seq: Int?) in
+            guard let message = message(id), message.seq > 0 else { return (id, nil) }
+            return (id, message.seq)
+        }
+        guard let targetID = ChatScrollPolicy.firstUnreadRow(rows, after: boundary),
+              let index = items.firstIndex(of: targetID) else { return false }
+        // Exact heights for the first new message and the screen below it, so
+        // "does it fit" is decided on real geometry. Not inside a layout pass.
+        if reason != "layout" {
+            let width = collectionView.bounds.width
+            sizer.prepare(width: width)
+            var changed = false
+            var covered: CGFloat = 0
+            var i = index
+            while i < items.count, covered < collectionView.bounds.height * 1.2 {
+                if let row = message(items[i]) {
+                    if sizer.cached(row.id) == nil {
+                        sizer.prime(row, width: width, notify: false)
+                        appliedHeightIDs.insert(row.id)
+                        changed = true
+                    }
+                    covered += sizer.cached(row.id) ?? 0
+                } else {
+                    covered += 200
+                }
+                i += 1
+            }
+            if changed {
+                let context = UICollectionViewFlowLayoutInvalidationContext()
+                context.invalidateFlowLayoutDelegateMetrics = true
+                context.invalidateFlowLayoutAttributes = true
+                collectionView.collectionViewLayout.invalidateLayout(with: context)
+            }
+        }
+        collectionView.layoutIfNeeded()
+        guard let frame = collectionView.layoutAttributesForItem(at: IndexPath(item: index, section: 0))?.frame,
+              let landing = ChatScrollPolicy.unreadEntryLanding(
+                rowStartLanding: landingOffset(forRowStart: frame.minY),
+                tailOffset: maximumOffsetY()
+              ) else { return false }
+        isPinningBottom = true
+        collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: landing), animated: false)
+        isPinningBottom = false
+        scrollPolicy.anchorAtFirstUnread(offset: landing)
+        unreadAnchorID = targetID
+        lastPinnedViewportSize = collectionView.bounds.size
+        lastPinnedAdjustedInsets = collectionView.adjustedContentInset
+        KLog.chat("📌 [chat-entry] first-unread session=\(sessionId.prefix(12)) reason=\(reason) boundary=\(boundary) row=\(targetID.prefix(16)) landing=\(Int(landing)) tail=\(Int(maximumOffsetY()))")
+        updateJumpButtonVisibility()
+        return true
+    }
+
+    /// The held first new row. A turn that concludes folds its mid-turn
+    /// messages into Steps: then the first new row still shown takes over.
+    private func heldUnreadIndex() -> Int? {
+        if let id = unreadAnchorID, let index = items.firstIndex(of: id) { return index }
+        guard let boundary = unreadEntryBoundary else { return nil }
+        let rows = items.map { id -> (id: String, seq: Int?) in
+            guard let message = message(id), message.seq > 0 else { return (id, nil) }
+            return (id, message.seq)
+        }
+        guard let id = ChatScrollPolicy.firstUnreadRow(rows, after: boundary) else { return nil }
+        unreadAnchorID = id
+        return items.firstIndex(of: id)
+    }
+
+    #if DEBUG
+    var automationUnreadEntry: ChatScrollPolicy.UnreadEntry { scrollPolicy.unreadEntry }
+    #endif
 
     // MARK: Scroll-driven pagination
 

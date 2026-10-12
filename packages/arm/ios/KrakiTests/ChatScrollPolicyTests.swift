@@ -291,4 +291,56 @@ final class ChatScrollPolicyTests: XCTestCase {
 
         XCTAssertEqual(policy, ChatScrollPolicy())
     }
+
+    // MARK: Unread entry (red dot / notification)
+
+    func testFirstUnreadRowIsTheLowestSeqAfterTheReadPosition() {
+        let rows: [(id: String, seq: Int?)] = [("a", 10), ("b", 11), ("live", nil), ("c", 12)]
+        XCTAssertEqual(ChatScrollPolicy.firstUnreadRow(rows, after: 10), "b")
+        XCTAssertNil(ChatScrollPolicy.firstUnreadRow(rows, after: 12), "nothing new loaded: stay at the tail")
+        XCTAssertNil(ChatScrollPolicy.firstUnreadRow([("live", nil)], after: 0))
+    }
+
+    func testLandsOnTheFirstUnreadOnlyWhenItsStartIsNotReadableAtTheTail() {
+        // The new part fits: its start lands at or below the tail offset.
+        XCTAssertNil(ChatScrollPolicy.unreadEntryLanding(rowStartLanding: 900, tailOffset: 900))
+        XCTAssertNil(ChatScrollPolicy.unreadEntryLanding(rowStartLanding: 899.5, tailOffset: 900))
+        // Longer than a screen: land on its start.
+        XCTAssertEqual(ChatScrollPolicy.unreadEntryLanding(rowStartLanding: 400, tailOffset: 900), 400)
+    }
+
+    func testUnreadEntryIsArmedOnlyForThatEntryAndEndsWithTheUser() {
+        var policy = ChatScrollPolicy()
+        XCTAssertEqual(policy.unreadEntry, .none)
+        policy.resetForEntry(unreadBoundary: 41)
+        XCTAssertEqual(policy.unreadEntryBoundary, 41)
+        XCTAssertTrue(policy.entryBottomLocked)
+
+        policy.anchorAtFirstUnread(offset: 300)
+        XCTAssertEqual(policy.unreadEntry, .anchored)
+        XCTAssertFalse(policy.entryBottomLocked, "held at the first new message, not the tail")
+        XCTAssertFalse(policy.followingTail, "new arrivals must not pull the reader away")
+        XCTAssertFalse(policy.shouldFollowTail(distanceToBottom: 900))
+        XCTAssertFalse(policy.allowsEdgePaging, "no paging until the user scrolls")
+
+        policy.observeUserOffset(310, distanceToBottom: 800)
+        XCTAssertEqual(policy.unreadEntry, .none)
+        XCTAssertTrue(policy.allowsEdgePaging)
+
+        policy.resetForEntry(unreadBoundary: nil)
+        XCTAssertEqual(policy.unreadEntry, .none, "a read Session opens at the tail")
+    }
+
+    func testSendingOrGoingToTheTailCancelsTheUnreadLanding() {
+        var policy = ChatScrollPolicy()
+        policy.resetForEntry(unreadBoundary: 5)
+        policy.cancelUnreadEntry()
+        XCTAssertNil(policy.unreadEntryBoundary)
+        policy.resetForEntry(unreadBoundary: 5)
+        policy.beginTailNavigation(offset: 0, distanceToBottom: 500)
+        XCTAssertEqual(policy.unreadEntry, .none)
+        policy.resetForEntry(unreadBoundary: 5)
+        policy.beginLatestMessageStartNavigation()
+        XCTAssertEqual(policy.unreadEntry, .none)
+    }
 }

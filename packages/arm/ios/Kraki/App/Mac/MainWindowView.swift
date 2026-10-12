@@ -379,6 +379,9 @@ struct MainWindowView: View {
             let scope = note.userInfo?["scope"] as? String
             guard scope == selectionNotificationScope else { return }
             if let sid = note.userInfo?["sessionId"] as? String {
+                if note.userInfo?["fromNotification"] as? Bool == true {
+                    appState.sessionStore.notificationEntrySessions.insert(sid)
+                }
                 selectedSessionId = sid
             }
         }
@@ -585,6 +588,9 @@ struct MainWindowView: View {
         // view consumes this prepared transaction and never opens the Session a
         // second time with stale @State from the previous selection.
         _ = appState.messageProvider?.openSession(id, reanchorLatest: true)
+        // Before this entry marks the Session read: the chat lands on the
+        // first new message (ChatScrollPolicy.UnreadEntry).
+        appState.sessionStore.captureEntryUnreadBoundary(id)
         let nextViewModel = ChatViewModel(sessionId: id, appState: appState)
         nextViewModel.refreshMessageCache()
         let generation = (chatPresentation?.generation ?? 0) &+ 1
@@ -614,7 +620,6 @@ struct MainWindowView: View {
             "🧭 [MacChat presentation] generation=\(generation) session=\(id.prefix(12)) "
                 + "bottom=\(entryBottom) dbLast=\(entryDBLast) expected=\(entryExpected)"
         )
-        appState.sessionStore.entryUnreadSnapshots.removeValue(forKey: id)
         appState.markSessionReadIfVisible(id)
     }
 

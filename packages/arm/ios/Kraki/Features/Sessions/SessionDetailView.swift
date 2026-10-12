@@ -86,11 +86,9 @@ struct SessionDetailView: View {
             // no-op if warm-up already covered this session or if the
             // disk cache already reaches head.
             appState.messageProvider?.ensureLoaded(sessionId: sessionId, reason: "openSession")
-            // Snapshot unread state SYNCHRONOUSLY (before scheduling any
-            // Task) so ChatView's R3 entry-scroll sees the original value
-            // even though markRead's Task may run before ChatView's .task
-            // body fires.
-            sessionStore.entryUnreadSnapshots[sessionId] = sessionStore.isUnread(sessionId)
+            // Capture the read position SYNCHRONOUSLY, before markRead below:
+            // the chat lands on the first new message (ChatScrollPolicy).
+            sessionStore.captureEntryUnreadBoundary(sessionId)
             // Defer markRead one runloop turn so ChatView's entry-scroll
             // task can snapshot the unread state before it's cleared.
             Task { @MainActor in

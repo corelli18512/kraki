@@ -12,6 +12,7 @@ import { Composer, composerIntent, type ComposerHandle, type ComposerIntent } fr
 import type { PermissionDecision } from './ActionSlot';
 import { StepsModal } from './StepsModal';
 import { ChatScroller, type ChatScrollerHandle } from './ChatScroller';
+import { captureEntryBoundary, firstUnreadKey } from '../../lib/chat/unread-entry';
 import './chat.css';
 
 const EMPTY: ChatMessage[] = [];
@@ -123,12 +124,27 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const visibleRows = useMemo(() => rows.slice(Math.max(0, rows.length - windowSize)), [rows, windowSize]);
   const hiddenAbove = rows.length - visibleRows.length;
 
-  // New session: fresh index space, open at the bottom.
+  // Entered with new messages: the read position, captured on this entry's
+  // first render — before SessionPage's effect marks the Session read.
+  const entry = useRef<{ sessionId: string; boundary: number | null } | null>(null);
+  if (entry.current?.sessionId !== sessionId) {
+    entry.current = { sessionId, boundary: captureEntryBoundary(sessionId) };
+  }
+  const [unreadEntryLive, setUnreadEntryLive] = useState(true);
+  useEffect(() => { setUnreadEntryLive(true); }, [sessionId]);
+  const entryBoundary = unreadEntryLive ? entry.current.boundary : null;
+  const unreadTarget = useMemo(() => (entryBoundary === null ? null : firstUnreadKey(
+    visibleRows.map((r) => ({ key: r.key, seq: r.kind === 'spine' ? seqOf(r.item.message) : undefined })),
+    entryBoundary,
+  )), [visibleRows, entryBoundary]);
+
+  // New session: fresh index space. Where it opens (the newest edge, or the
+  // first new message) is reported by its own scroller, which is recreated
+  // per Session and reports during layout — before this effect would run,
+  // so resetting "at bottom" here would overwrite a first-new-message landing.
   useEffect(() => {
     setWindowSize(WINDOW_START);
     setUnseen(false);
-    setAtBottom(true);
-    atBottomRef.current = true;
   }, [sessionId]);
 
   // A reply that lands while the reader is away marks ↓ with a dot.
@@ -161,6 +177,13 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const afterSubmit = useCallback(() => {
     requestAnimationFrame(() => scrollToBottom(true));
   }, [scrollToBottom]);
+
+  // New bubbles enter from their side; older pages and the live → landed
+  // handoff do not (ChatScroller.newTailKeys).
+  const entranceSide = useCallback((row: ChatRow) => {
+    const side = rowSide(row);
+    return side === 'user' ? 'right' : side === 'agent' ? 'left' : null;
+  }, []);
 
   // ── Older pages ──
   const lowSeq = lowestSeq(messages);
@@ -257,6 +280,9 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
         }}
         onNearTop={loadOlder}
         onScroll={measureUp}
+        unreadTarget={entry.current.boundary === null ? undefined : unreadTarget}
+        onUnreadEntryEnd={() => setUnreadEntryLive(false)}
+        entranceSide={entranceSide}
       />
       {rows.length === 0 && (
         <div className="kchat-empty" style={{ paddingTop: topInset }}>

@@ -733,6 +733,13 @@ final class MacChatDocumentView: NSView {
         return itemFrames[index]
     }
 
+    /// The first loaded row after a read position (lowest seq above it).
+    func firstItem(afterSeq boundary: Int) -> (key: String, frame: NSRect)? {
+        let index = indexBySeq.compactMap { $0.key > boundary ? $0.value : nil }.min()
+        guard let index, index < itemFrames.count, index < itemKeys.count else { return nil }
+        return (itemKeys[index], itemFrames[index])
+    }
+
     func latestItemFrame() -> NSRect? {
         itemFrames.last
     }
@@ -2767,9 +2774,12 @@ final class MacChatScrollView: MacSmoothScrollView {
         }
     }
 
-    func prepareForSession(_ sessionId: String) {
+    func prepareForSession(_ sessionId: String, unreadBoundary: Int? = nil) {
         guard representedSessionId != sessionId else { return }
         representedSessionId = sessionId
+        unreadEntryKey = nil
+        heldUnreadBoundary = nil
+        pendingUnreadBoundary = unreadBoundary
         presentationEpoch += 1
         diagnosticWindowTop = 0
         diagnosticWindowBottom = 0
@@ -2802,7 +2812,8 @@ final class MacChatScrollView: MacSmoothScrollView {
         jumpButtonVisibilityGenerations.removeAll(keepingCapacity: true)
         snapshotApplyActive = false
         suppressRunwayForNextReflect = false
-        scrollPolicy.resetForEntry()
+        scrollPolicy.resetForEntry(unreadBoundary: pendingUnreadBoundary)
+        pendingUnreadBoundary = nil
         sendTailLock = false
         hasUserScrolled = false
         initialTailTrimRequested = false
@@ -2968,21 +2979,40 @@ final class MacChatScrollView: MacSmoothScrollView {
             ?? chatDocumentView.visibleAnchor(at: viewport.minY)
         let anchor = geometryAnchorForMutation(fallback: fallbackAnchor)
         let oldHeight = chatDocumentView.frame.height
+        let oldLatestHeight = chatDocumentView.latestItemFrame()?.height ?? 0
         if restartWarmup {
             chatDocumentView.endScrollInteraction(in: viewport)
         } else {
-            // Growth commits immediately (as on iOS): the pinned tail follows in
-            // the same frame. Animating the frame toward each new height left
-            // the newest lines clipped while tokens kept arriving.
+            // Growth commits immediately (as on iOS): the bubble frame is
+            // always exact, so its newest lines are never clipped.
             guard chatDocumentView.commitWarmedHeights() else { return }
         }
         let heightDelta = chatDocumentView.frame.height - oldHeight
-        if (followingBottom || isEntryBottomLocked) && !bottomGlideActive, abs(heightDelta) > 0.5 {
-            contentView.bounds.origin.y += heightDelta
+        let following = (followingBottom || isEntryBottomLocked) && !bottomGlideActive
+        // The newest bubble growing (a streamed line): the conversation glides
+        // up to it instead of jumping a line in one frame. Rows above changing
+        // height are compensated at once — that keeps what is on screen still.
+        let tailGrowth = MacTailMotion.tailGrowth(
+            documentDelta: heightDelta,
+            latestHeightDelta: (chatDocumentView.latestItemFrame()?.height ?? 0) - oldLatestHeight
+        )
+        if following, abs(heightDelta) > 0.5 {
+            contentView.bounds.origin.y += heightDelta - tailGrowth
+            if tailGrowth > 0.5, hasPresentedFirstFrame {
+                followTailSmoothly()
+            } else {
+                contentView.bounds.origin.y += tailGrowth
+            }
+        } else if (followingBottom || isEntryBottomLocked) && bottomGlideActive {
+            // Gliding to the bottom already. A new line restarts the glide from
+            // where it is now: re-targeting a nearly finished glide would cover
+            // the whole line in its last frames (a jump).
+            if tailGrowth > 0.5 { followTailSmoothly() }
         } else if let anchor,
                   let frame = chatDocumentView.frame(forKey: anchor.key) {
             contentView.bounds.origin.y = frame.minY + anchor.delta
         }
+        applyUnreadEntryAfterGeometryChange()
         super.reflectScrolledClipView(contentView)
         adoptStableGeometryAnchorIfNeeded()
     }
@@ -2994,6 +3024,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         if (followingBottom || isEntryBottomLocked) && !bottomGlideActive {
             contentView.bounds.origin.y += delta
         }
+        applyUnreadEntryAfterGeometryChange()
         chatDocumentView.layoutSubtreeIfNeeded()
         super.reflectScrolledClipView(contentView)
         updateJumpButtonVisibility(animated: false)
@@ -3046,7 +3077,9 @@ final class MacChatScrollView: MacSmoothScrollView {
             max(0, contentSize.height - topContentInset)
         )
         onFirstUsableLayout?()
-        if isEntryBottomLocked, distanceToBottom > 0.5 {
+        // Never cut a running glide to the bottom short: pinning here jumped to
+        // the bottom for one frame, then the glide's next frame jumped back.
+        if isEntryBottomLocked, !bottomGlideActive, distanceToBottom > 0.5 {
             let bottom = max(
                 -topContentInset,
                 chatDocumentView.frame.height - contentView.bounds.height
@@ -3076,6 +3109,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     /// Anything submitted from the composer is a new message (as on iOS):
     /// return to the newest edge so the user sees what they just sent.
     func returnToNewestAfterLocalSubmit() {
+        scrollPolicy.cancelUnreadEntry()
         sendTailLock = true
         jumpTapped()
         // The controls must not ride over the message being sent: ↓ goes now
@@ -3557,6 +3591,7 @@ final class MacChatScrollView: MacSmoothScrollView {
             clipView.bounds.origin.y += anchorShift
             super.reflectScrolledClipView(clipView)
         }
+        if clipView === contentView { applyUnreadEntryAfterGeometryChange() }
         if isScrollInteractionActive {
             // Prefetch as soon as a live trackpad/wheel gesture reaches the
             // edge. Waiting for didEndLiveScroll makes long momentum gestures
@@ -3815,9 +3850,108 @@ final class MacChatScrollView: MacSmoothScrollView {
         }
     }
 
+    // MARK: Unread entry (ChatScrollPolicy.UnreadEntry, same rule as iPhone)
+
+    private var pendingUnreadBoundary: Int?
+    /// The first new message whose start is held at the top.
+    private var unreadEntryKey: String?
+    private var heldUnreadBoundary: Int?
+
+    /// Entered with new messages and the user hasn't scrolled: an entry pin
+    /// lands on the first new message's start when it wouldn't be readable at
+    /// the tail, and keeps holding it there while heights settle.
+    private var applyingUnreadEntry = false
+
+    /// After a height change was added to the offset directly (streaming
+    /// growth, warmed heights): check the landing again in the same step.
+    private func applyUnreadEntryAfterGeometryChange() {
+        guard scrollPolicy.unreadEntry != .none else { return }
+        _ = landOnFirstUnreadIfNeeded()
+    }
+
+    private func landOnFirstUnreadIfNeeded() -> Bool {
+        guard !applyingUnreadEntry else { return false }
+        applyingUnreadEntry = true
+        defer { applyingUnreadEntry = false }
+        let tail = max(-topContentInset, chatDocumentView.frame.height - contentView.bounds.height)
+        switch scrollPolicy.unreadEntry {
+        case .none:
+            return false
+        case .anchored:
+            // A concluded turn folds its mid-turn messages into Steps: then
+            // the first new row still shown takes over.
+            var frame = unreadEntryKey.flatMap { chatDocumentView.frame(forKey: $0) }
+            if frame == nil, let boundary = heldUnreadBoundary,
+               let first = chatDocumentView.firstItem(afterSeq: boundary) {
+                unreadEntryKey = first.key
+                frame = first.frame
+            }
+            guard let frame else { return false }
+            let held = landingOffset(forRowStart: frame.minY)
+            if held >= tail - 1, let boundary = heldUnreadBoundary {
+                // Measured: it fits after all. Follow the tail again.
+                scrollPolicy.releaseUnreadAnchor(boundary: boundary)
+                unreadEntryKey = nil
+                return false
+            }
+            cancelScrollAnimation()
+            contentView.bounds.origin.y = held
+        case .armed(let boundary):
+            guard let first = chatDocumentView.firstItem(afterSeq: boundary),
+                  let landing = ChatScrollPolicy.unreadEntryLanding(
+                    rowStartLanding: landingOffset(forRowStart: first.frame.minY),
+                    tailOffset: tail
+                  ) else { return false }
+            cancelScrollAnimation()
+            contentView.bounds.origin.y = landing
+            unreadEntryKey = first.key
+            heldUnreadBoundary = boundary
+            scrollPolicy.anchorAtFirstUnread(offset: landing)
+            KLog.chat("📌 [chat-entry] first-unread session=\(representedSessionId?.prefix(12) ?? "") boundary=\(boundary) row=\(first.key.prefix(16)) landing=\(Int(landing)) tail=\(Int(tail))")
+        }
+        scrollPolicy.rememberOffset(contentView.bounds.minY)
+        updateJumpButtonVisibility(animated: false)
+        super.reflectScrolledClipView(contentView)
+        return true
+    }
+
+    #if DEBUG
+    var automationUnreadEntry: ChatScrollPolicy.UnreadEntry { scrollPolicy.unreadEntry }
+    #endif
+
+    /// The newest bubble grew while the bottom is followed: the conversation
+    /// eases toward the bottom every frame (one continuous motion that keeps
+    /// re-targeting while lines keep arriving, instead of restarting a glide
+    /// per line).
+    private func followTailSmoothly() {
+        guard landOnFirstUnreadIfNeeded() == false else { return }
+        if let running = scrollAnimation {
+            // Already following; or a long glide to the bottom (↓, a send)
+            // that re-targets anyway — following takes over only near the
+            // end, so the long glide is never cut into a jump.
+            if running.follow || distanceToBottom > 3 * MacTailMotion.maxLag { return }
+        }
+        animateScroll(follow: true, to: { [weak self] in
+            guard let self else { return 0 }
+            return self.chatDocumentView.frame.height - self.contentView.bounds.height
+        }, completion: { [weak self] in
+            guard let self else { return }
+            self.scrollPolicy.pinToTail(observedOffset: self.contentView.bounds.minY)
+        })
+        bottomGlideActive = true
+        scrollPolicy.pinToTail(observedOffset: contentView.bounds.minY)
+    }
+
+    /// True once the Session's first frame is on screen (entry establishment
+    /// stays instant and hidden; motion starts after that).
+    private var hasPresentedFirstFrame: Bool { alphaValue > 0.99 && window != nil }
+
     func scrollToBottom(animated: Bool) {
         geometryAnchorLock = nil
         guard chatDocumentView.frame.height > 0 else { return }
+        // Arrival glides are animated too; only ↓ and sending end the landing
+        // (they cancel it before getting here).
+        if landOnFirstUnreadIfNeeded() { return }
         // A running glide to the bottom re-targets every frame; a streaming
         // pin must not cut it short into a jump.
         if !animated, bottomGlideActive {
@@ -3859,18 +3993,20 @@ final class MacChatScrollView: MacSmoothScrollView {
     private var scrollAnimationTimer: Timer?
     private var scrollAnimation: (
         start: CFTimeInterval, duration: CFTimeInterval, from: CGFloat,
-        target: () -> CGFloat, completion: (() -> Void)?
+        target: () -> CGFloat, completion: (() -> Void)?, follow: Bool, last: CFTimeInterval
     )?
     var isProgrammaticScrollActive: Bool { scrollAnimation != nil }
 
     func animateScroll(
         duration: CFTimeInterval = 0.28,
+        follow: Bool = false,
         to target: @escaping () -> CGFloat,
         completion: (() -> Void)? = nil
     ) {
         cancelScrollAnimation()
         resetSmoothWheelAnimation()
-        scrollAnimation = (CACurrentMediaTime(), duration, contentView.bounds.minY, target, completion)
+        let now = CACurrentMediaTime()
+        scrollAnimation = (now, duration, contentView.bounds.minY, target, completion, follow, now)
         let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.advanceScrollAnimation() }
         }
@@ -3889,12 +4025,21 @@ final class MacChatScrollView: MacSmoothScrollView {
 
     private func advanceScrollAnimation() {
         guard let animation = scrollAnimation else { return }
-        let progress = min(1, (CACurrentMediaTime() - animation.start) / animation.duration)
+        let now = CACurrentMediaTime()
+        var progress = min(1, (now - animation.start) / animation.duration)
         let eased = 1 - pow(1 - progress, 3)
         let minimumY = -contentInsets.top
         let maximumY = max(minimumY, chatDocumentView.frame.height - contentView.bounds.height)
         let target = min(maximumY, max(minimumY, animation.target()))
-        let y = animation.from + (target - animation.from) * CGFloat(eased)
+        var y = animation.from + (target - animation.from) * CGFloat(eased)
+        if animation.follow {
+            let current = contentView.bounds.minY
+            let step = MacTailMotion.followStep(remaining: target - current, elapsed: now - animation.last)
+            y = current + step
+            scrollAnimation?.last = now
+            progress = abs(target - y) <= 0.5 ? 1 : 0
+            if progress >= 1 { y = target }
+        }
         geometryAnchorLock = nil
         contentView.bounds.origin = NSPoint(x: contentView.bounds.origin.x, y: y)
         reflectScrolledClipView(contentView)
@@ -3919,6 +4064,8 @@ struct MacChatListRepresentable: NSViewRepresentable {
     let liveSteps: Int
     let sessionMode: SessionMode
     let entryGeneration: Int
+    /// Read position this Session was entered with (lands on the first new message).
+    var unreadEntryBoundary: Int? = nil
     let bottomContentInset: CGFloat
     let isLoadingOlder: Bool
     let isLoadingNewer: Bool
@@ -3941,7 +4088,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
         // Do not expose the estimated top/anchor that NSScrollView starts with.
         // First usable layout performs an atomic bottom establishment below.
         scrollView.alphaValue = 0
-        scrollView.prepareForSession(sessionId)
+        scrollView.prepareForSession(sessionId, unreadBoundary: unreadEntryBoundary)
         // A compact desktop tail is enough for several screens; older history
         // is restored from SQLite when the user reaches the top edge.
         messageStore.maxWindowPx = 4_800
@@ -4019,7 +4166,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
             context.coordinator.forcePinOnNextUpdate = false
             context.coordinator.itemCache.removeAll(keepingCapacity: true)
             context.coordinator.itemCacheWidth = nil
-            scrollView.prepareForSession(sessionId)
+            scrollView.prepareForSession(sessionId, unreadBoundary: unreadEntryBoundary)
         }
         messageStore.maxWindowPx = 4_800
         messageStore.heightForSeq = { [weak documentView = scrollView.chatDocumentView] sid, seq in
@@ -4402,4 +4549,36 @@ struct MacChatListRepresentable: NSViewRepresentable {
         text?.utf8.count ?? 0
     }
 }
+
+/// Motion rules for content arriving at the followed bottom (shared by tests).
+enum MacTailMotion {
+    /// Time constant of following: ~95 % of a new line is in view after
+    /// 3 τ (0.21 s).
+    static let followTau: CFTimeInterval = 0.07
+    /// Beyond about two lines behind (a very fast stream) following speeds up
+    /// in proportion, so the newest text never drifts out of view.
+    static let maxLag: CGFloat = 40
+    /// pt/s: the end of a follow settles instead of creeping.
+    static let minimumFollowSpeed: CGFloat = 120
+
+    /// Distance to move this frame toward a bottom `remaining` away.
+    static func followStep(remaining: CGFloat, elapsed: CFTimeInterval) -> CGFloat {
+        guard abs(remaining) > 0.5 else { return remaining }
+        let distance = abs(remaining)
+        let tau = distance > maxLag ? followTau * Double((maxLag / distance).squareRoot()) : followTau
+        // After a main-thread stall, continue at the normal pace rather than
+        // catching up the whole stall in one frame (that reads as a jump).
+        let dt = max(0, min(elapsed, 1.0 / 60.0))
+        // Exponential approach, with a small minimum speed so the last
+        // fraction of a point does not linger.
+        let moved = max(distance * CGFloat(1 - exp(-dt / tau)), min(distance, minimumFollowSpeed * CGFloat(dt)))
+        return remaining < 0 ? -moved : moved
+    }
+    /// The part of a document height change caused by the newest item growing.
+    static func tailGrowth(documentDelta: CGFloat, latestHeightDelta: CGFloat) -> CGFloat {
+        guard documentDelta > 0, latestHeightDelta > 0 else { return 0 }
+        return min(documentDelta, latestHeightDelta)
+    }
+}
+
 #endif

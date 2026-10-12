@@ -205,7 +205,7 @@ extension MacNotifications: UNUserNotificationCenterDelegate {
                 NotificationCenter.default.post(
                     name: .macSelectSession,
                     object: nil,
-                    userInfo: ["sessionId": sessionId]
+                    userInfo: ["sessionId": sessionId, "fromNotification": true]
                 )
             }
         }

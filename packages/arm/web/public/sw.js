@@ -125,7 +125,9 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
   const sessionId = event.notification.data?.sessionId;
-  const path = sessionId ? `/session/${sessionId}` : '/';
+  // `from=notification`: the chat lands on the first new message even if the
+  // cached list doesn't know yet that the Session has new messages.
+  const path = sessionId ? `/session/${sessionId}?from=notification` : '/';
   const fullUrl = self.registration.scope + path.slice(1);
 
   event.waitUntil(

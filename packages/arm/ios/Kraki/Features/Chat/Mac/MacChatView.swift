@@ -506,6 +506,7 @@ struct MacChatView: View {
                 liveSteps: viewModel.lastUserStepsHint,
                 sessionMode: currentMode,
                 entryGeneration: entryGeneration,
+                unreadEntryBoundary: appState.sessionStore.entryUnreadBoundaries[viewModel.sessionId],
                 bottomContentInset: effectiveBottomInputHeight,
                 isLoadingOlder: viewModel.isLoadingOlder,
                 isLoadingNewer: viewModel.isFillingTail,
