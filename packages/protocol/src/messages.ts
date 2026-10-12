@@ -731,6 +731,17 @@ export interface AccountUsage {
 
 /** The subscription accounts this tentacle can read and their remaining quota.
  *  Sent to each app on join and broadcast whenever a reading changes. */
+/**
+ * tentacle → app (unicast, local link only): the push preview for an App on
+ * the same machine, sent alongside the Head's `notification_preview` copy.
+ * `preview` is the plaintext preview JSON (this message is itself E2E
+ * encrypted). Both copies carry the same `nid`; the App posts it once.
+ */
+export interface LocalNotificationMessage extends BaseEnvelope {
+  type: 'local_notification';
+  payload: { preview: string };
+}
+
 export interface DeviceUsageMessage extends BaseEnvelope {
   type: 'device_usage';
   payload: {
@@ -995,6 +1006,9 @@ export interface SetSessionSubscriptionMessage extends BaseEnvelope {
   type: 'set_session_subscription';
   payload: {
     sessionId: string | null;
+    /** Echoed in the ACK so the App can tell this request's answer from a
+     *  stale one (e.g. an ACK still in flight on a replaced route). */
+    requestId?: string;
   };
 }
 
@@ -1008,10 +1022,11 @@ export interface SessionLiveSnapshot {
   };
 }
 
-/** Tentacle acknowledgement and live-ready barrier for session subscription. */
+/** Tentacle acknowledgement and live-ready barrier for session subscription.
+ *  Every variant also carries the request's `requestId` when one was sent. */
 export interface SessionSubscriptionSetMessage extends BaseEnvelope {
   type: 'session_subscription_set';
-  payload:
+  payload: { requestId?: string } & (
     | {
         accepted: true;
         sessionId: string;
@@ -1029,7 +1044,7 @@ export interface SessionSubscriptionSetMessage extends BaseEnvelope {
           code: 'session_not_found';
           message: string;
         };
-      };
+      });
 }
 
 /** Sent by tentacle to app with metadata for all active sessions.
@@ -1156,6 +1171,7 @@ export type ProducerMessage =
   | ArchivedSessionListMessage
   | AttachmentDataMessage
   | DeviceUsageMessage
+  | LocalNotificationMessage
   | UsageHistoryMessage
   | DeviceUpdateStatusMessage;
 

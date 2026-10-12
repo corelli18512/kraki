@@ -381,6 +381,14 @@ final class AuthManager {
     }
 
     /// Sign a challenge nonce and send back `auth_response`.
+    /// Sign a local-link proof with this device's registered signing key.
+    /// Callers pass a domain-separated string (never a bare Head nonce).
+    func signLocalLinkProof(_ message: String) throws -> String {
+        precondition(message.hasPrefix("kraki-local-link/"), "local link proofs must be domain-separated")
+        let signingKey = try keychain.getOrCreateSigningKey()
+        return try crypto.signChallenge(message, privateKey: signingKey.privateKey)
+    }
+
     func handleAuthChallenge(nonce: String) {
         do {
             let signingKey = try keychain.getOrCreateSigningKey()

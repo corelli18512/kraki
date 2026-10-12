@@ -75,12 +75,38 @@ final class MacNotifications: NSObject {
     }
 
     /// The relay forwarded an encrypted preview (`{blob, key}` for this Mac).
-    func present(decryptedPreview json: String, appState: AppState) {
+    /// Notification ids already handled, shared by both routes (local link
+    /// and Head). Persisted so a late Head copy is still recognised after the
+    /// App restarts.
+    let deduper = NotificationDeduper(defaults: .standard)
+
+    #if DEBUG
+    /// Tests observe posts here instead of Notification Center.
+    var postHandlerForTesting: ((_ sessionId: String, _ title: String, _ body: String) -> Void)?
+    #endif
+
+    /// `route` is "link" or "head" (diagnostics only).
+    func present(decryptedPreview json: String, appState: AppState, route: String = "head") {
+        // Claim the id before any other rule. A copy skipped because the
+        // Session was on screen must also suppress the other route's copy,
+        // which can arrive much later when the user has moved on.
+        if let nid = Self.notificationId(in: json), !deduper.claim(nid) {
+            KLog.d("🔔 duplicate notification dropped nid=\(nid.prefix(8)) route=\(route)")
+            return
+        }
         guard isEnabled else { return }
         let preview = PushPreviewFormat.content(fromJSON: json)
         guard let sessionId = preview.sessionId else { return }
         if appState.isActivelyViewingSession(sessionId) { return }
+        KLog.d("🔔 notification posted route=\(route)")
         post(sessionId: sessionId, title: preview.title, body: preview.body)
+    }
+
+    static func notificationId(in json: String) -> String? {
+        guard let data = json.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let nid = object["nid"] as? String, !nid.isEmpty, nid.count <= 64 else { return nil }
+        return nid
     }
 
     private func sendTokenControl(register: Bool, appState: AppState) {
@@ -103,6 +129,12 @@ final class MacNotifications: NSObject {
     /// (`threadIdentifier`) and is round-tripped via userInfo so a click can
     /// switch Sessions in the main window.
     func post(sessionId: String, title: String, body: String) {
+        #if DEBUG
+        if let postHandlerForTesting {
+            postHandlerForTesting(sessionId, title, body)
+            return
+        }
+        #endif
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -116,6 +148,37 @@ final class MacNotifications: NSObject {
             trigger: nil
         )
         UNUserNotificationCenter.current().add(request)
+    }
+}
+
+/// Remembers recently handled notification ids (bounded, persisted).
+final class NotificationDeduper {
+    static let defaultsKey = "notifications.recentIds"
+    static let capacity = 512
+
+    private let defaults: UserDefaults
+    private var order: [String]
+    private var seen: Set<String>
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+        let stored = defaults.stringArray(forKey: Self.defaultsKey) ?? []
+        order = Array(stored.suffix(Self.capacity))
+        seen = Set(order)
+    }
+
+    /// True the first time `id` is seen; false for every later copy.
+    func claim(_ id: String) -> Bool {
+        guard !seen.contains(id) else { return false }
+        seen.insert(id)
+        order.append(id)
+        if order.count > Self.capacity {
+            let overflow = order.count - Self.capacity
+            for old in order.prefix(overflow) { seen.remove(old) }
+            order.removeFirst(overflow)
+        }
+        defaults.set(order, forKey: Self.defaultsKey)
+        return true
     }
 }
 

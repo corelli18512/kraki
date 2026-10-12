@@ -39,6 +39,10 @@ final class AppState {
     private(set) var voiceVocabularyStore = VoiceVocabularyStore()
     private(set) var preferencesManager: PreferencesManager?
     private(set) var pulseManager: PulseManager?
+    #if os(macOS)
+    /// Direct loopback route to the Tentacle on this Mac (POC). Nil in tests.
+    @ObservationIgnored private(set) var localLink: LocalLinkClient?
+    #endif
     private(set) var sessionSubscriptionController: SessionSubscriptionController!
     /// Region-advertised voice capability from the latest authenticated
     /// handshake. Nil means the microphone affordance stays hidden.
@@ -707,6 +711,9 @@ final class AppState {
         // the endpoint before E2E encryption, and unwraps inbound frames
         // after decryption.
         self.pulseManager = PulseManager(host: self)
+        #if os(macOS)
+        self.localLink = LocalLinkClient(appState: self)
+        #endif
         self.sessionSubscriptionController = SessionSubscriptionController(host: self)
 
         // Mirror the persisted credential state from disk so cold launch
@@ -1005,6 +1012,9 @@ final class AppState {
         signedOutByUser = true
         #endif
         wsClient?.disconnect()
+        #if os(macOS)
+        localLink?.stop()
+        #endif
         pulseManager?.resetForIdentityChange()
         // The old decrypt pipeline may already have queued main-actor work.
         // Retire its router as well as the transport before clearing stores.
@@ -1207,6 +1217,11 @@ final class AppState {
         // Drain any queued encrypted messages
         messageRouter?.drainQueue()
 
+        #if os(macOS)
+        localLink?.start()
+        #endif
+        sessionSubscriptionController?.resume()
+
         // Re-register push token if user has it enabled
         #if os(iOS)
         pushManager?.onAuthenticated()
@@ -1319,6 +1334,18 @@ final class AppState {
 
         do {
             let blob = try crypto.encryptToBlob(innerString, recipients: recipients)
+            #if os(macOS)
+            // The Tentacle on this Mac is reached over loopback, not the Head.
+            if let targetDeviceId, let localLink,
+               localLink.sendEncrypted(
+                   blob: blob.blob, keys: blob.keys, to: targetDeviceId,
+                   connectionScoped: connectionScoped,
+                   replayable: Self.replayableAcrossRoutes.contains(message["type"] as? String ?? "")
+               ) {
+                KLog.d("📤🔒 local link → \(targetDeviceId.prefix(12))...")
+                return true
+            }
+            #endif
             KLog.d("📤🔒 pulse → \(targetDeviceId?.prefix(12) ?? "broadcast")...")
             guard let pulseManager else { return false }
             pulseManager.sendEncrypted(
@@ -1348,12 +1375,56 @@ extension AppState: SessionSubscriptionHost {
     }
 
     func isTentacleOnline(_ tentacleId: String) -> Bool {
-        deviceStore.devices[tentacleId]?.online == true
+        #if os(macOS)
+        if localLink?.isLinked(tentacleId) == true { return true }
+        #endif
+        return deviceStore.devices[tentacleId]?.online == true
     }
 
+    /// Commands the Tentacle handles idempotently (client ids, permission ids,
+    /// absolute settings), so a copy delivered again over the Head after the
+    /// link died unconfirmed is harmless. Not here: create/fork (would create
+    /// twice), connection-scoped commands (abort, subscription), which must
+    /// not outlive their connection, and `mark_unread`, which is relative to
+    /// the read cursor: a late copy would undo a read that happened since.
+    static let replayableAcrossRoutes: Set<String> = [
+        "send_input", "approve", "deny", "always_allow",
+        "set_session_mode", "set_session_model", "rename_session", "pin_session",
+        "mark_read", "archive_session", "delete_session", "kill_session",
+    ]
+
+    #if os(macOS)
+    /// The route to `tentacleId` switched between the Head and the local link.
+    /// Like a Tentacle (re)join: drop connection-scoped subscription authority
+    /// (the Tentacle re-sends session_list on the new route, which is the new
+    /// barrier), re-declare features and re-send inputs still waiting.
+    func localLinkDidChange(tentacleId: String, linked: Bool) {
+        sessionSubscriptionController.onTentacleUnavailable(tentacleId)
+        if let store = attachmentStore {
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { store.routeChanged() }
+            } else {
+                Task { @MainActor in store.routeChanged() }
+            }
+        }
+        if linked || deviceStore.devices[tentacleId]?.online == true {
+            messageRouter?.declareClientFeatures(to: tentacleId)
+            commandSender?.resendPendingInputs(
+                deviceId: tentacleId,
+                reason: linked ? "local_link_up" : "local_link_down"
+            )
+        }
+    }
+    #endif
+
     func sendSessionSubscription(to tentacleId: String, sessionId: String?) -> Bool {
+        sendSessionSubscription(to: tentacleId, sessionId: sessionId, requestId: UUID().uuidString)
+    }
+
+    func sendSessionSubscription(to tentacleId: String, sessionId: String?, requestId: String) -> Bool {
         var payload: [String: Any] = [:]
         payload["sessionId"] = sessionId ?? NSNull()
+        payload["requestId"] = requestId
         return sendEncryptedMessage([
             "type": "set_session_subscription",
             "deviceId": deviceId ?? "",
@@ -1426,6 +1497,14 @@ extension AppState: SessionSubscriptionHost {
 
     func reportSessionSubscriptionError(_ message: String) {
         lastError = message
+    }
+
+    func tentacleRouteIsIndependent(_ tentacleId: String) -> Bool {
+        #if os(macOS)
+        return localLink?.isLinked(tentacleId) == true
+        #else
+        return false
+        #endif
     }
 }
 
@@ -1502,6 +1581,9 @@ extension AppState: PulseHost {
         }
         guard let data = try? JSONSerialization.data(withJSONObject: envelope),
               let str = String(data: data, encoding: .utf8) else { return }
+        #if os(macOS)
+        localLink?.noteHeadFrame(target: target)
+        #endif
         wsClient?.sendRaw(str)
     }
 
@@ -1524,6 +1606,24 @@ extension AppState: PulseHost {
             messageRouter?.handleRawMessage(messageData)
             return
         }
+
+        #if os(macOS)
+        // While this Mac is linked to a Tentacle, that Tentacle sends it nothing
+        // through the Head. A Head frame from it was sent before the switch and
+        // is stale. Its connection-scoped live state (deltas, card, subscription
+        // acks) would land after the link's fresh snapshot and duplicate or
+        // revert the card, so those are dropped after decryption; everything
+        // else (session_list, spine) is idempotent and still applied.
+        if let src = object["src"] as? String, let localLink, localLink.isLinked(src) {
+            localLink.noteStaleHeadFrameDropped()
+            var marked = object
+            marked[EncryptionHandler.staleRouteKey] = true
+            if let markedData = try? JSONSerialization.data(withJSONObject: marked) {
+                messageRouter?.encryptionHandler.submitForDecryption(markedData)
+            }
+            return
+        }
+        #endif
 
         // All other delivered payloads are `{blob, keys}` E2E ciphertext from a
         // tentacle. Submit to the ordered background decrypt pipeline so RSA

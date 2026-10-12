@@ -252,6 +252,17 @@ final class AttachmentStore {
         pump()
     }
 
+    /// The route to a Tentacle switched (Mac local link up/down) while the
+    /// connection itself stayed up. A chunk request in flight on the old
+    /// route will never be answered; ask again now instead of waiting for
+    /// the chunk timeout. Already-received chunks are kept.
+    @MainActor
+    func routeChanged() {
+        guard inFlight != nil else { return }
+        clearInFlight()
+        pump()
+    }
+
     /// Process an inbound `attachment_data` chunk. May be called off the
     /// main thread; state changes hop to the main actor. `paced` is the
     /// tentacle's echo that it served exactly this chunk on request.

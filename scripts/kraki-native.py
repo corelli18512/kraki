@@ -139,6 +139,9 @@ def parser() -> argparse.ArgumentParser:
     wait.add_argument("--text")
 
     sub.add_parser("shutdown")
+    call = sub.add_parser("call")
+    call.add_argument("method")
+    call.add_argument("params", nargs="?", default="{}")
     return root
 
 
@@ -210,6 +213,8 @@ def main() -> None:
         })
     elif command == "shutdown":
         method, params = "shutdown", {}
+    elif command == "call":
+        method, params = args.method, json.loads(args.params)
     else:
         raise AssertionError(command)
 

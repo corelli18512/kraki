@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Kraki Mac 本地直连 POC</title>
+<style>
+body{font:15px/1.6 -apple-system,system-ui,sans-serif;max-width:880px;margin:24px auto;padding:0 16px;color:#1d1d1f}
+h1{font-size:24px}h2{font-size:18px;margin-top:28px;border-bottom:1px solid #e5e5e5;padding-bottom:4px}
+code,pre{font:13px ui-monospace,Menlo,monospace;background:#f5f5f7;border-radius:4px}code{padding:1px 4px}pre{padding:10px;overflow:auto}
+table{border-collapse:collapse;width:100%;margin:8px 0}td,th{border:1px solid #ddd;padding:6px 8px;text-align:left;vertical-align:top}th{background:#f5f5f7}
+.ok{color:#1a7f37;font-weight:600}.muted{color:#6e6e73}
+</style></head><body>
+<h1>Kraki Mac 本地直连 POC</h1>
+<p class="muted">分支 <code>poc/mac-local-direct</code> · worktree <code>~/Documents/Repos/kraki-mac-local-direct</code> · commit <code>6d80f9ce</code>（未 push，未发版）</p>
+
+<h2>结论</h2>
+<p>Mac App 和同一台 Mac 上的 Tentacle 之间的流量，已经改成走 <code>ws://127.0.0.1</code> 直连。端到端测试用的是真实 Mac App、真实 daemon 和真实模型：会话期间<b>经 head 发给 App 的帧数是 0</b>。断链后会自动退回走 head，Tentacle 重启后会自动重新直连。</p>
+
+<h2>架构</h2>
+<pre class="mermaid">
+flowchart LR
+  App["Kraki for Mac"] -- "身份 / 设备列表 / 其他电脑 / 推送 / 语音" --> Head
+  Head --> T["本机 Tentacle"]
+  App == "本地直连 ws://127.0.0.1（E2E 密文 + Pulse）" ==> T
+</pre>
+<ul>
+<li><b>只替换传输这一跳。</b>载荷还是原来那份 E2E <code>{blob,keys}</code> 密文，App 的解密和路由代码不用改。每条连接有自己独立的一组 Pulse 流（live + bulk），直接复用 head 那一跳现成的 <code>TentaclePulse</code> / <code>PulseManager</code>。</li>
+<li><b>握手是双向签名。</b>双方各自用 head 已登记的设备密钥签名，签名内容加了专用前缀（域分隔），不会被拿去冒充 head 的 challenge 签名。只接受本账号的 App 设备，带浏览器 Origin 的连接一律拒绝。</li>
+<li><b>App 通过文件发现 Tentacle。</b>Tentacle 写入 <code>KRAKI_HOME/local-link.json</code>（权限 0600，内容是端口和 tentacleId），App 每 2 秒读一次。</li>
+<li><b>切换走的是现有的"设备重新加入"语义。</b>直连建立后，Tentacle 通过直连重新发 greeting、usage 和 session_list，这份 session_list 就是 App 新的订阅屏障。直连断开时，如果 head 还能看到这个 App，就改为通过 head 重新发一遍。</li>
+</ul>
+
+<h2>验证</h2>
+<table>
+<tr><th>场景</th><th>结果</th></tr>
+<tr><td>集成测试（真 head + 真 RelayClient + 模拟 App 同时连 head 和直连）<br><code>local-link-e2e.test.ts</code></td><td class="ok">4/4 通过；<code>packages/tests</code> 全部 59 个测试通过</td></tr>
+<tr><td>真实 Mac App（Debug，dev-local 模式，锁屏下无窗口自动化）连接隔离的本地栈</td><td class="ok">head 认证后约 16ms 完成直连握手</td></tr>
+<tr><td>真实 pi 会话（deepseek-flash）</td><td class="ok">收到回复 LOCAL-LINK-OK；Tentacle 经直连发出 13 个 payload，经 head 发给 App 0 帧</td></tr>
+<tr><td>停掉 daemon，再从新端口拉起</td><td class="ok">App 立即回退到 head；之后自动重新直连（linkUps=2）；同一会话第二轮收到 AFTER-RESTART-OK，经 head 发给 App 仍是 0 帧</td></tr>
+<tr><td>伪造签名、陌生设备、浏览器 Origin</td><td class="ok">全部被拒绝</td></tr>
+<tr><td>iOS target 构建、tentacle tsc</td><td class="ok">通过</td></tr>
+</table>
+<p class="muted">全程没碰你的正式 Kraki.app（PID 不变）、<code>~/.kraki</code> 和正式 daemon。本机 4400 端口被别的项目占着，所以本地 head 用的是 4410。</p>
+
+<h2>还没做 / 下一步</h2>
+<ul>
+<li><b>head 离线时还不能用。</b>Tentacle 这边已经支持 head 断开时继续服务直连的 App。但 App 这边要等 head 认证完才开始直连（需要设备列表来验签），而且订阅和发送都要求 <code>connectionStatus == .connected</code>。要做离线模式，需要缓存本机 Tentacle 的公钥，并对已直连的 Tentacle 放开这个限制。</li>
+<li><b>切换时有竞态。</b>切换前已经进了 head pulse 队列的帧，切换后可能还会到达。实测有 2–3 帧重传，目前无害：输入是幂等的，session_list 会重建状态。另外，通过 head 发出的旧订阅请求可能晚到，覆盖掉直连上的订阅。需要给订阅打上所走链路的标记来解决。</li>
+<li>产品化还缺：UI 上"本地直连"的标识、指标、协议版本协商，以及对 loopback 监听做一次安全评审（未认证的连接也能占用连接，有 DoS 风险）。</li>
+<li>为了能在锁屏下验证，<code>MacApp.init</code> 里加了一个仅 DEBUG 生效的兜底：没有窗口时也启动自动化驱动。</li>
+<li>Dev App 的本地缓存里多了一个测试会话（"Local link E2E"），属于 dev tentacle，不影响正式 App。</li>
+</ul>
+<p>详细设计和握手协议见 <code>docs/mac-local-link-poc.md</code>。</p>
+</body></html>

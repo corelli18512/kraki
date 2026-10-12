@@ -40,6 +40,7 @@ import { TentaclePulse, streamForType, type PulseDeliveryTarget } from './tentac
 import { CardManager } from './card-manager.js';
 import { AttachmentPacer } from './attachment-pacer.js';
 import { SleepGuard } from './sleep-guard.js';
+import { LocalLinkServer } from './local-link.js';
 
 const logger = createLogger('relay-client');
 /** Pulse-trace is OFF by default. Enable with env `KRAKI_TRACE_PULSE=1`
@@ -113,6 +114,9 @@ export interface RelayClientOptions {
   autoArchiveDays?: number;
   /** Persist a new auto-archive setting chosen from an app. */
   saveAutoArchiveDays?: (days: number) => void;
+  /** Serve same-machine Apps over a loopback link instead of the Head.
+   *  Default: on for macOS unless KRAKI_LOCAL_LINK=0; off elsewhere. */
+  localLink?: boolean;
 }
 
 export const DEFAULT_AUTO_ARCHIVE_DAYS = 14;
@@ -189,8 +193,14 @@ export class RelayClient {
   private authInfo: AuthOkMessage | null = null;
   /** Cached consumer public keys for E2E encryption (includes offline devices for pushPreview) */
   private consumerKeys = new Map<string, string>();
-  /** Device IDs of currently connected consumers. */
+  /** Device IDs of consumers the Head reports online. */
   private onlineConsumers = new Set<string>();
+  /** Registered signing keys (compact SPKI) of this account's App devices —
+   *  used to authenticate same-machine Apps on the local link. */
+  private appSigningKeys = new Map<string, string>();
+  /** Same-machine loopback transport to local Apps. Lazily started on
+   *  the first auth_ok, when this device's identity is confirmed. */
+  private localLink: LocalLinkServer | null = null;
   /** Accepted in-memory single-session subscription for each connected Arm. */
   private currentSessionByArm = new Map<string, string | null>();
   /** High-frequency live card types filtered by current session subscription. */
@@ -778,7 +788,7 @@ export class RelayClient {
       {
         now: () => Date.now(),
         sendPulseFrame: (pulseB64, target) => this.sendPulseEnvelope(pulseB64, target),
-        onDelivered: (blobB64) => this.handlePulseDelivered(blobB64),
+        onDelivered: (blobB64) => this.handlePulseDelivered(blobB64, undefined, 'head'),
       },
       `tentacle:${options.device.deviceId ?? 'local'}:${Date.now()}`,
     );
@@ -1160,6 +1170,8 @@ export class RelayClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.localLink?.stop();
+    this.localLink = null;
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -1212,6 +1224,7 @@ export class RelayClient {
       }
       this.setState('connected');
       this.onAuthenticated?.(this.authInfo);
+      this.ensureLocalLink();
       // Bring up the pulse endpoint to the relay (resume the stream).
       this.pulse.onConnected();
       // Initialize events watcher for imported sessions
@@ -1311,8 +1324,14 @@ export class RelayClient {
     if (msg.type === 'device_joined') {
       const device = msg.device as DeviceSummary;
       if (device.role === 'app') {
+        if (device.publicKey) this.appSigningKeys.set(device.id, device.publicKey);
         const key = device.encryptionKey ?? device.publicKey;
-        if (key) {
+        if (key && this.localLink?.has(device.id)) {
+          // Served over the local link; the Head joining it changes nothing
+          // for this Tentacle (its subscription lives on the local link).
+          this.onlineConsumers.add(device.id);
+          this.consumerKeys.set(device.id, key);
+        } else if (key) {
           this.consumerKeys.set(device.id, key);
           this.onlineConsumers.add(device.id);
           this.appFeatures.delete(device.id);
@@ -1330,8 +1349,10 @@ export class RelayClient {
 
     if (msg.type === 'device_left') {
       const deviceId = msg.deviceId as string;
-      this.appFeatures.delete(deviceId);
       this.onlineConsumers.delete(deviceId);
+      // Still on the local link: its features and subscription are live there.
+      if (this.localLink?.has(deviceId)) return;
+      this.appFeatures.delete(deviceId);
       this.currentSessionByArm.delete(deviceId);
       return;
     }
@@ -1340,9 +1361,11 @@ export class RelayClient {
       const deviceId = msg.deviceId as string;
       this.appFeatures.delete(deviceId);
       this.consumerKeys.delete(deviceId);
+      this.appSigningKeys.delete(deviceId);
       this.onlineConsumers.delete(deviceId);
       this.currentSessionByArm.delete(deviceId);
       this.attachmentPacer.drop(deviceId);
+      this.localLink?.disconnectPeer(deviceId, 'device_removed');
       return;
     }
 
@@ -1423,7 +1446,7 @@ export class RelayClient {
    *  Pulse resume after a Tentacle restart), which would silently stop every
    *  broadcast to a connected App until it reconnects. */
   private noteAppAlive(deviceId: string | undefined): void {
-    if (!deviceId || this.onlineConsumers.has(deviceId) || !this.consumerKeys.has(deviceId)) return;
+    if (!deviceId || this.isAppOnline(deviceId) || !this.consumerKeys.has(deviceId)) return;
     this.onlineConsumers.add(deviceId);
     if (!this.currentSessionByArm.has(deviceId)) this.currentSessionByArm.set(deviceId, null);
     this.attachmentPacer.notifyOnline(deviceId);
@@ -1520,7 +1543,9 @@ export class RelayClient {
     // session and return the bounded live-ready snapshot in the ACK.
     if (msg.type === 'set_session_subscription') {
       if (msg.payload.sessionId && isSafeId(msg.payload.sessionId)) this.unarchiveOnUse(msg.payload.sessionId);
-      this.handleSetSessionSubscription(msg.deviceId, msg.payload.sessionId);
+      const rid = (msg.payload as { requestId?: unknown }).requestId;
+      const requestId = typeof rid === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(rid) ? rid : undefined;
+      this.handleSetSessionSubscription(msg.deviceId, msg.payload.sessionId, requestId);
       return;
     }
 
@@ -3340,7 +3365,7 @@ export class RelayClient {
     this.sessionManager.appendTrace(msg.sessionId, msg.type, JSON.stringify(enriched));
   }
 
-  private handleSetSessionSubscription(requesterDeviceId: string, sessionId: string | null): void {
+  private handleSetSessionSubscription(requesterDeviceId: string, sessionId: string | null, requestId?: string): void {
     const requesterKey = this.consumerKeys.get(requesterDeviceId);
     if (!requesterKey) {
       logger.warn({ requesterDeviceId, sessionId }, 'Session subscription requested without requester key');
@@ -3354,7 +3379,7 @@ export class RelayClient {
         deviceId: this.authInfo?.deviceId ?? '',
         seq: ++this.seqCounter,
         timestamp: new Date().toISOString(),
-        payload: { accepted: true, sessionId: null, snapshot: null },
+        payload: { accepted: true, sessionId: null, snapshot: null, ...(requestId && { requestId }) },
       });
       return;
     }
@@ -3370,12 +3395,18 @@ export class RelayClient {
         payload: {
           accepted: false,
           sessionId,
+          ...(requestId && { requestId }),
           error: { code: 'session_not_found', message: 'Session not found' },
         },
       });
       return;
     }
 
+    // Flush any debounced delta first. card.state() already contains that
+    // text, so flushing it after joining would deliver it twice (in the
+    // snapshot draft and again as the delayed delta). Flushed now, it reaches
+    // only the existing subscribers.
+    this.flushDelta(sessionId);
     // Replace membership before capturing/enqueuing the ACK. Any subsequent
     // card event for this session is sent after the snapshot on stream 0.
     this.currentSessionByArm.set(requesterDeviceId, sessionId);
@@ -3390,7 +3421,7 @@ export class RelayClient {
       deviceId: this.authInfo?.deviceId ?? '',
       seq: ++this.seqCounter,
       timestamp: new Date().toISOString(),
-      payload: { accepted: true, sessionId, snapshot },
+      payload: { accepted: true, sessionId, snapshot, ...(requestId && { requestId }) },
     });
   }
 
@@ -3402,6 +3433,9 @@ export class RelayClient {
       logger.warn({ requesterDeviceId }, 'Card requested but no encryption key for requester');
       return;
     }
+    // Same reason as handleSetSessionSubscription: never snapshot text that a
+    // debounced delta is about to deliver again.
+    this.flushDelta(sessionId);
     for (const snap of this.card.snapshot(sessionId)) {
       const enriched = {
         ...snap,
@@ -3423,7 +3457,7 @@ export class RelayClient {
   /** Serializes and rate-limits attachment bytes (see AttachmentPacer). */
   private readonly attachmentPacer = new AttachmentPacer({
     chunkBytes: RelayClient.ATTACHMENT_CHUNK_BYTES,
-    isOnline: (deviceId) => this.onlineConsumers.has(deviceId),
+    isOnline: (deviceId) => this.isAppOnline(deviceId),
     sendChunk: (job, index, total, slice) => {
       const key = this.consumerKeys.get(job.deviceId);
       if (!key) return 0;
@@ -3561,11 +3595,121 @@ export class RelayClient {
   // TODO: Make send() accept a discriminated union of ProducerMessage types
   // instead of Partial<ProducerMessage> so TypeScript enforces correct payload
   // shape per message type (e.g. user_message must have payload.content).
+  // ── Local link (same-machine Apps) ────────────────────────────
+
+  private relayOpen(): boolean {
+    return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  /** Apps reachable either through the Head or over the local link. */
+  private onlineApps(): string[] {
+    const ids = new Set(this.onlineConsumers);
+    for (const id of this.localLink?.peerIds() ?? []) ids.add(id);
+    return [...ids];
+  }
+
+  private isAppOnline(deviceId: string): boolean {
+    return this.onlineConsumers.has(deviceId) || this.localLink?.has(deviceId) === true;
+  }
+
+  /** Frames this Tentacle put on the Head socket; `framesToLinkedApps` counts
+   *  frames addressed to an App that was on the local link at the time. */
+  private headTx = { frames: 0, bytes: 0, framesToLinkedApps: 0 };
+  private lastStatsLine = '';
+
+  /** Local-link counters (for diagnostics/tests); null when not running. */
+  getLocalLinkStats(): (ReturnType<LocalLinkServer['getStats']> & { head: { frames: number; bytes: number; framesToLinkedApps: number } }) | null {
+    const stats = this.localLink?.getStats();
+    return stats ? { ...stats, head: { ...this.headTx } } : null;
+  }
+
+  private logLocalLinkStats(): void {
+    const stats = this.getLocalLinkStats();
+    if (!stats) return;
+    const line = JSON.stringify(stats);
+    if (line === this.lastStatsLine) return;
+    this.lastStatsLine = line;
+    logger.info({ localLink: stats }, 'Local link stats');
+  }
+
+  private ensureLocalLink(): void {
+    if (this.localLink || !this.keyManager || !this.authInfo) return;
+    // Only Kraki for Mac connects to it, so other platforms do not listen.
+    const enabled = this.options.localLink
+      ?? (process.platform === 'darwin' && process.env.KRAKI_LOCAL_LINK !== '0');
+    if (!enabled) return;
+    const server = new LocalLinkServer({
+      tentacleId: () => this.authInfo?.deviceId,
+      privateKeyPem: () => this.keyManager?.getKeyPair().privateKey,
+      appSigningKey: (appId) => this.appSigningKeys.get(appId),
+      onPeerUp: (appId) => this.onLocalAppUp(appId),
+      onPeerDown: (appId) => this.onLocalAppDown(appId),
+      onDelivered: (appId, payloadJson) => this.onLocalDelivered(appId, payloadJson),
+    }, getKrakiHome());
+    this.localLink = server;
+    server.start().catch((err) => {
+      logger.warn({ err: (err as Error).message }, 'Local link failed to start; Apps stay on the Head');
+      if (this.localLink === server) this.localLink = null;
+    });
+  }
+
+  /** A same-machine App authenticated on the local link. Same bootstrap as a
+   *  Head `device_joined`, but routed locally: the session_list is the App's
+   *  new subscription barrier for this Tentacle. */
+  private onLocalAppUp(appId: string): void {
+    const key = this.consumerKeys.get(appId);
+    if (!key) {
+      logger.warn({ appId }, 'Local link App has no encryption key; dropping link');
+      this.localLink?.disconnectPeer(appId, 'no_key');
+      return;
+    }
+    logger.info({ appId }, 'App switched to the local link');
+    this.appFeatures.delete(appId);
+    this.currentSessionByArm.set(appId, null);
+    this.attachmentPacer.notifyOnline(appId);
+    this.sendGreetingTo(appId, key);
+    this.sendAccountUsageTo(appId, key);
+    this.sendSessionListTo(appId, key);
+  }
+
+  /** The local link dropped. If the Head still sees the App, fall back to it
+   *  with a fresh barrier; otherwise forget its connection-scoped state. */
+  private onLocalAppDown(appId: string): void {
+    this.appFeatures.delete(appId);
+    const key = this.consumerKeys.get(appId);
+    if (this.onlineConsumers.has(appId) && key && this.relayOpen()) {
+      logger.info({ appId }, 'App fell back from the local link to the Head');
+      this.currentSessionByArm.set(appId, null);
+      this.sendGreetingTo(appId, key);
+      this.sendAccountUsageTo(appId, key);
+      this.sendSessionListTo(appId, key);
+    } else {
+      this.currentSessionByArm.delete(appId);
+    }
+  }
+
+  /** The authenticated link is the sender: stamp it like the Head stamps
+   *  `src`, and never accept Head-control wrappers from an App. */
+  private onLocalDelivered(appId: string, payloadJson: string): void {
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(payloadJson);
+    } catch {
+      return;
+    }
+    if (parsed.from !== undefined) {
+      logger.warn({ appId }, 'Dropped Head-control wrapper received on the local link');
+      return;
+    }
+    parsed.src = appId;
+    this.handlePulseDelivered(JSON.stringify(parsed));
+  }
+
   private send(msg: Partial<ProducerMessage>, createsUnread = false, opts: { persist?: boolean } = {}): void {
     // Durable outcomes must reach the local spine even while the relay is
     // offline. Reconnect replay pulls from that spine; there is no event queue
     // to recover a reply discarded here. Only live-only deltas may be dropped.
-    if (msg.type === 'agent_message_delta' && (!this.ws || this.ws.readyState !== WebSocket.OPEN)) return;
+    if (msg.type === 'agent_message_delta' && !this.relayOpen() && !this.localLink?.peerIds().length) return;
 
     // Coalesce streaming card text deltas to amortize per-recipient RSA cost.
     // Skip the buffer when we're already inside a flush (the recursive send
@@ -3739,13 +3883,16 @@ export class RelayClient {
 
   /** Encrypt a producer message once for its explicit online target set. */
   private sendEncrypted(msg: Partial<ProducerMessage>): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.keyManager) return;
+    if (!this.keyManager) return;
+    // Offline from the Head, only local-link Apps are reachable.
+    const reachable = this.relayOpen() ? this.onlineApps() : (this.localLink?.peerIds() ?? []);
+    if (reachable.length === 0) return;
 
     const type = msg.type;
     const sessionId = msg.sessionId;
     const targetIds = type && RelayClient.SUBSCRIBER_ONLY_TYPES.has(type)
-      ? [...this.onlineConsumers].filter((deviceId) => this.currentSessionByArm.get(deviceId) === sessionId)
-      : [...this.onlineConsumers];
+      ? reachable.filter((deviceId) => this.currentSessionByArm.get(deviceId) === sessionId)
+      : reachable;
 
     if (targetIds.length === 0) {
       traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'SEND-DECISION', type, sessionId, droppedReason: 'targets-empty' });
@@ -3780,6 +3927,10 @@ export class RelayClient {
   /** Put a pulse frame on the wire using the sender-retained delivery target. */
   private sendPulseEnvelope(pulseB64: string, target?: PulseDeliveryTarget): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.headTx.frames++;
+    this.headTx.bytes += pulseB64.length;
+    const targets = Array.isArray(target) ? target : target ? [target] : [];
+    if (targets.some((t) => this.localLink?.has(t))) this.headTx.framesToLinkedApps++;
     const envelope: UnicastEnvelope | MulticastEnvelope | BroadcastEnvelope = Array.isArray(target)
       ? { type: 'multicast', to: target, pulse: pulseB64, blob: '', keys: {} }
       : target
@@ -3808,7 +3959,19 @@ export class RelayClient {
    * a large coalesced payload therefore trades supersession for progress.
    */
   private sendPayload(payloadJson: string, target: string | string[], durable: boolean, coalesceKey: string | undefined, stream: number): void {
-    const targets = Array.isArray(target) ? target : [target];
+    let targets = Array.isArray(target) ? target : [target];
+    // Same-machine Apps take the loopback link; the ciphertext is identical
+    // (already encrypted to every recipient), only the transport differs.
+    // Loopback has no slow-uplink problem, so payloads go whole.
+    if (this.localLink) {
+      const local = targets.filter((t) => this.localLink!.has(t));
+      if (local.length > 0) {
+        for (const appId of local) this.localLink.send(appId, payloadJson, durable, coalesceKey, stream);
+        targets = targets.filter((t) => !local.includes(t));
+        if (targets.length === 0) return;
+        target = Array.isArray(target) ? targets : targets[0];
+      }
+    }
     const fragmenting = targets.filter((t) => this.appFeatures.get(t)?.has(PAYLOAD_FRAGMENT_FEATURE));
     const parts = fragmenting.length > 0 ? fragmentPayload(payloadJson, randomUUID()) : null;
     if (!parts) {
@@ -3822,7 +3985,7 @@ export class RelayClient {
     for (const part of parts) this.pulse.send(part, shape(fragmenting), durable, undefined, stream);
   }
 
-  private handlePulseDelivered(payloadJson: string, fragmentSender?: string): void {
+  private handlePulseDelivered(payloadJson: string, fragmentSender?: string, route: 'head' | 'link' = 'link'): void {
     if (!this.keyManager || !this.authInfo) return;
     let parsed: { from?: string; src?: string; msg?: Record<string, unknown>; blob?: string; keys?: Record<string, string> };
     try {
@@ -3835,7 +3998,7 @@ export class RelayClient {
       const whole = this.payloadAssembler.accept(parsed);
       // Every part of a set is stamped by the head with the same sender; carry
       // it to the reassembled payload, which itself has no `src`.
-      if (whole !== null) this.handlePulseDelivered(whole, parsed.src);
+      if (whole !== null) this.handlePulseDelivered(whole, parsed.src, route);
       return;
     }
     // Head-originated plaintext control (device_joined/left/removed, etc.): route
@@ -3873,6 +4036,15 @@ export class RelayClient {
         // Replies and per-app state key off deviceId: use the verified sender.
         (inner as { deviceId?: string }).deviceId = sender;
       }
+      // A subscription arriving through the Head from an App that is on the
+      // local link was sent before the switch and is stale: applying it would
+      // replace the link's current subscription. Other commands still apply
+      // (an approve or answer sent just before the switch must not be lost).
+      if (route === 'head' && sender !== undefined && this.localLink?.has(sender)
+        && (inner as { type?: string }).type === 'set_session_subscription') {
+        logger.info({ appId: sender }, 'Dropped stale Head-routed subscription from a linked App');
+        return;
+      }
       traceLog.info({
         ns: process.hrtime.bigint().toString(),
         comp: 'tentacle',
@@ -3891,21 +4063,37 @@ export class RelayClient {
   /** Build and dispatch an encrypted push preview over the Head self-channel.
    *  This operation is independent of live subscribers and online targets. */
   private dispatchPushPreview(msg: Partial<ProducerMessage>): void {
-    const preview = this.buildPushPreview(msg);
-    if (!preview) return;
+    const built = this.buildPushPreview(msg);
+    if (!built) return;
     this.pulse.send(
-      JSON.stringify({ type: 'dispatch_push', payload: { preview } }),
+      JSON.stringify({ type: 'dispatch_push', payload: { preview: built.encrypted } }),
       HEAD_PULSE_TARGET,
       false,
       undefined,
       0,
     );
+    // Same-machine Apps also get the preview straight over the local link, so
+    // a Mac whose Head connection is down notifies in step with the messages
+    // it already sees over the link. The Head copy still goes out (it covers
+    // a link that drops at this instant); both carry the same `nid` and the
+    // App posts each notification once.
+    for (const appId of this.localLink?.peerIds() ?? []) {
+      const key = this.consumerKeys.get(appId);
+      if (!key || !(appId in built.encrypted.keys)) continue;
+      this.sendReliableUnicastTo(appId, key, {
+        type: 'local_notification',
+        deviceId: this.authInfo?.deviceId ?? '',
+        seq: ++this.seqCounter,
+        timestamp: new Date().toISOString(),
+        payload: { preview: built.plaintext },
+      });
+    }
   }
 
   /** Build the encrypted push preview for a notification-worthy message. */
   private buildPushPreview(
     msg: Partial<ProducerMessage>,
-  ): { blob: string; keys: Record<string, string> } | undefined {
+  ): { encrypted: { blob: string; keys: Record<string, string> }; plaintext: string } | undefined {
     let previewType: string | undefined;
     let previewSummary: string | undefined;
     if (msg.type === 'card_action') {
@@ -3961,6 +4149,9 @@ export class RelayClient {
     traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'PUSH-PREVIEW-BUILD', previewType, recipientCount: previewRecipients.length, onlineCount: this.onlineConsumers.size, offlineCount: previewRecipients.length - this.onlineConsumers.size });
     try {
       const preview = JSON.stringify({
+        // Notification id: lets an App that receives the same preview over
+        // two routes (local link + Head) post it once.
+        nid: randomUUID(),
         type: previewType,
         ...(normalizedSummary && { summary: normalizedSummary }),
         ...(previewType === 'idle' && !normalizedSummary && { steps: this.turnStepCounts.get(msg.sessionId as string) ?? 0 }),
@@ -3968,7 +4159,7 @@ export class RelayClient {
         ...(title ? { title } : {}),
       });
       const previewBlob = encryptToBlob(preview, previewRecipients);
-      return { blob: previewBlob.blob, keys: previewBlob.keys };
+      return { encrypted: { blob: previewBlob.blob, keys: previewBlob.keys }, plaintext: preview };
     } catch (err) {
       logger.debug({ err }, 'Pulse push-preview build failed');
       return undefined;
@@ -3988,7 +4179,8 @@ export class RelayClient {
     msg: Record<string, unknown>,
     durable = false,
   ): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.keyManager) return;
+    if (!this.keyManager) return;
+    if (!this.relayOpen() && !this.localLink?.has(targetDeviceId)) return;
 
     try {
       const recipientPubKey = importPublicKey(compactPubKey);
@@ -4054,7 +4246,7 @@ export class RelayClient {
     const key = this.consumerKeys.get(requesterDeviceId);
     if (!key || typeof requestId !== 'string' || !/^[a-zA-Z0-9-]{1,128}$/.test(requestId)) return;
     const reply = (error?: 'unavailable' | 'disabled' | 'busy') => {
-      if (this.state !== 'connected' || !this.onlineConsumers.has(requesterDeviceId)
+      if (this.state !== 'connected' || !this.isAppOnline(requesterDeviceId)
         || this.consumerKeys.get(requesterDeviceId) !== key) return;
       const message = this.accountUsageMessage();
       this.sendReliableUnicastTo(requesterDeviceId, key, {
@@ -4179,13 +4371,26 @@ export class RelayClient {
   }
 
   private updateConsumerKeys(devices: DeviceSummary[]): void {
+    // A Head reconnect does not touch Apps on the local link: keep their
+    // features and subscriptions, which belong to that link.
+    const localIds = new Set(this.localLink?.peerIds() ?? []);
+    const keptFeatures = new Map([...this.appFeatures].filter(([id]) => localIds.has(id)));
+    const keptSubs = new Map([...this.currentSessionByArm].filter(([id]) => localIds.has(id)));
     this.consumerKeys.clear();
     this.onlineConsumers.clear();
-    this.appFeatures.clear();
-    this.currentSessionByArm.clear();
+    this.appFeatures = keptFeatures;
+    this.currentSessionByArm = keptSubs;
+    this.appSigningKeys.clear();
     this.legacyReplayWarned.clear();
     for (const d of devices) {
       if (d.role === 'app') {
+        if (d.publicKey) this.appSigningKeys.set(d.id, d.publicKey);
+        if (localIds.has(d.id)) {
+          const key = d.encryptionKey ?? d.publicKey;
+          if (key) this.consumerKeys.set(d.id, key);
+          if (d.online) this.onlineConsumers.add(d.id);
+          continue;
+        }
         const key = d.encryptionKey ?? d.publicKey;
         if (key) {
           this.consumerKeys.set(d.id, key);
@@ -4195,6 +4400,12 @@ export class RelayClient {
           }
         }
       }
+    }
+    // A linked App that is no longer an App of this account (removed while
+    // this Tentacle could not hear device_removed) must not keep its link.
+    const appIds = new Set(devices.filter((d) => d.role === 'app').map((d) => d.id));
+    for (const id of localIds) {
+      if (!appIds.has(id)) this.localLink?.disconnectPeer(id, 'device_removed');
     }
   }
 
@@ -4291,6 +4502,7 @@ export class RelayClient {
       // Drive pulse heartbeat + liveness (5s tick, finer than 15s heartbeat).
       this.pulse.tick();
       this.maybeAutoArchive(now);
+      this.logLocalLinkStats();
       // Tick instrumentation: detect timer drift / event-loop block
       if (this.staleCheckLastTickAt > 0) {
         const tickDrift = now - this.staleCheckLastTickAt - RelayClient.STALE_CHECK_INTERVAL;

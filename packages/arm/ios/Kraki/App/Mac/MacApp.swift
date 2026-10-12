@@ -402,6 +402,13 @@ struct MacApp: App {
             }
         }
         #if DEBUG
+        // Headless hosts (locked screen, no window server surface) never run
+        // the WindowGroup `.task` that normally starts the driver. Semantic
+        // commands only need AppState, so start it here too (idempotent).
+        if MacAutomationDriver.shared.enabled, !isolatedChatTest,
+           environment["KRAKI_NATIVE_AUTOMATION_SCENARIO_HOST"] != "1" {
+            Task { @MainActor in MacAutomationDriver.shared.start(appState: state) }
+        }
         if environment["KRAKI_NATIVE_AUTOMATION_SCENARIO_HOST"] == "1" {
             Task { @MainActor in
                 MacAutomationDriver.shared.startIsolatedScenarioHost(appState: state)
