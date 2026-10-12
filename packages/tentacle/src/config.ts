@@ -288,6 +288,28 @@ export function clearDaemonIdentity(): void {
   }
 }
 
+// ── Daemon supervisor (CLI-started daemons) ────────────
+// `kraki start` runs the worker under a small supervisor that restarts it after
+// a crash (daemon-supervisor.ts). daemon.pid / daemon.ready stay the worker's;
+// this file records the supervisor so `kraki stop` can stop it first.
+
+export function getDaemonSupervisorPidPath(): string {
+  return join(getKrakiHome(), 'daemon-supervisor.pid');
+}
+
+export function loadDaemonSupervisorPid(): number | null {
+  try {
+    const pid = parseInt(readFileSync(getDaemonSupervisorPidPath(), 'utf8').trim(), 10);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearDaemonSupervisorPid(): void {
+  try { unlinkSync(getDaemonSupervisorPidPath()); } catch { /* not there */ }
+}
+
 // ── Daemon readiness ───────────────────────────────────
 
 export function getDaemonReadyPath(): string {

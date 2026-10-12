@@ -209,3 +209,14 @@ The MCP server is not exposed to the relay or to other devices. It is reachable 
 Open source helps because it lets people inspect how Kraki handles encryption, routing, and storage. It does not replace operational trust by itself, but it does make the design auditable and self-hosting possible.
 
 For the runtime picture of how the pieces fit together, read [`architecture.md`](./architecture.md).
+
+### Verifying a download
+
+Every release is built by this repository's release workflow, which signs a build-provenance attestation for each release asset, `SHA256SUMS.txt` included. npm packages are published with provenance. The installers and Kraki's updater check each download against `SHA256SUMS.txt`. To also check that a file was built by this repository's CI:
+
+```sh
+gh attestation verify kraki-cli-linux-x64 --repo corelli18512/kraki   # any release asset
+npm audit signatures                                                  # in a project that installs @kraki/tentacle
+```
+
+Kraki for Mac updates are additionally checked by Sparkle (EdDSA signature) and macOS (code signature, notarization).

@@ -43,13 +43,15 @@ try {
       __CFBundleIdentifier: process.platform === 'darwin' ? 'chat.kraki.cli' : undefined,
     },
     encoding: 'utf8',
-    timeout: 90_000,
+    timeout: 150_000, // startup + 15s stability + crash recovery (≤ 60s)
   });
 
   if (result.error) throw result.error;
   if (result.status !== 0) {
     const bootstrapPath = join(tempHome, 'logs', 'daemon-bootstrap.log');
     const daemonLogPath = join(tempHome, 'logs', 'daemon.log');
+    const supervisorLogPath = join(tempHome, 'logs', 'daemon-supervisor.log');
+    const supervisorLog = existsSync(supervisorLogPath) ? readFileSync(supervisorLogPath, 'utf8') : '';
     const bootstrap = existsSync(bootstrapPath) ? readFileSync(bootstrapPath, 'utf8') : '';
     const daemonLog = existsSync(daemonLogPath) ? readFileSync(daemonLogPath, 'utf8') : '';
     throw new Error(
@@ -58,6 +60,7 @@ try {
         result.stdout && `stdout:\n${result.stdout}`,
         result.stderr && `stderr:\n${result.stderr}`,
         bootstrap && `bootstrap:\n${bootstrap}`,
+        supervisorLog && `supervisor:\n${supervisorLog}`,
         daemonLog && `daemon:\n${daemonLog}`,
       ].filter(Boolean).join('\n\n'),
     );

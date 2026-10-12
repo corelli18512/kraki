@@ -1302,19 +1302,23 @@ async function main(): Promise<void> {
     // daemon-supervisor.ts: launchd's KeepAlive is dead while the user's
     // domain is stuck in on-demand-only mode).
     const { isMacAppManagedWorker, isWindowsAppManagedWorker } = await import('./managed.js');
-    const { SUPERVISED_ENV, runSupervisor } = await import('./daemon-supervisor.js');
+    const { SUPERVISED_ENV, SUPERVISE_ENV, runSupervisor } = await import('./daemon-supervisor.js');
     // Kraki for Windows' Run entry cannot set environment variables; it passes
     // the owner as a flag instead.
     if (args.includes(`--managed-by=${WINDOWS_APP_OWNER}`)) process.env.KRAKI_MANAGED_BY = WINDOWS_APP_OWNER;
     const appManaged = (process.platform === 'darwin' && isMacAppManagedWorker())
       || (process.platform === 'win32' && isWindowsAppManagedWorker());
-    if (appManaged && !process.env[SUPERVISED_ENV]) {
-      const { getLogsDir } = await import('./config.js');
+    // `kraki start` asks for supervision too (Linux, Windows, npm on macOS):
+    // a crashed daemon comes back by itself instead of staying offline.
+    const cliSupervised = process.env[SUPERVISE_ENV] === '1';
+    if ((appManaged || cliSupervised) && !process.env[SUPERVISED_ENV]) {
+      const { getLogsDir, getDaemonSupervisorPidPath } = await import('./config.js');
       const { join } = await import('node:path');
       const code = await runSupervisor({
         command: process.execPath,
         args: _isSEA ? [cmd] : [...process.execArgv, process.argv[1], cmd],
         logFile: join(getLogsDir(), 'daemon-supervisor.log'),
+        ...(cliSupervised && !appManaged && { pidFile: getDaemonSupervisorPidPath() }),
       });
       process.exit(code);
     }

@@ -205,7 +205,9 @@ export async function startWorker(): Promise<WorkerResult> {
   }
   if (!config) {
     logger.fatal({ configPath }, `No config found at ${configPath} — run \`kraki\` to set up`);
-    process.exit(1);
+    // Permanent: a supervisor must not restart us until setup has run.
+    const { PERMANENT_EXIT_CODE } = await import('./daemon-supervisor.js');
+    process.exit(PERMANENT_EXIT_CODE);
   }
 
   // 2. Resolve relay auth token
