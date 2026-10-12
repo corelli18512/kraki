@@ -76,6 +76,8 @@ vi.mock('@kraki/crypto', async () => {
 });
 
 import { SessionResumeError, RelayClient } from '../relay-client.js';
+import { beginAdapterTurn, finishTurnWithStatus } from '../relay/turns.js';
+import { handleConsumerMessage } from '../relay/consumer-messages.js';
 import { AttachmentStore } from '../attachment-store.js';
 import { createHash } from 'node:crypto';
 import { PayloadAssembler, isPayloadFragment, fragmentPayload } from '@kraki/protocol';
@@ -2930,8 +2932,7 @@ describe('RelayClient trace mirroring (off-spine)', () => {
         ['tool_start', 'b1', 'D', undefined],
         ['agent_narration', undefined, 'D', undefined],
       ]);
-      (client as unknown as { finishTurnWithStatus: (sid: string, a: unknown) => void })
-        .finishTurnWithStatus('sess_1', { type: 'user_abort', payload: { abortedAt: new Date().toISOString() } });
+      finishTurnWithStatus(client, 'sess_1', { type: 'user_abort', payload: { abortedAt: new Date().toISOString() } });
       const synthetic = entries().filter(e => e.type === 'tool_complete');
       expect(synthetic.find(e => e.payload.toolCallId === 'D').payload).toMatchObject({ termination: 'cancelled', subagent: { name: 'scout', status: 'stopped' } });
       expect(synthetic.find(e => e.payload.toolCallId === 'b1').payload).toMatchObject({ termination: 'cancelled', parentToolCallId: 'D' });
@@ -3134,8 +3135,7 @@ describe('RelayClient pending-question digest', () => {
       smMock.markIdle.mockImplementation(() => { state = 'idle'; });
 
       const oldTurnId = 'sess_1:maintenance-owner';
-      (client as unknown as { beginAdapterTurn: (sid: string, turnId: string) => void })
-        .beginAdapterTurn('sess_1', oldTurnId);
+      beginAdapterTurn(client, 'sess_1', oldTurnId);
       (adapter.onMessage as (sid: string, event: Record<string, unknown>) => void)('sess_1', {
         content: 'the answer before compaction', turnId: oldTurnId,
       });
@@ -4148,7 +4148,7 @@ describe('RelayClient pending-question digest', () => {
       type: 'device_joined', relaySeq: 9001,
       device: { id: 'app-fresh', name: 'Phone', role: 'app', online: true, encryptionKey: 'app-key' },
     })));
-    (client as unknown as { handleConsumerMessage: (msg: Record<string, unknown>) => void }).handleConsumerMessage({
+    handleConsumerMessage(client, {
       type: 'set_session_subscription', deviceId: 'app-fresh', seq: 1, timestamp: '', payload: { sessionId: 'sess_1' },
     });
     const ack = decodePulseSends(ws.sent).find((m) => m.type === 'session_subscription_set');
@@ -4218,10 +4218,9 @@ describe('turn-end push preview', () => {
     })));
     const internals = client as unknown as {
       send(msg: Record<string, unknown>): void;
-      beginAdapterTurn(sessionId: string): string;
     };
     const startTurn = (text: string) => {
-      internals.beginAdapterTurn('sess_1');
+      beginAdapterTurn(client, 'sess_1');
       internals.send({ type: 'user_message', sessionId: 'sess_1', payload: { content: text } });
     };
     const previews = () => decodeHeadControls(ws.sent)
