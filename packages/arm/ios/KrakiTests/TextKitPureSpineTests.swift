@@ -1460,12 +1460,12 @@ final class TextKitPureSpineTests: XCTestCase {
             bottomPadding: IOSComposerMetrics.verticalPadding,
             bubbleBottomPadding: TKMetrics.outerV
         )
-        XCTAssertEqual(clearance, 54)
+        XCTAssertEqual(clearance, 60)
         XCTAssertEqual(
-            ChatBottomObstruction.height(composerClearance: clearance, composerVisible: true, compacting: false), 54
+            ChatBottomObstruction.height(composerClearance: clearance, composerVisible: true, compacting: false), 60
         )
         XCTAssertEqual(
-            ChatBottomObstruction.height(composerClearance: clearance, composerVisible: true, compacting: true), 102
+            ChatBottomObstruction.height(composerClearance: clearance, composerVisible: true, compacting: true), 108
         )
         XCTAssertEqual(
             ChatBottomObstruction.height(composerClearance: clearance, composerVisible: false, compacting: true), 40

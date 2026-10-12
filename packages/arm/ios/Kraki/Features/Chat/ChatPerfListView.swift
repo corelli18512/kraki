@@ -327,11 +327,16 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// preload this session's history from GRDB.
     private let sessionId: String
     private let agentName: String
-    private var bottomContentInset: CGFloat
+    var bottomContentInset: CGFloat
+    /// How far the floating composer rises above its resting footprint. Added
+    /// to the scrollable range only, so the bubbles it covers can be scrolled
+    /// into view; the newest edge (follow, ↓, distance-to-bottom) keeps resting
+    /// on the resting composer, so its growth never moves the conversation.
+    var composerOverlayInset: CGFloat = 0
     /// Shared product policy. UIKit still owns gesture delivery, geometry,
     /// anchoring, and animation; entry/follow/intent/paging rules are identical
     /// to the AppKit adapter through this platform-neutral state machine.
-    private var scrollPolicy = ChatScrollPolicy()
+    var scrollPolicy = ChatScrollPolicy()
     /// Read position this Session was entered with (new messages / notification).
     private let unreadEntryBoundary: Int?
     /// The first new message held under the top glass (UnreadEntry.anchored).
@@ -367,7 +372,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// then `refreshSpineSnapshot()` snapshots it off the scroll frame.
     private let vm: ChatViewModel
     private let appState: AppState
-    private var collectionView: UICollectionView!
+    private(set) var collectionView: UICollectionView!
     private let scrollIndicator = IOSTransientScrollIndicator()
 
     /// The shared message store (window data layer). Held so the view can inject
@@ -791,7 +796,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
               !scrollingTowardOlder,
               !isPinningBottom else { return }
         let viewportChanged = collectionView.bounds.size != lastPinnedViewportSize
-        let insetsChanged = collectionView.adjustedContentInset != lastPinnedAdjustedInsets
+        let insetsChanged = tailAdjustedInsets != lastPinnedAdjustedInsets
         guard viewportChanged || insetsChanged else { return }
         // Keyboard presentation, safe-area resolution and multiline composer
         // growth can all happen after the data's initial scroll. Re-pin after
@@ -1319,10 +1324,10 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         collectionView.contentOffset.y + Self.latestMessageTopPadding - 8
     }
 
-    private func maximumOffsetY() -> CGFloat {
+    func maximumOffsetY() -> CGFloat {
         max(-collectionView.adjustedContentInset.top,
             collectionView.contentSize.height - collectionView.bounds.height
-                + collectionView.adjustedContentInset.bottom)
+                + tailAdjustedInsets.bottom)
     }
 
     private func landingOffset(forRowStart minY: CGFloat) -> CGFloat {
@@ -1393,7 +1398,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             || scrollPolicy.navigationActive || navigationLoadInFlight
     }
 
-    private func updateJumpButtonVisibility() {
+    func updateJumpButtonVisibility() {
         guard collectionView != nil else { return }
         if isAtConversationBottom, unseenArrivals > 0 {
             unseenArrivals = 0
@@ -2018,7 +2023,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
 
             if self.followingBottom {
                 self.lastPinnedViewportSize = self.collectionView.bounds.size
-                self.lastPinnedAdjustedInsets = self.collectionView.adjustedContentInset
+                self.lastPinnedAdjustedInsets = self.tailAdjustedInsets
             } else if let anchor,
                       let newFrame = self.collectionView.layoutAttributesForItem(at: anchor.0)?.frame {
                 self.collectionView.contentOffset.y += newFrame.minY - anchor.1
@@ -2227,8 +2232,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         let delta = abs(value - bottomContentInset)
         bottomContentInset = value
         let apply = {
-            self.collectionView.contentInset.bottom = value
-            self.collectionView.verticalScrollIndicatorInsets.bottom = value
+            self.collectionView.contentInset.bottom = value + self.composerOverlayInset
+            self.collectionView.verticalScrollIndicatorInsets.bottom = value + self.composerOverlayInset
             self.jumpButtonBottomConstraint?.constant = -Self.jumpBottomGap(value)
             self.view.layoutIfNeeded()
             self.scrollPolicy.setFollowingTail(shouldFollow)
@@ -2303,13 +2308,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         let updates = {
             self.collectionView.layoutIfNeeded()
             if shouldFollow {
-                let minY = -self.collectionView.adjustedContentInset.top
-                let maxY = max(
-                    minY,
-                    self.collectionView.contentSize.height
-                        - self.collectionView.bounds.height
-                        + self.collectionView.adjustedContentInset.bottom
-                )
+                let maxY = self.followPinOffset(keepingRevealed: true)
                 self.collectionView.contentOffset.y = maxY
                 self.scrollPolicy.pinToTail(observedOffset: maxY)
             }
@@ -2879,13 +2878,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         if !animated, landOnFirstUnreadIfNeeded(reason: reason) { return }
         isPinningBottom = true
         collectionView.layoutIfNeeded()
-        let minY = -collectionView.adjustedContentInset.top
-        let maxY = max(minY,
-                       collectionView.contentSize.height
-                       - collectionView.bounds.height
-                       + collectionView.adjustedContentInset.bottom)
+        let maxY = followPinOffset(keepingRevealed: reason != "explicit")
         lastPinnedViewportSize = collectionView.bounds.size
-        lastPinnedAdjustedInsets = collectionView.adjustedContentInset
+        lastPinnedAdjustedInsets = tailAdjustedInsets
         scrollPolicy.pinToTail(observedOffset: maxY)
         let targetText = String(format: "%.1f", maxY)
         let currentText = String(format: "%.1f", collectionView.contentOffset.y)
@@ -2932,7 +2927,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
             }
             scrollPolicy.rememberOffset(landing)
             lastPinnedViewportSize = collectionView.bounds.size
-            lastPinnedAdjustedInsets = collectionView.adjustedContentInset
+            lastPinnedAdjustedInsets = tailAdjustedInsets
             return true
         }
         guard let boundary = scrollPolicy.unreadEntryBoundary else { return false }
@@ -2982,7 +2977,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         scrollPolicy.anchorAtFirstUnread(offset: landing)
         unreadAnchorID = targetID
         lastPinnedViewportSize = collectionView.bounds.size
-        lastPinnedAdjustedInsets = collectionView.adjustedContentInset
+        lastPinnedAdjustedInsets = tailAdjustedInsets
         KLog.chat("📌 [chat-entry] first-unread session=\(sessionId.prefix(12)) reason=\(reason) boundary=\(boundary) row=\(targetID.prefix(16)) landing=\(Int(landing)) tail=\(Int(maximumOffsetY()))")
         updateJumpButtonVisibility()
         return true
@@ -3410,7 +3405,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     }
     /// Distance from the viewport to the bottom of loaded content (px).
     private func distanceToBottom() -> CGFloat {
-        collectionView.contentSize.height + collectionView.adjustedContentInset.bottom
+        collectionView.contentSize.height + tailAdjustedInsets.bottom
             - collectionView.bounds.height - collectionView.contentOffset.y
     }
 
@@ -3815,6 +3810,7 @@ struct ChatPerfListView: UIViewControllerRepresentable {
     let sessionId: String
     let agent: String
     let bottomContentInset: CGFloat
+    var composerOverlayInset: CGFloat = 0
     let onResolvePermission: (String, String?, String) -> Void
     let onAnswerQuestion: (String, String) -> Void
     let onOpenImage: (IOSImagePreviewSelection) -> Void
@@ -3836,6 +3832,7 @@ struct ChatPerfListView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ vc: ChatPerfListVC, context: Context) {
         vc.updateBottomContentInset(bottomContentInset)
+        vc.updateComposerOverlayInset(composerOverlayInset)
         vc.onResolvePermission = onResolvePermission
         vc.onAnswerQuestion = onAnswerQuestion
         vc.onOpenImage = onOpenImage

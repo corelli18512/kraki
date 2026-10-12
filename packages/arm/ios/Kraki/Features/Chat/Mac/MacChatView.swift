@@ -12,35 +12,6 @@ enum MacChatHeaderMetrics {
     static var listTopInset: CGFloat { height + 14 }
 }
 
-/// Messages-style top edge: a long, eased fade whose strongest point is still
-/// translucent, tinted neutral black (dark) / white (light).
-private struct MacChatTopEdgeFade: View {
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        let dark = colorScheme == .dark
-        ZStack {
-            Rectangle().fill(.ultraThinMaterial).opacity(0.85)
-            (dark ? Color.black : Color.white).opacity(dark ? 0.55 : 0.5)
-        }
-        .mask(
-            LinearGradient(
-                stops: [
-                    .init(color: .black.opacity(0.9), location: 0.0),
-                    .init(color: .black.opacity(0.78), location: 0.3),
-                    .init(color: .black.opacity(0.5), location: 0.55),
-                    .init(color: .black.opacity(0.22), location: 0.78),
-                    .init(color: .clear, location: 1.0),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
-
 private struct MacGlassCapsule: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
@@ -180,6 +151,8 @@ struct MacChatView: View {
     /// connection itself is reported once, in the sidebar header.)
     @State private var showsSyncing = false
     @State private var stepsTarget: StepsTarget?
+    /// Height the floating Composer rises above its resting footprint.
+    @State private var composerOverlay: CGFloat = 0
     @State private var showInfo = false
     @State private var modePickerExpanded = MacChatModePicker.startsExpanded
 
@@ -232,7 +205,8 @@ struct MacChatView: View {
         // The Composer is a floating overlay. Keep one stable base clearance so
         // the last bubble can rest above the input capsule, but never couple
         // Chat geometry to multiline typing, microphone, or streaming height.
-        // Those surfaces grow upward over the Chat without moving its viewport.
+        // Those surfaces grow upward over the Chat without moving its viewport;
+        // `composerOverlay` only lets the reader scroll covered bubbles into view.
         guard composerVisible else { return 0 }
         return ChatBottomObstruction.composerClearance(
             capsuleHeight: MacComposerMetrics.capsuleHeight,
@@ -508,6 +482,7 @@ struct MacChatView: View {
                 entryGeneration: entryGeneration,
                 unreadEntryBoundary: appState.sessionStore.entryUnreadBoundaries[viewModel.sessionId],
                 bottomContentInset: effectiveBottomInputHeight,
+                composerOverlayInset: composerOverlay,
                 isLoadingOlder: viewModel.isLoadingOlder,
                 isLoadingNewer: viewModel.isFillingTail,
                 hasNewerLocalRows: viewModel.hasNewerLocalRows,
@@ -561,6 +536,7 @@ struct MacChatView: View {
                 isCompacting: viewModel.isCompacting,
                 hasLiveCard: viewModel.card != nil
             )
+            .reportsComposerOverlay(resting: MacComposerMetrics.verticalPadding + MacComposerMetrics.capsuleHeight + MacComposerMetrics.bottomPadding, into: $composerOverlay)
         }
     }
 

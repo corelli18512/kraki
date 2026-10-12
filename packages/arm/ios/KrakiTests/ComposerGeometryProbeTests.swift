@@ -11,17 +11,26 @@ import UIKit
 /// Real production ChatView, isolated store and synthetic speech. No credentials,
 /// network or microphone. Geometry assertions are also backed by native captures.
 @MainActor final class ComposerGeometryProbeTests: XCTestCase {
-    func testClearanceBalancesVisibleGapsWithoutDoubleCountingCellPadding() {
-        for (capsule, padding): (CGFloat, CGFloat) in [(48, 6), (36, 12)] {
+    func testLastBubbleRestsAboveCapsuleAtTheGapBetweenBubbles() {
+        // iOS (48pt capsule, 6pt below) and Mac (36pt capsule, 12pt below);
+        // cells pad 6pt above and below their bubble, so bubbles sit 12pt apart.
+        for (capsule, padding, expected): (CGFloat, CGFloat, CGFloat) in [(48, 6, 60), (36, 12, 54)] {
             let clearance = ChatBottomObstruction.composerClearance(
                 capsuleHeight: capsule, bottomPadding: padding, bubbleBottomPadding: 6)
-            XCTAssertEqual(clearance, 54)
+            XCTAssertEqual(clearance, expected)
             for safeArea: CGFloat in [0, 21, 34] {
                 let capsuleBottom = 852 - safeArea - padding
                 let bubbleBottom = 852 - safeArea - clearance - 6
-                XCTAssertEqual(capsuleBottom - capsule - bubbleBottom, padding)
+                XCTAssertEqual(capsuleBottom - capsule - bubbleBottom, 6 * 2)
             }
         }
+    }
+
+    func testComposerOverlayIsOnlyTheGrowthAboveRest() {
+        XCTAssertEqual(ChatBottomObstruction.composerOverlay(measuredHeight: 60, restingHeight: 60), 0)
+        XCTAssertEqual(ChatBottomObstruction.composerOverlay(measuredHeight: 60.3, restingHeight: 60), 0)
+        XCTAssertEqual(ChatBottomObstruction.composerOverlay(measuredHeight: 52, restingHeight: 60), 0)
+        XCTAssertEqual(ChatBottomObstruction.composerOverlay(measuredHeight: 172.4, restingHeight: 60), 113)
     }
 
     func testStatusClearanceRemainsIndependentOfFloatingExpansion() {
@@ -111,6 +120,7 @@ import UIKit
             let row: [String: Any] = ["phase": label, "windowHeight": host.bounds.height,
                 "viewportHeight": scroll.contentView.bounds.height, "scrollY": scroll.contentView.bounds.minY,
                 "documentHeight": scroll.chatDocumentView.frame.height,
+                "tailHeight": scroll.chatDocumentView.tailHeight,
                 "bubbleTop": bubble.minY, "bubbleBottom": bubble.maxY,
                 "capsuleTop": capsule.minY, "capsuleBottom": capsule.maxY, "capsuleHeight": capsule.height,
                 "gapAbove": capsule.minY-bubble.maxY, "gapBelow": host.bounds.height-capsule.maxY,
@@ -202,6 +212,7 @@ import UIKit
         app.voiceInputController.debugApplyPartial(longText)
         drain(0.9)
         rows.append(try snapshot("recording-long"))
+        if !readingHistory { try revealCoveredTail(in: host, drain: drain) }
         app.iosVoiceComposer.cancel()
         drain(0.9)
         rows.append(try snapshot("cancelled"))
@@ -216,30 +227,87 @@ import UIKit
                                accuracy: 0.5, "\(prefix)\(row["phase"]!): \(key) must not follow floating composer growth")
             }
         }
+        let platform = try assertRestingGapsAndReach(rows, readingHistory: readingHistory, window: window)
+        try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])
+            .write(to: output.appendingPathComponent("\(platform)-\(prefix)geometry.json"))
+        print("COMPOSER_GEOMETRY \(platform) \(prefix): \(rows)")
+    }
+
+    /// The reader can push the covered tail up above the raised glass, and it
+    /// stays there; cancelling brings it back to rest (asserted by the next
+    /// phase's unchanged `scrollY`).
+    private func revealCoveredTail(in host: AnyObject, drain: (Double) -> Void) throws {
         #if os(macOS)
-        let platform = "mac"
+        let root = try XCTUnwrap(host as? NSView)
+        func all(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(all) }
+        let scroll = try XCTUnwrap(all(root).compactMap { $0 as? MacChatScrollView }.first)
+        let movement = scroll.automationPreciseScrollPacket(deltaY: -200)
+        XCTAssertGreaterThan(movement.after - movement.before, 20, "the covered tail can be scrolled into view")
+        drain(0.4)
+        XCTAssertEqual(scroll.contentView.bounds.minY, movement.after, accuracy: 0.5, "a revealed tail stays revealed")
+        #else
+        let root = try XCTUnwrap((host as? UIViewController)?.view)
+        func all(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(all) }
+        let list = try XCTUnwrap(all(root).compactMap { $0 as? UICollectionView }.first)
+        let controller = try XCTUnwrap(list.delegate as? ChatPerfListVC)
+        let tailY = list.contentOffset.y
+        let reach = list.contentSize.height - list.bounds.height + list.adjustedContentInset.bottom
+        XCTAssertGreaterThan(reach - tailY, 100, "the covered tail can be scrolled into view")
+        controller.automationUserScrollActive = true
+        controller.scrollViewWillBeginDragging(list)
+        list.contentOffset.y = reach
+        controller.scrollViewDidScroll(list)
+        controller.scrollViewDidEndDragging(list, willDecelerate: false)
+        controller.automationUserScrollActive = false
+        drain(0.4)
+        XCTAssertEqual(list.contentOffset.y, reach, accuracy: 0.5, "a revealed tail stays revealed")
+        #endif
+    }
+
+    /// Resting gaps match the gap between bubbles; the raised composer only
+    /// extends the scroll reach (and gives it back). Returns the platform tag.
+    private func assertRestingGapsAndReach(_ rows: [[String: Any]], readingHistory: Bool, window: AnyObject) throws -> String {
+        let baseline = rows[0]
+        #if os(iOS)
+        let window = try XCTUnwrap(window as? UIWindow)
+        #endif
+        #if os(macOS)
         for row in rows {
-            XCTAssertEqual(try XCTUnwrap(row["capsuleBottom"] as? CGFloat), 568, accuracy: 0.5)
-            XCTAssertEqual(try XCTUnwrap(row["documentHeight"] as? CGFloat), try XCTUnwrap(baseline["documentHeight"] as? CGFloat), accuracy: 0.5)
+            // A multi-line draft stacks the controls under the text, so the
+            // probed text viewport no longer ends at the capsule's bottom.
+            if row["phase"] as? String != "multiline-draft" {
+                XCTAssertEqual(try XCTUnwrap(row["capsuleBottom"] as? CGFloat), 568, accuracy: 0.5)
+            }
+            XCTAssertEqual(try XCTUnwrap(row["tailHeight"] as? CGFloat), try XCTUnwrap(baseline["documentHeight"] as? CGFloat), accuracy: 0.5)
         }
+        // Covered bubbles stay reachable: the raised Composer extends the
+        // document (scroll reach) without moving anything; it gives it back.
+        XCTAssertGreaterThan(try XCTUnwrap(rows[2]["documentHeight"] as? CGFloat),
+                             try XCTUnwrap(baseline["documentHeight"] as? CGFloat) + 20)
+        XCTAssertEqual(try XCTUnwrap(rows[3]["documentHeight"] as? CGFloat),
+                       try XCTUnwrap(baseline["documentHeight"] as? CGFloat), accuracy: 0.5)
         if !readingHistory {
             XCTAssertEqual(try XCTUnwrap(baseline["gapAbove"] as? CGFloat), 12, accuracy: 0.5)
             XCTAssertEqual(try XCTUnwrap(baseline["gapBelow"] as? CGFloat), 12, accuracy: 0.5)
             XCTAssertLessThan(try XCTUnwrap(rows[2]["gapAbove"] as? CGFloat), 0, "long transcript overlaps the tail instead of reserving empty space")
         }
+        return "mac"
         #else
-        let platform = "ios"
         for row in rows {
-            XCTAssertEqual(try XCTUnwrap(row["contentInsetBottom"] as? CGFloat), 54, accuracy: 0.5)
+            XCTAssertGreaterThanOrEqual(try XCTUnwrap(row["contentInsetBottom"] as? CGFloat), 60 - 0.5)
             XCTAssertEqual(try XCTUnwrap(row["contentHeight"] as? CGFloat), try XCTUnwrap(baseline["contentHeight"] as? CGFloat), accuracy: 0.5)
         }
+        // Resting: only the fixed clearance. Raised: the covered bubbles stay
+        // reachable (larger inset, same offset); collapsing gives it back.
+        XCTAssertEqual(try XCTUnwrap(baseline["contentInsetBottom"] as? CGFloat), 60, accuracy: 0.5)
+        XCTAssertGreaterThan(try XCTUnwrap(rows[2]["contentInsetBottom"] as? CGFloat), 60 + 40)
+        XCTAssertEqual(try XCTUnwrap(rows[3]["contentInsetBottom"] as? CGFloat), 60, accuracy: 0.5)
         if !readingHistory {
             let restingCapsuleTop = window.bounds.height - window.safeAreaInsets.bottom - IOSComposerMetrics.verticalPadding - IOSComposerMetrics.height
-            XCTAssertEqual(restingCapsuleTop - (try XCTUnwrap(baseline["bubbleBottom"] as? CGFloat)), 6, accuracy: 0.5)
+            // Same gap as between two bubbles (6pt cell padding on each side).
+            XCTAssertEqual(restingCapsuleTop - (try XCTUnwrap(baseline["bubbleBottom"] as? CGFloat)), TKMetrics.outerV * 2, accuracy: 0.5)
         }
+        return "ios"
         #endif
-        try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])
-            .write(to: output.appendingPathComponent("\(platform)-\(prefix)geometry.json"))
-        print("COMPOSER_GEOMETRY \(platform) \(prefix): \(rows)")
     }
 }

@@ -21,6 +21,8 @@ struct ChatView: View {
     @State private var hasMaterializedLatest = false
     @State private var selectedImagePreview: IOSImagePreviewSelection?
     @State private var selectedHTMLArtifact: IOSSelectedHTMLArtifact?
+    /// Height the floating composer rises above its resting footprint.
+    @State private var composerOverlay: CGFloat = 0
 
     // MARK: - View-model passthroughs
 
@@ -41,7 +43,8 @@ struct ChatView: View {
     private var forceComposerForDiagnostics: Bool { false }
     #endif
     /// Stable resting clearance, like Mac. Dictation and multiline text grow
-    /// upward over the list, never changing its inset/scroll position. UIKit
+    /// upward over the list without moving it; `composerOverlay` only lets the
+    /// reader scroll the covered bubbles into view (no follow). UIKit
     /// adds the home-indicator safe area via `adjustedContentInset.bottom`.
     private var effectiveBottomInputHeight: CGFloat {
         ChatBottomObstruction.height(
@@ -123,6 +126,7 @@ struct ChatView: View {
                     sessionId: sessionId,
                     agent: session?.agent ?? "claude",
                     bottomContentInset: effectiveBottomInputHeight,
+                    composerOverlayInset: isDeviceOnline || forceComposerForDiagnostics ? composerOverlay : 0,
                     onResolvePermission: resolveLivePermission,
                     onAnswerQuestion: answerLiveQuestion,
                     onOpenImage: { selection in
@@ -302,6 +306,7 @@ struct ChatView: View {
                     isCompacting: viewModel?.isCompacting == true,
                     hasLiveCard: viewModel?.card != nil
                 )
+                .reportsComposerOverlay(resting: IOSComposerMetrics.height + IOSComposerMetrics.verticalPadding * 2, into: $composerOverlay)
             }
         }
     }
