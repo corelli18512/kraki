@@ -746,15 +746,6 @@ final class CommandSender {
         }
     }
 
-    @discardableResult
-    func alwaysAllow(sessionId: String, permissionId: String, toolKind: String? = nil) -> Bool {
-        var payload: [String: Any] = ["permissionId": permissionId]
-        if let toolKind { payload["toolKind"] = toolKind }
-        return resolvePrompt(sessionId: sessionId, promptId: permissionId, decision: "always_allow") {
-            self.send(["type": "always_allow", "payload": payload], sessionId: sessionId)
-        }
-    }
-
     /// Optimistic permission resolution: show the decision at once (the
     /// bubble stays, its buttons become read-only so a second tap cannot send
     /// again), then either Tentacle's resolved card confirms it, or a transport

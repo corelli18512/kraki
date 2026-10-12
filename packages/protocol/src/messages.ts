@@ -303,7 +303,8 @@ export interface PermissionRequest extends BaseEnvelope {
      *  view showing the outcome). Never present on a live/pending request —
      *  a permission is not broadcast standalone, so its payload's sole live
      *  home is the {@link CardActionState} slot. Absent on old-session
-     *  spine records. */
+     *  spine records. `always_allow` appears only in history written by
+     *  tentacles before 0.38.7. */
     decision?: 'approve' | 'deny' | 'always_allow';
     /** Trace/history-only terminal state when the turn ended before a decision. */
     cancelled?: boolean;
@@ -427,7 +428,7 @@ export interface AgentNarrationMessage extends BaseEnvelope {
  * time) — there is no precedence between them. The tentacle owns the ENTIRE
  * decision of what occupies the slot; clients render it verbatim and perform
  * ZERO precedence/derivation logic. A permission's `id` is the round-trip
- * handle: clients answer it by sending approve/deny/always_allow with this id.
+ * handle: clients answer it by sending approve/deny with this id.
  * When a permission is resolved it stays in the slot with its `decision` set
  * (read-only) until a newer action replaces it or the card clears.
  *
@@ -1078,6 +1079,7 @@ export interface PermissionResolvedMessage extends BaseEnvelope {
   } & (
     | { resolution: 'approved' }
     | { resolution: 'denied'; reason?: string }
+    /** Only from tentacles before 0.38.7. */
     | { resolution: 'always_allowed' }
     | { resolution: 'cancelled'; reason?: string }
   );
@@ -1216,6 +1218,8 @@ export interface DenyMessage extends BaseEnvelope {
   };
 }
 
+/** @deprecated No app sends it any more. Tentacle ≥ 0.38.7 answers it like
+ *  `approve` for that one request (no session-wide grant). */
 export interface AlwaysAllowMessage extends BaseEnvelope {
   type: 'always_allow';
   payload: {

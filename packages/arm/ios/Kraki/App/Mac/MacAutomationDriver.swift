@@ -585,8 +585,6 @@ final class MacAutomationDriver {
             case "auto":
                 appState.commandSender?.setSessionMode(sessionId: sessionId, mode: .auto)
                 appState.commandSender?.approve(sessionId: sessionId, permissionId: permissionId)
-            case "always_allow":
-                appState.commandSender?.alwaysAllow(sessionId: sessionId, permissionId: permissionId, toolKind: action.toolName)
             case "deny":
                 appState.commandSender?.deny(sessionId: sessionId, permissionId: permissionId)
             default:

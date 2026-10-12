@@ -946,26 +946,6 @@ describe('CopilotAdapter', () => {
       const result = await resultPromise;
       expect(result).toEqual({ kind: 'reject' });
     });
-
-    it('maps always_allow → approved', async () => {
-      const permSpy = vi.fn();
-      adapter.onPermissionRequest = permSpy;
-      await adapter.start();
-      await adapter.createSession({});
-      adapter.setSessionMode('mock-sess-1', 'safe');
-
-      const handler = capturedSessionConfigs[0].onPermissionRequest;
-      const resultPromise = handler(
-        { kind: 'write', fileName: 'package.json' },
-        { sessionId: 'mock-sess-1' },
-      );
-
-      const permId = permSpy.mock.calls[0][1].id;
-      await adapter.respondToPermission('mock-sess-1', permId, 'always_allow');
-
-      const result = await resultPromise;
-      expect(result).toEqual({ kind: 'approve-once' });
-    });
   });
 
   // ── Question flow ───────────────────────────────────
