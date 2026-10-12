@@ -202,9 +202,6 @@ struct ChatView: View {
                 viewModel = ChatViewModel(sessionId: sessionId, appState: appState)
                 KLog.d("🎬 [3/render] ChatView.task viewModel created session=\(sessionId.prefix(12)) filteredCount=\(viewModel?.filteredMessages.count ?? -1)")
             }
-            // This list currently opens at the newest edge. Clear the one-shot
-            // snapshot so stale unread metadata cannot leak into a later open.
-            appState.sessionStore.entryUnreadSnapshots.removeValue(forKey: sessionId)
             #if DEBUG
             // Dev-only auto-send: drive a real turn without fighting the
             // simulator's SwiftUI-TextField focus (which idb can't drive).

@@ -461,6 +461,7 @@ extension PushManager: UNUserNotificationCenterDelegate {
         let sessionId = userInfo["sessionId"] as? String
 
         if let sessionId {
+            appState?.sessionStore.notificationEntrySessions.insert(sessionId)
             appState?.sessionStore.navigateToSession = sessionId
         }
         completionHandler()

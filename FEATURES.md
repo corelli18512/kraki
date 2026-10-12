@@ -60,6 +60,7 @@ Platforms: **M** Kraki for Mac · **W** Kraki for Windows · **I** iPhone ·
 | ID | What the person does | What should happen | Platforms |
 |---|---|---|---|
 | D1 | Send a message | Bubble at once; reply streams; the chat stays at the bottom | M W I B |
+| D20 | Open a session with new messages (red dot, or a notification) | New part fits on one screen: the newest edge. Longer: the first new message's start at the top, held there while more arrives or streams, until you scroll, tap ↓ or send. Messages arriving after the chat opened (cold start) follow the same rule | M W I B |
 | D2 | Type a long or multi-line message | The composer grows, then uses two rows (text above, controls below); never flickers or breaks | M W I B |
 | D3 | Steer while the agent works | Composer says Steer; the message joins the running turn | M W I B |
 | D4 | Stop the agent | The turn ends with "User aborted" | M W I B |

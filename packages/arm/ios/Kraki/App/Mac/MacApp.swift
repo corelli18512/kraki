@@ -462,6 +462,10 @@ struct MacApp: App {
                     // and must never seed the production window.
                     guard note.userInfo?["scope"] as? String == nil,
                           let sessionId = note.userInfo?["sessionId"] as? String else { return }
+                    // Kept until the window opens it (a cold launch queues it).
+                    if note.userInfo?["fromNotification"] as? Bool == true {
+                        appState.sessionStore.notificationEntrySessions.insert(sessionId)
+                    }
                     launchCoordinator.recordSelectedSession(sessionId)
                 }
                 #if DEBUG

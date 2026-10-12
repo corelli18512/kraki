@@ -14,6 +14,21 @@ struct ChatScrollPolicy: Equatable {
         case newer
     }
 
+    /// Entering a Session with new messages (red dot, notification): the
+    /// reader starts at the first message they haven't read when the new part
+    /// doesn't fit on one screen; otherwise at the newest tail as usual.
+    /// Evaluated on every entry pin until the user takes over, so a cold
+    /// start whose new messages arrive after the list appeared, and a reply
+    /// still streaming, behave the same: follow while it fits, stop with the
+    /// first new message at the top once it doesn't.
+    enum UnreadEntry: Equatable {
+        case none
+        /// Rows with seq > boundary are new; no landing decided yet.
+        case armed(boundary: Int)
+        /// The first new message's start was placed at the top.
+        case anchored
+    }
+
     struct NavigationControlVisibility: Equatable {
         let showTail: Bool
         let showLatestMessageStart: Bool
@@ -31,6 +46,7 @@ struct ChatScrollPolicy: Equatable {
     let movementEpsilon: CGFloat
 
     private(set) var entryBottomLocked = true
+    private(set) var unreadEntry: UnreadEntry = .none
     private(set) var allowsEdgePaging = false
     private(set) var followingTail = true
     private(set) var direction: Direction = .none
@@ -113,7 +129,8 @@ struct ChatScrollPolicy: Equatable {
         )
     }
 
-    mutating func resetForEntry() {
+    mutating func resetForEntry(unreadBoundary: Int? = nil) {
+        unreadEntry = unreadBoundary.map { .armed(boundary: $0) } ?? .none
         entryBottomLocked = true
         allowsEdgePaging = false
         followingTail = true
@@ -130,6 +147,7 @@ struct ChatScrollPolicy: Equatable {
     /// Releases entry protection when a native callback proves user ownership,
     /// without replacing an offset baseline captured by an earlier begin event.
     mutating func unlockForUserInteraction() {
+        unreadEntry = .none
         entryBottomLocked = false
         allowsEdgePaging = true
         navigationActive = false
@@ -277,6 +295,7 @@ struct ChatScrollPolicy: Equatable {
     /// Leaves tail-following for a user-selected arbitrary anchor whose
     /// direction is not known (for example a Debug semantic scroll target).
     mutating func leaveTailForUserNavigation(offset: CGFloat? = nil) {
+        unreadEntry = .none
         entryBottomLocked = false
         allowsEdgePaging = true
         followingTail = false
@@ -344,6 +363,7 @@ struct ChatScrollPolicy: Equatable {
         direction: Direction,
         followingTail: Bool
     ) {
+        unreadEntry = .none
         entryBottomLocked = false
         allowsEdgePaging = true
         self.direction = direction
@@ -353,6 +373,59 @@ struct ChatScrollPolicy: Equatable {
         olderPageConsumed = false
         suppressesNewerPagingAfterOlder = false
         navigationActive = true
+    }
+
+    // MARK: Unread entry
+
+    /// The read position to land after, while still undecided.
+    var unreadEntryBoundary: Int? {
+        if case .armed(let boundary) = unreadEntry { return boundary }
+        return nil
+    }
+
+    /// The first loaded row the reader hasn't read: the lowest seq above the
+    /// boundary (rows without a seq — live/pending — never qualify).
+    static func firstUnreadRow<ID>(
+        _ rows: [(id: ID, seq: Int?)],
+        after boundary: Int
+    ) -> ID? {
+        rows.first { ($0.seq ?? 0) > boundary }?.id
+    }
+
+    /// Where to land for the first unread row, or nil to stay at the tail
+    /// because its start is already readable there. `rowStartLanding` is the
+    /// platform's offset that puts the row start under the top glass (the
+    /// same landing the ↑ control uses), clamped to the document.
+    static func unreadEntryLanding(
+        rowStartLanding: CGFloat,
+        tailOffset: CGFloat
+    ) -> CGFloat? {
+        rowStartLanding < tailOffset - 1 ? rowStartLanding : nil
+    }
+
+    /// The first new message no longer fits: hold its start at the top. Not a
+    /// user interaction — edge paging stays off until the user scrolls.
+    mutating func anchorAtFirstUnread(offset: CGFloat) {
+        unreadEntry = .anchored
+        entryBottomLocked = false
+        followingTail = false
+        direction = .none
+        lastObservedOffset = offset
+        olderPageArmed = false
+    }
+
+    /// Held, but exact geometry now shows the new part fits after all (the
+    /// landing was decided on estimates): back to the tail, still armed.
+    mutating func releaseUnreadAnchor(boundary: Int) {
+        unreadEntry = .armed(boundary: boundary)
+        entryBottomLocked = true
+        followingTail = true
+        direction = .newer
+    }
+
+    /// The user sent a message or asked for the tail: no unread landing.
+    mutating func cancelUnreadEntry() {
+        unreadEntry = .none
     }
 
     private func isNearTail(_ distanceToBottom: CGFloat) -> Bool {

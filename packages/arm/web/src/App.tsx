@@ -1,4 +1,5 @@
 import { KrakiLogo } from './components/KrakiLogo';
+import { markNotificationEntry } from './lib/chat/unread-entry';
 import { useEffect, useRef } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import { Sidebar } from './components/layout/Sidebar';
@@ -114,7 +115,10 @@ export function App() {
   }, [sessions, previews]);
 
   // Clicking a desktop notification opens its session.
-  useEffect(() => desktop?.onOpenSession((sid) => navigate(`/session/${sid}`)), [navigate]);
+  useEffect(() => desktop?.onOpenSession((sid) => {
+    markNotificationEntry(sid);
+    navigate(`/session/${sid}`);
+  }), [navigate]);
 
   useEffect(() => {
     if (navigateToSession) {

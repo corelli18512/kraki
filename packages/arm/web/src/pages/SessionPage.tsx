@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { markNotificationEntry } from '../lib/chat/unread-entry';
 import { sessionDisplayTitle } from '../lib/session-status';
 import { useParams, useNavigate } from 'react-router';
 import { useStore } from '../hooks/useStore';
@@ -43,6 +44,16 @@ export function SessionPage() {
   const isPending = useStore((s) => sessionId ? s.pendingSessions.has(sessionId) : false);
   const sessionMode = useStore((s) => (sessionId ? s.sessionModes.get(sessionId) : undefined) ?? 'auto') as SessionMode;
   const narrow = useNarrow();
+
+  // Opened from a notification (sw.js): mark it before ChatView's first
+  // render captures the entry, then drop the marker from the address.
+  const notifiedEntry = useRef<string | null>(null);
+  if (sessionId && notifiedEntry.current !== sessionId
+      && new URLSearchParams(window.location.search).get('from') === 'notification') {
+    notifiedEntry.current = sessionId;
+    markNotificationEntry(sessionId);
+    window.history.replaceState(window.history.state, '', window.location.pathname);
+  }
 
   // Navigate home when session is deleted (removed from store while viewing)
   // but not if it's a pending session (optimistic open before session_created)

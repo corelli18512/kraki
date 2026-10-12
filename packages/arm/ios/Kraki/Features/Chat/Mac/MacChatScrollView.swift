@@ -733,6 +733,13 @@ final class MacChatDocumentView: NSView {
         return itemFrames[index]
     }
 
+    /// The first loaded row after a read position (lowest seq above it).
+    func firstItem(afterSeq boundary: Int) -> (key: String, frame: NSRect)? {
+        let index = indexBySeq.compactMap { $0.key > boundary ? $0.value : nil }.min()
+        guard let index, index < itemFrames.count, index < itemKeys.count else { return nil }
+        return (itemKeys[index], itemFrames[index])
+    }
+
     func latestItemFrame() -> NSRect? {
         itemFrames.last
     }
@@ -2767,9 +2774,12 @@ final class MacChatScrollView: MacSmoothScrollView {
         }
     }
 
-    func prepareForSession(_ sessionId: String) {
+    func prepareForSession(_ sessionId: String, unreadBoundary: Int? = nil) {
         guard representedSessionId != sessionId else { return }
         representedSessionId = sessionId
+        unreadEntryKey = nil
+        heldUnreadBoundary = nil
+        pendingUnreadBoundary = unreadBoundary
         presentationEpoch += 1
         diagnosticWindowTop = 0
         diagnosticWindowBottom = 0
@@ -2802,7 +2812,8 @@ final class MacChatScrollView: MacSmoothScrollView {
         jumpButtonVisibilityGenerations.removeAll(keepingCapacity: true)
         snapshotApplyActive = false
         suppressRunwayForNextReflect = false
-        scrollPolicy.resetForEntry()
+        scrollPolicy.resetForEntry(unreadBoundary: pendingUnreadBoundary)
+        pendingUnreadBoundary = nil
         sendTailLock = false
         hasUserScrolled = false
         initialTailTrimRequested = false
@@ -2983,6 +2994,7 @@ final class MacChatScrollView: MacSmoothScrollView {
                   let frame = chatDocumentView.frame(forKey: anchor.key) {
             contentView.bounds.origin.y = frame.minY + anchor.delta
         }
+        applyUnreadEntryAfterGeometryChange()
         super.reflectScrolledClipView(contentView)
         adoptStableGeometryAnchorIfNeeded()
     }
@@ -2994,6 +3006,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         if (followingBottom || isEntryBottomLocked) && !bottomGlideActive {
             contentView.bounds.origin.y += delta
         }
+        applyUnreadEntryAfterGeometryChange()
         chatDocumentView.layoutSubtreeIfNeeded()
         super.reflectScrolledClipView(contentView)
         updateJumpButtonVisibility(animated: false)
@@ -3076,6 +3089,7 @@ final class MacChatScrollView: MacSmoothScrollView {
     /// Anything submitted from the composer is a new message (as on iOS):
     /// return to the newest edge so the user sees what they just sent.
     func returnToNewestAfterLocalSubmit() {
+        scrollPolicy.cancelUnreadEntry()
         sendTailLock = true
         jumpTapped()
         // The controls must not ride over the message being sent: ↓ goes now
@@ -3557,6 +3571,7 @@ final class MacChatScrollView: MacSmoothScrollView {
             clipView.bounds.origin.y += anchorShift
             super.reflectScrolledClipView(clipView)
         }
+        if clipView === contentView { applyUnreadEntryAfterGeometryChange() }
         if isScrollInteractionActive {
             // Prefetch as soon as a live trackpad/wheel gesture reaches the
             // edge. Waiting for didEndLiveScroll makes long momentum gestures
@@ -3815,9 +3830,81 @@ final class MacChatScrollView: MacSmoothScrollView {
         }
     }
 
+    // MARK: Unread entry (ChatScrollPolicy.UnreadEntry, same rule as iPhone)
+
+    private var pendingUnreadBoundary: Int?
+    /// The first new message whose start is held at the top.
+    private var unreadEntryKey: String?
+    private var heldUnreadBoundary: Int?
+
+    /// Entered with new messages and the user hasn't scrolled: an entry pin
+    /// lands on the first new message's start when it wouldn't be readable at
+    /// the tail, and keeps holding it there while heights settle.
+    private var applyingUnreadEntry = false
+
+    /// After a height change was added to the offset directly (streaming
+    /// growth, warmed heights): check the landing again in the same step.
+    private func applyUnreadEntryAfterGeometryChange() {
+        guard scrollPolicy.unreadEntry != .none else { return }
+        _ = landOnFirstUnreadIfNeeded()
+    }
+
+    private func landOnFirstUnreadIfNeeded() -> Bool {
+        guard !applyingUnreadEntry else { return false }
+        applyingUnreadEntry = true
+        defer { applyingUnreadEntry = false }
+        let tail = max(-topContentInset, chatDocumentView.frame.height - contentView.bounds.height)
+        switch scrollPolicy.unreadEntry {
+        case .none:
+            return false
+        case .anchored:
+            // A concluded turn folds its mid-turn messages into Steps: then
+            // the first new row still shown takes over.
+            var frame = unreadEntryKey.flatMap { chatDocumentView.frame(forKey: $0) }
+            if frame == nil, let boundary = heldUnreadBoundary,
+               let first = chatDocumentView.firstItem(afterSeq: boundary) {
+                unreadEntryKey = first.key
+                frame = first.frame
+            }
+            guard let frame else { return false }
+            let held = landingOffset(forRowStart: frame.minY)
+            if held >= tail - 1, let boundary = heldUnreadBoundary {
+                // Measured: it fits after all. Follow the tail again.
+                scrollPolicy.releaseUnreadAnchor(boundary: boundary)
+                unreadEntryKey = nil
+                return false
+            }
+            cancelScrollAnimation()
+            contentView.bounds.origin.y = held
+        case .armed(let boundary):
+            guard let first = chatDocumentView.firstItem(afterSeq: boundary),
+                  let landing = ChatScrollPolicy.unreadEntryLanding(
+                    rowStartLanding: landingOffset(forRowStart: first.frame.minY),
+                    tailOffset: tail
+                  ) else { return false }
+            cancelScrollAnimation()
+            contentView.bounds.origin.y = landing
+            unreadEntryKey = first.key
+            heldUnreadBoundary = boundary
+            scrollPolicy.anchorAtFirstUnread(offset: landing)
+            KLog.chat("📌 [chat-entry] first-unread session=\(representedSessionId?.prefix(12) ?? "") boundary=\(boundary) row=\(first.key.prefix(16)) landing=\(Int(landing)) tail=\(Int(tail))")
+        }
+        scrollPolicy.rememberOffset(contentView.bounds.minY)
+        updateJumpButtonVisibility(animated: false)
+        super.reflectScrolledClipView(contentView)
+        return true
+    }
+
+    #if DEBUG
+    var automationUnreadEntry: ChatScrollPolicy.UnreadEntry { scrollPolicy.unreadEntry }
+    #endif
+
     func scrollToBottom(animated: Bool) {
         geometryAnchorLock = nil
         guard chatDocumentView.frame.height > 0 else { return }
+        // Arrival glides are animated too; only ↓ and sending end the landing
+        // (they cancel it before getting here).
+        if landOnFirstUnreadIfNeeded() { return }
         // A running glide to the bottom re-targets every frame; a streaming
         // pin must not cut it short into a jump.
         if !animated, bottomGlideActive {
@@ -3919,6 +4006,8 @@ struct MacChatListRepresentable: NSViewRepresentable {
     let liveSteps: Int
     let sessionMode: SessionMode
     let entryGeneration: Int
+    /// Read position this Session was entered with (lands on the first new message).
+    var unreadEntryBoundary: Int? = nil
     let bottomContentInset: CGFloat
     let isLoadingOlder: Bool
     let isLoadingNewer: Bool
@@ -3941,7 +4030,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
         // Do not expose the estimated top/anchor that NSScrollView starts with.
         // First usable layout performs an atomic bottom establishment below.
         scrollView.alphaValue = 0
-        scrollView.prepareForSession(sessionId)
+        scrollView.prepareForSession(sessionId, unreadBoundary: unreadEntryBoundary)
         // A compact desktop tail is enough for several screens; older history
         // is restored from SQLite when the user reaches the top edge.
         messageStore.maxWindowPx = 4_800
@@ -4019,7 +4108,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
             context.coordinator.forcePinOnNextUpdate = false
             context.coordinator.itemCache.removeAll(keepingCapacity: true)
             context.coordinator.itemCacheWidth = nil
-            scrollView.prepareForSession(sessionId)
+            scrollView.prepareForSession(sessionId, unreadBoundary: unreadEntryBoundary)
         }
         messageStore.maxWindowPx = 4_800
         messageStore.heightForSeq = { [weak documentView = scrollView.chatDocumentView] sid, seq in
