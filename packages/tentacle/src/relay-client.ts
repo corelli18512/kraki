@@ -22,6 +22,7 @@ import type {
 } from '@kraki/protocol';
 import type { DeviceUpdateInfo, DeviceUpdatePhase } from '@kraki/protocol';
 import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment } from '@kraki/protocol';
+import { parseConsumerMessage } from '@kraki/protocol/schemas';
 import { randomUUID } from 'node:crypto';
 import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
 import type { RecipientKey } from '@kraki/crypto';
@@ -1384,7 +1385,7 @@ export class RelayClient {
           this.keyManager.getKeyPair().privateKey,
         );
         const inner = JSON.parse(decrypted);
-        this.handleConsumerMessage(inner as ConsumerMessage);
+        this.handleConsumerMessage(inner);
       } catch {
         // Can't decrypt — not for us or corrupted
       }
@@ -1488,7 +1489,31 @@ export class RelayClient {
       });
   }
 
-  private handleConsumerMessage(msg: ConsumerMessage): void {
+  /** A decrypted app message failed its field check. Unknown types are what
+   *  a newer app may send (debug only); a malformed known message is a bug
+   *  worth a warning. A dropped send_input gets an error in the chat, or the
+   *  app would keep its bubble "sending" with no explanation. */
+  private rejectConsumerMessage(raw: unknown, { type, unknownType, problem }: { type?: string; unknownType: boolean; problem: string }): void {
+    const r = (raw ?? {}) as { deviceId?: unknown; sessionId?: unknown };
+    if (unknownType) {
+      logger.debug({ type, deviceId: r.deviceId }, 'Ignored app message of an unknown type');
+      return;
+    }
+    logger.warn({ type, problem, deviceId: r.deviceId }, 'Dropped malformed app message');
+    if (type === 'send_input' && typeof r.sessionId === 'string' && isSafeId(r.sessionId) && this.sessionManager.getMeta(r.sessionId)) {
+      this.send({ type: 'error', sessionId: r.sessionId, payload: { message: 'Kraki on this computer could not read that message. Updating Kraki here may fix it.' } });
+    }
+  }
+
+  private handleConsumerMessage(raw: unknown): void {
+    // Field types first (see @kraki/protocol/schemas): handlers below trust them,
+    // and a malformed field must never reach a session's history.
+    const checked = parseConsumerMessage(raw);
+    if (!checked.ok) {
+      this.rejectConsumerMessage(raw, checked);
+      return;
+    }
+    const msg = checked.message;
     this.noteAppAlive(msg.deviceId);
     // Session/attachment ids become filesystem paths. Reject anything that is
     // not one of our id shapes before it reaches a handler.
@@ -4025,7 +4050,7 @@ export class RelayClient {
         this.authInfo.deviceId,
         this.keyManager.getKeyPair().privateKey,
       );
-      const inner = JSON.parse(decrypted) as ConsumerMessage;
+      const inner = JSON.parse(decrypted) as Record<string, unknown>;
       // The head stamps the authenticated sender (`src`). The deviceId inside
       // the encrypted message is chosen by the sender, so it must match.
       if (sender !== undefined) {
