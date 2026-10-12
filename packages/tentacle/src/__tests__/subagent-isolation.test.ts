@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TurnTracker } from '../adapters/turn-tracker.js';
 import { CopilotAdapter } from '../adapters/copilot.js';
+import { wireEvents } from '../adapters/copilot-events.js';
 import { ClaudeAdapter } from '../adapters/claude.js';
 import { handleSDKMessage } from '../adapters/claude-messages.js';
 
@@ -39,13 +40,13 @@ describe('Copilot subagent events', () => {
       },
     };
     const internals = adapter as unknown as {
-      sessions: Map<string, unknown>; wireEvents: (id: string, s: unknown) => void; probeRuntime: () => Promise<string>;
+      sessions: Map<string, unknown>; probeRuntime: () => Promise<string>;
     };
     const turn = new TurnTracker(adapter, 's1');
     turn.beginTurn(); // a prompt is running
     internals.sessions.set('s1', { session, pendingPermissions: new Map(), pendingQuestions: new Map(), turn });
     internals.probeRuntime = async () => 'alive';
-    internals.wireEvents('s1', session);
+    wireEvents(adapter, 's1', session as never);
     const rec = record(adapter);
     const fire = (type: string, data: Record<string, unknown> = {}, agentId?: string) => {
       for (const fn of handlers.get(type) ?? []) void fn({ type, data, ...(agentId && { agentId }) });

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CopilotAdapter } from '../adapters/copilot.js';
+import { wireEvents } from '../adapters/copilot-events.js';
 import { TurnTracker } from '../adapters/turn-tracker.js';
 
 describe('Copilot relay turn identity', () => {
@@ -14,9 +15,9 @@ describe('Copilot relay turn identity', () => {
       send: vi.fn(async () => {}),
     };
     const entry = { session, pendingPermissions: new Map(), pendingQuestions: new Map(), turn: new TurnTracker(adapter, 's1') };
-    const internals = adapter as unknown as { sessions: Map<string, typeof entry>; wireEvents: (id: string, s: unknown) => void };
+    const internals = adapter as unknown as { sessions: Map<string, typeof entry> };
     internals.sessions.set('s1', entry);
-    internals.wireEvents('s1', session);
+    wireEvents(adapter, 's1', session as never);
     const fire = (type: string, data: unknown = {}) => { for (const fn of handlers.get(type) ?? []) void fn({ data }); };
     const onMessage = vi.fn();
     const onIdle = vi.fn();
@@ -52,12 +53,11 @@ describe('Copilot session.error before idle (Windows E2E finding)', () => {
     entry.turn.beginTurn(); // a prompt is running
     const internals = adapter as unknown as {
       sessions: Map<string, unknown>;
-      wireEvents: (id: string, s: unknown) => void;
       probeRuntime: () => Promise<string>;
     };
     internals.sessions.set('s1', entry);
     internals.probeRuntime = probe;
-    internals.wireEvents('s1', session);
+    wireEvents(adapter, 's1', session as never);
     const order: string[] = [];
     adapter.onError = (_id, e) => { order.push(`error:${e.message}`); };
     adapter.onIdle = () => { order.push('idle'); };
