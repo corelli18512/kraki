@@ -6,6 +6,21 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.82</title>
+            <pubDate>Mon, 12 Oct 2026 08:34:01 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.82</sparkle:fullReleaseNotesLink>
+            <sparkle:version>84</sparkle:version>
+            <sparkle:shortVersionString>0.2.82</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[## What's new in Kraki 0.2.82
+
+- **Pick up where you left off:** opening a conversation with new messages (a red dot, or from a notification) now starts at the first message you haven't read when the new part is longer than one screen. If it fits, you land at the bottom as before. It stays there while more arrives, until you scroll, tap ↓ or send.
+- **Smoother replies:** while a reply streams, the conversation glides up line by line instead of jumping. A reply that arrives all at once slides in smoothly, with no jump.
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.82/Kraki.app.zip" length="92924000" type="application/octet-stream" sparkle:edSignature="6Y6wlGZlKtsJvuzzlFVVFZ97ibh3xMT1oqlEoHLUI5fQkPAhvmVxDlmJcpxEeO3fHgfEw/fl1GylianwCgpXAA=="/>
+        </item>
+        <item>
             <title>0.2.81</title>
             <pubDate>Mon, 12 Oct 2026 06:15:12 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -40,24 +55,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.80/Kraki.app.zip" length="92844739" type="application/octet-stream" sparkle:edSignature="HhRoZGnejbvuT2XcdRgLHuJJuQlyGsLYrqiQThlRV829Q+HTN8LnqZ5G4REzNfS3+MysYGqzdMNy+SmWfrqrBg=="/>
         </item>
-        <item>
-            <title>0.2.79</title>
-            <pubDate>Thu, 08 Oct 2026 18:34:57 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.79</sparkle:fullReleaseNotesLink>
-            <sparkle:version>81</sparkle:version>
-            <sparkle:shortVersionString>0.2.79</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's new in Kraki 0.2.79
-
-- **Voice cut off mid-message:** if your connection stalls while you dictate, the words heard so far go back into the message box with a short note saying what happened. They no longer show up as a half message that failed to send.
-- **Messages stay in order:** a message that failed to send stays where you wrote it, and messages sent after it appear below it.
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.79/Kraki.app.zip" length="92831058" type="application/octet-stream" sparkle:edSignature="pBegvjyi/BF2wfOQCTGz7nQoARHK34NrTTlFHThEI3kksDY8gEwa1cEQv59trv8xQrees3D7yHowPmYvTjipAg=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: HXhl9tfvFXZAFu8PF7RcfFODF0MYxZc3G/KdcohUuktfYvat0vbOC1IFRYrh8qXIXMJ9Gm+Bp6xttHDgn17GCw==
-length: 5015
+edSignature: eEl6P3NsUwij6WHaBskupzvc4oHP93G+hUo6bh0V50C9kOIbyyF2qRBJJZAo9awLo0Ac6NMO/2TmnLahXha0Dw==
+length: 5148
 -->
