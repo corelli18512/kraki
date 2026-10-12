@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ClaudeAdapter } from '../adapters/claude.js';
+import { TurnTracker } from '../adapters/turn-tracker.js';
 
 type CapturedResult = {
   behavior: string;
@@ -27,6 +28,7 @@ type PendingLike = {
 type EntryLike = {
   pendingPermissions: Map<string, { resolve: (r: CapturedResult) => void; toolKind?: string }>;
   pendingQuestions: Map<string, PendingLike>;
+  turn: TurnTracker;
 };
 
 const asSessions = (a: ClaudeAdapter) =>
@@ -43,8 +45,10 @@ describe('Claude streaming input', () => {
       inputChannel: { push, end: vi.fn() },
       pendingPermissions: new Map(),
       pendingQuestions: new Map(),
-      pendingText: 'working draft',
+      turn: new TurnTracker(adapter, 's1'),
     };
+    entry.turn.beginTurn();
+    entry.turn.appendProse('working draft');
     (adapter as unknown as { sessions: Map<string, typeof entry> }).sessions.set('s1', entry);
 
     await adapter.sendMessage('s1', 'change direction', undefined, { delivery: 'steer' });
@@ -54,7 +58,11 @@ describe('Claude streaming input', () => {
       message: { role: 'user', content: 'change direction' },
       parent_tool_use_id: null,
     });
-    expect(entry.pendingText).toBe('working draft');
+    // The steer joined the running turn: its draft is still the reply.
+    const onMessage = vi.fn();
+    adapter.onMessage = onMessage;
+    entry.turn.finish();
+    expect(onMessage).toHaveBeenCalledWith('s1', { content: 'working draft' });
   });
 });
 
@@ -67,7 +75,7 @@ describe('Claude AskUserQuestion answers key', () => {
     const pendingQuestions = new Map<string, PendingLike>([
       ['q1', { resolve: (r) => { captured = r; }, questionId: 'q1', questions }],
     ]);
-    asSessions(adapter).set('s1', { pendingPermissions: new Map(), pendingQuestions });
+    asSessions(adapter).set('s1', { pendingPermissions: new Map(), pendingQuestions, turn: new TurnTracker(adapter, 's1') });
 
     await adapter.respondToQuestion('s1', 'q1', '\u4F60\u7ED9\u6211\u505A\u4E00\u4E2A\u8BE6\u7EC6\u7684\u5E26\u56FE\u793A\u7684html report', false);
 
@@ -112,7 +120,7 @@ describe('Claude AskUserQuestion answers key', () => {
     const pendingQuestions = new Map<string, PendingLike>([
       ['q1', { resolve: (r) => { captured = r; }, questionId: 'q1', questions }],
     ]);
-    asSessions(adapter).set('s1', { pendingPermissions: new Map(), pendingQuestions });
+    asSessions(adapter).set('s1', { pendingPermissions: new Map(), pendingQuestions, turn: new TurnTracker(adapter, 's1') });
 
     (adapter as unknown as { broadcastPendingResolutions: (s: string) => void })
       .broadcastPendingResolutions('s1');
@@ -130,7 +138,7 @@ describe('Claude AskUserQuestion answers key', () => {
     }).onQuestionRequest = (_s, q) => emitted.push({ id: q.id, question: q.question });
 
     const pendingQuestions = new Map<string, PendingLike>();
-    asSessions(adapter).set('s1', { pendingPermissions: new Map(), pendingQuestions });
+    asSessions(adapter).set('s1', { pendingPermissions: new Map(), pendingQuestions, turn: new TurnTracker(adapter, 's1') });
 
     const input = {
       questions: [

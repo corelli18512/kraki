@@ -591,11 +591,12 @@ describe('CopilotAdapter', () => {
 
     it('buffers assistant.message and flushes as onMessage conclusion at idle', async () => {
       const msgSpy = vi.fn();
-      const narrationSpy = vi.fn();
+      const stepSpy = vi.fn();
       adapter.onMessage = msgSpy;
-      adapter.onNarration = narrationSpy;
+      adapter.onNarrationTrace = stepSpy;
       await adapter.start();
       const { sessionId } = await adapter.createSession({});
+      await adapter.sendMessage(sessionId, 'go'); // a prompt is running
       // Draft-bubble model: a lone assistant.message is buffered, NOT graduated
       // to a bubble immediately.
       mockSessions[0]._emit('assistant.message', { data: { content: 'Full response' } });
@@ -603,7 +604,8 @@ describe('CopilotAdapter', () => {
       // At idle it flushes as the single conclusion bubble.
       mockSessions[0]._emit('session.idle', {});
       expect(msgSpy).toHaveBeenCalledWith(sessionId, { content: 'Full response' });
-      expect(narrationSpy).not.toHaveBeenCalled();
+      // The reply is never also recorded as a step.
+      expect(stepSpy).not.toHaveBeenCalled();
     });
 
     it('flushes buffered prose as onNarration when a tool follows', async () => {
@@ -613,6 +615,7 @@ describe('CopilotAdapter', () => {
       adapter.onNarration = narrationSpy;
       await adapter.start();
       const { sessionId } = await adapter.createSession({});
+      await adapter.sendMessage(sessionId, 'go'); // a prompt is running
       // Prose followed by a tool → the prose was narration (draft/status),
       // not the conclusion, so it must NOT become a permanent bubble.
       mockSessions[0]._emit('assistant.message', { data: { content: "I'll read the file." } });
@@ -654,6 +657,7 @@ describe('CopilotAdapter', () => {
       adapter.onIdle = spy;
       await adapter.start();
       const { sessionId } = await adapter.createSession({});
+      await adapter.sendMessage(sessionId, 'go'); // a prompt is running
       mockSessions[0]._emit('session.idle', {});
       expect(spy).toHaveBeenCalledWith(sessionId);
     });
