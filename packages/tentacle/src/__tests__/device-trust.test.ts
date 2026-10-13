@@ -750,20 +750,20 @@ describe('device trust — final review', () => {
 });
 
 describe('device trust — follow-up review', () => {
-  it('DT503-07: a stale lock is taken over, a live one is never removed', () => {
+  it('DT503-07: a dead holder lock is taken over; a live holder lock never is, however old', () => {
     const dir = join(home, 'trust');
     mkdirSync(dir, { recursive: true });
-    // Abandoned lock (holder died): taken over.
-    writeFileSync(join(dir, 'policy.lock'), 'dead.token');
-    const old = new Date(Date.now() - 60_000);
-    utimesSync(join(dir, 'policy.lock'), old, old);
     const store = new TrustStore(dir);
+    // Held by a process that no longer exists: taken over.
+    writeFileSync(join(dir, 'policy.lock'), '999999999.dead');
     expect(store.setPolicy({ enforce: true })).toBe(true);
     expect(existsSync(join(dir, 'policy.lock'))).toBe(false);
-    // Live lock (fresh): the writer waits, then gives up without touching it.
-    writeFileSync(join(dir, 'policy.lock'), 'live.token');
+    // Held by a live process (this one's parent), even an old lock: never removed.
+    writeFileSync(join(dir, 'policy.lock'), `${process.ppid}.live`);
+    const old = new Date(Date.now() - 600_000);
+    utimesSync(join(dir, 'policy.lock'), old, old);
     expect(() => store.setPolicy({ enforce: false })).toThrow(/locked/);
-    expect(readFileSync(join(dir, 'policy.lock'), 'utf8')).toBe('live.token');
+    expect(readFileSync(join(dir, 'policy.lock'), 'utf8')).toBe(`${process.ppid}.live`);
     expect(readTrustPolicy(dir).enforce).toBe(true);
   });
 });

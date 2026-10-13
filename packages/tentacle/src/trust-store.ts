@@ -24,7 +24,7 @@
  */
 
 import {
-  chmodSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -135,38 +135,56 @@ function writePrivateJson(path: string, value: unknown): void {
   renameSync(tmp, path);
 }
 
+/** Whether the process that wrote a lock token (`<pid>.<uuid>`) is gone. */
+function holderIsDead(token: string): boolean {
+  const pid = Number(token.split('.')[0]);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ESRCH';
+  }
+}
+
+function tryCreate(path: string, token: string): boolean {
+  try {
+    writeFileSync(path, token, { mode: 0o600, flag: 'wx' });
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    return false;
+  }
+}
+
 /**
- * Run `fn` holding `<dir>/<name>`, a lock file shared by every process. The
- * file holds a unique token: only its owner removes it, and a lock older than
- * 10 s (its holder died — critical sections take milliseconds) is taken over
- * by renaming it aside and checking it is still the one inspected, so a lock
- * another process just acquired is never removed.
+ * Run `fn` holding `<dir>/<name>`, a lock file shared by every process on
+ * this computer. The file holds `<pid>.<uuid>`; only its owner removes it.
+ * A lock is taken over only when the process that holds it no longer exists
+ * (a live holder, however slow, is never robbed), and only by one process at
+ * a time: the take-over itself runs under `<name>.recover`, so no other
+ * process can replace the dead lock between our check and its removal.
  */
 function withTrustLock<T>(dir: string, name: string, fn: () => T): T {
   ensureDir(dir);
   const lock = join(dir, name);
+  const recover = `${lock}.recover`;
   const token = `${process.pid}.${randomUUID()}`;
-  const deadline = Date.now() + 3_000;
-  for (;;) {
-    try {
-      writeFileSync(lock, token, { mode: 0o600, flag: 'wx' });
-      break;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-    }
-    try {
-      const st = statSync(lock);
-      if (Date.now() - st.mtimeMs > 10_000) {
-        const seen = readFileSync(lock, 'utf8');
-        const aside = `${lock}.${token}.stale`;
-        renameSync(lock, aside);
-        const moved = readFileSync(aside, 'utf8');
-        if (moved === seen) unlinkSync(aside);
-        // Someone replaced it between our read and rename: put theirs back.
-        else try { linkSync(aside, lock); } finally { unlinkSync(aside); }
-        continue;
+  const deadline = Date.now() + 5_000;
+  while (!tryCreate(lock, token)) {
+    let held = '';
+    try { held = readFileSync(lock, 'utf8'); } catch { continue; /* just released */ }
+    if (holderIsDead(held) && tryCreate(recover, token)) {
+      try {
+        // Still the same dead holder's lock? (Nobody else can take over now.)
+        if (readFileSync(lock, 'utf8') === held) unlinkSync(lock);
+      } catch { /* already gone */ } finally {
+        unlinkSync(recover);
       }
-    } catch { /* raced with its owner: retry */ }
+      continue;
+    }
+    // A recovery lock left by a process that died while recovering.
+    try { const r = readFileSync(recover, 'utf8'); if (holderIsDead(r)) unlinkSync(recover); } catch { /* none */ }
     if (Date.now() > deadline) throw new Error('Device trust settings are locked by another process');
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
   }

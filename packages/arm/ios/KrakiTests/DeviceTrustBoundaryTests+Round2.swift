@@ -187,6 +187,32 @@ extension DeviceTrustBoundaryTests {
         XCTAssertFalse(contents.contains("BUFFERED_FORGERY"), "\(contents)")
     }
 
+    /// DT503-02: an older-page read in flight when the session is reset
+    /// (takeover) is discarded, even if the reloaded window has the same top.
+    func testInFlightPageReadIsDiscardedAfterReset() async throws {
+        let rows = { (text: String) in (1...200).map {
+            ChatMessage(type: "agent_message", seq: $0, sessionId: self.sid, deviceId: self.other, timestamp: nil,
+                        payload: ["content": AnyCodable(text)])
+        } }
+        try app.messageDatabase.insert(sid, rows("FORGED"))
+        _ = app.messageStore.loadInitialWindow(sid)
+        let top = try XCTUnwrap(app.messageStore.windowState(sid)?.topSeq)
+        XCTAssertGreaterThan(top, 1)
+        MessageProviderDebug.olderPageDelayMs = 400
+        defer { MessageProviderDebug.olderPageDelayMs = 0 }
+        let provider = try XCTUnwrap(app.messageProvider)
+        let pending = Task { await provider.ensureOlderLoadedAsync(sessionId: self.sid) }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        // Takeover: reset, drop, reload authentic history with the same top.
+        provider.resetSession(sid)
+        app.messageStore.deleteSessionMessages(sid)
+        try app.messageDatabase.insert(sid, rows("AUTHENTIC"))
+        _ = app.messageStore.loadInitialWindow(sid)
+        XCTAssertEqual(app.messageStore.windowState(sid)?.topSeq, top)
+        let landed = await pending.value
+        XCTAssertFalse(landed, "a read started before the reset must not land")
+    }
+
     #if os(iOS)
     /// APPS-02: a push without a usable envelope shows generic text, not the relay's.
     func testNotificationServiceIgnoresRelayTextWithoutEnvelope() throws {
