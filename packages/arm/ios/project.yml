@@ -238,6 +238,8 @@ targets:
       - path: KrakiTests/PushPreviewFormatTests.swift
       - path: KrakiTests/VoiceVocabularySyncTests.swift
       - path: KrakiTests/DeviceTrustTests.swift
+      - path: KrakiTests/DeviceTrustBoundaryTests.swift
+      - path: KrakiTests/DeviceTrustUsabilityTests.swift
       - path: KrakiTests/E2EV2NodeVectors.swift
     settings:
       base:

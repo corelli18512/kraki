@@ -74,10 +74,15 @@ class NotificationService: UNNotificationServiceExtension {
         }
 
         do {
-            let decrypted = key.hasPrefix(DeviceTrustPush.prefix)
+            let trusted = key.hasPrefix(DeviceTrustPush.prefix)
+            let decrypted = trusted
                 ? try openTrustedPreview(key: key)
                 : try decryptPreview(blob: blob, wrappedKey: key)
             let preview = PushPreviewFormat.content(fromJSON: decrypted)
+            // An unsigned preview may not speak for a paired computer.
+            if !trusted, !DeviceTrustPush.legacyPreviewAllowed(sessionId: preview.sessionId) {
+                throw NSError(domain: "KrakiNotification", code: 8, userInfo: [NSLocalizedDescriptionKey: "Unsigned preview"])
+            }
             content.title = preview.title
             content.subtitle = ""
             content.body = preview.body

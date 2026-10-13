@@ -59,19 +59,50 @@ extension MessageRouter {
     /// paired computer's session is forged. Returns true when handled.
     @MainActor
     func handleDeviceTrust(type: String, dict: [String: Any], appState: AppState) -> Bool {
-        if dict[DeviceTrustInbound.unsignedKey] as? Bool == true,
-           let sid = dict["sessionId"] as? String,
-           let owner = appState.sessionStore.sessions[sid]?.deviceId ?? appState.sessionStore.archivedSessionInfo(sid)?.deviceId,
-           TentacleTrustStore.shared.pairedPin(owner) != nil {
-            KLog.d("⛔️ device trust: dropped unsigned \(type) for a paired computer's session")
-            return true
+        let unsigned = dict[DeviceTrustInbound.unsignedKey] as? Bool == true
+        let signedBy = dict[DeviceTrustInbound.signedByKey] as? String
+        if unsigned, TentacleTrustStore.shared.hasPins {
+            let store = TentacleTrustStore.shared
+            for sid in Self.referencedSessionIds(dict) {
+                guard let owner = appState.sessionStore.sessions[sid]?.deviceId
+                        ?? appState.sessionStore.archivedSessionInfo(sid)?.deviceId else { continue }
+                if store.pin(owner) != nil {
+                    KLog.d("⛔️ device trust: dropped unsigned \(type) touching a pinned computer's session")
+                    return true
+                }
+            }
+        }
+        if type == "session_list" || type == "session_created" {
+            // Sessions changed: refresh what the notification extension may show.
+            DispatchQueue.main.async { [weak appState] in appState?.publishPushTrustPolicy() }
         }
         switch type {
-        case "pair_result": appState.handlePairResult(dict)
-        case "trust_required": appState.handleTrustRequired(dict)
-        case "trusted_devices": appState.handleTrustedDevices(dict)
-        default: return false
+        case "pair_result", "trusted_devices":
+            // Only from the pinned computer itself, signed.
+            guard let signedBy, signedBy == dict["deviceId"] as? String else {
+                KLog.d("⛔️ device trust: dropped unsigned \(type)")
+                return true
+            }
+            if type == "pair_result" { appState.handlePairResult(dict) } else { appState.handleTrustedDevices(dict) }
+        case "trust_required":
+            appState.handleTrustRequired(dict, signed: signedBy != nil && signedBy == dict["deviceId"] as? String)
+        default:
+            return false
         }
         return true
+    }
+
+    /// Every session an inner message refers to, wherever it carries it.
+    static func referencedSessionIds(_ dict: [String: Any]) -> [String] {
+        var ids: [String] = []
+        if let sid = dict["sessionId"] as? String { ids.append(sid) }
+        let payload = dict["payload"] as? [String: Any]
+        if let sid = payload?["sessionId"] as? String { ids.append(sid) }
+        let lists = [payload?["sessions"], dict["sessions"]].compactMap { $0 as? [[String: Any]] }
+        for list in lists { ids.append(contentsOf: list.compactMap { $0["id"] as? String ?? $0["sessionId"] as? String }) }
+        if let preview = payload?["preview"] as? String,
+           let object = try? JSONSerialization.jsonObject(with: Data(preview.utf8)) as? [String: Any],
+           let sid = object["sessionId"] as? String { ids.append(sid) }
+        return ids.filter { !$0.isEmpty }
     }
 }

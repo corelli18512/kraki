@@ -102,6 +102,7 @@ enum PairingFailureText {
         case "no_local_enrollment": return "Kraki on this Mac could not confirm the pairing. Restart Kraki and try again."
         case "stale", "from_future": return "This device's clock is off. Check the date and time, then scan again."
         case "trust_required": return "This computer only accepts paired devices. Scan its code to pair."
+        case "local_keys_missing": return "Kraki on this Mac hasn't set up pairing yet. Update or restart Kraki, then try again."
         default: return "Pairing was refused (\(reason)). Run `kraki connect` on the computer and scan the new code."
         }
     }
@@ -168,6 +169,16 @@ extension AppState {
         KLog.d("🔏 device trust: pinned \(trust.tentacleId.prefix(12)) from QR")
     }
 
+    /// DEBUG `KRAKI_PAIRING_URL`: pair with this token, pinning like a scanned
+    /// QR (device trust, fingerprint check).
+    func prepareDebugPairing(url: String, token: String, auth: AuthManager) {
+        auth.clearStoredCredentials()
+        auth.pairingToken = token
+        guard let link = PairingLink(string: url) else { return }
+        deviceStore.keyPins.pendingQRFingerprint = link.keyFingerprint
+        pinFromPairingLink(link)
+    }
+
     /// Pair this (signed-in) app with the computer whose QR was scanned.
     func pairWithComputer(_ link: PairingLink) {
         pinFromPairingLink(link)
@@ -189,6 +200,17 @@ extension AppState {
             guard deviceTrust.mayRequestPairing(tentacleId) else { continue }
             sendPairRequest(tentacleId: tentacleId, pin: pin)
         }
+        publishPushTrustPolicy()
+    }
+
+    /// Tell the Notification Service Extension which unsigned previews it may
+    /// show (see DeviceTrustPush.legacyPreviewAllowed).
+    func publishPushTrustPolicy() {
+        let store = TentacleTrustStore.shared
+        let tentacles = deviceStore.devices.values.filter { $0.role == .tentacle }
+        let legacyAllowed = tentacles.contains { store.pin($0.id) == nil }
+        let paired = sessionStore.sessions.values.filter { store.pin($0.deviceId) != nil }.map(\.id)
+        DeviceTrustPush.publishPolicy(legacyAllowed: legacyAllowed, pairedSessions: paired)
     }
 
     private func sendPairRequest(tentacleId: String, pin: TentaclePin) {
@@ -261,13 +283,15 @@ extension AppState {
         if ok {
             commandSender?.resendPendingInputs(deviceId: tentacleId, reason: "device_trust_paired")
         }
+        publishPushTrustPolicy()
     }
 
     /// The computer does not (or no longer) trust this app.
-    func handleTrustRequired(_ dict: [String: Any]) {
+    func handleTrustRequired(_ dict: [String: Any], signed: Bool) {
         guard let tentacleId = dict["deviceId"] as? String else { return }
         if TentacleTrustStore.shared.pin(tentacleId) != nil {
-            // Only reachable with the pinned key's signature (EncryptionHandler).
+            // A pinned computer's notice must carry its pinned signature.
+            guard signed else { return }
             TentacleTrustStore.shared.update(tentacleId) { pin in
                 guard var updated = pin else { return }
                 updated.paired = false
@@ -405,6 +429,13 @@ extension AppState {
         deviceTrust.clearPairRequest(device.id)
         deviceTrust.pairingRequired.remove(device.id)
         deviceTrustDevicesChanged()
+        if TentacleTrustStore.shared.pin(device.id) == nil {
+            // This Mac's computer has no device-trust keys yet (older Kraki,
+            // or not started since updating).
+            deviceTrust.feedback = .failed(name: device.name, reason: "local_keys_missing")
+        } else {
+            deviceTrust.feedback = .pairing(name: device.name)
+        }
         return true
     }
     #endif

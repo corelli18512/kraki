@@ -30,7 +30,7 @@ export const NO_RSA_KEY = 'x25519-only';
 export const PUSH_V2_PREFIX = 'v2.';
 
 export type OpenResult =
-  | { kind: 'message'; inner: Record<string, unknown>; signed: boolean }
+  | { kind: 'message'; inner: Record<string, unknown>; signed: boolean; toAll?: boolean }
   | { kind: 'pair_request'; signed: SignedMessage; inner: Record<string, unknown> }
   | { kind: 'rejected'; reason: string };
 
@@ -187,15 +187,19 @@ export class DeviceTrust {
       const claimed = inner.deviceId;
       if (claimed !== undefined && claimed !== '' && claimed !== outer.from) return reject('device_mismatch');
       inner.deviceId = outer.from;
+      // Pairing is verified on its own terms (signed by the key it enrolls),
+      // also for an app that is already paired: re-pairing after a new QR scan
+      // or a lost pair_result must reach the pairing handler.
+      if (inner.type === 'pair_request') return { kind: 'pair_request', signed: outer, inner };
       const device = this.store.get(outer.from);
       if (device) {
         const rejection = checkSignedMessage(outer, device.identityKey, this.selfId()!, this.store.replayGuard);
         if (rejection) return reject(rejection, { from: outer.from, type: inner.type });
-        this.store.noteAccepted();
+        // Persist the nonce before acting: a crash must not reopen the replay window.
+        if (!this.store.noteAccepted()) return reject('replay_store_unwritable', { from: outer.from });
         this.stats.signedIn++;
-        return { kind: 'message', inner, signed: true };
+        return { kind: 'message', inner, signed: true, toAll: outer.to === ANY_RECIPIENT };
       }
-      if (inner.type === 'pair_request') return { kind: 'pair_request', signed: outer, inner };
       if (this.enforced) return reject('untrusted_sender', { from: outer.from, type: inner.type });
       this.stats.unsignedIn++;
       return { kind: 'message', inner, signed: false };
@@ -204,8 +208,12 @@ export class DeviceTrust {
     const inner = outer as Record<string, unknown>;
     if (typeof inner !== 'object' || inner === null) return reject('bad_body');
     if (this.enforced) return reject('unsigned', { type: inner.type });
-    // A paired app always signs; unsigned traffic in its name is forged.
+    // A paired app always signs; unsigned traffic in its name — by the relay's
+    // stamp or by the deviceId it claims — is forged.
     if (sender !== undefined && this.store.has(sender)) return reject('unsigned_from_paired', { type: inner.type });
+    if (typeof inner.deviceId === 'string' && this.store.has(inner.deviceId)) {
+      return reject('unsigned_from_paired', { type: inner.type });
+    }
     this.stats.unsignedIn++;
     return { kind: 'message', inner, signed: false };
   }
@@ -239,7 +247,15 @@ export class DeviceTrust {
     if (!verifySignature(signed, c.identityKey)) return fail('bad_signature');
     const replay = this.store.replayGuard.check(signed);
     if (replay) return fail(replay);
-    this.store.noteAccepted();
+    if (!this.store.noteAccepted()) return fail('replay_store_unwritable');
+    // Already paired with exactly these keys (a re-scan, or the first
+    // pair_result was lost): possession of the trusted identity key, proven
+    // by the signature above, is enough to confirm again.
+    const existing = this.store.get(appId);
+    if (existing && existing.identityKey === c.identityKey && existing.encryptionKey === c.encryptionKey
+      && (existing.rsaKey ?? undefined) === (c.rsaKey || undefined)) {
+      return { ok: true, appId, encryptionKey: existing.encryptionKey, device: existing };
+    }
     const claim: PairingClaim = {
       tentacleId: c.tentacleId, appId, identityKey: c.identityKey, encryptionKey: c.encryptionKey,
       ...(c.rsaKey ? { rsaKey: c.rsaKey } : {}), ts: c.ts,

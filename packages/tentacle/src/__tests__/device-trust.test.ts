@@ -8,6 +8,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Real RSA-4096 key generation per app: slow on a loaded machine.
+vi.setConfig({ testTimeout: 60_000 });
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -271,7 +274,7 @@ describe('device trust (enforced) — a compromised Head cannot command the comp
     const { env, phone } = paired();
     const captured = appSend(env, phone, { type: 'send_input', sessionId: 's1', payload: { text: 'once' } });
     env.deliver(captured, phone.id);
-    env.client.deviceTrust!.store.flushReplay();
+    // No graceful flush: the nonce must already be on disk.
     const restarted = setup('enforce');
     joined(restarted, phone);
     restarted.deliver(captured, phone.id);
@@ -533,5 +536,73 @@ describe('device trust — push previews', () => {
     expect(opened.to).toBe(phone.id);
     expect(JSON.parse(opened.body).type).toBe('idle');
     expect(Buffer.byteLength(buildApnsPayload({ blob: built.encrypted!.blob, key }))).toBeLessThanOrEqual(4096);
+  });
+});
+
+describe('device trust — review regressions', () => {
+  it('REV-03: a store created before the keys picks up the fresh-install policy on connect', () => {
+    const keyManager = new KeyManager(join(home, 'late', 'keys'));
+    const client = new RelayClient(createAdapter() as never, createSessionManager() as never, {
+      relayUrl: 'ws://localhost:4000', authMethod: 'open',
+      device: { name: 'Fresh', role: 'tentacle', deviceId: TENTACLE }, localLink: false,
+    }, keyManager);
+    expect(client.deviceTrust!.enforced).toBe(false); // nothing on disk yet
+    keyManager.getKeyPair(); // what the connect handler does first
+    (client as unknown as { ensureDeviceTrustReady(): void }).ensureDeviceTrustReady();
+    expect(client.deviceTrust!.enforced).toBe(true);
+  });
+
+  it('REV-04: a paired app re-pairs with a fresh code, and a lost pair_result can be retried', () => {
+    const env = setup('enforce');
+    const phone = makeApp('dev_phone');
+    joined(env, phone);
+    const secret = createPairingSecret(home);
+    env.deliver(pairRequest(env, phone, secret), phone.id);
+    expect(env.client.deviceTrust!.isTrusted(phone.id)).toBe(true);
+    env.sent.length = 0;
+    // Retry of the same pairing (secret already consumed): confirmed again.
+    env.deliver(pairRequest(env, phone, secret), phone.id);
+    const results = readable(env, phone).filter((m) => m.type === 'pair_result');
+    expect(results.at(-1)?.payload).toMatchObject({ ok: true });
+    // New keys under the same app id need a fresh valid code.
+    const reinstalled = { ...makeApp('dev_phone') };
+    env.sent.length = 0;
+    env.deliver(pairRequest(env, reinstalled, null), reinstalled.id);
+    expect(readable(env, reinstalled).find((m) => m.type === 'pair_result')?.payload).toMatchObject({ ok: false });
+    env.deliver(pairRequest(env, reinstalled, createPairingSecret(home)), reinstalled.id);
+    expect(env.client.deviceTrust!.store.get(phone.id)?.identityKey).toBe(reinstalled.ik.publicKey);
+  });
+
+  it('REV-05: a write from a stale store does not resurrect a revoked device', () => {
+    const dir = join(home, 'trust');
+    const env = setup('enforce');
+    const a = makeApp('dev_a');
+    const b = makeApp('dev_b');
+    joined(env, a);
+    env.deliver(pairRequest(env, a, createPairingSecret(home)), a.id);
+    // Another process revokes a; the daemon has not refreshed yet.
+    new TrustStore(dir).remove(a.id);
+    joined(env, b);
+    env.deliver(pairRequest(env, b, createPairingSecret(home)), b.id);
+    const onDisk = new TrustStore(dir);
+    expect(onDisk.has(a.id)).toBe(false);
+    expect(onDisk.has(b.id)).toBe(true);
+  });
+
+  it('REV-08: an unsigned legacy envelope claiming a paired app is refused in compatible mode', async () => {
+    const env = setup('compatible');
+    const phone = makeApp('dev_phone');
+    joined(env, phone);
+    env.deliver(pairRequest(env, phone, createPairingSecret(home)), phone.id);
+    const tentacleRsa = env.keyManager.getKeyPair().publicKey;
+    const forged = encryptToBlob(JSON.stringify({ type: 'send_input', deviceId: phone.id, sessionId: 's1', payload: { text: 'forged' } }),
+      [{ deviceId: TENTACLE, publicKey: tentacleRsa }]);
+    // Direct (non-pulse) envelope: no relay stamp at all.
+    (env.client as unknown as { handleMessage(m: Record<string, unknown>): void })
+      .handleMessage({ type: 'unicast', to: TENTACLE, blob: forged.blob, keys: forged.keys });
+    // Pulse path with another device's stamp.
+    env.deliver(forged as never, 'dev_other');
+    await flush();
+    expect(sendInputCalls(env)).toHaveLength(0);
   });
 });

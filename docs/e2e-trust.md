@@ -101,8 +101,10 @@ X25519 key; it travels as the app's entry in the preview's `keys` map,
 prefixed `v2.` (the Head forwards `{blob, key}` per device unchanged — no Head
 change). The iOS Notification Service Extension and Kraki for Mac show it only
 if the signature matches a pinned computer, it is addressed to this device and
-is less than 24 h old. Mac drops unsigned previews about a paired computer's
-sessions.
+is less than 24 h old. Unsigned (legacy) previews: Mac drops those about a
+paired computer's sessions; the app publishes a policy to the app group so the
+iOS NSE shows them only while an unpaired computer exists and never for a paired
+computer's session (generic text otherwise).
 
 ## UI (iOS / macOS)
 
@@ -129,13 +131,34 @@ sessions.
   pairing, one-time secret, same-Mac pairing, commands round-trip, a rogue
   account device is refused.
 
+## Hardening from the review round (2026-10-13)
+
+GPT-6.1 line-by-line review (REV-01…09) and trust-boundary test suites
+(packages/tentacle/src/__tests__/trust-boundary-tentacle.test.ts, 78 cases;
+KrakiTests/DeviceTrustBoundaryTests.swift, 28+ cases) found and now pin:
+- Apps: a pin protects from the moment of pinning (pending/refused too);
+  pair_result / trusted_devices / trust_required must carry the pinned
+  computer's signature (`__krakiSignedBy`, set only by verification); unsigned
+  messages must name a sender and may not touch a pinned computer's session
+  anywhere in the message (top level, payload, session lists, previews); an
+  opened link with other keys for any pinned computer asks first.
+- Tentacle: policy loaded before the first relay frame on fresh installs;
+  unreadable policy fails closed (enforce); re-pairing / lost pair_result
+  retries reach the pairing handler (idempotent for identical keys); nonces
+  persisted synchronously before acting (fail closed if unwritable); unreadable
+  replay state rejects everything signed before startup; trust-store writes
+  are locked read-modify-write (no resurrecting revoked apps); unsigned
+  messages claiming a paired app by deviceId are refused in compatible mode;
+  trust administration must be addressed to this computer (not `*`); Head
+  control wrappers are refused on the local link even when fragmented; a local
+  enrollment must be consumed before trust is granted; upgraded installs
+  create device-trust keys at startup (same-Mac pairing).
+
 ## Not done
 
 - **Web app** and **Windows-specific** checks: deferred. Web cannot pair; an enforcing computer does not serve it.
 - **Adding a computer** requires a QR scan / pasted link or the same-Mac path;
   approving a new device from an already paired one is not implemented.
-- **iOS NSE** cannot tell which computer an unsigned (legacy RSA) preview is
-  about, so the Head could still spoof the text of a legacy-path notification.
 - **Head-originated destructive control**: `account_deleted` makes the computer
   forget credentials and keys; `device_removed` revokes trust (DoS, not takeover).
 - App-side replay protection (computer→app) and key rotation are not implemented.

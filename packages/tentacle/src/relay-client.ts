@@ -347,6 +347,11 @@ export class RelayClient {
         // @coinfra/pulse ≥0.5.1: progress heartbeats never trigger resends.
         pulseProgressAck: true,
       };
+      // The keys exist now (a fresh install just created them and its default
+      // policy). Make sure device-trust keys exist on upgraded installs too
+      // (same-Mac pairing reads them), then load the policy before anything
+      // from the relay is accepted.
+      this.ensureDeviceTrustReady();
       const auth = this.buildAuthPayload(device);
       ws.send(JSON.stringify({ type: 'auth', auth, device }));
     });
@@ -488,6 +493,7 @@ export class RelayClient {
       this.authInfo = msg as unknown as AuthOkMessage;
       this.preferChallengeAuth = true;
       this.reconnectAttempts = 0;
+      this.deviceTrust?.store.refresh();
       // Cache consumer device public keys for E2E
       if (this.authInfo.devices) {
         this.updateConsumerKeys(this.authInfo.devices);
@@ -665,7 +671,7 @@ export class RelayClient {
       }
       try {
         const opened = this.deviceTrust!.open({ blob: msg.blob, keys: msg.keys }, undefined);
-        if (opened.kind === 'message') this.dispatchAppMessage(opened.inner, opened.signed);
+        if (opened.kind === 'message') this.dispatchAppMessage(opened.inner, opened.signed, opened.toAll);
         else if (opened.kind === 'pair_request') this.handlePairRequest(opened.signed, opened.inner);
       } catch {
         // Can't decrypt — not for us or corrupted
@@ -970,7 +976,7 @@ export class RelayClient {
       return;
     }
     parsed.src = appId;
-    this.handlePulseDelivered(JSON.stringify(parsed));
+    this.handlePulseDelivered(JSON.stringify(parsed), undefined, 'link');
   }
 
   send(msg: Partial<ProducerMessage>, createsUnread = false, opts: { persist?: boolean } = {}): void {
@@ -1245,7 +1251,7 @@ export class RelayClient {
     for (const part of parts) this.pulse.send(part, shape(fragmenting), durable, undefined, stream);
   }
 
-  private handlePulseDelivered(payloadJson: string, fragmentSender?: string, route: 'head' | 'link' = 'link'): void {
+  private handlePulseDelivered(payloadJson: string, fragmentSender: string | undefined, route: 'head' | 'link'): void {
     if (!this.keyManager || !this.authInfo) return;
     let parsed: { from?: string; src?: string; msg?: Record<string, unknown>; blob?: string; keys?: Record<string, string> };
     try {
@@ -1266,6 +1272,11 @@ export class RelayClient {
     // load-bearing — device_joined registers the app's consumer key. Only the
     // head's own control types are accepted from this plaintext wrapper; auth
     // frames and consumer messages arriving this way are forged and dropped.
+    // Head control never arrives over the local link, whole or reassembled.
+    if (route === 'link' && parsed.from !== undefined) {
+      logger.warn({ src: fragmentSender }, 'Dropped Head-control wrapper received on the local link');
+      return;
+    }
     if (parsed.from === HEAD_PULSE_TARGET) {
       const type = parsed.msg?.type;
       if (parsed.msg && typeof type === 'string' && HEAD_CONTROL_TYPES.has(type)) {
@@ -1317,7 +1328,7 @@ export class RelayClient {
         clientId: (inner as { payload?: { clientId?: string } }).payload?.clientId,
         decryptNs: (process.hrtime.bigint() - decryptStart).toString(),
       });
-      this.dispatchAppMessage(inner, opened.signed);
+      this.dispatchAppMessage(inner, opened.signed, opened.toAll);
     } catch (err) {
       logger.error({ err }, 'Pulse delivered payload decrypt failed');
     }
@@ -1465,6 +1476,16 @@ export class RelayClient {
 
   // ── Device trust ────────────────────────────────────
 
+  private ensureDeviceTrustReady(): void {
+    const km = this.keyManager as (KeyManager & { getPublicIdentity?: () => unknown }) | null;
+    if (km && typeof km.getPublicIdentity === 'function' && km.keysDir) {
+      try { km.getPublicIdentity(); } catch (err) {
+        logger.warn({ err: (err as Error).message }, 'Could not create device-trust keys');
+      }
+    }
+    if (this.deviceTrust?.store.refresh()) this.reevaluateAllApps();
+  }
+
   /** The key an app is reached with, or undefined when it may not be. A
    *  paired app's pinned key always wins over the one the Head reports; with
    *  trust enforced, an unpaired app gets nothing. */
@@ -1544,11 +1565,13 @@ export class RelayClient {
 
   /** Route an authenticated app message. Trust administration is accepted
    *  only from a paired app's signed message. */
-  private dispatchAppMessage(inner: Record<string, unknown>, signed: boolean): void {
+  private dispatchAppMessage(inner: Record<string, unknown>, signed: boolean, toAll = false): void {
     const type = typeof inner.type === 'string' ? inner.type : '';
     if (TRUST_ADMIN_TYPES.has(type)) {
       const from = inner.deviceId as string | undefined;
-      if (!signed || !from || !this.deviceTrust?.isTrusted(from)) {
+      // Signed for this computer specifically: a message addressed to several
+      // computers can be replayed by the relay to any one of them.
+      if (!signed || toAll || !from || !this.deviceTrust?.isTrusted(from)) {
         logger.warn({ type, from }, 'Dropped trust administration from an unpaired app');
         return;
       }

@@ -77,8 +77,10 @@ export function cmdDevices(args: string[]): void {
       return fail(matches.length === 0 ? `No paired app "${target}".` : `"${target}" matches several apps; use the id.`, json);
     }
     store.remove(matches[0]!.id);
-    if (json) process.stdout.write(JSON.stringify({ ok: true, revoked: matches[0]!.id }) + '\n');
-    else console.log(chalk.green(`  ${matches[0]!.name ?? matches[0]!.id} can no longer control this computer.`));
+    const name = matches[0]!.name ?? matches[0]!.id;
+    if (json) process.stdout.write(JSON.stringify({ ok: true, revoked: matches[0]!.id, enforced: store.enforced }) + '\n');
+    else if (store.enforced) console.log(chalk.green(`  ${name} can no longer control this computer.`));
+    else console.log(chalk.yellow(`  ${name} is no longer paired. "Only paired devices" is off, so it can still connect as an unpaired device — run \`kraki devices enforce on\` to block it.`));
     return;
   }
 

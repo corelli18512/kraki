@@ -24,7 +24,7 @@
  */
 
 import {
-  chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync,
+  chmodSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -107,12 +107,20 @@ export function writeTrustPolicy(dir: string, policy: TrustPolicy): void {
 }
 
 export function readTrustPolicy(dir: string): TrustPolicy {
+  let text: string;
   try {
-    const raw = JSON.parse(readFileSync(join(dir, 'policy.json'), 'utf8')) as { enforce?: unknown };
-    return { enforce: raw.enforce === true };
-  } catch {
+    text = readFileSync(join(dir, 'policy.json'), 'utf8');
+  } catch (err) {
     // No policy: an install that predates device trust (compatible).
-    return { enforce: false };
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { enforce: false };
+    return { enforce: true };
+  }
+  try {
+    const raw = JSON.parse(text) as { enforce?: unknown };
+    return { enforce: raw.enforce !== false };
+  } catch {
+    // Unreadable policy: fail closed.
+    return { enforce: true };
   }
 }
 
@@ -164,7 +172,14 @@ export class TrustStore {
     this.stamps.policy = this.mtime(this.policyPath);
     try {
       this.replayGuard.import(JSON.parse(readFileSync(this.replayPath, 'utf8')) as Array<[string, number]>);
-    } catch { /* first run */ }
+    } catch (err) {
+      // Lost replay state (not merely absent): refuse anything signed before
+      // now, so no captured message inside the window can be replayed.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.replayGuard.rejectBefore(Date.now());
+        logger.warn({ err: (err as Error).message }, 'Replay state unreadable — rejecting earlier messages');
+      }
+    }
   }
 
   get persistent(): boolean { return this.dir !== null; }
@@ -177,6 +192,15 @@ export class TrustStore {
   }
 
   get enforced(): boolean {
+    // Until a policy file exists (a fresh install writes one with its keys),
+    // keep looking for it: never act on a stale "compatible" guess.
+    if (this.dir && this.stamps.policy === 0) {
+      const stamp = this.mtime(this.policyPath);
+      if (stamp !== 0) {
+        this.policy = readTrustPolicy(this.dir);
+        this.stamps.policy = stamp;
+      }
+    }
     return this.policy.enforce;
   }
 
@@ -236,26 +260,60 @@ export class TrustStore {
     this.stamps.devices = this.mtime(this.devicesPath);
   }
 
-  /** Persist accepted nonces soon (a restart must not reopen the replay window). */
-  noteAccepted(): void {
+  /**
+   * Persist an accepted nonce before the message is acted on, so a crash
+   * cannot reopen the replay window. False when it could not be written:
+   * the caller must then refuse the message (fail closed).
+   */
+  noteAccepted(): boolean {
     this.replayDirty = true;
-    if (!this.dir || this.replaySaveTimer) return;
-    this.replaySaveTimer = setTimeout(() => {
-      this.replaySaveTimer = null;
-      this.flushReplay();
-    }, 1_000);
-    this.replaySaveTimer.unref?.();
+    return this.flushReplay();
   }
 
-  flushReplay(): void {
+  flushReplay(): boolean {
     if (this.replaySaveTimer) { clearTimeout(this.replaySaveTimer); this.replaySaveTimer = null; }
-    if (!this.dir || !this.replayDirty) return;
-    this.replayDirty = false;
+    if (!this.dir || !this.replayDirty) return true;
     try {
       ensureDir(this.dir);
       writePrivateJson(this.replayPath, this.replayGuard.export());
+      this.replayDirty = false;
+      return true;
     } catch (err) {
       logger.warn({ err: (err as Error).message }, 'Could not persist replay state');
+      return false;
+    }
+  }
+
+  /**
+   * Read-modify-write devices.json under a lock file, starting from what is
+   * on disk — so the daemon and `kraki devices` (or two daemons) never write
+   * back a stale copy (e.g. resurrecting a revoked app).
+   */
+  private mutate(change: (devices: Map<string, TrustedDevice>) => boolean): boolean {
+    if (!this.dir) return change(this.devices);
+    ensureDir(this.dir);
+    const lock = join(this.dir, 'devices.lock');
+    const deadline = Date.now() + 3_000;
+    let fd: number | null = null;
+    while (fd === null) {
+      try {
+        fd = openSync(lock, 'wx', 0o600);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        // A holder that died leaves the lock behind; it is stale after 10 s.
+        try { if (Date.now() - statSync(lock).mtimeMs > 10_000) unlinkSync(lock); } catch { /* raced */ }
+        if (Date.now() > deadline) throw new Error('Trusted devices are locked by another process');
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      }
+    }
+    try {
+      this.loadDevices();
+      const changed = change(this.devices);
+      if (changed) this.save();
+      return changed;
+    } finally {
+      closeSync(fd);
+      try { unlinkSync(lock); } catch { /* gone */ }
     }
   }
 
@@ -273,15 +331,13 @@ export class TrustStore {
 
   /** Revoke an app (it was removed from the account, or the user revoked it). */
   remove(appId: string): boolean {
-    if (!this.devices.delete(appId)) return false;
-    this.save();
+    if (!this.mutate((devices) => devices.delete(appId))) return false;
     logger.info({ appId }, 'Device trust revoked');
     return true;
   }
 
   private trust(appId: string, device: TrustedDevice): void {
-    this.devices.set(appId, device);
-    this.save();
+    this.mutate((devices) => { devices.set(appId, device); return true; });
     logger.info({ appId, via: device.via, name: device.name }, 'Device trusted');
   }
 
@@ -336,7 +392,12 @@ export class TrustStore {
       if (e.appId !== appId || e.identityKey !== identityKey || e.encryptionKey !== encryptionKey) return false;
       if (typeof e.ts !== 'number' || e.ts < now - LOCAL_ENROLL_TTL_MS || e.ts > now + LOCAL_ENROLL_TTL_MS) return false;
       if (!isRawPublicKey(e.identityKey) || !isRawPublicKey(e.encryptionKey)) return false;
-      try { unlinkSync(path); } catch { /* fine */ }
+      // Consume it before trusting: a left-over enrollment would let a
+      // revoked app enroll itself again.
+      try { unlinkSync(path); } catch {
+        logger.warn({ appId }, 'Could not consume local enrollment');
+        return false;
+      }
       this.trust(appId, {
         identityKey: e.identityKey,
         encryptionKey: e.encryptionKey,

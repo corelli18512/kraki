@@ -353,6 +353,12 @@ final class TentacleTrustStore {
         return pins.values.contains { $0.paired }
     }
 
+    /// Any computer pinned (paired, pairing or refused).
+    var hasPins: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !pins.isEmpty
+    }
+
     var all: [String: TentaclePin] {
         lock.lock(); defer { lock.unlock() }
         return pins
@@ -394,6 +400,8 @@ enum DeviceTrustInbound {
     /// where session ownership is known) drops any that touch a session of a
     /// paired computer.
     static let unsignedKey = "__krakiUnsigned"
+    /// Marker on signed inner messages: the verified signer (a pinned computer).
+    static let signedByKey = "__krakiSignedBy"
 
     /// Authenticate a decrypted payload. `src` is the relay/link sender stamp.
     static func check(
@@ -429,18 +437,28 @@ enum DeviceTrustInbound {
                 return .rejected("device_mismatch")
             }
             inner["deviceId"] = signed.from
+            inner[signedByKey] = signed.from
+            inner.removeValue(forKey: unsignedKey)
             guard let out = try? JSONSerialization.data(withJSONObject: inner) else { return .rejected("bad_body") }
             return .message(out)
         }
-        // Unsigned: legacy computers only. Anything attributable to a paired
-        // computer — by stamp or claimed sender here, by the session it
-        // touches in MessageRouter — is forged: a paired computer always signs.
-        guard store.hasPaired else { return .message(data) }
-        let claimed = object["deviceId"] as? String
-        for id in [src, claimed].compactMap({ $0 }) where store.pairedPin(id) != nil {
-            return .rejected("unsigned_from_paired")
-        }
+        // Unsigned: legacy computers only. Anything attributable to a pinned
+        // computer (paired, or pairing — protection starts at pinning) — by
+        // stamp or claimed sender here, by the sessions it touches in
+        // MessageRouter — is forged: such a computer always signs.
         var marked = object
+        marked.removeValue(forKey: signedByKey)
+        guard store.hasPins else {
+            marked[unsignedKey] = true
+            guard let out = try? JSONSerialization.data(withJSONObject: marked) else { return .rejected("bad_json") }
+            return .message(out)
+        }
+        let claimed = object["deviceId"] as? String
+        // Without a claimed sender it cannot be told apart from a pinned computer.
+        guard let claimed, !claimed.isEmpty else { return .rejected("unsigned_unattributed") }
+        for id in [src, claimed].compactMap({ $0 }) where store.pin(id) != nil {
+            return .rejected("unsigned_from_pinned")
+        }
         marked[unsignedKey] = true
         guard let out = try? JSONSerialization.data(withJSONObject: marked) else { return .rejected("bad_json") }
         return .message(out)
@@ -458,6 +476,30 @@ enum DeviceTrustPush {
     static let maxAge: TimeInterval = 24 * 3600
 
     enum Failure: Error { case notV2, decrypt, unsigned, unpinned, badSignature, wrongRecipient, stale }
+
+    /// Shared with the Notification Service Extension: whether a legacy
+    /// (unsigned RSA) preview may be shown. A paired computer signs its
+    /// previews, so an unsigned one is shown only when this device also uses
+    /// an unpaired computer, and never for a paired computer's session.
+    static let legacyAllowedKey = "kraki.deviceTrust.legacyPreviewsAllowed"
+    static let pairedSessionsKey = "kraki.deviceTrust.pairedSessions"
+
+    static func legacyPreviewAllowed(
+        sessionId: String?,
+        store: TentacleTrustStore = .shared,
+        defaults: UserDefaults = DeviceTrustDefaults.shared
+    ) -> Bool {
+        guard store.hasPins else { return true }
+        guard defaults.bool(forKey: legacyAllowedKey) else { return false }
+        if let sessionId, Set(defaults.stringArray(forKey: pairedSessionsKey) ?? []).contains(sessionId) { return false }
+        return true
+    }
+
+    /// Written by the app whenever computers or sessions change.
+    static func publishPolicy(legacyAllowed: Bool, pairedSessions: [String], defaults: UserDefaults = DeviceTrustDefaults.shared) {
+        defaults.set(legacyAllowed, forKey: legacyAllowedKey)
+        defaults.set(Array(pairedSessions.prefix(2_000)), forKey: pairedSessionsKey)
+    }
 
     /// The preview JSON, verified to come from a pinned computer.
     static func open(

@@ -4,6 +4,13 @@
 
 import SwiftUI
 
+extension Text {
+    /// Copy that marks commands with backticks (`kraki connect`) renders them as code.
+    init(trustCopy: String) {
+        self.init((try? AttributedString(markdown: trustCopy)) ?? AttributedString(trustCopy))
+    }
+}
+
 // MARK: - Status
 
 extension ComputerTrustState {
@@ -40,12 +47,14 @@ extension ComputerTrustState {
     }
 
     /// One sentence for the security section.
-    func explanation(computer: String) -> String {
+    func explanation(computer: String, online: Bool = true) -> String {
         switch self {
         case .paired:
             return "Messages with \(computer) are signed and end-to-end encrypted to keys exchanged when you scanned its code. Kraki's servers can't read them or send commands in your name."
         case .pairing:
-            return "Confirming the pairing with \(computer)…"
+            return online
+                ? "Confirming the pairing with \(computer)…"
+                : "\(computer) is offline. Pairing finishes automatically when it's back online."
         case .failed(let reason):
             return PairingFailureText.describe(reason)
         case .needsPairing:
@@ -105,7 +114,7 @@ struct ComputerSecurityRows: View {
             Spacer()
             TrustStatusBadge(state: state)
         }
-        Text(state.explanation(computer: device.name))
+        Text(trustCopy: state.explanation(computer: device.name, online: device.online))
             .font(.footnote)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -183,7 +192,7 @@ struct ComputerSecurityRows: View {
 
     private func trustedRow(_ entry: TrustedDeviceEntry) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: entry.via == "local" ? "desktopcomputer" : "iphone")
+            Image(systemName: entry.via == "local" ? "desktopcomputer" : "qrcode")
                 .foregroundStyle(.secondary)
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 1) {
@@ -202,6 +211,7 @@ struct ComputerSecurityRows: View {
             Spacer()
             Button("Revoke", role: .destructive) { revoking = entry }
                 .buttonStyle(.borderless)
+                .foregroundStyle(Color(hex: 0xDC2626))
                 .accessibilityIdentifier("trust.revoke.\(entry.id)")
         }
         .confirmationDialog(
@@ -215,10 +225,20 @@ struct ComputerSecurityRows: View {
             }
             Button("Cancel", role: .cancel) { revoking = nil }
         } message: {
-            Text(entry.id == appState.deviceId
-                 ? "This device will stop working with \(device.name) until you scan its code again."
-                 : "\(entry.name) will no longer see or control \(device.name). To use it again, scan the computer's code on it.")
+            Text(revokeMessage(entry))
         }
+    }
+
+    private func revokeMessage(_ entry: TrustedDeviceEntry) -> String {
+        let enforced = info?.enforced == true
+        if entry.id == appState.deviceId {
+            return enforced
+                ? "This device will stop working with \(device.name) until you scan its code again."
+                : "This device will no longer be paired with \(device.name). While \"Only paired devices\" is off, it can still connect unpaired."
+        }
+        return enforced
+            ? "\(entry.name) will no longer see or control \(device.name). To use it again, scan the computer's code on it."
+            : "\(entry.name) will no longer be paired. While \"Only paired devices\" is off, any device on your account — including it — can still connect. Turn that on to block it."
     }
 
     private func subtitle(_ entry: TrustedDeviceEntry) -> String {
@@ -245,9 +265,9 @@ struct PairingNeededBanner: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(state == .needsPairing ? "Pair with \(device.name)" : "Pairing with \(device.name) failed")
                         .font(.system(size: 13, weight: .semibold))
-                    Text(state == .needsPairing
+                    Text(trustCopy: state == .needsPairing
                          ? "It only accepts devices paired with it. Run `kraki connect` there and scan the code."
-                         : state.explanation(computer: device.name))
+                         : state.explanation(computer: device.name, online: device.online))
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -330,7 +350,7 @@ struct PairingFeedbackToast: View {
                 Image(systemName: "exclamationmark.shield.fill").foregroundStyle(Color(hex: 0xDC2626))
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Couldn't pair with \(name)")
-                    Text(PairingFailureText.describe(reason))
+                    Text(trustCopy: PairingFailureText.describe(reason))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -376,7 +396,7 @@ struct PastePairingLinkSheet: View {
                 .font(.system(size: 12, design: .monospaced))
                 .accessibilityIdentifier("trust.pasteField")
             if let error {
-                Text(error).font(.system(size: 11.5)).foregroundStyle(Color(hex: 0xDC2626))
+                Text(trustCopy: error).font(.system(size: 11.5)).foregroundStyle(Color(hex: 0xDC2626))
             }
             HStack {
                 Spacer()
@@ -435,9 +455,10 @@ struct PastePairingLinkSheet: View {
 }
 
 extension AppState {
-    /// The link names a computer this app is paired with, under another key.
+    /// The link names a computer this app already pinned (paired, pairing or
+    /// refused) under other keys.
     func pairingLinkChangesKey(_ link: PairingLink) -> Bool {
-        guard let trust = link.trust, let pin = TentacleTrustStore.shared.pairedPin(trust.tentacleId) else { return false }
+        guard let trust = link.trust, let pin = TentacleTrustStore.shared.pin(trust.tentacleId) else { return false }
         return pin.identityKey != trust.identityKey || pin.encryptionKey != trust.encryptionKey
     }
 }

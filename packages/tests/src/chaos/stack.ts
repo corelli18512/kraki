@@ -16,12 +16,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Storage, HeadServer, OpenAuthProvider } from '@kraki/head';
-import { SessionManager, RelayClient, KeyManager, AttachmentStore, createPairingSecret, writeTrustPolicy } from '@kraki/tentacle';
+import { SessionManager, RelayClient, KeyManager, AttachmentStore, createPairingSecret, writeTrustPolicy, buildPushPreview } from '@kraki/tentacle';
 import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { WebSocket } from 'ws';
 import { ChaosProxy, type FaultProfile } from './proxy.js';
 import { ScriptedAdapter } from './scripted-adapter.js';
+import { connectTrustedApp } from './trusted-app.js';
 import { connectApp, sendToTentacle, type MockApp } from '../helpers.js';
 
 export interface StackOptions { controlPort?: number; headPort?: number }
@@ -53,6 +55,8 @@ export class ChaosStack {
   trustMode: 'enforce' | 'compatible' = 'compatible';
   /** Unpaired device that tries to command the computer (device-trust tests). */
   private rogue: MockApp | null = null;
+  private secondComputer: { root: string; keys: KeyManager; relay: RelayClient } | null = null;
+  private trustedApps: Awaited<ReturnType<typeof connectTrustedApp>>[] = [];
   /** Drop the next N `session_messages_batch` replies (sent, never delivered). */
   dropBatches = 0;
   readonly events: Array<{ t: number; event: string; detail?: Record<string, unknown> }> = [];
@@ -260,7 +264,61 @@ export class ChaosStack {
         case 'POST /peer/input': out = await this.peerInput(String(body.text ?? 'ok'), String(body.sessionId ?? this.sessionId)); break;
         case 'POST /session': out = { sessionId: await this.createSession() }; break;
         case 'POST /pairing-token': out = { token: await this.pairingToken() }; break;
-        case 'POST /trust/pairing-link': out = { url: await this.trustPairingLink() }; break;
+        case 'POST /trust/pairing-link': out = { url: await this.trustPairingLink(Number(body.ageMs ?? 0)) }; break;
+        case 'POST /trust/second-app': {
+          const app = await connectTrustedApp(this.headPort, String(body.url ?? await this.trustPairingLink()));
+          this.trustedApps.push(app);
+          out = { deviceId: app.id, result: app.messages.find((m) => m.type === 'pair_result') };
+          break;
+        }
+        case 'POST /trust/second-app-input': {
+          const app = this.trustedApps.at(-1);
+          if (!app) throw new Error('second app not started');
+          app.send('send_input', { text: String(body.text), clientId: `second-${Date.now()}` }, this.sessionId);
+          break;
+        }
+        case 'POST /trust/second-computer': {
+          if (!this.secondComputer) {
+            const root = mkdtempSync(join(tmpdir(), 'kraki-chaos-second-'));
+            const keys = new KeyManager(join(root, 'keys'));
+            writeTrustPolicy(join(root, 'trust'), { enforce: true });
+            const relay = new RelayClient(new ScriptedAdapter().asAdapter(), new SessionManager(join(root, 'sessions')), {
+              relayUrl: `ws://127.0.0.1:${this.headPort}`, authMethod: 'open',
+              device: { name: 'Second Computer', role: 'tentacle', kind: 'desktop' }, localLink: false,
+            }, keys);
+            this.secondComputer = { root, keys, relay };
+            relay.connect();
+            await this.waitFor(() => relay.getAuthInfo() !== null, 10_000, 'second computer auth');
+          }
+          const { root, keys, relay } = this.secondComputer;
+          const id = relay.getAuthInfo()!.deviceId;
+          const identity = keys.getPublicIdentity();
+          const params = new URLSearchParams({ relay: `ws://127.0.0.1:${this.appProxy.port}`, token: await this.pairingToken(),
+            tid: id, ik: identity.identityKey, xk: identity.encryptionKey, ps: createPairingSecret(root) });
+          out = { tentacleId: id, url: `https://app.kraki.chat/?${params}` };
+          break;
+        }
+        case 'POST /trust/policy':
+          writeTrustPolicy(join(this.root, 'trust'), { enforce: body.enforce === true });
+          break;
+        case 'POST /trust/preview': {
+          const preview = buildPushPreview(this.relay, {
+            type: 'agent_message', sessionId: this.sessionId,
+            payload: { question: { id: 'q_usability', text: 'Allow the usability test? ✓' } },
+          } as unknown as Parameters<typeof buildPushPreview>[1]);
+          out = preview?.encrypted ?? {};
+          break;
+        }
+        case 'POST /trust/screenshot': {
+          // Opt-in only; never select or boot another lane's simulator.
+          const simulator = process.env.CHAOS_TRUST_SIMULATOR;
+          const name = String(body.name ?? '');
+          if (!simulator || !/^[A-Fa-f0-9-]{36}$/.test(simulator) || !/^ios-[a-z0-9-]+$/.test(name)) {
+            throw new Error('explicit test simulator and safe screenshot name required');
+          }
+          execFileSync('xcrun', ['simctl', 'io', simulator, 'screenshot', `/tmp/kraki-trust-review/shots/${name}.png`]);
+          break;
+        }
         case 'POST /trust/rogue-input': out = await this.rogueInput(String(body.text ?? 'rogue'), String(body.sessionId ?? this.sessionId)); break;
         case 'GET /trust/state': out = {
           mode: this.trustMode,
@@ -295,13 +353,13 @@ export class ChaosStack {
   }
 
   /** A pairing QR link for this computer, as `kraki pair` renders it. */
-  async trustPairingLink(): Promise<string> {
+  async trustPairingLink(ageMs = 0): Promise<string> {
     const token = await this.pairingToken();
     const identity = this.keys.getPublicIdentity();
     const params = new URLSearchParams({
       relay: `ws://127.0.0.1:${this.appProxy.port}`, token,
       tid: this.tentacleId, ik: identity.identityKey, xk: identity.encryptionKey,
-      ps: createPairingSecret(this.root),
+      ps: createPairingSecret(this.root, Date.now() - Math.max(0, ageMs)),
     });
     return `https://app.kraki.chat/?${params.toString()}`;
   }
@@ -336,6 +394,9 @@ export class ChaosStack {
 
   async stop(): Promise<void> {
     this.relay?.disconnect();
+    this.trustedApps.forEach((app) => app.close());
+    this.secondComputer?.relay.disconnect();
+    if (this.secondComputer) rmSync(this.secondComputer.root, { recursive: true, force: true });
     this.admin?.close();
     this.peer?.close();
     this.rogue?.close();

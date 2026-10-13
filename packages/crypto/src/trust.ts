@@ -222,10 +222,17 @@ export class ReplayGuard {
     this.now = options.now ?? Date.now;
   }
 
+  private notBefore = 0;
+
+  /** Treat everything signed before `ts` as stale (replay state was lost). */
+  rejectBefore(ts: number): void {
+    this.notBefore = Math.max(this.notBefore, ts);
+  }
+
   /** Check freshness and uniqueness; records the nonce when accepted. */
   check(m: Pick<SignedMessage, 'from' | 'ts' | 'nonce'>): 'stale' | 'from_future' | 'replay' | null {
     const now = this.now();
-    if (m.ts < now - this.maxAgeMs) return 'stale';
+    if (m.ts < now - this.maxAgeMs || m.ts < this.notBefore) return 'stale';
     if (m.ts > now + this.maxFutureMs) return 'from_future';
     const key = `${m.from}\n${m.nonce}`;
     if (this.seen.has(key)) return 'replay';

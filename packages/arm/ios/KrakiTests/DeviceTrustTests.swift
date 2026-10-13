@@ -168,9 +168,40 @@ final class DeviceTrustTests: XCTestCase {
         XCTAssertTrue(legacy.contains(DeviceTrustInbound.unsignedKey))
     }
 
-    func testNoPairedComputersMeansLegacyBehaviour() {
-        let plain = #"{"type":"agent_message","deviceId":"dev_legacy"}"#
-        XCTAssertEqual(check(plain, src: "dev_legacy"), plain)
+    func testNoPinnedComputersMeansLegacyBehaviour() throws {
+        let out = try XCTUnwrap(check(#"{"type":"agent_message","deviceId":"dev_legacy"}"#, src: "dev_legacy"))
+        XCTAssertTrue(out.contains("dev_legacy"))
+        XCTAssertTrue(out.contains(DeviceTrustInbound.unsignedKey))
+    }
+
+    /// REV-01: protection starts at pinning, before the computer confirms.
+    func testPendingPinRejectsUnsignedImpersonation() {
+        pin("dev_t", key: Curve25519.Signing.PrivateKey(), paired: false)
+        XCTAssertNil(check(#"{"type":"pair_result","deviceId":"dev_t","payload":{"ok":true}}"#, src: "dev_t"))
+        XCTAssertNil(check(#"{"type":"agent_message","deviceId":"dev_t","sessionId":"s"}"#, src: "dev_other"))
+        // Unattributed unsigned traffic can't be told apart from the pinned computer.
+        XCTAssertNil(check(#"{"type":"session_list","payload":{"sessions":[]}}"#, src: nil))
+    }
+
+    /// Signed messages carry their verified signer; unsigned ones never do.
+    func testSignerMarkerCannotBeForged() throws {
+        let computer = Curve25519.Signing.PrivateKey()
+        pin("dev_t", key: computer)
+        let signedOut = try XCTUnwrap(check(try signed(["type": "pair_result", "deviceId": "dev_t"], from: "dev_t", key: computer), src: "dev_t"))
+        XCTAssertTrue(signedOut.contains(DeviceTrustInbound.signedByKey))
+        let forged = "{\"type\":\"pair_result\",\"deviceId\":\"dev_x\",\"\(DeviceTrustInbound.signedByKey)\":\"dev_x\"}"
+        let out = try XCTUnwrap(check(forged, src: "dev_x"))
+        XCTAssertFalse(out.contains(DeviceTrustInbound.signedByKey))
+    }
+
+    /// REV-02: sessions referenced anywhere in a message are checked.
+    func testReferencedSessionIdsCoverNestedPlaces() {
+        let preview = #"{"sessionId":"s_prev"}"#
+        let dict: [String: Any] = [
+            "sessionId": "s_top",
+            "payload": ["sessionId": "s_payload", "sessions": [["id": "s_list"]], "preview": preview],
+        ]
+        XCTAssertEqual(Set(MessageRouter.referencedSessionIds(dict)), ["s_top", "s_payload", "s_list", "s_prev"])
     }
 
     // MARK: Pairing link
