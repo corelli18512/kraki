@@ -58,6 +58,7 @@ struct MacToolActivityRow: View {
         }
         .buttonStyle(.plain)
         .disabled(!hasExpandableContent)
+        .help(hasExpandableContent ? MacControlHelp.toolDetails(expanded: expanded) : "")
     }
 
     private var iconWithBadge: some View {

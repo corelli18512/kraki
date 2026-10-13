@@ -298,15 +298,13 @@ struct SessionsSidebarView: View {
             if isSelected {
                 Capsule().fill(Color.krakiPrimary)
             } else {
-                Capsule()
-                    .fill(Color.surfaceSecondary)
-                    .overlay(
-                        Capsule().stroke(Color.borderPrimary.opacity(0.6), lineWidth: 1)
-                    )
+                Capsule().fill(Color.surfaceSecondary)
+                    .overlay(Capsule().stroke(Color.borderPrimary.opacity(0.6), lineWidth: 1))
             }
         }
         .clipShape(Capsule())
         .buttonStyle(.plain)
+        .help(label == "All" ? "Show sessions on all devices" : "Show sessions on \(label)")
     }
 
     // MARK: - Session list
