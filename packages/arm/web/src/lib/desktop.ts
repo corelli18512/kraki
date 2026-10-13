@@ -49,7 +49,44 @@ export interface BuiltInBridge {
   openLogs: () => void;
 }
 
+export interface DesktopSettingsState {
+  usageShortcut: string;
+  usageShortcutEnabled: boolean;
+  launchAtLogin: boolean;
+  keepRunningInTray: boolean;
+  notificationPermission: 'granted' | 'denied' | 'default';
+  logsPath: string | null;
+  allowRemoteUpdates: boolean;
+}
+
+/** Optional OS preferences; absent in browsers and older desktop shells. */
+export interface DesktopSettingsBridge {
+  /** Read the current device's OS preferences and permission. */
+  state: () => Promise<DesktopSettingsState>;
+  /** Register an Electron accelerator globally; return errors rather than claiming success. */
+  setUsageShortcut?: (shortcut: string, enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
+  /** Add/remove the app's Windows login item. */
+  setLaunchAtLogin?: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
+  /** Keep the shell in the tray when its last window closes. */
+  setKeepRunningInTray?: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
+  /** Open Windows notification settings. */
+  openNotificationSettings?: () => void;
+  /** Reveal the service log directory in Explorer. */
+  showLogsInExplorer?: () => void;
+  /** Select an external Kraki CLI executable, without installing one. */
+  locateCli?: () => Promise<{ ok: boolean; error?: string }>;
+  /** Re-probe an external CLI installation. */
+  recheckCli?: () => Promise<{ ok: boolean; error?: string }>;
+  /** Bring the background service online without changing the chosen agent role. */
+  goOnline?: () => Promise<{ ok: boolean; error?: string }>;
+  /** Stop online presence without relinquishing built-in ownership. */
+  goOffline?: () => Promise<{ ok: boolean; error?: string }>;
+  /** Persist the daemon's supported remote-update policy. */
+  setAllowRemoteUpdates?: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
+}
+
 export interface KrakiDesktopBridge {
+  settings?: DesktopSettingsBridge;
   platform: string;
   /** Device name shown to other devices ("Kraki Windows"). */
   deviceName: string;

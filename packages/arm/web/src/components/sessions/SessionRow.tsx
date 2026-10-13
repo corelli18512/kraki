@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router';
 import type { WebSessionSummary } from '../../types/store';
 import { useOutbox } from '../../lib/chat/outbox';
 import {
-  Archive, Pencil, BellOff, BellRing, BotMessageSquare, CircleSlash, CircleUser, GitFork, Keyboard,
+  Archive, MoreHorizontal, Pencil, BellOff, BellRing, BotMessageSquare, CircleSlash, CircleUser, GitFork, Keyboard,
   MessageCircleQuestion, Pin, PinOff, ShieldQuestion, Trash2, WifiOff,
 } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
@@ -137,6 +137,7 @@ export const SessionRow = memo(function SessionRow({
           actions={[
             { icon: pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />, label: pinned ? 'Unpin' : 'Pin', bgClass: 'bg-teal-500', onClick: () => { togglePin(); setOpenSwipeId?.(null); } },
             { icon: unread ? <BellOff className="h-4 w-4" /> : <BellRing className="h-4 w-4" />, label: unread ? 'Read' : 'Unread', bgClass: 'bg-blue-500', onClick: () => { toggleRead(); setOpenSwipeId?.(null); } },
+            { icon: <MoreHorizontal className="h-4 w-4" />, label: 'More', bgClass: 'bg-slate-500', onClick: () => { setOpenSwipeId?.(null); setMenu({ x: 16, y: Math.min(window.innerHeight - 280, 100) }); } },
             { icon: <Trash2 className="h-4 w-4" />, label: 'Delete', bgClass: 'bg-red-500', onClick: () => { setOpenSwipeId?.(null); setConfirmDelete(true); } },
           ]}
           isOpen={openSwipeId === session.id}
@@ -155,9 +156,8 @@ export const SessionRow = memo(function SessionRow({
           <button type="button" role="menuitem" onClick={() => { toggleRead(); setMenu(null); }}>
             {unread ? <BellOff /> : <BellRing />} {unread ? 'Mark Read' : 'Mark Unread'}
           </button>
-          <button type="button" role="menuitem" onClick={() => { navigate(`/devices?device=${session.deviceId}&session=${session.id}`); setMenu(null); }}>
-            <Pencil /> Rename…
-          </button>
+          {/* Mac: Rename lives in Session Info, opened over the selected chat. */}
+          <button type="button" role="menuitem" onClick={() => { navigate(`/session/${session.id}?info=1`); setMenu(null); }}><Pencil /> Rename…</button>
           <button type="button" role="menuitem" onClick={() => { wsClient.forkSession(session.id); setMenu(null); }}>
             <GitFork /> Fork
           </button>

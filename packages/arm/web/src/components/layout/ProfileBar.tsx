@@ -1,5 +1,6 @@
+import { SettingsAlert } from './SettingsControls';
 import { resetVoice } from '../../lib/voice/voice';
-import { setDesktopSignedOut } from '../../lib/desktop';
+import { desktop, setDesktopSignedOut } from '../../lib/desktop';
 import { useState } from 'react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
@@ -18,6 +19,19 @@ function SignOutIcon({ className }: { className?: string }) {
   );
 }
 
+/** Sign out only this app; computers retain their session storage. */
+export function signOut() {
+    const savedClientId = useStore.getState().githubClientId;
+    localStorage.removeItem(STORAGE_KEY);
+    setDesktopSignedOut(true);
+    wsClient.disconnect();
+    resetVoice();
+    useStore.getState().reset();
+    useStore.setState({ githubClientId: savedClientId, status: 'awaiting_login' });
+    window.history.replaceState({}, '', '/');
+    void import('../../lib/message-db').then(({ clearAllMessages }) => clearAllMessages());
+}
+
 export function ProfileBar({ compact = false, menu = false }: { compact?: boolean; menu?: boolean } = {}) {
   const user = useStore((s) => s.user);
   const [imgError, setImgError] = useState(false);
@@ -30,14 +44,7 @@ export function ProfileBar({ compact = false, menu = false }: { compact?: boolea
   const initial = user.login.charAt(0).toUpperCase();
 
   function handleSignOut() {
-    const savedClientId = useStore.getState().githubClientId;
-    localStorage.removeItem(STORAGE_KEY);
-    setDesktopSignedOut(true);
-    wsClient.disconnect();
-    resetVoice();
-    useStore.getState().reset();
-    useStore.setState({ githubClientId: savedClientId, status: 'awaiting_login' });
-    window.history.replaceState({}, '', '/');
+    signOut();
     setConfirming(false);
   }
 
@@ -72,31 +79,7 @@ export function ProfileBar({ compact = false, menu = false }: { compact?: boolea
         </button>
       </div>}
 
-      {/* Sign-out confirmation dialog */}
-      {confirming && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setConfirming(false)} onKeyDown={(e) => e.key === 'Escape' && setConfirming(false)} role="dialog" aria-modal="true" tabIndex={-1}>
-          <div className="mx-4 w-full max-w-sm rounded-xl bg-surface-primary p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-base font-semibold text-text-primary">Sign out?</h3>
-            <p className="mt-2 text-sm text-text-secondary">
-              This will disconnect from the relay and clear all local data including session history and device keys. You'll need to sign in again.
-            </p>
-            <div className="mt-5 flex justify-end gap-3">
-              <button
-                onClick={() => setConfirming(false)}
-                className="rounded-lg px-4 py-2 text-sm font-medium text-text-secondary transition-colors hover:bg-surface-secondary"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSignOut}
-                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700"
-              >
-                Sign out
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {confirming && <div className="fixed inset-0 z-[90]"><SettingsAlert title={`Sign out of Kraki on ${desktop ? 'this PC' : 'this browser'}?`} body={`Conversations cached ${desktop ? 'on this PC' : 'in this browser'} are removed. Your computers keep all sessions; sign in again to see them.`} confirm="Sign Out" onCancel={() => setConfirming(false)} onConfirm={handleSignOut} /></div>}
     </>
   );
 }

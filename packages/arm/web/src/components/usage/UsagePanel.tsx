@@ -19,6 +19,7 @@ import {
 } from '../../lib/usage';
 import { desktop } from '../../lib/desktop';
 import './usage.css';
+import { matchesUsageShortcut, useUsageShortcut } from '../../lib/usage-shortcut';
 
 export const OPEN_USAGE_EVENT = 'kraki:open-usage';
 export const USAGE_SHORTCUT = 'F6';
@@ -279,14 +280,14 @@ export function UsagePanel() {
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (e.key !== USAGE_SHORTCUT || e.repeat) return;
+      if (!matchesUsageShortcut(e) || e.repeat) return;
       e.preventDefault();
       if (mode !== 'closed' && pinned) { close(); return; }
       held.current = true;
       open(inside.current ? 'detail' : 'compact', false);
     };
     const up = (e: KeyboardEvent) => {
-      if (e.key !== USAGE_SHORTCUT) return;
+      if ((e.key.length === 1 ? e.key.toUpperCase() : e.key) !== useUsageShortcut.getState().shortcut.split('+').at(-1)) return;
       held.current = false;
       if (!pinned) close();
     };

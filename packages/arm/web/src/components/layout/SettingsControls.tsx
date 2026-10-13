@@ -1,0 +1,120 @@
+import type { ReactNode } from 'react';
+import { useEffect, useRef } from 'react';
+
+export function SettingsSection({ title, children, footer }: { title?: string; children: ReactNode; footer?: string }) {
+  return (
+    <section className={`kp-section${title ? '' : ' kp-section-untitled'}`}>
+      {title && <h3>{title}</h3>}
+      <div className="kp-group">{children}</div>
+      {footer && <p className="kp-section-footer">{footer}</p>}
+    </section>
+  );
+}
+export function SettingsRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="kp-row">
+      <span>{label}</span>
+      {children}
+    </div>
+  );
+}
+export function SettingsSwitch({
+  label,
+  on,
+  disabled,
+  onChange,
+  testId,
+}: {
+  label: string;
+  on: boolean;
+  disabled?: boolean;
+  onChange: (on: boolean) => void;
+  testId?: string;
+}) {
+  return (
+    <button
+      type="button"
+      className="kp-switch"
+      role="switch"
+      aria-label={label}
+      aria-checked={on}
+      disabled={disabled}
+      data-testid={testId}
+      onClick={() => onChange(!on)}
+    >
+      <span />
+    </button>
+  );
+}
+export function SettingsAlert({
+  title,
+  body,
+  confirm,
+  onConfirm,
+  onCancel,
+  testId,
+}: {
+  title: string;
+  body: string;
+  confirm: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  testId?: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    ref.current?.querySelector('button')?.focus();
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopImmediatePropagation();
+        onCancel();
+      }
+      if (e.key === 'Tab') {
+        const buttons = ref.current?.querySelectorAll('button');
+        if (!buttons?.length) return;
+        if (e.shiftKey && (document.activeElement === buttons[0] || document.activeElement === ref.current)) {
+          e.preventDefault();
+          buttons[buttons.length - 1].focus();
+        } else if (!e.shiftKey && document.activeElement === buttons[buttons.length - 1]) {
+          e.preventDefault();
+          buttons[0].focus();
+        }
+      }
+    };
+    window.addEventListener('keydown', key, true);
+    return () => {
+      window.removeEventListener('keydown', key, true);
+      previous?.focus();
+    };
+  }, [onCancel]);
+  return (
+    <div
+      className="kp-alert-backdrop"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div
+        ref={ref}
+        tabIndex={-1}
+        className="kp-alert"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={title}
+        data-testid={testId}
+      >
+        <h3>{title}</h3>
+        <p>{body}</p>
+        <div className="kp-alert-actions">
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="is-destructive" onClick={onConfirm}>
+            {confirm}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

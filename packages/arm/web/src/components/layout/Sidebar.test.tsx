@@ -59,6 +59,6 @@ describe('Sidebar desktop rail', () => {
     fireEvent.click(screen.getByLabelText('App menu'));
     expect(screen.getByText('octocat')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('menuitem', { name: 'Sign Out…' }));
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
   });
 });

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { BotMessageSquare, Download, Gauge, MonitorCloud, Menu, Plus, Search, Settings, UserCog, X } from 'lucide-react';
-import { OPEN_USAGE_EVENT, USAGE_SHORTCUT } from '../usage/UsagePanel';
+import { OPEN_USAGE_EVENT } from '../usage/UsagePanel';
+import { useUsageShortcut } from '../../lib/usage-shortcut';
 import { useStore } from '../../hooks/useStore';
 import { useShowsReconnecting } from '../../hooks/useShowsReconnecting';
 import { useNarrow } from '../../hooks/useNarrow';
@@ -69,6 +70,8 @@ function EmptySessions({ onNew, onImport }: { onNew: () => void; onImport: () =>
 
 export function Sidebar() {
   const narrow = useNarrow();
+  const usageShortcut = useUsageShortcut((s) => s.shortcut);
+  const usageShortcutEnabled = useUsageShortcut((s) => s.enabled);
   const { sessionId } = useParams<{ sessionId: string }>();
   const pinned = useStore((s) => s.pinnedSessions);
   const status = useStore((s) => s.status);
@@ -145,7 +148,7 @@ export function Sidebar() {
               <div className="ksb-menu-dismiss" onClick={() => setAppMenu(false)} />
               <div className="ksb-plus-menu ksb-app-menu" role="menu" onKeyDown={(e) => { if (e.key === 'Escape') setAppMenu(false); }}>
                 <button type="button" role="menuitem" onClick={() => { setAppMenu(false); navigate('/devices'); }}><MonitorCloud /> Devices</button>
-                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); window.dispatchEvent(new Event(OPEN_USAGE_EVENT)); }} title={`Account Usage (hold ${USAGE_SHORTCUT})`} data-testid="sidebar-usage"><Gauge /> Account Usage</button>
+                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); window.dispatchEvent(new Event(OPEN_USAGE_EVENT)); }} title={`Account Usage${usageShortcutEnabled ? ` (hold ${usageShortcut})` : ''}`} data-testid="sidebar-usage"><Gauge /> Account Usage</button>
                 <button type="button" role="menuitem" onClick={() => { setAppMenu(false); setSettingsOpen(true); }}><Settings /> Settings…</button>
                 <ProfileBar menu />
               </div>
