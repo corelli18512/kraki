@@ -27,8 +27,8 @@ describe('ChatView pending question live-row visibility', () => {
     });
   }
 
-  it('does not draw an empty typing row under a pending question, even if the card reopened', () => {
-    waitingCard();
+  it.each(['', ' \n '])('does not draw a typing row for blank draft %j under a pending question, even if the card reopened', (text) => {
+    waitingCard(text);
     render(<ChatView sessionId="s" topInset={56} />);
     expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
   });
