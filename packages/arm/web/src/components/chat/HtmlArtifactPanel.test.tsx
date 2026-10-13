@@ -30,6 +30,15 @@ describe('HtmlArtifactPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close Report' }));
     expect(onClose).toHaveBeenCalledOnce();
   });
+  it('leaves the report open when Escape belongs to an image preview above it', () => {
+    const onClose = vi.fn();
+    const { rerender } = render(<><HtmlArtifactPanel artifact={artifact} sessionId="s1" onClose={onClose} /><div className="kimage-viewer" /></>);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    rerender(<HtmlArtifactPanel artifact={artifact} sessionId="s1" onClose={onClose} />);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
   it('rejects metadata oversize without requesting the attachment', () => {
     render(<HtmlArtifactPanel artifact={{ ...artifact, size: 10 * 1024 * 1024 + 1 }} sessionId="s1" onClose={() => {}} />);
     expect(useText).toHaveBeenLastCalledWith(expect.anything(), 's1', expect.any(Function), false);

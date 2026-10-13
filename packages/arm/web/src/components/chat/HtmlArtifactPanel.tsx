@@ -59,7 +59,9 @@ export function HtmlArtifactPanel({ artifact, sessionId, onClose, expanded = fal
     return () => { cancelled = true; if (url) URL.revokeObjectURL(url); };
   }, [artifact.id, status, text, oversized]);
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented && !document.querySelector('.kimage-viewer')) onClose();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
