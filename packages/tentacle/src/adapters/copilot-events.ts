@@ -268,25 +268,35 @@ export function wireEvents(adapter: CopilotAdapter, sessionId: string, session: 
     logger.error({ sessionId, errorType, statusCode: data.statusCode, agentId: (event as { agentId?: string }).agentId }, `session.error: ${message}`);
     // A subagent's failure reaches the parent as the task tool's result.
     if (fromSubagent(event)) return;
-    if (!adapter.turnErrorReported.get(sessionId)) {
-      adapter.turnErrorReported.set(sessionId, true);
-      const status = typeof data.statusCode === 'number' ? data.statusCode : undefined;
-      // A request the service answered (bad model, rate limit, outage) is
-      // reported as is, at once. Only a possible sign-out needs the probe.
-      if (status !== undefined && status !== 401 && status !== 403) {
-        adapter.emitError(sessionId, message);
-        return;
-      }
-      const report = (async () => {
-        if (await adapter.probeRuntime() === 'auth_error') adapter.fireAuthError(sessionId, message);
-        else adapter.emitError(sessionId, message);
-      })();
-      adapter.pendingErrorReports.set(sessionId, report);
-      try { await report; } finally {
-        if (adapter.pendingErrorReports.get(sessionId) === report) adapter.pendingErrorReports.delete(sessionId);
-      }
-    }
+    // A failure before assistant.turn_start belongs to the newest prompt (it
+    // was rejected before it started), not to the previous run.
+    const turn = adapter.sessions.get(sessionId)?.turn;
+    if (turn?.awaitingStart) turn.captureTurnId();
+    const status = typeof data.statusCode === 'number' ? data.statusCode : undefined;
+    // A request the service answered (bad model, rate limit, outage) is
+    // reported as is, at once. Only a possible sign-out needs the probe.
+    await reportTurnError(message, status === undefined || status === 401 || status === 403);
   });
+
+  /** One error report per turn (session.error or turn_end(error)), stamped
+   *  with the turn it happened in. A probed report is awaited by idle. */
+  const reportTurnError = async (message: string, probe: boolean): Promise<void> => {
+    if (adapter.turnErrorReported.get(sessionId)) return;
+    adapter.turnErrorReported.set(sessionId, true);
+    const identity = adapter.lifecycleEvent(sessionId);
+    if (!probe) {
+      adapter.emitError(sessionId, message, identity);
+      return;
+    }
+    const report = (async () => {
+      if (await adapter.probeRuntime() === 'auth_error') adapter.fireAuthError(sessionId, message, identity);
+      else adapter.emitError(sessionId, message, identity);
+    })();
+    adapter.pendingErrorReports.set(sessionId, report);
+    try { await report; } finally {
+      if (adapter.pendingErrorReports.get(sessionId) === report) adapter.pendingErrorReports.delete(sessionId);
+    }
+  };
 
   // Which model Copilot actually runs is Copilot's decision (`auto`, plan
   // limits, fallbacks). Kraki relays; it never aborts a turn over it.
@@ -324,13 +334,7 @@ export function wireEvents(adapter: CopilotAdapter, sessionId: string, session: 
       return;
     }
     if (reason === 'error') {
-      const errorMsg = (data?.error as string) ?? 'Unknown agent error';
-      adapter.turnErrorReported.set(sessionId, true);
-      if (await adapter.probeRuntime() === 'auth_error') {
-        adapter.fireAuthError(sessionId, errorMsg);
-      } else {
-        adapter.emitError(sessionId, errorMsg);
-      }
+      await reportTurnError((data?.error as string) ?? 'Unknown agent error', true);
     }
 
   });

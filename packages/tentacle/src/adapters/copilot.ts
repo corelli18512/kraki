@@ -171,11 +171,16 @@ export class CopilotAdapter extends AgentAdapter {
     return this.sessions.get(sessionId)?.turn.event() ?? {};
   }
 
+  /** Sessions whose send is retrying across a runtime rebuild. */
+  private retryingSends = new Set<string>();
+
   /** session.error reports still deciding whether it is a sign-out. */
   pendingErrorReports = new Map<string, Promise<void>>();
 
-  emitError(sessionId: string, message: string): void {
-    this.onError?.(sessionId, { message, ...this.lifecycleEvent(sessionId) });
+  /** `turn`: the identity captured when the error happened (a report that
+   *  awaits a probe must not take the turn current after it). */
+  emitError(sessionId: string, message: string, turn: { turnId?: string } = this.lifecycleEvent(sessionId)): void {
+    this.onError?.(sessionId, { message, ...turn });
   }
 
 
@@ -374,8 +379,14 @@ export class CopilotAdapter extends AgentAdapter {
         // Resolve all pending permissions/questions across every session
         // BEFORE clearing the entries — otherwise the arm UI stays stuck on
         // a request that will never be answered (the old runtime is dead).
-        for (const sessionId of this.sessions.keys()) {
+        for (const [sessionId, entry] of this.sessions) {
           broadcastPendingResolutions(this, sessionId);
+          // A running turn of the dead runtime will never idle; only a send
+          // that is about to retry keeps its turn open.
+          if (!this.retryingSends.has(sessionId)) {
+            entry.turn.discardProse();
+            entry.turn.finish({ error: 'The Copilot runtime stopped unexpectedly and was restarted; this turn was interrupted.' });
+          }
         }
         if (this.client) {
           try { await this.client.stop(); } catch { /* old client may already be dead */ }
@@ -637,16 +648,21 @@ export class CopilotAdapter extends AgentAdapter {
       }
 
       if (health === 'dead') {
-        // Runtime process died — rebuild the client and retry once
+        // Runtime process died — rebuild the client and retry once. The retry
+        // continues this send's open turn (and its relay identity).
         logger.warn({ err, sessionId }, 'Runtime died mid-send; rebuilding client');
+        const turn = this.sessions.get(sessionId)?.turn;
+        this.retryingSends.add(sessionId);
         try {
           await this.rebuildClient();
-          entry = await resumeTrackedSession(this, sessionId);
+          entry = await resumeTrackedSession(this, sessionId, turn);
           await entry.session.send(opts);
           return;
         } catch (rebuildErr) {
           handleUnavailableSession(this, sessionId, rebuildErr);
           throw rebuildErr;
+        } finally {
+          this.retryingSends.delete(sessionId);
         }
       }
 
@@ -910,10 +926,10 @@ export class CopilotAdapter extends AgentAdapter {
   }
 
   /** Fire onError with a clear, actionable auth-error message. */
-  fireAuthError(sessionId: string, err: unknown): void {
+  fireAuthError(sessionId: string, err: unknown, turn?: { turnId?: string }): void {
     const raw = getErrorMessage(err);
     logger.error({ sessionId, err }, 'Authentication error detected');
-    this.emitError(sessionId, `GitHub credential expired or invalid: ${raw}\n\nRun one of the following on the host machine to re-authenticate:\n• \`copilot /login\`\n• \`gh auth login\``);
+    this.emitError(sessionId, `GitHub credential expired or invalid: ${raw}\n\nRun one of the following on the host machine to re-authenticate:\n• \`copilot /login\`\n• \`gh auth login\``, turn);
   }
 
   // ── SDK → callback wiring ─────────────────────────
