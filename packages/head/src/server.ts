@@ -398,6 +398,11 @@ export class HeadServer {
           const sender = this.storage.getDevice(state.deviceId);
           if (!target || target.userId !== state.userId || !sender || target.role === sender.role) {
             this.sendError(ws, 'unicast target is not reachable');
+            // Still consume the frame on the sender's stream, forwarding it
+            // nowhere: an unconsumed seq would never be ACKed, the sender would
+            // retransmit it (with the same target) forever, and every later
+            // seq on that stream would wait behind it.
+            this.pulseHub.onPulseEnvelope(state.deviceId, { pulse: msg.pulse as string, to: [] });
             return;
           }
         }
@@ -434,20 +439,19 @@ export class HeadServer {
         this.sendError(ws, `multicast target count must be between 1 and ${MAX_MULTICAST_TARGETS}`);
         return;
       }
-      for (const targetId of requested) {
+      const allowed = requested.filter((targetId) => {
         const target = this.storage.getDevice(targetId);
-        if (
-          targetId === state.deviceId
-          || targetId === HEAD_PULSE_TARGET
-          || !target
-          || target.userId !== state.userId
-          || target.role !== 'app'
-        ) {
-          this.sendError(ws, 'multicast contains a forbidden target');
-          return;
-        }
-      }
-      const onlineTargets = requested.filter((targetId) => this.connections.has(targetId));
+        return targetId !== state.deviceId
+          && targetId !== HEAD_PULSE_TARGET
+          && !!target
+          && target.userId === state.userId
+          && target.role === 'app';
+      });
+      // Forbidden targets are dropped, not the frame: the frame must still be
+      // consumed on the sender's stream (see the unicast branch), and the
+      // allowed targets still get it.
+      if (allowed.length < requested.length) this.sendError(ws, 'multicast contains a forbidden target');
+      const onlineTargets = allowed.filter((targetId) => this.connections.has(targetId));
       this.pulseHub.onPulseEnvelope(state.deviceId, {
         pulse: msg.pulse,
         to: onlineTargets,
