@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 STATE=/tmp/kraki-chaos
 rm -rf "$STATE"; mkdir -p "$STATE/results"
 cd "$ROOT/packages/tests"
-env -u NODE_ENV -u KRAKI_HOME -u KRAKI_META_FILE CHAOS_DEVICE_TRUST=enforce npx tsx src/chaos/stack.ts --control-port 0 \
+env -u NODE_ENV -u KRAKI_HOME -u KRAKI_META_FILE CHAOS_DEVICE_TRUST="${CHAOS_DEVICE_TRUST:-enforce}" npx tsx src/chaos/stack.ts --control-port 0 \
   > "$STATE/stack.out" 2> "$STATE/stack.log" &
 STACK=$!
 trap 'kill $STACK 2>/dev/null; wait $STACK 2>/dev/null; rm -f "$STATE/stack.json" "$ROOT/packages/arm/ios/KrakiTests/trust-stack.json"' EXIT

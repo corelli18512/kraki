@@ -19,7 +19,8 @@ import { Storage, HeadServer, OpenAuthProvider } from '@kraki/head';
 import { SessionManager, RelayClient, KeyManager, AttachmentStore, createPairingSecret, writeTrustPolicy, buildPushPreview } from '@kraki/tentacle';
 import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { readFileSync, existsSync } from 'node:fs';
 import { WebSocket } from 'ws';
 import { ChaosProxy, type FaultProfile } from './proxy.js';
 import { ScriptedAdapter } from './scripted-adapter.js';
@@ -52,7 +53,10 @@ export class ChaosStack {
   private peer: MockApp | null = null;
   /** Device trust mode of the Tentacle (CHAOS_DEVICE_TRUST=enforce). The
    *  first session is always created before enforcing (by an unpaired admin). */
-  trustMode: 'enforce' | 'compatible' = 'compatible';
+  trustMode: 'enforce' | 'compatible' | 'default' = process.env.CHAOS_DEVICE_TRUST === 'default' ? 'default' : 'compatible';
+  /** Transition tests: the pre-device-trust Tentacle (CHAOS_OLD_WORKTREE). */
+  private oldTentacle: ChildProcess | null = null;
+  private get oldLedgerPath(): string { return join(this.root, 'old-ledger.json'); }
   /** Unpaired device that tries to command the computer (device-trust tests). */
   private rogue: MockApp | null = null;
   private secondComputer: { root: string; keys: KeyManager; relay: RelayClient } | null = null;
@@ -119,7 +123,8 @@ export class ChaosStack {
       relayUrl: `ws://127.0.0.1:${this.tentacleProxy.port}`,
       device,
       authMethod: 'open',
-      ...(this.trustMode === 'enforce' ? {} : { deviceTrust: 'compatible' as const }),
+      // 'default': exactly what a user gets (policy file / install defaults).
+      ...(this.trustMode === 'compatible' ? { deviceTrust: 'compatible' as const } : {}),
       // The Swift harness is not the same-Mac App: keep it on the Head.
       localLink: false,
     }, this.keys, this.attachments);
@@ -154,7 +159,59 @@ export class ChaosStack {
     await this.startTentacle();
   }
 
-  get tentacleId(): string { return this.relay.getAuthInfo()?.deviceId ?? ''; }
+  get tentacleId(): string { return this.relay.getAuthInfo()?.deviceId ?? this.tentacleDeviceId; }
+
+  // ── Version transition (new ⇄ old Tentacle on one computer directory) ──
+
+  async stopNewTentacle(): Promise<void> {
+    this.relay.disconnect();
+    this.relay.deviceTrust?.store.flushReplay();
+    this.log('new_tentacle_stopped');
+  }
+
+  /** What a computer looked like before device trust: RSA keys, sessions,
+   *  device id — no trust store, no identity/X25519 keys. */
+  makeOldInstall(): void {
+    rmSync(join(this.root, 'trust'), { recursive: true, force: true });
+    for (const f of ['identity-ed25519.key', 'e2e-x25519.key', 'public-identity.json']) {
+      rmSync(join(this.root, 'keys', f), { force: true });
+    }
+    this.log('old_install');
+  }
+
+  async startOldTentacle(): Promise<void> {
+    const worktree = process.env.CHAOS_OLD_WORKTREE;
+    if (!worktree) throw new Error('CHAOS_OLD_WORKTREE not set');
+    rmSync(this.oldLedgerPath, { force: true });
+    const env: NodeJS.ProcessEnv = { ...process.env, KRAKI_HOME: this.root };
+    delete env.NODE_ENV;
+    const child = spawn('npx', ['tsx', 'src/chaos/old-tentacle.ts', `ws://127.0.0.1:${this.tentacleProxy.port}`, this.root, this.tentacleDeviceId, this.oldLedgerPath],
+      { cwd: join(worktree, 'packages', 'tests'), env, stdio: ['ignore', 'pipe', 'inherit'] });
+    this.oldTentacle = child;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('old tentacle did not authenticate')), 30_000);
+      child.stdout!.on('data', (d: Buffer) => {
+        if (d.toString().includes('"oldTentacle":"authenticated"')) { clearTimeout(timer); resolve(); }
+      });
+      child.once('exit', (code) => { clearTimeout(timer); reject(new Error(`old tentacle exited ${code}`)); });
+    });
+    this.log('old_tentacle_started');
+  }
+
+  async stopOldTentacle(): Promise<void> {
+    const child = this.oldTentacle;
+    if (!child) return;
+    this.oldTentacle = null;
+    await new Promise<void>((resolve) => { child.once('exit', () => resolve()); child.kill('SIGTERM'); });
+    this.log('old_tentacle_stopped');
+  }
+
+  async startNewTentacle(): Promise<void> {
+    // A fresh process: keys and trust state come from disk.
+    this.keys = new KeyManager(join(this.root, 'keys'));
+    await this.startTentacle();
+    this.log('new_tentacle_started');
+  }
 
   /** Creates a session through a direct (unproxied) admin app connection. */
   async createSession(): Promise<string> {
@@ -207,7 +264,13 @@ export class ChaosStack {
   }
 
   ledger(sessionId = this.sessionId): Record<string, unknown> {
-    const received = Object.fromEntries(this.adapter.received.get(sessionId) ?? []);
+    const received: Record<string, number> = Object.fromEntries(this.adapter.received.get(sessionId) ?? []);
+    if (existsSync(this.oldLedgerPath)) {
+      try {
+        const old = JSON.parse(readFileSync(this.oldLedgerPath, 'utf8')) as Record<string, Record<string, number>>;
+        for (const [text, n] of Object.entries(old[sessionId] ?? {})) received[text] = (received[text] ?? 0) + n;
+      } catch { /* being written */ }
+    }
     const spine = this.sessions.getMessagesAfterSeq(sessionId, 0).map((m) => ({ seq: m.seq, type: m.type }));
     return { sessionId, received, emitted: this.adapter.emitted.get(sessionId) ?? [], spine };
   }
@@ -319,9 +382,15 @@ export class ChaosStack {
           execFileSync('xcrun', ['simctl', 'io', simulator, 'screenshot', `/tmp/kraki-trust-review/shots/${name}.png`]);
           break;
         }
+        case 'POST /transition/stop-new': await this.stopNewTentacle(); break;
+        case 'POST /transition/old-install': this.makeOldInstall(); break;
+        case 'POST /transition/start-old': await this.startOldTentacle(); break;
+        case 'POST /transition/stop-old': await this.stopOldTentacle(); break;
+        case 'POST /transition/start-new': await this.startNewTentacle(); break;
         case 'POST /trust/rogue-input': out = await this.rogueInput(String(body.text ?? 'rogue'), String(body.sessionId ?? this.sessionId)); break;
         case 'GET /trust/state': out = {
           mode: this.trustMode,
+          policyFile: existsSync(join(this.root, 'trust', 'policy.json')) ? JSON.parse(readFileSync(join(this.root, 'trust', 'policy.json'), 'utf8')) : null,
           enforced: this.relay.deviceTrust?.enforced ?? false,
           root: this.root,
           trusted: this.relay.deviceTrust?.store.ids() ?? [],
@@ -394,6 +463,7 @@ export class ChaosStack {
 
   async stop(): Promise<void> {
     this.relay?.disconnect();
+    await this.stopOldTentacle().catch(() => {});
     this.trustedApps.forEach((app) => app.close());
     this.secondComputer?.relay.disconnect();
     if (this.secondComputer) rmSync(this.secondComputer.root, { recursive: true, force: true });

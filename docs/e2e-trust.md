@@ -182,6 +182,16 @@ KrakiTests/DeviceTrustBoundaryTests.swift, 28+ cases) found and now pin:
   apps that paired with any computer.
 - Recommended order: release the apps first, then the CLI.
 
+Verified end to end (2026-10-13) with real old code (origin/main b2cf03da,
+`CHAOS_OLD_WORKTREE`) on one computer directory:
+- `DeviceTrustTransitionTests` (new Mac app + old-protocol app): old CLI →
+  upgrade → pair → enforce → downgrade → Forget Pairing → upgrade again; every
+  step checks which inputs reach the agent.
+  `CHAOS_DEVICE_TRUST=default CHAOS_OLD_WORKTREE=<old worktree> bash scripts/chaos/run-trust.sh -only-testing:KrakiMacTests/DeviceTrustTransitionTests`
+- Old Swift app (built from the old worktree) `NetworkResilienceTests` S0/A1
+  against the new CLI with default settings, fresh and upgraded (with a new
+  app paired at the same time): pass.
+
 ## Hardening from review round 2 (2026-10-13)
 
 Three read-only GPT reviews (protocol, apps/UI, end-to-end design) found 24
