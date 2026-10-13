@@ -80,12 +80,12 @@ struct PerformanceNoticeCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Image(systemName: "gauge.with.dots.needle.67percent")
+                Image(systemName: "sparkles")
                     .foregroundStyle(Color.accentColor)
-                Text("Help Make Kraki Faster")
+                Text("Help Improve Kraki")
                     .font(.headline)
             }
-            Text("Kraki sends timings like how fast messages are delivered and replies start, plus connection drops and crashes, so we can fix slow spots. Never message text, voice or attachments.")
+            Text("Kraki sends timings like how fast messages are delivered and replies start, plus connection drops and crashes, so we can find problems and make Kraki better. Never message text, voice or attachments.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

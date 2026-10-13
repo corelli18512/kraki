@@ -29,7 +29,7 @@ relay, signed by the device's existing key. Kept 14 days, then deleted.
 
 ## Privacy policy — English
 
-> **Performance data.** To find and fix slow or unreliable spots, the Kraki apps
+> **Performance data.** To find problems and improve the experience, the Kraki apps
 > send performance data: timings and counts such as how long a message took to
 > be delivered, how long until a reply started, interruptions while a reply was
 > arriving, connection drops, voice input errors by category, app start times
@@ -43,7 +43,7 @@ relay, signed by the device's existing key. Kept 14 days, then deleted.
 
 ## 隐私政策 — 中文
 
-> **性能数据。** 为了找到并修复慢或不稳定的地方，Kraki App 会发送性能数据：
+> **性能数据。** 为了发现问题、改进使用体验，Kraki App 会发送性能数据：
 > 例如消息多久被确认送达、回复多久开始出现、回复过程中是否卡顿、连接断开和
 > 重连的时间、按类别统计的语音输入错误、App 启动耗时以及上次是否异常退出，
 > 并附带 App 和系统的版本号。其中绝不包含消息内容、草稿、语音、附件、文件名

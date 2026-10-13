@@ -18,7 +18,7 @@ struct DiagSettingsSection: View {
         } header: {
             Text("Privacy")
         } footer: {
-            Text("Sends timings such as how long messages take to deliver and replies to start, connection drops, voice errors and crashes, so we can find and fix slow spots. Never message text, drafts, voice, attachments or file names. Turning this off stops sending and deletes anything not yet sent.")
+            Text("Sends timings such as how long messages take to deliver and replies to start, connection drops, voice errors and crashes, so we can find problems and make Kraki better. Never message text, drafts, voice, attachments or file names. Turning this off stops sending and deletes anything not yet sent.")
         }
         .onChange(of: enabled) { _, value in KrakiDiag.setEnabled(value) }
         #endif
