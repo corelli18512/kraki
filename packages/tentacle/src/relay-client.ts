@@ -1649,16 +1649,18 @@ export class RelayClient {
       }
       const enforce = payload.enforce === true;
       // The request names the revision the app saw; an older one (e.g. a
-      // request the relay withheld) cannot undo a newer choice.
-      if (payload.revision !== trust.store.policyRevision) {
-        logger.warn({ by: from, enforce, revision: payload.revision, current: trust.store.policyRevision }, 'Stale device trust policy request ignored');
-        this.sendTrustedDevicesTo(from);
+      // request the relay withheld) cannot undo a newer choice — checked
+      // against the file, under the lock the CLI also takes.
+      const wasEnforced = trust.enforced;
+      const revision = typeof payload.revision === 'number' ? payload.revision : -1;
+      if (!trust.store.setPolicy({ enforce }, revision)) {
+        logger.warn({ by: from, enforce, revision, current: trust.store.policyRevision }, 'Stale device trust policy request ignored');
+        if (trust.enforced !== wasEnforced) this.reevaluateAllApps();
+        this.broadcastTrustedDevices();
         return;
       }
-      logger.info({ by: from, enforce }, 'Device trust policy change requested');
-      const changed = enforce !== trust.enforced;
-      trust.store.setPolicy({ enforce });
-      if (changed) this.reevaluateAllApps();
+      logger.info({ by: from, enforce }, 'Device trust policy changed by a paired app');
+      if (enforce !== wasEnforced) this.reevaluateAllApps();
       this.broadcastTrustedDevices();
     }
   }

@@ -731,3 +731,20 @@ describe('device trust — PR self-review', () => {
     expect(store.acceptLocalEnrollment('../../config', 'x', 'y')).toBe(false);
   });
 });
+
+describe('device trust — final review', () => {
+  it('DT503-01: a withheld request cannot override a newer CLI choice made before the daemon refreshed', () => {
+    writeTrustPolicy(join(home, 'trust'), { enforce: true });
+    const env = setup('policy');
+    const phone = makeApp('dev_phone');
+    joined(env, phone);
+    env.deliver(pairRequest(env, phone, createPairingSecret(home)), phone.id);
+    const rev = env.client.deviceTrust!.store.policyRevision;
+    const withheld = appSend(env, phone, { type: 'set_trust_policy', payload: { enforce: false, revision: rev } });
+    // `kraki devices enforce on` in another process (no refresh in the daemon yet).
+    new TrustStore(join(home, 'trust')).setPolicy({ enforce: true });
+    env.deliver(withheld, phone.id);
+    expect(readTrustPolicy(join(home, 'trust'))).toEqual({ enforce: true, revision: rev + 1 });
+    expect(env.client.deviceTrust!.enforced).toBe(true);
+  });
+});

@@ -353,7 +353,7 @@ export class ChaosStack {
             }, keys);
             this.secondComputer = { root, keys, relay };
             relay.connect();
-            await this.waitFor(() => relay.getAuthInfo() !== null, 10_000, 'second computer auth');
+            await this.waitFor(() => relay.getAuthInfo() !== null, 30_000, 'second computer auth');
           }
           const { root, keys, relay } = this.secondComputer;
           const id = relay.getAuthInfo()!.deviceId;

@@ -16,12 +16,13 @@ final class DeviceTrustTransitionTests: XCTestCase {
     private var suite: String!
 
     override func setUp() async throws {
+        // Isolate identity keys before anything can skip: tearDown resets them.
+        keysDir = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-trust-keys-\(UUID().uuidString)")
+        DeviceIdentityKeys.testDirectory = keysDir
+        DeviceIdentityKeys.shared.reset()
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: "/tmp/kraki-chaos/stack.json")) else { throw XCTSkip("chaos stack not running") }
         stack = try JSONDecoder().decode(StackInfo.self, from: data)
         guard (try await control("GET", "/trust/state"))["mode"] as? String == "default" else { throw XCTSkip("needs CHAOS_DEVICE_TRUST=default") }
-        keysDir = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-transition-\(UUID().uuidString)")
-        DeviceIdentityKeys.testDirectory = keysDir
-        DeviceIdentityKeys.shared.reset()
         suite = "DeviceTrustTransition.\(UUID().uuidString)"
         TentacleTrustStore.shared.useDefaults(try XCTUnwrap(UserDefaults(suiteName: suite)))
         DeviceTrustTesting.localKrakiHome = FileManager.default.temporaryDirectory.appendingPathComponent("no-local-computer")
@@ -31,7 +32,7 @@ final class DeviceTrustTransitionTests: XCTestCase {
     override func tearDown() async throws {
         app?.disconnect()
         app = nil
-        DeviceIdentityKeys.shared.reset()
+        if DeviceIdentityKeys.testDirectory != nil { DeviceIdentityKeys.shared.reset() }
         DeviceIdentityKeys.testDirectory = nil
         DeviceTrustTesting.localKrakiHome = nil
         UserDefaults().removePersistentDomain(forName: suite ?? "")

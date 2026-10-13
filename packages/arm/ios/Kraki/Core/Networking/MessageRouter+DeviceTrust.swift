@@ -72,6 +72,9 @@ extension MessageRouter {
                 }
             }
         }
+        if type == "session_list", let signedBy {
+            Self.dropUnauthenticatedHistory(listedBy: signedBy, dict: dict, appState: appState)
+        }
         switch type {
         case "pair_result", "trusted_devices":
             // Only from the pinned computer itself, signed.
@@ -91,6 +94,22 @@ extension MessageRouter {
             return false
         }
         return true
+    }
+
+    /// A pinned computer's signed list takes back sessions an unpinned device
+    /// claimed first: whatever that device supplied (history, preview, live
+    /// state) is unauthenticated and must not appear as the computer's, so it
+    /// is dropped and fetched again from the computer.
+    @MainActor
+    static func dropUnauthenticatedHistory(listedBy signer: String, dict: [String: Any], appState: AppState) {
+        let store = TentacleTrustStore.shared
+        for sid in referencedSessionIds(dict) {
+            guard let owner = appState.sessionStore.sessions[sid]?.deviceId, owner != signer,
+                  store.pin(owner) == nil else { continue }
+            KLog.d("🔏 device trust: \(sid.prefix(12)) taken back from unpinned \(owner.prefix(12)) — dropping its history")
+            appState.messageStore.deleteSessionMessages(sid)
+            appState.sessionStore.sessionPreviews[sid] = nil
+        }
     }
 
     /// Every session an inner message refers to, wherever it carries it.

@@ -184,3 +184,17 @@ describe('round 2 hardening', () => {
     expect(() => new ReplayGuard().import({ v: 2, entries: [] })).toThrow();
   });
 });
+
+describe('final review', () => {
+  it('DT503-05: clock rollback in a running process cannot reopen a pruned nonce', () => {
+    let now = 50_000_000;
+    const g = new ReplayGuard({ now: () => now });
+    const old = { from: 'a', ts: now, nonce: 'OLD' };
+    expect(g.check(old)).toBeNull();
+    for (let i = 0; i < 1100; i++) g.check({ from: 'a', ts: now, nonce: `n${i}` });
+    now += 20 * 60_000;
+    expect(g.check({ from: 'a', ts: now, nonce: 'later' })).toBeNull();
+    now -= 20 * 60_000;
+    expect(g.check(old)).not.toBeNull();
+  });
+});

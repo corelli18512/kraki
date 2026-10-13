@@ -68,6 +68,9 @@ class NotificationService: UNNotificationServiceExtension {
         content.subtitle = ""
         content.body = "Open Kraki to view the update."
         let legacyAllowed = DeviceTrustPush.legacyPreviewAllowed()
+        // The outer session id is the relay's word: never a tap target once
+        // a computer is pinned (a verified preview sets it again below).
+        if !legacyAllowed { content.userInfo["sessionId"] = nil }
 
         guard let kraki = request.content.userInfo["kraki"] as? [String: Any],
               let blob = kraki["blob"] as? String,

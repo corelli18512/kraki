@@ -145,6 +145,26 @@ extension DeviceTrustBoundaryTests {
         }
     }
 
+    /// DT503-02: when a pinned computer takes a session back, what the
+    /// unpinned claimant supplied (history, preview) is dropped.
+    func testTakeoverDropsUnauthenticatedHistory() throws {
+        pin()
+        let relayKey = try CryptoManager().generateKeyPair()
+        let relayPublic = try CryptoManager().exportPublicKeySPKI(relayKey.publicKey)
+        app.deviceStore.setDevices([
+            DeviceSummary(id: computer, name: "Pinned", role: .tentacle, kind: .desktop, encryptionKey: relayPublic, online: true),
+            DeviceSummary(id: other, name: "Relay made", role: .tentacle, kind: .desktop, encryptionKey: relayPublic, online: true),
+        ])
+        try route(legacyEnvelope(message("session_list", device: other, payload: ["sessions": [["id": sid, "title": "forged", "state": "idle", "lastSeq": 1]]]), src: other))
+        // What the unpinned claimant supplied: cached history and a preview.
+        try app.messageDatabase.insert(sid, [ChatMessage(type: "agent_message", seq: 1, sessionId: sid, deviceId: other, timestamp: nil, payload: ["content": AnyCodable("FORGED")])])
+        app.sessionStore.sessionPreviews[sid] = SessionPreview(text: "FORGED", type: "message", timestamp: "2099-01-01T00:00:00Z")
+        try route(signedEnvelope(message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "authentic", "state": "idle", "lastSeq": 1]]]), key: signer))
+        XCTAssertEqual(app.sessionStore.sessions[sid]?.deviceId, computer)
+        XCTAssertFalse(app.messageDatabase.messagesAfter(sid, afterSeq: 0, limit: 100).contains { $0.content == "FORGED" })
+        XCTAssertNotEqual(app.sessionStore.sessionPreviews[sid]?.text, "FORGED")
+    }
+
     #if os(iOS)
     /// APPS-02: a push without a usable envelope shows generic text, not the relay's.
     func testNotificationServiceIgnoresRelayTextWithoutEnvelope() throws {
@@ -159,6 +179,7 @@ extension DeviceTrustBoundaryTests {
             XCTAssertEqual(output?.title, "Kraki")
             XCTAssertEqual(output?.body, "Open Kraki to view the update.")
             XCTAssertEqual(output?.threadIdentifier ?? "", "", "no grouping by a relay-chosen session")
+            XCTAssertNil(output?.userInfo["sessionId"], "no tap target from the relay (DT503-04)")
         }
     }
     #endif

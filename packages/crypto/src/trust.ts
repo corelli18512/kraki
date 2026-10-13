@@ -275,7 +275,10 @@ export class ReplayGuard {
   /** {@link check} without recording (e.g. before knowing the message is worth it). */
   peek(m: Pick<SignedMessage, 'from' | 'ts' | 'nonce'>): 'stale' | 'from_future' | 'replay' | null {
     const now = this.now();
-    if (m.ts < now - this.maxAgeMs || m.ts < this.notBefore) return 'stale';
+    // The window never moves back with the clock: nonces older than the
+    // latest time seen may already have been pruned.
+    this.highWater = Math.max(this.highWater, now);
+    if (m.ts < this.highWater - this.maxAgeMs || m.ts < this.notBefore) return 'stale';
     if (m.ts > now + this.maxFutureMs) return 'from_future';
     if (this.seen.has(`${m.from}\n${m.nonce}`)) return 'replay';
     return null;

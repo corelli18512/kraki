@@ -135,6 +135,31 @@ function writePrivateJson(path: string, value: unknown): void {
   renameSync(tmp, path);
 }
 
+/** Run `fn` holding `<dir>/<name>` (a lock file shared by every process). */
+function withTrustLock<T>(dir: string, name: string, fn: () => T): T {
+  ensureDir(dir);
+  const lock = join(dir, name);
+  const deadline = Date.now() + 3_000;
+  let fd: number | null = null;
+  while (fd === null) {
+    try {
+      fd = openSync(lock, 'wx', 0o600);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      // A holder that died leaves the lock behind; it is stale after 10 s.
+      try { if (Date.now() - statSync(lock).mtimeMs > 10_000) unlinkSync(lock); } catch { /* raced */ }
+      if (Date.now() > deadline) throw new Error('Device trust settings are locked by another process');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    closeSync(fd);
+    try { unlinkSync(lock); } catch { /* gone */ }
+  }
+}
+
 function ensureDir(path: string): void {
   mkdirSync(path, { recursive: true, mode: 0o700 });
   try { chmodSync(path, 0o700); } catch { /* best effort */ }
@@ -222,18 +247,35 @@ export class TrustStore {
     return this.policy.revision ?? 0;
   }
 
-  /** Record an explicit choice (always a new revision, even if unchanged). */
-  setPolicy(policy: { enforce: boolean }): void {
-    if (this.dir) {
-      this.refresh();
-      const revision = (readTrustPolicy(this.dir).revision ?? 0) + 1;
-      writeTrustPolicy(this.dir, { enforce: policy.enforce, revision });
-      this.policy = { enforce: policy.enforce, revision };
-    } else {
+  /**
+   * Record an explicit choice (always a new revision, even if unchanged).
+   * With `expectedRevision` (a paired app's request) it is a compare-and-set
+   * against the revision on disk, under the same lock the CLI uses: false
+   * when another choice was made in the meantime.
+   */
+  setPolicy(policy: { enforce: boolean }, expectedRevision?: number): boolean {
+    if (!this.dir) {
+      if (expectedRevision !== undefined && expectedRevision !== (this.policy.revision ?? 0)) return false;
       this.policy = { enforce: policy.enforce, revision: (this.policy.revision ?? 0) + 1 };
+      return true;
     }
-    this.stamps.policy = this.mtime(this.policyPath);
-    logger.info({ enforce: policy.enforce, revision: this.policy.revision }, 'Device trust policy changed');
+    const dir = this.dir;
+    const applied = withTrustLock(dir, 'policy.lock', () => {
+      const current = readTrustPolicy(dir);
+      const stamp = this.mtime(this.policyPath);
+      if (expectedRevision !== undefined && expectedRevision !== (current.revision ?? 0)) {
+        this.policy = current;
+        this.stamps.policy = stamp;
+        return false;
+      }
+      const revision = (current.revision ?? 0) + 1;
+      writeTrustPolicy(dir, { enforce: policy.enforce, revision });
+      this.policy = { enforce: policy.enforce, revision };
+      this.stamps.policy = this.mtime(this.policyPath);
+      return true;
+    });
+    if (applied) logger.info({ enforce: policy.enforce, revision: this.policy.revision }, 'Device trust policy changed');
+    return applied;
   }
 
   /**
@@ -314,32 +356,14 @@ export class TrustStore {
    */
   private mutate(change: (devices: Map<string, TrustedDevice>) => boolean): boolean {
     if (!this.dir) return change(this.devices);
-    ensureDir(this.dir);
-    const lock = join(this.dir, 'devices.lock');
-    const deadline = Date.now() + 3_000;
-    let fd: number | null = null;
-    while (fd === null) {
-      try {
-        fd = openSync(lock, 'wx', 0o600);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-        // A holder that died leaves the lock behind; it is stale after 10 s.
-        try { if (Date.now() - statSync(lock).mtimeMs > 10_000) unlinkSync(lock); } catch { /* raced */ }
-        if (Date.now() > deadline) throw new Error('Trusted devices are locked by another process');
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
-      }
-    }
-    try {
+    return withTrustLock(this.dir, 'devices.lock', () => {
       const before = JSON.stringify([...this.devices]);
       this.loadDevices();
       if (JSON.stringify([...this.devices]) !== before) queueMicrotask(() => this.onExternalChange?.());
       const changed = change(this.devices);
       if (changed) this.save();
       return changed;
-    } finally {
-      closeSync(fd);
-      try { unlinkSync(lock); } catch { /* gone */ }
-    }
+    });
   }
 
   get(appId: string): TrustedDevice | undefined {
