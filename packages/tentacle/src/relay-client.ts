@@ -301,6 +301,9 @@ export class RelayClient {
    *  auto-resolve, cleared when the turn ends. Insertion order is preserved so
    *  the newest open question wins the preview slot. */
   openQuestions = new Map<string, Map<string, PendingHumanAction>>();
+  /** `${sessionId}\u0000${questionId}` of answers being delivered. Claimed
+   *  before the first await, so a competing answer sees it as no longer open. */
+  answeringQuestions = new Set<string>();
 
   /**
    * Connect to the relay. Auto-reconnects on disconnect.

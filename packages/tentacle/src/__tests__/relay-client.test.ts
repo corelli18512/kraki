@@ -3998,6 +3998,30 @@ describe('RelayClient pending-question digest', () => {
     expect(sm.clearPendingHumanAction).not.toHaveBeenCalledWith('sess_1');
   });
 
+  it('a competing answer to a question being answered is not turned into a recovery prompt', async () => {
+    const { adapter, askQ, answerQ, sm } = buildClient();
+    let accept!: (r: string) => void;
+    (adapter.respondToQuestion as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => new Promise<string>((resolve) => { accept = resolve; }))
+      .mockResolvedValueOnce('not_found');
+    askQ('q1');
+    answerQ('q1', 'a');
+    await vi.waitFor(() => expect(adapter.respondToQuestion).toHaveBeenCalledTimes(1));
+    // Another device answers the same question while the first is in flight.
+    answerQ('q1', 'b');
+    await Promise.resolve();
+    accept('accepted');
+    await vi.runAllTimersAsync();
+
+    expect(adapter.respondToQuestion).toHaveBeenCalledTimes(1);
+    const prompts = (adapter.sendMessage as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[1]));
+    expect(prompts.some((p) => p.includes('A previous turn was interrupted'))).toBe(false);
+    const users = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => JSON.parse(c[2]) as { type: string; payload: Record<string, unknown> })
+      .filter((m) => m.type === 'user_message');
+    expect(users.map((m) => m.payload.answerTo)).toEqual(['q1', undefined]);
+  });
+
   it('rejects ambiguous composer text when multiple questions are pending', async () => {
     const { adapter, askQ, ws, sm, client } = buildClient();
     askQ('q1');

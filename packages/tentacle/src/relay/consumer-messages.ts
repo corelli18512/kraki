@@ -213,11 +213,14 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
         // An answer targets an open question explicitly (`answerTo`); a
         // composer message without it answers the sole open question. An
         // `answerTo` for a question that is no longer open is delivered as
-        // an ordinary message (not recorded as an answer).
+        // an ordinary message (not recorded as an answer). So is an answer
+        // to a question another answer is already being delivered to.
         const requestedAnswerTo = msg.payload.answerTo as string | undefined;
-        const answering = requestedAnswerTo
+        const targeted = requestedAnswerTo
           ? client.openQuestions.get(sessionId)?.get(requestedAnswerTo) ?? null
           : soleOpenQuestion(client, sessionId);
+        const answerClaim = targeted ? `${sessionId}\u0000${targeted.questionId}` : '';
+        const answering = targeted && !client.answeringQuestions.has(answerClaim) ? targeted : null;
         // Composer text with several open questions is ambiguous. Reject it
         // before it is persisted: a stored user_message would look sent and
         // would start a new turn boundary for input the agent never gets.
@@ -258,6 +261,7 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
         });
 
         if (answering) {
+          client.answeringQuestions.add(answerClaim);
           updateInputLedger(client, sessionId, clientId, 'dispatching');
           const delivery = deliverQuestionAnswer(client, sessionId, answering, {
             text: msg.payload.text === '[image]' ? '' : msg.payload.text,
@@ -269,6 +273,8 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
             updateInputLedger(client, sessionId, clientId, 'rejected');
             logger.error({ err, sessionId }, 'question answer from composer failed');
             client.send({ type: 'error', sessionId, payload: { message: describeFailure('Failed to deliver answer', err) } });
+          }).finally(() => {
+            client.answeringQuestions.delete(answerClaim);
           });
           break;
         }
