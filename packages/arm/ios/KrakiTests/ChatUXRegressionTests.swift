@@ -1398,6 +1398,27 @@ final class ChatUXRegressionTests: XCTestCase {
 
     // MARK: Navigation controls
 
+    /// 1-03 (2026-10-13 review): ↑ through a long conversation while the live
+    /// card is showing pages older history in via `nav-older`; the window then
+    /// trims rows BEFORE the live card (a middle deletion). Edge-only batch
+    /// updates raised UIKit's "invalid number of items" exception.
+    func testUpThroughLongHistoryWithLiveCardKeepsTheListConsistent() throws {
+        let fx = try makeFixture(total: 600)
+        drain(1_500)
+        fx.app.messageStore.beginCardTurn(sid)
+        fx.app.messageStore.applyCardMessage(sid, "Working on it\u{2026}", reset: true)
+        fx.vc.syncLiveUpdates()
+        drain(500)
+        XCTAssertEqual(fx.vc.automationItemIDs.last, ChatPerfListVC.liveCardID, "live card at the tail")
+        for _ in 0..<40 {
+            fx.vc.automationTapUp()
+            drain(700)
+            XCTAssertEqual(fx.cv.numberOfItems(inSection: 0), fx.vc.automationItemIDs.count,
+                           "collection view and data source agree")
+        }
+        XCTAssertEqual(fx.vc.automationItemIDs.last, ChatPerfListVC.liveCardID)
+    }
+
     func testUpStepsThroughReplyStartsAndDownShowsAwayFromBottom() throws {
         let fx = try makeFixture(total: 120)
         drain(1_500)
