@@ -5,7 +5,7 @@ const { tmpdir } = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { readFileSync } = require('node:fs');
-const { isKrakiExecutable, probeCli } = require('../src/settings.cjs');
+const { isKrakiExecutable, probeCli, isSafeUsageShortcut } = require('../src/settings.cjs');
 
 test('external CLI validation rejects directories, arbitrary names and missing files', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'kraki-settings-'));
@@ -40,4 +40,9 @@ test('settings preload exposes the agreed capability names and forwards fixed IP
   assert.equal(typeof bridge.settings.locateCli, 'function');
   assert.equal(typeof bridge.settings.recheckCli, 'function');
   assert.equal(typeof bridge.builtIn.showSignInWindow, 'function');
+});
+
+test('global usage shortcut never captures plain typing keys or Escape', () => {
+  for (const key of ['F6', 'Control+U', 'Alt+Space', 'CommandOrControl+Shift+U']) assert.equal(isSafeUsageShortcut(key), true);
+  for (const key of ['A', 'Shift+A', 'Escape', 'Control+Escape', '']) assert.equal(isSafeUsageShortcut(key), false);
 });

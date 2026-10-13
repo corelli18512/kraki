@@ -320,7 +320,7 @@ function createTray() {
   setInterval(updateTray, 3000);
   if (process.env.KRAKI_DESKTOP_LOG_NOTIFY) {
     setTimeout(() => {
-      try { require('node:fs').appendFileSync(path.join(app.getPath('userData'), 'notify.log'), `${new Date().toISOString()} tray bounds=${JSON.stringify(tray.getBounds())} empty=${tray.getImage?.()?.isEmpty?.() ?? false}\n`); } catch { /* ignore */ }
+      try { require('node:fs').appendFileSync(path.join(app.getPath('userData'), 'notify.log'), `${new Date().toISOString()} tray bounds=${JSON.stringify(tray.getBounds())} empty=${trayImage(shownIcon).isEmpty()}\n`); } catch { /* ignore */ }
     }, 3000);
   }
 }
@@ -438,7 +438,7 @@ function registerUsageShortcut(shortcut, enabled) {
 }
 function readConfig() { try { return JSON.parse(readFileSync(path.join(builtIn.home(), 'config.json'), 'utf8')); } catch { return null; } }
 ipcMain.handle('kraki:settings-state', async () => ({
-  usageShortcut: pref('usageShortcut') ?? 'CommandOrControl+Shift+U',
+  usageShortcut: pref('usageShortcut') ?? 'F6',
   usageShortcutEnabled: !!registeredUsageShortcut,
   launchAtLogin: process.platform === 'win32' ? await builtIn.launchAtLogin() : app.getLoginItemSettings().openAtLogin,
   keepRunningInTray: pref('keepRunningInTray') !== false,
@@ -450,7 +450,7 @@ ipcMain.handle('kraki:settings-state', async () => ({
   externalCliVersion: pref('externalCliVersion') ?? null,
 }));
 ipcMain.handle('kraki:settings-shortcut', safely((_e, shortcut, enabled) => {
-  if (typeof shortcut !== 'string' || !shortcut || shortcut.length > 100) throw new Error('Enter a valid shortcut.');
+  if (!settings.isSafeUsageShortcut(shortcut)) throw new Error('Use a function key or a shortcut with Control or Alt.');
   registerUsageShortcut(shortcut, !!enabled);
   pref('usageShortcut', shortcut); pref('usageShortcutEnabled', !!enabled);
 }));
@@ -525,7 +525,7 @@ app.whenReady().then(async () => {
   serveApp();
   createWindow();
   createTray();
-  if (pref('usageShortcutEnabled') !== false) {
-    try { registerUsageShortcut(pref('usageShortcut') ?? 'CommandOrControl+Shift+U', true); } catch { /* state reports unavailable */ }
+  if (pref('usageShortcutEnabled') === true) {
+    try { registerUsageShortcut(pref('usageShortcut') ?? 'F6', true); } catch { /* state reports unavailable */ }
   }
 });

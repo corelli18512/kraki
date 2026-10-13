@@ -18,4 +18,12 @@ async function probeCli(selected) {
   if (!version) throw new Error('The selected CLI did not report a Kraki version.');
   return { externalCliPath: file, externalCliVersion: version };
 }
-module.exports = { exec, isKrakiExecutable, probeCli };
+function isSafeUsageShortcut(shortcut) {
+  if (typeof shortcut !== 'string' || shortcut.length > 100) return false;
+  const parts = shortcut.split('+');
+  const key = parts.pop();
+  if (!key || /^(?:esc|escape)$/i.test(key)) return false;
+  if (/^F(?:[1-9]|1[0-9]|2[0-4])$/i.test(key)) return true;
+  return parts.some((mod) => /^(?:CommandOrControl|CmdOrCtrl|Command|Cmd|Control|Ctrl|Alt|Option|Super|Meta)$/i.test(mod));
+}
+module.exports = { exec, isKrakiExecutable, probeCli, isSafeUsageShortcut };
