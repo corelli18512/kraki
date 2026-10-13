@@ -39,7 +39,8 @@ describe('Sidebar desktop rail', () => {
     expect(screen.getByText('No matching sessions')).toBeInTheDocument();
     expect(screen.getByText('Try another search')).toBeInTheDocument();
     expect(screen.queryByText('No sessions yet')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('Clear search'));
+    expect(screen.queryByLabelText('Clear search')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Search sessions'), { target: { value: '' } });
     expect(screen.getByText('No sessions yet')).toBeInTheDocument();
   });
   it('reclaims the footer and retains navigation/settings entry points in one toolbar menu', () => {
@@ -50,7 +51,15 @@ describe('Sidebar desktop rail', () => {
     expect(screen.getByRole('menuitem', { name: 'Devices' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Account Usage' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Settings…' })).toBeInTheDocument();
-    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    const button = screen.getByLabelText('App menu');
+    button.focus();
+    fireEvent.keyDown(button, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(button).toHaveFocus();
+    // Reopening installs a fresh listener even if focus is elsewhere.
+    fireEvent.click(button);
+    screen.getByLabelText('Search sessions').focus();
+    fireEvent.keyDown(screen.getByLabelText('Search sessions'), { key: 'Escape' });
     expect(screen.queryByRole('menu')).toBeNull();
   });
   it('includes profile and sign-out menu items for authenticated accounts', () => {
@@ -60,5 +69,51 @@ describe('Sidebar desktop rail', () => {
     expect(screen.getByText('octocat')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('menuitem', { name: 'Sign Out…' }));
     expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+  });
+});
+
+describe('Sidebar native search and ordering', () => {
+  const base = { deviceId: 'd', agent: 'pi' as const, state: 'idle' as const, messageCount: 0 };
+  it('matches a raw model-only query case-insensitively', () => {
+    useStore.getState().setSessions([
+      { ...base, id: 'model', title: 'Model match', model: 'deepseek/deepseek-flash' },
+      { ...base, id: 'other', title: 'Other model', model: 'claude-4' },
+    ]);
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Search sessions'), { target: { value: '  DEEPSEEK  ' } });
+    expect(screen.getByText('Model match')).toBeInTheDocument();
+    expect(screen.queryByText('Other model')).toBeNull();
+    expect(screen.queryByTestId('sidebar-no-results')).toBeNull();
+  });
+  it('sorts new/restored empty rows using creation when preview is absent, empty or invalid', () => {
+    useStore.getState().setSessions([
+      { ...base, id: 'old', title: 'Old conversation', createdAt: '2026-06-01T00:00:00Z' },
+      { ...base, id: 'new', title: 'New empty', createdAt: '2026-06-10T00:00:00Z' },
+      { ...base, id: 'restored', title: 'Restored empty', createdAt: '2026-06-11T00:00:00Z' },
+      { ...base, id: 'invalid', title: 'Invalid preview', createdAt: '2026-06-12T00:00:00Z' },
+    ]);
+    useStore.getState().setSessionPreview('old', { text: 'Old message', type: 'agent', timestamp: '2026-06-02T00:00:00Z' });
+    useStore.getState().setSessionPreview('restored', { text: '', type: 'session_created', timestamp: '' });
+    useStore.getState().setSessionPreview('invalid', { text: '', type: 'session_created', timestamp: 'not a date' });
+    const { container } = render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    expect([...container.querySelectorAll('.ksr-title')].map((e) => e.textContent)).toEqual([
+      'Invalid preview', 'Restored empty', 'New empty', 'Old conversation',
+    ]);
+  });
+  it('compares mixed ISO date shapes chronologically, preserving pin, creation and id ties', () => {
+    useStore.getState().setSessions([
+      { ...base, id: 'a', title: 'A', createdAt: '2026-06-01T00:00:00Z' },
+      { ...base, id: 'b', title: 'B', createdAt: '2026-06-02T00:00:00Z' },
+      { ...base, id: 'c', title: 'C', createdAt: '2026-06-02T00:00:00Z' },
+      { ...base, id: 'd', title: 'D', createdAt: '2026-06-02T00:00:00Z' },
+      { ...base, id: 'pinned', title: 'Pinned', createdAt: '2020-01-01T00:00:00Z' },
+    ]);
+    for (const id of ['a', 'b', 'c']) {
+      useStore.getState().setSessionPreview(id, { text: '', type: 'agent', timestamp: '2026-06-10T10:00:00Z' });
+    }
+    useStore.getState().setSessionPreview('d', { text: '', type: 'agent', timestamp: '2026-06-10T12:00:00+01:00' });
+    useStore.getState().setPinnedSessions(new Set(['pinned']));
+    const { container } = render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    expect([...container.querySelectorAll('.ksr-title')].map((e) => e.textContent)).toEqual(['Pinned', 'D', 'B', 'C', 'A']);
   });
 });

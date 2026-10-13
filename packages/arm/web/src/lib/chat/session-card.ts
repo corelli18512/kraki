@@ -37,6 +37,12 @@ export const STATUS_LABEL: Partial<Record<SessionCardStatus, string>> = {
   humanMessage: 'Last message from you',
 };
 
+/** Native effective date: a valid preview timestamp, otherwise session creation. */
+export function sessionTimestamp(previewTimestamp?: string, createdAt?: string): string {
+  if (previewTimestamp && Number.isFinite(Date.parse(previewTimestamp))) return previewTimestamp;
+  return createdAt && Number.isFinite(Date.parse(createdAt)) ? createdAt : '';
+}
+
 /** Local HH:mm today, lowercase yesterday, then elapsed calendar days (Mac). */
 export function sessionTimeLabel(iso: string, now = new Date()): string {
   if (!iso) return '';

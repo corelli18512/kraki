@@ -27,6 +27,11 @@ describe('SessionRow Mac sidebar', () => {
     expect(screen.getByLabelText('Offline')).toBeInTheDocument();
     expect(container.querySelector('.ksr-devdot')).toBeNull();
   });
+  it('uses creation time for an invalid preview just like list ordering', () => {
+    useStore.getState().setSessionPreview('s', { text: 'Invalid timestamp', type: 'agent', timestamp: 'invalid' });
+    row();
+    expect(screen.getByText(sessionTimeLabel(session.createdAt!))).toBeInTheDocument();
+  });
   it('renders six native-worded actions with a destructive separator and routes Rename to Session Info', () => {
     row();
     fireEvent.contextMenu(screen.getByRole('button', { name: /Sidebar test/ }), { clientX: 40, clientY: 100 });
