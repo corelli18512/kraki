@@ -384,6 +384,10 @@
 .kmenu .is-destructive { color: #ef4444; }
 
 .kmessage-menu {
+  --k-bg: #fafafa;
+  --k-text: #262626;
+  --k-border: rgba(0, 0, 0, 0.25);
+  --k-user: #007aff;
   position: fixed;
   z-index: 100;
   width: max-content;
@@ -396,6 +400,12 @@
   box-shadow: inset 0 0 0 0.5px var(--k-border), 0 5px 16px rgba(0, 0, 0, 0.22);
   color: var(--k-text);
   font: 13px/18px var(--k-font);
+}
+.dark .kmessage-menu {
+  --k-bg: #262626;
+  --k-text: #f2f2f2;
+  --k-border: rgba(255, 255, 255, 0.2);
+  --k-user: #0a84ff;
 }
 .kmessage-menu button {
   display: block;
@@ -591,7 +601,7 @@
   border: 0.5px solid rgba(82, 82, 91, 0.72);
   border-radius: 9px;
   background: #18181b;
-  color: #e4e4e7;
+  color: #f4f4f5;
 }
 .kmd-code-lang {
   padding: 8px 12px 0;
