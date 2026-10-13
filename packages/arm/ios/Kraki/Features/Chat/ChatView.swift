@@ -35,13 +35,6 @@ struct ChatView: View {
         return ChatViewModel.renderable(viewModel.filteredMessages).isEmpty
             && viewModel.pendingMessages.isEmpty && viewModel.card == nil
     }
-    #if DEBUG
-    private var forceComposerForDiagnostics: Bool {
-        ProcessInfo.processInfo.environment["KRAKI_FORCE_COMPOSER"] == "1"
-    }
-    #else
-    private var forceComposerForDiagnostics: Bool { false }
-    #endif
     /// Stable resting clearance, like Mac. Dictation and multiline text grow
     /// upward over the list without moving it; `composerOverlay` only lets the
     /// reader scroll the covered bubbles into view (no follow). UIKit
@@ -53,7 +46,7 @@ struct ChatView: View {
                 bottomPadding: IOSComposerMetrics.verticalPadding,
                 bubbleBottomPadding: TKMetrics.outerV
             ),
-            composerVisible: isDeviceOnline || forceComposerForDiagnostics,
+            composerVisible: true,
             compacting: viewModel?.isCompacting == true
         )
     }
@@ -126,7 +119,7 @@ struct ChatView: View {
                     sessionId: sessionId,
                     agent: session?.agent ?? "claude",
                     bottomContentInset: effectiveBottomInputHeight,
-                    composerOverlayInset: isDeviceOnline || forceComposerForDiagnostics ? composerOverlay : 0,
+                    composerOverlayInset: composerOverlay,
                     onResolvePermission: resolveLivePermission,
                     onAnswerQuestion: answerLiveQuestion,
                     onOpenImage: { selection in
@@ -162,13 +155,11 @@ struct ChatView: View {
             if !waitingForLatest { topEdgeBlur }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            // Show the compose area whenever the tentacle device is on file
-            // as online. We intentionally do NOT gate on
-            // `appState.isFullyOnline` — relay blips are short, the WS layer
-            // queues outbound frames, and the input itself surfaces a hint
-            // when sending would not be live.
-            if !waitingForLatest,
-               isDeviceOnline || viewModel?.isCompacting == true || forceComposerForDiagnostics {
+            // Always, like Mac: with the computer offline the composer stays
+            // mounted (an attached photo and dictation survive a presence
+            // blip), says so, and queues the message in the outbox until it
+            // reconnects.
+            if !waitingForLatest {
                 bottomInputArea
             }
         }
@@ -291,23 +282,21 @@ struct ChatView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Compacting context")
             }
-            if isDeviceOnline {
-                // Pure floating liquid-glass capsule. The capsule itself owns
-                // its glass background (see `inputBoxGlassBackground` in
-                // MessageInputView); we deliberately do NOT add a band of
-                // material under the home-indicator strip — the chat
-                // collection view scrolls behind the input so messages blur
-                // through the capsule and the home-indicator area shows the
-                // underlying content directly, matching the web composer.
-                MessageInputView(
-                    sessionId: sessionId,
-                    pendingPermission: viewModel?.permissions.first,
-                    pendingQuestion: viewModel?.questions.last,
-                    isCompacting: viewModel?.isCompacting == true,
-                    hasLiveCard: viewModel?.card != nil
-                )
-                .reportsComposerOverlay(resting: IOSComposerMetrics.height + IOSComposerMetrics.verticalPadding * 2, into: $composerOverlay)
-            }
+            // Pure floating liquid-glass capsule. The capsule itself owns
+            // its glass background (see `inputBoxGlassBackground` in
+            // MessageInputView); we deliberately do NOT add a band of
+            // material under the home-indicator strip — the chat
+            // collection view scrolls behind the input so messages blur
+            // through the capsule and the home-indicator area shows the
+            // underlying content directly, matching the web composer.
+            MessageInputView(
+                sessionId: sessionId,
+                pendingPermission: viewModel?.permissions.first,
+                pendingQuestion: viewModel?.questions.last,
+                isCompacting: viewModel?.isCompacting == true,
+                hasLiveCard: viewModel?.card != nil
+            )
+            .reportsComposerOverlay(resting: IOSComposerMetrics.height + IOSComposerMetrics.verticalPadding * 2, into: $composerOverlay)
         }
     }
 

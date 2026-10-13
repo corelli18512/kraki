@@ -18,7 +18,7 @@ final class ChatUXRegressionTests: XCTestCase {
     var windows: [UIWindow] = []
     private var states: [AppState] = []
     let sid = "ux-gate"
-    private let dev = "ux-gate-device"
+    let dev = "ux-gate-device"
 
     override func tearDown() async throws {
         windows.forEach { $0.isHidden = true; $0.rootViewController = nil }
