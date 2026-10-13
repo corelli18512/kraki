@@ -456,7 +456,7 @@ class MessageProvider {
     });
     getStore().setTurnSteps(sessionId, bubbleSeq, list);
     const key = `${sessionId}:${bubbleSeq}`;
-    this.traceLoaded.add(key);
+    if (complete) this.traceLoaded.add(key);
     for (const listener of this.traceListeners) listener();
     const refresh = this.traceRefresh.delete(key);
     if (!complete || refresh) this.tracePulled.delete(key);

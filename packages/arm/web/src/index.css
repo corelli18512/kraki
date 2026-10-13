@@ -51,6 +51,10 @@
   --color-text-secondary: #64748b;
   --color-text-muted: #94a3b8;
   --color-text-title: #052847;
+  /* AppKit label colors are translucent over their enclosing surface. */
+  --color-label-primary: rgba(0, 0, 0, .847);
+  --color-label-secondary: rgba(0, 0, 0, .498);
+  --color-label-tertiary: rgba(0, 0, 0, .259);
 }
 
 /* Theme toggle via class on <html> */
@@ -63,6 +67,9 @@
   --color-text-secondary: #94a3b8;
   --color-text-muted: #64748b;
   --color-text-title: #dbe8f4;
+  --color-label-primary: rgba(255, 255, 255, .847);
+  --color-label-secondary: rgba(255, 255, 255, .549);
+  --color-label-tertiary: rgba(255, 255, 255, .247);
 }
 
 /* Keep the document itself fixed to the visual viewport. Only explicit app
