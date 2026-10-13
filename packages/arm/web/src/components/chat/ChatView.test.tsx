@@ -3,7 +3,9 @@ import { render, screen } from '@testing-library/react';
 import { ChatView } from './ChatView';
 import { useStore } from '../../hooks/useStore';
 
-vi.mock('./ChatScroller', () => ({ ChatScroller: () => null }));
+vi.mock('./ChatScroller', () => ({
+  ChatScroller: ({ rows }: { rows: { kind: string }[] }) => <div data-testid="live-rows">{rows.filter((r) => r.kind === 'live').length}</div>,
+}));
 vi.mock('./Composer', () => ({
   composerIntent: () => 'steer',
   Composer: ({ canAbort }: { canAbort: boolean }) => canAbort ? <button>Stop</button> : null,
@@ -19,11 +21,25 @@ describe('ChatView compaction indicator', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
-  it('shows runtime compaction and keeps Stop available', () => {
-    useStore.setState({ runtimeStatuses: new Map([['s', { status: 'compacting' }]]) });
+  it('shows runtime compaction without an empty live bubble and keeps Stop available', () => {
+    useStore.setState({
+      runtimeStatuses: new Map([['s', { status: 'compacting' }]]),
+      cards: new Map([['s', { text: '', closed: false } as never]]),
+    });
     render(<ChatView sessionId="s" topInset={56} />);
     expect(screen.getByRole('status', { name: 'Compacting context' })).toHaveTextContent('Compacting context…');
     expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+  });
+
+  it('keeps an in-flight tool card visible while compacting', () => {
+    useStore.setState({
+      runtimeStatuses: new Map([['s', { status: 'compacting' }]]),
+      cards: new Map([['s', { text: '', closed: false, action: { type: 'tool_start', payload: { toolName: 'bash' } } } as never]]),
+    });
+    render(<ChatView sessionId="s" topInset={56} />);
+    expect(screen.getByRole('status')).toBeInTheDocument();
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
   });
 
   it('shows session-state compaction and removes it when idle', () => {

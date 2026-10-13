@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronUp, ChevronsDown } from 'lucide-react';
+import { ChevronUp, ChevronsDown, Loader } from 'lucide-react';
 import type { Attachment, ContentRef } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
 import { useOutbox, outbox } from '../../lib/chat/outbox';
@@ -86,7 +86,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   // until a spine bubble concludes the segment (a reply, a question, a
   // terminal status) — not only while the card happens to have content.
   const showLive = !!card && !card.closed && (sessionActive || permissionOpen)
-    && (card.text.length > 0 || actionLive || sessionActive);
+    && (card.text.length > 0 || actionLive || session?.state === 'active');
 
   // Row objects are reused while their record is unchanged, so memoized
   // bubbles only re-render when their own content changes.
@@ -314,7 +314,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
       <div className="kcomposer-dock" ref={composerBox}>
         {isCompacting && (
           <div className="kcompacting" role="status" aria-label="Compacting context">
-            <span className="kspinner" aria-hidden />
+            <Loader className="kcompacting-spinner" aria-hidden />
             <span>Compacting context…</span>
           </div>
         )}

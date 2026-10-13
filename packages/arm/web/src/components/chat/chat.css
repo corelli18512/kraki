@@ -710,12 +710,13 @@
   margin: 0 auto 8px;
   padding: 8px 14px;
   border-radius: 999px;
-  background: rgba(246, 246, 246, 0.8);
+  background: rgba(232, 236, 237, 0.8);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   color: var(--k-text-2);
   font: 500 13px/16px var(--k-font);
 }
+.kcompacting-spinner { width: 16px; height: 16px; flex: none; color: var(--k-text-3); animation: kspin 0.8s linear infinite; }
 .dark .kcompacting { background: rgba(36, 36, 36, 0.8); }
 .kcomposer { position: relative; display: flex; align-items: flex-end; gap: var(--k-gap); }
 .kcomposer-field {
@@ -915,6 +916,8 @@
   .kslot { margin-top: 8px; }
   .kslot-alone { margin-top: 0; }
   .kslot-tool { line-height: 14px; }
+  .kagent-stack:has(.kslot-permission) { min-width: min(408px, 95%); }
+  .kbubble-agent:has(.kslot-permission) { width: 100%; }
   .kchoice, .kslot-permission-buttons .kchoice {
     padding: 6px 14px;
     border: none;
