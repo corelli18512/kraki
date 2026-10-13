@@ -484,8 +484,8 @@ ipcMain.handle('kraki:settings-remote-updates', safely(async (_e, enabled) => {
 ipcMain.on('kraki:notify', (_e, n) => {
   if (!Notification.isSupported() || !n || typeof n.title !== 'string') return;
   const note = new Notification({
-    title: String(n.title).slice(0, 120),
-    body: String(n.body ?? '').slice(0, 240),
+    title: String(n.title),
+    body: String(n.body ?? ''),
     icon: path.join(ASSETS, 'icon.png'),
     silent: false,
   });

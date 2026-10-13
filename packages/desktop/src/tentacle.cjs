@@ -358,7 +358,9 @@ class BuiltInKraki {
 
   /** Restart after an agent was installed or an app update. */
   async restart() {
+    const login = await this.launchAtLogin();
     await this.disable({ keepOwnership: true });
+    if (login) await this.setLoginItem(true);
     await this.start();
   }
 }

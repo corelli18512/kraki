@@ -38,6 +38,15 @@ describe('Mac NotificationDeduper desktop parity', () => {
     p.present(json('watched')); p.present(json('one')); p.present(json('two'));
     expect(post).toHaveBeenCalledTimes(2);
   });
+  it('claims while notifications are disabled, before the preference rule', () => {
+    const post = vi.fn();
+    const p = new DesktopNotificationPresenter(localStorage, () => false, post);
+    localStorage.setItem('kraki:notifications.enabled', 'false');
+    p.present(json('disabled'));
+    localStorage.removeItem('kraki:notifications.enabled');
+    p.present(json('disabled')); p.present(json('enabled'));
+    expect(post).toHaveBeenCalledTimes(1);
+  });
   it('does not invent ids for missing/invalid nid and bounds persistence to 512', () => {
     const post = vi.fn();
     const p = new DesktopNotificationPresenter(localStorage, () => false, post);

@@ -95,8 +95,8 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
     ? builtIn.externalPresence?.(action) ?? Promise.resolve({ ok: false, error: 'External service control is unavailable.' })
     : action === 'start' ? builtIn.enable() : action === 'stop' ? builtIn.disable({ keepOwnership: true }) : builtIn.restart();
   const runsAgents = state.owned;
-  const status = busy === 'online' || busy === 'switch' ? 'Going online…'
-    : busy === 'offline' ? 'Going offline…' : busy === 'reconnect' ? 'Reconnecting…'
+  const status = busy === 'online' || busy === 'on' || busy === 'switch' ? 'Going online…'
+    : busy === 'offline' || busy === 'off' ? 'Going offline…' : busy === 'reconnect' ? 'Reconnecting…'
       : state.running ? 'Online' : 'Offline';
 
   return (
@@ -128,8 +128,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
         <Row title="Coding agents" detail="Which agents are installed and signed in here.">
           <button type="button" className={button} onClick={() => setAgentsOpen(true)}>Check Coding Agents…</button>
         </Row>
-        <Row title="Version" detail={`Kraki ${state.version ?? 'unknown'}${state.owned ? ' (built in)' : ''}`}>
-        </Row>
+        <Row title="Version" detail={`Kraki ${state.version ?? 'unknown'}${state.owned ? ' (built in)' : ''}`} />
         </fieldset>
         <fieldset className="ds-settings-group"><legend>Online</legend>
           <Row title={status}>

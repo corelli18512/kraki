@@ -264,10 +264,11 @@
 /* Launch logo is centered independently from the activity bar (MacEntryGateView). */
 .ds-launch { align-items: center; justify-content: center; }
 .ds-launch-logo { width: 176px; height: 176px; object-fit: contain; }
-.ds-launch-activity { position: absolute; top: calc(50% + 118px); width: 128px; height: 2px; overflow: hidden; background: color-mix(in srgb, var(--color-text-muted) 15%, transparent); border-radius: 1px; }
-.ds-launch-activity::after { content: ""; display: block; width: 40%; height: 100%; background: var(--color-text-secondary); animation: ds-launch-slide 1.2s ease-in-out infinite alternate; }
-@keyframes ds-launch-slide { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
-@media (prefers-reduced-motion: reduce) { .ds-launch-activity::after { animation: none; width: 100%; } }
+.ds-launch-activity { --ds-cyan: #0891b2; position: absolute; top: calc(50% + 118px); width: 128px; height: 2px; overflow: hidden; background: color-mix(in srgb, var(--ds-primary) 11%, transparent); }
+.ds-launch-activity::after { content: ""; display: block; width: 58px; height: 100%; background: linear-gradient(to right, transparent, color-mix(in srgb, var(--ds-primary) 74%, transparent), color-mix(in srgb, var(--ds-cyan) 96%, transparent), color-mix(in srgb, var(--ds-primary) 74%, transparent), transparent); animation: ds-launch-slide 1.25s ease-in-out infinite; }
+.dark .ds-launch-activity { --ds-cyan: #22d3ee; background: color-mix(in srgb, var(--ds-primary) 16%, transparent); }
+@keyframes ds-launch-slide { from { transform: translateX(-58px); } to { transform: translateX(128px); } }
+@media (prefers-reduced-motion: reduce) { .ds-launch-activity::after { animation: none; transform: translateX(35px); opacity: 0.8; } }
 
 .ds-settings-group { border: 1px solid var(--color-border-primary); background: var(--color-surface-secondary); border-radius: 10px; padding: 8px 12px; }
 .ds-settings-group legend { padding: 0 4px; font-size: 11px; font-weight: 600; color: var(--color-text-secondary); }

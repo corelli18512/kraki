@@ -47,6 +47,7 @@ export class DesktopNotificationPresenter {
       this.ids = [...this.ids, nid].slice(-CAPACITY);
       try { this.storage.setItem(IDS_KEY, JSON.stringify(this.ids)); } catch { /* storage unavailable */ }
     }
+    if (this.storage.getItem('kraki:notifications.enabled') === 'false') return;
     const content = formatDesktopPreview(preview);
     if (!content.sessionId || this.watching(content.sessionId)) return;
     this.post(content);
