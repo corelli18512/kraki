@@ -4,7 +4,7 @@
 /// you; everything else lives in the window (see MacPresence.swift):
 ///   • This Mac's status (click: Settings › This Mac)
 ///   • Needs You — sessions waiting on a permission or an answer
-///   • Open Kraki, Account Usage
+///   • Open Kraki, Show/Hide Account Usage
 ///   • Go Online / Go Offline
 ///   • Settings…, Quit Kraki… (quitting takes this Mac offline)
 
@@ -17,6 +17,8 @@ struct MenuBarExtraView: View {
     @Environment(TentacleCLIManager.self) private var tentacleCLI
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
+    @ObservedObject private var usagePeek = UsagePeekController.shared
+    @ObservedObject private var usageHotKey = UsagePeekController.shared.hotkey
 
     var body: some View {
         statusItem
@@ -41,10 +43,13 @@ struct MenuBarExtraView: View {
 
         Divider()
 
+        // No shortcut shown: menu bar menu shortcuts only work while the menu
+        // is open, and ⌘0 is the window's Actual Size.
         Button("Open Kraki") { openKraki() }
-            .keyboardShortcut("0", modifiers: .command)
 
-        Button("Account Usage") {
+        // The global shortcut (when on) is shown in the title: a menu
+        // key equivalent can't express every recorded shortcut.
+        Button(accountUsageTitle) {
             UsagePeekController.shared.togglePinned()
         }
 
@@ -70,6 +75,11 @@ struct MenuBarExtraView: View {
                ? "Quit Kraki and Go Offline…" : "Quit Kraki") {
             MacPresenceController.shared.quitGoingOffline()
         }
+    }
+
+    private var accountUsageTitle: String {
+        let base = usagePeek.peek.isVisible ? "Hide Account Usage" : "Show Account Usage"
+        return usageHotKey.enabled ? "\(base)  (\(usageHotKey.shortcut.display))" : base
     }
 
     @ViewBuilder
