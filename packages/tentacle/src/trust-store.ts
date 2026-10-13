@@ -29,7 +29,7 @@ import {
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
-  generatePairingSecret, isRawPublicKey, verifyPairingProof, ReplayGuard, type PairingClaim,
+  generatePairingSecret, isFileSafeId, isRawPublicKey, verifyPairingProof, ReplayGuard, type PairingClaim,
 } from '@kraki/crypto';
 import { getKrakiHome } from './config.js';
 import { createLogger } from './logger.js';
@@ -403,7 +403,7 @@ export class TrustStore {
    * these keys. The file must be owned by this user and private.
    */
   acceptLocalEnrollment(appId: string, identityKey: string, encryptionKey: string, now = Date.now()): boolean {
-    if (!this.dir) return false;
+    if (!this.dir || !isFileSafeId(appId)) return false;
     const path = join(this.dir, 'local-enroll', `${appId}.json`);
     if (!existsSync(path)) return false;
     try {

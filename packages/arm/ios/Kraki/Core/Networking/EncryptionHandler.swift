@@ -201,6 +201,7 @@ final class EncryptionHandler {
         switch DeviceTrustInbound.check(plaintext: plaintext, src: json["src"] as? String, selfId: deviceId) {
         case .message(let data):
             messageData = data
+            DeviceTrustInbound.applyRevocation(messageData)
         case .rejected(let reason):
             KLog.d("⛔️ device trust: rejected payload (\(reason)) src=\(json["src"] as? String ?? "-")")
             if reason.hasPrefix("unsigned_from_pinned:") {

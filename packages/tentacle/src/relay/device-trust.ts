@@ -245,16 +245,23 @@ export class DeviceTrust {
     if (c.rsaKey !== undefined && typeof c.rsaKey !== 'string') return fail('bad_claim');
     if (signed.to !== self) return fail('wrong_recipient');
     if (!verifySignature(signed, c.identityKey)) return fail('bad_signature');
-    const replay = this.store.replayGuard.check(signed);
+    // Anyone can sign a pair_request (with the key it enrolls), so its nonce
+    // is recorded only once the pairing succeeds: failed attempts cost no
+    // memory or disk. Replaying a successful one is harmless (one-time QR
+    // secret / consumed enrollment file; identical keys only confirm again).
+    const replay = this.store.replayGuard.peek(signed);
     if (replay) return fail(replay);
-    if (!this.store.noteAccepted()) return fail('replay_store_unwritable');
+    const succeed = (outcome: PairOutcome): PairOutcome => {
+      this.store.replayGuard.record(signed);
+      return this.store.noteAccepted() ? outcome : fail('replay_store_unwritable');
+    };
     // Already paired with exactly these keys (a re-scan, or the first
     // pair_result was lost): possession of the trusted identity key, proven
     // by the signature above, is enough to confirm again.
     const existing = this.store.get(appId);
     if (existing && existing.identityKey === c.identityKey && existing.encryptionKey === c.encryptionKey
       && (existing.rsaKey ?? undefined) === (c.rsaKey || undefined)) {
-      return { ok: true, appId, encryptionKey: existing.encryptionKey, device: existing };
+      return succeed({ ok: true, appId, encryptionKey: existing.encryptionKey, device: existing });
     }
     const claim: PairingClaim = {
       tentacleId: c.tentacleId, appId, identityKey: c.identityKey, encryptionKey: c.encryptionKey,
@@ -266,6 +273,6 @@ export class DeviceTrust {
       : typeof payload.proof === 'string' && this.store.acceptQrPairing(claim, payload.proof, name);
     if (!ok) return fail(payload.local === true ? 'no_local_enrollment' : 'bad_proof');
     this.stats.paired++;
-    return { ok: true, appId, encryptionKey: claim.encryptionKey, device: this.store.get(appId) };
+    return succeed({ ok: true, appId, encryptionKey: claim.encryptionKey, device: this.store.get(appId) });
   }
 }

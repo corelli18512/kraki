@@ -149,6 +149,11 @@ export function isWireId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
+/** A device ID that is also safe as a file name (`local-enroll/<id>.json`). */
+export function isFileSafeId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+}
+
 /** Canonical base64url of exactly 16 bytes. */
 function isNonce(value: unknown): value is string {
   if (typeof value !== 'string' || value.length !== 22) return false;
@@ -261,14 +266,24 @@ export class ReplayGuard {
 
   /** Check freshness and uniqueness; records the nonce when accepted. */
   check(m: Pick<SignedMessage, 'from' | 'ts' | 'nonce'>): 'stale' | 'from_future' | 'replay' | null {
+    const rejection = this.peek(m);
+    if (rejection) return rejection;
+    this.record(m);
+    return null;
+  }
+
+  /** {@link check} without recording (e.g. before knowing the message is worth it). */
+  peek(m: Pick<SignedMessage, 'from' | 'ts' | 'nonce'>): 'stale' | 'from_future' | 'replay' | null {
     const now = this.now();
     if (m.ts < now - this.maxAgeMs || m.ts < this.notBefore) return 'stale';
     if (m.ts > now + this.maxFutureMs) return 'from_future';
-    const key = `${m.from}\n${m.nonce}`;
-    if (this.seen.has(key)) return 'replay';
-    this.prune(now);
-    this.seen.set(key, m.ts);
+    if (this.seen.has(`${m.from}\n${m.nonce}`)) return 'replay';
     return null;
+  }
+
+  record(m: Pick<SignedMessage, 'from' | 'ts' | 'nonce'>): void {
+    this.prune(this.now());
+    this.seen.set(`${m.from}\n${m.nonce}`, m.ts);
   }
 
   private prune(now: number): void {

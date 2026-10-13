@@ -695,3 +695,39 @@ describe('device trust — round 2 regressions', () => {
     expect(sendInputCalls(third)).toHaveLength(0);
   });
 });
+
+describe('device trust — PR self-review', () => {
+  it('a revoked app is told so, signed on its old key (compatible: back to unpaired)', () => {
+    const env = setup('compatible');
+    const phone = makeApp('dev_phone');
+    const laptop = makeApp('dev_laptop');
+    joined(env, phone);
+    joined(env, laptop);
+    env.deliver(pairRequest(env, phone, createPairingSecret(home)), phone.id);
+    env.deliver(pairRequest(env, laptop, createPairingSecret(home)), laptop.id);
+    env.sent.length = 0;
+    env.deliver(appSend(env, phone, { type: 'revoke_device', payload: { deviceId: laptop.id } }), phone.id);
+    const notices = readable(env, laptop).filter((m) => m.type === 'trust_revoked');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.__signed).toBe(true);
+    expect(notices[0]!.payload).toEqual({ enforced: false });
+    // Then the unpaired (legacy) connection comes back up.
+    expect(readable(env, laptop).some((m) => m.type === 'session_list' && m.__signed !== true)).toBe(true);
+  });
+
+  it('failed pair_requests leave no replay state behind', () => {
+    const env = setup('enforce');
+    const before = env.client.deviceTrust!.store.replayGuard.export().entries.length;
+    for (let i = 0; i < 20; i++) {
+      const rogue = makeApp(`dev_rogue${i}`);
+      joined(env, rogue);
+      env.deliver(pairRequest(env, rogue, null), rogue.id);
+    }
+    expect(env.client.deviceTrust!.store.replayGuard.export().entries.length).toBe(before);
+  });
+
+  it('a local enrollment id with path characters is refused', () => {
+    const store = new TrustStore(join(home, 'trust'));
+    expect(store.acceptLocalEnrollment('../../config', 'x', 'y')).toBe(false);
+  });
+});

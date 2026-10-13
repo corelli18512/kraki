@@ -79,6 +79,9 @@ export class RelayClient {
   private relayAppDevices = new Map<string, DeviceSummary>();
   private headOnlineApps = new Set<string>();
   private trustRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  /** X25519 key each paired app had when last seen trusted, so an app that
+   *  loses trust can still be told so (signed) on its old key. */
+  private pinnedKeys = new Map<string, string>();
   /** Same-machine loopback transport to local Apps. Lazily started on
    *  the first auth_ok, when this device's identity is confirmed. */
   localLink: LocalLinkServer | null = null;
@@ -283,6 +286,7 @@ export class RelayClient {
         )
       : null;
     if (this.deviceTrust) {
+      for (const d of this.deviceTrust.store.list()) this.pinnedKeys.set(d.id, d.encryptionKey);
       this.deviceTrust.store.onExternalChange = () => {
         this.reevaluateAllApps();
         this.broadcastTrustedDevices();
@@ -681,6 +685,7 @@ export class RelayClient {
       // Removal only ever takes trust away, so the Head is believed here:
       // removing a device from the account revokes it on this computer too.
       const wasTrusted = this.deviceTrust?.store.remove(deviceId) ?? false;
+      this.pinnedKeys.delete(deviceId);
       this.unpairedApps.delete(deviceId);
       this.relayAppDevices.delete(deviceId);
       this.headOnlineApps.delete(deviceId);
@@ -1589,6 +1594,7 @@ export class RelayClient {
     if (!outcome.ok) return;
     const key = this.deviceTrust.consumerKeyFor(appId);
     if (!key) return;
+    if (outcome.device) this.pinnedKeys.set(appId, outcome.device.encryptionKey);
     logger.info({ appId }, 'App paired');
     this.headOnlineApps.add(appId);
     this.unpairedApps.delete(appId);
@@ -1711,6 +1717,14 @@ export class RelayClient {
    */
   private reevaluateApp(appId: string): void {
     const device = this.relayAppDevices.get(appId);
+    const trusted = this.deviceTrust?.store.get(appId);
+    const formerKey = this.pinnedKeys.get(appId);
+    const lostTrust = !trusted && formerKey !== undefined;
+    if (trusted) this.pinnedKeys.set(appId, trusted.encryptionKey);
+    else if (formerKey) {
+      this.pinnedKeys.delete(appId);
+      this.sendTrustRevoked(appId, formerKey);
+    }
     const key = device ? this.appKeyFor(device) : this.deviceTrust?.consumerKeyFor(appId);
     const online = this.headOnlineApps.has(appId) || this.localLink?.has(appId) === true;
     if (!key) {
@@ -1720,7 +1734,8 @@ export class RelayClient {
     }
     const previous = this.consumerKeys.get(appId);
     this.consumerKeys.set(appId, key);
-    if (!online || (previous === key && this.onlineConsumers.has(appId))) return;
+    // A changed trust status re-sends the snapshot on the new channel.
+    if (!online || (previous === key && this.onlineConsumers.has(appId) && !lostTrust)) return;
     this.unpairedApps.delete(appId);
     this.onlineConsumers.add(appId);
     this.appFeatures.delete(appId);
@@ -1730,6 +1745,30 @@ export class RelayClient {
     sendAccountUsageTo(this, appId, key);
     this.sendSessionListTo(appId, key);
     this.sendTrustedDevicesTo(appId);
+  }
+
+  /**
+   * Tell an app that this computer no longer trusts it — signed, on the key it
+   * was paired with (the only one it accepts from us). In compatible mode it
+   * then goes back to the unpaired connection; enforced, it must pair again.
+   */
+  private sendTrustRevoked(appId: string, formerKey: string): void {
+    const online = this.headOnlineApps.has(appId) || this.localLink?.has(appId) === true;
+    const self = this.authInfo?.deviceId;
+    if (!online || !self || !this.deviceTrust) return;
+    try {
+      const notice = JSON.stringify({
+        type: 'trust_revoked',
+        deviceId: self,
+        seq: 0,
+        timestamp: new Date().toISOString(),
+        payload: { enforced: this.deviceTrust.enforced },
+      });
+      this.sendPayload(this.deviceTrust.sealToKey(notice, appId, formerKey), appId, false, undefined, 0);
+      logger.info({ appId }, 'Told app its pairing was revoked');
+    } catch (err) {
+      logger.warn({ err: (err as Error).message, appId }, 'trust_revoked notice failed');
+    }
   }
 
   private reevaluateAllApps(): void {

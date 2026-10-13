@@ -73,6 +73,14 @@ enum DeviceTrustWire {
         return fromB64url(value)?.count == 32
     }
 
+    /// Same rule as `isFileSafeId` in trust.ts (`local-enroll/<id>.json`).
+    static func isFileSafeId(_ value: String) -> Bool {
+        !value.isEmpty && value.count <= 128 && value.unicodeScalars.allSatisfy {
+            ($0.value >= 0x30 && $0.value <= 0x39) || ($0.value >= 0x41 && $0.value <= 0x5a)
+                || ($0.value >= 0x61 && $0.value <= 0x7a) || $0 == "_" || $0 == "-"
+        }
+    }
+
     /// Same rule as `isWireId` in trust.ts: delimiter-free, 1…128 chars.
     static func isWireId(_ value: String) -> Bool {
         !value.isEmpty && value.count <= 128 && !value.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7f }
@@ -407,6 +415,18 @@ enum DeviceTrustInbound {
     /// where session ownership is known) drops any that touch a session of a
     /// paired computer.
     static let unsignedKey = "__krakiUnsigned"
+    /// A signed `trust_revoked` from a pinned computer in compatible mode:
+    /// forget the pin right here on the decrypt queue, so the unpaired
+    /// messages that follow it are accepted (not taken for forgeries).
+    static func applyRevocation(_ data: Data, store: TentacleTrustStore = .shared) {
+        guard let inner = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              inner["type"] as? String == "trust_revoked",
+              let from = inner[signedByKey] as? String, from == inner["deviceId"] as? String,
+              store.pin(from) != nil,
+              (inner["payload"] as? [String: Any])?["enforced"] as? Bool != true else { return }
+        store.update(from) { $0 = nil }
+    }
+
     /// Session ownership: a pinned claimant outranks an unpinned owner.
     static func claimantOutranksOwner(_ claimant: String, _ owner: String) -> Bool {
         TentacleTrustStore.shared.pin(claimant) != nil && TentacleTrustStore.shared.pin(owner) == nil

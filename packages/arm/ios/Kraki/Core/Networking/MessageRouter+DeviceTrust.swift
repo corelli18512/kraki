@@ -80,6 +80,11 @@ extension MessageRouter {
                 return true
             }
             if type == "pair_result" { appState.handlePairResult(dict) } else { appState.handleTrustedDevices(dict) }
+        case "trust_revoked":
+            // Only from the computer itself, signed (the pin was already
+            // dropped on the decrypt queue when it is compatible).
+            guard let signedBy, signedBy == dict["deviceId"] as? String else { return true }
+            appState.handleTrustRevoked(dict)
         case "trust_required":
             appState.handleTrustRequired(dict, signed: signedBy != nil && signedBy == dict["deviceId"] as? String)
         default:

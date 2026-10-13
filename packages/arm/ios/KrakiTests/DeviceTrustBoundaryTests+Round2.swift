@@ -120,6 +120,31 @@ extension DeviceTrustBoundaryTests {
         XCTAssertNotNil(payload["keys"], "unpaired again: legacy RSA envelope")
     }
 
+    /// PR review: a signed trust_revoked (compatible) drops the pin before the
+    /// unpaired messages behind it are decrypted; unsigned ones change nothing.
+    func testSignedRevocationReturnsToUnpairedConnection() throws {
+        pin()
+        try seedSession()
+        // Unsigned "revocation" from the relay: ignored.
+        try route(legacyEnvelope(message("trust_revoked", device: computer, payload: ["enforced": false]), src: computer))
+        XCTAssertNotNil(TentacleTrustStore.shared.pin(computer))
+        // Signed by the computer: the pin goes at once (decrypt queue)…
+        try route(signedEnvelope(message("trust_revoked", device: computer, payload: ["enforced": false]), key: signer))
+        XCTAssertNil(TentacleTrustStore.shared.pin(computer))
+        // …so its unpaired messages that follow are accepted.
+        try route(legacyEnvelope(message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "unpaired", "state": "idle"]]]), src: computer))
+        XCTAssertEqual(app.sessionStore.sessions[sid]?.title, "unpaired")
+        XCTAssertNotEqual(app.trustState(for: computer), .stoppedSigning)
+    }
+
+    /// PR review: a relay-assigned app id never becomes a path outside local-enroll.
+    func testFileSafeIds() {
+        XCTAssertTrue(DeviceTrustWire.isFileSafeId("dev_c0e1672f-92d"))
+        for bad in ["../../config", "a/b", "", ".", "x.json", String(repeating: "a", count: 129)] {
+            XCTAssertFalse(DeviceTrustWire.isFileSafeId(bad), bad)
+        }
+    }
+
     #if os(iOS)
     /// APPS-02: a push without a usable envelope shows generic text, not the relay's.
     func testNotificationServiceIgnoresRelayTextWithoutEnvelope() throws {
