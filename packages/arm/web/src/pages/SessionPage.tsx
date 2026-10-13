@@ -10,6 +10,7 @@ import { wsClient } from '../lib/ws-client';
 import { useNarrow } from '../hooks/useNarrow';
 import { SessionInfoPanel } from '../components/devices/SessionInfoPanel';
 import { messageProvider } from '../lib/message-provider';
+import { ImagePreviewProvider } from '../components/chat/ImageViewer';
 import { HtmlArtifactPanel } from '../components/chat/HtmlArtifactPanel';
 import type { ContentRef } from '@kraki/protocol';
 import { setDesiredSessionSubscription } from '../lib/session-subscription-lifecycle';
@@ -34,6 +35,7 @@ export function SessionPage() {
   const navigate = useNavigate();
   const [mobileInfoOpen, setMobileInfoOpen] = useState(false);
   const [selectedArtifact, setSelectedArtifact] = useState<ContentRef | null>(null);
+  const [selectedArtifactExpanded, setSelectedArtifactExpanded] = useState(false);
   const sessionUsage = useStore((s) => sessionId ? s.sessionUsage.get(sessionId) : undefined);
   const deviceAgentsList = useStore((s) => session ? s.deviceAgents.get(session.deviceId) : undefined);
   // Find the agent matching this session, or flatten all agents' models
@@ -72,6 +74,7 @@ export function SessionPage() {
   useEffect(() => {
     if (sessionId) setActiveSessionId(sessionId);
     setSelectedArtifact(null);
+    setSelectedArtifactExpanded(false);
     return () => setActiveSessionId(null);
   }, [sessionId, setActiveSessionId]);
 
@@ -149,31 +152,33 @@ export function SessionPage() {
 
   return (
     <div className="kchat-page">
-      <ChatHeader
-        // Reconnecting is silent in the conversation; only the title says so.
-        title={isReconnecting ? 'Connecting…' : displayTitle}
-        mode={sessionMode}
-        narrow={narrow}
-        backBadge={totalOtherUnread}
-        onBack={() => navigate('/')}
-        onTitle={() => {
-          setMobileInfoOpen(true);
-        }}
-        onMode={(mode) => wsClient.setSessionMode(sessionId!, mode)}
-      />
-      {!isReconnecting && !isDeviceOnline && (
-        <div className="kchat-banner" style={{ top: topInset }}>
-          {`${session.deviceName ?? 'Device'} is offline — messages will be sent when it reconnects`}
-        </div>
-      )}
+      <div className="kmedia-pane relative flex min-h-0 flex-1">
+        <ImagePreviewProvider key={sessionId}>
+          <div className="relative flex min-w-0 flex-1">
+            <ChatHeader
+              // Reconnecting is silent in the conversation; only the title says so.
+              title={isReconnecting ? 'Connecting…' : displayTitle}
+              mode={sessionMode}
+              narrow={narrow}
+              backBadge={totalOtherUnread}
+              onBack={() => navigate('/')}
+              onTitle={() => {
+                setMobileInfoOpen(true);
+              }}
+              onMode={(mode) => wsClient.setSessionMode(sessionId!, mode)}
+            />
+            {!isReconnecting && !isDeviceOnline && (
+              <div className="kchat-banner" style={{ top: topInset }}>
+                {`${session.deviceName ?? 'Device'} is offline — messages will be sent when it reconnects`}
+              </div>
+            )}
 
-      <div className="relative flex min-h-0 flex-1">
-        <div className="relative flex min-w-0 flex-1">
-          <ChatView sessionId={sessionId!} topInset={topInset} onOpenArtifact={setSelectedArtifact} />
-        </div>
-        {selectedArtifact && (
-          <HtmlArtifactPanel artifact={selectedArtifact} sessionId={sessionId!} onClose={() => setSelectedArtifact(null)} />
-        )}
+            <ChatView sessionId={sessionId!} topInset={topInset} onOpenArtifact={(artifact) => { setSelectedArtifact(artifact); setSelectedArtifactExpanded(false); }} />
+          </div>
+          {selectedArtifact && (
+            <HtmlArtifactPanel key={selectedArtifact.id} artifact={selectedArtifact} sessionId={sessionId!} expanded={selectedArtifactExpanded} onToggleExpanded={() => setSelectedArtifactExpanded((value) => !value)} onClose={() => { setSelectedArtifact(null); setSelectedArtifactExpanded(false); }} />
+          )}
+        </ImagePreviewProvider>
       </div>
 
       {mobileInfoOpen && session && (

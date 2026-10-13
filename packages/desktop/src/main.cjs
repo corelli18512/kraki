@@ -529,3 +529,12 @@ app.whenReady().then(async () => {
     try { registerUsageShortcut(pref('usageShortcut') ?? 'F6', true); } catch { /* state reports unavailable */ }
   }
 });
+
+// Explicit report export: the page supplies HTML, never a filesystem path.
+ipcMain.handle('kraki:export-html-report', async (event, html, name) => {
+  if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame) {
+    return { ok: false, error: 'Report export is only available from the main window.' };
+  }
+  const { exportHtmlReport } = require('./report-export.cjs');
+  return exportHtmlReport(app.getPath('temp'), (file) => shell.openPath(file), html, name);
+});

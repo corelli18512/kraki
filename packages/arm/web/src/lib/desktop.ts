@@ -93,6 +93,8 @@ export interface DesktopSettingsBridge {
 
 export interface KrakiDesktopBridge {
   settings?: DesktopSettingsBridge;
+  /** Export a self-contained report to the system browser; never accepts a path. */
+  exportHtmlReport?: (html: string, name: string) => Promise<{ ok: boolean; error?: string }>;
   platform: string;
   /** Device name shown to other devices ("Kraki Windows"). */
   deviceName: string;

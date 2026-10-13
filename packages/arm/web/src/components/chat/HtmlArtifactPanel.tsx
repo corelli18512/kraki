@@ -1,70 +1,86 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ContentRef } from '@kraki/protocol';
 import { useAttachmentText } from '../../hooks/useAttachment';
 import { withMermaidRuntime } from '../../lib/report-mermaid';
-import { X, Maximize2, FileCode2, LoaderCircle, AlertTriangle } from 'lucide-react';
+import { desktop } from '../../lib/desktop';
+import { formatReportBytes, htmlArtifactTitle } from './Attachments';
+import { X, Maximize2, Minimize2, FileText, Compass, LoaderCircle, AlertTriangle } from 'lucide-react';
 
+const MAX_REPORT_BYTES = 10 * 1024 * 1024;
+const SIZE_ERROR = 'This report exceeds the 10 MB safety limit.';
 const ATTACHMENT_PULL = (sessionId: string, ref: ContentRef): void => {
-  void import('../../lib/ws-client').then(({ wsClient }) => {
-    wsClient.requestAttachment(sessionId, ref);
-  });
+  void import('../../lib/ws-client').then(({ wsClient }) => wsClient.requestAttachment(sessionId, ref));
 };
 
-function withArtifactCsp(html: string): string {
-  const csp = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; base-uri \'none\'; object-src \'none\'; frame-src \'none\'; form-action \'none\'; connect-src \'none\'; img-src data: blob:; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; font-src data:;">';
-  const cspPattern = /<meta[^>]+http-equiv=["']Content-Security-Policy["'][^>]*>/gi;
-  if (cspPattern.test(html)) return html.replace(cspPattern, csp);
-  if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (head) => `${head}${csp}`);
-  return `${csp}${html}`;
+export function withArtifactCsp(html: string): string {
+  const csp = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; base-uri \'none\'; object-src \'none\'; frame-src \'none\'; child-src \'none\'; media-src \'none\'; manifest-src \'none\'; worker-src \'none\'; form-action \'none\'; connect-src \'none\'; img-src data: blob:; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; font-src data:;">';
+  // The policy must precede every report-controlled element, including scripts
+  // before <head>. Preserve a leading doctype to avoid switching to quirks mode.
+  const body = html.replace(/^\uFEFF/, '');
+  const doctype = body.match(/^\s*(<!doctype[^>]*>)/i);
+  return doctype ? `${doctype[1]}${csp}${body.slice(doctype[0].length)}` : `${csp}${body}`;
 }
 
-function ArtifactFrame({ artifact, sessionId }: { artifact: ContentRef; sessionId: string }) {
-  const { status, text, error } = useAttachmentText(artifact, sessionId, ATTACHMENT_PULL);
-  const [url, setUrl] = useState<string | null>(null);
+/** Browser copies keep the original HTML, with a self-contained Mermaid runtime. */
+export async function exportHtmlReport(html: string, name: string): Promise<void> {
+  if (desktop?.exportHtmlReport) {
+    const result = await desktop.exportHtmlReport(html, name);
+    if (!result.ok) throw new Error(result.error || 'Couldn’t open this report in the browser.');
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${name.replace(/[^\p{L}\p{N}._ -]/gu, '_').replace(/\.html?$/i, '') || 'Report'}.html`;
+  link.click();
+  // Keep the object alive until the browser has started the download.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
 
+export function HtmlArtifactPanel({ artifact, sessionId, onClose, expanded = false, onToggleExpanded }: {
+  artifact: ContentRef; sessionId: string; onClose: () => void; expanded?: boolean; onToggleExpanded?: () => void;
+}) {
+  const title = htmlArtifactTitle(artifact);
+  const { status, text, error } = useAttachmentText(artifact, sessionId, ATTACHMENT_PULL, artifact.size <= MAX_REPORT_BYTES);
+  const oversized = artifact.size > MAX_REPORT_BYTES || (text !== null && new TextEncoder().encode(text).byteLength > MAX_REPORT_BYTES);
+  const [prepared, setPrepared] = useState<{ id: string; html: string; url: string } | null>(null);
+  const [renderError, setRenderError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   useEffect(() => {
-    if (status !== 'ready' || text === null) {
-      setUrl(null);
-      return undefined;
-    }
-    let blobUrl: string | null = null;
+    setPrepared(null); setRenderError(null); setExportError(null);
+    if (status !== 'ready' || text === null || oversized) return;
+    let url: string | null = null;
     let cancelled = false;
     void withMermaidRuntime(text).then((html) => {
       if (cancelled) return;
-      blobUrl = URL.createObjectURL(new Blob([withArtifactCsp(html)], { type: 'text/html' }));
-      setUrl(blobUrl);
-    });
-    return () => {
-      cancelled = true;
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      url = URL.createObjectURL(new Blob([withArtifactCsp(html)], { type: 'text/html' }));
+      setPrepared({ id: artifact.id, html, url });
+    }).catch((reason: unknown) => { if (!cancelled) setRenderError(String(reason)); });
+    return () => { cancelled = true; if (url) URL.revokeObjectURL(url); };
+  }, [artifact.id, status, text, oversized]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented && !document.querySelector('.kimage-viewer')) onClose();
     };
-  }, [artifact.id, status, text]);
-
-  if (status === 'error') {
-    return <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-text-secondary"><AlertTriangle className="mb-2 size-5 text-amber-500" /><p>Could not load this report.<br /><span className="text-[10px] text-text-muted">{error}</span></p></div>;
-  }
-  if (!url) {
-    return <div className="flex flex-1 items-center justify-center gap-2 text-xs text-text-secondary"><LoaderCircle className="size-4 animate-spin" />Loading report…</div>;
-  }
-  return <iframe title={artifact.caption || artifact.name || 'HTML report'} src={url} sandbox="allow-scripts" referrerPolicy="no-referrer" className="min-h-0 flex-1 border-0 bg-white" />;
-}
-
-export function HtmlArtifactPanel({ artifact, sessionId, onClose }: { artifact: ContentRef; sessionId: string; onClose: () => void }) {
-  const title = artifact.caption || artifact.name || 'HTML report';
-  const panelRef = useRef<HTMLElement>(null);
-  return (
-    <aside ref={panelRef} className="fixed inset-0 z-40 flex flex-col bg-surface-primary md:static md:h-full md:w-[min(48vw,680px)] md:shrink-0 md:border-l md:border-border-primary md:shadow-none fullscreen:h-screen fullscreen:w-screen fullscreen:max-w-none fullscreen:border-0" aria-label="HTML report preview">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border-primary px-3">
-        <FileCode2 className="size-4 shrink-0 text-kraki-500" />
-        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-text-primary">{title}</span>
-        <button type="button" onClick={() => panelRef.current?.requestFullscreen?.()} className="rounded-md p-1.5 text-text-muted hover:bg-surface-tertiary hover:text-text-primary" aria-label="Fullscreen report" title="Fullscreen">
-          <Maximize2 className="size-4" />
-        </button>
-        <button type="button" onClick={onClose} className="rounded-md p-1.5 text-text-muted hover:bg-surface-tertiary hover:text-text-primary" aria-label="Close report preview" title="Close">
-          <X className="size-4" />
-        </button>
-      </div>
-      <ArtifactFrame artifact={artifact} sessionId={sessionId} />
-    </aside>
-  );
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const ready = prepared?.id === artifact.id ? prepared : null;
+  const reason = oversized ? SIZE_ERROR : status === 'error' ? error : renderError;
+  const expansionLabel = expanded ? 'Restore Split View' : 'Expand Report';
+  return <aside className={`kreport-panel ${expanded ? 'is-expanded' : ''}`} aria-label="HTML report preview">
+    <div className="kreport-header">
+      <FileText className="kreport-header-icon" />
+      <span className="kreport-header-text"><strong>{title}</strong><small>Report · {formatReportBytes(artifact.size)}</small></span>
+      {ready && <button type="button" aria-label="Open in Browser" title="Open in Browser" onClick={() => {
+        void exportHtmlReport(ready.html, artifact.name || title).catch((reason: unknown) => setExportError(reason instanceof Error ? reason.message : String(reason)));
+      }}><Compass /></button>}
+      {onToggleExpanded && <button type="button" className="kreport-expand" onClick={onToggleExpanded} aria-label={expansionLabel} title={expansionLabel}>{expanded ? <Minimize2 /> : <Maximize2 />}</button>}
+      <button type="button" onClick={onClose} aria-label="Close Report" title="Close Report"><X /></button>
+    </div>
+    {exportError && <p className="kreport-export-error" role="alert">{exportError}</p>}
+    {reason ? <div className="kreport-state is-error"><AlertTriangle /><strong>Couldn’t load this report</strong><p>{reason}</p></div>
+      : ready ? <iframe title={title} src={ready.url} sandbox="allow-scripts" referrerPolicy="no-referrer" className="kreport-frame" />
+        : <div className="kreport-state"><LoaderCircle className="animate-spin" /><p>Loading report…</p></div>}
+  </aside>;
 }

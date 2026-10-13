@@ -49,6 +49,19 @@ describe('MessageProvider — TRACE axis', () => {
     expect(sent[0].payload).toMatchObject({ sessionId: 's1', bubbleSeq: 5, targetDeviceId: 'tentacle-dev' });
   });
 
+  it('distinguishes a confirmed empty trace from an in-flight pull', () => {
+    messageProvider.requestTurnTrace('s1', 5);
+    expect(messageProvider.isTurnTraceLoaded('s1', 5)).toBe(false);
+    messageProvider.handleTurnTraceBatch('s1', 5, [], false);
+    expect(messageProvider.isTurnTraceLoaded('s1', 5)).toBe(false);
+    messageProvider.handleTurnTraceBatch('s1', 5, [], true);
+    expect(messageProvider.isTurnTraceLoaded('s1', 5)).toBe(true);
+    messageProvider.invalidateTurnTrace('s1', 5);
+    expect(messageProvider.isTurnTraceLoaded('s1', 5)).toBe(true);
+    messageProvider.handleTurnTraceBatch('s1', 5, [], false);
+    expect(messageProvider.isTurnTraceLoaded('s1', 5)).toBe(false);
+  });
+
   it('dedups repeated pulls for the same bubble', () => {
     messageProvider.requestTurnTrace('s1', 5);
     messageProvider.requestTurnTrace('s1', 5);
