@@ -46,3 +46,50 @@ describe('Bubble — draftless terminal outcome', () => {
     expect(onOpenSteps).toHaveBeenCalledWith(4);
   });
 });
+
+describe('Bubble — media hierarchy', () => {
+  it('keeps report cards in the agent bubble before outside images, including report-only answers', () => {
+    const row: ChatRow = {
+      kind: 'spine', key: 'a4', item: { message: {
+        type: 'agent_message', sessionId: 's1', deviceId: 'd1', seq: 4, timestamp: '',
+        payload: { content: '', attachments: [
+          { type: 'content_ref', id: 'report', mimeType: 'text/html', size: 167_000, caption: 'Report' },
+          { type: 'image', mimeType: 'image/png', data: 'AAAA' },
+        ] },
+      } as never },
+    };
+    const { container } = render(<Bubble row={row} ctx={{ sessionId: 's1', hueSeed: 's1', onOpenArtifact: () => {} }} />);
+    const card = screen.getByRole('button', { name: 'Open report Report' });
+    expect(card.closest('.kbubble-agent')).not.toBeNull();
+    const stack = container.querySelector('.kagent-stack')!;
+    expect(stack.children[0]).toHaveClass('kbubble-agent');
+    expect(stack.children[1]).toHaveClass('kattachments');
+    expect(stack.children[1].querySelector('[data-image-gallery]')).not.toBeNull();
+  });
+});
+
+describe('Bubble — integrated media context actions', () => {
+  it('uses the native palette and transcript Steps menu for a report-only answer', () => {
+    const onOpenSteps = vi.fn();
+    const row: ChatRow = { kind: 'spine', key: 'a4', item: { message: {
+      type: 'agent_message', sessionId: 's1', deviceId: 'd1', seq: 4, timestamp: '',
+      payload: { content: '', steps: 1, attachments: [
+        { type: 'content_ref', id: 'report', mimeType: 'text/html', size: 167_000, caption: 'Report' },
+      ] },
+    } as never } };
+    render(<Bubble row={row} ctx={{ sessionId: 's1', hueSeed: 's1', onOpenSteps, onOpenArtifact: () => {} }} />);
+    const bubble = screen.getByRole('button', { name: 'Open report Report' }).closest<HTMLElement>('.kbubble-agent')!;
+    expect(bubble.style.getPropertyValue('--k-agent-light')).not.toBe('');
+    expect(bubble.style.getPropertyValue('--hue')).toBe('');
+    fireEvent.contextMenu(bubble);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Show Steps' }));
+    expect(onOpenSteps).toHaveBeenCalledWith(4);
+  });
+  it('keeps ordinary user prose independent of agent report cards', () => {
+    const row: ChatRow = { kind: 'spine', key: 'u1', item: { message: {
+      type: 'user_message', sessionId: 's1', deviceId: 'd1', seq: 1, timestamp: '', payload: { content: 'User prose' },
+    } as never } };
+    render(<Bubble row={row} ctx={{ sessionId: 's1', hueSeed: 's1' }} />);
+    expect(screen.getByText('User prose').closest('.kbubble-user')).not.toBeNull();
+  });
+});

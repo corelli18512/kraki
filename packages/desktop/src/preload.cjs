@@ -6,6 +6,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 const arg = (name) => (process.argv.find((a) => a.startsWith(`--${name}=`)) ?? '').split('=').slice(1).join('=');
 
 contextBridge.exposeInMainWorld('krakiDesktop', {
+  // Browser report copies are exported by the main process, not page paths.
+  exportHtmlReport: (html, name) => ipcRenderer.invoke('kraki:export-html-report', html, name),
   platform: process.platform,
   version: arg('kraki-version'),
   oauthRedirectOrigin: arg('kraki-oauth-origin') || 'https://app.kraki.chat',

@@ -177,7 +177,7 @@ function AgentRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
   return (
     <div className="krow krow-agent" data-row-key={row.key} data-question={isQuestion ? 'true' : undefined}>
       <div className="kagent-stack">
-        {(hasBody || action) && (
+        {(hasBody || action || reports.length > 0) && (
           <MessageBubble
             className="kbubble kbubble-agent"
             style={palette}
@@ -189,13 +189,11 @@ function AgentRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
                 <ActionSlot action={action} handlers={ctx} />
               </div>
             )}
+            {reports.length > 0 && <HtmlArtifactCards artifacts={reports} onOpen={ctx.onOpenArtifact} />}
           </MessageBubble>
         )}
         {images.length > 0 && (
           <div className="kattachments"><ImageAttachments attachments={images} sessionId={ctx.sessionId} /></div>
-        )}
-        {reports.length > 0 && (
-          <div className="kattachments"><HtmlArtifactCards artifacts={reports} onOpen={ctx.onOpenArtifact} /></div>
         )}
         {steps > 0 && (hasBody || action) && (
           <button

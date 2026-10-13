@@ -325,10 +325,10 @@ function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
 }
 
 /** Called by useAttachment to acquire ownership of a pull. */
-export function markFetching(ref: ContentRef): boolean {
+export function markFetching(ref: ContentRef, retry = false): boolean {
   expectedRefs.set(ref.id, ref);
   const current = states.get(ref.id);
-  if (current?.kind === 'ready' || current?.kind === 'awaiting-chunks' || current?.kind === 'fetching') {
+  if ((!retry && current?.kind === 'ready') || current?.kind === 'awaiting-chunks' || current?.kind === 'fetching') {
     return false;
   }
   states.set(ref.id, { kind: 'fetching' });
