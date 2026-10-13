@@ -733,6 +733,11 @@ final class AppState {
            !token.isEmpty {
             auth.clearStoredCredentials()
             auth.pairingToken = token
+            // Same pinning as a scanned QR (device trust, fingerprint check).
+            if let link = PairingLink(string: pairingURL) {
+                deviceStore.keyPins.pendingQRFingerprint = link.keyFingerprint
+                pinFromPairingLink(link)
+            }
             if let pairedRelay = components.queryItems?.first(where: { $0.name == "relay" })?.value,
                !pairedRelay.isEmpty, pairedRelay != relayURL {
                 relayURL = pairedRelay
