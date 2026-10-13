@@ -919,8 +919,8 @@
 @media (prefers-reduced-motion: reduce) { .kenter-left, .kenter-right { animation: none; } }
 
 /* Media trace details use native quaternary fill, not the tool name pill fill. */
-.ktool-detail { background: rgba(120, 120, 128, .06); }
-.ktool-detail pre { font-size: 11px; line-height: 1.4; }
+.ktool-detail { background: rgba(120, 120, 120, .09); font-size: 11px; line-height: 14px; }
+.ktool-detail pre { font-size: 11px; line-height: 14px; }
 .ksub-report .kmd { white-space: pre-wrap; font-size: 15px; }
 .ksheet-empty { display: flex; height: 100%; min-height: 200px; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; color: var(--k-text-2); }
 .ksheet-empty svg { width: 36px; height: 36px; opacity: .5; margin-bottom: 14px; }
@@ -1008,3 +1008,5 @@
 .kimage-tile::after { content: ""; position: absolute; inset: 0; border: 1px solid color-mix(in srgb, var(--k-border) 85%, transparent); border-radius: inherit; pointer-events: none; }
 
 .ksheet-body:has(.ksheet-empty) { flex: 1; }
+
+.ktool-header > .font-mono { line-height: 15px; }
