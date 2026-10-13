@@ -11,10 +11,10 @@ export function SettingsSection({ title, children, footer }: { title?: string; c
     </section>
   );
 }
-export function SettingsRow({ label, children }: { label: string; children: ReactNode }) {
+export function SettingsRow({ label, detail, children }: { label: string; detail?: string; children: ReactNode }) {
   return (
     <div className="kp-row">
-      <span>{label}</span>
+      {detail ? <div className="min-w-0"><p>{label}</p><p className="kp-foot">{detail}</p></div> : <span>{label}</span>}
       {children}
     </div>
   );

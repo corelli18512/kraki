@@ -37,18 +37,6 @@ function AgentsSheet({ builtIn, onClose }: { builtIn: BuiltInBridge; onClose: ()
   );
 }
 
-function Row({ title, detail, children }: { title: string; detail?: string; children?: React.ReactNode }) {
-  return (
-    <div className="kp-row">
-      <div className="min-w-0">
-        <p>{title}</p>
-        {detail && <p className="kp-foot">{detail}</p>}
-      </div>
-      {children && <div className="flex shrink-0 items-center gap-2">{children}</div>}
-    </div>
-  );
-}
-
 export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
   const [state, setState] = useState<BuiltInState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -119,8 +107,8 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
       <SettingsSection title="Agents">
         {external ? (
           <>
-            <Row
-              title="Kraki"
+            <SettingsRow
+              label="Kraki"
               detail="The command-line Kraki runs the agents on this PC. You update it from a terminal."
             >
               <button
@@ -133,14 +121,14 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
               >
                 {busy === 'switch' ? 'Switching…' : 'Use built-in Kraki'}
               </button>
-            </Row>
+            </SettingsRow>
             <p className="kp-foot">
               Switching stops the command-line Kraki's background service and keeps your sign-in and sessions.
             </p>
           </>
         ) : (
-          <Row
-            title="Run agents on this PC"
+          <SettingsRow
+            label="Run agents on this PC"
             detail={
               runsAgents
                 ? 'Kraki runs in the background and starts when you sign in to Windows.'
@@ -156,14 +144,14 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
                 else void act('off', builtIn.disable, () => localStorage.setItem(ROLE_KEY, 'remoteOnly'));
               }}
             />
-          </Row>
+          </SettingsRow>
         )}
         {!state.available && (
-          <Row title="Kraki isn't installed" detail="Install Kraki, or locate an existing command-line installation.">
+          <SettingsRow label="Kraki isn't installed" detail="Install Kraki, or locate an existing command-line installation.">
             <a className="kp-button" href="https://kraki.chat/docs" target="_blank" rel="noreferrer">
               Install Kraki…
             </a>
-          </Row>
+          </SettingsRow>
         )}
         <SettingsRow label="Coding agents">
           <button type="button" className="kp-button" onClick={() => setAgentsOpen(true)}>

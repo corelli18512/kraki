@@ -87,3 +87,4 @@
 .kp-alert-no-body h3 { margin-bottom:0; }
 
 .kp-gear-icon { transform:translateY(.75px) scale(1.05,1.025); }
+.kp-alert-viewport .kp-alert-actions button:first-child:focus { outline:3px solid #007aff80; outline-offset:2px; }
