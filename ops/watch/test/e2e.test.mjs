@@ -17,10 +17,13 @@ let port;
 let relayStatus = 200;
 const bark = [];
 let pings = 0;
+let barkHangs = false;
+let metricsCalls = 0;
 
 before(async () => {
   dir = await mkdtemp(join(tmpdir(), 'kraki-watch-e2e-'));
   server = createServer((req, res) => {
+    if (req.url === '/push' && barkHangs) return; // never answers
     if (req.url === '/push') {
       let body = '';
       req.on('data', (c) => { body += c; });
@@ -29,7 +32,11 @@ before(async () => {
     }
     if (req.url === '/ping') { pings++; res.end('OK'); return; }
     if (req.url === '/health/ready') { res.end('{"status":"ready"}'); return; }
-    if (req.url === '/internal/metrics') { res.end(JSON.stringify({ counters: { 'push.attempted': 5, 'push.sent': 5, 'auth.ok': 2 } })); return; }
+    if (req.url === '/internal/metrics') {
+      metricsCalls++;
+      res.end(JSON.stringify({ uptimeSec: metricsCalls, counters: { 'push.attempted': 5 * metricsCalls, 'push.sent': 5 * metricsCalls, 'auth.ok': 2 * metricsCalls } }));
+      return;
+    }
     res.writeHead(relayStatus, { 'Content-Type': 'application/json' });
     res.end(relayStatus === 200 ? '{"name":"@kraki/head","version":"0.21.0","status":"ok"}' : 'Bad Gateway');
   });
@@ -40,12 +47,15 @@ before(async () => {
   port = server.address().port;
 
   await writeFile(join(dir, 'systemctl'), '#!/bin/sh\nprintf "ActiveState=active\\nInvocationID=abc\\nActiveEnterTimestamp=@1760000000\\n"\n');
-  await writeFile(join(dir, 'journalctl'), `#!/bin/sh\necho '◈ [2026-10-13T00:00:00.000Z] health {"conns":2,"durableRows":0,"rssMb":80}'\n`);
+  // Records its arguments; prints one line and a cursor like journalctl --show-cursor.
+  await writeFile(join(dir, 'journalctl'), `#!/bin/sh\necho "$@" >> ${join(dir, 'journal-args')}\necho '◈ [2026-10-13T00:00:00.000Z] health {"conns":2,"durableRows":0,"rssMb":80}'\necho '-- cursor: s=abc;i=42'\n`);
   await chmod(join(dir, 'systemctl'), 0o755);
   await chmod(join(dir, 'journalctl'), 0o755);
   await writeFile(join(dir, 'backup.json'), JSON.stringify({ ok: true, at: new Date().toISOString(), sizeBytes: 100, prevSizeBytes: 100, copied: true }));
   await writeFile(join(dir, 'watch.json'), JSON.stringify({
     host: 'test', label: '测试', timezone: 'Asia/Shanghai', quietHours: [0, 0], digestHour: 0,
+    // The test machine's real disk must not trip the disk alert.
+    disk: { path: '/', warning: 101, critical: 102 },
     relayUnit: 'kraki-relay', metricsUrl: `http://127.0.0.1:${port}/internal/metrics`, backupStatus: join(dir, 'backup.json'),
     units: [{ unit: 'kraki-relay', name: 'relay 进程', severity: 'critical' }],
     probes: [
@@ -62,6 +72,10 @@ after(async () => {
 });
 
 function run(...args) {
+  return runEnv({}, ...args);
+}
+
+function runEnv(extra, ...args) {
   return new Promise((resolve, reject) => {
     execFile(process.execPath, [SCRIPT, ...args], {
       env: {
@@ -72,6 +86,7 @@ function run(...args) {
         BARK_KEY: 'test-key',
         BARK_SERVER: `http://127.0.0.1:${port}`,
         HC_PING_URL: `http://127.0.0.1:${port}/ping`,
+        ...extra,
       },
       timeout: 30_000,
     }, (err, stdout, stderr) => (err ? reject(new Error(`${err.message}\n${stderr}`)) : resolve(stdout)));
@@ -130,5 +145,37 @@ test('digest-now sends the summary', async () => {
   assert.equal(d.group, 'Kraki 日报');
   assert.match(d.title, /^Kraki 日报 · 测试 · /);
   assert.match(d.body, /可用性  测试 relay/);
-  assert.match(d.body, /推送  成功 5 \/ 失败 0/);
+  // First metrics sample is a baseline; each later run adds 5.
+  assert.match(d.body, /推送  成功 \d+ \/ 失败 0/);
+  assert.doesNotMatch(d.body, /推送  成功 0 /);
+});
+
+test('journal reads continue from the saved cursor (no line counted twice)', async () => {
+  const args = (await readFile(join(dir, 'journal-args'), 'utf8')).trim().split('\n');
+  assert.match(args[0], /--since -2min/);
+  assert.match(args[args.length - 1], /--after-cursor s=abc;i=42/);
+});
+
+test('a hanging Bark cannot lose alert state: saved first, retried next run', async () => {
+  await run('maintenance', '0'); // end the earlier test's window
+  relayStatus = 502;
+  await run();
+  await run(); // two failures: not yet firing
+  barkHangs = true;
+  // Third failure fires; Bark never answers; systemd would kill the run at
+  // its timeout. Kill it mid-delivery ourselves.
+  const child = execFile(process.execPath, [SCRIPT], { env: {
+    PATH: `${dir}:${process.env.PATH}`, KRAKI_WATCH_CONFIG: join(dir, 'watch.json'), KRAKI_WATCH_STATE_DIR: join(dir, 'state'),
+    KRAKI_WATCH_NOTIFY: '1', BARK_KEY: 'test-key', BARK_SERVER: `http://127.0.0.1:${port}`, HC_PING_URL: `http://127.0.0.1:${port}/ping`,
+  } });
+  await new Promise((r) => setTimeout(r, 3000));
+  child.kill('SIGKILL');
+  const state = JSON.parse(await readFile(join(dir, 'state', 'state.json'), 'utf8'));
+  assert.equal(state.alerts['K-RELAY-DOWN@t'].status, 'firing', 'state saved before delivery');
+  assert.ok(state.undelivered.some((n) => /测试 relay无法访问/.test(n.title)), 'critical queued for retry');
+  const before = bark.length;
+  barkHangs = false;
+  relayStatus = 200;
+  await run();
+  assert.ok(bark.slice(before).some((b) => /\[延迟送达\].*测试 relay无法访问/.test(b.title) && b.level === 'critical'), 'retried as critical');
 });

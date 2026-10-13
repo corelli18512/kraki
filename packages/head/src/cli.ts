@@ -506,7 +506,8 @@ metrics().startLoopMonitor();
 const readinessContext: ReadinessContext = {
   version: VERSION,
   startedAt,
-  pingDatabase: () => { storage!.rawDb.prepare('SELECT 1').get(); },
+  // Reads a real table page (SELECT 1 alone never touches the file).
+  pingDatabase: () => { storage!.rawDb.prepare('SELECT id FROM users LIMIT 1').get(); },
   expectedPushProviders: PUSH_PROVIDERS,
   loadedPushProviders: () => pushManager?.providerNames() ?? [],
   gauges: () => head.getGauges(),

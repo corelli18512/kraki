@@ -31,6 +31,9 @@ STATUS=${KRAKI_BACKUP_STATUS:-/var/lib/kraki-watch/backup.json}
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# JSON string body: escape backslash and quote, drop control characters.
+json_str() { printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g' | cut -c1-400; }
+
 write_status() {
   # $1 = JSON body (without braces)
   mkdir -p "$(dirname "$STATUS")"
@@ -45,12 +48,23 @@ if [ -f "$STATUS" ]; then
   PREV_SIZE=${PREV_SIZE:-0}
 fi
 
+STATUS_WRITTEN=0
 fail() {
   echo "$1" >&2
-  msg=$(printf '%s' "$1" | tr -d '"\\' | tr '\n' ' ' | cut -c1-200)
-  write_status "\"ok\":false,\"at\":\"$(now_iso)\",\"error\":\"$msg\",\"prevSizeBytes\":$PREV_SIZE"
+  write_status "\"ok\":false,\"at\":\"$(now_iso)\",\"error\":\"$(json_str "$1")\",\"prevSizeBytes\":$PREV_SIZE"
+  STATUS_WRITTEN=1
   exit 1
 }
+# Any other failure (set -e: mkdir, mv, chmod, …) must not leave the previous
+# success standing.
+on_exit() {
+  rc=$?
+  [ -n "${SCP_ERR:-}" ] && rm -f "$SCP_ERR"
+  if [ "$rc" -ne 0 ] && [ "$STATUS_WRITTEN" -eq 0 ]; then
+    write_status "\"ok\":false,\"at\":\"$(now_iso)\",\"error\":\"backup script exited with $rc\",\"prevSizeBytes\":$PREV_SIZE" || true
+  fi
+}
+trap on_exit EXIT
 
 [ -f "$DB" ] || fail "DB not found: $DB"
 command -v sqlite3 >/dev/null 2>&1 || fail "sqlite3 not installed"
@@ -85,15 +99,19 @@ fi
 COPIED=null
 COPY_ERROR=""
 if [ -n "$REMOTE" ]; then
-  gzip -kf "$OUT"
-  if scp -q -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=20 "$OUT.gz" "$REMOTE/" 2>/tmp/kraki-backup-scp.err; then
+  SCP_ERR=$(mktemp "$BACKUP_DIR/.scp-err.XXXXXX")
+  if ! gzip -kf "$OUT" 2>"$SCP_ERR"; then
+    COPIED=false
+    COPY_ERROR="gzip failed: $(cat "$SCP_ERR")"
+  elif scp -q -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=20 "$OUT.gz" "$REMOTE/" 2>"$SCP_ERR"; then
     COPIED=true
   else
     COPIED=false
-    COPY_ERROR=$(tr -d '"\\' < /tmp/kraki-backup-scp.err | tr '\n' ' ' | cut -c1-200)
+    COPY_ERROR=$(cat "$SCP_ERR")
   fi
-  rm -f "$OUT.gz" /tmp/kraki-backup-scp.err
+  rm -f "$OUT.gz" "$SCP_ERR"
 fi
 
-write_status "\"ok\":true,\"at\":\"$(now_iso)\",\"file\":\"$OUT\",\"sizeBytes\":$SIZE,\"prevSizeBytes\":$PREV_SIZE,\"copied\":$COPIED,\"copyError\":\"$COPY_ERROR\""
+write_status "\"ok\":true,\"at\":\"$(now_iso)\",\"file\":\"$(json_str "$OUT")\",\"sizeBytes\":$SIZE,\"prevSizeBytes\":$PREV_SIZE,\"copied\":$COPIED,\"copyError\":\"$(json_str "$COPY_ERROR")\""
+STATUS_WRITTEN=1
 echo "backup ok: $OUT ($SIZE bytes, copied=$COPIED)"

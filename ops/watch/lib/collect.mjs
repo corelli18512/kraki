@@ -84,11 +84,13 @@ export function probeWs(p) {
 }
 
 export async function unitStatus(unit) {
-  const r = await run('systemctl', ['show', unit, '-p', 'ActiveState', '-p', 'InvocationID', '-p', 'ActiveEnterTimestamp', '--timestamp=unix']);
+  const r = await run('systemctl', ['show', unit, '-p', 'ActiveState', '-p', 'InvocationID', '-p', 'ActiveEnterTimestamp', '-p', 'NRestarts', '--timestamp=unix']);
   if (!r.ok) return { active: 'unknown' };
   const kv = Object.fromEntries(r.stdout.trim().split('\n').map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
   const ts = /@(\d+)/.exec(kv.ActiveEnterTimestamp ?? '');
-  return { active: kv.ActiveState || 'unknown', invocationId: kv.InvocationID || null, activeSince: ts ? Number(ts[1]) * 1000 : null };
+  const nRestarts = Number(kv.NRestarts);
+  return { active: kv.ActiveState || 'unknown', invocationId: kv.InvocationID || null, activeSince: ts ? Number(ts[1]) * 1000 : null,
+    nRestarts: kv.NRestarts !== undefined && Number.isFinite(nRestarts) ? nRestarts : undefined };
 }
 
 export async function diskUsage(path) {
@@ -113,12 +115,21 @@ export async function hostMemory() {
   }
 }
 
-/** Relay log lines since `sinceMs` (first run: the last 2 minutes). */
-export async function relayLogs(unit, sinceMs) {
-  const since = sinceMs ? `@${Math.floor(sinceMs / 1000)}` : '-2min';
-  const r = await run('journalctl', ['-u', unit, '--since', since, '-o', 'cat', '--no-pager', '-q']);
+/**
+ * Relay log lines after the previous run's journal cursor (first run: the
+ * last 2 minutes). Cursor-based, so no line is counted twice. Returns the
+ * summary plus the new cursor (`cursor`).
+ */
+export async function relayLogs(unit, cursor) {
+  const args = ['-u', unit, '-o', 'cat', '--no-pager', '-q', '--show-cursor'];
+  args.push(...(cursor ? ['--after-cursor', cursor] : ['--since', '-2min']));
+  const r = await run('journalctl', args);
   if (!r.ok) return null;
-  return summarize(r.stdout.split('\n'));
+  const lines = r.stdout.split('\n');
+  let next = cursor ?? null;
+  const at = lines.findLastIndex((l) => l.startsWith('-- cursor: '));
+  if (at >= 0) { next = lines[at].slice('-- cursor: '.length).trim(); lines.splice(at, 1); }
+  return { ...summarize(lines), cursor: next };
 }
 
 export async function relayMetrics(url) {

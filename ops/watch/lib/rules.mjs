@@ -23,12 +23,17 @@ export function median(values) {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
-export function counterDeltas(prev, cur) {
-  // A relay restart resets its counters: then everything since start is new.
+/**
+ * Counter increase since the previous sample. The first sample is only a
+ * baseline (its lifetime totals are not "now"); after a relay restart
+ * (`restarted`) the new totals are all new.
+ */
+export function counterDeltas(prev, cur, restarted = false) {
   const out = {};
   for (const [k, v] of Object.entries(cur ?? {})) {
+    if (restarted) { out[k] = v; continue; }
     const p = prev?.[k];
-    out[k] = typeof p === 'number' && v >= p ? v - p : v;
+    out[k] = typeof p === 'number' && v >= p ? v - p : 0;
   }
   return out;
 }
@@ -66,8 +71,13 @@ export function evaluateRules(snap, memIn, config) {
     if (!snap.maintenance) {
       push({ id: u.id ?? `K-SVC-FAILED@${u.unit}`, severity: u.severity, failAfter: u.active === 'failed' ? 1 : 2, ok: !down, title: `${u.name}${down ? '已停止' : '运行中'}`, detail: down ? `systemd 状态：${u.active}` : '' });
     }
-    if (u.invocationId && m.invocationId && u.invocationId !== m.invocationId && !snap.maintenance) {
-      m.restarts.push(now);
+    // Automatic restarts since the last run (several can happen between runs);
+    // a new invocation without one is a manual/other restart.
+    const autoRestarts = Number.isFinite(u.nRestarts) && Number.isFinite(m.nRestarts) ? Math.max(0, u.nRestarts - m.nRestarts) : 0;
+    if (Number.isFinite(u.nRestarts)) m.nRestarts = u.nRestarts;
+    const newInvocation = u.invocationId && m.invocationId && u.invocationId !== m.invocationId;
+    if ((newInvocation || autoRestarts > 0) && !snap.maintenance) {
+      for (let i = 0; i < Math.max(1, autoRestarts); i++) m.restarts.push(now);
       const crash = u.unit === config.relayUnit ? snap.logs?.lastCrash : null;
       push({ id: `K-SVC-RESTART@${u.unit}`, event: true, severity: 'warning', ok: false, title: `${u.name}意外重启`, detail: crash ? `最后的错误：${crash}` : '不是部署引起的重启' });
     }
@@ -106,8 +116,11 @@ export function evaluateRules(snap, memIn, config) {
     push({ id: 'K-MEM', severity: 'warning', failAfter: 10, ok: !(health.rssMb > (config.relayRssMb ?? 512)), title: 'relay 内存偏高', detail: `${health.rssMb} MB` });
   }
   if (snap.metrics?.counters) {
-    sample.metricDeltas = counterDeltas(mem.lastCounters, snap.metrics.counters);
+    const uptime = snap.metrics.uptimeSec;
+    const restarted = mem.lastCounters !== undefined && Number.isFinite(uptime) && Number.isFinite(mem.lastUptimeSec) && uptime < mem.lastUptimeSec;
+    sample.metricDeltas = counterDeltas(mem.lastCounters, snap.metrics.counters, restarted);
     mem.lastCounters = snap.metrics.counters;
+    mem.lastUptimeSec = uptime;
     for (const k of ['auth.ok', 'auth.fail', 'push.attempted', 'push.sent', 'push.failed', 'pulse.forwarded', 'conn.stalledClosed']) {
       digest.totals[`m:${k}`] = sample.metricDeltas[k] ?? 0;
     }
@@ -130,11 +143,14 @@ export function evaluateRules(snap, memIn, config) {
   }
 
   if (logs) {
-    const pushFail = count('pushFail');
+    // Relay counters are per final send result; logs also show intermediate
+    // retry errors. Use the counters when the relay has them, logs otherwise.
+    const withMetrics = win.some((s) => s.metricDeltas);
+    const pushFail = withMetrics ? sum((s) => (s.metricDeltas?.['push.failed'] ?? 0) + (s.metricDeltas?.['push.threw'] ?? 0)) : count('pushFail');
     const attempted = sum((s) => s.metricDeltas?.['push.attempted']);
-    const share = attempted > 0 ? pushFail / attempted : null;
+    const share = withMetrics && attempted > 0 ? pushFail / attempted : null;
     push({ id: 'K-PUSH-FAIL', severity: 'warning', failAfter: 1, ok: !(pushFail >= 10 && (share === null || share > 0.2)), title: '推送大量失败', detail: `10 分钟 ${pushFail} 次失败${share === null ? '' : `（${Math.round(share * 100)}%）`}` });
-    const pushAuth = sum((s) => s.pushAuth) + sum((s) => s.metricDeltas?.['push.authError']);
+    const pushAuth = withMetrics ? sum((s) => s.metricDeltas?.['push.authError']) : sum((s) => s.pushAuth);
     push({ id: 'K-PUSH-AUTH', severity: 'critical', failAfter: 1, ok: pushAuth < 3, title: '推送密钥失效（APNs 认证错误）', detail: `10 分钟 ${pushAuth} 次` });
     push({ id: 'K-AUTH-FAIL', severity: 'warning', failAfter: 1, ok: count('authFail') < 10, title: '登录大量失败', detail: `10 分钟 ${count('authFail')} 次` });
     push({ id: 'K-AUTH-ABUSE', severity: 'info', failAfter: 1, ok: count('authAbuse') < 100, title: '疑似暴力尝试登录', detail: `10 分钟 ${count('authAbuse')} 次` });
@@ -155,8 +171,10 @@ export function evaluateRules(snap, memIn, config) {
     const old = withRows.find((s) => now - s.at >= 30 * MIN);
     push({ id: 'K-DURABLE', severity: 'warning', failAfter: 1, ok: !(old && latest > 1000 && latest > old.durableRows), title: '待送达的离线消息在堆积', detail: `${old?.durableRows ?? '?'} → ${latest}（30 分钟）` });
   }
+  // A deploy drops every connection on purpose: forget the baseline.
+  if (snap.maintenance) for (const s of mem.hist) delete s.conns;
   const withConns = mem.hist.filter((s) => Number.isFinite(s.conns));
-  if (withConns.length > 1) {
+  if (withConns.length > 1 && !snap.maintenance) {
     const cur = withConns[withConns.length - 1].conns;
     const before = withConns.filter((s) => now - s.at <= 5 * MIN && s !== withConns[withConns.length - 1]).map((s) => s.conns);
     const peak = before.length ? Math.max(...before) : 0;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { digestDue, emptyState, evaluate, inQuietHours, rollDigest } from '../lib/engine.mjs';
+import { digestDue, emptyState, evaluate, inQuietHours, rollDigest, routeRetries } from '../lib/engine.mjs';
 
 const config = { host: 'cn', label: '国内', timezone: 'Asia/Shanghai', quietHours: [23, 8], digestHour: 9 };
 // 2026-10-13 14:00 Beijing = 06:00Z
@@ -78,6 +78,27 @@ test('a warning that turns critical fires again as critical', () => {
   const c = { ...w, severity: 'critical', detail: '96%' };
   const { sent } = runSeq([w, w, c, c], DAY);
   assert.deepEqual(sent.map((n) => [n.kind, n.severity, n.minute]), [['fire', 'warning', 0], ['fire', 'critical', 2]]);
+});
+
+test('critical easing back to warning stops ringing; one incident, one recovery', () => {
+  const w = { id: 'K-DISK', severity: 'warning', failAfter: 1, ok: false, title: '磁盘快满了' };
+  const c = { ...w, severity: 'critical' };
+  const { sent, state } = runSeq([w, c, ...Array(40).fill(w), { ...w, ok: true }], DAY);
+  assert.deepEqual(sent.map((n) => [n.kind, n.severity]), [['fire', 'warning'], ['fire', 'critical'], ['resolve', 'warning']]);
+  assert.equal(state.day.incidents.filter((i) => i.endedAt === null).length, 0);
+});
+
+test('failed deliveries are re-routed through quiet hours', () => {
+  const state = emptyState();
+  const retries = [
+    { kind: 'fire', severity: 'warning', title: 'w', body: '', quiet: false },
+    { kind: 'fire', severity: 'critical', title: 'c', body: '', quiet: false },
+    { kind: 'resolve', severity: 'critical', title: 'r', body: '', quiet: false },
+  ];
+  const now = routeRetries(state, retries, NIGHT, config);
+  assert.deepEqual(now.map((n) => n.title), ['c', 'r']);
+  assert.equal(now[1].quiet, true, 'a recovery retried at night is quiet');
+  assert.deepEqual(state.deferred.map((n) => n.title), ['w']);
 });
 
 test('info is never pushed, only counted', () => {

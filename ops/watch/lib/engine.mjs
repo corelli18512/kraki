@@ -82,7 +82,18 @@ export function evaluate(prev, results, now, config) {
       const due = a.fails >= (r.failAfter ?? 1);
       if (!due) continue;
       const escalated = a.status === 'firing' && RANK[r.severity] > RANK[a.severity];
+      if (a.status === 'firing' && RANK[r.severity] < RANK[a.severity]) {
+        // Eased (disk 96% → 88%): same incident, lower level from now on.
+        a.severity = r.severity;
+        const open = openIncident(state, r.id);
+        if (open) open.severity = r.severity;
+      }
       if (a.status !== 'firing' || escalated) {
+        if (escalated) {
+          // The warning incident becomes the critical one: one incident, one recovery.
+          const open = openIncident(state, r.id);
+          if (open) open.endedAt = now;
+        }
         a.status = 'firing';
         a.severity = r.severity;
         a.firedAt = now;
@@ -98,8 +109,7 @@ export function evaluate(prev, results, now, config) {
     } else {
       if (a.status === 'firing') {
         const lasted = minutesText(now - a.firstFailAt);
-        const open = [...state.day.incidents].reverse().find((i) => i.id === r.id && i.endedAt === null);
-        if (open) open.endedAt = now;
+        for (const i of state.day.incidents) if (i.id === r.id && i.endedAt === null) i.endedAt = now;
         if (a.severity !== 'info') notes.push(message('resolve', a.severity, `${label}：已恢复 · ${r.title}`, `持续 ${lasted}`, quiet));
       }
       state.alerts[r.id] = { status: 'ok', fails: 0, title: r.title };
@@ -118,6 +128,25 @@ export function evaluate(prev, results, now, config) {
     state.deferred = [];
   }
   return { state, notifications };
+}
+
+function openIncident(state, id) {
+  return [...state.day.incidents].reverse().find((i) => i.id === id && i.endedAt === null);
+}
+
+/**
+ * Re-apply the current quiet-hours policy to messages that failed to deliver
+ * earlier: warnings wait for the morning batch again, recoveries take the
+ * current loudness. Returns the ones to send now.
+ */
+export function routeRetries(state, retries, now, config) {
+  const quiet = inQuietHours(now, config);
+  const now_ = [];
+  for (const n of retries) {
+    if (quiet && n.severity === 'warning' && n.kind !== 'digest') state.deferred.push({ ...n, at: n.at ?? now });
+    else now_.push({ ...n, quiet: n.kind === 'resolve' ? quiet : n.quiet });
+  }
+  return now_;
 }
 
 function message(kind, severity, title, body, quiet) {

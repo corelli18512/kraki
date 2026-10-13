@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { sendBark } from './lib/bark.mjs';
 import * as collect from './lib/collect.mjs';
 import { formatDigest } from './lib/digest.mjs';
-import { accumulate, digestDue, emptyState, evaluate, localParts, recordProbe, rollDigest } from './lib/engine.mjs';
+import { accumulate, digestDue, emptyState, evaluate, localParts, recordProbe, rollDigest, routeRetries } from './lib/engine.mjs';
 import { evaluateRules } from './lib/rules.mjs';
 
 const env = process.env;
@@ -36,13 +36,17 @@ async function saveState(state) {
   await rename(tmp, STATE_FILE);
 }
 
-async function deliver(n) {
+/** All delivery in one run must finish well inside the unit's 50 s timeout. */
+const DELIVERY_BUDGET_MS = Number(env.KRAKI_WATCH_DELIVERY_BUDGET_MS) || 25_000;
+const RANK = { critical: 0, warning: 1, info: 2 };
+
+async function deliver(n, attempts = 2) {
   const line = `${n.kind}/${n.severity}: ${n.title}${n.body ? ` | ${n.body.replace(/\n/g, ' ¶ ')}` : ''}`;
   if (!NOTIFY || !env.BARK_KEY) {
     console.log(`[shadow] ${line}`);
     return { ok: true };
   }
-  const r = await sendBark(n, { server: env.BARK_SERVER || undefined, deviceKey: env.BARK_KEY });
+  const r = await sendBark(n, { server: env.BARK_SERVER || undefined, deviceKey: env.BARK_KEY, attempts, timeoutMs: 6000 });
   console.log(`[${r.ok ? 'sent' : `FAILED ${r.error}`}] ${line}`);
   return r;
 }
@@ -60,7 +64,7 @@ async function collectSnapshot(config, state, now) {
     Promise.all(units),
     collect.diskUsage(config.disk?.path ?? '/'),
     collect.hostMemory(),
-    config.relayUnit ? collect.relayLogs(config.relayUnit, state.lastRunAt) : null,
+    config.relayUnit ? collect.relayLogs(config.relayUnit, state.journalCursor) : null,
     config.metricsUrl ? collect.relayMetrics(config.metricsUrl) : null,
     certDue ? Promise.all(config.certs.map((h) => collect.certDaysLeft(h))) : undefined,
     config.backupStatus ? collect.readJson(config.backupStatus) : undefined,
@@ -78,29 +82,41 @@ async function runOnce(config) {
 
   const out = evaluate(state, results, now, config);
   state = out.state;
+  if (snap.logs?.cursor) state.journalCursor = snap.logs.cursor;
   accumulate(state, digest);
   for (const p of digest.probes) recordProbe(state, p.name, p.ok);
   Object.assign(state.day.notes, digest.notes);
 
   // First run on a host: start counting today, no near-empty summary right away.
   state.lastDigestDate ??= localParts(now, config.timezone).date;
-  const queue = [...(state.undelivered ?? []), ...out.notifications];
+  const retries = routeRetries(state, state.undelivered ?? [], now, config);
+  const queue = [...retries, ...out.notifications];
   if (digestDue(state, now, config)) {
     queue.push(formatDigest(state, now, config));
     state = rollDigest(state, now, config);
   }
-  const undelivered = [];
-  for (const n of queue) {
-    const r = await deliver(n);
-    if (!r.ok) undelivered.push({ ...n, title: n.title.startsWith('[延迟送达]') ? n.title : `[延迟送达] ${n.title}` });
-  }
-  state.undelivered = undelivered.slice(-20);
+  // Critical first, so a slow Bark cannot starve a new critical behind old warnings.
+  queue.sort((a, b) => (RANK[a.severity] ?? 2) - (RANK[b.severity] ?? 2));
+  const late = (n) => ({ ...n, title: n.title.startsWith('[延迟送达]') ? n.title : `[延迟送达] ${n.title}` });
+
+  // Persist first: if delivery hangs until the unit is killed, the alert state
+  // is safe and the queue is retried next run.
+  state.undelivered = queue.slice(0, 20).map(late);
   state.lastRunAt = now;
   await saveState(state);
-
   const firing = Object.entries(state.alerts).filter(([, a]) => a.status === 'firing').map(([id]) => id);
   console.log(`run ok: ${results.length} checks, firing [${firing.join(', ')}]${snap.maintenance ? ' (maintenance)' : ''}`);
   await collect.ping(env.HC_PING_URL);
+
+  const deadline = Date.now() + DELIVERY_BUDGET_MS;
+  const undelivered = [];
+  for (const n of queue) {
+    if (Date.now() >= deadline) { undelivered.push(late(n)); continue; }
+    const r = await deliver(n);
+    if (!r.ok) undelivered.push(late(n));
+  }
+  state.undelivered = undelivered.slice(0, 20);
+  await saveState(state);
 }
 
 async function main() {

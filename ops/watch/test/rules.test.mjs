@@ -191,9 +191,43 @@ test('version mismatch is info only', () => {
   assert.deepEqual([v.ok, v.severity, v.detail], [false, 'info', '0.21.0 / 0.20.1']);
 });
 
-test('counter deltas survive a relay restart', () => {
-  assert.deepEqual(counterDeltas({ a: 10, b: 5 }, { a: 15, b: 2 }), { a: 5, b: 2 });
-  assert.deepEqual(counterDeltas(undefined, { a: 3 }), { a: 3 });
+test('counter deltas: first sample is a baseline; a restart counts everything new', () => {
+  assert.deepEqual(counterDeltas({ a: 10, b: 5 }, { a: 15, b: 5 }), { a: 5, b: 0 });
+  assert.deepEqual(counterDeltas(undefined, { a: 3 }), { a: 0 }, 'lifetime totals are not now');
+  assert.deepEqual(counterDeltas({ a: 1 }, { a: 3 }, true), { a: 3 }, 'restart detected by uptime, even when the total grew');
+});
+
+test('relay restart is detected by uptime going backwards', () => {
+  let mem = evaluateRules(snap({ metrics: { uptimeSec: 500, counters: { 'push.authError': 1 } } }), {}, config).mem;
+  const r = evaluateRules(snap({ now: T0 + MIN, metrics: { uptimeSec: 20, counters: { 'push.authError': 3 } } }), mem, config);
+  assert.equal(byId(r.results, 'K-PUSH-AUTH').ok, false, '3 new credential errors after the restart');
+  mem = evaluateRules(snap({ metrics: { uptimeSec: 9999, counters: { 'push.authError': 50 } } }), {}, config).mem;
+  assert.equal(byId(evaluateRules(snap({ now: T0 + MIN, metrics: { uptimeSec: 10059, counters: { 'push.authError': 50 } } }), mem, config).results, 'K-PUSH-AUTH').ok, true,
+    'old lifetime errors never page');
+});
+
+test('with relay counters, push alerts use final results only (no double count with logs)', () => {
+  const lines = ['⚠️ [x] APNs send failed {"status":403,"reason":"ExpiredProviderToken"}', '⚠️ [x] APNs send failed {"status":403,"reason":"ExpiredProviderToken"}'];
+  let mem = evaluateRules(snap({ metrics: { uptimeSec: 100, counters: { 'push.authError': 0, 'push.attempted': 0, 'push.failed': 0 } } }), {}, config).mem;
+  const r = evaluateRules(snap({ now: T0 + MIN, logs: summarize(lines), metrics: { uptimeSec: 160, counters: { 'push.authError': 2, 'push.attempted': 2, 'push.failed': 2 } } }), mem, config);
+  assert.equal(byId(r.results, 'K-PUSH-AUTH').ok, true, '2 failures are 2, not 4');
+});
+
+test('several automatic restarts between two runs count as flapping', () => {
+  const unit = (n, inv) => [{ unit: 'kraki-relay', name: 'relay', severity: 'critical', active: 'active', invocationId: inv, nRestarts: n, activeSince: T0 }];
+  const mem = evaluateRules(snap({ units: unit(0, 'a') }), {}, config).mem;
+  const r = evaluateRules(snap({ now: T0 + MIN, units: unit(3, 'b') }), mem, config);
+  assert.equal(byId(r.results, 'K-SVC-FLAP@kraki-relay').ok, false);
+});
+
+test('a deploy does not report a connection drop, before or after', () => {
+  let mem = {};
+  const h = (conns, m, maintenance = false) => snap({ now: T0 + m * MIN, maintenance, logs: summarize([`◈ [x] health {"conns":${conns},"durableRows":0,"rssMb":100}`]) });
+  for (let m = 0; m < 3; m++) mem = evaluateRules(h(10, m), mem, config).mem;
+  let r = evaluateRules(h(0, 3, true), mem, config);
+  assert.equal(byId(r.results, 'K-CONN-DROP'), undefined);
+  r = evaluateRules(h(1, 4), r.mem, config);
+  assert.equal(byId(r.results, 'K-CONN-DROP')?.ok ?? true, true);
 });
 
 test('daily summary text', () => {

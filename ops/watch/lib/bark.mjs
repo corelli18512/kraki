@@ -12,7 +12,7 @@ export function barkPayload(n, deviceKey) {
   return { ...base, level: 'timeSensitive', group: 'Kraki 警告' };
 }
 
-export async function sendBark(n, { server = 'https://api.day.app', deviceKey, fetchImpl = fetch, attempts = 3 } = {}) {
+export async function sendBark(n, { server = 'https://api.day.app', deviceKey, fetchImpl = fetch, attempts = 3, timeoutMs = 10_000 } = {}) {
   let lastError = null;
   for (let i = 0; i < attempts; i++) {
     try {
@@ -20,14 +20,14 @@ export async function sendBark(n, { server = 'https://api.day.app', deviceKey, f
         method: 'POST',
         headers: { 'Content-Type': 'application/json; charset=utf-8' },
         body: JSON.stringify(barkPayload(n, deviceKey)),
-        signal: AbortSignal.timeout(10_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (res.ok) return { ok: true };
       lastError = `HTTP ${res.status}`;
     } catch (err) {
       lastError = err?.message ?? String(err);
     }
-    if (i + 1 < attempts) await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+    if (i + 1 < attempts) await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
   }
   return { ok: false, error: lastError };
 }
