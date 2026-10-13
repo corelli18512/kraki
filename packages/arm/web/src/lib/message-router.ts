@@ -225,6 +225,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
           deviceName: device?.name ?? msg.deviceId,
           agent: msg.payload.agent as import('@kraki/protocol').AgentId,
           model: msg.payload.model,
+          createdAt: msg.timestamp,
           state: 'active',
           messageCount: 0,
           lastSeq: msg.payload.lastSeq ?? 0,
@@ -416,11 +417,11 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     }
 
     case 'session_model_set': {
-      const { model } = (msg as SessionModelSetMessage).payload;
+      const { model, reasoningEffort } = (msg as SessionModelSetMessage).payload;
       if (model) {
         const session = store.sessions.get(sid);
         if (session) {
-          store.upsertSession({ ...session, model });
+          store.upsertSession({ ...session, model, reasoningEffort });
         }
       }
       break;

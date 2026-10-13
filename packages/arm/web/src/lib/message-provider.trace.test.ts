@@ -51,13 +51,15 @@ describe('MessageProvider — TRACE axis', () => {
 
   it('distinguishes a confirmed empty trace from an in-flight pull', () => {
     messageProvider.requestTurnTrace('s1', 5);
-    expect(messageProvider.isTurnTraceComplete('s1', 5)).toBe(false);
+    expect(messageProvider.isTurnTraceLoaded('s1', 5)).toBe(false);
     messageProvider.handleTurnTraceBatch('s1', 5, [], false);
-    expect(messageProvider.isTurnTraceComplete('s1', 5)).toBe(false);
+    expect(messageProvider.isTurnTraceLoaded('s1', 5)).toBe(false);
     messageProvider.handleTurnTraceBatch('s1', 5, [], true);
-    expect(messageProvider.isTurnTraceComplete('s1', 5)).toBe(true);
+    expect(messageProvider.isTurnTraceLoaded('s1', 5)).toBe(true);
     messageProvider.invalidateTurnTrace('s1', 5);
-    expect(messageProvider.isTurnTraceComplete('s1', 5)).toBe(false);
+    expect(messageProvider.isTurnTraceLoaded('s1', 5)).toBe(true);
+    messageProvider.handleTurnTraceBatch('s1', 5, [], false);
+    expect(messageProvider.isTurnTraceLoaded('s1', 5)).toBe(false);
   });
 
   it('dedups repeated pulls for the same bubble', () => {
@@ -175,5 +177,23 @@ describe('MessageProvider — TRACE axis', () => {
     messageProvider.handleTurnTraceBatch('s1', 5, [trace('tool_start', 'tc1')], false);
     messageProvider.requestTurnTrace('s1', 5);
     expect(sent.filter((x) => x.type === 'request_turn_trace')).toHaveLength(2);
+  });
+});
+
+describe('MessageProvider — confirmed empty trace', () => {
+  it('only marks a trace loaded after completion and notifies subscribers', () => {
+    messageProvider.clear();
+    const changed = vi.fn();
+    const unsubscribe = messageProvider.subscribeTurnTraces(changed);
+    expect(messageProvider.isTurnTraceLoaded('s', 2)).toBe(false);
+    messageProvider.handleTurnTraceBatch('s', 2, [], false);
+    expect(messageProvider.isTurnTraceLoaded('s', 2)).toBe(false);
+    messageProvider.handleTurnTraceBatch('s', 2, [], true);
+    expect(messageProvider.isTurnTraceLoaded('s', 2)).toBe(true);
+    expect(changed).toHaveBeenCalledTimes(2);
+    unsubscribe();
+    messageProvider.clear();
+    expect(messageProvider.isTurnTraceLoaded('s', 2)).toBe(false);
+    expect(changed).toHaveBeenCalledTimes(2);
   });
 });

@@ -91,7 +91,7 @@ describe('SessionRow', () => {
     unmount();
     useStore.getState().setDevices([{ id: 'd1', name: 'MacBook', role: 'tentacle', online: false }]);
     row();
-    expect(screen.getByText('offline')).toBeInTheDocument();
+    expect(screen.queryByText('offline')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Offline')).toBeInTheDocument();
   });
 
@@ -204,11 +204,11 @@ describe('ToolActivity', () => {
   it('expands to show body when clicked', async () => {
     const user = userEvent.setup();
     renderWithRouter(
-      <ToolActivity type="complete" toolName="shell" headline="$ ls" sessionId="s1" requestPull={noopPull} />,
+      <ToolActivity type="complete" toolName="shell" headline="$ ls" args={{ command: 'ls', timeout: 30 }} sessionId="s1" requestPull={noopPull} />,
     );
     await user.click(screen.getByRole('button'));
-    // Without refs, the body echoes the headline under the native Arguments label
     expect(screen.getByText('Arguments')).toBeInTheDocument();
+    expect(screen.getByText(/command: ls/)).toHaveTextContent('timeout: 30');
   });
 
   it('does not show result section without resultRef', async () => {

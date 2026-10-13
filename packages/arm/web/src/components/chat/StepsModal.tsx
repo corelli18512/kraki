@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, CheckCircle2, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, useLayoutEffect, useSyncExternalStore } from 'react';
+import { ChevronLeft, CircleCheck, CircleX } from 'lucide-react';
 import type { ContentRef } from '@kraki/protocol';
 import { useAttachmentText } from '../../hooks/useAttachment';
 import { callIdOf, contentsLabel, formatDuration, formatTokens, mergeSteps, subagentOf, subagentStatus } from '../../lib/subagent-steps';
@@ -94,7 +94,11 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
   onClose: () => void;
 }) {
   const live = bubbleSeq === null;
+  const body = useRef<HTMLDivElement>(null);
   const { steps, targetSeq } = useTurnSteps(sessionId, live, bubbleSeq ?? undefined);
+
+  const loaded = useSyncExternalStore(messageProvider.subscribeTurnTraces,
+    () => messageProvider.isTurnTraceLoaded(sessionId, targetSeq));
 
   useEffect(() => {
     if (targetSeq < 0) return;
@@ -128,6 +132,11 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, path.length]);
 
+  // Native Steps opens at the newest trace edge and follows live additions.
+  useLayoutEffect(() => {
+    if (body.current && path.length === 0) body.current.scrollTop = body.current.scrollHeight;
+  }, [steps, path.length]);
+
   const title = current ? (subagentOf(current)?.name ?? 'Subagent') : 'Steps';
   return (
     <div className="ksheet-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label="Steps">
@@ -139,13 +148,18 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
             </button>
           )}
           <h3>{title}</h3>
-          <button type="button" onClick={onClose} className="ksheet-close" aria-label="Close steps"><X aria-hidden /></button>
+          {live && <span className="ksheet-live">LIVE</span>}
+          <button type="button" onClick={onClose} className="ksheet-close" aria-label="Close steps"><CircleX aria-hidden /></button>
         </div>
-        <div className="ksheet-body" key={path.join('/')}>
-          {steps.length === 0 ? (
-            messageProvider.isTurnTraceComplete(sessionId, targetSeq) ? (
-              <div className="ksheet-empty"><CheckCircle2 aria-hidden /><strong>No steps recorded</strong><p>This turn completed without a recorded tool trace.</p></div>
-            ) : <p className="ksheet-loading"><span className="kspinner" /> Loading steps…</p>
+        <div ref={body} className="ksheet-body" key={path.join('/')}>
+          {steps.length === 0 ? loaded ? (
+            <div className="ksheet-empty">
+              <CircleCheck aria-hidden />
+              <h4>No steps recorded</h4>
+              <p>This turn completed without a recorded tool trace.</p>
+            </div>
+          ) : (
+            <div className="ksheet-waiting"><span className="kspinner" /><p>Loading steps…</p></div>
           ) : current ? (
             <SubagentPage msg={current} merged={merged} steps={steps} agent={agent} sessionId={sessionId} onOpen={open} />
           ) : (

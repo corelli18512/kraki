@@ -315,7 +315,19 @@ export function shouldRender(item: SpineItem): boolean {
 
 /** The whole pipeline the chat list draws (spine + derived question state). */
 export function spineRows(raw: ChatMessage[], pendingAnswerTo: string[], atHead: boolean): SpineItem[] {
-  return projectTurns(presentQuestions(raw, pendingAnswerTo, atHead)).filter(shouldRender);
+  const visible: SpineItem[] = [];
+  for (const item of projectTurns(presentQuestions(raw, pendingAnswerTo, atHead))) {
+    if (shouldRender(item)) {
+      visible.push(item);
+      continue;
+    }
+    const outcome = terminalOutcomeOf(item.message);
+    const draftlessOutcome = outcome?.type === 'user_abort' ||
+      (outcome?.type === 'failed' && !!outcome.message?.trim());
+    // The preceding question already draws this outcome in its frozen card.
+    if (draftlessOutcome && !questionSpecOf(visible.at(-1)?.message ?? item.message)) visible.push(item);
+  }
+  return visible;
 }
 
 // ── Row identity + frozen card ──

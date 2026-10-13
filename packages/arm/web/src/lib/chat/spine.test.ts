@@ -34,7 +34,7 @@ describe('questions on the spine', () => {
     expect(answered.action).toBeUndefined();
   });
 
-  it('abort while asking draws User aborted inside the question, no separate row', () => {
+  it('abort while asking draws Stopped inside the question, no separate row', () => {
     const rows = spineRows([m('user_message', 1, { content: 'go' }), ask(2, 'q1'), abort(3), m('idle', 4)], [], true);
     expect(rows.map((r) => seqOf(r.message))).toEqual([1, 2]);
     expect(rowKey(rows[1])).toBe('2#q-user_abort');
@@ -109,8 +109,31 @@ describe('turn projection', () => {
     expect(frozenCardOf(rows[1])?.text).toBe('checking');
   });
 
-  it('draft-less legacy interrupted turn without a reply renders nothing', () => {
+  it('draft-less legacy interrupted turn keeps Stopped', () => {
     const rows = spineRows([m('user_message', 1, { content: 'go' }), m('interrupted_turn', 2, { reason: 'user_aborted' }), m('idle', 3)], [], true);
-    expect(rows.map((r) => seqOf(r.message))).toEqual([1]);
+    expect(rows.map((r) => seqOf(r.message))).toEqual([1, 2]);
+    expect(frozenCardOf(rows[1])).toEqual({ text: '', action: { type: 'user_abort' } });
+  });
+
+  it('retains the stopped session shape (turn_status seq4) with its Steps', () => {
+    const rows = spineRows([m('user_message', 1, { content: 'sleep' }),
+      m('tool_start', 2, { toolCallId: 't', toolName: 'bash' }),
+      m('turn_status', 4, { draft: '', steps: 1, action: { type: 'user_abort' } }), m('idle', 5)], [], true);
+    expect(rows.map((r) => seqOf(r.message))).toEqual([1, 4]);
+    expect(frozenCardOf(rows[1])?.action?.type).toBe('user_abort');
+    expect(rows[1].message.payload).toMatchObject({ steps: 1 });
+  });
+
+  it('retains a draftless failure reason, but not an empty failed outcome', () => {
+    const failed = (reason: string) => m('turn_status', 2, { draft: '', action: { type: 'failed', payload: { message: reason } } });
+    expect(spineRows([m('user_message', 1), failed('Usage limit'), m('idle', 3)], [], true)).toHaveLength(2);
+    expect(spineRows([m('user_message', 1), failed('  '), m('idle', 3)], [], true)).toHaveLength(1);
+  });
+
+  it('does not duplicate a draftless failure already owned by the question', () => {
+    const rows = spineRows([m('user_message', 1), ask(2, 'q'), m('turn_status', 3,
+      { draft: '', action: { type: 'failed', payload: { message: 'Lost process' } } }), m('idle', 4)], [], true);
+    expect(rows.map((r) => seqOf(r.message))).toEqual([1, 2]);
+    expect(frozenCardOf(rows[1])?.action).toEqual({ type: 'failed', message: 'Lost process' });
   });
 });
