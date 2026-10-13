@@ -398,7 +398,11 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
               && client.sessionManager.getMeta(sessionId)?.state === 'active') {
               client.errorPersistedForTurn.set(sessionId, turnId);
               client.pendingTerminalErrors.set(sessionId, { message, source: 'adapter', turnId });
-              settleAdapterIdle(client, sessionId, { turnId });
+              try {
+                settleAdapterIdle(client, sessionId, { turnId });
+              } catch (settleErr) {
+                logger.error({ err: settleErr, sessionId }, 'closing the rejected turn failed');
+              }
             }
           })
           .finally(() => {
