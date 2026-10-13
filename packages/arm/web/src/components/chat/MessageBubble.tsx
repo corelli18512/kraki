@@ -7,6 +7,8 @@ export function renderedMessageText(root: HTMLElement): string {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
     if (!(node instanceof HTMLElement)) return '';
     if (node.matches('.kmd-code-lang, .ktable-footer')) return '';
+    // Mac table attachments copy the complete TSV, including preview-hidden rows.
+    if (node.dataset.copyText !== undefined) return `${node.dataset.copyText}\n`;
     if (node.tagName === 'BR') return '\n';
     const children = Array.from(node.childNodes).map(text).join('');
     if (node.tagName === 'TD' || node.tagName === 'TH') return `${children}\t`;

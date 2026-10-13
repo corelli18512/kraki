@@ -74,6 +74,15 @@ describe('MessageBubble — native context actions', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
+  it('copies all table rows, including those hidden by the preview', () => {
+    const rows = Array.from({ length: 12 }, (_, i) => `| item ${i} | ${i} |`);
+    const { bubble, writeText } = setup(undefined, ['| Name | Value |', '|---|---|', ...rows].join('\n'));
+    expect(screen.queryByText('item 11')).toBeNull();
+    fireEvent.contextMenu(bubble);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy' }));
+    expect(writeText).toHaveBeenCalledWith(['Name\tValue', ...rows.map((_, i) => `item ${i}\t${i}`)].join('\n'));
+  });
+
   it('omits fence labels and table chrome from copied text', () => {
     const { bubble, writeText } = setup(undefined, '```python\nprint("Hello")\n```\n\n| Name | Value |\n|---|---|\n| Alpha | 123 |');
     fireEvent.contextMenu(bubble);

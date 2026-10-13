@@ -9,6 +9,12 @@ const styles = document.createElement('style');
 beforeAll(() => { styles.textContent = chatCss; document.head.append(styles); });
 afterAll(() => styles.remove());
 
+// jsdom reports the literal `inherit`; Chromium resolves this in verify.mjs.
+function resolvedColor(element: Element): string {
+  const color = getComputedStyle(element).color;
+  return color === 'inherit' && element.parentElement ? resolvedColor(element.parentElement) : color;
+}
+
 describe('Markdown — native transcript rendering', () => {
   it.each([Markdown, StreamingMarkdown])('preserves prose and quote soft newlines in final and streamed text', (Component) => {
     const { container } = render(<Component text={'First **bold** line\nSecond `code` line\n\n> Quote one\n> Quote two'} />);
@@ -33,8 +39,8 @@ describe('Markdown — native transcript rendering', () => {
     const { container } = render(<Markdown text={'```python\ndef hello(name):\n    print("Hello", name)\n```'} />);
     const code = container.querySelector('pre code')!;
     expect(code.textContent).toBe('def hello(name):\n    print("Hello", name)\n');
-    expect(getComputedStyle(code.querySelector('.hljs-keyword')!).color).toBe('rgb(201, 209, 217)');
-    expect(getComputedStyle(code.querySelector('.hljs-title')!).color).toBe('rgb(201, 209, 217)');
+    expect(resolvedColor(code.querySelector('.hljs-keyword')!)).toBe('rgb(201, 209, 217)');
+    expect(resolvedColor(code.querySelector('.hljs-title')!)).toBe('rgb(201, 209, 217)');
     expect(getComputedStyle(code.querySelector('.hljs-built_in')!).color).toBe('rgb(255, 166, 87)');
     expect(getComputedStyle(code.querySelector('.hljs-string')!).color).toBe('rgb(165, 214, 255)');
     expect(getComputedStyle(container.querySelector('pre')!).whiteSpace).toBe('pre');

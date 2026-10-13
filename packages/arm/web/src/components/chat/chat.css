@@ -386,23 +386,23 @@
 .kmessage-menu {
   position: fixed;
   z-index: 100;
-  min-width: 150px;
-  padding: 4px;
-  border: 0.5px solid var(--k-border);
-  border-radius: 6px;
+  width: max-content;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 14px;
   background: color-mix(in srgb, var(--k-bg) 92%, transparent);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.22);
+  box-shadow: inset 0 0 0 0.5px var(--k-border), 0 5px 16px rgba(0, 0, 0, 0.22);
   color: var(--k-text);
   font: 13px/18px var(--k-font);
 }
 .kmessage-menu button {
   display: block;
   width: 100%;
-  padding: 2px 8px;
+  padding: 3px 8px;
   border: none;
-  border-radius: 3px;
+  border-radius: 7px;
   background: none;
   color: inherit;
   font: inherit;
@@ -606,23 +606,24 @@
 /* Highlightr's github-dark palette, including its neutral keyword/title
    rendering and the native 4.5:1 readability fallback on #18181b. Scoped
    here so other editors keep their own highlight.js theme. */
-.kmd-code .hljs, .kmd-code .hljs * { color: #c9d1d9; background: transparent; }
-.kmd-code .hljs-attr, .kmd-code .hljs-attribute, .kmd-code .hljs-literal,
-.kmd-code .hljs-meta, .kmd-code .hljs-number, .kmd-code .hljs-operator,
-.kmd-code .hljs-selector-attr, .kmd-code .hljs-selector-class,
-.kmd-code .hljs-selector-id, .kmd-code .hljs-variable { color: #79c0ff; }
-.kmd-code .hljs-string, .kmd-code .hljs-regexp { color: #a5d6ff; }
-.kmd-code .hljs-built_in, .kmd-code .hljs-symbol { color: #ffa657; }
-.kmd-code .hljs-code, .kmd-code .hljs-comment, .kmd-code .hljs-formula { color: #8b949e; }
-.kmd-code .hljs-name, .kmd-code .hljs-quote,
-.kmd-code .hljs-selector-pseudo, .kmd-code .hljs-selector-tag { color: #7ee787; }
-.kmd-code .hljs-subst { color: #c9d1d9; }
-.kmd-code .hljs-section { color: #f4f4f5; font-weight: 700; }
-.kmd-code .hljs-bullet { color: #f2cc60; }
-.kmd-code .hljs-emphasis { font-style: italic; }
-.kmd-code .hljs-strong { font-weight: 700; }
-.kmd-code .hljs-addition { color: #aff5b4; background: #033a16; }
-.kmd-code .hljs-deletion { color: #ffdcd7; background: #67060c; }
+.kmd-code .hljs { color: #c9d1d9; background: transparent; }
+.kmd-code .hljs span { color: inherit; background: transparent; }
+.kmd-code .hljs .hljs-attr, .kmd-code .hljs .hljs-attribute, .kmd-code .hljs .hljs-literal,
+.kmd-code .hljs .hljs-meta, .kmd-code .hljs .hljs-number, .kmd-code .hljs .hljs-operator,
+.kmd-code .hljs .hljs-selector-attr, .kmd-code .hljs .hljs-selector-class,
+.kmd-code .hljs .hljs-selector-id, .kmd-code .hljs .hljs-variable { color: #79c0ff; }
+.kmd-code .hljs .hljs-string, .kmd-code .hljs .hljs-regexp { color: #a5d6ff; }
+.kmd-code .hljs .hljs-built_in, .kmd-code .hljs .hljs-symbol { color: #ffa657; }
+.kmd-code .hljs .hljs-code, .kmd-code .hljs .hljs-comment, .kmd-code .hljs .hljs-formula { color: #8b949e; }
+.kmd-code .hljs .hljs-name, .kmd-code .hljs .hljs-quote,
+.kmd-code .hljs .hljs-selector-pseudo, .kmd-code .hljs .hljs-selector-tag { color: #7ee787; }
+.kmd-code .hljs .hljs-subst { color: #c9d1d9; }
+.kmd-code .hljs .hljs-section { color: #f4f4f5; font-weight: 700; }
+.kmd-code .hljs .hljs-bullet { color: #f2cc60; }
+.kmd-code .hljs .hljs-emphasis { font-style: italic; }
+.kmd-code .hljs .hljs-strong { font-weight: 700; }
+.kmd-code .hljs .hljs-addition { color: #aff5b4; background: #033a16; }
+.kmd-code .hljs .hljs-deletion { color: #ffdcd7; background: #67060c; }
 
 /* Chat tables — Mac typography, 7×10 padding, horizontal hairlines only. */
 .ktable {
