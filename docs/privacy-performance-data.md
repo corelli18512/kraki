@@ -15,6 +15,12 @@ batch carries the app version and build, OS version, CPU architecture, a random
 per-launch id, and opaque ids (device, session, message) that Kraki already
 uses to route messages.
 
+How users learn about it: once per install, after sign-in (existing users: on
+the first launch of the version that turns it on), a card says what is sent and
+offers OK / Don't Share. It waits for the notification permission answer so it
+never stacks on that prompt (`PerformanceNotice.swift`). Afterwards it lives in
+Settings → Privacy.
+
 What is never sent: message text, drafts, transcripts, voice, attachments,
 file names or paths, URLs, error messages, network names.
 

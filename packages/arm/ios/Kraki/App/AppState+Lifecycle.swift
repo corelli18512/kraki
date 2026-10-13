@@ -318,6 +318,9 @@ extension AppState {
         Self.onMacNotificationsMain { $0.onAuthenticated(appState: self) }
         #endif
         voiceInputController.prepare()
+        #if KRAKI_DIAG && !KRAKI_DIAG_TEST_BUILD
+        Task { @MainActor in PerformanceNotice.shared.authenticated() }
+        #endif
     }
 
     func onAuthFailed(error: String) {
