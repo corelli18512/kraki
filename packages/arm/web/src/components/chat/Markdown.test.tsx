@@ -23,6 +23,8 @@ describe('Markdown — native transcript rendering', () => {
     expect(paragraphs[1].textContent).toBe('Quote one\nQuote two');
     expect(getComputedStyle(paragraphs[0]).whiteSpace).toBe('pre-wrap');
     expect(getComputedStyle(paragraphs[1]).whiteSpace).toBe('pre-wrap');
+    expect(getComputedStyle(paragraphs[0].parentElement!).lineHeight).toBe('18px');
+    expect(getComputedStyle(paragraphs[1]).lineHeight).toBe('19px');
     expect(container.querySelector('strong')).toHaveTextContent('bold');
     expect(container.querySelector('code')).toHaveTextContent('code');
   });
@@ -33,6 +35,11 @@ describe('Markdown — native transcript rendering', () => {
     expect(container.querySelector('hr')).toBeNull();
     expect(screen.getByRole('table')).toBeInTheDocument();
     expect(screen.getByText('123')).toBeInTheDocument();
+    const table = container.querySelector<HTMLElement>('.ktable')!;
+    // Chromium's border width is checked in the paired-browser validation;
+    // jsdom exposes an empty borderStyle for the shorthand `border: none`.
+    expect(getComputedStyle(table).borderRadius).toBe('0');
+    expect(getComputedStyle(table.querySelector('th')!).borderTopLeftRadius).toBe('10px');
   });
 
   it('uses native syntax colors and preserves fence whitespace', () => {
