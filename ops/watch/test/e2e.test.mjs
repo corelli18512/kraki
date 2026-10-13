@@ -179,3 +179,21 @@ test('a hanging Bark cannot lose alert state: saved first, retried next run', as
   await run();
   assert.ok(bark.slice(before).some((b) => /\[延迟送达\].*测试 relay无法访问/.test(b.title) && b.level === 'critical'), 'retried as critical');
 });
+
+test('a new critical is never pushed out of the outbox by older retries', async () => {
+  await run('maintenance', '0');
+  const statePath = join(dir, 'state', 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  state.undelivered = Array.from({ length: 25 }, (_, i) => ({ kind: 'repeat', severity: 'critical', title: `[延迟送达] old ${i}`, body: '', quiet: false }));
+  state.alerts = {};
+  await writeFile(statePath, JSON.stringify(state));
+  barkHangs = true;
+  relayStatus = 502;
+  for (let i = 0; i < 3; i++) await runEnv({ KRAKI_WATCH_RUN_BUDGET_MS: '2500' });
+  const after = JSON.parse(await readFile(statePath, 'utf8'));
+  assert.equal(after.undelivered.length, 20);
+  assert.match(after.undelivered[0].title, /测试 relay无法访问/, 'fresh critical first');
+  barkHangs = false;
+  relayStatus = 200;
+  await run();
+});

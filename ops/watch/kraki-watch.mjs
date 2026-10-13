@@ -36,17 +36,17 @@ async function saveState(state) {
   await rename(tmp, STATE_FILE);
 }
 
-/** All delivery in one run must finish well inside the unit's 50 s timeout. */
-const DELIVERY_BUDGET_MS = Number(env.KRAKI_WATCH_DELIVERY_BUDGET_MS) || 25_000;
+/** The whole run (checks + delivery) must end well inside the unit's 50 s timeout. */
+const RUN_BUDGET_MS = Number(env.KRAKI_WATCH_RUN_BUDGET_MS) || 40_000;
 const RANK = { critical: 0, warning: 1, info: 2 };
 
-async function deliver(n, attempts = 2) {
+async function deliver(n, attempts = 2, timeoutMs = 6000) {
   const line = `${n.kind}/${n.severity}: ${n.title}${n.body ? ` | ${n.body.replace(/\n/g, ' ¶ ')}` : ''}`;
   if (!NOTIFY || !env.BARK_KEY) {
     console.log(`[shadow] ${line}`);
     return { ok: true };
   }
-  const r = await sendBark(n, { server: env.BARK_SERVER || undefined, deviceKey: env.BARK_KEY, attempts, timeoutMs: 6000 });
+  const r = await sendBark(n, { server: env.BARK_SERVER || undefined, deviceKey: env.BARK_KEY, attempts, timeoutMs });
   console.log(`[${r.ok ? 'sent' : `FAILED ${r.error}`}] ${line}`);
   return r;
 }
@@ -74,6 +74,7 @@ async function collectSnapshot(config, state, now) {
 
 async function runOnce(config) {
   const now = Date.now();
+  const deadline = now + RUN_BUDGET_MS;
   let state = await loadState();
   const snap = await collectSnapshot(config, state, now);
   const { results, mem, digest } = evaluateRules(snap, state.rules, config);
@@ -90,13 +91,23 @@ async function runOnce(config) {
   // First run on a host: start counting today, no near-empty summary right away.
   state.lastDigestDate ??= localParts(now, config.timezone).date;
   const retries = routeRetries(state, state.undelivered ?? [], now, config);
-  const queue = [...retries, ...out.notifications];
+  const fresh = [...out.notifications];
   if (digestDue(state, now, config)) {
-    queue.push(formatDigest(state, now, config));
+    fresh.push(formatDigest(state, now, config));
     state = rollDigest(state, now, config);
   }
-  // Critical first, so a slow Bark cannot starve a new critical behind old warnings.
-  queue.sort((a, b) => (RANK[a.severity] ?? 2) - (RANK[b.severity] ?? 2));
+  // Critical first, fresh before retried, one copy of each message: a slow
+  // Bark cannot push a new critical out of the 20-message outbox.
+  const isRetry = (n) => n.title.startsWith('[延迟送达]');
+  const seen = new Set();
+  const queue = [];
+  for (const n of [...fresh, ...retries]) {
+    const key = `${n.kind}|${n.title.replace(/^\[延迟送达\] /, '')}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    queue.push(n);
+  }
+  queue.sort((a, b) => ((RANK[a.severity] ?? 2) - (RANK[b.severity] ?? 2)) || (isRetry(a) - isRetry(b)));
   const late = (n) => ({ ...n, title: n.title.startsWith('[延迟送达]') ? n.title : `[延迟送达] ${n.title}` });
 
   // Persist first: if delivery hangs until the unit is killed, the alert state
@@ -108,11 +119,12 @@ async function runOnce(config) {
   console.log(`run ok: ${results.length} checks, firing [${firing.join(', ')}]${snap.maintenance ? ' (maintenance)' : ''}`);
   await collect.ping(env.HC_PING_URL);
 
-  const deadline = Date.now() + DELIVERY_BUDGET_MS;
   const undelivered = [];
   for (const n of queue) {
-    if (Date.now() >= deadline) { undelivered.push(late(n)); continue; }
-    const r = await deliver(n);
+    const left = deadline - Date.now();
+    if (left < 2000) { undelivered.push(late(n)); continue; }
+    // One attempt per message when time is short; never past the deadline.
+    const r = await deliver(n, left > 14_000 ? 2 : 1, Math.min(6000, left - 1000));
     if (!r.ok) undelivered.push(late(n));
   }
   state.undelivered = undelivered.slice(0, 20);

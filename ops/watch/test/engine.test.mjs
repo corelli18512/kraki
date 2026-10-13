@@ -85,7 +85,16 @@ test('critical easing back to warning stops ringing; one incident, one recovery'
   const c = { ...w, severity: 'critical' };
   const { sent, state } = runSeq([w, c, ...Array(40).fill(w), { ...w, ok: true }], DAY);
   assert.deepEqual(sent.map((n) => [n.kind, n.severity]), [['fire', 'warning'], ['fire', 'critical'], ['resolve', 'warning']]);
+  assert.equal(state.day.incidents.length, 1, 'warning → critical → warning is one incident');
   assert.equal(state.day.incidents.filter((i) => i.endedAt === null).length, 0);
+});
+
+test('escalation is not reported as a recovery', () => {
+  const w = { id: 'K-DISK', severity: 'warning', failAfter: 1, ok: false, title: '磁盘快满了' };
+  const { state } = runSeq([w, { ...w, severity: 'critical' }], DAY);
+  assert.equal(state.day.incidents.length, 1);
+  assert.equal(state.day.incidents[0].endedAt, null);
+  assert.equal(state.day.incidents[0].severity, 'critical');
 });
 
 test('failed deliveries are re-routed through quiet hours', () => {

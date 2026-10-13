@@ -121,7 +121,9 @@ export async function hostMemory() {
  * summary plus the new cursor (`cursor`).
  */
 export async function relayLogs(unit, cursor) {
-  const args = ['-u', unit, '-o', 'cat', '--no-pager', '-q', '--show-cursor'];
+  // At most the newest 20,000 lines per run: a huge backlog (log storm) is
+  // skipped rather than blocking every later run on an oversized read.
+  const args = ['-u', unit, '-o', 'cat', '--no-pager', '-q', '--show-cursor', '-n', '20000'];
   args.push(...(cursor ? ['--after-cursor', cursor] : ['--since', '-2min']));
   const r = await run('journalctl', args);
   if (!r.ok) return null;

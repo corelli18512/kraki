@@ -20,7 +20,7 @@
 
 import { config as dotenvConfig } from 'dotenv';
 import { metrics } from './metrics.js';
-import { handleObservability, type ReadinessContext } from './observability.js';
+import { handleObservability, pingRelayDatabase, type ReadinessContext } from './observability.js';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -506,8 +506,7 @@ metrics().startLoopMonitor();
 const readinessContext: ReadinessContext = {
   version: VERSION,
   startedAt,
-  // Reads a real table page (SELECT 1 alone never touches the file).
-  pingDatabase: () => { storage!.rawDb.prepare('SELECT id FROM users LIMIT 1').get(); },
+  pingDatabase: () => pingRelayDatabase(storage!.rawDb),
   expectedPushProviders: PUSH_PROVIDERS,
   loadedPushProviders: () => pushManager?.providerNames() ?? [],
   gauges: () => head.getGauges(),

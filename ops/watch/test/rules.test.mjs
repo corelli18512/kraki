@@ -213,6 +213,29 @@ test('with relay counters, push alerts use final results only (no double count w
   assert.equal(byId(r.results, 'K-PUSH-AUTH').ok, true, '2 failures are 2, not 4');
 });
 
+test('push alerts fall back to logs for runs without relay counters', () => {
+  const auth = '⚠️ [x] APNs send failed {"status":403,"reason":"ExpiredProviderToken"}';
+  let mem = evaluateRules(snap({ metrics: { uptimeSec: 100, counters: { 'push.authError': 0 } } }), {}, config).mem;
+  mem = evaluateRules(snap({ now: T0 + MIN, metrics: { uptimeSec: 160, counters: { 'push.authError': 0 } } }), mem, config).mem;
+  const r = evaluateRules(snap({ now: T0 + 2 * MIN, metrics: null, logs: summarize([auth, auth, auth]) }), mem, config);
+  assert.equal(byId(r.results, 'K-PUSH-AUTH').ok, false, 'metrics endpoint down: the log still counts');
+});
+
+test('a relay restart is also detected by a new systemd invocation', () => {
+  const unit = (inv) => [{ unit: 'kraki-relay', name: 'relay', severity: 'critical', active: 'active', invocationId: inv, activeSince: T0 }];
+  const mem = evaluateRules(snap({ units: unit('a'), metrics: { uptimeSec: 10, counters: { 'push.authError': 1 } } }), {}, config).mem;
+  // Restarted, and by the next sample its uptime already exceeds the old one.
+  const r = evaluateRules(snap({ now: T0 + MIN, units: unit('b'), metrics: { uptimeSec: 50, counters: { 'push.authError': 3 } } }), mem, config);
+  assert.equal(byId(r.results, 'K-PUSH-AUTH').ok, false, '3 new errors, not 2');
+});
+
+test('NRestarts reset by a manual start still counts the new automatic restarts', () => {
+  const unit = (n, inv) => [{ unit: 'kraki-relay', name: 'relay', severity: 'critical', active: 'active', invocationId: inv, nRestarts: n, activeSince: T0 }];
+  const mem = evaluateRules(snap({ units: unit(5, 'a') }), {}, config).mem;
+  const r = evaluateRules(snap({ now: T0 + MIN, units: unit(3, 'b') }), mem, config);
+  assert.equal(byId(r.results, 'K-SVC-FLAP@kraki-relay').ok, false);
+});
+
 test('several automatic restarts between two runs count as flapping', () => {
   const unit = (n, inv) => [{ unit: 'kraki-relay', name: 'relay', severity: 'critical', active: 'active', invocationId: inv, nRestarts: n, activeSince: T0 }];
   const mem = evaluateRules(snap({ units: unit(0, 'a') }), {}, config).mem;

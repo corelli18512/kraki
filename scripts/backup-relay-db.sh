@@ -32,7 +32,7 @@ STATUS=${KRAKI_BACKUP_STATUS:-/var/lib/kraki-watch/backup.json}
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # JSON string body: escape backslash and quote, drop control characters.
-json_str() { printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g' | cut -c1-400; }
+json_str() { printf '%s' "$1" | tr -d '\000-\037' | cut -c1-400 | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 write_status() {
   # $1 = JSON body (without braces)

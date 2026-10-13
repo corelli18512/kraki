@@ -27,6 +27,12 @@ export interface ReadinessContext {
   maxHealthAgeMs?: number;
 }
 
+/** Reads a real table page (SELECT 1 alone never touches the file). Throws
+ *  when the database is unusable. */
+export function pingRelayDatabase(db: { prepare: (sql: string) => { get: () => unknown } }): void {
+  db.prepare('SELECT user_id FROM users LIMIT 1').get();
+}
+
 export function readiness(ctx: ReadinessContext, now = Date.now()): { ok: boolean; checks: Record<string, string> } {
   const checks: Record<string, string> = {};
   try {

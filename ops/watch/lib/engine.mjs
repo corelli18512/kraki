@@ -89,17 +89,15 @@ export function evaluate(prev, results, now, config) {
         if (open) open.severity = r.severity;
       }
       if (a.status !== 'firing' || escalated) {
-        if (escalated) {
-          // The warning incident becomes the critical one: one incident, one recovery.
-          const open = openIncident(state, r.id);
-          if (open) open.endedAt = now;
-        }
         a.status = 'firing';
         a.severity = r.severity;
         a.firedAt = now;
         a.lastNotifiedAt = now;
         state.day.fired[r.severity] += 1;
-        state.day.incidents.push({ id: r.id, severity: r.severity, title: r.title, startedAt: a.firstFailAt, endedAt: null });
+        // Escalation stays the same incident (warning → critical), one recovery.
+        const open = escalated ? openIncident(state, r.id) : null;
+        if (open) open.severity = r.severity;
+        else state.day.incidents.push({ id: r.id, severity: r.severity, title: r.title, startedAt: a.firstFailAt, endedAt: null });
         if (r.severity === 'info') continue;
         notes.push(message('fire', r.severity, `${label}：${r.title}`, a.detail, quiet));
       } else if (r.severity !== 'info' && now - a.lastNotifiedAt >= REPEAT_MS[a.severity]) {

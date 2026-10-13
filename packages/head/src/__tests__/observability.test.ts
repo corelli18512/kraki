@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { LatencyHistogram, LATENCY_BUCKETS_MS, metrics, resetMetricsForTests } from '../metrics.js';
-import { handleObservability, readiness, type ReadinessContext } from '../observability.js';
+import { handleObservability, pingRelayDatabase, readiness, type ReadinessContext } from '../observability.js';
 import { PushManager, type PushProvider, type PushPayload, type PushResult } from '../push/index.js';
 import { Storage } from '../storage.js';
 import { WebSocket } from 'ws';
@@ -74,6 +74,15 @@ describe('readiness', () => {
     const r = readiness(context({ expectedPushProviders: ['apns', 'web_push'], loadedPushProviders: () => ['apns'] }));
     expect(r.ok).toBe(false);
     expect(r.checks.push).toBe('fail:web_push');
+  });
+});
+
+describe('pingRelayDatabase (the production readiness probe)', () => {
+  it('passes on a real relay database and fails once it is unusable', () => {
+    const storage = new Storage(':memory:');
+    expect(() => pingRelayDatabase(storage.rawDb)).not.toThrow();
+    storage.close();
+    expect(() => pingRelayDatabase(storage.rawDb)).toThrow();
   });
 });
 

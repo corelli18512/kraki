@@ -73,7 +73,9 @@ export function evaluateRules(snap, memIn, config) {
     }
     // Automatic restarts since the last run (several can happen between runs);
     // a new invocation without one is a manual/other restart.
-    const autoRestarts = Number.isFinite(u.nRestarts) && Number.isFinite(m.nRestarts) ? Math.max(0, u.nRestarts - m.nRestarts) : 0;
+    // NRestarts resets when the unit is started by hand: then all of it is new.
+    const autoRestarts = !Number.isFinite(u.nRestarts) || !Number.isFinite(m.nRestarts) ? 0
+      : u.nRestarts >= m.nRestarts ? u.nRestarts - m.nRestarts : u.nRestarts;
     if (Number.isFinite(u.nRestarts)) m.nRestarts = u.nRestarts;
     const newInvocation = u.invocationId && m.invocationId && u.invocationId !== m.invocationId;
     if ((newInvocation || autoRestarts > 0) && !snap.maintenance) {
@@ -117,7 +119,12 @@ export function evaluateRules(snap, memIn, config) {
   }
   if (snap.metrics?.counters) {
     const uptime = snap.metrics.uptimeSec;
-    const restarted = mem.lastCounters !== undefined && Number.isFinite(uptime) && Number.isFinite(mem.lastUptimeSec) && uptime < mem.lastUptimeSec;
+    // New process: uptime went back, or systemd started a new invocation.
+    const relay = (snap.units ?? []).find((x) => x.unit === config.relayUnit);
+    const newProcess = (Number.isFinite(uptime) && Number.isFinite(mem.lastUptimeSec) && uptime < mem.lastUptimeSec)
+      || (relay?.invocationId && mem.lastRelayInvocation && relay.invocationId !== mem.lastRelayInvocation);
+    const restarted = mem.lastCounters !== undefined && Boolean(newProcess);
+    if (relay?.invocationId) mem.lastRelayInvocation = relay.invocationId;
     sample.metricDeltas = counterDeltas(mem.lastCounters, snap.metrics.counters, restarted);
     mem.lastCounters = snap.metrics.counters;
     mem.lastUptimeSec = uptime;
@@ -145,12 +152,13 @@ export function evaluateRules(snap, memIn, config) {
   if (logs) {
     // Relay counters are per final send result; logs also show intermediate
     // retry errors. Use the counters when the relay has them, logs otherwise.
-    const withMetrics = win.some((s) => s.metricDeltas);
-    const pushFail = withMetrics ? sum((s) => (s.metricDeltas?.['push.failed'] ?? 0) + (s.metricDeltas?.['push.threw'] ?? 0)) : count('pushFail');
+    // Per run: counters when that run had them, else that run's log lines.
+    const pushFail = sum((s) => (s.metricDeltas ? (s.metricDeltas['push.failed'] ?? 0) + (s.metricDeltas['push.threw'] ?? 0) : s.counts.pushFail));
+    const allMetrics = win.length > 0 && win.every((s) => s.metricDeltas);
     const attempted = sum((s) => s.metricDeltas?.['push.attempted']);
-    const share = withMetrics && attempted > 0 ? pushFail / attempted : null;
+    const share = allMetrics && attempted > 0 ? pushFail / attempted : null;
     push({ id: 'K-PUSH-FAIL', severity: 'warning', failAfter: 1, ok: !(pushFail >= 10 && (share === null || share > 0.2)), title: '推送大量失败', detail: `10 分钟 ${pushFail} 次失败${share === null ? '' : `（${Math.round(share * 100)}%）`}` });
-    const pushAuth = withMetrics ? sum((s) => s.metricDeltas?.['push.authError']) : sum((s) => s.pushAuth);
+    const pushAuth = sum((s) => (s.metricDeltas ? s.metricDeltas['push.authError'] ?? 0 : s.pushAuth));
     push({ id: 'K-PUSH-AUTH', severity: 'critical', failAfter: 1, ok: pushAuth < 3, title: '推送密钥失效（APNs 认证错误）', detail: `10 分钟 ${pushAuth} 次` });
     push({ id: 'K-AUTH-FAIL', severity: 'warning', failAfter: 1, ok: count('authFail') < 10, title: '登录大量失败', detail: `10 分钟 ${count('authFail')} 次` });
     push({ id: 'K-AUTH-ABUSE', severity: 'info', failAfter: 1, ok: count('authAbuse') < 100, title: '疑似暴力尝试登录', detail: `10 分钟 ${count('authAbuse')} 次` });
