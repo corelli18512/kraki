@@ -927,7 +927,7 @@
   }
   .kperm-approve { box-shadow: none !important; }
   .kslot-permission-q { line-height: 18px; }
-  .kslot-permission-caption { line-height: 14px; }
+  .kslot-permission-caption { line-height: 15px; }
   .ksheet-head h3 { font-size: 17px; }
   .kstep-prose, .kstep-note, .kstep-permission { font-size: 15px; line-height: 18px; }
   .kstep-permission .kstep-icon { width: 18px; height: 18px; }
