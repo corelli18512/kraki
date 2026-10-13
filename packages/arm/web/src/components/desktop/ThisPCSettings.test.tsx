@@ -30,6 +30,11 @@ describe('ThisPCSettings capability-driven native parity', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Logs Window' }));
     expect(builtIn.openLogs).toHaveBeenCalled();
   });
+  it('shows status-query failures rather than an empty pane', async () => {
+    vi.mocked(builtIn.state).mockRejectedValue(new Error('unavailable'));
+    render(<ThisPCSettings builtIn={builtIn} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t read this PC’s status.');
+  });
   it('uses actual startup/update preferences and displays bridge errors', async () => {
     bridge.setAllowRemoteUpdates.mockResolvedValue({ ok: false, error: 'Policy could not be saved.' });
     render(<ThisPCSettings builtIn={builtIn} />);

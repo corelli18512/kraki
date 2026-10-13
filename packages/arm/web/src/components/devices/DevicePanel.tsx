@@ -40,12 +40,14 @@ export function DevicePanel({
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [builtInId, setBuiltInId] = useState<string | null>(null);
-  useEffect(() => { void desktop?.builtIn?.state().then((s) => setBuiltInId(s.deviceId)); }, []);
+  const [builtInKnown, setBuiltInKnown] = useState(!desktop?.builtIn);
+  const [identityError, setIdentityError] = useState(false);
+  useEffect(() => { void desktop?.builtIn?.state().then((s) => { setBuiltInId(s.deviceId); setBuiltInKnown(true); }).catch(() => setIdentityError(true)); }, []);
 
   const sessions = useStore((s) => s.sessions);
 
   const deviceSessions = [...sessions.values()].filter((s) => s.deviceId === device.id);
-  const canRemove = !device.online && !isCurrentDevice && device.id !== builtInId;
+  const canRemove = builtInKnown && !device.online && !isCurrentDevice && device.id !== builtInId;
   const hasGreeting = models && models.length > 0;
 
   const statusDot = device.online && hasGreeting
@@ -89,6 +91,7 @@ export function DevicePanel({
       </div>
 
       <div className="space-y-4 px-5 pb-4">
+        {identityError && <p role="alert" className="text-xs text-text-muted">Couldn’t identify this PC. Device removal is unavailable.</p>}
         {/* Device info */}
         <div className="space-y-1.5">
           <div className="flex justify-between text-[11px]">

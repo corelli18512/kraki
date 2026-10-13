@@ -89,9 +89,11 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
   const settings = desktop?.settings;
 
   const refresh = useCallback(async () => {
-    const next = await builtIn.state();
-    if (settings) setOs(await settings.state());
-    setState((prev) => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+    try {
+      const next = await builtIn.state();
+      setState((prev) => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+      if (settings) setOs(await settings.state());
+    } catch { setError('Couldn’t read this PC’s status.'); }
   }, [builtIn, settings]);
   useEffect(() => {
     void refresh();
@@ -116,7 +118,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
     }
   };
 
-  if (!state) return null;
+  if (!state) return <p className="kp-foot" role={error ? 'alert' : 'status'}>{error ?? 'Checking…'}</p>;
   const external = !state.owned && (state.cliDaemon || state.cliLogin);
   const runsAgents = state.owned;
   const status =

@@ -56,6 +56,7 @@ export function SettingsPanel({
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
   const [builtInId, setBuiltInId] = useState<string | null>(null);
+  const [builtInKnown, setBuiltInKnown] = useState(!desktop?.builtIn);
   const [os, setOs] = useState<DesktopSettingsState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -69,7 +70,7 @@ export function SettingsPanel({
   useEffect(() => {
     if (!open) return;
     if (isPushSupported()) void isPushSubscribed().then(setPushEnabled);
-    void desktop?.builtIn?.state().then((s) => setBuiltInId(s.deviceId));
+    void desktop?.builtIn?.state().then((s) => { setBuiltInId(s.deviceId); setBuiltInKnown(true); }).catch(() => setError('Couldn’t identify this PC. Device removal is unavailable.'));
     void bridge
       ?.state()
       .then((s) => {
@@ -396,7 +397,7 @@ export function SettingsPanel({
                     {d.role === 'tentacle' && state.deviceVersions.get(d.id)}
                   </p>
                 </div>
-                {!d.online && d.id !== state.deviceId && d.id !== builtInId ? (
+                {builtInKnown && !d.online && d.id !== state.deviceId && d.id !== builtInId ? (
                   <button type="button" className="kp-button" onClick={() => setRemoving(d)}>
                     Remove…
                   </button>
