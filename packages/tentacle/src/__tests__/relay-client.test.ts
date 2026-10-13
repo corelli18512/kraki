@@ -2468,6 +2468,48 @@ describe('RelayClient delta debounce', () => {
   });
 });
 
+describe('RelayClient subscriptions across a Tentacle reconnect', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  it('keeps the subscription of an App that stayed online, so live deltas keep flowing', () => {
+    const adapter = createAdapter();
+    const client = new RelayClient(
+      adapter as unknown as Parameters<typeof RelayClient>[0],
+      createSessionManager() as unknown as Parameters<typeof RelayClient>[1],
+      { relayUrl: 'ws://localhost:4000', authMethod: 'open', device: { name: 'Test', role: 'tentacle' }, reconnectDelay: 10 },
+      createKeyManager() as unknown as Parameters<typeof RelayClient>[3],
+    );
+    const authOk = JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_1', authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'local' },
+      devices: [{ id: 'consumer-dev', name: 'Phone', role: 'app', online: true, encryptionKey: 'consumer-pub' }],
+    });
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(authOk));
+    subscribeForTest(client, 's1');
+
+    // The Head replaced our socket (Wi-Fi switch): the App saw no device_left
+    // and still holds its confirmed subscription.
+    sockets[0].close();
+    vi.advanceTimersByTime(1_000);
+    const ws = sockets[sockets.length - 1];
+    expect(ws).not.toBe(sockets[0]);
+    ws.emit('open');
+    ws.emit('message', Buffer.from(authOk));
+    ws.sent.length = 0;
+
+    (adapter.onMessageDelta as (sid: string, e: { content: string }) => void)('s1', { content: 'still streaming' });
+    vi.advanceTimersByTime(40);
+    const deltas = decodePulseSends(ws.sent).filter((m) => m.type === 'agent_message_delta');
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0].payload).toMatchObject({ content: 'still streaming' });
+  });
+});
+
 describe('RelayClient handleSessionMessagesRange', () => {
   beforeEach(() => {
     sockets.length = 0;

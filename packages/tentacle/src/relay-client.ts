@@ -1463,6 +1463,10 @@ export class RelayClient {
     const localIds = new Set(this.localLink?.peerIds() ?? []);
     const keptFeatures = new Map([...this.appFeatures].filter(([id]) => localIds.has(id)));
     const keptSubs = new Map([...this.currentSessionByArm].filter(([id]) => localIds.has(id)));
+    // An App that stayed online across this Tentacle's reconnect still holds
+    // its confirmed subscription: when the Head replaces our old socket it
+    // sends the App no device_left, so the App never re-subscribes. Keep it.
+    const previousSubs = this.currentSessionByArm;
     this.consumerKeys.clear();
     this.onlineConsumers.clear();
     this.appFeatures = keptFeatures;
@@ -1483,7 +1487,7 @@ export class RelayClient {
           this.consumerKeys.set(d.id, key);
           if (d.online) {
             this.onlineConsumers.add(d.id);
-            this.currentSessionByArm.set(d.id, null);
+            this.currentSessionByArm.set(d.id, previousSubs.get(d.id) ?? null);
           }
         }
       }
