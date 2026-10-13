@@ -224,7 +224,8 @@ export class ApnsProvider implements PushProvider {
 
     const signer = createSign('SHA256');
     signer.update(`${header}.${payload}`);
-    const signature = signer.sign(this.key, 'base64url');
+    // JWS ES256 wants the raw r||s signature, not Node's default DER encoding.
+    const signature = signer.sign({ key: this.key, dsaEncoding: 'ieee-p1363' }, 'base64url');
 
     const token = `${header}.${payload}.${signature}`;
     this.jwt = { token, issuedAt: now };

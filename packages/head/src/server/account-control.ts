@@ -242,8 +242,9 @@ export function handleRegisterPushToken(server: HeadServer, ws: WebSocket, state
     payload.bundleId as string | undefined,
   );
 
-  // Clean up push tokens from stale devices (offline >24h) to prevent
+  // Clean up Web Push tokens from stale devices (offline >24h) to prevent
   // duplicate notifications from abandoned PWA installs on the same phone.
+  // APNs tokens are kept: a phone not opened for a day still needs its pushes.
   // Only this user's devices matter; passing every connection on the relay
   // made each registration O(global connections) in SQL parameters.
   const onlineDeviceIds = server.storage.getDevicesByUser(state.userId)
