@@ -29,6 +29,12 @@ describe('Markdown — native transcript rendering', () => {
     expect(container.querySelector('code')).toHaveTextContent('code');
   });
 
+  it.each(['First  \nSecond', 'First\\\nSecond'])('keeps hard breaks to a single preserved newline (%s)', (text) => {
+    const { container } = render(<Markdown text={text} />);
+    expect(container.querySelector('p')!.textContent).toBe('First\nSecond');
+    expect(container.querySelector('br')).toBeNull();
+  });
+
   it('renders a thematic break as literal native text without disabling GFM', () => {
     const { container } = render(<Markdown text={'Above\n\n---\n\n| Name | Value |\n|---|---|\n| Alpha | 123 |'} />);
     expect(screen.getByText('---')).toHaveClass('kmd-native-rule');
