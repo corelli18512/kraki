@@ -103,6 +103,11 @@ extension MessageRouter {
         }
         if type == "session_list", let signedBy {
             Self.dropUnauthenticatedHistory(listedBy: signedBy, dict: dict, appState: appState)
+            // The ordering watermark may come from unsigned (possibly forged,
+            // future-dated) lists: the computer's first signed one resets it.
+            if appState.deviceTrust.signedSnapshotSeen.insert(signedBy).inserted {
+                appState.sessionStore.lastSessionListSnapshotAt[signedBy] = nil
+            }
         }
         switch type {
         case "pair_result", "trusted_devices":

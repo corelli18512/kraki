@@ -260,7 +260,9 @@ final class SessionStore {
     /// has already been applied. Keep this in-memory only: a new Tentacle
     /// process starts a fresh timestamp sequence, and the first snapshot after
     /// reconnect must remain acceptable.
-    private var lastSessionListSnapshotAt: [String: Date] = [:]
+    /// Newest session_list timestamp per computer. Device trust resets it
+    /// on a computer's first signed list (an unsigned one may be forged).
+    var lastSessionListSnapshotAt: [String: Date] = [:]
     /// Bumped when a session is deleted while it's being viewed.
     /// `MainTabView` observes this and pops the session navigation
     /// stack so the user lands on the session list instead of the

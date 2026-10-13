@@ -238,6 +238,22 @@ extension DeviceTrustBoundaryTests {
     }
     #endif
 
+    /// Post-merge: a future-dated unsigned list (from before pinning) can't
+    /// make the computer's signed lists look stale.
+    func testFutureDatedUnsignedListDoesNotBlockSignedLists() throws {
+        try requireKeychain()
+        let relayKey = try CryptoManager().generateKeyPair()
+        let relayPublic = try CryptoManager().exportPublicKeySPKI(relayKey.publicKey)
+        app.deviceStore.setDevices([DeviceSummary(id: computer, name: "Computer", role: .tentacle, kind: .desktop, encryptionKey: relayPublic, online: true)])
+        var forged = message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "forged", "state": "idle"]]])
+        forged["timestamp"] = "2099-01-01T00:00:00.000Z"
+        try route(legacyEnvelope(forged, src: computer))
+        XCTAssertEqual(app.sessionStore.sessions[sid]?.title, "forged")
+        pin()
+        try route(signedEnvelope(message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "authentic", "state": "idle"]]]), key: signer))
+        XCTAssertEqual(app.sessionStore.sessions[sid]?.title, "authentic")
+    }
+
     #if os(iOS)
     /// APPS-02: a push without a usable envelope shows generic text, not the relay's.
     func testNotificationServiceIgnoresRelayTextWithoutEnvelope() throws {

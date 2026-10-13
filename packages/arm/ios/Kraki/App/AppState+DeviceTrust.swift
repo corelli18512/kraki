@@ -63,6 +63,8 @@ final class DeviceTrustModel {
     var dismissedBanners: Set<String> = []
     /// Paired computers that sent unsigned messages since their last signed one.
     var stoppedSigning: Set<String> = []
+    /// Computers whose signed session_list was seen (this run).
+    @ObservationIgnored var signedSnapshotSeen: Set<String> = []
 
     @ObservationIgnored private var lastPairRequest: [String: Date] = [:]
     @ObservationIgnored var retryScheduled = false
@@ -78,6 +80,7 @@ final class DeviceTrustModel {
         feedback = nil
         dismissedBanners = []
         stoppedSigning = []
+        signedSnapshotSeen = []
         lastPairRequest = [:]
         retryScheduled = false
         revision += 1
