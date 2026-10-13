@@ -1,4 +1,4 @@
-/** Attachments shared by producer and consumer messages: inline images and content refs. */
+// Attachments shared by producer and consumer messages: inline images and content refs.
 
 // ============================================================
 // Attachment types (shared between producer and consumer)

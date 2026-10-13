@@ -2,6 +2,8 @@ import UIKit
 import SwiftUI
 import Highlightr
 
+// MARK: - Metrics (mirror the SwiftUI bubble so cached heights line up)
+
 enum TKMetrics {
     /// Hosting cell padding around the bubble (UIHostingConfiguration used
     /// `.padding(.horizontal, 12) / .vertical, 6`).

@@ -1,4 +1,4 @@
-/** Control messages (device ↔ relay, unencrypted): auth, pairing, devices, account, preferences, Custom Words, push tokens; and the ControlMessage union. */
+// Control messages (device ↔ relay, unencrypted): auth, pairing, devices, account, preferences, Custom Words, push tokens; and the ControlMessage union.
 
 import type { DeviceSummary, DeviceInfo } from './devices.js';
 import type { VoiceCapability } from './voice.js';

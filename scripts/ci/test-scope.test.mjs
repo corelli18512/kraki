@@ -15,7 +15,10 @@ const relay = { ...ts, resilience: true };
 for (const [name, paths, expected] of [
   ['docs do not launch platform tests', ['README.md', 'docs/a.md', 'packages/arm/ios/README.md'], none],
   ['runtime markdown is not documentation', ['packages/tentacle/prompts/system.md'], tentacle],
-  ['native-only', ['packages/arm/ios/Kraki/App/Mac/MainWindowView.swift'], native],
+  ['native-only', ['packages/arm/ios/KrakiTests/ChatScrollPolicyTests.swift'], native],
+  ['app Swift read by TypeScript tests', ['packages/arm/ios/Kraki/App/Mac/MainWindowView.swift'], { ...native, typescript: true }],
+  ['Swift read by TypeScript tests (StabilityTracker)', ['packages/arm/ios/Kraki/Core/Diagnostics/StabilityTracker.swift'], { ...native, typescript: true }],
+  ['Swift read by TypeScript tests (CommandSender)', ['packages/arm/ios/Kraki/Core/Storage/CommandSender.swift'], { ...native, typescript: true }],
   ['Swift read by TypeScript tests (AppState)', ['packages/arm/ios/Kraki/App/AppState.swift'], { ...native, typescript: true }],
   ['Swift read by TypeScript tests (AppState extension)', ['packages/arm/ios/Kraki/App/AppState+VoiceInput.swift'], { ...native, typescript: true }],
   ['Swift read by TypeScript tests (DiagRecorder)', ['packages/arm/ios/Kraki/Core/Diagnostics/DiagRecorder.swift'], { ...native, typescript: true }],

@@ -60,8 +60,6 @@ enum IOSCodePalette {
 // Landed pure-spine messages have one renderer and one identity: a TextKit
 // bubble for the persisted message. TRACE steps are presented separately.
 
-// MARK: - Metrics (mirror the SwiftUI bubble so cached heights line up)
-
 private let tkCodeHighlightCache: NSCache<NSString, NSAttributedString> = {
     let cache = NSCache<NSString, NSAttributedString>()
     cache.countLimit = 256

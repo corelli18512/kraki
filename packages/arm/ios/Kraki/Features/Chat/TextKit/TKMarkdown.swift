@@ -344,4 +344,3 @@ enum TKMarkdown {
     }
 }
 
-// MARK: - Shared TextKit2 measurement

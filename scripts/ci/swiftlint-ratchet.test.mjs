@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { baselineEntries, normalize, regressions } from './swiftlint-ratchet.mjs';
+import { baselineEntries, declarationIdentity, normalize, regressions } from './swiftlint-ratchet.mjs';
 
 const v = (rule, file, subject, size = 0) => ({ rule, file, subject, size });
 
@@ -37,4 +37,19 @@ test('baseline entries drop line numbers and sort stably', () => {
   const out = baselineEntries([{ ...v('force_try', 'B.swift', 'x'), line: 3 }, { ...v('force_try', 'A.swift', 'x'), line: 9 }]);
   assert.deepEqual(out.map((e) => e.file), ['A.swift', 'B.swift']);
   assert.equal('line' in out[0], false);
+});
+
+test('same first line in different types is a different declaration', () => {
+  const lines = ['final class A {', '    func render() {', '    }', '}', 'struct B {', '    func render() {', '    }', '}'];
+  assert.equal(declarationIdentity(lines, 1), 'A :: func render() {');
+  assert.equal(declarationIdentity(lines, 5), 'B :: func render() {');
+  // A shrinking cannot pay for B growing past the limit.
+  const base = [v('function_body_length', 'X.swift', 'A :: func render() {', 100)];
+  const now = [v('function_body_length', 'X.swift', 'B :: func render() {', 90)];
+  assert.equal(regressions(base, now).length, 1);
+});
+
+test('multi-line signatures and nested types are part of the identity', () => {
+  const lines = ['extension Outer {', '    struct Inner {', '        func run(', '            a: Int', '        ) -> Int {', '        }', '    }', '}'];
+  assert.equal(declarationIdentity(lines, 2), 'Outer.Inner :: func run( a: Int ) -> Int {');
 });

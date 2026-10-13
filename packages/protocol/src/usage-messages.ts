@@ -1,4 +1,4 @@
-/** Account usage, local notifications, device updates and session replay messages. */
+// Account usage, local notifications, device updates and session replay messages.
 
 import { type ProducerMessage } from './history-messages.js';
 import { type BaseEnvelope } from './message-base.js';
