@@ -7,7 +7,17 @@ import { fitToMaxDimension } from '../image-resize.js';
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 import type { PiAdapter } from './pi.js';
 import { shouldAutoApprove, parsePiPermission } from './pi-permissions.js';
+import { KRAKI_DIALOG_PREFIX } from './pi-kraki-tools.js';
+import { DELEGATE_ANSWER } from './permission-policy.js';
 import { LEGACY_SHOW_HTML_MAX_BYTES, logger, type AssistantStreamEvent } from './pi-session.js';
+
+/** Choices of a question card shown for another extension's confirm dialog. */
+export const PI_CONFIRM_CHOICES = ['Yes', 'No'] as const;
+
+/** The value Kraki's ask_user decodes (text plus optional images). */
+export function krakiAnswerEnvelope(text: string, images?: Array<{ type: 'image'; data: string; mimeType: string }>): string {
+  return JSON.stringify({ __krakiAnswer: 1, text, ...(images && images.length > 0 && { images }) });
+}
 
 // ── Event mapping: pi session.subscribe → Kraki callbacks ──
 export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { type: string; [k: string]: unknown }): Promise<void> {
@@ -303,17 +313,44 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
         adapter.checkSubagentsDone(sessionId, s);
         break;
       }
+      const rawTitle = typeof e.title === 'string' ? e.title : '';
+      const ownDialog = rawTitle.startsWith(KRAKI_DIALOG_PREFIX);
+      const title = ownDialog ? rawTitle.slice(KRAKI_DIALOG_PREFIX.length) : rawTitle;
+      // Another extension's dialog: a plain question card answered with a plain
+      // value — never Kraki's answer envelope or tool-permission policy.
+      if (!ownDialog && (e.method === 'select' || e.method === 'input' || e.method === 'editor' || e.method === 'confirm')) {
+        const qid = e.id;
+        s.pendingQuestions.set(qid, qid);
+        (s.foreignDialogs ??= new Map()).set(qid, e.method);
+        const message = e.method === 'confirm' && typeof e.message === 'string' && e.message ? `\n\n${e.message}` : '';
+        const choices = e.method === 'confirm'
+          ? [...PI_CONFIRM_CHOICES]
+          : e.method === 'select' && Array.isArray(e.options) ? (e.options as string[]) : undefined;
+        adapter.onQuestionRequest?.(sessionId, {
+          ...adapter.lifecycleEvent(s),
+          id: qid,
+          question: `${title || 'An extension has a question'}${message}`,
+          choices,
+        });
+        break;
+      }
       // ask_user surfaces via ctx.ui.select (choices) / ctx.ui.input (free-form)
       // → a Kraki question card. The arm's answer returns via respondToQuestion
       // → the matching extension_ui_response.
       if (e.method === 'select' || e.method === 'input') {
         const qid = e.id;
+        if (s.mode === 'delegate') {
+          // Delegate: the agent's own questions are auto-answered.
+          s.proc.sendRaw({ type: 'extension_ui_response', id: qid, value: krakiAnswerEnvelope(DELEGATE_ANSWER) });
+          logger.debug({ sessionId }, 'pi question auto-answered (delegate mode)');
+          break;
+        }
         s.pendingQuestions.set(qid, qid);
         const choices = Array.isArray(e.options) ? (e.options as string[]) : undefined;
         adapter.onQuestionRequest?.(sessionId, {
           ...adapter.lifecycleEvent(s),
           id: qid,
-          question: String(e.title ?? 'The agent has a question'),
+          question: title || 'The agent has a question',
           choices,
         });
         break;
@@ -325,7 +362,7 @@ export async function handleEvent(adapter: PiAdapter, sessionId: string, e: { ty
       // UI methods (notify/status/…) are unused and need no reply.
       if (e.method !== 'confirm') break;
       const permId = e.id;
-      const toolName = String(e.title ?? 'tool');
+      const toolName = title || 'tool';
       const inputJson = typeof e.message === 'string' ? e.message : '';
       let input: Record<string, unknown> = {};
       try {
