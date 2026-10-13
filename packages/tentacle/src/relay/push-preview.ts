@@ -15,13 +15,15 @@ import { logger, traceLog } from './shared.js';
 export function dispatchPushPreview(client: RelayClient, msg: Partial<ProducerMessage>): void {
   const built = buildPushPreview(client, msg);
   if (!built) return;
-  client.pulse.send(
-    JSON.stringify({ type: 'dispatch_push', payload: { preview: built.encrypted } }),
-    HEAD_PULSE_TARGET,
-    false,
-    undefined,
-    0,
-  );
+  if (built.encrypted) {
+    client.pulse.send(
+      JSON.stringify({ type: 'dispatch_push', payload: { preview: built.encrypted } }),
+      HEAD_PULSE_TARGET,
+      false,
+      undefined,
+      0,
+    );
+  }
   // Same-machine Apps also get the preview straight over the local link, so
   // a Mac whose Head connection is down notifies in step with the messages
   // it already sees over the link. The Head copy still goes out (it covers
@@ -29,7 +31,8 @@ export function dispatchPushPreview(client: RelayClient, msg: Partial<ProducerMe
   // App posts each notification once.
   for (const appId of client.localLink?.peerIds() ?? []) {
     const key = client.consumerKeys.get(appId);
-    if (!key || !(appId in built.encrypted.keys)) continue;
+    // A paired app is reached with its pinned keys even without an RSA key.
+    if (!key || !(client.deviceTrust?.isTrusted(appId) || (built.encrypted && appId in built.encrypted.keys))) continue;
     client.sendReliableUnicastTo(appId, key, {
       type: 'local_notification',
       deviceId: client.authInfo?.deviceId ?? '',
@@ -44,7 +47,7 @@ export function dispatchPushPreview(client: RelayClient, msg: Partial<ProducerMe
 export function buildPushPreview(
   client: RelayClient,
   msg: Partial<ProducerMessage>,
-): { encrypted: { blob: string; keys: Record<string, string> }; plaintext: string } | undefined {
+): { encrypted: { blob: string; keys: Record<string, string> } | null; plaintext: string } | undefined {
   let previewType: string | undefined;
   let previewSummary: string | undefined;
   if (msg.type === 'card_action') {
@@ -96,7 +99,7 @@ export function buildPushPreview(
       // skip invalid keys
     }
   }
-  if (previewRecipients.length === 0) return undefined;
+  if (previewRecipients.length === 0 && !client.localLink?.peerIds().length) return undefined;
   traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'PUSH-PREVIEW-BUILD', previewType, recipientCount: previewRecipients.length, onlineCount: client.onlineConsumers.size, offlineCount: previewRecipients.length - client.onlineConsumers.size });
   try {
     const preview = JSON.stringify({
@@ -109,6 +112,11 @@ export function buildPushPreview(
       sessionId: msg.sessionId,
       ...(title ? { title } : {}),
     });
+    // Paired apps without a pinned RSA key (Kraki for Mac) have no RSA
+    // recipient here; they get the preview over the local link only.
+    // TODO(device-trust): sign push previews and move them to X25519 once
+    // the iOS Notification Service Extension can verify/decrypt them.
+    if (previewRecipients.length === 0) return { encrypted: null, plaintext: preview };
     const previewBlob = encryptToBlob(preview, previewRecipients);
     return { encrypted: { blob: previewBlob.blob, keys: previewBlob.keys }, plaintext: preview };
   } catch (err) {

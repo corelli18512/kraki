@@ -16,7 +16,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Storage, HeadServer, OpenAuthProvider } from '@kraki/head';
-import { SessionManager, RelayClient, KeyManager, AttachmentStore } from '@kraki/tentacle';
+import { SessionManager, RelayClient, KeyManager, AttachmentStore, createPairingSecret } from '@kraki/tentacle';
+import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { ChaosProxy, type FaultProfile } from './proxy.js';
@@ -47,6 +48,11 @@ export class ChaosStack {
   private admin: MockApp | null = null;
   /** A second, unproxied app device ("the Mac") that talks in the session. */
   private peer: MockApp | null = null;
+  /** Device trust mode of the Tentacle (CHAOS_DEVICE_TRUST=enforce). The
+   *  first session is always created before enforcing (by an unpaired admin). */
+  trustMode: 'enforce' | 'compatible' = 'compatible';
+  /** Unpaired device that tries to command the computer (device-trust tests). */
+  private rogue: MockApp | null = null;
   /** Drop the next N `session_messages_batch` replies (sent, never delivered). */
   dropBatches = 0;
   readonly events: Array<{ t: number; event: string; detail?: Record<string, unknown> }> = [];
@@ -65,6 +71,10 @@ export class ChaosStack {
     this.attachments = new AttachmentStore(join(this.root, 'sessions'));
     await this.startTentacle();
     this.sessionId = await this.createSession();
+    if (process.env.CHAOS_DEVICE_TRUST === 'enforce') {
+      this.trustMode = 'enforce';
+      await this.restartTentacle();
+    }
     if (options.controlPort !== undefined) await this.startControl(options.controlPort);
   }
 
@@ -102,6 +112,9 @@ export class ChaosStack {
       relayUrl: `ws://127.0.0.1:${this.tentacleProxy.port}`,
       device,
       authMethod: 'open',
+      deviceTrust: this.trustMode,
+      // The Swift harness is not the same-Mac App: keep it on the Head.
+      localLink: false,
     }, this.keys, this.attachments);
     this.relay.onStateChange = (state) => this.log('tentacle_state', { state });
     const relayAny = this.relay as unknown as { sendReliableUnicastTo: (...a: unknown[]) => void };
@@ -119,6 +132,8 @@ export class ChaosStack {
     this.relay.onAuthenticated = (info) => {
       if (!this.tentacleDeviceId) this.tentacleDeviceId = info.deviceId;
       device.deviceId = this.tentacleDeviceId;
+      // Like ~/.kraki/device-id: lets a same-Mac test App find this computer.
+      writeFileSync(join(this.root, 'device-id'), this.tentacleDeviceId);
       this.log('tentacle_authenticated', { deviceId: info.deviceId });
     };
     this.relay.connect();
@@ -242,6 +257,14 @@ export class ChaosStack {
         case 'POST /peer/input': out = await this.peerInput(String(body.text ?? 'ok'), String(body.sessionId ?? this.sessionId)); break;
         case 'POST /session': out = { sessionId: await this.createSession() }; break;
         case 'POST /pairing-token': out = { token: await this.pairingToken() }; break;
+        case 'POST /trust/pairing-link': out = { url: await this.trustPairingLink() }; break;
+        case 'POST /trust/rogue-input': out = await this.rogueInput(String(body.text ?? 'rogue'), String(body.sessionId ?? this.sessionId)); break;
+        case 'GET /trust/state': out = {
+          mode: this.trustMode,
+          root: this.root,
+          trusted: this.relay.deviceTrust?.store.ids() ?? [],
+          stats: this.relay.deviceTrust?.stats ?? null,
+        }; break;
         case 'POST /attachment': out = this.putAttachment(Number(body.bytes ?? 1_000_000), String(body.sessionId ?? this.sessionId)); break;
         case 'POST /legacy-pull': await this.legacyPull(String(body.id), String(body.sessionId ?? this.sessionId)); break;
         case 'POST /legacy-close': this.legacyApps.forEach((a) => a.close()); this.legacyApps = []; break;
@@ -267,6 +290,29 @@ export class ChaosStack {
     }
   }
 
+  /** A pairing QR link for this computer, as `kraki pair` renders it. */
+  async trustPairingLink(): Promise<string> {
+    const token = await this.pairingToken();
+    const identity = this.keys.getPublicIdentity();
+    const params = new URLSearchParams({
+      relay: `ws://127.0.0.1:${this.appProxy.port}`, token,
+      tid: this.tentacleId, ik: identity.identityKey, xk: identity.encryptionKey,
+      ps: createPairingSecret(this.root),
+    });
+    return `https://app.kraki.chat/?${params.toString()}`;
+  }
+
+  /** A device on the account that never paired (what a compromised Head
+   *  can always add) sends a command. */
+  async rogueInput(text: string, sessionId: string): Promise<Record<string, unknown>> {
+    if (!this.rogue) this.rogue = await connectApp(this.headPort, 'Rogue');
+    const clientId = `rogue_${Date.now()}`;
+    sendToTentacle(this.rogue, { type: 'send_input', sessionId, deviceId: this.rogue.deviceId, seq: 0,
+      timestamp: new Date().toISOString(), payload: { text, clientId } });
+    this.log('rogue_input', { sessionId, text });
+    return { clientId, rogueId: this.rogue.deviceId };
+  }
+
   /** Another device sends input (like replying from the Mac). */
   async peerInput(text: string, sessionId: string): Promise<Record<string, unknown>> {
     if (!this.peer) this.peer = await connectApp(this.headPort, 'Chaos Mac');
@@ -288,6 +334,7 @@ export class ChaosStack {
     this.relay?.disconnect();
     this.admin?.close();
     this.peer?.close();
+    this.rogue?.close();
     this.legacyApps.forEach((a) => a.close());
     await this.appProxy.close();
     await this.app2Proxy.close();

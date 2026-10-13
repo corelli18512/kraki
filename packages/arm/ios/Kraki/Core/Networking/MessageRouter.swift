@@ -176,6 +176,7 @@ final class MessageRouter {
                 // A Tentacle that was away may have missed inputs the Relay
                 // could not hold; re-send what is still waiting for it.
                 if summary.role == .tentacle {
+                    appState?.deviceTrustDevicesChanged()
                     // A Tentacle that (re)connected forgot this app's features.
                     if appState?.deviceStore.deviceFeatures[summary.id]?.contains(PayloadFragments.feature) == true {
                         declareClientFeatures(to: summary.id)
@@ -323,6 +324,26 @@ final class MessageRouter {
         }
 
         KLog.d("📨 Inner message: \(type)")
+
+        // Device trust: an unsigned message about a paired computer's session
+        // is forged (a paired computer signs everything).
+        if dict[DeviceTrustInbound.unsignedKey] as? Bool == true,
+           let sid = dict["sessionId"] as? String,
+           let owner = appState.sessionStore.sessions[sid]?.deviceId ?? appState.sessionStore.archivedSessionInfo(sid)?.deviceId,
+           TentacleTrustStore.shared.pairedPin(owner) != nil {
+            KLog.d("⛔️ device trust: dropped unsigned \(type) for a paired computer's session")
+            return
+        }
+
+        if type == "pair_result" {
+            appState.handlePairResult(dict)
+            return
+        }
+
+        if type == "trust_required" {
+            appState.handleTrustRequired(dict)
+            return
+        }
 
         // ── Messages without a sessionId ─────────────────────────────────
 

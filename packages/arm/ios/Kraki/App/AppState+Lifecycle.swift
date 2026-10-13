@@ -279,6 +279,8 @@ extension AppState {
         pulseManager?.onConnected()
 
         deviceStore.setDevices(devices)
+        // Pair with computers pinned from a QR code or from this Mac.
+        deviceTrustDevicesChanged()
 
         // Drain any queued encrypted messages
         messageRouter?.drainQueue()

@@ -19,6 +19,8 @@ packages:
     path: ./Vendor/Pulse
   VoiceInputCore:
     path: ./Vendor/VoiceInputCore
+  CoinfraCrypto:
+    path: ./Vendor/CoinfraCrypto
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle.git
     exactVersion: 2.9.5
@@ -168,6 +170,7 @@ targets:
       - package: Highlightr
       - package: Pulse
       - package: VoiceInputCore
+      - package: CoinfraCrypto
 
   KrakiNotification:
     type: app-extension
@@ -231,6 +234,8 @@ targets:
       - path: KrakiTests/AccountUsageTests.swift
       - path: KrakiTests/PushPreviewFormatTests.swift
       - path: KrakiTests/VoiceVocabularySyncTests.swift
+      - path: KrakiTests/DeviceTrustTests.swift
+      - path: KrakiTests/E2EV2NodeVectors.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.tests
@@ -298,6 +303,7 @@ targets:
       - path: Kraki/App/AppState+MacSignIn.swift
       - path: Kraki/App/AppState+Pulse.swift
       - path: Kraki/App/AppState+Sending.swift
+      - path: Kraki/App/AppState+DeviceTrust.swift
       - path: Kraki/App/AppState+SessionSubscription.swift
       - path: Kraki/App/AppState+VoiceInput.swift
       # Mac-only app shell, scenes, commands.
@@ -408,4 +414,5 @@ targets:
       - package: Pulse
       - package: Highlightr
       - package: VoiceInputCore
+      - package: CoinfraCrypto
       - package: Sparkle

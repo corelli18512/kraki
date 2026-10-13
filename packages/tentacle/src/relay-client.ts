@@ -13,8 +13,8 @@ import type { AgentCapabilities, ProducerMessage, DeviceInfo, AuthOkMessage, Aut
 import type { DeviceUpdateInfo, DeviceUpdatePhase } from '@kraki/protocol';
 import { HEAD_CONTROL_TYPES, HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, fragmentPayload, isPayloadFragment } from '@kraki/protocol';
 import { randomUUID } from 'node:crypto';
-import { importPublicKey, encryptToBlob, decryptFromBlob, signChallenge } from '@kraki/crypto';
-import type { RecipientKey } from '@kraki/crypto';
+import { dirname, join } from 'node:path';
+import { signChallenge, DEVICE_TRUST_FEATURE, type SignedMessage } from '@kraki/crypto';
 import type { AgentAdapter } from './adapters/base.js';
 import { type SessionManager, type PendingHumanAction } from './session-manager.js';
 import type { KeyManager } from './key-manager.js';
@@ -26,6 +26,8 @@ import { CardManager } from './card-manager.js';
 import { AttachmentPacer } from './attachment-pacer.js';
 import { SleepGuard } from './sleep-guard.js';
 import { LocalLinkServer } from './local-link.js';
+import { TrustStore } from './trust-store.js';
+import { DeviceTrust, deviceTrustEnforcedFromEnv } from './relay/device-trust.js';
 import { broadcastAccountUsage, sendAccountUsageTo } from './relay/account-usage.js';
 import { wireAdapterEvents } from './relay/adapter-events.js';
 import { sendAttachmentChunk } from './relay/attachments.js';
@@ -65,6 +67,12 @@ export class RelayClient {
   /** Registered signing keys (compact SPKI) of this account's App devices —
    *  used to authenticate same-machine Apps on the local link. */
   private appSigningKeys = new Map<string, string>();
+  /** Pinned app keys, signatures and pairing (see relay/device-trust.ts). */
+  readonly deviceTrust: DeviceTrust | null;
+  /** Enforced trust: online apps the Head reports that are not paired with
+   *  this computer (deviceId → relay-reported RSA key). They get only a
+   *  `trust_required` notice until they pair. */
+  private unpairedApps = new Map<string, string>();
   /** Same-machine loopback transport to local Apps. Lazily started on
    *  the first auth_ok, when this device's identity is confirmed. */
   localLink: LocalLinkServer | null = null;
@@ -255,6 +263,16 @@ export class RelayClient {
     this.options = options;
     this.keyManager = keyManager ?? null;
     this.attachmentStore = attachmentStore;
+    this.deviceTrust = this.keyManager
+      ? new DeviceTrust(
+          this.keyManager,
+          // Next to this computer's keys (`<KRAKI_HOME>/trust`), so an
+          // isolated KeyManager (tests, chaos stack) gets an isolated store.
+          new TrustStore(this.keyManager.keysDir ? join(dirname(this.keyManager.keysDir), 'trust') : undefined),
+          options.deviceTrust ? options.deviceTrust === 'enforce' : deviceTrustEnforcedFromEnv(),
+          () => this.authInfo?.deviceId,
+        )
+      : null;
     // Per-hop pulse endpoint to the relay — the reliable-delivery layer.
     this.pulse = new TentaclePulse(
       {
@@ -568,7 +586,11 @@ export class RelayClient {
       const device = msg.device as DeviceSummary;
       if (device.role === 'app') {
         if (device.publicKey) this.appSigningKeys.set(device.id, device.publicKey);
-        const key = device.encryptionKey ?? device.publicKey;
+        const key = this.appKeyFor(device);
+        if (!key) {
+          this.noteUnpairedApp(device);
+          return;
+        }
         if (key && this.localLink?.has(device.id)) {
           // Served over the local link; the Head joining it changes nothing
           // for this Tentacle (its subscription lives on the local link).
@@ -593,6 +615,7 @@ export class RelayClient {
     if (msg.type === 'device_left') {
       const deviceId = msg.deviceId as string;
       this.onlineConsumers.delete(deviceId);
+      this.unpairedApps.delete(deviceId);
       // Still on the local link: its features and subscription are live there.
       if (this.localLink?.has(deviceId)) return;
       this.appFeatures.delete(deviceId);
@@ -602,6 +625,10 @@ export class RelayClient {
 
     if (msg.type === 'device_removed') {
       const deviceId = msg.deviceId as string;
+      // Removal only ever takes trust away, so the Head is believed here:
+      // removing a device from the account revokes it on this computer too.
+      this.deviceTrust?.store.remove(deviceId);
+      this.unpairedApps.delete(deviceId);
       this.appFeatures.delete(deviceId);
       this.consumerKeys.delete(deviceId);
       this.appSigningKeys.delete(deviceId);
@@ -621,13 +648,9 @@ export class RelayClient {
         return;
       }
       try {
-        const decrypted = decryptFromBlob(
-          { blob: msg.blob as string, keys: msg.keys as Record<string, string> },
-          this.authInfo.deviceId,
-          this.keyManager.getKeyPair().privateKey,
-        );
-        const inner = JSON.parse(decrypted);
-        handleConsumerMessage(this, inner);
+        const opened = this.deviceTrust!.open({ blob: msg.blob, keys: msg.keys }, undefined);
+        if (opened.kind === 'message') handleConsumerMessage(this, opened.inner as never);
+        else if (opened.kind === 'pair_request') this.handlePairRequest(opened.signed, opened.inner);
       } catch {
         // Can't decrypt — not for us or corrupted
       }
@@ -1128,26 +1151,18 @@ export class RelayClient {
       return;
     }
 
-    const recipients: RecipientKey[] = [];
-    const usableTargets: string[] = [];
-    for (const deviceId of targetIds) {
-      const compactKey = this.consumerKeys.get(deviceId);
-      if (!compactKey) continue;
-      try {
-        recipients.push({ deviceId, publicKey: importPublicKey(compactKey) });
-        usableTargets.push(deviceId);
-      } catch (err) {
-        logger.warn({ err, deviceId }, 'Skipping device with invalid public key');
-      }
-    }
-    if (recipients.length === 0) return;
+    const usableTargets = targetIds.filter((deviceId) => this.consumerKeys.has(deviceId));
+    if (usableTargets.length === 0) return;
 
     traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'SEND-OK', type, sessionId, recipients: usableTargets, coalesceKey: coalesceKeyFor(msg) });
 
     try {
       const plaintext = JSON.stringify(msg);
-      const { blob, keys } = encryptToBlob(plaintext, recipients);
-      this.sendPayload(JSON.stringify({ blob, keys }), usableTargets, false, coalesceKeyFor(msg), streamForType(msg.type));
+      // Paired apps: one signed X25519 payload to their pinned keys. Others
+      // (compatible mode only): the legacy RSA payload.
+      for (const sealed of this.deviceTrust!.seal(plaintext, usableTargets, (id) => this.consumerKeys.get(id))) {
+        this.sendPayload(sealed.payload, sealed.targets, false, coalesceKeyFor(msg), streamForType(msg.type));
+      }
     } catch (err) {
       logger.error({ err }, 'Encrypted multicast failed');
     }
@@ -1247,13 +1262,16 @@ export class RelayClient {
     const sender = parsed.src ?? fragmentSender;
     try {
       const decryptStart = process.hrtime.bigint();
-      const { blob, keys } = parsed as { blob: string; keys: Record<string, string> };
-      const decrypted = decryptFromBlob(
-        { blob, keys },
-        this.authInfo.deviceId,
-        this.keyManager.getKeyPair().privateKey,
-      );
-      const inner = JSON.parse(decrypted) as Record<string, unknown>;
+      // Decrypt and authenticate. With device trust the signature (checked
+      // against the key pinned at pairing) decides who sent a message; the
+      // Head's `src` stamp must only agree with it.
+      const opened = this.deviceTrust!.open(parsed as Record<string, unknown>, sender);
+      if (opened.kind === 'rejected') return;
+      if (opened.kind === 'pair_request') {
+        this.handlePairRequest(opened.signed, opened.inner);
+        return;
+      }
+      const inner = opened.inner;
       // The head stamps the authenticated sender (`src`). The deviceId inside
       // the encrypted message is chosen by the sender, so it must match.
       if (sender !== undefined) {
@@ -1306,11 +1324,9 @@ export class RelayClient {
     if (!this.relayOpen() && !this.localLink?.has(targetDeviceId)) return;
 
     try {
-      const recipientPubKey = importPublicKey(compactPubKey);
-      const { blob, keys } = encryptToBlob(JSON.stringify(msg), [
-        { deviceId: targetDeviceId, publicKey: recipientPubKey },
-      ]);
-      this.sendPayload(JSON.stringify({ blob, keys }), targetDeviceId, durable, undefined, streamForType((msg as { type?: string }).type));
+      for (const sealed of this.deviceTrust!.seal(JSON.stringify(msg), [targetDeviceId], () => compactPubKey)) {
+        this.sendPayload(sealed.payload, targetDeviceId, durable, undefined, streamForType((msg as { type?: string }).type));
+      }
     } catch (err) {
       logger.error({ err, targetDeviceId }, 'Reliable unicast failed');
     }
@@ -1410,7 +1426,9 @@ export class RelayClient {
       agents: this.options.device.capabilities?.agents,
       version: this.options.version,
       features: ['idempotent_input', PAYLOAD_FRAGMENT_FEATURE, ...(this.accountUsageEnabled ? ['account_usage'] : []),
-        ...(this.accountUsageEnabled && this.accountUsageRefresher ? ['account_usage_refresh'] : [])],
+        ...(this.accountUsageEnabled && this.accountUsageRefresher ? ['account_usage_refresh'] : []),
+        ...(this.deviceTrust ? [DEVICE_TRUST_FEATURE] : [])],
+      ...(this.deviceTrust ? { trust: { enforced: this.deviceTrust.enforced } } : {}),
       ...(this.updateInfo ? { update: this.updateInfo } : {}),
     };
   }
@@ -1429,6 +1447,83 @@ export class RelayClient {
     this.sendReliableUnicastTo(targetDeviceId, compactPubKey, greeting);
   }
 
+  // ── Device trust ────────────────────────────────────
+
+  /** The key an app is reached with, or undefined when it may not be. A
+   *  paired app's pinned key always wins over the one the Head reports; with
+   *  trust enforced, an unpaired app gets nothing. */
+  private appKeyFor(device: DeviceSummary): string | undefined {
+    const pinned = this.deviceTrust?.consumerKeyFor(device.id);
+    if (pinned) return pinned;
+    if (this.deviceTrust?.enforced) return undefined;
+    return device.encryptionKey ?? device.publicKey;
+  }
+
+  /** Enforced trust: an online app that is not paired learns that it must
+   *  pair (a signed notice with nothing secret in it) and nothing else. */
+  private noteUnpairedApp(device: DeviceSummary): void {
+    const relayKey = device.encryptionKey ?? device.publicKey;
+    if (!this.deviceTrust?.enforced || !relayKey) return;
+    this.unpairedApps.set(device.id, relayKey);
+    const self = this.authInfo?.deviceId;
+    if (!self) return;
+    try {
+      const notice = JSON.stringify({
+        type: 'trust_required',
+        deviceId: self,
+        seq: 0,
+        timestamp: new Date().toISOString(),
+        payload: { tentacleId: self, name: this.options.device.name },
+      });
+      this.sendPayload(this.deviceTrust.sealSignedToRelayKey(notice, device.id, relayKey), device.id, false, undefined, 0);
+    } catch (err) {
+      logger.warn({ err: (err as Error).message, appId: device.id }, 'trust_required notice failed');
+    }
+    logger.info({ appId: device.id }, 'Unpaired app — waiting for it to pair');
+  }
+
+  /** An app asked to pair. Answer it (to the key it enrolled), and on
+   *  success bring it up exactly like a newly joined app. */
+  private handlePairRequest(signed: SignedMessage, inner: Record<string, unknown>): void {
+    if (!this.deviceTrust) return;
+    const outcome = this.deviceTrust.handlePairRequest(signed, inner);
+    const self = this.authInfo?.deviceId ?? '';
+    const appId = outcome.appId;
+    if (outcome.encryptionKey) {
+      const reply = JSON.stringify({
+        type: 'pair_result',
+        deviceId: self,
+        seq: 0,
+        timestamp: new Date().toISOString(),
+        payload: {
+          ok: outcome.ok,
+          ...(outcome.reason ? { reason: outcome.reason } : {}),
+          tentacleId: self,
+          name: this.options.device.name,
+          enforced: this.deviceTrust.enforced,
+        },
+      });
+      try {
+        this.sendPayload(this.deviceTrust.sealToKey(reply, appId, outcome.encryptionKey), appId, false, undefined, 0);
+      } catch (err) {
+        logger.warn({ err: (err as Error).message, appId }, 'pair_result failed');
+      }
+    }
+    if (!outcome.ok) return;
+    const key = this.deviceTrust.consumerKeyFor(appId);
+    if (!key) return;
+    logger.info({ appId }, 'App paired');
+    this.unpairedApps.delete(appId);
+    this.consumerKeys.set(appId, key);
+    this.onlineConsumers.add(appId);
+    this.appFeatures.delete(appId);
+    this.attachmentPacer.notifyOnline(appId);
+    this.currentSessionByArm.set(appId, null);
+    this.sendGreetingTo(appId, key);
+    sendAccountUsageTo(this, appId, key);
+    this.sendSessionListTo(appId, key);
+  }
+
   private updateConsumerKeys(devices: DeviceSummary[]): void {
     // A Head reconnect does not touch Apps on the local link: keep their
     // features and subscriptions, which belong to that link.
@@ -1440,17 +1535,21 @@ export class RelayClient {
     this.appFeatures = keptFeatures;
     this.currentSessionByArm = keptSubs;
     this.appSigningKeys.clear();
+    this.unpairedApps.clear();
     this.legacyReplayWarned.clear();
     for (const d of devices) {
       if (d.role === 'app') {
         if (d.publicKey) this.appSigningKeys.set(d.id, d.publicKey);
+        const key = this.appKeyFor(d);
+        if (!key) {
+          if (d.online) this.noteUnpairedApp(d);
+          continue;
+        }
         if (localIds.has(d.id)) {
-          const key = d.encryptionKey ?? d.publicKey;
-          if (key) this.consumerKeys.set(d.id, key);
+          this.consumerKeys.set(d.id, key);
           if (d.online) this.onlineConsumers.add(d.id);
           continue;
         }
-        const key = d.encryptionKey ?? d.publicKey;
         if (key) {
           this.consumerKeys.set(d.id, key);
           if (d.online) {

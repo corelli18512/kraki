@@ -286,3 +286,5 @@ export function canonicalJson(value: Record<string, unknown>): string {
   }
   return JSON.stringify(sorted);
 }
+export * from './v2.js';
+export * from './trust.js';

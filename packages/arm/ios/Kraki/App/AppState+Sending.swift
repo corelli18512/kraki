@@ -65,6 +65,33 @@ extension AppState {
             targetDeviceId = nil
         }
 
+        let replayable = Self.replayableAcrossRoutes.contains(message["type"] as? String ?? "")
+        let fragment = targetDeviceId.map {
+            deviceStore.deviceFeatures[$0]?.contains(PayloadFragments.feature) == true
+        } ?? false
+
+        // Device trust: a paired computer gets the message signed with this
+        // device's identity key and encrypted to the X25519 key pinned at
+        // pairing — never to a key the relay reported.
+        let trust = TentacleTrustStore.shared
+        if let targetDeviceId, let pin = trust.pairedPin(targetDeviceId) {
+            guard let payload = sealSigned(innerString, to: targetDeviceId, recipients: [(targetDeviceId, pin.encryptionKey)]) else {
+                return false
+            }
+            return deliverEncrypted(payload, target: targetDeviceId, connectionScoped: connectionScoped,
+                                    fragment: fragment, replayable: replayable)
+        }
+        var pairedInBroadcast: Set<String> = []
+        if targetDeviceId == nil {
+            let paired = deviceStore.devices.values
+                .filter { $0.role == .tentacle }
+                .compactMap { d in trust.pairedPin(d.id).map { (deviceId: d.id, publicKey: $0.encryptionKey) } }
+            if !paired.isEmpty, let payload = sealSigned(innerString, to: DeviceTrustWire.anyRecipient, recipients: paired) {
+                _ = deliverEncrypted(payload, target: nil, connectionScoped: connectionScoped, fragment: false, replayable: false)
+                pairedInBroadcast = Set(paired.map(\.deviceId))
+            }
+        }
+
         // Collect recipient encryption keys
         var recipients: [RecipientKey] = []
         let crypto = CryptoManager()
@@ -84,7 +111,7 @@ extension AppState {
             }
         } else {
             // Broadcast to all tentacle devices
-            for device in deviceStore.devices.values where device.role == .tentacle {
+            for device in deviceStore.devices.values where device.role == .tentacle && !pairedInBroadcast.contains(device.id) {
                 guard let encKeyB64 = device.encryptionKey ?? device.publicKey else { continue }
                 do {
                     let pubKey = try crypto.importPublicKeyFromSPKI(encKeyB64)
@@ -96,6 +123,7 @@ extension AppState {
         }
 
         guard !recipients.isEmpty else {
+            if !pairedInBroadcast.isEmpty { return true }
             KLog.d("⚠️ sendEncrypted: no recipients found")
             return false
         }
@@ -130,5 +158,33 @@ extension AppState {
             KLog.d("❌ sendEncrypted: encryption failed: \(error)")
             return false
         }
+    }
+
+    /// Sign `body` as this device and encrypt it to `recipients` (X25519).
+    func sealSigned(_ body: String, to: String, recipients: [(deviceId: String, publicKey: String)]) -> [String: Any]? {
+        guard let selfId = deviceId else { return nil }
+        do {
+            let signed = try DeviceTrustWire.sign(body: body, from: selfId, to: to, key: DeviceIdentityKeys.shared.signingKey())
+            let signedData = try JSONSerialization.data(withJSONObject: signed)
+            let blob = try E2EV2.encrypt(String(decoding: signedData, as: UTF8.self), recipients: recipients)
+            return ["v": 2, "blob": blob]
+        } catch {
+            KLog.d("❌ device trust: sealing failed: \(error)")
+            return nil
+        }
+    }
+
+    /// Hand an E2E payload to the local link (same-Mac computer) or Pulse.
+    @discardableResult
+    func deliverEncrypted(_ payload: [String: Any], target: String?, connectionScoped: Bool, fragment: Bool, replayable: Bool) -> Bool {
+        #if os(macOS)
+        if let target, let localLink,
+           localLink.sendEncryptedPayload(payload, to: target, connectionScoped: connectionScoped, replayable: replayable) {
+            return true
+        }
+        #endif
+        guard let pulseManager else { return false }
+        pulseManager.sendEncryptedPayload(payload, target: target, connectionScoped: connectionScoped, fragment: fragment)
+        return true
     }
 }

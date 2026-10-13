@@ -1,0 +1,140 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import {
+  ANY_RECIPIENT,
+  ReplayGuard,
+  checkSignedMessage,
+  generateIdentityKeyPair,
+  generatePairingSecret,
+  identityPublicKeyOf,
+  isRawPublicKey,
+  isSignedMessage,
+  pairingProof,
+  signMessage,
+  verifyPairingProof,
+  verifySignature,
+  type PairingClaim,
+} from '../trust.js';
+
+const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
+
+describe('identity keys', () => {
+  it('generates raw 32-byte public keys that match the private key', () => {
+    const kp = generateIdentityKeyPair();
+    expect(isRawPublicKey(kp.publicKey)).toBe(true);
+    expect(identityPublicKeyOf(kp.privateKey)).toBe(kp.publicKey);
+  });
+});
+
+describe('signed messages', () => {
+  const alice = generateIdentityKeyPair();
+  const mallory = generateIdentityKeyPair();
+  const body = JSON.stringify({ type: 'send_input', sessionId: 's1', payload: { text: 'ls' } });
+
+  it('round-trips and verifies', () => {
+    const m = signMessage(body, 'app_a', 'tent_1', alice.privateKey);
+    expect(isSignedMessage(JSON.parse(JSON.stringify(m)))).toBe(true);
+    expect(verifySignature(m, alice.publicKey)).toBe(true);
+    expect(checkSignedMessage(m, alice.publicKey, 'tent_1')).toBeNull();
+  });
+
+  it('rejects a different signer (the relay substituting its own key)', () => {
+    const forged = signMessage(body, 'app_a', 'tent_1', mallory.privateKey);
+    expect(checkSignedMessage(forged, alice.publicKey, 'tent_1')).toBe('bad_signature');
+  });
+
+  it('rejects any modified field', () => {
+    const m = signMessage(body, 'app_a', 'tent_1', alice.privateKey);
+    for (const patch of [
+      { body: body.replace('ls', 'rm -rf ~') },
+      { from: 'app_b' },
+      { to: 'tent_2' },
+      { ts: m.ts + 1 },
+      { nonce: 'AAAAAAAAAAAAAAAAAAAAAA' },
+    ]) {
+      expect(verifySignature({ ...m, ...patch }, alice.publicKey)).toBe(false);
+    }
+  });
+
+  it('binds the recipient', () => {
+    const m = signMessage(body, 'app_a', 'tent_1', alice.privateKey);
+    expect(checkSignedMessage(m, alice.publicKey, 'tent_2')).toBe('wrong_recipient');
+    const any = signMessage(body, 'app_a', ANY_RECIPIENT, alice.privateKey);
+    expect(checkSignedMessage(any, alice.publicKey, 'tent_2')).toBeNull();
+  });
+
+  it('rejects replays, stale and future messages', () => {
+    let now = 1_000_000_000_000;
+    const guard = new ReplayGuard({ now: () => now });
+    const m = signMessage(body, 'app_a', 'tent_1', alice.privateKey, { ts: now });
+    expect(checkSignedMessage(m, alice.publicKey, 'tent_1', guard)).toBeNull();
+    expect(checkSignedMessage(m, alice.publicKey, 'tent_1', guard)).toBe('replay');
+    const old = signMessage(body, 'app_a', 'tent_1', alice.privateKey, { ts: now - 16 * 60_000 });
+    expect(checkSignedMessage(old, alice.publicKey, 'tent_1', guard)).toBe('stale');
+    const future = signMessage(body, 'app_a', 'tent_1', alice.privateKey, { ts: now + 11 * 60_000 });
+    expect(checkSignedMessage(future, alice.publicKey, 'tent_1', guard)).toBe('from_future');
+    // Persisted state survives a restart.
+    const restored = new ReplayGuard({ now: () => now });
+    restored.import(guard.export());
+    expect(restored.check(m)).toBe('replay');
+    now += 20 * 60_000;
+    expect(new ReplayGuard({ now: () => now }).check(m)).toBe('stale');
+  });
+
+  it('rejects malformed signatures without throwing', () => {
+    const m = signMessage(body, 'app_a', 'tent_1', alice.privateKey);
+    expect(verifySignature({ ...m, sig: 'not base64!' }, alice.publicKey)).toBe(false);
+    expect(verifySignature({ ...m, sig: '' }, alice.publicKey)).toBe(false);
+    expect(verifySignature(m, 'short')).toBe(false);
+  });
+});
+
+describe('pairing proof', () => {
+  const app = generateIdentityKeyPair();
+  const claim: PairingClaim = {
+    tentacleId: 'dev_tentacle',
+    appId: 'dev_phone',
+    identityKey: app.publicKey,
+    encryptionKey: 'x'.repeat(43),
+    ts: 1_700_000_000_000,
+  };
+
+  it('verifies with the QR secret only', () => {
+    const secret = generatePairingSecret();
+    const proof = pairingProof(secret, claim);
+    expect(verifyPairingProof(secret, claim, proof)).toBe(true);
+    expect(verifyPairingProof(generatePairingSecret(), claim, proof)).toBe(false);
+  });
+
+  it('binds every enrolled key and the computer', () => {
+    const secret = generatePairingSecret();
+    const proof = pairingProof(secret, claim);
+    const relayKey = generateIdentityKeyPair().publicKey;
+    expect(verifyPairingProof(secret, { ...claim, identityKey: relayKey }, proof)).toBe(false);
+    expect(verifyPairingProof(secret, { ...claim, encryptionKey: 'y'.repeat(43) }, proof)).toBe(false);
+    expect(verifyPairingProof(secret, { ...claim, rsaKey: 'MIIB' }, proof)).toBe(false);
+    expect(verifyPairingProof(secret, { ...claim, tentacleId: 'dev_other' }, proof)).toBe(false);
+    expect(verifyPairingProof(secret, { ...claim, appId: 'dev_relay' }, proof)).toBe(false);
+  });
+});
+
+describe('cross-implementation vectors', () => {
+  // Swift (DeviceTrustTests) verifies these exact bytes.
+  const vectors = JSON.parse(readFileSync(join(fixtures, 'trust-vectors.json'), 'utf8')) as {
+    identity: { privateKey: string; publicKey: string };
+    signed: Parameters<typeof verifySignature>[0];
+    pairing: { secret: string; claim: PairingClaim; proof: string };
+  };
+
+  it('match this implementation', () => {
+    expect(identityPublicKeyOf(vectors.identity.privateKey)).toBe(vectors.identity.publicKey);
+    expect(verifySignature(vectors.signed, vectors.identity.publicKey)).toBe(true);
+    const resigned = signMessage(vectors.signed.body, vectors.signed.from, vectors.signed.to,
+      vectors.identity.privateKey, { ts: vectors.signed.ts, nonce: vectors.signed.nonce });
+    // Ed25519 (RFC 8032) is deterministic.
+    expect(resigned.sig).toBe(vectors.signed.sig);
+    expect(pairingProof(vectors.pairing.secret, vectors.pairing.claim)).toBe(vectors.pairing.proof);
+  });
+});

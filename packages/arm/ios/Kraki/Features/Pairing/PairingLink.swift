@@ -12,6 +12,15 @@ struct PairingLink: Equatable {
     let relay: String?
     /// Fingerprint of the computer's encryption key (`fp`), when present.
     var keyFingerprint: String?
+    /// Device trust (DeviceTrust.swift): the computer's ID, identity and
+    /// X25519 keys, and the one-time pairing secret. Read optically from the
+    /// QR, so the relay never sees them.
+    var trust: (tentacleId: String, identityKey: String, encryptionKey: String, secret: String)?
+
+    static func == (lhs: PairingLink, rhs: PairingLink) -> Bool {
+        lhs.token == rhs.token && lhs.relay == rhs.relay && lhs.keyFingerprint == rhs.keyFingerprint
+            && lhs.trust?.tentacleId == rhs.trust?.tentacleId && lhs.trust?.secret == rhs.trust?.secret
+    }
 
     init?(url: URL) {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -22,6 +31,13 @@ struct PairingLink: Equatable {
         self.relay = (relay?.isEmpty ?? true) ? nil : relay
         let fp = components.queryItems?.first(where: { $0.name == "fp" })?.value
         self.keyFingerprint = (fp?.isEmpty ?? true) ? nil : fp
+        let item = { (name: String) in components.queryItems?.first(where: { $0.name == name })?.value }
+        if let tid = item("tid"), !tid.isEmpty,
+           let ik = item("ik"), DeviceTrustWire.isRawKey(ik),
+           let xk = item("xk"), DeviceTrustWire.isRawKey(xk),
+           let ps = item("ps"), DeviceTrustWire.fromB64url(ps)?.count == 16 {
+            self.trust = (tid, ik, xk, ps)
+        }
     }
 
     init?(string: String) {
@@ -85,6 +101,13 @@ extension AppState {
             pendingPairingPrompt = .confirmRelay(link)
             return
         }
+        // Already signed in to this account: a QR that carries device trust
+        // pairs this app with that computer (the usual "re-scan to pair").
+        if hasStoredCredentials && hasCompletedInitialConnect, link.trust != nil,
+           link.relay == nil || link.relay == relayURL {
+            pairWithComputer(link)
+            return
+        }
         if hasStoredCredentials && hasCompletedInitialConnect {
             pendingPairingPrompt = .alreadyConnected(link, login: user?.login)
             return
@@ -101,6 +124,7 @@ extension AppState {
     private func startPairing(_ link: PairingLink) {
         pendingPairingPrompt = nil
         deviceStore.keyPins.pendingQRFingerprint = link.keyFingerprint
+        pinFromPairingLink(link)
         if let relay = link.relay, relay != relayURL {
             // Stash the token so the reconnect → bootstrapAuth path sends
             // `method: "pairing"` against the right regional relay.

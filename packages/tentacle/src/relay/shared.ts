@@ -78,6 +78,11 @@ export interface RelayClientOptions {
   /** Serve same-machine Apps over a loopback link instead of the Head.
    *  Default: on for macOS unless KRAKI_LOCAL_LINK=0; off elsewhere. */
   localLink?: boolean;
+  /** Device trust (docs/e2e-trust.md). 'enforce': only paired apps are
+   *  served and only their signed commands accepted. 'compatible': paired apps
+   *  use signed X25519, others the legacy RSA path. Default: 'enforce' when
+   *  KRAKI_DEVICE_TRUST=enforce, else 'compatible'. */
+  deviceTrust?: 'enforce' | 'compatible';
 }
 
 export const DEFAULT_AUTO_ARCHIVE_DAYS = 14;

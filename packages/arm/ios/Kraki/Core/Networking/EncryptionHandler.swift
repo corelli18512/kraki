@@ -22,6 +22,7 @@ enum EncryptionError: Error, CustomStringConvertible {
     case notAddressedToUs
     case senderMismatch
     case staleRoute
+    case untrusted(String)
 
     var description: String {
         switch self {
@@ -35,6 +36,7 @@ enum EncryptionError: Error, CustomStringConvertible {
         case .notAddressedToUs: return "Envelope does not contain a key for this device"
         case .senderMismatch:   return "Message deviceId does not match the relay-stamped sender"
         case .staleRoute:       return "Connection-scoped message arrived on a replaced route"
+        case .untrusted(let r): return "Rejected by device trust: \(r)"
         }
     }
 }
@@ -135,8 +137,19 @@ final class EncryptionHandler {
             throw EncryptionError.notReady
         }
 
-        guard let json = try JSONSerialization.jsonObject(with: envelope) as? [String: Any],
-              let blob = json["blob"] as? String,
+        guard let json = try JSONSerialization.jsonObject(with: envelope) as? [String: Any] else {
+            KLog.d("❌ decrypt: invalid envelope structure")
+            throw EncryptionError.invalidEnvelope
+        }
+        // Device trust: X25519 payload from a paired computer.
+        if E2EV2.isPayload(json), let blob = json["blob"] as? String {
+            guard let plaintext = try E2EV2.decrypt(blob, deviceId: deviceId,
+                                                    privateKey: DeviceIdentityKeys.shared.agreementKey()) else {
+                throw EncryptionError.notAddressedToUs
+            }
+            return try authenticate(plaintext, envelope: json, deviceId: deviceId)
+        }
+        guard let blob = json["blob"] as? String,
               let keys = json["keys"] as? [String: String] else {
             KLog.d("❌ decrypt: invalid envelope structure")
             throw EncryptionError.invalidEnvelope
@@ -178,9 +191,19 @@ final class EncryptionHandler {
         )
 
         KLog.d("🔓 Decrypted: \(String(plaintext.prefix(100)))")
+        return try authenticate(plaintext, envelope: json, deviceId: deviceId)
+    }
 
-        guard let messageData = plaintext.data(using: .utf8) else {
-            throw EncryptionError.decodingFailed
+    /// Signature/attribution checks (DeviceTrust.swift), then the existing
+    /// sender-stamp and stale-route checks.
+    private func authenticate(_ plaintext: String, envelope json: [String: Any], deviceId: String) throws -> (message: Data, sessionId: String?) {
+        let messageData: Data
+        switch DeviceTrustInbound.check(plaintext: plaintext, src: json["src"] as? String, selfId: deviceId) {
+        case .message(let data):
+            messageData = data
+        case .rejected(let reason):
+            KLog.d("⛔️ device trust: rejected payload (\(reason)) src=\(json["src"] as? String ?? "-")")
+            throw EncryptionError.untrusted(reason)
         }
 
         let innerJson = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any]
