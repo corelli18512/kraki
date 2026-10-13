@@ -221,7 +221,9 @@
 }
 .ds-sheet-title { font-size: 15px; font-weight: 600; color: var(--color-text-primary); }
 /* LocalAgentsWindow uses a 500pt window, independently of the 520pt catalog. */
-.ds-local-agents-sheet { width: 500px; }
+.ds-local-agents-sheet { width: 500px; padding: 19px; }
+.ds-local-agents-sheet .ds-sheet-title { line-height: 18px; }
+.ds-sheet .ds-button:focus-visible { outline: 3px solid #007aff80; outline-offset: 2px; }
 .ds-local-agents-header { display: flex; flex-direction: column; gap: 4px; }
 .ds-local-agents-help { font-size: 11.5px; line-height: 14px; color: var(--color-text-muted); }
 .ds-local-agents-panel { padding: 6px 12px; border-radius: 10px; background: color-mix(in srgb, var(--color-surface-secondary) 70%, transparent); }

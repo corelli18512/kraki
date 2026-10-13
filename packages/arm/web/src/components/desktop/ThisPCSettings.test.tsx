@@ -69,6 +69,9 @@ describe('ThisPCSettings capability-driven native parity', () => {
     expect(done).toHaveFocus();
     fireEvent.keyDown(done, { key: 'Tab' });
     const supported = await within(agents).findByRole('button', { name: 'Supported agents' });
+    expect(supported).toHaveFocus();
+    fireEvent.keyDown(supported, { key: 'Tab', shiftKey: true });
+    expect(done).toHaveFocus();
     supported.focus();
     fireEvent.click(supported);
     const catalog = screen.getByRole('dialog', { name: 'Supported coding agents' });
