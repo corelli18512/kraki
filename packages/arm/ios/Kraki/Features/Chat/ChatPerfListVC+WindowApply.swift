@@ -524,11 +524,12 @@ extension ChatPerfListVC {
         // as empty-cell (OOB guard) flashes. Defer the spine reload until the
         // page settles; `cardChanged` (streaming tail) still reconfigures the
         // single live-card cell cheaply so the tail keeps updating live.
-        let pagingInFlight = fetchingOlder || fetchingNewer
-            || measuringOlderPage || measuringNewerPage
+        let pagingInFlight = fetchingOlder || fetchingNewer || measuringOlderPage || measuringNewerPage
             || paginationSnapshotDeferred || pendingApply != nil
         if pagingInFlight {
             refreshSpineSnapshot()
+            // A held (fully fetched) older page must not hide the live tail.
+            revealHeldOlderPageForLiveUpdate()
             if cardChanged, let idx = items.firstIndex(of: Self.liveCardID) {
                 lastLiveCardSignature = cardSig
                 refreshVisibleLiveCard(at: idx, duringPaging: true)
