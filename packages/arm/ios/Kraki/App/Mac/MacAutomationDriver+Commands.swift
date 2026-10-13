@@ -9,6 +9,55 @@ import SwiftUI
 import WebKit
 
 extension MacAutomationDriver {
+    /// Window-level commands (resize/park, close auxiliary windows). Returns
+    /// false when `method` is not one of them.
+    func handleWindowCommand(_ method: String, params: [String: Any], id: Any?, connection: Int32) -> Bool {
+        switch method {
+        case "resizeWindow":
+            resizeWindow(params: params, id: id, connection: connection)
+        case "closeAuxWindows":
+            send(result: ["closed": closeAuxWindows()], id: id, on: connection)
+        default:
+            return false
+        }
+        return true
+    }
+
+    private func resizeWindow(params: [String: Any], id: Any?, connection: Int32) {
+        let width = CGFloat(params["width"] as? Double ?? 1_600)
+        let height = CGFloat(params["height"] as? Double ?? 900)
+        guard let window = NSApp.windows
+            .filter({ $0.contentView != nil && $0.frame.width > 300 && $0.frame.height > 200 })
+            .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
+            send(error: "invalid_state", message: "No production window is mounted", id: id, on: connection); return
+        }
+        window.setContentSize(NSSize(width: max(width, 700), height: max(height, 500)))
+        // Keep the whole window on screen: partly off-screen content renders black in captures.
+        if let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
+            window.setFrameOrigin(NSPoint(x: visible.minX, y: visible.maxY - window.frame.height))
+        }
+        window.contentView?.layoutSubtreeIfNeeded()
+        send(result: ["width": Double(window.contentLayoutRect.width), "height": Double(window.contentLayoutRect.height)], id: id, on: connection)
+    }
+
+    /// Debug-only: close every visible window except the main chat window
+    /// (Settings, artifact/report viewers, account usage) and dismiss sheets.
+    private func closeAuxWindows() -> [String] {
+        let main = NSApp.windows
+            .filter { $0.isVisible && $0.contentView != nil && $0.sheetParent == nil && $0.frame.width > 300 && $0.frame.height > 200 }
+            .first { $0.title.isEmpty || $0.title == "Kraki" || $0.title == "Kraki (Dev)" }
+        var closed: [String] = []
+        for window in NSApp.windows where window.isVisible && window !== main {
+            if let parent = window.sheetParent { parent.endSheet(window); closed.append("sheet"); continue }
+            if window.level != .normal || window.frame.width < 200 { continue } // menu-bar extra, popovers, panels
+            closed.append(window.title.isEmpty ? String(describing: type(of: window)) : window.title)
+            window.performClose(nil)
+            if window.isVisible { window.orderOut(nil) }
+        }
+        main?.makeKeyAndOrderFront(nil)
+        return closed
+    }
+
     func voiceState(_ appState: AppState) -> [String: Any] {
         let controller = appState.voiceInputController
         let state: String

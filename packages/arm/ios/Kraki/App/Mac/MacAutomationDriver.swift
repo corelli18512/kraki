@@ -205,6 +205,7 @@ final class MacAutomationDriver {
         let id = request["id"]
         let params = request["params"] as? [String: Any] ?? [:]
 
+        if handleWindowCommand(method, params: params, id: id, connection: connection) { return }
         switch method {
         case "ping":
             send(result: [
@@ -215,21 +216,6 @@ final class MacAutomationDriver {
                 "hasKeyWindow": NSApp.keyWindow != nil,
                 "hasMainWindow": NSApp.mainWindow != nil,
             ], id: id, on: connection)
-        case "resizeWindow":
-            let width = CGFloat(params["width"] as? Double ?? 1_600)
-            let height = CGFloat(params["height"] as? Double ?? 900)
-            guard let window = NSApp.windows
-                .filter({ $0.contentView != nil && $0.frame.width > 300 && $0.frame.height > 200 })
-                .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
-                send(error: "invalid_state", message: "No production window is mounted", id: id, on: connection); return
-            }
-            window.setContentSize(NSSize(width: max(width, 700), height: max(height, 500)))
-            // Keep the whole window on screen: partly off-screen content renders black in captures.
-            if let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
-                window.setFrameOrigin(NSPoint(x: visible.minX, y: visible.maxY - window.frame.height))
-            }
-            window.contentView?.layoutSubtreeIfNeeded()
-            send(result: ["width": Double(window.contentLayoutRect.width), "height": Double(window.contentLayoutRect.height)], id: id, on: connection)
         case "snapshot":
             send(result: snapshot(), id: id, on: connection)
         case "mockSnapshot":
@@ -711,22 +697,6 @@ final class MacAutomationDriver {
                 }
                 send(result: result, id: id, on: connection)
             }
-        case "closeAuxWindows":
-            // Debug-only: close every visible window except the main chat window
-            // (Settings, artifact/report viewers, account usage) and dismiss sheets.
-            let main = NSApp.windows
-                .filter { $0.isVisible && $0.contentView != nil && $0.sheetParent == nil && $0.frame.width > 300 && $0.frame.height > 200 }
-                .first { $0.title.isEmpty || $0.title == "Kraki" || $0.title == "Kraki (Dev)" }
-            var closed: [String] = []
-            for w in NSApp.windows where w.isVisible && w !== main {
-                if let parent = w.sheetParent { parent.endSheet(w); closed.append("sheet") ; continue }
-                if w.level != .normal || w.frame.width < 200 { continue } // menu-bar extra, popovers, panels
-                closed.append(w.title.isEmpty ? String(describing: type(of: w)) : w.title)
-                w.performClose(nil)
-                if w.isVisible { w.orderOut(nil) }
-            }
-            main?.makeKeyAndOrderFront(nil)
-            send(result: ["closed": closed], id: id, on: connection)
         case "localLinkProbe":
             // Debug-only fault injection for local-link tests.
             guard let appState else {
