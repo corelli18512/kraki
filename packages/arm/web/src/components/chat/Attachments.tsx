@@ -1,7 +1,8 @@
 import type { Attachment, ContentRef } from '@kraki/protocol';
-import { AlertTriangle, ChevronRight, FileText } from 'lucide-react';
-import { useEffect, useState, type CSSProperties } from 'react';
+import { AlertTriangle, ArrowUpRight, FileText } from 'lucide-react';
+import { useState, type CSSProperties } from 'react';
 import { useAttachment } from '../../hooks/useAttachment';
+import { getState } from '../../lib/attachments';
 import { useOpenImagePreview } from './ImageViewer';
 
 const ATTACHMENT_PULL = (sid: string, ref: ContentRef): void => {
@@ -23,7 +24,7 @@ export function HtmlArtifactCards({ artifacts, onOpen }: { artifacts: ContentRef
         return <button key={artifact.id} type="button" className="kreport-card" onClick={() => onOpen?.(artifact)} aria-label={`Open report ${title}`} disabled={!onOpen}>
           <span className="kreport-card-icon"><FileText /></span>
           <span className="kreport-card-text"><strong>{title}</strong><small>Report · {formatReportBytes(artifact.size)}</small></span>
-          <ChevronRight className="kreport-card-chevron" />
+          <ArrowUpRight className="kreport-card-chevron" />
         </button>;
       })}
     </div>
@@ -42,7 +43,8 @@ export function ImageAttachments({ attachments, sessionId }: { attachments?: Att
   const open = (index: number) => {
     const resolved = images.flatMap((attachment, i) => {
       const url = attachment.type === 'image' ? `data:${attachment.mimeType};base64,${attachment.data}` : resolvedRefs[attachment.id];
-      return url ? [{ url, title: attachment.type === 'image' ? `Image ${i + 1}` : attachment.caption ?? attachment.name ?? 'Image', originalIndex: i }] : [];
+      const state = attachment.type === 'content_ref' ? getState(attachment.id) : undefined;
+      return url ? [{ url, blob: state?.kind === 'ready' ? state.blob : undefined, title: attachment.type === 'image' ? `Image ${i + 1}` : attachment.caption ?? attachment.name ?? 'Image', originalIndex: i }] : [];
     });
     if (resolved.length) openPreview?.({ items: resolved, initialIndex: Math.max(0, resolved.findIndex((item) => item.originalIndex === index)) });
   };
@@ -86,13 +88,12 @@ function RefImageTile({ ref_, sessionId, gallery, onReady, onExpand }: {
 }) {
   const { status, url, error, retry } = useAttachment(ref_, sessionId, ATTACHMENT_PULL);
   const [invalidUrl, setInvalidUrl] = useState<string | null>(null);
-  useEffect(() => { if (status === 'ready' && url && url !== invalidUrl) onReady(url); }, [status, url, invalidUrl, onReady]);
   const style = gallery ? undefined : refImageSize(ref_);
   if (status === 'error' || (url && invalidUrl === url)) return <button type="button" className={`kimage-placeholder is-error ${gallery ? 'is-gallery' : ''}`} style={style} onClick={() => { setInvalidUrl(null); retry(); }}>
     <AlertTriangle /><span>{error || 'Invalid image'}</span><small>Click to retry</small>
   </button>;
   if (status === 'ready' && url) return <button type="button" aria-label={gallery ? 'Open image gallery' : 'Open image preview'} className={`kimage-tile ${gallery ? 'is-gallery' : 'is-ref'}`} style={style} onClick={onExpand}>
-    <img src={url} alt={ref_.caption ?? ref_.name ?? 'Attachment'} onLoad={onImageLoad} onError={() => setInvalidUrl(url)} />
+    <img src={url} alt={ref_.caption ?? ref_.name ?? 'Attachment'} onLoad={(event) => { onReady(url); onImageLoad(event); }} onError={() => setInvalidUrl(url)} />
   </button>;
   return <div className={`kimage-placeholder ${gallery ? 'is-gallery' : ''}`} style={style}><span className="kspinner" aria-label="Loading" /></div>;
 }

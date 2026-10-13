@@ -13,10 +13,12 @@ const ATTACHMENT_PULL = (sessionId: string, ref: ContentRef): void => {
 };
 
 export function withArtifactCsp(html: string): string {
-  const csp = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; base-uri \'none\'; object-src \'none\'; frame-src \'none\'; form-action \'none\'; connect-src \'none\'; img-src data: blob:; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; font-src data:;">';
-  const stripped = html.replace(/<meta[^>]+http-equiv\s*=\s*["']?Content-Security-Policy["']?[^>]*>/gi, '');
-  if (/<head[^>]*>/i.test(stripped)) return stripped.replace(/<head[^>]*>/i, (head) => `${head}${csp}`);
-  return `${csp}${stripped}`;
+  const csp = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; base-uri \'none\'; object-src \'none\'; frame-src \'none\'; child-src \'none\'; media-src \'none\'; manifest-src \'none\'; worker-src \'none\'; form-action \'none\'; connect-src \'none\'; img-src data: blob:; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; font-src data:;">';
+  // The policy must precede every report-controlled element, including scripts
+  // before <head>. Preserve a leading doctype to avoid switching to quirks mode.
+  const body = html.replace(/^\uFEFF/, '');
+  const doctype = body.match(/^\s*(<!doctype[^>]*>)/i);
+  return doctype ? `${doctype[1]}${csp}${body.slice(doctype[0].length)}` : `${csp}${body}`;
 }
 
 /** Browser copies keep the original HTML, with a self-contained Mermaid runtime. */

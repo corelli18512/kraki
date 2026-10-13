@@ -922,29 +922,29 @@
 .ktool-detail { background: rgba(120, 120, 128, .06); }
 .ktool-detail pre { font-size: 11px; line-height: 1.4; }
 .ksub-report .kmd { white-space: pre-wrap; font-size: 15px; }
-.ksheet-empty { display: flex; height: 100%; min-height: 200px; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; color: var(--k-text-2); }
-.ksheet-empty svg { width: 28px; height: 28px; opacity: .5; }
-.ksheet-empty strong { font-size: 15px; font-weight: 600; }
+.ksheet-empty { display: flex; height: 100%; min-height: 200px; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; color: var(--k-text-2); }
+.ksheet-empty svg { width: 36px; height: 36px; opacity: .5; margin-bottom: 14px; }
+.ksheet-empty strong { font-size: 24px; line-height: 29px; font-weight: 700; }
 .ksheet-empty p { font-size: 13px; }
 
 /* Native media cards and detail-pane-owned previews. */
 .kreport-cards { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; min-width: 230px; }
 .kreport-cards:first-child { margin-top: 0; }
-.kreport-card { display: flex; align-items: center; gap: 10px; width: 100%; height: 54px; padding: 0 11px; border: 1px solid rgba(0,0,0,.09); border-radius: 8px; background: rgba(255,255,255,.78); text-align: left; cursor: pointer; }
+.kreport-card { display: flex; align-items: center; gap: 10px; width: 100%; height: 54px; padding: 0 11px; border: 1px solid rgba(0,0,0,.72); border-radius: 8px; background: rgba(255,255,255,.78); text-align: left; cursor: pointer; }
 .kreport-card:hover { background: rgba(0,122,255,.09); border-color: rgba(0,122,255,.42); }
 .kreport-card-icon { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 7px; background: rgba(0,122,255,.1); color: #007aff; flex-shrink: 0; }
 .kreport-card-icon svg { width: 18px; height: 18px; }
 .kreport-card-text, .kreport-header-text { min-width: 0; flex: 1; }
 .kreport-card-text strong, .kreport-header-text strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; line-height: 17px; color: var(--k-text); }
 .kreport-card-text small { display: block; margin-top: 3px; font-size: 10px; line-height: 14px; color: var(--k-text-2); }
-.kreport-card-chevron { width: 12px; height: 12px; color: var(--k-text-3); flex-shrink: 0; transform: rotate(-45deg); }
-.dark .kreport-card { background: rgba(30,30,30,.78); border-color: rgba(255,255,255,.09); }
+.kreport-card-chevron { width: 12px; height: 12px; color: var(--k-text-3); flex-shrink: 0; }
+.dark .kreport-card { background: rgba(30,30,30,.78); border-color: rgba(255,255,255,.72); }
 .dark .kreport-card:hover { background: rgba(10,132,255,.09); border-color: rgba(10,132,255,.42); }
 .dark .kreport-card-icon { background: rgba(10,132,255,.1); color: #0a84ff; }
 .kimage-single { max-width: 360px; }
 .kimage-stack { position: relative; width: calc(360px + var(--image-stack-offset)); max-width: 100%; }
 .kimage-stack-card { position: absolute; width: calc(100% - var(--image-stack-offset)); height: 184px; }
-.kimage-tile { display: block; overflow: hidden; padding: 0; background: var(--k-fill); border: 1px solid color-mix(in srgb, var(--k-border) 85%, transparent); border-radius: 12px; cursor: pointer; max-width: 100%; }
+.kimage-tile { position: relative; display: block; overflow: hidden; padding: 0; background: var(--k-fill); border: 0; border-radius: 12px; cursor: pointer; max-width: 100%; }
 .kimage-tile img { display: block; }
 .kimage-tile.is-binary img { max-height: 240px; max-width: 100%; object-fit: cover; }
 .kimage-tile.is-ref { border-radius: 10px; }
@@ -956,7 +956,7 @@
 .kimage-placeholder.is-error svg { width: 18px; height: 18px; color: rgba(255,59,48,.8); }
 .kimage-placeholder.is-error small { font-size: 11px; font-weight: 500; color: var(--k-text-3); }
 .kimage-viewer { position: absolute; inset: 0; z-index: 100; background: rgba(0,0,0,.94); overflow: hidden; color: white; }
-.kimage-toolbar { position: absolute; inset: 0 0 auto; height: 52px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: rgba(35,35,35,.9); }
+.kimage-toolbar { position: absolute; inset: 0 0 auto; height: 52px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: rgb(89,92,93); backdrop-filter: blur(16px); }
 .kimage-title { font-size: 13px; font-weight: 500; opacity: .9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kimage-index { font-size: 11px; font-weight: 500; font-family: var(--k-mono); opacity: .62; white-space: nowrap; }
 .kimage-spacer { flex: 1; }
@@ -990,5 +990,21 @@
 .kagent-stack:has(.kreport-cards) { width: 95%; }
 .kbubble-agent:has(.kreport-cards) { width: 100%; }
 /* The native ultra-thin toolbar material is light even over the dark canvas. */
-.kimage-toolbar { background: rgba(89,93,94,.97); backdrop-filter: blur(16px); }
 .dark .kimage-toolbar { background: rgba(40,40,40,.97); }
+
+.ktool-header .text-text-secondary, .ktool-detail .text-text-secondary, .ktool-detail .text-text-muted { color: var(--k-text-2); }
+.ktool-header .bg-surface-tertiary { background: rgba(120,120,128,.12); }
+.ktool-success { color: #34c759; }
+.ktool-failure { color: #ff3b30; }
+.ktool-cancelled { color: #ff9500; }
+.dark .ktool-success { color: #30d158; }
+.dark .ktool-failure { color: #ff453a; }
+.dark .ktool-cancelled { color: #ff9f0a; }
+.dark .kimage-placeholder.is-error svg, .dark .kreport-export-error { color: #ff453a; }
+.dark .kreport-state.is-error svg { color: #ff9f0a; }
+.kimage-tile.is-ref, .kimage-placeholder:not(.is-gallery) { height: auto !important; }
+
+/* Native image borders overlay the pixels; they do not add to displaySize. */
+.kimage-tile::after { content: ""; position: absolute; inset: 0; border: 1px solid color-mix(in srgb, var(--k-border) 85%, transparent); border-radius: inherit; pointer-events: none; }
+
+.ksheet-body:has(.ksheet-empty) { flex: 1; }

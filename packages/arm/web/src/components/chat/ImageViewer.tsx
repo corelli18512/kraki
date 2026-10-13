@@ -1,7 +1,7 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Minimize2, X, ZoomIn, ZoomOut } from 'lucide-react';
 
-export interface ImagePreviewItem { url: string; title: string }
+export interface ImagePreviewItem { url: string; title: string; blob?: Blob }
 export interface ImagePreviewSelection { items: ImagePreviewItem[]; initialIndex: number }
 const ImagePreviewContext = createContext<((selection: ImagePreviewSelection) => void) | undefined>(undefined);
 export const useOpenImagePreview = () => useContext(ImagePreviewContext);
@@ -9,7 +9,14 @@ export const useOpenImagePreview = () => useContext(ImagePreviewContext);
 /** Owned by the chat pane, outside the scrolling/virtualized message list. */
 export function ImagePreviewProvider({ children }: { children: ReactNode }) {
   const [selection, setSelection] = useState<ImagePreviewSelection | null>(null);
-  return <ImagePreviewContext.Provider value={setSelection}>{children}{selection && <ImageViewer selection={selection} onClose={() => setSelection(null)} />}</ImagePreviewContext.Provider>;
+  const open = useCallback((next: ImagePreviewSelection) => {
+    // Own ref-image URLs while open, even if virtualized source tiles unmount.
+    setSelection({ ...next, items: next.items.map((item) => item.blob ? { ...item, url: URL.createObjectURL(item.blob) } : item) });
+  }, []);
+  useEffect(() => () => {
+    selection?.items.forEach((item) => { if (item.blob) URL.revokeObjectURL(item.url); });
+  }, [selection]);
+  return <ImagePreviewContext.Provider value={open}>{children}{selection && <ImageViewer selection={selection} onClose={() => setSelection(null)} />}</ImagePreviewContext.Provider>;
 }
 
 export function ImageViewer({ selection, onClose }: { selection: ImagePreviewSelection; onClose: () => void }) {
@@ -42,13 +49,15 @@ export function ImageViewer({ selection, onClose }: { selection: ImagePreviewSel
       if (event.key === 'Escape') { event.preventDefault(); onClose(); }
       if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
         event.preventDefault();
-        setIndex((current) => Math.min(selection.items.length - 1, Math.max(0, current + (event.key === 'ArrowLeft' ? -1 : 1))));
-        setZoom(1); setPan({ x: 0, y: 0 });
+        const next = index + (event.key === 'ArrowLeft' ? -1 : 1);
+        if (next >= 0 && next < selection.items.length) {
+          setIndex(next); setZoom(1); setPan({ x: 0, y: 0 });
+        }
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selection.items.length, onClose]);
+  }, [index, selection.items.length, onClose]);
   useEffect(() => {
     const c = canvas.current;
     if (!c) return;

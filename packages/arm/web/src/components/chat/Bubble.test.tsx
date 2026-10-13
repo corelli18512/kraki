@@ -31,3 +31,24 @@ describe('Bubble — system_message', () => {
     expect(screen.queryByTestId('steps-only-turn')).not.toBeInTheDocument();
   });
 });
+
+describe('Bubble — media hierarchy', () => {
+  it('keeps report cards in the agent bubble before outside images, including report-only answers', () => {
+    const row: ChatRow = {
+      kind: 'spine', key: 'a4', item: { message: {
+        type: 'agent_message', sessionId: 's1', deviceId: 'd1', seq: 4, timestamp: '',
+        payload: { content: '', attachments: [
+          { type: 'content_ref', id: 'report', mimeType: 'text/html', size: 167_000, caption: 'Report' },
+          { type: 'image', mimeType: 'image/png', data: 'AAAA' },
+        ] },
+      } as never },
+    };
+    const { container } = render(<Bubble row={row} ctx={{ sessionId: 's1', hueSeed: 's1', onOpenArtifact: () => {} }} />);
+    const card = screen.getByRole('button', { name: 'Open report Report' });
+    expect(card.closest('.kbubble-agent')).not.toBeNull();
+    const stack = container.querySelector('.kagent-stack')!;
+    expect(stack.children[0]).toHaveClass('kbubble-agent');
+    expect(stack.children[1]).toHaveClass('kattachments');
+    expect(stack.children[1].querySelector('[data-image-gallery]')).not.toBeNull();
+  });
+});

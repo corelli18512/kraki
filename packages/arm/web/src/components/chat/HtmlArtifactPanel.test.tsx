@@ -65,10 +65,15 @@ describe('HtmlArtifactPanel', () => {
     expect(anchor.href).toBe('blob:report');
     click.mockRestore();
   });
-  it('puts restrictive CSP before report scripts and removes competing policies', () => {
+  it('prepends restrictive CSP before scripts; later report policies can only tighten it', () => {
     const html = withArtifactCsp('<head><script>run()</script><meta http-equiv="Content-Security-Policy" content="default-src *"></head>');
     expect(html.indexOf('Content-Security-Policy')).toBeLessThan(html.indexOf('<script>'));
-    expect(html).not.toContain('default-src *');
-    expect(html.match(/Content-Security-Policy/g)).toHaveLength(1);
+    expect(html).toContain('default-src *');
+    expect(html.match(/Content-Security-Policy/g)).toHaveLength(2);
+    const document = withArtifactCsp('\uFEFF  <!doctype html><html><body>ok</body></html>');
+    expect(document).toMatch(/^<!doctype html><meta http-equiv="Content-Security-Policy"/);
+    for (const attack of ['<script>run()</script><head></head>', '<!--<head>--><script>run()</script>']) {
+      expect(withArtifactCsp(attack)).toMatch(/^<meta http-equiv="Content-Security-Policy"/);
+    }
   });
 });

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, List, X } from 'lucide-react';
+import { ChevronLeft, CheckCircle2, X } from 'lucide-react';
 import type { ContentRef } from '@kraki/protocol';
 import { useAttachmentText } from '../../hooks/useAttachment';
 import { callIdOf, contentsLabel, formatDuration, formatTokens, mergeSteps, subagentOf, subagentStatus } from '../../lib/subagent-steps';
@@ -144,7 +144,7 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
         <div className="ksheet-body" key={path.join('/')}>
           {steps.length === 0 ? (
             messageProvider.isTurnTraceComplete(sessionId, targetSeq) ? (
-              <div className="ksheet-empty"><List aria-hidden /><strong>No steps recorded</strong><p>This turn completed without a recorded tool trace.</p></div>
+              <div className="ksheet-empty"><CheckCircle2 aria-hidden /><strong>No steps recorded</strong><p>This turn completed without a recorded tool trace.</p></div>
             ) : <p className="ksheet-loading"><span className="kspinner" /> Loading steps…</p>
           ) : current ? (
             <SubagentPage msg={current} merged={merged} steps={steps} agent={agent} sessionId={sessionId} onOpen={open} />

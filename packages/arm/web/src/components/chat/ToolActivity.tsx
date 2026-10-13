@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Loader2, CheckCircle2, XCircle, CircleSlash, FileText, FileEdit, Terminal, Search, FolderSearch } from 'lucide-react';
+import { Loader2, CheckCircle2, XCircle, CircleSlash, BookText, ChevronsLeftRightEllipsis, SquareTerminal, SearchCode, FileSearch, Link, SquareMousePointer, Server, Wrench } from 'lucide-react';
 import type { ContentRef } from '@kraki/protocol';
 
 import { useAttachmentText } from '../../hooks/useAttachment';
@@ -13,6 +13,7 @@ interface ToolActivityProps {
   headline: string;
   /** Lazy ref to the full args JSON. */
   argsRef?: ContentRef;
+  args?: Record<string, unknown>;
   /** Lazy ref to the full result body (complete events only). */
   resultRef?: ContentRef;
   sessionId: string;
@@ -25,7 +26,7 @@ interface ToolActivityProps {
 }
 
 export function ToolActivity({
-  type, toolName, headline, argsRef, resultRef,
+  type, toolName, headline, argsRef, args, resultRef,
   sessionId, requestPull,
   success, termination, cancelled, forceExpanded,
 }: ToolActivityProps) {
@@ -39,24 +40,24 @@ export function ToolActivity({
     <div className="my-1">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="group flex w-full items-center gap-1.5 rounded-lg py-1.5 text-left transition-all hover:bg-surface-tertiary active:scale-[0.98]"
+        className="ktool-header group flex w-full items-center gap-1.5 rounded-lg py-1.5 text-left transition-colors hover:bg-surface-tertiary"
       >
         <span className="relative mr-1 size-4 shrink-0 text-text-secondary">
           <ToolIcon className="size-4" aria-hidden="true" />
           {isStart && !cancelled
             ? <Loader2 aria-label="Running" className="absolute -right-2 bottom-0 size-2 animate-spin text-text-muted" />
             : termination || cancelled
-              ? <CircleSlash className="absolute -right-[5px] bottom-px size-2 text-amber-500" />
+              ? <CircleSlash className="absolute -right-[5px] bottom-px size-2 ktool-cancelled" />
               : success === false
-                ? <XCircle className="absolute -right-[5px] bottom-px size-2 text-red-500" />
-                : <CheckCircle2 className="absolute -right-[5px] bottom-px size-2 text-green-500" />}
+                ? <XCircle className="absolute -right-[5px] bottom-px size-2 ktool-failure" />
+                : <CheckCircle2 className="absolute -right-[5px] bottom-px size-2 ktool-success" />}
         </span>
         <span className="shrink-0 rounded bg-surface-tertiary px-[5px] py-px font-mono text-xs text-text-secondary">{toolName}</span>
         {headline && (
           <span className="truncate text-xs text-text-secondary">{headline}</span>
         )}
         <svg
-          className={`h-3 w-3 shrink-0 text-text-muted transition-transform ${
+          className={`ml-auto h-[11px] w-[11px] shrink-0 text-text-muted transition-transform ${
             isExpanded ? '' : '-rotate-90'
           }`}
           fill="none"
@@ -78,7 +79,8 @@ export function ToolActivity({
               headline={headline}
             />
           )}
-          {!argsRef && headline && (
+          {!argsRef && args && <ToolArgsRendered args={args} />}
+          {!argsRef && !args && headline && (
             <div>
               <p className="font-semibold text-text-muted">Arguments</p>
               <pre className="mt-0.5 overflow-x-auto font-mono text-text-secondary whitespace-pre-wrap">
@@ -137,6 +139,7 @@ function ToolArgsBody({
   let args: Record<string, unknown> = {};
   try {
     args = JSON.parse(text ?? '{}') as Record<string, unknown>;
+    if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Non-object arguments');
   } catch {
     return (
       <div>
@@ -194,27 +197,21 @@ function ToolResultBody({
   );
 }
 
-function getToolIcon(toolName: string): typeof FileText {
-  switch (toolName) {
-    case 'read_file':
-    case 'view':
-      return FileText;
-    case 'write_file':
-    case 'edit_file':
-    case 'edit':
-    case 'create_file':
-    case 'create':
-      return FileEdit;
-    case 'shell':
-    case 'bash':
-      return Terminal;
-    case 'grep':
-    case 'search':
-      return Search;
-    case 'glob':
-      return FolderSearch;
-    default:
-      return FileText;
+function getToolIcon(toolName: string): typeof Wrench {
+  const lower = toolName.toLowerCase();
+  if (lower.startsWith('mcp__') || lower.startsWith('mcp-') || lower === 'mcp') {
+    const parts = lower.split('_');
+    if (parts.some((part) => part.includes('search'))) return SearchCode;
+    if (parts.some((part) => part.includes('fetch') || part.includes('get'))) return Link;
+    if (parts.some((part) => /browser|click|playwright/.test(part))) return SquareMousePointer;
+    return Server;
   }
+  if (lower.includes('playwright') || lower.includes('browser_')) return SquareMousePointer;
+  if (['shell', 'bash', 'run', 'command'].includes(lower)) return SquareTerminal;
+  if (['read_file', 'read', 'view', 'view_file', 'open', 'cat'].includes(lower)) return BookText;
+  if (['write_file', 'write', 'create_file', 'create', 'new_file', 'edit_file', 'edit', 'patch', 'str_replace_editor'].includes(lower)) return ChevronsLeftRightEllipsis;
+  if (['grep', 'search', 'search_code', 'search_files', 'ripgrep', 'rg'].includes(lower)) return SearchCode;
+  if (['glob', 'list_files', 'find'].includes(lower)) return FileSearch;
+  if (['fetch_url', 'webfetch', 'web_fetch', 'fetch', 'websearch', 'web_search'].includes(lower)) return Link;
+  return Wrench;
 }
-

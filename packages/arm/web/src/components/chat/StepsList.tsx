@@ -22,6 +22,7 @@ function StepRow({ msg, sessionId, forceExpanded, cancelled }: { msg: ChatMessag
         toolName={String(p.toolName ?? 'tool')}
         headline={String(p.headline ?? '')}
         argsRef={p.argsRef as ContentRef | undefined}
+        args={p.args as Record<string, unknown> | undefined}
         resultRef={p.resultRef as ContentRef | undefined}
         sessionId={sessionId}
         requestPull={pull}
