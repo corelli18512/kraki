@@ -136,3 +136,11 @@
 .ua-empty-icon { width: 20px; height: 20px; color: var(--color-text-muted); }
 .ua-update { display: flex; align-items: center; gap: 5px; padding: 0 18px 12px; margin-top: -6px; font-size: 11px; color: var(--color-text-secondary); }
 .ua-update svg { width: 12px; height: 12px; }
+
+/* Dark branches of UsagePeekView: keep the panel in the app's appearance. */
+.dark .ua-panel { --color-text-primary:#dfe0e0; --color-text-secondary:#9fa1a2; --color-text-muted:#74777a; }
+.dark .ua-compact-card.is-current { background:color-mix(in srgb, #5ea0d7 8%, transparent); }
+.dark .ua-card.is-current { background:color-mix(in srgb, #5ea0d7 7%, transparent); }
+.dark .ua-card.is-current.is-hover { background:color-mix(in srgb, #5ea0d7 11%, transparent); }
+.dark .ua-current { background:color-mix(in srgb, #5ea0d7 14%, transparent); }
+.dark .ur-mid .ur-arc { stroke:var(--ur-dark-gradient); }
