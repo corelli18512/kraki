@@ -146,6 +146,10 @@ extension AppState {
         KrakiDiag.phase("active")
         #endif
         noteVisible()
+        #if KRAKI_DIAG && !KRAKI_DIAG_TEST_BUILD
+        // A notice deferred behind an open permission prompt gets another chance.
+        if connectionStatus == .connected { Task { @MainActor in PerformanceNotice.shared.authenticated() } }
+        #endif
         updateReadVisibility(appForeground: true, conversationVisible: true)
         #if os(iOS)
         Task { await pushManager?.handleForeground() }
@@ -192,6 +196,7 @@ extension AppState {
     func handleBackground() {
         isInBackground = true
         stability.appHidden()
+        messageRouter?.replyMetrics.backgrounded()
         noteOrderlyExit()
         updateReconnectingIndicator()
         #if KRAKI_DIAG
@@ -317,6 +322,9 @@ extension AppState {
         Self.onMacNotificationsMain { $0.onAuthenticated(appState: self) }
         #endif
         voiceInputController.prepare()
+        #if KRAKI_DIAG && !KRAKI_DIAG_TEST_BUILD
+        Task { @MainActor in PerformanceNotice.shared.authenticated() }
+        #endif
     }
 
     func onAuthFailed(error: String) {

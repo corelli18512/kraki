@@ -90,6 +90,8 @@ final class MessageRouter {
     private(set) weak var appState: AppState?
     private var retired = false
     let encryptionHandler: EncryptionHandler
+    /// `reply.summary` per turn this device started (MessageRouter+Replies.swift).
+    let replyMetrics = MessageRouter.makeReplyTracker()
 
     private static let previewMaxLength = 80
 
@@ -416,6 +418,7 @@ final class MessageRouter {
             appState.markSessionReadIfVisible(sessionId, seq: seq)
         }
 
+        noteReplyProgress(type, sessionId: sessionId, payload: payload)
         switch type {
 
         // ── Session lifecycle ────────────────────────────────────────────
@@ -475,16 +478,7 @@ final class MessageRouter {
             }
 
         case "turn_status":
-            appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
-            appState.messageStore.clearRuntimeStatusIfCompacting(sessionId)
-            appState.messageStore.endCardTurn(sessionId)
-            let action = payload?["action"] as? [String: Any]
-            let failed = (action?["type"] as? String) == "failed"
-            let draft = payload?["draft"] as? String ?? ""
-            updatePreview(sessionId,
-                          text: draft.isEmpty ? (failed ? "Turn failed" : "Stopped") : draft,
-                          type: failed ? "error" : "agent",
-                          timestamp: timestamp)
+            handleTurnStatus(sessionId, json: json, payload: payload, timestamp: timestamp)
 
         case "interrupted_turn":
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
@@ -735,11 +729,7 @@ final class MessageRouter {
             deviceId: tentacleDeviceId,
             deviceName: deviceName
         )
-        for sid in removedSessionIDs {
-            appState.messageStore.clearRuntimeStatus(sid)
-            appState.messageStore.clearCard(sid)
-        }
-        appState.noteSessionListApplied()
+        sessionListApplied(removed: removedSessionIDs, idle: Set(parsed.filter { $0.state == .idle }.map(\.id)))
 
         for digest in parsed {
             // Runtime status is ephemeral and the producer is authoritative.
@@ -1208,7 +1198,7 @@ final class MessageRouter {
 
     /// Optimistic mirror for stable turn boundaries only. The next
     /// `session_list` digest always replaces this value authoritatively.
-    private func updatePreview(
+    func updatePreview(
         _ sessionId: String,
         text: String,
         type: String,

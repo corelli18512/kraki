@@ -524,7 +524,7 @@ jobs:
           if [ '${{ endsWith(needs.prepare.outputs.release_tag, '-diag') }}' = 'true' ]; then
             bash scripts/diag/verify-diagnostic-delivery.sh "$APP"
           else
-            bash scripts/diag/verify-no-diag.sh "$APP"
+            bash scripts/diag/verify-production.sh "$APP"
           fi
           codesign --verify --strict --verbose=2 "$APP"
 

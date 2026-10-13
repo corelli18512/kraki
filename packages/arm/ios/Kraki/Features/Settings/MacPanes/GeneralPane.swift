@@ -14,7 +14,7 @@ struct GeneralPane: View {
 
     var body: some View {
         Form {
-            #if KRAKI_DIAG
+            #if KRAKI_DIAG_TEST_BUILD
             DiagSettingsSection()
             #endif
             Section("Appearance") {
@@ -81,6 +81,10 @@ struct GeneralPane: View {
                     Text(error).font(.system(size: 11)).foregroundStyle(.orange)
                 }
             }
+
+            #if KRAKI_DIAG && !KRAKI_DIAG_TEST_BUILD
+            DiagSettingsSection()
+            #endif
         }
         .formStyle(.grouped)
         .onChange(of: colorScheme) { _, newValue in

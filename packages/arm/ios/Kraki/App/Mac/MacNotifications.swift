@@ -36,6 +36,8 @@ final class MacNotifications: NSObject {
 
     /// Request authorization (idempotent — UN handles repeat calls).
     func requestAuthorization() async {
+        NotificationPermissionPrompt.began()
+        defer { NotificationPermissionPrompt.ended() }
         _ = try? await UNUserNotificationCenter.current()
             .requestAuthorization(options: [.alert, .badge, .sound])
     }

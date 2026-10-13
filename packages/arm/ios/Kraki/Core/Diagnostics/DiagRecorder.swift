@@ -11,7 +11,7 @@ enum DiagEventName: String, Codable {
     case outbox = "outbox.state", echo = "echo.input", health = "diag.health", upload = "diag.upload", slowWork = "work.slow"
     case busy = "ui.busy", marker = "user.marker", voice = "voice.action", list = "list.snapshot", navigation = "session.view"
     case ready = "ready.summary", outage = "outage.summary", open = "open.summary"
-    case send = "send.summary", voiceSummary = "voice.summary"
+    case send = "send.summary", voiceSummary = "voice.summary", reply = "reply.summary"
 }
 enum DiagField: String {
     case clientId, questionId, answerTo, ix, origin, phase, state, source, stack
@@ -22,6 +22,7 @@ enum DiagField: String {
     case code, detectMs, reconnectMs, catchupMs, impactMs, visibleMs, pathChanged, afterWake, previousExit
     case shown, shownMs, falseAlarm, manualRetries, autoResends, offline, background, confirmMs, correctionMs, cause
     case stage, confirmed, warm, startMs, recordMs, finalizeMs, correctionOn
+    case firstActivityMs, firstTextMs, deltas, maxGapMs, stalls
 }
 enum DiagValue: Encodable {
     case id(String), tag(String), number(Double), bool(Bool)
@@ -156,7 +157,13 @@ final class DiagSpool {
     private(set) var evicted = 0
     var bytes: Int { segments.reduce(0) { $0 + $1.bytes } }
 
-    init(directory: URL, maxBytes: Int = 50 * 1024 * 1024, maxFiles: Int = 2048) throws {
+    /// Production keeps at most 5 MB unsent (weeks offline); test builds 50 MB.
+    #if KRAKI_DIAG_TEST_BUILD
+    static let defaultMaxBytes = 50 * 1024 * 1024
+    #else
+    static let defaultMaxBytes = 5 * 1024 * 1024
+    #endif
+    init(directory: URL, maxBytes: Int = DiagSpool.defaultMaxBytes, maxFiles: Int = 2048) throws {
         self.directory = directory; self.maxBytes = maxBytes; self.maxFiles = maxFiles
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700])

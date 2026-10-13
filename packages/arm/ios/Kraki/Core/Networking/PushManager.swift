@@ -289,6 +289,8 @@ final class PushManager: NSObject {
             return false
         case .notDetermined:
             do {
+                NotificationPermissionPrompt.began()
+                defer { NotificationPermissionPrompt.ended() }
                 let granted = try await UNUserNotificationCenter.current()
                     .requestAuthorization(options: [.alert, .sound, .badge])
                 await refreshPermissionStatus()
