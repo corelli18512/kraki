@@ -43,6 +43,40 @@ extension ChatPerfListVC {
     var automationLastLiveRenderCostMs: Double { lastLiveRenderCost * 1_000 }
     #endif
 
+    /// Edge deltas describe the change only when everything between the edges
+    /// survived unchanged. The window can trim its newest rows while the live
+    /// card stays last, putting the deletion in the MIDDLE; a batch built from
+    /// edge counts then disagrees with the data source and UIKit throws.
+    func edgesKeepMiddle(_ e: (insertFront: Int, deleteFront: Int, insertBack: Int, deleteBack: Int),
+                         old: [String], new: [String]) -> Bool {
+        let oldMid = e.deleteFront ..< (old.count - e.deleteBack)
+        let newMid = e.insertFront ..< (new.count - e.insertBack)
+        guard oldMid.lowerBound <= oldMid.upperBound, newMid.lowerBound <= newMid.upperBound else { return false }
+        return old[oldMid].elementsEqual(new[newMid])
+    }
+
+    /// A non-edge change: keep the reading position with the anchored diff, or
+    /// reload as a last resort. Never an edge batch update.
+    func applyMiddleChange(reason: String, new newIds: [String]) {
+        chatPerfLog.log("[apply] \(reason) midInvalid → anchored diff")
+        if applyAnchoredDiff(old: items, new: newIds) { return }
+        reloadWholeWindow(newIds)
+    }
+
+    /// Replace the whole window without animation (loses the scroll anchor,
+    /// never desyncs the collection view from `items`).
+    func reloadWholeWindow(_ newIds: [String]) {
+        UIView.performWithoutAnimation {
+            loadingOlder = hasLoadedWindow && !atOldest
+            loadingNewer = showsNewerSpinner
+            items = newIds
+            paginationSnapshotDeferred = false
+            collectionView.reloadData()
+            collectionView.layoutIfNeeded()
+        }
+        warmWindow()
+    }
+
     func applyEdges(txn: PaginateTxn? = nil,
                             reason: String,
                             insertFront: Int = 0, deleteFront: Int = 0,
@@ -65,37 +99,13 @@ extension ChatPerfListVC {
             // Loses the scroll anchor (rare), but never crashes. The deepEnough
             // buffer hold keeps this practically unreachable.
             chatPerfLog.log("[apply] \(reason) NO-COMMON reload old=\(oldCount) new=\(newIds.count)")
-            UIView.performWithoutAnimation {
-                loadingOlder = hasLoadedWindow && !atOldest
-                loadingNewer = showsNewerSpinner
-                items = newIds
-                paginationSnapshotDeferred = false
-                collectionView.reloadData()
-                collectionView.layoutIfNeeded()
-            }
-            warmWindow()
+            reloadWholeWindow(newIds)
             return
         }
-        // Edge deltas only describe the change when everything between the
-        // edges survived unchanged. The window can trim its newest rows while
-        // the live card stays last, putting the deletion in the MIDDLE; a batch
-        // built from edge counts then disagrees with the data source and UIKit
-        // throws. Every caller (nav-older included) gets the check here.
-        let oldMid = e.deleteFront ..< (oldCount - e.deleteBack)
-        let newMid = e.insertFront ..< (newIds.count - e.insertBack)
-        guard oldMid.lowerBound <= oldMid.upperBound, newMid.lowerBound <= newMid.upperBound,
-              items[oldMid].elementsEqual(newIds[newMid]) else {
-            chatPerfLog.log("[apply] \(reason) midInvalid → anchored diff")
-            if applyAnchoredDiff(old: items, new: newIds) { return }
-            UIView.performWithoutAnimation {
-                loadingOlder = hasLoadedWindow && !atOldest
-                loadingNewer = showsNewerSpinner
-                items = newIds
-                paginationSnapshotDeferred = false
-                collectionView.reloadData()
-                collectionView.layoutIfNeeded()
-            }
-            warmWindow()
+        // A middle deletion (window trim before the live card) cannot be an
+        // edge batch update: UIKit would throw. See `applyMiddleChange`.
+        if !edgesKeepMiddle(e, old: items, new: newIds) {
+            applyMiddleChange(reason: reason, new: newIds)
             return
         }
         let iF = e.insertFront, dF = e.deleteFront, iB = e.insertBack, dB = e.deleteBack

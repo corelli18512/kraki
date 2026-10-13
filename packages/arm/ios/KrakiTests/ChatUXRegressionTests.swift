@@ -15,9 +15,9 @@ final class ChatUXRegressionTests: XCTestCase {
     }
 
     private var roots: [URL] = []
-    private var windows: [UIWindow] = []
+    var windows: [UIWindow] = []
     private var states: [AppState] = []
-    private let sid = "ux-gate"
+    let sid = "ux-gate"
     private let dev = "ux-gate-device"
 
     override func tearDown() async throws {
@@ -60,22 +60,7 @@ final class ChatUXRegressionTests: XCTestCase {
     /// `onScreen`: attach the window to the simulator's real UIWindowScene so
     /// Core Animation actually renders (needed to sample presentation layers;
     /// a scene-less window never composites and finishes animations at once).
-    func testClosedChatControllerIsReleased() throws {
-        weak var weakVC: ChatPerfListVC?
-        try autoreleasepool {
-            let fx = try makeFixture(total: 40)
-            weakVC = fx.vc
-            let window = windows.removeLast()
-            fx.vc.viewWillDisappear(false)
-            fx.vc.viewDidDisappear(false)
-            window.rootViewController = nil
-            window.isHidden = true
-        }
-        drain(300)
-        XCTAssertNil(weakVC, "the frame monitor (or something else) still retains the chat controller")
-    }
-
-    private func makeFixture(total: Int, onScreen: Bool = false,
+    func makeFixture(total: Int, onScreen: Bool = false,
                              outbound: (([String: Any]) -> Bool)? = nil) throws -> Fx {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ux-gate-\(UUID().uuidString)")
         roots.append(root)
@@ -126,7 +111,7 @@ final class ChatUXRegressionTests: XCTestCase {
         return nil
     }
 
-    private func drain(_ ms: Int) {
+    func drain(_ ms: Int) {
         RunLoop.main.run(until: Date().addingTimeInterval(Double(ms) / 1000))
     }
 
@@ -1397,27 +1382,6 @@ final class ChatUXRegressionTests: XCTestCase {
     }
 
     // MARK: Navigation controls
-
-    /// 1-03 (2026-10-13 review): ↑ through a long conversation while the live
-    /// card is showing pages older history in via `nav-older`; the window then
-    /// trims rows BEFORE the live card (a middle deletion). Edge-only batch
-    /// updates raised UIKit's "invalid number of items" exception.
-    func testUpThroughLongHistoryWithLiveCardKeepsTheListConsistent() throws {
-        let fx = try makeFixture(total: 600)
-        drain(1_500)
-        fx.app.messageStore.beginCardTurn(sid)
-        fx.app.messageStore.applyCardMessage(sid, "Working on it\u{2026}", reset: true)
-        fx.vc.syncLiveUpdates()
-        drain(500)
-        XCTAssertEqual(fx.vc.automationItemIDs.last, ChatPerfListVC.liveCardID, "live card at the tail")
-        for _ in 0..<40 {
-            fx.vc.automationTapUp()
-            drain(700)
-            XCTAssertEqual(fx.cv.numberOfItems(inSection: 0), fx.vc.automationItemIDs.count,
-                           "collection view and data source agree")
-        }
-        XCTAssertEqual(fx.vc.automationItemIDs.last, ChatPerfListVC.liveCardID)
-    }
 
     func testUpStepsThroughReplyStartsAndDownShowsAwayFromBottom() throws {
         let fx = try makeFixture(total: 120)

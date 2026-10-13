@@ -10,7 +10,7 @@ final class MacComposerUndoTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let textView = MacComposerTextView(frame: window.contentView!.bounds)
+        let textView = MacComposerTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
         textView.allowsUndo = true
         window.contentView?.addSubview(textView)
         window.makeFirstResponder(textView)
