@@ -741,7 +741,7 @@ final class SessionStoreTests: XCTestCase {
 
         await coordinator.bootstrap(appState: app)
         XCTAssertEqual(coordinator.phase, .preparingAuthenticated)
-        try await Task.sleep(for: .milliseconds(40))
+        try await waitBriefly { coordinator.phase == .authenticated }  // 10 ms watchdog; busy CI can be late
 
         XCTAssertEqual(coordinator.phase, .authenticated)
         XCTAssertFalse(coordinator.isLaunchGateVisible)

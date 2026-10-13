@@ -102,6 +102,10 @@ export class ChaosStack {
       relayUrl: `ws://127.0.0.1:${this.tentacleProxy.port}`,
       device,
       authMethod: 'open',
+      // These scenarios test the relay path. A local link would let the Mac
+      // test App bypass the fault proxy, and would publish its discovery file
+      // in the real ~/.kraki (KRAKI_HOME is unset here).
+      localLink: false,
     }, this.keys, this.attachments);
     this.relay.onStateChange = (state) => this.log('tentacle_state', { state });
     const relayAny = this.relay as unknown as { sendReliableUnicastTo: (...a: unknown[]) => void };
