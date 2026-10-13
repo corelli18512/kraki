@@ -18,6 +18,8 @@ const components: Components = {
   a: ({ href, children }) => (
     <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
   ),
+  // Native inline parsing displays thematic breaks as text, not a divider.
+  hr: () => <span className="kmd-native-rule">---</span>,
   // Fenced code: a dark card with the language label, horizontally scrollable.
   pre: ({ children }) => {
     const child = Array.isArray(children) ? children[0] : children;

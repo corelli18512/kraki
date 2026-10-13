@@ -9,6 +9,7 @@ import { stringToHue } from '../../lib/color';
 import { Markdown, StreamingMarkdown } from './Markdown';
 import { ActionSlot, type ActionHandlers, type SlotAction } from './ActionSlot';
 import { HtmlArtifactCards, ImageAttachments } from './Attachments';
+import { MessageBubble } from './MessageBubble';
 
 export type ChatRow =
   | { kind: 'spine'; key: string; item: SpineItem }
@@ -64,7 +65,7 @@ export const Bubble = memo(function Bubble({ row, ctx }: { row: ChatRow; ctx: Bu
     const text = row.kind === 'spine' ? contentOf(row.item.message) || 'System notice' : '';
     return (
       <div className="krow krow-agent">
-        <div className="kbubble kbubble-system"><Markdown text={text} /></div>
+        <MessageBubble className="kbubble kbubble-system"><Markdown text={text} /></MessageBubble>
       </div>
     );
   }
@@ -85,9 +86,9 @@ function UserRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
     >
       <div className="kuser-stack">
         {showText && (
-          <div className="kbubble kbubble-user">
+          <MessageBubble className="kbubble kbubble-user">
             <Markdown text={text} />
-          </div>
+          </MessageBubble>
         )}
         {images.length > 0 && (
           <div className="kattachments kattachments-user"><ImageAttachments attachments={images} sessionId={ctx.sessionId} /></div>
@@ -176,14 +177,18 @@ function AgentRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
     <div className="krow krow-agent" data-row-key={row.key} data-question={isQuestion ? 'true' : undefined}>
       <div className="kagent-stack">
         {(hasBody || action) && (
-          <div className="kbubble kbubble-agent" style={{ '--hue': hue } as CSSProperties}>
+          <MessageBubble
+            className="kbubble kbubble-agent"
+            style={{ '--hue': hue } as CSSProperties}
+            onShowSteps={steps > 0 && ctx.onOpenSteps ? () => ctx.onOpenSteps?.(live ? null : stepsSeq) : undefined}
+          >
             {hasBody && (live ? <StreamingMarkdown text={text} /> : <Markdown text={text} />)}
             {action && (
               <div className={`kslot ${hasBody ? '' : 'kslot-alone'}`}>
                 <ActionSlot action={action} handlers={ctx} />
               </div>
             )}
-          </div>
+          </MessageBubble>
         )}
         {images.length > 0 && (
           <div className="kattachments"><ImageAttachments attachments={images} sessionId={ctx.sessionId} /></div>
