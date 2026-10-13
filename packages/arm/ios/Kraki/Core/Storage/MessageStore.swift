@@ -916,8 +916,8 @@ final class MessageStore {
         /// or a frozen row's question choices / terminal outcome
         /// (`ChatMessage.frozenCard`), as a `ChatMessage` (type + payload).
         var action: ChatMessage?
-        /// Draft frozen above each steer of the turn (MessageStore+SteerSplit).
-        var steerSplit = SteerSplit()
+        /// The steer the card is drawn above (MessageStore+SteerPlacement).
+        var aboveSteer: String?
     }
     var cards: [String: SessionCard] = [:]
     /// A concluded turn rejects late coalesced deltas/card snapshots so its
@@ -973,6 +973,8 @@ final class MessageStore {
         // Non-empty model output proves the runtime advanced beyond compaction.
         if !content.isEmpty { clearRuntimeStatusIfCompacting(sessionId) }
         var card = cards[sessionId] ?? SessionCard()
+        // A new segment (reset, or words after an empty draft) follows the steer.
+        if reset || (card.text.isEmpty && !content.isEmpty) { card.aboveSteer = nil }
         card.text = reset ? content : card.text + content
         if !content.isEmpty, card.action?.payload["retained"]?.boolValue == true {
             // Narration resumed: the retained resolved prompt is now superseded,
@@ -1092,12 +1094,11 @@ final class MessageStore {
         cardHoldUntil[sessionId] = seq
     }
 
-    /// The card as the conversation may show it: below the latest steer, only
-    /// the words that followed it.
+    /// The card as the conversation may show it.
     func visibleCard(_ sessionId: String) -> SessionCard? {
         guard let card = cards[sessionId] else { return nil }
         if let until = cardHoldUntil[sessionId], persistedHead(sessionId) < until { return nil }
-        return card.afterLatestSteer
+        return card
     }
 
     /// Land-and-clear: the concluding bubble landed on the spine, drop the card.

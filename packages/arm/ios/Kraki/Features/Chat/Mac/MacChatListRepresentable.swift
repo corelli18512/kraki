@@ -206,7 +206,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
             || scrollView.isEntryBottomLocked
             || context.coordinator.firstLayout
 
-        scrollView.performAtomicSnapshot {
+        scrollView.performAtomicSnapshotGlidingLiveCardMove {
             scrollView.chatDocumentView.apply(
                 contents: builtItems,
                 documentWidth: max(documentWidth, 1),
@@ -375,8 +375,9 @@ struct MacChatListRepresentable: NSViewRepresentable {
             coordinator.itemCache[message.id] = item
             return item
         }
+        // Last, or above a steer the agent has not read yet (MessageStore+SteerPlacement).
         if let liveCard, !liveCard.text.isEmpty || liveCard.action != nil {
-            items.append(MacChatItem(
+            items.insert(MacChatItem(
                 seq: liveTraceSeq,
                 key: "__live__",
                 signature: liveCardSignature(liveCard),
@@ -393,7 +394,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
                         steps: liveSteps
                     )
                 }
-            ))
+            ), at: liveCard.rowIndex(in: messages))
         }
         return items
     }

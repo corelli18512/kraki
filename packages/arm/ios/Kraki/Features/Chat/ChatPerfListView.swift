@@ -164,7 +164,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// Turn ids in the current snapshot (oldest→newest). The engine's diff key.
     var ids: [String] {
         var result = messages.map(\.id)
-        if vm.card?.text.isEmpty == false || vm.card?.action != nil { result.append(Self.liveCardID) }
+        // Last, or above a steer the agent has not read yet (MessageStore+SteerPlacement).
+        if let card = vm.card, !card.text.isEmpty || card.action != nil { result.insert(Self.liveCardID, at: card.rowIndex(in: messages)) }
         return result
     }
     var messageCount: Int { messages.count }
@@ -482,7 +483,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         items.count
     }
 
-    var hasLiveCardItem: Bool { items.last == Self.liveCardID }
+    var hasLiveCardItem: Bool { items.contains(Self.liveCardID) }
     private func isLiveCard(_ index: Int) -> Bool { index < items.count && items[index] == Self.liveCardID }
 
     /// A frozen card (`turn_status` / `interrupted_turn`, or a question)

@@ -80,6 +80,7 @@ extension ChatPerfListVC {
         hasher.combine(vm.card?.action?.payload["localError"]?.stringValue ?? "")
         hasher.combine(vm.card?.action?.payload["retained"]?.boolValue ?? false)
         hasher.combine(vm.card?.action?.cancelled ?? false)
+        hasher.combine(vm.card?.aboveSteer ?? "")
         return String(hasher.finalize(), radix: 16)
     }
 

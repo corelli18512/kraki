@@ -252,7 +252,7 @@ targets:
       - path: KrakiTests/DeviceTrustBoundaryTests+Round2.swift
       - path: KrakiTests/DeviceTrustUsabilityTests.swift
       - path: KrakiTests/E2EV2NodeVectors.swift
-      - path: KrakiTests/SteerSplitTests.swift
+      - path: KrakiTests/SteerPlacementTests.swift
       - path: KrakiTests/ComposerAnswerImagesTests.swift
     settings:
       base:

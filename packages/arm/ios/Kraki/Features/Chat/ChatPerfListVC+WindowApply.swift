@@ -741,6 +741,10 @@ extension ChatPerfListVC {
     /// re-assigns all text and backgrounds and reads as a flash.
     func applyTailInPlace(old: [String], new: [String]) -> Bool {
         guard !old.isEmpty, !new.isEmpty, collectionView.window != nil else { return false }
+        // The live card changes rows first (animated), then the rest applies.
+        if let moved = liveCardMoved(old: old, new: new), applyLiveCardMove(old: old, to: moved) {
+            return moved == new || applyTailInPlace(old: moved, new: new)
+        }
         let shared = min(old.count, new.count)
         var prefix = 0
         while prefix < shared, old[prefix] == new[prefix] { prefix += 1 }

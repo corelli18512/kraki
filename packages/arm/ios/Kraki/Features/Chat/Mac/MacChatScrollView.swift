@@ -530,7 +530,7 @@ final class MacChatScrollView: MacSmoothScrollView {
             ?? chatDocumentView.visibleAnchor(at: viewport.minY)
         let anchor = geometryAnchorForMutation(fallback: fallbackAnchor)
         let oldHeight = chatDocumentView.frame.height
-        let oldLatestHeight = chatDocumentView.latestItemFrame()?.height ?? 0
+        let oldLatestHeight = chatDocumentView.growingItemFrame()?.height ?? 0
         if restartWarmup {
             chatDocumentView.endScrollInteraction(in: viewport)
         } else {
@@ -545,7 +545,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         // height are compensated at once — that keeps what is on screen still.
         let tailGrowth = MacTailMotion.tailGrowth(
             documentDelta: heightDelta,
-            latestHeightDelta: (chatDocumentView.latestItemFrame()?.height ?? 0) - oldLatestHeight
+            latestHeightDelta: (chatDocumentView.growingItemFrame()?.height ?? 0) - oldLatestHeight
         )
         if following, abs(heightDelta) > 0.5 {
             contentView.bounds.origin.y += heightDelta - tailGrowth
