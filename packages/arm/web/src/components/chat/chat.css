@@ -1227,7 +1227,10 @@
 .kreport-card-chevron { width: 12px; height: 12px; color: var(--k-text-3); flex-shrink: 0; }
 .dark .kreport-card { background: rgba(30,30,30,.78); border-color: rgba(255,255,255,.72); }
 .dark .kreport-card:hover { background: rgba(10,132,255,.09); border-color: rgba(10,132,255,.42); }
-.dark .kreport-card-icon { background: rgba(10,132,255,.1); color: #0a84ff; }
+.dark .kreport-card-icon { background: rgba(10,132,255,.1); }
+.dark .kreport-card-text strong { color: var(--color-label-primary); }
+.dark .kreport-card-text small { color: var(--color-label-secondary); }
+.dark .kreport-card-chevron { color: var(--color-label-tertiary); }
 .kimage-single { max-width: 360px; }
 .kimage-stack { position: relative; width: calc(360px + var(--image-stack-offset)); max-width: 100%; }
 .kimage-stack-card { position: absolute; width: calc(100% - var(--image-stack-offset)); height: 184px; }
@@ -1258,10 +1261,13 @@
 .kreport-panel.is-expanded { position: absolute; inset: 0; width: 100%; border-left: 0; }
 .kreport-header { display: flex; flex-shrink: 0; align-items: center; gap: 9px; height: 37px; padding: 0 12px 8px; border-bottom: 1px solid color-mix(in srgb, var(--k-border) 70%, transparent); }
 .kreport-header-icon { width: 20px; height: 20px; flex-shrink: 0; color: #007aff; padding: 2px; }
-.dark .kreport-header-icon { color: #0a84ff; }
+.dark .kreport-header-text strong, .dark .kreport-state strong { color: var(--color-text-title); }
 .kreport-header-text small { display: block; font-size: 9.5px; line-height: 12px; color: var(--k-text-3); }
 .kreport-header button { width: 26px; height: 26px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: var(--k-text-2); cursor: pointer; border-radius: 4px; }
 .kreport-header button:hover { background: var(--k-fill); }
+@media (min-width: 768px) {
+  .dark .kreport-header button:hover { background: none; }
+}
 .kreport-header button svg { width: 13px; height: 13px; }
 .kreport-frame { min-height: 0; flex: 1; width: 100%; border: 0; background: white; }
 .kreport-state { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center; font-size: 12px; color: var(--k-text-2); }
@@ -1276,8 +1282,10 @@
 }
 .kagent-stack:has(.kreport-cards) { width: 95%; }
 .kbubble-agent:has(.kreport-cards) { width: 100%; }
-/* The native ultra-thin toolbar material is light even over the dark canvas. */
-.dark .kimage-toolbar { background: rgba(40,40,40,.97); }
+/* Resolved native dark ultra-thin material above the image canvas. */
+.dark .kimage-toolbar { background: rgb(22,25,26); }
+/* Native disabling fades the label only, leaving the white10% backing intact. */
+.dark .kimage-toolbar button:disabled { opacity: 1; color: rgba(255,255,255,.45); }
 
 .dark .kimage-placeholder.is-error svg, .dark .kreport-export-error { color: #ff453a; }
 .dark .kreport-state.is-error svg { color: #ff9f0a; }
