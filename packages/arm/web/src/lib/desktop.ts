@@ -37,16 +37,44 @@ export type SetupEvent =
 export interface BuiltInBridge {
   state: () => Promise<BuiltInState>;
   checkAgents: (onEvent: (e: AgentCheckEvent) => void) => Promise<{ ok: boolean }>;
-  setup: (opts: { deviceName?: string; forceLogin?: boolean }, onEvent: (e: SetupEvent) => void) => Promise<{ ok: boolean; username?: string; code?: string }>;
+  setup: (opts: { deviceName?: string; forceLogin?: boolean; useCode?: boolean }, onEvent: (e: SetupEvent) => void) => Promise<{ ok: boolean; username?: string; code?: string }>;
   cancelSetup: () => void;
+  showSignInWindow?: () => void;
   /** `kraki connect --json`: a pairing link for a phone (needs the daemon). */
   connectPhone: () => Promise<{ ok: boolean; url?: string; token?: string; expiresAt?: string; error?: string }>;
   enable: () => Promise<{ ok: boolean; error?: string }>;
-  disable: () => Promise<{ ok: boolean; error?: string }>;
+  disable: (opts?: { keepOwnership?: boolean }) => Promise<{ ok: boolean; error?: string }>;
+  externalPresence?: (action: 'start' | 'stop' | 'restart') => Promise<{ ok: boolean; error?: string }>;
   restart: () => Promise<{ ok: boolean; error?: string }>;
   /** The relay + GitHub token the app signs in with (same account). */
   credentials: () => { relay: string; token: string | null } | null;
   openLogs: () => void;
+  logsPath?: () => Promise<string>;
+  showLogsInExplorer?: () => void;
+}
+
+export interface DesktopSettingsState {
+  usageShortcut: string;
+  usageShortcutEnabled: boolean;
+  launchAtLogin: boolean;
+  keepRunningInTray: boolean;
+  notificationPermission: 'granted' | 'denied' | 'default';
+  logsPath: string | null;
+  allowRemoteUpdates: boolean;
+  externalCliPath?: string | null;
+  externalCliVersion?: string | null;
+}
+
+export interface DesktopSettingsBridge {
+  state: () => Promise<DesktopSettingsState>;
+  setUsageShortcut?: (shortcut: string, enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
+  setLaunchAtLogin?: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
+  setKeepRunningInTray?: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
+  openNotificationSettings?: () => void;
+  showLogsInExplorer?: () => void;
+  locateCli?: () => Promise<{ ok: boolean; error?: string }>;
+  recheckCli?: () => Promise<{ ok: boolean; error?: string }>;
+  setAllowRemoteUpdates?: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export interface KrakiDesktopBridge {
@@ -54,6 +82,7 @@ export interface KrakiDesktopBridge {
   /** Device name shown to other devices ("Kraki Windows"). */
   deviceName: string;
   builtIn?: BuiltInBridge;
+  settings?: DesktopSettingsBridge;
   version: string;
   /** Origin GitHub redirects back to after OAuth (the shell intercepts it). */
   oauthRedirectOrigin: string;
@@ -77,25 +106,6 @@ export const desktop: KrakiDesktopBridge | undefined =
   typeof window !== 'undefined' ? window.krakiDesktop : undefined;
 
 export const isDesktop = !!desktop;
-
-/** Whether the user is looking at this session right now. */
-function isWatching(sessionId: string): boolean {
-  return document.visibilityState === 'visible' && document.hasFocus()
-    && window.location.pathname === `/session/${sessionId}`;
-}
-
-const recent = new Map<string, number>();
-
-/** A native notification for something that needs the user — only in the
- *  desktop shell (browsers get Web Push), never for the session in view, and
- *  at most one per session per few seconds. */
-export function notifyDesktop(sessionId: string, title: string, body: string): void {
-  if (!desktop || isWatching(sessionId)) return;
-  const now = Date.now();
-  if ((recent.get(sessionId) ?? 0) > now - 3_000) return;
-  recent.set(sessionId, now);
-  desktop.notify({ title, body: body.replace(/\s+/g, ' ').trim().slice(0, 180), sessionId });
-}
 
 const SIGNED_OUT_KEY = 'kraki-desktop.signedOut';
 

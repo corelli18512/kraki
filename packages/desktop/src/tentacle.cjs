@@ -232,14 +232,15 @@ class BuiltInKraki {
    * First-time setup. `openSignIn(url)` must resolve with the
    * kraki://auth/callback?… URL (or null when the user closed it).
    */
-  setup({ deviceName, forceLogin, onEvent, openSignIn }) {
+  setup({ deviceName, forceLogin, useCode, onEvent, openSignIn }) {
     // Cancel at once; the PATH refresh is async and must not let an old
     // setup run on.
     this.cancelSetup();
     const attempt = this.setupAttempt;
     return refreshRegistryPath().then(() => new Promise((resolve) => {
       if (attempt !== this.setupAttempt) { resolve({ ok: false, code: -1, detail: 'cancelled' }); return; }
-      const args = ['setup', '--json', '--oauth'];
+      const args = ['setup', '--json'];
+      if (!useCode) args.push('--oauth');
       if (deviceName) args.push('--device-name', deviceName);
       if (forceLogin) args.push('--force-login');
       let done = null;
@@ -308,9 +309,16 @@ class BuiltInKraki {
   }
 
   /** Stop for good: the supervisor (not just the worker) and the login entry. */
+  async launchAtLogin() {
+    return process.platform === 'win32' && !!(await reg(['query', RUN_KEY, '/v', APP_RUN_VALUE]));
+  }
+
   async setLoginItem(on) {
     if (process.platform !== 'win32') return;
-    if (on) await reg(['add', RUN_KEY, '/v', APP_RUN_VALUE, '/t', 'REG_SZ', '/d', `"${this.appPath}" --login`, '/f']);
+    if (on) {
+      const result = await reg(['add', RUN_KEY, '/v', APP_RUN_VALUE, '/t', 'REG_SZ', '/d', `"${this.appPath}" --login`, '/f']);
+      if (result === null) throw new Error('Windows could not add Kraki to Startup apps. Open Settings → Apps → Startup, then try again.');
+    }
     else await reg(['delete', RUN_KEY, '/v', APP_RUN_VALUE, '/f']);
   }
 

@@ -260,3 +260,14 @@
 /* The CLI choice over the signed-in window (ExistingCLIChoicePresenter). */
 .ds-owner-backdrop { align-items: center; padding-top: 0; font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif; }
 .ds-owner-sheet { width: 460px; padding: 26px 24px 20px; }
+
+/* Launch logo is centered independently from the activity bar (MacEntryGateView). */
+.ds-launch { align-items: center; justify-content: center; }
+.ds-launch-logo { width: 176px; height: 176px; object-fit: contain; }
+.ds-launch-activity { position: absolute; top: calc(50% + 118px); width: 128px; height: 2px; overflow: hidden; background: color-mix(in srgb, var(--color-text-muted) 15%, transparent); border-radius: 1px; }
+.ds-launch-activity::after { content: ""; display: block; width: 40%; height: 100%; background: var(--color-text-secondary); animation: ds-launch-slide 1.2s ease-in-out infinite alternate; }
+@keyframes ds-launch-slide { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
+@media (prefers-reduced-motion: reduce) { .ds-launch-activity::after { animation: none; width: 100%; } }
+
+.ds-settings-group { border: 1px solid var(--color-border-primary); background: var(--color-surface-secondary); border-radius: 10px; padding: 8px 12px; }
+.ds-settings-group legend { padding: 0 4px; font-size: 11px; font-weight: 600; color: var(--color-text-secondary); }

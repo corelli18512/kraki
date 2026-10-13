@@ -3,7 +3,7 @@
 // the relay connection (so replies, questions and approvals notify natively),
 // a taskbar badge, single-instance behaviour, and in-window GitHub sign-in.
 const {
-  app, BrowserWindow, Menu, Notification, Tray, dialog, ipcMain, nativeImage, nativeTheme,
+  app, BrowserWindow, Menu, Notification, Tray, dialog, ipcMain, globalShortcut, nativeImage, nativeTheme,
   net, protocol, screen, shell,
 } = require('electron');
 const { existsSync, readFileSync, writeFileSync } = require('node:fs');
@@ -13,6 +13,7 @@ const os = require('node:os');
 const { BuiltInKraki, readLocalLinkDiscovery } = require('./tentacle.cjs');
 const presence = require('./presence.cjs');
 const permissions = require('./permissions.cjs');
+const settings = require('./settings.cjs');
 
 const SCHEME = 'app';
 const HOST = 'kraki';
@@ -163,7 +164,11 @@ function createWindow() {
   win.on('close', (e) => {
     saveBounds();
     // Closing keeps Kraki running in the tray (replies still notify).
-    if (!quitting) { e.preventDefault(); win.hide(); stillOnlineHintOnce(); }
+    if (!quitting) {
+      e.preventDefault();
+      if (pref('keepRunningInTray') === false) void quitFromTray();
+      else { win.hide(); stillOnlineHintOnce(); }
+    }
   });
   win.on('focus', () => win.flashFrame(false));
 
@@ -303,7 +308,7 @@ function stillOnlineHintOnce() {
 }
 
 ipcMain.on('kraki:needs-you', (_e, list) => {
-  needsYou = Array.isArray(list) ? list.slice(0, 20).map((s) => ({ id: String(s.id), title: String(s.title).slice(0, 60), reason: String(s.reason) })) : [];
+  needsYou = Array.isArray(list) ? list.map((s) => ({ id: String(s.id), title: String(s.title), reason: String(s.reason) })) : [];
   updateTray();
 });
 
@@ -315,7 +320,7 @@ function createTray() {
   setInterval(updateTray, 3000);
   if (process.env.KRAKI_DESKTOP_LOG_NOTIFY) {
     setTimeout(() => {
-      try { require('node:fs').appendFileSync(path.join(app.getPath('userData'), 'notify.log'), `${new Date().toISOString()} tray bounds=${JSON.stringify(tray.getBounds())} empty=${icon.isEmpty()}\n`); } catch { /* ignore */ }
+      try { require('node:fs').appendFileSync(path.join(app.getPath('userData'), 'notify.log'), `${new Date().toISOString()} tray bounds=${JSON.stringify(tray.getBounds())} empty=${tray.getImage?.()?.isEmpty?.() ?? false}\n`); } catch { /* ignore */ }
     }, 3000);
   }
 }
@@ -387,6 +392,7 @@ ipcMain.handle('kraki:builtin-agents', async () => builtIn.checkAgents((e) => se
 ipcMain.handle('kraki:builtin-setup', async (_e, opts) => builtIn.setup({
   deviceName: opts?.deviceName,
   forceLogin: !!opts?.forceLogin,
+  useCode: !!opts?.useCode,
   onEvent: (e) => send('kraki:builtin-setup-event', e),
   openSignIn: openSignInWindow,
 }));
@@ -396,10 +402,84 @@ ipcMain.on('kraki:builtin-cancel-setup', () => {
   if (signInWindow && !signInWindow.isDestroyed()) signInWindow.close();
 });
 ipcMain.handle('kraki:builtin-enable', safely(() => builtIn.enable()));
-ipcMain.handle('kraki:builtin-disable', safely(() => builtIn.disable()));
+ipcMain.handle('kraki:builtin-disable', safely((_e, opts) => builtIn.disable({ keepOwnership: !!opts?.keepOwnership })));
+ipcMain.on('kraki:builtin-show-signin', () => {
+  if (signInWindow && !signInWindow.isDestroyed()) { signInWindow.restore(); signInWindow.show(); signInWindow.focus(); }
+});
+ipcMain.handle('kraki:builtin-logs-path', () => path.join(builtIn.home(), 'logs'));
+ipcMain.on('kraki:builtin-show-logs', () => { if (builtIn) void shell.openPath(path.join(builtIn.home(), 'logs')); });
+ipcMain.handle('kraki:builtin-external-presence', safely(async (_e, action) => {
+  if (!['start', 'stop', 'restart'].includes(action)) throw new Error('Invalid service action.');
+  if (builtIn.marker()) throw new Error('The built-in Kraki manages this PC.');
+  await settings.exec(pref('externalCliPath') || builtIn.bin, [action]);
+}));
 ipcMain.handle('kraki:builtin-restart', safely(() => builtIn.restart()));
 ipcMain.on('kraki:builtin-credentials', (e) => { e.returnValue = builtIn?.credentials() ?? null; });
-ipcMain.on('kraki:builtin-open-logs', () => { if (builtIn) void shell.openPath(path.join(builtIn.home(), 'logs')); });
+ipcMain.on('kraki:builtin-open-logs', () => {
+  if (!builtIn) return;
+  const logs = path.join(builtIn.home(), 'logs');
+  const viewer = new BrowserWindow({ width: 900, height: 600, title: 'Kraki Logs', autoHideMenuBar: true, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  const files = require('node:fs').existsSync(logs) ? require('node:fs').readdirSync(logs).filter((name) => /\.log$/.test(name)) : [];
+  const escape = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const text = files.map((name) => { try { return name + '\n' + readFileSync(path.join(logs, name), 'utf8').slice(-100000); } catch { return ''; } }).join('\n\n');
+  void viewer.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<title>Kraki Logs</title><pre style="white-space:pre-wrap;font:12px monospace">' + escape(text || 'No logs yet. Path: ' + logs) + '</pre>'));
+});
+
+// ── Device OS preferences (Settings bridge) ──
+let registeredUsageShortcut = null;
+function registerUsageShortcut(shortcut, enabled) {
+  if (enabled && shortcut !== registeredUsageShortcut) {
+    if (!globalShortcut.register(shortcut, () => { showWindow(); send('kraki:open-usage'); })) {
+      throw new Error('This shortcut is already in use or is not supported.');
+    }
+  }
+  if (registeredUsageShortcut && (!enabled || registeredUsageShortcut !== shortcut)) globalShortcut.unregister(registeredUsageShortcut);
+  registeredUsageShortcut = enabled ? shortcut : null;
+}
+function readConfig() { try { return JSON.parse(readFileSync(path.join(builtIn.home(), 'config.json'), 'utf8')); } catch { return null; } }
+ipcMain.handle('kraki:settings-state', async () => ({
+  usageShortcut: pref('usageShortcut') ?? 'CommandOrControl+Shift+U',
+  usageShortcutEnabled: !!registeredUsageShortcut,
+  launchAtLogin: process.platform === 'win32' ? await builtIn.launchAtLogin() : app.getLoginItemSettings().openAtLogin,
+  keepRunningInTray: pref('keepRunningInTray') !== false,
+  // Electron cannot query per-app Windows notification permission.
+  notificationPermission: Notification.isSupported() ? 'default' : 'denied',
+  logsPath: builtIn ? path.join(builtIn.home(), 'logs') : null,
+  allowRemoteUpdates: readConfig()?.remoteUpdate !== false,
+  externalCliPath: pref('externalCliPath') ?? null,
+  externalCliVersion: pref('externalCliVersion') ?? null,
+}));
+ipcMain.handle('kraki:settings-shortcut', safely((_e, shortcut, enabled) => {
+  if (typeof shortcut !== 'string' || !shortcut || shortcut.length > 100) throw new Error('Enter a valid shortcut.');
+  registerUsageShortcut(shortcut, !!enabled);
+  pref('usageShortcut', shortcut); pref('usageShortcutEnabled', !!enabled);
+}));
+ipcMain.handle('kraki:settings-login', safely(async (_e, enabled) => {
+  if (process.platform === 'win32') {
+    await builtIn.setLoginItem(!!enabled);
+    if (await builtIn.launchAtLogin() !== !!enabled) throw new Error('Windows could not change the login item.');
+    return;
+  }
+  app.setLoginItemSettings({ openAtLogin: !!enabled, path: process.execPath, args: ['--login'] });
+  if (app.getLoginItemSettings().openAtLogin !== !!enabled) throw new Error('Windows could not change the login item.');
+}));
+ipcMain.handle('kraki:settings-tray', safely((_e, enabled) => { pref('keepRunningInTray', !!enabled); }));
+ipcMain.on('kraki:settings-notifications', () => { if (process.platform === 'win32') void shell.openExternal('ms-settings:notifications'); });
+ipcMain.handle('kraki:settings-locate-cli', safely(async () => {
+  const result = await dialog.showOpenDialog(win, { title: 'Locate kraki manually', properties: ['openFile'], filters: [{ name: 'Kraki executable', extensions: process.platform === 'win32' ? ['exe'] : ['*'] }] });
+  if (result.canceled) throw new Error('Selection cancelled.');
+  const cli = await settings.probeCli(result.filePaths[0]);
+  pref('externalCliPath', cli.externalCliPath); pref('externalCliVersion', cli.externalCliVersion);
+}));
+ipcMain.handle('kraki:settings-recheck-cli', safely(async () => {
+  const cli = await settings.probeCli(pref('externalCliPath'));
+  pref('externalCliPath', cli.externalCliPath); pref('externalCliVersion', cli.externalCliVersion);
+}));
+ipcMain.handle('kraki:settings-remote-updates', safely(async (_e, enabled) => {
+  if (!readConfig()) throw new Error('Set up Kraki on this PC first.');
+  await settings.exec(builtIn.bin, ['config', 'remote-update', enabled ? 'on' : 'off']);
+  if ((readConfig()?.remoteUpdate !== false) !== !!enabled) throw new Error('Kraki could not change its update policy.');
+}));
 
 ipcMain.on('kraki:notify', (_e, n) => {
   if (!Notification.isSupported() || !n || typeof n.title !== 'string') return;
@@ -423,6 +503,7 @@ ipcMain.on('kraki:notify', (_e, n) => {
 app.on('second-instance', showWindow);
 app.on('before-quit', () => { quitting = true; });
 app.on('activate', showWindow);
+app.on('will-quit', () => globalShortcut.unregisterAll());
 
 app.whenReady().then(async () => {
   // The microphone (voice input) and clipboard writes (Copy buttons) for the
@@ -444,4 +525,7 @@ app.whenReady().then(async () => {
   serveApp();
   createWindow();
   createTray();
+  if (pref('usageShortcutEnabled') !== false) {
+    try { registerUsageShortcut(pref('usageShortcut') ?? 'CommandOrControl+Shift+U', true); } catch { /* state reports unavailable */ }
+  }
 });
