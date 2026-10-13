@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowUp, CornerRightUp, ImagePlus, Square, X } from 'lucide-react';
+import { ArrowUp, CornerRightUp, ImagePlus, Square, X, CircleX } from 'lucide-react';
 import type { Attachment } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
 import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
@@ -14,7 +14,14 @@ function messageText(m: unknown): string {
   return typeof v === 'string' ? v : '';
 }
 
-const MAX_LINES_HEIGHT = 168;
+/** Native editor edge fades only when content is hidden beyond that edge. */
+export function updateComposerScrollFade(el: HTMLTextAreaElement): void {
+  const top = el.scrollTop > 0.5;
+  const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 0.5;
+  el.style.maskImage = top || bottom
+    ? `linear-gradient(to bottom, ${top ? 'transparent' : '#000'}, #000 14px, #000 calc(100% - 14px), ${bottom ? 'transparent' : '#000'})`
+    : '';
+}
 const MAX_IMAGE_SIZE = 3 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 1024;
 
@@ -74,12 +81,14 @@ export interface ComposerProps {
   canAbort: boolean;
   /** Relay up and the session's device online. */
   reachable: boolean;
+  /** Attachments are unavailable during a running or compacting turn. */
+  busy: boolean;
   onSend: (text: string, attachments: Attachment[] | undefined, intent: ComposerIntent) => void;
   onAbort: () => void;
 }
 
 export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
-  { sessionId, intent, canAbort, reachable, onSend, onAbort },
+  { sessionId, intent, canAbort, reachable, busy, onSend, onAbort },
   ref,
 ) {
   const text = useStore((s) => s.drafts.get(sessionId) ?? '');
@@ -90,8 +99,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const fileRef = useRef<HTMLInputElement>(null);
   const composing = useRef(false);
   const [multiline, setMultiline] = useState(false);
-  /** Draft length at which the field went to two rows. */
-  const multilineFrom = useRef(0);
+  const boxRef = useRef<HTMLDivElement>(null);
   const dictation = useDictation(sessionId);
 
   const onVoiceFinal = (spoken: string, mode: VoiceFinish) => {
@@ -125,30 +133,37 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (shouldAutoFocusTextInput()) fieldRef.current?.focus({ preventScroll: true });
   }, [sessionId]);
 
-  // Grow with the text up to a cap, then scroll inside the field.
+  // Measure wrapping at the one-row width even when the controls are stacked.
+  // The editor stays mounted so wrapping never loses focus, selection or IME.
   useLayoutEffect(() => {
     const el = fieldRef.current;
-    if (!el) return;
-    el.style.height = '0px';
-    el.style.height = `${Math.min(el.scrollHeight, MAX_LINES_HEIGHT)}px`;
-    // Multi-line drafts use two rows: text across the box, controls below (Mac/iOS).
-    // Only the one-row layout is measured: two rows give the text the full
-    // width, where it may fit on one line again, and measuring there would
-    // flip the layout back and forth forever. Two rows end when the draft is
-    // shorter than when it got there (and has no line break).
-    if (multiline) {
-      if (!text || (!text.includes('\n') && text.length < multilineFrom.current)) setMultiline(false);
-      return;
-    }
-    if (!text) return;
-    const cs = getComputedStyle(el);
-    const line = parseFloat(cs.lineHeight) || 20;
-    const content = el.scrollHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-    if (text.includes('\n') || content > line * 1.6) {
-      multilineFrom.current = text.length;
-      setMultiline(true);
-    }
-  }, [text, multiline]);
+    const box = boxRef.current;
+    if (!el || !box) return;
+    const fit = () => {
+      const desktop = window.matchMedia('(min-width: 768px)').matches;
+      const micWidth = box.querySelector('.kmic') ? (desktop ? 32 : 44) : 0;
+      const clearWidth = desktop && (text.trim() || image) ? 26 : 0;
+      el.style.width = `${Math.max(1, box.clientWidth - (desktop ? 5 : 0) - 44 - clearWidth - micWidth)}px`;
+      el.style.padding = desktop ? '1px 4px' : '14px 16px 14px 4px';
+      el.style.height = '0px';
+      const cs = getComputedStyle(el);
+      const line = parseFloat(cs.lineHeight) || 20;
+      const padding = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+      const stacked = !!text.trim() && (text.includes('\n') || el.scrollHeight > line + padding + 0.5);
+      setMultiline(stacked);
+      el.style.padding = '';
+      if (desktop) el.style.width = `${Math.max(1, box.clientWidth - 5 - (stacked ? 12 : 44 + (text.trim() || image ? 26 : 0) + (box.querySelector('.kmic') ? 32 : 0)))}px`;
+      if (!desktop) el.style.width = '';
+      const fittedPadding = desktop ? padding : stacked ? 17 : 28;
+      el.style.height = `${Math.min(Math.max(el.scrollHeight, line + fittedPadding), desktop ? 3 * line + padding : 168)}px`;
+      el.style.width = '';
+      updateComposerScrollFade(el);
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [text, image, multiline, dictation.active]);
 
   const hasText = text.trim().length > 0;
   const structured = intent === 'answerQuestion' || intent === 'denyPermission';
@@ -175,7 +190,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   };
 
   const pickImage = async (file: File | undefined) => {
-    if (!file || !file.type.startsWith('image/')) return;
+    if (busy || !file || !file.type.startsWith('image/')) return;
     const result = await compressImage(file);
     if (result) setImage(result);
     else useStore.getState().setLastError('Image is too large (max 3 MB after compression).');
@@ -191,7 +206,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   return (
     <div className="kcomposer">
       <VoiceError owner={sessionId} />
-      <div className={`kcomposer-field${multiline && !dictation.active ? ' is-multiline' : ''}${dictation.active ? ' is-dictating' : ''}`}>
+      <div ref={boxRef} className={`kcomposer-field${multiline && !dictation.active ? ' is-multiline' : ''}${dictation.active ? ' is-dictating' : ''}`}>
         {dictation.active ? (
           <>
             <VoiceTranscript owner={sessionId} />
@@ -202,12 +217,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           type="button"
           className={`kcomposer-attach ${image ? 'has-image' : ''}`}
           aria-label={image ? 'Replace image' : 'Attach image'}
+          disabled={busy}
           onClick={() => fileRef.current?.click()}
         >
           {image ? <img src={image.preview} alt="Attached" /> : <ImagePlus aria-hidden />}
         </button>
         {image && (
-          <button type="button" className="kcomposer-unattach" aria-label="Remove image" onClick={() => setImage(null)}>
+          <button type="button" className="kcomposer-unattach" disabled={busy} aria-label="Remove image" onClick={() => setImage(null)}>
             <X aria-hidden />
           </button>
         )}
@@ -218,6 +234,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           hidden
           onChange={(e) => { void pickImage(e.target.files?.[0]); e.target.value = ''; }}
         />
+        <div className="kcomposer-text">
         <textarea
           ref={fieldRef}
           rows={1}
@@ -225,6 +242,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           placeholder={PLACEHOLDER[intent]}
           aria-label={PLACEHOLDER[intent]}
           onChange={(e) => setDraft(sessionId, e.target.value)}
+          onScroll={(e) => updateComposerScrollFade(e.currentTarget)}
           onCompositionStart={() => { composing.current = true; }}
           onCompositionEnd={() => { composing.current = false; }}
           onPaste={(e) => {
@@ -240,16 +258,20 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             submit();
           }}
         />
+        </div>
+        {(hasText || image) && <button type="button" className="kcomposer-clear" aria-label="Clear draft" onClick={() => {
+          setDraft(sessionId, ''); setImage(null); fieldRef.current?.focus();
+        }}><CircleX aria-hidden /></button>}
         <MicButton owner={sessionId} onStart={startVoice} disabled={!reachable} />
         </>)}
       </div>
       <button
         type="button"
-        className={`kprimary is-${glyph} ${!voiceSend && !showsStop && !canSend ? 'is-disabled' : ''} ${!voiceSend && showsStop && !reachable ? 'is-unreachable' : ''}`}
+        className={`kprimary is-${glyph} ${!voiceSend && !showsStop && !canSend ? 'is-disabled' : ''} ${!voiceSend && showsStop && !reachable ? 'is-unreachable' : ''} ${canSend && !reachable ? 'is-offline' : ''}`}
         aria-label={label}
         data-testid={voiceSend ? 'voice-send' : showsStop ? 'chat-stop' : 'chat-send'}
         onClick={primary}
-        disabled={voiceSend ? dictation.phase === 'finishing' : showsStop ? abortPending || !reachable : false}
+        disabled={voiceSend ? dictation.phase === 'finishing' : showsStop ? abortPending || !reachable : !canSend}
       >
         {!voiceSend && showsStop
           ? abortPending ? <span className="kspinner is-light" aria-hidden /> : <Square className="kprimary-stop" aria-hidden />

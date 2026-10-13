@@ -329,6 +329,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
           intent={intent}
           canAbort={canAbort}
           reachable={reachable}
+          busy={sessionActive}
           onSend={onSend}
           onAbort={() => wsClient.abortSession(sessionId)}
         />
