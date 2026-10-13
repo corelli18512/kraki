@@ -42,6 +42,8 @@ private func bridgeToSecKey(_ ref: CFTypeRef) -> SecKey? {
 ///   "aps": { "alert": { "title": "Kraki", "body": "Needs your attention" }, "mutable-content": 1 },
 ///   "kraki": { "blob": "<base64>", "key": "<base64 RSA-wrapped AES key>" }
 /// }
+/// or, from a computer this phone is paired with (device trust), `key` is
+/// `v2.<X25519 envelope>` of a preview the computer signed (`blob` empty).
 class NotificationService: UNNotificationServiceExtension {
 
     private var contentHandler: ((UNNotificationContent) -> Void)?
@@ -59,12 +61,22 @@ class NotificationService: UNNotificationServiceExtension {
             return
         }
         content.sound = .default
+        // Only text this extension verified (or, with no computer pinned, the
+        // legacy preview it decrypted) is shown; the outer alert comes from
+        // the relay and is replaced by generic text.
+        content.title = "Kraki"
+        content.subtitle = ""
+        content.body = "Open Kraki to view the update."
+        let legacyAllowed = DeviceTrustPush.legacyPreviewAllowed()
+        // The outer session id is the relay's word: never a tap target once
+        // a computer is pinned (a verified preview sets it again below).
+        if !legacyAllowed { content.userInfo["sessionId"] = nil }
 
-        // Try to decrypt the push preview.
         guard let kraki = request.content.userInfo["kraki"] as? [String: Any],
               let blob = kraki["blob"] as? String,
               let key = kraki["key"] as? String else {
-            if let sessionId = request.content.userInfo["sessionId"] as? String {
+            // The outer session id is the relay's word: only trusted without pins.
+            if legacyAllowed, let sessionId = request.content.userInfo["sessionId"] as? String {
                 applySessionPresentation(sessionId, to: content)
             }
             contentHandler(content)
@@ -72,7 +84,14 @@ class NotificationService: UNNotificationServiceExtension {
         }
 
         do {
-            let decrypted = try decryptPreview(blob: blob, wrappedKey: key)
+            let trusted = key.hasPrefix(DeviceTrustPush.prefix)
+            // An unsigned preview may not speak for anyone once a computer is pinned.
+            guard trusted || legacyAllowed else {
+                throw NSError(domain: "KrakiNotification", code: 8, userInfo: [NSLocalizedDescriptionKey: "Unsigned preview"])
+            }
+            let decrypted = trusted
+                ? try openTrustedPreview(key: key)
+                : try decryptPreview(blob: blob, wrappedKey: key)
             let preview = PushPreviewFormat.content(fromJSON: decrypted)
             content.title = preview.title
             content.subtitle = ""
@@ -83,11 +102,8 @@ class NotificationService: UNNotificationServiceExtension {
                 applySessionPresentation(sessionId, to: content)
             }
         } catch {
-            // Decryption failed: retain a useful, private fallback. The raw APNs
-            // payload already carries the default sound and attention badge.
-            content.title = "Kraki"
-            content.subtitle = ""
-            content.body = "Open Kraki to view the update."
+            // Keep the generic text set above.
+            content.userInfo["sessionId"] = nil
         }
 
         contentHandler(content)
@@ -112,6 +128,16 @@ class NotificationService: UNNotificationServiceExtension {
     }
 
     // MARK: - Crypto
+
+    /// A signed device-trust preview: only shown if a computer this phone
+    /// paired with signed it for this phone.
+    private func openTrustedPreview(key: String) throws -> String {
+        guard let selfId = DeviceTrustDefaults.shared.string(forKey: "kraki.deviceId"),
+              let agreementKey = DeviceIdentityKeys.shared.existingAgreementKey() else {
+            throw NSError(domain: "KrakiNotification", code: 7, userInfo: [NSLocalizedDescriptionKey: "Not paired"])
+        }
+        return try DeviceTrustPush.open(key: key, selfId: selfId, agreementKey: agreementKey)
+    }
 
     private func decryptPreview(blob: String, wrappedKey: String) throws -> String {
         // Load encryption private key from shared keychain

@@ -384,9 +384,14 @@ final class LocalLinkClient: NSObject, PulseHost {
 
     /// Send E2E ciphertext to the linked Tentacle. False when not linked.
     func sendEncrypted(blob: String, keys: [String: String], to tentacleId: String, connectionScoped: Bool, replayable: Bool = false) -> Bool {
+        sendEncryptedPayload(["blob": blob, "keys": keys], to: tentacleId, connectionScoped: connectionScoped, replayable: replayable)
+    }
+
+    /// Either E2E payload format (see PulseManager.sendEncryptedPayload).
+    func sendEncryptedPayload(_ object: [String: Any], to tentacleId: String, connectionScoped: Bool, replayable: Bool = false) -> Bool {
         guard linkedTentacleId == tentacleId, let pulse else { return false }
         stats.payloadsOut += 1
-        pulse.sendEncrypted(blob: blob, keys: keys, target: tentacleId, connectionScoped: connectionScoped, fragment: false, replayable: replayable)
+        pulse.sendEncryptedPayload(object, target: tentacleId, connectionScoped: connectionScoped, fragment: false, replayable: replayable)
         return true
     }
 

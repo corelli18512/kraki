@@ -4576,7 +4576,7 @@ describe('RelayClient rejects unauthenticated consumer input', () => {
       user: { id: 'u1', login: 'test', provider: 'open' }, devices: [],
     })));
     const deliver = (payload: Record<string, unknown>) =>
-      (client as unknown as { handlePulseDelivered(json: string): void }).handlePulseDelivered(JSON.stringify(payload));
+      (client as unknown as { handlePulseDelivered(json: string, src: undefined, route: 'head'): void }).handlePulseDelivered(JSON.stringify(payload), undefined, 'head');
     return { adapter, sm, client, deliver };
   }
 

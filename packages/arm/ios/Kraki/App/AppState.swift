@@ -140,7 +140,7 @@ final class AppState {
     /// (Used by the production init too, so it must not be DEBUG-only.)
     /// Cross-store links that need a fully initialized AppState.
     private func bindStores() {
-        sessionStore.isDeviceStillPaired = { [weak deviceStore] id in deviceStore?.devices[id] != nil }
+        sessionStore.isDeviceStillPaired = DeviceTrustInbound.ownershipRule(deviceStore)
     }
 
     static func makeAttachmentStore(for state: AppState) -> AttachmentStore {
@@ -731,8 +731,7 @@ final class AppState {
            let components = URLComponents(string: pairingURL),
            let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
            !token.isEmpty {
-            auth.clearStoredCredentials()
-            auth.pairingToken = token
+            prepareDebugPairing(url: pairingURL, token: token, auth: auth)
             if let pairedRelay = components.queryItems?.first(where: { $0.name == "relay" })?.value,
                !pairedRelay.isEmpty, pairedRelay != relayURL {
                 relayURL = pairedRelay

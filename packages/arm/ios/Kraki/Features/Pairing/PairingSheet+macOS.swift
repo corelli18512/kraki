@@ -22,6 +22,9 @@ struct PairingSheet: View {
     @State private var connected: DeviceSummary?
     /// App devices already online when the card opened; anything new is "the phone".
     @State private var baseline: Set<String> = []
+    /// Apps this Mac's computer trusted when the card opened.
+    /// Set once this Mac knows its computer's trusted list (nil until then).
+    @State private var trustedBaseline: Set<String>?
     private var previewPayload: TentacleCLIManager.PairingPayload?
     private var previewConnected: DeviceSummary?
 
@@ -39,6 +42,29 @@ struct PairingSheet: View {
 
     private var onlineApps: [DeviceSummary] {
         appState.deviceStore.devices.values.filter { $0.role == .app && $0.online && $0.id != appState.deviceId }
+    }
+
+    /// Apps this Mac's computer reports as paired (when this app is paired with it).
+    private var trustedApps: [String]? {
+        guard let local = AppState.localTentacleId, let info = appState.deviceTrust.info[local] else { return nil }
+        return info.devices.map(\.id).filter { $0 != appState.deviceId }
+    }
+
+    /// A newly online app counts as "connected" only when the computer is
+    /// known not to require pairing.
+    private var presenceMeansConnected: Bool {
+        guard let local = AppState.localTentacleId else { return true }
+        if let info = appState.deviceTrust.info[local] { return !info.enforced }
+        switch appState.trustState(for: local) {
+        case .unsupported, .notPaired: return true
+        default: return false
+        }
+    }
+
+    /// The computer only serves paired apps: "connected" means "paired".
+    private var waitsForPairing: Bool {
+        guard let local = AppState.localTentacleId else { return false }
+        return appState.deviceTrust.info[local]?.enforced == true
     }
 
     var body: some View {
@@ -72,14 +98,24 @@ struct PairingSheet: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: connected?.id)
         .task {
             baseline = Set(onlineApps.map(\.id))
+            if let apps = trustedApps { trustedBaseline = Set(apps) }
+            if let local = AppState.localTentacleId { appState.requestTrustedDevices(local) }
             if previewPayload == nil { await renewLoop() }
         }
         .onChange(of: onlineApps.map(\.id).sorted()) { _, ids in
-            guard connected == nil, previewPayload == nil,
-                  let newId = ids.first(where: { !baseline.contains($0) }),
-                  let device = appState.deviceStore.devices[newId] else { return }
-            connected = device
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { dismiss() }
+            guard presenceMeansConnected else { return }
+            guard let newId = ids.first(where: { !baseline.contains($0) }) else { return }
+            markConnected(newId)
+        }
+        .onChange(of: trustedApps?.sorted()) { _, ids in
+            guard let ids else { return }
+            // The first list only sets the baseline: those were paired before.
+            guard let known = trustedBaseline else {
+                trustedBaseline = Set(ids)
+                return
+            }
+            guard let newId = ids.first(where: { !known.contains($0) }) else { return }
+            markConnected(newId)
         }
     }
 
@@ -164,6 +200,13 @@ struct PairingSheet: View {
         }
     }
 
+    private func markConnected(_ id: String) {
+        guard connected == nil, previewPayload == nil,
+              let device = appState.deviceStore.devices[id] else { return }
+        connected = device
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { dismiss() }
+    }
+
     private func success(_ device: DeviceSummary) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "checkmark.circle.fill")
@@ -173,7 +216,9 @@ struct PairingSheet: View {
             Text("Connected")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Color.textPrimary)
-            Text("\(device.name) can now see and run your sessions.")
+            Text(waitsForPairing
+                 ? "\(device.name) is paired with this Mac and can now see and run your sessions."
+                 : "\(device.name) can now see and run your sessions.")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.textSecondary)
                 .multilineTextAlignment(.center)

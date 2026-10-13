@@ -102,6 +102,8 @@ extension AppState {
         messageRouter = router
         wsClient?.onMessage = { [weak router] data in router?.handleRawMessage(data) }
         authManager?.clearStoredCredentials()
+        // A new sign-in is a new device: computers pair it again.
+        resetDeviceTrust()
         preferencesManager?.resetVocabulary()
         if clearRelayURL { clearStoredRelayURL() }
         deviceId = nil
@@ -297,6 +299,8 @@ extension AppState {
         pulseManager?.onConnected()
 
         deviceStore.setDevices(devices)
+        // Pair with computers pinned from a QR code or from this Mac.
+        deviceTrustDevicesChanged()
 
         // Drain any queued encrypted messages
         messageRouter?.drainQueue()

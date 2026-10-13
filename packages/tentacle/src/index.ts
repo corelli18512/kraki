@@ -28,6 +28,8 @@ export type { SessionContext, SessionMeta, RunRecord, LoggedMessage, SessionLink
 export { RelayClient } from './relay-client.js';
 export type { RelayClientOptions, RelayClientState } from './relay-client.js';
 export { KeyManager } from './key-manager.js';
+export { TrustStore, createPairingSecret, writeTrustPolicy } from './trust-store.js';
+export { buildPushPreview } from './relay/push-preview.js';
 export { AttachmentStore } from './attachment-store.js';
 export { scanLocalSessions, filterSessions } from './session-scanner.js';
 export type { ScanOptions, SessionFilter } from './session-scanner.js';

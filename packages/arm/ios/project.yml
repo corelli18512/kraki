@@ -19,6 +19,8 @@ packages:
     path: ./Vendor/Pulse
   VoiceInputCore:
     path: ./Vendor/VoiceInputCore
+  CoinfraCrypto:
+    path: ./Vendor/CoinfraCrypto
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle.git
     exactVersion: 2.9.5
@@ -168,6 +170,7 @@ targets:
       - package: Highlightr
       - package: Pulse
       - package: VoiceInputCore
+      - package: CoinfraCrypto
 
   KrakiNotification:
     type: app-extension
@@ -177,6 +180,9 @@ targets:
         excludes:
           - "**/.DS_Store"
       - path: Kraki/Core/Notifications/PushPreviewFormat.swift
+      - path: Kraki/Core/Crypto/DeviceTrust.swift
+    dependencies:
+      - package: CoinfraCrypto
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.ios.notification
@@ -207,8 +213,12 @@ targets:
       - path: KrakiTests
         excludes:
           - "**/.DS_Store"
+      # The unchanged Notification Service Extension source, so its decrypt /
+      # provenance entry point is tested as shipped (it uses app types).
+      - path: KrakiNotification/NotificationService.swift
     settings:
       base:
+        OTHER_SWIFT_FLAGS: "$(inherited) -Xfrontend -testable-import-module -Xfrontend Kraki"
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.ios.tests
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: true
@@ -231,6 +241,11 @@ targets:
       - path: KrakiTests/AccountUsageTests.swift
       - path: KrakiTests/PushPreviewFormatTests.swift
       - path: KrakiTests/VoiceVocabularySyncTests.swift
+      - path: KrakiTests/DeviceTrustTests.swift
+      - path: KrakiTests/DeviceTrustBoundaryTests.swift
+      - path: KrakiTests/DeviceTrustBoundaryTests+Round2.swift
+      - path: KrakiTests/DeviceTrustUsabilityTests.swift
+      - path: KrakiTests/E2EV2NodeVectors.swift
       - path: KrakiTests/SteerSplitTests.swift
       - path: KrakiTests/ComposerAnswerImagesTests.swift
     settings:
@@ -290,6 +305,7 @@ targets:
       - path: Kraki/Shared/NavigationIDs.swift
       - path: Kraki/Shared/ToolStatusIcon.swift
       - path: Kraki/Shared/PermissionDiffPreview.swift
+      - path: Kraki/Shared/DeviceDates.swift
       # Session list UI shared by iOS and Mac (status glyphs, metadata row, update badges).
       - path: Kraki/Shared/SessionUI
       # AppState is platformized (push + willTerminate guarded).
@@ -299,6 +315,7 @@ targets:
       - path: Kraki/App/AppState+MacSignIn.swift
       - path: Kraki/App/AppState+Pulse.swift
       - path: Kraki/App/AppState+Sending.swift
+      - path: Kraki/App/AppState+DeviceTrust.swift
       - path: Kraki/App/AppState+SessionSubscription.swift
       - path: Kraki/App/AppState+VoiceInput.swift
       # Mac-only app shell, scenes, commands.
@@ -309,6 +326,7 @@ targets:
       # Mac-only feature surfaces (sidebar, welcome, tentacle, preferences,
       # chat placeholder, pairing). Their iOS analogues stay iOS-only — the
       # macOS chat surface will be rewritten against the pure-spine model.
+      - path: Kraki/Features/Devices/DeviceTrustViews.swift
       - path: Kraki/Features/Sessions/SessionsSidebarView+macOS.swift
       - path: Kraki/Features/Sessions/ArchivedSessionsView.swift
       - path: Kraki/Features/Sessions/NewSessionSheet+macOS.swift
@@ -411,4 +429,5 @@ targets:
       - package: Pulse
       - package: Highlightr
       - package: VoiceInputCore
+      - package: CoinfraCrypto
       - package: Sparkle

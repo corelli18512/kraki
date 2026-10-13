@@ -5,7 +5,10 @@
  * then displays a QR code in the terminal containing:
  * - relay URL
  * - pairing token (expires in 5 min)
- * - tentacle's public key (for E2E)
+ * - tentacle's public key fingerprint (for E2E, legacy apps)
+ * - device trust: this computer's ID, identity and encryption keys, and a
+ *   one-time pairing secret. The QR is read optically, so the relay never sees
+ *   the secret; the app proves it saw the QR when it enrolls (trust-store.ts).
  */
 
 import { wsProxyOptions } from './proxy.js';
@@ -13,14 +16,20 @@ import { WebSocket } from 'ws';
 import { createHash } from 'node:crypto';
 import { execSync } from 'node:child_process';
 import chalk from 'chalk';
-import { loadConfig } from './config.js';
+import { getOrCreateDeviceId, loadConfig } from './config.js';
 import { KeyManager } from './key-manager.js';
+import { createPairingSecret } from './trust-store.js';
 
 export interface PairingInfo {
   relay: string;
   pairingToken: string;
   publicKey?: string;
   expiresIn: number;
+  /** Device trust (see trust-store.ts). */
+  tentacleId?: string;
+  identityKey?: string;
+  encryptionKey?: string;
+  pairingSecret?: string;
 }
 
 /**
@@ -52,11 +61,16 @@ export async function requestPairingToken(
       if (msg.type === 'pairing_token_created') {
         clearTimeout(timeout);
         const km = new KeyManager();
+        const identity = km.getPublicIdentity();
         resolve({
           relay: relayUrl,
           pairingToken: msg.token!,
           publicKey: km.getCompactPublicKey(),
           expiresIn: msg.expiresIn!,
+          tentacleId: getOrCreateDeviceId(),
+          identityKey: identity.identityKey,
+          encryptionKey: identity.encryptionKey,
+          pairingSecret: createPairingSecret(),
         });
         ws.close();
         return;
@@ -88,6 +102,14 @@ export function buildPairingUrl(info: PairingInfo, appBaseUrl?: string): string 
   // The full key would make the QR too large; a 16-byte fingerprint lets the
   // phone verify the key the relay later hands it (the relay cannot swap it).
   if (info.publicKey) params.set('fp', keyFingerprint(info.publicKey));
+  // Device trust: the app pins these keys for this computer (not the relay's)
+  // and proves it saw `ps` when it enrolls its own keys.
+  if (info.tentacleId && info.identityKey && info.encryptionKey && info.pairingSecret) {
+    params.set('tid', info.tentacleId);
+    params.set('ik', info.identityKey);
+    params.set('xk', info.encryptionKey);
+    params.set('ps', info.pairingSecret);
+  }
   return `${base}?${params.toString()}`;
 }
 
