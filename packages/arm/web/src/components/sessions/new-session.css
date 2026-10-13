@@ -36,7 +36,7 @@
   cursor: text;
 }
 /* Calibrated dark regular Glass; pills and disabled start composite onto this surface. */
-.dark .ns-composer { background: rgba(23, 26, 37, 0.8); }
+.dark .ns-composer { background: rgba(24, 26, 33, 0.8); }
 .ns-composer.ns-focused { border-color: color-mix(in srgb, #0b5b9c 45%, transparent); }
 .dark .ns-composer.ns-focused { border-color: rgba(110, 180, 243, 0.45); }
 /* "+" / Ctrl+N: the border briefly brightens, then settles — no glow. */
