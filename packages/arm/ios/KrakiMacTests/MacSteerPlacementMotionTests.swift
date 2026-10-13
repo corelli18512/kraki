@@ -16,6 +16,14 @@ final class MacSteerPlacementMotionTests: MacChatUXTestCase {
                         "timestamp": "2026-09-01T00:00:01.500Z", "payload": payload])
     }
 
+    /// Visible cells whose frames overlap, top to bottom.
+    private func overlaps(_ fx: Fx) -> [String] {
+        let cells = fx.doc.visibleCells.sorted { $0.key < $1.key }.map(\.value)
+        return zip(cells, cells.dropFirst()).compactMap { upper, lower in
+            lower.frame.minY < upper.frame.maxY - 0.5 ? "\(lower.frame.minY) over \(upper.frame.maxY)" : nil
+        }
+    }
+
     private func liveIndex(_ fx: Fx) -> Int? { fx.doc.itemKeys.firstIndex(of: "__live__") }
     private func steerKey(_ seq: Int) -> String { "\(sid):\(seq)" }
 
@@ -29,9 +37,16 @@ final class MacSteerPlacementMotionTests: MacChatUXTestCase {
         drain(600)
         XCTAssertEqual(fx.doc.itemKeys.suffix(2), ["__live__", steerKey(42)], "the steer appears below the card")
 
-        // Same segment keeps growing above the steer; the bottom stays pinned.
-        fx.app.messageStore.applyCardMessage(sid, " " + Self.en, reset: false)
+        // Same segment keeps growing above the steer; the bottom stays pinned
+        // and the steer moves down with it (no overlap at any step).
+        var overlapSeen: [String] = []
+        for word in Self.en.split(separator: " ") {
+            fx.app.messageStore.applyCardMessage(sid, " " + word, reset: false)
+            drain(30)
+            overlapSeen += overlaps(fx)
+        }
         drain(800)
+        XCTAssertEqual(overlapSeen, [], "the steer below the growing card moves with it")
         XCTAssertEqual(fx.doc.itemKeys.suffix(2), ["__live__", steerKey(42)])
         XCTAssertLessThanOrEqual(abs(distanceToBottom(fx)), 1, "pinned while the card grows above the steer")
 

@@ -23,6 +23,8 @@ import UIKit
     private var shot = 0
     private var frames: [String: String] = [:]
     private var gaps: [CGFloat] = []
+    /// Every overlap of two visible rows seen at any sample (should stay empty).
+    private var overlaps: [String] = []
 
     override func tearDown() {
         window?.isHidden = true; window?.rootViewController = nil; window = nil
@@ -61,6 +63,7 @@ import UIKit
         XCTAssertTrue(order("turn-ended").hasSuffix("user: \(steer) | agent: Done: headings no longer carry emoji, and PRs are grouped by label."),
                       order("turn-ended"))
         XCTAssertTrue(gaps.allSatisfy { abs($0) < 2 }, "the reader pinned at the bottom stays pinned: \(gaps)")
+        XCTAssertEqual(overlaps, [], "a row below the growing card moves with it, nothing overlaps")
     }
 
     /// The agent's next segment (`reset`). Samples the move frame by frame:
@@ -74,6 +77,7 @@ import UIKit
             drain(1.0 / 30.0)
             let animating = liveCellView()?.layer.animationKeys()?.isEmpty == false
             moving.append("\(collection?.numberOfItems(inSection: 0) ?? -1):\(animating):\(Int(bottomGap().rounded()))")
+            noteOverlaps("move")
         }
         print("STEER_MOVE samples=\(moving.joined(separator: ","))")
         XCTAssertTrue(liveCellView() === liveCell, "the same cell moves (no delete + insert)")
@@ -141,6 +145,7 @@ import UIKit
             let first = index == 0 && app.messageStore.cards[sid]?.text.isEmpty != false
             app.messageStore.applyCardMessage(sid, (first ? "" : " ") + word, reset: false)
             drain(0.09)
+            noteOverlaps("stream \(word)")
         }
     }
 
@@ -154,6 +159,7 @@ import UIKit
         try XCTUnwrap(image.pngData()).write(to: output.appendingPathComponent(String(format: "%02d-%@.png", shot, phase)))
         frames[phase] = drawnRows().joined(separator: " | ")
         gaps.append(bottomGap())
+        noteOverlaps(phase)
         print("STEER_BEAT \(phase): \(frames[phase] ?? "") bottomGap=\(String(format: "%.1f", bottomGap()))")
         drain(beat - 0.5)
     }
@@ -162,6 +168,15 @@ import UIKit
     private func drain(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
     private func all(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(all) }
     private var collection: UICollectionView? { window.flatMap { all($0).compactMap { $0 as? UICollectionView }.first } }
+
+    /// Visible rows whose frames overlap (top to bottom, half a point slack).
+    private func noteOverlaps(_ when: String) {
+        guard let cv = collection else { return }
+        let cells = cv.indexPathsForVisibleItems.sorted().compactMap { cv.cellForItem(at: $0) }
+        for (upper, lower) in zip(cells, cells.dropFirst()) where lower.frame.minY < upper.frame.maxY - 0.5 {
+            overlaps.append(String(format: "%@: %.1f over %.1f", when, lower.frame.minY, upper.frame.maxY))
+        }
+    }
 
     private func liveCellView() -> TKBubbleCell? {
         collection?.visibleCells.compactMap { $0 as? TKBubbleCell }.first { $0.contentSnapshot?.isLive == true }

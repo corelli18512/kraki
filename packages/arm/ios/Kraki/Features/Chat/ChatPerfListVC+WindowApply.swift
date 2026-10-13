@@ -456,7 +456,8 @@ extension ChatPerfListVC {
     func animateItemGeometry(at indexPath: IndexPath, animated: Bool) {
         let shouldFollow = shouldFollowLiveTail
         let context = UICollectionViewFlowLayoutInvalidationContext()
-        context.invalidateItems(at: [indexPath])
+        // Rows below a growing card (a steer it sits above) move with it.
+        context.invalidateItems(at: (indexPath.item..<max(indexPath.item + 1, collectionView.numberOfItems(inSection: 0))).map { IndexPath(item: $0, section: 0) })
         // An item-only invalidation updates FlowLayout's content size but NOT
         // UIScrollView.contentSize (every tail pin / distance reads the latter).
         // Report the growth PLUS any drift already present, so the scroll view
