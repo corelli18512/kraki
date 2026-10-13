@@ -3942,6 +3942,45 @@ describe('RelayClient pending-question digest', () => {
     expect(adapter.sendMessage).not.toHaveBeenCalled();
   });
 
+  it('a late Stop acknowledgement for turn A never settles the queued turn B', async () => {
+    const { adapter, ws, sm, client } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    const releases: Array<() => void> = [];
+    (adapter.abortSession as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise<void>((resolve) => { releases.push(resolve); }),
+    );
+    const send = (seq: number, text: string) => ws.emit('message', Buffer.from(consumerJson({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq,
+      timestamp: new Date().toISOString(), payload: { text, clientId: `stop-${seq}` },
+    })));
+    const stop = (seq: number) => ws.emit('message', Buffer.from(consumerJson({
+      type: 'abort_session', sessionId: 'sess_1', deviceId: 'app-x', seq,
+      timestamp: new Date().toISOString(), payload: {},
+    })));
+    const turns = (client as unknown as { activeInputTurnIds: Map<string, string> }).activeInputTurnIds;
+    send(610, 'turn A');
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    const turnA = turns.get('sess_1');
+    send(611, 'turn B');
+    // Double-tap Stop (or Stop from two devices) while A runs.
+    stop(612);
+    stop(613);
+    await Promise.resolve();
+    releases.shift()?.();
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+    const turnB = turns.get('sess_1');
+    expect(turnB).not.toBe(turnA);
+    for (const release of releases.splice(0)) release();
+    await vi.runAllTimersAsync();
+
+    expect(turns.get('sess_1')).toBe(turnB);
+    expect((client as unknown as { settledAdapterTurnIds: Map<string, string> }).settledAdapterTurnIds.get('sess_1')).toBe(turnA);
+    expect(smMock.markInputLedgerSettled.mock.calls.map((c) => c[1])).not.toContain(turnB);
+    expect(smMock.markIdle).toHaveBeenCalledTimes(1);
+    const idles = smMock.appendMessage.mock.calls.filter((c) => c[1] === 'idle');
+    expect(idles).toHaveLength(1);
+  });
+
   it('does not persist terminal history when explicit abort sees an empty card', async () => {
     const { adapter, ws, sm } = buildClient();
     ws.emit('message', Buffer.from(consumerJson({

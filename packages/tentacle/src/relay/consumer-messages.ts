@@ -397,9 +397,17 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
           .catch((err) => logger.error({ err, sessionId }, 'killSession failed'));
         break;
       case 'abort_session': {
+        // The Stop belongs to the turn running now. Its acknowledgement may
+        // arrive after that turn settled and a queued prompt took over; it
+        // must never settle the successor.
+        const turnId = client.activeInputTurnIds.get(sessionId);
+        const abortKey = turnId ?? '';
+        if (client.abortsInFlight.get(sessionId) === abortKey) break;
+        client.abortsInFlight.set(sessionId, abortKey);
         const snapshot = client.card.state(sessionId);
         client.adapter.abortSession(sessionId)
           .then(() => {
+            if (client.activeInputTurnIds.get(sessionId) !== turnId) return;
             // An open question is visible state too: record the abort so
             // the conversation shows "User aborted" after it.
             if (snapshot.draft || snapshot.action || client.openQuestions.has(sessionId)) {
@@ -412,7 +420,6 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
               client.card.clear(sessionId);
             }
             client.pendingTerminalErrors.delete(sessionId);
-            const turnId = client.activeInputTurnIds.get(sessionId);
             client.settledAdapterTurnIds.set(sessionId, turnId ?? '__unidentified__');
             if (turnId) client.sessionManager.markInputLedgerSettled(sessionId, turnId);
             resolveTurnIdle(client, sessionId);
@@ -426,6 +433,9 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
           .catch((err) => {
             logger.error({ err, sessionId }, 'abortSession failed');
             client.send({ type: 'error', sessionId, payload: { message: `Failed to abort session: ${(err as Error).message}` } });
+          })
+          .finally(() => {
+            if (client.abortsInFlight.get(sessionId) === abortKey) client.abortsInFlight.delete(sessionId);
           });
         break;
       }
