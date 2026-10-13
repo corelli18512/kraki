@@ -76,7 +76,7 @@ vi.mock('@kraki/crypto', async () => {
 });
 
 import { SessionResumeError, RelayClient } from '../relay-client.js';
-import { beginAdapterTurn, finishTurnWithStatus } from '../relay/turns.js';
+import { beginAdapterTurn, finishTurnWithStatus, reserveInput } from '../relay/turns.js';
 import { handleConsumerMessage } from '../relay/consumer-messages.js';
 import { AttachmentStore } from '../attachment-store.js';
 import { createHash } from 'node:crypto';
@@ -3901,17 +3901,31 @@ describe('RelayClient pending-question digest', () => {
   });
 
   it('rejects ambiguous composer text when multiple questions are pending', async () => {
-    const { adapter, askQ, ws } = buildClient();
+    const { adapter, askQ, ws, sm, client } = buildClient();
     askQ('q1');
     askQ('q2');
     ws.sent.length = 0;
     ws.emit('message', Buffer.from(consumerJson({
       type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 505,
-      timestamp: new Date().toISOString(), payload: { text: 'ambiguous answer' },
+      timestamp: new Date().toISOString(), payload: { text: 'ambiguous answer', clientId: 'c-ambiguous' },
     })));
     await vi.runAllTimersAsync();
     expect(adapter.respondToQuestion).not.toHaveBeenCalled();
     expect(adapter.sendMessage).not.toHaveBeenCalled();
+    // Rejected before persistence: no user bubble the agent never got.
+    expect((sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.some((c) => c[1] === 'user_message')).toBe(false);
+    expect((sm.recordInputLedger as ReturnType<typeof vi.fn>).mock.calls.some((c) => c[1].status === 'persisted')).toBe(false);
+    const errors = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[1] === 'error');
+    expect(errors.some((c) => String(c[2]).includes('Multiple questions are pending'))).toBe(true);
+
+    // A retry of that clientId is a fresh attempt, not a lost duplicate.
+    const reserved = (sm.recordInputLedger as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1]).filter((e) => e.clientId === 'c-ambiguous').at(-1);
+    expect(reserved.userSeq).toBeUndefined();
+    const rejected = { ...reserved, status: 'rejected' };
+    (sm.getInputLedgerEntry as ReturnType<typeof vi.fn>).mockReturnValue(rejected);
+    const retry = reserveInput(client, 'sess_1', 'c-ambiguous', 'prompt', 'ambiguous answer');
+    expect(retry).toMatchObject({ duplicate: false, recovery: false });
   });
 
   it('routes image-only composer input to the sole pending question', async () => {

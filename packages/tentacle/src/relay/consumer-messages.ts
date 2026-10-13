@@ -218,6 +218,14 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
         const answering = requestedAnswerTo
           ? client.openQuestions.get(sessionId)?.get(requestedAnswerTo) ?? null
           : soleOpenQuestion(client, sessionId);
+        // Composer text with several open questions is ambiguous. Reject it
+        // before it is persisted: a stored user_message would look sent and
+        // would start a new turn boundary for input the agent never gets.
+        if (!answering && !requestedAnswerTo && (client.openQuestions.get(sessionId)?.size ?? 0) > 1) {
+          updateInputLedger(client, sessionId, clientId, 'rejected');
+          client.send({ type: 'error', sessionId, payload: { message: 'Multiple questions are pending. Answer the intended question directly.' } });
+          break;
+        }
         let persistedSeq = inputEntry?.userSeq;
         if (!reservation.recovery) {
           const userMessage = {
@@ -264,12 +272,6 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
           });
           break;
         }
-        if (!requestedAnswerTo && (client.openQuestions.get(sessionId)?.size ?? 0) > 1) {
-          updateInputLedger(client, sessionId, clientId, 'rejected');
-          client.send({ type: 'error', sessionId, payload: { message: 'Multiple questions are pending. Answer the intended question directly.' } });
-          break;
-        }
-
         if (effectiveDelivery === 'steer') {
           void dispatchInput(client, sessionId, async () => {
             beginSteerAcceptance(client, sessionId);

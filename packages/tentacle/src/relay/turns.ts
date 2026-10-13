@@ -139,7 +139,9 @@ export function reserveInput(
       client.admittedInputs.add(`${sessionId}\u0000${clientId}`);
       return { duplicate: false, conflict: false, recovery: true, effectiveDelivery: existing.delivery === 'steer' ? 'steer' : 'prompt', turnId: existing.turnId, entry: existing };
     }
-    if (existing.status === 'pending') {
+    // `rejected` without a row: refused before persistence (ambiguous
+    // answer). A retry is a fresh attempt, like a reservation left pending.
+    if (existing.status === 'pending' || (existing.status === 'rejected' && existing.userSeq === undefined)) {
       const recoveredSeq = client.sessionManager.findUserMessageSeqByClientId(sessionId, clientId);
       if (recoveredSeq !== null) {
         const recovered: InputLedgerEntry = {
