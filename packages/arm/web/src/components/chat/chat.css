@@ -1053,7 +1053,8 @@
 .kstep-note { display: flex; align-items: flex-start; gap: 8px; font-size: 15px; line-height: 18px; }
 .kstep-icon { width: 18px; height: 18px; flex-shrink: 0; }
 .kstep-good { color: #34d399; }
-.kstep-bad { color: #ef4444; }
+.kstep-bad { color: #ff3b30; }  /* Mac systemRed (live-turn LT-08) */
+.dark .kstep-bad { color: #ff453a; }
 
 .kstep-permission { color: var(--color-label-secondary); font-size: 15px; line-height: 18px; }
 .kstep-outcome { display: block; margin-top: 3px; padding-left: 26px; }
