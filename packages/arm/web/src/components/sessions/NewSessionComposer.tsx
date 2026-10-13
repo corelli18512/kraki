@@ -241,6 +241,8 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
     return () => window.removeEventListener(FOCUS_COMPOSER_EVENT, onFocus);
   }, [nudge]);
 
+  const dictation = useDictation('new');
+
   // Same native 1pt editor inset, outside 8pt padding, and ten-line cap.
   useLayoutEffect(() => {
     const el = textRef.current;
@@ -254,9 +256,7 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
     const observer = new ResizeObserver(fit);
     if (el.parentElement) observer.observe(el.parentElement);
     return () => observer.disconnect();
-  }, [text, minRows]);
-
-  const dictation = useDictation('new');
+  }, [text, minRows, dictation.active]);
   const onVoiceFinal = (spoken: string, mode: VoiceFinish) => {
     const full = [text.trimEnd(), spoken].filter(Boolean).join(' ');
     if (mode === 'send' && full.trim() && availability === 'ready' && deviceId && agentId && model) submit(full);
