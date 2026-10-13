@@ -217,6 +217,16 @@ describe('pi abort', () => {
     expect(session.aborting).toBe(false);
   });
 
+  it('still aborts on an older Pi that has no clear_queue', async () => {
+    const { adapter, sid, proc, session } = makeAdapter();
+    proc.request.mockImplementation((type) => type === 'clear_queue'
+      ? Promise.reject(new Error('Unknown command: clear_queue'))
+      : Promise.resolve());
+    await adapter.abortSession(sid);
+    expect(proc.request).toHaveBeenCalledWith('abort');
+    expect(session.turn.isSettled).toBe(true);
+  });
+
   it('cancels pending question and permission UI requests before aborting', async () => {
     const { adapter, sid, proc, session } = makeAdapter();
     session.pendingQuestions.set('q1', 'q1');

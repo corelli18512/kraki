@@ -13,6 +13,7 @@
  *  - native fork/tree via pi's `fork` / `get_tree` RPC commands.
  */
 
+import { agentEnv } from '../agent-env.js';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { cliSpawnArgs } from '../cli-launch.js';
@@ -214,7 +215,7 @@ export class PiAdapter extends AgentAdapter {
     // live permission mode (the adapter, via persistMeta, is the source of truth).
     // The gate itself is loaded in every mode; the adapter decides silent-approve
     // vs card per shouldAutoApprove, so a mode change never respawns pi.
-    const env = { ...process.env, KRAKI_META_FILE: this.sidecarPath(sessionId) };
+    const env = agentEnv({ KRAKI_META_FILE: this.sidecarPath(sessionId) });
     const proc = new PiRpcProcess({
       cliPath: this.cliPath,
       cwd,
@@ -733,8 +734,16 @@ export class PiAdapter extends AgentAdapter {
       // canonical history and marks the active input ledger aborted/settled;
       // future inputs waiting in Relay's own chain are not touched. Otherwise
       // Pi can retain a follow-up after the UI has announced this turn aborted.
-      const cleared = await s.proc.request<{ steering?: string[]; followUp?: string[] }>('clear_queue');
-      logger.debug({ sessionId, steering: cleared?.steering?.length ?? 0, followUp: cleared?.followUp?.length ?? 0 }, 'cleared Pi queue before explicit abort');
+      // An older Pi without clear_queue answers "Unknown command": it has no
+      // queue to clear, so Stop must still abort. Any other failure keeps the
+      // turn open (the queue may still hold a continuation).
+      try {
+        const cleared = await s.proc.request<{ steering?: string[]; followUp?: string[] }>('clear_queue');
+        logger.debug({ sessionId, steering: cleared?.steering?.length ?? 0, followUp: cleared?.followUp?.length ?? 0 }, 'cleared Pi queue before explicit abort');
+      } catch (err) {
+        if (!/unknown command/i.test((err as Error).message)) throw err;
+        logger.warn({ sessionId }, 'pi: this Pi has no clear_queue; aborting without it');
+      }
       // Release dialogs only after clearing the queue, so resolving the last
       // tool cannot begin a queued continuation in the cancellation window.
       // Relay has already captured the visible card and retains abort history.
@@ -949,7 +958,7 @@ export class PiAdapter extends AgentAdapter {
       let err = '';
       let done = false;
       const finish = (value: string | null) => { if (!done) { done = true; clearTimeout(timer); resolve(value); } };
-      const child = spawn(...cliSpawnArgs(this.cliPath, args), { cwd: tmpdir(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      const child = spawn(...cliSpawnArgs(this.cliPath, args), { cwd: tmpdir(), env: agentEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       const timer = setTimeout(() => { child.kill(); logger.warn({ sessionId }, 'pi title generation timed out'); finish(null); }, 45_000);
       child.stdout.on('data', (d) => { out += d.toString(); });
       child.stderr.on('data', (d) => { err += d.toString(); });

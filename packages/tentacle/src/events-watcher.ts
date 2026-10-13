@@ -10,7 +10,7 @@
 import { watch, statSync, openSync, readSync, closeSync, existsSync, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { convertEvent } from './history-parser.js';
+import { convertEventSafely, parseEventLine } from './history-parser.js';
 import { createLogger } from './logger.js';
 
 const logger = createLogger('events-watcher');
@@ -71,6 +71,12 @@ export class EventsWatcher {
     try {
       watcher = watch(filePath, () => {
         this.onFileChange(sessionId);
+      });
+      // An FSWatcher without an error listener turns e.g. the session folder
+      // being deleted (EPERM on Windows) into an uncaught exception.
+      watcher.on('error', (err) => {
+        logger.warn({ err: err.message, sessionId }, 'events.jsonl watcher failed; no longer watching');
+        this.unwatch(sessionId);
       });
     } catch (err) {
       logger.warn({ err: (err as Error).message, sessionId }, 'Failed to watch events.jsonl');
@@ -152,7 +158,12 @@ export class EventsWatcher {
     if (entry.debounceTimer) clearTimeout(entry.debounceTimer);
     entry.debounceTimer = setTimeout(() => {
       entry.debounceTimer = null;
-      this.readNewEvents(entry);
+      // A timer callback that throws takes the whole daemon down.
+      try {
+        this.readNewEvents(entry);
+      } catch (err) {
+        logger.warn({ err: (err as Error).message, sessionId }, 'Could not read new external events');
+      }
     }, DEBOUNCE_MS);
   }
 
@@ -187,15 +198,9 @@ export class EventsWatcher {
 
     let broadcastCount = 0;
     for (const line of lines) {
-      let event: { type: string; data: Record<string, unknown>; timestamp?: string };
-      try {
-        event = JSON.parse(line);
-      } catch {
-        continue;
-      }
-
-      const ts = event.timestamp ?? new Date().toISOString();
-      const converted = convertEvent(event, ts, meta);
+      const event = parseEventLine(line);
+      if (!event) continue;
+      const converted = convertEventSafely(event, meta);
       if (!converted) continue;
 
       // Broadcast as a Kraki protocol message

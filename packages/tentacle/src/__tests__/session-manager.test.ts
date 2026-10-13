@@ -23,6 +23,14 @@ describe('SessionManager', () => {
     try { rmSync(dir, { recursive: true }); } catch {}
   });
 
+  it('starts and lists resumable sessions despite stray entries in the sessions folder', () => {
+    const { sessionId } = sm.createSession('copilot', 'gpt-4');
+    mkdirSync(join(dir, 'sess copy'));
+    writeFileSync(join(dir, '.DS_Store'), '');
+    const restarted = new SessionManager(dir);
+    expect(restarted.getResumableSessions().map((m) => m.id)).toContain(sessionId);
+  });
+
   // ── Create ────────────────────────────────────────────
 
   describe('create session', () => {
