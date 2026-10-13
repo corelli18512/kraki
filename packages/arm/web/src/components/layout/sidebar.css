@@ -36,7 +36,8 @@
   --s-hero: #1e293b;
 }
 .ksb.is-wide { position: relative; background: var(--s-bg); }
-.ksb.is-wide::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 1px; background: var(--s-border); pointer-events: none; z-index: 20; }
+.app-main-wide { border-left: 1px solid transparent; }
+.app-main-wide::before { content: ""; position: absolute; top: 20px; left: -1px; bottom: 20px; width: 1px; background: color-mix(in srgb, var(--color-border-primary, #e2e8f0) 55%, transparent); pointer-events: none; z-index: 20; }
 .dark .ksb.is-wide { --s-border: #475569; }
 
 .ksb-scroll { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }

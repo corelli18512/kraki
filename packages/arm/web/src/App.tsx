@@ -152,7 +152,7 @@ export function App() {
       <aside className={`${narrow ? (inSubPage ? 'hidden' : 'flex') + ' w-full' : 'flex w-[280px]'} shrink-0 flex-col`} aria-hidden={showBlockingOverlay}>
         <Sidebar />
       </aside>
-      <main className={`relative min-w-0 flex-1 flex-col overflow-hidden ${!narrow || inSubPage ? 'flex' : 'hidden'}`} aria-hidden={showBlockingOverlay}>
+      <main className={`relative min-w-0 flex-1 flex-col overflow-hidden ${narrow ? '' : 'app-main-wide'} ${!narrow || inSubPage ? 'flex' : 'hidden'}`} aria-hidden={showBlockingOverlay}>
         <ErrorBoundary>
           <Outlet />
         </ErrorBoundary>
