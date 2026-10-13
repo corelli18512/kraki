@@ -373,8 +373,17 @@ class BuiltInKraki {
 function readLocalLinkDiscovery(home = krakiHome()) {
   try {
     const file = path.join(home, 'local-link.json');
-    if (statSync(file).size > 4096) return null;
-    return readFileSync(file, 'utf8');
+    const stat = statSync(file);
+    if (stat.size > 4096 || stat.mtimeMs < bootTime() - 5000) return null;
+    const raw = readFileSync(file, 'utf8');
+    const discovery = JSON.parse(raw);
+    // Discovery survives a crash. Never advertise a stopped daemon (owned
+    // or external), or a record from a prior boot whose PID may be reused.
+    if (!Number.isSafeInteger(discovery?.pid) || discovery.pid <= 0) return null;
+    try { process.kill(discovery.pid, 0); } catch (e) {
+      if (e.code !== 'EPERM') return null;
+    }
+    return raw;
   } catch {
     return null;
   }
