@@ -10,6 +10,7 @@ test.beforeEach(async ({ page }) => {
     document.documentElement.classList.add('dark');
     document.getElementById('root')!.innerHTML = `
       <div class="kchat">
+        <div class="kmd"><a href="#">Ordinary transcript link</a></div>
         <div class="ksheet">
           <button class="ksheet-close">Close</button>
           <button class="ksheet-back">Steps</button>
@@ -32,6 +33,7 @@ test('uses native dark Steps/subagent surfaces and keyboard focus without recolo
   await expect(page.locator('.ktool-detail')).toHaveCSS('background-color', 'rgb(14, 18, 34)');
   await expect(page.locator('.ktool-detail pre')).toHaveCSS('max-height', '240px');
   await expect(page.locator('.ksheet-back')).toHaveCSS('color', 'rgb(94, 160, 215)');
+  await expect(page.locator('.kmd a')).toHaveCSS('color', 'rgb(143, 213, 255)');
   await expect(page.locator('.ksub-report')).toHaveCSS('border-top-color', 'rgba(255, 255, 255, 0.1)');
   for (const selector of ['.ksub-name', '.ksub-page-task']) {
     await expect(page.locator(selector)).toHaveCSS('color', 'rgb(219, 232, 244)');
