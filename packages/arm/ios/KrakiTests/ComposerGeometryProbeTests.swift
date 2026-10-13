@@ -250,6 +250,13 @@ import UIKit
         func all(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(all) }
         let list = try XCTUnwrap(all(root).compactMap { $0 as? UICollectionView }.first)
         let controller = try XCTUnwrap(list.delegate as? ChatPerfListVC)
+        // The raised composer reaches the list's inset asynchronously; a slow
+        // CI runner had not applied it after the fixed wait. Wait until stable.
+        var inset = list.adjustedContentInset.bottom, stableSince = Date(), started = Date()
+        while Date().timeIntervalSince(started) < 5, Date().timeIntervalSince(stableSince) < 0.3 {
+            drain(0.05)
+            if abs(list.adjustedContentInset.bottom - inset) > 0.5 { inset = list.adjustedContentInset.bottom; stableSince = Date() }
+        }
         let tailY = list.contentOffset.y
         let reach = list.contentSize.height - list.bounds.height + list.adjustedContentInset.bottom
         XCTAssertGreaterThan(reach - tailY, 100, "the covered tail can be scrolled into view")

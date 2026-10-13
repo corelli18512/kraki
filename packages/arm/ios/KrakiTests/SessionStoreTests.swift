@@ -741,12 +741,7 @@ final class SessionStoreTests: XCTestCase {
 
         await coordinator.bootstrap(appState: app)
         XCTAssertEqual(coordinator.phase, .preparingAuthenticated)
-        // The 10 ms watchdog runs on the main actor: wait for it, bounded,
-        // instead of a fixed 40 ms (a busy CI runner can be later than that).
-        let deadline = Date().addingTimeInterval(2)
-        while coordinator.phase != .authenticated, Date() < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        try await waitBriefly { coordinator.phase == .authenticated }  // 10 ms watchdog; busy CI can be late
 
         XCTAssertEqual(coordinator.phase, .authenticated)
         XCTAssertFalse(coordinator.isLaunchGateVisible)
@@ -795,4 +790,12 @@ final class SessionStoreTests: XCTestCase {
         app.commandSender?.resolveCreateRequest(requestId, sessionId: "created")
         XCTAssertNil(app.sessionStore.sessionListRevealId)
     }
+}
+
+/// Polls `done` on the main actor for up to `seconds` (CI runners can run a
+/// short timer late; a fixed sleep made bounded-timing tests flaky).
+@MainActor
+func waitBriefly(seconds: TimeInterval = 2, _ done: () -> Bool) async throws {
+    let deadline = Date().addingTimeInterval(seconds)
+    while !done(), Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
 }

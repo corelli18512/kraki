@@ -115,9 +115,11 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
     private func start(_ host: VoiceHost, _ voice: IOSVoiceComposer, session id: String = "a", range: NSRange? = nil) async -> VoiceSession {
         voice.begin(sessionID: id, selection: range, context: .init(fields: [:], vocabulary: []))
         await settle()
+        try? await waitBriefly { host.voiceInputController.state == .obtainingLease }  // busy CI: not a fixed 20 ms
         let now = Int(Date().timeIntervalSince1970)
         host.voiceInputController.receiveLease(.init(payload: .init(ver: 1, iss: "test", sub: "test-user", did: "test-device", iat: now, exp: now + 600, quotaSeconds: 600, resource: "voice/doubao", jti: UUID().uuidString), signature: "test", alg: "RSA-SHA256"))
         await settle()
+        try? await waitBriefly { !host.factory.sessions.isEmpty }
         guard let session = host.factory.sessions.last else {
             XCTFail("No synthetic session; controller=\(host.voiceInputController.state)")
             return VoiceSession { _ in }
