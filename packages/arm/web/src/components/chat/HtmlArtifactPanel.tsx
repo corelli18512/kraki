@@ -4,7 +4,8 @@ import { useAttachmentText } from '../../hooks/useAttachment';
 import { withMermaidRuntime } from '../../lib/report-mermaid';
 import { desktop } from '../../lib/desktop';
 import { formatReportBytes, htmlArtifactTitle } from './Attachments';
-import { X, Maximize2, Minimize2, FileText, Compass, LoaderCircle, AlertTriangle } from 'lucide-react';
+import { X, Maximize2, Minimize2, Compass, LoaderCircle, AlertTriangle } from 'lucide-react';
+import { RichTextDocumentIcon } from './RichTextDocumentIcon';
 
 const MAX_REPORT_BYTES = 10 * 1024 * 1024;
 const SIZE_ERROR = 'This report exceeds the 10 MB safety limit.';
@@ -70,7 +71,7 @@ export function HtmlArtifactPanel({ artifact, sessionId, onClose, expanded = fal
   const expansionLabel = expanded ? 'Restore Split View' : 'Expand Report';
   return <aside className={`kreport-panel ${expanded ? 'is-expanded' : ''}`} aria-label="HTML report preview">
     <div className="kreport-header">
-      <FileText className="kreport-header-icon" />
+      <RichTextDocumentIcon className="kreport-header-icon" />
       <span className="kreport-header-text"><strong>{title}</strong><small>Report · {formatReportBytes(artifact.size)}</small></span>
       {ready && <button type="button" aria-label="Open in Browser" title="Open in Browser" onClick={() => {
         void exportHtmlReport(ready.html, artifact.name || title).catch((reason: unknown) => setExportError(reason instanceof Error ? reason.message : String(reason)));

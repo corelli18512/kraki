@@ -31,20 +31,21 @@ export function ToolActivity({
   const running = type === 'start' && !cancelled;
   const stopped = cancelled || termination === 'cancelled';
   const failed = success === false || termination === 'interrupted';
+  const displayHeadline = toolHeadline(toolName, headline, args);
   const ToolIcon = getToolIcon(toolName);
   const Badge = running ? Loader2 : stopped ? CircleMinus : failed ? XCircle : CheckCircle2;
   const expandable = !!argsRef || !!resultRef || !!(args && Object.keys(args).length);
   return (
     <div className="ktool">
       <button type="button" className="ktool-head" disabled={!expandable}
-        aria-label={`${running ? 'Running ' : stopped ? 'Stopped ' : ''}${toolName}${headline ? ` ${headline}` : ''}`}
+        aria-label={`${running ? 'Running ' : stopped ? 'Stopped ' : ''}${toolName}${displayHeadline ? ` ${displayHeadline}` : ''}`}
         aria-expanded={expandable ? isExpanded : undefined} onClick={() => setExpanded(!expanded)}>
         <span className="ktool-icon">
           <ToolIcon aria-hidden />
           <Badge aria-hidden className={`ktool-badge ${running ? 'is-running' : stopped ? 'is-stopped' : failed ? 'is-failed' : 'is-done'}`} />
         </span>
         <span className="ktool-name">{toolName}</span>
-        {headline && <span className="ktool-headline">{headline.replace(/\s+/g, ' ')}</span>}
+        {displayHeadline && <span className="ktool-headline">{displayHeadline.replace(/\s+/g, ' ')}</span>}
         {expandable && <svg aria-hidden className={`ktool-chevron ${isExpanded ? 'is-expanded' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path d="m9 5 7 7-7 7" /></svg>}
       </button>
       {isExpanded && expandable && (
@@ -56,6 +57,35 @@ export function ToolActivity({
       )}
     </div>
   );
+}
+
+/** MacToolActivityRow derives missing headlines only from inline arguments. */
+export function toolHeadline(toolName: string, headline: string, args?: Record<string, unknown>): string {
+  if (headline || !args) return headline;
+  const string = (key: string): string | undefined => typeof args[key] === 'string' ? args[key] as string : undefined;
+  switch (toolName.toLowerCase()) {
+    case 'shell': case 'bash': {
+      const command = string('command');
+      return command === undefined ? '' : `$ ${command}`;
+    }
+    case 'read_file': case 'view': case 'read': case 'write_file': case 'edit_file':
+    case 'edit': case 'create_file': case 'create': case 'write':
+      return string('path') ?? '';
+    case 'fetch_url': return string('url') ?? '';
+    case 'grep': case 'search': {
+      const pattern = string('pattern');
+      return pattern === undefined ? '' : `/${pattern}/`;
+    }
+    case 'glob': return string('pattern') ?? '';
+    default: {
+      const preferred = ['query', 'path', 'file', 'url', 'name', 'id', 'key'];
+      for (const key of [...preferred, ...Object.keys(args).sort()]) {
+        const value = string(key);
+        if (value && [...value].length < 120) return value;
+      }
+      return '';
+    }
+  }
 }
 
 /** Preserve every argument, including timeout and edit text; native has no rich-diff view. */
@@ -83,7 +113,7 @@ function LazySection({ title, refValue, sessionId, requestPull, argumentsBody }:
       <h4>{title}</h4>
       {status === 'loading' && <p className="ktool-loading"><span className="kspinner" />Loading…</p>}
       {status === 'error' && <p className="kstep-bad">Couldn't load: {error}</p>}
-      {status === 'ready' && <pre>{body}</pre>}
+      {status === 'ready' && <pre className={!argumentsBody && body?.endsWith('\n') ? 'ktool-final-line' : undefined}>{body}</pre>}
     </section>
   );
 }

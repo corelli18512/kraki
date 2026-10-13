@@ -69,7 +69,7 @@ export function SubagentCard({ msg, merged, onOpen }: { msg: ChatMessage; merged
   const Icon = status === 'running' ? Loader2 : status === 'failed' ? XCircle : status === 'stopped' ? CircleSlash : CheckCircle2;
   return (
     <button type="button" className="ksub-card" data-status={status} onClick={() => onOpen(id)} aria-label={`Open subagent ${info?.name ?? ''}`}>
-      <Icon className={`ksub-status ksub-status-${status}`} aria-hidden />
+      <span className={`ksub-status ksub-status-${status}`}><Icon aria-hidden /></span>
       <span className="ksub-text">
         <span className="ksub-name">{info?.name ?? String((msg.payload as { toolName?: string }).toolName ?? 'subagent')}</span>
         {info?.task && <span className="ksub-task">{info.task}</span>}
