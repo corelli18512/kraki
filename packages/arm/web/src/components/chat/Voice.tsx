@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react';
 import { Loader2, Mic, TextCursor, X } from 'lucide-react';
 import {
   CONSENT_MESSAGE, CONSENT_TITLE, acceptConsent, cancelDictation, declineConsent, dismissVoiceError,
-  finishDictation, startDictation, transcriptPieces, useVoice, wordLines, type VoiceFinish,
+  finishDictation, startDictation, transcriptPieces, useVoice, wordLines, type VoiceFinish, type StageVoice,
 } from '../../lib/voice/voice';
 import type { VoiceContext } from '../../lib/voice/context';
 import './chat.css';
@@ -19,7 +19,7 @@ export function useDictation(owner: string) {
   const mine = s.owner === owner;
   return {
     available: !!s.capability,
-    active: mine && (s.phase === 'connecting' || s.phase === 'recording' || s.phase === 'finishing'),
+    active: mine && !s.staged && (s.phase === 'connecting' || s.phase === 'recording' || s.phase === 'finishing'),
     phase: mine ? s.phase : 'idle',
     error: mine && s.phase === 'failed' ? s.error : null,
     levels: mine ? s.levels : [],
@@ -29,10 +29,10 @@ export function useDictation(owner: string) {
 }
 
 /** Start dictating; once the user accepts the cloud notice it starts by itself. */
-export function useStartDictation(owner: string, context: () => VoiceContext, onFinal: (text: string, mode: VoiceFinish) => void) {
+export function useStartDictation(owner: string, context: () => VoiceContext, onFinal: (text: string, mode: VoiceFinish) => void, onStage?: StageVoice) {
   const pendingConsent = useVoice((s) => s.consentPending && s.owner === owner);
   const [waiting, setWaiting] = useState(false);
-  const start = () => { void startDictation(owner, withWords(context()), onFinal).then((started) => setWaiting(!started)); };
+  const start = () => { void startDictation(owner, withWords(context()), onFinal, onStage).then((started) => setWaiting(!started)); };
   useEffect(() => {
     if (waiting && !pendingConsent) {
       setWaiting(false);

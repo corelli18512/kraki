@@ -6,6 +6,8 @@ import { shouldAutoFocusTextInput } from '../../lib/mobile-input';
 import { MicButton, VoiceError, VoiceRow, VoiceTranscript, useDictation, useStartDictation } from './Voice';
 import { finishDictation, voiceSettings, type VoiceFinish } from '../../lib/voice/voice';
 import { sessionContext } from '../../lib/voice/context';
+import type { PendingInput } from '../../lib/chat/outbox';
+import { mergeVoiceDraft, stagedVoice } from '../../lib/voice/staged-input';
 
 /** Text worth mining for spelling terms (never sent whole). */
 function messageText(m: unknown): string {
@@ -72,6 +74,7 @@ async function compressImage(file: File): Promise<{ attachment: Attachment; prev
 
 export interface ComposerHandle {
   focus: () => void;
+  editStaged: (entry: PendingInput) => boolean;
 }
 
 export interface ComposerProps {
@@ -85,10 +88,11 @@ export interface ComposerProps {
   busy: boolean;
   onSend: (text: string, attachments: Attachment[] | undefined, intent: ComposerIntent) => void;
   onAbort: () => void;
+  onStageVoice?: (text: string, attachments: Attachment[] | undefined, intent: ComposerIntent) => string;
 }
 
 export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
-  { sessionId, intent, canAbort, reachable, busy, onSend, onAbort },
+  { sessionId, intent, canAbort, reachable, busy, onSend, onAbort, onStageVoice },
   ref,
 ) {
   const text = useStore((s) => s.drafts.get(sessionId) ?? '');
@@ -104,7 +108,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   const onVoiceFinal = (spoken: string, mode: VoiceFinish) => {
     const draft = useStore.getState().drafts.get(sessionId) ?? '';
-    const full = [draft.trimEnd(), spoken].filter(Boolean).join(draft && !/\s$/.test(draft) ? ' ' : '');
+    const full = mergeVoiceDraft(draft, spoken);
     if (mode === 'send' && full.trim()) {
       onSend(full.trim(), undefined, intent);
       setDraft(sessionId, '');
@@ -121,9 +125,31 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       { id: sessionId, title: session?.title ?? session?.autoTitle ?? undefined, agent: session?.agent ?? 'agent', model: session?.model ?? undefined, mode: st.sessionModes.get(sessionId) },
       recent, [], voiceSettings.shareContext,
     );
-  }, onVoiceFinal);
+  }, onVoiceFinal, onStageVoice && intent !== 'denyPermission' ? (raw) => {
+    const base = useStore.getState().drafts.get(sessionId) ?? '';
+    const id = onStageVoice(mergeVoiceDraft(base, raw), image ? [image.attachment] : undefined, intent);
+    setDraft(sessionId, '');
+    setImage(null);
+    setTimeout(() => fieldRef.current?.focus(), 0);
+    return stagedVoice(id, base, !!image, (original) => {
+      const current = useStore.getState().drafts.get(sessionId) ?? '';
+      setDraft(sessionId, current.trim() ? `${original}\n${current}` : original);
+    });
+  } : undefined);
 
-  useImperativeHandle(ref, () => ({ focus: () => fieldRef.current?.focus() }), []);
+  useImperativeHandle(ref, () => ({
+    focus: () => fieldRef.current?.focus(),
+    editStaged: (entry) => {
+      const attachments = entry.attachments ?? [];
+      if (attachments.length > 1 || (attachments.length && image)) return false;
+      const attachment = attachments[0];
+      if (attachment && attachment.type !== 'image') return false;
+      if (attachment?.type === 'image') setImage({ attachment, preview: `data:${attachment.mimeType};base64,${attachment.data}` });
+      setDraft(sessionId, mergeVoiceDraft(useStore.getState().drafts.get(sessionId) ?? '', entry.originalText ?? entry.text));
+      fieldRef.current?.focus();
+      return true;
+    },
+  }), [sessionId, image, setDraft]);
 
   // A new session (or the turn ending) resets the pending abort.
   useEffect(() => { setAbortPending(false); }, [sessionId, canAbort]);
@@ -179,7 +205,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [canSend, text, image, intent, onSend, setDraft, sessionId]);
 
   const primary = () => {
-    if (dictation.active) { if (dictation.phase !== 'finishing') finishDictation('send'); return; }
+    if (dictation.active) { if (dictation.phase !== 'finishing') finishDictation(intent === 'denyPermission' ? 'edit' : 'send'); return; }
     if (showsStop) {
       if (abortPending || !reachable) return;
       setAbortPending(true);

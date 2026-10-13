@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { CircleHelp, AudioLines } from 'lucide-react';
 import type { Attachment, ContentRef } from '@kraki/protocol';
 import type { SessionCard } from '../../types/store';
 import type { PendingInput } from '../../lib/chat/outbox';
@@ -25,6 +26,7 @@ export interface BubbleContext extends ActionHandlers {
   onOpenSteps?: (seq: number | null) => void;
   onRetry?: (clientId: string) => void;
   onDelete?: (clientId: string) => void;
+  onEditPending?: (clientId: string) => void;
   onOpenArtifact?: (artifact: ContentRef) => void;
 }
 
@@ -80,7 +82,7 @@ function UserRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
   const images = attachments.filter(isImage);
   return (
     <div
-      className={`krow krow-user ${state === 'sending' ? 'is-sending' : ''}`}
+      className={`krow krow-user ${state === 'sending' || state === 'unconfirmed' ? 'is-sending' : ''}`}
       data-row-key={row.key}
       data-delivery={state}
     >
@@ -93,16 +95,16 @@ function UserRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
         {images.length > 0 && (
           <div className="kattachments kattachments-user"><ImageAttachments attachments={images} sessionId={ctx.sessionId} /></div>
         )}
-        {state === 'failed' && row.kind === 'pending' && (
-          <FailedMark clientId={row.entry.clientId} ctx={ctx} />
+        {state && state !== 'sending' && row.kind === 'pending' && (
+          <PendingMark clientId={row.entry.clientId} state={state} ctx={ctx} />
         )}
       </div>
     </div>
   );
 }
 
-/** Not delivered: a red mark beside the message; click → Retry / Delete. */
-function FailedMark({ clientId, ctx }: { clientId: string; ctx: BubbleContext }) {
+/** Pending input actions mirror Mac's delivery-status menu. */
+function PendingMark({ clientId, state, ctx }: { clientId: string; state: PendingInput['state']; ctx: BubbleContext }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -115,13 +117,14 @@ function FailedMark({ clientId, ctx }: { clientId: string; ctx: BubbleContext })
     <div className="kfailed" ref={ref}>
       <button
         type="button"
-        className="kfailed-mark"
-        aria-label="Not delivered. Retry or delete"
+        className={`kfailed-mark is-${state}`}
+        aria-label={state === 'correcting' ? 'Correcting voice input. Click for options' : state === 'unconfirmed' ? 'Awaiting confirmation. Retry or delete' : 'Not delivered. Retry or delete'}
         onClick={() => setOpen((v) => !v)}
-      >!</button>
+      >{state === 'correcting' ? <AudioLines aria-hidden /> : state === 'unconfirmed' ? <CircleHelp aria-hidden /> : '!'}</button>
       {open && (
         <div className="kmenu" role="menu">
-          <button type="button" role="menuitem" onClick={() => { setOpen(false); ctx.onRetry?.(clientId); }}>Retry</button>
+          <button type="button" role="menuitem" onClick={() => { setOpen(false); ctx.onRetry?.(clientId); }}>{state === 'correcting' ? 'Send Original' : 'Retry'}</button>
+          {state === 'correcting' && <button type="button" role="menuitem" onClick={() => { setOpen(false); ctx.onEditPending?.(clientId); }}>Edit</button>}
           <button type="button" role="menuitem" className="is-destructive" onClick={() => { setOpen(false); ctx.onDelete?.(clientId); }}>Delete</button>
         </div>
       )}
