@@ -249,6 +249,14 @@ final class ReplyTrackerTests: XCTestCase {
         XCTAssertEqual(t.inFlight, ReplyTracker.maxOpen)
     }
 
+    func testAStaleTurnIsAbandonedNotSupersededWhenTheSameSessionStartsAgain() {
+        let t = tracker()
+        t.started("s", kind: .typed)
+        clock += ReplyTracker.maxAge + 1
+        t.started("s", kind: .typed)
+        XCTAssertEqual(t.summaries.map(\.outcome), [.abandoned])
+    }
+
     func testEventsForUntrackedSessionsAreIgnored() {
         let t = tracker()
         t.delta("x", reset: false)

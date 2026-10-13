@@ -108,6 +108,22 @@ extension ChatUXRegressionTests {
         XCTAssertEqual(router.replyMetrics.summaries.last?.outcome, .stopped)
     }
 
+    func testReconnectFindingTheSessionIdleClosesTheTurnAsAbandoned() throws {
+        let fx = try makeFixture(total: 10) { _ in true }
+        drain(300)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "hello"))
+        let clientId = try XCTUnwrap(sender.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
+        registerReplySession(fx.app)
+        let router = try XCTUnwrap(fx.app.messageRouter)
+        try route(router, "user_message", 11, ["content": "hello", "clientId": clientId])
+        router.reconcileReplies(idle: [sid], removed: [])
+        XCTAssertEqual(router.replyMetrics.inFlight, 0)
+        XCTAssertEqual(router.replyMetrics.summaries.last?.outcome, .abandoned)
+        router.reconcileReplies(idle: [], removed: [sid]) // nothing left to close
+        XCTAssertEqual(router.replyMetrics.summaries.count, 1)
+    }
+
     func testReplySummaryClosesWhenTheAppLeavesTheForeground() throws {
         let fx = try makeFixture(total: 10) { _ in true }
         drain(300)

@@ -26,6 +26,7 @@ extension MessageRouter {
     /// only for the subscribed (open) conversation.
     func noteReplyProgress(_ type: String, sessionId: String, payload: [String: Any]?) {
         guard let appState else { return }
+        replyMetrics.expire()
         switch type {
         case "user_message":
             // A turn this device started while the user is here to wait for
@@ -59,6 +60,26 @@ extension MessageRouter {
         default:
             break
         }
+    }
+
+    /// After session_list reconciliation: clear state of removed sessions and
+    /// close reply turns whose end was missed.
+    func sessionListApplied(removed: Set<String>, idle: Set<String>) {
+        guard let appState else { return }
+        for sid in removed {
+            appState.messageStore.clearRuntimeStatus(sid)
+            appState.messageStore.clearCard(sid)
+        }
+        appState.noteSessionListApplied()
+        reconcileReplies(idle: idle, removed: removed)
+    }
+
+    /// Reconnect authority (session_list): a tracked turn whose session is now
+    /// idle or gone ended while we were not listening.
+    func reconcileReplies(idle: Set<String>, removed: some Sequence<String>) {
+        replyMetrics.expire()
+        for sid in removed { replyMetrics.missedEnd(sid) }
+        for sid in replyMetrics.openSessions where idle.contains(sid) { replyMetrics.missedEnd(sid) }
     }
 
     /// A turn ended without a final message: failed or stopped.

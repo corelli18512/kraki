@@ -729,11 +729,7 @@ final class MessageRouter {
             deviceId: tentacleDeviceId,
             deviceName: deviceName
         )
-        for sid in removedSessionIDs {
-            appState.messageStore.clearRuntimeStatus(sid)
-            appState.messageStore.clearCard(sid)
-        }
-        appState.noteSessionListApplied()
+        sessionListApplied(removed: removedSessionIDs, idle: Set(parsed.filter { $0.state == .idle }.map(\.id)))
 
         for digest in parsed {
             // Runtime status is ephemeral and the producer is authoritative.

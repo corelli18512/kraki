@@ -31,10 +31,8 @@ final class PerformanceNotice {
     @ObservationIgnored var skipsAutomatedRuns = true
     /// Seconds to wait after sign-in before showing (lets the main screen settle).
     @ObservationIgnored var settleDelay: Duration = .seconds(1.5)
-    /// The notification permission question is still open (prompt up or due).
-    @ObservationIgnored var permissionPending: () async -> Bool = {
-        await UNUserNotificationCenter.current().notificationSettings().authorizationStatus == .notDetermined
-    }
+    /// The app's notification permission prompt is on screen right now.
+    @ObservationIgnored var permissionPending: () async -> Bool = { NotificationPermissionPrompt.isOpen }
 
     var hasBeenSeen: Bool { defaults.bool(forKey: Self.seenKey) }
 
@@ -46,7 +44,8 @@ final class PerformanceNotice {
             try? await Task.sleep(for: settleDelay)
             // Never stack on the notification permission alert: wait for its
             // answer; if it stays open, give up for now and try again on the
-            // next authentication (reconnect / return to the foreground).
+            // next authentication or return to the foreground. (The settle
+            // delay covers the first-sign-in prompt being scheduled.)
             var waited = 0
             while await permissionPending() {
                 waited += 1
@@ -140,4 +139,14 @@ private struct PerformanceNoticeOverlay: ViewModifier {
             }
         }
     }
+}
+
+/// Whether the app's own notification permission request is on screen
+/// (PushManager on iOS, MacNotifications on Mac). Main thread.
+enum NotificationPermissionPrompt {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var open = 0
+    static var isOpen: Bool { lock.withLock { open > 0 } }
+    static func began() { lock.withLock { open += 1 } }
+    static func ended() { lock.withLock { open = max(0, open - 1) } }
 }

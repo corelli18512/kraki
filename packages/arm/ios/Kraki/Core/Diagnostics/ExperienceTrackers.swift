@@ -294,8 +294,8 @@ final class ReplyTracker {
 
     /// This device's message for `sessionId` came back from the agent's machine.
     func started(_ sessionId: String, kind: Summary.Kind) {
-        finish(sessionId, .superseded)
         expire()
+        finish(sessionId, .superseded)
         while entries.count >= Self.maxOpen,
               let oldest = entries.min(by: { $0.value.startedAt < $1.value.startedAt })?.key {
             finish(oldest, .abandoned)
@@ -308,6 +308,15 @@ final class ReplyTracker {
         let t = now()
         for (id, entry) in entries where t - entry.startedAt > Self.maxAge { finish(id, .abandoned) }
     }
+
+    /// A reconnect found the session idle or gone: its end was missed, so the
+    /// timings are unknown.
+    func missedEnd(_ sessionId: String) {
+        finish(sessionId, .abandoned)
+    }
+
+    /// Open turns, for reconciliation.
+    var openSessions: [String] { Array(entries.keys) }
 
     /// A tool step / card action: activity, and the end of a text run.
     func activity(_ sessionId: String) {
