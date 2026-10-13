@@ -150,8 +150,7 @@ export function SessionPage() {
         backBadge={totalOtherUnread}
         onBack={() => navigate('/')}
         onTitle={() => {
-          if (narrow) setMobileInfoOpen(true);
-          else navigate(`/devices?device=${session.deviceId}&session=${sessionId}`);
+          setMobileInfoOpen(true);
         }}
         onMode={(mode) => wsClient.setSessionMode(sessionId!, mode)}
       />
@@ -171,9 +170,9 @@ export function SessionPage() {
       </div>
 
       {mobileInfoOpen && session && (
-        <div className="fixed inset-0 z-50 md:hidden" onKeyDown={(e) => e.key === 'Escape' && setMobileInfoOpen(false)} role="dialog" aria-modal="true" tabIndex={-1}>
+        <div className="fixed inset-0 z-50" onKeyDown={(e) => e.key === 'Escape' && setMobileInfoOpen(false)} role="dialog" aria-modal="true" tabIndex={-1}>
           <div className="absolute inset-0 bg-black/40" onClick={() => setMobileInfoOpen(false)} />
-          <div className="absolute inset-y-0 right-0 w-full max-w-sm animate-slide-in-right bg-surface-primary shadow-xl">
+          <div className="ksi-sheet">
             <SessionInfoPanel
               session={session}
               usage={sessionUsage}

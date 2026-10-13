@@ -2,7 +2,7 @@
 .ua-scrim { position: fixed; inset: 0; z-index: 84; }
 .ua-panel {
   position: fixed;
-  top: 12px;
+  top: 44px;
   right: 12px;
   z-index: 85;
   display: flex;

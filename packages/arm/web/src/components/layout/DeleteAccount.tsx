@@ -2,32 +2,11 @@
  * Settings › Account › Delete Account… — Mac/iOS DeleteAccountSection: an
  * explanation first, then a final "can't be undone" confirmation.
  */
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { CheckCircle2 } from 'lucide-react';
+import { SettingsAlert as Dialog } from './SettingsControls';
 import { wsClient } from '../../lib/ws-client';
 import { DELETE_EXPLANATION, useAccountDeletion } from '../../lib/account-deletion';
-
-function Dialog({ title, body, confirm, onConfirm, onCancel, testId }: {
-  title: string; body: string; confirm: string; onConfirm: () => void; onCancel: () => void; testId: string;
-}) {
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onCancel(); } };
-    window.addEventListener('keydown', key, true);
-    return () => window.removeEventListener('keydown', key, true);
-  }, [onCancel]);
-  return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/30 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
-      <div role="alertdialog" aria-modal="true" aria-label={title} data-testid={testId} className="w-full max-w-sm rounded-2xl border border-border-primary bg-surface-primary p-5 shadow-2xl">
-        <h3 className="text-[15px] font-semibold text-text-primary">{title}</h3>
-        <p className="mt-2 whitespace-pre-line text-[13px] leading-relaxed text-text-secondary">{body}</p>
-        <div className="mt-5 flex justify-end gap-2">
-          <button type="button" onClick={onCancel} className="rounded-lg px-3 py-1.5 text-sm text-text-primary hover:bg-surface-secondary">Cancel</button>
-          <button type="button" onClick={onConfirm} className="rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700">{confirm}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export function DeleteAccountSection() {
   const state = useAccountDeletion((s) => s.state);
@@ -35,7 +14,7 @@ export function DeleteAccountSection() {
   const deleting = state.kind === 'deleting';
   return (
     <section data-testid="settings-delete-account">
-      <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">Account</h3>
+      
       <button
         type="button"
         disabled={deleting}

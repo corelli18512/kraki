@@ -18,6 +18,19 @@ function SignOutIcon({ className }: { className?: string }) {
   );
 }
 
+/** Sign out only this app; computers retain their session storage. */
+export function signOut() {
+    const savedClientId = useStore.getState().githubClientId;
+    localStorage.removeItem(STORAGE_KEY);
+    setDesktopSignedOut(true);
+    wsClient.disconnect();
+    resetVoice();
+    useStore.getState().reset();
+    useStore.setState({ githubClientId: savedClientId, status: 'awaiting_login' });
+    window.history.replaceState({}, '', '/');
+    void import('../../lib/message-db').then(({ clearAllMessages }) => clearAllMessages());
+}
+
 export function ProfileBar({ compact = false }: { compact?: boolean } = {}) {
   const user = useStore((s) => s.user);
   const [imgError, setImgError] = useState(false);
@@ -30,14 +43,7 @@ export function ProfileBar({ compact = false }: { compact?: boolean } = {}) {
   const initial = user.login.charAt(0).toUpperCase();
 
   function handleSignOut() {
-    const savedClientId = useStore.getState().githubClientId;
-    localStorage.removeItem(STORAGE_KEY);
-    setDesktopSignedOut(true);
-    wsClient.disconnect();
-    resetVoice();
-    useStore.getState().reset();
-    useStore.setState({ githubClientId: savedClientId, status: 'awaiting_login' });
-    window.history.replaceState({}, '', '/');
+    signOut();
     setConfirming(false);
   }
 

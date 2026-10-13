@@ -258,6 +258,8 @@ export class KrakiWSClient {
       autoTitle: digest.autoTitle,
       state: digest.state,
       messageCount: digest.messageCount,
+      createdAt: digest.createdAt,
+      reasoningEffort: digest.reasoningEffort,
     });
     store.setSessionMode(digest.id, normalizeSessionMode(digest.mode));
     if (digest.preview) store.setSessionPreview(digest.id, digest.preview);
@@ -683,6 +685,8 @@ export class KrakiWSClient {
       autoTitle: digest.autoTitle,
       state: digest.state as SessionState,
       messageCount: digest.messageCount,
+      createdAt: digest.createdAt,
+      reasoningEffort: digest.reasoningEffort,
       lastSeq: digest.lastSeq,
       readSeq: digest.readSeq,
     });
@@ -801,6 +805,8 @@ export class KrakiWSClient {
         autoTitle: ts.autoTitle,
         state: ts.state as SessionState,
         messageCount: ts.messageCount,
+        createdAt: ts.createdAt,
+        reasoningEffort: ts.reasoningEffort,
         lastSeq: ts.lastSeq,
         readSeq: ts.readSeq,
       });
