@@ -16,11 +16,15 @@ export function formatReportBytes(n: number): string {
   return `${(n / 1_000_000).toFixed(1)} MB`;
 }
 
+export function htmlArtifactTitle(artifact: ContentRef): string {
+  return artifact.caption?.trim() || artifact.name?.trim() || 'Report';
+}
+
 export function HtmlArtifactCards({ artifacts, onOpen }: { artifacts: ContentRef[]; onOpen?: (artifact: ContentRef) => void }) {
   return (
     <div className="kreport-cards" data-html-artifacts={artifacts.length}>
       {artifacts.map((artifact) => {
-        const title = artifact.caption || artifact.name || 'HTML report';
+        const title = htmlArtifactTitle(artifact);
         return <button key={artifact.id} type="button" className="kreport-card" onClick={() => onOpen?.(artifact)} aria-label={`Open report ${title}`} disabled={!onOpen}>
           <span className="kreport-card-icon"><FileText /></span>
           <span className="kreport-card-text"><strong>{title}</strong><small>Report · {formatReportBytes(artifact.size)}</small></span>
@@ -60,8 +64,9 @@ export function ImageAttachments({ attachments, sessionId }: { attachments?: Att
 }
 
 export function refImageSize(ref: ContentRef): CSSProperties {
-  const width = ref.width && ref.width > 0 ? ref.width : 192;
-  const height = ref.height && ref.height > 0 ? ref.height : width;
+  const hasSize = !!ref.width && ref.width > 0 && !!ref.height && ref.height > 0;
+  const width = hasSize ? ref.width! : 192;
+  const height = hasSize ? ref.height! : 192;
   const ratio = Math.min(1, 360 / width, 192 / height);
   return { width: width * ratio, height: height * ratio, maxWidth: '100%', aspectRatio: `${width} / ${height}` };
 }

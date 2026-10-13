@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { HtmlArtifactCards, ImageAttachments, refImageSize } from './Attachments';
+import { HtmlArtifactCards, ImageAttachments, refImageSize, htmlArtifactTitle } from './Attachments';
 import { ImagePreviewProvider } from './ImageViewer';
 
 const state = vi.hoisted(() => ({ status: 'loading', url: null as string | null, error: null as string | null, retry: vi.fn() }));
@@ -14,6 +14,7 @@ describe('ImageAttachments', () => {
     expect(refImageSize(ref)).toMatchObject({ width: 360, height: 180 });
     expect(refImageSize({ ...ref, width: 400, height: 800 })).toMatchObject({ width: 96, height: 192 });
     expect(refImageSize({ ...ref, width: undefined, height: undefined })).toMatchObject({ width: 192, height: 192 });
+    expect(refImageSize({ ...ref, width: undefined })).toMatchObject({ width: 192, height: 192 });
   });
   it('shows spinner-only loading and a retryable error with the reason', () => {
     const { rerender } = render(<ImageAttachments attachments={[ref]} sessionId="s1" />);
@@ -55,6 +56,7 @@ describe('ImageAttachments', () => {
 
 describe('HtmlArtifactCards', () => {
   it('uses decimal file sizes and Report wording', () => {
+    expect(htmlArtifactTitle({ ...ref, caption: '  ', name: '  ' })).toBe('Report');
     const open = vi.fn();
     render(<HtmlArtifactCards artifacts={[{ ...ref, mimeType: 'text/html', caption: 'Report title', size: 167_000 }]} onOpen={open} />);
     expect(screen.getByText('Report · 167 KB')).toBeInTheDocument();

@@ -3,7 +3,7 @@ import type { ContentRef } from '@kraki/protocol';
 import { useAttachmentText } from '../../hooks/useAttachment';
 import { withMermaidRuntime } from '../../lib/report-mermaid';
 import { desktop } from '../../lib/desktop';
-import { formatReportBytes } from './Attachments';
+import { formatReportBytes, htmlArtifactTitle } from './Attachments';
 import { X, Maximize2, Minimize2, FileText, Compass, LoaderCircle, AlertTriangle } from 'lucide-react';
 
 const MAX_REPORT_BYTES = 10 * 1024 * 1024;
@@ -40,7 +40,7 @@ export async function exportHtmlReport(html: string, name: string): Promise<void
 export function HtmlArtifactPanel({ artifact, sessionId, onClose, expanded = false, onToggleExpanded }: {
   artifact: ContentRef; sessionId: string; onClose: () => void; expanded?: boolean; onToggleExpanded?: () => void;
 }) {
-  const title = artifact.caption?.trim() || artifact.name?.trim() || 'Report';
+  const title = htmlArtifactTitle(artifact);
   const { status, text, error } = useAttachmentText(artifact, sessionId, ATTACHMENT_PULL, artifact.size <= MAX_REPORT_BYTES);
   const oversized = artifact.size > MAX_REPORT_BYTES || (text !== null && new TextEncoder().encode(text).byteLength > MAX_REPORT_BYTES);
   const [prepared, setPrepared] = useState<{ id: string; html: string; url: string } | null>(null);
