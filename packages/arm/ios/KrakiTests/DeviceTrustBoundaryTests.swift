@@ -44,7 +44,15 @@ final class DeviceTrustBoundaryTests: XCTestCase {
         app.deviceId = selfId
         app.relayURL = "ws://127.0.0.1:4400"
         // RSA belongs solely to this test process (Mac) or dedicated simulator.
-        _ = try KeychainManager().getOrCreateEncryptionKey()
+        // An unsigned CI simulator has no Keychain (-34018): only the tests
+        // that need it are skipped (see requireKeychain).
+        keychainAvailable = (try? KeychainManager().getOrCreateEncryptionKey()) != nil
+    }
+
+    var keychainAvailable = false
+
+    func requireKeychain() throws {
+        if !keychainAvailable { throw XCTSkip("Keychain unavailable (unsigned simulator)") }
     }
 
     override func tearDown() async throws {
@@ -94,6 +102,7 @@ final class DeviceTrustBoundaryTests: XCTestCase {
 
     /// The relay knows the app's RSA public key and can create this envelope.
     func legacyEnvelope(_ inner: [String: Any], src: String? = nil) throws -> Data {
+        try requireKeychain()
         let key = try KeychainManager().getOrCreateEncryptionKey()
         let encrypted = try CryptoManager().encryptToBlob(String(decoding: json(inner), as: UTF8.self),
                                                          recipients: [RecipientKey(deviceId: selfId, publicKey: key.publicKey)])
@@ -528,6 +537,7 @@ final class DeviceTrustBoundaryTests: XCTestCase {
 
     #if os(iOS)
     func testIOSIdentityKeychainAccessibilityAndReinstallPersistence() throws {
+        try requireKeychain()
         // Safe only on this lane's disposable simulator. No real-device keys.
         let testDirectory = DeviceIdentityKeys.testDirectory
         DeviceIdentityKeys.testDirectory = nil
