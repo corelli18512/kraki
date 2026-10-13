@@ -207,8 +207,8 @@ describe('ToolActivity', () => {
       <ToolActivity type="complete" toolName="shell" headline="$ ls" sessionId="s1" requestPull={noopPull} />,
     );
     await user.click(screen.getByRole('button'));
-    // Without refs, the body just echoes the headline under "Command" label
-    expect(screen.getByText('Command')).toBeInTheDocument();
+    // Without refs, the body echoes the headline under the native Arguments label
+    expect(screen.getByText('Arguments')).toBeInTheDocument();
   });
 
   it('does not show result section without resultRef', async () => {

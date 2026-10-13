@@ -39,7 +39,7 @@ describe('StepsList tool_start → tool_complete merge (protocol contract)', () 
     renderSteps([
       makeMsg('tool_start', { toolName: 'bash', headline: '$ sleep 1', toolCallId: 't2' }, 1),
     ]);
-    expect(screen.getByText(/Running/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Running')).toBeInTheDocument();
   });
 
   it('interleaves narration prose with a merged tool chip', () => {

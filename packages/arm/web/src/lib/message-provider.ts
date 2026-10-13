@@ -63,6 +63,7 @@ class MessageProvider {
   /** Turn-trace pulls already completed or scheduled, keyed
    *  `${sessionId}:${bubbleSeq}`. */
   private tracePulled = new Set<string>();
+  private traceComplete = new Set<string>();
   /** Only one potentially-large trace response may be in flight globally.
    *  This prevents reconnect-time cross-bubble pulls from flooding Tentacle
    *  encryption and the Head WebSocket before stream 1 can apply backpressure. */
@@ -300,6 +301,7 @@ class MessageProvider {
     this.loadingForeground.clear();
     this.pendingTailReconciles.clear();
     this.tracePulled.clear();
+    this.traceComplete.clear();
     this.traceInFlight = null;
     this.traceQueue = [];
     this.traceQueued.clear();
@@ -412,7 +414,12 @@ class MessageProvider {
    * `idle`, to reconcile the live-broadcast steps against the authoritative
    * persisted list).
    */
+  isTurnTraceComplete(sessionId: string, bubbleSeq: number): boolean {
+    return this.traceComplete.has(`${sessionId}:${bubbleSeq}`);
+  }
+
   invalidateTurnTrace(sessionId: string, bubbleSeq: number): void {
+    this.traceComplete.delete(`${sessionId}:${bubbleSeq}`);
     const key = `${sessionId}:${bubbleSeq}`;
     if (this.traceInFlight === key) {
       this.traceRefresh.add(key);
@@ -439,8 +446,10 @@ class MessageProvider {
     logger.info('handleTurnTraceBatch received', {
       sessionId, bubbleSeq, count: list.length, complete,
     });
-    getStore().setTurnSteps(sessionId, bubbleSeq, list);
     const key = `${sessionId}:${bubbleSeq}`;
+    if (complete) this.traceComplete.add(key);
+    else this.traceComplete.delete(key);
+    getStore().setTurnSteps(sessionId, bubbleSeq, list);
     const refresh = this.traceRefresh.delete(key);
     if (!complete || refresh) this.tracePulled.delete(key);
 

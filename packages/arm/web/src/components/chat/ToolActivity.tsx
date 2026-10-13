@@ -1,10 +1,8 @@
-import { useState, lazy, Suspense } from 'react';
+import { useState } from 'react';
 import { Loader2, CheckCircle2, XCircle, CircleSlash, FileText, FileEdit, Terminal, Search, FolderSearch } from 'lucide-react';
 import type { ContentRef } from '@kraki/protocol';
 
 import { useAttachmentText } from '../../hooks/useAttachment';
-
-const ReactDiffViewer = lazy(() => import('react-diff-viewer-continued'));
 
 interface ToolActivityProps {
   type: 'start' | 'complete';
@@ -41,29 +39,25 @@ export function ToolActivity({
     <div className="my-1">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="group flex w-full items-center gap-1 rounded-lg py-1.5 text-left transition-all hover:bg-surface-tertiary active:scale-[0.98]"
+        className="group flex w-full items-center gap-1.5 rounded-lg py-1.5 text-left transition-all hover:bg-surface-tertiary active:scale-[0.98]"
       >
-        {isStart
-          ? (cancelled
-            ? <CircleSlash className="h-3.5 w-3.5 shrink-0 text-amber-500" />
-            : <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-text-muted" />)
-          : termination
-            ? <CircleSlash className={`h-3.5 w-3.5 shrink-0 ${termination === 'cancelled' ? 'text-amber-500' : 'text-red-500'}`} />
-            : (success === false
-              ? <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />
-              : <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />)
-        }
-        <ToolIcon className="h-3.5 w-3.5 shrink-0 text-text-muted opacity-0" aria-hidden="true" />
-        <span className="shrink-0 text-xs font-medium text-text-secondary">
-          {isStart ? 'Running ' : termination === 'cancelled' ? 'Cancelled ' : termination === 'interrupted' ? 'Interrupted ' : ''}
-          <span className="font-mono text-ocean-600 dark:text-ocean-400">{toolName}</span>
+        <span className="relative mr-1 size-4 shrink-0 text-text-secondary">
+          <ToolIcon className="size-4" aria-hidden="true" />
+          {isStart && !cancelled
+            ? <Loader2 aria-label="Running" className="absolute -right-2 bottom-0 size-2 animate-spin text-text-muted" />
+            : termination || cancelled
+              ? <CircleSlash className="absolute -right-[5px] bottom-px size-2 text-amber-500" />
+              : success === false
+                ? <XCircle className="absolute -right-[5px] bottom-px size-2 text-red-500" />
+                : <CheckCircle2 className="absolute -right-[5px] bottom-px size-2 text-green-500" />}
         </span>
+        <span className="shrink-0 rounded bg-surface-tertiary px-[5px] py-px font-mono text-xs text-text-secondary">{toolName}</span>
         {headline && (
-          <span className="truncate font-mono text-[11px] text-text-muted">{headline}</span>
+          <span className="truncate text-xs text-text-secondary">{headline}</span>
         )}
         <svg
           className={`h-3 w-3 shrink-0 text-text-muted transition-transform ${
-            expanded ? 'rotate-180' : ''
+            isExpanded ? '' : '-rotate-90'
           }`}
           fill="none"
           viewBox="0 0 24 24"
@@ -75,10 +69,9 @@ export function ToolActivity({
       </button>
 
       {isExpanded && (
-        <div className="mt-1 space-y-2 rounded-lg bg-surface-tertiary p-3 text-xs">
+        <div className="ktool-detail mt-1 space-y-2 rounded-lg p-3 text-[11px]">
           {argsRef && (
             <ToolArgsBody
-              toolName={toolName}
               argsRef={argsRef}
               sessionId={sessionId}
               requestPull={requestPull}
@@ -87,8 +80,8 @@ export function ToolActivity({
           )}
           {!argsRef && headline && (
             <div>
-              <p className="font-semibold text-text-muted">{getDetailLabel(toolName)}</p>
-              <pre className="mt-1 overflow-x-auto font-mono text-text-secondary whitespace-pre-wrap">
+              <p className="font-semibold text-text-muted">Arguments</p>
+              <pre className="mt-0.5 overflow-x-auto font-mono text-text-secondary whitespace-pre-wrap">
                 {headline}
               </pre>
             </div>
@@ -107,12 +100,10 @@ export function ToolActivity({
 }
 
 /** Lazy body for the args section. Shows a placeholder while fetching,
- *  then renders the full args. Special-cases edit/create file dumps to
- *  show a diff/preview instead of raw JSON. */
+ *  then renders all argument keys as monospaced text. */
 function ToolArgsBody({
-  toolName, argsRef, sessionId, requestPull, headline,
+  argsRef, sessionId, requestPull, headline,
 }: {
-  toolName: string;
   argsRef: ContentRef;
   sessionId: string;
   requestPull: (sessionId: string, ref: ContentRef) => void;
@@ -123,8 +114,8 @@ function ToolArgsBody({
   if (status === 'loading') {
     return (
       <div>
-        <p className="font-semibold text-text-muted">{getDetailLabel(toolName)}</p>
-        <pre className="mt-1 overflow-x-auto font-mono text-text-secondary whitespace-pre-wrap">
+        <p className="font-semibold text-text-muted">Arguments</p>
+        <pre className="mt-0.5 overflow-x-auto font-mono text-text-secondary whitespace-pre-wrap">
           {headline}
         </pre>
         <p className="mt-1 flex items-center gap-1.5 text-[10px] text-text-muted">
@@ -150,54 +141,25 @@ function ToolArgsBody({
     return (
       <div>
         <p className="font-semibold text-text-muted">Arguments</p>
-        <pre className="mt-1 max-h-60 overflow-auto text-text-secondary whitespace-pre-wrap font-mono">
+        <pre className="mt-0.5 max-h-60 overflow-auto text-text-secondary whitespace-pre-wrap font-mono">
           {text}
         </pre>
       </div>
     );
   }
-  return <ToolArgsRendered toolName={toolName} args={args} />;
+  return <ToolArgsRendered args={args} />;
 }
 
-function ToolArgsRendered({ toolName, args }: { toolName: string; args: Record<string, unknown> }) {
-  const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
-  const editDiff = getEditDiff(toolName, args);
-  const argsDetail = getArgsDetail(toolName, args);
+export function formatToolArguments(args: Record<string, unknown>): string {
+  return Object.keys(args).sort().map((key) => `${key}: ${typeof args[key] === 'string' ? args[key] : JSON.stringify(args[key])}`).join('\n');
+}
 
-  if (editDiff) {
-    return (
-      <div className="overflow-hidden rounded text-[11px]">
-        <Suspense fallback={<pre className="p-2 text-text-muted">Loading diff…</pre>}>
-          <ReactDiffViewer
-            oldValue={editDiff.oldStr}
-            newValue={editDiff.newStr}
-            splitView={false}
-            hideLineNumbers={false}
-            useDarkTheme={isDark}
-            styles={{
-              contentText: { fontSize: '11px', lineHeight: '1.5' },
-            }}
-          />
-        </Suspense>
-      </div>
-    );
-  }
-  if (argsDetail) {
-    return (
-      <div>
-        <p className="font-semibold text-text-muted">{argsDetail.label}</p>
-        <pre className="mt-1 max-h-60 overflow-auto text-text-secondary whitespace-pre-wrap font-mono">
-          {argsDetail.content}
-        </pre>
-      </div>
-    );
-  }
-  // Fallback: pretty JSON.
+function ToolArgsRendered({ args }: { args: Record<string, unknown> }) {
   return (
     <div>
-      <p className="font-semibold text-text-muted">Arguments</p>
-      <pre className="mt-1 max-h-60 overflow-auto text-text-secondary whitespace-pre-wrap font-mono">
-        {JSON.stringify(args, null, 2)}
+      <p className="font-semibold text-text-secondary">Arguments</p>
+      <pre className="mt-0.5 max-h-60 overflow-auto text-text-secondary whitespace-pre-wrap font-mono">
+        {formatToolArguments(args)}
       </pre>
     </div>
   );
@@ -224,7 +186,7 @@ function ToolResultBody({
         <p className="mt-1 text-[10px] text-red-500">Failed to load result: {error}</p>
       )}
       {status === 'ready' && (
-        <pre className="mt-1 max-h-60 overflow-auto text-text-secondary whitespace-pre-wrap">
+        <pre className="mt-0.5 max-h-60 overflow-auto font-mono text-text-secondary whitespace-pre-wrap">
           {text}
         </pre>
       )}
@@ -256,85 +218,3 @@ function getToolIcon(toolName: string): typeof FileText {
   }
 }
 
-function getDetailLabel(toolName: string): string {
-  switch (toolName) {
-    case 'shell':
-    case 'bash':
-      return 'Command';
-    case 'read_file':
-    case 'view':
-    case 'write_file':
-    case 'edit_file':
-    case 'edit':
-    case 'create_file':
-    case 'create':
-      return 'Path';
-    case 'grep':
-    case 'search':
-      return 'Pattern';
-    case 'glob':
-      return 'Pattern';
-    case 'fetch_url':
-      return 'URL';
-    default:
-      return 'Summary';
-  }
-}
-
-/** Extract old/new strings for diff view from any tool with old_str/new_str args. */
-function getEditDiff(_toolName: string, args: Record<string, unknown>): { oldStr: string; newStr: string } | null {
-  const oldStr = typeof args.old_str === 'string' ? args.old_str : '';
-  const newStr = typeof args.new_str === 'string' ? args.new_str : '';
-  if (!oldStr && !newStr) return null;
-  return { oldStr, newStr };
-}
-
-/** Extract additional detail args to display beyond the summary. */
-function getArgsDetail(toolName: string, args: Record<string, unknown>): { label: string; content: string } | null {
-  switch (toolName) {
-    case 'edit':
-    case 'edit_file': {
-      const old_str = typeof args.old_str === 'string' ? args.old_str : undefined;
-      const new_str = typeof args.new_str === 'string' ? args.new_str : undefined;
-      if (old_str != null || new_str != null) {
-        const parts: string[] = [];
-        if (old_str != null) parts.push(`- ${old_str}`);
-        if (new_str != null) parts.push(`+ ${new_str}`);
-        return { label: 'Changes', content: parts.join('\n') };
-      }
-      return null;
-    }
-    case 'write_file':
-    case 'create_file':
-    case 'create': {
-      const content = typeof args.file_text === 'string' ? args.file_text
-        : typeof args.content === 'string' ? args.content
-        : undefined;
-      if (content) {
-        const preview = content.length > 500 ? content.slice(0, 497) + '…' : content;
-        return { label: 'Content', content: preview };
-      }
-      return null;
-    }
-    case 'grep':
-    case 'search': {
-      const path = typeof args.path === 'string' ? args.path : undefined;
-      if (path) return { label: 'Directory', content: path };
-      return null;
-    }
-    case 'shell':
-    case 'bash': {
-      const command = typeof args.command === 'string' ? args.command : undefined;
-      if (command) return { label: 'Command', content: `$ ${command}` };
-      return null;
-    }
-    case 'view':
-    case 'read_file': {
-      const path = typeof args.path === 'string' ? args.path : undefined;
-      if (path) return { label: 'Path', content: path };
-      return null;
-    }
-    default:
-      return null;
-  }
-}
