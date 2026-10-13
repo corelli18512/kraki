@@ -791,11 +791,3 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertNil(app.sessionStore.sessionListRevealId)
     }
 }
-
-/// Polls `done` on the main actor for up to `seconds` (CI runners can run a
-/// short timer late; a fixed sleep made bounded-timing tests flaky).
-@MainActor
-func waitBriefly(seconds: TimeInterval = 2, _ done: () -> Bool) async throws {
-    let deadline = Date().addingTimeInterval(seconds)
-    while !done(), Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
-}
