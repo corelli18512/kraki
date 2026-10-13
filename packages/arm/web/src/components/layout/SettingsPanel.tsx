@@ -89,9 +89,12 @@ export function SettingsPanel({
     window.addEventListener('keydown', key);
     return () => {
       window.removeEventListener('keydown', key);
-      useUsageShortcut.setState({ recording: false });
     };
   }, [open, onClose, inline]);
+
+  useEffect(() => {
+    if (!open) useUsageShortcut.setState({ recording: false });
+  }, [open]);
 
   async function updateOs(fn: (() => Promise<{ ok: boolean; error?: string }>) | undefined) {
     if (!fn) return;
@@ -230,7 +233,10 @@ export function SettingsPanel({
           Usage” {desktop ? 'in the tray' : 'in the sidebar'} opens it any time.
         </p>
       </SettingsSection>
-      <section className="kp-section"><h3>Sessions</h3><ArchiveSettings /></section>
+      <section className="kp-section">
+        <h3>Sessions</h3>
+        <ArchiveSettings />
+      </section>
       {bridge && os && (
         <SettingsSection title="Behavior">
           {bridge.setKeepRunningInTray && (
@@ -490,6 +496,21 @@ export function SettingsPanel({
               type="button"
               role="tab"
               aria-selected={tab === name}
+              tabIndex={tab === name ? 0 : -1}
+              onKeyDown={(e) => {
+                if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+                e.preventDefault();
+                const buttons = [...e.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>('[role=tab]')];
+                const index = buttons.indexOf(e.currentTarget);
+                const next =
+                  e.key === 'Home'
+                    ? 0
+                    : e.key === 'End'
+                      ? buttons.length - 1
+                      : (index + (e.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+                setTab(tabs[next][0]);
+                buttons[next].focus();
+              }}
               aria-controls="settings-pane"
               key={name}
               onClick={() => setTab(name)}

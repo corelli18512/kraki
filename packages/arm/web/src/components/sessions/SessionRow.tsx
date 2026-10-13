@@ -135,10 +135,10 @@ export const SessionRow = memo(function SessionRow({
       {menu && (
         <div className="ksr-menu" style={{ left: menu.x, top: menu.y }} role="menu">
           <button type="button" role="menuitem" onClick={() => { togglePin(); setMenu(null); }}>
-            {pinned ? <PinOff /> : <Pin />} {pinned ? 'Unpin' : 'Pin to top'}
+            {pinned ? <PinOff /> : <Pin />} {pinned ? 'Unpin' : 'Pin'}
           </button>
           <button type="button" role="menuitem" onClick={() => { toggleRead(); setMenu(null); }}>
-            {unread ? <BellOff /> : <BellRing />} {unread ? 'Mark read' : 'Mark unread'}
+            {unread ? <BellOff /> : <BellRing />} {unread ? 'Mark Read' : 'Mark Unread'}
           </button>
           <button type="button" role="menuitem" onClick={() => { setTitleDraft(session.title ?? session.autoTitle ?? ''); setRenaming(true); setMenu(null); }}><Pencil /> Rename…</button>
           <button type="button" role="menuitem" onClick={() => { wsClient.forkSession(session.id); setMenu(null); }}>

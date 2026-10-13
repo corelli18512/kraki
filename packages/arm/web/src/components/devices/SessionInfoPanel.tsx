@@ -29,6 +29,12 @@ interface Props {
   onClose: () => void;
 }
 export function SessionInfoPanel({ session, usage, models, modelDetails, onClose }: Props) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    rootRef.current?.querySelector('button')?.focus();
+    return () => previous?.focus();
+  }, []);
   const device = useStore((s) => s.devices.get(session.deviceId));
   const version = useStore((s) => s.deviceVersions.get(session.deviceId));
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -58,7 +64,25 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
     ? new Date(session.createdAt.includes('T') ? session.createdAt : `${session.createdAt.replace(' ', 'T')}Z`)
     : null;
   return (
-    <div className="ksi-panel">
+    <div
+      className="ksi-panel"
+      ref={rootRef}
+      onKeyDown={(e) => {
+        if (e.key !== 'Tab') return;
+        const controls = [
+          ...e.currentTarget.querySelectorAll<HTMLElement>(
+            'button:not(:disabled),input:not(:disabled),select:not(:disabled)',
+          ),
+        ];
+        if (e.shiftKey && document.activeElement === controls[0]) {
+          e.preventDefault();
+          controls.at(-1)?.focus();
+        } else if (!e.shiftKey && document.activeElement === controls.at(-1)) {
+          e.preventDefault();
+          controls[0]?.focus();
+        }
+      }}
+    >
       <div className="ksi-header">
         <h2>Session Info</h2>
         <button type="button" onClick={onClose}>
@@ -293,8 +317,8 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
       </div>
       {confirmDelete && (
         <SettingsAlert
-          title="Delete session?"
-          body="This permanently deletes the session and its messages on this computer."
+          title="Delete Session"
+          body="This will permanently delete this session and all its messages."
           confirm="Delete"
           onCancel={() => setConfirmDelete(false)}
           onConfirm={() => {
