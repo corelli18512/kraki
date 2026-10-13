@@ -49,7 +49,7 @@ describe('SessionRow Mac sidebar', () => {
     row();
     fireEvent.contextMenu(screen.getByRole('button', { name: /Sidebar test/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete…' }));
-    expect(screen.getByRole('alertdialog', { name: 'Delete Session' })).toHaveTextContent('Delete this session? This cannot be undone.');
+    expect(screen.getByRole('alertdialog', { name: 'Delete this session? This cannot be undone.' })).toHaveTextContent('Delete this session? This cannot be undone.');
     expect(screen.getByRole('button', { name: 'Delete Session' })).toBeInTheDocument();
     expect(screen.queryByText(/permanently deletes.*Local Mac/)).toBeNull();
     fireEvent.keyDown(window, { key: 'Escape' });

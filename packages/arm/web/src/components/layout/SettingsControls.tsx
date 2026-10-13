@@ -103,14 +103,14 @@ export function SettingsAlert({
       <div
         ref={ref}
         tabIndex={-1}
-        className="kp-alert"
+        className={`kp-alert${stacked ? ' kp-alert-stacked' : ''}${body ? '' : ' kp-alert-no-body'}`}
         role="alertdialog"
         aria-modal="true"
         aria-label={title}
         data-testid={testId}
       >
         <h3>{title}</h3>
-        <p>{body}</p>
+        {body && <p>{body}</p>}
         <div className={`kp-alert-actions${stacked ? ' is-stacked' : ''}`}>
           <button type="button" onClick={onCancel}>
             Cancel

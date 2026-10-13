@@ -175,8 +175,9 @@ export const SessionRow = memo(function SessionRow({
       {confirmDelete && (
         <SettingsAlert
           viewport
-          title="Delete Session"
-          body="Delete this session? This cannot be undone."
+          stacked
+          title="Delete this session? This cannot be undone."
+          body=""
           confirm="Delete Session"
           onCancel={() => setConfirmDelete(false)}
           onConfirm={() => { wsClient.deleteSession(session.id); setConfirmDelete(false); }}
