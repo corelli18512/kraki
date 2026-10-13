@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Real RSA-4096 key generation per app: slow on a loaded machine.
 vi.setConfig({ testTimeout: 60_000 });
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -765,5 +765,15 @@ describe('device trust — follow-up review', () => {
     expect(() => store.setPolicy({ enforce: false })).toThrow(/locked/);
     expect(readFileSync(join(dir, 'policy.lock'), 'utf8')).toBe(`${process.ppid}.live`);
     expect(readTrustPolicy(dir).enforce).toBe(true);
+  });
+});
+
+describe('device trust — post-merge review', () => {
+  it('creating a pairing secret clears expired ones', () => {
+    const dir = join(home, 'trust', 'pairings');
+    createPairingSecret(home, Date.now() - 10 * 60_000);
+    createPairingSecret(home, Date.now() - 10 * 60_000);
+    createPairingSecret(home);
+    expect(readdirSync(dir).filter((f) => f.endsWith('.json'))).toHaveLength(1);
   });
 });

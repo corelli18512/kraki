@@ -208,6 +208,16 @@ function ensureDir(path: string): void {
 export function createPairingSecret(home = getKrakiHome(), now = Date.now()): string {
   const dir = join(getTrustDir(home), 'pairings');
   ensureDir(dir);
+  // A code shown and never scanned leaves its file: drop expired ones.
+  try {
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith('.json')) continue;
+      try {
+        const r = JSON.parse(readFileSync(join(dir, f), 'utf8')) as Partial<PendingPairing>;
+        if (typeof r.expiresAt !== 'number' || r.expiresAt < now) unlinkSync(join(dir, f));
+      } catch { /* unreadable or raced: leave it */ }
+    }
+  } catch { /* best effort */ }
   const secret = generatePairingSecret();
   const record: PendingPairing = { secret, createdAt: now, expiresAt: now + PAIRING_SECRET_TTL_MS };
   writePrivateJson(join(dir, `${randomUUID()}.json`), record);
