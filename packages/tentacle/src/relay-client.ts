@@ -279,6 +279,12 @@ export class RelayClient {
           () => this.authInfo?.deviceId,
         )
       : null;
+    if (this.deviceTrust) {
+      this.deviceTrust.store.onExternalChange = () => {
+        this.reevaluateAllApps();
+        this.broadcastTrustedDevices();
+      };
+    }
     // Per-hop pulse endpoint to the relay — the reliable-delivery layer.
     this.pulse = new TentaclePulse(
       {
@@ -1602,11 +1608,17 @@ export class RelayClient {
         return;
       }
       const enforce = payload.enforce === true;
-      logger.info({ by: from, enforce }, 'Device trust policy change requested');
-      if (enforce !== trust.enforced) {
-        trust.store.setPolicy({ enforce });
-        this.reevaluateAllApps();
+      // The request names the revision the app saw; an older one (e.g. a
+      // request the relay withheld) cannot undo a newer choice.
+      if (payload.revision !== trust.store.policyRevision) {
+        logger.warn({ by: from, enforce, revision: payload.revision, current: trust.store.policyRevision }, 'Stale device trust policy request ignored');
+        this.sendTrustedDevicesTo(from);
+        return;
       }
+      logger.info({ by: from, enforce }, 'Device trust policy change requested');
+      const changed = enforce !== trust.enforced;
+      trust.store.setPolicy({ enforce });
+      if (changed) this.reevaluateAllApps();
       this.broadcastTrustedDevices();
     }
   }
@@ -1622,6 +1634,7 @@ export class RelayClient {
       payload: {
         enforced: trust.enforced,
         policyLocked: trust.policyLocked,
+        policyRevision: trust.store.policyRevision,
         devices: trust.store.list().map((d) => ({
           id: d.id,
           name: d.name ?? this.relayAppDevices.get(d.id)?.name ?? d.id,

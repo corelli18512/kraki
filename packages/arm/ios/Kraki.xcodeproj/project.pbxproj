@@ -241,6 +241,7 @@
 		6310305F2F3A95D6D92254CC /* AccountUsageViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 653D042B0A60468230A5F1F3 /* AccountUsageViews.swift */; };
 		633DCAA5AB83F3DE244B008E /* DeviceTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = 063CF9F10027975D232E4285 /* DeviceTrust.swift */; };
 		6364CF87B7AAD62DAAD3B169 /* DeviceTrustUsabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEB9006B05BFDEB74A7F5815 /* DeviceTrustUsabilityTests.swift */; };
+		636E41EED426A33999D346A0 /* DeviceTrustBoundaryTests+Round2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FEEACAB97F1A6281EA52F5C /* DeviceTrustBoundaryTests+Round2.swift */; };
 		638AB6D714A37B797A1AD183 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D17C06CC0E96BDAA7779524 /* SessionListView.swift */; };
 		63DE953CAAAE955E45469971 /* IOSVoiceHoldScenario.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF4923A90FCE08A9677B9EFA /* IOSVoiceHoldScenario.swift */; };
 		63E651E7838FC6F14D2F059E /* MacBubbleActionSlot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B40607F268A8BCEBF58C6D7 /* MacBubbleActionSlot.swift */; };
@@ -408,6 +409,7 @@
 		B6922FDD9F417397FB74E61E /* ToolChipHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = F163484AD442AE1D67F4E8A7 /* ToolChipHeader.swift */; };
 		B6DC117F829ED8444AD3D22D /* MacChatDocumentView+Cells.swift in Sources */ = {isa = PBXBuildFile; fileRef = 274EBAC3743441FC43250511 /* MacChatDocumentView+Cells.swift */; };
 		B7C46A0BC08656D1F5C64D5E /* DeviceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04BA085D5DB073C1C3E8D700 /* DeviceStore.swift */; };
+		B8044E639BE3C0F9D7FB48AE /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B2053230A2F15EC2518979 /* NotificationService.swift */; };
 		B818C7A7582AF25F7A285F00 /* SessionCardPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = EABA3BCA49EC90EEEEA2C7C0 /* SessionCardPresentation.swift */; };
 		B84F034425AB3197961B56D9 /* WindowZoom.swift in Sources */ = {isa = PBXBuildFile; fileRef = F98488549005B2CCE060B76B /* WindowZoom.swift */; };
 		B8FF9EBBBEB7C81BA045175F /* ThemePlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBACFBCC6FD0563946CD080A /* ThemePlatform.swift */; };
@@ -456,6 +458,7 @@
 		CB61BDB02D7D8329D0D6AD39 /* MacAppDelegate+Regressions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A62AA3E373A4AA8C2DF05A2B /* MacAppDelegate+Regressions.swift */; };
 		CC81A758A1BF637D7B8C9172 /* LaunchdOnDemandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 694EAD21A42351FD2CD77CD8 /* LaunchdOnDemandTests.swift */; };
 		CCCB57F4C5E02BC17A39F7AA /* MacMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9684E802464B9754C3FE6FA3 /* MacMarkdown.swift */; };
+		CD08CAD68CEF92E66E57161E /* DeviceTrustBoundaryTests+Round2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FEEACAB97F1A6281EA52F5C /* DeviceTrustBoundaryTests+Round2.swift */; };
 		CDAFEE18A03A0D0CC2D1E1B3 /* MacScrollControllers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7266CC5C151C27DC7434B2CE /* MacScrollControllers.swift */; };
 		CDD3FC5A96DCC43FE52A4BCA /* MessageDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2E016C4ACE0484D7DB04166 /* MessageDatabase.swift */; };
 		CE35D47AAECB0C510C0EF6F1 /* AppState+Pulse.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94493ACAFFB46D206EC677D6 /* AppState+Pulse.swift */; };
@@ -720,6 +723,7 @@
 		4B3276E172306B8CE408EBF5 /* ComposerScrollEdges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerScrollEdges.swift; sourceTree = "<group>"; };
 		4D17C06CC0E96BDAA7779524 /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
 		4FC819A2213A114B1B7515F3 /* ChatPerfListVC+ScrollPaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatPerfListVC+ScrollPaging.swift"; sourceTree = "<group>"; };
+		4FEEACAB97F1A6281EA52F5C /* DeviceTrustBoundaryTests+Round2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DeviceTrustBoundaryTests+Round2.swift"; sourceTree = "<group>"; };
 		50BC90E20CAB53EA38363CD1 /* LocalAgentsCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAgentsCheck.swift; sourceTree = "<group>"; };
 		50E35AD5263921130DD1A18D /* StabilityTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StabilityTrackerTests.swift; sourceTree = "<group>"; };
 		5179D3E57BD2FCF3F327E11C /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
@@ -1616,6 +1620,7 @@
 				0B5C9B91D8E0CF8C6D63E91D /* CryptoTests.swift */,
 				A429810ED3F81077317149B3 /* DeviceStoreTests.swift */,
 				FE8B08A0D358AD93F667D18E /* DeviceTrustBoundaryTests.swift */,
+				4FEEACAB97F1A6281EA52F5C /* DeviceTrustBoundaryTests+Round2.swift */,
 				2DE38EE9D44EC80DF761EB95 /* DeviceTrustTests.swift */,
 				CEB9006B05BFDEB74A7F5815 /* DeviceTrustUsabilityTests.swift */,
 				01C03CDBEA5BAFA47F71D2F1 /* E2EV2NodeVectors.swift */,
@@ -1961,6 +1966,7 @@
 				1B01E117986AF227249E2056 /* BuiltInTentacleTests.swift in Sources */,
 				367589ADA07E8E0D001A10C7 /* ComposerGeometryProbeTests.swift in Sources */,
 				D56C224B51DB99D732C156DE /* ComposerGrowthShots.swift in Sources */,
+				636E41EED426A33999D346A0 /* DeviceTrustBoundaryTests+Round2.swift in Sources */,
 				FF48C125D31E2EED8D0B5A03 /* DeviceTrustBoundaryTests.swift in Sources */,
 				C8696A99587AA952863E2341 /* DeviceTrustE2ETests.swift in Sources */,
 				17F053F2ED867E64A934BCC9 /* DeviceTrustTests.swift in Sources */,
@@ -2025,6 +2031,7 @@
 				6694584044EDB20D4B5557D1 /* ComposerGeometryProbeTests.swift in Sources */,
 				70666EBE60A847EF864AF2C1 /* CryptoTests.swift in Sources */,
 				45E3892DFF16FF95AE291B87 /* DeviceStoreTests.swift in Sources */,
+				CD08CAD68CEF92E66E57161E /* DeviceTrustBoundaryTests+Round2.swift in Sources */,
 				B942C7C121C53B9FA55DD114 /* DeviceTrustBoundaryTests.swift in Sources */,
 				8B3206E8C76D7E9EE08AD79E /* DeviceTrustTests.swift in Sources */,
 				B584C35EFD559395DF1AE19F /* DeviceTrustUsabilityTests.swift in Sources */,
@@ -2045,6 +2052,7 @@
 				C0C4528A1D3D1773A0BA9870 /* MessagesTests.swift in Sources */,
 				92179DB4025882C8C975EC34 /* NativeSessionPreviewGlyphTests.swift in Sources */,
 				76AE13D36EC637DC85CBD038 /* NativeStyleTests.swift in Sources */,
+				B8044E639BE3C0F9D7FB48AE /* NotificationService.swift in Sources */,
 				97B4D1DF70CC145EFCFAA78F /* PairingLinkTests.swift in Sources */,
 				3E6DC3A38E8C02979FFFA91D /* PendingTailBufferTests.swift in Sources */,
 				5AAAC8892D718A7C7AC7F28D /* ProtocolTypesTests.swift in Sources */,
@@ -2571,6 +2579,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xfrontend -testable-import-module -Xfrontend Kraki";
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -2703,6 +2712,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xfrontend -testable-import-module -Xfrontend Kraki";
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -3149,6 +3159,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xfrontend -testable-import-module -Xfrontend Kraki";
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -3245,6 +3256,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xfrontend -testable-import-module -Xfrontend Kraki";
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.ios.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;

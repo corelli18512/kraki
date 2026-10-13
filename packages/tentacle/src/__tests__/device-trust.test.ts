@@ -29,7 +29,7 @@ import { KeyManager } from '../key-manager.js';
 import { createPairingSecret, readTrustPolicy, TrustStore, writeTrustPolicy } from '../trust-store.js';
 import { buildPushPreview } from '../relay/push-preview.js';
 import { buildApnsPayload } from '../../../head/src/push/apns.js';
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync as rmSyncFs } from 'node:fs';
 
 const TENTACLE = 'dev_tentacle';
 
@@ -482,7 +482,7 @@ describe('device trust — administration from paired apps', () => {
     const legacy = makeApp('dev_legacy');
     joined(env, legacy);
     expect(env.client.consumerKeys.has(legacy.id)).toBe(true);
-    env.deliver(appSend(env, phone, { type: 'set_trust_policy', payload: { enforce: true } }), phone.id);
+    env.deliver(appSend(env, phone, { type: 'set_trust_policy', payload: { enforce: true, revision: env.client.deviceTrust!.store.policyRevision } }), phone.id);
     expect(env.client.deviceTrust!.enforced).toBe(true);
     expect(readTrustPolicy(join(home, 'trust')).enforce).toBe(true);
     expect(env.client.consumerKeys.has(legacy.id)).toBe(false);
@@ -527,15 +527,15 @@ describe('device trust — push previews', () => {
     client.closingTurnPush.set('s1', {});
     client.lastAgentContent.set('s1', '中文 "quoted" '.repeat(200));
     const built = buildPushPreview(env.client, { type: 'idle', sessionId: 's1' })!;
-    const key = built.encrypted!.keys[phone.id]!;
+    const key = built.trusted!.keys[phone.id]!;
     expect(key.startsWith('v2.')).toBe(true);
-    expect(built.encrypted!.blob).toBe('');
+    expect(built.trusted!.blob).toBe('');
     const opened = JSON.parse(decryptV2(key.slice(3), phone.id, phone.xk.privateKey));
     expect(isSignedMessage(opened)).toBe(true);
     expect(verifySignature(opened, env.tentacle.identityKey)).toBe(true);
     expect(opened.to).toBe(phone.id);
     expect(JSON.parse(opened.body).type).toBe('idle');
-    expect(Buffer.byteLength(buildApnsPayload({ blob: built.encrypted!.blob, key }))).toBeLessThanOrEqual(4096);
+    expect(Buffer.byteLength(buildApnsPayload({ blob: built.trusted!.blob, key }))).toBeLessThanOrEqual(4096);
   });
 });
 
@@ -604,5 +604,83 @@ describe('device trust — review regressions', () => {
     env.deliver(forged as never, 'dev_other');
     await flush();
     expect(sendInputCalls(env)).toHaveLength(0);
+  });
+});
+
+describe('device trust — round 2 regressions', () => {
+  it('R2-D05: a withheld older policy request cannot undo a newer choice', () => {
+    writeTrustPolicy(join(home, 'trust'), { enforce: true });
+    const env = setup('policy');
+    const phone = makeApp('dev_phone');
+    joined(env, phone);
+    env.deliver(pairRequest(env, phone, createPairingSecret(home)), phone.id);
+    const rev = env.client.deviceTrust!.store.policyRevision;
+    const withheld = appSend(env, phone, { type: 'set_trust_policy', payload: { enforce: false, revision: rev } });
+    env.deliver(appSend(env, phone, { type: 'set_trust_policy', payload: { enforce: true, revision: rev } }), phone.id);
+    env.deliver(withheld, phone.id);
+    expect(env.client.deviceTrust!.enforced).toBe(true);
+  });
+
+  it('PROT2-01: a second process seeing the new RSA key cannot pick compatible for a fresh install', () => {
+    const keys = join(home, 'race', 'keys');
+    new KeyManager(keys).getKeyPair();
+    // Remove the identity key, as if the first process stopped right after the RSA key.
+    rmSyncFs(join(keys, 'identity-ed25519.key'), { force: true });
+    new KeyManager(keys).getPublicIdentity();
+    expect(readTrustPolicy(join(home, 'race', 'trust')).enforce).toBe(true);
+  });
+
+  it('PROT2-03: an absorbed external revocation withdraws the app everywhere, previews included', async () => {
+    const env = setup('enforce');
+    const a = makeApp('dev_a');
+    joined(env, a);
+    env.deliver(pairRequest(env, a, createPairingSecret(home)), a.id);
+    new TrustStore(join(home, 'trust')).remove(a.id);
+    // A daemon-side locked write absorbs the change before the refresh timer.
+    env.headControl({ type: 'device_removed', deviceId: 'dev_unrelated' });
+    await flush();
+    expect(env.client.consumerKeys.has(a.id)).toBe(false);
+    const client = env.client as unknown as { closingTurnPush: Map<string, object>; lastAgentContent: Map<string, string> };
+    client.closingTurnPush.set('s1', {});
+    client.lastAgentContent.set('s1', 'secret');
+    const built = buildPushPreview(env.client, { type: 'idle', sessionId: 's1' });
+    expect(built?.encrypted ?? null).toBeNull();
+    expect(built?.trusted ?? null).toBeNull();
+  });
+
+  it('PROT2-04: with legacy and paired recipients, the paired preview fits APNs on its own', () => {
+    const env = setup('compatible');
+    const phone = makeApp('dev_phone');
+    const legacy = makeApp('dev_legacy');
+    joined(env, phone);
+    joined(env, legacy);
+    env.deliver(pairRequest(env, phone, createPairingSecret(home)), phone.id);
+    const client = env.client as unknown as { closingTurnPush: Map<string, object>; lastAgentContent: Map<string, string> };
+    client.closingTurnPush.set('s1', {});
+    client.lastAgentContent.set('s1', '"\\\\'.repeat(800));
+    const built = buildPushPreview(env.client, { type: 'idle', sessionId: 's1' })!;
+    expect(built.encrypted!.keys[legacy.id]).toBeDefined();
+    expect(built.encrypted!.keys[phone.id]).toBeUndefined();
+    const key = built.trusted!.keys[phone.id]!;
+    expect(Buffer.byteLength(buildApnsPayload({ blob: built.trusted!.blob, key }))).toBeLessThanOrEqual(4096);
+  });
+
+  it('PROT2-02: lost replay state stays fail-closed across the next restart', async () => {
+    const env = setup('enforce');
+    const phone = makeApp('dev_phone');
+    joined(env, phone);
+    env.deliver(pairRequest(env, phone, createPairingSecret(home)), phone.id);
+    const captured = appSend(env, phone, { type: 'send_input', sessionId: 's1', payload: { text: 'once' } });
+    env.deliver(captured, phone.id);
+    writeFileSync(join(home, 'trust', 'replay.json'), '[[null, 1]]');
+    const second = setup('enforce');
+    joined(second, phone);
+    // Another command is accepted (and the state written) after the loss.
+    second.deliver(appSend(second, phone, { type: 'send_input', sessionId: 's1', payload: { text: 'later' } }), phone.id);
+    const third = setup('enforce');
+    joined(third, phone);
+    third.deliver(captured, phone.id);
+    await flush();
+    expect(sendInputCalls(third)).toHaveLength(0);
   });
 });

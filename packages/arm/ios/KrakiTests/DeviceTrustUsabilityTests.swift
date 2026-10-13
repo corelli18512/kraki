@@ -232,8 +232,12 @@ final class DeviceTrustUsabilityTests: XCTestCase {
         try await wait("computer offline") { self.app.deviceStore.devices[self.stack.tentacleId]?.online == false }
         app.pairWithComputer(qr)
         try await capture("offline-pairing")
+        XCTAssertEqual(app.trustState(for: stack.tentacleId), .pairing)
         try await Task.sleep(for: .seconds(21))
-        XCTAssertEqual(app.trustState(for: stack.tentacleId), .pairing, "no timeout/retry explanation")
+        // Still offline → still pending (the retry only fires for online computers).
+        if app.deviceStore.devices[stack.tentacleId]?.online == false {
+            XCTAssertEqual(app.trustState(for: stack.tentacleId), .pairing, "no timeout/retry explanation")
+        }
         try await capture("offline-pairing-after-21s")
         try await control("/heal")
         try await wait("pairs after computer returns") { self.app.trustState(for: self.stack.tentacleId) == .paired }

@@ -170,10 +170,15 @@ extension AppState {
         let pinned = deviceStore.devices.values
             .filter { $0.role == .tentacle }
             .compactMap { d in trust.pin(d.id).map { (deviceId: d.id, publicKey: $0.encryptionKey) } }
-        guard !pinned.isEmpty, let payload = sealSigned(inner, to: DeviceTrustWire.anyRecipient, recipients: pinned) else {
-            return (nil, [])
+        guard !pinned.isEmpty else { return (nil, []) }
+        let covered = Set(pinned.map(\.deviceId))
+        // Pinned computers are covered either way: if sealing fails they get
+        // nothing rather than the legacy payload to a relay-reported key.
+        guard let payload = sealSigned(inner, to: DeviceTrustWire.anyRecipient, recipients: pinned) else {
+            KLog.d("❌ device trust: broadcast sealing failed — pinned computers skipped")
+            return (nil, covered)
         }
         _ = deliverEncrypted(payload, target: nil, connectionScoped: connectionScoped, fragment: false, replayable: false)
-        return (nil, Set(pinned.map(\.deviceId)))
+        return (nil, covered)
     }
 }

@@ -140,7 +140,10 @@ function signed(env: Env, phone: App, body: Record<string, unknown>, opts: SignO
 }
 function request(env: Env, phone: App, secret: string | null, override: Partial<PairingClaim> = {}, local = false) {
   const claim: PairingClaim = { tentacleId: COMPUTER, appId: phone.id, identityKey: phone.ik.publicKey, encryptionKey: phone.xk.publicKey, rsaKey: phone.rsaCompact, ts: Date.now(), ...override };
-  return wire(env, signed(env, phone, { type: 'pair_request', payload: { claim, ...(secret ? { proof: pairingProof(secret, claim) } : {}), ...(local ? { local: true } : {}) } }));
+  // A malformed claim has no valid proof at all (pairingProof refuses it).
+  let proof: string | undefined;
+  try { proof = secret ? pairingProof(secret, claim) : undefined; } catch { proof = 'AAAA'; }
+  return wire(env, signed(env, phone, { type: 'pair_request', payload: { claim, ...(proof ? { proof } : {}), ...(local ? { local: true } : {}) } }));
 }
 function paired(mode: 'enforce' | 'compatible' | 'policy' = 'enforce') {
   if (mode === 'policy') writeTrustPolicy(join(home, 'trust'), { enforce: true });
@@ -422,7 +425,7 @@ describe('Tentacle confidentiality: outbound keys stay pinned', () => {
     expect(JSON.stringify(readable(env, phone))).toContain('SECRET_HISTORY');
     expect(JSON.stringify(readable(env, phone))).toContain('SECRET_BROADCAST');
     env.client.closingTurnPush.set('s1', {}); env.client.lastAgentContent.set('s1', 'SECRET_PREVIEW');
-    const preview = buildPushPreview(env.client, { type: 'idle', sessionId: 's1' })!.encrypted!;
+    const preview = buildPushPreview(env.client, { type: 'idle', sessionId: 's1' })!.trusted!;
     expect(Object.keys(preview.keys)).toEqual([phone.id]);
     expect(preview.keys[phone.id].startsWith('v2.')).toBe(true);
     expect(() => decryptV2(preview.keys[phone.id].slice(3), phone.id, head.xk.privateKey)).toThrow();
@@ -448,34 +451,34 @@ describe('Tentacle policy and replay persistence', () => {
     const body = { type: 'set_trust_policy', deviceId: phone.id, payload: { enforce: false } };
     env.deliver(wire(env, body), phone.id);
     env.deliver(wire(env, signMessage(JSON.stringify(body), phone.id, COMPUTER, rogue.ik.privateKey)), phone.id);
-    env.deliver(wire(env, signed(env, rogue, { type: 'set_trust_policy', payload: { enforce: false } })), rogue.id);
+    env.deliver(wire(env, signed(env, rogue, { type: 'set_trust_policy', payload: { enforce: false, revision: env.client.deviceTrust!.store.policyRevision } })), rogue.id);
     expect(env.client.deviceTrust!.enforced).toBe(true);
   });
 
   it('a valid paired signature or explicit local edit can change an unlocked policy; fixed mode stays locked', () => {
     const { env, phone } = paired('policy');
-    env.deliver(wire(env, signed(env, phone, { type: 'set_trust_policy', payload: { enforce: false } })), phone.id);
+    env.deliver(wire(env, signed(env, phone, { type: 'set_trust_policy', payload: { enforce: false, revision: env.client.deviceTrust!.store.policyRevision } })), phone.id);
     expect(env.client.deviceTrust!.enforced).toBe(false);
     writeTrustPolicy(join(home, 'trust'), { enforce: true });
     env.client.deviceTrust!.store.refresh();
     expect(env.client.deviceTrust!.enforced).toBe(true);
     const locked = setup('enforce');
-    locked.deliver(wire(locked, signed(locked, phone, { type: 'set_trust_policy', payload: { enforce: false } })), phone.id);
+    locked.deliver(wire(locked, signed(locked, phone, { type: 'set_trust_policy', payload: { enforce: false, revision: locked.client.deviceTrust!.store.policyRevision } })), phone.id);
     expect(locked.client.deviceTrust!.enforced).toBe(true);
   });
 
   it('captured set_trust_policy cannot override a newer policy within the replay window', () => {
     const { env, phone } = paired('policy');
-    const old = wire(env, signed(env, phone, { type: 'set_trust_policy', payload: { enforce: false } }));
+    const old = wire(env, signed(env, phone, { type: 'set_trust_policy', payload: { enforce: false, revision: env.client.deviceTrust!.store.policyRevision } }));
     env.deliver(old, phone.id);
-    env.deliver(wire(env, signed(env, phone, { type: 'set_trust_policy', payload: { enforce: true } })), phone.id);
+    env.deliver(wire(env, signed(env, phone, { type: 'set_trust_policy', payload: { enforce: true, revision: env.client.deviceTrust!.store.policyRevision } })), phone.id);
     env.deliver(old, phone.id);
     expect(env.client.deviceTrust!.enforced).toBe(true);
   });
 
   it('another computer-specific signature cannot disable this computer', () => {
     const { env, phone } = paired('policy');
-    env.deliver(wire(env, signed(env, phone, { type: 'set_trust_policy', payload: { enforce: false } }, { to: 'dev_other_computer' })), phone.id);
+    env.deliver(wire(env, signed(env, phone, { type: 'set_trust_policy', payload: { enforce: false, revision: env.client.deviceTrust!.store.policyRevision } }, { to: 'dev_other_computer' })), phone.id);
     expect(env.client.deviceTrust!.enforced).toBe(true);
   });
 
@@ -484,7 +487,7 @@ describe('Tentacle policy and replay persistence', () => {
     // A captured multi-recipient envelope can be delivered to either recipient.
     // This asserts target-specific authorization for a security policy change.
     const other = generateE2EKeyPair();
-    const message = signed(env, phone, { type: 'set_trust_policy', payload: { enforce: false, tentacleId: 'dev_other_computer' } }, { to: '*' });
+    const message = signed(env, phone, { type: 'set_trust_policy', payload: { enforce: false, revision: env.client.deviceTrust!.store.policyRevision, tentacleId: 'dev_other_computer' } }, { to: '*' });
     const captured = { v: 2, blob: encryptV2(JSON.stringify(message), [{ recipientId: COMPUTER, publicKey: env.tentacle.encryptionKey }, { recipientId: 'dev_other_computer', publicKey: other.publicKey }]) };
     env.deliver(captured, phone.id);
     expect(env.client.deviceTrust!.enforced).toBe(true);
@@ -509,9 +512,9 @@ describe('Tentacle policy and replay persistence', () => {
 
   it('VT-CRASH-DOWNGRADE: crash-window replay of an old policy-off message cannot enable relay injection', async () => {
     const { env, phone } = paired('policy'); env.client.deviceTrust!.store.flushReplay();
-    const captured = wire(env, signed(env, phone, { type: 'set_trust_policy', payload: { enforce: false } }));
+    const captured = wire(env, signed(env, phone, { type: 'set_trust_policy', payload: { enforce: false, revision: env.client.deviceTrust!.store.policyRevision } }));
     env.deliver(captured, phone.id);
-    env.deliver(wire(env, signed(env, phone, { type: 'set_trust_policy', payload: { enforce: true } })), phone.id);
+    env.deliver(wire(env, signed(env, phone, { type: 'set_trust_policy', payload: { enforce: true, revision: env.client.deviceTrust!.store.policyRevision } })), phone.id);
     expect(readTrustPolicy(join(home, 'trust')).enforce).toBe(true);
     const restarted = setup('policy'); restarted.deliver(captured, phone.id);
     const rogue = app('dev_rogue', true); joined(restarted, rogue);
@@ -544,7 +547,7 @@ describe('Tentacle policy and replay persistence', () => {
   it('identical nonces from different paired senders are independent', async () => {
     const { env, phone } = paired(); const second = app('dev_second');
     env.deliver(request(env, second, createPairingSecret(home)), second.id);
-    for (const sender of [phone, second]) env.deliver(wire(env, signed(env, sender, { ...evil, sessionId: sender.id }, { nonce: 'SAME_NONCE' })), sender.id);
+    for (const sender of [phone, second]) env.deliver(wire(env, signed(env, sender, { ...evil, sessionId: sender.id }, { nonce: 'U0FNRV9OT05DRV8xMjM0NQ' })), sender.id);
     await flush();
     expect(env.adapter.sendMessage).toHaveBeenCalledTimes(2);
   });

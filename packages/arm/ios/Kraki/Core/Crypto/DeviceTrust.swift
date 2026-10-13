@@ -73,6 +73,11 @@ enum DeviceTrustWire {
         return fromB64url(value)?.count == 32
     }
 
+    /// Same rule as `isWireId` in trust.ts: delimiter-free, 1…128 chars.
+    static func isWireId(_ value: String) -> Bool {
+        !value.isEmpty && value.count <= 128 && !value.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7f }
+    }
+
     private static func signingInput(from: String, to: String, ts: Int64, nonce: String, body: String) -> Data {
         Data("\(sigContext)\n\(from)\n\(to)\n\(ts)\n\(nonce)\n\(body)".utf8)
     }
@@ -106,9 +111,11 @@ enum DeviceTrustWire {
 
     static func parseSigned(_ object: [String: Any]) -> Signed? {
         guard (object["ks"] as? NSNumber)?.intValue == 1,
-              let from = object["from"] as? String, let to = object["to"] as? String,
-              let ts = (object["ts"] as? NSNumber)?.int64Value,
-              let nonce = object["nonce"] as? String, let body = object["body"] as? String,
+              let from = object["from"] as? String, isWireId(from),
+              let to = object["to"] as? String, isWireId(to),
+              let ts = (object["ts"] as? NSNumber)?.int64Value, ts >= 0,
+              let nonce = object["nonce"] as? String, nonce.count == 22, fromB64url(nonce)?.count == 16,
+              let body = object["body"] as? String,
               let sig = object["sig"] as? String else { return nil }
         return Signed(from: from, to: to, ts: ts, nonce: nonce, body: body, sig: sig)
     }
@@ -400,6 +407,11 @@ enum DeviceTrustInbound {
     /// where session ownership is known) drops any that touch a session of a
     /// paired computer.
     static let unsignedKey = "__krakiUnsigned"
+    /// Session ownership: a pinned claimant outranks an unpinned owner.
+    static func claimantOutranksOwner(_ claimant: String, _ owner: String) -> Bool {
+        TentacleTrustStore.shared.pin(claimant) != nil && TentacleTrustStore.shared.pin(owner) == nil
+    }
+
     /// Marker on signed inner messages: the verified signer (a pinned computer).
     static let signedByKey = "__krakiSignedBy"
 
@@ -477,28 +489,12 @@ enum DeviceTrustPush {
 
     enum Failure: Error { case notV2, decrypt, unsigned, unpinned, badSignature, wrongRecipient, stale }
 
-    /// Shared with the Notification Service Extension: whether a legacy
-    /// (unsigned RSA) preview may be shown. A paired computer signs its
-    /// previews, so an unsigned one is shown only when this device also uses
-    /// an unpaired computer, and never for a paired computer's session.
-    static let legacyAllowedKey = "kraki.deviceTrust.legacyPreviewsAllowed"
-    static let pairedSessionsKey = "kraki.deviceTrust.pairedSessions"
-
-    static func legacyPreviewAllowed(
-        sessionId: String?,
-        store: TentacleTrustStore = .shared,
-        defaults: UserDefaults = DeviceTrustDefaults.shared
-    ) -> Bool {
-        guard store.hasPins else { return true }
-        guard defaults.bool(forKey: legacyAllowedKey) else { return false }
-        if let sessionId, Set(defaults.stringArray(forKey: pairedSessionsKey) ?? []).contains(sessionId) { return false }
-        return true
-    }
-
-    /// Written by the app whenever computers or sessions change.
-    static func publishPolicy(legacyAllowed: Bool, pairedSessions: [String], defaults: UserDefaults = DeviceTrustDefaults.shared) {
-        defaults.set(legacyAllowed, forKey: legacyAllowedKey)
-        defaults.set(Array(pairedSessions.prefix(2_000)), forKey: pairedSessionsKey)
+    /// Whether an unsigned (legacy RSA) preview may be shown. Once any
+    /// computer is pinned, never: RSA ciphertext proves nothing about its
+    /// sender, and the extension cannot reliably know which sessions belong
+    /// to which computer. Unpaired computers' previews then show generic text.
+    static func legacyPreviewAllowed(store: TentacleTrustStore = .shared) -> Bool {
+        !store.hasPins
     }
 
     /// The preview JSON, verified to come from a pinned computer.

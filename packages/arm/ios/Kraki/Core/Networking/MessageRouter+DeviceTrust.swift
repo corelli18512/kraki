@@ -20,6 +20,13 @@ extension MessageRouter {
             }
             return
         }
+        // Unsigned previews never once a computer is pinned (same rule as the
+        // iOS Notification Service Extension); paired computers' previews also
+        // reach this Mac signed, or over the local link.
+        guard DeviceTrustPush.legacyPreviewAllowed() else {
+            KLog.d("⛔️ device trust: dropped unsigned notification_preview")
+            return
+        }
         guard let appState, let deviceId = appState.deviceId,
               let payload = json["payload"] as? [String: Any],
               let blob = payload["blob"] as? String,
@@ -31,14 +38,6 @@ extension MessageRouter {
             return
         }
         Task { @MainActor in
-            // A paired computer signs its previews; an unsigned one about
-            // its session was made by someone else (e.g. the relay).
-            if let sid = (try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])?["sessionId"] as? String,
-               let owner = appState.sessionStore.sessions[sid]?.deviceId,
-               TentacleTrustStore.shared.pairedPin(owner) != nil {
-                KLog.d("⛔️ device trust: dropped unsigned notification for a paired computer")
-                return
-            }
             MacNotifications.shared.present(decryptedPreview: text, appState: appState, route: "head")
         }
         #endif
@@ -71,10 +70,6 @@ extension MessageRouter {
                     return true
                 }
             }
-        }
-        if type == "session_list" || type == "session_created" {
-            // Sessions changed: refresh what the notification extension may show.
-            DispatchQueue.main.async { [weak appState] in appState?.publishPushTrustPolicy() }
         }
         switch type {
         case "pair_result", "trusted_devices":

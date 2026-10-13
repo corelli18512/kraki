@@ -47,10 +47,13 @@ extension ComputerTrustState {
     }
 
     /// One sentence for the security section.
-    func explanation(computer: String, online: Bool = true) -> String {
+    /// `enforced`: the computer confirmed "Only paired devices" (nil: unknown).
+    func explanation(computer: String, online: Bool = true, enforced: Bool? = nil) -> String {
         switch self {
+        case .paired where enforced == true:
+            return "Messages with \(computer) are signed and end-to-end encrypted to keys exchanged when you scanned its code, and it only accepts paired devices. Kraki's servers can't read your sessions or send commands in your name."
         case .paired:
-            return "Messages with \(computer) are signed and end-to-end encrypted to keys exchanged when you scanned its code. Kraki's servers can't read them or send commands in your name."
+            return "This device's messages with \(computer) are signed and end-to-end encrypted to keys exchanged when you scanned its code. Until \"Only paired devices\" is on, other devices on your account — or a compromised Kraki server — can still connect to \(computer)."
         case .pairing:
             return online
                 ? "Confirming the pairing with \(computer)…"
@@ -60,7 +63,7 @@ extension ComputerTrustState {
         case .needsPairing:
             return "\(computer) only accepts devices paired with it. Run `kraki connect` on it and scan the code."
         case .notPaired:
-            return "Not paired yet. Pair to make sure only your devices can see and control \(computer): run `kraki connect` on it and scan the code."
+            return "Not paired yet. Pairing makes this device's messages with \(computer) signed and end-to-end encrypted to keys you exchange in person: run `kraki connect` on it and scan the code."
         case .unsupported:
             return "Update Kraki on \(computer) to pair this device with it."
         }
@@ -114,7 +117,7 @@ struct ComputerSecurityRows: View {
             Spacer()
             TrustStatusBadge(state: state)
         }
-        Text(trustCopy: state.explanation(computer: device.name, online: device.online))
+        Text(trustCopy: state.explanation(computer: device.name, online: device.online, enforced: info?.enforced))
             .font(.footnote)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -138,19 +141,29 @@ struct ComputerSecurityRows: View {
 
         if state == .paired, let info {
             Toggle(isOn: Binding(
-                get: { info.enforced },
+                get: { info.pendingEnforce ?? info.enforced },
                 set: { appState.setOnlyPairedDevices($0, on: device.id) }
             )) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Only paired devices")
+                    HStack(spacing: 6) {
+                        Text("Only paired devices")
+                        if info.pendingEnforce != nil {
+                            ProgressView().controlSize(.mini)
+                            Text("Applying…").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    // Describes what the computer confirmed, not the request.
                     Text(info.enforced
                          ? "Devices that haven't scanned this computer's code can't connect."
                          : "Any device signed in to your account can connect. Turn on once all your devices are paired.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if info.policyLocked {
+                        Text("Set by the computer's configuration.").font(.caption).foregroundStyle(.tertiary)
+                    }
                 }
             }
-            .disabled(info.policyLocked)
+            .disabled(info.policyLocked || info.pendingEnforce != nil)
             .accessibilityIdentifier("trust.enforceToggle")
 
             if !info.devices.isEmpty {

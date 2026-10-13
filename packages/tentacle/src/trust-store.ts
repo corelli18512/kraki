@@ -81,6 +81,9 @@ export function getTrustDir(home = getKrakiHome()): string {
 export interface TrustPolicy {
   /** Serve only paired apps and accept only their signed commands. */
   enforce: boolean;
+  /** Bumped on every explicit choice. A paired app's request names the
+   *  revision it saw, so an older withheld request cannot undo a newer one. */
+  revision?: number;
 }
 
 /**
@@ -94,7 +97,7 @@ export function initTrustPolicy(dir: string, enforce: boolean): void {
   if (existsSync(path)) return;
   ensureDir(dir);
   try {
-    writeFileSync(path, JSON.stringify({ enforce }, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+    writeFileSync(path, JSON.stringify({ enforce, revision: 0 }, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
   }
@@ -103,7 +106,8 @@ export function initTrustPolicy(dir: string, enforce: boolean): void {
 /** Write the policy (CLI, Settings, or a paired app's request). */
 export function writeTrustPolicy(dir: string, policy: TrustPolicy): void {
   ensureDir(dir);
-  writePrivateJson(join(dir, 'policy.json'), { enforce: policy.enforce === true });
+  const revision = policy.revision ?? readTrustPolicy(dir).revision! + 1;
+  writePrivateJson(join(dir, 'policy.json'), { enforce: policy.enforce === true, revision });
 }
 
 export function readTrustPolicy(dir: string): TrustPolicy {
@@ -112,15 +116,16 @@ export function readTrustPolicy(dir: string): TrustPolicy {
     text = readFileSync(join(dir, 'policy.json'), 'utf8');
   } catch (err) {
     // No policy: an install that predates device trust (compatible).
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { enforce: false };
-    return { enforce: true };
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { enforce: false, revision: 0 };
+    return { enforce: true, revision: 0 };
   }
   try {
-    const raw = JSON.parse(text) as { enforce?: unknown };
-    return { enforce: raw.enforce !== false };
+    const raw = JSON.parse(text) as { enforce?: unknown; revision?: unknown };
+    const revision = typeof raw.revision === 'number' && Number.isSafeInteger(raw.revision) && raw.revision >= 0 ? raw.revision : 0;
+    return { enforce: raw.enforce !== false, revision };
   } catch {
     // Unreadable policy: fail closed.
-    return { enforce: true };
+    return { enforce: true, revision: 0 };
   }
 }
 
@@ -157,7 +162,10 @@ export class TrustStore {
   private devices = new Map<string, TrustedDevice>();
   readonly replayGuard = new ReplayGuard();
   private replaySaveTimer: ReturnType<typeof setTimeout> | null = null;
-  private policy: TrustPolicy = { enforce: false };
+  private policy: TrustPolicy = { enforce: false, revision: 0 };
+  /** Called when a locked write found devices.json changed by another
+   *  process (the periodic refresh would no longer see it). */
+  onExternalChange: (() => void) | null = null;
   /** mtimes of devices.json / policy.json when last read (CLI edits them). */
   private stamps = { devices: -1, policy: -1 };
 
@@ -171,13 +179,18 @@ export class TrustStore {
     this.policy = readTrustPolicy(dir);
     this.stamps.policy = this.mtime(this.policyPath);
     try {
-      this.replayGuard.import(JSON.parse(readFileSync(this.replayPath, 'utf8')) as Array<[string, number]>);
+      this.replayGuard.import(JSON.parse(readFileSync(this.replayPath, 'utf8')));
     } catch (err) {
-      // Lost replay state (not merely absent): refuse anything signed before
-      // now, so no captured message inside the window can be replayed.
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        this.replayGuard.rejectBefore(Date.now());
-        logger.warn({ err: (err as Error).message }, 'Replay state unreadable — rejecting earlier messages');
+      // Lost replay state — unreadable, malformed, or missing while apps are
+      // paired: refuse everything that could have been accepted before (also
+      // messages signed ahead of our clock), and persist that floor at once
+      // so the next restart keeps it.
+      const missing = (err as NodeJS.ErrnoException).code === 'ENOENT';
+      if (!missing || this.devices.size > 0) {
+        this.replayGuard.markStateLost();
+        this.replayDirty = true;
+        this.flushReplay();
+        logger.warn({ err: (err as Error).message }, 'Replay state lost — rejecting earlier messages');
       }
     }
   }
@@ -204,11 +217,23 @@ export class TrustStore {
     return this.policy.enforce;
   }
 
-  setPolicy(policy: TrustPolicy): void {
-    if (this.dir) writeTrustPolicy(this.dir, policy);
-    this.policy = { enforce: policy.enforce };
+  get policyRevision(): number {
+    void this.enforced;
+    return this.policy.revision ?? 0;
+  }
+
+  /** Record an explicit choice (always a new revision, even if unchanged). */
+  setPolicy(policy: { enforce: boolean }): void {
+    if (this.dir) {
+      this.refresh();
+      const revision = (readTrustPolicy(this.dir).revision ?? 0) + 1;
+      writeTrustPolicy(this.dir, { enforce: policy.enforce, revision });
+      this.policy = { enforce: policy.enforce, revision };
+    } else {
+      this.policy = { enforce: policy.enforce, revision: (this.policy.revision ?? 0) + 1 };
+    }
     this.stamps.policy = this.mtime(this.policyPath);
-    logger.info({ enforce: policy.enforce }, 'Device trust policy changed');
+    logger.info({ enforce: policy.enforce, revision: this.policy.revision }, 'Device trust policy changed');
   }
 
   /**
@@ -228,10 +253,8 @@ export class TrustStore {
     if (policyStamp !== this.stamps.policy) {
       const next = readTrustPolicy(this.dir);
       this.stamps.policy = policyStamp;
-      if (next.enforce !== this.policy.enforce) {
-        this.policy = next;
-        changed = true;
-      }
+      if (next.enforce !== this.policy.enforce) changed = true;
+      this.policy = next;
     }
     return changed;
   }
@@ -307,7 +330,9 @@ export class TrustStore {
       }
     }
     try {
+      const before = JSON.stringify([...this.devices]);
       this.loadDevices();
+      if (JSON.stringify([...this.devices]) !== before) queueMicrotask(() => this.onExternalChange?.());
       const changed = change(this.devices);
       if (changed) this.save();
       return changed;

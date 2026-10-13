@@ -713,12 +713,14 @@ final class SessionStore {
 
     // MARK: - Session CRUD
 
-    /// Whether a device is still paired with this account (set by AppState).
-    @ObservationIgnored var isDeviceStillPaired: ((String) -> Bool)?
+    /// Whether `owner` keeps a session that `claimant` also lists (set by
+    /// AppState): it is still paired with this account, and device trust does
+    /// not rank the claimant (pinned) above it (unpinned).
+    @ObservationIgnored var isDeviceStillPaired: ((_ owner: String, _ claimant: String) -> Bool)?
 
     func upsertSession(_ digest: SessionDigest, deviceId: String, deviceName: String) {
         if let owner = sessions[digest.id]?.deviceId, owner != deviceId,
-           isDeviceStillPaired?(owner) == true {
+           isDeviceStillPaired?(owner, deviceId) == true {
             KLog.d("⚠️ Ignoring session \(digest.id.prefix(12)) claimed by another computer")
             return
         }
@@ -825,7 +827,7 @@ final class SessionStore {
         // (otherwise this computer would start receiving its inputs).
         let digests = digests.filter { digest in
             guard let owner = sessions[digest.id]?.deviceId, owner != deviceId,
-                  isDeviceStillPaired?(owner) == true else { return true }
+                  isDeviceStillPaired?(owner, deviceId) == true else { return true }
             KLog.d("⚠️ Ignoring session \(digest.id.prefix(12)) claimed by another computer")
             return false
         }

@@ -1,7 +1,9 @@
 # Device trust (E2E v2)
 
 Goal: **a compromised relay (Head) can neither read conversations nor command
-a computer.** Kraki-the-company acting maliciously (shipping a bad client) is
+a computer** — for a computer with "Only paired devices" on (enforce). In
+compatible mode a paired app's own traffic is protected, but the computer still
+serves unpaired devices of the account, which a compromised relay can add. Kraki-the-company acting maliciously (shipping a bad client) is
 out of scope: E2E cannot defend against the party that ships the clients.
 
 Before: the Head distributes every device's public key, so it could swap keys
@@ -101,10 +103,13 @@ X25519 key; it travels as the app's entry in the preview's `keys` map,
 prefixed `v2.` (the Head forwards `{blob, key}` per device unchanged — no Head
 change). The iOS Notification Service Extension and Kraki for Mac show it only
 if the signature matches a pinned computer, it is addressed to this device and
-is less than 24 h old. Unsigned (legacy) previews: Mac drops those about a
-paired computer's sessions; the app publishes a policy to the app group so the
-iOS NSE shows them only while an unpaired computer exists and never for a paired
-computer's session (generic text otherwise).
+is less than 24 h old. Unsigned (legacy RSA) previews are never shown once any
+computer is pinned — on Mac and in the iOS NSE, which then shows generic text
+(also when the push has no usable envelope; the relay's outer alert text and
+session id are never used). Legacy and device-trust previews are dispatched
+separately so a paired phone's APNs payload carries only its own `v2.` entry;
+the summary is shortened until it fits 4 KB. Enforced computers send no legacy
+previews at all.
 
 ## UI (iOS / macOS)
 
@@ -154,6 +159,29 @@ KrakiTests/DeviceTrustBoundaryTests.swift, 28+ cases) found and now pin:
   enrollment must be consumed before trust is granted; upgraded installs
   create device-trust keys at startup (same-Mac pairing).
 
+## Hardening from review round 2 (2026-10-13)
+
+Three read-only GPT reviews (protocol, apps/UI, end-to-end design) found 24
+items, all addressed with regression tests:
+- Fresh-install policy written before the RSA key becomes visible (no race or
+  interrupted start can persist "compatible").
+- Replay state v2 `{notBefore, highWater, entries}`: validated on load; lost or
+  malformed state rejects everything up to now + max clock lead and persists
+  that floor; clock rollback cannot reopen pruned nonces.
+- Signed/HMAC'd fields are delimiter-free (`isWireId`, canonical 16-byte nonce),
+  in TS and Swift.
+- Policy has a revision; `set_trust_policy` must name the current one (a
+  withheld older request cannot undo a newer choice); apps show "Applying…"
+  until the computer's signed list confirms, and report a timeout.
+- Trust-store writes that absorb another process's change re-evaluate access.
+- Apps: key-change confirmation on every path incl. cold launch; in-session
+  pairing only for this account's computers (else account switch); a pinned
+  computer's signed session list takes sessions back from unpinned claimants;
+  broadcast sealing failure never falls back to relay keys; pairing retries
+  every ~10 s while pending; Mac "Connect your phone" treats unknown policy as
+  pending; copy only promises relay exclusion when enforcement is confirmed.
+- iOS test target compiles the shipped NSE source (no generated wrapper).
+
 ## Not done
 
 - **Web app** and **Windows-specific** checks: deferred. Web cannot pair; an enforcing computer does not serve it.
@@ -162,3 +190,8 @@ KrakiTests/DeviceTrustBoundaryTests.swift, 28+ cases) found and now pin:
 - **Head-originated destructive control**: `account_deleted` makes the computer
   forget credentials and keys; `device_removed` revokes trust (DoS, not takeover).
 - App-side replay protection (computer→app) and key rotation are not implemented.
+- In mixed setups (some computers paired, some not) unpaired computers'
+  notifications show generic text on iOS/Mac.
+- Before a pinned computer's signed session list arrives, a session the relay
+  attributed to an unpinned device is treated as that device's (it is taken
+  back as soon as the signed list arrives).

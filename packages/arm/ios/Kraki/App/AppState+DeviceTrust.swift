@@ -15,9 +15,14 @@ struct TrustedDeviceEntry: Identifiable, Equatable {
 
 /// What a computer reported about its trust settings.
 struct ComputerTrustInfo: Equatable {
+    /// As last confirmed by the computer (signed).
     var enforced: Bool
     var policyLocked: Bool
     var devices: [TrustedDeviceEntry]
+    /// The computer's policy revision; a change request names it.
+    var policyRevision: Int = 0
+    /// A change this app asked for and the computer has not confirmed yet.
+    var pendingEnforce: Bool?
 }
 
 /// How this app stands with one computer.
@@ -55,6 +60,7 @@ final class DeviceTrustModel {
     var dismissedBanners: Set<String> = []
 
     @ObservationIgnored private var lastPairRequest: [String: Date] = [:]
+    @ObservationIgnored var retryScheduled = false
     static let retryInterval: TimeInterval = 10
 
     init() {
@@ -67,6 +73,7 @@ final class DeviceTrustModel {
         feedback = nil
         dismissedBanners = []
         lastPairRequest = [:]
+        retryScheduled = false
         revision += 1
     }
 
@@ -102,6 +109,7 @@ enum PairingFailureText {
         case "no_local_enrollment": return "Kraki on this Mac could not confirm the pairing. Restart Kraki and try again."
         case "stale", "from_future": return "This device's clock is off. Check the date and time, then scan again."
         case "trust_required": return "This computer only accepts paired devices. Scan its code to pair."
+        case "policy_unconfirmed": return "The computer didn't confirm the change. Check that it's online, then try again."
         case "local_keys_missing": return "Kraki on this Mac hasn't set up pairing yet. Update or restart Kraki, then try again."
         default: return "Pairing was refused (\(reason)). Run `kraki connect` on the computer and scan the new code."
         }
@@ -200,17 +208,21 @@ extension AppState {
             guard deviceTrust.mayRequestPairing(tentacleId) else { continue }
             sendPairRequest(tentacleId: tentacleId, pin: pin)
         }
-        publishPushTrustPolicy()
+        scheduleTrustRetry()
     }
 
-    /// Tell the Notification Service Extension which unsigned previews it may
-    /// show (see DeviceTrustPush.legacyPreviewAllowed).
-    func publishPushTrustPolicy() {
-        let store = TentacleTrustStore.shared
-        let tentacles = deviceStore.devices.values.filter { $0.role == .tentacle }
-        let legacyAllowed = tentacles.contains { store.pin($0.id) == nil }
-        let paired = sessionStore.sessions.values.filter { store.pin($0.deviceId) != nil }.map(\.id)
-        DeviceTrustPush.publishPolicy(legacyAllowed: legacyAllowed, pairedSessions: paired)
+    /// While a pairing waits for its computer's answer, ask again after the
+    /// throttle interval (a lost pair_result must not leave it stuck).
+    func scheduleTrustRetry() {
+        guard !deviceTrust.retryScheduled,
+              TentacleTrustStore.shared.all.contains(where: { !$0.value.paired && $0.value.lastError == nil }) else { return }
+        deviceTrust.retryScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + DeviceTrustModel.retryInterval + 0.5) { [weak self] in
+            guard let self else { return }
+            self.deviceTrust.retryScheduled = false
+            guard self.deviceId != nil, self.connectionStatus == .connected else { return }
+            self.deviceTrustDevicesChanged()
+        }
     }
 
     private func sendPairRequest(tentacleId: String, pin: TentaclePin) {
@@ -283,7 +295,6 @@ extension AppState {
         if ok {
             commandSender?.resendPendingInputs(deviceId: tentacleId, reason: "device_trust_paired")
         }
-        publishPushTrustPolicy()
     }
 
     /// The computer does not (or no longer) trust this app.
@@ -323,7 +334,8 @@ extension AppState {
         }
         let enforced = payload["enforced"] as? Bool == true
         deviceTrust.info[tentacleId] = ComputerTrustInfo(
-            enforced: enforced, policyLocked: payload["policyLocked"] as? Bool == true, devices: devices)
+            enforced: enforced, policyLocked: payload["policyLocked"] as? Bool == true, devices: devices,
+            policyRevision: (payload["policyRevision"] as? NSNumber)?.intValue ?? 0)
         TentacleTrustStore.shared.update(tentacleId) { pin in pin?.enforced = enforced }
     }
 
@@ -338,11 +350,17 @@ extension AppState {
     }
 
     func setOnlyPairedDevices(_ enforce: Bool, on tentacleId: String) {
-        if var info = deviceTrust.info[tentacleId] {
-            info.enforced = enforce
-            deviceTrust.info[tentacleId] = info
+        guard var info = deviceTrust.info[tentacleId] else { return }
+        // Shown as "Applying…" until the computer's signed list confirms it.
+        info.pendingEnforce = enforce
+        deviceTrust.info[tentacleId] = info
+        sendTrustAdmin(tentacleId, type: "set_trust_policy", payload: ["enforce": enforce, "revision": info.policyRevision])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+            guard let self, var current = self.deviceTrust.info[tentacleId], current.pendingEnforce == enforce else { return }
+            current.pendingEnforce = nil
+            self.deviceTrust.info[tentacleId] = current
+            self.deviceTrust.feedback = .failed(name: self.deviceStore.devices[tentacleId]?.name ?? "your computer", reason: "policy_unconfirmed")
         }
-        sendTrustAdmin(tentacleId, type: "set_trust_policy", payload: ["enforce": enforce])
     }
 
     private func sendTrustAdmin(_ tentacleId: String, type: String, payload: [String: Any]) {
@@ -447,3 +465,14 @@ enum DeviceTrustTesting {
     static var localKrakiHome: URL?
 }
 #endif
+
+extension DeviceTrustInbound {
+    /// SessionStore's ownership rule: `owner` keeps a session `claimant` also
+    /// lists while it is still on the account — unless device trust ranks the
+    /// claimant (pinned) above it (unpinned, e.g. a relay-made device).
+    static func ownershipRule(_ deviceStore: DeviceStore) -> (String, String) -> Bool {
+        { [weak deviceStore] owner, claimant in
+            deviceStore?.devices[owner] != nil && !claimantOutranksOwner(claimant, owner)
+        }
+    }
+}

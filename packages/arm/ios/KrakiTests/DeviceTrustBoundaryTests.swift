@@ -15,15 +15,15 @@ import XCTest
 /// failures: do not turn them into expected-failure tests or fix product code here.
 @MainActor
 final class DeviceTrustBoundaryTests: XCTestCase {
-    private var app: AppState!
-    private var root: URL!
-    private var suite: String!
-    private let computer = "boundary-computer"
-    private let other = "boundary-relay-device"
-    private let selfId = "boundary-app"
-    private let sid = "boundary-session"
-    private var signer: Curve25519.Signing.PrivateKey!
-    private var recipient: Curve25519.KeyAgreement.PrivateKey!
+    var app: AppState!
+    var root: URL!
+    var suite: String!
+    let computer = "boundary-computer"
+    let other = "boundary-relay-device"
+    let selfId = "boundary-app"
+    let sid = "boundary-session"
+    var signer: Curve25519.Signing.PrivateKey!
+    var recipient: Curve25519.KeyAgreement.PrivateKey!
 
     override func setUp() async throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-boundary-\(UUID().uuidString)")
@@ -63,11 +63,11 @@ final class DeviceTrustBoundaryTests: XCTestCase {
         try? FileManager.default.removeItem(at: root)
     }
 
-    private func json(_ object: [String: Any]) throws -> Data {
+    func json(_ object: [String: Any]) throws -> Data {
         try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
 
-    private func pin(paired: Bool = true, via: String = "qr") {
+    func pin(paired: Bool = true, via: String = "qr") {
         TentacleTrustStore.shared.update(computer) {
             $0 = TentaclePin(identityKey: DeviceTrustWire.b64url(signer.publicKey.rawRepresentation),
                              encryptionKey: E2EV2.publicKey(recipient), paired: paired,
@@ -76,7 +76,7 @@ final class DeviceTrustBoundaryTests: XCTestCase {
         }
     }
 
-    private func seedSession(id: String? = nil, archived: Bool = false) throws {
+    func seedSession(id: String? = nil, archived: Bool = false) throws {
         let digest = try XCTUnwrap(SessionDigest(json: ["id": id ?? sid, "agent": "copilot", "title": "authentic", "state": "idle"]))
         if archived {
             app.sessionStore.archivedSessions[computer] = [digest]
@@ -85,7 +85,7 @@ final class DeviceTrustBoundaryTests: XCTestCase {
         }
     }
 
-    private func message(_ type: String, device: String? = nil, session: String? = nil, payload: [String: Any] = [:]) -> [String: Any] {
+    func message(_ type: String, device: String? = nil, session: String? = nil, payload: [String: Any] = [:]) -> [String: Any] {
         var object: [String: Any] = ["type": type, "timestamp": ISO8601.now(), "seq": 1, "payload": payload]
         if let device { object["deviceId"] = device }
         if let session { object["sessionId"] = session }
@@ -93,7 +93,7 @@ final class DeviceTrustBoundaryTests: XCTestCase {
     }
 
     /// The relay knows the app's RSA public key and can create this envelope.
-    private func legacyEnvelope(_ inner: [String: Any], src: String? = nil) throws -> Data {
+    func legacyEnvelope(_ inner: [String: Any], src: String? = nil) throws -> Data {
         let key = try KeychainManager().getOrCreateEncryptionKey()
         let encrypted = try CryptoManager().encryptToBlob(String(decoding: json(inner), as: UTF8.self),
                                                          recipients: [RecipientKey(deviceId: selfId, publicKey: key.publicKey)])
@@ -102,7 +102,7 @@ final class DeviceTrustBoundaryTests: XCTestCase {
         return try json(object)
     }
 
-    private func signedEnvelope(_ inner: [String: Any], key: Curve25519.Signing.PrivateKey, src: String? = nil) throws -> Data {
+    func signedEnvelope(_ inner: [String: Any], key: Curve25519.Signing.PrivateKey, src: String? = nil) throws -> Data {
         let signed = try DeviceTrustWire.sign(body: String(decoding: json(inner), as: UTF8.self), from: computer, to: selfId, key: key)
         let blob = try E2EV2.encrypt(String(decoding: json(signed), as: UTF8.self),
                                      recipients: [(selfId, E2EV2.publicKey(try DeviceIdentityKeys.shared.agreementKey()))])
@@ -110,7 +110,7 @@ final class DeviceTrustBoundaryTests: XCTestCase {
     }
 
     /// Production decryption + routing; only rejected envelopes skip routing.
-    private func route(_ envelope: Data) throws {
+    func route(_ envelope: Data) throws {
         do {
             let router = try XCTUnwrap(app.messageRouter)
             let clear = try router.encryptionHandler.decryptInbound(envelope)
@@ -121,7 +121,7 @@ final class DeviceTrustBoundaryTests: XCTestCase {
 
     /// Capture all production Pulse ciphertexts without the pre-encryption
     /// testOutboundMessageHandler (which would bypass the security code).
-    private func outbound() throws -> [[String: Any]] {
+    func outbound() throws -> [[String: Any]] {
         let pulse = try XCTUnwrap(app.pulseManager)
         let live = try XCTUnwrap(Mirror(reflecting: pulse).children.first { $0.label == "live" }?.value as? Endpoint)
         return try live.snapshot().outbox.map {
@@ -129,7 +129,7 @@ final class DeviceTrustBoundaryTests: XCTestCase {
         }
     }
 
-    private func link(identity: Curve25519.Signing.PrivateKey, encryption: Curve25519.KeyAgreement.PrivateKey) throws -> PairingLink {
+    func link(identity: Curve25519.Signing.PrivateKey, encryption: Curve25519.KeyAgreement.PrivateKey) throws -> PairingLink {
         try XCTUnwrap(PairingLink(string: "https://127.0.0.1/?token=boundary&tid=\(computer)&ik=\(DeviceTrustWire.b64url(identity.publicKey.rawRepresentation))&xk=\(E2EV2.publicKey(encryption))&ps=\(DeviceTrustWire.b64url(Data(repeating: 7, count: 16)))"))
     }
 
@@ -348,6 +348,7 @@ final class DeviceTrustBoundaryTests: XCTestCase {
 
     func testPairingLinkKeyChangeRequiresConfirmationForPairedComputer() throws {
         pin()
+        app.deviceStore.setDevices([DeviceSummary(id: computer, name: "Pinned", role: .tentacle, kind: .desktop, online: true)])
         let before = TentacleTrustStore.shared.pin(computer)
         let changed = try link(identity: Curve25519.Signing.PrivateKey(), encryption: Curve25519.KeyAgreement.PrivateKey())
         XCTAssertTrue(app.pairingLinkChangesKey(changed))
@@ -399,7 +400,7 @@ final class DeviceTrustBoundaryTests: XCTestCase {
 
     // MARK: Push previews (real NSE source is compiled into the iOS tests)
 
-    private func push(key: Curve25519.Signing.PrivateKey, to: String? = nil, age: TimeInterval = 0) throws -> String {
+    func push(key: Curve25519.Signing.PrivateKey, to: String? = nil, age: TimeInterval = 0) throws -> String {
         let body = String(decoding: try json(["nid": UUID().uuidString, "sessionId": sid, "type": "question", "title": "Pinned session", "summary": "forged preview"]), as: UTF8.self)
         let signed = try DeviceTrustWire.sign(body: body, from: computer, to: to ?? selfId, key: key, ts: Int64(Date().addingTimeInterval(-age).timeIntervalSince1970 * 1000))
         let blob = try E2EV2.encrypt(String(decoding: json(signed), as: UTF8.self), recipients: [(selfId, E2EV2.publicKey(try DeviceIdentityKeys.shared.agreementKey()))])
@@ -416,7 +417,7 @@ final class DeviceTrustBoundaryTests: XCTestCase {
     }
 
     #if os(iOS)
-    private func notification(blob: String, key: String) throws -> UNNotificationContent {
+    func notification(blob: String, key: String) throws -> UNNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = "Kraki"
         content.body = "Needs attention"

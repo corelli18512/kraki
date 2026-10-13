@@ -62,6 +62,11 @@ export class KeyManager {
       // the loser uses the winner's. Before this, both wrote their own and the
       // device registered one key while the disk kept the other — the
       // computer could not reconnect after its next restart.
+      // A fresh install enforces device trust from the start. Record that
+      // before the RSA key becomes visible: any process that sees private.pem
+      // without a policy would take it for an upgrade (compatible), and an
+      // interrupted first start must not leave that ambiguity either.
+      initTrustPolicy(this.trustDir, true);
       const generated = generateKeyPair();
       const tmp = `${privPath}.${process.pid}.${Date.now()}.tmp`;
       writeFileSync(tmp, generated.privateKey, { mode: 0o600 });

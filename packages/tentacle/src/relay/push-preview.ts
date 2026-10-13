@@ -10,14 +10,21 @@ import { markdownToPlainText, truncateUtf8, PUSH_SUMMARY_MAX_BYTES } from '../pu
 import type { RelayClient } from '../relay-client.js';
 import { logger, traceLog } from './shared.js';
 
+/** Largest `v2.` preview key: leaves room for the APNs `aps` object (~200 B). */
+const TRUSTED_PREVIEW_MAX_CHARS = 3_700;
+
 /** Build and dispatch an encrypted push preview over the Head self-channel.
  *  This operation is independent of live subscribers and online targets. */
 export function dispatchPushPreview(client: RelayClient, msg: Partial<ProducerMessage>): void {
   const built = buildPushPreview(client, msg);
   if (!built) return;
-  if (built.encrypted) {
+  // Legacy (RSA, shared blob) and device-trust (per-app, blob-less) previews
+  // go as separate dispatches: the Head forwards `{blob, key}` per device, and
+  // a paired phone must not also carry the unused legacy blob (APNs 4 KB).
+  for (const preview of [built.encrypted, built.trusted]) {
+    if (!preview) continue;
     client.pulse.send(
-      JSON.stringify({ type: 'dispatch_push', payload: { preview: built.encrypted } }),
+      JSON.stringify({ type: 'dispatch_push', payload: { preview } }),
       HEAD_PULSE_TARGET,
       false,
       undefined,
@@ -47,7 +54,13 @@ export function dispatchPushPreview(client: RelayClient, msg: Partial<ProducerMe
 export function buildPushPreview(
   client: RelayClient,
   msg: Partial<ProducerMessage>,
-): { encrypted: { blob: string; keys: Record<string, string> } | null; plaintext: string } | undefined {
+): {
+  /** Legacy RSA preview for unpaired apps (compatible mode only). */
+  encrypted: { blob: string; keys: Record<string, string> } | null;
+  /** Signed X25519 previews for paired apps (`v2.` keys, empty blob). */
+  trusted: { blob: string; keys: Record<string, string> } | null;
+  plaintext: string;
+} | undefined {
   let previewType: string | undefined;
   let previewSummary: string | undefined;
   if (msg.type === 'card_action') {
@@ -99,6 +112,8 @@ export function buildPushPreview(
       pairedRecipients.push(deviceId);
       continue;
     }
+    // Enforced: nothing for apps that are not paired, whatever is cached.
+    if (client.deviceTrust?.enforced) continue;
     try {
       previewRecipients.push({ deviceId, publicKey: importPublicKey(compactKey) });
     } catch {
@@ -108,29 +123,39 @@ export function buildPushPreview(
   if (previewRecipients.length === 0 && pairedRecipients.length === 0 && !client.localLink?.peerIds().length) return undefined;
   traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'PUSH-PREVIEW-BUILD', previewType, recipientCount: previewRecipients.length, onlineCount: client.onlineConsumers.size, offlineCount: previewRecipients.length - client.onlineConsumers.size });
   try {
-    const preview = JSON.stringify({
+    const nid = randomUUID();
+    const steps = client.turnStepCounts.get(msg.sessionId as string) ?? 0;
+    const render = (summary: string | undefined) => JSON.stringify({
       // Notification id: lets an App that receives the same preview over
       // two routes (local link + Head) post it once.
-      nid: randomUUID(),
+      nid,
       type: previewType,
-      ...(normalizedSummary && { summary: normalizedSummary }),
-      ...(previewType === 'idle' && !normalizedSummary && { steps: client.turnStepCounts.get(msg.sessionId as string) ?? 0 }),
+      ...(summary && { summary }),
+      ...(previewType === 'idle' && !normalizedSummary && { steps }),
       sessionId: msg.sessionId,
       ...(title ? { title } : {}),
     });
-    const keys: Record<string, string> = {};
-    let blob = '';
+    const preview = render(normalizedSummary);
+    let encrypted: { blob: string; keys: Record<string, string> } | null = null;
     if (previewRecipients.length > 0) {
       const legacy = encryptToBlob(preview, previewRecipients);
-      blob = legacy.blob;
-      Object.assign(keys, legacy.keys);
+      encrypted = { blob: legacy.blob, keys: legacy.keys };
     }
+    let trusted: { blob: string; keys: Record<string, string> } | null = null;
     for (const appId of pairedRecipients) {
-      const sealed = client.deviceTrust!.sealPushPreview(preview, appId);
-      if (sealed) keys[appId] = sealed;
+      // Signing, escaping and the envelope add size: shorten the summary
+      // until the whole APNs payload fits in 4 KB.
+      let summary = normalizedSummary;
+      let sealed = client.deviceTrust!.sealPushPreview(render(summary), appId);
+      while (sealed && sealed.length > TRUSTED_PREVIEW_MAX_CHARS && summary) {
+        summary = truncateUtf8(summary, Math.floor(Buffer.byteLength(summary) * 0.6));
+        sealed = client.deviceTrust!.sealPushPreview(render(summary), appId);
+      }
+      if (!sealed) continue;
+      trusted ??= { blob: '', keys: {} };
+      trusted.keys[appId] = sealed;
     }
-    if (previewRecipients.length === 0 && Object.keys(keys).length === 0) return { encrypted: null, plaintext: preview };
-    return { encrypted: { blob, keys }, plaintext: preview };
+    return { encrypted, trusted, plaintext: preview };
   } catch (err) {
     logger.debug({ err }, 'Pulse push-preview build failed');
     return undefined;

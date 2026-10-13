@@ -140,7 +140,7 @@ final class AppState {
     /// (Used by the production init too, so it must not be DEBUG-only.)
     /// Cross-store links that need a fully initialized AppState.
     private func bindStores() {
-        sessionStore.isDeviceStillPaired = { [weak deviceStore] id in deviceStore?.devices[id] != nil }
+        sessionStore.isDeviceStillPaired = DeviceTrustInbound.ownershipRule(deviceStore)
     }
 
     static func makeAttachmentStore(for state: AppState) -> AttachmentStore {

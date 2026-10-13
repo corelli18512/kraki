@@ -11,7 +11,7 @@ cd "$ROOT/packages/tests"
 env -u NODE_ENV -u KRAKI_HOME -u KRAKI_META_FILE CHAOS_DEVICE_TRUST=enforce npx tsx src/chaos/stack.ts --control-port 0 \
   > "$STATE/stack.out" 2> "$STATE/stack.log" &
 STACK=$!
-trap 'kill $STACK 2>/dev/null; wait $STACK 2>/dev/null; rm -f "$STATE/stack.json" "$ROOT/packages/arm/ios/KrakiTests/trust-stack.json" "$ROOT/packages/arm/ios/KrakiTests/UsabilityNotificationService.swift"' EXIT
+trap 'kill $STACK 2>/dev/null; wait $STACK 2>/dev/null; rm -f "$STATE/stack.json" "$ROOT/packages/arm/ios/KrakiTests/trust-stack.json"' EXIT
 for _ in $(seq 1 150); do grep -q '^{"controlPort' "$STATE/stack.out" && break; sleep 0.2; done
 grep -m1 '^{"controlPort' "$STATE/stack.out" > "$STATE/stack.json" || { echo "stack failed"; tail "$STATE/stack.log"; exit 1; }
 cat "$STATE/stack.json"
@@ -20,9 +20,6 @@ selectors=("$@")
 if [ "$platform" = ios ]; then
   : "${KRAKI_TEST_SIMULATOR:?Use your own simulator}"
   cp "$STATE/stack.json" "$ROOT/packages/arm/ios/KrakiTests/trust-stack.json"
-  # Compile the exact NSE source in the test bundle, importing its app-side
-  # crypto dependencies. No APNs, notification authorization or product edits.
-  { echo '@testable import Kraki'; cat "$ROOT/packages/arm/ios/KrakiNotification/NotificationService.swift"; } > "$ROOT/packages/arm/ios/KrakiTests/UsabilityNotificationService.swift"
   [ ${#selectors[@]} -eq 0 ] && selectors=(-only-testing:KrakiTests/DeviceTrustUsabilityTests)
 else
   [ ${#selectors[@]} -eq 0 ] && selectors=(-only-testing:KrakiMacTests/DeviceTrustE2ETests)

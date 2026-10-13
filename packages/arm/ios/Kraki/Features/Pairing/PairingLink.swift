@@ -104,16 +104,18 @@ extension AppState {
             pendingPairingPrompt = .confirmRelay(link)
             return
         }
+        // Other keys for a computer this app already pinned: ask first, on
+        // every path (also a cold launch before the first connection).
+        if !keyChangeConfirmed, let trust = link.trust, pairingLinkChangesKey(link) {
+            pendingPairingPrompt = .replaceComputerKey(link, name: deviceStore.devices[trust.tentacleId]?.name ?? "this computer")
+            return
+        }
         // Already signed in to this account: a QR that carries device trust
         // pairs this app with that computer (the usual "re-scan to pair").
-        // (The computer must be one of this account's devices; the relay in
-        // the link may differ from ours by region.)
+        // The computer must be one of this account's devices; a code from
+        // another account falls through to the account-switch prompt.
         if hasStoredCredentials && hasCompletedInitialConnect, let trust = link.trust,
-           link.relay == nil || link.relay == relayURL || deviceStore.devices[trust.tentacleId] != nil {
-            if !keyChangeConfirmed, pairingLinkChangesKey(link) {
-                pendingPairingPrompt = .replaceComputerKey(link, name: deviceStore.devices[trust.tentacleId]?.name ?? "this computer")
-                return
-            }
+           deviceStore.devices[trust.tentacleId] != nil {
             pairWithComputer(link)
             return
         }

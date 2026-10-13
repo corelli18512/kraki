@@ -98,7 +98,7 @@ describe('pairing proof', () => {
     tentacleId: 'dev_tentacle',
     appId: 'dev_phone',
     identityKey: app.publicKey,
-    encryptionKey: 'x'.repeat(43),
+    encryptionKey: generateIdentityKeyPair().publicKey,
     ts: 1_700_000_000_000,
   };
 
@@ -114,7 +114,7 @@ describe('pairing proof', () => {
     const proof = pairingProof(secret, claim);
     const relayKey = generateIdentityKeyPair().publicKey;
     expect(verifyPairingProof(secret, { ...claim, identityKey: relayKey }, proof)).toBe(false);
-    expect(verifyPairingProof(secret, { ...claim, encryptionKey: 'y'.repeat(43) }, proof)).toBe(false);
+    expect(verifyPairingProof(secret, { ...claim, encryptionKey: generateIdentityKeyPair().publicKey }, proof)).toBe(false);
     expect(verifyPairingProof(secret, { ...claim, rsaKey: 'MIIB' }, proof)).toBe(false);
     expect(verifyPairingProof(secret, { ...claim, tentacleId: 'dev_other' }, proof)).toBe(false);
     expect(verifyPairingProof(secret, { ...claim, appId: 'dev_relay' }, proof)).toBe(false);
@@ -140,5 +140,47 @@ describe('cross-implementation vectors', () => {
     expect(pairingProof(vectors.pairing.secret, vectors.pairing.claim)).toBe(vectors.pairing.proof);
     expect(safetyCode(vectors.identity.publicKey)).toBe(vectors.safetyCode);
     expect(safetyCode(vectors.identity.publicKey)).toMatch(/^\d{4} \d{4} \d{4}$/);
+  });
+});
+
+describe('round 2 hardening', () => {
+  const k = generateIdentityKeyPair();
+  it('rejects delimiter-bearing ids and non-canonical nonces', () => {
+    expect(() => signMessage('{}', 'a', 'b\nc', k.privateKey)).toThrow();
+    expect(() => signMessage('{}', 'a\nb', 'c', k.privateKey)).toThrow();
+    expect(() => signMessage('{}', 'a', 'b', k.privateKey, { nonce: 'short' })).toThrow();
+    const m = signMessage('{}', 'a', 'b', k.privateKey);
+    expect(verifySignature({ ...m, from: 'a\nb' }, k.publicKey)).toBe(false);
+    expect(isSignedMessage({ ...m, nonce: m.nonce + '=' })).toBe(false);
+    expect(() => pairingProof(generatePairingSecret(), {
+      tentacleId: 't\nx', appId: 'a', identityKey: k.publicKey, encryptionKey: k.publicKey, ts: 1,
+    })).toThrow();
+  });
+
+  it('replay state survives restarts, clock rollback and loss', () => {
+    let now = 10_000_000;
+    const g1 = new ReplayGuard({ now: () => now });
+    const m = { from: 'a', ts: now, nonce: 'N1' };
+    expect(g1.check(m)).toBeNull();
+    // Time passes beyond the window; the nonce is pruned at export.
+    now += 20 * 60_000;
+    const state = g1.export();
+    expect(state.entries).toEqual([]);
+    // Clock set back: the old message is still refused.
+    now -= 20 * 60_000;
+    const g2 = new ReplayGuard({ now: () => now });
+    g2.import(JSON.parse(JSON.stringify(state)));
+    expect(g2.check(m)).toBe('stale');
+    // Lost state refuses messages signed ahead of the clock too.
+    const g3 = new ReplayGuard({ now: () => now });
+    g3.markStateLost();
+    expect(g3.check({ from: 'a', ts: now + 5 * 60_000, nonce: 'N2' })).toBe('stale');
+    // ...and the floor survives the next export/import.
+    const g4 = new ReplayGuard({ now: () => now });
+    g4.import(JSON.parse(JSON.stringify(g3.export())));
+    expect(g4.check({ from: 'a', ts: now + 5 * 60_000, nonce: 'N2' })).toBe('stale');
+    // Malformed state throws (the store then marks it lost).
+    expect(() => new ReplayGuard().import([[null, 1]])).toThrow();
+    expect(() => new ReplayGuard().import({ v: 2, entries: [] })).toThrow();
   });
 });

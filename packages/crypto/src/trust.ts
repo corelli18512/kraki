@@ -139,16 +139,34 @@ export interface SignedMessage {
   sig: string;
 }
 
+/**
+ * A device ID that can appear in signed or HMAC'd strings: non-empty, at most
+ * 128 characters, no control characters (so `\n`-joined fields stay
+ * unambiguous).
+ */
+export function isWireId(value: unknown): value is string {
+  // eslint-disable-next-line no-control-regex
+  return typeof value === 'string' && value.length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+/** Canonical base64url of exactly 16 bytes. */
+function isNonce(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length !== 22) return false;
+  try { return fromB64url(value).length === 16; } catch { return false; }
+}
+
 export function isSignedMessage(value: unknown): value is SignedMessage {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
   return v.ks === SIGNED_MESSAGE_VERSION
-    && typeof v.from === 'string' && typeof v.to === 'string'
-    && typeof v.ts === 'number' && Number.isSafeInteger(v.ts)
-    && typeof v.nonce === 'string' && typeof v.body === 'string' && typeof v.sig === 'string';
+    && isWireId(v.from) && isWireId(v.to)
+    && typeof v.ts === 'number' && Number.isSafeInteger(v.ts) && v.ts >= 0
+    && isNonce(v.nonce) && typeof v.body === 'string' && typeof v.sig === 'string';
 }
 
 function signingInput(m: Pick<SignedMessage, 'from' | 'to' | 'ts' | 'nonce' | 'body'>): Buffer {
+  // Every field before the body is delimiter-free (isWireId / isNonce /
+  // integer), so the encoding is injective; the body is last.
   return Buffer.from(`${SIG_CONTEXT}\n${m.from}\n${m.to}\n${m.ts}\n${m.nonce}\n${m.body}`, 'utf8');
 }
 
@@ -167,6 +185,8 @@ export function signMessage(
   privateKey: string | KeyObject,
   options: SignOptions = {},
 ): SignedMessage {
+  if (!isWireId(from) || !isWireId(to)) throw new Error('Invalid device ID');
+  if (options.nonce !== undefined && !isNonce(options.nonce)) throw new Error('Invalid nonce');
   const key = typeof privateKey === 'string' ? importIdentityPrivateKey(privateKey) : privateKey;
   const unsigned = {
     from,
@@ -181,6 +201,7 @@ export function signMessage(
 
 /** True when `m.sig` is a valid signature by `publicKey` over the message. */
 export function verifySignature(m: SignedMessage, publicKey: string): boolean {
+  if (!isSignedMessage(m)) return false;
   try {
     const sig = fromB64url(m.sig);
     if (sig.length !== 64) return false;
@@ -196,6 +217,14 @@ export type SignedMessageRejection =
   | 'stale'
   | 'from_future'
   | 'replay';
+
+/** Persisted {@link ReplayGuard} state. */
+export interface ReplayState {
+  v: 2;
+  notBefore: number;
+  highWater: number;
+  entries: Array<[string, number]>;
+}
 
 export interface ReplayGuardOptions {
   /** Oldest accepted message age. Default 15 minutes. */
@@ -223,6 +252,7 @@ export class ReplayGuard {
   }
 
   private notBefore = 0;
+  private highWater = 0;
 
   /** Treat everything signed before `ts` as stale (replay state was lost). */
   rejectBefore(ts: number): void {
@@ -249,15 +279,54 @@ export class ReplayGuard {
   }
 
   /** Persistable state: accepted nonces still inside the window. */
-  export(): Array<[string, number]> {
+  /**
+   * Persistable state. Besides accepted nonces still inside the window it
+   * carries the rejection floor and the latest receiver time, so a restart —
+   * also after the clock was set back — never reopens a retired interval.
+   */
+  export(): ReplayState {
     const now = this.now();
-    return [...this.seen].filter(([, ts]) => ts >= now - this.maxAgeMs);
+    this.highWater = Math.max(this.highWater, now);
+    const floor = this.highWater - this.maxAgeMs;
+    return {
+      v: 2,
+      notBefore: this.notBefore,
+      highWater: this.highWater,
+      entries: [...this.seen].filter(([, ts]) => ts >= floor),
+    };
   }
 
-  import(entries: Array<[string, number]>): void {
-    for (const [key, ts] of entries) {
-      if (typeof key === 'string' && typeof ts === 'number') this.seen.set(key, ts);
+  /**
+   * Restore persisted state. Throws on anything malformed; the caller then
+   * treats the state as lost (see {@link markStateLost}).
+   */
+  import(state: unknown): void {
+    const valid = (e: unknown): e is [string, number] =>
+      Array.isArray(e) && e.length === 2 && typeof e[0] === 'string' && Number.isSafeInteger(e[1]);
+    if (Array.isArray(state)) {
+      // v1: a bare entry list.
+      if (!state.every(valid)) throw new Error('Malformed replay state');
+      for (const [key, ts] of state) this.seen.set(key, ts);
+      return;
     }
+    const s = state as Partial<ReplayState> | null;
+    if (!s || s.v !== 2 || !Number.isSafeInteger(s.notBefore) || !Number.isSafeInteger(s.highWater)
+      || !Array.isArray(s.entries) || !s.entries.every(valid)) {
+      throw new Error('Malformed replay state');
+    }
+    for (const [key, ts] of s.entries) this.seen.set(key, ts);
+    this.highWater = Math.max(this.highWater, s.highWater!);
+    // Nonces older than the window were dropped at export: whatever is older
+    // than that may have been accepted before, whatever the clock says now.
+    this.rejectBefore(Math.max(s.notBefore!, s.highWater! - this.maxAgeMs));
+  }
+
+  /**
+   * Replay state was lost: refuse everything that could have been accepted
+   * before, including messages signed ahead of our clock.
+   */
+  markStateLost(): void {
+    this.rejectBefore(this.now() + this.maxFutureMs);
   }
 }
 
@@ -300,6 +369,11 @@ export interface PairingClaim {
 }
 
 function pairingInput(c: PairingClaim): Buffer {
+  // Delimiter-free fields (IDs, base64 keys) keep the encoding injective.
+  if (!isWireId(c.tentacleId) || !isWireId(c.appId) || !isRawPublicKey(c.identityKey) || !isRawPublicKey(c.encryptionKey)
+    || (c.rsaKey !== undefined && !/^[A-Za-z0-9+/=]*$/.test(c.rsaKey)) || !Number.isSafeInteger(c.ts)) {
+    throw new Error('Invalid pairing claim');
+  }
   return Buffer.from(
     `${PAIR_CONTEXT}\n${c.tentacleId}\n${c.appId}\n${c.identityKey}\n${c.encryptionKey}\n${c.rsaKey ?? ''}\n${c.ts}`,
     'utf8',

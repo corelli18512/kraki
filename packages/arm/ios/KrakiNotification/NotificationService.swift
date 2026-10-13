@@ -61,12 +61,19 @@ class NotificationService: UNNotificationServiceExtension {
             return
         }
         content.sound = .default
+        // Only text this extension verified (or, with no computer pinned, the
+        // legacy preview it decrypted) is shown; the outer alert comes from
+        // the relay and is replaced by generic text.
+        content.title = "Kraki"
+        content.subtitle = ""
+        content.body = "Open Kraki to view the update."
+        let legacyAllowed = DeviceTrustPush.legacyPreviewAllowed()
 
-        // Try to decrypt the push preview.
         guard let kraki = request.content.userInfo["kraki"] as? [String: Any],
               let blob = kraki["blob"] as? String,
               let key = kraki["key"] as? String else {
-            if let sessionId = request.content.userInfo["sessionId"] as? String {
+            // The outer session id is the relay's word: only trusted without pins.
+            if legacyAllowed, let sessionId = request.content.userInfo["sessionId"] as? String {
                 applySessionPresentation(sessionId, to: content)
             }
             contentHandler(content)
@@ -75,14 +82,14 @@ class NotificationService: UNNotificationServiceExtension {
 
         do {
             let trusted = key.hasPrefix(DeviceTrustPush.prefix)
+            // An unsigned preview may not speak for anyone once a computer is pinned.
+            guard trusted || legacyAllowed else {
+                throw NSError(domain: "KrakiNotification", code: 8, userInfo: [NSLocalizedDescriptionKey: "Unsigned preview"])
+            }
             let decrypted = trusted
                 ? try openTrustedPreview(key: key)
                 : try decryptPreview(blob: blob, wrappedKey: key)
             let preview = PushPreviewFormat.content(fromJSON: decrypted)
-            // An unsigned preview may not speak for a paired computer.
-            if !trusted, !DeviceTrustPush.legacyPreviewAllowed(sessionId: preview.sessionId) {
-                throw NSError(domain: "KrakiNotification", code: 8, userInfo: [NSLocalizedDescriptionKey: "Unsigned preview"])
-            }
             content.title = preview.title
             content.subtitle = ""
             content.body = preview.body
@@ -92,11 +99,8 @@ class NotificationService: UNNotificationServiceExtension {
                 applySessionPresentation(sessionId, to: content)
             }
         } catch {
-            // Decryption failed: retain a useful, private fallback. The raw APNs
-            // payload already carries the default sound and attention badge.
-            content.title = "Kraki"
-            content.subtitle = ""
-            content.body = "Open Kraki to view the update."
+            // Keep the generic text set above.
+            content.userInfo["sessionId"] = nil
         }
 
         contentHandler(content)

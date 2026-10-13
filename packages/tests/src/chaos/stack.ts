@@ -306,7 +306,7 @@ export class ChaosStack {
             type: 'agent_message', sessionId: this.sessionId,
             payload: { question: { id: 'q_usability', text: 'Allow the usability test? ✓' } },
           } as unknown as Parameters<typeof buildPushPreview>[1]);
-          out = preview?.encrypted ?? {};
+          out = preview?.trusted ?? preview?.encrypted ?? {};
           break;
         }
         case 'POST /trust/screenshot': {
