@@ -38,7 +38,7 @@ function StepRow({ msg, sessionId, forceExpanded, cancelled }: { msg: ChatMessag
     const reason = typeof p.reason === 'string' ? p.reason.trim() : '';
     return (
       <div className="kstep-permission">
-        <div className="kstep-note"><Lock className="kstep-icon" aria-hidden />
+        <div className="kstep-note"><Lock className="kstep-icon kstep-permission-lock" preserveAspectRatio="none" aria-hidden />
           <span>{String(p.description || (p.toolName ? `Run ${String(p.toolName)}` : 'Permission'))}</span>
         </div>
         {decision && <span className={`kstep-outcome ${decision === 'deny' ? 'kstep-bad' : 'kstep-good'}`}>{decision === 'deny' ? (reason ? `Denied: ${reason}` : 'Denied') : decision === 'always_allow' ? 'Always allowed' : 'Approved'}</span>}

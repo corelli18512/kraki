@@ -133,6 +133,8 @@ describe('permission steps', () => {
     const title = screen.getByText('sleep 12');
     expect(prose.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(tool.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelector('.kstep-permission-lock')).toHaveClass('kstep-icon');
+    expect(container.querySelector('.kstep-permission-lock')).toHaveAttribute('preserveAspectRatio', 'none');
     expect(container.querySelector('.kstep-outcome')).toHaveTextContent('Denied');
     expect(title.closest('.kstep-note')).not.toContainElement(screen.getByText('Denied'));
   });
