@@ -20,22 +20,29 @@
 .ksi-actions { display:flex; gap:12px; }
 .ksi-actions button { flex:1; display:flex; align-items:center; justify-content:center; gap:5px; height:24px; padding:0 5px; font-size:13px; line-height:16px; border:1px solid transparent; border-radius:6px; background:#f3f7fb; color:#0b5b9c; }
 .ksi-actions button + button { background:#fff5f6; color:#ff3b30; }
-.dark .ksi-header button,.dark .ksi-row select,.dark .ksi-efforts { background-color:#414141; }
+.dark .ksi-header button,.dark .ksi-row select,.dark .ksi-efforts { background-color:#151928; }
 .ksi-sheet { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:440px; height:580px; max-height:calc(100dvh - 32px); max-width:calc(100vw - 24px); border-radius:24px; background:var(--color-surface-primary); border:1px solid var(--color-border-primary); box-shadow:0 20px 50px #0005; overflow:hidden; }
 @media(max-width:639px) { .ksi-sheet { width:100%; max-width:none; height:100dvh; max-height:none; border-radius:0; } .ksi-id > span { overflow:hidden; text-overflow:ellipsis; } .ksi-efforts { width:210px; } }
 
-.dark .ksi-panel { color:var(--color-text-primary); }
+.dark .ksi-panel { color:#d8d9dc; }
 
 .ksi-header button:focus-visible { outline:3px solid #007aff80; outline-offset:2px; }
-.dark .ksi-actions button { background:#5ea0d71a; color:#5ea0d7; }
-.dark .ksi-actions button + button { background:#ef44441a; color:#ff8585; }
+.dark .ksi-actions button { background:#060d20; color:#5ea0d7; }
+.dark .ksi-actions button + button { background:#0e0919; color:#ff4245; }
 
-.dark .ksi-efforts button[aria-checked=true] { background:#0a84ff; }
+.dark .ksi-efforts button[aria-checked=true] { background:#067eff; }
 
-.dark .ksi-row select { background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 12'%3E%3Cpath d='m2 4 2-2 2 2M2 8l2 2 2-2' fill='none' stroke='%23f1f5f9' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+.dark .ksi-row select { background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 12'%3E%3Cpath d='m2 4 2-2 2 2M2 8l2 2 2-2' fill='none' stroke='%23d8d9dc' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
 
 /* Classic (6px) scrollbars reserve a gutter that Mac's overlay scroller does not: give it back from the
  * trailing padding so right-aligned values sit where Mac's do (S15). Overlay-scrollbar platforms keep 36px. */
 @supports selector(::-webkit-scrollbar) {
   .ksi-body { padding-right:30px; }
 }
+
+.dark .ksi-body h3,.dark .ksi-row > span { color:#8c8e96; }
+.dark .ksi-header,.dark .ksi-body hr { border-color:#1b1e2e; }
+.dark .ksi-sheet { border-color:#343845; }
+.dark .ksi-header button:focus-visible { outline-color:#0e588a; }
+.ksi-online-dot { background:#34c759; }
+.dark .ksi-online-dot { background:#30d158; }

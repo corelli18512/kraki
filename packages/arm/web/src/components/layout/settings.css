@@ -35,11 +35,15 @@
 .kp-alert-actions { display:flex; gap:8px; margin-top:16px; }
 .kp-alert-actions button { flex:1; padding:4px 6px; font-size:13px; border-radius:16px; background:#ddd; min-height:28px; }
 .kp-alert-actions .is-destructive { background:#f5bfc1; color:#ff3b30; }
-.dark .kp-group { background:#242424; }
-.dark .kp-row + .kp-row,.dark .kp-group > .kp-foot { border-color:#3a3a3a; }
-.dark .kp-button,.dark .kp-segment,.dark .kp-alert-actions button { background:#414141; }
-.dark .kp-switch { background:#555; }
-.dark .kp-alert-actions .is-destructive { background:#643738; color:#ff453a; }
+.dark .kp-group { background:#2a2f31; }
+.dark .kp-row + .kp-row,.dark .kp-group > .kp-foot { border-color:#34393b; }
+.dark .kp-button,.dark .kp-segment { background:#3a3f41; }
+.dark .kp-button { color:#dfe0e0; }
+.dark .kp-alert-actions button { background:#2c2e2f; color:#dedfdf; }
+.dark .kp-switch { background:#3f4345; }
+.dark .kp-switch span { background:#e3e3e4; }
+.dark .kp-switch[aria-checked=true] span { background:#daecff; }
+.dark .kp-alert-actions .is-destructive { background:#542628; color:#f01e14; }
 .kp-inline { display:flex; flex-direction:column; height:100%; }
 @media(max-width:639px) { .kp-window { width:100%; height:100dvh; max-height:none; max-width:none; border-radius:0; } .kp-tabs { overflow:auto; justify-content:flex-start; } }
 
@@ -51,18 +55,24 @@
 .kp-voice fieldset .kp-foot { font-size:13px; line-height:16px; color:#808080; }
 
 
-.dark .kp-pane { color:var(--color-text-primary); }
+.dark .kp-pane { background:#23292b; color:#dfe0e0; }
+.dark .kp-section h3 { color:#dddedf; }
+.dark .kp-pane-about { background:var(--color-surface-primary); }
 
 .kp-section + .kp-section-untitled { margin-top:10px; }
 .kp-voice fieldset > .kp-row { border-top:1px solid #e6e6e6; }
+.dark .kp-voice fieldset > .kp-row { border-color:#34393b; }
 .kp-row > .text-text-secondary { color:#808080; }
 .kp-about .kp-brand-title { color:#052847; }
 .dark .kp-about .kp-brand-title { color:#dbe8f4; }
 
-.dark .kp-alert { background:#303336; color:var(--color-text-primary); border-color:#555; }
+.dark .kp-alert { background:#1a1c1d; color:#dcdddd; border-color:#606466; }
 .kp-alert button:focus-visible { outline:3px solid #007aff80; outline-offset:2px; }
 
-.dark .kp-window { border-color:#555; }
+.dark .kp-window { background:#23292b; border-color:#555; }
+.dark .kp-title,.dark .kp-tabs button { color:#9fa5a7; }
+.dark .kp-tabs { border-color:#34393b; }
+.dark .kp-tabs button[aria-selected=true] { background:#252c2f; box-shadow:inset 0 0 0 1px #344044; }
 
 /* Toolbar icons must not shrink when the longer tab labels consume the row. */
 .kp-tabs svg { flex-shrink:0; }
@@ -70,7 +80,7 @@
 .kp-device + .kp-device { border-top:1px solid #e6e6e6; }
 .kp-device + .kp-device > .kp-row { min-height:59px; }
 .kp-device-meta { display:flex; gap:6px; align-items:center; font-size:10.5px; line-height:13px; color:var(--color-text-muted); margin-top:2px; }
-.dark .kp-device + .kp-device { border-color:#3a3a3a; }
+.dark .kp-device + .kp-device { border-color:#34393b; }
 .kp-pane-about { padding:24px 24px 0; }
 .kp-pane-about .kp-about { padding:7.5px 0 0; }
 .kp-alert-viewport { position:fixed; }
@@ -80,12 +90,36 @@
 
 .kp-about .kp-brand-title { line-height:22px; }
 .kp-about .kp-brand-title + p { line-height:12px; }
-.dark .kp-switch[aria-checked=true],.dark .kp-tabs button[aria-selected=true] { --native-accent:#0a84ff; }
-.dark .kp-switch[aria-checked=true] { background:var(--native-accent); }
-.dark .kp-tabs button[aria-selected=true] { color:var(--native-accent); }
+.dark .kp-switch[aria-checked=true] { background:#067eff; }
+.dark .kp-segment button[aria-checked=true] { background:#067eff; }
+.dark .kp-tabs button[aria-selected=true] { color:#007aff; }
 
 .kp-devices-icon { transform:scaleX(1.15); }
 .kp-alert-no-body h3 { margin-bottom:0; }
 
 .kp-gear-icon { transform:translateY(.75px) scale(1.05,1.025); }
 .kp-alert-viewport .kp-alert-actions button:first-child:focus { outline:3px solid #007aff80; outline-offset:2px; }
+
+/* Native grouped-form labels are distinct from explicit semantic app text. */
+.dark .kp-row > .text-text-secondary,
+.dark .kp-voice .kp-unavailable,
+.dark .kp-voice fieldset .kp-foot,
+.dark .kp-voice .kp-row > svg { color:#9fa1a2; }
+.dark .kp-section-footer { color:#9c9e9f; }
+.dark .kp-account-name,.dark .kp-device-name { color:var(--color-text-primary); }
+.dark .kp-pane .text-kraki-500 { color:#5ea0d7; }
+.dark .kp-avatar { background:#32404a; }
+.kp-offline-dot { background:#94a3b880; }
+.dark .kp-offline-dot { background:color-mix(in srgb, var(--color-text-muted) 50%, transparent); }
+.dark .kp-about .kp-button { background:#151928; }
+.dark .kp-about hr { border-color:#1b1e2e; }
+.dark .kp-button.is-recording { outline:3px solid #226d97; outline-offset:2px; }
+.dark .kp-alert button:focus-visible,
+.dark .kp-alert-actions button:first-child:focus { outline-color:#1a648e; }
+/* Native sheets lift the navy canvas with a neutral wash instead of black dimming. */
+.dark .kp-alert-backdrop,.dark .ksi-backdrop { background:rgba(122,124,126,.1); backdrop-filter:brightness(.5); }
+.dark .kp-window > .kp-alert-backdrop { background:rgba(0,0,0,.2); backdrop-filter:none; }
+.dark .kp-alert-viewport .kp-alert,.dark .ksi-panel .kp-alert { background:#16181d; border-color:#52555c; }
+.dark .kp-alert-viewport .kp-alert-actions button,.dark .ksi-panel .kp-alert-actions button { background:#27292e; }
+.dark .kp-alert-viewport .kp-alert-actions .is-destructive,.dark .ksi-panel .kp-alert-actions .is-destructive { background:#512227; }
+.dark .kp-alert-viewport .kp-alert-actions button:first-child:focus { outline-color:#18618d; }

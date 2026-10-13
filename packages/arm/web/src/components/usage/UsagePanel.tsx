@@ -7,7 +7,7 @@
  * out while still holding and it shrinks back; release and it fades away.
  * "Account Usage" (sidebar) opens it pinned, in detail.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useParams } from 'react-router';
 import type { AccountUsage, AccountUsageWindow, DeviceSummary } from '@kraki/protocol';
 import { ArrowDownCircle, Gauge, Laptop, RotateCw } from 'lucide-react';
@@ -56,13 +56,20 @@ export function UsageRing({ window: w, stale, size, lineWidth, delay = 0, animat
   }, [target, delay, animateIn]);
   const r = (size - lineWidth) / 2;
   const c = 2 * Math.PI * r;
-  const gid = `ur-${state}`;
+  const gid = `ur-${useId().replaceAll(':', '')}`;
+  // Preserve the accepted light interpolation and the native endpoints; the
+  // dark amber interior stop matches SwiftUI's rendered stroke interpolation.
   return (
     <div className={`ur ur-${state}`} style={{ width: size, height: size }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
         <defs>
           <linearGradient id={gid} x1="0" y1="0" x2="1" y2="1">
             <stop offset="0" className="ur-c0" />
+            <stop offset="1" className="ur-c1" />
+          </linearGradient>
+          <linearGradient id={`${gid}-dark`} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" className="ur-c0" />
+            <stop offset="0.85" stopColor="#ff9115" />
             <stop offset="1" className="ur-c1" />
           </linearGradient>
         </defs>
@@ -73,7 +80,7 @@ export function UsageRing({ window: w, stale, size, lineWidth, delay = 0, animat
             strokeDasharray={`${(c * Math.max(0.0001, value / 100)).toFixed(2)} ${c.toFixed(2)}`}
             transform={`rotate(-90 ${size / 2} ${size / 2})`}
             className="ur-arc"
-            style={{ filter: `drop-shadow(0 0 ${lineWidth * 0.3}px var(--ur-glow))` }}
+            style={{ filter: `drop-shadow(0 0 ${lineWidth * 0.3}px var(--ur-glow))`, '--ur-dark-gradient': `url(#${gid}-dark)` } as CSSProperties}
           />
         )}
       </svg>

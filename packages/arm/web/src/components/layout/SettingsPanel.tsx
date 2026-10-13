@@ -201,7 +201,7 @@ export function SettingsPanel({
         <SettingsRow label="Shortcut">
           <button
             type="button"
-            className="kp-button"
+            className={`kp-button${shortcut.recording ? ' is-recording' : ''}`}
             style={{ width: 230, height: 26 }}
             onClick={() => useUsageShortcut.setState({ recording: true })}
             onBlur={() => useUsageShortcut.setState({ recording: false })}
@@ -265,11 +265,11 @@ export function SettingsPanel({
     <>
       <SettingsSection>
         <div className="kp-row" style={{ gap: 14, justifyContent: 'flex-start', padding: '14px 0' }}>
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-kraki-500/15 text-base font-bold text-kraki-500">
+          <div className="kp-avatar flex h-12 w-12 items-center justify-center rounded-full bg-kraki-500/15 text-base font-bold text-kraki-500">
             {(state.user.email ?? state.user.login).slice(0, 2).toUpperCase()}
           </div>
           <div>
-            <p className="text-sm font-semibold">{state.user.email ?? state.user.login}</p>
+            <p className="kp-account-name text-sm font-semibold">{state.user.email ?? state.user.login}</p>
             <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-text-secondary">
               <CheckCircle size={10} color="#34D399" />
               Signed in via{' '}
@@ -382,11 +382,11 @@ export function SettingsPanel({
             <div key={d.id} className="kp-device">
               <div className="kp-row" style={{ gap: 10 }}>
                 <span
-                  className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ background: d.online ? '#34D399' : '#94a3b880' }}
+                  className={`h-2 w-2 shrink-0 rounded-full${d.online ? '' : ' kp-offline-dot'}`}
+                  style={d.online ? { background: '#34D399' } : undefined}
                 />
                 <div className="flex-1">
-                  <p className="font-medium">{d.name}</p>
+                  <p className="kp-device-name font-medium">{d.name}</p>
                   <div className="kp-device-meta">
                     <span className="text-[10px] font-semibold uppercase tracking-[.4px]">{d.role === 'tentacle' ? 'Computer' : 'App'}</span>
                     {d.role === 'tentacle' && <span>{state.deviceVersions.get(d.id)}</span>}

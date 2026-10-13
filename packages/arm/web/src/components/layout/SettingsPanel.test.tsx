@@ -59,8 +59,22 @@ describe('SettingsPanel native preferences parity', () => {
   it('records a shortcut without opening account usage', () => {
     open();
     fireEvent.click(screen.getByRole('button', { name: 'F6' }));
+    expect(screen.getByRole('button', { name: 'Press a shortcut…' })).toHaveClass('is-recording');
     fireEvent.keyDown(screen.getByRole('button', { name: 'Press a shortcut…' }), { key: 'F8' });
     expect(useUsageShortcut.getState()).toMatchObject({ shortcut: 'F8', recording: false });
+    expect(screen.getByRole('button', { name: 'F8' })).not.toHaveClass('is-recording');
+  });
+  it('clears the active recorder indication on blur and Escape without saving', () => {
+    open();
+    const recorder = screen.getByRole('button', { name: 'F6' });
+    fireEvent.click(recorder);
+    fireEvent.blur(recorder);
+    expect(recorder).not.toHaveClass('is-recording');
+    expect(useUsageShortcut.getState().shortcut).toBe('F6');
+    fireEvent.click(recorder);
+    fireEvent.keyDown(recorder, { key: 'Escape' });
+    expect(recorder).not.toHaveClass('is-recording');
+    expect(useUsageShortcut.getState()).toMatchObject({ shortcut: 'F6', recording: false });
   });
   it('shows notifications independently of push support', () => {
     open(); tab('Notifications');
