@@ -126,6 +126,17 @@ export function evaluateRules(snap, memIn, config) {
     const restarted = mem.lastCounters !== undefined && Boolean(newProcess);
     if (relay?.invocationId) mem.lastRelayInvocation = relay.invocationId;
     sample.metricDeltas = counterDeltas(mem.lastCounters, snap.metrics.counters, restarted);
+    // Counters back after an outage: this delta also covers the runs that
+    // were already counted from logs. Take those out (push alerts only).
+    const gap = [];
+    for (let i = mem.hist.length - 1; i >= 0 && !mem.hist[i].metricDeltas; i--) gap.push(mem.hist[i]);
+    if (gap.length > 0 && mem.lastCounters !== undefined && !restarted) {
+      const d = sample.metricDeltas;
+      const logged = gap.reduce((t, s) => t + (s.counts.pushFail ?? 0), 0);
+      const loggedAuth = gap.reduce((t, s) => t + (s.pushAuth ?? 0), 0);
+      d['push.failed'] = Math.max(0, (d['push.failed'] ?? 0) - logged);
+      d['push.authError'] = Math.max(0, (d['push.authError'] ?? 0) - loggedAuth);
+    }
     mem.lastCounters = snap.metrics.counters;
     mem.lastUptimeSec = uptime;
     for (const k of ['auth.ok', 'auth.fail', 'push.attempted', 'push.sent', 'push.failed', 'pulse.forwarded', 'conn.stalledClosed']) {

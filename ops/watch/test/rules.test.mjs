@@ -221,6 +221,14 @@ test('push alerts fall back to logs for runs without relay counters', () => {
   assert.equal(byId(r.results, 'K-PUSH-AUTH').ok, false, 'metrics endpoint down: the log still counts');
 });
 
+test('counters returning after an outage do not re-count what the logs already counted', () => {
+  const auth = '⚠️ [x] APNs send failed {"status":403,"reason":"ExpiredProviderToken"}';
+  let mem = evaluateRules(snap({ metrics: { uptimeSec: 100, counters: { 'push.authError': 0 } } }), {}, config).mem;
+  mem = evaluateRules(snap({ now: T0 + MIN, metrics: null, logs: summarize([auth, auth]) }), mem, config).mem;
+  const r = evaluateRules(snap({ now: T0 + 2 * MIN, metrics: { uptimeSec: 220, counters: { 'push.authError': 2 } } }), mem, config);
+  assert.equal(byId(r.results, 'K-PUSH-AUTH').ok, true, '2 errors, not 4');
+});
+
 test('a relay restart is also detected by a new systemd invocation', () => {
   const unit = (inv) => [{ unit: 'kraki-relay', name: 'relay', severity: 'critical', active: 'active', invocationId: inv, activeSince: T0 }];
   const mem = evaluateRules(snap({ units: unit('a'), metrics: { uptimeSec: 10, counters: { 'push.authError': 1 } } }), {}, config).mem;
