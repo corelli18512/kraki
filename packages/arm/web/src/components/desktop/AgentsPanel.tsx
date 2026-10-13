@@ -178,7 +178,7 @@ function SupportedAgentsSheet({ check, onClose }: { check: Check; onClose: () =>
           {check.running && <><span className="ds-spinner" /><span className="ds-muted">Checking…</span></>}
           <span className="ds-spacer" />
           <button type="button" className="ds-button" disabled={check.running} onClick={check.run}>Check Again</button>
-          <button type="button" className="ds-button ds-button-primary" onClick={onClose}>Done</button>
+          <button type="button" className="ds-button ds-button-primary ds-button-default" onClick={onClose}>Done</button>
         </div>
       </div>
     </div>

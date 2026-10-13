@@ -68,6 +68,7 @@ describe('ThisPCSettings capability-driven native parity', () => {
     expect(agents).toHaveClass('ds-local-agents-sheet');
     expect(agents).toHaveTextContent('Kraki uses the agents installed and signed in on this PC. Install or sign in to an agent in its own app or in Terminal, then click Check Again.');
     const done = within(agents).getByRole('button', { name: 'Done' });
+    expect(done).toHaveClass('ds-button-default');
     expect(done).toHaveFocus();
     fireEvent.keyDown(done, { key: 'Tab' });
     const supported = await within(agents).findByRole('button', { name: 'Supported agents' });
@@ -78,6 +79,8 @@ describe('ThisPCSettings capability-driven native parity', () => {
     fireEvent.click(supported);
     const catalog = screen.getByRole('dialog', { name: 'Supported coding agents' });
     expect(catalog).not.toHaveClass('ds-local-agents-sheet');
+    expect(within(catalog).getByRole('button', { name: 'Done' })).toHaveClass('ds-button-default');
+    expect(within(catalog).getByRole('button', { name: 'Check Again' })).not.toHaveClass('ds-button-default');
     fireEvent.keyDown(within(catalog).getByRole('button', { name: 'Done' }), { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Supported coding agents' })).not.toBeInTheDocument();
     expect(agents).toBeInTheDocument();
