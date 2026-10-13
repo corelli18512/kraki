@@ -145,33 +145,33 @@ export function SessionPage() {
 
   return (
     <div className="kchat-page">
-      <ChatHeader
-        // Reconnecting is silent in the conversation; only the title says so.
-        title={isReconnecting ? 'Connecting…' : displayTitle}
-        mode={sessionMode}
-        narrow={narrow}
-        backBadge={totalOtherUnread}
-        onBack={() => navigate('/')}
-        onTitle={() => {
-          if (narrow) setMobileInfoOpen(true);
-          else navigate(`/devices?device=${session.deviceId}&session=${sessionId}`);
-        }}
-        onMode={(mode) => wsClient.setSessionMode(sessionId!, mode)}
-      />
-      {!isReconnecting && !isDeviceOnline && (
-        <div className="kchat-banner" style={{ top: topInset }}>
-          {`${session.deviceName ?? 'Device'} is offline — messages will be sent when it reconnects`}
-        </div>
-      )}
-
       <div className="kmedia-pane relative flex min-h-0 flex-1">
         <ImagePreviewProvider key={sessionId}>
-        <div className="relative flex min-w-0 flex-1">
-          <ChatView sessionId={sessionId!} topInset={topInset} onOpenArtifact={(artifact) => { setSelectedArtifact(artifact); setSelectedArtifactExpanded(false); }} />
-        </div>
-        {selectedArtifact && (
-          <HtmlArtifactPanel key={selectedArtifact.id} artifact={selectedArtifact} sessionId={sessionId!} expanded={selectedArtifactExpanded} onToggleExpanded={() => setSelectedArtifactExpanded((value) => !value)} onClose={() => { setSelectedArtifact(null); setSelectedArtifactExpanded(false); }} />
-        )}
+          <div className="relative flex min-w-0 flex-1">
+            <ChatHeader
+              // Reconnecting is silent in the conversation; only the title says so.
+              title={isReconnecting ? 'Connecting…' : displayTitle}
+              mode={sessionMode}
+              narrow={narrow}
+              backBadge={totalOtherUnread}
+              onBack={() => navigate('/')}
+              onTitle={() => {
+                if (narrow) setMobileInfoOpen(true);
+                else navigate(`/devices?device=${session.deviceId}&session=${sessionId}`);
+              }}
+              onMode={(mode) => wsClient.setSessionMode(sessionId!, mode)}
+            />
+            {!isReconnecting && !isDeviceOnline && (
+              <div className="kchat-banner" style={{ top: topInset }}>
+                {`${session.deviceName ?? 'Device'} is offline — messages will be sent when it reconnects`}
+              </div>
+            )}
+
+            <ChatView sessionId={sessionId!} topInset={topInset} onOpenArtifact={(artifact) => { setSelectedArtifact(artifact); setSelectedArtifactExpanded(false); }} />
+          </div>
+          {selectedArtifact && (
+            <HtmlArtifactPanel key={selectedArtifact.id} artifact={selectedArtifact} sessionId={sessionId!} expanded={selectedArtifactExpanded} onToggleExpanded={() => setSelectedArtifactExpanded((value) => !value)} onClose={() => { setSelectedArtifact(null); setSelectedArtifactExpanded(false); }} />
+          )}
         </ImagePreviewProvider>
       </div>
 
