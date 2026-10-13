@@ -26,6 +26,20 @@ describe('history-parser', () => {
   });
 
   describe('parseEventsFile', () => {
+    it('skips rows that are valid JSON but not events instead of throwing', () => {
+      const events = [
+        'null', '[]', '42', '{"type":"user.message"}', '{"type":"user.message","data":null}',
+        '{"type":"assistant.message","data":{"content":{"not":"text"},"toolRequests":"x"}}',
+        makeEvent('user.message', { content: 'still imported' }, '2026-04-10T12:01:00Z'),
+      ].join('\n');
+      writeFileSync(join(dir, 'events.jsonl'), events, 'utf8');
+
+      const { messages } = parseEventsFile(join(dir, 'events.jsonl'));
+
+      expect(messages.at(-1)?.type).toBe('user_message');
+      expect(messages.every((m) => typeof m.payload === 'string')).toBe(true);
+    });
+
     it('should extract metadata from session.start', () => {
       const events = [
         makeEvent('session.start', {

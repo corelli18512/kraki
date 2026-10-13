@@ -13,6 +13,7 @@
  *    remote user approves/denies/answers via the tentacle runtime.
  */
 
+import { agentEnv } from '../agent-env.js';
 import type { CopilotClient as CopilotClientType, CopilotSession, SessionConfig, MessageOptions, PermissionRequestResult, SessionMetadata, MCPServerConfig, ContextTier } from '@github/copilot-sdk';
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, statSync } from 'node:fs';
@@ -305,6 +306,7 @@ export class CopilotAdapter extends AgentAdapter {
     const { CopilotClient, RuntimeConnection } = await loadCopilotSdk();
     const opts = {
       useLoggedInUser: true,
+      env: agentEnv(),
       ...(cliPath && { connection: RuntimeConnection.forStdio({ path: cliPath }) }),
     };
     logger.debug({ isSea: isSea(), cliPath: cliPath ?? null }, 'starting CopilotClient');

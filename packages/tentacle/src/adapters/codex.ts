@@ -28,6 +28,7 @@
  * tentacle self-management guard sees every gated command in every mode.
  */
 
+import { agentEnv } from '../agent-env.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Attachment, ModelDetail, ReasoningEffort, SessionUsage } from '@kraki/protocol';
@@ -146,7 +147,7 @@ export class CodexAdapter extends AgentAdapter {
     const rpc = new CodexRpcProcess({
       command: this.opts.cliPath,
       args,
-      env: this.opts.env ?? process.env,
+      env: this.opts.env ?? agentEnv(),
       requestTimeoutMs: this.opts.requestTimeoutMs ?? 60_000,
     });
     rpc.onNotification = (n) => {

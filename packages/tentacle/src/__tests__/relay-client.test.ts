@@ -397,6 +397,32 @@ describe('RelayClient auth negotiation', () => {
     expect(retryAuth.auth).toEqual({ method: 'open' });
   });
 
+  it('a removed computer with no saved token reports it once instead of crash-looping', async () => {
+    const client = new RelayClient(
+      createAdapter(),
+      createSessionManager(),
+      {
+        relayUrl: 'ws://localhost:4000',
+        authMethod: 'github_token',
+        device: { name: 'ALEX-PC', role: 'tentacle', deviceId: 'dev_123' },
+        reconnectDelay: 10,
+      },
+      createKeyManager(),
+    );
+    const fatal = vi.fn();
+    const removed = vi.fn();
+    client.onFatalError = fatal;
+    client.onDeviceRemoved = removed;
+    client.connect();
+    sockets[0].emit('open');
+    expect(JSON.parse(sockets[0].sent[0]).auth).toEqual({ method: 'challenge', deviceId: 'dev_123' });
+    sockets[0].emit('message', Buffer.from(JSON.stringify({ type: 'auth_error', code: 'unknown_device', message: 'Unknown device' })));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(removed).toHaveBeenCalledTimes(1);
+    expect(fatal).not.toHaveBeenCalled();
+    expect(sockets.length).toBe(1);
+  });
+
   it('re-registers its key with the account token once when the relay has a different key (invalid_signature)', async () => {
     const client = new RelayClient(
       createAdapter(),

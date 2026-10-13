@@ -413,6 +413,16 @@ export async function startWorker(): Promise<WorkerResult> {
     })();
   };
 
+  relay.onDeviceRemoved = () => {
+    logger.fatal('This computer was removed from your Kraki account. Run `kraki` to sign in again.');
+    void (async () => {
+      await shutdown().catch(() => {});
+      // Permanent: restarting cannot sign in again without the user.
+      const { PERMANENT_EXIT_CODE } = await import('./daemon-supervisor.js');
+      process.exit(PERMANENT_EXIT_CODE);
+    })();
+  };
+
   relay.onFatalError = (message) => {
     logger.fatal({ message }, 'Relay fatal error — exiting so the supervisor can restart');
     // A dead relay client inside a live process looks "running" to every

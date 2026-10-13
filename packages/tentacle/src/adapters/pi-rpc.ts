@@ -1,5 +1,6 @@
 /** The pi CLI in RPC mode: one child process per session, JSON lines in and out, command timeouts. */
 
+import { agentEnv } from '../agent-env.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { cliSpawnArgs } from '../cli-launch.js';
 import { readPiJsonLines } from './pi-jsonl.js';
@@ -102,7 +103,7 @@ export class PiRpcProcess {
     this.child = spawn(...cliSpawnArgs(this.opts.cliPath, args), {
       windowsHide: true,
       cwd: this.opts.cwd ?? process.cwd(),
-      env: this.opts.env ?? process.env,
+      env: this.opts.env ?? agentEnv(),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

@@ -444,6 +444,9 @@ export function finishTurnWithStatus(
       payload: { ...snapshot.previousAction.payload, cancelled: true },
     });
   }
+  for (const prompt of snapshot.queuedPrompts) {
+    recordTrace(client, { type: 'permission', sessionId, payload: { ...prompt.payload, cancelled: true } });
+  }
 
   const finishedAt = action.type === 'user_abort' ? action.payload.abortedAt : action.payload.failedAt;
   const steps = client.turnStepCounts.get(sessionId) ?? 0;

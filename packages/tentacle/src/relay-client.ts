@@ -322,7 +322,16 @@ export class RelayClient {
         // @coinfra/pulse ≥0.5.1: progress heartbeats never trigger resends.
         pulseProgressAck: true,
       };
-      const auth = this.buildAuthPayload(device);
+      let auth: AuthMethod;
+      try {
+        auth = this.buildAuthPayload(device);
+      } catch (err) {
+        // A throw inside the ws 'open' listener is an uncaughtException: the
+        // worker would exit and the supervisor restart it into the same state.
+        this.onFatalError?.(err instanceof Error ? err.message : String(err));
+        this.disconnect();
+        return;
+      }
       ws.send(JSON.stringify({ type: 'auth', auth, device }));
     });
 
@@ -455,6 +464,10 @@ export class RelayClient {
 
   /** Called once when the relay reports that the account was deleted. */
   onAccountDeleted: (() => void) | null = null;
+  /** The relay no longer knows this device and no credential remains to sign
+   *  in again (removed from the account while offline). Permanent until the
+   *  user runs setup; restarting cannot help. */
+  onDeviceRemoved: (() => void) | null = null;
 
   private handleMessage(msg: Record<string, unknown>): void {
     if (msg.type === 'auth_ok') {
@@ -501,6 +514,15 @@ export class RelayClient {
         return;
       }
       if (authError.code === 'unknown_device' && this.preferChallengeAuth && this.options.device.deviceId && this.keyManager) {
+        if (!this.hasFullAuthCredential()) {
+          // Removed from the account (e.g. while offline) and no token to sign
+          // in again with: nothing will ever succeed until the user signs in.
+          logger.warn('This computer was removed from the account and has no saved sign-in');
+          this.disconnect();
+          if (this.onDeviceRemoved) this.onDeviceRemoved();
+          else this.onFatalError?.('This computer was removed from your Kraki account. Run `kraki` to sign in again.');
+          return;
+        }
         logger.warn('Challenge auth rejected for unknown device; retrying with full auth');
         this.preferChallengeAuth = false;
         this.ws?.close();
@@ -638,6 +660,12 @@ export class RelayClient {
     // ONLY after E2E decryption above (or via the Pulse path); a plaintext
     // frame from the relay must never reach handleConsumerMessage.
     logger.debug({ type: msg.type }, 'Ignoring unrecognized relay frame');
+  }
+
+  /** Whether a non-challenge sign-in is possible (open relay, or a saved token/key). */
+  private hasFullAuthCredential(): boolean {
+    const method = this.options.authMethod;
+    return method === 'open' || !!this.options.token;
   }
 
   private buildAuthPayload(device: DeviceInfo): AuthMethod {

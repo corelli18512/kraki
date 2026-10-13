@@ -73,6 +73,9 @@ export class SessionManager {
       return;
     }
     for (const dir of dirs) {
+      // A stray entry (".DS_Store", "sess copy") is not a session; sessionDir
+      // would throw on it and stop the daemon from starting.
+      if (!isSafeId(dir)) continue;
       const meta = this.readMeta(dir);
       if (!meta) continue;
       const ls = meta.lastSeq ?? 0;
@@ -113,7 +116,7 @@ export class SessionManager {
       try {
         const msg = JSON.parse(line);
         const sid = msg.sessionId;
-        if (!sid) continue;
+        if (typeof sid !== 'string' || !isSafeId(sid)) continue;
         if (!bySession.has(sid)) bySession.set(sid, []);
         bySession.get(sid)!.push({ seq: msg.seq, type: msg.type, payload: msg.payload, ts: msg.ts });
       } catch { /* skip */ }
@@ -650,6 +653,7 @@ export class SessionManager {
     if (!existsSync(this.sessionsDir)) return sessions;
 
     for (const dir of readdirSync(this.sessionsDir)) {
+      if (!isSafeId(dir)) continue;
       const meta = this.readMeta(dir);
       if (meta && (meta.state === 'active' || meta.state === 'idle' || meta.state === 'disconnected')) {
         sessions.push(meta);

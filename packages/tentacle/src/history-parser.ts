@@ -26,6 +26,45 @@ interface SdkEvent {
   timestamp?: string;
 }
 
+/**
+ * Parse one events.jsonl line into an event, or null when it is not one.
+ * The file is written by another program (Copilot CLI) and can hold torn or
+ * unexpected rows; valid JSON is not enough (`null`, arrays, rows without
+ * `data`), and a bad row must never stop an import or the live watcher.
+ */
+export function parseEventLine(line: string): SdkEvent | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const event = parsed as Record<string, unknown>;
+  if (typeof event.type !== 'string') return null;
+  const data = event.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  return {
+    type: event.type,
+    data: data as Record<string, unknown>,
+    ...(typeof event.id === 'string' && { id: event.id }),
+    ...(typeof event.timestamp === 'string' && { timestamp: event.timestamp }),
+  };
+}
+
+/** {@link convertEvent} for untrusted rows: a row of the right shape whose
+ *  fields have unexpected types is skipped instead of throwing. */
+export function convertEventSafely(
+  event: SdkEvent,
+  meta: ParsedSessionMeta,
+): { type: string; payload: string; ts: string } | null {
+  try {
+    return convertEvent(event, event.timestamp ?? new Date().toISOString(), meta);
+  } catch {
+    return null;
+  }
+}
+
 // ── Converted message format (matches SessionManager's LoggedMessage) ──
 
 export interface BackfilledMessage {
@@ -69,15 +108,9 @@ export function parseEventsFile(eventsPath: string): {
   for (const line of content.split('\n')) {
     if (!line.trim()) continue;
 
-    let event: SdkEvent;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      continue; // skip corrupt lines
-    }
-
-    const ts = event.timestamp ?? new Date().toISOString();
-    const converted = convertEvent(event, ts, meta);
+    const event = parseEventLine(line);
+    if (!event) continue; // skip corrupt or unexpected lines
+    const converted = convertEventSafely(event, meta);
     if (converted) {
       seq++;
       messages.push({ seq, ...converted });
