@@ -19,7 +19,11 @@ The phase-one progress/performance numbers below are a historical snapshot; they
   It keeps the production bundle/keychain/defaults/outbox identity and ships through the existing TestFlight / Sparkle channels;
   a normal Release still contains no log collection code, and the Diagnostics configuration with its separate `.diag` identity is kept.
 - iOS enables it only via workflow_dispatch `diagnostics=true`; Mac only via an explicit `mac-v…-diag` tag.
-  `verify-diagnostic-delivery.sh` verifies logging/toggle/existing identity; normal releases still use `verify-no-diag.sh`.
+  `verify-diagnostic-delivery.sh` verifies logging/toggle/existing identity.
+- **2026-10 update: production builds collect too.** Release now compiles `KRAKI_DIAG KRAKI_DIAG_EXISTING_IDENTITY`; the test-build-only UI
+  (upload details, marker button) is behind `KRAKI_DIAG_TEST_BUILD`, which only Diagnostics/DiagnosticsDelivery set. Production shows
+  Settings → Privacy → Share Performance Data (on by default), uploads on cellular too (not in Low Data Mode) and keeps at most 5 MB unsent.
+  Normal releases run `verify-production.sh` (metrics present, normal identity, no test-build identity or UI). See `docs/stability-metrics.md`.
 - Target versions this round: iOS 0.1.8 (build number assigned by the TestFlight workflow), Mac 0.2.40 (42).
 - Settings has a "Record and Send Diagnostics" toggle (on by default in diagnostics builds), the last upload time, the pending amount and a manual problem-marker button.
 - Added `ui.busy` (busy intervals ≥50 ms completed by the foreground run loop, excluding sleeping; not a watchdog stack),
@@ -104,7 +108,7 @@ The iOS NSE uses `group.chat.kraki.ios.diag` and a separate keychain entitlement
 Mac's normal Sparkle updates are already restricted by bundle identity, so production updates are never installed over Diag.
 Mac window size/zoom settings are still shared across Prod/Dev as originally agreed, so we cannot claim "all UI preferences are fully isolated".
 
-`bash scripts/diag/verify-no-diag.sh <Production.app>` checks the host/NSE bundle IDs and live-code strings.
+`bash scripts/diag/verify-production.sh <Production.app>` checks the host/NSE bundle IDs, that production carries the metrics code with the normal identity, and no test-build identity or UI.
 It is wired into the pre-sign/export steps of the iOS TestFlight / macOS release workflows.
 It is a line of defense that works together with real Release build tests; we do not claim a single strings check proves zero leakage for any future implementation.
 
@@ -251,7 +255,7 @@ pnpm --filter @kraki/monitor typecheck
 bash scripts/diag/run-native-tests.sh
 pnpm exec tsx scripts/diag/local-e2e.ts  # macOS, real Swift RSA/URLSession → standalone loopback Monitor
 python3 scripts/diag/timeline.py <local download directory or a single .gz> --question <id>
-bash scripts/diag/verify-no-diag.sh <Release.app>
+bash scripts/diag/verify-production.sh <Release.app>
 ```
 
 NativeTests is a separate optimized build using a URLProtocol mock, temp directories and isolated Defaults; it does not launch the real app,

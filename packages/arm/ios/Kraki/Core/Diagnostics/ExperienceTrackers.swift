@@ -242,3 +242,109 @@ struct ForegroundExitMarker {
     func enteredForeground() { defaults.set(true, forKey: key) }
     func leftForeground() { defaults.set(false, forKey: key) }
 }
+
+/// One `reply.summary` per turn this device started: how long after the
+/// user's message came back (echo) the agent's first activity and first text
+/// arrived, and whether the text stream stalled while it was arriving.
+///
+/// With `send.summary.confirmMs` (send → echo, i.e. the Kraki round trip) this
+/// separates Kraki's share of "it feels slow" from the agent's own thinking:
+/// `firstActivityMs` / `firstTextMs` are mostly agent time plus one relay hop.
+/// Gaps are measured only between consecutive text deltas of one text run (a
+/// tool step resets the run), so a long-running tool is not a "stall".
+/// Metadata only. Main thread only (owned by AppState, fed by MessageRouter).
+final class ReplyTracker {
+    struct Summary: Equatable {
+        enum Kind: String { case typed, answer }
+        enum Outcome: String { case completed, failed, stopped, backgrounded, superseded }
+        var kind: Kind
+        var outcome: Outcome = .completed
+        /// Echo → first card action / tool / text / message of the reply.
+        var firstActivityMs: Double?
+        /// Echo → first reply text (delta or whole message).
+        var firstTextMs: Double?
+        /// Echo → end of the turn.
+        var durationMs: Double = 0
+        /// Text deltas received.
+        var deltas = 0
+        /// Longest gap between consecutive deltas of one text run.
+        var maxGapMs: Double = 0
+        /// Gaps of at least `stallMs` between consecutive deltas.
+        var stalls = 0
+    }
+
+    static let stallMs: Double = 3000
+    var now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    var onSummary: ((Summary) -> Void)?
+    #if DEBUG
+    private(set) var summaries: [Summary] = []
+    #endif
+
+    private struct Entry {
+        var summary: Summary
+        var startedAt: TimeInterval
+        var lastDeltaAt: TimeInterval?
+    }
+    private var entries: [String: Entry] = [:]
+
+    /// This device's message for `sessionId` came back from the agent's machine.
+    func started(_ sessionId: String, kind: Summary.Kind) {
+        finish(sessionId, .superseded)
+        entries[sessionId] = Entry(summary: Summary(kind: kind), startedAt: now())
+    }
+
+    /// A tool step / card action: activity, and the end of a text run.
+    func activity(_ sessionId: String) {
+        guard var entry = entries[sessionId] else { return }
+        markActivity(&entry)
+        entry.lastDeltaAt = nil
+        entries[sessionId] = entry
+    }
+
+    /// A streaming text delta. `reset` starts a new text run.
+    func delta(_ sessionId: String, reset: Bool) {
+        guard var entry = entries[sessionId] else { return }
+        let t = now()
+        markActivity(&entry)
+        if entry.summary.firstTextMs == nil { entry.summary.firstTextMs = (t - entry.startedAt) * 1000 }
+        entry.summary.deltas += 1
+        if let last = entry.lastDeltaAt, !reset {
+            let gap = (t - last) * 1000
+            entry.summary.maxGapMs = max(entry.summary.maxGapMs, gap)
+            if gap >= Self.stallMs { entry.summary.stalls += 1 }
+        }
+        entry.lastDeltaAt = t
+        entries[sessionId] = entry
+    }
+
+    /// A whole agent message landed (also the end of a text run).
+    func message(_ sessionId: String) {
+        guard var entry = entries[sessionId] else { return }
+        markActivity(&entry)
+        if entry.summary.firstTextMs == nil { entry.summary.firstTextMs = (now() - entry.startedAt) * 1000 }
+        entry.lastDeltaAt = nil
+        entries[sessionId] = entry
+    }
+
+    func finish(_ sessionId: String, _ outcome: Summary.Outcome) {
+        guard var entry = entries.removeValue(forKey: sessionId) else { return }
+        entry.summary.outcome = outcome
+        entry.summary.durationMs = (now() - entry.startedAt) * 1000
+        #if DEBUG
+        summaries.append(entry.summary)
+        #endif
+        onSummary?(entry.summary)
+    }
+
+    /// The app left the foreground: timings after this are not the user's
+    /// experience (delivery is paused), so close every open turn.
+    func backgrounded() {
+        for sessionId in Array(entries.keys) { finish(sessionId, .backgrounded) }
+    }
+
+    var inFlight: Int { entries.count }
+
+    private func markActivity(_ entry: inout Entry) {
+        if entry.summary.firstActivityMs == nil { entry.summary.firstActivityMs = (now() - entry.startedAt) * 1000 }
+    }
+}

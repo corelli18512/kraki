@@ -233,6 +233,80 @@ final class FakeHTTP: URLProtocol, @unchecked Sendable {
             print("PASS: real Swift RSA -> URLSession -> local Monitor API, including retry")
         }
 
+        // Budget: a heavy day of use (200 messages with replies, 40 conversation
+        // opens, 20 voice recordings, 30 foreground cycles, 10 reconnects) with
+        // the full production event feed, flushed in small batches the way the
+        // app does, then compacted before upload as the spool does.
+        let dayDir = root.appendingPathComponent("heavy-day")
+        let day = try DiagSpool(directory: dayDir, maxBytes: 50 * 1024 * 1024)
+        let dayRecorder = DiagRecorder(capacity: 100_000, perSecond: Int.max)
+        let session = "sess_" + UUID().uuidString
+        func uuid() -> DiagValue { .id(UUID().uuidString) }
+        var dayEvents = 0
+        func flushDay() throws {
+            let events = dayRecorder.drain().events
+            guard !events.isEmpty else { return }
+            dayEvents += events.count
+            let id = UUID().uuidString
+            let batch = DiagBatch(batchId: id, processId: dayRecorder.processId, platform: "ios", version: "0.1.31", build: "131", events: events)
+            try day.append(diagGzip(JSONEncoder().encode(batch)), batchId: id)
+        }
+        for n in 0..<200 {
+            let client = uuid()
+            dayRecorder.record(.input, session: session, [.clientId: client, .textLength: .int(120), .attachments: .int(0), .source: .tag("ChatViewModel.swift")])
+            dayRecorder.record(.handoff, session: session, [.clientId: client, .accepted: .bool(true), .stack: .tag("0x1a2b3c,0x4d5e6f")])
+            dayRecorder.record(.outbox, session: session, [.clientId: client, .phase: .tag("sending"), .count: .int(1)])
+            dayRecorder.record(.echo, session: session, [.clientId: client, .messageSeq: .int(n), .matched: .bool(true)])
+            dayRecorder.record(.outbox, session: session, [.clientId: client, .phase: .tag("cleared"), .count: .int(0)])
+            dayRecorder.record(.send, [.kind: .tag("typed"), .outcome: .tag("delivered"), .shown: .tag("none"), .shownMs: .number(0),
+                .falseAlarm: .bool(false), .manualRetries: .int(0), .autoResends: .int(0), .restored: .int(0), .offline: .bool(false),
+                .attachments: .int(0), .textLength: .int(120), .background: .bool(false), .confirmMs: .number(412.5)])
+            dayRecorder.record(.reply, [.kind: .tag("typed"), .outcome: .tag("completed"), .durationMs: .number(48_213.2), .deltas: .int(180),
+                .maxGapMs: .number(812.4), .stalls: .int(0), .firstActivityMs: .number(2311.7), .firstTextMs: .number(5120.3)])
+            for _ in 0..<2 { dayRecorder.record(.busy, [.durationMs: .number(34.2)]) }
+            dayRecorder.record(.slowWork, session: session, [.source: .tag("TKBubbleCell.swift"), .durationMs: .number(12.4), .messageSeq: .int(n)])
+            dayRecorder.record(.list, session: session, [.count: .int(80), .pending: .int(0), .firstSeq: .int(n), .lastSeq: .int(n + 80)])
+            try flushDay()
+        }
+        for _ in 0..<40 {
+            dayRecorder.record(.navigation, session: session, [.source: .tag("SessionListView.swift")])
+            dayRecorder.record(.open, [.outcome: .tag("current"), .gap: .int(0), .firstContentMs: .number(120.4), .viewCurrentMs: .number(310.2)])
+            dayRecorder.record(.list, session: session, [.count: .int(80), .pending: .int(0), .firstSeq: .int(1), .lastSeq: .int(80)])
+            try flushDay()
+        }
+        for _ in 0..<20 {
+            for _ in 0..<3 { dayRecorder.record(.voice, [.source: .tag("KrakiVoiceInputController.swift"), .textLength: .int(60), .accepted: .bool(true)]) }
+            dayRecorder.record(.voiceSummary, [.outcome: .tag("final"), .stage: .tag("finishing"), .confirmed: .bool(true), .textLength: .int(60),
+                .warm: .bool(true), .count: .int(0), .correctionOn: .bool(true), .startMs: .number(180.2), .recordMs: .number(6200.4), .finalizeMs: .number(1400.3)])
+            try flushDay()
+        }
+        for _ in 0..<30 {
+            dayRecorder.record(.phase, [.phase: .tag("background"), .pending: .int(0)])
+            dayRecorder.record(.phase, [.phase: .tag("active"), .pending: .int(0)])
+            dayRecorder.record(.ready, [.kind: .tag("warm"), .outcome: .tag("ready"), .path: .tag("wifi"), .attempt: .int(1), .gap: .int(0),
+                .viewing: .bool(true), .backgroundMs: .number(600_000), .firstContentMs: .number(40.1), .wsOpenMs: .number(220.3),
+                .authedMs: .number(410.2), .listFreshMs: .number(620.4), .viewCurrentMs: .number(700.1)])
+            try flushDay()
+        }
+        for _ in 0..<10 {
+            dayRecorder.record(.connection, [.state: .tag("disconnected"), .attempt: .int(0)])
+            dayRecorder.record(.connection, [.state: .tag("connected"), .attempt: .int(1)])
+            dayRecorder.record(.outage, [.source: .tag("WebSocketClient.swift"), .code: .tag("-1005"), .outcome: .tag("recovered"), .path: .tag("cellular"),
+                .attempt: .int(1), .detectMs: .number(3000), .reconnectMs: .number(900), .catchupMs: .number(300), .impactMs: .number(4200),
+                .visibleMs: .number(0), .pathChanged: .bool(true), .afterWake: .bool(false)])
+            try flushDay()
+        }
+        // Upload loop as in DiagClient.tick: compact, send the first segment, repeat.
+        let beforeCompact = day.bytes
+        var dayBytes = 0, uploads = 0
+        while let first = { try? day.compact(); return day.segments.first }() {
+            dayBytes += first.bytes; uploads += 1
+            day.remove(first.url)
+        }
+        print(String(format: "heavy day: %d events, %.1f KB as written, %.1f KB uploaded in %d requests", dayEvents,
+            Double(beforeCompact) / 1024, Double(dayBytes) / 1024, uploads))
+        check(dayBytes < 100 * 1024, "a heavy day uploads under 100 KB")
+
         // Optimized-build microbenchmark, not an assertion about whole-app CPU/battery.
         let bench = DiagRecorder(capacity: 256, perSecond: Int.max)
         let count = 100_000
@@ -242,6 +316,8 @@ final class FakeHTTP: URLProtocol, @unchecked Sendable {
             if n % 100 == 99 { _ = bench.drain() }
         }
         let elapsed = ProcessInfo.processInfo.systemUptime - start
+        // Generous ceiling (measured ~0.3 us): recording stays far below a frame.
+        check(elapsed * 1_000_000 / Double(count) < 20, "recording one event costs under 20 us")
         print("PASS: recorder, concurrency, gzip, disk cap/relaunch, HTTP retry, toggle/logout, compaction/crash recovery, bounded catch-up and config retry")
         print(String(format: "record+periodic-drain microbenchmark: %.3f us/event, %d events", elapsed * 1_000_000 / Double(count), count))
         if let path = ProcessInfo.processInfo.environment["KRAKI_DIAG_TEST_BATCH"] { try posts[0].write(to: URL(fileURLWithPath: path)) }

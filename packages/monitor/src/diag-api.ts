@@ -37,7 +37,8 @@ export const fields: Record<string, Validator> = {
   // Stability summaries (StabilityTracker): durations, counts and tags only.
   kind: choice('cold', 'warm', 'wake', 'typed', 'voice', 'answer', 'steer'),
   outcome: choice('ready', 'abandoned', 'timeout', 'recovered', 'backgrounded', 'current', 'left',
-    'delivered', 'deleted', 'cleared', 'final', 'failed', 'cancelled', 'departed', 'suspended', 'ended'),
+    'delivered', 'deleted', 'cleared', 'final', 'failed', 'cancelled', 'departed', 'suspended', 'ended',
+    'completed', 'stopped', 'superseded'),
   path: choice('wifi', 'cellular', 'wired', 'other', 'none', 'unknown'),
   gap: number, viewing: bool, backgroundMs: number, firstContentMs: number, wsOpenMs: number, authedMs: number,
   listFreshMs: number, viewCurrentMs: number,
@@ -49,6 +50,8 @@ export const fields: Record<string, Validator> = {
   cause: v => typeof v === 'string' && /^[a-z_]{1,48}$/.test(v), // coarse class, never a message
   stage: choice('preflight', 'permission', 'lease', 'recording', 'finishing'),
   confirmed: bool, warm: bool, startMs: number, recordMs: number, finalizeMs: number, correctionOn: bool,
+  // reply.summary (ReplyTracker)
+  firstActivityMs: number, firstTextMs: number, deltas: number, maxGapMs: number, stalls: number,
 };
 /** Adding an event requires consciously extending this allowlist and its native call site. */
 export const schemas: Record<string, string[]> = {
@@ -78,6 +81,7 @@ export const schemas: Record<string, string[]> = {
     'offline', 'attachments', 'textLength', 'background', 'confirmMs', 'correctionMs', 'cause'],
   'voice.summary': ['outcome', 'stage', 'cause', 'confirmed', 'textLength', 'warm', 'count', 'startMs', 'recordMs',
     'finalizeMs', 'correctionOn'],
+  'reply.summary': ['kind', 'outcome', 'durationMs', 'firstActivityMs', 'firstTextMs', 'deltas', 'maxGapMs', 'stalls'],
   'outage.summary': ['source', 'code', 'outcome', 'path', 'attempt', 'detectMs', 'reconnectMs', 'catchupMs',
     'impactMs', 'visibleMs', 'pathChanged', 'afterWake'],
 };

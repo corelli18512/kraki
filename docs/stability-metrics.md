@@ -6,7 +6,9 @@ Principles:
 - Each "process" reports **one summary** when it ends.
 - Only durations, counts and cause category labels are recorded — never message text, error strings or network names.
 - The logic lives in `StabilityTracker` / `SendTracker` / `VoiceTracker` (`Core/Diagnostics/`). This code is always compiled, so it is covered by unit tests.
-- Only diagnostics builds (`KRAKI_DIAG`) report, through the existing KrakiDiag → `kraki-diag` Monitor channel. Production builds report nothing and do not start the network path monitor.
+- Production iOS / Mac builds report, through the KrakiDiag → `kraki-diag` Monitor channel (Release compiles `KRAKI_DIAG KRAKI_DIAG_EXISTING_IDENTITY`). The user can turn it off in Settings → Privacy → Share Performance Data (on by default; off deletes anything unsent), and the collector can turn it off for everyone (`touch $KRAKI_DIAG_DIR/DISABLED` → config `enabled:false`). Privacy text: `docs/privacy-performance-data.md`.
+- Uploads use any network except Low Data Mode, in the foreground, outside Low Power Mode and thermal pressure. A heavy day (200 messages with replies, full event feed) is about 65 KB in ~11 requests; recording one event costs ~0.3 µs. Both are checked by `scripts/diag/run-native-tests.sh` (budget: < 100 KB/day, < 20 µs/event). Production keeps at most 5 MB unsent; test builds 50 MB.
+- Web and Windows do not report yet.
 
 ## Events
 
@@ -79,6 +81,16 @@ Counts only outages while signed in, in the foreground, and not during an "open"
   - `count`: number of lease rollovers
   - `correctionOn`: whether Correct Transcripts was on for this recording. When off, `confirmed=false` is expected and not a correction failure
 
+### `reply.summary`: one reply turn this device started
+Starts when this device's own message comes back from the agent's computer (the echo, so `send.summary.confirmMs` covers send → echo) while the app is in the foreground; steers stay inside the running turn. Owned by `MessageRouter.replyMetrics` (`MessageRouter+Replies.swift`, `ReplyTracker`).
+- `firstActivityMs`: echo → first sign of the reply (tool step, text, message). Mostly the agent's own thinking plus one relay hop.
+- `firstTextMs`: echo → first reply text.
+- `durationMs`: echo → end of the turn.
+- `deltas`, `maxGapMs`, `stalls`: streamed text deltas, the longest gap between consecutive deltas of one text run, and gaps ≥ 3 s. A tool step ends a text run, so a long tool is not a stall. Deltas only reach the conversation that is open, so these are 0 for replies the user was not watching.
+- `kind`: typed / answer. `outcome`: `completed` (idle), `failed`, `stopped` (stopped, interrupted, session ended), `backgrounded` (iOS left the foreground; timings after that are not the user's experience), `superseded` (a new turn started before this one ended).
+
+"Reply feels slow" splits into: `send.summary.confirmMs` (Kraki round trip) + `reply.summary.firstTextMs` (agent + one hop); stalls point at streaming.
+
 ### `open.summary`: opening a conversation
 Recorded only while online and not during an app-open or outage process.
 - Fields: `firstContentMs`, `viewCurrentMs`, `gap`
@@ -96,6 +108,8 @@ Recorded only while online and not during an app-open or outage process.
 | Messages shown as a problem | < 1%, false alarms should be 0 |
 | Voice release → result | < 4 s |
 | Voice failure rate | < 2% |
+| Echo → first reply activity `firstActivityMs` | track only (agent-dependent) |
+| Replies with a stall ≥ 3 s | < 2% |
 | Open conversation → latest on screen | < 1.5 s |
 
 ## Viewing the data (manual tool, not in CI)

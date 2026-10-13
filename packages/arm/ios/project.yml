@@ -35,10 +35,16 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
   configs:
-    Diagnostics:
-      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) KRAKI_DIAG"
-    DiagnosticsDelivery:
+    # Production builds record experience metrics (KrakiDiag) with the normal
+    # app identity; the user can turn it off in Settings and the collector can
+    # turn it off for everyone (config `enabled:false`).
+    Release:
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) KRAKI_DIAG KRAKI_DIAG_EXISTING_IDENTITY"
+    # Test builds additionally show upload details and the "mark" button.
+    Diagnostics:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) KRAKI_DIAG KRAKI_DIAG_TEST_BUILD"
+    DiagnosticsDelivery:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) KRAKI_DIAG KRAKI_DIAG_EXISTING_IDENTITY KRAKI_DIAG_TEST_BUILD"
 
 schemes:
   KrakiDiag:

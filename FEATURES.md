@@ -119,6 +119,7 @@ Platforms: **M** Kraki for Mac · **W** Kraki for Windows · **I** iPhone ·
 | H5 | Delete account | Two confirmations; every device signed out; computers stop serving | M W I B |
 | H6 | This Mac / This PC | Run agents toggle, status, restart, check agents, version, logs, updates, permissions | M W |
 | H7 | About and diagnostics | Versions of every part; Copy diagnostics works | M W I B |
+| H8 | Privacy → Share Performance Data (on by default) | Off: nothing more is sent and unsent data is deleted at once; on again: sending resumes. Never sends message text, drafts, voice or attachments ([privacy text](docs/privacy-performance-data.md)) | M I |
 
 ## I. The app itself
 

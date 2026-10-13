@@ -130,8 +130,10 @@ final class DiagClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         config.urlCache = nil
         config.httpShouldSetCookies = false
         config.httpMaximumConnectionsPerHost = 1
-        config.allowsCellularAccess = false
-        config.allowsExpensiveNetworkAccess = false
+        // Cellular is fine: a heavy day is well under 100 KB. Low Data Mode is
+        // the user's explicit "save data" choice, so wait for another network.
+        config.allowsCellularAccess = true
+        config.allowsExpensiveNetworkAccess = true
         config.allowsConstrainedNetworkAccess = false
         config.waitsForConnectivity = false
         config.timeoutIntervalForRequest = 15

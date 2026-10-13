@@ -162,3 +162,76 @@ final class ForegroundExitMarkerTests: XCTestCase {
         XCTAssertEqual(marker.previousExit(), "clean")
     }
 }
+
+final class ReplyTrackerTests: XCTestCase {
+    private var clock: TimeInterval = 1000
+    private func tracker() -> ReplyTracker {
+        let t = ReplyTracker()
+        t.now = { [unowned self] in clock }
+        return t
+    }
+
+    func testFirstActivityFirstTextAndStalls() throws {
+        let t = tracker()
+        t.started("s", kind: .typed)
+        clock += 1.2
+        t.activity("s")              // a tool step
+        clock += 0.8
+        t.delta("s", reset: true)    // first text at 2.0 s
+        clock += 0.1
+        t.delta("s", reset: false)
+        clock += 3.5
+        t.delta("s", reset: false)   // stalled 3.5 s
+        clock += 0.2
+        t.delta("s", reset: false)
+        clock += 0.3
+        t.message("s")
+        clock += 0.5
+        t.finish("s", .completed)
+        let s = try XCTUnwrap(t.summaries.first)
+        XCTAssertEqual(s.kind, .typed)
+        XCTAssertEqual(s.outcome, .completed)
+        XCTAssertEqual(try XCTUnwrap(s.firstActivityMs), 1200, accuracy: 1)
+        XCTAssertEqual(try XCTUnwrap(s.firstTextMs), 2000, accuracy: 1)
+        XCTAssertEqual(s.deltas, 4)
+        XCTAssertEqual(s.maxGapMs, 3500, accuracy: 1)
+        XCTAssertEqual(s.stalls, 1)
+        XCTAssertEqual(s.durationMs, 6600, accuracy: 1)
+        XCTAssertEqual(t.inFlight, 0)
+    }
+
+    func testToolStepBetweenTextRunsIsNotAStall() throws {
+        let t = tracker()
+        t.started("s", kind: .answer)
+        t.delta("s", reset: true)
+        t.activity("s")              // a long tool runs
+        clock += 40
+        t.delta("s", reset: false)   // first delta of the next run
+        t.finish("s", .completed)
+        let s = try XCTUnwrap(t.summaries.first)
+        XCTAssertEqual(s.stalls, 0)
+        XCTAssertEqual(s.maxGapMs, 0)
+        XCTAssertEqual(try XCTUnwrap(s.firstTextMs), 0, accuracy: 1)
+    }
+
+    func testNewTurnSupersedesAndBackgroundClosesAll() throws {
+        let t = tracker()
+        t.started("a", kind: .typed)
+        clock += 1
+        t.started("a", kind: .typed)
+        t.started("b", kind: .typed)
+        t.backgrounded()
+        XCTAssertEqual(t.summaries.map(\.outcome), [.superseded, .backgrounded, .backgrounded])
+        XCTAssertNil(t.summaries[0].firstActivityMs)
+        XCTAssertEqual(t.inFlight, 0)
+    }
+
+    func testEventsForUntrackedSessionsAreIgnored() {
+        let t = tracker()
+        t.delta("x", reset: false)
+        t.activity("x")
+        t.message("x")
+        t.finish("x", .completed)
+        XCTAssertTrue(t.summaries.isEmpty)
+    }
+}

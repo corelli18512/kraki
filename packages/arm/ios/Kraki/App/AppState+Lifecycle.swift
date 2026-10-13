@@ -192,6 +192,7 @@ extension AppState {
     func handleBackground() {
         isInBackground = true
         stability.appHidden()
+        messageRouter?.replyMetrics.backgrounded()
         noteOrderlyExit()
         updateReconnectingIndicator()
         #if KRAKI_DIAG

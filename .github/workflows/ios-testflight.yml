@@ -137,7 +137,7 @@ jobs:
           if [ '${{ inputs.diagnostics }}' = 'true' ]; then
             bash scripts/diag/verify-diagnostic-delivery.sh "$APP"
           else
-            bash scripts/diag/verify-no-diag.sh "$APP"
+            bash scripts/diag/verify-production.sh "$APP"
           fi
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")" = "$VERSION"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")" = "$BUILD_NUMBER"
