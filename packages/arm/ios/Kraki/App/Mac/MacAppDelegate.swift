@@ -221,7 +221,9 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        #if DEBUG
         scheduleMenuDumpsIfRequested()
+        #endif
 
         if ProcessInfo.processInfo.environment["KRAKI_RENDER_BUBBLE_TEST"] == "1" {
             renderBubbleTestToPNG()
@@ -307,6 +309,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         removeUnwantedMenus()
     }
 
+    #if DEBUG
     /// KRAKI_MENUBAR_DUMP_AFTER / KRAKI_MAINMENU_DUMP_AFTER=<seconds>: log the
     /// menu bar menu / the whole main menu, for checks without opening them
     /// or needing Accessibility access.
@@ -365,6 +368,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+    #endif
 
     /// Removes the synthesized "File" menu from the menu bar. The Window
     /// menu stays (trimmed in MacCommands): it carries ⌘W and ⌘M.
