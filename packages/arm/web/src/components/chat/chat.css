@@ -802,11 +802,9 @@
   .kjump { right: 16px; }
   .kjump .kround {
     color: var(--k-jump-light);
-    border-color: color-mix(in srgb, var(--k-jump-light) 25%, transparent);
   }
   .dark .kjump .kround {
     color: var(--k-jump-dark);
-    border-color: color-mix(in srgb, var(--k-jump-dark) 25%, transparent);
   }
 }
 .kround.is-visible { opacity: 1; transform: scale(1); pointer-events: auto; }

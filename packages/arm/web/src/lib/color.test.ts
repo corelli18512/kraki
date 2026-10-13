@@ -7,7 +7,7 @@ describe('agentNavigationColors — MacChatScrollView template-button tint', () 
     expect(stringToHue('mv23g6gx-gq3i4yy8')).toBe(95);
     expect(agentNavigationColors('mv23g6gx-gq3i4yy8')).toEqual({ light: 'hsl(95 70% 45%)', dark: 'hsl(95 75% 65%)' });
     expect(agentNavigationColors('mv6hxl3c-v9oii65w')).toEqual({ light: 'hsl(78 70% 45%)', dark: 'hsl(78 75% 65%)' });
-    // Actual Chromium verifies hue95's native opaque glyph color #66c322.
+    // Paired Chromium/native glyph pixels agree within one channel level.
     expect(agentNavigationColors('s')).not.toEqual(agentBubbleColors('s'));
   });
 });
