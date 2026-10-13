@@ -31,3 +31,18 @@ describe('Bubble — system_message', () => {
     expect(screen.queryByTestId('steps-only-turn')).not.toBeInTheDocument();
   });
 });
+
+describe('Bubble — draftless terminal outcome', () => {
+  it('renders Stopped and opens the persisted turn trace', () => {
+    const onOpenSteps = vi.fn();
+    const row: ChatRow = { kind: 'spine', key: '4', item: { message: {
+      type: 'turn_status', sessionId: 's1', deviceId: 'd1', seq: 4,
+      timestamp: '2026-09-26T00:00:00.000Z', payload: { draft: '', steps: 1, action: { type: 'user_abort' } },
+    } as never } };
+    render(<Bubble row={row} ctx={{ sessionId: 's1', hueSeed: 's1', onOpenSteps }} />);
+    expect(screen.getByText('Stopped')).toBeInTheDocument();
+    expect(screen.queryByText('User aborted')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show steps' }));
+    expect(onOpenSteps).toHaveBeenCalledWith(4);
+  });
+});

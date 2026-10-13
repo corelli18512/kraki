@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronUp, ChevronsDown } from 'lucide-react';
 import type { Attachment, ContentRef } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
+import { useNarrow } from '../../hooks/useNarrow';
 import { useOutbox, outbox } from '../../lib/chat/outbox';
 import { openQuestions, payloadOf, rowKey, seqOf, spineRows } from '../../lib/chat/spine';
 import { messageProvider } from '../../lib/message-provider';
@@ -117,6 +118,10 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const atBottomRef = useRef(true);
   const [unseen, setUnseen] = useState(false);
   const [composerHeight, setComposerHeight] = useState(72);
+  const narrow = useNarrow();
+  // Mac's floating composer grows over chat, without moving the newest edge.
+  // ChatBottomObstruction: 36 capsule + 2×12 bottom padding − 6 row margin.
+  const bottomClearance = narrow ? composerHeight + 8 : 54;
   const [upTarget, setUpTarget] = useState<string | null>(null);
   const composerRef = useRef<ComposerHandle>(null);
   const composerBox = useRef<HTMLDivElement>(null);
@@ -266,7 +271,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
         rows={visibleRows}
         renderRow={(row: ChatRow) => <Bubble row={row} ctx={ctx} />}
         topInset={topInset + 8}
-        bottomInset={composerHeight + 8}
+        bottomInset={bottomClearance}
         header={(hiddenAbove > 0 || hasOlder) ? <div className="ktop-loader"><span className="kspinner" /></div> : null}
         onAtBottomChange={(bottom) => {
           atBottomRef.current = bottom;

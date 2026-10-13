@@ -166,3 +166,21 @@ describe('MessageProvider — TRACE axis', () => {
     expect(sent.filter((x) => x.type === 'request_turn_trace')).toHaveLength(2);
   });
 });
+
+describe('MessageProvider — confirmed empty trace', () => {
+  it('only marks a trace loaded after completion and notifies subscribers', () => {
+    messageProvider.clear();
+    const changed = vi.fn();
+    const unsubscribe = messageProvider.subscribeTurnTraces(changed);
+    expect(messageProvider.isTurnTraceLoaded('s', 2)).toBe(false);
+    messageProvider.handleTurnTraceBatch('s', 2, [], false);
+    expect(messageProvider.isTurnTraceLoaded('s', 2)).toBe(false);
+    messageProvider.handleTurnTraceBatch('s', 2, [], true);
+    expect(messageProvider.isTurnTraceLoaded('s', 2)).toBe(true);
+    expect(changed).toHaveBeenCalledTimes(2);
+    unsubscribe();
+    messageProvider.clear();
+    expect(messageProvider.isTurnTraceLoaded('s', 2)).toBe(false);
+    expect(changed).toHaveBeenCalledTimes(2);
+  });
+});
