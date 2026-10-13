@@ -39,7 +39,7 @@ describe('StepsList tool_start → tool_complete merge (protocol contract)', () 
     renderSteps([
       makeMsg('tool_start', { toolName: 'bash', headline: '$ sleep 1', toolCallId: 't2' }, 1),
     ]);
-    expect(screen.getByText(/Running/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Running bash/i })).toBeInTheDocument();
   });
 
   it('interleaves narration prose with a merged tool chip', () => {
@@ -133,5 +133,33 @@ describe('permission steps', () => {
     expect(merged).toHaveLength(2);
     expect(merged[0].payload).toMatchObject({ description: 'Edit win.txt', decision: 'approve' });
     expect(merged[1].payload).toMatchObject({ description: 'Delete win.txt', decision: 'deny', reason: 'keep it' });
+  });
+});
+
+describe('StepsList — native trace order and text', () => {
+  it('places completed bash before the permission it waited on, with outcome below', () => {
+    renderSteps([
+      makeMsg('agent_narration', { content: 'First line\nSecond line' }, 1),
+      makeMsg('tool_start', { toolName: 'bash', toolCallId: 't', headline: 'sleep 12' }, 2),
+      makeMsg('permission', { id: 'p', description: 'sleep 12' }, 3),
+      makeMsg('permission', { id: 'p', decision: 'deny' }, 4),
+      makeMsg('tool_complete', { toolName: 'bash', toolCallId: 't', headline: 'sleep 12', success: false }, 5),
+    ]);
+    expect([...document.querySelectorAll('.kstep-prose, .ktool, .kstep-permission')].map((n) => n.className))
+      .toEqual(['kstep-prose', 'ktool', 'kstep-permission']);
+    expect(document.querySelector('.kstep-prose')?.textContent).toBe('First line\nSecond line');
+    expect(screen.getByText('Denied')).toHaveClass('kstep-outcome', 'kstep-bad');
+    expect(screen.getByText('Denied').parentElement).toHaveClass('kstep-permission');
+  });
+
+  it('keeps the latest duplicate completion and handles lost/late starts', async () => {
+    const { mergeSteps } = await import('../../lib/subagent-steps');
+    const merged = mergeSteps([
+      makeMsg('tool_complete', { toolName: 'bash', toolCallId: 't', headline: 'old' }, 1),
+      makeMsg('tool_start', { toolName: 'bash', toolCallId: 't' }, 2),
+      makeMsg('tool_complete', { toolName: 'bash', toolCallId: 't', headline: 'latest' }, 3),
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].payload).toMatchObject({ headline: 'latest' });
   });
 });

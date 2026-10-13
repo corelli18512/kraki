@@ -5,7 +5,7 @@ import type { PendingInput } from '../../lib/chat/outbox';
 import {
   attachmentsOf, contentOf, frozenCardOf, payloadOf, questionSpecOf, seqOf, type SpineItem,
 } from '../../lib/chat/spine';
-import { stringToHue } from '../../lib/color';
+import { agentBubbleColors } from '../../lib/color';
 import { Markdown, StreamingMarkdown } from './Markdown';
 import { ActionSlot, type ActionHandlers, type SlotAction } from './ActionSlot';
 import { HtmlArtifactCards, ImageAttachments } from './Attachments';
@@ -158,14 +158,15 @@ function AgentRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
   const images = attachments.filter(isImage);
   const reports = htmlArtifacts(attachments);
   const hasBody = !!text.trim();
-  const hue = stringToHue(ctx.hueSeed);
+  const colors = agentBubbleColors(ctx.hueSeed);
+  const palette = { '--k-agent-light': colors.light, '--k-agent-dark': colors.dark } as CSSProperties;
   const isQuestion = row.kind === 'spine' && !!questionSpecOf(row.item.message);
 
   if (!hasBody && !action && images.length === 0 && reports.length === 0) {
     // A live turn with nothing streamed yet: the typing indicator.
     return live ? (
       <div className="krow krow-agent" data-row-key={row.key}>
-        <div className="kbubble kbubble-agent kbubble-typing" style={{ '--hue': hue } as CSSProperties}>
+        <div className="kbubble kbubble-agent kbubble-typing" style={palette}>
           <span className="ktyping" aria-label="Agent is working"><i /><i /><i /></span>
         </div>
       </div>
@@ -176,7 +177,7 @@ function AgentRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
     <div className="krow krow-agent" data-row-key={row.key} data-question={isQuestion ? 'true' : undefined}>
       <div className="kagent-stack">
         {(hasBody || action) && (
-          <div className="kbubble kbubble-agent" style={{ '--hue': hue } as CSSProperties}>
+          <div className="kbubble kbubble-agent" style={palette}>
             {hasBody && (live ? <StreamingMarkdown text={text} /> : <Markdown text={text} />)}
             {action && (
               <div className={`kslot ${hasBody ? '' : 'kslot-alone'}`}>

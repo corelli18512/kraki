@@ -43,24 +43,26 @@
   --color-accent-900: #4c1d95;
   --color-accent-950: #2e1065;
 
-  --color-surface-primary: var(--color-white);
-  --color-surface-secondary: var(--color-slate-50);
-  --color-surface-tertiary: var(--color-slate-100);
-  --color-border-primary: var(--color-slate-200);
-  --color-text-primary: var(--color-slate-900);
-  --color-text-secondary: var(--color-slate-500);
-  --color-text-muted: var(--color-slate-400);
+  --color-surface-primary: #ffffff;
+  --color-surface-secondary: #f8fafc;
+  --color-surface-tertiary: #f1f5f9;
+  --color-border-primary: #e2e8f0;
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #64748b;
+  --color-text-muted: #94a3b8;
+  --color-text-title: #052847;
 }
 
 /* Theme toggle via class on <html> */
 .dark {
-  --color-surface-primary: var(--color-slate-950);
-  --color-surface-secondary: var(--color-slate-800);
-  --color-surface-tertiary: var(--color-slate-700);
-  --color-border-primary: var(--color-slate-600);
-  --color-text-primary: var(--color-slate-100);
-  --color-text-secondary: var(--color-slate-400);
-  --color-text-muted: var(--color-slate-500);
+  --color-surface-primary: #020617;
+  --color-surface-secondary: #1e293b;
+  --color-surface-tertiary: #334155;
+  --color-border-primary: #475569;
+  --color-text-primary: #f1f5f9;
+  --color-text-secondary: #94a3b8;
+  --color-text-muted: #64748b;
+  --color-text-title: #dbe8f4;
 }
 
 /* Keep the document itself fixed to the visual viewport. Only explicit app

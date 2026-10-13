@@ -204,11 +204,11 @@ describe('ToolActivity', () => {
   it('expands to show body when clicked', async () => {
     const user = userEvent.setup();
     renderWithRouter(
-      <ToolActivity type="complete" toolName="shell" headline="$ ls" sessionId="s1" requestPull={noopPull} />,
+      <ToolActivity type="complete" toolName="shell" headline="$ ls" args={{ command: 'ls', timeout: 30 }} sessionId="s1" requestPull={noopPull} />,
     );
     await user.click(screen.getByRole('button'));
-    // Without refs, the body just echoes the headline under "Command" label
-    expect(screen.getByText('Command')).toBeInTheDocument();
+    expect(screen.getByText('Arguments')).toBeInTheDocument();
+    expect(screen.getByText(/command: ls/)).toHaveTextContent('timeout: 30');
   });
 
   it('does not show result section without resultRef', async () => {
