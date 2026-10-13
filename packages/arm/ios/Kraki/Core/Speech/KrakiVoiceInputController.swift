@@ -316,14 +316,6 @@ enum VoiceComposerAccessPolicy {
     }
 }
 
-/// Opt-in terminal information for hold-to-text; existing onFinal clients keep
-/// their original draft-only behavior. A recovered/raw-only result must not send.
-struct VoiceInputCompletion {
-    let text: String
-    let rawText: String
-    let completed: Bool
-}
-
 @Observable
 final class KrakiVoiceInputController {
     /// How long a press waits for Kraki to reconnect before giving up.
@@ -529,7 +521,7 @@ final class KrakiVoiceInputController {
             VoiceInputError.gateway("Voice input was reset for this account. Please try again.")
                 .localizedDescription
         )
-        completion?(VoiceInputCompletion(text: recoveredText, rawText: recoveredText, completed: false))
+        completion?(VoiceInputCompletion(text: recoveredText, rawText: recoveredText, completed: false, failed: true))
         if !recoveredText.isEmpty { handler?(recoveredText) }
     }
 
@@ -792,7 +784,7 @@ final class KrakiVoiceInputController {
             let completion = completionHandler
             metrics.outcome(.departed)
             cancel()
-            completion?(VoiceInputCompletion(text: recoveredText, rawText: recoveredText, completed: false))
+            completion?(VoiceInputCompletion(text: recoveredText, rawText: recoveredText, completed: false, failed: true))
             if !recoveredText.isEmpty { handler?(recoveredText) }
         case .idle, .failed:
             break
@@ -961,8 +953,10 @@ final class KrakiVoiceInputController {
                 ? rawText : resolvedFinalText(text, gatewayRawText: gatewayRawText)
             let handler = finalHandler
             let completion = completionHandler
-            let completeRaw = gatewayRawText.map { resolvedFinalText($0, gatewayRawText: $0) } ?? rawText
             let validFinal = !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            // Without `rawText` the final is the raw transcript (see below); the
+            // last partial is only a fallback for an empty final.
+            let completeRaw = gatewayRawText.map { resolvedFinalText($0, gatewayRawText: $0) } ?? (validFinal ? finalText : rawText)
             // Gateway contract: `rawText` accompanies the final only when the
             // corrector succeeded AND changed the text. Without it the final
             // *is* the complete raw ASR transcript: an unchanged correction, or
@@ -1018,7 +1012,7 @@ final class KrakiVoiceInputController {
             failedSessionID = owner
             metrics.cause(VoiceTracker.classify(gatewayReason: reason))
             state = .failed(message)
-            completion?(VoiceInputCompletion(text: raw, rawText: raw, completed: false))
+            completion?(VoiceInputCompletion(text: raw, rawText: raw, completed: false, failed: true))
             if !recoveredText.isEmpty { handler?(recoveredText) }
         }
         guard warmConnectionDesired else { return }
@@ -1080,7 +1074,7 @@ final class KrakiVoiceInputController {
             metrics.cause("quota")
             metrics.outcome(.ended)
             state = .idle
-            completion?(VoiceInputCompletion(text: recoveredText, rawText: recoveredText, completed: false))
+            completion?(VoiceInputCompletion(text: recoveredText, rawText: recoveredText, completed: false, failed: true))
             if !recoveredText.isEmpty { handler?(recoveredText) }
             if warmConnectionDesired { scheduleReconnect(immediate: true) }
             return true
@@ -1361,7 +1355,7 @@ final class KrakiVoiceInputController {
         failedSessionID = owner
         metrics.cause(error.metricCause)
         state = .failed(error.localizedDescription)
-        completion?(VoiceInputCompletion(text: raw, rawText: raw, completed: false))
+        completion?(VoiceInputCompletion(text: raw, rawText: raw, completed: false, failed: true))
     }
 
     private func recordingCleanup(clearHandlers: Bool) {

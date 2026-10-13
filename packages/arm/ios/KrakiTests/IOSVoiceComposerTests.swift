@@ -638,3 +638,40 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
         XCTAssertEqual(insert("", "keep").0, "keep")
     }
 }
+
+/// Review group 2 (2026-10-13): Send before the first partial arrived.
+extension IOSVoiceComposerTests {
+    /// 2-09: a failure before any words arrived is not "nothing was said":
+    /// the typed draft goes back into the box instead of being sent.
+    func testFailureBeforeFirstPartialRestoresDraftInsteadOfSendingIt() async {
+        let (host, voice) = make()
+        host.sessionStore.setDraft("a", "Please also")
+        let session = await start(host, voice)
+        voice.send(attachments: nil, delivery: .prompt)
+        session.event(.failed("socket disconnected")); await settle()
+        XCTAssertTrue(host.transmitted.isEmpty, "the incomplete draft must not be sent")
+        XCTAssertTrue(host.staged.isEmpty)
+        XCTAssertEqual(host.sessionStore.drafts["a"], "Please also")
+    }
+
+    func testFailureBeforeFirstPartialWithImageKeepsAnUnsentBubble() async {
+        let (host, voice) = make()
+        let session = await start(host, voice)
+        voice.send(attachments: [ImageAttachment(type: "image", mimeType: "image/png", data: "AA==")], delivery: .prompt)
+        session.event(.failed("socket disconnected")); await settle()
+        XCTAssertTrue(host.transmitted.isEmpty, "a lone image must not be sent for a failed dictation")
+        XCTAssertEqual(host.last?.state, "failed")
+        XCTAssertEqual(host.last?.text, "[image]")
+    }
+
+    /// 2-10: a final without `rawText` is the complete transcript even when no
+    /// partial preceded it.
+    func testFinalWithoutAnyPartialIsSent() async {
+        let (host, voice) = make()
+        let session = await start(host, voice)
+        voice.send(attachments: nil, delivery: .prompt)
+        await final("run the tests", session)
+        XCTAssertEqual(host.transmitted.map(\.1), ["run the tests"])
+        XCTAssertEqual(host.last?.state, "sending")
+    }
+}

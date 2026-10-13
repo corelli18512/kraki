@@ -225,16 +225,8 @@ struct MessageInputView: View {
                 if focused && !programmaticVoiceFocus { voice.takeOver(sessionID: sessionId) }
                 programmaticVoiceFocus = false
             }
-            .onChange(of: session?.state) { _, newState in
-                // A normal prompt's local latch ends at the first authoritative
-                // session-state transition. Once active, subsequent submissions
-                // are explicit steers; once idle, they are normal prompts.
-                awaitingActive = false
-                if newState == .idle { abortPending = false }
-            }
-            .onChange(of: appState.isFullyOnline) { _, online in
-                if !online { abortPending = false }
-            }
+            .settlesComposerLatches(sessionId: sessionId, state: session?.state,
+                                    awaitingActive: $awaitingActive, abortPending: $abortPending)
             .onChange(of: selectedPhoto) { _, newItem in
                 Task { await loadPhoto(newItem) }
             }
@@ -1009,55 +1001,23 @@ struct MessageInputView: View {
 
     private func loadPhoto(_ item: PhotosPickerItem?) async {
         guard let item else { return }
-        guard let data = try? await item.loadTransferable(type: Data.self) else {
-            await MainActor.run {
-                imageAttachError = "Couldn't read that image."
-                selectedPhoto = nil
-            }
-            return
-        }
-        guard let uiImage = UIImage(data: data) else {
-            await MainActor.run {
-                imageAttachError = "That file isn't a supported image format."
-                selectedPhoto = nil
-            }
-            return
-        }
-
-        // Pixels, not points: the default renderer format uses the screen
-        // scale (3x), which turned a "1024" limit into 3072 px images.
-        // 1568 px is the long side vision models use without downscaling.
-        let maxDimension: CGFloat = 1568
-        let maxSize = 3 * 1024 * 1024
-
-        var targetImage = uiImage
-        let pixelWidth = uiImage.size.width * uiImage.scale
-        let pixelHeight = uiImage.size.height * uiImage.scale
-        if pixelWidth > maxDimension || pixelHeight > maxDimension {
-            let ratio = maxDimension / max(pixelWidth, pixelHeight)
-            let newSize = CGSize(width: (pixelWidth * ratio).rounded(), height: (pixelHeight * ratio).rounded())
-            let format = UIGraphicsImageRendererFormat.default()
-            format.scale = 1
-            let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
-            targetImage = renderer.image { _ in uiImage.draw(in: CGRect(origin: .zero, size: newSize)) }
-        }
-
-        if let compressed = targetImage.jpegData(compressionQuality: 0.8), compressed.count <= maxSize {
-            imageData = compressed; imageMimeType = "image/jpeg"
-            return
-        }
-        if let compressed = targetImage.jpegData(compressionQuality: 0.6), compressed.count <= maxSize {
-            imageData = compressed; imageMimeType = "image/jpeg"
-            return
-        }
-        // Both compression attempts still exceeded the 3 MB cap.
-        // Surface an explicit error and reset the picker so the user
-        // can pick a smaller / different image instead of sending a
-        // message with a silently missing attachment.
-        await MainActor.run {
+        let data = try? await item.loadTransferable(type: Data.self)
+        let outcome = PhotoAttachmentLoad.jpeg(from: data)
+        // A newer pick, a removal or a send since this load started wins: a
+        // late (e.g. iCloud) load must not attach to the next message.
+        guard selectedPhoto == item else { return }
+        switch outcome {
+        case .image(let jpeg):
+            imageData = jpeg; imageMimeType = "image/jpeg"
+        case .unreadable:
+            imageAttachError = "Couldn't read that image."; selectedPhoto = nil
+        case .unsupported:
+            imageAttachError = "That file isn't a supported image format."; selectedPhoto = nil
+        case .tooLarge:
+            // Reset the picker so the user can pick a smaller / different
+            // image instead of sending with a silently missing attachment.
             imageAttachError = "That image is too large to send (over 3 MB after compression). Try a smaller picture."
-            selectedPhoto = nil
-            imageData = nil
+            selectedPhoto = nil; imageData = nil
         }
     }
 }
