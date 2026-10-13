@@ -252,6 +252,16 @@ extension DeviceTrustBoundaryTests {
         pin()
         try route(signedEnvelope(message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "authentic", "state": "idle"]]]), key: signer))
         XCTAssertEqual(app.sessionStore.sessions[sid]?.title, "authentic")
+        // Forget Pairing, a forged future-dated list, then pair again: same result.
+        app.forgetPairing(computer)
+        var forged2 = message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "forged again", "state": "idle"]]])
+        forged2["timestamp"] = "2100-01-01T00:00:00.000Z"
+        try route(legacyEnvelope(forged2, src: computer))
+        XCTAssertEqual(app.sessionStore.sessions[sid]?.title, "forged again")
+        app.pinFromPairingLink(try link(identity: signer, encryption: recipient))
+        TentacleTrustStore.shared.update(computer) { $0?.paired = true }
+        try route(signedEnvelope(message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "authentic again", "state": "idle"]]]), key: signer))
+        XCTAssertEqual(app.sessionStore.sessions[sid]?.title, "authentic again")
     }
 
     #if os(iOS)

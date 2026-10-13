@@ -102,8 +102,16 @@ struct PairingSheet: View {
         .task {
             baseline = Set(onlineApps.map(\.id))
             accountAppsAtOpen = Set(appState.deviceStore.devices.values.filter { $0.role == .app }.map(\.id))
+            // Paired with this Mac's computer: get its signed trusted list
+            // before showing a code, so the baseline is exact (an app already
+            // on the account may pair without a new device id).
+            if let local = AppState.localTentacleId, appState.trustState(for: local) == .paired, trustedApps == nil {
+                appState.requestTrustedDevices(local)
+                for _ in 0..<30 where trustedApps == nil { try? await Task.sleep(for: .milliseconds(100)) }
+            } else if let local = AppState.localTentacleId {
+                appState.requestTrustedDevices(local)
+            }
             if let apps = trustedApps { trustedBaseline = Set(apps) }
-            if let local = AppState.localTentacleId { appState.requestTrustedDevices(local) }
             if previewPayload == nil { await renewLoop() }
         }
         .onChange(of: onlineApps.map(\.id).sorted()) { _, ids in
