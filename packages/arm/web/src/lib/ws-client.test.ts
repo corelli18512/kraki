@@ -516,6 +516,9 @@ describe('KrakiWSClient', () => {
       expect(session?.model).toBe('claude-4');
       expect(session?.state).toBe('active');
       expect(session?.createdAt).toBeTruthy();
+      expect(useStore.getState().sessionPreviews.get('sess-new')).toMatchObject({
+        text: 'Session created', type: 'session_created', timestamp: session?.createdAt,
+      });
     });
 
     it('routes session_ended and updates state', async () => {

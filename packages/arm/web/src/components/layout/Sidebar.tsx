@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { BotMessageSquare, Download, Gauge, MonitorCloud, Menu, Plus, Search, Settings, UserCog, X } from 'lucide-react';
+import { BotMessageSquare, Download, Gauge, MonitorCloud, Menu, Plus, Search, Settings, UserCog } from 'lucide-react';
 import { OPEN_USAGE_EVENT } from '../usage/UsagePanel';
 import { useUsageShortcut } from '../../lib/usage-shortcut';
 import { useStore } from '../../hooks/useStore';
@@ -16,6 +16,7 @@ import { ProfileBar } from './ProfileBar';
 import { KrakiLogo } from '../KrakiLogo';
 import { requestComposerFocus } from '../sessions/NewSessionComposer';
 import { desktop } from '../../lib/desktop';
+import { sessionTimestamp } from '../../lib/chat/session-card';
 import './sidebar.css';
 
 function Brand() {
@@ -36,18 +37,23 @@ function useSortedSessions(query: string) {
     return [...sessions.values()]
       .filter((s) => {
         if (!q) return true;
-        const hay = `${s.title ?? ''} ${s.autoTitle ?? ''} ${s.deviceName ?? ''} ${previews.get(s.id)?.text ?? ''}`.toLowerCase();
+        const hay = `${s.title ?? ''} ${s.autoTitle ?? ''} ${s.deviceName ?? ''} ${s.model ?? ''} ${previews.get(s.id)?.text ?? ''}`.toLowerCase();
         return hay.includes(q);
       })
+      .map((session) => ({
+        session,
+        timestamp: Date.parse(sessionTimestamp(previews.get(session.id)?.timestamp, session.createdAt)) || 0,
+        createdAt: Date.parse(session.createdAt ?? '') || 0,
+      }))
       .sort((a, b) => {
-        const pa = pinned.has(a.id) ? 0 : 1;
-        const pb = pinned.has(b.id) ? 0 : 1;
+        const pa = pinned.has(a.session.id) ? 0 : 1;
+        const pb = pinned.has(b.session.id) ? 0 : 1;
         if (pa !== pb) return pa - pb;
-        const ta = previews.get(a.id)?.timestamp ?? '';
-        const tb = previews.get(b.id)?.timestamp ?? '';
-        if (ta !== tb) return tb.localeCompare(ta);
-        return a.id.localeCompare(b.id);
-      });
+        if (a.timestamp !== b.timestamp) return b.timestamp - a.timestamp;
+        if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
+        return a.session.id.localeCompare(b.session.id);
+      })
+      .map(({ session }) => session);
   }, [sessions, pinned, previews, query]);
 }
 
@@ -81,6 +87,14 @@ export function Sidebar() {
   const [importOpen, setImportOpen] = useState(false);
   const [plusMenu, setPlusMenu] = useState(false);
   const [appMenu, setAppMenu] = useState(false);
+  useEffect(() => {
+    if (!appMenu) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAppMenu(false);
+    };
+    window.addEventListener('keydown', dismiss);
+    return () => window.removeEventListener('keydown', dismiss);
+  }, [appMenu]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Tray › Settings… (Kraki for Windows).
   useEffect(() => desktop?.onOpen?.('settings', () => { if (narrow) setTab('settings'); else setSettingsOpen(true); }), [narrow]);
@@ -146,7 +160,7 @@ export function Sidebar() {
             <button type="button" className="ksb-icon" aria-label="App menu" aria-expanded={appMenu} onClick={() => setAppMenu((v) => !v)}><Menu strokeWidth={1.8} /></button>
             {appMenu && <>
               <div className="ksb-menu-dismiss" onClick={() => setAppMenu(false)} />
-              <div className="ksb-plus-menu ksb-app-menu" role="menu" onKeyDown={(e) => { if (e.key === 'Escape') setAppMenu(false); }}>
+              <div className="ksb-plus-menu ksb-app-menu" role="menu">
                 <button type="button" role="menuitem" onClick={() => { setAppMenu(false); navigate('/devices'); }}><MonitorCloud /> Devices</button>
                 <button type="button" role="menuitem" onClick={() => { setAppMenu(false); window.dispatchEvent(new Event(OPEN_USAGE_EVENT)); }} title={`Account Usage${usageShortcutEnabled ? ` (hold ${usageShortcut})` : ''}`} data-testid="sidebar-usage"><Gauge /> Account Usage</button>
                 <button type="button" role="menuitem" onClick={() => { setAppMenu(false); setSettingsOpen(true); }}><Settings /> Settings…</button>
@@ -157,7 +171,6 @@ export function Sidebar() {
           <label className="ksb-search">
             <Search aria-hidden />
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" aria-label="Search sessions" />
-            {query && <button type="button" aria-label="Clear search" onClick={() => setQuery('')}><X /></button>}
           </label>
           <div className="ksb-plus-wrap">
             <button

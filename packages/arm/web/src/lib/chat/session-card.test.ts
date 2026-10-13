@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sessionTimeLabel, sessionPendingPreview, type SessionPendingInput } from './session-card';
+import { sessionTimeLabel, sessionTimestamp, sessionPendingPreview, type SessionPendingInput } from './session-card';
 
 const pending = (values: Partial<SessionPendingInput> = {}): SessionPendingInput => ({
   clientId: 'a', sessionId: 's', text: 'hello\n world', timestamp: '2026-06-10T09:00:00Z', order: 1, state: 'sending', ...values,
@@ -42,5 +42,16 @@ describe('sessionPendingPreview (SessionPendingPreview.select)', () => {
   it('is ready for native unconfirmed and correcting states without treating local correction as transport', () => {
     expect(sessionPendingPreview([pending({ state: 'unconfirmed' })], 's', false)?.text).toBe('Awaiting confirmation · hello world');
     expect(sessionPendingPreview([pending({ state: 'correcting' })], 's', false)?.status).toBe('correcting');
+  });
+});
+
+
+describe('sessionTimestamp (native effective preview date)', () => {
+  const created = '2026-06-10T09:00:00Z';
+  it('keeps a valid preview and falls back on missing, empty or invalid previews', () => {
+    expect(sessionTimestamp('2026-06-11T09:00:00+00:00', created)).toBe('2026-06-11T09:00:00+00:00');
+    for (const preview of [undefined, '', 'invalid']) expect(sessionTimestamp(preview, created)).toBe(created);
+    expect(sessionTimestamp(undefined, 'invalid')).toBe('');
+    expect(sessionTimestamp()).toBe('');
   });
 });

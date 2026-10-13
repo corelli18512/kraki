@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
-import { collapseWhitespace, resolveCardStatus, sessionTimeLabel, STATUS_LABEL, type SessionCardStatus, sessionPendingPreview, DELIVERY_LABEL, type SessionDeliveryStatus } from '../../lib/chat/session-card';
+import { collapseWhitespace, resolveCardStatus, sessionTimeLabel, sessionTimestamp, STATUS_LABEL, type SessionCardStatus, sessionPendingPreview, DELIVERY_LABEL, type SessionDeliveryStatus } from '../../lib/chat/session-card';
 import { SessionCardMetadata } from './SessionCardMetadata';
 import { AgentAvatar } from '../common/AgentAvatar';
 import { SwipeableCard } from './SwipeableCard';
@@ -67,7 +67,7 @@ export const SessionRow = memo(function SessionRow({
   const status = pending ? 'delivery' : resolveCardStatus(session.state, preview?.type, device?.online, hasDraft, compacting);
   const title = sessionDisplayTitle(session);
   const machine = session.deviceName || device?.name;
-  const time = sessionTimeLabel(pending?.timestamp || preview?.timestamp || session.createdAt || '');
+  const time = sessionTimeLabel(sessionTimestamp(pending?.timestamp || preview?.timestamp, session.createdAt));
 
   const togglePin = () => wsClient.pinSession(session.id, !pinned);
   const toggleRead = () => (unread ? wsClient.markRead(session.id) : wsClient.markUnread(session.id));

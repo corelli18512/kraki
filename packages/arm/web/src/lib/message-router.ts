@@ -222,7 +222,7 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
           readSeq: msg.payload.lastSeq ?? 0,
         });
         // Set an initial preview so new sessions sort to the top of the list
-        updatePreview(sid, { text: 'New session', type: 'session_created', timestamp: msg.timestamp ?? new Date().toISOString() }, false);
+        updatePreview(sid, { text: 'Session created', type: 'session_created', timestamp: msg.timestamp ?? new Date().toISOString() }, false);
       }
       // Clear pending state — session is now real
       store.removePendingSession(sid);

@@ -42,7 +42,9 @@
 
 .ksb-scroll { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
 .ksb-list { display: flex; flex-direction: column; }
-.ksb.is-wide .ksb-list { gap: 0; padding: 4px 0; }
+/* A classic scrollbar uses the trailing 6px inset, not the cards' width. */
+.ksb.is-wide .ksb-list { width: 280px; gap: 0; padding: 4px 0; }
+.ksb.is-wide .ksb-scroll { overflow-x: hidden; }
 
 .ksb-top { display: flex; align-items: center; gap: 8px; height: 40px; flex-shrink: 0; padding: 0 10px 0 4px; }
 .ksb-search {
@@ -61,7 +63,6 @@
 .ksb-search svg { width: 11px; height: 11px; flex-shrink: 0; }
 .ksb-search input { min-width: 0; flex: 1; border: none; outline: none; background: none; color: var(--s-text); font: 11px var(--s-font); }
 .ksb-search input::placeholder { color: var(--s-text-2); }
-.ksb-search button { display: flex; border: none; background: none; color: var(--s-text-3); cursor: pointer; }
 .ksb-icon {
   display: flex;
   width: 26px;
