@@ -26,7 +26,7 @@ import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } 
 import { linkIntoShadow } from './shadow-link.js';
 import { cloneTree } from '../fs-clone.js';
 import { handleSDKMessage } from './claude-messages.js';
-import { makeCanUseToolHandler, emitQuestionCard, broadcastPendingResolutions } from './claude-permissions.js';
+import { makeCanUseToolHandler, emitQuestionCard, broadcastPendingResolutions, releasePendingForMode } from './claude-permissions.js';
 import { resetSubagentPhase } from './claude-subagents.js';
 import { loadClaudeSettingsEnv, claudeConfigSource, secureStorageEnv, isClaudeLoggedOut, aliasEnvKey } from './claude-env.js';
 import { getErrorMessage } from './claude-errors.js';
@@ -815,6 +815,7 @@ export class ClaudeAdapter extends AgentAdapter {
         logger.warn({ err, sessionId }, 'Failed to set SDK permission mode');
       });
     }
+    releasePendingForMode(this, sessionId, mode);
 
     logger.debug({ sessionId, mode }, 'Session permission mode changed');
   }

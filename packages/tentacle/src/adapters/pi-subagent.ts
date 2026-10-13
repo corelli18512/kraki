@@ -126,6 +126,29 @@ function usageInfo(row: Record<string, unknown>): Partial<SubagentInfo> {
   };
 }
 
+/** Blocks of a pi-subagents grouped completion (`formatGroupedCompletion`):
+ *  a header naming every run, then one numbered block per run. Null for a
+ *  single-run notice. A block that cannot be located reports the whole text. */
+function groupedCompletionBlocks(content: string): Array<{ agent?: string; text: string }> | null {
+  const lines = content.split('\n');
+  const header = /^Background tasks completed \((\d+)\):(.*)$/.exec(lines[0] ?? '');
+  if (!header) return null;
+  const agents = [...header[2].matchAll(/\*\*([^*]+)\*\*/g)].map((m) => m[1]);
+  const count = Math.max(Number(header[1]) || 0, agents.length);
+  const starts: number[] = [];
+  let from = 1;
+  for (let i = 0; i < count; i++) {
+    const at = lines.findIndex((line, j) => j >= from && line.startsWith(`${i + 1}. ${agents[i] ?? ''}`));
+    if (at < 0) break;
+    starts.push(at);
+    from = at + 1;
+  }
+  return Array.from({ length: count }, (_, i) => ({
+    agent: agents[i],
+    text: starts.length === count ? lines.slice(starts[i], starts[i + 1] ?? lines.length).join('\n').trim() : content,
+  }));
+}
+
 export class PiSubagentTracker {
   /** Reads a child's saved output (the file a notification points at). */
   constructor(private readonly readOutput?: (path: string) => string | undefined) {}
@@ -135,6 +158,8 @@ export class PiSubagentTracker {
   private asyncRuns = new Map<string, string>();
   /** Background runs already notified (the snapshot may still list them). */
   private finishedRuns = new Set<string>();
+  /** Background runs any snapshot has listed. */
+  private listedRuns = new Set<string>();
   /** Latest host snapshot of background runs (pi-subagents). */
   private snapshot: PiAsyncRun[] | null = null;
 
@@ -192,6 +217,7 @@ export class PiSubagentTracker {
     const runs = (payload as { runs?: unknown } | undefined)?.runs;
     if (!Array.isArray(runs)) return [];
     this.snapshot = runs.map((r) => ({ id: str((r as Record<string, unknown>).id), state: str((r as Record<string, unknown>).state) }));
+    for (const run of this.snapshot) this.listedRuns.add(run.id);
     const emits: PiSubagentEmit[] = [];
     for (const run of runs as Array<Record<string, unknown>>) {
       const toolCallId = this.asyncRuns.get(str(run.id));
@@ -230,31 +256,57 @@ export class PiSubagentTracker {
   }
 
   /** `subagent-notify` (background run finished). Completes its dispatch with
-   *  the notification text as the report. */
+   *  the notification text as the report. pi-subagents batches completions
+   *  that land close together into one grouped notice: every run in it is
+   *  completed, each with its own block as the report. */
   onAsyncNotify(content: string): PiSubagentEmit[] {
-    let toolCallId: string | undefined;
-    for (const [runId, id] of this.asyncRuns) {
-      if (content.includes(runId)) { toolCallId = id; break; }
+    const blocks = groupedCompletionBlocks(content);
+    if (!blocks) {
+      const toolCallId = this.notifiedDispatch(content, new Set());
+      const failed = /\b(failed|error)\b/i.test(content.split('\n')[0] ?? '');
+      return toolCallId ? this.completeAsync(toolCallId, content, failed) : [];
     }
-    // A plain single-run notification does not name the run: take the oldest
-    // background dispatch still open.
-    if (!toolCallId) {
-      for (const id of this.asyncRuns.values()) {
-        if (!this.dispatches.get(id)?.done) { toolCallId = id; break; }
-      }
+    // A grouped notice carries successful completions only (others flush alone).
+    const emits: PiSubagentEmit[] = [];
+    const taken = new Set<string>();
+    for (const block of blocks) {
+      const toolCallId = this.notifiedDispatch(block.text, taken, block.agent);
+      if (!toolCallId) continue;
+      taken.add(toolCallId);
+      emits.push(...this.completeAsync(toolCallId, block.text, false));
     }
-    const d = toolCallId ? this.dispatches.get(toolCallId) : undefined;
-    if (!d || d.done || !toolCallId) return [];
+    return emits;
+  }
+
+  /** The open background dispatch a notification (or one block of a grouped
+   *  one) reports: the run it names, else the oldest open one for its agent,
+   *  else the oldest open one (a plain single-run notice does not name it). */
+  private notifiedDispatch(text: string, taken: Set<string>, agent?: string): string | undefined {
+    const open = [...this.asyncRuns].filter(([, id]) => {
+      const d = this.dispatches.get(id);
+      return !!d && !d.done && !taken.has(id);
+    });
+    const forAgent = ([, id]: [string, string]) => {
+      const d = this.dispatches.get(id);
+      return !!d && this.dispatchInfo(d, 'running').name === agent;
+    };
+    return open.find(([runId]) => text.includes(runId))?.[1]
+      ?? (agent ? open.find(forAgent)?.[1] : undefined)
+      ?? open[0]?.[1];
+  }
+
+  private completeAsync(toolCallId: string, report: string, failed: boolean): PiSubagentEmit[] {
+    const d = this.dispatches.get(toolCallId);
+    if (!d || d.done) return [];
     d.done = true;
     if (d.asyncRunId) { this.asyncRuns.delete(d.asyncRunId); this.finishedRuns.add(d.asyncRunId); }
-    const failed = /\b(failed|error)\b/i.test(content.split('\n')[0] ?? '');
     const emits: PiSubagentEmit[] = [];
     for (const child of d.children) {
       if (!child.synthetic || child.info.status !== 'running') continue;
       child.info = { ...child.info, status: failed ? 'failed' : 'completed' };
       emits.push({ kind: 'complete', toolCallId: child.id, toolName: PI_SUBAGENT_TOOL, result: '', success: !failed, parentToolCallId: toolCallId, subagent: child.info });
     }
-    emits.push({ kind: 'complete', toolCallId, toolName: PI_SUBAGENT_TOOL, result: content, success: !failed, subagent: this.dispatchInfo(d, failed ? 'failed' : 'completed') });
+    emits.push({ kind: 'complete', toolCallId, toolName: PI_SUBAGENT_TOOL, result: report, success: !failed, subagent: this.dispatchInfo(d, failed ? 'failed' : 'completed') });
     this.dispatches.delete(toolCallId);
     return emits;
   }
@@ -285,10 +337,11 @@ export class PiSubagentTracker {
   activeAsyncRuns(): number {
     if (this.snapshot) {
       const live = this.snapshot.filter((r) => !isTerminalRunState(r.state) && !this.finishedRuns.has(r.id)).length;
-      // A launch not yet listed in the snapshot is still pending.
+      // A launch not yet listed in the snapshot is still pending; one that was
+      // listed and has left the snapshot is finished (its notice may be late).
       let unlisted = 0;
       for (const [runId, id] of this.asyncRuns) {
-        if (!this.dispatches.get(id)?.done && !this.snapshot.some((r) => r.id === runId)) unlisted++;
+        if (!this.dispatches.get(id)?.done && !this.listedRuns.has(runId)) unlisted++;
       }
       return live + unlisted;
     }
@@ -302,10 +355,33 @@ export class PiSubagentTracker {
     return [...this.asyncRuns.entries()].filter(([, id]) => !this.dispatches.get(id)?.done).map(([runId]) => runId);
   }
 
+  /** Background runs that will never report to this session (the user stopped
+   *  them, or the pi process that owned them is gone): close their steps as
+   *  stopped and stop counting them as active. */
+  retirePending(): PiSubagentEmit[] {
+    const emits: PiSubagentEmit[] = [];
+    for (const [runId, toolCallId] of this.asyncRuns) {
+      this.finishedRuns.add(runId);
+      const d = this.dispatches.get(toolCallId);
+      if (!d || d.done) continue;
+      d.done = true;
+      for (const child of d.children) {
+        if (!child.synthetic || child.info.status !== 'running') continue;
+        child.info = { ...child.info, status: 'stopped' };
+        emits.push({ kind: 'complete', toolCallId: child.id, toolName: PI_SUBAGENT_TOOL, result: '', success: false, parentToolCallId: toolCallId, subagent: child.info });
+      }
+      emits.push({ kind: 'complete', toolCallId, toolName: PI_SUBAGENT_TOOL, result: '', success: false, subagent: this.dispatchInfo(d, 'stopped') });
+      this.dispatches.delete(toolCallId);
+    }
+    this.asyncRuns.clear();
+    return emits;
+  }
+
   reset(): void {
     this.dispatches.clear();
     this.asyncRuns.clear();
     this.finishedRuns.clear();
+    this.listedRuns.clear();
     this.snapshot = null;
   }
 

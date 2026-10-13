@@ -117,4 +117,117 @@ describe('pi background subagents', () => {
     expect(t.of('onIdle')).toHaveLength(1);
     expect(t.of('onToolComplete')[0]).toMatchObject({ toolCallId: 'D', subagent: { name: 'scout', status: 'completed' } });
   });
+
+  // pi-subagents 0.76.1 batches completions landing within ~1s into one
+  // notice (notify.js formatGroupedCompletion); this is its exact output.
+  const grouped = [
+    'Background tasks completed (2): **scout**, **reviewer**',
+    '',
+    '1. scout',
+    'src/a.ts: purple',
+    '',
+    '2. reviewer',
+    'looks good',
+  ].join('\n');
+
+  const launchAs = async (t: ReturnType<typeof setup>, id: string, runId: string, agent: string) => {
+    await t.emit({ type: 'tool_execution_start', toolCallId: id, toolName: 'subagent', args: { agent, task: 'T', async: true } });
+    await t.emit({ type: 'tool_execution_end', toolCallId: id, toolName: 'subagent', isError: false, result: {
+      content: [{ type: 'text', text: `Async: ${agent} [${runId}]` }], details: { runId },
+    } });
+  };
+
+  const nextTurn = async (t: ReturnType<typeof setup>, turnId: string) => {
+    t.adapter.setTurnIdentity(t.sid, turnId);
+    t.session.turn.beginTurn();
+    await t.emit({ type: 'agent_start' });
+    await t.assistant('next answer');
+    await t.settle();
+  };
+
+  it('a grouped completion finishes every run in it, and later turns are not held', async () => {
+    const t = setup();
+    await t.emit({ type: 'agent_start' });
+    await launchAs(t, 'D1', 'run-1', 'scout');
+    await launchAs(t, 'D2', 'run-2', 'reviewer');
+    await t.assistant('started both');
+    await t.settle();
+    await t.snapshot([{ id: 'run-1', state: 'running' }, { id: 'run-2', state: 'running' }]);
+    await t.notify(grouped);
+    // The widget clears once no background run remains.
+    await t.emit({ type: 'extension_ui_request', id: 'w-clear', method: 'setWidget', widgetKey: 'subagent-async', widgetLines: [] });
+    await t.emit({ type: 'agent_start' });
+    await t.assistant('both done');
+    await t.settle();
+    expect(t.of('onIdle')).toEqual([{ turnId: 'turn-1' }]);
+    const done = t.of('onToolComplete') as Array<{ toolCallId: string; result: string; subagent?: { status: string } }>;
+    expect(done.map((d) => [d.toolCallId, d.result, d.subagent?.status])).toEqual([
+      ['D1', '1. scout\nsrc/a.ts: purple', 'completed'],
+      ['D2', '2. reviewer\nlooks good', 'completed'],
+    ]);
+
+    await nextTurn(t, 'turn-2');
+    expect(t.of('onIdle')).toEqual([{ turnId: 'turn-1' }, { turnId: 'turn-2' }]);
+  });
+
+  it('a run that was listed and then left the snapshot no longer holds turns', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    await t.emit({ type: 'agent_start' });
+    await launchAs(t, 'D1', 'run-1', 'scout');
+    await launchAs(t, 'D2', 'run-2', 'reviewer');
+    await t.settle();
+    await t.snapshot([{ id: 'run-1', state: 'running' }, { id: 'run-2', state: 'running' }]);
+    // Only one notice ever arrives; then the widget clears.
+    await t.notify('Background task completed: **scout**\n\nfound it');
+    await t.emit({ type: 'extension_ui_request', id: 'w-clear', method: 'setWidget', widgetKey: 'subagent-async', widgetLines: [] });
+    vi.advanceTimersByTime(PiAdapter.SUBAGENT_CONTINUATION_GRACE_MS + 1);
+    expect(t.of('onIdle')).toEqual([{ turnId: 'turn-1' }]);
+    await nextTurn(t, 'turn-2');
+    expect(t.of('onIdle')).toEqual([{ turnId: 'turn-1' }, { turnId: 'turn-2' }]);
+  });
+
+  it('the hold settles when background runs report nothing for too long', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    await t.emit({ type: 'agent_start' });
+    await t.launch('D', 'run-1');
+    await t.settle();
+    await t.snapshot([{ id: 'run-1', state: 'running' }]);
+    vi.advanceTimersByTime(PiAdapter.SUBAGENT_HOLD_IDLE_MS - 1);
+    // Activity restarts the bound.
+    await t.snapshot([{ id: 'run-1', state: 'running' }]);
+    vi.advanceTimersByTime(PiAdapter.SUBAGENT_HOLD_IDLE_MS - 1);
+    expect(t.of('onIdle')).toHaveLength(0);
+    vi.advanceTimersByTime(2);
+    expect(t.of('onIdle')).toEqual([{ turnId: 'turn-1' }]);
+    expect(t.of('onToolComplete')).toEqual([expect.objectContaining({ toolCallId: 'D', success: false, subagent: expect.objectContaining({ status: 'stopped' }) })]);
+    await nextTurn(t, 'turn-2');
+    expect(t.of('onIdle')).toHaveLength(2);
+  });
+
+  it('after Stop, the stopped runs do not hold the next turn', async () => {
+    const t = setup();
+    await t.emit({ type: 'agent_start' });
+    await t.launch('D', 'run-1');
+    await t.settle();
+    await t.adapter.abortSession(t.sid);
+    expect(t.adapter.subagentTracker(t.sid).activeAsyncRuns()).toBe(0);
+    await nextTurn(t, 'turn-2');
+    expect(t.of('onIdle')).toEqual([{ turnId: 'turn-2' }]);
+  });
+
+  it('a pi process exit retires its background runs: the next turn is not held', async () => {
+    const t = setup();
+    await t.emit({ type: 'agent_start' });
+    await t.launch('D', 'run-1');
+    await t.settle();
+    Object.assign(t.proc, { crashReason: () => undefined });
+    (t.adapter as unknown as { handleProcessExit: (id: string, s: unknown, code: number) => void }).handleProcessExit(t.sid, t.session, 1);
+    expect(t.of('onIdle')).toEqual([{ turnId: 'turn-1' }]);
+    expect(t.session.awaitingSubagents).toBe(false);
+    expect(t.adapter.subagentTracker(t.sid).activeAsyncRuns()).toBe(0);
+    await nextTurn(t, 'turn-2');
+    expect(t.of('onIdle')).toEqual([{ turnId: 'turn-1' }, { turnId: 'turn-2' }]);
+  });
 });

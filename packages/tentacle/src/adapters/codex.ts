@@ -37,13 +37,13 @@ import { CodexRpcProcess, type RpcNotification } from './codex-rpc.js';
 import { getConfigDir } from '../config.js';
 import { showImageTool } from '../mcp/tools/show-image.js';
 import { TurnTracker } from './turn-tracker.js';
-import { KRAKI_MODES_PROMPT, modeChangeSignal } from './permission-policy.js';
+import { DELEGATE_ANSWER, KRAKI_MODES_PROMPT, modeChangeSignal } from './permission-policy.js';
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 import { tmpdir } from 'node:os';
 import { handleNotification } from './codex-notifications.js';
 import { handleServerRequest, emitNativeQuestion } from './codex-requests.js';
 import { str } from './codex-items.js';
-import { logger, type Mode, DEFAULT_MODE, KRAKI_EFFORTS, mapCodexModels, makeId, errMessage, type PendingPermission, type QueuedInput, type CodexSession, type SessionSidecar, type CodexAdapterOptions, type CodexChildThread } from './codex-session.js';
+import { logger, codexShouldAutoApprove, type Mode, DEFAULT_MODE, KRAKI_EFFORTS, mapCodexModels, makeId, errMessage, type PendingPermission, type QueuedInput, type CodexSession, type SessionSidecar, type CodexAdapterOptions, type CodexChildThread } from './codex-session.js';
 export { unwrapShellCommand } from './codex-items.js';
 export { codexShouldAutoApprove, mapCodexModels, type CodexAdapterOptions } from './codex-session.js';
 
@@ -163,21 +163,35 @@ export class CodexAdapter extends AgentAdapter {
     };
     rpc.onExit = (info) => this.handleServerExit(rpc, info);
     rpc.start();
-    this.rpc = rpc;
-    await rpc.request('initialize', {
-      clientInfo: { name: 'kraki', title: 'Kraki', version: '1' },
-      // Required for client-hosted dynamic tools (ask_user / show_image).
-      capabilities: { experimentalApi: true },
-    }, 30_000);
+    try {
+      await rpc.request('initialize', {
+        clientInfo: { name: 'kraki', title: 'Kraki', version: '1' },
+        // Required for client-hosted dynamic tools (ask_user / show_image).
+        capabilities: { experimentalApi: true },
+      }, 30_000);
+    } catch (err) {
+      if (rpc.alive) await rpc.stop().catch(() => {});
+      throw err;
+    }
     rpc.notify('initialized');
+    // Published only after the handshake: a concurrent caller must never send
+    // to a server that is not initialized yet.
+    this.rpc = rpc;
   }
+
+  /** Spawn in progress; concurrent callers share it. */
+  private serverStarting: Promise<void> | null = null;
 
   private async ensureServer(): Promise<CodexRpcProcess> {
     if (this.rpc?.alive) return this.rpc;
     if (this.stopping) throw new Error('Codex adapter is stopping');
-    logger.warn('codex app-server not running — respawning');
-    await this.spawnServer();
-    return this.rpc!;
+    if (!this.serverStarting) {
+      logger.warn('codex app-server not running — respawning');
+      this.serverStarting = this.spawnServer().finally(() => { this.serverStarting = null; });
+    }
+    await this.serverStarting;
+    if (!this.rpc?.alive) throw new Error('codex app-server exited during startup');
+    return this.rpc;
   }
 
   private handleServerExit(rpc: CodexRpcProcess, info: { code: number | null; signal: NodeJS.Signals | null; stderrTail: string }): void {
@@ -219,6 +233,7 @@ export class CodexAdapter extends AgentAdapter {
       mode: DEFAULT_MODE,
       starting: false,
       abortPending: false,
+      startGeneration: 0,
       settledTurns: [],
       turnCommandItems: new Set(),
       turn: new TurnTracker(this, sessionId),
@@ -372,6 +387,20 @@ export class CodexAdapter extends AgentAdapter {
     return s.turn.event();
   }
 
+  /** An image attachment's bytes: inline, or (current apps) a content_ref
+   *  into the AttachmentStore. Null for anything that is not an image. */
+  private resolveImage(s: CodexSession, att: Attachment): { bytes: Buffer; mime: string } | null {
+    let bytes: Buffer | null = null;
+    let mime = att.mimeType;
+    if (att.type === 'image') {
+      bytes = Buffer.from(att.data, 'base64');
+    } else if (att.type === 'content_ref' && this.opts.attachmentStore) {
+      const hit = this.opts.attachmentStore.read(s.sessionId, att.id);
+      if (hit) { bytes = hit.bytes; mime = hit.meta.mimeType ?? mime; }
+    }
+    return bytes && mime.startsWith('image/') ? { bytes, mime } : null;
+  }
+
   private buildInput(s: CodexSession, text: string, attachments?: Attachment[]): unknown[] {
     const input: unknown[] = [];
     if (s.modeSignal) {
@@ -380,15 +409,9 @@ export class CodexAdapter extends AgentAdapter {
     }
     if (text) input.push({ type: 'text', text, text_elements: [] });
     for (const att of attachments ?? []) {
-      let bytes: Buffer | null = null;
-      let mime = att.mimeType;
-      if (att.type === 'image') {
-        bytes = Buffer.from(att.data, 'base64');
-      } else if (att.type === 'content_ref' && this.opts.attachmentStore) {
-        const hit = this.opts.attachmentStore.read(s.sessionId, att.id);
-        if (hit) { bytes = hit.bytes; mime = hit.meta.mimeType ?? mime; }
-      }
-      if (!bytes || !mime.startsWith('image/')) continue;
+      const image = this.resolveImage(s, att);
+      if (!image) continue;
+      const { bytes, mime } = image;
       const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : mime === 'image/gif' ? 'gif' : 'jpg';
       const dir = join(this.storeDir(s.sessionId), 'codex-inputs');
       mkdirSync(dir, { recursive: true });
@@ -436,6 +459,7 @@ export class CodexAdapter extends AgentAdapter {
   }
 
   private async startTurn(s: CodexSession, input: QueuedInput): Promise<void> {
+    const generation = ++s.startGeneration;
     s.starting = true;
     s.turnCommandItems = new Set();
     s.turn.beginTurn();
@@ -450,9 +474,14 @@ export class CodexAdapter extends AgentAdapter {
         ...(s.effort && { effort: s.effort }),
         approvalPolicy: 'untrusted',
       });
+      // This turn was already finalized (app-server exit / instant failure)
+      // and the next queued turn owns the session now.
+      if (s.startGeneration !== generation) return;
       // turn/completed may already have landed for an instantly-failing turn.
       if (!s.turn.isSettled && res?.turn?.id) s.activeTurnId = res.turn.id;
     } catch (err) {
+      // Already finalized and reported (e.g. the app-server exited mid-start).
+      if (s.startGeneration !== generation) return;
       s.starting = false;
       s.abortPending = false;
       s.activeTurnId = undefined;
@@ -499,15 +528,22 @@ export class CodexAdapter extends AgentAdapter {
     const continuesSameTurn = !!next?.relayTurnId && next.relayTurnId === ev.turnId && !s.turn.isAborted;
     s.turn.finish({ error, idle: !continuesSameTurn });
     this.onFlushComplete?.(s.sessionId);
-    if (next) {
-      this.startTurn(s, next).catch((err) => {
-        const turn = next.relayTurnId ? { turnId: next.relayTurnId } : {};
-        this.onError?.(s.sessionId, { message: errMessage(err), ...turn });
-        // The relay waits for this turn's idle; without it the session would
-        // stay "running" forever.
-        if (next.relayTurnId) this.onIdle?.(s.sessionId, turn); else this.onIdle?.(s.sessionId);
-      });
-    }
+    if (next) this.startQueued(s, next);
+  }
+
+  /** Start a queued input; if it cannot start, report it and move on to the
+   *  rest of the queue (it would otherwise wait for an unrelated later turn). */
+  private startQueued(s: CodexSession, next: QueuedInput): void {
+    this.startTurn(s, next).catch((err) => {
+      const turn = next.relayTurnId ? { turnId: next.relayTurnId } : {};
+      this.onError?.(s.sessionId, { message: errMessage(err), ...turn });
+      // The relay waits for this turn's idle; without it the session would
+      // stay "running" forever.
+      if (next.relayTurnId) this.onIdle?.(s.sessionId, turn); else this.onIdle?.(s.sessionId);
+      if (s.activeTurnId || s.starting || this.sessions.get(s.sessionId) !== s) return;
+      const following = s.queue.shift();
+      if (following) this.startQueued(s, following);
+    });
   }
 
   /** A tool / question / subagent follows: prose before it was narration. */
@@ -586,6 +622,31 @@ export class CodexAdapter extends AgentAdapter {
     if (!s) return;
     if (s.mode !== mode) s.modeSignal = mode;
     s.mode = mode;
+    this.releasePendingForMode(s);
+  }
+
+  /** Entering auto/delegate approves the permissions already waiting (as the
+   *  new mode would have); delegate also answers the open questions. */
+  private releasePendingForMode(s: CodexSession): void {
+    if ((s.mode !== 'auto' && s.mode !== 'delegate') || !this.rpc?.alive) return;
+    for (const [id, p] of s.pendingPermissions) {
+      if (!codexShouldAutoApprove(s.mode, p.toolKind)) continue;
+      this.answerPermission(p, true);
+      s.pendingPermissions.delete(id);
+      this.onPermissionAutoResolved?.(s.sessionId, id, 'approved');
+    }
+    if (s.mode !== 'delegate') return;
+    for (const [id, q] of s.pendingQuestions) {
+      if (q.source === 'ask_user') {
+        this.rpc.respond(q.rpcId, { contentItems: [{ type: 'inputText', text: DELEGATE_ANSWER }], success: true });
+      } else {
+        const answers = { ...(q.collected ?? {}) };
+        for (const item of (q.questions ?? []).slice(q.index ?? 0)) answers[item.id] = { answers: [DELEGATE_ANSWER] };
+        this.rpc.respond(q.rpcId, { answers });
+      }
+      s.pendingQuestions.delete(id);
+      this.onQuestionAutoResolved?.(s.sessionId, id);
+    }
   }
 
   async setSessionModel(sessionId: string, model: string, reasoningEffort?: string): Promise<void> {
@@ -710,14 +771,14 @@ export class CodexAdapter extends AgentAdapter {
     s.pendingQuestions.delete(questionId);
 
     const value = typeof answer === 'string' ? { text: answer } : answer;
-    const images = (value.attachments ?? []).filter((a): a is Extract<Attachment, { type: 'image' }> => a.type === 'image');
+    const images = (value.attachments ?? []).flatMap((a) => this.resolveImage(s, a) ?? []);
     const text = value.text || (images.length ? 'The user answered with image attachment(s).' : '');
 
     if (pending.source === 'ask_user') {
       this.rpc.respond(pending.rpcId, {
         contentItems: [
           { type: 'inputText', text },
-          ...images.map((img) => ({ type: 'inputImage', imageUrl: `data:${img.mimeType};base64,${img.data}` })),
+          ...images.map((img) => ({ type: 'inputImage', imageUrl: `data:${img.mime};base64,${img.bytes.toString('base64')}` })),
         ],
         success: true,
       });

@@ -8,6 +8,9 @@ import { createInterface } from 'node:readline';
 
 const LOG = process.env.FAKE_CODEX_LOG;
 const LOGGED_OUT = process.env.FAKE_CODEX_LOGGED_OUT === '1';
+// Slow handshake; like the real server, requests before it finish are refused.
+const INIT_DELAY_MS = Number(process.env.FAKE_CODEX_INIT_DELAY_MS ?? 0);
+let initialized = false;
 let seq = 0;
 const uid = (p) => `${p}-${process.pid}-${++seq}`;
 const threads = new Map(); // threadId -> { activeTurn }
@@ -40,8 +43,11 @@ rl.on('line', (line) => {
 });
 
 async function handle({ id, method, params }) {
+  if (method !== 'initialize' && !initialized) return send({ id, error: { code: -32600, message: 'Not initialized' } });
   switch (method) {
     case 'initialize':
+      if (INIT_DELAY_MS) await sleep(INIT_DELAY_MS);
+      initialized = true;
       return send({ id, result: { userAgent: 'fake/0.157.1', codexHome: '/tmp/fake', platformFamily: 'unix', platformOs: 'macos' } });
     case 'account/read':
       return send({ id, result: LOGGED_OUT ? { account: null, requiresOpenaiAuth: true } : { account: { type: 'chatgpt', email: 't@example.com' }, requiresOpenaiAuth: true } });
@@ -94,6 +100,8 @@ async function handle({ id, method, params }) {
       const t = threads.get(params.threadId);
       if (!t) return send({ id, error: { code: -32600, message: `thread not loaded: ${params.threadId}` } });
       if (t.activeTurn) return send({ id, error: { code: -32600, message: 'turn already in progress' } });
+      if (JSON.stringify(params.input).includes('BADSTART')) return send({ id, error: { code: -32600, message: 'bad start' } });
+      if (JSON.stringify(params.input).includes('CRASHSTART')) { await sleep(50); process.exit(3); }
       const turnId = uid('turn');
       t.activeTurn = turnId;
       if (JSON.stringify(params.input).includes('DELAYSTART')) await sleep(150);
@@ -286,6 +294,7 @@ async function runTurn(threadId, t, turnId, input) {
     started(it); completed(it);
   }
 
+  if (text.includes('PAUSE')) await sleep(150);
   await say(`echo: ${text}`);
   notify('thread/tokenUsage/updated', { ...base, tokenUsage: {
     total: { totalTokens: 150, inputTokens: 100, cachedInputTokens: 40, cacheWriteInputTokens: 0, outputTokens: 50, reasoningOutputTokens: 10 },

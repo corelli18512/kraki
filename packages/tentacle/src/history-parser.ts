@@ -24,6 +24,9 @@ interface SdkEvent {
   data: Record<string, unknown>;
   id?: string;
   timestamp?: string;
+  /** Set on events of a subagent (task tool): the id of its dispatching tool
+   *  call. The root agent's events never carry it. */
+  agentId?: string;
 }
 
 /**
@@ -49,6 +52,7 @@ export function parseEventLine(line: string): SdkEvent | null {
     data: data as Record<string, unknown>,
     ...(typeof event.id === 'string' && { id: event.id }),
     ...(typeof event.timestamp === 'string' && { timestamp: event.timestamp }),
+    ...(typeof event.agentId === 'string' && event.agentId && { agentId: event.agentId }),
   };
 }
 
@@ -170,6 +174,9 @@ export function convertEvent(
     }
 
     case 'assistant.message': {
+      // A subagent's prose is its own work (it reports back through the task
+      // tool's result), never a reply of the parent — as in the live adapter.
+      if (event.agentId) return null;
       const content = event.data.content as string ?? '';
       if (!content) return null; // skip empty messages (SDK sends these before tool calls)
       return {
@@ -185,7 +192,7 @@ export function convertEvent(
       const toolCallId = event.data.toolCallId as string | undefined;
       return {
         type: 'tool_start',
-        payload: JSON.stringify({ toolName, args, toolCallId }),
+        payload: JSON.stringify({ toolName, args, toolCallId, ...(event.agentId && { parentToolCallId: event.agentId }) }),
         ts,
       };
     }
@@ -214,12 +221,15 @@ export function convertEvent(
           result: result.slice(0, 5000), // Cap result size for backfill
           toolCallId,
           success,
+          ...(event.agentId && { parentToolCallId: event.agentId }),
         }),
         ts,
       };
     }
 
     case 'assistant.turn_end': {
+      // A subagent's turn boundary is not the parent's.
+      if (event.agentId) return null;
       return {
         type: 'idle',
         payload: JSON.stringify({}),

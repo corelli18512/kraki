@@ -1,7 +1,7 @@
 /**
  * Unit tests for the pi adapter's per-call permission mapping and policy.
  *
- * The permission-gate extension asks `ctx.ui.confirm(toolName, JSON.stringify(input))`
+ * The permission-gate extension asks `ctx.ui.confirm(KRAKI_DIALOG_PREFIX + toolName, JSON.stringify(input))`
  * before every non-capability tool; the adapter applies `shouldAutoApprove`
  * (Kraki's shared policy) to decide silent-approve vs card, and turns a gated call into
  * a Kraki permission card via parsePiPermission. These tests pin the policy and

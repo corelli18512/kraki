@@ -93,6 +93,10 @@ export interface CodexSession {
   starting: boolean;
   /** Abort requested before the Codex turn id was known. */
   abortPending: boolean;
+  /** Bumped by every startTurn: a continuation of an older start (its
+   *  turn already finalized, e.g. by an app-server exit) must not touch the
+   *  session's state, which may already belong to the next queued turn. */
+  startGeneration: number;
   /** Recently settled Codex turn ids — late events for them are dropped. */
   settledTurns: string[];
   /** commandExecution item ids started by the current turn. Codex's

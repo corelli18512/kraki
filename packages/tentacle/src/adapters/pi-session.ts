@@ -23,6 +23,8 @@ export const PROMPT_WATCHDOG_INTERVAL_MS = 5_000;
 export const PROMPT_PROBE_FAILURE_LIMIT = 3;
 export const PROMPT_IDLE_STALL_MS = 120_000;
 
+export type ForeignDialogMethod = 'select' | 'input' | 'editor' | 'confirm';
+
 export interface PiSession {
   proc: PiRpcProcess;
   cwd: string;
@@ -48,6 +50,9 @@ export interface PiSession {
   /** Outstanding ask_user questions (questionId → pi's UI request id). Mirrors
    *  pendingPerms — cleared on answer / kill / respawn. */
   pendingQuestions: Map<string, string>;
+  /** Open dialogs of OTHER extensions (question id → dialog method). Shown as
+   *  plain question cards; answered with plain values, never Kraki's envelope. */
+  foreignDialogs?: Map<string, ForeignDialogMethod>;
   /** stopReason of the most recent assistant message_end this turn ('stop' |
    *  'error' | 'aborted' | 'toolUse' | …). 'error'/'aborted' mean the run did
    *  NOT produce a real answer → just idle. */
@@ -70,6 +75,9 @@ export interface PiSession {
   awaitingSubagents?: boolean;
   /** Fallback settle when background runs finished but no wake run came. */
   subagentGrace?: ReturnType<typeof setTimeout>;
+  /** Upper bound on the hold: settles when background runs show no activity
+   *  (status snapshot or notification) for SUBAGENT_HOLD_IDLE_MS. */
+  subagentHoldTimer?: ReturnType<typeof setTimeout>;
 }
 
 /** A subagent's saved output file (pi-subagents notifications point at it),
