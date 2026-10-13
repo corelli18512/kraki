@@ -3942,6 +3942,26 @@ describe('RelayClient pending-question digest', () => {
     expect(adapter.sendMessage).not.toHaveBeenCalled();
   });
 
+  it('a prompt the adapter rejects closes its turn as failed instead of staying active', async () => {
+    const { adapter, ws, sm } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    (adapter.sendMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('model gpt-old is not supported'));
+    ws.emit('message', Buffer.from(consumerJson({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 620,
+      timestamp: new Date().toISOString(), payload: { text: 'hello', clientId: 'rejected-turn' },
+    })));
+    await vi.runAllTimersAsync();
+
+    const rows = smMock.appendMessage.mock.calls.map((c) => ({ type: c[1], payload: JSON.parse(c[2]).payload }));
+    const types = rows.map((r) => r.type);
+    expect(types.filter((t) => t === 'error')).toHaveLength(1);
+    const status = rows.find((r) => r.type === 'turn_status');
+    expect(status?.payload).toMatchObject({ action: { type: 'failed', payload: { message: expect.stringContaining('gpt-old') } } });
+    expect(rows.find((r) => r.type === 'idle')?.payload).toMatchObject({ reason: 'failed' });
+    expect(types.indexOf('idle')).toBeGreaterThan(types.indexOf('error'));
+    expect(smMock.markIdle).toHaveBeenCalledWith('sess_1');
+  });
+
   it('a late Stop acknowledgement for turn A never settles the queued turn B', async () => {
     const { adapter, ws, sm, client } = buildClient();
     const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;

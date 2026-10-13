@@ -13,7 +13,7 @@ import { handleRequestCard, handleSessionMessages, handleSessionMessagesRange, h
 import { clearOpenQuestions, deliverQuestionAnswer, resolvePermission, soleOpenQuestion } from './questions.js';
 import { deleteSessionEverywhere, handleCreateSession, handleDeleteArchivedSessions, handleForkSession, handleImportSession, handleRequestArchivedSessions, handleRequestLocalSessions, handleSetAutoArchiveDays, unarchiveOnUse } from './session-commands.js';
 import { ensureSessionResumed, sendToAdapter } from './session-resume.js';
-import { acceptMaintenanceFollowUp, acceptsAdapterEvent, beginAdapterTurn, beginSteerAcceptance, clearCompacting, dispatchInput, finishSteerAcceptance, finishTurnWithStatus, reechoInput, reserveInput, resolveTurnIdle, sendTurnIdle, updateInputLedger, waitForTurnIdle } from './turns.js';
+import { acceptMaintenanceFollowUp, acceptsAdapterEvent, beginAdapterTurn, beginSteerAcceptance, clearCompacting, dispatchInput, finishSteerAcceptance, finishTurnWithStatus, reechoInput, reserveInput, resolveTurnIdle, sendTurnIdle, settleAdapterIdle, updateInputLedger, waitForTurnIdle } from './turns.js';
 import { logger, traceLog, describeFailure } from './shared.js';
 
 export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
@@ -326,6 +326,9 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
                 client.send({ type: 'active', sessionId, payload: {} });
                 client.sessionManager.markActive(sessionId);
               }
+              // A retried rejected input reuses its turn id; that turn was
+              // closed as failed and now runs again.
+              if (client.settledAdapterTurnIds.get(sessionId) === reservation.turnId) client.settledAdapterTurnIds.delete(sessionId);
               beginAdapterTurn(client, sessionId, reservation.turnId);
               traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-SEND', sessionId, clientId, queueBehindMaintenance, turnId: reservation.turnId });
               updateInputLedger(client, sessionId, clientId, 'dispatching');
@@ -371,7 +374,19 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
             client.maintenanceFollowUps.delete(sessionId);
             updateInputLedger(client, sessionId, clientId, 'rejected');
             logger.error({ err, sessionId }, 'send input failed');
-            client.send({ type: 'error', sessionId, payload: { message: describeFailure('Failed to deliver message', err) } });
+            const message = describeFailure('Failed to deliver message', err);
+            client.send({ type: 'error', sessionId, payload: { message } });
+            // The adapter refused the prompt after this turn was announced
+            // active (e.g. Codex turn/start rejected a retired model). No
+            // provider idle will follow: close the turn as failed here.
+            const turnId = reservation.turnId;
+            if (client.activeInputTurnIds.get(sessionId) === turnId
+              && client.settledAdapterTurnIds.get(sessionId) !== turnId
+              && client.sessionManager.getMeta(sessionId)?.state === 'active') {
+              client.errorPersistedForTurn.set(sessionId, turnId);
+              client.pendingTerminalErrors.set(sessionId, { message, source: 'adapter', turnId });
+              settleAdapterIdle(client, sessionId, { turnId });
+            }
           })
           .finally(() => {
             if (client.inputChains.get(sessionId) === next) client.inputChains.delete(sessionId);
