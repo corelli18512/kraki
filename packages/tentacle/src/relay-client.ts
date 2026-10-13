@@ -27,7 +27,7 @@ import { AttachmentPacer } from './attachment-pacer.js';
 import { SleepGuard } from './sleep-guard.js';
 import { LocalLinkServer } from './local-link.js';
 import { TrustStore } from './trust-store.js';
-import { DeviceTrust, deviceTrustEnforcedFromEnv } from './relay/device-trust.js';
+import { DeviceTrust, deviceTrustModeFromEnv, TRUST_ADMIN_TYPES } from './relay/device-trust.js';
 import { broadcastAccountUsage, sendAccountUsageTo } from './relay/account-usage.js';
 import { wireAdapterEvents } from './relay/adapter-events.js';
 import { sendAttachmentChunk } from './relay/attachments.js';
@@ -73,6 +73,12 @@ export class RelayClient {
    *  this computer (deviceId → relay-reported RSA key). They get only a
    *  `trust_required` notice until they pair. */
   private unpairedApps = new Map<string, string>();
+  /** Latest summary the Head reported for each app of the account, and which
+   *  of them the Head reports online — so access can be re-evaluated when
+   *  trust changes (pairing, revocation, policy). */
+  private relayAppDevices = new Map<string, DeviceSummary>();
+  private headOnlineApps = new Set<string>();
+  private trustRefreshTimer: ReturnType<typeof setInterval> | null = null;
   /** Same-machine loopback transport to local Apps. Lazily started on
    *  the first auth_ok, when this device's identity is confirmed. */
   localLink: LocalLinkServer | null = null;
@@ -268,8 +274,8 @@ export class RelayClient {
           this.keyManager,
           // Next to this computer's keys (`<KRAKI_HOME>/trust`), so an
           // isolated KeyManager (tests, chaos stack) gets an isolated store.
-          new TrustStore(this.keyManager.keysDir ? join(dirname(this.keyManager.keysDir), 'trust') : undefined),
-          options.deviceTrust ? options.deviceTrust === 'enforce' : deviceTrustEnforcedFromEnv(),
+          new TrustStore(this.keyManager.keysDir ? this.keyManager.trustDir : null),
+          options.deviceTrust ?? deviceTrustModeFromEnv(),
           () => this.authInfo?.deviceId,
         )
       : null;
@@ -334,6 +340,7 @@ export class RelayClient {
       this.setState('authenticating');
       this.lastActivityAt = Date.now();
       this.startStaleCheck();
+      this.startTrustRefresh();
       const device = {
         ...this.options.device,
         publicKey: this.keyManager?.getCompactPublicKey(),
@@ -419,6 +426,8 @@ export class RelayClient {
     this.intentionalDisconnect = true;
     this.sleepGuard.stop();
     this.stopStaleCheck();
+    this.stopTrustRefresh();
+    this.deviceTrust?.store.flushReplay();
     this.clearAllDeltaTimers();
     this.compactingSessions.clear();
     this.compactionTurnIds.clear();
@@ -586,6 +595,8 @@ export class RelayClient {
       const device = msg.device as DeviceSummary;
       if (device.role === 'app') {
         if (device.publicKey) this.appSigningKeys.set(device.id, device.publicKey);
+        this.relayAppDevices.set(device.id, device);
+        this.headOnlineApps.add(device.id);
         const key = this.appKeyFor(device);
         if (!key) {
           this.noteUnpairedApp(device);
@@ -607,6 +618,7 @@ export class RelayClient {
           sendAccountUsageTo(this, device.id, key);
           // Send session list so the app can sync and establish its reconnect barrier.
           this.sendSessionListTo(device.id, key);
+          this.sendTrustedDevicesTo(device.id);
         }
       }
       return;
@@ -616,6 +628,7 @@ export class RelayClient {
       const deviceId = msg.deviceId as string;
       this.onlineConsumers.delete(deviceId);
       this.unpairedApps.delete(deviceId);
+      this.headOnlineApps.delete(deviceId);
       // Still on the local link: its features and subscription are live there.
       if (this.localLink?.has(deviceId)) return;
       this.appFeatures.delete(deviceId);
@@ -627,8 +640,11 @@ export class RelayClient {
       const deviceId = msg.deviceId as string;
       // Removal only ever takes trust away, so the Head is believed here:
       // removing a device from the account revokes it on this computer too.
-      this.deviceTrust?.store.remove(deviceId);
+      const wasTrusted = this.deviceTrust?.store.remove(deviceId) ?? false;
       this.unpairedApps.delete(deviceId);
+      this.relayAppDevices.delete(deviceId);
+      this.headOnlineApps.delete(deviceId);
+      if (wasTrusted) queueMicrotask(() => this.broadcastTrustedDevices());
       this.appFeatures.delete(deviceId);
       this.consumerKeys.delete(deviceId);
       this.appSigningKeys.delete(deviceId);
@@ -649,7 +665,7 @@ export class RelayClient {
       }
       try {
         const opened = this.deviceTrust!.open({ blob: msg.blob, keys: msg.keys }, undefined);
-        if (opened.kind === 'message') handleConsumerMessage(this, opened.inner as never);
+        if (opened.kind === 'message') this.dispatchAppMessage(opened.inner, opened.signed);
         else if (opened.kind === 'pair_request') this.handlePairRequest(opened.signed, opened.inner);
       } catch {
         // Can't decrypt — not for us or corrupted
@@ -1301,7 +1317,7 @@ export class RelayClient {
         clientId: (inner as { payload?: { clientId?: string } }).payload?.clientId,
         decryptNs: (process.hrtime.bigint() - decryptStart).toString(),
       });
-      handleConsumerMessage(this, inner);
+      this.dispatchAppMessage(inner, opened.signed);
     } catch (err) {
       logger.error({ err }, 'Pulse delivered payload decrypt failed');
     }
@@ -1513,6 +1529,7 @@ export class RelayClient {
     const key = this.deviceTrust.consumerKeyFor(appId);
     if (!key) return;
     logger.info({ appId }, 'App paired');
+    this.headOnlineApps.add(appId);
     this.unpairedApps.delete(appId);
     this.consumerKeys.set(appId, key);
     this.onlineConsumers.add(appId);
@@ -1522,6 +1539,149 @@ export class RelayClient {
     this.sendGreetingTo(appId, key);
     sendAccountUsageTo(this, appId, key);
     this.sendSessionListTo(appId, key);
+    this.broadcastTrustedDevices();
+  }
+
+  /** Route an authenticated app message. Trust administration is accepted
+   *  only from a paired app's signed message. */
+  private dispatchAppMessage(inner: Record<string, unknown>, signed: boolean): void {
+    const type = typeof inner.type === 'string' ? inner.type : '';
+    if (TRUST_ADMIN_TYPES.has(type)) {
+      const from = inner.deviceId as string | undefined;
+      if (!signed || !from || !this.deviceTrust?.isTrusted(from)) {
+        logger.warn({ type, from }, 'Dropped trust administration from an unpaired app');
+        return;
+      }
+      this.handleTrustAdmin(from, type, (inner.payload ?? {}) as Record<string, unknown>);
+      return;
+    }
+    handleConsumerMessage(this, inner as never);
+  }
+
+  private handleTrustAdmin(from: string, type: string, payload: Record<string, unknown>): void {
+    const trust = this.deviceTrust!;
+    if (type === 'request_trusted_devices') {
+      this.sendTrustedDevicesTo(from);
+      return;
+    }
+    if (type === 'revoke_device') {
+      const target = typeof payload.deviceId === 'string' ? payload.deviceId : '';
+      logger.info({ by: from, target }, 'Device revoke requested');
+      // Its access goes before the store forgets it, so nothing more is sent.
+      if (target && trust.store.remove(target)) this.reevaluateApp(target);
+      this.broadcastTrustedDevices();
+      if (target === from) this.sendTrustRequired(from);
+      return;
+    }
+    if (type === 'set_trust_policy') {
+      if (trust.policyLocked) {
+        this.sendTrustedDevicesTo(from);
+        return;
+      }
+      const enforce = payload.enforce === true;
+      logger.info({ by: from, enforce }, 'Device trust policy change requested');
+      if (enforce !== trust.enforced) {
+        trust.store.setPolicy({ enforce });
+        this.reevaluateAllApps();
+      }
+      this.broadcastTrustedDevices();
+    }
+  }
+
+  /** The trusted-devices list, for paired apps' Settings. */
+  private trustedDevicesMessage(): Record<string, unknown> {
+    const trust = this.deviceTrust!;
+    return {
+      type: 'trusted_devices',
+      deviceId: this.authInfo?.deviceId ?? '',
+      seq: ++this.seqCounter,
+      timestamp: new Date().toISOString(),
+      payload: {
+        enforced: trust.enforced,
+        policyLocked: trust.policyLocked,
+        devices: trust.store.list().map((d) => ({
+          id: d.id,
+          name: d.name ?? this.relayAppDevices.get(d.id)?.name ?? d.id,
+          via: d.via,
+          pairedAt: d.pairedAt,
+        })),
+      },
+    };
+  }
+
+  private sendTrustedDevicesTo(appId: string): void {
+    if (!this.deviceTrust?.isTrusted(appId) || !this.isAppOnline(appId)) return;
+    const key = this.consumerKeys.get(appId);
+    if (key) this.sendReliableUnicastTo(appId, key, this.trustedDevicesMessage());
+  }
+
+  broadcastTrustedDevices(): void {
+    if (!this.deviceTrust) return;
+    for (const appId of this.deviceTrust.store.ids()) this.sendTrustedDevicesTo(appId);
+  }
+
+  private sendTrustRequired(appId: string): void {
+    const device = this.relayAppDevices.get(appId);
+    if (device) this.noteUnpairedApp(device);
+  }
+
+  /** Withdraw everything an app had: keys, presence, link, subscription. */
+  private dropAppAccess(appId: string): void {
+    this.consumerKeys.delete(appId);
+    this.onlineConsumers.delete(appId);
+    this.appFeatures.delete(appId);
+    this.currentSessionByArm.delete(appId);
+    this.attachmentPacer.drop(appId);
+    this.localLink?.disconnectPeer(appId, 'untrusted');
+  }
+
+  /**
+   * Apply the current trust state to one app: grant (and bring up) or
+   * withdraw access. Used when pairing, revocation or the policy changes.
+   */
+  private reevaluateApp(appId: string): void {
+    const device = this.relayAppDevices.get(appId);
+    const key = device ? this.appKeyFor(device) : this.deviceTrust?.consumerKeyFor(appId);
+    const online = this.headOnlineApps.has(appId) || this.localLink?.has(appId) === true;
+    if (!key) {
+      if (this.consumerKeys.has(appId)) this.dropAppAccess(appId);
+      if (online && device) this.noteUnpairedApp(device);
+      return;
+    }
+    const previous = this.consumerKeys.get(appId);
+    this.consumerKeys.set(appId, key);
+    if (!online || (previous === key && this.onlineConsumers.has(appId))) return;
+    this.unpairedApps.delete(appId);
+    this.onlineConsumers.add(appId);
+    this.appFeatures.delete(appId);
+    this.attachmentPacer.notifyOnline(appId);
+    this.currentSessionByArm.set(appId, null);
+    this.sendGreetingTo(appId, key);
+    sendAccountUsageTo(this, appId, key);
+    this.sendSessionListTo(appId, key);
+    this.sendTrustedDevicesTo(appId);
+  }
+
+  private reevaluateAllApps(): void {
+    const ids = new Set([...this.relayAppDevices.keys(), ...this.consumerKeys.keys()]);
+    for (const id of ids) this.reevaluateApp(id);
+  }
+
+  /** Changes made by another process (`kraki devices …`, Kraki for Mac). */
+  private startTrustRefresh(): void {
+    if (this.trustRefreshTimer || !this.deviceTrust?.store.persistent) return;
+    this.trustRefreshTimer = setInterval(() => {
+      if (!this.deviceTrust?.store.refresh()) return;
+      logger.info({ enforced: this.deviceTrust.enforced, trusted: this.deviceTrust.store.ids().length }, 'Device trust changed on disk');
+      this.reevaluateAllApps();
+      this.broadcastTrustedDevices();
+    }, 2_000);
+    this.trustRefreshTimer.unref?.();
+  }
+
+  private stopTrustRefresh(): void {
+    if (this.trustRefreshTimer) clearInterval(this.trustRefreshTimer);
+    this.trustRefreshTimer = null;
   }
 
   private updateConsumerKeys(devices: DeviceSummary[]): void {
@@ -1536,10 +1696,14 @@ export class RelayClient {
     this.currentSessionByArm = keptSubs;
     this.appSigningKeys.clear();
     this.unpairedApps.clear();
+    this.relayAppDevices.clear();
+    this.headOnlineApps.clear();
     this.legacyReplayWarned.clear();
     for (const d of devices) {
       if (d.role === 'app') {
         if (d.publicKey) this.appSigningKeys.set(d.id, d.publicKey);
+        this.relayAppDevices.set(d.id, d);
+        if (d.online) this.headOnlineApps.add(d.id);
         const key = this.appKeyFor(d);
         if (!key) {
           if (d.online) this.noteUnpairedApp(d);

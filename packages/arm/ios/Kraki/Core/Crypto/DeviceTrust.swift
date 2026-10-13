@@ -15,10 +15,34 @@
 ///   its pinned X25519 key, and only messages it signed are accepted from it.
 ///
 /// Wire format is byte-compatible with packages/crypto/src/trust.ts.
+///
+/// Also compiled into the iOS Notification Service Extension (push previews),
+/// so it depends only on Foundation, CryptoKit, Security and CoinfraCrypto.
 
+import CoinfraCrypto
 import CryptoKit
 import Foundation
 import Security
+
+/// Defaults shared with the iOS Notification Service Extension; per-app on
+/// macOS (Prod and Dev must not share pins). Mirrors AppState.sharedDefaults.
+enum DeviceTrustDefaults {
+    static var shared: UserDefaults {
+        #if KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY && os(iOS)
+        return UserDefaults(suiteName: "group.chat.kraki.ios.diag") ?? .standard
+        #elseif KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY
+        return .standard
+        #elseif os(macOS)
+        #if DEBUG
+        return UserDefaults(suiteName: "chat.kraki.mac.dev") ?? .standard
+        #else
+        return UserDefaults(suiteName: "chat.kraki.mac") ?? .standard
+        #endif
+        #else
+        return UserDefaults(suiteName: "group.chat.kraki.ios") ?? .standard
+        #endif
+    }
+}
 
 // MARK: - Wire
 
@@ -96,6 +120,17 @@ enum DeviceTrustWire {
         return key.isValidSignature(sig, for: signingInput(from: m.from, to: m.to, ts: m.ts, nonce: m.nonce, body: m.body))
     }
 
+    /// `1234 5678 9012` — same as `safetyCode` in trust.ts. Users compare it
+    /// with `kraki devices` on the computer.
+    static func safetyCode(_ identityKey: String) -> String? {
+        guard let raw = fromB64url(identityKey), raw.count == 32 else { return nil }
+        let digest = Array(SHA256.hash(data: raw))
+        let n = digest.prefix(8).reduce(UInt64(0)) { ($0 << 8) | UInt64($1) } % 1_000_000_000_000
+        let s = String(format: "%012llu", n)
+        let a = s.index(s.startIndex, offsetBy: 4), b = s.index(s.startIndex, offsetBy: 8)
+        return "\(s[..<a]) \(s[a..<b]) \(s[b...])"
+    }
+
     /// HMAC-SHA256 under the QR secret over the keys being enrolled.
     static func pairingProof(
         secret: String, tentacleId: String, appId: String,
@@ -148,6 +183,14 @@ final class DeviceIdentityKeys {
         return key
     }
 
+    /// The X25519 key if it exists — never creates one (Notification Service Extension).
+    func existingAgreementKey() -> Curve25519.KeyAgreement.PrivateKey? {
+        lock.lock(); defer { lock.unlock() }
+        if let agreement { return agreement }
+        guard let raw = load("e2e-x25519") else { return nil }
+        return try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw)
+    }
+
     var identityPublicKey: String? { (try? signingKey()).map { DeviceTrustWire.b64url($0.publicKey.rawRepresentation) } }
     var encryptionPublicKey: String? { (try? agreementKey()).map { DeviceTrustWire.b64url($0.publicKey.rawRepresentation) } }
 
@@ -182,7 +225,13 @@ final class DeviceIdentityKeys {
         #endif
     }
 
-    private static let service = "chat.kraki.device-trust"
+    private static let service: String = {
+        #if KRAKI_DIAG && !KRAKI_DIAG_EXISTING_IDENTITY
+        return "chat.kraki.diag.device-trust"
+        #else
+        return "chat.kraki.device-trust"
+        #endif
+    }()
 
     private func load(_ name: String) -> Data? {
         if let dir = directory {
@@ -218,7 +267,9 @@ final class DeviceIdentityKeys {
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
         let status = SecItemAdd(item as CFDictionary, nil)
-        guard status == errSecSuccess else { throw KeychainError.saveFailed(status) }
+        guard status == errSecSuccess else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status), userInfo: [NSLocalizedDescriptionKey: "Keychain save failed"])
+        }
     }
 
     private func delete(_ name: String) {
@@ -261,7 +312,10 @@ final class TentacleTrustStore {
     private var defaults: UserDefaults
     private var pins: [String: TentaclePin]
 
-    init(defaults: UserDefaults = .standard) {
+    /// Called on the main queue after any change (drives the UI).
+    var onChange: (() -> Void)?
+
+    init(defaults: UserDefaults = DeviceTrustDefaults.shared) {
         self.defaults = defaults
         self.pins = Self.load(defaults)
     }
@@ -275,9 +329,11 @@ final class TentacleTrustStore {
     #if DEBUG
     /// Tests: use an isolated defaults domain.
     func useDefaults(_ defaults: UserDefaults) {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         self.defaults = defaults
         self.pins = Self.load(defaults)
+        lock.unlock()
+        notify()
     }
     #endif
 
@@ -310,11 +366,18 @@ final class TentacleTrustStore {
         let snapshot = pins
         lock.unlock()
         if let data = try? JSONEncoder().encode(snapshot) { defaults.set(data, forKey: Self.storageKey) }
+        notify()
     }
 
     func reset() {
         lock.lock(); pins = [:]; lock.unlock()
         defaults.removeObject(forKey: Self.storageKey)
+        notify()
+    }
+
+    private func notify() {
+        guard let onChange else { return }
+        if Thread.isMainThread { onChange() } else { DispatchQueue.main.async(execute: onChange) }
     }
 }
 
@@ -345,7 +408,18 @@ enum DeviceTrustInbound {
         }
         if let signed = DeviceTrustWire.parseSigned(object) {
             if let src, src != signed.from { return .rejected("sender_mismatch") }
-            guard let pin = store.pin(signed.from) else { return .rejected("unpinned_signer") }
+            guard let pin = store.pin(signed.from) else {
+                // A computer we have no key for can only tell us it wants
+                // pairing (a hint for the UI: nothing secret, nothing acted on).
+                if let inner = try? JSONSerialization.jsonObject(with: Data(signed.body.utf8)) as? [String: Any],
+                   inner["type"] as? String == "trust_required",
+                   var hint = Optional(inner) {
+                    hint["deviceId"] = signed.from
+                    hint[unsignedKey] = true
+                    if let out = try? JSONSerialization.data(withJSONObject: hint) { return .message(out) }
+                }
+                return .rejected("unpinned_signer")
+            }
             guard DeviceTrustWire.verify(signed, publicKey: pin.identityKey) else { return .rejected("bad_signature") }
             guard signed.to == selfId || signed.to == DeviceTrustWire.anyRecipient else { return .rejected("wrong_recipient") }
             guard var inner = try? JSONSerialization.jsonObject(with: Data(signed.body.utf8)) as? [String: Any] else {
@@ -370,5 +444,40 @@ enum DeviceTrustInbound {
         marked[unsignedKey] = true
         guard let out = try? JSONSerialization.data(withJSONObject: marked) else { return .rejected("bad_json") }
         return .message(out)
+    }
+}
+
+// MARK: - Push previews
+
+/// Device-trust push previews: the computer signs the preview and encrypts it
+/// to this device's X25519 key; the Head forwards it as `key` = `v2.<envelope>`
+/// (see packages/tentacle/src/relay/push-preview.ts).
+enum DeviceTrustPush {
+    static let prefix = "v2."
+    /// A preview older than this is a replay by the Head, not news.
+    static let maxAge: TimeInterval = 24 * 3600
+
+    enum Failure: Error { case notV2, decrypt, unsigned, unpinned, badSignature, wrongRecipient, stale }
+
+    /// The preview JSON, verified to come from a pinned computer.
+    static func open(
+        key: String,
+        selfId: String,
+        agreementKey: Curve25519.KeyAgreement.PrivateKey,
+        store: TentacleTrustStore = .shared,
+        now: Date = Date()
+    ) throws -> String {
+        guard key.hasPrefix(prefix) else { throw Failure.notV2 }
+        guard let plaintext = try? CoinfraCrypto.decryptFromBlob(String(key.dropFirst(prefix.count)), recipientId: selfId, privateKey: agreementKey),
+              let object = try? JSONSerialization.jsonObject(with: Data(plaintext.utf8)) as? [String: Any] else {
+            throw Failure.decrypt
+        }
+        guard let signed = DeviceTrustWire.parseSigned(object) else { throw Failure.unsigned }
+        guard let pin = store.pin(signed.from) else { throw Failure.unpinned }
+        guard DeviceTrustWire.verify(signed, publicKey: pin.identityKey) else { throw Failure.badSignature }
+        guard signed.to == selfId else { throw Failure.wrongRecipient }
+        let age = now.timeIntervalSince1970 - Double(signed.ts) / 1000
+        guard age < maxAge, age > -600 else { throw Failure.stale }
+        return signed.body
     }
 }

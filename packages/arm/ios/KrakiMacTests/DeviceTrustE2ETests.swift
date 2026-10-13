@@ -24,9 +24,9 @@ final class DeviceTrustE2ETests: XCTestCase {
         DeviceIdentityKeys.testDirectory = keysDir
         DeviceIdentityKeys.shared.reset()
         defaultsSuite = "DeviceTrustE2E.\(UUID().uuidString)"
-        TentacleTrustStore.shared.useDefaults(UserDefaults(suiteName: defaultsSuite)!)
+        TentacleTrustStore.shared.useDefaults(try XCTUnwrap(UserDefaults(suiteName: defaultsSuite)))
         DeviceTrustTesting.localKrakiHome = FileManager.default.temporaryDirectory.appendingPathComponent("no-local-computer")
-        DeviceTrustCoordinator.shared.lastPairRequest = [:]
+        DeviceTrustModel.shared.reset()
     }
 
     override func tearDown() async throws {
@@ -43,7 +43,7 @@ final class DeviceTrustE2ETests: XCTestCase {
 
     @discardableResult
     private func control(_ method: String, _ path: String, _ body: [String: Any]? = nil) async throws -> [String: Any] {
-        var req = URLRequest(url: URL(string: "http://127.0.0.1:\(stack.controlPort)\(path)")!)
+        var req = URLRequest(url: try XCTUnwrap(URL(string: "http://127.0.0.1:\(stack.controlPort)\(path)")))
         req.httpMethod = method
         req.timeoutInterval = 30
         if let body { req.httpBody = try JSONSerialization.data(withJSONObject: body) }
@@ -141,7 +141,7 @@ final class DeviceTrustE2ETests: XCTestCase {
         // Another install (new keys, no pins) scans the same QR.
         DeviceIdentityKeys.shared.reset()
         TentacleTrustStore.shared.reset()
-        DeviceTrustCoordinator.shared.lastPairRequest = [:]
+        DeviceTrustModel.shared.reset()
         let second = try await connect(port: stack.app2Port)
         second.pairWithComputer(try XCTUnwrap(PairingLink(string: url)))
         try await waitUntil(15, "second app refused") { TentacleTrustStore.shared.pin(self.stack.tentacleId)?.lastError != nil }
@@ -149,6 +149,61 @@ final class DeviceTrustE2ETests: XCTestCase {
         XCTAssertEqual(TentacleTrustStore.shared.pin(stack.tentacleId)?.lastError, "bad_proof")
         await pause(1)
         XCTAssertNil(second.sessionStore.sessions[stack.sessionId])
+    }
+
+    /// A paired app manages the computer's trust: it sees the trusted list,
+    /// turns "Only paired devices" off and on, and can revoke itself.
+    func test_T4_manageTrustFromApp() async throws {
+        let app = try await connect(port: stack.appPort)
+        let url = try await control("POST", "/trust/pairing-link")["url"] as? String ?? ""
+        app.pairWithComputer(try XCTUnwrap(PairingLink(string: url)))
+        try await waitUntil(15, "paired") { app.trustState(for: self.stack.tentacleId) == .paired }
+        XCTAssertEqual(app.safetyCode(for: stack.tentacleId)?.count, 14)
+        try await waitUntil(10, "trusted list received") {
+            app.deviceTrust.info[self.stack.tentacleId]?.devices.contains { $0.id == app.deviceId } == true
+        }
+        let info = try XCTUnwrap(app.deviceTrust.info[stack.tentacleId])
+        XCTAssertTrue(info.enforced)
+        XCTAssertFalse(info.policyLocked)
+        try await waitUntil(20, "session served") { app.sessionStore.sessions[self.stack.sessionId] != nil }
+
+        // Off: an unpaired device on the account is served again.
+        app.setOnlyPairedDevices(false, on: stack.tentacleId)
+        var enforced = true
+        for _ in 0..<50 where enforced {
+            enforced = (try await control("GET", "/trust/state"))["enforced"] as? Bool ?? true
+            await pause(0.2)
+        }
+        XCTAssertFalse(enforced)
+        let allowed = "rogue-allowed-\(UUID().uuidString.prefix(6))"
+        try await control("POST", "/trust/rogue-input", ["text": allowed])
+        var ledger: [String: Int] = [:]
+        for _ in 0..<50 where ledger[allowed] == nil {
+            await pause(0.2)
+            ledger = try await received()
+        }
+        XCTAssertEqual(ledger[allowed], 1, "compatible mode serves unpaired devices")
+
+        // On again: refused.
+        app.setOnlyPairedDevices(true, on: stack.tentacleId)
+        for _ in 0..<50 where !enforced {
+            enforced = (try await control("GET", "/trust/state"))["enforced"] as? Bool ?? false
+            await pause(0.2)
+        }
+        XCTAssertTrue(enforced)
+        try await waitUntil(10, "app sees enforcement") { app.deviceTrust.info[self.stack.tentacleId]?.enforced == true }
+        let refused = "rogue-refused-\(UUID().uuidString.prefix(6))"
+        try await control("POST", "/trust/rogue-input", ["text": refused])
+        await pause(2)
+        let afterRefused = try await received()
+        XCTAssertNil(afterRefused[refused])
+
+        // Revoking itself: the computer cuts it off and says so.
+        app.revokeTrustedDevice(try XCTUnwrap(app.deviceId), on: stack.tentacleId)
+        try await waitUntil(10, "revoked") { app.trustState(for: self.stack.tentacleId) == .needsPairing }
+        let state = try await control("GET", "/trust/state")
+        XCTAssertFalse((state["trusted"] as? [String] ?? []).contains(app.deviceId ?? ""))
+        XCTAssertFalse(app.computersNeedingPairing.isEmpty, "the banner asks to pair again")
     }
 
     /// Kraki for Mac and the computer on the same Mac pair without a QR,

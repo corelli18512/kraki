@@ -9,7 +9,7 @@
     "to": "dev_tentacle",
     "ts": 1760000000123,
     "nonce": "AAECAwQFBgcICQoLDA0ODw",
-    "body": "{\"type\":\"send_input\",\"sessionId\":\"s1\",\"payload\":{\"text\":\"héllo ✓ \\\"quoted\\\"\\nline\"}}",
+    "body": "{\"type\":\"send_input\",\"sessionId\":\"s1\",\"payload\":{\"text\":\"h\u00e9llo \u2713 \\\"quoted\\\"\\nline\"}}",
     "sig": "PU_uNnSS75wCIOwX2MdxHzEGmdwZoRbXMqspY6LaGPRa3692GtuKPdzo_rSwOR7_Bze2HGjC6VEXlv0k9IMQAg"
   },
   "pairing": {
@@ -23,5 +23,6 @@
       "ts": 1760000000456
     },
     "proof": "ZYREy6js-mrojiRIIRePZ7tzKSYBi8y2_qFWOcWqN-o"
-  }
+  },
+  "safetyCode": "4254 2974 6431"
 }

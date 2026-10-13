@@ -49,6 +49,7 @@ function printHelp(): void {
     head('Get started'),
     cmd('kraki', 'Set up this computer and start Kraki'),
     cmd('kraki connect', 'Show a QR code to connect your phone'),
+    cmd('kraki devices', 'Apps that can control this computer (revoke, enforce)'),
     '',
     head('Everyday'),
     cmd('kraki status', 'Is Kraki running and connected?'),
@@ -183,6 +184,12 @@ async function main(): Promise<void> {
 
   if (cmd === 'status') {
     cmdStatus(args.includes('--json'));
+    return;
+  }
+
+  if (cmd === 'devices') {
+    const { cmdDevices } = await import('./cli/devices.js');
+    cmdDevices(args.slice(1));
     return;
   }
 

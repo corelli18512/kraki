@@ -6,7 +6,7 @@
  */
 
 import { existsSync, linkSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createPublicKey } from 'node:crypto';
 import type { KeyObject } from 'node:crypto';
 import {
@@ -16,6 +16,7 @@ import {
 } from '@kraki/crypto';
 import type { KeyPair } from '@kraki/crypto';
 import { getConfigDir } from './config.js';
+import { initTrustPolicy } from './trust-store.js';
 
 const KEYS_DIR_NAME = 'keys';
 const PRIVATE_KEY_FILE = 'private.pem';
@@ -71,6 +72,9 @@ export class KeyManager {
         }
       }
       try { unlinkSync(tmp); } catch { /* ignore */ }
+      // A fresh install: create the device-trust keys with it, and enforce
+      // device trust from the start (its first app pairs through the QR).
+      this.freshInstall = true;
     }
 
     // The public key is always the one belonging to private.pem on disk.
@@ -79,7 +83,16 @@ export class KeyManager {
     const onDisk = existsSync(pubPath) ? readFileSync(pubPath, 'utf8') : null;
     if (onDisk !== publicKey) writeFileSync(pubPath, publicKey, { mode: 0o644 });
     this.keyPair = { privateKey, publicKey };
+    if (this.freshInstall) this.getPublicIdentity();
     return this.keyPair;
+  }
+
+  /** True when this process generated the RSA keys (no previous install). */
+  private freshInstall = false;
+
+  /** `<KRAKI_HOME>/trust`, next to `keys/`. */
+  get trustDir(): string {
+    return join(dirname(this.keysDir), 'trust');
   }
 
   /**
@@ -101,6 +114,14 @@ export class KeyManager {
    */
   getIdentityKey(): { privateKey: KeyObject; publicKey: string } {
     if (this.identityKey) return this.identityKey;
+    const path = join(this.keysDir, IDENTITY_PRIVATE_KEY_FILE);
+    if (!existsSync(path)) {
+      // First device-trust key on this computer. Upgraded installs (RSA keys
+      // from before) start compatible so their apps keep working until they
+      // pair; fresh installs enforce.
+      const upgraded = !this.freshInstall && existsSync(join(this.keysDir, PRIVATE_KEY_FILE));
+      initTrustPolicy(this.trustDir, !upgraded);
+    }
     const privateKey = importIdentityPrivateKey(
       this.loadOrCreate(IDENTITY_PRIVATE_KEY_FILE, () => generateIdentityKeyPair().privateKey),
     );

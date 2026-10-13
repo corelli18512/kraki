@@ -1,4 +1,4 @@
-# Device trust (E2E v2) — POC
+# Device trust (E2E v2)
 
 Goal: **a compromised relay (Head) can neither read conversations nor command
 a computer.** Kraki-the-company acting maliciously (shipping a bad client) is
@@ -66,21 +66,57 @@ computer — `ts` within −15/+10 min and an unseen nonce (persisted in
 
 ## Modes (Tentacle)
 
-| | compatible (default) | enforce (`KRAKI_DEVICE_TRUST=enforce`) |
+| | compatible | enforce ("Only paired devices") |
 |---|---|---|
 | paired apps | signed X25519 both ways; unsigned in their name rejected | same |
 | unpaired apps | legacy RSA, unsigned (as today) | receive only a signed `trust_required`; every command rejected |
 | pairing | accepted | accepted |
 
-Apps: a paired computer is always signed/X25519; unpaired computers stay on
-the legacy path. An unsigned message attributable to a paired computer (by
-`src`, `deviceId` or session ownership) is dropped.
+The mode lives in `~/.kraki/trust/policy.json`, reloaded every 2 s:
+- **default**: a fresh install (RSA keys generated now) enforces; an install
+  upgraded from a version without device trust starts compatible.
+- `kraki devices enforce on|off`, or a paired app (signed `set_trust_policy`).
+- `KRAKI_DEVICE_TRUST=enforce|compatible` fixes it for the process (tests).
 
-Migration: ship compatible; every app pairs (QR re-scan / automatic on the
-same Mac); then enforce. Existing devices must re-pair — there is no implicit
-trust of previously known devices.
+Apps: a computer pinned from a QR/this Mac is always signed/X25519 — from the
+moment of pinning, never falling back to the relay's key. Unpinned computers
+stay on the legacy path. An unsigned message attributable to a paired computer
+(by `src`, `deviceId` or session ownership) is dropped.
 
-## Verified (POC)
+## Administration
+
+Paired apps only (signed): `request_trusted_devices`, `revoke_device {deviceId}`,
+`set_trust_policy {enforce}`. The computer answers/broadcasts `trusted_devices`
+`{enforced, policyLocked, devices[]}` to paired apps. CLI: `kraki devices`
+(list + safety code), `kraki devices revoke <id|name>`, `kraki devices enforce on|off`.
+`device_removed` from the Head also revokes.
+
+**Safety code**: 12 digits from SHA-256 of the computer's identity key; shown by
+`kraki devices` and by the app for its pinned key.
+
+## Push previews
+
+For paired apps the computer signs the preview and encrypts it to the app's
+X25519 key; it travels as the app's entry in the preview's `keys` map,
+prefixed `v2.` (the Head forwards `{blob, key}` per device unchanged — no Head
+change). The iOS Notification Service Extension and Kraki for Mac show it only
+if the signature matches a pinned computer, it is addressed to this device and
+is less than 24 h old. Mac drops unsigned previews about a paired computer's
+sessions.
+
+## UI (iOS / macOS)
+
+- Device rows: trust badge (Paired / Pairing… / Pairing failed / Needs pairing / Not paired / Update needed).
+- Computer security section (iOS device page; Mac Settings › Devices › badge):
+  status and explanation, safety code, "Only paired devices" toggle, devices
+  that can control the computer with Revoke, Scan code (iOS) / Paste link / Pair again (this Mac).
+- Session list (iOS) / sidebar (Mac): "Pair with <computer>" banner when a computer requires pairing or refused it.
+- Toast after scanning/pasting: Pairing… → Paired / Couldn't pair (+ reason).
+- Re-scanning a code with a different key for a paired computer asks first.
+- Mac "Connect your phone": under enforcement, waits until the phone is paired.
+- Logout/sign-in as a new device resets pins and identity keys.
+
+## Verified
 
 - `packages/crypto` trust tests + Node⇄Swift vectors (signature, pairing proof, X25519).
 - `packages/tentacle/src/__tests__/device-trust.test.ts` — a full-strength
@@ -93,15 +129,13 @@ trust of previously known devices.
   pairing, one-time secret, same-Mac pairing, commands round-trip, a rogue
   account device is refused.
 
-## Not done (POC limits)
+## Not done
 
-- **Web app**: no device trust; unusable against an enforcing computer.
-- **Push previews** stay RSA and unsigned (the Head could spoof a notification
-  text, not read one). NSE needs X25519 + signature verification.
-- **Adding a computer** requires a QR scan or the same-Mac path; approving a
-  new device from an already paired one is not implemented.
-- **UI**: pairing state is in `TentacleTrustStore` only (no badge/flow yet);
-  pairing secrets on iOS live in UserDefaults until confirmed.
-- **Head-originated destructive control**: `account_deleted` still makes the
-  computer forget its credentials and keys (a DoS, not a takeover).
+- **Web app** and **Windows-specific** checks: deferred. Web cannot pair; an enforcing computer does not serve it.
+- **Adding a computer** requires a QR scan / pasted link or the same-Mac path;
+  approving a new device from an already paired one is not implemented.
+- **iOS NSE** cannot tell which computer an unsigned (legacy RSA) preview is
+  about, so the Head could still spoof the text of a legacy-path notification.
+- **Head-originated destructive control**: `account_deleted` makes the computer
+  forget credentials and keys; `device_removed` revokes trust (DoS, not takeover).
 - App-side replay protection (computer→app) and key rotation are not implemented.

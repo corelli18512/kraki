@@ -11,6 +11,7 @@
 		00D9A1D724388C88656314A9 /* Highlightr in Frameworks */ = {isa = PBXBuildFile; productRef = 58A77F08B0D342014F734926 /* Highlightr */; };
 		011C11527B518D1977DB2289 /* CommandSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ABD91DDEFD532C3C383BBDE /* CommandSender.swift */; };
 		015F3761162543C928CB860C /* AppState+VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5397CE9AB925FCDD8531D41F /* AppState+VoiceInput.swift */; };
+		01FC5C4762616D0B0C8B9F78 /* DeviceTrustViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 568A76BBB39D462D02FA2D02 /* DeviceTrustViews.swift */; };
 		028B61458E76278B13E26B2F /* Pulse in Frameworks */ = {isa = PBXBuildFile; productRef = 7FF5AA6801C008E56910369C /* Pulse */; };
 		030741A547AC17FE92C3A217 /* ThisMacSetupSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 593F51D017203A91FAB57F80 /* ThisMacSetupSnapshot.swift */; };
 		0313E21470C38A392FB20B51 /* StabilityTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E35AD5263921130DD1A18D /* StabilityTrackerTests.swift */; };
@@ -103,6 +104,7 @@
 		26B54BE0E0908B2B4DB4F348 /* SessionPendingPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE07323D3B27AC8EA6814441 /* SessionPendingPreview.swift */; };
 		26EB8AA427A1FAD44EA48D39 /* MacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE814884FDD9A0A46CCCCB69 /* MacApp.swift */; };
 		2763E00AC69C460AF2CB5B38 /* AppState+Lifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 878E7F3EA2BD2E72EFA07B3E /* AppState+Lifecycle.swift */; };
+		27B956914DEE0DB45921EA26 /* DeviceTrustViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 568A76BBB39D462D02FA2D02 /* DeviceTrustViews.swift */; };
 		287E2A4E159F78777974E5B9 /* E2EV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81ACBA3EBD5D6F0F5F360495 /* E2EV2.swift */; };
 		29B069587F551B25D683BB2A /* MacVoiceComposerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B840BBE9C2E72331DE8CD87 /* MacVoiceComposerTests.swift */; };
 		29B683CC4CD8D0B407D050BD /* DeleteAccountSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5941D690801C4745401FC76 /* DeleteAccountSection.swift */; };
@@ -237,6 +239,7 @@
 		61DE330DBE66144398A6F8D4 /* MacBubbleTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D15C4DAE8AB0534C9C6226 /* MacBubbleTestView.swift */; };
 		62D2B4F534C13F83CF2512DB /* SessionPreviewStatusGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42D1AE5100B28D8BB99611C5 /* SessionPreviewStatusGlyph.swift */; };
 		6310305F2F3A95D6D92254CC /* AccountUsageViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 653D042B0A60468230A5F1F3 /* AccountUsageViews.swift */; };
+		633DCAA5AB83F3DE244B008E /* DeviceTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = 063CF9F10027975D232E4285 /* DeviceTrust.swift */; };
 		638AB6D714A37B797A1AD183 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D17C06CC0E96BDAA7779524 /* SessionListView.swift */; };
 		63DE953CAAAE955E45469971 /* IOSVoiceHoldScenario.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF4923A90FCE08A9677B9EFA /* IOSVoiceHoldScenario.swift */; };
 		63E651E7838FC6F14D2F059E /* MacBubbleActionSlot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B40607F268A8BCEBF58C6D7 /* MacBubbleActionSlot.swift */; };
@@ -370,6 +373,7 @@
 		A97C02EF361069D7F5305B77 /* TentacleCLIManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D219A1249EBFCAA247533E07 /* TentacleCLIManager.swift */; };
 		A9998526CF744DB0A952EE90 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF54424FDF29034ACFC16B5A /* SettingsView.swift */; };
 		AA2224407192AFD8D14EFC4D /* AppState+SessionSubscription.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDBF088FAB08E249B47F2A90 /* AppState+SessionSubscription.swift */; };
+		AA85ED18ADD4CF48D29A4A90 /* CoinfraCrypto in Frameworks */ = {isa = PBXBuildFile; productRef = 904CD8E02268858B4CDFD03A /* CoinfraCrypto */; };
 		AAA61C762D71F8631907232C /* MacCodeHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77830CCB7D008C4059FE3E0D /* MacCodeHighlighter.swift */; };
 		AB1118902D9FE8F17A096886 /* MacBubbleTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C5D0987ED225B3C748129E /* MacBubbleTextView.swift */; };
 		AB26D1713A7CC1BBAB99A89D /* ChatPerfListVC+Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA48B106C647082D2095E935 /* ChatPerfListVC+Diagnostics.swift */; };
@@ -501,12 +505,14 @@
 		E584D9C40B57680AF34DE750 /* FlatBubbleTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5DA5D4B10C2EF6EA184D1E3 /* FlatBubbleTestView.swift */; };
 		E5952087022B1FCC4FB24D3F /* BackgroundVoiceFinisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = D62ACFCE82CB8B7407AEF768 /* BackgroundVoiceFinisher.swift */; };
 		E5AB2624F19A5393F5D4F1E4 /* ChatPerfListSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9096638DD70F2733CBC131FB /* ChatPerfListSupport.swift */; };
+		E62EED37DE736BEA02B37D52 /* DeviceDates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59A0EADC2F8D9117AA3642F8 /* DeviceDates.swift */; };
 		E74ACB62F0337BF8D7E95E3B /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E57D3E8B020B76BCD75B0243 /* ChatViewModel.swift */; };
 		E7E8B3D8B17CDFA130977730 /* SessionSubscriptionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C23E728794AEA9E7A803A564 /* SessionSubscriptionController.swift */; };
 		E91DFA13736873AA77B82DAE /* IOSVoiceHoldScenario.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF4923A90FCE08A9677B9EFA /* IOSVoiceHoldScenario.swift */; };
 		E96A6C5AE2A674EBCEB5B49C /* ChatScrollPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 061382BF8F60896127BB9961 /* ChatScrollPolicyTests.swift */; };
 		E99066BB398A92ECC653535A /* MacLaunchActivityIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D80A4B531EA5EBD081A0626 /* MacLaunchActivityIndicator.swift */; };
 		EA535D1A68DC8F9A8747E2F3 /* IOSImagePreviewSwipeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8895C333F3D6006EA10344CD /* IOSImagePreviewSwipeTests.swift */; };
+		EACF9AB072D5A72DB5F27D17 /* MessageRouter+DeviceTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE418F194A53663504E9F28E /* MessageRouter+DeviceTrust.swift */; };
 		EB8DEE5994FE4F2012FFDDA7 /* ExperienceTrackers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43FB5915A2C34921FF2DF24A /* ExperienceTrackers.swift */; };
 		EBB7E4C62FE6047767653940 /* NewSessionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD29591F2C7F6E0D0AFAE855 /* NewSessionSheet.swift */; };
 		EBBE7FD227990872EBFAFA2C /* AttachmentSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7155B0057D71BDD112CB0B8E /* AttachmentSchedulerTests.swift */; };
@@ -531,6 +537,7 @@
 		F67A09E157C2A96010AFEDB2 /* AttachmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77E056700BA106FD1E130382 /* AttachmentStore.swift */; };
 		F68223766885D060184C6278 /* LogsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447FBAB1A2FAA65AD4B03988 /* LogsWindow.swift */; };
 		F7876F1F5FF548F7C05C0BE7 /* LocalAgentsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250E3DB62309C76D6D79AC25 /* LocalAgentsPanel.swift */; };
+		F7B50B27C50074C2E07495C8 /* MessageRouter+DeviceTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE418F194A53663504E9F28E /* MessageRouter+DeviceTrust.swift */; };
 		F7EE09CD66D8D14AAF6C8318 /* ReconnectCatchUpUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A44A8EBCD3E1B4E7252D2D8 /* ReconnectCatchUpUITests.swift */; };
 		F8289CBF9D6D730BE4F5A0A8 /* IOSVoiceComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAEABA66C53A4169697F5D6A /* IOSVoiceComposer.swift */; };
 		F85512964945773051AF726F /* ComposerScrollEdges.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B3276E172306B8CE408EBF5 /* ComposerScrollEdges.swift */; };
@@ -718,6 +725,7 @@
 		5437A18846D42371499BC0F6 /* KrakiNotification.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = KrakiNotification.entitlements; sourceTree = "<group>"; };
 		5469FDA14AA91327B6DF4400 /* MainWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowView.swift; sourceTree = "<group>"; };
 		5626ED6495E1877F3D9A7F74 /* ChatPlaceholderView+macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatPlaceholderView+macOS.swift"; sourceTree = "<group>"; };
+		568A76BBB39D462D02FA2D02 /* DeviceTrustViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceTrustViews.swift; sourceTree = "<group>"; };
 		56FE3464DA3DC8C37A09F34F /* SessionCardMetadataRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCardMetadataRow.swift; sourceTree = "<group>"; };
 		57DFD94E5939F03A4A3B51AA /* MacChatScenarioCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatScenarioCatalog.swift; sourceTree = "<group>"; };
 		580633A6385D5F9C85E09B7C /* IOSComposerGrowthShots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSComposerGrowthShots.swift; sourceTree = "<group>"; };
@@ -948,6 +956,7 @@
 		FBB8ED0D8A220DC4E658371C /* MacAppDelegate+Benchmarks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MacAppDelegate+Benchmarks.swift"; sourceTree = "<group>"; };
 		FD87000DEF19B722B35DD012 /* DeviceTrustE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceTrustE2ETests.swift; sourceTree = "<group>"; };
 		FDCB4B5308B56C1588901815 /* SessionCardEffortTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCardEffortTests.swift; sourceTree = "<group>"; };
+		FE418F194A53663504E9F28E /* MessageRouter+DeviceTrust.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MessageRouter+DeviceTrust.swift"; sourceTree = "<group>"; };
 		FE814884FDD9A0A46CCCCB69 /* MacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -962,6 +971,14 @@
 				EF182DDCEE43C64585164D92 /* VoiceInputCore in Frameworks */,
 				2B734C69AB104A3752E06468 /* CoinfraCrypto in Frameworks */,
 				2DB082D4CBCC47E1805C757B /* Sparkle in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		99FA2AE8802A100E327D4F39 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA85ED18ADD4CF48D29A4A90 /* CoinfraCrypto in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1073,6 +1090,7 @@
 				41EB27413D7A5189B3C42D36 /* EncryptionHandler.swift */,
 				E2EFD5BF1FB2C036AFDC23BF /* LocalLinkClient.swift */,
 				654A17BD8AED96C7CD6AA7A5 /* MessageRouter.swift */,
+				FE418F194A53663504E9F28E /* MessageRouter+DeviceTrust.swift */,
 				11A7EB4EC1634A535D5A90D5 /* PayloadFragments.swift */,
 				2C0AE2F0350124712EAE0E17 /* PreferencesManager.swift */,
 				E45FF5DF9F0159EB23B50D72 /* PulseManager.swift */,
@@ -1435,6 +1453,7 @@
 			children = (
 				6463492D6BEB410FD49FF787 /* DeviceDetailView.swift */,
 				01A6162027FE71CB62BA4255 /* DeviceListView.swift */,
+				568A76BBB39D462D02FA2D02 /* DeviceTrustViews.swift */,
 			);
 			path = Devices;
 			sourceTree = "<group>";
@@ -1751,6 +1770,7 @@
 			buildConfigurationList = F82C545B4DDA6E2D3D47CA56 /* Build configuration list for PBXNativeTarget "KrakiNotification" */;
 			buildPhases = (
 				C947B40F36B1554D8BFB6EB1 /* Sources */,
+				99FA2AE8802A100E327D4F39 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -1758,6 +1778,7 @@
 			);
 			name = KrakiNotification;
 			packageProductDependencies = (
+				904CD8E02268858B4CDFD03A /* CoinfraCrypto */,
 			);
 			productName = KrakiNotification;
 			productReference = 714C9952404A97A090FC011F /* KrakiNotification.appex */;
@@ -2092,6 +2113,7 @@
 				07009971363AD7EBB365BAF8 /* DeviceListView.swift in Sources */,
 				50081F6ED81CAC7430B9230F /* DeviceStore.swift in Sources */,
 				68D1986FB0D305A056E0BF47 /* DeviceTrust.swift in Sources */,
+				27B956914DEE0DB45921EA26 /* DeviceTrustViews.swift in Sources */,
 				22BE330C81BC2B0040415007 /* DeviceUpdate.swift in Sources */,
 				673D5C65A6DEC8F88420B800 /* DeviceUpdateViews.swift in Sources */,
 				1FA04773E415B708A7C36B46 /* DevicesPane.swift in Sources */,
@@ -2194,6 +2216,7 @@
 				CDD3FC5A96DCC43FE52A4BCA /* MessageDatabase.swift in Sources */,
 				CB2D37D2D7F4BB782B250DDF /* MessageInputView.swift in Sources */,
 				87DF8395030B8C3D235D6DD2 /* MessageProvider.swift in Sources */,
+				F7B50B27C50074C2E07495C8 /* MessageRouter+DeviceTrust.swift in Sources */,
 				0D84FEFC83BB1552A71A855F /* MessageRouter.swift in Sources */,
 				0904D2B58EE9736437D89A18 /* MessageStore.swift in Sources */,
 				52884F019776B2D42A94782B /* Messages.swift in Sources */,
@@ -2325,9 +2348,11 @@
 				740E73B05B08B70AF980FD93 /* ComposerOverlayReporting.swift in Sources */,
 				4550B0DBED564B557D6AF038 /* CryptoManager.swift in Sources */,
 				9C0DB5CFA181283D2785F926 /* DeleteAccountSection.swift in Sources */,
+				E62EED37DE736BEA02B37D52 /* DeviceDates.swift in Sources */,
 				66DF9008513F4B3A31CC4D9A /* DeviceKeyPins.swift in Sources */,
 				B7C46A0BC08656D1F5C64D5E /* DeviceStore.swift in Sources */,
 				DA761F29446D005358B330AF /* DeviceTrust.swift in Sources */,
+				01FC5C4762616D0B0C8B9F78 /* DeviceTrustViews.swift in Sources */,
 				3D638B1F84CF8CD3D9E622FC /* DeviceUpdate.swift in Sources */,
 				CACC43CA3593FD94B9F55030 /* DeviceUpdateViews.swift in Sources */,
 				4BD6FA3628CFB971ABDA5DA8 /* DevicesPane.swift in Sources */,
@@ -2417,6 +2442,7 @@
 				D760ADD6B42A59302671894C /* MessageBodyParser.swift in Sources */,
 				85698BAF42714CA74CF81CB8 /* MessageDatabase.swift in Sources */,
 				348C4411EA05E81F65F1E554 /* MessageProvider.swift in Sources */,
+				EACF9AB072D5A72DB5F27D17 /* MessageRouter+DeviceTrust.swift in Sources */,
 				A5D83F4EAEE78022F37C596A /* MessageRouter.swift in Sources */,
 				9F22AAB74FB6EB31386F8314 /* MessageStore.swift in Sources */,
 				6F355E1177288E02FB77EFDD /* Messages.swift in Sources */,
@@ -2486,6 +2512,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				633DCAA5AB83F3DE244B008E /* DeviceTrust.swift in Sources */,
 				6856421EC696E6C930A56346 /* NotificationService.swift in Sources */,
 				81D17D24CB1754939FF7CAA4 /* PushPreviewFormat.swift in Sources */,
 			);
@@ -3500,6 +3527,10 @@
 			productName = Pulse;
 		};
 		8C099CEF99730C7439A68CEE /* CoinfraCrypto */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CoinfraCrypto;
+		};
+		904CD8E02268858B4CDFD03A /* CoinfraCrypto */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = CoinfraCrypto;
 		};

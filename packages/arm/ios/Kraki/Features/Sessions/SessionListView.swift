@@ -10,6 +10,7 @@ struct SessionListView: View {
 
     @Binding var navigationPath: NavigationPath
     @State private var showNewSession = false
+    @State private var showPairingScanner = false
     @State private var selectedDeviceFilter: String? = nil
     @State private var showFilterRow = false
     #if DEBUG
@@ -49,12 +50,16 @@ struct SessionListView: View {
         .safeAreaInset(edge: .top) {
             VStack(spacing: 0) {
                 brandHeader
+                PairingNeededBanner { _ in showPairingScanner = true }
                 if showFilterRow {
                     deviceFilterRow
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
             .animation(.easeInOut(duration: 0.25), value: showFilterRow)
+        }
+        .sheet(isPresented: $showPairingScanner) {
+            PairingView().environment(appState)
         }
         .sheet(isPresented: $showNewSession) {
             NewSessionSheet()

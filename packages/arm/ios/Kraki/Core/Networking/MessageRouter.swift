@@ -87,7 +87,7 @@ extension SessionDigest {
 
 final class MessageRouter {
 
-    private weak var appState: AppState?
+    private(set) weak var appState: AppState?
     private var retired = false
     let encryptionHandler: EncryptionHandler
 
@@ -227,22 +227,7 @@ final class MessageRouter {
             KLog.d("✅ push_token_registered")
 
         case "notification_preview":
-            // Relay-forwarded encrypted push preview for an online Mac.
-            #if os(macOS)
-            guard let appState, let deviceId = appState.deviceId,
-                  let payload = json["payload"] as? [String: Any],
-                  let blob = payload["blob"] as? String,
-                  let key = payload["key"] as? String,
-                  let envelope = try? JSONSerialization.data(withJSONObject: ["blob": blob, "keys": [deviceId: key]]),
-                  let decrypted = try? encryptionHandler.decryptInbound(envelope),
-                  let text = String(data: decrypted.message, encoding: .utf8) else {
-                KLog.d("⚠️ notification_preview could not be decrypted")
-                return
-            }
-            Task { @MainActor in
-                MacNotifications.shared.present(decryptedPreview: text, appState: appState, route: "head")
-            }
-            #endif
+            handleNotificationPreview(json)
 
         case "voice_lease_grant":
             if let lease = Self.decodeVoiceLease(json["lease"]) {
@@ -316,34 +301,9 @@ final class MessageRouter {
     /// Route a decrypted inner message to the appropriate store(s).
     @MainActor
     func handleDataMessage(_ json: Data) {
-        guard !retired, let appState,
-              let dict = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
-              let type = dict["type"] as? String else {
-            KLog.d("⚠️ Failed to parse decrypted inner message")
-            return
-        }
-
-        KLog.d("📨 Inner message: \(type)")
-
-        // Device trust: an unsigned message about a paired computer's session
-        // is forged (a paired computer signs everything).
-        if dict[DeviceTrustInbound.unsignedKey] as? Bool == true,
-           let sid = dict["sessionId"] as? String,
-           let owner = appState.sessionStore.sessions[sid]?.deviceId ?? appState.sessionStore.archivedSessionInfo(sid)?.deviceId,
-           TentacleTrustStore.shared.pairedPin(owner) != nil {
-            KLog.d("⛔️ device trust: dropped unsigned \(type) for a paired computer's session")
-            return
-        }
-
-        if type == "pair_result" {
-            appState.handlePairResult(dict)
-            return
-        }
-
-        if type == "trust_required" {
-            appState.handleTrustRequired(dict)
-            return
-        }
+        // Device-trust messages are handled (or dropped) first.
+        guard !retired, let appState, case let (dict, type)? = Self.parseInner(json),
+              !handleDeviceTrust(type: type, dict: dict, appState: appState) else { return }
 
         // ── Messages without a sessionId ─────────────────────────────────
 

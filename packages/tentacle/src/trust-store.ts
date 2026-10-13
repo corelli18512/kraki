@@ -17,6 +17,7 @@
  *
  * Layout under `<KRAKI_HOME>/trust/` (directory 0700, files 0600):
  *   devices.json              { version: 1, devices: { [appId]: TrustedDevice } }
+ *   policy.json               { enforce: boolean } — see initTrustPolicy
  *   pairings/<id>.json        { secret, createdAt, expiresAt }
  *   local-enroll/<appId>.json LocalEnrollment
  *   replay.json               ReplayGuard state
@@ -77,6 +78,44 @@ export function getTrustDir(home = getKrakiHome()): string {
   return join(home, 'trust');
 }
 
+export interface TrustPolicy {
+  /** Serve only paired apps and accept only their signed commands. */
+  enforce: boolean;
+}
+
+/**
+ * Record the default policy once, when this computer's keys are created:
+ * a fresh install enforces from the start (its first app pairs through the
+ * QR it shows); an install upgraded from a version without device trust stays
+ * compatible until its apps have paired. Never overwrites a choice.
+ */
+export function initTrustPolicy(dir: string, enforce: boolean): void {
+  const path = join(dir, 'policy.json');
+  if (existsSync(path)) return;
+  ensureDir(dir);
+  try {
+    writeFileSync(path, JSON.stringify({ enforce }, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+  }
+}
+
+/** Write the policy (CLI, Settings, or a paired app's request). */
+export function writeTrustPolicy(dir: string, policy: TrustPolicy): void {
+  ensureDir(dir);
+  writePrivateJson(join(dir, 'policy.json'), { enforce: policy.enforce === true });
+}
+
+export function readTrustPolicy(dir: string): TrustPolicy {
+  try {
+    const raw = JSON.parse(readFileSync(join(dir, 'policy.json'), 'utf8')) as { enforce?: unknown };
+    return { enforce: raw.enforce === true };
+  } catch {
+    // No policy: an install that predates device trust (compatible).
+    return { enforce: false };
+  }
+}
+
 function writePrivateJson(path: string, value: unknown): void {
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
   writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
@@ -103,23 +142,83 @@ export function createPairingSecret(home = getKrakiHome(), now = Date.now()): st
 }
 
 export class TrustStore {
-  readonly dir: string;
+  /** Null: memory only (a KeyManager without a key directory, e.g. a test
+   *  double) — never falls back to the real `~/.kraki`. */
+  readonly dir: string | null;
+  private replayDirty = false;
   private devices = new Map<string, TrustedDevice>();
   readonly replayGuard = new ReplayGuard();
   private replaySaveTimer: ReturnType<typeof setTimeout> | null = null;
+  private policy: TrustPolicy = { enforce: false };
+  /** mtimes of devices.json / policy.json when last read (CLI edits them). */
+  private stamps = { devices: -1, policy: -1 };
 
   /** @param dir the trust directory — `<KRAKI_HOME>/trust` in production,
    *  next to the KeyManager's `keys/` directory. */
-  constructor(dir = getTrustDir()) {
+  constructor(dir: string | null) {
     this.dir = dir;
+    if (dir === null) return;
     // Created on first write only: constructing a store must not touch disk.
-    this.load();
+    this.loadDevices();
+    this.policy = readTrustPolicy(dir);
+    this.stamps.policy = this.mtime(this.policyPath);
+    try {
+      this.replayGuard.import(JSON.parse(readFileSync(this.replayPath, 'utf8')) as Array<[string, number]>);
+    } catch { /* first run */ }
   }
 
-  private get devicesPath(): string { return join(this.dir, 'devices.json'); }
-  private get replayPath(): string { return join(this.dir, 'replay.json'); }
+  get persistent(): boolean { return this.dir !== null; }
+  private get devicesPath(): string { return join(this.dir ?? '', 'devices.json'); }
+  private get replayPath(): string { return join(this.dir ?? '', 'replay.json'); }
+  private get policyPath(): string { return join(this.dir ?? '', 'policy.json'); }
 
-  private load(): void {
+  private mtime(path: string): number {
+    try { return statSync(path).mtimeMs; } catch { return 0; }
+  }
+
+  get enforced(): boolean {
+    return this.policy.enforce;
+  }
+
+  setPolicy(policy: TrustPolicy): void {
+    if (this.dir) writeTrustPolicy(this.dir, policy);
+    this.policy = { enforce: policy.enforce };
+    this.stamps.policy = this.mtime(this.policyPath);
+    logger.info({ enforce: policy.enforce }, 'Device trust policy changed');
+  }
+
+  /**
+   * Pick up changes another process made (`kraki devices revoke`, `kraki
+   * devices enforce`, Kraki for Mac Settings). Returns true when anything changed.
+   */
+  refresh(): boolean {
+    if (!this.dir) return false;
+    let changed = false;
+    const devicesStamp = this.mtime(this.devicesPath);
+    if (devicesStamp !== this.stamps.devices) {
+      const before = JSON.stringify([...this.devices]);
+      this.loadDevices();
+      changed ||= before !== JSON.stringify([...this.devices]);
+    }
+    const policyStamp = this.mtime(this.policyPath);
+    if (policyStamp !== this.stamps.policy) {
+      const next = readTrustPolicy(this.dir);
+      this.stamps.policy = policyStamp;
+      if (next.enforce !== this.policy.enforce) {
+        this.policy = next;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  list(): Array<TrustedDevice & { id: string }> {
+    return [...this.devices].map(([id, d]) => ({ id, ...d }));
+  }
+
+  private loadDevices(): void {
+    this.stamps.devices = this.mtime(this.devicesPath);
+    this.devices.clear();
     try {
       const raw = JSON.parse(readFileSync(this.devicesPath, 'utf8')) as { version?: number; devices?: Record<string, TrustedDevice> };
       for (const [id, d] of Object.entries(raw.devices ?? {})) {
@@ -128,19 +227,19 @@ export class TrustStore {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') logger.warn({ err: (err as Error).message }, 'Could not read trusted devices');
     }
-    try {
-      this.replayGuard.import(JSON.parse(readFileSync(this.replayPath, 'utf8')) as Array<[string, number]>);
-    } catch { /* first run */ }
   }
 
   private save(): void {
+    if (!this.dir) return;
     ensureDir(this.dir);
     writePrivateJson(this.devicesPath, { version: 1, devices: Object.fromEntries(this.devices) });
+    this.stamps.devices = this.mtime(this.devicesPath);
   }
 
   /** Persist accepted nonces soon (a restart must not reopen the replay window). */
   noteAccepted(): void {
-    if (this.replaySaveTimer) return;
+    this.replayDirty = true;
+    if (!this.dir || this.replaySaveTimer) return;
     this.replaySaveTimer = setTimeout(() => {
       this.replaySaveTimer = null;
       this.flushReplay();
@@ -150,6 +249,8 @@ export class TrustStore {
 
   flushReplay(): void {
     if (this.replaySaveTimer) { clearTimeout(this.replaySaveTimer); this.replaySaveTimer = null; }
+    if (!this.dir || !this.replayDirty) return;
+    this.replayDirty = false;
     try {
       ensureDir(this.dir);
       writePrivateJson(this.replayPath, this.replayGuard.export());
@@ -189,6 +290,7 @@ export class TrustStore {
    * pairing secret. The secret is consumed on success.
    */
   acceptQrPairing(claim: PairingClaim, proof: string, name: string | undefined, now = Date.now()): boolean {
+    if (!this.dir) return false;
     const dir = join(this.dir, 'pairings');
     let files: string[];
     try { files = readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { return false; }
@@ -220,6 +322,7 @@ export class TrustStore {
    * these keys. The file must be owned by this user and private.
    */
   acceptLocalEnrollment(appId: string, identityKey: string, encryptionKey: string, now = Date.now()): boolean {
+    if (!this.dir) return false;
     const path = join(this.dir, 'local-enroll', `${appId}.json`);
     if (!existsSync(path)) return false;
     try {

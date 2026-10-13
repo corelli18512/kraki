@@ -23,7 +23,10 @@ vi.mock('../logger.js', () => ({
 
 import { RelayClient } from '../relay-client.js';
 import { KeyManager } from '../key-manager.js';
-import { createPairingSecret } from '../trust-store.js';
+import { createPairingSecret, readTrustPolicy, TrustStore, writeTrustPolicy } from '../trust-store.js';
+import { buildPushPreview } from '../relay/push-preview.js';
+import { buildApnsPayload } from '../../../head/src/push/apns.js';
+import { existsSync } from 'node:fs';
 
 const TENTACLE = 'dev_tentacle';
 
@@ -79,14 +82,14 @@ function createSessionManager(): Record<string, unknown> {
 /** What the (compromised) Head sees leave the Tentacle. */
 interface Sent { payload: Record<string, unknown>; target: string | string[] | undefined }
 
-function setup(mode: 'enforce' | 'compatible') {
+function setup(mode: 'enforce' | 'compatible' | 'policy') {
   const keyManager = new KeyManager(join(process.env.KRAKI_HOME!, 'keys'));
   const adapter = createAdapter();
   const client = new RelayClient(adapter as never, createSessionManager() as never, {
     relayUrl: 'ws://localhost:4000',
     authMethod: 'open',
     device: { name: 'Test Mac', role: 'tentacle', deviceId: TENTACLE },
-    deviceTrust: mode,
+    ...(mode === 'policy' ? {} : { deviceTrust: mode }),
     localLink: false,
   }, keyManager);
   const sent: Sent[] = [];
@@ -418,5 +421,117 @@ describe('device trust (compatible) — migration', () => {
     expect(env.sent.some((s) => isV2Payload(s.payload))).toBe(true);
     expect(JSON.stringify(readable(env, phone))).toContain('"out"');
     expect(JSON.stringify(readable(env, oldApp))).toContain('"out"');
+  });
+});
+
+describe('device trust — administration from paired apps', () => {
+  function pairedPolicy(enforce: boolean) {
+    writeTrustPolicy(join(home, 'trust'), { enforce });
+    const env = setup('policy');
+    const phone = makeApp('dev_phone');
+    const laptop = makeApp('dev_laptop');
+    joined(env, phone);
+    joined(env, laptop);
+    env.deliver(pairRequest(env, phone, createPairingSecret(home)), phone.id);
+    env.deliver(pairRequest(env, laptop, createPairingSecret(home)), laptop.id);
+    return { env, phone, laptop };
+  }
+
+  it('tells paired apps which devices are trusted', () => {
+    const { env, phone } = pairedPolicy(true);
+    const lists = readable(env, phone).filter((m) => m.type === 'trusted_devices');
+    const last = lists.at(-1)!.payload as { enforced: boolean; policyLocked: boolean; devices: Array<{ id: string; via: string }> };
+    expect(last.enforced).toBe(true);
+    expect(last.policyLocked).toBe(false);
+    expect(last.devices.map((d) => d.id).sort()).toEqual(['dev_laptop', 'dev_phone']);
+    expect(lists.every((m) => m.__signed === true)).toBe(true);
+  });
+
+  it('a paired app revokes another; the revoked one loses access at once', async () => {
+    const { env, phone, laptop } = pairedPolicy(true);
+    env.deliver(appSend(env, phone, { type: 'revoke_device', payload: { deviceId: laptop.id } }), phone.id);
+    expect(env.client.deviceTrust!.isTrusted(laptop.id)).toBe(false);
+    expect(env.client.consumerKeys.has(laptop.id)).toBe(false);
+    env.sent.length = 0;
+    env.deliver(appSend(env, laptop, { type: 'send_input', sessionId: 's1', payload: { text: 'after revoke' } }), laptop.id);
+    (env.adapter.onMessage as (sid: string, e: { content: string }) => void)('s1', { content: 'NOT_FOR_LAPTOP' });
+    await flush();
+    expect(sendInputCalls(env)).toHaveLength(0);
+    expect(JSON.stringify(readable(env, laptop))).not.toContain('NOT_FOR_LAPTOP');
+    expect(JSON.stringify(readable(env, phone))).toContain('NOT_FOR_LAPTOP');
+  });
+
+  it('ignores administration that is unsigned or from an unpaired app', () => {
+    const { env, phone } = pairedPolicy(false);
+    const legacy = makeApp('dev_legacy');
+    joined(env, legacy);
+    const tentacleRsa = env.keyManager.getKeyPair().publicKey;
+    for (const type of ['revoke_device', 'set_trust_policy']) {
+      env.deliver(encryptToBlob(JSON.stringify({ type, deviceId: legacy.id, payload: { deviceId: phone.id, enforce: false } }),
+        [{ deviceId: TENTACLE, publicKey: tentacleRsa }]) as never, legacy.id);
+      env.deliver(appSend(env, legacy, { type, payload: { deviceId: phone.id, enforce: false } }), legacy.id);
+    }
+    expect(env.client.deviceTrust!.isTrusted(phone.id)).toBe(true);
+  });
+
+  it('a paired app turns enforcement on; unpaired apps are cut off', async () => {
+    const { env, phone } = pairedPolicy(false);
+    const legacy = makeApp('dev_legacy');
+    joined(env, legacy);
+    expect(env.client.consumerKeys.has(legacy.id)).toBe(true);
+    env.deliver(appSend(env, phone, { type: 'set_trust_policy', payload: { enforce: true } }), phone.id);
+    expect(env.client.deviceTrust!.enforced).toBe(true);
+    expect(readTrustPolicy(join(home, 'trust')).enforce).toBe(true);
+    expect(env.client.consumerKeys.has(legacy.id)).toBe(false);
+    expect(readable(env, legacy).at(-1)?.type).toBe('trust_required');
+  });
+
+  it('picks up `kraki devices revoke` / `enforce` made by another process', async () => {
+    const { env, laptop } = pairedPolicy(false);
+    (env.client as unknown as { startTrustRefresh(): void }).startTrustRefresh();
+    const other = new TrustStore(join(home, 'trust'));
+    other.remove(laptop.id);
+    other.setPolicy({ enforce: true });
+    await new Promise((r) => setTimeout(r, 2_300));
+    expect(env.client.deviceTrust!.enforced).toBe(true);
+    expect(env.client.consumerKeys.has(laptop.id)).toBe(false);
+    env.client.disconnect();
+  });
+});
+
+describe('device trust — default policy', () => {
+  it('a fresh install enforces; an upgraded install stays compatible', () => {
+    const fresh = new KeyManager(join(home, 'fresh', 'keys'));
+    fresh.getKeyPair();
+    expect(existsSync(join(home, 'fresh', 'keys', 'identity-ed25519.key'))).toBe(true);
+    expect(readTrustPolicy(join(home, 'fresh', 'trust')).enforce).toBe(true);
+
+    const old = new KeyManager(join(home, 'old', 'keys'));
+    writeFileSync(join(home, 'old', 'keys', 'private.pem'), generateKeyPair().privateKey, { mode: 0o600 });
+    new KeyManager(join(home, 'old', 'keys')).getPublicIdentity();
+    expect(readTrustPolicy(join(home, 'old', 'trust')).enforce).toBe(false);
+    void old;
+  });
+});
+
+describe('device trust — push previews', () => {
+  it('paired apps get a signed X25519 preview that fits in an APNs payload', () => {
+    const env = setup('enforce');
+    const phone = makeApp('dev_phone');
+    joined(env, phone);
+    env.deliver(pairRequest(env, phone, createPairingSecret(home)), phone.id);
+    const client = env.client as unknown as { closingTurnPush: Map<string, { failure?: string }>; lastAgentContent: Map<string, string> };
+    client.closingTurnPush.set('s1', {});
+    client.lastAgentContent.set('s1', '中文 "quoted" '.repeat(200));
+    const built = buildPushPreview(env.client, { type: 'idle', sessionId: 's1' })!;
+    const key = built.encrypted!.keys[phone.id]!;
+    expect(key.startsWith('v2.')).toBe(true);
+    expect(built.encrypted!.blob).toBe('');
+    const opened = JSON.parse(decryptV2(key.slice(3), phone.id, phone.xk.privateKey));
+    expect(isSignedMessage(opened)).toBe(true);
+    expect(verifySignature(opened, env.tentacle.identityKey)).toBe(true);
+    expect(opened.to).toBe(phone.id);
+    expect(JSON.parse(opened.body).type).toBe('idle');
+    expect(Buffer.byteLength(buildApnsPayload({ blob: built.encrypted!.blob, key }))).toBeLessThanOrEqual(4096);
   });
 });

@@ -16,7 +16,7 @@ final class DeviceTrustTests: XCTestCase {
     override func setUp() {
         super.setUp()
         suite = "DeviceTrustTests.\(UUID().uuidString)"
-        store = TentacleTrustStore(defaults: UserDefaults(suiteName: suite)!)
+        store = TentacleTrustStore(defaults: UserDefaults(suiteName: suite) ?? .standard)
     }
 
     override func tearDown() {
@@ -37,6 +37,48 @@ final class DeviceTrustTests: XCTestCase {
         ]
         static let secret = "5JHuX0U7LWjbxz0KSFNFmA"
         static let proof = "ZYREy6js-mrojiRIIRePZ7tzKSYBi8y2_qFWOcWqN-o"
+        static let safetyCode = "4254 2974 6431"
+        /// Signed by the identity above for dev_alpha (E2EV2NodeVectors), ts below.
+        static let pushKey = "v2.wB8BAQzeR10WquyBckCJEHUAAAFK8_BE803_SImwR_us8kUD6Ctl3II_gE-dqNZv-fOT3W2xafE7CTo4cdk5zsFcDe3aLHcMfD5d5YLHhvJYA01TSKQJdxfIG8C9Jmz1yS8NgAPlERdzIZW5kV9gs4VmOK_jiwRgl9XxBW6bcqkgdWOF1F8MQIxM5KJM4nrNd3ZHvjr0i6_dCihfBFE0DpLB-kKhtlxA1_ONz-vkKGtEq1SK6YwNssvv5NQgM2SwAe4znBJga7AzPrY-XrnrpwQ2EIu0hswmzPhf_hugspWXaxpEMaCp-sLHLrz7BAn6OX2Z471EX0xPgNImP1UEo1DDLWD1eRi2_wy7RPPv1eRGDAqHF_eeU8iJl8fQq6mDKJ6ihAtJ3Fm5E1xyAXkVF0yLULJdZzDgWrvNJ7z_RG39zABY8-p7W6ifoeBgJiclh8i7HBmc6A8TMnhoNcQ8AAEACWRldl9hbHBoYQAgf-PY3MVWzoNtwtmGF63o4AEkvEmDCIKsfFaJaK3ZWk4APCWm-WxTLnq_LeApQtQ9-JcY9qU8kZQtaHRVF-e43rhtaD-mD00v9PKO6dkgIocKrTsTSlEHh8D-J9zpMw"
+        static let pushPreview = #"{"nid":"n1","type":"question","summary":"Proceed? ✓","sessionId":"s1","title":"Fix bug"}"#
+        static let pushTs: Int64 = 1760000000999
+    }
+
+    func testSafetyCodeMatchesNode() {
+        XCTAssertEqual(DeviceTrustWire.safetyCode(NodeVectors.identityPublic), NodeVectors.safetyCode)
+        XCTAssertNil(DeviceTrustWire.safetyCode("short"))
+    }
+
+    func testOpensNodePushPreviewOnlyFromThePinnedComputer() throws {
+        let alpha = E2EV2NodeVectors.recipients[0]
+        let key = try CoinfraCrypto.importEncryptionPrivateKey(alpha.privateKey)
+        let at = Date(timeIntervalSince1970: Double(NodeVectors.pushTs) / 1000 + 60)
+        // Not pinned: refused.
+        XCTAssertThrowsError(try DeviceTrustPush.open(key: NodeVectors.pushKey, selfId: alpha.id, agreementKey: key, store: store, now: at))
+        store.update("dev_tentacle") { pin in
+            pin = TentaclePin(identityKey: NodeVectors.identityPublic, encryptionKey: alpha.publicKey,
+                              paired: true, secret: nil, via: "qr", pinnedAt: Date())
+        }
+        XCTAssertEqual(try DeviceTrustPush.open(key: NodeVectors.pushKey, selfId: alpha.id, agreementKey: key, store: store, now: at),
+                       NodeVectors.pushPreview)
+        // A replay a day later is refused.
+        XCTAssertThrowsError(try DeviceTrustPush.open(key: NodeVectors.pushKey, selfId: alpha.id, agreementKey: key, store: store,
+                                                      now: at.addingTimeInterval(25 * 3600)))
+        // Pinned under another key (the relay's): refused.
+        pin("dev_tentacle", key: Curve25519.Signing.PrivateKey())
+        XCTAssertThrowsError(try DeviceTrustPush.open(key: NodeVectors.pushKey, selfId: alpha.id, agreementKey: key, store: store, now: at))
+    }
+
+    func testTrustRequiredHintFromAnUnpinnedComputerOnly() throws {
+        let computer = Curve25519.Signing.PrivateKey()
+        let hint = try signed(["type": "trust_required", "deviceId": "dev_new"], from: "dev_new", key: computer)
+        let out = try XCTUnwrap(check(hint, src: "dev_new"))
+        XCTAssertTrue(out.contains("trust_required"))
+        // Anything else from an unpinned signer is refused.
+        XCTAssertNil(check(try signed(["type": "session_list", "deviceId": "dev_new"], from: "dev_new", key: computer), src: "dev_new"))
+        // A paired computer's trust_required must carry its pinned signature.
+        pin("dev_t", key: Curve25519.Signing.PrivateKey())
+        XCTAssertNil(check(try signed(["type": "trust_required", "deviceId": "dev_t"], from: "dev_t", key: computer), src: "dev_t"))
     }
 
     func testVerifiesNodeSignature() throws {

@@ -92,6 +92,8 @@ extension AppState {
         messageRouter = router
         wsClient?.onMessage = { [weak router] data in router?.handleRawMessage(data) }
         authManager?.clearStoredCredentials()
+        // A new sign-in is a new device: computers pair it again.
+        resetDeviceTrust()
         preferencesManager?.resetVocabulary()
         clearStoredRelayURL()
         deviceId = nil

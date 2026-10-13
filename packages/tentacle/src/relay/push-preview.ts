@@ -92,14 +92,20 @@ export function buildPushPreview(
   // specifically for offline delivery — online devices already got the real
   // message via the live pulse stream.
   const previewRecipients: RecipientKey[] = [];
+  const pairedRecipients: string[] = [];
   for (const [deviceId, compactKey] of client.consumerKeys) {
+    // Paired apps get a signed X25519 preview of their own (below).
+    if (client.deviceTrust?.isTrusted(deviceId)) {
+      pairedRecipients.push(deviceId);
+      continue;
+    }
     try {
       previewRecipients.push({ deviceId, publicKey: importPublicKey(compactKey) });
     } catch {
       // skip invalid keys
     }
   }
-  if (previewRecipients.length === 0 && !client.localLink?.peerIds().length) return undefined;
+  if (previewRecipients.length === 0 && pairedRecipients.length === 0 && !client.localLink?.peerIds().length) return undefined;
   traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'PUSH-PREVIEW-BUILD', previewType, recipientCount: previewRecipients.length, onlineCount: client.onlineConsumers.size, offlineCount: previewRecipients.length - client.onlineConsumers.size });
   try {
     const preview = JSON.stringify({
@@ -112,13 +118,19 @@ export function buildPushPreview(
       sessionId: msg.sessionId,
       ...(title ? { title } : {}),
     });
-    // Paired apps without a pinned RSA key (Kraki for Mac) have no RSA
-    // recipient here; they get the preview over the local link only.
-    // TODO(device-trust): sign push previews and move them to X25519 once
-    // the iOS Notification Service Extension can verify/decrypt them.
-    if (previewRecipients.length === 0) return { encrypted: null, plaintext: preview };
-    const previewBlob = encryptToBlob(preview, previewRecipients);
-    return { encrypted: { blob: previewBlob.blob, keys: previewBlob.keys }, plaintext: preview };
+    const keys: Record<string, string> = {};
+    let blob = '';
+    if (previewRecipients.length > 0) {
+      const legacy = encryptToBlob(preview, previewRecipients);
+      blob = legacy.blob;
+      Object.assign(keys, legacy.keys);
+    }
+    for (const appId of pairedRecipients) {
+      const sealed = client.deviceTrust!.sealPushPreview(preview, appId);
+      if (sealed) keys[appId] = sealed;
+    }
+    if (previewRecipients.length === 0 && Object.keys(keys).length === 0) return { encrypted: null, plaintext: preview };
+    return { encrypted: { blob, keys }, plaintext: preview };
   } catch (err) {
     logger.debug({ err }, 'Pulse push-preview build failed');
     return undefined;

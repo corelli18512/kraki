@@ -2,11 +2,12 @@
  * Device trust on the Tentacle: seal outbound payloads to pinned app keys,
  * authenticate inbound commands, and accept pairings.
  *
- * Two modes:
- * - **enforced** (`KRAKI_DEVICE_TRUST=enforce`): only paired apps receive
+ * Two modes, from `<KRAKI_HOME>/trust/policy.json` (`kraki devices enforce
+ * on|off`, or a paired app), overridable with `KRAKI_DEVICE_TRUST`:
+ * - **enforced**: only paired apps receive
  *   anything and only their signed messages are acted on. The relay can drop
  *   or delay traffic, but cannot read it, inject commands or enroll a device.
- * - **compatible** (default): paired apps get signed X25519 payloads and must
+ * - **compatible**: paired apps get signed X25519 payloads and must
  *   sign; unpaired apps keep the legacy RSA path. This is the migration step:
  *   pair every app, then enforce.
  *
@@ -25,6 +26,8 @@ import { logger } from './shared.js';
 /** `consumerKeys` value for a paired app without a pinned RSA key: it gets
  *  X25519 payloads only (and no RSA push preview). */
 export const NO_RSA_KEY = 'x25519-only';
+/** Marks a device-trust push preview in the preview's per-device `keys`. */
+export const PUSH_V2_PREFIX = 'v2.';
 
 export type OpenResult =
   | { kind: 'message'; inner: Record<string, unknown>; signed: boolean }
@@ -40,10 +43,20 @@ export interface PairOutcome {
   device?: TrustedDevice;
 }
 
-export function deviceTrustEnforcedFromEnv(): boolean {
+/** A fixed mode from the environment, if set. */
+export function deviceTrustModeFromEnv(): 'enforce' | 'compatible' | undefined {
   const v = process.env.KRAKI_DEVICE_TRUST;
-  return v === 'enforce' || v === '1';
+  if (v === 'enforce' || v === '1') return 'enforce';
+  if (v === 'compatible' || v === '0') return 'compatible';
+  return undefined;
 }
+
+/** Messages only a paired app may send (checked by signature). */
+export const TRUST_ADMIN_TYPES: ReadonlySet<string> = new Set([
+  'request_trusted_devices',
+  'revoke_device',
+  'set_trust_policy',
+]);
 
 export class DeviceTrust {
   readonly stats = { signedIn: 0, unsignedIn: 0, rejected: 0, v2Out: 0, rsaOut: 0, paired: 0 };
@@ -51,9 +64,19 @@ export class DeviceTrust {
   constructor(
     private readonly keyManager: KeyManager,
     readonly store: TrustStore,
-    readonly enforced: boolean,
+    /** Fixed mode (option / environment); undefined follows the policy file. */
+    private readonly fixedMode: 'enforce' | 'compatible' | undefined,
     private readonly selfId: () => string | undefined,
   ) {}
+
+  get enforced(): boolean {
+    return this.fixedMode ? this.fixedMode === 'enforce' : this.store.enforced;
+  }
+
+  /** Whether the mode can be changed (not fixed by option/environment). */
+  get policyLocked(): boolean {
+    return this.fixedMode !== undefined;
+  }
 
   isTrusted(appId: string): boolean {
     return this.store.has(appId);
@@ -112,6 +135,18 @@ export class DeviceTrust {
   sealToKey(plaintext: string, target: string, encryptionKey: string): string {
     const blob = encryptV2(this.sign(plaintext, target), [{ recipientId: target, publicKey: encryptionKey }]);
     return JSON.stringify({ v: 2, blob });
+  }
+
+  /**
+   * A push preview for one paired app: signed and encrypted to its pinned
+   * X25519 key, as the `v2.`-prefixed entry of the preview's `keys` map. The
+   * Head forwards `{blob, key}` per device unchanged; the app (or iOS
+   * Notification Service Extension) verifies the signature before showing it.
+   */
+  sealPushPreview(preview: string, appId: string): string | undefined {
+    const device = this.store.get(appId);
+    if (!device) return undefined;
+    return PUSH_V2_PREFIX + encryptV2(this.sign(preview, appId), [{ recipientId: appId, publicKey: device.encryptionKey }]);
   }
 
   /** Signed message RSA-encrypted to a relay-reported key — only for notices

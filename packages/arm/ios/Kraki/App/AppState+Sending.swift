@@ -70,27 +70,11 @@ extension AppState {
             deviceStore.deviceFeatures[$0]?.contains(PayloadFragments.feature) == true
         } ?? false
 
-        // Device trust: a paired computer gets the message signed with this
-        // device's identity key and encrypted to the X25519 key pinned at
-        // pairing — never to a key the relay reported.
-        let trust = TentacleTrustStore.shared
-        if let targetDeviceId, let pin = trust.pairedPin(targetDeviceId) {
-            guard let payload = sealSigned(innerString, to: targetDeviceId, recipients: [(targetDeviceId, pin.encryptionKey)]) else {
-                return false
-            }
-            return deliverEncrypted(payload, target: targetDeviceId, connectionScoped: connectionScoped,
-                                    fragment: fragment, replayable: replayable)
-        }
-        var pairedInBroadcast: Set<String> = []
-        if targetDeviceId == nil {
-            let paired = deviceStore.devices.values
-                .filter { $0.role == .tentacle }
-                .compactMap { d in trust.pairedPin(d.id).map { (deviceId: d.id, publicKey: $0.encryptionKey) } }
-            if !paired.isEmpty, let payload = sealSigned(innerString, to: DeviceTrustWire.anyRecipient, recipients: paired) {
-                _ = deliverEncrypted(payload, target: nil, connectionScoped: connectionScoped, fragment: false, replayable: false)
-                pairedInBroadcast = Set(paired.map(\.deviceId))
-            }
-        }
+        // Device trust: computers pinned at pairing (see sendToPinnedComputers).
+        let pinned = sendToPinnedComputers(innerString, target: targetDeviceId, connectionScoped: connectionScoped,
+                                           fragment: fragment, replayable: replayable)
+        if let handled = pinned.result { return handled }
+        let pairedInBroadcast = pinned.covered
 
         // Collect recipient encryption keys
         var recipients: [RecipientKey] = []
@@ -130,30 +114,9 @@ extension AppState {
 
         do {
             let blob = try crypto.encryptToBlob(innerString, recipients: recipients)
-            #if os(macOS)
-            // The Tentacle on this Mac is reached over loopback, not the Head.
-            if let targetDeviceId, let localLink,
-               localLink.sendEncrypted(
-                   blob: blob.blob, keys: blob.keys, to: targetDeviceId,
-                   connectionScoped: connectionScoped,
-                   replayable: Self.replayableAcrossRoutes.contains(message["type"] as? String ?? "")
-               ) {
-                KLog.d("📤🔒 local link → \(targetDeviceId.prefix(12))...")
-                return true
-            }
-            #endif
-            KLog.d("📤🔒 pulse → \(targetDeviceId?.prefix(12) ?? "broadcast")...")
-            guard let pulseManager else { return false }
-            pulseManager.sendEncrypted(
-                blob: blob.blob,
-                keys: blob.keys,
-                target: targetDeviceId,
-                connectionScoped: connectionScoped,
-                fragment: targetDeviceId.map {
-                    deviceStore.deviceFeatures[$0]?.contains(PayloadFragments.feature) == true
-                } ?? false
-            )
-            return true
+            KLog.d("📤🔒 → \(targetDeviceId?.prefix(12) ?? "broadcast")...")
+            return deliverEncrypted(["blob": blob.blob, "keys": blob.keys], target: targetDeviceId,
+                                    connectionScoped: connectionScoped, fragment: fragment, replayable: replayable)
         } catch {
             KLog.d("❌ sendEncrypted: encryption failed: \(error)")
             return false
@@ -186,5 +149,31 @@ extension AppState {
         guard let pulseManager else { return false }
         pulseManager.sendEncryptedPayload(payload, target: target, connectionScoped: connectionScoped, fragment: fragment)
         return true
+    }
+
+    /// A computer pinned from its QR code (or this Mac) gets the message signed
+    /// with this device's identity key and encrypted to its pinned X25519 key —
+    /// never to a key the relay reported. This holds from the moment of
+    /// pinning: a pairing in progress or refused must not fall back to the
+    /// relay's key. `result` is set when the send is fully handled here;
+    /// `covered` lists broadcast recipients already sent to.
+    private func sendToPinnedComputers(
+        _ inner: String, target: String?, connectionScoped: Bool, fragment: Bool, replayable: Bool
+    ) -> (result: Bool?, covered: Set<String>) {
+        let trust = TentacleTrustStore.shared
+        if let target {
+            guard let pin = trust.pin(target) else { return (nil, []) }
+            guard let payload = sealSigned(inner, to: target, recipients: [(target, pin.encryptionKey)]) else { return (false, []) }
+            return (deliverEncrypted(payload, target: target, connectionScoped: connectionScoped,
+                                     fragment: fragment, replayable: replayable), [])
+        }
+        let pinned = deviceStore.devices.values
+            .filter { $0.role == .tentacle }
+            .compactMap { d in trust.pin(d.id).map { (deviceId: d.id, publicKey: $0.encryptionKey) } }
+        guard !pinned.isEmpty, let payload = sealSigned(inner, to: DeviceTrustWire.anyRecipient, recipients: pinned) else {
+            return (nil, [])
+        }
+        _ = deliverEncrypted(payload, target: nil, connectionScoped: connectionScoped, fragment: false, replayable: false)
+        return (nil, Set(pinned.map(\.deviceId)))
     }
 }

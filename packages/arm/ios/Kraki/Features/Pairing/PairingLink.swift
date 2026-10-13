@@ -77,17 +77,20 @@ enum PairingLinkPrompt: Identifiable, Equatable {
     /// This phone is already connected; pairing again would only matter for a
     /// different account, which requires logging out first.
     case alreadyConnected(PairingLink, login: String?)
+    /// The code names a computer this app is paired with, under another key.
+    case replaceComputerKey(PairingLink, name: String)
 
     var id: String {
         switch self {
         case .confirmRelay(let link): return "relay:\(link.token)"
         case .alreadyConnected(let link, _): return "connected:\(link.token)"
+        case .replaceComputerKey(let link, _): return "rekey:\(link.token)"
         }
     }
 
     var link: PairingLink {
         switch self {
-        case .confirmRelay(let link), .alreadyConnected(let link, _): return link
+        case .confirmRelay(let link), .alreadyConnected(let link, _), .replaceComputerKey(let link, _): return link
         }
     }
 }
@@ -96,15 +99,21 @@ extension AppState {
     /// Entry point for every pairing link (scanner, Camera universal link,
     /// manual paste). Asks first when the relay is untrusted or the phone is
     /// already connected; otherwise pairs immediately.
-    func openPairingLink(_ link: PairingLink, relayConfirmed: Bool = false) {
+    func openPairingLink(_ link: PairingLink, relayConfirmed: Bool = false, keyChangeConfirmed: Bool = false) {
         if link.needsRelayConfirmation && !relayConfirmed {
             pendingPairingPrompt = .confirmRelay(link)
             return
         }
         // Already signed in to this account: a QR that carries device trust
         // pairs this app with that computer (the usual "re-scan to pair").
-        if hasStoredCredentials && hasCompletedInitialConnect, link.trust != nil,
-           link.relay == nil || link.relay == relayURL {
+        // (The computer must be one of this account's devices; the relay in
+        // the link may differ from ours by region.)
+        if hasStoredCredentials && hasCompletedInitialConnect, let trust = link.trust,
+           link.relay == nil || link.relay == relayURL || deviceStore.devices[trust.tentacleId] != nil {
+            if !keyChangeConfirmed, pairingLinkChangesKey(link) {
+                pendingPairingPrompt = .replaceComputerKey(link, name: deviceStore.devices[trust.tentacleId]?.name ?? "this computer")
+                return
+            }
             pairWithComputer(link)
             return
         }

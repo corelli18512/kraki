@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Storage, HeadServer, OpenAuthProvider } from '@kraki/head';
-import { SessionManager, RelayClient, KeyManager, AttachmentStore, createPairingSecret } from '@kraki/tentacle';
+import { SessionManager, RelayClient, KeyManager, AttachmentStore, createPairingSecret, writeTrustPolicy } from '@kraki/tentacle';
 import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { WebSocket } from 'ws';
@@ -72,7 +72,10 @@ export class ChaosStack {
     await this.startTentacle();
     this.sessionId = await this.createSession();
     if (process.env.CHAOS_DEVICE_TRUST === 'enforce') {
+      // Through the policy file, like `kraki devices enforce on`, so a paired
+      // app can change it.
       this.trustMode = 'enforce';
+      writeTrustPolicy(join(this.root, 'trust'), { enforce: true });
       await this.restartTentacle();
     }
     if (options.controlPort !== undefined) await this.startControl(options.controlPort);
@@ -112,7 +115,7 @@ export class ChaosStack {
       relayUrl: `ws://127.0.0.1:${this.tentacleProxy.port}`,
       device,
       authMethod: 'open',
-      deviceTrust: this.trustMode,
+      ...(this.trustMode === 'enforce' ? {} : { deviceTrust: 'compatible' as const }),
       // The Swift harness is not the same-Mac App: keep it on the Head.
       localLink: false,
     }, this.keys, this.attachments);
@@ -261,6 +264,7 @@ export class ChaosStack {
         case 'POST /trust/rogue-input': out = await this.rogueInput(String(body.text ?? 'rogue'), String(body.sessionId ?? this.sessionId)); break;
         case 'GET /trust/state': out = {
           mode: this.trustMode,
+          enforced: this.relay.deviceTrust?.enforced ?? false,
           root: this.root,
           trusted: this.relay.deviceTrust?.store.ids() ?? [],
           stats: this.relay.deviceTrust?.stats ?? null,

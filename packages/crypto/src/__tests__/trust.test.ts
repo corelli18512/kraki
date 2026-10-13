@@ -12,6 +12,7 @@ import {
   isRawPublicKey,
   isSignedMessage,
   pairingProof,
+  safetyCode,
   signMessage,
   verifyPairingProof,
   verifySignature,
@@ -126,6 +127,7 @@ describe('cross-implementation vectors', () => {
     identity: { privateKey: string; publicKey: string };
     signed: Parameters<typeof verifySignature>[0];
     pairing: { secret: string; claim: PairingClaim; proof: string };
+    safetyCode: string;
   };
 
   it('match this implementation', () => {
@@ -136,5 +138,7 @@ describe('cross-implementation vectors', () => {
     // Ed25519 (RFC 8032) is deterministic.
     expect(resigned.sig).toBe(vectors.signed.sig);
     expect(pairingProof(vectors.pairing.secret, vectors.pairing.claim)).toBe(vectors.pairing.proof);
+    expect(safetyCode(vectors.identity.publicKey)).toBe(vectors.safetyCode);
+    expect(safetyCode(vectors.identity.publicKey)).toMatch(/^\d{4} \d{4} \d{4}$/);
   });
 });

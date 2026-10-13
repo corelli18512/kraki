@@ -282,6 +282,7 @@ struct MainWindowView: View {
     private var inspectorShown: Bool = false
 
     @State private var pairingPresented: Bool = false
+    @State private var trustPasteFor: DeviceSummary?
     @State private var pendingDeleteSessionId: String? = nil
     @State private var sidebarSearchText = ""
     @State private var chatPresentation: ChatPresentation?
@@ -317,6 +318,9 @@ struct MainWindowView: View {
                 VStack(spacing: 0) {
                     sidebarSectionHeader
                     connectionNoticeRow
+                    PairingNeededBanner { device in
+                        if !appState.macPairLocallyIfPossible(device) { trustPasteFor = device }
+                    }
                     SessionsSidebarView(
                         selectedSessionId: $selectedSessionId,
                         searchText: sidebarSearchText,
@@ -363,9 +367,11 @@ struct MainWindowView: View {
                 )
             }
         )
+        .overlay(alignment: .top) { PairingFeedbackToast() }
         .sheet(isPresented: $pairingPresented) {
             PairingSheet()
         }
+        .sheet(item: $trustPasteFor) { device in PastePairingLinkSheet(computer: device) }
         .onReceive(NotificationCenter.default.publisher(for: .macToggleSidebar)) { _ in
             withAnimation(.easeInOut(duration: 0.22)) { sidebarVisible.toggle() }
         }

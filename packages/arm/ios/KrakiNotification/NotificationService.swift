@@ -42,6 +42,8 @@ private func bridgeToSecKey(_ ref: CFTypeRef) -> SecKey? {
 ///   "aps": { "alert": { "title": "Kraki", "body": "Needs your attention" }, "mutable-content": 1 },
 ///   "kraki": { "blob": "<base64>", "key": "<base64 RSA-wrapped AES key>" }
 /// }
+/// or, from a computer this phone is paired with (device trust), `key` is
+/// `v2.<X25519 envelope>` of a preview the computer signed (`blob` empty).
 class NotificationService: UNNotificationServiceExtension {
 
     private var contentHandler: ((UNNotificationContent) -> Void)?
@@ -72,7 +74,9 @@ class NotificationService: UNNotificationServiceExtension {
         }
 
         do {
-            let decrypted = try decryptPreview(blob: blob, wrappedKey: key)
+            let decrypted = key.hasPrefix(DeviceTrustPush.prefix)
+                ? try openTrustedPreview(key: key)
+                : try decryptPreview(blob: blob, wrappedKey: key)
             let preview = PushPreviewFormat.content(fromJSON: decrypted)
             content.title = preview.title
             content.subtitle = ""
@@ -112,6 +116,16 @@ class NotificationService: UNNotificationServiceExtension {
     }
 
     // MARK: - Crypto
+
+    /// A signed device-trust preview: only shown if a computer this phone
+    /// paired with signed it for this phone.
+    private func openTrustedPreview(key: String) throws -> String {
+        guard let selfId = DeviceTrustDefaults.shared.string(forKey: "kraki.deviceId"),
+              let agreementKey = DeviceIdentityKeys.shared.existingAgreementKey() else {
+            throw NSError(domain: "KrakiNotification", code: 7, userInfo: [NSLocalizedDescriptionKey: "Not paired"])
+        }
+        return try DeviceTrustPush.open(key: key, selfId: selfId, agreementKey: agreementKey)
+    }
 
     private func decryptPreview(blob: String, wrappedKey: String) throws -> String {
         // Load encryption private key from shared keychain

@@ -313,3 +313,18 @@ export function verifyPairingProof(secret: string, claim: PairingClaim, proof: s
     return false;
   }
 }
+
+// ── Safety code ─────────────────────────────────────────
+
+/**
+ * Twelve digits, grouped `1234 5678 9012`, derived from an identity key.
+ * Shown by the computer (`kraki devices`) and by every app for its pinned
+ * key, so a user can confirm both sides hold the same key without trusting
+ * the relay. First 8 bytes of SHA-256(raw key) as a big-endian integer, mod 10^12.
+ */
+export function safetyCode(identityKey: string): string {
+  const digest = createHash('sha256').update(fromB64url(identityKey)).digest();
+  const n = digest.readBigUInt64BE(0) % 1_000_000_000_000n;
+  const s = n.toString().padStart(12, '0');
+  return `${s.slice(0, 4)} ${s.slice(4, 8)} ${s.slice(8)}`;
+}
