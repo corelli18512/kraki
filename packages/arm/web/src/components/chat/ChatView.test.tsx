@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ChatView } from './ChatView';
 import { useStore } from '../../hooks/useStore';
+import { agentNavigationColors } from '../../lib/color';
+
+const viewport = vi.hoisted(() => ({ narrow: false }));
+vi.mock('../../hooks/useNarrow', () => ({ useNarrow: () => viewport.narrow }));
 
 vi.mock('./ChatScroller', () => ({
   ChatScroller: ({ rows }: { rows: { kind: string }[] }) => <div data-testid="live-rows">{rows.filter((r) => r.kind === 'live').length}</div>,
@@ -12,7 +16,23 @@ vi.mock('./Composer', () => ({
 }));
 
 beforeEach(() => {
+  viewport.narrow = false;
   useStore.setState({ sessions: new Map(), runtimeStatuses: new Map(), messages: new Map(), cards: new Map() });
+});
+
+describe('ChatView history navigation', () => {
+  it('sets the shared native session tint and fixed Mac clearance without changing mobile clearance', () => {
+    const { container, rerender } = render(<ChatView sessionId="mv23g6gx-gq3i4yy8" topInset={40} />);
+    const jump = container.querySelector<HTMLElement>('.kjump')!;
+    expect(jump.style.bottom).toBe('57px');
+    expect(jump.style.getPropertyValue('--k-jump-light')).toBe('hsl(95 70% 45%)');
+    expect(jump.style.getPropertyValue('--k-jump-dark')).toBe(agentNavigationColors('mv23g6gx-gq3i4yy8').dark);
+    viewport.narrow = true;
+    rerender(<ChatView sessionId="mv23g6gx-gq3i4yy8" topInset={64} />);
+    expect(jump.style.bottom).toBe('80px');
+    expect(screen.getByRole('button', { name: 'Previous reply' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeInTheDocument();
+  });
 });
 
 describe('ChatView compaction indicator', () => {

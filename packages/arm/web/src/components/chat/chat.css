@@ -19,6 +19,9 @@
   --k-fill-2: rgba(120, 120, 128, 0.16);
   --k-user: #0b5b9c;           /* kraki-500 */
   --k-link: #0056a8;
+  /* AppKit secondarySystemFill/separator, calibrated for browser compositing. */
+  --k-quote-fill: rgba(0, 0, 0, 0.075);
+  --k-quote-rule: rgba(0, 0, 0, 0.095);
 
   --k-control: 44px;           /* iPhone round controls */
   --k-gap: 8px;
@@ -53,6 +56,8 @@
   --k-fill-2: rgba(120, 120, 128, 0.32);
   --k-user: #5ea0d7;           /* kraki-300 */
   --k-link: #8fd5ff;
+  --k-quote-fill: rgba(255, 255, 255, 0.078);
+  --k-quote-rule: rgba(255, 255, 255, 0.098);
 
 }
 
@@ -113,6 +118,7 @@
   border-radius: 999px;
   font: 600 13px/18px var(--k-font);
 }
+.khead.is-wide .khead-title { color: var(--color-text-title); }
 .khead.is-wide .khead-title:hover { filter: brightness(0.98); }
 .khead.is-wide .khead-mode { position: absolute; top: 8px; right: 14px; }
 
@@ -577,22 +583,26 @@
 .kmd a { color: var(--k-link); text-decoration: none; }
 .kmd a:hover { text-decoration: underline; }
 .kbubble-user .kmd a { color: #fff; }
-.kmd ul, .kmd ol { margin: 0 0 8px; padding-left: 22px; }
-.kmd li { margin: 0 0 3px; padding-left: 2px; }
+.kmd ul, .kmd ol { margin: 0 0 8px; }
+.kmd ul { padding-left: 18px; }
+.kmd ol { padding-left: 25px; }
+.kmd li { margin: 0 0 3px; padding-left: 0; }
 .kmd ul { list-style: none; }
 .kmd ul > li { position: relative; }
 .kmd ul > li::before {
   content: "•";
   position: absolute;
-  left: -16px;
-  color: var(--k-text-3);
+  left: -18px;
+  color: var(--color-label-secondary);
   font-weight: 600;
 }
 .kbubble-user .kmd ul > li::before { color: rgba(255, 255, 255, 0.7); }
 .kmd ol { list-style: decimal; }
-.kmd ol > li::marker { color: var(--k-text-2); font-weight: 600; }
+.kmd ol > li::marker { color: var(--color-label-secondary); font-weight: 600; }
 .kmd li > p { margin: 0; }
 .kmd li > ul, .kmd li > ol { margin: 3px 0 0; }
+/* Native list depth advances 18pt even when the parent marker uses 25pt. */
+.kmd ol > li > ul, .kmd ol > li > ol { margin-left: -7px; }
 .kmd ul:has(+ ol), .kmd ol:has(+ ul) { margin-bottom: 3px; }
 .kmd ul:has(+ .kmd-native-rule), .kmd ol:has(+ .kmd-native-rule) { margin-bottom: 18px; }
 .kmd code {
@@ -605,7 +615,7 @@
   margin: 0 0 8px;
   padding: 3px 8px 3px 14px;
   border-radius: 8px;
-  background: var(--k-fill);
+  background: var(--k-quote-fill);
 }
 .kmd blockquote::before {
   content: "";
@@ -615,7 +625,7 @@
   left: 0;
   width: 3px;
   border-radius: 1.5px;
-  background: var(--k-text-3);
+  background: var(--k-quote-rule);
 }
 .kmd blockquote p { margin: 0; line-height: 19px; }
 .kmd-native-rule { display: block; margin: 0 0 6px; font: 15px/18px var(--k-font); }
@@ -689,7 +699,7 @@
 .ktable-grid th, .ktable-grid td { padding: 7px 10px; vertical-align: top; max-width: 420px; overflow-wrap: anywhere; }
 .ktable-grid th {
   background: var(--kt-head);
-  color: var(--k-text-2);
+  color: var(--color-label-secondary);
   font-size: 12.5px;
   line-height: 15px;
   font-weight: 600;
@@ -698,7 +708,7 @@
 }
 .ktable .ktable-grid th:first-child { border-top-left-radius: 10px; }
 .ktable .ktable-grid th:last-child { border-top-right-radius: 10px; }
-.ktable-grid tbody td { box-shadow: inset 0 0.5px var(--kt-hair); color: var(--k-text); }
+.ktable-grid tbody td { box-shadow: inset 0 0.5px var(--kt-hair); color: var(--color-label-primary); }
 .ktable-grid td.is-num { white-space: nowrap; }
 .ktable-grid code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--k-text) 8%, transparent); font: 12.5px var(--k-mono); }
 .ktable-grid a { color: #0056a8; }
@@ -788,6 +798,15 @@
 .kround svg { width: 18px; height: 18px; stroke-width: 2.5; }
 .kround[aria-label="Jump to latest"] { color: #7c3aed; }
 .dark .kround[aria-label="Jump to latest"] { color: #c4b5fd; }
+@media (min-width: 768px) {
+  .kjump { right: 16px; }
+  .kjump .kround {
+    color: var(--k-jump-light);
+  }
+  .dark .kjump .kround {
+    color: var(--k-jump-dark);
+  }
+}
 .kround.is-visible { opacity: 1; transform: scale(1); pointer-events: auto; }
 /* ↑ rests in ↓'s slot and is pushed up while ↓ shows. */
 .kround.is-raised { bottom: calc(var(--k-control) + var(--k-gap)); }

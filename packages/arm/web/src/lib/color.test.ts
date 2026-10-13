@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { agentBubbleColors, stringToHue } from './color';
+import { agentBubbleColors, agentNavigationColors, stringToHue } from './color';
 import palette from './mac-agent-palette.json';
+
+describe('agentNavigationColors — MacChatScrollView template-button tint', () => {
+  it('uses the native session hue with separate light/dark saturation and lightness', () => {
+    expect(stringToHue('mv23g6gx-gq3i4yy8')).toBe(95);
+    expect(agentNavigationColors('mv23g6gx-gq3i4yy8')).toEqual({ light: 'hsl(95 70% 45%)', dark: 'hsl(95 75% 65%)' });
+    expect(agentNavigationColors('mv6hxl3c-v9oii65w')).toEqual({ light: 'hsl(78 70% 45%)', dark: 'hsl(78 75% 65%)' });
+    // Paired Chromium/native glyph pixels agree within one channel level.
+    expect(agentNavigationColors('s')).not.toEqual(agentBubbleColors('s'));
+  });
+});
 
 describe('agentBubbleColors — AppKit calibrated HSB to sRGB', () => {
   it('covers every hue in both native appearances', () => {
