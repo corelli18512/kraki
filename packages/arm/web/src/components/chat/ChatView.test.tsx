@@ -15,6 +15,59 @@ beforeEach(() => {
   useStore.setState({ sessions: new Map(), runtimeStatuses: new Map(), messages: new Map(), cards: new Map() });
 });
 
+describe('ChatView pending question live-row visibility', () => {
+  const question = { type: 'agent_message', seq: 1, sessionId: 's', deviceId: 'd', timestamp: '',
+    payload: { content: '', question: { id: 'q', text: 'Which parity color?', choices: ['Amber', 'Teal'] } } };
+
+  function waitingCard(text = '', action: unknown = null) {
+    useStore.setState({
+      sessions: new Map([['s', { id: 's', state: 'active', lastSeq: 1 } as never]]),
+      messages: new Map([['s', [question as never]]]),
+      cards: new Map([['s', { text, action, closed: false } as never]]),
+    });
+  }
+
+  it('does not draw an empty typing row under a pending question, even if the card reopened', () => {
+    waitingCard();
+    render(<ChatView sessionId="s" topInset={56} />);
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+  });
+
+  it('preserves genuine streamed prose after a pending question', () => {
+    waitingCard('Reading another file.');
+    render(<ChatView sessionId="s" topInset={56} />);
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+  });
+
+  it.each([
+    { type: 'tool_start', payload: { toolName: 'read' } },
+    { type: 'tool_batch', payload: { running: 2 } },
+    { type: 'permission', payload: { id: 'p' } },
+  ])('preserves a genuine $type action after a pending question', (action) => {
+    waitingCard('', action);
+    render(<ChatView sessionId="s" topInset={56} />);
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+  });
+
+  it('keeps the empty typing row for an active turn with no pending question', () => {
+    waitingCard();
+    useStore.setState({ messages: new Map() });
+    render(<ChatView sessionId="s" topInset={56} />);
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+  });
+
+  it('resumes the typing row once the question has been answered', () => {
+    waitingCard();
+    useStore.setState({
+      sessions: new Map([['s', { id: 's', state: 'active', lastSeq: 2 } as never]]),
+      messages: new Map([['s', [question, { type: 'user_message', seq: 2, sessionId: 's',
+        payload: { content: 'Amber', answerTo: 'q' } }] as never]]),
+    });
+    render(<ChatView sessionId="s" topInset={56} />);
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+  });
+});
+
 describe('ChatView compaction indicator', () => {
   it('does not show the capsule for an idle session', () => {
     render(<ChatView sessionId="s" topInset={56} />);
