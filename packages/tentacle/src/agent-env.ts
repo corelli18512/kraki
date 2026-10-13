@@ -9,7 +9,7 @@
  * scripts behave as in production. Drop them; everything else (the user's
  * login-shell PATH, credentials, `KRAKI_HOME`) is passed through.
  */
-export const DAEMON_ONLY_ENV = ['NODE_ENV', 'LOG_LEVEL', 'KRAKI_SUPERVISED', 'KRAKI_MANAGED_BY', 'KRAKI_META_FILE'] as const;
+export const DAEMON_ONLY_ENV = ['NODE_ENV', 'LOG_LEVEL', 'KRAKI_SUPERVISE', 'KRAKI_SUPERVISED', 'KRAKI_MANAGED_BY', 'KRAKI_META_FILE'] as const;
 
 export function agentEnv(
   extra: Record<string, string | undefined> = {},
