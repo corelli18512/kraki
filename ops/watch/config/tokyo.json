@@ -1,0 +1,28 @@
+{
+  "host": "tokyo",
+  "label": "东京",
+  "timezone": "Asia/Shanghai",
+  "quietHours": [23, 8],
+  "digestHour": 9,
+  "relayUnit": "kraki-relay",
+  "metricsUrl": "http://127.0.0.1:4000/internal/metrics",
+  "backupStatus": "/var/lib/kraki-watch/backup.json",
+  "disk": { "path": "/", "warning": 85, "critical": 95 },
+  "units": [
+    { "unit": "kraki-relay", "name": "东京 relay 进程", "severity": "critical" },
+    { "unit": "caddy", "name": "Caddy（东京反向代理）", "severity": "critical" },
+    { "unit": "kraki-diag", "id": "K-DIAG-DOWN", "name": "东京诊断服务", "severity": "warning" }
+  ],
+  "probes": [
+    { "id": "K-RELAY-DOWN", "target": "tokyo", "name": "东京 relay", "url": "https://relay.kraki.chat/", "expectBody": "\"status\":\"ok\"", "relay": true, "severity": "critical", "failAfter": 3, "local": true, "slow": true },
+    { "id": "K-RELAY-WS", "target": "tokyo", "kind": "ws", "name": "东京 relay WebSocket", "url": "wss://relay.kraki.chat/", "severity": "critical", "failAfter": 3, "local": true },
+    { "id": "K-RELAY-READY", "target": "tokyo", "name": "东京 relay 就绪检查", "url": "http://127.0.0.1:4000/health/ready", "expectBody": "\"status\":\"ready\"", "readiness": true, "severity": "critical", "failAfter": 3, "local": true },
+    { "id": "K-PEER-DOWN", "target": "cn", "name": "国内 relay（从东京看）", "url": "https://cn.relay.kraki.chat/", "expectBody": "\"status\":\"ok\"", "relay": true, "severity": "critical", "failAfter": 5, "timeoutMs": 15000 },
+    { "id": "K-WEB-DOWN", "target": "web", "name": "网页版", "url": "https://app.kraki.chat/", "severity": "critical", "failAfter": 3 },
+    { "id": "K-SITE-DOWN", "target": "site", "name": "官网", "url": "https://kraki.chat/", "severity": "warning", "failAfter": 5 },
+    { "id": "K-SITE-DOWN", "target": "dl-mac", "name": "Mac 下载链接", "url": "https://kraki.chat/download/mac", "expectRedirect": "/releases/download/mac-v[^/]+/Kraki\\.dmg$", "severity": "warning", "failAfter": 5 },
+    { "id": "K-SITE-DOWN", "target": "dl-win", "name": "Windows 下载链接", "url": "https://kraki.chat/download/windows", "expectRedirect": "/releases/download/win-v[^/]+/.+\\.exe$", "severity": "warning", "failAfter": 5 },
+    { "id": "K-VOICE-DOWN", "target": "stt", "name": "语音网关（stt.kraki.chat）", "url": "https://stt.kraki.chat/healthz", "expectBody": "\"ok\":true", "severity": "critical", "failAfter": 5, "timeoutMs": 15000 }
+  ],
+  "certs": ["relay.kraki.chat", "app.kraki.chat", "kraki.chat"]
+}

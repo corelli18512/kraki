@@ -1,6 +1,7 @@
 /** The WebSocket auth handshake: token / challenge auth, pairing tokens, replacing an older connection. */
 
 import { WebSocket } from 'ws';
+import { metrics } from '../metrics.js';
 import type { AuthMessage, AuthErrorCode, DeviceSummary } from '@kraki/protocol';
 import { DEVICE_REPLACED_CLOSE_CODE } from '@kraki/protocol';
 import { PULSE_ACK_EVERY_BYTES } from '../pulse-hub.js';
@@ -12,6 +13,7 @@ import { broadcastDeviceJoined, getDeviceSummaries } from './presence.js';
 import { publicPreferences, type ClientState } from './shared.js';
 
 export function sendAuthError(server: HeadServer, ws: WebSocket, code: AuthErrorCode, message: string, redirect?: string, deviceId?: string): void {
+  metrics().authFailed(code);
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'auth_error', code, message, ...(redirect && { redirect }), ...(deviceId && { deviceId }) }));
   }
@@ -132,6 +134,7 @@ export function handleBackendAuthResult(server: HeadServer, ws: WebSocket, state
   server.connections.set(result.deviceId, ws);
   server.userByDevice.set(result.deviceId, result.userId);
   trace('DEV-CONNECT', { device: result.deviceId, user: result.userId, auth: 'backend' });
+  metrics().inc('auth.ok');
 
   logger.info('Device authenticated (via backend)', {
     deviceId: result.deviceId,

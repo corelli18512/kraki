@@ -68,6 +68,22 @@ collector when `KRAKI_DIAG_DIR` is set. Existing embedded-mode deployments must
 move that route to Monitor before upgrading Head; independent `kraki-diag`
 deployments do not require a Head restart. See Monitor's migration instructions.
 
+## Health and metrics
+
+- `GET /` — liveness: `{"name":"@kraki/head","version":…,"status":"ok"}` while the process runs.
+- `GET /health/ready` — readiness: `200 {"status":"ready"}` only when the database
+  answers a query, the 30 s health tick is running (event loop not stuck) and every
+  push provider in `PUSH_PROVIDERS` loaded; otherwise `503 {"status":"not_ready","checks":…}`
+  naming the failed check. Point uptime monitors here.
+- `GET /internal/metrics` — counters and timings for the host's own alerting
+  ([`ops/watch`](../../ops/watch/README.md)): connections, auth ok/failed by code,
+  pulse frames and bytes in/out, forwarded messages, push sent/failed, and how long
+  the relay takes to handle one frame (histogram). Counts only: no device, user, IP
+  or payload data. Answers **direct loopback requests only**; anything that came
+  through a reverse proxy (any forwarding header) or from another address gets 404.
+- The log carries a `health` line every 30 s (connections, memory, durable rows,
+  event-loop delay `evlLagMs` p99 / `evlMaxMs`).
+
 ## Useful options
 
 ```bash

@@ -70,6 +70,11 @@ jobs:
           ./actionlint -shellcheck= -color
       - name: Test change routing
         run: node --test scripts/ci/test-scope.test.mjs scripts/ci/swiftlint-ratchet.test.mjs
+      - name: Test relay alerting (ops/watch)
+        run: |
+          node --test ops/watch/test/*.test.mjs
+          sh -n ops/watch/install.sh
+          sh -n scripts/backup-relay-db.sh
       - name: Select affected checks
         id: scope
         run: node scripts/ci/test-scope.mjs
