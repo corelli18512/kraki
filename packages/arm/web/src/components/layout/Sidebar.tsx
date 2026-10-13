@@ -87,14 +87,17 @@ export function Sidebar() {
   const [importOpen, setImportOpen] = useState(false);
   const [plusMenu, setPlusMenu] = useState(false);
   const [appMenu, setAppMenu] = useState(false);
+  // Escape dismisses either rail menu wherever focus is (the native menus do).
   useEffect(() => {
-    if (!appMenu) return;
+    if (!appMenu && !plusMenu) return;
     const dismiss = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setAppMenu(false);
+      if (event.key !== 'Escape') return;
+      setAppMenu(false);
+      setPlusMenu(false);
     };
     window.addEventListener('keydown', dismiss);
     return () => window.removeEventListener('keydown', dismiss);
-  }, [appMenu]);
+  }, [appMenu, plusMenu]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Tray › Settings… (Kraki for Windows).
   useEffect(() => desktop?.onOpen?.('settings', () => { if (narrow) setTab('settings'); else setSettingsOpen(true); }), [narrow]);

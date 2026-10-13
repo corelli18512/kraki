@@ -62,6 +62,14 @@ describe('Sidebar desktop rail', () => {
     fireEvent.keyDown(screen.getByLabelText('Search sessions'), { key: 'Escape' });
     expect(screen.queryByRole('menu')).toBeNull();
   });
+  it('dismisses the plus context menu with Escape even when focus is in Search', () => {
+    render(<MemoryRouter><Sidebar /></MemoryRouter>);
+    fireEvent.contextMenu(screen.getAllByLabelText('New session')[0]);
+    expect(screen.getByRole('menuitem', { name: 'Import Session…' })).toBeInTheDocument();
+    screen.getByLabelText('Search sessions').focus();
+    fireEvent.keyDown(screen.getByLabelText('Search sessions'), { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
   it('includes profile and sign-out menu items for authenticated accounts', () => {
     useStore.getState().setUser({ id: 'u', login: 'octocat', provider: 'github' });
     render(<MemoryRouter><Sidebar /></MemoryRouter>);

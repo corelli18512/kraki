@@ -61,3 +61,26 @@ it('opens the compact subagent card, preserves report source lines and returns t
   fireEvent.keyDown(window, { key: 'Escape' });
   expect(screen.getByRole('button', { name: 'Open subagent delegate' })).toBeInTheDocument();
 });
+
+describe('StepsModal — modal focus (native sheet)', () => {
+  it('takes focus from the trigger, keeps Tab inside, and restores the trigger on close', () => {
+    const trigger = document.createElement('button');
+    trigger.textContent = 'bubble';
+    document.body.appendChild(trigger);
+    trigger.focus();
+    const { unmount } = render(<StepsModal sessionId="s" bubbleSeq={2} onClose={() => {}} />);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    const close = screen.getByRole('button', { name: 'Close steps' });
+    for (let i = 0; i < 3; i++) {
+      fireEvent.keyDown(window, { key: 'Tab' });
+      expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    }
+    expect(close).toHaveFocus();
+    trigger.focus();
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    unmount();
+    expect(trigger).toHaveFocus();
+    trigger.remove();
+  });
+});

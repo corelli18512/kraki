@@ -62,7 +62,7 @@
 
 .ns-bar { display: flex; align-items: center; gap: 6px; cursor: default; }
 .ns-spacer { flex: 1; min-width: 8px; }
-.ns-pill-wrap { position: relative; }
+.ns-pill-wrap { position: relative; display: flex; } /* exact 25px box: no inline baseline slack under the pill (COMPOSER3-01) */
 .ns-pill {
   display: inline-flex;
   align-items: center;

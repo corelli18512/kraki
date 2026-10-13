@@ -10,6 +10,7 @@ describe('ToolActivity — native arguments', () => {
   it('preserves timeout and all edit keys in sorted key/value text', () => {
     expect(formatToolArguments({ timeout: 30, command: 'seq 1 400' })).toBe('command: seq 1 400\ntimeout: 30');
     expect(formatToolArguments({ old_str: 'before', new_str: 'after', path: 'a' })).toBe('new_str: after\nold_str: before\npath: a');
+    expect(formatToolArguments({ edits: [{ oldText: 'before', newText: 'after', meta: { z: 1, a: null } }], none: null })).toBe('edits: [{"meta":{"a":null,"z":1},"newText":"after","oldText":"before"}]\nnone: null');
   });
   it('shows raw edit arguments, not a diff viewer', () => {
     render(<ToolActivity type="complete" toolName="edit" headline="a" args={{ old_str: 'before', new_str: 'after', path: 'a' }} sessionId="s" requestPull={() => {}} />);

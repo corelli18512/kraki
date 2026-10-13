@@ -280,9 +280,6 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
             Open Logs Window
           </button>
         </div>
-        <SettingsRow label="Background Service">
-          <span className="text-text-secondary">{state.version ?? '—'}</span>
-        </SettingsRow>
       </SettingsSection>
       {error && (
         <p role="alert" className="mt-2 text-xs text-orange-500">

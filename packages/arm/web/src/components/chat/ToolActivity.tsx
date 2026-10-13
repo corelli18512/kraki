@@ -92,8 +92,17 @@ export function toolHeadline(toolName: string, headline: string, args?: Record<s
 export function formatToolArguments(args: Record<string, unknown>): string {
   return Object.keys(args).sort().map((key) => {
     const value = args[key];
-    return `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`;
+    return `${key}: ${typeof value === 'string' ? value : JSON.stringify(sortKeys(value) ?? null)}`;
   }).join('\n');
+}
+
+/** Nested object keys sorted, matching Mac's JSONSerialization `.sortedKeys`. */
+function sortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map((k) => [k, sortKeys((value as Record<string, unknown>)[k])]));
+  }
+  return value;
 }
 
 function LazySection({ title, refValue, sessionId, requestPull, argumentsBody }: {

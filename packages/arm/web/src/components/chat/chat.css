@@ -492,7 +492,7 @@
 .kslot { margin-top: 10px; }
 .kslot-alone { margin-top: 0; }
 .kslot-icon { width: 14px; height: 14px; flex-shrink: 0; }
-.kslot-muted { color: var(--k-text-2); font-size: 13px; }
+.kslot-muted { color: var(--k-text-2); font-size: 13px; font-family: var(--k-font); }  /* proportional even inside the mono .kslot-tool row (Mac: .system 13) */
 
 .kslot-tool {
   display: flex;
@@ -1036,6 +1036,7 @@
   background: rgba(0, 0, 0, 0.4);
   backdrop-filter: blur(4px);
 }
+.ksheet:focus { outline: none; }
 .ksheet {
   display: flex;
   width: min(760px, calc(100% - 32px));
@@ -1095,7 +1096,10 @@
 .ksheet-live { color: var(--k-user); font-size: 10px; font-weight: 900; margin-left: auto; margin-right: 8px; }
 .ksheet-empty, .ksheet-waiting { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center; color: var(--k-text-2); gap: 10px; }
 .ksheet-waiting p { margin: 0; font-size: 12px; }
-.ksheet-empty svg { width: 36px; height: 36px; color: var(--color-label-tertiary); margin-bottom: 14px; }
+/* Lucide's ring spans 22/24 of the box: 39px renders the native 36pt circle. The 13px bottom pad
+ * lifts the centered group 6.5pt to the native ContentUnavailableView position (media3-02). */
+.ksheet-empty { padding-bottom: 13px; }
+.ksheet-empty svg { width: 39px; height: 39px; color: var(--color-label-tertiary); margin-bottom: 14px; }
 .ksheet-empty h4 { margin: 0; font-size: 25px; line-height: 30px; font-weight: 700; color: var(--color-label-secondary); }
 .ksheet-empty p { margin: 2px 0 0; font-size: 13px; line-height: 16px; color: var(--color-label-secondary); }
 
@@ -1152,6 +1156,8 @@
    * pitch. Keep that extent local without changing multiline transcript pitch. */
   .kbubble-agent:has(.kslot-tool, .kslot-permission) > .kmd { padding-bottom: 2px; }
   .krow[data-question="true"] .kmd strong { font-weight: 700; }
+  /* Same TextKit body extent above a question's choices: native card is 1pt taller (live-turn3-02). */
+  .krow[data-question="true"] .kbubble-agent > .kmd { padding-bottom: 1px; }
   .kstep-permission-lock { width: 12px; height: 15.5px; margin: 2.5px 1.5px 0 -0.5px; }
   .kagent-stack:has(.kslot-permission) { min-width: min(408px, 95%); }
   .kbubble-agent:has(.kslot-permission) { width: 100%; }
