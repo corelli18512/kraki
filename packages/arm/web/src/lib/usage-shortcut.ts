@@ -2,7 +2,7 @@ import { create } from 'zustand';
 
 export const useUsageShortcut = create<{ shortcut: string; enabled: boolean; recording: boolean }>(() => ({
   shortcut: localStorage.getItem('kraki:usage.shortcut') ?? 'F6',
-  enabled: localStorage.getItem('kraki:usage.enabled') !== '0',
+  enabled: localStorage.getItem('kraki:usage.enabled') === '1',
   recording: false,
 }));
 

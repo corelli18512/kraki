@@ -71,6 +71,7 @@ function EmptySessions({ onNew, onImport }: { onNew: () => void; onImport: () =>
 export function Sidebar() {
   const narrow = useNarrow();
   const usageShortcut = useUsageShortcut((s) => s.shortcut);
+  const usageShortcutEnabled = useUsageShortcut((s) => s.enabled);
   const { sessionId } = useParams<{ sessionId: string }>();
   const pinned = useStore((s) => s.pinnedSessions);
   const status = useStore((s) => s.status);
@@ -164,7 +165,7 @@ export function Sidebar() {
         <div className="ksb-footer">
           <ProfileBar compact />
           <button type="button" className="ksb-icon" aria-label="Devices" title="Devices" onClick={() => navigate('/devices')}><MonitorCloud /></button>
-          <button type="button" className="ksb-icon" aria-label="Account Usage" title={`Account Usage (hold ${usageShortcut})`} onClick={() => window.dispatchEvent(new Event(OPEN_USAGE_EVENT))} data-testid="sidebar-usage"><Gauge /></button>
+          <button type="button" className="ksb-icon" aria-label="Account Usage" title={`Account Usage${usageShortcutEnabled ? ` (hold ${usageShortcut})` : ''}`} onClick={() => window.dispatchEvent(new Event(OPEN_USAGE_EVENT))} data-testid="sidebar-usage"><Gauge /></button>
           <button type="button" className="ksb-icon" aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}><Settings /></button>
         </div>
         <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
