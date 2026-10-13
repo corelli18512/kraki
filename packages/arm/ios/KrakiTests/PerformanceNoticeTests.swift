@@ -49,6 +49,18 @@ final class PerformanceNoticeTests: XCTestCase {
         XCTAssertTrue(n.hasBeenSeen)
     }
 
+    func testAPermissionPromptLeftOpenDefersTheNoticeToTheNextSignIn() async {
+        var pending = true
+        let n = notice(pending: { pending })
+        n.authenticated()
+        await wait(62)
+        XCTAssertFalse(n.isVisible, "never shown while the prompt is still open")
+        pending = false
+        n.authenticated() // next reconnect / foreground
+        await wait(0.3)
+        XCTAssertTrue(n.isVisible)
+    }
+
     func testWaitsForTheNotificationPermissionAnswer() async {
         var pending = true
         let n = notice(pending: { pending })

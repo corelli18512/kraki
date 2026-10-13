@@ -44,8 +44,13 @@ final class PerformanceNotice {
         scheduled = true
         Task { @MainActor in
             try? await Task.sleep(for: settleDelay)
-            // Never stack on the notification permission alert.
-            for _ in 0..<60 where await permissionPending() {
+            // Never stack on the notification permission alert: wait for its
+            // answer; if it stays open, give up for now and try again on the
+            // next authentication (reconnect / return to the foreground).
+            var waited = 0
+            while await permissionPending() {
+                waited += 1
+                if waited > 60 { scheduled = false; return }
                 try? await Task.sleep(for: .seconds(1))
             }
             guard !hasBeenSeen else { return }

@@ -87,7 +87,7 @@ Starts when this device's own message comes back from the agent's computer (the 
 - `firstTextMs`: echo → first reply text.
 - `durationMs`: echo → end of the turn.
 - `deltas`, `maxGapMs`, `stalls`: streamed text deltas, the longest gap between consecutive deltas of one text run, and gaps ≥ 3 s. A tool step ends a text run, so a long tool is not a stall. Deltas only reach the conversation that is open, so these are 0 for replies the user was not watching.
-- `kind`: typed / answer. `outcome`: `completed` (idle), `failed`, `stopped` (stopped, interrupted, session ended), `backgrounded` (iOS left the foreground; timings after that are not the user's experience), `superseded` (a new turn started before this one ended).
+- `kind`: typed / answer. `outcome`: `completed` (idle), `failed` (turn_status failed or idle reason failed), `stopped` (stopped / idle reason aborted, interrupted, session ended or deleted), `backgrounded` (iOS left the foreground; timings after that are not the user's experience), `superseded` (a new turn started before this one ended), `abandoned` (no end seen within an hour, or more than 32 open turns). An empty reset delta and a null card action (what a stop sends) are not reply text or activity.
 
 "Reply feels slow" splits into: `send.summary.confirmMs` (Kraki round trip) + `reply.summary.firstTextMs` (agent + one hop); stalls point at streaming.
 

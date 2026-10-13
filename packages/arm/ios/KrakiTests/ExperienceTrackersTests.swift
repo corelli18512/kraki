@@ -226,6 +226,29 @@ final class ReplyTrackerTests: XCTestCase {
         XCTAssertEqual(t.inFlight, 0)
     }
 
+    func testEmptyResetIsNotReplyText() throws {
+        let t = tracker()
+        t.started("s", kind: .typed)
+        clock += 1
+        t.delta("s", reset: true, empty: true)
+        t.finish("s", .stopped)
+        let s = try XCTUnwrap(t.summaries.first)
+        XCTAssertNil(s.firstTextMs)
+        XCTAssertNil(s.firstActivityMs)
+        XCTAssertEqual(s.deltas, 0)
+    }
+
+    func testTurnsWithoutAnEndExpireAndAreBounded() {
+        let t = tracker()
+        t.started("old", kind: .typed)
+        clock += ReplyTracker.maxAge + 1
+        t.started("new", kind: .typed)
+        XCTAssertEqual(t.summaries.map(\.outcome), [.abandoned])
+        XCTAssertEqual(t.inFlight, 1)
+        for i in 0..<(ReplyTracker.maxOpen + 5) { t.started("s\(i)", kind: .typed); clock += 1 }
+        XCTAssertEqual(t.inFlight, ReplyTracker.maxOpen)
+    }
+
     func testEventsForUntrackedSessionsAreIgnored() {
         let t = tracker()
         t.delta("x", reset: false)

@@ -35,18 +35,26 @@ extension MessageRouter {
                   appState.commandSender?.outbox[sessionId]?[clientId] != nil else { return }
             replyMetrics.started(sessionId, kind: payload?["answerTo"] is String ? .answer : .typed)
         case "agent_message_delta":
-            guard payload?["content"] is String else { return }
-            replyMetrics.delta(sessionId, reset: payload?["reset"] as? Bool ?? false)
-        case "card_action", "tool_start":
+            guard let content = payload?["content"] as? String else { return }
+            replyMetrics.delta(sessionId, reset: payload?["reset"] as? Bool ?? false, empty: content.isEmpty)
+        case "card_action":
+            // A null action clears the slot (e.g. on stop): not reply activity.
+            guard payload?["action"] is [String: Any] else { return }
+            replyMetrics.activity(sessionId)
+        case "tool_start":
             replyMetrics.activity(sessionId)
         case "agent_message":
             replyMetrics.message(sessionId)
         case "idle":
-            replyMetrics.finish(sessionId, .completed)
+            switch payload?["reason"] as? String {
+            case "aborted": replyMetrics.finish(sessionId, .stopped)
+            case "failed": replyMetrics.finish(sessionId, .failed)
+            default: replyMetrics.finish(sessionId, .completed)
+            }
         case "turn_status":
             let failed = ((payload?["action"] as? [String: Any])?["type"] as? String) == "failed"
             replyMetrics.finish(sessionId, failed ? .failed : .stopped)
-        case "interrupted_turn", "session_ended":
+        case "interrupted_turn", "session_ended", "session_deleted":
             replyMetrics.finish(sessionId, .stopped)
         default:
             break

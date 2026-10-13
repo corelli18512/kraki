@@ -71,6 +71,43 @@ extension ChatUXRegressionTests {
         XCTAssertNil(router.replyMetrics.summaries.last?.firstActivityMs)
     }
 
+    /// Stop before any output: the tentacle sends an empty reset, a null card
+    /// action, then idle(reason: aborted) without turn_status.
+    func testStopBeforeAnyOutputIsStoppedWithoutText() throws {
+        let fx = try makeFixture(total: 10) { _ in true }
+        drain(300)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "hello"))
+        let clientId = try XCTUnwrap(sender.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
+        registerReplySession(fx.app)
+        let router = try XCTUnwrap(fx.app.messageRouter)
+        try route(router, "user_message", 11, ["content": "hello", "clientId": clientId])
+        // Live frames reach the tracker before the subscription gate drops them
+        // in this fixture; call the hook directly to exercise the same payloads.
+        router.noteReplyProgress("agent_message_delta", sessionId: sid, payload: ["content": "", "reset": true])
+        router.noteReplyProgress("card_action", sessionId: sid, payload: ["action": NSNull()])
+        try route(router, "idle", 0, ["reason": "aborted"])
+        let reply = try XCTUnwrap(router.replyMetrics.summaries.last)
+        XCTAssertEqual(reply.outcome, .stopped)
+        XCTAssertNil(reply.firstTextMs)
+        XCTAssertNil(reply.firstActivityMs)
+        XCTAssertEqual(reply.deltas, 0)
+    }
+
+    func testDeletingTheSessionClosesItsTurn() throws {
+        let fx = try makeFixture(total: 10) { _ in true }
+        drain(300)
+        let sender = try XCTUnwrap(fx.app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "hello"))
+        let clientId = try XCTUnwrap(sender.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
+        registerReplySession(fx.app)
+        let router = try XCTUnwrap(fx.app.messageRouter)
+        try route(router, "user_message", 11, ["content": "hello", "clientId": clientId])
+        try route(router, "session_deleted", 0, [:])
+        XCTAssertEqual(router.replyMetrics.inFlight, 0)
+        XCTAssertEqual(router.replyMetrics.summaries.last?.outcome, .stopped)
+    }
+
     func testReplySummaryClosesWhenTheAppLeavesTheForeground() throws {
         let fx = try makeFixture(total: 10) { _ in true }
         drain(300)

@@ -256,7 +256,7 @@ struct ForegroundExitMarker {
 final class ReplyTracker {
     struct Summary: Equatable {
         enum Kind: String { case typed, answer }
-        enum Outcome: String { case completed, failed, stopped, backgrounded, superseded }
+        enum Outcome: String { case completed, failed, stopped, backgrounded, superseded, abandoned }
         var kind: Kind
         var outcome: Outcome = .completed
         /// Echo → first card action / tool / text / message of the reply.
@@ -274,6 +274,11 @@ final class ReplyTracker {
     }
 
     static let stallMs: Double = 3000
+    /// A turn with no terminal event this long after its echo is closed as
+    /// `abandoned` (missed idle, deleted session, long disconnect).
+    static let maxAge: TimeInterval = 3600
+    /// At most this many open turns (one per session; Mac stays up for days).
+    static let maxOpen = 32
     var now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     var onSummary: ((Summary) -> Void)?
     #if DEBUG
@@ -290,7 +295,18 @@ final class ReplyTracker {
     /// This device's message for `sessionId` came back from the agent's machine.
     func started(_ sessionId: String, kind: Summary.Kind) {
         finish(sessionId, .superseded)
+        expire()
+        while entries.count >= Self.maxOpen,
+              let oldest = entries.min(by: { $0.value.startedAt < $1.value.startedAt })?.key {
+            finish(oldest, .abandoned)
+        }
         entries[sessionId] = Entry(summary: Summary(kind: kind), startedAt: now())
+    }
+
+    /// Close turns that never saw a terminal event.
+    func expire() {
+        let t = now()
+        for (id, entry) in entries where t - entry.startedAt > Self.maxAge { finish(id, .abandoned) }
     }
 
     /// A tool step / card action: activity, and the end of a text run.
@@ -301,9 +317,15 @@ final class ReplyTracker {
         entries[sessionId] = entry
     }
 
-    /// A streaming text delta. `reset` starts a new text run.
-    func delta(_ sessionId: String, reset: Bool) {
+    /// A streaming text delta. `reset` starts a new text run. An empty delta
+    /// (a reset that clears the draft, e.g. on stop) is not reply text.
+    func delta(_ sessionId: String, reset: Bool, empty: Bool = false) {
         guard var entry = entries[sessionId] else { return }
+        if empty {
+            entry.lastDeltaAt = nil
+            entries[sessionId] = entry
+            return
+        }
         let t = now()
         markActivity(&entry)
         if entry.summary.firstTextMs == nil { entry.summary.firstTextMs = (t - entry.startedAt) * 1000 }
