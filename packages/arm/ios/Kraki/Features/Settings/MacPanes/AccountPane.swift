@@ -17,14 +17,7 @@ struct AccountPane: View {
             if let user = appState.user {
                 Section {
                     HStack(spacing: 14) {
-                        ZStack {
-                            Circle()
-                                .fill(Color.krakiPrimary.opacity(0.15))
-                            Text(initials(for: user))
-                                .font(.system(size: 16, weight: .bold, design: .rounded))
-                                .foregroundStyle(Color.krakiPrimary)
-                        }
-                        .frame(width: 48, height: 48)
+                        AccountAvatar(user: user, size: 48, initials: initials(for: user))
                         VStack(alignment: .leading, spacing: 3) {
                             Text(user.email ?? user.login)
                                 .font(.system(size: 14, weight: .semibold))
