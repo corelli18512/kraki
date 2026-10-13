@@ -6,7 +6,6 @@ import StoreKit
 import UserNotifications
 
 struct SettingsView: View {
-    @State private var diagnosticsCopied = false
     @Environment(AppState.self) private var appState
 
     @AppStorage("colorScheme") private var selectedScheme: AppColorScheme = .system
@@ -53,14 +52,7 @@ struct SettingsView: View {
         Section {
             if let user = appState.user {
                 HStack(spacing: 12) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.krakiPrimary.opacity(0.15))
-                        Text(String(user.login.prefix(1)).uppercased())
-                            .font(.headline.weight(.semibold))
-                            .foregroundStyle(Color.krakiPrimary)
-                    }
-                    .frame(width: 40, height: 40)
+                    AccountAvatar(user: user, size: 40, initials: String(user.login.prefix(1)).uppercased())
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(user.login)
@@ -245,22 +237,17 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - About Kraki (relay + client version, logo-and-name in header)
+    // MARK: - About Kraki (app + relay version, logo-and-name in header)
 
     private var aboutSection: some View {
         Section {
-            ForEach(DiagnosticsSummary.rows(appState: appState), id: \.label) { row in
-                LabeledContent(row.label) {
-                    Text(row.value)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
+            LabeledContent("Kraki for iPhone") {
+                Text(appVersion)
+                    .foregroundStyle(.secondary)
             }
-            Button {
-                UIPasteboard.general.string = DiagnosticsSummary.text(appState: appState)
-                diagnosticsCopied = true
-            } label: {
-                Label(diagnosticsCopied ? "Copied" : "Copy Diagnostics", systemImage: diagnosticsCopied ? "checkmark" : "doc.on.doc")
+            LabeledContent("Relay") {
+                Text(appState.relayVersion ?? "—")
+                    .foregroundStyle(.secondary)
             }
         } header: {
             HStack(spacing: 8) {

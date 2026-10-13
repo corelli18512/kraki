@@ -134,11 +134,6 @@ private struct DeviceRow: View {
                 Button("Remove…", action: onRemove)
                     .controlSize(.small)
                     .accessibilityIdentifier("prefs.devices.remove.\(device.id)")
-            } else {
-                Text(String(device.id.prefix(10)) + "…")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(Color.textMuted)
-                    .help(device.id)
             }
         }
         if update != nil || hasProgress {
