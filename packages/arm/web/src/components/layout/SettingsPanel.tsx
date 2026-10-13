@@ -233,10 +233,10 @@ export function SettingsPanel({
           Usage” {desktop ? 'in the tray' : 'in the sidebar'} opens it any time.
         </p>
       </SettingsSection>
-      <section className="kp-section">
+      {state.archiveInfo.size > 0 && <section className="kp-section">
         <h3>Sessions</h3>
         <ArchiveSettings />
-      </section>
+      </section>}
       {bridge && os && (
         <SettingsSection title="Behavior">
           {bridge.setKeepRunningInTray && (

@@ -5,7 +5,7 @@ import { useStore } from '../../hooks/useStore';
 import { useVoice, voiceSettings } from '../../lib/voice/voice';
 import { useUsageShortcut } from '../../lib/usage-shortcut';
 
-const commands = vi.hoisted(() => ({ updatePreferences: vi.fn(), setAutoArchiveDays: vi.fn(), removeDevice: vi.fn(), requestAccountDeletion: vi.fn(), registerPushToken: vi.fn(), unregisterPushToken: vi.fn() }));
+const commands = vi.hoisted(() => ({ updatePreferences: vi.fn(), setAutoArchiveDays: vi.fn(), deleteArchivedSessions: vi.fn(), removeDevice: vi.fn(), requestAccountDeletion: vi.fn(), registerPushToken: vi.fn(), unregisterPushToken: vi.fn() }));
 vi.mock('../../lib/ws-client', () => ({ wsClient: { url: 'ws://localhost:4430', ...commands } }));
 const push = vi.hoisted(() => ({ supported: false, isPushSubscribed: vi.fn(), subscribeToPush: vi.fn(), unsubscribeFromPush: vi.fn() }));
 vi.mock('../../lib/push', () => ({ isPushSupported: () => push.supported, getPushPermission: () => 'default', isPushSubscribed: push.isPushSubscribed, subscribeToPush: push.subscribeToPush, unsubscribeFromPush: push.unsubscribeFromPush }));
@@ -42,6 +42,19 @@ describe('SettingsPanel native preferences parity', () => {
     expect(screen.queryByRole('radiogroup', { name: 'Theme' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Copy Diagnostics' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Documentation' })).toHaveAttribute('href', 'https://kraki.chat/docs');
+  });
+  it('keeps archived session deletion behind native confirmation', () => {
+    useStore.setState({ archiveInfo: new Map([['computer', { count: 3, days: 14 }]]) });
+    open();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 3 Archived Sessions…' }));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent("Delete archived sessions from your computers? This can't be undone.");
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(commands.deleteArchivedSessions).not.toHaveBeenCalled();
+  });
+  it('hides the archive section when no computer supplies archive settings', () => {
+    useStore.setState({ archiveInfo: new Map() });
+    open();
+    expect(screen.queryByRole('heading', { name: 'Sessions' })).not.toBeInTheDocument();
   });
   it('records a shortcut without opening account usage', () => {
     open();
