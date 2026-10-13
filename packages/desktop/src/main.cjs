@@ -252,19 +252,18 @@ function updateTray() {
   }
 }
 
+async function changePresence(nextTransition, action) {
+  transition = nextTransition; updateTray();
+  try { await action(); } finally { transition = null; updateTray(); }
+}
 async function goOnline() {
   if (!builtIn) return;
-  transition = 'starting'; updateTray();
-  try { await builtIn.enable(); } catch { /* the status shows it */ }
-  transition = null; updateTray();
+  try { await changePresence('starting', () => builtIn.enable()); } catch { /* the status shows it */ }
 }
 async function goOffline() {
   if (!builtIn) return;
-  transition = 'stopping'; updateTray();
-  // Keep ownership: this PC stays Kraki for Windows' and comes back online
-  // when Kraki is opened again.
-  try { await builtIn.disable({ keepOwnership: true }); } catch { /* status shows it */ }
-  transition = null; updateTray();
+  // Keep ownership so opening Kraki can bring this PC online again.
+  try { await changePresence('stopping', () => builtIn.disable({ keepOwnership: true })); } catch { /* the status shows it */ }
 }
 
 /** Tray › Quit: while this PC is online, quitting takes it offline (asked once). */
@@ -463,6 +462,8 @@ ipcMain.handle('kraki:settings-login', safely(async (_e, enabled) => {
   app.setLoginItemSettings({ openAtLogin: !!enabled, path: process.execPath, args: ['--login'] });
   if (app.getLoginItemSettings().openAtLogin !== !!enabled) throw new Error('Windows could not change the login item.');
 }));
+ipcMain.handle('kraki:settings-go-online', safely(() => changePresence('starting', () => builtIn.enable())));
+ipcMain.handle('kraki:settings-go-offline', safely(() => changePresence('stopping', () => builtIn.disable({ keepOwnership: true }))));
 ipcMain.handle('kraki:settings-tray', safely((_e, enabled) => { pref('keepRunningInTray', !!enabled); }));
 ipcMain.on('kraki:settings-notifications', () => { if (process.platform === 'win32') void shell.openExternal('ms-settings:notifications'); });
 ipcMain.handle('kraki:settings-locate-cli', safely(async () => {

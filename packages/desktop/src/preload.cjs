@@ -50,6 +50,8 @@ contextBridge.exposeInMainWorld('krakiDesktop', {
     showLogsInExplorer: () => ipcRenderer.send('kraki:builtin-show-logs'),
     locateCli: () => ipcRenderer.invoke('kraki:settings-locate-cli'),
     recheckCli: () => ipcRenderer.invoke('kraki:settings-recheck-cli'),
+    goOnline: () => ipcRenderer.invoke('kraki:settings-go-online'),
+    goOffline: () => ipcRenderer.invoke('kraki:settings-go-offline'),
     setAllowRemoteUpdates: (enabled) => ipcRenderer.invoke('kraki:settings-remote-updates', enabled),
   },
   setNeedsYou: (list) => ipcRenderer.send('kraki:needs-you', list),

@@ -114,7 +114,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
       else after?.();
       await refresh();
     } catch {
-      setError('Couldn’t update this PC.');
+      setError('Couldn’t update this PC’s status.');
     } finally {
       setBusy(null);
     }
@@ -261,18 +261,16 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
               </button>
             </>
           ) : (
-            (external || state.owned) && (
               <button
                 type="button"
                 className={button}
-                disabled={!!busy}
+                disabled={!!busy || (!runsAgents && !external)}
                 onClick={() => {
                   void act('online', () => presence('start'));
                 }}
               >
                 Go Online
               </button>
-            )
           )}
         </div>
         {settings?.setLaunchAtLogin && os && (
