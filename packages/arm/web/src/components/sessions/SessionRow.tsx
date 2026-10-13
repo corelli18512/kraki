@@ -3,7 +3,7 @@ import { modelDisplayName, sessionDisplayTitle } from '../../lib/session-status'
 import { useNavigate } from 'react-router';
 import type { SessionSummary } from '@kraki/protocol';
 import {
-  BellOff, BellRing, BotMessageSquare, CircleSlash, CircleUser, GitFork, Keyboard,
+  Archive, MoreHorizontal, Pencil, BellOff, BellRing, BotMessageSquare, CircleSlash, CircleUser, GitFork, Keyboard,
   MessageCircleQuestion, Pin, PinOff, ShieldQuestion, Trash2, WifiOff,
 } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
@@ -52,6 +52,8 @@ export const SessionRow = memo(function SessionRow({
   const compacting = useStore((s) => s.runtimeStatuses.get(session.id)?.status === 'compacting');
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
 
   const draftText = collapseWhitespace(draft);
   const hasDraft = !!draftText && !selected;
@@ -119,6 +121,7 @@ export const SessionRow = memo(function SessionRow({
           actions={[
             { icon: pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />, label: pinned ? 'Unpin' : 'Pin', bgClass: 'bg-teal-500', onClick: () => { togglePin(); setOpenSwipeId?.(null); } },
             { icon: unread ? <BellOff className="h-4 w-4" /> : <BellRing className="h-4 w-4" />, label: unread ? 'Read' : 'Unread', bgClass: 'bg-blue-500', onClick: () => { toggleRead(); setOpenSwipeId?.(null); } },
+            { icon: <MoreHorizontal className="h-4 w-4" />, label: 'More', bgClass: 'bg-slate-500', onClick: () => { setOpenSwipeId?.(null); setMenu({ x: 16, y: Math.min(window.innerHeight - 280, 100) }); } },
             { icon: <Trash2 className="h-4 w-4" />, label: 'Delete', bgClass: 'bg-red-500', onClick: () => { setOpenSwipeId?.(null); setConfirmDelete(true); } },
           ]}
           isOpen={openSwipeId === session.id}
@@ -138,14 +141,17 @@ export const SessionRow = memo(function SessionRow({
             {unread ? <BellOff /> : <BellRing />} {unread ? 'Mark read' : 'Mark unread'}
           </button>
           <button type="button" role="menuitem" onClick={() => { wsClient.forkSession(session.id); setMenu(null); }}>
-            <GitFork /> Fork session
+            <GitFork /> Fork
           </button>
+          <button type="button" role="menuitem" onClick={() => { setTitleDraft(session.title ?? session.autoTitle ?? ''); setRenaming(true); setMenu(null); }}><Pencil /> Rename…</button>
+          <button type="button" role="menuitem" onClick={() => { wsClient.archiveSession(session.id, true); setMenu(null); }}><Archive /> Archive</button>
           <button type="button" role="menuitem" className="is-destructive" onClick={() => { setMenu(null); setConfirmDelete(true); }}>
-            <Trash2 /> Delete session
+            <Trash2 /> Delete…
           </button>
         </div>
       )}
 
+      {renaming && <div className="kdialog-backdrop" role="dialog" aria-modal="true" aria-label="Rename session" onClick={() => setRenaming(false)}><form className="kdialog" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); wsClient.renameSession(session.id, titleDraft.trim()); setRenaming(false); }}><h3>Rename session</h3><input autoFocus aria-label="Session title" value={titleDraft} onChange={(e) => setTitleDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') setRenaming(false); }} maxLength={80} className="my-3 w-full rounded border border-border-primary bg-surface-secondary p-2" /><div className="kdialog-buttons"><button type="button" onClick={() => setRenaming(false)}>Cancel</button><button type="submit">Save</button></div></form></div>}
       {confirmDelete && (
         <div className="kdialog-backdrop" onClick={() => setConfirmDelete(false)} role="dialog" aria-modal="true">
           <div className="kdialog" onClick={(e) => e.stopPropagation()}>

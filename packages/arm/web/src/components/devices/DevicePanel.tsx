@@ -38,7 +38,7 @@ export function DevicePanel({
   const shownVersion = displayVersion(device.id, deviceUpdates, deviceVersions) ?? version;
 
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [showTooltip, setShowTooltip] = useState(false);
+
   const sessions = useStore((s) => s.sessions);
 
   const deviceSessions = [...sessions.values()].filter((s) => s.deviceId === device.id);
@@ -82,25 +82,7 @@ export function DevicePanel({
             This device
           </span>
         )}
-        {!isCurrentDevice && (
-          <span className="relative flex items-center">
-            <button
-              onClick={() => canRemove ? setConfirmOpen(true) : setShowTooltip((v) => !v)}
-              onMouseEnter={() => !canRemove && setShowTooltip(true)}
-              onMouseLeave={() => setShowTooltip(false)}
-              className={`peer rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${
-                canRemove ? 'text-red-500 hover:bg-red-500/10' : 'text-text-muted opacity-50'
-              }`}
-            >
-              Remove
-            </button>
-            {!canRemove && showTooltip && (
-              <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-1 -translate-y-1/2 whitespace-nowrap rounded-md bg-surface-tertiary px-2 py-1 text-[10px] text-text-secondary shadow-lg">
-                Disconnect the device first
-              </span>
-            )}
-          </span>
-        )}
+        {canRemove && <button type="button" onClick={() => setConfirmOpen(true)} className="rounded-md px-2 py-0.5 text-[11px] font-medium text-red-500 hover:bg-red-500/10">Remove…</button>}
       </div>
 
       <div className="space-y-4 px-5 pb-4">
@@ -197,10 +179,9 @@ export function DevicePanel({
             className="mx-4 w-full max-w-sm rounded-xl border border-border-primary bg-surface-primary p-6 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-sm font-semibold text-text-primary">Remove device</h3>
+            <h3 className="text-sm font-semibold text-text-primary">Remove {device.name}?</h3>
             <p className="mt-2 text-xs text-text-secondary">
-              Are you sure you want to remove <strong>{device.name}</strong>? This action is permanent
-              and cannot be undone. The device will need to reconnect and re-authenticate to appear again.
+              It's signed out of your account. To use it again, sign in or pair it again.
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <button
@@ -213,7 +194,7 @@ export function DevicePanel({
                 onClick={handleRemove}
                 className="rounded-lg bg-red-700 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-800"
               >
-                Remove permanently
+                Remove
               </button>
             </div>
           </div>

@@ -77,6 +77,10 @@ export interface DesktopSettingsBridge {
   locateCli?: () => Promise<{ ok: boolean; error?: string }>;
   /** Re-probe an external CLI installation. */
   recheckCli?: () => Promise<{ ok: boolean; error?: string }>;
+  /** Bring the background service online without changing the chosen agent role. */
+  goOnline?: () => Promise<{ ok: boolean; error?: string }>;
+  /** Stop online presence without relinquishing built-in ownership. */
+  goOffline?: () => Promise<{ ok: boolean; error?: string }>;
   /** Persist the daemon's supported remote-update policy. */
   setAllowRemoteUpdates?: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
 }

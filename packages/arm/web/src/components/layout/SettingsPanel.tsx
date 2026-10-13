@@ -49,10 +49,10 @@ export function SettingsPanel({ open, onClose, inline, className }: { open: bool
   }, [open, bridge]);
   useEffect(() => {
     if (!open || inline) return;
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { if (shortcut.recording) useUsageShortcut.setState({ recording: false }); else onClose(); } };
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { if (useUsageShortcut.getState().recording) useUsageShortcut.setState({ recording: false }); else onClose(); } };
     window.addEventListener('keydown', key);
     return () => { window.removeEventListener('keydown', key); useUsageShortcut.setState({ recording: false }); };
-  }, [open, onClose, inline, shortcut.recording]);
+  }, [open, onClose, inline]);
 
   async function updateOs(fn: (() => Promise<{ ok: boolean; error?: string }>) | undefined) {
     if (!fn) return;

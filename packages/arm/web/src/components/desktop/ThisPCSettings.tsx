@@ -4,7 +4,8 @@
  * runs agents, the background service, the coding agents and the logs.
  */
 import { useCallback, useEffect, useState } from 'react';
-import type { BuiltInBridge, BuiltInState } from '../../lib/desktop';
+import { desktop, type BuiltInBridge, type BuiltInState, type DesktopSettingsState } from '../../lib/desktop';
+import { SettingsRow, SettingsSection } from '../layout/SettingsControls';
 import { AgentsPanel, useAgentsCheck } from './AgentsPanel';
 import './desktop-setup.css';
 
@@ -62,11 +63,14 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [agentsOpen, setAgentsOpen] = useState(false);
+  const [os, setOs] = useState<DesktopSettingsState | null>(null);
+  const settings = desktop?.settings;
 
   const refresh = useCallback(async () => {
     const next = await builtIn.state();
+    if (settings) setOs(await settings.state());
     setState((prev) => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
-  }, [builtIn]);
+  }, [builtIn, settings]);
   useEffect(() => {
     void refresh();
     const t = setInterval(() => { void refresh(); }, 3000);
@@ -76,64 +80,35 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
   const act = async (name: string, fn: () => Promise<{ ok: boolean; error?: string }>, after?: () => void) => {
     setBusy(name);
     setError(null);
-    const r = await fn();
-    if (!r.ok) setError(r.error ?? 'Something went wrong.');
-    else after?.();
-    await refresh();
-    setBusy(null);
+    try {
+      const r = await fn();
+      if (!r.ok) setError(r.error ?? 'Something went wrong.');
+      else after?.();
+      await refresh();
+    } catch { setError('Couldn’t update this PC.'); }
+    finally { setBusy(null); }
   };
 
   if (!state) return null;
   const external = !state.owned && (state.cliDaemon || state.cliLogin);
   const runsAgents = state.owned;
-  const status = !state.running ? 'Not running'
-    : state.relayState === 'connected' ? 'Running · connected'
-      : state.relayState ? `Running · ${state.relayState}` : 'Running';
+  const status = busy === 'online' ? 'Going online…' : busy === 'offline' ? 'Going offline…' : busy === 'restart' ? 'Reconnecting…' : !state.running ? 'Offline'
+    : state.relayState === 'connected' ? 'Online'
+      : state.relayState ? `Connecting · ${state.relayState}` : 'Checking…';
 
   return (
-    <section data-testid="settings-this-pc">
-      <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">This PC</h3>
-      <div className="space-y-2">
-        {external ? (
-          <>
-            <Row title="Kraki" detail="The command-line Kraki runs the agents on this PC. You update it from a terminal.">
-              <button type="button" className={button} disabled={!!busy} onClick={() => { void act('switch', builtIn.enable, () => localStorage.setItem(OWNER_KEY, 'builtIn')); }}>
-                {busy === 'switch' ? 'Switching…' : 'Use built-in Kraki'}
-              </button>
-            </Row>
-            <p className="text-[11px] text-text-muted">Switching stops the command-line Kraki's background service and keeps your sign-in and sessions.</p>
-          </>
-        ) : (
-          <Row title="Run agents on this PC" detail={runsAgents ? 'Kraki runs in the background and starts when you sign in to Windows.' : 'When off, this PC only controls agents on your other computers.'}>
-            <Switch
-              label="Run agents on this PC"
-              on={runsAgents}
-              disabled={!!busy}
-              onChange={(on) => {
-                if (on) void act('on', builtIn.enable, () => localStorage.setItem(ROLE_KEY, 'runsAgents'));
-                else void act('off', builtIn.disable, () => localStorage.setItem(ROLE_KEY, 'remoteOnly'));
-              }}
-            />
-          </Row>
-        )}
-        {(runsAgents || external) && (
-          <Row title="Background service" detail={status}>
-            {runsAgents && (
-              <button type="button" className={button} disabled={!!busy} onClick={() => { void act('restart', builtIn.restart); }}>
-                {busy === 'restart' ? 'Restarting…' : 'Restart'}
-              </button>
-            )}
-          </Row>
-        )}
-        <Row title="Coding agents" detail="Which agents are installed and signed in here.">
-          <button type="button" className={button} onClick={() => setAgentsOpen(true)}>Check Coding Agents…</button>
-        </Row>
-        <Row title="Version" detail={`Kraki ${state.version ?? 'unknown'}${state.owned ? ' (built in)' : ''}`}>
-          <button type="button" className={button} onClick={() => builtIn.openLogs()}>Open Logs</button>
-        </Row>
-        {error && <p className="text-[11px] text-orange-500">{error}</p>}
-      </div>
+    <div data-testid="settings-this-pc">
+      <SettingsSection title="Agents">
+        {external ? <><Row title="Kraki" detail="The command-line Kraki runs the agents on this PC. You update it from a terminal."><button type="button" className={button} disabled={!!busy} onClick={() => { void act('switch', builtIn.enable, () => localStorage.setItem(OWNER_KEY, 'builtIn')); }}>{busy === 'switch' ? 'Switching…' : 'Use built-in Kraki'}</button></Row><p className="kp-foot">Switching stops the command-line Kraki's background service and keeps your sign-in and sessions.</p></> : <Row title="Run agents on this PC" detail={runsAgents ? 'Kraki runs in the background and starts when you sign in to Windows.' : 'When off, this PC only controls agents on your other computers.'}><Switch label="Run agents on this PC" on={runsAgents} disabled={!!busy} onChange={(on) => { if (on) void act('on', builtIn.enable, () => localStorage.setItem(ROLE_KEY, 'runsAgents')); else void act('off', builtIn.disable, () => localStorage.setItem(ROLE_KEY, 'remoteOnly')); }} /></Row>}
+        {!state.available && <Row title="Kraki isn't installed" detail="Install Kraki, or locate an existing command-line installation."><a className={button} href="https://kraki.chat/docs" target="_blank" rel="noreferrer">Install Kraki…</a></Row>}
+        <SettingsRow label="Coding agents"><button type="button" className={button} onClick={() => setAgentsOpen(true)}>Check Coding Agents…</button></SettingsRow>
+        {(settings?.locateCli || settings?.recheckCli) && <div className="kp-row">{settings.locateCli && <button type="button" className={button} disabled={!!busy} onClick={() => { void act('locate', settings.locateCli!); }}>Locate Kraki…</button>}{settings.recheckCli && <button type="button" className={button} disabled={!!busy} onClick={() => { void act('check', settings.recheckCli!); }}>{busy === 'check' ? 'Checking…' : 'Re-check'}</button>}</div>}
+      </SettingsSection>
+      <SettingsSection title="Online"><SettingsRow label="Status"><span className="text-text-secondary">{status}</span></SettingsRow><div className="kp-row" style={{ justifyContent: 'flex-start' }}>{state.running ? <>{settings?.goOffline && <button type="button" className={button} disabled={!!busy} onClick={() => { void act('offline', settings.goOffline!); }}>Go Offline</button>}<button type="button" className={button} disabled={!!busy || !state.owned} onClick={() => { void act('restart', builtIn.restart); }}>Reconnect</button></> : settings?.goOnline && <button type="button" className={button} disabled={!!busy} onClick={() => { void act('online', settings.goOnline!); }}>Go Online</button>}</div>{settings?.setLaunchAtLogin && os && <SettingsRow label="Start automatically at login"><Switch label="Start automatically at login" on={os.launchAtLogin} disabled={!!busy} onChange={(on) => { void act('login', () => settings.setLaunchAtLogin!(on)); }} /></SettingsRow>}</SettingsSection>
+      {settings?.setAllowRemoteUpdates && os && <SettingsSection title="Updates"><SettingsRow label="Allow remote updates"><Switch label="Allow remote updates" on={os.allowRemoteUpdates} disabled={!!busy} onChange={(on) => { void act('updates', () => settings.setAllowRemoteUpdates!(on)); }} /></SettingsRow><p className="kp-foot">Allow your other devices to update Kraki on this PC.</p></SettingsSection>}
+      <SettingsSection title="Logs">{os?.logsPath && <p className="kp-foot py-2 break-all font-mono">{os.logsPath}</p>}<div className="kp-row" style={{ justifyContent: 'flex-start' }}>{settings?.showLogsInExplorer && <button type="button" className={button} onClick={settings.showLogsInExplorer}>Show in Explorer</button>}<button type="button" className={button} onClick={() => builtIn.openLogs()}>Open Logs Window</button></div><SettingsRow label="Background Service"><span className="text-text-secondary">{state.version ?? '—'}</span></SettingsRow></SettingsSection>
+      {error && <p role="alert" className="mt-2 text-xs text-orange-500">{error}</p>}
       {agentsOpen && <AgentsSheet builtIn={builtIn} onClose={() => setAgentsOpen(false)} />}
-    </section>
+    </div>
   );
 }
