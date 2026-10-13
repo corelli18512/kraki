@@ -76,7 +76,8 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
     [messages, answerKey, atHead],
   );
 
-  const sessionActive = session?.state === 'active' || session?.state === 'compacting' || runtime?.status === 'compacting';
+  const isCompacting = session?.state === 'compacting' || runtime?.status === 'compacting';
+  const sessionActive = session?.state === 'active' || isCompacting;
   const action = card?.action ?? null;
   const actionLive = action?.type === 'tool_start' || action?.type === 'tool_complete'
     || (action?.type === 'tool_batch' && action.payload.running > 0) || action?.type === 'permission';
@@ -311,6 +312,12 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
       </div>
 
       <div className="kcomposer-dock" ref={composerBox}>
+        {isCompacting && (
+          <div className="kcompacting" role="status" aria-label="Compacting context">
+            <span className="kspinner" aria-hidden />
+            <span>Compacting context…</span>
+          </div>
+        )}
         <Composer
           ref={composerRef}
           sessionId={sessionId}

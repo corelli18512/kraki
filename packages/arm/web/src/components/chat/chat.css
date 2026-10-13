@@ -702,6 +702,21 @@
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
   background: linear-gradient(to bottom, color-mix(in srgb, var(--k-bg) 0%, transparent), var(--k-bg) 38%);
 }
+.kcompacting {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 8px;
+  margin: 0 auto 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(246, 246, 246, 0.8);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  color: var(--k-text-2);
+  font: 500 13px/16px var(--k-font);
+}
+.dark .kcompacting { background: rgba(36, 36, 36, 0.8); }
 .kcomposer { position: relative; display: flex; align-items: flex-end; gap: var(--k-gap); }
 .kcomposer-field {
   position: relative;
@@ -887,6 +902,36 @@
 .kstep-icon { width: 14px; height: 14px; flex-shrink: 0; }
 .kstep-good { color: #16a34a; font-weight: 600; }
 .kstep-bad { color: #ef4444; }
+
+.kstep-permission { display: flex; flex-direction: column; gap: 3px; }
+.kstep-permission .kstep-note { color: var(--k-text-2, #64748b); }
+.kstep-permission-outcome { padding-left: 26px; }
+
+/* Mac action metrics; keep the iPhone choice sizing independent. */
+@media (min-width: 768px) {
+  /* NSColor's calibrated light fill appears lighter in the sRGB capture. */
+  .kchat { --k-agent-s: 44%; --k-agent-l: 94.5%; }
+  .dark .kchat { --k-agent-s: 35%; --k-agent-l: 18%; }
+  .kslot { margin-top: 8px; }
+  .kslot-alone { margin-top: 0; }
+  .kslot-tool { line-height: 14px; }
+  .kchoice, .kslot-permission-buttons .kchoice {
+    padding: 6px 14px;
+    border: none;
+    box-shadow: inset 0 0 0 0.5px var(--k-border);
+    font-size: 13px;
+    line-height: 16px;
+  }
+  .kperm-approve { box-shadow: none !important; }
+  .kslot-permission-q { line-height: 18px; }
+  .kslot-permission-caption { line-height: 14px; }
+  .ksheet-head h3 { font-size: 17px; }
+  .kstep-prose, .kstep-note, .kstep-permission { font-size: 15px; line-height: 18px; }
+  .kstep-permission .kstep-icon { width: 18px; height: 18px; }
+  .kstep-permission .kstep-good { color: #34d399; font-weight: 400; }
+  .kstep-bad { color: #ff3b30; }
+  .dark .kstep-bad { color: #ff453a; }
+}
 
 @media (max-width: 767px) {
   .ksheet-backdrop { align-items: flex-end; }

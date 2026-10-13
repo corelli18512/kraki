@@ -120,6 +120,35 @@ describe('StepsList subagent groups', () => {
 });
 
 describe('permission steps', () => {
+  it('keeps a completed tool before its denied permission and renders the outcome below the title', () => {
+    const { container } = renderSteps([
+      makeMsg('agent_narration', { content: 'Running the sleep now.' }, 1),
+      makeMsg('tool_start', { toolName: 'bash', headline: '$ sleep 12', toolCallId: 'sleep' }, 2),
+      makeMsg('permission', { id: 'p', description: 'sleep 12', toolName: 'bash' }, 3),
+      makeMsg('permission', { id: 'p', decision: 'deny' }, 4),
+      makeMsg('tool_complete', { toolName: 'bash', headline: '$ sleep 12', toolCallId: 'sleep', success: false }, 5),
+    ]);
+    const prose = screen.getByText('Running the sleep now.');
+    const tool = screen.getByText('bash');
+    const title = screen.getByText('sleep 12');
+    expect(prose.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(tool.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelector('.kstep-permission-outcome')).toHaveTextContent('Denied');
+    expect(title.closest('.kstep-note')).not.toContainElement(screen.getByText('Denied'));
+  });
+
+  it('uses the latest completion at the first start and retains tools whose start was lost', async () => {
+    const { mergeSteps } = await import('../../lib/subagent-steps');
+    const start = makeMsg('tool_start', { toolCallId: 't', toolName: 'bash' }, 1);
+    const narration = makeMsg('agent_narration', { content: 'Waiting.' }, 2);
+    const latest = makeMsg('tool_complete', { toolCallId: 't', success: false }, 5);
+    const lostStart = makeMsg('tool_complete', { toolCallId: 'lost' }, 6);
+    expect(mergeSteps([
+      start, narration, start,
+      makeMsg('tool_complete', { toolCallId: 't', success: true }, 4), latest, lostStart,
+    ])).toEqual([latest, narration, lostStart]);
+  });
+
   it('a request and its decision show as one step with the outcome and deny reason', async () => {
     const { mergeSteps } = await import('../../lib/subagent-steps');
     const perm = (seq: number, payload: Record<string, unknown>) =>
