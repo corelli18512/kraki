@@ -87,8 +87,10 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   // While a turn runs, its live bubble stays from the first word or action
   // until a spine bubble concludes the segment (a reply, a question, a
   // terminal status) — not only while the card happens to have content.
+  // A pending question waits for the human, not another empty typing row;
+  // genuine draft text or tool/permission work still gets its own live row.
   const showLive = !!card && !card.closed && (sessionActive || permissionOpen)
-    && (card.text.length > 0 || actionLive || session?.state === 'active');
+    && (card.text.trim().length > 0 || actionLive || (session?.state === 'active' && questions.length === 0));
 
   // Row objects are reused while their record is unchanged, so memoized
   // bubbles only re-render when their own content changes.

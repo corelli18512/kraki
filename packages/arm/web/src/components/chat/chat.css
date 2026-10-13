@@ -1141,6 +1141,11 @@
   .kslot { margin-top: 8px; }
   .kslot-alone { margin-top: 0; }
   .kslot-tool { line-height: 14px; }
+  /* TextKit's action-card body bounds include 2pt beyond the 18pt prose
+   * pitch. Keep that extent local without changing multiline transcript pitch. */
+  .kbubble-agent:has(.kslot-tool, .kslot-permission) > .kmd { padding-bottom: 2px; }
+  .krow[data-question="true"] .kmd strong { font-weight: 700; }
+  .kstep-permission-lock { width: 12px; height: 15.5px; margin: 2.5px 1.5px 0 -0.5px; }
   .kagent-stack:has(.kslot-permission) { min-width: min(408px, 95%); }
   .kbubble-agent:has(.kslot-permission) { width: 100%; }
   .kchoice, .kslot-permission-buttons .kchoice {
