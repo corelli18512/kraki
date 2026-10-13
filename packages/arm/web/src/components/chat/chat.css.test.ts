@@ -42,6 +42,6 @@ describe('chat.css — dark live-turn action colours', () => {
     expect(styleFor('kcompacting', true).backgroundColor).toBe('rgba(33, 36, 49, 0.8)');
     // jsdom does not implement backdrop-filter; paired Chromium captures
     // assert the absence of blur and the translucent label tint.
-    expect(styleFor('ksteps', true).backgroundColor).toBe('rgba(118, 118, 128, 0.1)');
+    expect(styleFor('ksteps', true).backgroundColor).toBe('rgba(255, 255, 255, 0.048)')  // transcript-D-02 calibration (shared capsule);
   });
 });

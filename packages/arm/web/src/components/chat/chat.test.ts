@@ -29,7 +29,8 @@ describe('chat.css — dark Mac transcript materials', () => {
     const title = rule('.dark .khead.is-wide .khead-title');
     const mode = rule('.dark .khead.is-wide .khead-capsule');
     expect(title.background).toBe('rgba(28, 30, 32, 0.55)');
-    expect(mode.background).toBe(title.background);
+    // The mode capsule/segments use the composer-owned regular-Glass calibration (composer-D-04).
+    expect(mode.background).toBe('rgba(19, 21, 24, 0.95)');
     expect(title.getPropertyValue('backdrop-filter')).toBe('blur(20px)');
     expect(title.color).toBeUndefined();
     expect(rule('.dark .khead.is-wide::before').background).toBe('rgba(15, 15, 15, 0.7)');
@@ -53,10 +54,10 @@ describe('chat.css — dark Mac transcript materials', () => {
     expect(navigation.getPropertyValue('border-color')).toBe('rgba(110, 136, 208, 0.25)');
   });
 
-  it('uses native neutral sheet dimming and translucent quaternary tool details', () => {
+  it('uses native neutral sheet dimming and the native quaternary tool-detail fill', () => {
     expect(rule('.dark .ksheet-backdrop', true).background).toBe('rgba(22, 23, 23, 0.6)');
     expect(composite([22, 23, 23], 0.6, [2, 6, 23])).toEqual([14, 16, 23]);
-    expect(rule('.dark .ktool-detail').background).toBe('rgba(255, 255, 255, 0.048)');
+    expect(rule('.dark .ktool-detail').background).toBe('#0e1222'); // media-D-02 exact native fill
   });
 
   it('provides a visible dark blue keyboard focus ring on Close', () => {
