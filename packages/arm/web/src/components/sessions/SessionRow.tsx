@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { modelDisplayName, sessionDisplayTitle } from '../../lib/session-status';
 import { useNavigate } from 'react-router';
 import type { WebSessionSummary } from '../../types/store';
@@ -10,6 +10,7 @@ import {
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import { collapseWhitespace, resolveCardStatus, sessionTimeLabel, STATUS_LABEL, type SessionCardStatus, sessionPendingPreview, DELIVERY_LABEL, type SessionDeliveryStatus } from '../../lib/chat/session-card';
+import { SessionCardMetadata } from './SessionCardMetadata';
 import { AgentAvatar } from '../common/AgentAvatar';
 import { SwipeableCard } from './SwipeableCard';
 
@@ -61,7 +62,7 @@ export const SessionRow = memo(function SessionRow({
   const connected = useStore((s) => s.status === 'connected');
   const pending = archived ? undefined : sessionPendingPreview(entries, session.id, connected && device?.online !== false);
   const draftText = collapseWhitespace(draft);
-  const hasDraft = !pending && !!draftText && !selected;
+  const hasDraft = !pending && !!draftText;
   const previewText = pending?.text ?? (hasDraft ? draftText : collapseWhitespace(preview?.text));
   const status = pending ? 'delivery' : resolveCardStatus(session.state, preview?.type, device?.online, hasDraft, compacting);
   const title = sessionDisplayTitle(session);
@@ -74,10 +75,20 @@ export const SessionRow = memo(function SessionRow({
   const onContextMenu = useCallback((e: React.MouseEvent) => {
     if (narrow || archived) return;
     e.preventDefault();
-    setMenu({ x: Math.max(0, Math.min(e.clientX, window.innerWidth - 168)), y: Math.max(0, Math.min(e.clientY, window.innerHeight - 166)) });
-    const close = () => { setMenu(null); window.removeEventListener('click', close); };
-    setTimeout(() => window.addEventListener('click', close), 0);
+    setMenu({ x: Math.max(0, Math.min(e.clientX, window.innerWidth - 118)), y: Math.max(0, Math.min(e.clientY, window.innerHeight - 166)) });
   }, [narrow, archived]);
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    window.addEventListener('click', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [menu]);
 
   const row = (
     <button
@@ -99,7 +110,7 @@ export const SessionRow = memo(function SessionRow({
           {unread && <span className="ksr-unread" aria-label="Unread" />}
           {time && <span className="ksr-time">{time}</span>}
         </span>
-        <span className="ksr-line2">
+        {narrow ? <span className="ksr-line2">
           {machine && (
             <>
               {narrow && <span className={`ksr-devdot ${device?.online ? 'is-online' : ''}`} />}
@@ -108,8 +119,7 @@ export const SessionRow = memo(function SessionRow({
           )}
           {machine && session.model && <span className="ksr-sep" />}
           {session.model && <span className="ksr-model">{modelDisplayName(session.model, deviceAgents, session.agent)}</span>}
-          {!narrow && session.model && session.reasoningEffort && <span className="ksr-effort">· {session.reasoningEffort}</span>}
-        </span>
+        </span> : <SessionCardMetadata machine={machine} model={session.model ? modelDisplayName(session.model, deviceAgents, session.agent) : undefined} effort={session.reasoningEffort} />}
         <span className={`ksr-line3 ${hasDraft ? 'is-draft' : ''}`}>
           <span className="ksr-status-slot"><StatusGlyph status={status} draft={hasDraft} delivery={pending?.status} /></span>
           {previewText

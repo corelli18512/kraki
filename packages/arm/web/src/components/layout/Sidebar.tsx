@@ -97,7 +97,7 @@ export function Sidebar() {
 
   const list = query.trim() && sorted.length === 0
     ? <div className="ksb-noresults" data-testid="sidebar-no-results">
-        <Search aria-hidden strokeWidth={1} />
+        <svg aria-hidden viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"><circle cx="12.5" cy="12.5" r="11" /><path d="m21 21 9 9" /></svg>
         <p>No matching sessions</p>
         <span>Try another search</span>
       </div>

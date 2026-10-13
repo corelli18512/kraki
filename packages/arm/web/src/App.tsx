@@ -149,7 +149,7 @@ export function App() {
   return (
     <div className={`app-viewport flex overflow-hidden bg-surface-primary ${isDesktop ? 'min-w-[800px]' : ''}`}>
       <ErrorBanner />
-      <aside className={`${narrow ? (inSubPage ? 'hidden' : 'flex') + ' w-full' : 'flex w-[280px] border-r border-border-primary'} shrink-0 flex-col`} aria-hidden={showBlockingOverlay}>
+      <aside className={`${narrow ? (inSubPage ? 'hidden' : 'flex') + ' w-full' : 'flex w-[280px]'} shrink-0 flex-col`} aria-hidden={showBlockingOverlay}>
         <Sidebar />
       </aside>
       <main className={`relative min-w-0 flex-1 flex-col overflow-hidden ${!narrow || inSubPage ? 'flex' : 'hidden'}`} aria-hidden={showBlockingOverlay}>
