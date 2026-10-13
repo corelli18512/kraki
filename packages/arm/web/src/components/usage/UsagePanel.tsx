@@ -19,6 +19,7 @@ import {
 } from '../../lib/usage';
 import { desktop } from '../../lib/desktop';
 import './usage.css';
+import { detailUsageLayout } from '../../lib/usage-layout';
 import { matchesUsageShortcut, useUsageShortcut } from '../../lib/usage-shortcut';
 
 export const OPEN_USAGE_EVENT = 'kraki:open-usage';
@@ -208,7 +209,7 @@ function Empty({ outdated }: { outdated: DeviceSummary[] }) {
   );
 }
 
-function Card({ merged, isCurrent, index, now }: { merged: MergedAccountUsage; isCurrent: boolean; index: number; now: number }) {
+function Card({ merged, isCurrent, index, now, width }: { merged: MergedAccountUsage; isCurrent: boolean; index: number; now: number; width: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
   const size = ref.current?.getBoundingClientRect();
@@ -219,6 +220,7 @@ function Card({ merged, isCurrent, index, now }: { merged: MergedAccountUsage; i
       ref={ref}
       className={`ua-card${isCurrent ? ' is-current' : ''}${hover ? ' is-hover' : ''}`}
       style={{
+        width,
         transform: reduceMotion() ? undefined : `perspective(700px) rotateX(${rx}deg) rotateY(${ry}deg) translateY(${hover ? -2 : 0}px)`,
         '--hx': hover && size ? `${(hover.x / size.width) * 100}%` : '50%',
         '--hy': hover && size ? `${(hover.y / size.height) * 100}%` : '50%',
@@ -314,6 +316,14 @@ export function UsagePanel() {
     return () => window.removeEventListener('keydown', key);
   }, [pinned, close]);
 
+  const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const resize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, []);
+  const layout = detailUsageLayout(accounts.map((m) => Math.max(1, ringWindows(m.account).length)), Math.min(790, viewportWidth - 24));
+
   if (mode === 'closed') return null;
   const detailed = mode === 'detail';
   return (
@@ -322,6 +332,7 @@ export function UsagePanel() {
       <div
         className={`ua-panel ${detailed ? 'is-detail' : 'is-compact'}${closing ? ' is-closing' : ''}`}
         role="dialog"
+        style={detailed ? { width: layout.width } : undefined}
         aria-label="Account Usage"
         data-testid="usage-panel"
         onMouseEnter={() => { inside.current = true; if (held.current) setMode('detail'); }}
@@ -331,7 +342,9 @@ export function UsagePanel() {
         {accounts.length === 0 ? <Empty outdated={outdated} /> : detailed ? (
           <div className="ua-detail">
             <div className="ua-grid ua-grid-detail">
-              {accounts.map((m, i) => <Card key={m.id} merged={m} isCurrent={m.id === current} index={i} now={now} />)}
+              {layout.rows.map((row, r) => <div className="ua-detail-row" key={r}>
+                {row.map((i) => <Card key={accounts[i].id} merged={accounts[i]} isCurrent={accounts[i].id === current} index={i} now={now} width={layout.widths[i]} />)}
+              </div>)}
             </div>
             {outdated.length > 0 && <div className="ua-update"><ArrowDownCircle />{usageUpdateHint(outdated)}</div>}
           </div>
