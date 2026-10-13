@@ -15,17 +15,17 @@ export function DeleteAccountSection() {
   return (
     <section data-testid="settings-delete-account">
       
-      <button
+      <div className="kp-group"><div className="kp-row"><button
         type="button"
         disabled={deleting}
         onClick={() => setStep('explain')}
-        className="inline-flex items-center gap-2 rounded-lg border border-red-500/40 px-3 py-1.5 text-sm text-red-600 hover:bg-red-500/10 disabled:opacity-60 dark:text-red-400"
+        className="kp-button inline-flex items-center gap-2 disabled:opacity-60"
       >
         {deleting && <span className="h-3 w-3 animate-spin rounded-full border-2 border-red-500 border-t-transparent" />}
         {deleting ? 'Deleting…' : 'Delete Account…'}
-      </button>
+      </button></div></div>
       {state.kind === 'failed' && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{state.message}</p>}
-      <p className="mt-2 text-[11px] text-text-muted">Deletes your account and its data from Kraki's servers and signs out every device.</p>
+      <p className="kp-section-footer">Deletes your account and its data from Kraki's servers and signs out every device.</p>
       {step === 'explain' && (
         <Dialog testId="delete-explain" title="Delete your Kraki account?" body={DELETE_EXPLANATION} confirm="Continue"
           onCancel={() => setStep('none')} onConfirm={() => setStep('final')} />

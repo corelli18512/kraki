@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { sessionDisplayTitle } from '../../lib/session-status';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import type { DeviceSummary, AgentCapabilities } from '@kraki/protocol';
 import { displayVersion } from '../../lib/device-update';
+import { desktop } from '../../lib/desktop';
 import { DeviceUpdateBox } from './DeviceUpdateBox';
 
 function formatDate(iso?: string): string {
@@ -38,11 +39,13 @@ export function DevicePanel({
   const shownVersion = displayVersion(device.id, deviceUpdates, deviceVersions) ?? version;
 
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [builtInId, setBuiltInId] = useState<string | null>(null);
+  useEffect(() => { void desktop?.builtIn?.state().then((s) => setBuiltInId(s.deviceId)); }, []);
 
   const sessions = useStore((s) => s.sessions);
 
   const deviceSessions = [...sessions.values()].filter((s) => s.deviceId === device.id);
-  const canRemove = !device.online && !isCurrentDevice;
+  const canRemove = !device.online && !isCurrentDevice && device.id !== builtInId;
   const hasGreeting = models && models.length > 0;
 
   const statusDot = device.online && hasGreeting

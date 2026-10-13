@@ -287,7 +287,7 @@ export function UsagePanel() {
       open(inside.current ? 'detail' : 'compact', false);
     };
     const up = (e: KeyboardEvent) => {
-      if (e.key !== useUsageShortcut.getState().shortcut.split('+').at(-1)) return;
+      if ((e.key.length === 1 ? e.key.toUpperCase() : e.key) !== useUsageShortcut.getState().shortcut.split('+').at(-1)) return;
       held.current = false;
       if (!pinned) close();
     };

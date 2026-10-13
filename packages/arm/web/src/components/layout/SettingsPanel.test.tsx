@@ -1,17 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SettingsPanel } from './SettingsPanel';
 import { useStore } from '../../hooks/useStore';
 import { useVoice, voiceSettings } from '../../lib/voice/voice';
 import { useUsageShortcut } from '../../lib/usage-shortcut';
 
-const commands = vi.hoisted(() => ({ updatePreferences: vi.fn(), setAutoArchiveDays: vi.fn(), removeDevice: vi.fn(), requestAccountDeletion: vi.fn() }));
+const commands = vi.hoisted(() => ({ updatePreferences: vi.fn(), setAutoArchiveDays: vi.fn(), removeDevice: vi.fn(), requestAccountDeletion: vi.fn(), registerPushToken: vi.fn(), unregisterPushToken: vi.fn() }));
 vi.mock('../../lib/ws-client', () => ({ wsClient: { url: 'ws://localhost:4430', ...commands } }));
+const push = vi.hoisted(() => ({ supported: false, isPushSubscribed: vi.fn(), subscribeToPush: vi.fn(), unsubscribeFromPush: vi.fn() }));
+vi.mock('../../lib/push', () => ({ isPushSupported: () => push.supported, getPushPermission: () => 'default', isPushSubscribed: push.isPushSubscribed, subscribeToPush: push.subscribeToPush, unsubscribeFromPush: push.unsubscribeFromPush }));
 vi.mock('../../hooks/useTheme', () => ({ useTheme: () => ({ theme: 'system', setTheme: vi.fn() }) }));
 vi.mock('./ProfileBar', () => ({ signOut: vi.fn() }));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  push.supported = false;
+  push.isPushSubscribed.mockResolvedValue(false);
+  push.subscribeToPush.mockResolvedValue('subscription');
+  push.unsubscribeFromPush.mockResolvedValue(true);
+  localStorage.removeItem('kraki:notifications.enabled');
   useStore.getState().reset();
   useStore.setState({ status: 'connected', user: { id: 'u1', login: 'tester', provider: 'open' }, deviceId: 'self', archiveInfo: new Map([['computer', { count: 0, days: 14 }]]) });
   useUsageShortcut.setState({ shortcut: 'F6', enabled: true, recording: false });
@@ -48,6 +55,20 @@ describe('SettingsPanel native preferences parity', () => {
     expect(screen.getByText('Push notifications aren’t available with this relay.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('switch', { name: 'Notify me when an agent replies or needs me' }));
     expect(localStorage.getItem('kraki:notifications.enabled')).toBe('0');
+  });
+  it('notification preference controls the existing browser push subscription', async () => {
+    push.supported = true;
+    push.isPushSubscribed.mockResolvedValue(true);
+    useStore.setState({ vapidPublicKey: 'public-key' });
+    open(); tab('Notifications');
+    await screen.findByText('Push notifications are on, including when this browser is closed.');
+    fireEvent.click(screen.getByRole('switch', { name: 'Notify me when an agent replies or needs me' }));
+    await waitFor(() => expect(commands.unregisterPushToken).toHaveBeenCalledWith({ provider: 'web_push' }));
+    expect(localStorage.getItem('kraki:notifications.enabled')).toBe('0');
+    fireEvent.click(screen.getByRole('switch', { name: 'Notify me when an agent replies or needs me' }));
+    await waitFor(() => expect(commands.registerPushToken).toHaveBeenCalledWith({ provider: 'web_push', token: 'subscription' }));
+    expect(push.subscribeToPush).toHaveBeenCalledWith('public-key');
+    expect(localStorage.getItem('kraki:notifications.enabled')).toBe('1');
   });
   it('shows open-auth identity and retains two-stage account deletion safety', () => {
     open(); tab('Account');

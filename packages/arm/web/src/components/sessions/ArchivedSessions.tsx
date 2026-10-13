@@ -86,10 +86,10 @@ export function ArchiveSettings() {
 
   return (
     <div className="space-y-2">
-      <label className="flex items-center justify-between gap-3 text-sm text-text-primary">
+      <label className="kp-group kp-row" style={{ padding: '8px 10px' }}>
         <span>Archive After</span>
         <select
-          className="rounded-md border border-border-primary bg-surface-secondary px-2 py-1 text-sm"
+          className="rounded-md bg-transparent px-2 text-[13px]"
           value={days}
           onChange={(e) => {
             const value = Number(e.target.value);
@@ -100,7 +100,7 @@ export function ArchiveSettings() {
           <option value={0}>Never</option>
         </select>
       </label>
-      <p className="text-xs text-text-muted">Sessions without new messages for this long are archived. Pinned sessions are never archived.</p>
+      <p className="kp-section-footer">Sessions without new messages for this long are archived. Pinned sessions are never archived.</p>
       {count > 0 && !confirming && (
         <button type="button" className="text-sm text-red-500 hover:underline" onClick={() => setConfirming(true)}>
           Delete {count} archived session{count === 1 ? '' : 's'}…

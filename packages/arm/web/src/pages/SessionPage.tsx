@@ -171,7 +171,7 @@ export function SessionPage() {
 
       {mobileInfoOpen && session && (
         <div className="fixed inset-0 z-50" onKeyDown={(e) => e.key === 'Escape' && setMobileInfoOpen(false)} role="dialog" aria-modal="true" tabIndex={-1}>
-          <div className="absolute inset-0 bg-black/40" onClick={() => setMobileInfoOpen(false)} />
+          <div className="absolute inset-0 bg-black/20" onClick={() => setMobileInfoOpen(false)} />
           <div className="ksi-sheet">
             <SessionInfoPanel
               session={session}

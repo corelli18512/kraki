@@ -140,11 +140,11 @@ export const SessionRow = memo(function SessionRow({
           <button type="button" role="menuitem" onClick={() => { toggleRead(); setMenu(null); }}>
             {unread ? <BellOff /> : <BellRing />} {unread ? 'Mark read' : 'Mark unread'}
           </button>
+          <button type="button" role="menuitem" onClick={() => { setTitleDraft(session.title ?? session.autoTitle ?? ''); setRenaming(true); setMenu(null); }}><Pencil /> Rename…</button>
           <button type="button" role="menuitem" onClick={() => { wsClient.forkSession(session.id); setMenu(null); }}>
             <GitFork /> Fork
           </button>
-          <button type="button" role="menuitem" onClick={() => { setTitleDraft(session.title ?? session.autoTitle ?? ''); setRenaming(true); setMenu(null); }}><Pencil /> Rename…</button>
-          <button type="button" role="menuitem" onClick={() => { wsClient.archiveSession(session.id, true); setMenu(null); }}><Archive /> Archive</button>
+          <button type="button" role="menuitem" onClick={() => { wsClient.archiveSession(session.id, true); if (selected) navigate('/'); setMenu(null); }}><Archive /> Archive</button>
           <button type="button" role="menuitem" className="is-destructive" onClick={() => { setMenu(null); setConfirmDelete(true); }}>
             <Trash2 /> Delete…
           </button>
