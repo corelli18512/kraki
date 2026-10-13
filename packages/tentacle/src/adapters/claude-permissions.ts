@@ -33,7 +33,7 @@ export function makeCanUseToolHandler(
 
     // Handle AskUserQuestion tool → bridge to onQuestionRequest
     if (toolName === 'AskUserQuestion') {
-      return handleAskUserQuestion(adapter, sessionId, input, pendingQuestions);
+      return handleAskUserQuestion(adapter, sessionId, input, pendingQuestions, options.signal);
     }
 
     if (isKrakiSelfManagementCommand(shellCommandFromInput(input))) {
@@ -49,6 +49,8 @@ export function makeCanUseToolHandler(
       return { behavior: 'allow', updatedInput: input };
     }
 
+    if (options.signal?.aborted) return { behavior: 'deny', message: 'Request cancelled' };
+
     // Not auto-approved — send to relay for user decision
     const permId = makeId('perm');
     const parsed = parseClaudeToolCall(toolName, input);
@@ -62,7 +64,19 @@ export function makeCanUseToolHandler(
 
     // Register BEFORE announcing: a response may arrive synchronously.
     const decision = new Promise<PermissionResult>((resolve) => {
-      pendingPermissions.set(permId, { resolve, toolKind, input });
+      // The SDK withdraws the request (e.g. its subagent was stopped): close
+      // the card and stop accepting answers for it.
+      const onAbort = () => {
+        if (!pendingPermissions.delete(permId)) return;
+        adapter.onPermissionAutoResolved?.(sessionId, permId, 'cancelled');
+        resolve({ behavior: 'deny', message: 'Request cancelled' });
+      };
+      options.signal?.addEventListener('abort', onAbort, { once: true });
+      const settle = (result: PermissionResult) => {
+        options.signal?.removeEventListener('abort', onAbort);
+        resolve(result);
+      };
+      pendingPermissions.set(permId, { resolve: settle, toolKind, input });
     });
     // Approval cards raised by a subagent say so.
     let parentToolCallId: string | undefined;
@@ -90,6 +104,7 @@ export function handleAskUserQuestion(
   sessionId: string,
   input: Record<string, unknown>,
   pendingQuestions: Map<string, PendingQuestion>,
+  signal?: AbortSignal,
 ): Promise<PermissionResult> {
   const mode = adapter.sessionModes.get(sessionId) ?? DEFAULT_SESSION_MODE;
 
@@ -111,7 +126,22 @@ export function handleAskUserQuestion(
 
   const questions = input.questions as AskUserQuestionItem[] | undefined;
 
-  return new Promise<PermissionResult>((resolve) => {
+  return new Promise<PermissionResult>((resolveQuestion) => {
+    // The SDK withdraws the request: close whichever card of this call is
+    // open (serial cards share the same resolve) and stop accepting answers.
+    const onAbort = () => {
+      for (const [qId, q] of pendingQuestions) {
+        if (q.resolve !== resolve) continue;
+        pendingQuestions.delete(qId);
+        adapter.onQuestionAutoResolved?.(sessionId, qId);
+      }
+      resolveQuestion({ behavior: 'deny', message: 'Request cancelled' });
+    };
+    const resolve = (result: PermissionResult) => {
+      signal?.removeEventListener('abort', onAbort);
+      resolveQuestion(result);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
     const qs = questions ?? [];
     if (qs.length === 0) {
       // Malformed AskUserQuestion with no questions: surface a single
