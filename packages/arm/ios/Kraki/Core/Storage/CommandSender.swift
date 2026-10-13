@@ -82,7 +82,7 @@ final class CommandSender {
     @ObservationIgnored private var outboxURL: URL?
     private static let outboxWriteQueue = DispatchQueue(label: "chat.kraki.outbox.write", qos: .utility)
 
-    private weak var appState: AppState?
+    private(set) weak var appState: AppState?
 
     init(appState: AppState, outboxURL: URL? = nil) {
         self.appState = appState
@@ -393,7 +393,7 @@ final class CommandSender {
                     }
                     continue
                 }
-                guard !self.isLinkBusy else { continue }
+                guard !self.isLinkBusy, !self.waitsBehindRunningTurn(sessionId, clientId: clientId) else { continue }
                 stalled += step
                 if !resent, stalled >= timeout / 2, self.canResendAutomatically(sessionId) {
                     resent = true
