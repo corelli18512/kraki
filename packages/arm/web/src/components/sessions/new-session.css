@@ -101,7 +101,7 @@
 /* Popovers (the pills' choice lists) */
 .ns-popover {
   position: absolute;
-  top: calc(100% + 13px);
+  top: calc(100% + 9.5px); /* painted rim core lands on native y486.5 */
   left: calc(50% - 143px);
   z-index: 60;
   width: 286px;

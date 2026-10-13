@@ -1152,6 +1152,8 @@
   .kslot { margin-top: 8px; }
   .kslot-alone { margin-top: 0; }
   .kslot-tool { line-height: 14px; }
+  /* The parallel-batch row centres a mini ProgressView: native row is 1pt taller than a tool row. */
+  .kslot-tool:has(> .kslot-muted) { line-height: 15px; }
   /* TextKit's action-card body bounds include 2pt beyond the 18pt prose
    * pitch. Keep that extent local without changing multiline transcript pitch. */
   .kbubble-agent:has(.kslot-tool, .kslot-permission) > .kmd { padding-bottom: 2px; }
