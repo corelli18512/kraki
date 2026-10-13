@@ -8,6 +8,7 @@
 .kchat,
 .ksheet,
 .ktable-window-backdrop,
+.kmessage-menu,
 .ns-composer-wrap {
   --k-bg: #ffffff;
   --k-text: #0f172a;           /* slate-900 */
@@ -17,7 +18,7 @@
   --k-fill: rgba(120, 120, 128, 0.12);
   --k-fill-2: rgba(120, 120, 128, 0.16);
   --k-user: #0b5b9c;           /* kraki-500 */
-  --k-link: #0b5b9c;
+  --k-link: #0056a8;
 
   --k-control: 44px;           /* iPhone round controls */
   --k-gap: 8px;
@@ -41,6 +42,7 @@
 .dark .kchat,
 .dark .ksheet,
 .dark .ktable-window-backdrop,
+.dark .kmessage-menu,
 .dark .ns-composer-wrap {
   --k-bg: #020617;             /* slate-950 */
   --k-text: #f1f5f9;           /* slate-100 */
@@ -50,7 +52,7 @@
   --k-fill: rgba(120, 120, 128, 0.24);
   --k-fill-2: rgba(120, 120, 128, 0.32);
   --k-user: #5ea0d7;           /* kraki-300 */
-  --k-link: #7cb6e6;
+  --k-link: #8fd5ff;
 
 }
 
@@ -86,22 +88,33 @@
 }
 .khead > * { pointer-events: auto; }
 .khead.is-wide {
-  height: 56px;
+  height: 40px;
+  align-items: flex-start;
   justify-content: center;
-  padding: 0 16px;
-  background: linear-gradient(to bottom, var(--k-bg) 55%, color-mix(in srgb, var(--k-bg) 0%, transparent));
+  padding: 8px 14px 0;
 }
+.khead.is-wide::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: -1;
+  height: 96px;
+  background: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.78) 30%, rgba(0, 0, 0, 0.5) 55%, rgba(0, 0, 0, 0.22) 78%, transparent);
+  pointer-events: none;
+}
+.dark .khead.is-wide::before { background: rgba(0, 0, 0, 0.55); }
 .khead.is-wide .khead-title {
-  max-width: 60%;
-  border: none;
-  background: none;
-  color: var(--k-text);
-  font: 600 15px/20px var(--k-font);
-  cursor: pointer;
+  max-width: min(460px, calc(100% - 300px));
+  height: 32px;
+  padding: 0 15px;
+  border-radius: 999px;
+  font: 600 13px/18px var(--k-font);
 }
-.khead.is-wide .khead-title:hover { opacity: 0.75; }
-.khead.is-wide .khead-mode { position: absolute; right: 16px; }
-.khead.is-wide .khead-capsule { background: none; box-shadow: none; border: none; }
+.khead.is-wide .khead-title:hover { filter: brightness(0.98); }
+.khead.is-wide .khead-mode { position: absolute; top: 8px; right: 14px; }
 
 /* iPhone: floating glass capsules over a Messages-like top fade. */
 .khead.is-narrow {
@@ -119,7 +132,7 @@
   background: linear-gradient(to bottom, var(--k-bg) 35%, color-mix(in srgb, var(--k-bg) 0%, transparent));
   pointer-events: none;
 }
-.khead-round, .khead.is-narrow .khead-title, .khead-capsule {
+.khead-round, .khead-title, .khead-capsule {
   height: 44px;
   border: 0.5px solid color-mix(in srgb, var(--k-border) 70%, transparent);
   background: color-mix(in srgb, var(--k-bg) 80%, transparent);
@@ -129,7 +142,7 @@
   color: var(--k-text);
   cursor: pointer;
 }
-.dark .khead-round, .dark .khead.is-narrow .khead-title, .dark .khead-capsule {
+.dark .khead-round, .dark .khead-title, .dark .khead-capsule {
   background: color-mix(in srgb, #0f172a 72%, transparent);
   border-color: rgba(148, 163, 184, 0.22);
 }
@@ -173,7 +186,7 @@
   border-radius: 22px;
   font: 600 14px/18px var(--k-font);
 }
-.khead.is-wide .khead-capsule { height: 32px; padding: 0 8px; }
+.khead.is-wide .khead-capsule { height: 32px; padding: 0 12px; font-size: 13px; }
 .khead-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; }
 .khead-menu {
   position: absolute;
@@ -377,6 +390,48 @@
 .kmenu button:hover { background: var(--k-fill); }
 .kmenu .is-destructive { color: #ef4444; }
 
+.kmessage-menu {
+  --k-bg: #fafafa;
+  --k-text: #262626;
+  --k-border: rgba(0, 0, 0, 0.25);
+  --k-user: #007aff;
+  position: fixed;
+  z-index: 100;
+  width: max-content;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--k-bg) 92%, transparent);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: inset 0 0 0 0.5px var(--k-border), 0 5px 16px rgba(0, 0, 0, 0.22);
+  color: var(--k-text);
+  font: 13px/18px var(--k-font);
+}
+.dark .kmessage-menu {
+  --k-bg: #262626;
+  --k-text: #f2f2f2;
+  --k-border: rgba(255, 255, 255, 0.2);
+  --k-user: #0a84ff;
+}
+.kmessage-menu button {
+  display: block;
+  width: 100%;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.kmessage-menu button:hover, .kmessage-menu button:focus-visible {
+  outline: none;
+  background: var(--k-user);
+  color: white;
+}
+
 /* Typing indicator for a live turn with nothing streamed yet. */
 .kbubble-typing { padding: 12px 14px; }
 .ktyping { display: inline-flex; gap: 4px; }
@@ -488,10 +543,14 @@
 
 /* ── Markdown (TextKit / Mac bubble styles) ─────────────────────── */
 
-.kmd { min-width: 0; }
+/* Native 15pt prose has an 18pt line pitch; quote lineSpacing adds 1pt.
+   Smaller tables and monospaced fences retain their separate metrics. */
+.kmd { min-width: 0; line-height: 18px; }
 .kmd > :first-child { margin-top: 0; }
 .kmd > :last-child { margin-bottom: 0; }
-.kmd p { margin: 0 0 8px; }
+.kmd p { margin: 0 0 8px; white-space: pre-wrap; }
+.kmd p:has(+ p) { margin-bottom: 18px; }
+.kmd :is(h1, h2, h3, h4, h5, h6) + p { margin-top: 10px; }
 .kmd h1, .kmd h2, .kmd h3, .kmd h4, .kmd h5, .kmd h6 { margin: 2px 0 5px; line-height: 1.25; }
 .kmd h1 { font-size: 22px; font-weight: 700; }
 .kmd h2 { font-size: 20px; font-weight: 700; }
@@ -518,6 +577,8 @@
 .kmd ol > li::marker { color: var(--k-text-2); font-weight: 600; }
 .kmd li > p { margin: 0; }
 .kmd li > ul, .kmd li > ol { margin: 3px 0 0; }
+.kmd ul:has(+ ol), .kmd ol:has(+ ul) { margin-bottom: 3px; }
+.kmd ul:has(+ .kmd-native-rule), .kmd ol:has(+ .kmd-native-rule) { margin-bottom: 18px; }
 .kmd code {
   font-family: var(--k-mono);
   font-size: 0.93em;
@@ -540,8 +601,8 @@
   border-radius: 1.5px;
   background: var(--k-text-3);
 }
-.kmd blockquote p { margin: 0; }
-.kmd hr { margin: 10px 0; border: none; border-top: 1px solid var(--k-border); }
+.kmd blockquote p { margin: 0; line-height: 19px; }
+.kmd-native-rule { display: block; margin: 0 0 6px; font: 15px/18px var(--k-font); }
 
 /* Code: a neutral editor surface, the same in every bubble. */
 .kmd-code {
@@ -550,7 +611,7 @@
   border: 0.5px solid rgba(82, 82, 91, 0.72);
   border-radius: 9px;
   background: #18181b;
-  color: #e4e4e7;
+  color: #f4f4f5;
 }
 .kmd-code-lang {
   padding: 8px 12px 0;
@@ -559,24 +620,45 @@
 }
 .kmd-code pre {
   margin: 0;
-  padding: 8px 12px 10px;
+  padding: 0 12px 8px;
   overflow-x: auto;
   font: 13px/19px var(--k-mono);
   white-space: pre;
 }
-.kmd-code[data-language=""] pre { padding-top: 10px; }
+.kmd-code[data-language=""] pre { padding-top: 8px; }
 .kmd-code pre code.hljs { padding: 0; background: transparent; }
 .kmd-code code { font-size: 13px; }
 
-/* Chat tables — Mac/iOS ChatTable (13.5 / 12.5 pt, 10 radius, 7×10 padding,
-   hairline = label 13%, header tint = label 5%). */
+/* Highlightr's github-dark palette, including its neutral keyword/title
+   rendering and the native 4.5:1 readability fallback on #18181b. Scoped
+   here so other editors keep their own highlight.js theme. */
+.kmd-code .hljs { color: #c9d1d9; background: transparent; }
+.kmd-code .hljs span { color: inherit; background: transparent; }
+.kmd-code .hljs .hljs-attr, .kmd-code .hljs .hljs-attribute, .kmd-code .hljs .hljs-literal,
+.kmd-code .hljs .hljs-meta, .kmd-code .hljs .hljs-number, .kmd-code .hljs .hljs-operator,
+.kmd-code .hljs .hljs-selector-attr, .kmd-code .hljs .hljs-selector-class,
+.kmd-code .hljs .hljs-selector-id, .kmd-code .hljs .hljs-variable { color: #79c0ff; }
+.kmd-code .hljs .hljs-string, .kmd-code .hljs .hljs-regexp { color: #a5d6ff; }
+.kmd-code .hljs .hljs-built_in, .kmd-code .hljs .hljs-symbol { color: #ffa657; }
+.kmd-code .hljs .hljs-code, .kmd-code .hljs .hljs-comment, .kmd-code .hljs .hljs-formula { color: #8b949e; }
+.kmd-code .hljs .hljs-name, .kmd-code .hljs .hljs-quote,
+.kmd-code .hljs .hljs-selector-pseudo, .kmd-code .hljs .hljs-selector-tag { color: #7ee787; }
+.kmd-code .hljs .hljs-subst { color: #c9d1d9; }
+.kmd-code .hljs .hljs-section { color: #f4f4f5; font-weight: 700; }
+.kmd-code .hljs .hljs-bullet { color: #f2cc60; }
+.kmd-code .hljs .hljs-emphasis { font-style: italic; }
+.kmd-code .hljs .hljs-strong { font-weight: 700; }
+.kmd-code .hljs .hljs-addition { color: #aff5b4; background: #033a16; }
+.kmd-code .hljs .hljs-deletion { color: #ffdcd7; background: #67060c; }
+
+/* Chat tables — Mac typography, 7×10 padding, horizontal hairlines only. */
 .ktable {
   --kt-hair: color-mix(in srgb, var(--k-text) 13%, transparent);
   --kt-head: color-mix(in srgb, var(--k-text) 5%, transparent);
   margin: 2px 0 8px;
   max-width: 100%;
-  border: 1px solid var(--kt-hair);
-  border-radius: 10px;
+  border: none;
+  border-radius: 0;
   overflow: hidden;
   background: var(--k-bubble-bg, transparent);
 }
@@ -587,17 +669,20 @@
 }
 .ktable-scroll::after { right: 0; background: linear-gradient(to right, transparent, color-mix(in srgb, var(--k-text) 10%, transparent)); }
 .ktable-scroll.fade-right::after { opacity: 1; }
-.ktable-grid { border-collapse: separate; border-spacing: 0; min-width: 100%; font: 13.5px/18px var(--k-font); font-variant-numeric: tabular-nums; }
+.ktable-grid { border-collapse: separate; border-spacing: 0; min-width: 100%; font: 13.5px/16px var(--k-font); font-variant-numeric: tabular-nums; }
 .ktable-grid th, .ktable-grid td { padding: 7px 10px; vertical-align: top; max-width: 420px; overflow-wrap: anywhere; }
 .ktable-grid th {
   background: var(--kt-head);
   color: var(--k-text-2);
   font-size: 12.5px;
+  line-height: 15px;
   font-weight: 600;
   text-align: left;
   white-space: nowrap;
 }
-.ktable-grid tbody td { border-top: 1px solid var(--kt-hair); color: var(--k-text); }
+.ktable .ktable-grid th:first-child { border-top-left-radius: 10px; }
+.ktable .ktable-grid th:last-child { border-top-right-radius: 10px; }
+.ktable-grid tbody td { box-shadow: inset 0 0.5px var(--kt-hair); color: var(--k-text); }
 .ktable-grid td.is-num { white-space: nowrap; }
 .ktable-grid code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--k-text) 8%, transparent); font: 12.5px var(--k-mono); }
 .ktable-grid a { color: #0056a8; }
