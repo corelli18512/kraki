@@ -28,292 +28,41 @@
  * tentacle self-management guard sees every gated command in every mode.
  */
 
+import { agentEnv } from '../agent-env.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Attachment, ModelDetail, ReasoningEffort, SessionUsage, ToolArgs } from '@kraki/protocol';
-import {
-  AgentAdapter,
-  type CreateSessionConfig,
-  type PermissionDecision,
-  type QuestionAnswer,
-  type QuestionResponseResult,
-  type PermissionResponseResult,
-  type SendMessageOptions,
-  type SessionInfo,
-} from './base.js';
-import { CodexRpcProcess, type RpcId, type RpcNotification, type RpcServerRequest } from './codex-rpc.js';
+import type { Attachment, ModelDetail, ReasoningEffort, SessionUsage } from '@kraki/protocol';
+import { AgentAdapter, type CreateSessionConfig, type PermissionDecision, type QuestionAnswer, type QuestionResponseResult, type PermissionResponseResult, type SendMessageOptions, type SessionInfo } from './base.js';
+import { CodexRpcProcess, type RpcNotification } from './codex-rpc.js';
 import { getConfigDir } from '../config.js';
-import { createLogger } from '../logger.js';
-import {
-  isKrakiSelfManagementCommand,
-  SELF_MANAGEMENT_DENIAL_REASON,
-} from '../self-management-guard.js';
-import { showImageHandler, showImageTool } from '../mcp/tools/show-image.js';
-import { DEFAULT_SESSION_MODE } from '@kraki/protocol';
-import { DELEGATE_ANSWER, KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMode } from './permission-policy.js';
+import { showImageTool } from '../mcp/tools/show-image.js';
+import { TurnTracker } from './turn-tracker.js';
+import { DELEGATE_ANSWER, KRAKI_MODES_PROMPT, modeChangeSignal } from './permission-policy.js';
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 import { tmpdir } from 'node:os';
-
-const logger = createLogger('codex-adapter');
-
-type Mode = SessionMode;
-const DEFAULT_MODE: Mode = DEFAULT_SESSION_MODE;
-const KRAKI_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
-/** Tools hosted by this adapter and exposed to Codex via `dynamicTools`. */
-const KRAKI_DYNAMIC_TOOLS = new Set(['ask_user', 'show_image', 'kraki_get_mode']);
-
-// ── Pure helpers (exported for tests) ─────────────────────
-
-/** Codex only asks the client for commands and file changes (reads run under
- *  its own safe-command list), so both are side effects for Kraki's policy. */
-export function codexShouldAutoApprove(mode: Mode, kind: 'shell' | 'write'): boolean {
-  return krakiAutoApproves(mode, kind);
-}
-
-/** Map Codex model/list entries to Kraki ModelDetail. */
-export function mapCodexModels(data: unknown): ModelDetail[] {
-  if (!Array.isArray(data)) return [];
-  const out: ModelDetail[] = [];
-  for (const raw of data as Array<Record<string, unknown>>) {
-    if (!raw || raw.hidden === true) continue;
-    const id = typeof raw.id === 'string' ? raw.id : typeof raw.model === 'string' ? raw.model : '';
-    if (!id) continue;
-    const efforts = Array.isArray(raw.supportedReasoningEfforts)
-      ? (raw.supportedReasoningEfforts as Array<{ reasoningEffort?: string }>)
-        .map((e) => e?.reasoningEffort)
-        .filter((e): e is ReasoningEffort => KRAKI_EFFORTS.includes(e as ReasoningEffort))
-      : [];
-    const def = KRAKI_EFFORTS.includes(raw.defaultReasoningEffort as ReasoningEffort)
-      ? raw.defaultReasoningEffort as ReasoningEffort : undefined;
-    out.push({
-      id,
-      name: typeof raw.displayName === 'string' && raw.displayName ? raw.displayName : id,
-      supportsReasoningEffort: efforts.length > 0,
-      ...(efforts.length > 0 && { supportedReasoningEfforts: efforts }),
-      ...(def && { defaultReasoningEffort: def }),
-    });
-  }
-  return out;
-}
-
-/** First line of a prompt, capped — a task label, never the full prompt. */
-function oneLine(text: string, max = 120): string {
-  const line = text.trim().split('\n')[0].trim();
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
-}
-
-function str(v: unknown): string {
-  return typeof v === 'string' ? v : '';
-}
-
-/** Codex runs every command through a login shell (`/bin/zsh -lc '<cmd>'`).
- *  Show the inner command on cards and step headlines, like Codex's own UI.
- *  Only exact single-argument wrappers are unwrapped; anything else is kept. */
-export function unwrapShellCommand(command: string): string {
-  const m = /^(?:\/(?:usr\/)?bin\/)?(?:ba|z)?sh\s+-l?c\s+([\s\S]+)$/.exec(command.trim());
-  if (!m) return command;
-  const arg = m[1].trim();
-  if (arg.length >= 2 && arg.startsWith("'") && arg.endsWith("'")) {
-    const body = arg.slice(1, -1);
-    // Only '\'' escapes are legal inside a POSIX single-quoted word.
-    if (body.replace(/'\\''/g, '').includes("'")) return command;
-    return body.replace(/'\\''/g, "'");
-  }
-  if (arg.length >= 2 && arg.startsWith('"') && arg.endsWith('"')) {
-    const body = arg.slice(1, -1);
-    if (/(^|[^\\])"/.test(body)) return command;
-    return body.replace(/\\(["\\$`])/g, '$1');
-  }
-  return command;
-}
-
-function makeId(prefix: string): string {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function errMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-function fileChangePaths(item: Record<string, unknown> | undefined): string[] {
-  const changes = item?.changes;
-  if (!Array.isArray(changes)) return [];
-  return (changes as Array<{ path?: unknown }>).map((c) => str(c?.path)).filter(Boolean);
-}
-
-/** Extract readable text from an MCP tool-call result. */
-function mcpResultText(item: Record<string, unknown>): string {
-  const error = item.error as { message?: string } | null | undefined;
-  if (error?.message) return error.message;
-  const result = item.result as { content?: unknown[] } | null | undefined;
-  if (!Array.isArray(result?.content)) return '';
-  return result!.content
-    .map((c) => (c && typeof c === 'object' && (c as { type?: string }).type === 'text' ? str((c as { text?: unknown }).text) : ''))
-    .filter(Boolean)
-    .join('\n');
-}
-
-// ── Session state ─────────────────────────────────────────
-
-interface PendingPermission {
-  rpcId: RpcId;
-  kind: 'command' | 'file' | 'permissions';
-  toolKind: 'shell' | 'write';
-  params: Record<string, unknown>;
-}
-
-interface PendingQuestion {
-  rpcId: RpcId;
-  source: 'ask_user' | 'native';
-  /** native request_user_input: questions answered one card at a time. */
-  questions?: Array<{ id: string; question: string; options?: Array<{ label: string }> | null }>;
-  index?: number;
-  collected?: Record<string, { answers: string[] }>;
-}
-
-interface QueuedInput {
-  text: string;
-  attachments?: Attachment[];
-  relayTurnId?: string;
-}
-
-interface CodexSession {
-  sessionId: string;
-  threadId?: string;
-  /** Thread attached to the CURRENT app-server process. */
-  loaded: boolean;
-  cwd?: string;
-  model?: string;
-  effort?: ReasoningEffort;
-  mode: Mode;
-  modeSignal?: Mode;
-  activeTurnId?: string;
-  /** A turn/start is in flight (response not yet received). */
-  starting: boolean;
-  /** Abort requested before the Codex turn id was known. */
-  abortPending: boolean;
-  /** The current turn was stopped by the user. RelayClient owns that terminal
-   *  boundary (turn_status user_abort + idle aborted), so the adapter settles
-   *  its own state silently: no onMessage / onIdle for the aborted turn. */
-  userAborted: boolean;
-  /** Recently settled Codex turn ids — late events for them are dropped. */
-  settledTurns: string[];
-  /** commandExecution item ids started by the current turn. Codex's
-   *  turn/interrupt leaves running commands alive (verified 0.157.1), so
-   *  abort terminates exactly these via thread/backgroundTerminals. */
-  turnCommandItems: Set<string>;
-  relayTurnId?: string;
-  eventTurnId?: string;
-  turnFinalized: boolean;
-  pendingText: string;
-  pendingError?: string;
-  tools: Map<string, { toolName: string; args: Record<string, unknown> }>;
-  pendingPermissions: Map<string, PendingPermission>;
-  pendingQuestions: Map<string, PendingQuestion>;
-  allowKinds: Set<'shell' | 'write'>;
-  queue: QueuedInput[];
-  usage?: SessionUsage;
-}
-
-interface SessionSidecar {
-  threadId?: string;
-  cwd?: string;
-  model?: string;
-  effort?: ReasoningEffort;
-}
-
-export interface CodexAdapterOptions {
-  /** Absolute path to the `codex` executable. */
-  cliPath: string;
-  /** Extra argv before `app-server` (tests use `node fake.js`). */
-  cliArgs?: string[];
-  attachmentStore?: import('../attachment-store.js').AttachmentStore;
-  /** Override the Kraki sessions dir (tests). Defaults to <configDir>/sessions. */
-  sessionsDir?: string;
-  env?: NodeJS.ProcessEnv;
-  requestTimeoutMs?: number;
-}
-
-/** A subagent thread spawned (directly or nested) by a session's thread. */
-interface CodexChildThread {
-  sessionId: string;
-  label: string;
-  /** Synthetic trace step standing for this subagent (its dispatch). */
-  dispatchId?: string;
-  /** The dispatch step of the subagent that spawned this one (nesting). */
-  parentDispatchId?: string;
-  task?: string;
-  tokens?: number;
-  /** Open tool items of the child, by item id. */
-  tools: Map<string, { toolName: string }>;
-  /** The child's latest prose: narration once a step follows, else its report. */
-  draft?: string;
-  done?: boolean;
-}
-
-/** Codex thread item → Kraki tool step (name + args), or null if not a tool. */
-function codexItemTool(item: Record<string, unknown>): { toolName: string; args: Record<string, unknown> } | null {
-  switch (item.type) {
-    case 'commandExecution':
-      return { toolName: 'shell', args: { command: unwrapShellCommand(str(item.command)), cwd: str(item.cwd) } };
-    case 'fileChange': {
-      const paths = fileChangePaths(item);
-      const changes = Array.isArray(item.changes) ? item.changes as Array<{ diff?: string }> : [];
-      return { toolName: 'edit', args: { path: paths.join(', '), paths, diff: changes.map((c) => str(c.diff)).join('\n') } };
-    }
-    case 'mcpToolCall': {
-      const args = (item.arguments && typeof item.arguments === 'object' ? item.arguments : {}) as Record<string, unknown>;
-      return { toolName: 'mcp', args: { server: str(item.server), tool: str(item.tool), params: args } };
-    }
-    case 'webSearch':
-      return { toolName: 'web_search', args: { query: str(item.query) } };
-    case 'imageView':
-      return { toolName: 'view', args: { path: str(item.path) } };
-    case 'dynamicToolCall':
-      return KRAKI_DYNAMIC_TOOLS.has(str(item.tool)) ? null : { toolName: str(item.tool) || 'tool', args: {} };
-    default:
-      return null;
-  }
-}
-
-/** Codex completed thread item → tool result, or null if not a tool. */
-function codexItemResult(item: Record<string, unknown>): { result: string; success: boolean } | null {
-  switch (item.type) {
-    case 'commandExecution':
-      return { result: str(item.aggregatedOutput), success: item.status === 'completed' && (item.exitCode === 0 || item.exitCode == null) };
-    case 'fileChange': {
-      const paths = fileChangePaths(item);
-      const ok = item.status === 'completed';
-      return { result: ok ? `Updated ${paths.join(', ')}` : `File change ${str(item.status)}`, success: ok };
-    }
-    case 'mcpToolCall':
-      return { result: mcpResultText(item), success: item.status === 'completed' };
-    case 'webSearch':
-    case 'imageView':
-      return { result: '', success: true };
-    case 'dynamicToolCall':
-      return KRAKI_DYNAMIC_TOOLS.has(str(item.tool)) ? null : { result: '', success: item.success === true };
-    default:
-      return null;
-  }
-}
+import { handleNotification } from './codex-notifications.js';
+import { handleServerRequest, emitNativeQuestion } from './codex-requests.js';
+import { str } from './codex-items.js';
+import { logger, codexShouldAutoApprove, type Mode, DEFAULT_MODE, KRAKI_EFFORTS, mapCodexModels, makeId, errMessage, type PendingPermission, type QueuedInput, type CodexSession, type SessionSidecar, type CodexAdapterOptions, type CodexChildThread } from './codex-session.js';
+export { unwrapShellCommand } from './codex-items.js';
+export { codexShouldAutoApprove, mapCodexModels, type CodexAdapterOptions } from './codex-session.js';
 
 // ── Adapter ───────────────────────────────────────────────
 
 export class CodexAdapter extends AgentAdapter {
-  private rpc: CodexRpcProcess | null = null;
-  private sessions = new Map<string, CodexSession>();
+  rpc: CodexRpcProcess | null = null;
+  sessions = new Map<string, CodexSession>();
   private threadToSession = new Map<string, string>();
   /** Subagent threads spawned (directly or nested) by a session's thread →
    * owning Kraki session. Only server requests (approvals, questions, Kraki
    * tools) and their withdrawals are routed through it; a subagent's own
    * messages and turn lifecycle never drive the parent session. */
-  private childThreads = new Map<string, CodexChildThread>();
+  childThreads = new Map<string, CodexChildThread>();
   private models: ModelDetail[] = [];
   /** Ephemeral title threads awaiting their final agent message. */
-  private titleThreads = new Map<string, { text: string; done: (text: string | null) => void }>();
+  titleThreads = new Map<string, { text: string; done: (text: string | null) => void }>();
   private stopping = false;
-  private readonly opts: CodexAdapterOptions;
+  readonly opts: CodexAdapterOptions;
 
   static readonly DEVELOPER_INSTRUCTIONS = [
     'You are running inside Kraki, a remote-control harness. A human operator is',
@@ -398,37 +147,51 @@ export class CodexAdapter extends AgentAdapter {
     const rpc = new CodexRpcProcess({
       command: this.opts.cliPath,
       args,
-      env: this.opts.env ?? process.env,
+      env: this.opts.env ?? agentEnv(),
       requestTimeoutMs: this.opts.requestTimeoutMs ?? 60_000,
     });
     rpc.onNotification = (n) => {
-      try { this.handleNotification(n); } catch (err) {
+      try { handleNotification(this, n); } catch (err) {
         logger.error({ err: errMessage(err), method: n.method }, 'codex notification handler failed');
       }
     };
     rpc.onServerRequest = (r) => {
-      this.handleServerRequest(r).catch((err) => {
+      handleServerRequest(this, r).catch((err) => {
         logger.error({ err: errMessage(err), method: r.method }, 'codex server request handler failed');
         rpc.respondError(r.id, errMessage(err));
       });
     };
     rpc.onExit = (info) => this.handleServerExit(rpc, info);
     rpc.start();
-    this.rpc = rpc;
-    await rpc.request('initialize', {
-      clientInfo: { name: 'kraki', title: 'Kraki', version: '1' },
-      // Required for client-hosted dynamic tools (ask_user / show_image).
-      capabilities: { experimentalApi: true },
-    }, 30_000);
+    try {
+      await rpc.request('initialize', {
+        clientInfo: { name: 'kraki', title: 'Kraki', version: '1' },
+        // Required for client-hosted dynamic tools (ask_user / show_image).
+        capabilities: { experimentalApi: true },
+      }, 30_000);
+    } catch (err) {
+      if (rpc.alive) await rpc.stop().catch(() => {});
+      throw err;
+    }
     rpc.notify('initialized');
+    // Published only after the handshake: a concurrent caller must never send
+    // to a server that is not initialized yet.
+    this.rpc = rpc;
   }
+
+  /** Spawn in progress; concurrent callers share it. */
+  private serverStarting: Promise<void> | null = null;
 
   private async ensureServer(): Promise<CodexRpcProcess> {
     if (this.rpc?.alive) return this.rpc;
     if (this.stopping) throw new Error('Codex adapter is stopping');
-    logger.warn('codex app-server not running — respawning');
-    await this.spawnServer();
-    return this.rpc!;
+    if (!this.serverStarting) {
+      logger.warn('codex app-server not running — respawning');
+      this.serverStarting = this.spawnServer().finally(() => { this.serverStarting = null; });
+    }
+    await this.serverStarting;
+    if (!this.rpc?.alive) throw new Error('codex app-server exited during startup');
+    return this.rpc;
   }
 
   private handleServerExit(rpc: CodexRpcProcess, info: { code: number | null; signal: NodeJS.Signals | null; stderrTail: string }): void {
@@ -444,10 +207,7 @@ export class CodexAdapter extends AgentAdapter {
         s.activeTurnId = undefined;
         s.starting = false;
         this.dropPendingCards(s, false);
-        if (!s.turnFinalized) {
-          this.onError?.(s.sessionId, { message: 'Codex app-server exited unexpectedly', ...this.turnEvent(s) });
-          this.finalizeTurn(s);
-        }
+        this.finalizeTurn(s, 'Codex app-server exited unexpectedly');
       }
     }
   }
@@ -473,15 +233,13 @@ export class CodexAdapter extends AgentAdapter {
       mode: DEFAULT_MODE,
       starting: false,
       abortPending: false,
-      userAborted: false,
+      startGeneration: 0,
       settledTurns: [],
       turnCommandItems: new Set(),
-      turnFinalized: true,
-      pendingText: '',
+      turn: new TurnTracker(this, sessionId),
       tools: new Map(),
       pendingPermissions: new Map(),
       pendingQuestions: new Map(),
-      allowKinds: new Set(),
       queue: [],
       ...init,
     };
@@ -618,16 +376,29 @@ export class CodexAdapter extends AgentAdapter {
 
   setTurnIdentity(sessionId: string, turnId: string): void {
     const s = this.sessions.get(sessionId);
-    if (s) s.relayTurnId = turnId;
+    if (s) s.turn.relayTurnId = turnId;
   }
 
   isTurnSettled(sessionId: string): boolean {
-    return this.sessions.get(sessionId)?.turnFinalized === true;
+    return this.sessions.get(sessionId)?.turn.isSettled === true;
   }
 
-  private turnEvent(s: CodexSession): { turnId?: string } {
-    const turnId = s.eventTurnId ?? s.relayTurnId;
-    return turnId ? { turnId } : {};
+  turnEvent(s: CodexSession): { turnId?: string } {
+    return s.turn.event();
+  }
+
+  /** An image attachment's bytes: inline, or (current apps) a content_ref
+   *  into the AttachmentStore. Null for anything that is not an image. */
+  private resolveImage(s: CodexSession, att: Attachment): { bytes: Buffer; mime: string } | null {
+    let bytes: Buffer | null = null;
+    let mime = att.mimeType;
+    if (att.type === 'image') {
+      bytes = Buffer.from(att.data, 'base64');
+    } else if (att.type === 'content_ref' && this.opts.attachmentStore) {
+      const hit = this.opts.attachmentStore.read(s.sessionId, att.id);
+      if (hit) { bytes = hit.bytes; mime = hit.meta.mimeType ?? mime; }
+    }
+    return bytes && mime.startsWith('image/') ? { bytes, mime } : null;
   }
 
   private buildInput(s: CodexSession, text: string, attachments?: Attachment[]): unknown[] {
@@ -638,15 +409,9 @@ export class CodexAdapter extends AgentAdapter {
     }
     if (text) input.push({ type: 'text', text, text_elements: [] });
     for (const att of attachments ?? []) {
-      let bytes: Buffer | null = null;
-      let mime = att.mimeType;
-      if (att.type === 'image') {
-        bytes = Buffer.from(att.data, 'base64');
-      } else if (att.type === 'content_ref' && this.opts.attachmentStore) {
-        const hit = this.opts.attachmentStore.read(s.sessionId, att.id);
-        if (hit) { bytes = hit.bytes; mime = hit.meta.mimeType ?? mime; }
-      }
-      if (!bytes || !mime.startsWith('image/')) continue;
+      const image = this.resolveImage(s, att);
+      if (!image) continue;
+      const { bytes, mime } = image;
       const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : mime === 'image/gif' ? 'gif' : 'jpg';
       const dir = join(this.storeDir(s.sessionId), 'codex-inputs');
       mkdirSync(dir, { recursive: true });
@@ -680,27 +445,26 @@ export class CodexAdapter extends AgentAdapter {
         // start a fresh turn with this input.
         logger.debug({ sessionId, err: errMessage(err) }, 'codex steer rejected; starting new turn');
         if (s.activeTurnId || s.starting) {
-          s.queue.push({ text, attachments, relayTurnId: s.relayTurnId });
+          s.queue.push({ text, attachments, relayTurnId: s.turn.relayTurnId });
           return;
         }
       }
     } else if (busy) {
       // prompt/follow_up while a turn runs: run it right after the active turn.
-      s.queue.push({ text, attachments, relayTurnId: s.relayTurnId });
+      s.queue.push({ text, attachments, relayTurnId: s.turn.relayTurnId });
       return;
     }
 
-    await this.startTurn(s, { text, attachments, relayTurnId: s.relayTurnId });
+    await this.startTurn(s, { text, attachments, relayTurnId: s.turn.relayTurnId });
   }
 
   private async startTurn(s: CodexSession, input: QueuedInput): Promise<void> {
+    const generation = ++s.startGeneration;
     s.starting = true;
-    s.turnFinalized = false;
-    s.userAborted = false;
     s.turnCommandItems = new Set();
-    s.pendingText = '';
-    s.pendingError = undefined;
-    s.eventTurnId = input.relayTurnId;
+    s.turn.beginTurn();
+    // A queued input keeps the relay turn it was sent in.
+    s.turn.eventTurnId = input.relayTurnId;
     try {
       const rpc = await this.ensureLoaded(s);
       const res = await rpc.request<{ turn: { id: string; status?: string } }>('turn/start', {
@@ -710,20 +474,25 @@ export class CodexAdapter extends AgentAdapter {
         ...(s.effort && { effort: s.effort }),
         approvalPolicy: 'untrusted',
       });
+      // This turn was already finalized (app-server exit / instant failure)
+      // and the next queued turn owns the session now.
+      if (s.startGeneration !== generation) return;
       // turn/completed may already have landed for an instantly-failing turn.
-      if (!s.turnFinalized && res?.turn?.id) s.activeTurnId = res.turn.id;
+      if (!s.turn.isSettled && res?.turn?.id) s.activeTurnId = res.turn.id;
     } catch (err) {
+      // Already finalized and reported (e.g. the app-server exited mid-start).
+      if (s.startGeneration !== generation) return;
       s.starting = false;
       s.abortPending = false;
       s.activeTurnId = undefined;
-      s.turnFinalized = true;
+      s.turn.settleSilently(); // the caller reports the failure
       throw err;
     }
     s.starting = false;
     if (s.abortPending) void this.interruptActive(s);
   }
 
-  private async interruptActive(s: CodexSession): Promise<void> {
+  async interruptActive(s: CodexSession): Promise<void> {
     if (!s.activeTurnId) return;
     s.abortPending = false;
     if (!this.rpc?.alive) return;
@@ -735,16 +504,16 @@ export class CodexAdapter extends AgentAdapter {
   }
 
   /** True when a notification belongs to a turn other than the live one. */
-  private isStale(s: CodexSession, codexTurnId: string): boolean {
+  isStale(s: CodexSession, codexTurnId: string): boolean {
     if (!codexTurnId) return false;
     if (s.settledTurns.includes(codexTurnId)) return true;
     return !!s.activeTurnId && s.activeTurnId !== codexTurnId;
   }
 
-  /** Settle the current turn exactly once and run the next queued input. */
-  private finalizeTurn(s: CodexSession): void {
-    if (s.turnFinalized) return;
-    s.turnFinalized = true;
+  /** Settle the current turn exactly once — its reply (or `error`), then idle —
+   *  and run the next queued input. */
+  finalizeTurn(s: CodexSession, error?: string): void {
+    if (s.turn.isSettled) return;
     s.abortPending = false;
     if (s.activeTurnId) {
       s.settledTurns.push(s.activeTurnId);
@@ -756,41 +525,40 @@ export class CodexAdapter extends AgentAdapter {
     // A queued steer belongs to the relay turn that is ending here: Codex runs
     // it as a new turn, but for the relay it is the same logical turn. Settling
     // that turn now would make the relay drop everything the steer produces.
-    const continuesSameTurn = !!next?.relayTurnId && next.relayTurnId === ev.turnId && !s.userAborted;
-    if (!s.userAborted && !continuesSameTurn) {
-      if (ev.turnId) this.onIdle?.(s.sessionId, ev); else this.onIdle?.(s.sessionId);
-    }
+    const continuesSameTurn = !!next?.relayTurnId && next.relayTurnId === ev.turnId && !s.turn.isAborted;
+    // The continuation produces the turn's reply: this run's prose is a step
+    // (as Pi does while a turn is held open), not a second reply.
+    if (continuesSameTurn && !error && !s.turn.pendingError) s.turn.holdOpen();
+    s.turn.finish({ error, idle: !continuesSameTurn });
     this.onFlushComplete?.(s.sessionId);
-    if (next) {
-      this.startTurn(s, next).catch((err) => {
-        const turn = next.relayTurnId ? { turnId: next.relayTurnId } : {};
-        this.onError?.(s.sessionId, { message: errMessage(err), ...turn });
-        // The relay waits for this turn's idle; without it the session would
-        // stay "running" forever.
-        if (next.relayTurnId) this.onIdle?.(s.sessionId, turn); else this.onIdle?.(s.sessionId);
-      });
-    }
+    if (next) this.startQueued(s, next);
   }
 
-  private flushNarration(s: CodexSession): void {
-    const text = s.pendingText.trim();
-    s.pendingText = '';
-    if (!text) return;
-    this.onNarration?.(s.sessionId, { content: text, ...this.turnEvent(s) });
-    this.onNarrationTrace?.(s.sessionId, { content: text, ...this.turnEvent(s) });
+  /** Start a queued input; if it cannot start, report it and move on to the
+   *  rest of the queue (it would otherwise wait for an unrelated later turn). */
+  private startQueued(s: CodexSession, next: QueuedInput): void {
+    this.startTurn(s, next).catch((err) => {
+      const turn = next.relayTurnId ? { turnId: next.relayTurnId } : {};
+      this.onError?.(s.sessionId, { message: errMessage(err), ...turn });
+      // The relay waits for this turn's idle; without it the session would
+      // stay "running" forever.
+      if (next.relayTurnId) this.onIdle?.(s.sessionId, turn); else this.onIdle?.(s.sessionId);
+      if (s.activeTurnId || s.starting || this.sessions.get(s.sessionId) !== s) return;
+      const following = s.queue.shift();
+      if (following) this.startQueued(s, following);
+    });
   }
 
-  private flushConclusion(s: CodexSession): void {
-    const text = s.pendingText.trim();
-    s.pendingText = '';
-    if (text) this.onMessage?.(s.sessionId, { content: text, ...this.turnEvent(s) });
+  /** A tool / question / subagent follows: prose before it was narration. */
+  flushNarration(s: CodexSession): void {
+    s.turn.toolStarted();
   }
 
   async abortSession(sessionId: string): Promise<void> {
     const s = this.sessions.get(sessionId);
     if (!s) return;
     s.queue = [];
-    if (!s.turnFinalized) s.userAborted = true;
+    s.turn.abort();
     this.dropPendingCards(s, true);
     const commandItems = [...s.turnCommandItems];
     if (s.activeTurnId) await this.interruptActive(s);
@@ -798,7 +566,7 @@ export class CodexAdapter extends AgentAdapter {
     else if (s.starting) s.abortPending = true;
     if (commandItems.length > 0) await this.terminateTurnCommands(s, new Set(commandItems));
     // turn/completed(interrupted) finalizes; if the turn is already gone, do it now.
-    if (!s.activeTurnId && !s.starting && !s.turnFinalized) this.finalizeTurn(s);
+    if (!s.activeTurnId && !s.starting && !s.turn.isSettled) this.finalizeTurn(s);
   }
 
   /** Stop means stop: kill commands this turn started that Codex left running.
@@ -857,8 +625,31 @@ export class CodexAdapter extends AgentAdapter {
     if (!s) return;
     if (s.mode !== mode) s.modeSignal = mode;
     s.mode = mode;
-    // A downgrade must not inherit "always allow" grants made in a looser mode.
-    if (mode === 'safe') s.allowKinds.clear();
+    this.releasePendingForMode(s);
+  }
+
+  /** Entering auto/delegate approves the permissions already waiting (as the
+   *  new mode would have); delegate also answers the open questions. */
+  private releasePendingForMode(s: CodexSession): void {
+    if ((s.mode !== 'auto' && s.mode !== 'delegate') || !this.rpc?.alive) return;
+    for (const [id, p] of s.pendingPermissions) {
+      if (!codexShouldAutoApprove(s.mode, p.toolKind)) continue;
+      this.answerPermission(p, true);
+      s.pendingPermissions.delete(id);
+      this.onPermissionAutoResolved?.(s.sessionId, id, 'approved');
+    }
+    if (s.mode !== 'delegate') return;
+    for (const [id, q] of s.pendingQuestions) {
+      if (q.source === 'ask_user') {
+        this.rpc.respond(q.rpcId, { contentItems: [{ type: 'inputText', text: DELEGATE_ANSWER }], success: true });
+      } else {
+        const answers = { ...(q.collected ?? {}) };
+        for (const item of (q.questions ?? []).slice(q.index ?? 0)) answers[item.id] = { answers: [DELEGATE_ANSWER] };
+        this.rpc.respond(q.rpcId, { answers });
+      }
+      s.pendingQuestions.delete(id);
+      this.onQuestionAutoResolved?.(s.sessionId, id);
+    }
   }
 
   async setSessionModel(sessionId: string, model: string, reasoningEffort?: string): Promise<void> {
@@ -939,7 +730,7 @@ export class CodexAdapter extends AgentAdapter {
       return 'not_found';
     }
     s.pendingPermissions.delete(permissionId);
-    const allow = decision === 'approve' || decision === 'always_allow';
+    const allow = decision === 'approve';
     this.answerPermission(pending, allow);
     // Codex's decline carries no text; relay the operator's reason as a steer
     // into the running turn so the model learns why.
@@ -951,19 +742,10 @@ export class CodexAdapter extends AgentAdapter {
       }).catch((err) => logger.debug({ sessionId, err: errMessage(err) }, 'codex deny-reason steer failed'));
     }
 
-    if (decision === 'always_allow') {
-      s.allowKinds.add(pending.toolKind);
-      for (const [otherId, other] of s.pendingPermissions) {
-        if (other.toolKind !== pending.toolKind) continue;
-        s.pendingPermissions.delete(otherId);
-        this.answerPermission(other, true);
-        this.onPermissionAutoResolved?.(sessionId, otherId, 'approved');
-      }
-    }
     return 'accepted';
   }
 
-  private answerPermission(p: PendingPermission, allow: boolean): void {
+  answerPermission(p: PendingPermission, allow: boolean): void {
     if (!this.rpc) return;
     if (p.kind === 'permissions') {
       const requested = (p.params.permissions ?? {}) as Record<string, unknown>;
@@ -992,14 +774,14 @@ export class CodexAdapter extends AgentAdapter {
     s.pendingQuestions.delete(questionId);
 
     const value = typeof answer === 'string' ? { text: answer } : answer;
-    const images = (value.attachments ?? []).filter((a): a is Extract<Attachment, { type: 'image' }> => a.type === 'image');
+    const images = (value.attachments ?? []).flatMap((a) => this.resolveImage(s, a) ?? []);
     const text = value.text || (images.length ? 'The user answered with image attachment(s).' : '');
 
     if (pending.source === 'ask_user') {
       this.rpc.respond(pending.rpcId, {
         contentItems: [
           { type: 'inputText', text },
-          ...images.map((img) => ({ type: 'inputImage', imageUrl: `data:${img.mimeType};base64,${img.data}` })),
+          ...images.map((img) => ({ type: 'inputImage', imageUrl: `data:${img.mime};base64,${img.bytes.toString('base64')}` })),
         ],
         success: true,
       });
@@ -1012,7 +794,7 @@ export class CodexAdapter extends AgentAdapter {
     const collected = pending.collected ?? {};
     if (qs[idx]) collected[qs[idx].id] = { answers: [text] };
     if (idx + 1 < qs.length) {
-      this.emitNativeQuestion(s, pending.rpcId, qs, idx + 1, collected);
+      emitNativeQuestion(this, s, pending.rpcId, qs, idx + 1, collected);
     } else {
       this.rpc.respond(pending.rpcId, { answers: collected });
     }
@@ -1020,7 +802,7 @@ export class CodexAdapter extends AgentAdapter {
   }
 
   /** Resolve every outstanding card for a session (turn ended / abort / stop). */
-  private dropPendingCards(s: CodexSession, answerServer: boolean): void {
+  dropPendingCards(s: CodexSession, answerServer: boolean): void {
     for (const [id, p] of s.pendingPermissions) {
       if (answerServer && this.rpc?.alive) {
         if (p.kind === 'permissions') this.rpc.respond(p.rpcId, { permissions: {}, scope: 'turn' });
@@ -1044,7 +826,7 @@ export class CodexAdapter extends AgentAdapter {
 
   // ── Codex → Kraki: server requests ───────────────────
 
-  private sessionForParams(params: unknown): CodexSession | undefined {
+  sessionForParams(params: unknown): CodexSession | undefined {
     const threadId = str((params as { threadId?: unknown } | undefined)?.threadId);
     const sid = threadId ? this.threadToSession.get(threadId) : undefined;
     return sid ? this.sessions.get(sid) : undefined;
@@ -1052,7 +834,7 @@ export class CodexAdapter extends AgentAdapter {
 
   /** Owning session for a server request: the session's own thread, or one of
    * the subagent threads it spawned. */
-  private sessionForRequest(params: unknown): { s: CodexSession; child?: string } | undefined {
+  sessionForRequest(params: unknown): { s: CodexSession; child?: string } | undefined {
     const own = this.sessionForParams(params);
     if (own) return { s: own };
     const threadId = str((params as { threadId?: unknown } | undefined)?.threadId);
@@ -1063,7 +845,7 @@ export class CodexAdapter extends AgentAdapter {
 
   /** Learn subagent threads from the notifications of a thread we own (the
    * session's thread or an already-known subagent thread, for nesting). */
-  private learnChildThreads(n: RpcNotification, params: Record<string, unknown>): void {
+  learnChildThreads(n: RpcNotification, params: Record<string, unknown>): void {
     const threadId = str(params.threadId);
     const owner = threadId
       ? this.threadToSession.get(threadId) ?? this.childThreads.get(threadId)?.sessionId
@@ -1092,499 +874,5 @@ export class CodexAdapter extends AgentAdapter {
     }
   }
 
-  private async handleServerRequest(req: RpcServerRequest): Promise<void> {
-    const rpc = this.rpc!;
-    const params = (req.params ?? {}) as Record<string, unknown>;
-    const owner = this.sessionForRequest(params);
-    const s = owner?.s;
-    // Approval cards raised by a subagent say so.
-    const who = owner?.child ? `Subagent ${owner.child} — ` : '';
-
-    switch (req.method) {
-      case 'item/commandExecution/requestApproval': {
-        if (!s) return rpc.respond(req.id, { decision: 'decline' });
-        const rawCommand = str(params.command);
-        const command = unwrapShellCommand(rawCommand);
-        if (isKrakiSelfManagementCommand(command) || isKrakiSelfManagementCommand(rawCommand)) {
-          // Codex's decline carries no reason text; the model sees the command
-          // was declined. Log the Kraki reason for operators.
-          logger.warn({ sessionId: s.sessionId, reason: SELF_MANAGEMENT_DENIAL_REASON }, 'blocked tentacle self-management command');
-          return rpc.respond(req.id, { decision: 'decline' });
-        }
-        const pending: PendingPermission = { rpcId: req.id, kind: 'command', toolKind: 'shell', params };
-        const reason = str(params.reason);
-        return this.gate(s, pending, [], {
-          toolArgs: { toolName: 'shell', args: { command } },
-          description: who + (command ? `Run: ${command}` : (reason || 'Run a command')),
-        });
-      }
-
-      case 'item/fileChange/requestApproval': {
-        if (!s) return rpc.respond(req.id, { decision: 'decline' });
-        const tracked = s.tools.get(str(params.itemId));
-        const paths = (tracked?.args.paths as string[] | undefined) ?? [];
-        const grantRoot = str(params.grantRoot);
-        const pending: PendingPermission = { rpcId: req.id, kind: 'file', toolKind: 'write', params };
-        const label = paths.length ? paths.join(', ') : (grantRoot || 'files');
-        return this.gate(s, pending, grantRoot ? [grantRoot] : paths, {
-          toolArgs: { toolName: 'write_file', args: { path: paths[0] ?? grantRoot, content: str(tracked?.args.diff) } },
-          description: `${who}${str(params.reason) || 'Edit'}: ${label}`,
-        });
-      }
-
-      case 'item/permissions/requestApproval': {
-        if (!s) return rpc.respond(req.id, { permissions: {}, scope: 'turn' });
-        const perms = (params.permissions ?? {}) as Record<string, unknown>;
-        const toolKind = perms.fileSystem ? 'write' : 'shell';
-        const pending: PendingPermission = { rpcId: req.id, kind: 'permissions', toolKind, params };
-        return this.gate(s, pending, [], {
-          toolArgs: { toolName: 'permissions', args: perms },
-          description: who + (str(params.reason) || `Grant extra permissions: ${Object.keys(perms).filter((k) => perms[k]).join(', ') || 'unspecified'}`),
-        });
-      }
-
-      case 'item/tool/call':
-        return this.handleDynamicTool(req, params, s);
-
-      case 'item/tool/requestUserInput': {
-        if (!s) return rpc.respond(req.id, { answers: {} });
-        const qs = Array.isArray(params.questions) ? params.questions as PendingQuestion['questions'] : [];
-        if (!qs || qs.length === 0) return rpc.respond(req.id, { answers: {} });
-        if (s.mode === 'delegate') {
-          const answers: Record<string, { answers: string[] }> = {};
-          for (const q of qs) answers[q.id] = { answers: [DELEGATE_ANSWER] };
-          return rpc.respond(req.id, { answers });
-        }
-        this.emitNativeQuestion(s, req.id, qs, 0, {});
-        return;
-      }
-
-      case 'mcpServer/elicitation/request':
-        return rpc.respond(req.id, { action: 'decline', content: null, _meta: null });
-
-      // Legacy v1 approvals are never used by v2 threads; refuse defensively.
-      case 'execCommandApproval':
-      case 'applyPatchApproval':
-        return rpc.respond(req.id, { decision: 'denied' });
-
-      default:
-        logger.debug({ method: req.method }, 'codex: unsupported server request');
-        return rpc.respondError(req.id, `Kraki does not support ${req.method}`, -32601);
-    }
-  }
-
-  /** Apply Kraki's mode policy: auto-answer, or raise a permission card. */
-  private gate(
-    s: CodexSession,
-    pending: PendingPermission,
-    paths: string[],
-    card: { toolArgs: ToolArgs; description: string },
-  ): void {
-    if (codexShouldAutoApprove(s.mode, pending.toolKind) || s.allowKinds.has(pending.toolKind)) {
-      this.answerPermission(pending, true);
-      return;
-    }
-    const id = makeId('perm');
-    s.pendingPermissions.set(id, pending);
-    this.onPermissionRequest?.(s.sessionId, { id, ...card, ...this.turnEvent(s) });
-  }
-
-  private emitNativeQuestion(
-    s: CodexSession,
-    rpcId: RpcId,
-    qs: NonNullable<PendingQuestion['questions']>,
-    index: number,
-    collected: Record<string, { answers: string[] }>,
-  ): void {
-    const q = qs[index];
-    const id = makeId('q');
-    s.pendingQuestions.set(id, { rpcId, source: 'native', questions: qs, index, collected });
-    const choices = q.options?.map((o) => o.label).filter(Boolean);
-    this.onQuestionRequest?.(s.sessionId, {
-      id,
-      question: q.question || 'The agent has a question',
-      ...(choices && choices.length > 0 && { choices }),
-      ...this.turnEvent(s),
-    });
-  }
-
-  private async handleDynamicTool(req: RpcServerRequest, params: Record<string, unknown>, s: CodexSession | undefined): Promise<void> {
-    const rpc = this.rpc!;
-    const tool = str(params.tool);
-    const args = (params.arguments && typeof params.arguments === 'object' ? params.arguments : {}) as Record<string, unknown>;
-    const fail = (text: string) => rpc.respond(req.id, { contentItems: [{ type: 'inputText', text }], success: false });
-    if (!s) return fail('Unknown Kraki session.');
-
-    switch (tool) {
-      case 'kraki_get_mode':
-        return rpc.respond(req.id, { contentItems: [{ type: 'inputText', text: s.mode }], success: true });
-
-      case 'ask_user': {
-        const question = str(args.question) || 'The agent has a question';
-        if (s.mode === 'delegate') {
-          return rpc.respond(req.id, { contentItems: [{ type: 'inputText', text: DELEGATE_ANSWER }], success: true });
-        }
-        this.flushNarration(s);
-        const choices = Array.isArray(args.choices) ? (args.choices as unknown[]).map(str).filter(Boolean) : [];
-        const id = makeId('q');
-        s.pendingQuestions.set(id, { rpcId: req.id, source: 'ask_user' });
-        this.onQuestionRequest?.(s.sessionId, {
-          id,
-          question,
-          ...(choices.length > 0 && { choices }),
-          ...this.turnEvent(s),
-        });
-        return;
-      }
-
-      case 'show_image': {
-        this.flushNarration(s);
-        const callId = str(params.callId) || makeId('tool');
-        this.onToolStart?.(s.sessionId, { toolName: 'show_image', args, toolCallId: callId, ...this.turnEvent(s) });
-        const result = await showImageHandler(args, { sessionId: s.sessionId });
-        const text = result.content.filter((c) => c.type === 'text').map((c) => (c as { text: string }).text).join('\n');
-        const refs: import('@kraki/protocol').ContentRef[] = [];
-        if (!result.isError && this.opts.attachmentStore) {
-          for (const c of result.content) {
-            if (c.type !== 'image') continue;
-            const img = c as { data: string; mimeType: string };
-            const caption = str(args.caption).trim();
-            refs.push(this.opts.attachmentStore.put(s.sessionId, Buffer.from(img.data, 'base64'), img.mimeType, caption ? { caption } : {}));
-          }
-        }
-        this.onToolComplete?.(s.sessionId, {
-          toolName: 'show_image',
-          result: text,
-          toolCallId: callId,
-          success: !result.isError,
-          ...(refs.length > 0 && { attachments: refs }),
-          ...this.turnEvent(s),
-        });
-        return rpc.respond(req.id, { contentItems: [{ type: 'inputText', text: text || 'Done.' }], success: !result.isError });
-      }
-
-      default:
-        return fail(`Unknown tool: ${tool}`);
-    }
-  }
-
   // ── Codex → Kraki: notifications ─────────────────────
-
-  private handleNotification(n: RpcNotification): void {
-    const params = (n.params ?? {}) as Record<string, unknown>;
-    const title = this.titleThreads.get(str(params.threadId));
-    if (title) {
-      const item = params.item as { type?: string; text?: string } | undefined;
-      if (n.method === 'item/completed' && item?.type === 'agentMessage') title.text = str(item.text);
-      if (n.method === 'turn/completed') {
-        const status = str((params.turn as { status?: unknown } | undefined)?.status);
-        title.done(status === 'completed' ? title.text : null);
-      }
-      return;
-    }
-    this.learnChildThreads(n, params);
-    const s = this.sessionForParams(params);
-    if (!s) {
-      // A subagent thread: its steps show under its dispatch step; its
-      // messages and turn lifecycle never drive the owning session.
-      const child = this.childThreads.get(str(params.threadId));
-      const owner = child ? this.sessions.get(child.sessionId) : undefined;
-      if (owner && child) this.handleChildNotification(owner, child, n, params);
-      return;
-    }
-
-    const turnScoped = n.method === 'turn/started' || n.method === 'turn/completed'
-      ? str((params.turn as { id?: unknown } | undefined)?.id)
-      : str(params.turnId);
-    if (this.isStale(s, turnScoped)) {
-      logger.debug({ sessionId: s.sessionId, method: n.method }, 'codex: dropped late event from a settled turn');
-      return;
-    }
-
-    switch (n.method) {
-      case 'turn/started': {
-        const turn = params.turn as { id?: string } | undefined;
-        if (turn?.id && !s.turnFinalized) {
-          s.activeTurnId = turn.id;
-          if (s.abortPending) void this.interruptActive(s);
-        }
-        break;
-      }
-
-      case 'item/agentMessage/delta': {
-        const delta = str(params.delta);
-        if (delta) this.onMessageDelta?.(s.sessionId, { content: delta, ...this.turnEvent(s) });
-        break;
-      }
-
-      case 'item/started':
-        this.handleItemStarted(s, params.item as Record<string, unknown>);
-        break;
-
-      case 'item/completed':
-        this.handleItemCompleted(s, params.item as Record<string, unknown>);
-        break;
-
-      case 'error': {
-        const error = params.error as { message?: string } | undefined;
-        if (params.willRetry !== true && error?.message) s.pendingError = error.message;
-        break;
-      }
-
-      case 'thread/tokenUsage/updated': {
-        const usage = params.tokenUsage as {
-          total?: Record<string, number>;
-          last?: Record<string, number>;
-        } | undefined;
-        if (!usage?.total) break;
-        const prev = s.usage;
-        const next: SessionUsage = {
-          inputTokens: usage.total.inputTokens ?? 0,
-          outputTokens: usage.total.outputTokens ?? 0,
-          cacheReadTokens: usage.total.cachedInputTokens ?? 0,
-          cacheWriteTokens: usage.total.cacheWriteInputTokens ?? 0,
-          totalCost: prev?.totalCost ?? 0,
-          totalDurationMs: prev?.totalDurationMs ?? 0,
-          ...(usage.last?.inputTokens !== undefined && { contextTokens: usage.last.inputTokens }),
-        };
-        s.usage = next;
-        this.onUsageUpdate?.(s.sessionId, next);
-        break;
-      }
-
-      case 'thread/name/updated': {
-        const name = str(params.threadName).trim();
-        if (name) this.onTitleChanged?.(s.sessionId, name);
-        break;
-      }
-
-      case 'serverRequest/resolved': {
-        // Codex withdrew a request itself (e.g. turn interrupted) — retire the card.
-        this.retireWithdrawnRequest(s, params.requestId);
-        break;
-      }
-
-      case 'turn/completed':
-        this.handleTurnCompleted(s, params.turn as Record<string, unknown> | undefined);
-        break;
-
-      default:
-        break;
-    }
-  }
-
-  private retireWithdrawnRequest(s: CodexSession, rid: unknown): void {
-    for (const [id, p] of s.pendingPermissions) {
-      if (p.rpcId !== rid) continue;
-      s.pendingPermissions.delete(id);
-      this.onPermissionAutoResolved?.(s.sessionId, id, 'cancelled');
-    }
-    for (const [id, q] of s.pendingQuestions) {
-      if (q.rpcId !== rid) continue;
-      s.pendingQuestions.delete(id);
-      this.onQuestionAutoResolved?.(s.sessionId, id);
-    }
-  }
-
-  private handleItemStarted(s: CodexSession, item: Record<string, unknown> | undefined): void {
-    if (!item) return;
-    const id = str(item.id);
-    const start = (toolName: string, args: Record<string, unknown>) => {
-      this.flushNarration(s);
-      s.tools.set(id, { toolName, args });
-      this.onToolStart?.(s.sessionId, { toolName, args, toolCallId: id, ...this.turnEvent(s) });
-    };
-    switch (item.type) {
-      case 'agentMessage':
-        // Only the LAST agent message of a turn is the reply. Codex often emits
-        // a commentary message and then the final answer with no tool between
-        // them, so a new message graduates the buffered one to narration.
-        this.flushNarration(s);
-        break;
-      case 'contextCompaction':
-        this.onCompaction?.(s.sessionId, { phase: 'start', ...this.turnEvent(s) });
-        break;
-      case 'subAgentActivity':
-        this.flushNarration(s);
-        this.handleSubagentActivity(s, item, undefined);
-        break;
-      case 'collabAgentToolCall':
-        this.noteSpawnPrompt(item);
-        break;
-      default: {
-        // Tool items (shared with subagent threads). Kraki's own dynamic
-        // tools are surfaced from the item/tool/call request instead.
-        const tool = codexItemTool(item);
-        if (!tool) break;
-        if (item.type === 'commandExecution') s.turnCommandItems.add(id);
-        start(tool.toolName, tool.args);
-        break;
-      }
-    }
-  }
-
-  /** A spawn call carries the task it gave each new subagent. */
-  private noteSpawnPrompt(item: Record<string, unknown>): void {
-    const prompt = str(item.prompt);
-    if (!prompt || !Array.isArray(item.receiverThreadIds)) return;
-    for (const tid of item.receiverThreadIds) {
-      const child = this.childThreads.get(str(tid));
-      if (child && !child.task) child.task = oneLine(prompt);
-    }
-  }
-
-  /** subAgentActivity on a session's (or a subagent's) thread: a subagent
-   *  started → open its dispatch step; finished → close it with its report. */
-  private handleSubagentActivity(s: CodexSession, item: Record<string, unknown>, parentDispatchId: string | undefined): void {
-    const tid = str(item.agentThreadId);
-    const child = this.childThreads.get(tid);
-    if (!child || child.sessionId !== s.sessionId) return;
-    const kind = str(item.kind);
-    if (kind === 'started' && !child.dispatchId) {
-      child.dispatchId = `codex-subagent-${tid}`;
-      child.parentDispatchId = parentDispatchId;
-      this.onToolStart?.(s.sessionId, {
-        toolName: 'spawn_agent',
-        args: { agent: child.label, ...(child.task && { task: child.task }) },
-        toolCallId: child.dispatchId,
-        ...(parentDispatchId && { parentToolCallId: parentDispatchId }),
-        subagent: this.childInfo(child, 'running'),
-        ...this.turnEvent(s),
-      });
-    } else if ((kind === 'completed' || kind === 'interrupted') && child.dispatchId && !child.done) {
-      child.done = true;
-      const status = kind === 'completed' ? 'completed' : 'stopped';
-      // Close anything the child left open.
-      for (const [id, tool] of child.tools) {
-        this.onToolComplete?.(s.sessionId, { toolName: tool.toolName, result: '', success: false, toolCallId: id, parentToolCallId: child.dispatchId, ...this.turnEvent(s) });
-      }
-      child.tools.clear();
-      this.onToolComplete?.(s.sessionId, {
-        toolName: 'spawn_agent',
-        result: child.draft ?? '',
-        success: kind === 'completed',
-        toolCallId: child.dispatchId,
-        ...(child.parentDispatchId && { parentToolCallId: child.parentDispatchId }),
-        subagent: this.childInfo(child, status),
-        ...this.turnEvent(s),
-      });
-      child.draft = undefined;
-    }
-  }
-
-  private childInfo(child: CodexChildThread, status: 'running' | 'completed' | 'failed' | 'stopped'): import('@kraki/protocol').SubagentInfo {
-    return {
-      name: child.label,
-      ...(child.task && { task: child.task }),
-      status,
-      ...(child.tokens !== undefined && { tokens: child.tokens }),
-    };
-  }
-
-  /** A subagent thread's own events: its tool items and prose become steps
-   *  under its dispatch; nested spawns become dispatches under it. */
-  private handleChildNotification(s: CodexSession, child: CodexChildThread, n: RpcNotification, params: Record<string, unknown>): void {
-    if (n.method === 'serverRequest/resolved') {
-      this.retireWithdrawnRequest(s, params.requestId);
-      return;
-    }
-    if (n.method === 'thread/tokenUsage/updated') {
-      const total = (params.tokenUsage as { total?: Record<string, number> } | undefined)?.total;
-      if (total) child.tokens = (total.inputTokens ?? 0) + (total.outputTokens ?? 0);
-      return;
-    }
-    const parent = child.dispatchId;
-    if (!parent || (n.method !== 'item/started' && n.method !== 'item/completed')) return;
-    const item = params.item as Record<string, unknown> | undefined;
-    if (!item) return;
-    const id = str(item.id);
-    const flushDraft = () => {
-      if (!child.draft) return;
-      this.onNarrationTrace?.(s.sessionId, { content: child.draft, parentToolCallId: parent, ...this.turnEvent(s) });
-      child.draft = undefined;
-    };
-    if (n.method === 'item/started') {
-      if (item.type === 'subAgentActivity') { flushDraft(); this.handleSubagentActivity(s, item, parent); return; }
-      if (item.type === 'agentMessage') { flushDraft(); return; }
-      if (item.type === 'userMessage' && !child.task) {
-        const content = Array.isArray(item.content) ? item.content as Array<{ text?: string }> : [];
-        const text = content.map((c) => str(c.text)).join(' ').trim();
-        if (text) child.task = oneLine(text);
-        return;
-      }
-      const tool = codexItemTool(item);
-      if (!tool) return;
-      flushDraft();
-      child.tools.set(id, { toolName: tool.toolName });
-      this.onToolStart?.(s.sessionId, { ...tool, toolCallId: id, parentToolCallId: parent, ...this.turnEvent(s) });
-      return;
-    }
-    if (item.type === 'subAgentActivity') { this.handleSubagentActivity(s, item, parent); return; }
-    if (item.type === 'collabAgentToolCall') { this.noteSpawnPrompt(item); return; }
-    if (item.type === 'agentMessage') {
-      const text = str(item.text);
-      if (text) child.draft = child.draft ? `${child.draft}\n\n${text}` : text;
-      return;
-    }
-    const tracked = child.tools.get(id);
-    const res = codexItemResult(item);
-    if (!tracked || !res) return;
-    child.tools.delete(id);
-    this.onToolComplete?.(s.sessionId, { toolName: tracked.toolName, ...res, toolCallId: id, parentToolCallId: parent, ...this.turnEvent(s) });
-  }
-
-  private handleItemCompleted(s: CodexSession, item: Record<string, unknown> | undefined): void {
-    if (!item) return;
-    const id = str(item.id);
-    const complete = (result: string, success: boolean) => {
-      const tracked = s.tools.get(id);
-      if (!tracked) return;
-      s.tools.delete(id);
-      this.onToolComplete?.(s.sessionId, { toolName: tracked.toolName, result, success, toolCallId: id, ...this.turnEvent(s) });
-    };
-    switch (item.type) {
-      case 'agentMessage': {
-        const text = str(item.text);
-        if (text) s.pendingText = s.pendingText ? `${s.pendingText}\n\n${text}` : text;
-        break;
-      }
-      case 'contextCompaction':
-        this.onCompaction?.(s.sessionId, { phase: 'end', ...this.turnEvent(s) });
-        break;
-      default: {
-        const res = codexItemResult(item);
-        if (res) complete(res.result, res.success);
-        break;
-      }
-    }
-  }
-
-  private handleTurnCompleted(s: CodexSession, turn: Record<string, unknown> | undefined): void {
-    if (s.turnFinalized) return;
-    const status = str(turn?.status);
-    const turnError = (turn?.error as { message?: string } | null | undefined)?.message;
-
-    // Anything Codex still has open for this turn is moot now.
-    this.dropPendingCards(s, false);
-    for (const [id, t] of s.tools) {
-      this.onToolComplete?.(s.sessionId, { toolName: t.toolName, result: '', success: false, toolCallId: id, ...this.turnEvent(s) });
-    }
-    s.tools.clear();
-
-    if (s.userAborted) {
-      // RelayClient already snapshotted the draft into turn_status(user_abort).
-      s.pendingText = '';
-    } else if (status === 'failed') {
-      s.pendingText = '';
-      this.onError?.(s.sessionId, { message: turnError || s.pendingError || 'Codex turn failed', ...this.turnEvent(s) });
-    } else {
-      this.flushConclusion(s);
-    }
-    const duration = typeof turn?.durationMs === 'number' ? turn.durationMs : 0;
-    if (duration && s.usage) {
-      s.usage = { ...s.usage, totalDurationMs: s.usage.totalDurationMs + duration };
-      this.onUsageUpdate?.(s.sessionId, s.usage);
-    }
-    this.finalizeTurn(s);
-  }
 }

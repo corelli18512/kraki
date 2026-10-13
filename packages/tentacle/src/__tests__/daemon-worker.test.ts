@@ -325,14 +325,14 @@ describe('daemon-worker: startWorker()', () => {
     }
   });
 
-  it('exits if no config found', async () => {
+  it('exits if no config found, with a code the supervisor does not restart', async () => {
     mockConfig = null;
     await startWorker().catch(() => {});
     expect(mockLoggerFns.fatal).toHaveBeenCalledWith(
       expect.objectContaining({ configPath: '/tmp/fake-kraki/config.json' }),
       expect.stringContaining('No config found'),
     );
-    expect(mockExit).toHaveBeenCalledWith(1);
+    expect(mockExit).toHaveBeenCalledWith(78);
   });
 
   it('never uses the GitHub CLI token; relies on challenge auth without a saved token', async () => {

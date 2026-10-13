@@ -49,7 +49,7 @@ final class SessionStoreTests: XCTestCase {
     // MARK: - Ownership
 
     func testAnotherPairedComputerCannotTakeOverASession() {
-        store.isDeviceStillPaired = { $0 == "dev-1" || $0 == "dev-2" }
+        store.isDeviceStillPaired = { owner, _ in owner == "dev-1" || owner == "dev-2" }
         store.upsertSession(makeDigest(title: "mine"), deviceId: "dev-1", deviceName: "A")
         store.upsertSession(makeDigest(title: "hijack"), deviceId: "dev-2", deviceName: "B")
         store.reconcileSessionList([makeDigest(title: "hijack")], deviceId: "dev-2", deviceName: "B")
@@ -58,7 +58,7 @@ final class SessionStoreTests: XCTestCase {
     }
 
     func testASessionOfARemovedComputerCanBeAdopted() {
-        store.isDeviceStillPaired = { $0 == "dev-2" }
+        store.isDeviceStillPaired = { owner, _ in owner == "dev-2" }
         store.upsertSession(makeDigest(), deviceId: "dev-1", deviceName: "A")
         store.upsertSession(makeDigest(), deviceId: "dev-2", deviceName: "B")
         XCTAssertEqual(store.sessions["sess-1"]?.deviceId, "dev-2")
@@ -741,7 +741,7 @@ final class SessionStoreTests: XCTestCase {
 
         await coordinator.bootstrap(appState: app)
         XCTAssertEqual(coordinator.phase, .preparingAuthenticated)
-        try await Task.sleep(for: .milliseconds(40))
+        try await waitBriefly { coordinator.phase == .authenticated }  // 10 ms watchdog; busy CI can be late
 
         XCTAssertEqual(coordinator.phase, .authenticated)
         XCTAssertFalse(coordinator.isLaunchGateVisible)

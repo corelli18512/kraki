@@ -152,6 +152,7 @@ const mockedExecSync = realExecSync as unknown as Mock;
 // ── Import after mocking ────────────────────────────────
 
 import { CopilotAdapter, AgentAdapter } from '../index.js';
+import { evictIdleSessions } from '../copilot-eviction.js';
 import {
   installCopilotSdkImportCompatibility,
   resolveCopilotCliPath,
@@ -591,11 +592,12 @@ describe('CopilotAdapter', () => {
 
     it('buffers assistant.message and flushes as onMessage conclusion at idle', async () => {
       const msgSpy = vi.fn();
-      const narrationSpy = vi.fn();
+      const stepSpy = vi.fn();
       adapter.onMessage = msgSpy;
-      adapter.onNarration = narrationSpy;
+      adapter.onNarrationTrace = stepSpy;
       await adapter.start();
       const { sessionId } = await adapter.createSession({});
+      await adapter.sendMessage(sessionId, 'go'); // a prompt is running
       // Draft-bubble model: a lone assistant.message is buffered, NOT graduated
       // to a bubble immediately.
       mockSessions[0]._emit('assistant.message', { data: { content: 'Full response' } });
@@ -603,7 +605,8 @@ describe('CopilotAdapter', () => {
       // At idle it flushes as the single conclusion bubble.
       mockSessions[0]._emit('session.idle', {});
       expect(msgSpy).toHaveBeenCalledWith(sessionId, { content: 'Full response' });
-      expect(narrationSpy).not.toHaveBeenCalled();
+      // The reply is never also recorded as a step.
+      expect(stepSpy).not.toHaveBeenCalled();
     });
 
     it('flushes buffered prose as onNarration when a tool follows', async () => {
@@ -613,6 +616,7 @@ describe('CopilotAdapter', () => {
       adapter.onNarration = narrationSpy;
       await adapter.start();
       const { sessionId } = await adapter.createSession({});
+      await adapter.sendMessage(sessionId, 'go'); // a prompt is running
       // Prose followed by a tool → the prose was narration (draft/status),
       // not the conclusion, so it must NOT become a permanent bubble.
       mockSessions[0]._emit('assistant.message', { data: { content: "I'll read the file." } });
@@ -654,6 +658,7 @@ describe('CopilotAdapter', () => {
       adapter.onIdle = spy;
       await adapter.start();
       const { sessionId } = await adapter.createSession({});
+      await adapter.sendMessage(sessionId, 'go'); // a prompt is running
       mockSessions[0]._emit('session.idle', {});
       expect(spy).toHaveBeenCalledWith(sessionId);
     });
@@ -945,26 +950,6 @@ describe('CopilotAdapter', () => {
 
       const result = await resultPromise;
       expect(result).toEqual({ kind: 'reject' });
-    });
-
-    it('maps always_allow → approved', async () => {
-      const permSpy = vi.fn();
-      adapter.onPermissionRequest = permSpy;
-      await adapter.start();
-      await adapter.createSession({});
-      adapter.setSessionMode('mock-sess-1', 'safe');
-
-      const handler = capturedSessionConfigs[0].onPermissionRequest;
-      const resultPromise = handler(
-        { kind: 'write', fileName: 'package.json' },
-        { sessionId: 'mock-sess-1' },
-      );
-
-      const permId = permSpy.mock.calls[0][1].id;
-      await adapter.respondToPermission('mock-sess-1', permId, 'always_allow');
-
-      const result = await resultPromise;
-      expect(result).toEqual({ kind: 'approve-once' });
     });
   });
 
@@ -1739,7 +1724,6 @@ describe('CopilotAdapter', () => {
       sessions: Map<string, { pendingPermissions: Map<string, unknown>; pendingQuestions: Map<string, unknown>; session: { disconnect: Mock } }>;
       lastActivityAt: Map<string, number>;
       turnHasOutput: Map<string, boolean>;
-      evictIdleSessions: () => Promise<void>;
     };
 
     // Helper: configure execSync to report the given total RSS (MB).
@@ -1777,7 +1761,7 @@ describe('CopilotAdapter', () => {
       // Report RSS = 500 MB — well under threshold.
       mockRuntimeRssMB(500, 2);
 
-      await internals.evictIdleSessions();
+      await evictIdleSessions(adapter);
 
       expect(internals.sessions.size).toBe(2);
       expect(mockSessions[0].disconnect).not.toHaveBeenCalled();
@@ -1797,7 +1781,7 @@ describe('CopilotAdapter', () => {
 
       mockRuntimeRssMB(3000, 2); // 3 GB > 2 GB threshold
 
-      await internals.evictIdleSessions();
+      await evictIdleSessions(adapter);
 
       expect(mockSessions[0].disconnect).toHaveBeenCalled();
       expect(mockSessions[1].disconnect).not.toHaveBeenCalled();
@@ -1816,7 +1800,7 @@ describe('CopilotAdapter', () => {
 
       mockRuntimeRssMB(3000, 1);
 
-      await internals.evictIdleSessions();
+      await evictIdleSessions(adapter);
 
       expect(mockSessions[0].disconnect).not.toHaveBeenCalled();
       expect(internals.sessions.has(blocked.sessionId)).toBe(true);
@@ -1832,7 +1816,7 @@ describe('CopilotAdapter', () => {
 
       mockRuntimeRssMB(3000, 1);
 
-      await internals.evictIdleSessions();
+      await evictIdleSessions(adapter);
 
       expect(mockSessions[0].disconnect).not.toHaveBeenCalled();
       expect(internals.sessions.has(turning.sessionId)).toBe(true);
@@ -1850,7 +1834,7 @@ describe('CopilotAdapter', () => {
 
       mockRuntimeRssMB(3000, 1);
 
-      await internals.evictIdleSessions();
+      await evictIdleSessions(adapter);
 
       expect(evictedSpy).toHaveBeenCalledWith(s.sessionId);
     });

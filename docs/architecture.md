@@ -78,11 +78,19 @@ Its job is to:
 - assign per-session sequence numbers and timestamps
 - handle session replay via `request_session_messages_range` (file-backed, not relayed)
 - manage session lifecycle (create, update, close)
-- auto-approve tools from a local allowed list
+- apply the session's permission mode (safe asks before side effects; auto and delegate don't)
 - store image attachments and serve them on demand
 - expose a local MCP server (`kraki-show_image`)
 
-The repository includes adapters for **GitHub Copilot**, **Claude Code**, **Codex** and **pi**. The adapter boundary is intentionally separated so more agents can be added.
+The repository includes adapters for **GitHub Copilot**, **Claude Code**, **Codex** and **pi**. The adapter boundary is intentionally separated so more agents can be added. The rules every adapter shares for one turn (reply vs narration, stop, idle once) live in `adapters/turn-tracker.ts`.
+
+The daemon is a worker process under a small supervisor (`daemon-supervisor.ts`) that restarts it after a crash, backing off from 1s to 60s; a clean exit (stop, update) ends both. Which process supervises the worker:
+
+- `kraki start` on Linux, Windows and npm installs: the supervisor it starts, recorded in `daemon-supervisor.pid`. Stopping it ends the supervisor first, so the worker is not restarted.
+- Kraki for Mac and Kraki for Windows: their app's job.
+- The standalone macOS binary: launchd.
+
+A worker that cannot run at all (no config) exits with code 78, and its supervisor stops instead of retrying.
 
 ### Arm
 

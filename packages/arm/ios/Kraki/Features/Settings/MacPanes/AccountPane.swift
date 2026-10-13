@@ -17,14 +17,7 @@ struct AccountPane: View {
             if let user = appState.user {
                 Section {
                     HStack(spacing: 14) {
-                        ZStack {
-                            Circle()
-                                .fill(Color.krakiPrimary.opacity(0.15))
-                            Text(initials(for: user))
-                                .font(.system(size: 16, weight: .bold, design: .rounded))
-                                .foregroundStyle(Color.krakiPrimary)
-                        }
-                        .frame(width: 48, height: 48)
+                        AccountAvatar(user: user, size: 48, initials: initials(for: user))
                         VStack(alignment: .leading, spacing: 3) {
                             Text(user.email ?? user.login)
                                 .font(.system(size: 14, weight: .semibold))
@@ -47,10 +40,6 @@ struct AccountPane: View {
                     LabeledContent("Login",  value: user.login)
                     if let email = user.email {
                         LabeledContent("Email",  value: email)
-                    }
-                    if let did = appState.deviceId {
-                        LabeledContent("Device ID", value: String(did.prefix(12)) + "…")
-                            .help(did)
                     }
                 }
 
@@ -100,10 +89,10 @@ struct AccountPane: View {
     }
 
     private func providerLabel(for user: UserInfo) -> String {
-        // UserInfo may or may not expose a provider — fall back to a
-        // sensible default so the chip stays informative without
-        // pretending to know.
-        return "GitHub"
+        switch user.provider {
+        case "github", nil: return "GitHub"
+        case let other?: return other.capitalized
+        }
     }
 }
 

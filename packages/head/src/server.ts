@@ -1,164 +1,38 @@
-import { RemoteAuthBackend } from './remote-auth-backend.js';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage as HttpIncomingMessage } from 'http';
 import type { Server } from 'http';
-import type {
-  AuthMessage, AuthErrorCode, AuthMethod,
-  DeviceSummary, DeviceRole, DeviceKind,
-  VoiceResource, VoiceCapability, BlobPayload,
-} from '@kraki/protocol';
-import { HEAD_PULSE_TARGET, ACCOUNT_DELETED_CLOSE_CODE, DEVICE_REPLACED_CLOSE_CODE } from '@kraki/protocol';
+import type { AuthMessage, VoiceCapability, BlobPayload } from '@kraki/protocol';
+import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { Storage } from './storage.js';
-import { parseVoiceWordOps, type VoiceWord } from './voice-vocabulary.js';
-import { PulseHub, PULSE_ACK_EVERY_BYTES } from './pulse-hub.js';
-import { LeaseIssuer } from './lease-issuer.js';
-import type { AuthProvider } from './auth.js';
+import { PulseHub } from './pulse-hub.js';
 import { LocalAuthBackend } from './local-auth-backend.js';
 import { getLogger } from './logger.js';
 import { trace, fp } from './trace.js';
 import { clientIp } from './client-ip.js';
-import type { PushManager } from './push/index.js';
-import type { AuthBackend, AuthOutcome, ChallengeOutcome } from './auth-backend.js';
-
-/** Custom Words has its own channel (`auth_ok.voiceVocabulary` and
- *  `voice_vocabulary_updated`). Never ship it inside generic preferences: that
- *  would duplicate it on every auth and broadcast it on every theme change. */
-function publicPreferences(prefs: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
-  if (!prefs || !('voiceVocabulary' in prefs)) return prefs;
-  const { voiceVocabulary: _omitted, ...rest } = prefs;
-  return rest;
-}
-
-interface ClientState {
-  deviceId?: string;
-  userId?: string;
-  authenticated: boolean;
-  ip?: string;
-  isAlive: boolean;
-  authenticatedAt?: number;
-  pendingNonce?: string;
-  /** An `auth` / `auth_response` is awaiting its backend. */
-  authInFlight?: boolean;
-  pendingDeviceId?: string;
-  pendingDeviceInfo?: { encryptionKey?: string };
-  pendingAuthMethod?: string;
-  /** Replaced by a newer socket of the same device: closing, inert. */
-  evicted?: boolean;
-  /** Closes the socket if it never authenticates (G1). */
-  authTimer?: ReturnType<typeof setTimeout>;
-
-  // ── Liveness uncertainty (device_pending broadcast) ──
-  /** Timestamp when pong grace period expires (null = no pending ping). */
-  pongOverdueAt: number | null;
-  /** Whether we already broadcast device_pending for this ping cycle. */
-  pendingLivenessBroadcast: boolean;
-  /** Diagnostic: last time we sent a ping to this client (ms epoch). */
-  lastPingSentAt?: number;
-  /** Diagnostic: last time we received a pong from this client (ms epoch). */
-  lastPongRecvAt?: number;
-  /** Last time any frame arrived from this client (ms epoch). */
-  lastInboundAt?: number;
-  /** ws.bufferedAmount when the last ping was queued. */
-  bufferedAtPing?: number;
-  /** Declared at auth: this client's Pulse accepts progress heartbeats. */
-  pulseProgressAck?: boolean;
-}
-
-export interface HeadServerOptions {
-  authProviders?: Map<string, AuthProvider>;
-  authProvider?: AuthProvider;
-  maxPayload?: number;
-  pairingEnabled?: boolean;
-  pairingTtl?: number;
-  version?: string;
-  pushManager?: PushManager;
-  /** Optional auth backend. If provided, auth is delegated to it instead of using local providers. */
-  authBackend?: AuthBackend;
-  /** This head's region identifier (e.g., 'us', 'china'). Sent to auth backend for region checks. */
-  region?: string;
-  /** Voice-broker lease signer. If absent, request_voice_lease is rejected with 'not_entitled'. */
-  leaseIssuer?: LeaseIssuer;
-  /** Lease (device voice credential) lifetime in seconds. Default 86400 (24h). */
-  voiceLeaseTtlSec?: number;
-  /** The only voice limit: max seconds of audio per user per UTC day. Default 7200 (2h). */
-  voiceDailyQuotaSec?: number;
-  /**
-   * Public WSS URL of the voice broker for this region (e.g.
-   * `wss://cn.stt.kraki.chat/voice`). When set, head advertises a
-   * `VoiceCapability` inside `auth_ok.voice` so arm can render the mic UI.
-   * When unset, the field is omitted entirely — arm hides the mic UI.
-   *
-   * Must be set together with `leaseIssuer`: cli-side interlock refuses to
-   * start in either-without-the-other configurations because:
-   *   - Advertising a broker URL but having no issuer would mean clients
-   *     show the mic UI then get `not_entitled` on every press.
-   *   - Having an issuer but no advertised URL means clients have no way
-   *     to actually use the leases they're being issued.
-   */
-  voiceBrokerUrl?: string;
-  /**
-   * Close sockets that have not authenticated within this time (ms).
-   * Default 15s. A socket that asked for `auth_info` (an app on its login
-   * screen, waiting for the user to finish signing in) gets
-   * `loginScreenAuthTimeoutMs` instead (default 10 min).
-   */
-  authTimeoutMs?: number;
-  loginScreenAuthTimeoutMs?: number;
-}
-
-const DEFAULT_VOICE_LEASE_TTL_SEC = 86_400;
-const DEFAULT_VOICE_DAILY_QUOTA_SEC = 7_200;
-const MIN_VOICE_LEASE_GRANT_SEC = 1;
-const VALID_VOICE_RESOURCES = new Set<VoiceResource>(['voice/doubao']);
-
-const DEFAULT_MAX_PAYLOAD = 10 * 1024 * 1024;
-const DEFAULT_AUTH_TIMEOUT_MS = 15_000;
-const DEFAULT_LOGIN_SCREEN_AUTH_TIMEOUT_MS = 10 * 60_000;
-const MAX_MULTICAST_TARGETS = 64;
-/** Send-buffer ceiling per socket before a stalled client is disconnected. */
-const MAX_WS_BUFFERED_BYTES = 32 * 1024 * 1024;
-
-/** How often the liveness sweep runs (ms). Faster than the 30s ping timer so
- *  device_pending detection latency tracks the recipient's ping cadence
- *  (~10s), not the slower liveness check cadence. */
-const LIVENESS_SWEEP_INTERVAL_MS = 2_500;
-/** Grace period after ping before broadcasting device_pending (ms).
- *  Overridable via PONG_GRACE_MS environment variable. */
-const PONG_GRACE_MS = Math.max(1_000, parseInt(process.env.PONG_GRACE_MS ?? '8000', 10) || 8_000);
-
-function isValidMessage(msg: unknown): msg is { type: string; [key: string]: unknown } {
-  if (typeof msg !== 'object' || msg === null) return false;
-  const obj = msg as Record<string, unknown>;
-  return typeof obj.type === 'string' && obj.type.length > 0;
-}
-
-function isValidAuth(msg: Record<string, unknown>): boolean {
-  if (!msg.device || typeof msg.device !== 'object') return false;
-  const dev = msg.device as Record<string, unknown>;
-  if (typeof dev.name !== 'string' || typeof dev.role !== 'string') return false;
-  if (dev.role !== 'tentacle' && dev.role !== 'app') return false;
-  if (!msg.auth || typeof msg.auth !== 'object') return false;
-  const auth = msg.auth as Record<string, unknown>;
-  if (typeof auth.method !== 'string') return false;
-  return true;
-}
+import type { AuthBackend } from './auth-backend.js';
+import { handleControlMessage, firePushPreview } from './server/account-control.js';
+import { handleAuth, handleChallengeResponse, handleCreatePairingToken, handleRequestPairingToken } from './server/auth-flow.js';
+import { broadcastDeviceJoined, broadcastDeviceLeft, broadcastDevicePending } from './server/presence.js';
+import { handleRequestVoiceLease } from './server/voice-lease.js';
+import { type ClientState, type HeadServerOptions, DEFAULT_MAX_PAYLOAD, DEFAULT_AUTH_TIMEOUT_MS, DEFAULT_LOGIN_SCREEN_AUTH_TIMEOUT_MS, MAX_MULTICAST_TARGETS, MAX_WS_BUFFERED_BYTES, LIVENESS_SWEEP_INTERVAL_MS, PONG_GRACE_MS, isValidMessage, isValidAuth } from './server/shared.js';
+export type { HeadServerOptions } from './server/shared.js';
 
 export class HeadServer {
   private wss: WebSocketServer;
-  private storage: Storage;
-  private options: HeadServerOptions;
+  storage: Storage;
+  options: HeadServerOptions;
 
   private static readonly PING_INTERVAL = 30_000;
 
   // In-memory state
-  private connections = new Map<string, WebSocket>();
-  private authBackend: AuthBackend;
-  private userByDevice = new Map<string, string>();
-  private clients = new Map<WebSocket, ClientState>();
+  connections = new Map<string, WebSocket>();
+  authBackend: AuthBackend;
+  userByDevice = new Map<string, string>();
+  clients = new Map<WebSocket, ClientState>();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
   /** Per-hop pulse hub — the reliable-delivery layer for every connection. */
-  private pulseHub!: PulseHub;
+  pulseHub!: PulseHub;
   private pulseTickTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(storage: Storage, options: HeadServerOptions) {
@@ -301,7 +175,7 @@ export class HeadServer {
 
       state.pendingLivenessBroadcast = true;
       getLogger().debug('Broadcasting device_pending (pong overdue)', { deviceId });
-      this.broadcastDevicePending(state.userId, deviceId);
+      broadcastDevicePending(this, state.userId, deviceId);
     }
   }
 
@@ -324,7 +198,7 @@ export class HeadServer {
 
   // --- Auth provider helpers ---
 
-  private getVapidPublicKey(): string | undefined {
+  getVapidPublicKey(): string | undefined {
     return this.options.pushManager?.getVapidPublicKey();
   }
 
@@ -338,7 +212,7 @@ export class HeadServer {
    * advertises Beijing's broker, and US main advertises nothing, all from a
    * single helper.
    */
-  private getVoiceCapability(): VoiceCapability | undefined {
+  getVoiceCapability(): VoiceCapability | undefined {
     const url = this.options.voiceBrokerUrl;
     if (!url) return undefined;
     return { brokerUrl: url, resource: 'voice/doubao' };
@@ -430,7 +304,7 @@ export class HeadServer {
           });
 
           if (disconnectedUserId) {
-            this.broadcastDeviceLeft(disconnectedUserId, disconnectedDeviceId);
+            broadcastDeviceLeft(this, disconnectedUserId, disconnectedDeviceId);
           }
         } else {
           logger.debug('Stale socket closed (already replaced by reconnect)', {
@@ -459,7 +333,7 @@ export class HeadServer {
   private async onMessage(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): Promise<void> {
     // One-shot pairing token request — before auth
     if (msg.type === 'request_pairing_token') {
-      await this.handleRequestPairingToken(ws, state, msg as { token?: string });
+      await handleRequestPairingToken(this, ws, state, msg as { token?: string });
       return;
     }
 
@@ -481,9 +355,9 @@ export class HeadServer {
           this.sendError(ws, 'Invalid auth message: device.name and device.role required');
           return;
         }
-        await this.handleAuth(ws, state, msg as unknown as AuthMessage);
+        await handleAuth(this, ws, state, msg as unknown as AuthMessage);
       } else if (msg.type === 'auth_response' && state.pendingNonce) {
-        this.handleChallengeResponse(ws, state, msg as unknown as { deviceId: string; signature: string });
+        handleChallengeResponse(this, ws, state, msg as unknown as { deviceId: string; signature: string });
       } else {
         this.sendError(ws, 'Must authenticate first');
       }
@@ -492,7 +366,7 @@ export class HeadServer {
 
     // Authenticated messages
     if (msg.type === 'create_pairing_token') {
-      await this.handleCreatePairingToken(ws, state);
+      await handleCreatePairingToken(this, ws, state);
       return;
     }
 
@@ -524,6 +398,11 @@ export class HeadServer {
           const sender = this.storage.getDevice(state.deviceId);
           if (!target || target.userId !== state.userId || !sender || target.role === sender.role) {
             this.sendError(ws, 'unicast target is not reachable');
+            // Still consume the frame on the sender's stream, forwarding it
+            // nowhere: an unconsumed seq would never be ACKed, the sender would
+            // retransmit it (with the same target) forever, and every later
+            // seq on that stream would wait behind it.
+            this.pulseHub.onPulseEnvelope(state.deviceId, { pulse: msg.pulse as string, to: [] });
             return;
           }
         }
@@ -560,20 +439,19 @@ export class HeadServer {
         this.sendError(ws, `multicast target count must be between 1 and ${MAX_MULTICAST_TARGETS}`);
         return;
       }
-      for (const targetId of requested) {
+      const allowed = requested.filter((targetId) => {
         const target = this.storage.getDevice(targetId);
-        if (
-          targetId === state.deviceId
-          || targetId === HEAD_PULSE_TARGET
-          || !target
-          || target.userId !== state.userId
-          || target.role !== 'app'
-        ) {
-          this.sendError(ws, 'multicast contains a forbidden target');
-          return;
-        }
-      }
-      const onlineTargets = requested.filter((targetId) => this.connections.has(targetId));
+        return targetId !== state.deviceId
+          && targetId !== HEAD_PULSE_TARGET
+          && !!target
+          && target.userId === state.userId
+          && target.role === 'app';
+      });
+      // Forbidden targets are dropped, not the frame: the frame must still be
+      // consumed on the sender's stream (see the unicast branch), and the
+      // allowed targets still get it.
+      if (allowed.length < requested.length) this.sendError(ws, 'multicast contains a forbidden target');
+      const onlineTargets = allowed.filter((targetId) => this.connections.has(targetId));
       this.pulseHub.onPulseEnvelope(state.deviceId, {
         pulse: msg.pulse,
         to: onlineTargets,
@@ -589,7 +467,7 @@ export class HeadServer {
         // devices (the reliable message itself is delivered by the hub).
         // Push previews are tentacle-originated (same rule as dispatch_push).
         if (msg.pushPreview && this.storage.getDevice(state.deviceId)?.role === 'tentacle') {
-          this.firePushPreview(state, msg.pushPreview as BlobPayload);
+          firePushPreview(this, state, msg.pushPreview as BlobPayload);
         }
         this.pulseHub.onPulseEnvelope(state.deviceId, { pulse: msg.pulse as string });
         return;
@@ -600,10 +478,10 @@ export class HeadServer {
 
     // Relay-terminated control ops (update_preferences / remove_device /
     // (un)register_push_token). Arrive via pulse deliver-to-self (deliverPulseToSelf).
-    if (this.handleControlMessage(ws, state, msg)) return;
+    if (handleControlMessage(this, ws, state, msg)) return;
 
     if (msg.type === 'request_voice_lease') {
-      this.handleRequestVoiceLease(ws, state, msg);
+      handleRequestVoiceLease(this, ws, state, msg);
       return;
     }
 
@@ -621,125 +499,6 @@ export class HeadServer {
   }
 
   // --- Voice lease issuance ---
-
-  private handleRequestVoiceLease(
-    ws: WebSocket,
-    state: ClientState,
-    msg: Record<string, unknown>,
-  ): void {
-    const logger = getLogger();
-    const userId = state.userId;
-    const deviceId = state.deviceId;
-    if (!userId || !deviceId) {
-      ws.send(JSON.stringify({
-        type: 'voice_lease_denied',
-        reason: 'invalid_request',
-        detail: 'Not authenticated',
-      }));
-      return;
-    }
-
-    const issuer = this.options.leaseIssuer;
-    if (!issuer) {
-      this.sendControlToDevice(deviceId, {
-        type: 'voice_lease_denied',
-        reason: 'not_entitled',
-        detail: 'Voice lease issuance is not enabled on this head',
-      });
-      return;
-    }
-
-    // Validate request shape.
-    const requestedDeviceId = typeof msg.deviceId === 'string' ? msg.deviceId : undefined;
-    const requestedResource = typeof msg.resource === 'string' ? (msg.resource as VoiceResource) : undefined;
-    if (!requestedDeviceId || !requestedResource) {
-      this.sendControlToDevice(deviceId, {
-        type: 'voice_lease_denied',
-        reason: 'invalid_request',
-        detail: 'Missing deviceId or resource',
-      });
-      return;
-    }
-
-    // Lease may only be requested for the authenticated device — no proxying.
-    if (requestedDeviceId !== deviceId) {
-      this.sendControlToDevice(deviceId, {
-        type: 'voice_lease_denied',
-        reason: 'invalid_request',
-        detail: 'deviceId does not match authenticated device',
-      });
-      return;
-    }
-
-    if (!VALID_VOICE_RESOURCES.has(requestedResource)) {
-      this.sendControlToDevice(deviceId, {
-        type: 'voice_lease_denied',
-        reason: 'invalid_request',
-        detail: `Unknown resource: ${String(requestedResource)}`,
-      });
-      return;
-    }
-
-    // A lease is a long-lived credential for this device; the audio budget
-    // is granted incrementally by usage reports, charged to the UTC day the
-    // audio is used. So issuance only checks that anything is left today.
-    const nowSec = Math.floor(Date.now() / 1000);
-    const dailyCap = this.options.voiceDailyQuotaSec ?? DEFAULT_VOICE_DAILY_QUOTA_SEC;
-    this.storage.revokePendingVoiceLeases(userId, deviceId, requestedResource, nowSec);
-    const accountedToday = this.storage.voiceSecondsAccountedToday(userId, nowSec);
-    if (dailyCap - accountedToday < MIN_VOICE_LEASE_GRANT_SEC) {
-      logger.info('Voice lease denied: daily quota exhausted', {
-        userId, deviceId, accountedToday, dailyCap,
-      });
-      this.sendControlToDevice(deviceId, {
-        type: 'voice_lease_denied',
-        reason: 'quota_exhausted',
-        detail: `Daily quota reached (${accountedToday}/${dailyCap}s)`,
-      });
-      return;
-    }
-    const ttl = this.options.voiceLeaseTtlSec ?? DEFAULT_VOICE_LEASE_TTL_SEC;
-    // Signed ceiling for one lease: all the UTC days it can span. The real
-    // limit is the daily grant Head hands out on each usage report.
-    const grant = dailyCap * (Math.ceil(ttl / 86_400) + 1);
-
-    const lease = issuer.issue({
-      userId,
-      deviceId,
-      quotaSeconds: grant,
-      ttlSeconds: ttl,
-      resource: requestedResource,
-      nowUnixSec: nowSec,
-    });
-
-    try {
-      this.storage.recordVoiceLease({
-        jti: lease.payload.jti,
-        userId,
-        deviceId,
-        resource: requestedResource,
-        quotaSeconds: grant,
-        issuedAtUnixSec: lease.payload.iat,
-        expiresAtUnixSec: lease.payload.exp,
-      });
-    } catch (err) {
-      logger.error('Voice lease persist failed', {
-        userId, deviceId, jti: lease.payload.jti, error: (err as Error).message,
-      });
-      this.sendControlToDevice(deviceId, {
-        type: 'voice_lease_denied',
-        reason: 'invalid_request',
-        detail: 'Lease persistence failed',
-      });
-      return;
-    }
-
-    logger.info('Voice lease issued', {
-      userId, deviceId, jti: lease.payload.jti,
-      quotaSeconds: grant, ttlSec: ttl, accountedToday, dailyCap,
-    });
-    this.sendControlToDevice(deviceId, { type: 'voice_lease_grant', lease });
-  }
 
   // --- Routing ---
 
@@ -771,7 +530,7 @@ export class HeadServer {
    *  wrapped as `{from:'@head', msg}` — the receiver's pulse layer recognizes the
    *  `@head` marker and dispatches `msg` WITHOUT decrypting. Non-durable:
    *  presence/prefs are ephemeral. */
-  private sendControlToDevice(deviceId: string, msg: Record<string, unknown>): void {
+  sendControlToDevice(deviceId: string, msg: Record<string, unknown>): void {
     const payload = Buffer.from(JSON.stringify({ from: HEAD_PULSE_TARGET, msg }), 'utf8');
     this.pulseHub.sendToDevice(deviceId, new Uint8Array(payload));
   }
@@ -779,7 +538,7 @@ export class HeadServer {
   /** Presence (device_joined/left/removed/pending): the destination's next
    *  `auth_ok` device list supersedes it, so it is never replayed across a
    *  reconnect (a stale device_left would hide an online peer). */
-  private sendPresenceToDevice(deviceId: string, msg: Record<string, unknown>): void {
+  sendPresenceToDevice(deviceId: string, msg: Record<string, unknown>): void {
     const payload = Buffer.from(JSON.stringify({ from: HEAD_PULSE_TARGET, msg }), 'utf8');
     this.pulseHub.sendPresenceToDevice(deviceId, new Uint8Array(payload));
   }
@@ -805,79 +564,7 @@ export class HeadServer {
     }
     // handleControlMessage whitelists the 4 relay-terminated types and returns
     // false for anything else, so the self-channel cannot tunnel unicast/auth/etc.
-    this.handleControlMessage(ws, state, msg);
-  }
-
-  /** The relay-terminated control ops, callable from BOTH the raw-WS dispatch
-   *  (onMessage) and the pulse deliver-to-self path. Returns true if handled. */
-  private handleControlMessage(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): boolean {
-    switch (msg.type) {
-      case 'update_preferences':    this.handleUpdatePreferences(ws, state, msg); return true;
-      case 'update_voice_vocabulary': this.handleUpdateVoiceVocabulary(state, msg); return true;
-      case 'remove_device':         this.handleRemoveDevice(ws, state, msg.deviceId as string); return true;
-      case 'delete_account':        void this.handleDeleteAccount(ws, state); return true;
-      case 'register_push_token':   this.handleRegisterPushToken(ws, state, msg); return true;
-      case 'unregister_push_token': this.handleUnregisterPushToken(ws, state, msg); return true;
-      case 'dispatch_push': {
-        const sender = state.deviceId ? this.storage.getDevice(state.deviceId) : undefined;
-        const payload = msg.payload as { preview?: BlobPayload } | undefined;
-        if (sender?.role !== 'tentacle' || !payload?.preview) return true;
-        this.firePushPreview(state, payload.preview);
-        return true;
-      }
-      default: return false;
-    }
-  }
-
-  /** Persist a preferences update and echo the merged result to the sender + the
-   *  user's other online devices. */
-  private handleUpdatePreferences(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): void {
-    if (!state.userId) return;
-    const prefs = msg.preferences as Record<string, unknown> | undefined;
-    if (!prefs || typeof prefs !== 'object') return;
-    this.storage.updatePreferences(state.userId, prefs);
-    // Read back the full merged preferences
-    const fullUser = this.storage.getUser(state.userId);
-    const merged = publicPreferences(fullUser?.preferences ?? prefs);
-    const confirmation = { type: 'preferences_updated', preferences: merged };
-    // Confirm to the sender + fan out to the user's other devices — all over pulse.
-    if (state.deviceId) this.sendControlToDevice(state.deviceId, confirmation);
-    const userDevices = (() => {
-      try { return this.storage.getDevicesByUser(state.userId!); } catch { return []; }
-    })();
-    for (const d of userDevices) {
-      if (d.id === state.deviceId) continue;
-      const other = this.connections.get(d.id);
-      if (!other || other.readyState !== WebSocket.OPEN) continue;
-      this.sendControlToDevice(d.id, confirmation);
-    }
-  }
-
-  /** Account data, not session data: no tentacle is involved. The sender
-   *  always gets the resulting list back (its acknowledgement); other online
-   *  apps of the account get it only when something was applied. */
-  private handleUpdateVoiceVocabulary(state: ClientState, msg: Record<string, unknown>): void {
-    if (!state.userId || !state.deviceId) return;
-    const requestId = typeof msg.requestId === 'string' ? msg.requestId.slice(0, 64) : undefined;
-    const ops = parseVoiceWordOps(msg.ops);
-    let words: VoiceWord[];
-    try {
-      words = ops?.length
-        ? this.storage.updateVoiceVocabulary(state.userId, ops)
-        : this.storage.getVoiceVocabulary(state.userId);
-    } catch (err) {
-      // Pulse self-delivery has no outer try/catch. No reply: the client keeps
-      // the ops in its outbox and retries.
-      getLogger().warn('Voice vocabulary update failed', { error: (err as Error).message });
-      return;
-    }
-    this.sendControlToDevice(state.deviceId, { type: 'voice_vocabulary_updated', requestId, words });
-    if (!ops?.length) return;
-    for (const d of this.storage.getDevicesByUser(state.userId)) {
-      if (d.id !== state.deviceId && d.role === 'app' && this.connections.get(d.id)?.readyState === WebSocket.OPEN) {
-        this.sendControlToDevice(d.id, { type: 'voice_vocabulary_updated', words });
-      }
-    }
+    handleControlMessage(this, ws, state, msg);
   }
 
   /** Fan-out targets for a pulse broadcast from `fromDevice`: all OTHER
@@ -906,41 +593,6 @@ export class HeadServer {
     return targets;
   }
 
-  /** Notify offline devices from a pushPreview side-channel. The preview rides the
-   *  same pulse broadcast envelope as the reliable message. */
-  private firePushPreview(state: ClientState, pushPreview: BlobPayload | undefined): void {
-    const senderUserId = state.userId;
-    const senderDeviceId = state.deviceId;
-    if (!senderUserId || !senderDeviceId || !pushPreview) {
-      trace('PUSH-SKIP', { reason: !senderUserId ? 'no-user' : !senderDeviceId ? 'no-device' : 'no-preview' });
-      return;
-    }
-    // Online native clients that post their own notifications (macOS) get the
-    // same encrypted preview over their live connection.
-    for (const token of this.storage.getPushTokensForOfflineDevices(senderUserId, [])) {
-      if (token.provider !== 'local' || token.deviceId === senderDeviceId) continue;
-      if (!this.connections.has(token.deviceId)) continue;
-      const key = pushPreview.keys[token.deviceId];
-      if (!key) continue;
-      this.sendControlToDevice(token.deviceId, { type: 'notification_preview', payload: { blob: pushPreview.blob, key } });
-      trace('PUSH-LOCAL', { deviceId: token.deviceId });
-    }
-    if (!this.options.pushManager) {
-      trace('PUSH-SKIP', { reason: 'no-pushmgr' });
-      return;
-    }
-    const onlineDeviceIds: string[] = [senderDeviceId];
-    let offlineCount = 0;
-    for (const device of this.storage.getDevicesByUser(senderUserId)) {
-      if (device.id === senderDeviceId) continue;
-      if (this.connections.get(device.id)) onlineDeviceIds.push(device.id);
-      else offlineCount++;
-    }
-    trace('PUSH-FIRE', { sender: senderDeviceId, onlineCount: onlineDeviceIds.length, offlineCount, previewKeys: Object.keys(pushPreview.keys) });
-    this.options.pushManager.sendToOfflineDevices(senderUserId, onlineDeviceIds, pushPreview)
-      .catch(err => getLogger().warn('Push notification send failed', { error: (err as Error).message }));
-  }
-
   private removeConnection(deviceId: string): void {
     const ws = this.connections.get(deviceId);
     const userId = this.userByDevice.get(deviceId);
@@ -966,599 +618,22 @@ export class HeadServer {
     // sees the map empty and skips.
     if (userId) {
       try { this.storage.touchDeviceLastSeen(deviceId); } catch { /* storage may be closed */ }
-      this.broadcastDeviceLeft(userId, deviceId);
-    }
-  }
-
-  private sendAuthError(ws: WebSocket, code: AuthErrorCode, message: string, redirect?: string, deviceId?: string): void {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'auth_error', code, message, ...(redirect && { redirect }), ...(deviceId && { deviceId }) }));
+      broadcastDeviceLeft(this, userId, deviceId);
     }
   }
 
   // --- Auth ---
 
-  private async handleAuth(ws: WebSocket, state: ClientState, msg: AuthMessage): Promise<void> {
-    state.pulseProgressAck = msg.device?.pulseProgressAck === true;
-    const logger = getLogger();
-    const { auth } = msg;
-    // One auth attempt per socket at a time: a second `auth` while the first
-    // is awaiting its backend would register the device twice.
-    if (state.authInFlight || state.pendingNonce) {
-      // Ignored rather than answered with auth_error: clients treat auth
-      // errors as credential failures, and this one is just a duplicate.
-      logger.warn('Ignoring duplicate auth while one is in progress', { ip: state.ip });
-      return;
-    }
-    state.authInFlight = true;
-    try {
-      if (auth.method === 'challenge') {
-        // Challenge is multi-step — start here, verify in handleChallengeResponse
-        const result = await this.authBackend.startChallenge(
-          auth.deviceId,
-          msg.device.encryptionKey,
-          this.options.region,
-        );
-        if (!this.socketStillAuthenticating(ws, state)) return;
-        if (!result.ok) {
-          this.sendAuthError(ws, result.code as AuthErrorCode, result.message,
-            result.code === 'wrong_region' ? (result as { redirect?: string }).redirect : undefined);
-          return;
-        }
-        state.pendingNonce = result.nonce;
-        state.pendingDeviceId = result.deviceId;
-        state.pendingDeviceInfo = { encryptionKey: msg.device.encryptionKey };
-        state.pendingAuthMethod = 'challenge';
-        logger.debug('Issuing auth challenge', { deviceId: auth.deviceId });
-        ws.send(JSON.stringify({ type: 'auth_challenge', nonce: result.nonce }));
-        return;
-      }
-
-      const result = await this.authBackend.authenticate(auth, msg.device, this.options.region, state.ip);
-      if (!this.socketStillAuthenticating(ws, state)) return;
-      this.handleBackendAuthResult(ws, state, result);
-    } finally {
-      state.authInFlight = false;
-    }
-  }
-
-  /** After an awaited auth step: is this socket still open, still ours and
-   *  still unauthenticated? The auth deadline may have closed it meanwhile;
-   *  registering a dead socket would evict the device's live connection. */
-  private socketStillAuthenticating(ws: WebSocket, state: ClientState): boolean {
-    return ws.readyState === WebSocket.OPEN && this.clients.get(ws) === state && !state.authenticated;
-  }
-
-  private handleChallengeResponse(ws: WebSocket, state: ClientState, msg: { deviceId: string; signature: string }): void {
-    const logger = getLogger();
-    const deviceId = state.pendingDeviceId;
-    const nonce = state.pendingNonce;
-    const pendingInfo = state.pendingDeviceInfo;
-
-    state.pendingNonce = undefined;
-    state.pendingDeviceId = undefined;
-    state.pendingDeviceInfo = undefined;
-
-    if (!deviceId || !nonce) {
-      this.sendAuthError(ws, 'no_pending_challenge', 'No pending challenge');
-      return;
-    }
-
-    state.authInFlight = true;
-    this.authBackend.verifyChallenge(
-      deviceId, nonce, msg.signature,
-      pendingInfo?.encryptionKey,
-      this.options.region,
-    ).then(result => {
-      if (!this.socketStillAuthenticating(ws, state)) return;
-      this.handleBackendAuthResult(ws, state, result);
-    }).catch(err => {
-      // A thrown error means the auth backend itself was unreachable / timed
-      // out (network, 5xx, abort) — NOT that the signature was invalid. A
-      // deterministic auth failure comes back as a resolved AuthError outcome
-      // above. Reporting this as auth_rejected made the arm treat a transient
-      // backend outage as a permanent credential failure and wipe the paired
-      // device, forcing a full re-pair. Surface it as auth_unavailable so the
-      // client retries instead of destroying a valid session.
-      logger.error('Auth backend verifyChallenge failed', { error: (err as Error).message });
-      if (this.socketStillAuthenticating(ws, state)) {
-        this.sendAuthError(ws, 'service_unavailable', 'Authentication service unavailable');
-      }
-    }).finally(() => {
-      state.authInFlight = false;
-    });
-  }
-
-  /**
-   * Handle a result from AuthBackend — registers connection state and sends response.
-   * Used for both initial auth and challenge-response verification.
-   */
-  private handleBackendAuthResult(ws: WebSocket, state: ClientState, result: AuthOutcome): void {
-    const logger = getLogger();
-
-    if (!result.ok) {
-      const redirect = result.code === 'wrong_region' ? (result as { redirect?: string }).redirect : undefined;
-      const deviceId = result.code === 'wrong_region' ? (result as { deviceId?: string }).deviceId : undefined;
-      this.sendAuthError(ws, result.code as AuthErrorCode, result.message, redirect, deviceId);
-      return;
-    }
-
-    // Register connection
-    state.authenticated = true;
-    state.authenticatedAt = Date.now();
-    if (state.authTimer) { clearTimeout(state.authTimer); state.authTimer = undefined; }
-    state.deviceId = result.deviceId;
-    state.userId = result.userId;
-    this.evictPreviousConnection(result.deviceId, ws);
-    this.connections.set(result.deviceId, ws);
-    this.userByDevice.set(result.deviceId, result.userId);
-    trace('DEV-CONNECT', { device: result.deviceId, user: result.userId, auth: 'backend' });
-
-    logger.info('Device authenticated (via backend)', {
-      deviceId: result.deviceId,
-      user: result.user.login,
-      method: result.authMethod,
-      ip: state.ip,
-    });
-
-    // Mirror user + devices into local storage so edge-local operations
-    // (broadcastDeviceJoined, getDeviceSummaries, etc.) work even when auth
-    // is delegated to a remote backend.
-    try {
-      this.storage.upsertUser(
-        result.user.id, result.user.login, result.user.provider, result.user.email,
-      );
-      for (const d of result.devices) {
-        try {
-          this.storage.upsertDevice(
-            d.id, result.userId, d.name, d.role,
-            d.kind ?? undefined, d.publicKey ?? undefined, d.encryptionKey ?? undefined,
-          );
-        } catch (err) {
-          logger.warn('Failed to mirror device locally', { deviceId: d.id, error: (err as Error).message });
-        }
-      }
-    } catch (err) {
-      logger.warn('Failed to mirror user locally', { userId: result.userId, error: (err as Error).message });
-    }
-
-    this.completeAuthHandshake(ws, {
-      deviceId: result.deviceId,
-      userId: result.userId,
-      user: result.user,
-      authMethod: result.authMethod,
-      devices: result.devices,
-      githubClientId: result.githubClientId,
-      vapidPublicKey: result.vapidPublicKey,
-    });
-  }
-
-  /**
-   * Common post-auth completion logic, used by every auth path.
-   *
-   * Responsibilities:
-   *  - Read user preferences from local storage and merge into the user object.
-   *  - Flush any locally-queued pending messages for this device (offline-queue).
-   *  - Build and send the `auth_ok` response.
-   *  - Broadcast `device_joined` to the user's other connected devices.
-   *
-   * Each caller is responsible for path-specific work BEFORE calling this:
-   * validating credentials, persisting user/device records, setting up
-   * ClientState, populating `connections` / `userByDevice` maps, and logging
-   * the path-specific "authenticated via X" line.
-   *
-   * Centralising the tail eliminates a class of bugs where new auth paths
-   * (notably the multi-region delegated-backend path) silently diverge from
-   * the established post-auth flow.
-   */
-  private completeAuthHandshake(
-    ws: WebSocket,
-    params: {
-      /** The authenticated device's ID. */
-      deviceId: string;
-      /** The authenticated user's ID. */
-      userId: string;
-      /** Identity fields from the auth source (local DB or remote backend).
-       *  `preferences` and `region` are optional and only meaningful from the
-       *  delegated-backend path — local paths leave them undefined and the
-       *  helper reads preferences from local storage instead. */
-      user: {
-        id: string;
-        login: string;
-        provider: string;
-        email?: string;
-        preferences?: Record<string, unknown>;
-        region?: string;
-      };
-      /** Auth method, echoed back in auth_ok. */
-      authMethod: string;
-      /** Devices list to include in auth_ok. If omitted, derived from local storage.
-       *  Edge mode supplies this from the remote backend's view. */
-      devices?: DeviceSummary[];
-      /** Override of the backend's GitHub client id (used when delegated). */
-      githubClientId?: string;
-      /** Override of `getVapidPublicKey()` (used when delegated). */
-      vapidPublicKey?: string;
-    },
-  ): void {
-    // Merge preferences. Local storage takes precedence (it captures per-edge
-    // overrides the backend might not know about), but fall back to the
-    // backend-supplied preferences if local has none — e.g. on a user's very
-    // first auth to this edge, before upsertUser has been called or when the
-    // backend is the canonical source of truth.
-    //
-    // Why this matters: storage.upsertUser only writes username/provider/email,
-    // NOT preferences. So a brand-new user record reads back with
-    // preferences=undefined. Without this fallback, backend preferences would
-    // be silently dropped at every first auth.
-    const fullUser = this.storage.getUser(params.userId);
-    const userResponse = {
-      ...params.user,
-      preferences: publicPreferences(fullUser?.preferences ?? params.user.preferences),
-    };
-
-    // Devices list. If the caller provided one (edge mode), recompute online
-    // status against our current connections map. Otherwise derive locally.
-    const devices = params.devices
-      ? params.devices.map(d => ({ ...d, online: this.connections.has(d.id) }))
-      : this.getDeviceSummaries(params.userId);
-    const deviceRole = devices.find((device) => device.id === params.deviceId)?.role
-      ?? this.storage.getDevice(params.deviceId)?.role;
-
-    ws.send(JSON.stringify({
-      type: 'auth_ok',
-      deviceId: params.deviceId,
-      authMethod: params.authMethod,
-      user: userResponse,
-      devices,
-      githubClientId: params.githubClientId ?? this.authBackend.getAuthInfo().githubClientId,
-      vapidPublicKey: params.vapidPublicKey ?? this.getVapidPublicKey(),
-      relayVersion: this.options.version,
-      pulseAckBytes: PULSE_ACK_EVERY_BYTES,
-      // Apps only: a tentacle has no use for the user's word list.
-      ...(deviceRole === 'app' && { voiceVocabulary: this.storage.getVoiceVocabulary(params.userId) }),
-      ...(this.getVoiceCapability() && { voice: this.getVoiceCapability() }),
-    }));
-
-    // Clients only accept Pulse envelopes after processing auth_ok. Starting
-    // the endpoint before auth_ok loses the initial hello, leaving peerEpoch
-    // empty and making a later relay restart indistinguishable from the first
-    // connection. That stale recvCursor then drops the restarted seq=1..N as
-    // duplicates. Keep this ordering centralized for every auth path.
-    //
-    // Apps have explicit reconnect authorities (fresh session_list,
-    // subscription snapshot, and history ranges). If their HELLO carries a new
-    // process epoch, fence the preceding process's non-durable downlink so the
-    // new UI cannot animate through old live events. Tentacle downlinks carry
-    // commands and retain ordinary Pulse resume semantics across process epochs.
-    this.pulseHub.onDeviceConnected(params.deviceId, {
-      discardPreviousProcessNonDurable: deviceRole === 'app',
-    });
-    this.broadcastDeviceJoined(params.userId, params.deviceId);
-  }
-
-  /**
-   * A device is about to register `ws` as its connection. If the SAME device id
-   * already had a socket, that older socket is now orphaned: once we overwrite
-   * the map entry its close handler hits the reconnect-guard and skips cleanup,
-   * and the ping timer (which only walks `connections`) never visits it again.
-   * It would sit in `clients` holding its ClientState until TCP finally gives
-   * up. Retire both the WebSocket and its Pulse link explicitly before the new
-   * connection is installed.
-   *
-   * Must be called BEFORE `connections.set(deviceId, ws)`.
-   */
-  private evictPreviousConnection(deviceId: string, ws: WebSocket): void {
-    const previous = this.connections.get(deviceId);
-    if (!previous || previous === ws) return;
-    getLogger().info('Replacing existing connection for device', { deviceId });
-    // The old close callback will see the replacement in `connections` and skip
-    // its guarded cleanup. Publish the Pulse disconnect here so capability and
-    // connection-scoped state cannot leak across the replacement boundary.
-    this.pulseHub.onDeviceDisconnected(deviceId);
-    const previousState = this.clients.get(previous);
-    if (previousState) previousState.evicted = true;
-    this.clients.delete(previous);
-    // Say why (a bare terminate() reads as a network drop, and a client that
-    // reconnects on it evicts this new connection in turn). Force the TCP
-    // teardown shortly after in case the old peer never completes the close.
-    try { previous.close(DEVICE_REPLACED_CLOSE_CODE, 'replaced'); } catch { /* best effort */ }
-    const force = setTimeout(() => { try { previous.terminate(); } catch { /* already gone */ } }, 2_000);
-    force.unref?.();
-    previous.once('close', () => clearTimeout(force));
-  }
-
   // --- Pairing tokens (in-memory) ---
 
-  private async handleCreatePairingToken(ws: WebSocket, state: ClientState): Promise<void> {
-    const logger = getLogger();
-    if (!(this.options.pairingEnabled ?? true)) {
-      this.sendError(ws, 'Pairing is disabled on this relay');
-      return;
-    }
-    if (!state.userId) {
-      this.sendError(ws, 'Not authenticated');
-      return;
-    }
-    try {
-      // A remote (edge) backend creates tokens on the account service.
-      const backend = this.authBackend as AuthBackend & {
-        createPairingTokenAsync?: (userId: string) => Promise<{ token: string; expiresIn: number }>;
-      };
-      const result = backend.createPairingTokenAsync
-        ? await backend.createPairingTokenAsync(state.userId)
-        : backend.createPairingToken(state.userId);
-      if (!result?.token) throw new Error('no token returned');
-      logger.info('Pairing token created', { userId: state.userId });
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'pairing_token_created', token: result.token, expiresIn: result.expiresIn }));
-      }
-    } catch (err) {
-      logger.warn('Pairing token creation failed', { userId: state.userId, error: (err as Error).message });
-      this.sendError(ws, 'Pairing is temporarily unavailable');
-    }
-  }
-
-  private async handleRequestPairingToken(ws: WebSocket, state: ClientState, msg: { token?: string }): Promise<void> {
-    const logger = getLogger();
-    if (!(this.options.pairingEnabled ?? true)) {
-      this.sendError(ws, 'Pairing is disabled on this relay');
-      return;
-    }
-    if (!msg.token) {
-      this.sendError(ws, 'Token required for pairing request');
-      return;
-    }
-    const result = await this.authBackend.requestPairingToken(msg.token, state.ip);
-    if (ws.readyState !== WebSocket.OPEN) return;
-    if (!result.ok) {
-      this.sendAuthError(ws, result.code as AuthErrorCode, result.message);
-      return;
-    }
-    logger.info('Pairing token created (one-shot)', { userId: result.userId });
-    ws.send(JSON.stringify({
-      type: 'pairing_token_created',
-      token: result.pairingToken,
-      expiresIn: result.expiresIn,
-    }));
-  }
-
   // --- Device presence notifications ---
-
-  private handleRemoveDevice(ws: WebSocket, state: ClientState, targetDeviceId: string): void {
-    const logger = getLogger();
-    if (!state.userId || !state.deviceId) {
-      this.sendError(ws, 'Not authenticated');
-      return;
-    }
-
-    if (!targetDeviceId || typeof targetDeviceId !== 'string') {
-      this.sendError(ws, 'Missing deviceId');
-      return;
-    }
-
-    const targetDevice = this.storage.getDevice(targetDeviceId);
-    if (!targetDevice || targetDevice.userId !== state.userId) {
-      this.sendError(ws, 'Device not found');
-      return;
-    }
-
-    // Only allow removing offline devices (zombie cleanup)
-    if (this.connections.has(targetDeviceId)) {
-      this.sendError(ws, 'Cannot remove an online device');
-      return;
-    }
-
-    this.storage.deleteDevice(targetDeviceId);
-    this.storage.deletePushTokensForDevice(targetDeviceId);
-    // Drop the device's pulse endpoint + persisted outbox/snapshot/capability
-    // rows too. Otherwise they outlive the device record forever, and
-    // recoverOnBoot faithfully rebuilds an endpoint for a device that can
-    // never authenticate again.
-    this.pulseHub.forgetDevice(targetDeviceId);
-    logger.info('Device removed', { deviceId: targetDeviceId, byDevice: state.deviceId });
-
-    // Edge mode: the account service owns the device list and every auth
-    // mirrors it back here, so the removal must reach it too (otherwise the
-    // device reappears after the next reconnect).
-    const remote = this.authBackend;
-    if (remote instanceof RemoteAuthBackend) {
-      const userId = state.userId;
-      remote.removeDevice(userId, targetDeviceId).then((ok) => {
-        if (!ok) logger.warn('Account service did not remove device', { deviceId: targetDeviceId });
-      }).catch((err) => {
-        logger.warn('Failed to remove device at account service', { deviceId: targetDeviceId, error: (err as Error).message });
-      });
-    }
-
-    // Broadcast removal to all remaining user devices
-    this.broadcastDeviceRemoved(state.userId, targetDeviceId);
-  }
 
   // --- Account deletion ---
 
   /** Users whose deletion is in flight (a double tap must not run it twice). */
-  private deletingAccounts = new Set<string>();
-
-  /**
-   * Delete the requesting user's account: at the account store (the account
-   * service in edge mode) and in this relay's own storage and pulse state.
-   * Then tell every connected device and close it. Devices that were offline
-   * get `auth_error` code `account_deleted` when they next connect.
-   */
-  private async handleDeleteAccount(ws: WebSocket, state: ClientState): Promise<void> {
-    const logger = getLogger();
-    const userId = state.userId;
-    const deviceId = state.deviceId;
-    if (!userId || !deviceId) {
-      this.sendError(ws, 'Not authenticated');
-      return;
-    }
-    if (this.storage.getDevice(deviceId)?.role !== 'app') {
-      this.sendError(ws, 'Only the Kraki app can delete the account');
-      return;
-    }
-    if (this.deletingAccounts.has(userId)) return;
-    this.deletingAccounts.add(userId);
-    try {
-      const deviceIds = new Set(this.storage.getDevicesByUser(userId).map((d) => d.id));
-      if (this.authBackend.deleteAccount) {
-        for (const id of await this.authBackend.deleteAccount(userId)) deviceIds.add(id);
-      }
-      // This relay's own rows (the edge mirror; already gone when the
-      // account store is this relay's storage).
-      for (const id of this.storage.deleteUser(userId)) deviceIds.add(id);
-      logger.info('Account deleted', { userId, devices: deviceIds.size, byDevice: deviceId });
-
-      for (const id of deviceIds) {
-        const socket = this.connections.get(id);
-        if (socket) {
-          // Detach before closing so the close handler doesn't announce
-          // device_left or touch the deleted rows.
-          this.connections.delete(id);
-          this.userByDevice.delete(id);
-          this.clients.delete(socket);
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({ type: 'account_deleted' }));
-            socket.close(ACCOUNT_DELETED_CLOSE_CODE, 'account_deleted');
-          }
-        }
-        this.pulseHub.forgetDevice(id);
-      }
-    } catch (err) {
-      logger.error('Account deletion failed', { userId, error: (err as Error).message });
-      this.sendError(ws, 'Could not delete the account. Try again.');
-    } finally {
-      this.deletingAccounts.delete(userId);
-    }
-  }
+  deletingAccounts = new Set<string>();
 
   // --- Push token management ---
-
-  private handleRegisterPushToken(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): void {
-    const logger = getLogger();
-    if (!state.userId || !state.deviceId) {
-      this.sendError(ws, 'Not authenticated');
-      return;
-    }
-
-    const payload = msg.payload as Record<string, unknown> | undefined;
-    if (!payload || typeof payload.token !== 'string' || typeof payload.provider !== 'string') {
-      this.sendError(ws, 'Invalid push token: payload.token and payload.provider required');
-      return;
-    }
-
-    this.storage.upsertPushToken(
-      state.deviceId,
-      payload.provider as string,
-      payload.token as string,
-      payload.environment as string | undefined,
-      payload.bundleId as string | undefined,
-    );
-
-    // Clean up push tokens from stale devices (offline >24h) to prevent
-    // duplicate notifications from abandoned PWA installs on the same phone.
-    // Only this user's devices matter; passing every connection on the relay
-    // made each registration O(global connections) in SQL parameters.
-    const onlineDeviceIds = this.storage.getDevicesByUser(state.userId)
-      .map((d) => d.id)
-      .filter((id) => this.connections.has(id));
-    const pruned = this.storage.deleteStaleUserPushTokens(state.userId, state.deviceId, onlineDeviceIds);
-    if (pruned > 0) {
-      logger.info('Pruned stale push tokens', { userId: state.userId, count: pruned });
-    }
-
-    logger.info('Push token registered', { deviceId: state.deviceId, provider: payload.provider });
-    if (state.deviceId) {
-      this.sendControlToDevice(state.deviceId, { type: 'push_token_registered', payload: { provider: payload.provider } });
-    }
-  }
-
-  private handleUnregisterPushToken(ws: WebSocket, state: ClientState, msg: Record<string, unknown>): void {
-    const logger = getLogger();
-    if (!state.userId || !state.deviceId) {
-      this.sendError(ws, 'Not authenticated');
-      return;
-    }
-
-    const payload = msg.payload as Record<string, unknown> | undefined;
-    if (!payload || typeof payload.provider !== 'string') {
-      this.sendError(ws, 'Invalid unregister: payload.provider required');
-      return;
-    }
-
-    this.storage.deletePushToken(state.deviceId, payload.provider as string);
-    logger.info('Push token unregistered', { deviceId: state.deviceId, provider: payload.provider });
-  }
-
-  private broadcastDeviceRemoved(userId: string, removedDeviceId: string): void {
-    let userDevices;
-    try {
-      userDevices = this.storage.getDevicesByUser(userId);
-    } catch { return; }
-    for (const d of userDevices) {
-      const ws = this.connections.get(d.id);
-      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      this.sendPresenceToDevice(d.id, { type: 'device_removed', deviceId: removedDeviceId });
-    }
-  }
-
-  private broadcastDeviceJoined(userId: string, newDeviceId: string): void {
-    let device;
-    try {
-      device = this.storage.getDevice(newDeviceId);
-    } catch { return; } // Storage may be closed during shutdown
-    if (!device) return;
-
-    const summary: DeviceSummary = {
-      id: device.id,
-      name: device.name,
-      role: device.role as DeviceRole,
-      kind: (device.kind as DeviceKind) ?? undefined,
-      publicKey: device.publicKey ?? undefined,
-      encryptionKey: device.encryptionKey ?? undefined,
-      online: true,
-      lastSeen: device.lastSeen,
-      createdAt: device.createdAt,
-    };
-
-    let userDevices;
-    try {
-      userDevices = this.storage.getDevicesByUser(userId);
-    } catch { return; }
-    for (const d of userDevices) {
-      if (d.id === newDeviceId) continue;
-      const ws = this.connections.get(d.id);
-      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      this.sendPresenceToDevice(d.id, { type: 'device_joined', device: summary });
-    }
-  }
-
-  private broadcastDeviceLeft(userId: string, leftDeviceId: string): void {
-    let userDevices;
-    try {
-      userDevices = this.storage.getDevicesByUser(userId);
-    } catch { return; } // Storage may be closed during shutdown
-    for (const d of userDevices) {
-      if (d.id === leftDeviceId) continue;
-      const ws = this.connections.get(d.id);
-      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      this.sendPresenceToDevice(d.id, { type: 'device_left', deviceId: leftDeviceId });
-    }
-  }
-
-  private broadcastDevicePending(userId: string, pendingDeviceId: string): void {
-    let userDevices;
-    try {
-      userDevices = this.storage.getDevicesByUser(userId);
-    } catch { return; }
-    for (const d of userDevices) {
-      if (d.id === pendingDeviceId) continue;
-      const ws = this.connections.get(d.id);
-      if (!ws || ws.readyState !== WebSocket.OPEN) continue;
-      this.sendPresenceToDevice(d.id, { type: 'device_pending', deviceId: pendingDeviceId });
-    }
-  }
 
   /** Handle pong from either protocol-level or JSON pong.
    *  Re-promotes to device_joined if we already broadcast device_pending.
@@ -1582,29 +657,14 @@ export class HeadServer {
       const activeWs = this.connections.get(state.deviceId);
       const activeState = activeWs ? this.clients.get(activeWs) : null;
       if (activeState === state) {
-        this.broadcastDeviceJoined(state.userId, state.deviceId);
+        broadcastDeviceJoined(this, state.userId, state.deviceId);
       }
     }
   }
 
   // --- Helpers ---
 
-  private getDeviceSummaries(userId: string): DeviceSummary[] {
-    const stored = this.storage.getDevicesByUser(userId);
-    return stored.map(d => ({
-      id: d.id,
-      name: d.name,
-      role: d.role as DeviceRole,
-      kind: (d.kind as DeviceKind) ?? undefined,
-      publicKey: d.publicKey ?? undefined,
-      encryptionKey: d.encryptionKey ?? undefined,
-      online: this.connections.has(d.id),
-      lastSeen: d.lastSeen,
-      createdAt: d.createdAt,
-    }));
-  }
-
-  private sendError(ws: WebSocket, message: string): void {
+  sendError(ws: WebSocket, message: string): void {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'server_error', message }));
     }

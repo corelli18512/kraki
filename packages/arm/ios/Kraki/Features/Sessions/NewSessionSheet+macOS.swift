@@ -105,7 +105,8 @@ struct NewSessionComposer: View {
     }
     private var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var canStart: Bool {
-        availability == .ready && !selectedDeviceId.isEmpty && !selectedAgentId.isEmpty && !selectedModel.isEmpty
+        // Cached agents outlive a computer going offline: it must be reachable.
+        availability == .ready && appState.isTentacleOnline(selectedDeviceId) && !selectedAgentId.isEmpty && !selectedModel.isEmpty
     }
     private var canSubmit: Bool { hasText && canStart }
     /// The send control: while recording it sends the voice message.
@@ -197,12 +198,14 @@ struct NewSessionComposer: View {
         .onChange(of: voiceComposer.editorRequest) { _, _ in
             if voiceComposer.editorSessionID == Self.draftID { requestFocus() }
         }
-        // ↑ while recording: the correction has finished (or failed) — start
-        // with what is in the editor now.
-        .onChange(of: voiceFinishing) { _, finishing in
-            guard !finishing, !voiceOwnsComposer, sendAfterVoice else { return }
+        // ↑ while recording: the utterance has ended in the editor. Start with
+        // what is there only if it completed with a final transcript; after a
+        // failure the text so far stays in the box (the failure row explains).
+        // Also fires when it ended synchronously (the mic had not started).
+        .onChange(of: voiceComposer.draftCompletion) { _, done in
+            guard let done, done.sessionID == Self.draftID, sendAfterVoice else { return }
             sendAfterVoice = false
-            submit()
+            if done.completed { submit() }
         }
         .onChange(of: selectedDeviceId) { _, id in onDeviceChanged(); onDeviceSelected(id) }
         // Computers come online after the composer appeared (first launch, a
@@ -235,11 +238,12 @@ struct NewSessionComposer: View {
     @State private var openPill: Pill?
     enum Pill: Hashable { case device, agent, model, effort }
 
-    private func pill<Content: View>(_ which: Pill, enabled: Bool = true, @ViewBuilder label: () -> PillLabel,
+    private func pill<Content: View>(_ which: Pill, enabled: Bool = true, help: String, @ViewBuilder label: () -> PillLabel,
                                      @ViewBuilder content: @escaping () -> Content) -> some View {
         Button { openPill = which } label: { label() }
             .buttonStyle(.plain)
             .disabled(!enabled)
+            .controlHelp(help)
             .popover(isPresented: Binding(get: { openPill == which }, set: { if !$0 { openPill = nil } }),
                      arrowEdge: .bottom) {
                 content().frame(width: 280)
@@ -247,7 +251,7 @@ struct NewSessionComposer: View {
     }
 
     private var devicePill: some View {
-        pill(.device) {
+        pill(.device, help: selectedDevice?.name ?? "Choose a computer") {
             PillLabel(text: selectedDevice.map { $0.id == localDeviceId ? "This Mac" : $0.name } ?? "Choose a computer",
                       dot: selectedDevice?.online == true ? Color(hex: 0x34D399) : Color.textMuted)
         } content: {
@@ -255,12 +259,11 @@ struct NewSessionComposer: View {
                              selected: selectedDeviceId,
                              updates: Set(tentacles.map(\.id).filter { appState.deviceStore.availableUpdate(for: $0) != nil })) { selectedDeviceId = $0; userPickedDevice = true; openPill = nil }
         }
-        .help(selectedDevice?.name ?? "")
         .accessibilityIdentifier("mac.newSession.device")
     }
 
     private var agentPill: some View {
-        pill(.agent, enabled: agents.count > 1) {
+        pill(.agent, enabled: agents.count > 1, help: MacControlHelp.agentPill(choices: agents.count)) {
             PillLabel(text: AgentInfo.from(selectedAgentId).label, agent: selectedAgentId, showsChevron: agents.count > 1)
         } content: {
             AgentChoiceList(agents: agents, selected: selectedAgentId) { selectedAgentId = $0; openPill = nil }
@@ -273,7 +276,7 @@ struct NewSessionComposer: View {
     }
 
     private var modelPill: some View {
-        pill(.model, enabled: models.count > 1) {
+        pill(.model, enabled: models.count > 1, help: MacControlHelp.modelPill(choices: models.count)) {
             PillLabel(text: selectedModel.isEmpty ? "Model" : modelName(selectedModel), showsChevron: models.count > 1)
         } content: {
             ModelChoiceList(models: models, name: modelName, selected: selectedModel) { selectedModel = $0; openPill = nil }
@@ -282,7 +285,7 @@ struct NewSessionComposer: View {
     }
 
     private func effortPill(_ efforts: [ReasoningEffort]) -> some View {
-        pill(.effort) {
+        pill(.effort, help: MacControlHelp.effortPill) {
             PillLabel(text: reasoningEffort.map { "\(Self.effortLabel($0)) thinking" } ?? "Thinking",
                       symbol: Self.effortSymbol(reasoningEffort))
         } content: {
@@ -365,9 +368,9 @@ struct NewSessionComposer: View {
             MacComposerControlGeometryProbe(identifier: "mac.newSession.voice")
             #endif
         }
-        .help("Dictate (⌥Space)")
         .accessibilityLabel("Start voice input")
         .accessibilityIdentifier("mac.newSession.voice")
+        .controlHelp(MacControlHelp.voice(available: appState.voiceCapability != nil, busy: voiceController.isBusy))
     }
 
     /// Recording, in the bottom row as on iOS: live level bars and the

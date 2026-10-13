@@ -10,12 +10,13 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ClaudeAdapter, secureStorageEnv, isClaudeLoggedOut } from '../adapters/claude.js';
+import { handleSDKMessage } from '../adapters/claude-messages.js';
 
 const sdk = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: sdk.query }));
 
 type RecordMessage = Record<string, unknown>;
-interface ClaudeEntry { query: object | null; inputIterable: AsyncIterable<RecordMessage>; model?: string; turnFinalized?: boolean }
+interface ClaudeEntry { query: object | null; inputIterable: AsyncIterable<RecordMessage>; model?: string; turn: { isSettled: boolean } }
 interface ClaudeInternals { sessions: Map<string, ClaudeEntry>; handleSDKMessage: (id: string, msg: RecordMessage) => void }
 
 let root: string, saved: Record<string, string | undefined>, claude: ClaudeAdapter;
@@ -45,13 +46,17 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function cc() { return claude as unknown as ClaudeInternals; }
+function cc(): ClaudeInternals {
+  const { sessions } = claude as unknown as Pick<ClaudeInternals, 'sessions'>;
+  return { sessions, handleSDKMessage: (id, msg) => handleSDKMessage(claude, id, msg as never) };
+}
 async function createClaude() { await claude.createSession({ sessionId: 's', cwd: root, model: 'sonnet', reasoningEffort: 'low' }); }
 const nextTick = () => new Promise((r) => setTimeout(r, 0));
 
 describe('ClaudeAdapter — audit findings C1–C7', () => {
   it('maps normal streamed text and the authoritative result to one conclusion', async () => {
     await createClaude(); claude.onMessageDelta = vi.fn(); claude.onMessage = vi.fn(); claude.onIdle = vi.fn();
+    (cc().sessions.get('s')!.turn as unknown as { beginTurn(): void }).beginTurn(); // a prompt is running
     cc().handleSDKMessage('s', { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hi' } } });
     cc().handleSDKMessage('s', { type: 'assistant', message: { content: [{ type: 'text', text: 'Hi' }] } });
     cc().handleSDKMessage('s', { type: 'result', is_error: false });
@@ -119,6 +124,20 @@ describe('ClaudeAdapter — audit findings C1–C7', () => {
       accountInfo: async () => ({ tokenSource: 'none', apiProvider: 'firstParty' }),
     }));
     await expect(claude.start()).rejects.toThrow(/not logged in/);
+  });
+
+  it('a Claude CLI that never answers the startup probe does not block start, and the probe is aborted', async () => {
+    vi.useFakeTimers();
+    let abort: AbortController | undefined;
+    sdk.query.mockImplementation(({ options }: { options: { abortController: AbortController } }) => {
+      abort = options.abortController;
+      return { supportedModels: () => new Promise(() => {}) };
+    });
+    const started = claude.start();
+    await vi.waitUntil(() => sdk.query.mock.calls.length > 0, { timeout: 5000, interval: 0 }).catch(() => {});
+    for (let i = 0; i < 25 && !abort?.signal.aborted; i++) await vi.advanceTimersByTimeAsync(1000);
+    await expect(started).resolves.toBeUndefined();
+    expect(abort?.signal.aborted).toBe(true);
   });
 
   it('C5 uses an explicit CLAUDE_CONFIG_DIR when creating its session shadow', async () => {
@@ -253,7 +272,7 @@ describe('ClaudeAdapter — turn lifecycle', () => {
   it('stopping an idle session does not arm the stop flag', async () => {
     await createClaude(); claude.onIdle = vi.fn();
     cc().sessions.get('s')!.query = { interrupt: vi.fn() };
-    cc().sessions.get('s')!.turnFinalized = true;
+    expect(cc().sessions.get('s')!.turn.isSettled).toBe(true); // no turn yet
     await claude.abortSession('s');
     cc().handleSDKMessage('s', { type: 'result', is_error: false });
     // Already finalized → ignored either way; no crash, no spurious idle.

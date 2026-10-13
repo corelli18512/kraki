@@ -131,7 +131,15 @@ struct MessageInputView: View {
         return false
     }
     private var canSend: Bool {
-        !isRecordingHere && !voiceSendPending && (isStructuredResponse ? hasText : (hasText || hasImage))
+        guard !isRecordingHere, !voiceSendPending else { return false }
+        if submissionIntent == .answerQuestion {
+            return ComposerAnswerImages.canSubmit(hasText: hasText, hasImage: hasImage, agent: session?.agent)
+        }
+        return isStructuredResponse ? hasText : (hasText || hasImage)
+    }
+    private var canAttachImage: Bool {
+        ComposerAnswerImages.canAttach(isIdle: isIdle, answeringQuestion: submissionIntent == .answerQuestion,
+                                       agent: session?.agent)
     }
     /// Agent running and nothing typed: the primary button stops the turn.
     /// As soon as there is something to send it becomes Send (steer).
@@ -225,16 +233,8 @@ struct MessageInputView: View {
                 if focused && !programmaticVoiceFocus { voice.takeOver(sessionID: sessionId) }
                 programmaticVoiceFocus = false
             }
-            .onChange(of: session?.state) { _, newState in
-                // A normal prompt's local latch ends at the first authoritative
-                // session-state transition. Once active, subsequent submissions
-                // are explicit steers; once idle, they are normal prompts.
-                awaitingActive = false
-                if newState == .idle { abortPending = false }
-            }
-            .onChange(of: appState.isFullyOnline) { _, online in
-                if !online { abortPending = false }
-            }
+            .settlesComposerLatches(sessionId: sessionId, state: session?.state,
+                                    awaitingActive: $awaitingActive, abortPending: $abortPending)
             .onChange(of: selectedPhoto) { _, newItem in
                 Task { await loadPhoto(newItem) }
             }
@@ -586,14 +586,16 @@ struct MessageInputView: View {
             // bubble-corrected send as a prompt.
             let delivery: CommandSender.InputDelivery = submissionIntent == .steer ? .steer : .prompt
             let answerTo = submissionIntent == .answerQuestion ? pendingQuestion?.id : nil
+            let attachments = answerTo == nil ? imageAttachments
+                : ComposerAnswerImages.attachments(imageAttachments, agent: session?.agent)
             let staged = withAnimation(Self.expandAnimation) {
-                voice.send(attachments: imageAttachments, delivery: delivery, answerTo: answerTo)
+                voice.send(attachments: attachments, delivery: delivery, answerTo: answerTo)
             }
             guard staged else {
                 showSubmitFailure()
                 return
             }
-            clearImage()
+            if attachments != nil { clearImage() }
             didSubmitFromComposer()
         }
     }
@@ -755,8 +757,8 @@ struct MessageInputView: View {
             }
         }
         .padding(.leading, 4)
-        .disabled(!isIdle)
-        .opacity(isIdle ? 1 : 0.4)
+        .disabled(!canAttachImage)
+        .opacity(canAttachImage ? 1 : 0.4)
     }
 
     private var imageAttachments: [ImageAttachment]? {
@@ -819,7 +821,10 @@ struct MessageInputView: View {
                 // calling the submit handler routes the return key
                 // through the same path as the in-app send icon,
                 // matching `.submitLabel(.send)`'s visual hint.
-                if newValue.hasSuffix("\n") {
+                // Only a single typed newline at the end is the return key:
+                // pasted text that happens to end with a newline is kept as
+                // a draft, not sent.
+                if Self.isReturnKeySubmit(old: text, new: newValue) {
                     let trimmed = String(newValue.dropLast())
                     sessionStore.setDraft(sessionId, trimmed)
                     handleModeSubmit()
@@ -912,19 +917,19 @@ struct MessageInputView: View {
         didSubmitFromComposer()
     }
 
+    /// The answer carries the attached image when the agent takes images in
+    /// answers (Pi); otherwise the image stays in the composer.
     private func handleQuestionAnswer() {
-        guard hasText, let q = pendingQuestion else { return }
-        let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard appState.commandSender?.answer(
-            sessionId: sessionId,
-            questionId: q.id,
-            answer: answer
-        ) == true else {
-            // Keep the typed answer so the user can retry.
-            showSubmitFailure()
+        let agent = session?.agent
+        guard ComposerAnswerImages.canSubmit(hasText: hasText, hasImage: hasImage, agent: agent),
+              let q = pendingQuestion else { return }
+        guard ComposerAnswerImages.send(appState.commandSender, sessionId: sessionId, questionId: q.id,
+                                        text: text, staged: imageAttachments, agent: agent) else {
+            showSubmitFailure() // Keep the typed answer so the user can retry.
             return
         }
         sessionStore.setDraft(sessionId, "")
+        if ComposerAnswerImages.allowed(agent: agent) { clearImage() }
         didSubmitFromComposer()
     }
 
@@ -1006,55 +1011,23 @@ struct MessageInputView: View {
 
     private func loadPhoto(_ item: PhotosPickerItem?) async {
         guard let item else { return }
-        guard let data = try? await item.loadTransferable(type: Data.self) else {
-            await MainActor.run {
-                imageAttachError = "Couldn't read that image."
-                selectedPhoto = nil
-            }
-            return
-        }
-        guard let uiImage = UIImage(data: data) else {
-            await MainActor.run {
-                imageAttachError = "That file isn't a supported image format."
-                selectedPhoto = nil
-            }
-            return
-        }
-
-        // Pixels, not points: the default renderer format uses the screen
-        // scale (3x), which turned a "1024" limit into 3072 px images.
-        // 1568 px is the long side vision models use without downscaling.
-        let maxDimension: CGFloat = 1568
-        let maxSize = 3 * 1024 * 1024
-
-        var targetImage = uiImage
-        let pixelWidth = uiImage.size.width * uiImage.scale
-        let pixelHeight = uiImage.size.height * uiImage.scale
-        if pixelWidth > maxDimension || pixelHeight > maxDimension {
-            let ratio = maxDimension / max(pixelWidth, pixelHeight)
-            let newSize = CGSize(width: (pixelWidth * ratio).rounded(), height: (pixelHeight * ratio).rounded())
-            let format = UIGraphicsImageRendererFormat.default()
-            format.scale = 1
-            let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
-            targetImage = renderer.image { _ in uiImage.draw(in: CGRect(origin: .zero, size: newSize)) }
-        }
-
-        if let compressed = targetImage.jpegData(compressionQuality: 0.8), compressed.count <= maxSize {
-            imageData = compressed; imageMimeType = "image/jpeg"
-            return
-        }
-        if let compressed = targetImage.jpegData(compressionQuality: 0.6), compressed.count <= maxSize {
-            imageData = compressed; imageMimeType = "image/jpeg"
-            return
-        }
-        // Both compression attempts still exceeded the 3 MB cap.
-        // Surface an explicit error and reset the picker so the user
-        // can pick a smaller / different image instead of sending a
-        // message with a silently missing attachment.
-        await MainActor.run {
+        let data = try? await item.loadTransferable(type: Data.self)
+        let outcome = PhotoAttachmentLoad.jpeg(from: data)
+        // A newer pick, a removal or a send since this load started wins: a
+        // late (e.g. iCloud) load must not attach to the next message.
+        guard selectedPhoto == item else { return }
+        switch outcome {
+        case .image(let jpeg):
+            imageData = jpeg; imageMimeType = "image/jpeg"
+        case .unreadable:
+            imageAttachError = "Couldn't read that image."; selectedPhoto = nil
+        case .unsupported:
+            imageAttachError = "That file isn't a supported image format."; selectedPhoto = nil
+        case .tooLarge:
+            // Reset the picker so the user can pick a smaller / different
+            // image instead of sending with a silently missing attachment.
             imageAttachError = "That image is too large to send (over 3 MB after compression). Try a smaller picture."
-            selectedPhoto = nil
-            imageData = nil
+            selectedPhoto = nil; imageData = nil
         }
     }
 }
@@ -1110,7 +1083,4 @@ struct PrimaryGlassCircle: View {
         }
     }
 }
-
-
-
 #endif

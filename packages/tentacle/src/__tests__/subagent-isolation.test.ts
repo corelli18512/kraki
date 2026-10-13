@@ -8,8 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { TurnTracker } from '../adapters/turn-tracker.js';
 import { CopilotAdapter } from '../adapters/copilot.js';
+import { wireEvents } from '../adapters/copilot-events.js';
 import { ClaudeAdapter } from '../adapters/claude.js';
+import { handleSDKMessage } from '../adapters/claude-messages.js';
 
 const sdk = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: sdk.query }));
@@ -37,11 +40,13 @@ describe('Copilot subagent events', () => {
       },
     };
     const internals = adapter as unknown as {
-      sessions: Map<string, unknown>; wireEvents: (id: string, s: unknown) => void; probeRuntime: () => Promise<string>;
+      sessions: Map<string, unknown>; probeRuntime: () => Promise<string>;
     };
-    internals.sessions.set('s1', { session, pendingPermissions: new Map(), pendingQuestions: new Map(), relayTurnId: undefined, turnSettled: false });
+    const turn = new TurnTracker(adapter, 's1');
+    turn.beginTurn(); // a prompt is running
+    internals.sessions.set('s1', { session, pendingPermissions: new Map(), pendingQuestions: new Map(), turn });
     internals.probeRuntime = async () => 'alive';
-    internals.wireEvents('s1', session);
+    wireEvents(adapter, 's1', session as never);
     const rec = record(adapter);
     const fire = (type: string, data: Record<string, unknown> = {}, agentId?: string) => {
       for (const fn of handlers.get(type) ?? []) void fn({ type, data, ...(agentId && { agentId }) });
@@ -116,8 +121,9 @@ describe('Claude subagent messages', () => {
 
   it('keeps forwarded subagent text, stream and errors out of the parent reply', async () => {
     await claude.createSession({ sessionId: 's', cwd: root, model: 'sonnet' });
+    (claude as unknown as { sessions: Map<string, { turn: { beginTurn(): void } }> }).sessions.get('s')!.turn.beginTurn(); // a prompt is running
     const rec = record(claude);
-    const h = (m: Record<string, unknown>) => (claude as unknown as { handleSDKMessage: (id: string, m: unknown) => void }).handleSDKMessage('s', m);
+    const h = (m: Record<string, unknown>) => handleSDKMessage(claude, 's', m as never);
     const P = 'toolu_TASK';
     const asst = (content: unknown[], parent: string | null = null, usage?: Record<string, number>) =>
       h({ type: 'assistant', parent_tool_use_id: parent, message: { content, ...(usage && { usage }) } });
@@ -136,7 +142,9 @@ describe('Claude subagent messages', () => {
     h({ type: 'result', subtype: 'success', is_error: false });
 
     expect(rec.filter((r) => r.cb === 'onMessage').map((r) => r.data.content)).toEqual(['config.ts: purple-otter-42']);
-    expect(rec.filter((r) => r.cb === 'onNarration').map((r) => r.data.content)).toEqual(['Delegating.']);
+    // Each finished parent segment reconciles the draft; only 'Delegating.' is a step.
+    expect(rec.filter((r) => r.cb === 'onNarration').map((r) => r.data.content)).toEqual(['Delegating.', 'config.ts: purple-otter-42']);
+    expect(rec.filter((r) => r.cb === 'onNarrationTrace' && !r.data.parentToolCallId).map((r) => r.data.content)).toEqual(['Delegating.']);
     expect(rec.filter((r) => r.cb === 'onMessageDelta').map((r) => r.data.content)).toEqual(['Delegating.', 'config.ts: purple-otter-42']);
     expect(rec.filter((r) => r.cb === 'onError')).toHaveLength(0);
     expect(rec.filter((r) => r.cb === 'onToolStart').map((r) => r.data.toolName)).toEqual(['Task', 'Grep']);
@@ -159,10 +167,10 @@ describe('Claude subagent messages', () => {
     beforeEach(async () => {
       await claude.createSession({ sessionId: 's', cwd: root, model: 'sonnet' });
       rec = record(claude);
-      const internals = claude as unknown as { sessions: Map<string, { query: unknown; turnFinalized?: boolean }>; handleSDKMessage: (id: string, m: unknown) => void };
-      internals.sessions.get('s')!.query = query; internals.sessions.get('s')!.turnFinalized = false;
+      const internals = claude as unknown as { sessions: Map<string, { query: unknown; turn: { beginTurn(): void } }> };
+      internals.sessions.get('s')!.query = query; internals.sessions.get('s')!.turn.beginTurn(); // a prompt is running
       query.stopTask.mockClear();
-      h = (m) => internals.handleSDKMessage('s', m);
+      h = (m) => handleSDKMessage(claude, 's', m as never);
     });
     const text = (t: string, parent: string | null = null) => h({ type: 'assistant', parent_tool_use_id: parent, message: { content: [{ type: 'text', text: t }] } });
     const launch = (id: string, task: string, desc: string) => {
@@ -229,7 +237,7 @@ describe('Claude subagent messages', () => {
 
     it('an interjection while held owns the next provider turn', async () => {
       claude.setTurnIdentity('s', 'turn-1');
-      (claude as unknown as { sessions: Map<string, { eventTurnId?: string }> }).sessions.get('s')!.eventTurnId = 'turn-1';
+      (claude as unknown as { sessions: Map<string, { turn: { eventTurnId?: string } }> }).sessions.get('s')!.turn.eventTurnId = 'turn-1';
       launch(P1, 'a1', 'Find codeword'); text('Waiting.'); result();
       const internals = claude as unknown as { sessions: Map<string, { inputChannel: { push: (m: unknown) => void } }> };
       internals.sessions.get('s')!.inputChannel.push = () => {};
@@ -239,7 +247,7 @@ describe('Claude subagent messages', () => {
       expect(idles()).toBe(0); // the subagent is still running
       done('a1', P1);
       continuation('final answer');
-      expect(rec.filter((r) => r.cb === 'onNarration').at(-1)!.data).toEqual({ content: 'checked X; still waiting', turnId: 'turn-2' });
+      expect(rec.filter((r) => r.cb === 'onNarrationTrace').at(-1)!.data).toEqual({ content: 'checked X; still waiting', turnId: 'turn-2' });
       expect(rec.filter((r) => r.cb === 'onMessage')).toEqual([{ cb: 'onMessage', data: { content: 'final answer', turnId: 'turn-2' } }]);
       expect(rec.filter((r) => r.cb === 'onIdle').map((r) => r.data)).toEqual([{ turnId: 'turn-2' }]);
     });

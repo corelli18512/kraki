@@ -22,7 +22,7 @@ import { messageProvider } from './message-provider';
 vi.mock('./ws-client', () => ({
   wsClient: {
     sendInput: vi.fn(), approve: vi.fn(), deny: vi.fn(),
-    alwaysAllow: vi.fn(), answer: vi.fn(), markRead: vi.fn(),
+    answer: vi.fn(), markRead: vi.fn(),
     createSession: vi.fn(),
   },
 }));

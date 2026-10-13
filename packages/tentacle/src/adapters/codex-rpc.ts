@@ -13,6 +13,7 @@
  *   codex app-server generate-ts --experimental --out <dir>
  */
 
+import { agentEnv } from '../agent-env.js';
 import { killProcessTree } from '../process-tree.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -90,7 +91,7 @@ export class CodexRpcProcess {
     const child = spawn(command, this.opts.args ?? ['app-server'], {
       windowsHide: true,
       cwd: this.opts.cwd,
-      env: this.opts.env ?? process.env,
+      env: this.opts.env ?? agentEnv(),
       stdio: ['pipe', 'pipe', 'pipe'],
       shell,
     });

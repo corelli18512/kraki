@@ -205,7 +205,9 @@ export async function startWorker(): Promise<WorkerResult> {
   }
   if (!config) {
     logger.fatal({ configPath }, `No config found at ${configPath} — run \`kraki\` to set up`);
-    process.exit(1);
+    // Permanent: a supervisor must not restart us until setup has run.
+    const { PERMANENT_EXIT_CODE } = await import('./daemon-supervisor.js');
+    process.exit(PERMANENT_EXIT_CODE);
   }
 
   // 2. Resolve relay auth token
@@ -408,6 +410,16 @@ export async function startWorker(): Promise<WorkerResult> {
       // Clean exit: supervisors don't restart it, and without a config the
       // next `kraki` runs setup from scratch.
       process.exit(0);
+    })();
+  };
+
+  relay.onDeviceRemoved = () => {
+    logger.fatal('This computer was removed from your Kraki account. Run `kraki` to sign in again.');
+    void (async () => {
+      await shutdown().catch(() => {});
+      // Permanent: restarting cannot sign in again without the user.
+      const { PERMANENT_EXIT_CODE } = await import('./daemon-supervisor.js');
+      process.exit(PERMANENT_EXIT_CODE);
     })();
   };
 

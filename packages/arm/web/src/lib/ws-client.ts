@@ -533,7 +533,7 @@ export class KrakiWSClient {
    *  "Sending…"); Tentacle's resolved card replaces it. Without confirmation
    *  while the delivery path is up it reverts with an explanation. */
   resolvePermission(sessionId: string, permissionId: string, toolName: string | undefined,
-                    decision: 'approve' | 'always_allow' | 'deny', reason?: string) {
+                    decision: 'approve' | 'deny', reason?: string) {
     const store = getStore();
     const current = store.cards.get(sessionId)?.action;
     if (current?.type === 'permission' && current.payload.id === permissionId) {
@@ -546,10 +546,8 @@ export class KrakiWSClient {
     const send = (msg: Record<string, unknown>) => this.sendEncrypted(msg);
     if (decision === 'approve') {
       commands.approve(permissionId, sessionId, send);
-    } else if (decision === 'deny') {
-      commands.deny(permissionId, sessionId, send, reason);
     } else {
-      commands.alwaysAllow(permissionId, sessionId, send, toolName);
+      commands.deny(permissionId, sessionId, send, reason);
     }
     const started = Date.now();
     const check = () => {

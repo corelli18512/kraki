@@ -159,7 +159,7 @@ struct MacStepsView: View {
                     .foregroundStyle(Color.textMuted)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Close steps")
+            .labelAndHelp(MacControlHelp.closeSteps)
         }
         .padding(.horizontal, 16)
         .frame(minHeight: 44)

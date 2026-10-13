@@ -87,19 +87,6 @@ export function deny(
   });
 }
 
-export function alwaysAllow(
-  permissionId: string,
-  sessionId: string,
-  send: (msg: Record<string, unknown>) => void,
-  toolKind?: string,
-): void {
-  send({
-    type: 'always_allow',
-    sessionId,
-    payload: { permissionId, toolKind },
-  });
-}
-
 export function killSession(
   sessionId: string,
   send: (msg: Record<string, unknown>) => void,

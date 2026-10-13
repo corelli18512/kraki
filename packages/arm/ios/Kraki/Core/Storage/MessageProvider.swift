@@ -66,6 +66,9 @@ final class MessageProvider {
     /// buffer just decides what to commit and what to fetch next.
     /// See `PendingTailBuffer` for the algorithm.
     private var pendingTail: [String: PendingTailBuffer] = [:]
+    /// Bumped by `resetSession`: an off-main read started before a reset
+    /// (e.g. device trust dropping unauthenticated history) must not land.
+    private var sessionGeneration: [String: Int] = [:]
 
     private weak var appState: AppState?
 
@@ -550,6 +553,7 @@ final class MessageProvider {
         guard !loadingOlderDB.contains(sessionId) else { return false }
 
         let topSeq = state.topSeq
+        let generation = sessionGeneration[sessionId, default: 0]
 
         loadingOlderDB.insert(sessionId)
         defer { loadingOlderDB.remove(sessionId) }
@@ -591,7 +595,8 @@ final class MessageProvider {
         // have advanced the window while we were reading. If topSeq
         // drifted, bail; the next scroll-driven trigger recomputes from
         // the new top.
-        guard let nowState = appState.messageStore.windowState(sessionId),
+        guard sessionGeneration[sessionId, default: 0] == generation,
+              let nowState = appState.messageStore.windowState(sessionId),
               nowState.topSeq == topSeq else {
             #if os(macOS)
             KLog.chatEntry(
@@ -1169,6 +1174,9 @@ final class MessageProvider {
         appState?.sessionStore.loadingSessions.removeAll()
     }
 
+}
+
+extension MessageProvider {
     /// Reset all in-memory provider state for a single session. Used
     /// by the test page's "Wipe DB" path so post-wipe `ensureLoaded`
     /// fetches against an empty DB without any stale inflight slot
@@ -1180,6 +1188,7 @@ final class MessageProvider {
     /// where post-wipe `ensureLoaded` would have nothing to compare
     /// against until the next `session_list` envelope arrives.
     func resetSession(_ sessionId: String) {
+        sessionGeneration[sessionId, default: 0] += 1
         if let slots = outstanding[sessionId] {
             for s in slots { s.timeout.cancel() }
         }

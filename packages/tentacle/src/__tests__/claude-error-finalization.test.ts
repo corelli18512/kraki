@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ClaudeAdapter, normalizeClaudeSDKError } from '../adapters/claude.js';
+import { handleSDKMessage } from '../adapters/claude-messages.js';
+import { TurnTracker } from '../adapters/turn-tracker.js';
 
 type Entry = {
   query: object | null;
   inputChannel: { push: ReturnType<typeof vi.fn> };
   pendingPermissions: Map<string, unknown>;
   pendingQuestions: Map<string, unknown>;
-  pendingText?: string;
   pendingError?: { message: string; quality: number };
-  relayTurnId?: string;
-  turnFinalized?: boolean;
+  turn: TurnTracker;
 };
 
 function setup() {
@@ -19,13 +19,11 @@ function setup() {
     inputChannel: { push: vi.fn() },
     pendingPermissions: new Map(),
     pendingQuestions: new Map(),
-    pendingText: '',
-    turnFinalized: false,
+    turn: new TurnTracker(adapter, 's1'),
   };
+  entry.turn.beginTurn(); // a turn is running
   (adapter as unknown as { sessions: Map<string, Entry> }).sessions.set('s1', entry);
-  const handle = (msg: Record<string, unknown>) =>
-    (adapter as unknown as { handleSDKMessage: (sessionId: string, msg: Record<string, unknown>) => void })
-      .handleSDKMessage('s1', msg);
+  const handle = (msg: Record<string, unknown>) => handleSDKMessage(adapter, 's1', msg as never);
   return { adapter, entry, handle };
 }
 
@@ -85,7 +83,7 @@ describe('Claude error finalization', () => {
     adapter.onIdle = onIdle;
     adapter.onMessage = onMessage;
 
-    entry.pendingText = 'recovered answer';
+    entry.turn.appendProse('recovered answer');
     handle({ type: 'assistant', error: 'unknown', message: { content: [] } });
     handle({ type: 'result', is_error: false, subtype: 'success' });
 
@@ -102,7 +100,7 @@ describe('Claude error finalization', () => {
     adapter.onMessage = onMessage;
     adapter.onIdle = onIdle;
     adapter.setTurnIdentity('s1', 's1:claude-turn');
-    entry.pendingText = 'completed';
+    entry.turn.appendProse('completed');
 
     handle({ type: 'result', is_error: false, subtype: 'success' });
 
@@ -112,11 +110,11 @@ describe('Claude error finalization', () => {
 
   it('re-arms the result boundary when a steer follows a completed turn', async () => {
     const { adapter, entry } = setup();
-    entry.turnFinalized = true;
+    entry.turn.finish();
 
     await adapter.sendMessage('s1', 'new prompt', undefined, { delivery: 'steer' });
 
-    expect(entry.turnFinalized).toBe(false);
+    expect(entry.turn.isSettled).toBe(false);
     expect(entry.inputChannel.push).toHaveBeenCalledWith({
       type: 'user',
       message: { role: 'user', content: 'new prompt' },
@@ -148,7 +146,7 @@ describe('Claude usage accounting', () => {
     const { adapter, entry, handle } = setup();
     const usage = vi.fn();
     adapter.onUsageUpdate = usage;
-    const turn = (cost: number) => { entry.turnFinalized = false; handle(result(cost)); };
+    const turn = (cost: number) => { entry.turn.beginTurn(); handle(result(cost)); };
     const result = (cost: number) => ({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: cost, duration_ms: 1, usage: {} });
     turn(0.25);
     turn(0.75);

@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { queryPiCatalog, PiAdapter, runPiListModels, type PiListModelsError } from '../adapters/pi.js';
+import { getDefaultModel } from '../adapters/pi-models.js';
 
 const tempDirs: string[] = [];
 let agentDir: string;
@@ -136,7 +137,7 @@ describe('queryPiCatalog — throwaway RPC lifecycle', () => {
     const scope = ['openai-codex/gpt-6-astra', 'openai-codex/gpt-6-sol', 'deepseek/deepseek-flash'];
     writeFileSync(settings, JSON.stringify({ enabledModels: scope }));
     const adapter = new PiAdapter({ cliPath: cli });
-    const defaultModel = () => (adapter as unknown as { getDefaultModel(): string }).getDefaultModel();
+    const defaultModel = () => getDefaultModel(adapter);
     expect(await adapter.listModels()).toEqual(scope);
     expect((await adapter.listModelDetails()).map(m => m.id)).toEqual(scope);
     expect(defaultModel()).toBe(scope[0]);

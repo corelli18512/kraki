@@ -4,169 +4,6 @@ import SwiftUI
 /// macOS chat surface kept structurally in sync with iOS `ChatView` and
 /// `SessionDetailView`: the list extends under a floating glass header (title
 /// capsule + mode capsule) and the floating composer owns its own glass.
-enum MacChatHeaderMetrics {
-    static let controlHeight: CGFloat = 32
-    static let topPadding: CGFloat = 8
-    static var height: CGFloat { topPadding + controlHeight }
-    /// First message rests this far below the list top (under the header).
-    static var listTopInset: CGFloat { height + 14 }
-}
-
-/// Messages-style top edge: a long, eased fade whose strongest point is still
-/// translucent, tinted neutral black (dark) / white (light).
-private struct MacChatTopEdgeFade: View {
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        let dark = colorScheme == .dark
-        ZStack {
-            Rectangle().fill(.ultraThinMaterial).opacity(0.85)
-            (dark ? Color.black : Color.white).opacity(dark ? 0.55 : 0.5)
-        }
-        .mask(
-            LinearGradient(
-                stops: [
-                    .init(color: .black.opacity(0.9), location: 0.0),
-                    .init(color: .black.opacity(0.78), location: 0.3),
-                    .init(color: .black.opacity(0.5), location: 0.55),
-                    .init(color: .black.opacity(0.22), location: 0.78),
-                    .init(color: .clear, location: 1.0),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
-
-private struct MacGlassCapsule: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content.glassEffect(.regular.interactive(), in: Capsule())
-        } else {
-            content.background {
-                Capsule().fill(.ultraThinMaterial)
-                    .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
-            }
-        }
-    }
-}
-
-/// Session mode control (same behavior as the iOS header): a glass capsule
-/// showing the current mode; clicking expands it into a segmented control in
-/// which only the selected mode is drawn (a sliding thumb in the mode color,
-/// no track). It closes after 3s without interaction; hovering pauses the
-/// countdown and every change restarts it.
-private struct MacChatModePicker: View {
-    private static let allModes: [SessionMode] = SessionMode.allCases
-    static var startsExpanded: Bool {
-        #if DEBUG
-        ProcessInfo.processInfo.environment["KRAKI_HEADER_MODE_EXPANDED"] == "1"
-        #else
-        false
-        #endif
-    }
-
-    let currentMode: SessionMode
-    @Binding var expanded: Bool
-    let onSelect: (SessionMode) -> Void
-    @State private var collapseTask: Task<Void, Never>?
-    @State private var hovering = false
-    @Namespace private var thumb
-
-    var body: some View {
-        Group {
-            if expanded {
-                expandedPicker
-                    .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .trailing)))
-            } else {
-                collapsedCapsule
-                    .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .trailing)))
-            }
-        }
-        .frame(height: MacChatHeaderMetrics.controlHeight)
-        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: expanded)
-    }
-
-    private var collapsedCapsule: some View {
-        Button {
-            expanded = true
-            scheduleCollapse()
-        } label: {
-            HStack(spacing: 6) {
-                Circle().fill(Color.modeColor(currentMode)).frame(width: 7, height: 7)
-                Text(currentMode.rawValue.capitalized)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(Color.textTitle)
-            }
-            .padding(.horizontal, 13)
-            .frame(height: MacChatHeaderMetrics.controlHeight)
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .fixedSize()
-        .modifier(MacGlassCapsule())
-        .accessibilityIdentifier("mac.chat.mode.collapsed")
-        .accessibilityLabel("Session mode, \(currentMode.rawValue.capitalized)")
-        .accessibilityHint("Shows the session modes")
-    }
-
-    private var expandedPicker: some View {
-        HStack(spacing: 0) {
-            ForEach(Self.allModes, id: \.self) { mode in
-                let selected = mode == currentMode
-                Button {
-                    if !selected { onSelect(mode) }
-                    scheduleCollapse()
-                } label: {
-                    Text(mode.rawValue.capitalized)
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(selected ? Color.white : Color.textSecondary)
-                        .padding(.horizontal, 13)
-                        .frame(height: MacChatHeaderMetrics.controlHeight - 6)
-                        .background {
-                            if selected {
-                                Capsule()
-                                    .fill(Color.modeColor(mode))
-                                    .matchedGeometryEffect(id: "thumb", in: thumb)
-                            }
-                        }
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("mac.chat.mode.\(mode.rawValue)")
-                .accessibilityAddTraits(selected ? .isSelected : [])
-            }
-        }
-        .padding(3)
-        .frame(height: MacChatHeaderMetrics.controlHeight)
-        .fixedSize()
-        .modifier(MacGlassCapsule())
-        .animation(.spring(response: 0.3, dampingFraction: 0.82), value: currentMode)
-        .onHover { inside in
-            hovering = inside
-            if inside { collapseTask?.cancel() } else { scheduleCollapse() }
-        }
-        .onAppear { scheduleCollapse() }
-        .onDisappear { collapseTask?.cancel() }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Session mode picker")
-    }
-
-    private func scheduleCollapse() {
-        guard !Self.startsExpanded else { return }
-        collapseTask?.cancel()
-        guard !hovering else { return }
-        collapseTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled, !hovering else { return }
-            expanded = false
-        }
-    }
-}
-
 struct MacChatView: View {
     let sessionId: String
     let viewModel: ChatViewModel
@@ -180,6 +17,8 @@ struct MacChatView: View {
     /// connection itself is reported once, in the sidebar header.)
     @State private var showsSyncing = false
     @State private var stepsTarget: StepsTarget?
+    /// Height the floating Composer rises above its resting footprint.
+    @State private var composerOverlay: CGFloat = 0
     @State private var showInfo = false
     @State private var modePickerExpanded = MacChatModePicker.startsExpanded
 
@@ -225,14 +64,15 @@ struct MacChatView: View {
     private var currentMode: SessionMode {
         appState.sessionStore.sessionModes[sessionId] ?? session?.mode ?? .auto
     }
-    /// Always, like iPhone: with the computer offline the Composer says so and
-    /// queues the message until it reconnects (it used to just disappear).
+    /// Always (iPhone does the same): with the computer offline the Composer
+    /// stays mounted, says so, and queues the message until it reconnects.
     private var composerVisible: Bool { true }
     private var effectiveBottomInputHeight: CGFloat {
         // The Composer is a floating overlay. Keep one stable base clearance so
         // the last bubble can rest above the input capsule, but never couple
         // Chat geometry to multiline typing, microphone, or streaming height.
-        // Those surfaces grow upward over the Chat without moving its viewport.
+        // Those surfaces grow upward over the Chat without moving its viewport;
+        // `composerOverlay` only lets the reader scroll covered bubbles into view.
         guard composerVisible else { return 0 }
         return ChatBottomObstruction.composerClearance(
             capsuleHeight: MacComposerMetrics.capsuleHeight,
@@ -459,7 +299,7 @@ struct MacChatView: View {
                 .frame(maxWidth: 460)
                 .padding(.horizontal, 150)
                 .accessibilityAddTraits(.isHeader)
-                .accessibilityHint("Shows session info")
+                .help(MacControlHelp.title(session.displayTitle))
                 .accessibilityIdentifier("mac.chat.title")
                 .transition(.opacity)
             }
@@ -508,6 +348,7 @@ struct MacChatView: View {
                 entryGeneration: entryGeneration,
                 unreadEntryBoundary: appState.sessionStore.entryUnreadBoundaries[viewModel.sessionId],
                 bottomContentInset: effectiveBottomInputHeight,
+                composerOverlayInset: composerOverlay,
                 isLoadingOlder: viewModel.isLoadingOlder,
                 isLoadingNewer: viewModel.isFillingTail,
                 hasNewerLocalRows: viewModel.hasNewerLocalRows,
@@ -561,6 +402,7 @@ struct MacChatView: View {
                 isCompacting: viewModel.isCompacting,
                 hasLiveCard: viewModel.card != nil
             )
+            .reportsComposerOverlay(resting: MacComposerMetrics.verticalPadding + MacComposerMetrics.capsuleHeight + MacComposerMetrics.bottomPadding, into: $composerOverlay)
         }
     }
 
@@ -613,12 +455,6 @@ struct MacChatView: View {
         switch decision {
         case "approve":
             appState.commandSender?.approve(sessionId: sessionId, permissionId: permissionId)
-        case "always_allow":
-            appState.commandSender?.alwaysAllow(
-                sessionId: sessionId,
-                permissionId: permissionId,
-                toolKind: toolName
-            )
         case "deny":
             appState.commandSender?.deny(sessionId: sessionId, permissionId: permissionId)
         default:
@@ -793,6 +629,7 @@ private struct MacSessionInfoSheet: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    .help(MacControlHelp.rename)
                 }
             }
             sessionIDRow
@@ -1042,9 +879,9 @@ private struct MacSessionInfoSheet: View {
     }
 
     private func macFormatDuration(_ milliseconds: Double) -> String {
-        let seconds = milliseconds / 1_000
-        if seconds < 60 { return String(format: "%.1fs", seconds) }
-        return "\(Int(seconds) / 60)m \(Int(seconds) % 60)s"
+        guard milliseconds.isFinite, milliseconds >= 0 else { return "—" } // peer value: Int() would trap
+        let seconds = min(milliseconds / 1_000, 1e12)
+        return seconds < 60 ? String(format: "%.1fs", seconds) : "\(Int(seconds) / 60)m \(Int(seconds) % 60)s"
     }
 
     private func contextBandColor(_ ratio: Double) -> Color {

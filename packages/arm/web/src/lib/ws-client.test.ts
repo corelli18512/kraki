@@ -660,15 +660,6 @@ describe('KrakiWSClient', () => {
       expect(sent.type).toBe('deny');
     });
 
-    it('alwaysAllow sends correct message', async () => {
-      const client = await setupClient();
-
-      client.resolvePermission('sess-1', 'perm-1', 'shell', 'always_allow');
-
-      const sent = await waitForDecodedSend(lastWsInstance);
-      expect(sent.type).toBe('always_allow');
-    });
-
     it('an answer is a message carrying answerTo', async () => {
       const client = await setupClient();
 

@@ -117,7 +117,13 @@ final class ChatViewModel {
     }
 
     /// Confirmed spine bubbles plus optimistic pending input.
-    var displayMessages: [ChatMessage] { Self.place(pendingMessages, in: cachedMessages) }
+    var displayMessages: [ChatMessage] { placingSteerSplits(Self.place(pendingMessages, in: cachedMessages)) }
+
+    /// Each draft frozen at a steer goes right above that steer
+    /// (`MessageStore+SteerSplit`); the live card shows what followed.
+    private func placingSteerSplits(_ rows: [ChatMessage]) -> [ChatMessage] {
+        card?.placingFrozenSteerDrafts(in: rows, sessionId: sessionId) ?? rows
+    }
 
     /// In-flight inputs follow the conversation tail. One that FAILED stays
     /// where it was written: later messages that did go through land below it
@@ -168,16 +174,16 @@ final class ChatViewModel {
         // open; it becomes known when session_list arrives, often after the
         // window was loaded from the database (a cold open).
         let pending = pendingInputsRaw
-        let answering = pending.compactMap(\.answerTo)
+        let answering = Self.answeringIDs(pending)
         let atHead = windowAtHead
         if let memo = currentSpineMemo, memo.revision == revision, memo.answering == answering, memo.atHead == atHead {
-            return Self.place(pendingMessages(landedIn: memo.messages), in: memo.messages)
+            return placingSteerSplits(Self.place(pendingMessages(landedIn: memo.messages), in: memo.messages))
         }
         let spine = Self.renderable(TurnSpineProjection.project(
             Self.presentingQuestions(filteredMessages, pending: pending, atHead: atHead)
         ))
         currentSpineMemo = (revision, answering, atHead, spine)
-        return Self.place(pendingMessages(landedIn: spine), in: spine)
+        return placingSteerSplits(Self.place(pendingMessages(landedIn: spine), in: spine))
     }
 
     private func pendingMessages(landedIn spine: [ChatMessage]) -> [ChatMessage] {
@@ -314,7 +320,7 @@ final class ChatViewModel {
         guard raw.contains(where: { $0.questionSpec != nil }) else { return [] }
         let pending = pendingInputsRaw
         let key = "\(raw.count)|\(raw.first?.seq ?? 0)|\(raw.last?.seq ?? 0)|\(windowAtHead)|"
-            + pending.compactMap(\.answerTo).joined(separator: ",")
+            + Self.answeringIDs(pending).joined(separator: ",")
         if let memo = questionsMemo, memo.key == key { return memo.value }
         let value = Self.presentingQuestions(raw, pending: pending, atHead: windowAtHead).compactMap { message -> PendingQuestion? in
             guard message.questionPresentation?.state == .open, let spec = message.questionSpec else { return nil }
@@ -351,13 +357,20 @@ final class ChatViewModel {
                 break
             }
             if presentation == nil {
-                presentation = pending.contains(where: { $0.answerTo == spec.id })
+                presentation = answeringIDs(pending).contains(spec.id)
                     ? .init(state: .answered)
                     : .init(state: atHead ? .open : .undetermined)
             }
             result[index].questionPresentation = presentation
         }
         return result
+    }
+
+    /// Questions answered by a pending input. A locally failed answer
+    /// (Retry/Delete) does not count: the agent is still waiting.
+    static func answeringIDs(_ pending: [ChatMessage]) -> [String] {
+        pending.filter { $0.payload["localState"]?.stringValue != CommandSender.PendingState.failed.rawValue }
+            .compactMap(\.answerTo)
     }
 
     private var windowAtHead: Bool { appState?.messageProvider?.atHead(sessionId) ?? true }

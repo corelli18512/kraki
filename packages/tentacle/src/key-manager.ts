@@ -6,19 +6,53 @@
  */
 
 import { existsSync, linkSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createPublicKey } from 'node:crypto';
-import { generateKeyPair, exportPublicKey, importPublicKey } from '@kraki/crypto';
+import type { KeyObject } from 'node:crypto';
+import {
+  generateKeyPair, exportPublicKey, importPublicKey,
+  generateE2EKeyPair, importE2EPrivateKey, e2ePublicKeyOf,
+  generateIdentityKeyPair, importIdentityPrivateKey, identityPublicKeyOf,
+} from '@kraki/crypto';
 import type { KeyPair } from '@kraki/crypto';
 import { getConfigDir } from './config.js';
+import { initTrustPolicy } from './trust-store.js';
+
+/**
+ * Whether a computer set up from scratch starts with "Only paired devices" on.
+ *
+ * Transition release: off. Apps that predate device trust (and the web and
+ * Windows apps) cannot pair yet, so a new computer must still serve them; the
+ * apps suggest turning it on once every device is paired. A later release
+ * flips this default — computers that already have a policy keep theirs.
+ * `KRAKI_FRESH_INSTALL_ENFORCE=1` previews that behaviour (tests).
+ */
+export function freshInstallEnforces(): boolean {
+  return process.env.KRAKI_FRESH_INSTALL_ENFORCE === '1';
+}
 
 const KEYS_DIR_NAME = 'keys';
 const PRIVATE_KEY_FILE = 'private.pem';
 const PUBLIC_KEY_FILE = 'public.pem';
+/** E2E v2 X25519 private key (base64url PKCS#8). */
+const E2E_PRIVATE_KEY_FILE = 'e2e-x25519.key';
+/** Device identity Ed25519 private key (base64url PKCS#8). */
+const IDENTITY_PRIVATE_KEY_FILE = 'identity-ed25519.key';
+/** Public half of both, for same-machine apps (Kraki for Mac) to pin. */
+export const PUBLIC_IDENTITY_FILE = 'public-identity.json';
+
+export interface PublicIdentity {
+  /** Ed25519 identity key, base64url raw. */
+  identityKey: string;
+  /** X25519 encryption key, base64url raw. */
+  encryptionKey: string;
+}
 
 export class KeyManager {
-  private keysDir: string;
+  readonly keysDir: string;
   private keyPair: KeyPair | null = null;
+  private e2eKey: { privateKey: KeyObject; publicKey: string } | null = null;
+  private identityKey: { privateKey: KeyObject; publicKey: string } | null = null;
 
   constructor(keysDir?: string) {
     this.keysDir = keysDir ?? join(getConfigDir(), KEYS_DIR_NAME);
@@ -41,6 +75,11 @@ export class KeyManager {
       // the loser uses the winner's. Before this, both wrote their own and the
       // device registered one key while the disk kept the other — the
       // computer could not reconnect after its next restart.
+      // A fresh install enforces device trust from the start. Record that
+      // before the RSA key becomes visible: any process that sees private.pem
+      // without a policy would take it for an upgrade (compatible), and an
+      // interrupted first start must not leave that ambiguity either.
+      initTrustPolicy(this.trustDir, freshInstallEnforces());
       const generated = generateKeyPair();
       const tmp = `${privPath}.${process.pid}.${Date.now()}.tmp`;
       writeFileSync(tmp, generated.privateKey, { mode: 0o600 });
@@ -51,6 +90,9 @@ export class KeyManager {
         }
       }
       try { unlinkSync(tmp); } catch { /* ignore */ }
+      // A fresh install: create the device-trust keys with it, and enforce
+      // device trust from the start (its first app pairs through the QR).
+      this.freshInstall = true;
     }
 
     // The public key is always the one belonging to private.pem on disk.
@@ -59,7 +101,80 @@ export class KeyManager {
     const onDisk = existsSync(pubPath) ? readFileSync(pubPath, 'utf8') : null;
     if (onDisk !== publicKey) writeFileSync(pubPath, publicKey, { mode: 0o644 });
     this.keyPair = { privateKey, publicKey };
+    if (this.freshInstall) this.getPublicIdentity();
     return this.keyPair;
+  }
+
+  /** True when this process generated the RSA keys (no previous install). */
+  private freshInstall = false;
+
+  /** `<KRAKI_HOME>/trust`, next to `keys/`. */
+  get trustDir(): string {
+    return join(dirname(this.keysDir), 'trust');
+  }
+
+  /**
+   * The E2E v2 (X25519) key: generated once, persisted next to the RSA keys.
+   * Never sent to the Head.
+   */
+  getE2EKey(): { privateKey: KeyObject; publicKey: string } {
+    if (this.e2eKey) return this.e2eKey;
+    const privateKey = importE2EPrivateKey(this.loadOrCreate(E2E_PRIVATE_KEY_FILE, () => generateE2EKeyPair().privateKey));
+    this.e2eKey = { privateKey, publicKey: e2ePublicKeyOf(privateKey) };
+    this.writePublicIdentity();
+    return this.e2eKey;
+  }
+
+  /**
+   * This computer's identity (Ed25519) key. Apps pin it when they pair (from
+   * the QR code, or from {@link PUBLIC_IDENTITY_FILE} on the same Mac) and
+   * accept only messages it signed. Never sent to the Head.
+   */
+  getIdentityKey(): { privateKey: KeyObject; publicKey: string } {
+    if (this.identityKey) return this.identityKey;
+    const path = join(this.keysDir, IDENTITY_PRIVATE_KEY_FILE);
+    if (!existsSync(path)) {
+      // First device-trust key on this computer. Upgraded installs (RSA keys
+      // from before) start compatible so their apps keep working until they
+      // pair; fresh installs enforce.
+      const upgraded = !this.freshInstall && existsSync(join(this.keysDir, PRIVATE_KEY_FILE));
+      initTrustPolicy(this.trustDir, upgraded ? false : freshInstallEnforces());
+    }
+    const privateKey = importIdentityPrivateKey(
+      this.loadOrCreate(IDENTITY_PRIVATE_KEY_FILE, () => generateIdentityKeyPair().privateKey),
+    );
+    this.identityKey = { privateKey, publicKey: identityPublicKeyOf(privateKey) };
+    this.writePublicIdentity();
+    return this.identityKey;
+  }
+
+  getPublicIdentity(): PublicIdentity {
+    return { identityKey: this.getIdentityKey().publicKey, encryptionKey: this.getE2EKey().publicKey };
+  }
+
+  private writePublicIdentity(): void {
+    if (!this.e2eKey || !this.identityKey) return;
+    const path = join(this.keysDir, PUBLIC_IDENTITY_FILE);
+    const content = JSON.stringify({ identityKey: this.identityKey.publicKey, encryptionKey: this.e2eKey.publicKey }) + '\n';
+    const onDisk = existsSync(path) ? readFileSync(path, 'utf8') : null;
+    if (onDisk !== content) writeFileSync(path, content, { mode: 0o644 });
+  }
+
+  /** Read a private key file, creating it exactly once across processes. */
+  private loadOrCreate(name: string, generate: () => string): string {
+    const path = join(this.keysDir, name);
+    if (!existsSync(path)) {
+      const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+      writeFileSync(tmp, generate(), { mode: 0o600 });
+      try { linkSync(tmp, path); } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+          try { unlinkSync(tmp); } catch { /* ignore */ }
+          throw err;
+        }
+      }
+      try { unlinkSync(tmp); } catch { /* ignore */ }
+    }
+    return readFileSync(path, 'utf8').trim();
   }
 
   /**

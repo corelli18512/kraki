@@ -187,8 +187,11 @@ describe('CodexAdapter (fake app-server child process)', () => {
     expect(h.of('permission')).toHaveLength(0);
     expect(h.replies().some((r) => r.result!.decision === 'accept')).toBe(true);
     const order = h.events.filter((e) => ['narration', 'tool_start', 'tool_complete', 'message'].includes(e.type)).map((e) => e.type);
-    expect(order).toEqual(['narration', 'tool_start', 'tool_complete', 'message']);
+    // Every finished prose segment reconciles the live draft (narration); the
+    // last one then graduates to the reply and is never recorded as a step.
+    expect(order).toEqual(['narration', 'tool_start', 'tool_complete', 'narration', 'message']);
     expect(h.of('narration')[0].content).toBe('Let me clean the build.');
+    expect(h.of('narration_trace').map((e) => e.content)).toEqual(['Let me clean the build.']);
     expect(h.of('tool_start')[0]).toMatchObject({ toolName: 'shell', args: { command: 'rm -rf build', cwd: '/tmp' } });
     expect(h.of('tool_complete')[0]).toMatchObject({ toolName: 'shell', result: 'removed', success: true });
     expect(h.of('message')[0].content).toBe('shell decision: accept');
@@ -259,21 +262,15 @@ describe('CodexAdapter (fake app-server child process)', () => {
     expect(h.of('tool_complete')[0]).toMatchObject({ success: false });
   });
 
-  it('always_allow grants the tool kind for later calls; switching to safe revokes it', async () => {
+  it('an approval covers that one call: the next shell call in safe mode asks again', async () => {
     await started();
     const sid = await session('safe');
     await turn(sid, 'SHELL', 'rt-1');
     const perm = await h.waitFor((e) => e.type === 'permission', 'permission');
-    await h.adapter.respondToPermission(sid, perm.id as string, 'always_allow');
+    await h.adapter.respondToPermission(sid, perm.id as string, 'approve');
     await h.idleCount(1);
+    expect(h.of('message')[0].content).toBe('shell decision: accept');
     await turn(sid, 'SHELL again', 'rt-2');
-    await h.idleCount(2);
-    expect(h.of('permission')).toHaveLength(1);
-    expect(h.of('message')[1].content).toBe('shell decision: accept');
-
-    h.adapter.setSessionMode(sid, 'auto');
-    h.adapter.setSessionMode(sid, 'safe');
-    await turn(sid, 'SHELL third', 'rt-3');
     await h.waitFor(() => h.of('permission').length === 2, 'second permission');
   });
 
@@ -476,6 +473,21 @@ describe('CodexAdapter (fake app-server child process)', () => {
     ]);
   });
 
+  it('a steer queued while the turn starts continues it: the first answer is a step, the continuation is the reply (2-48)', async () => {
+    await started();
+    const sid = await session();
+    const first = turn(sid, 'PAUSE first', 'rt-1');
+    // turn/start is still in flight: Codex cannot steer yet, so it is queued.
+    await turn(sid, 'more', 'rt-1', 'steer');
+    await first;
+    await h.idleCount(1);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(h.sent('turn/start')).toHaveLength(2);
+    expect(h.of('idle')).toHaveLength(1);
+    expect(h.of('message').map((m) => [m.content, m.turnId])).toEqual([['echo: more', 'rt-1']]);
+    expect(h.of('narration_trace').map((m) => [m.content, m.turnId])).toEqual([['echo: PAUSE first', 'rt-1']]);
+  });
+
   it('compaction items drive the compaction status', async () => {
     await started();
     const sid = await session();
@@ -543,5 +555,43 @@ describe('CodexAdapter (fake app-server child process)', () => {
     const input = h.sent('turn/start')[0].params!.input as Array<{ type: string; path?: string }>;
     expect(input.map((i) => i.type)).toEqual(['text', 'localImage']);
     expect(readFileSync(input[1].path!)).toEqual(PNG_1PX);
+  });
+
+  it('after a crash, concurrent sends wait for the respawned server to finish its handshake', async () => {
+    await started({ FAKE_CODEX_INIT_DELAY_MS: '150' });
+    const a = await session();
+    const b = await session();
+    await turn(a, 'CRASH', 'rt-1');
+    await h.idleCount(1);
+    await Promise.all([turn(a, 'from a', 'rt-2'), turn(b, 'from b', 'rt-3')]);
+    await h.idleCount(3);
+    expect(h.of('error').map((e) => e.message)).toEqual([expect.stringMatching(/exited unexpectedly/)]);
+    expect(h.of('message').map((m) => m.content).sort()).toEqual(['echo: from a', 'echo: from b']);
+    expect(h.sent('initialize')).toHaveLength(2);
+  });
+
+  it('a crash during turn/start does not settle the queued turn that already started', async () => {
+    await started();
+    const sid = await session();
+    const first = turn(sid, 'CRASHSTART', 'rt-1');
+    await turn(sid, 'queued', 'rt-2', 'follow_up');
+    await first.catch(() => {});
+    await h.waitFor((e) => e.type === 'idle' && e.turnId === 'rt-2', 'idle rt-2');
+    expect(h.of('error')[0]).toMatchObject({ message: /exited unexpectedly/, turnId: 'rt-1' });
+    expect(h.of('message')).toEqual([expect.objectContaining({ content: 'echo: queued', turnId: 'rt-2' })]);
+  });
+
+  it('a queued input that fails to start does not strand the rest of the queue', async () => {
+    await started();
+    const sid = await session();
+    await turn(sid, 'PAUSE first', 'rt-1');
+    await turn(sid, 'BADSTART', 'rt-2', 'follow_up');
+    await turn(sid, 'third', 'rt-3', 'follow_up');
+    await h.waitFor((e) => e.type === 'idle' && e.turnId === 'rt-3', 'idle rt-3');
+    expect(h.of('error')).toEqual([expect.objectContaining({ message: 'bad start', turnId: 'rt-2' })]);
+    expect(h.of('message').map((m) => [m.content, m.turnId])).toEqual([
+      ['echo: PAUSE first', 'rt-1'],
+      ['echo: third', 'rt-3'],
+    ]);
   });
 });

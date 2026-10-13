@@ -7,338 +7,43 @@
  */
 
 import { atomicWriteFile, renameWithRetry } from './fs-retry.js';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, rmSync, appendFileSync, openSync, readSync, closeSync, fstatSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync, appendFileSync, statSync } from 'node:fs';
 import { DEFAULT_SESSION_MODE, normalizeSessionMode, toWireSessionMode } from '@kraki/protocol';
 import { dirname, join } from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { getConfigDir } from './config.js';
 import type { ContentRef } from '@kraki/protocol';
+import { InputLedgerStore } from './session/input-ledger.js';
+import { SessionLinkTable } from './session/link-table.js';
+import { forEachLogLine, lastLoggedSeq, type LogIndex, upgradeLegacyEntry } from './session/log-file.js';
+import { readSessionPreview } from './session/preview.js';
+import { isSafeId, toWellFormedText } from './session/text.js';
+import { readTraceEntries, turnArtifacts, userMessageStartsTurn } from './session/turn-trace.js';
+import type {
+  InputLedgerEntry, LoggedMessage, PendingHumanAction, RunRecord, SessionContext, SessionLink,
+  SessionListEntry, SessionMeta, SessionMode, TraceLine,
+} from './session/types.js';
 
-const PREVIEW_MAX = 80;
-const PREVIEW_SCAN_CHUNK_BYTES = 32 * 1024;
-// Valid inline-image rows currently reach roughly 1.2 MB. Bound reconstruction
-// well above that so a corrupt newline-free log cannot grow memory without limit.
-const PREVIEW_SCAN_MAX_LINE_BYTES = 16 * 1024 * 1024;
-// Keep session-list generation bounded even if a log has no preview boundary.
-// This is large enough for the oversized rows seen in real session data while
-// avoiding an unbounded synchronous scan of a multi-hundred-megabyte log.
-const PREVIEW_SCAN_MAX_BYTES = 32 * 1024 * 1024;
-const PREVIEW_SCAN_MAX_LINES = 4096;
-const PREVIEW_BOUNDARY_TYPES = new Set([
-  'agent_message',
-  'user_message',
-  'interrupted_turn',
-  'turn_status',
-  'system_message',
-]);
-
-/** Ids from the wire become path segments under ~/.kraki/sessions. Only
- *  allow the characters our own ids use, so `..` or a slash can never reach
- *  the filesystem (e.g. delete_session with id `..` removing ~/.kraki). */
-export function isSafeId(id: unknown): id is string {
-  return typeof id === 'string' && id.length > 0 && id.length <= 200
-    && /^[A-Za-z0-9._-]+$/.test(id) && id !== '.' && id !== '..';
-}
-
-/** Replace lone UTF-16 surrogates before serializing text for strict JSON consumers. */
-export function toWellFormedText(text: string): string {
-  let result = '';
-  for (let i = 0; i < text.length; i++) {
-    const unit = text.charCodeAt(i);
-    if (unit >= 0xd800 && unit <= 0xdbff) {
-      const next = i + 1 < text.length ? text.charCodeAt(i + 1) : -1;
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        result += text[i] + text[++i];
-      } else {
-        result += '\ufffd';
-      }
-    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
-      result += '\ufffd';
-    } else {
-      result += text[i];
-    }
-  }
-  return result;
-}
-
-/** Truncate by Unicode code point, never through the middle of an emoji. */
-function truncateText(text: string, maxCodePoints: number): string {
-  return Array.from(toWellFormedText(text)).slice(0, maxCodePoints).join('');
-}
-
-/** Strip common markdown syntax for clean preview display. */
-function stripMarkdownForPreview(text: string): string {
-  const stripped = text
-    .replace(/```[\s\S]*?```/g, '')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/__([^_]+)__/g, '$1')
-    .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/_([^_]+)_/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '')
-    .replace(/^\s*[-*+]\s+/gm, '')
-    .replace(/^\s*\d+\.\s+/gm, '')
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
-    .replace(/\n+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return truncateText(stripped, PREVIEW_MAX);
-}
-
-// ── Types ───────────────────────────────────────────────
-
-/** A single logged message in a session's message log. */
-export interface LoggedMessage {
-  seq: number;
-  type: string;
-  payload: string;
-  ts: string;
-}
-
-/**
- * One line in a session's `trace.jsonl` — a tool/action trace record mirrored
- * off the spine and projected live through `card_action`. Tagged with the
- * turn's start seq (the user_message
- * that began the turn) so a turn's steps can be pulled by its bubble seq.
- * `payload` is the full enriched wire message (same JSON that was broadcast).
- */
-export interface TraceLine {
-  turnStartSeq: number;
-  type: string;
-  payload: string;
-  ts: string;
-}
-
-// ── Types ───────────────────────────────────────────────
-
-export interface SessionContext {
-  summary: string;
-  keyFiles: string[];
-  lastUserMessage: string;
-  pendingAction?: string;
-  updatedAt: string;
-}
-
-export type SessionMode = import('@kraki/protocol').SessionMode;
-
-/** One session_list entry (a SessionDigest without live overlays). */
-export interface SessionListEntry {
-  id: string;
-  agent: string;
-  model?: string;
-  reasoningEffort?: import('@kraki/protocol').ReasoningEffort;
-  title?: string;
-  autoTitle?: string;
-  state: 'active' | 'idle';
-  mode: import('@kraki/protocol').WireSessionMode;
-  pinned?: boolean;
-  archived?: boolean;
-  lastSeq: number;
-  readSeq: number;
-  messageCount: number;
-  createdAt: string;
-  lastActivityAt?: string;
-  usage?: import('@kraki/protocol').SessionUsage;
-  source?: import('@kraki/protocol').LocalSessionSource | 'imported';
-  preview?: import('@kraki/protocol').SessionPreviewDigest;
-}
-
-export interface SessionMeta {
-  id: string;
-  /** A fork whose attachments are still being linked from this session. */
-  attachmentsFrom?: string;
-  agent: string;
-  model?: string;
-  reasoningEffort?: import('@kraki/protocol').ReasoningEffort;
-  title?: string;
-  autoTitle?: string;
-  state: 'active' | 'idle' | 'ended' | 'disconnected';
-  mode: SessionMode;
-  pinned?: boolean;
-  /** Archived: left out of session_list until opened or written to (F2). */
-  archived?: boolean;
-  currentRunId: string;
-  totalRuns: number;
-  lastSeq: number;
-  readSeq: number;
-  createdAt: string;
-  updatedAt: string;
-  /** Cumulative token usage (persisted across restarts) */
-  usage?: import('@kraki/protocol').SessionUsage;
-  /** Origin of this session — set for imported sessions */
-  source?: import('@kraki/protocol').LocalSessionSource | 'imported';
-  /** Seq numbers of idle messages — used for turn-aligned pagination. */
-  idleSeqs?: number[];
-  /** Spine seq of the user_message that began the current turn. Trace
-   *  entries (tool_start/tool_complete) are tagged with this so a turn's
-   *  steps can be pulled by its concluding bubble seq. Mid-turn spine
-   *  messages (permission/question) do NOT move it. */
-  currentTurnStartSeq?: number;
-}
-
-export interface RunRecord {
-  id: string;
-  startedAt: string;
-  endedAt?: string;
-  endReason?: string;
-}
-
-/** Durable human-blocking state kept outside the model transcript. The
- *  question itself is on the spine (an `agent_message` carrying `question`);
- *  this record only lets Tentacle route an answer after a restart. */
-export interface PendingHumanAction {
-  version: 2;
-  kind: 'question';
-  questionId: string;
-  question: string;
-  choices?: string[];
-  /** Spine seq of the question message. */
-  questionSeq?: number;
-  createdAt: string;
-}
-
-/** Restart-safe identity record for an Arm send_input request. Never stores
- * message body; the hash is only used to detect clientId reuse with different input. */
-export interface InputLedgerEntry {
-  version: 1;
-  clientId: string;
-  status: 'pending' | 'persisted' | 'dispatching' | 'delivered' | 'settled' | 'rejected';
-  requestedDelivery: 'prompt' | 'steer';
-  delivery: 'prompt' | 'steer' | 'follow_up';
-  turnId: string;
-  contentLength: number;
-  contentHash: string;
-  userSeq?: number;
-  updatedAt: string;
-}
+// Public names of the session modules, unchanged by the split into session/.
+export { forEachLogLine, lastLoggedSeq, upgradeLegacyEntry } from './session/log-file.js';
+export { isSafeId, toWellFormedText } from './session/text.js';
+export type {
+  InputLedgerEntry, LoggedMessage, PendingHumanAction, RunRecord, SessionContext, SessionLink,
+  SessionListEntry, SessionMeta, SessionMode, TraceLine,
+} from './session/types.js';
 
 // ── Session Manager ─────────────────────────────────────
 
-/**
- * Spine rows store the full ProducerMessage envelope as `payload`. Sessions
- * imported before that was enforced stored only the inner payload
- * (`{"content": ...}`), which readers could not route. Wrap such rows into the
- * envelope shape on read.
- */
-/** Seq of the last complete row of a messages.jsonl (0 if none). Reads
- *  backwards in chunks: rows with inline images can exceed a megabyte. */
-export function lastLoggedSeq(logPath: string): number {
-  if (!existsSync(logPath)) return 0;
-  let fd: number | undefined;
-  try {
-    fd = openSync(logPath, 'r');
-    const size = fstatSync(fd).size;
-    const chunk = 256 * 1024;
-    let end = size;
-    let tail = Buffer.alloc(0);
-    while (end > 0 && tail.length < 32 * 1024 * 1024) {
-      const start = Math.max(0, end - chunk);
-      const buf = Buffer.alloc(end - start);
-      readSync(fd, buf, 0, buf.length, start);
-      tail = Buffer.concat([buf, tail]);
-      end = start;
-      const lines = tail.toString('utf8').split('\n');
-      // Skip a trailing partial line (crash mid-write); the last complete row
-      // is the last line followed by a newline that also has a full start.
-      for (let i = lines.length - 2; i >= (end > 0 ? 1 : 0); i--) {
-        if (!lines[i]) continue;
-        try {
-          const seq = (JSON.parse(lines[i]) as { seq?: unknown }).seq;
-          if (typeof seq === 'number') return seq;
-        } catch { /* corrupt row: keep looking */ }
-      }
-    }
-  } catch {
-    return 0;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-  return 0;
-}
-
-interface LogIndex {
-  ino: number;
-  /** Bytes of the file covered (always ends after a newline). */
-  size: number;
-  seqs: number[];
-  offsets: number[];
-  /** Seqs strictly increase in file order (binary search is valid). */
-  ascending: boolean;
-}
-
-/**
- * Stream complete lines of `path` in [start, end) without reading the whole
- * file. `visit` gets each line and its byte offset; returning false stops.
- * Returns the offset just past the last complete line visited.
- */
-export function forEachLogLine(
-  path: string,
-  start: number,
-  end: number,
-  visit: (line: string, offset: number) => boolean,
-): number {
-  let fd: number | undefined;
-  let consumed = start;
-  try {
-    fd = openSync(path, 'r');
-    const chunkSize = 1024 * 1024;
-    let carry = Buffer.alloc(0);
-    let carryOffset = start;
-    let pos = start;
-    while (pos < end) {
-      const buf = Buffer.alloc(Math.min(chunkSize, end - pos));
-      const read = readSync(fd, buf, 0, buf.length, pos);
-      if (read <= 0) break;
-      pos += read;
-      let data = carry.length ? Buffer.concat([carry, buf.subarray(0, read)]) : buf.subarray(0, read);
-      let lineStart = 0;
-      for (let nl = data.indexOf(0x0a); nl !== -1; nl = data.indexOf(0x0a, lineStart)) {
-        const lineOffset = carryOffset + lineStart;
-        if (nl > lineStart && !visit(data.subarray(lineStart, nl).toString('utf8'), lineOffset)) {
-          return lineOffset + (nl - lineStart) + 1;
-        }
-        lineStart = nl + 1;
-        consumed = carryOffset + lineStart;
-      }
-      carry = Buffer.from(data.subarray(lineStart));
-      carryOffset += lineStart;
-      data = Buffer.alloc(0);
-    }
-  } catch {
-    return consumed;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-  return consumed;
-}
-
-export function upgradeLegacyEntry(entry: LoggedMessage, sessionId: string): LoggedMessage {
-  try {
-    const parsed = JSON.parse(entry.payload) as Record<string, unknown>;
-    if (parsed && typeof parsed === 'object' && typeof parsed.type === 'string') return entry;
-    return {
-      ...entry,
-      payload: JSON.stringify({ type: entry.type, sessionId, timestamp: entry.ts, payload: parsed }),
-    };
-  } catch {
-    return entry;
-  }
-}
-
 export class SessionManager {
-  private static readonly INPUT_LEDGER_TERMINAL_LIMIT = 2048;
-
   private sessionsDir: string;
-  private inputLedgerCache = new Map<string, InputLedgerEntry[]>();
-  /** Uncompacted clientId index. The bounded ledger remains the hot state
-   * machine, while this metadata-only log preserves replay deduplication for
-   * older terminal inputs without rescanning messages.jsonl. */
-  private inputClientIndexCache = new Map<string, Map<string, InputLedgerEntry>>();
+  private inputLedger: InputLedgerStore;
+  private linkTable: SessionLinkTable;
 
   constructor(sessionsDir?: string) {
     this.sessionsDir = sessionsDir ?? join(getConfigDir(), 'sessions');
+    this.inputLedger = new InputLedgerStore((id) => this.sessionDir(id));
+    this.linkTable = new SessionLinkTable(this.sessionsDir);
     mkdirSync(this.sessionsDir, { recursive: true });
     this.migrateGlobalLog();
     this.clampOverflowReadSeq();
@@ -368,6 +73,9 @@ export class SessionManager {
       return;
     }
     for (const dir of dirs) {
+      // A stray entry (".DS_Store", "sess copy") is not a session; sessionDir
+      // would throw on it and stop the daemon from starting.
+      if (!isSafeId(dir)) continue;
       const meta = this.readMeta(dir);
       if (!meta) continue;
       const ls = meta.lastSeq ?? 0;
@@ -408,7 +116,7 @@ export class SessionManager {
       try {
         const msg = JSON.parse(line);
         const sid = msg.sessionId;
-        if (!sid) continue;
+        if (typeof sid !== 'string' || !isSafeId(sid)) continue;
         if (!bySession.has(sid)) bySession.set(sid, []);
         bySession.get(sid)!.push({ seq: msg.seq, type: msg.type, payload: msg.payload, ts: msg.ts });
       } catch { /* skip */ }
@@ -584,7 +292,7 @@ export class SessionManager {
    */
   deleteSession(sessionId: string): void {
     if (!isSafeId(sessionId)) return;
-    this.inputLedgerCache.delete(sessionId);
+    this.inputLedger.inputLedgerCache.delete(sessionId);
     this.cancelledAttachmentLinks.add(sessionId);
     const dir = this.sessionDir(sessionId);
     if (existsSync(dir)) {
@@ -717,7 +425,13 @@ export class SessionManager {
       // Stop if the fork was deleted (a failed fork); never recreate it.
       const gone = () => this.cancelledAttachmentLinks.has(forkId) || !existsSync(join(this.sessionDir(forkId), 'meta.json'));
       if (gone()) return;
-      await fsp.mkdir(to, { recursive: true });
+      // Not recursive: if the fork is deleted before this runs (the mkdir is
+      // queued on the I/O pool), recreating its folder would leave it behind.
+      try {
+        await fsp.mkdir(to);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return;
+      }
       let names: string[] = [];
       try { names = await fsp.readdir(from); } catch { /* source gone */ }
       const queue = [...names];
@@ -945,6 +659,7 @@ export class SessionManager {
     if (!existsSync(this.sessionsDir)) return sessions;
 
     for (const dir of readdirSync(this.sessionsDir)) {
+      if (!isSafeId(dir)) continue;
       const meta = this.readMeta(dir);
       if (meta && (meta.state === 'active' || meta.state === 'idle' || meta.state === 'disconnected')) {
         sessions.push(meta);
@@ -1036,152 +751,26 @@ export class SessionManager {
     rmSync(this.pendingActionPath(sessionId), { force: true });
   }
 
-  // ── Durable input identity state ───────────────────────
-
-  private inputLedgerPath(sessionId: string): string {
-    return join(this.sessionDir(sessionId), 'input-ledger.json');
-  }
-
-  private inputClientIndexPath(sessionId: string): string {
-    return join(this.sessionDir(sessionId), 'input-client-index.jsonl');
-  }
-
-  private loadInputClientIndex(sessionId: string): Map<string, InputLedgerEntry> {
-    const existing = this.inputClientIndexCache.get(sessionId);
-    if (existing) return existing;
-    const index = new Map<string, InputLedgerEntry>();
-    const path = this.inputClientIndexPath(sessionId);
-    if (existsSync(path)) {
-      try {
-        for (const line of readFileSync(path, 'utf8').split('\n')) {
-          if (!line) continue;
-          try {
-            const entry = JSON.parse(line) as InputLedgerEntry;
-            if (entry?.version === 1 && typeof entry.clientId === 'string' && typeof entry.contentHash === 'string') {
-              index.set(entry.clientId, entry);
-            }
-          } catch {
-            // Ignore a truncated final index row after an interrupted write.
-          }
-        }
-      } catch {
-        // The bounded ledger remains the fallback if the index is unavailable.
-      }
-    }
-    this.inputClientIndexCache.set(sessionId, index);
-    return index;
-  }
-
-  private persistInputClientIndex(sessionId: string, entry: InputLedgerEntry): void {
-    const index = this.loadInputClientIndex(sessionId);
-    index.set(entry.clientId, { ...entry });
-    appendFileSync(this.inputClientIndexPath(sessionId), `${JSON.stringify(entry)}\n`);
-  }
-
-  private loadInputLedger(sessionId: string): InputLedgerEntry[] {
-    const path = this.inputLedgerPath(sessionId);
-    if (!existsSync(path)) return [];
-    try {
-      const value = JSON.parse(readFileSync(path, 'utf8')) as unknown;
-      if (!Array.isArray(value)) return [];
-      return value.filter((entry): entry is InputLedgerEntry =>
-        !!entry && typeof entry === 'object'
-        && (entry as InputLedgerEntry).version === 1
-        && typeof (entry as InputLedgerEntry).clientId === 'string'
-        && typeof (entry as InputLedgerEntry).contentHash === 'string',
-      );
-    } catch {
-      return [];
-    }
-  }
+  // ── Durable input identity state (session/input-ledger.ts) ──
 
   getInputLedger(sessionId: string): InputLedgerEntry[] {
-    if (!this.inputLedgerCache.has(sessionId)) {
-      const entries = this.loadInputLedger(sessionId);
-      this.inputLedgerCache.set(sessionId, entries);
-      const index = this.loadInputClientIndex(sessionId);
-      // Seed indexes created before this file existed, including entries that
-      // will be compacted by the first subsequent ledger transition.
-      for (const entry of entries) index.set(entry.clientId, { ...entry });
-    }
-    return this.inputLedgerCache.get(sessionId)!.map((entry) => ({ ...entry }));
+    return this.inputLedger.getInputLedger(sessionId);
   }
 
   getInputLedgerEntry(sessionId: string, clientId: string): InputLedgerEntry | null {
-    const current = this.getInputLedger(sessionId).find((entry) => entry.clientId === clientId);
-    if (current) return current;
-    const indexed = this.loadInputClientIndex(sessionId).get(clientId);
-    return indexed ? { ...indexed } : null;
-  }
-
-  private compactInputLedger(entries: InputLedgerEntry[]): InputLedgerEntry[] {
-    const isOpen = (entry: InputLedgerEntry) =>
-      entry.status === 'pending' || entry.status === 'persisted' || entry.status === 'dispatching';
-    const retainedTerminalIds = new Set(
-      entries.filter((entry) => !isOpen(entry))
-        .slice(-SessionManager.INPUT_LEDGER_TERMINAL_LIMIT)
-        .map((entry) => entry.clientId),
-    );
-    return entries.filter((entry) => isOpen(entry) || retainedTerminalIds.has(entry.clientId));
+    return this.inputLedger.getInputLedgerEntry(sessionId, clientId);
   }
 
   recordInputLedger(sessionId: string, entry: InputLedgerEntry): void {
-    const path = this.inputLedgerPath(sessionId);
-    const entries = (this.inputLedgerCache.get(sessionId) ?? this.loadInputLedger(sessionId))
-      .filter((item) => item.clientId !== entry.clientId);
-    const indexPath = this.inputClientIndexPath(sessionId);
-    const index = this.loadInputClientIndex(sessionId);
-    const indexWasMissing = !existsSync(indexPath);
-    for (const existing of entries) index.set(existing.clientId, { ...existing });
-    if (indexWasMissing && entries.length > 0) {
-      appendFileSync(indexPath, `${entries.map((existing) => JSON.stringify(existing)).join('\n')}\n`);
-    }
-    entries.push({ ...entry });
-    const compacted = this.compactInputLedger(entries);
-    this.inputLedgerCache.set(sessionId, compacted);
-    atomicWrite(path, JSON.stringify(compacted, null, 2));
-    this.persistInputClientIndex(sessionId, entry);
+    this.inputLedger.recordInputLedger(sessionId, entry);
   }
 
   findUserMessageSeqByClientId(sessionId: string, clientId: string): number | null {
-    const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
-    if (!existsSync(logPath)) return null;
-    try {
-      for (const line of readFileSync(logPath, 'utf8').split('\n')) {
-        if (!line) continue;
-        try {
-          const entry = JSON.parse(line) as LoggedMessage;
-          if (entry.type !== 'user_message') continue;
-          const payload = JSON.parse(entry.payload) as { payload?: { clientId?: string } };
-          if (payload.payload?.clientId === clientId) return entry.seq;
-        } catch {
-          // Ignore an unrelated malformed line while recovering the ledger.
-        }
-      }
-    } catch {
-      return null;
-    }
-    return null;
+    return this.inputLedger.findUserMessageSeqByClientId(sessionId, clientId);
   }
 
   markInputLedgerSettled(sessionId: string, turnId: string): void {
-    const entries = this.getInputLedger(sessionId);
-    let changed = false;
-    const changedEntries: InputLedgerEntry[] = [];
-    const now = new Date().toISOString();
-    for (const entry of entries) {
-      if (entry.turnId !== turnId || (entry.status !== 'persisted' && entry.status !== 'dispatching' && entry.status !== 'delivered')) continue;
-      entry.status = 'settled';
-      entry.updatedAt = now;
-      changed = true;
-      changedEntries.push(entry);
-    }
-    if (changed) {
-      const compacted = this.compactInputLedger(entries);
-      this.inputLedgerCache.set(sessionId, compacted);
-      atomicWrite(this.inputLedgerPath(sessionId), JSON.stringify(compacted, null, 2));
-      for (const entry of changedEntries) this.persistInputClientIndex(sessionId, entry);
-    }
+    this.inputLedger.markInputLedgerSettled(sessionId, turnId);
   }
 
   // ── Message log ────────────────────────────────────────
@@ -1210,17 +799,9 @@ export class SessionManager {
 
     // A normal user_message begins a new turn — remember its seq so trace
     // entries recorded until the next normal prompt can be tagged to this turn.
-    // A steer is a visible user interjection inside the current agent lifecycle
-    // and must not split its TRACE history.
-    if (type === 'user_message') {
-      try {
-        const parsed = JSON.parse(payload) as { payload?: { delivery?: string } };
-        if (parsed.payload?.delivery !== 'steer') meta.currentTurnStartSeq = seq;
-      } catch {
-        // Legacy/corrupt payloads retain the historical boundary behavior.
-        meta.currentTurnStartSeq = seq;
-      }
-    }
+    // A steer, or an answer to the agent's question, is user input inside the
+    // current agent lifecycle and must not split its TRACE history.
+    if (type === 'user_message' && userMessageStartsTurn(payload)) meta.currentTurnStartSeq = seq;
 
     meta.lastSeq = seq;
     // Preserve the existing two-cursor contract. Ordinary Spine bookkeeping
@@ -1266,15 +847,8 @@ export class SessionManager {
         if (!meta.idleSeqs) meta.idleSeqs = [];
         meta.idleSeqs.push(seq - messages.length + i + 1);
       }
-      if (messages[i].type === 'user_message') {
-        try {
-          const parsed = JSON.parse(messages[i].payload) as { payload?: { delivery?: string } };
-          if (parsed.payload?.delivery !== 'steer') {
-            meta.currentTurnStartSeq = seq - messages.length + i + 1;
-          }
-        } catch {
-          meta.currentTurnStartSeq = seq - messages.length + i + 1;
-        }
+      if (messages[i].type === 'user_message' && userMessageStartsTurn(messages[i].payload)) {
+        meta.currentTurnStartSeq = seq - messages.length + i + 1;
       }
     }
 
@@ -1397,16 +971,11 @@ export class SessionManager {
     const meta = this.readMeta(sessionId);
     if (!meta) return { entries: [], complete: false, turnStartSeq: 0 };
 
-    // Resolve the turn start: greatest non-steer user_message seq <= bubbleSeq.
+    // Resolve the turn start: greatest turn-starting user_message seq <= bubbleSeq.
     let turnStartSeq = 0;
     for (const m of this.getMessagesAfterSeq(sessionId, 0)) {
       if (m.type !== 'user_message' || m.seq > bubbleSeq || m.seq <= turnStartSeq) continue;
-      try {
-        const parsed = JSON.parse(m.payload) as { payload?: { delivery?: string } };
-        if (parsed.payload?.delivery === 'steer') continue;
-      } catch {
-        // Legacy/corrupt payloads retain the historical boundary behavior.
-      }
+      if (!userMessageStartsTurn(m.payload)) continue;
       turnStartSeq = m.seq;
     }
 
@@ -1431,83 +1000,12 @@ export class SessionManager {
     if ((meta?.idleSeqs ?? []).some((idleSeq) => idleSeq > turnStartSeq)) return [];
 
     const entries = this.readTraceEntriesForTurnStart(sessionId, turnStartSeq);
-    const seen = new Set<string>();
-    const artifacts: ContentRef[] = [];
-
-    for (const entry of entries) {
-      if (!entry || typeof entry !== 'object') continue;
-      const message = entry as { type?: unknown; payload?: unknown };
-      if (message.type !== 'tool_complete' || !message.payload || typeof message.payload !== 'object') continue;
-      const payload = message.payload as {
-        toolName?: unknown;
-        success?: unknown;
-        termination?: unknown;
-        attachments?: unknown;
-      };
-      if (payload.success === false || payload.termination !== undefined) continue;
-      if (payload.toolName !== 'show_image' && payload.toolName !== 'show_report' && payload.toolName !== 'show_html') continue;
-      if (!Array.isArray(payload.attachments)) continue;
-
-      for (const candidate of payload.attachments) {
-        const ref = this.validTurnArtifact(candidate, payload.toolName);
-        if (!ref || seen.has(ref.id)) continue;
-        seen.add(ref.id);
-        artifacts.push(ref);
-      }
-    }
-    return artifacts;
+    return turnArtifacts(entries);
   }
 
   private readTraceEntriesForTurnStart(sessionId: string, turnStartSeq: number): unknown[] {
     if (turnStartSeq <= 0) return [];
-    const tracePath = join(this.sessionDir(sessionId), 'trace.jsonl');
-    if (!existsSync(tracePath)) return [];
-
-    let content: string;
-    try {
-      content = readFileSync(tracePath, 'utf8');
-    } catch {
-      return [];
-    }
-
-    const entries: unknown[] = [];
-    for (const line of content.split('\n')) {
-      if (!line) continue;
-      try {
-        const trace = JSON.parse(line) as TraceLine;
-        if (trace.turnStartSeq !== turnStartSeq) continue;
-        entries.push(JSON.parse(trace.payload));
-      } catch {
-        // Skip corrupted lines.
-      }
-    }
-    return entries;
-  }
-
-  private validTurnArtifact(candidate: unknown, toolName: 'show_image' | 'show_report' | 'show_html'): ContentRef | null {
-    if (!candidate || typeof candidate !== 'object') return null;
-    const ref = candidate as Partial<ContentRef>;
-    if (ref.type !== 'content_ref') return null;
-    if (typeof ref.id !== 'string' || ref.id.trim().length === 0) return null;
-    if (typeof ref.mimeType !== 'string') return null;
-    if (typeof ref.size !== 'number' || !Number.isFinite(ref.size) || ref.size < 0) return null;
-    if (toolName === 'show_image' && !ref.mimeType.startsWith('image/')) return null;
-    if (toolName !== 'show_image' && ref.mimeType !== 'text/html') return null;
-    if (ref.name !== undefined && typeof ref.name !== 'string') return null;
-    if (ref.caption !== undefined && typeof ref.caption !== 'string') return null;
-    if (ref.width !== undefined && (typeof ref.width !== 'number' || !Number.isFinite(ref.width) || ref.width < 0)) return null;
-    if (ref.height !== undefined && (typeof ref.height !== 'number' || !Number.isFinite(ref.height) || ref.height < 0)) return null;
-    const sanitized: ContentRef = {
-      type: 'content_ref',
-      id: ref.id,
-      mimeType: ref.mimeType,
-      size: ref.size,
-      ...(ref.caption !== undefined && { caption: ref.caption }),
-      ...(ref.name !== undefined && { name: ref.name }),
-      ...(ref.width !== undefined && { width: ref.width }),
-      ...(ref.height !== undefined && { height: ref.height }),
-    };
-    return sanitized;
+    return readTraceEntries(join(this.sessionDir(sessionId), 'trace.jsonl'), turnStartSeq);
   }
 
   /**
@@ -1630,182 +1128,9 @@ export class SessionManager {
     return join(this.sessionsDir, sessionId);
   }
 
-  /**
-   * Extract a sidebar preview = the most recent STABLE turn boundary.
-   *
-   * A turn boundary is the durable conversation anchor: the `user_message`
-   * that began the current (or last) turn, or the agent outcome of the
-   * previous turn (final `agent_message`, terminal `turn_status`, aborted
-   * `interrupted_turn`, or `system_message` like no-reply). It stays put for
-   * the whole turn — tool activity and narration are NOT boundaries.
-   *
-   * Transient `error` records (503/429 retries) are skipped: they are
-   * infrastructure noise, not conversation content, and a turn that fails is
-   * represented by its terminal `turn_status` (or falls back to the
-   * user_message, which is still the correct anchor). Open questions and
-   * permissions are likewise skipped here — they are turn-internal mechanics
-   * and are layered on top separately by `enrichSessionList` (the attention
-   * override), so they must never come from this file scan.
-   *
-   * Scans complete JSONL rows backwards in bounded chunks. The current spine
-   * has fewer durable row types while retaining dense Session seqs; older logs
-   * may still carry tool rows and therefore replay as a sparse filtered spine.
-   * An inline-image row can also be much larger than
-   * one read chunk.
-   */
+  /** The sidebar preview (session/preview.ts). */
   private getSessionPreview(sessionId: string): import('@kraki/protocol').SessionPreviewDigest | undefined {
-    const logPath = join(this.sessionDir(sessionId), 'messages.jsonl');
-    if (!existsSync(logPath)) return undefined;
-
-    const previewFromLine = (line: string): import('@kraki/protocol').SessionPreviewDigest | undefined => {
-      try {
-        const entry = upgradeLegacyEntry(JSON.parse(line) as LoggedMessage, sessionId);
-        if (!PREVIEW_BOUNDARY_TYPES.has(entry.type)) return undefined;
-        const inner = JSON.parse(entry.payload) as { type?: string; payload?: Record<string, unknown> };
-        const payload = inner.payload;
-        if (!payload) return undefined;
-
-        switch (inner.type) {
-          case 'agent_message': {
-            // A question reads as an agent line here; whether it is still
-            // awaiting an answer is live state (enrichSessionList overlays it).
-            const question = payload.question as { text?: unknown } | undefined;
-            if (question && typeof question.text === 'string' && question.text) {
-              return { text: stripMarkdownForPreview(question.text), type: 'agent', timestamp: entry.ts };
-            }
-            const content = payload.content;
-            if (typeof content === 'string' && content) {
-              return { text: stripMarkdownForPreview(content), type: 'agent', timestamp: entry.ts };
-            }
-            break;
-          }
-          case 'user_message': {
-            const content = payload.content;
-            if (typeof content === 'string' && content) {
-              return { text: stripMarkdownForPreview(content), type: 'user', timestamp: entry.ts };
-            }
-            break;
-          }
-          case 'interrupted_turn': {
-            const draft = payload.draft;
-            const failed = payload.reason === 'process_lost';
-            return {
-              text: typeof draft === 'string' && draft ? stripMarkdownForPreview(draft) : (failed ? 'Turn failed' : 'Stopped'),
-              type: 'agent',
-              timestamp: entry.ts,
-            };
-          }
-          case 'turn_status': {
-            const draft = payload.draft;
-            const actionType = (payload.action as { type?: string } | undefined)?.type;
-            const failed = actionType === 'failed';
-            return {
-              text: typeof draft === 'string' && draft ? stripMarkdownForPreview(draft) : (failed ? 'Turn failed' : 'Stopped'),
-              type: failed ? 'error' : 'agent',
-              timestamp: entry.ts,
-            };
-          }
-          case 'system_message': {
-            const content = payload.content;
-            if (typeof content === 'string' && content) {
-              return { text: stripMarkdownForPreview(content), type: 'agent', timestamp: entry.ts };
-            }
-            // A steps-only turn has no text of its own: fall through to the
-            // user's prompt rather than inventing a "No reply" preview.
-            if (payload.kind === 'no_reply') break;
-            return { text: 'System notice', type: 'agent', timestamp: entry.ts };
-          }
-          // error / idle / active / session_created / session_ended / tool_* /
-          // agent_narration / question / answer / permission / *_resolved /
-          // compacting are intentionally NOT turn boundaries — skip them.
-        }
-      } catch {
-        // Skip malformed lines.
-      }
-      return undefined;
-    };
-
-    try {
-      const fd = openSync(logPath, 'r');
-      try {
-        let position = fstatSync(fd).size;
-        const scanStart = Math.max(0, position - PREVIEW_SCAN_MAX_BYTES);
-        let suffixParts: Buffer[] = [];
-        let suffixBytes = 0;
-        let discardOversizedLine = false;
-        let inspectedLines = 0;
-        let lineLimitReached = false;
-
-        const inspectLine = (prefix: Buffer): import('@kraki/protocol').SessionPreviewDigest | undefined => {
-          if (discardOversizedLine) {
-            discardOversizedLine = false;
-            suffixParts = [];
-            suffixBytes = 0;
-            return undefined;
-          }
-
-          const lineBytes = prefix.length + suffixBytes;
-          if (lineBytes === 0) return undefined;
-          if (inspectedLines >= PREVIEW_SCAN_MAX_LINES) {
-            lineLimitReached = true;
-            return undefined;
-          }
-          inspectedLines++;
-          if (lineBytes > PREVIEW_SCAN_MAX_LINE_BYTES) {
-            suffixParts = [];
-            suffixBytes = 0;
-            return undefined;
-          }
-
-          const line = suffixParts.length === 0
-            ? prefix
-            : Buffer.concat([prefix, ...suffixParts.reverse()], lineBytes);
-          suffixParts = [];
-          suffixBytes = 0;
-          return previewFromLine(line.toString('utf8'));
-        };
-
-        while (position > scanStart) {
-          const requested = Math.min(PREVIEW_SCAN_CHUNK_BYTES, position - scanStart);
-          position -= requested;
-          const buf = Buffer.allocUnsafe(requested);
-          const bytesRead = readSync(fd, buf, 0, requested, position);
-          if (bytesRead <= 0) break;
-          const chunk = bytesRead === requested ? buf : buf.subarray(0, bytesRead);
-
-          let end = chunk.length;
-          while (end > 0) {
-            const newline = chunk.lastIndexOf(0x0a, end - 1);
-            if (newline < 0) break;
-            const preview = inspectLine(chunk.subarray(newline + 1, end));
-            if (preview) return preview;
-            if (lineLimitReached) return undefined;
-            end = newline;
-          }
-
-          if (end > 0 && !discardOversizedLine) {
-            const part = chunk.subarray(0, end);
-            if (suffixBytes + part.length > PREVIEW_SCAN_MAX_LINE_BYTES) {
-              discardOversizedLine = true;
-              suffixParts = [];
-              suffixBytes = 0;
-            } else {
-              suffixParts.push(part);
-              suffixBytes += part.length;
-            }
-          }
-        }
-
-        // Only the start of the file is a known line boundary. If the scan hit
-        // its byte budget, the remaining suffix may be the tail of a line that
-        // began before the window and must not be parsed as a complete record.
-        return scanStart === 0 ? inspectLine(Buffer.alloc(0)) : undefined;
-      } finally {
-        closeSync(fd);
-      }
-    } catch {
-      return undefined;
-    }
+    return readSessionPreview(sessionId, join(this.sessionDir(sessionId), 'messages.jsonl'));
   }
 
   // ── Turn-aligned pagination ──────────────────────────
@@ -1929,68 +1254,37 @@ export class SessionManager {
     atomicWrite(join(this.sessionDir(sessionId), 'runs', `${run.id}.json`), JSON.stringify(run, null, 2));
   }
 
-  // ── Link table (local session sync) ───────────────────
-
-  private get linkTablePath(): string {
-    return join(this.sessionsDir, 'link-table.json');
-  }
-
-  private readLinkTable(): SessionLink[] {
-    try {
-      return JSON.parse(readFileSync(this.linkTablePath, 'utf8'));
-    } catch { return []; }
-  }
-
-  private writeLinkTable(links: SessionLink[]): void {
-    atomicWrite(this.linkTablePath, JSON.stringify(links, null, 2));
-  }
+  // ── Link table (local session sync, session/link-table.ts) ──
 
   /** Add a link between a local Copilot session and a Kraki session. */
   addLink(link: SessionLink): void {
-    const links = this.readLinkTable();
-    // Replace existing link for this local session ID
-    const idx = links.findIndex(l => l.localSessionId === link.localSessionId);
-    if (idx >= 0) links[idx] = link;
-    else links.push(link);
-    this.writeLinkTable(links);
+    this.linkTable.addLink(link);
   }
 
   /** Remove a link by local session ID. */
   removeLink(localSessionId: string): void {
-    const links = this.readLinkTable().filter(l => l.localSessionId !== localSessionId);
-    this.writeLinkTable(links);
+    this.linkTable.removeLink(localSessionId);
   }
 
   /** Remove a link by Kraki session ID (used on session delete). */
   removeLinkByKrakiId(krakiSessionId: string): void {
-    const links = this.readLinkTable().filter(l => l.krakiSessionId !== krakiSessionId);
-    this.writeLinkTable(links);
+    this.linkTable.removeLinkByKrakiId(krakiSessionId);
   }
 
   /** Get link for a local session ID. */
   getLink(localSessionId: string): SessionLink | null {
-    return this.readLinkTable().find(l => l.localSessionId === localSessionId) ?? null;
+    return this.linkTable.getLink(localSessionId);
   }
 
   /** Get all linked local session IDs. */
   getLinkedIds(): Set<string> {
-    return new Set(this.readLinkTable().map(l => l.localSessionId));
+    return this.linkTable.getLinkedIds();
   }
 
   /** Get all links. */
   getAllLinks(): SessionLink[] {
-    return this.readLinkTable();
+    return this.linkTable.getAllLinks();
   }
-}
-
-/** Link between a local Copilot session and a Kraki session. */
-export interface SessionLink {
-  localSessionId: string;
-  krakiSessionId: string;
-  source: import('@kraki/protocol').LocalSessionSource;
-  cwd?: string;
-  branch?: string;
-  linkedAt: string;
 }
 
 /** Atomic write: write to temp file, then rename (prevents corruption on crash). */

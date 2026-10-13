@@ -231,6 +231,20 @@ describe('Storage.deleteStaleUserPushTokens', () => {
     expect(pruned).toBe(0);
   });
 
+  it('keeps APNs tokens of a phone that was not opened for a day', () => {
+    storage.upsertDevice('dev-phone', 'u1', 'iPhone', 'app', 'ios');
+    storage.upsertDevice('dev-new', 'u1', 'Mac', 'app', 'mac');
+    (storage as unknown as { db: { prepare: (sql: string) => { run: (...args: unknown[]) => void } } }).db
+      .prepare("UPDATE devices SET last_seen = datetime('now', '-48 hours') WHERE id = ?")
+      .run('dev-phone');
+    storage.upsertPushToken('dev-phone', 'apns', 'phone_tok');
+
+    const pruned = storage.deleteStaleUserPushTokens('u1', 'dev-new', ['dev-new']);
+    expect(pruned).toBe(0);
+    const remaining = storage.getPushTokensForOfflineDevices('u1', []);
+    expect(remaining.map((t) => t.deviceId)).toEqual(['dev-phone']);
+  });
+
   it('does not touch tokens from other users', () => {
     storage.upsertUser('u2', 'bob');
     storage.upsertDevice('dev-a', 'u1', 'Alice Phone', 'app', 'web');

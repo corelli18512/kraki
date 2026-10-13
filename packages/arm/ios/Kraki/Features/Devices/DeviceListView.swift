@@ -115,11 +115,12 @@ struct DeviceListView: View {
             Text("📡")
                 .font(.system(size: 40))
 
-            Text("No devices connected")
+            Text("No computers yet")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            (Text("Run ") + Text("kraki connect").monospaced() + Text(" to pair a device."))
+            (Text("Install Kraki on the computer that runs your coding agents, then run ")
+                + Text("kraki connect").monospaced() + Text(" there and scan the code."))
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
@@ -158,6 +159,10 @@ private struct DeviceRow: View {
                 .font(.body)
 
             Spacer()
+
+            if device.role == .tentacle {
+                TrustStatusBadge(state: appState.trustState(for: device.id), compact: appState.trustState(for: device.id) == .paired)
+            }
 
             if isSelf {
                 Text("You")

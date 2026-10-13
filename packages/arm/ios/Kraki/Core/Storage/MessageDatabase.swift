@@ -85,7 +85,9 @@ final class MessageDatabase {
 
     // MARK: - State
 
-    private let dbPool: DatabasePool
+    /// A WAL `DatabasePool` on disk; an in-memory queue only as the last
+    /// launch fallback (see `openRecovering`).
+    private let dbPool: any DatabaseWriter
 
     /// `MAX(seq)` per session. Every write goes through this type, so the
     /// memo stays exact; it is read on the main thread on every streaming
@@ -115,8 +117,11 @@ final class MessageDatabase {
         let fm = FileManager.default
         let temporary = { () -> MessageDatabase in
             let url = fm.temporaryDirectory.appendingPathComponent("kraki-messages-\(UUID().uuidString).sqlite")
-            // A fresh file in the temporary directory is always creatable.
-            return try! MessageDatabase(databaseURL: url)
+            if let db = try? MessageDatabase(databaseURL: url) { return db }
+            // A full disk fails the temporary file the same way: run this
+            // launch from memory rather than crash on every start.
+            KLog.diag("⚠️ Temporary message database unavailable; using memory")
+            return MessageDatabase(inMemory: ())
         }
         guard let url = try? databaseURL() else {
             KLog.diag("⚠️ Message database directory unavailable; using a temporary one")
@@ -172,6 +177,19 @@ final class MessageDatabase {
         var migrator = DatabaseMigrator()
         Self.registerMigrations(&migrator)
         try migrator.migrate(dbPool)
+    }
+
+    /// An in-memory cache (no file at all). Opening and migrating an empty
+    /// in-memory database cannot fail short of a broken SQLite build.
+    init(inMemory: Void) {
+        var config = Configuration()
+        config.prepareDatabase { db in try db.execute(sql: "PRAGMA foreign_keys = ON") }
+        // swiftlint:disable:next force_try
+        self.dbPool = try! DatabaseQueue(configuration: config)
+        var migrator = DatabaseMigrator()
+        Self.registerMigrations(&migrator)
+        // swiftlint:disable:next force_try
+        try! migrator.migrate(dbPool)
     }
 
     // MARK: - Migrations

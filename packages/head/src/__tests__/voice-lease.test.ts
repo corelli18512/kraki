@@ -320,7 +320,7 @@ describe('Storage voice_leases', () => {
   it('review: migration orders leases activated in the same second', () => {
     const dir = mkTmpLeaseDir();
     const dbPath = join(dir, 'v11-same-second.db');
-    const now = Math.floor(Date.now() / 1000);
+    const now = T('2026-06-15T12:00:00Z'); // midday: not across a UTC day boundary
     const v11 = new Storage(dbPath);
     v11.upsertUser('u1', 'a');
     for (const jti of ['x', 'y']) {
@@ -351,7 +351,7 @@ describe('Storage voice_leases', () => {
   it('review: migration keeps reserving a lease whose successor never connected', () => {
     const dir = mkTmpLeaseDir();
     const dbPath = join(dir, 'v11-pending.db');
-    const now = Math.floor(Date.now() / 1000);
+    const now = T('2026-06-15T12:00:00Z'); // midday: not across a UTC day boundary
     const v11 = new Storage(dbPath);
     v11.upsertUser('u1', 'a');
     v11.recordVoiceLease({ jti: 'live', userId: 'u1', deviceId: 'd', resource: 'voice/doubao', quotaSeconds: 300, issuedAtUnixSec: now - 100, expiresAtUnixSec: now + 86_000 });
@@ -393,7 +393,9 @@ describe('Storage voice_leases', () => {
   it('migration seeds daily usage and stops abandoned older leases from reserving', () => {
     const dir = mkTmpLeaseDir();
     const dbPath = join(dir, 'v11.db');
-    const now = Math.floor(Date.now() / 1000);
+    // Midday, so the leases (issued 100 s earlier) are on the same UTC day as
+    // `now`: with the real clock this failed when run just after midnight.
+    const now = T('2026-06-15T12:00:00Z');
     const v11 = new Storage(dbPath);
     v11.upsertUser('u1', 'a');
     for (const [jti, offset] of [['old', 0], ['newest', 10]] as const) {

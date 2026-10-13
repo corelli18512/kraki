@@ -13,742 +13,54 @@
  *  - native fork/tree via pi's `fork` / `get_tree` RPC commands.
  */
 
+import { agentEnv } from '../agent-env.js';
 import { randomUUID } from 'node:crypto';
-import { spawn, type ChildProcessWithoutNullStreams, execSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { cliSpawnArgs } from '../cli-launch.js';
-import { readPiJsonLines } from './pi-jsonl.js';
-import { readPiModelScope, scopePiModels } from './pi-model-scope.js';
-import { PiSubagentTracker, PI_SUBAGENT_TOOL, type PiSubagentEmit } from './pi-subagent.js';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, appendFileSync, statSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
-import {
-  AgentAdapter,
-  type CreateSessionConfig,
-  type SessionInfo,
-  type PermissionDecision,
-  type QuestionAnswer,
-  type QuestionResponseResult,
-  type PermissionResponseResult,
-  type SendMessageOptions,
-} from './base.js';
+import { PiSubagentTracker, type PiSubagentEmit } from './pi-subagent.js';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, appendFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { AgentAdapter, type CreateSessionConfig, type SessionInfo, type PermissionDecision, type QuestionAnswer, type QuestionResponseResult, type PermissionResponseResult, type SendMessageOptions } from './base.js';
 import type { SessionContext } from '../session-manager.js';
-import type { ModelDetail, SessionUsage, ReasoningEffort, ToolArgs } from '@kraki/protocol';
-import { createLogger } from '../logger.js';
-import { REPORT_MAX_BYTES } from '../report-policy.js';
-
-const LEGACY_SHOW_HTML_MAX_BYTES = 10 * 1024 * 1024;
+import type { ModelDetail, SessionUsage, ReasoningEffort } from '@kraki/protocol';
 import { getKrakiHome, getConfigDir } from '../config.js';
 import { PI_KRAKI_TOOLS_SOURCE } from './pi-kraki-tools.js';
-import { DEFAULT_SESSION_MODE, normalizeSessionMode } from '@kraki/protocol';
-import { KRAKI_MODES_PROMPT, krakiAutoApproves, modeChangeSignal, type SessionMode, type ToolKind } from './permission-policy.js';
+import { normalizeSessionMode } from '@kraki/protocol';
+import { TurnTracker } from './turn-tracker.js';
+import { DELEGATE_ANSWER, modeChangeSignal, type SessionMode } from './permission-policy.js';
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 import { tmpdir } from 'node:os';
-import { fitToMaxDimension } from '../image-resize.js';
 import { cloneFile } from '../fs-clone.js';
-import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
+import { handleEvent, krakiAnswerEnvelope, PI_CONFIRM_CHOICES } from './pi-events.js';
+import { fetchModels, ensureRawModels, clearModelRetry, getDefaultModel, fetchEfforts } from './pi-models.js';
+import { effortToThinking, type PiModelRow, PI_LIST_MODELS_TIMEOUT_MS, PI_LIST_MODELS_RETRY_DELAYS_MS, FALLBACK_EFFORTS, defaultEffortFor } from './pi-catalog.js';
+import { type Mode, MUTATING_DEFAULT_MODE, toolsForMode } from './pi-permissions.js';
+import { PiRpcProcess } from './pi-rpc.js';
+import { logger, PROMPT_ACK_GRACE_MS, PROMPT_WATCHDOG_INTERVAL_MS, PROMPT_PROBE_FAILURE_LIMIT, PROMPT_IDLE_STALL_MS, type PiSession, readSubagentOutput, EVICTION_INTERVAL_MS, IDLE_TTL_MS, KRAKI_SYSTEM_PROMPT, type PromptWatchdogOptions } from './pi-session.js';
+export { effortToThinking, type PiListModelsError, summarizeCrash, runPiListModels, type PiCatalogModel, FALLBACK_EFFORTS, piThinkingLevelsFor, defaultEffortFor, queryPiCatalog } from './pi-catalog.js';
+export { piToolKind, shouldAutoApprove, parsePiPermission } from './pi-permissions.js';
+export { type PiRpcEvent, type PiRpcOptions } from './pi-rpc.js';
+export { readSubagentOutput, KRAKI_SYSTEM_PROMPT } from './pi-session.js';
 
-const logger = createLogger('pi-adapter');
-
-/** The subset of pi's `message_update.assistantMessageEvent` the adapter reads. */
-interface AssistantStreamEvent {
-  type: string;
-  delta?: string;
-}
-const rpcLogger = createLogger('pi-rpc');
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Section 1 — transport: one `pi --mode rpc` child process
-//
-//  pi speaks newline-delimited JSON on stdin/stdout:
-//    - commands in  → { id, type, ... }
-//    - responses out → { id, type: "response", command, success, data|error }
-//    - events out    → session.subscribe stream (text_delta, tool_*, agent_end…)
-//  One process = one pi session (process-per-session isolation).
-// ─────────────────────────────────────────────────────────────────────────────
-
-export interface PiRpcEvent {
-  type: string;
-  [k: string]: unknown;
-}
-
-interface Pending {
-  resolve: (data: unknown) => void;
-  reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout> | null;
-}
-
-interface RequestOptions {
-  /** Omitted = normal bounded control-command timeout; null = wait until the
-   *  response or process exit. Prompt ACKs use null because preflight may spend
-   *  minutes compacting after the frame has already been delivered. */
-  timeoutMs?: number | null;
-}
-
-export interface PiRpcOptions {
-  cliPath: string;
-  cwd?: string;
-  provider?: string;
-  model?: string;
-  /** Restrict the tool set (read-only mode = ['read','grep','find','ls']). */
-  tools?: string[];
-  /** Resume an existing on-disk session file. */
-  sessionFile?: string;
-  appendSystemPrompt?: string;
-  /** Thinking level: off|minimal|low|medium|high|xhigh|max — `max` is pi's own
-   *  top rung, above xhigh, not an alias for it. */
-  thinking?: string;
-  /** Path to a pi extension loaded via `--extension`. Kraki always loads its
-   *  tools extension (ask_user / show_image + permission gate). */
-  extensionPath?: string;
-  /** Extra environment for the child. Kraki sets `KRAKI_META_FILE` here so the
-   *  extension's kraki_get_mode can read the live permission mode. */
-  env?: NodeJS.ProcessEnv;
-}
-
-/** Bounds short control commands. Prompt acceptance has its own watchdog. */
-const CMD_TIMEOUT_MS = 30_000;
-const PROMPT_ACK_GRACE_MS = 30_000;
-const PROMPT_WATCHDOG_INTERVAL_MS = 5_000;
-const PROMPT_PROBE_FAILURE_LIMIT = 3;
-const PROMPT_IDLE_STALL_MS = 120_000;
-
-class PiRpcProcess {
-  private child: ChildProcessWithoutNullStreams | null = null;
-  private stopReading: (() => void) | null = null;
-  private pending = new Map<string, Pending>();
-  private seq = 0;
-  private intentionalExit = false;
-  private lastStderr = '';
-  /** Rolling tail of everything pi printed on stderr (for crash reasons). */
-  private stderrTail = '';
-  onEvent: ((e: PiRpcEvent) => void) | null = null;
-  /** Fires only on UNEXPECTED exit (crash). Intentional kill() is silent. */
-  onExit: ((code: number | null) => void) | null = null;
-
-  constructor(private opts: PiRpcOptions) {}
-
-  /** The most telling stderr line after a crash, e.g. "TypeError: …". */
-  crashReason(): string | undefined {
-    return summarizeCrash(this.stderrTail);
-  }
-
-  start(): void {
-    const args = ['--mode', 'rpc'];
-    if (this.opts.provider) args.push('--provider', this.opts.provider);
-    if (this.opts.model) args.push('--model', this.opts.model);
-    if (this.opts.tools?.length) args.push('--tools', this.opts.tools.join(','));
-    if (this.opts.thinking) args.push('--thinking', this.opts.thinking);
-    // Continue an existing on-disk conversation by EXACT file path. We avoid
-    // `--continue` (which resumes whatever session was modified most recently in
-    // the cwd — ambiguous and wrong when several sessions share a cwd) and pin
-    // the precise jsonl instead. The absolute path also survives a cwd change.
-    if (this.opts.sessionFile) args.push('--session', this.opts.sessionFile);
-    if (this.opts.appendSystemPrompt) args.push('--append-system-prompt', this.opts.appendSystemPrompt);
-    // Kraki tools extension (ask_user / show_image / show_report /
-    // kraki_get_mode + permission gate), always loaded. rpc mode has no built-in
-    // tool-approval round-trip, so the gate's ctx.ui.confirm surfaces as an
-    // extension_ui_request the adapter maps to a Kraki permission card (or
-    // silently auto-approves per its mode policy). Loading unconditionally means
-    // a mode change never respawns pi — the policy is enforced by the adapter.
-    if (this.opts.extensionPath) args.push('--extension', this.opts.extensionPath);
-
-    this.child = spawn(...cliSpawnArgs(this.opts.cliPath, args), {
-      windowsHide: true,
-      cwd: this.opts.cwd ?? process.cwd(),
-      env: this.opts.env ?? process.env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    this.stopReading = readPiJsonLines(this.child.stdout, line => this.handleLine(line));
-    this.child.stderr.on('data', (d) => {
-      const stderr = d.toString().trim();
-      if (stderr) this.lastStderr = stderr;
-      this.stderrTail = (this.stderrTail + '\n' + d.toString()).slice(-4000);
-      rpcLogger.debug({ stderr }, 'pi stderr');
-    });
-    // A spawn failure (pi removed, nvm switched, EACCES) is emitted as an
-    // 'error' event. Without a listener Node rethrows it as an uncaught
-    // exception and the daemon shuts down every agent. Treat it as an exit.
-    const child = this.child;
-    let exited = false;
-    child.once('exit', () => { exited = true; });
-    child.on('error', (err) => {
-      this.lastStderr = err.message;
-      rpcLogger.warn({ err: err.message }, 'pi process error');
-      // A process that never started emits no 'exit' of its own.
-      setImmediate(() => { if (!exited && child.pid === undefined) child.emit('exit', null, null); });
-    });
-    this.child.stdin.on('error', (err) => rpcLogger.debug({ err: err.message }, 'pi stdin error'));
-    this.child.on('exit', (code) => {
-      const detail = this.lastStderr ? `: ${this.lastStderr}` : '';
-      for (const p of this.pending.values()) {
-        if (p.timer) clearTimeout(p.timer);
-        p.reject(new Error(`pi process exited${detail}`));
-      }
-      this.pending.clear();
-      this.child = null;
-      if (!this.intentionalExit) this.onExit?.(code);
-    });
-  }
-
-  private handleLine(line: string): void {
-    const t = line.trim();
-    if (!t) return;
-    let msg: Record<string, unknown>;
-    try {
-      msg = JSON.parse(t);
-    } catch {
-      rpcLogger.debug({ line: t }, 'non-JSON pi line');
-      return;
-    }
-    if (msg.type === 'response' && typeof msg.id === 'string') {
-      const p = this.pending.get(msg.id);
-      if (p) {
-        if (p.timer) clearTimeout(p.timer);
-        this.pending.delete(msg.id);
-        if (msg.success) p.resolve(msg.data);
-        else p.reject(new Error(String(msg.error ?? 'pi command failed')));
-      }
-      return;
-    }
-    this.onEvent?.(msg as PiRpcEvent);
-  }
-
-  /** Send a command and await its response. Short control commands are bounded;
-   *  callers may disable the wall-clock timer for commands whose response is
-   *  legitimately delayed after delivery (notably prompt preflight/compaction). */
-  request<T = unknown>(
-    type: string,
-    payload: Record<string, unknown> = {},
-    options: RequestOptions = {},
-  ): Promise<T> {
-    const id = `c${++this.seq}`;
-    const frame = JSON.stringify({ id, type, ...payload });
-    return new Promise<T>((resolve, reject) => {
-      const timeoutMs = options.timeoutMs === undefined ? CMD_TIMEOUT_MS : options.timeoutMs;
-      const timer = timeoutMs === null ? null : setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`pi command '${type}' timed out`));
-      }, timeoutMs);
-      this.pending.set(id, { resolve: resolve as (d: unknown) => void, reject, timer });
-      if (!this.child?.stdin.writable) {
-        if (timer) clearTimeout(timer);
-        this.pending.delete(id);
-        reject(new Error('pi stdin not writable'));
-        return;
-      }
-      this.child.stdin.write(`${frame}\n`);
-    });
-  }
-
-  /** Fire a command without waiting for its response (e.g. prompt). */
-  send(type: string, payload: Record<string, unknown> = {}): void {
-    const id = `c${++this.seq}`;
-    this.child?.stdin.write(`${JSON.stringify({ id, type, ...payload })}\n`);
-  }
-
-  /** Write a raw frame verbatim. Used to answer an unsolicited pi request
-   *  (e.g. extension_ui_request) whose `id` must be echoed exactly, not a new
-   *  client-generated one. */
-  sendRaw(frame: Record<string, unknown>): void {
-    this.child?.stdin.write(`${JSON.stringify(frame)}\n`);
-  }
-
-  kill(): void {
-    this.intentionalExit = true;
-    this.stopReading?.();
-    this.stopReading = null;
-    const child = this.child;
-    if (child && !child.killed) {
-      child.kill('SIGTERM');
-      // A pi stuck in a long operation (e.g. compaction) may ignore SIGTERM;
-      // never leave it running as an orphan.
-      const force = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-      }, 2_000);
-      force.unref?.();
-      child.once('exit', () => clearTimeout(force));
-    }
-    this.child = null;
-  }
-
-  get alive(): boolean {
-    return !!this.child
-      && this.child.exitCode === null
-      && this.child.signalCode === null
-      && this.child.stdin.writable
-      && !this.child.stdin.destroyed;
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Section 2 — adapter: pools one PiRpcProcess per Kraki session
-// ─────────────────────────────────────────────────────────────────────────────
-
-type Mode = SessionMode;
-const MUTATING_DEFAULT_MODE: Mode = DEFAULT_SESSION_MODE;
-
-/** pi tool names → Kraki policy kinds. pi's built-ins are read/bash/edit/write
- *  plus grep/find/ls; anything from a user extension is treated as a side
- *  effect unless it is plainly read-only. */
-export function piToolKind(toolName: string): ToolKind {
-  switch (toolName) {
-    case 'read':
-    case 'grep':
-    case 'find':
-    case 'ls':
-    case 'view_image':
-    case 'memory_search':
-      return 'read';
-    case 'edit':
-    case 'write':
-      return 'write';
-    case 'bash':
-      return 'shell';
-    default:
-      return 'other';
-  }
-}
-
-/** Kraki's shared permission policy for a pi tool call. Returns true when the
- *  call should run silently (no card). */
-export function shouldAutoApprove(mode: Mode, toolName: string, input: Record<string, unknown> = {}): boolean {
-  return krakiAutoApproves(mode, piSubagentToolKind(toolName, input) ?? piToolKind(toolName));
-}
-
-/** Read-only `subagent` management actions (pi-subagents). */
-const PI_SUBAGENT_READ_ACTIONS = new Set(['list', 'status', 'guide', 'doctor', 'cost', 'inspect']);
-
-/** Subagent extension bookkeeping that has no side effects. Launching a
- *  subagent stays a side effect: Kraki cannot ask before each of the child's
- *  own steps, so the launch itself is what `safe` asks about. */
-function piSubagentToolKind(toolName: string, input: Record<string, unknown>): ToolKind | undefined {
-  if (toolName === 'subagents_enable') return 'meta';
-  if (toolName === 'subagent' && typeof input.action === 'string' && PI_SUBAGENT_READ_ACTIONS.has(input.action)) return 'read';
-  return undefined;
-}
-
-function toolsForMode(_mode: Mode): string[] | undefined {
-  // Full tool set in every mode (undefined = pi default set). Mutating calls in
-  // safe are gated per-call by the permission-gate extension instead of
-  // being stripped, so pi can still write/bash after the user approves.
-  return undefined;
-}
-
-/** Map a pi tool name + JSON-encoded input (as delivered by the permission-gate
- *  extension's confirm request) into a Kraki permission card. Known pi tools are
- *  normalized to the shared ToolArgs shapes; anything else falls back to the
- *  raw name + args so the card still renders. */
-export function parsePiPermission(toolName: string, inputJson: string): { toolArgs: ToolArgs; description: string } {
-  let input: Record<string, unknown> = {};
-  try {
-    const parsed = inputJson ? JSON.parse(inputJson) : {};
-    if (parsed && typeof parsed === 'object') input = parsed as Record<string, unknown>;
-  } catch {
-    /* leave input empty on malformed JSON */
-  }
-  const str = (v: unknown): string => (typeof v === 'string' ? v : '');
-  switch (toolName) {
-    case 'bash': {
-      const command = str(input.command);
-      return { toolArgs: { toolName: 'shell', args: { command } }, description: command || 'Run a shell command' };
-    }
-    case 'write': {
-      const path = str(input.path);
-      return {
-        toolArgs: { toolName: 'write_file', args: { path, content: str(input.content) } },
-        description: path ? `Write ${path}` : 'Write a file',
-      };
-    }
-    case 'edit': {
-      const path = str(input.path);
-      return { toolArgs: { toolName, args: input }, description: path ? `Edit ${path}` : 'Edit a file' };
-    }
-    case 'subagent': {
-      const tasks = Array.isArray(input.tasks) ? input.tasks : Array.isArray(input.chain) ? input.chain : null;
-      const what = tasks
-        ? `${tasks.length} subagents`
-        : [str(input.agent), str(input.task).split('\n')[0]].filter(Boolean).join(': ') || 'a subagent';
-      return {
-        toolArgs: { toolName, args: input },
-        description: `Start ${what} — its own commands and edits will not ask again`,
-      };
-    }
-    default:
-      return { toolArgs: { toolName, args: input }, description: toolName };
-  }
-}
-
-/** Kraki ReasoningEffort → pi ThinkingLevel. The names line up 1:1 — pi's ladder
- *  is off|minimal|low|medium|high|xhigh|max, so `max` is a rung of its own and
- *  must not be folded into xhigh. On Anthropic's adaptive-thinking models each
- *  rung becomes an effort value and only `max` reaches the top one. */
-export function effortToThinking(effort?: string): string | undefined {
-  switch (effort) {
-    case 'low': return 'low';
-    case 'medium': return 'medium';
-    case 'high': return 'high';
-    case 'xhigh': return 'xhigh';
-    case 'max': return 'max';
-    default: return undefined;
-  }
-}
-
-interface PiSession {
-  proc: PiRpcProcess;
-  cwd: string;
-  model: string;
-  mode: Mode;
-  thinking?: string;
-  sessionFile?: string;
-  usage: SessionUsage;
-  lastActivity: number;
-  /** Relay-owned logical turn identity for the next accepted prompt. */
-  relayTurnId?: string;
-  /** Identity captured when the provider run started. */
-  eventTurnId?: string;
-  /** Fresh prompt ownership before agent_start. Only preflight maintenance may
-   *  use this identity; late provider callbacks must keep eventTurnId. */
-  promptPreflight?: { turnId?: string };
-  /** Set before the process-exit callback publishes idle, so an in-flight
-   *  prompt rejection cannot publish the same terminal idle a second time. */
-  exitObserved: boolean;
-  /** Outstanding per-call permission requests (permissionId → pi's UI request
-   *  id). Cleared when answered or when the child is killed/respawned so the
-   *  arm's card doesn't dangle. */
-  pendingPerms: Map<string, string>;
-  /** Outstanding ask_user questions (questionId → pi's UI request id). Mirrors
-   *  pendingPerms — cleared on answer / kill / respawn. */
-  pendingQuestions: Map<string, string>;
-  /** Number of narration segments (non-empty assistant prose at message_end)
-   *  produced since the current user message. */
-  narrationSegments: number;
-  /** True once a real tool ran AFTER the most recent narration segment (reset to
-   *  false whenever a narration finalizes). If the turn ends on a tool, the last
-   *  narration isn't a trailing reply — the turn is just its Steps. */
-  toolSinceLastNarration: boolean;
-  /** The most recent narration segment's finalized prose — the kept "draft" text
-   *  (keep-last); becomes the reply when no tool follows it. */
-  lastNarration: string;
-  /** stopReason of the most recent assistant message_end this turn ('stop' |
-   *  'error' | 'aborted' | 'toolUse' | …). 'error'/'aborted' mean the run did
-   *  NOT produce a real answer → just idle. */
-  lastStopReason: string | undefined;
-  /** Backend error held until agent_end says whether Pi will retry. */
-  pendingError: string | undefined;
-  /** Monotonic logical turn identity. Active-turn steer keeps this identity;
-   * post-settlement steer opens a new one. */
-  logicalTurn: number;
-  /** The logical turn whose terminal callbacks have been emitted, if any. */
-  settledTurn: number | undefined;
-  /** Pi emitted a non-retrying agent_end, so a following non-retry compaction
-   *  may settle the conversational answer before agent_settled. */
-  pendingMaintenanceIdle: boolean;
-  /** The most recent narration segment whose TRACE mirror is still DEFERRED —
-   *  not yet emitted as an `agent_narration` step because it might still
-   *  graduate verbatim into the concluding bubble. It is FLUSHED to the trace (a confirmed intermediate
-   *  step) when superseded by a newer narration or by a following tool, and
-   *  DISCARDED (never traced) when it becomes the bubble — so the trailing reply
-   *  never shows twice (last Step + bubble). Empty when nothing is pending. */
-  pendingNarration: string;
-  /** Cancellation handle for a normal prompt whose RPC ACK is still waiting on
-   *  Pi preflight (most notably auto-compaction). Pi's generic abort RPC does
-   *  not cancel compaction or that queued prompt, so explicit user abort must
-   *  retire this transport attempt and terminate the child before it can start
-   *  later as a ghost turn. */
-  promptAcceptanceAbort?: AbortController;
-  /** True from sending an abort RPC until pi acknowledges that the agent is idle.
-   *  Lets abortSession own the aborted turn's terminal boundary. */
-  aborting: boolean;
-  /** The run settled while background subagents (pi-subagents async runs)
-   *  still work. Pi wakes the agent when they finish; the Kraki turn stays
-   *  open for that answer. */
-  awaitingSubagents?: boolean;
-  /** Fallback settle when background runs finished but no wake run came. */
-  subagentGrace?: ReturnType<typeof setTimeout>;
-}
-
-/** A subagent's saved output file (pi-subagents notifications point at it),
- *  shown as the subagent's report. Only the extension's own artifact files
- *  (`…/subagent-artifacts/outputs/….md`), and only small ones. */
-export function readSubagentOutput(path: string): string | undefined {
-  try {
-    if (!isAbsolute(path) || path.split(/[\\/]/).includes('..')) return undefined;
-    if (!/[\\/]subagent-artifacts[\\/]outputs[\\/].+\.(md|txt)$/.test(path)) return undefined;
-    if (statSync(path).size > 64 * 1024) return undefined;
-    return readFileSync(path, 'utf8');
-  } catch {
-    return undefined;
-  }
-}
-
-// ── Dynamic model discovery via `pi --list-models` ────────────────
-
-interface PiModelRow {
-  provider: string;
-  model: string;
-  contextWindow: number;
-  reasoning: boolean;
-}
-
-/** Parse the human-readable table output of `pi --list-models`. */
-function parsePiListModels(stdout: string): PiModelRow[] {
-  const lines = stdout.split('\n').filter(l => l.trim().length > 0);
-  const header = lines[0];
-  if (!header?.includes('provider')) return [];
-
-  // Locate column boundaries from the header
-  const cols = ['provider', 'model', 'context', 'max-out', 'thinking', 'images'];
-  const boundaries: number[] = [];
-  let searchFrom = 0;
-  for (const col of cols) {
-    const idx = header.indexOf(col, searchFrom);
-    if (idx === -1) return [];
-    boundaries.push(idx);
-    searchFrom = idx + col.length;
-  }
-
-  const rows: PiModelRow[] = [];
-  for (const line of lines.slice(1)) {
-    const parts: string[] = [];
-    for (let i = 0; i < boundaries.length; i++) {
-      const start = boundaries[i];
-      const end = i + 1 < boundaries.length ? boundaries[i + 1] : undefined;
-      parts.push((end ? line.slice(start, end) : line.slice(start)).trim());
-    }
-    const [provider, model, ctxStr, , thinking] = parts;
-    if (!provider || !model) continue;
-
-    rows.push({
-      provider: provider.trim(),
-      model: model.trim(),
-      contextWindow: parseContext(ctxStr),
-      reasoning: thinking?.trim().toLowerCase() === 'yes',
-    });
-  }
-  return rows;
-}
-
-function parseContext(s: string): number {
-  s = s.trim().toUpperCase();
-  if (s.endsWith('K')) return parseInt(s, 10) * 1000;
-  if (s.endsWith('M')) return parseInt(s, 10) * 1_000_000;
-  const n = parseInt(s, 10);
-  return Number.isFinite(n) ? n : 200_000;
-}
-
-/** A cold pi start right after login can exceed this; the adapter retries. */
-const PI_LIST_MODELS_TIMEOUT_MS = 15_000;
-/** Backoff for retrying a failed `--list-models`; the last delay repeats. */
-const PI_LIST_MODELS_RETRY_DELAYS_MS = [10_000, 30_000, 60_000, 120_000, 300_000];
-
-export interface PiListModelsError extends Error {
-  timedOut?: boolean;
-  exitCode?: number | null;
-  signal?: NodeJS.Signals | null;
-  stdoutTail?: string;
-  stderrTail?: string;
-}
-
-/** Pick the line that explains a crash from a stderr tail: the last
- *  "SomethingError: …" line, else the last line that isn't Node's version
- *  banner or a stack frame. */
-export function summarizeCrash(stderr: string): string | undefined {
-  const lines = stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const errorLine = [...lines].reverse().find((l) => /^(?:[A-Z]\w*)?Error\b[^:]*:/.test(l));
-  const pick = errorLine ?? [...lines].reverse().find((l) => !/^Node\.js v/.test(l) && !/^at\s/.test(l) && !/^\^+$/.test(l));
-  return pick?.slice(0, 300);
-}
-
-/** Run `pi --list-models` asynchronously. On failure the error carries the
- *  elapsed outcome and the tail of whatever pi printed, so a slow or stuck
- *  start is diagnosable instead of a bare `ETIMEDOUT`. */
-export function runPiListModels(cliPath: string, timeoutMs: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(...cliSpawnArgs(cliPath, ['--list-models']), { env: process.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-    let stdout = '';
-    let stderr = '';
-    let timedOut = false;
-    let settled = false;
-    const tail = (text: string) => text.slice(-600).trim() || undefined;
-    const fail = (message: string, extra: Partial<PiListModelsError>) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      const err = new Error(message) as PiListModelsError;
-      Object.assign(err, extra, { stdoutTail: tail(stdout), stderrTail: tail(stderr) });
-      reject(err);
-    };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGKILL');
-      fail(`pi --list-models timed out after ${timeoutMs}ms`, { timedOut: true });
-    }, timeoutMs);
-    child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
-    child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
-    child.on('error', (e) => fail(`pi --list-models failed to start: ${e.message}`, {}));
-    child.on('close', (code, signal) => {
-      if (timedOut || settled) return;
-      if (code !== 0) {
-        fail(`pi --list-models exited with ${code ?? signal}`, { exitCode: code, signal });
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      resolve(stdout);
-    });
-  });
-}
-
-function resolveDefaultModel(models: PiModelRow[]): string {
-  if (models.length === 0) return 'deepseek/deepseek-v4-pro';
-  // Prefer a pro/large model as default, then the first model
-  const preferred = models.find(m => m.model.includes('pro') || m.model.includes('opus')) ?? models[0];
-  return `${preferred.provider}/${preferred.model}`;
-}
-
-// ── Per-model thinking levels via the `get_available_models` RPC ───
-
-/** The slice of a pi catalog entry we need. `--list-models` reports thinking as
- *  a bare yes/no, so the thinkingLevelMap — the thing that says which rungs a
- *  model actually has — is only reachable over RPC. */
-export interface PiCatalogModel {
-  id: string;
-  provider: string;
-  reasoning?: boolean;
-  thinkingLevelMap?: Record<string, string | null>;
-}
-
-/** pi's ladder, weakest first. Kraki has no `off`/`minimal` rung. */
-const PI_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
-const KRAKI_EFFORTS: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
-
-/** Ladder to fall back on when the catalog is unreachable: what the adapter
- *  offered for every reasoning model before it could ask per model. */
-export const FALLBACK_EFFORTS: ReasoningEffort[] = ['high', 'xhigh'];
-
-/** Mirrors pi-ai's `getSupportedThinkingLevels`. off/minimal/low/medium/high are
- *  available unless the model's map nulls them out; xhigh and max are opt-in —
- *  a model only has them if its map declares them. Anything else would advertise
- *  rungs pi then silently clamps away. */
-export function piThinkingLevelsFor(model: PiCatalogModel): ReasoningEffort[] {
-  if (!model.reasoning) return [];
-  return PI_THINKING_LEVELS.filter(level => {
-    const mapped = model.thinkingLevelMap?.[level];
-    if (mapped === null) return false;
-    if (level === 'xhigh' || level === 'max') return mapped !== undefined;
-    return true;
-  }).filter((level): level is ReasoningEffort =>
-    (KRAKI_EFFORTS as readonly string[]).includes(level));
-}
-
-/** `high` when the model has it, else the strongest rung below it — the same
- *  direction pi's own clamp walks. */
-export function defaultEffortFor(efforts: ReasoningEffort[]): ReasoningEffort | undefined {
-  for (let i = KRAKI_EFFORTS.indexOf('high'); i >= 0; i--) {
-    if (efforts.includes(KRAKI_EFFORTS[i])) return KRAKI_EFFORTS[i];
-  }
-  return efforts[0];
-}
-
-const EVICTION_INTERVAL_MS = 5 * 60_000;
-const IDLE_TTL_MS = 30 * 60_000;
-
-/** Describes the Kraki UI to the model so it narrates naturally instead of
- *  tagging its own messages. Appended to pi's system prompt on every spawn. */
-export const KRAKI_SYSTEM_PROMPT =
-  'You are operating inside Kraki, a remote-control harness. Communicate with the ' +
-  'human by writing ordinary assistant prose — it IS your reply and is shown to ' +
-  'them directly. You do NOT need any special tool to "send" a message; just ' +
-  'write. Narrate preamble, thinking, and progress as prose while you work, and ' +
-  'end your turn with a short, self-contained final answer. IMPORTANT: your LAST ' +
-  'paragraph of prose is used verbatim as the final reply to the user, with no ' +
-  'rewriting or summarization step in between — so make that last paragraph a ' +
-  'complete, standalone answer on its own, not a segue or a teaser. Kraki takes ' +
-  'care of ' +
-  'settling that final message into the chat, so you never manage bubbles ' +
-  'yourself. To get a decision or missing information from the human, call the ' +
-  'ask_user tool (it blocks and returns their answer). To visually show the human ' +
-  'an image (a screenshot, diagram, chart, or generated graphic they cannot ' +
-  'already see), call the show_image tool with the file path. When you write a report for ' +
-  'the human to read (analysis, design, investigation), save it as a text-first HTML file ' +
-  'and call show_report before concluding so it remains accessible in the producing ' +
-  'message. show_report is a report viewer, not a browser: for web pages, apps, or when ' +
-  'the human asks to open something in a browser, use the shell (e.g. `open`).\n\n' + KRAKI_MODES_PROMPT;
-
-
-interface PromptWatchdogOptions {
-  ackGraceMs: number;
-  intervalMs: number;
-  probeFailureLimit: number;
-  idleStallMs: number;
-}
-
-export function queryPiCatalog(cliPath: string, timeoutMs = 15_000): Promise<PiCatalogModel[]> {
-  return new Promise((resolve, reject) => {
-    // --no-session: this process only answers one question, it must not leave a
-    // session file behind next to the user's real ones.
-    const child = spawn(...cliSpawnArgs(cliPath, ['--mode', 'rpc', '--no-session']), {
-      windowsHide: true,
-      env: process.env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    let stopReading = () => {};
-    let settled = false;
-    let lastStderr = '';
-    const finish = (fn: () => void) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      stopReading();
-      child.kill();
-      fn();
-    };
-    const fail = (reason: string) =>
-      finish(() => reject(new Error(lastStderr ? `${reason}: ${lastStderr}` : reason)));
-    const timer = setTimeout(() => fail('pi catalog query timed out'), timeoutMs);
-
-    stopReading = readPiJsonLines(child.stdout, line => {
-      let msg: { type?: string; command?: string; success?: boolean; error?: string; data?: { models?: PiCatalogModel[] } };
-      try { msg = JSON.parse(line); } catch { return; }
-      if (msg.type !== 'response' || msg.command !== 'get_available_models') return;
-      if (msg.success === false) {
-        fail(msg.error || 'pi catalog query failed');
-        return;
-      }
-      finish(() => resolve(msg.data?.models ?? []));
-    });
-    // Drain stderr rather than leaving it piped and unread: a full pipe buffer
-    // would block pi mid-write and stall the query until the timeout. Keeping
-    // the last chunk also gives the rejection something to say.
-    child.stderr.on('data', d => { lastStderr = String(d).trim().slice(-200) || lastStderr; });
-    child.on('error', err => finish(() => reject(err)));
-    child.on('exit', () => fail('pi exited before answering'));
-    // An unhandled 'error' on stdin is a process-level crash, and this stream
-    // breaks whenever pi dies early — a degraded ladder is the acceptable
-    // outcome here, taking the daemon down with it is not.
-    child.stdin.on('error', () => fail('pi stdin closed before the query was sent'));
-    if (child.stdin.writable) {
-      child.stdin.write(`${JSON.stringify({ id: 'models', type: 'get_available_models' })}\n`);
-    }
-  });
-}
+/** The prompt watchdog gave up while the prompt request may still be pending
+ *  inside pi (no ACK and no rejection). */
+class PromptWatchdogError extends Error {}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Section 5 — adapter public methods
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class PiAdapter extends AgentAdapter {
-  private cliPath: string;
-  private readonly modelListTimeoutMs: number;
-  private readonly modelListRetryDelaysMs: number[];
-  private readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
+  cliPath: string;
+  readonly modelListTimeoutMs: number;
+  readonly modelListRetryDelaysMs: number[];
+  readonly attachmentStore?: import('../attachment-store.js').AttachmentStore;
   private readonly promptWatchdog: PromptWatchdogOptions;
-  private sessions = new Map<string, PiSession>();
+  sessions = new Map<string, PiSession>();
   /** Keep the start owner until maintenance ends, even across a queued turn. */
   private compactingSessions = new Map<string, { turnId?: string }>();
   /** Subagent progress per session (pi subagent extensions). */
-  private subagentTrackers = new Map<string, PiSubagentTracker>();
+  subagentTrackers = new Map<string, PiSubagentTracker>();
   private evictTimer: ReturnType<typeof setInterval> | null = null;
   /** Lazily-materialized path to the always-loaded Kraki tools extension. */
   private toolsExtPath: string | null = null;
@@ -883,7 +195,7 @@ export class PiAdapter extends AgentAdapter {
 
   async stop(): Promise<void> {
     this.stopped = true;
-    this.clearModelRetry();
+    clearModelRetry(this);
     if (this.evictTimer) clearInterval(this.evictTimer);
     for (const s of this.sessions.values()) s.proc.kill();
     this.sessions.clear();
@@ -897,7 +209,7 @@ export class PiAdapter extends AgentAdapter {
   private resolveModelId(model: string): [string, string] {
     const separator = model.indexOf('/');
     return separator < 0
-      ? [this.getDefaultModel().split('/')[0], model]
+      ? [getDefaultModel(this).split('/')[0], model]
       : [model.slice(0, separator), model.slice(separator + 1)];
   }
 
@@ -907,7 +219,7 @@ export class PiAdapter extends AgentAdapter {
     // live permission mode (the adapter, via persistMeta, is the source of truth).
     // The gate itself is loaded in every mode; the adapter decides silent-approve
     // vs card per shouldAutoApprove, so a mode change never respawns pi.
-    const env = { ...process.env, KRAKI_META_FILE: this.sidecarPath(sessionId) };
+    const env = agentEnv({ KRAKI_META_FILE: this.sidecarPath(sessionId) });
     const proc = new PiRpcProcess({
       cliPath: this.cliPath,
       cwd,
@@ -920,7 +232,11 @@ export class PiAdapter extends AgentAdapter {
       extensionPath: this.ensureToolsExtension(),
       env,
     });
-    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), relayTurnId: undefined, eventTurnId: undefined, exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), narrationSegments: 0, toolSinceLastNarration: false, lastNarration: '', lastStopReason: undefined, pendingError: undefined, logicalTurn: 0, settledTurn: 0, pendingMaintenanceIdle: false, pendingNarration: '', aborting: false };
+    const sess: PiSession = { proc, cwd, model, mode, thinking, sessionFile, usage: this.blankUsage(), lastActivity: Date.now(), turn: new TurnTracker(this, sessionId), exitObserved: false, pendingPerms: new Map(), pendingQuestions: new Map(), lastStopReason: undefined, pendingMaintenanceIdle: false, aborting: false };
+    // A respawn (lazy resume) keeps the relay turn assigned before it: the
+    // prompt that follows belongs to it. Only the id carries over — a late exit
+    // event of the old process must not touch the new process's turn.
+    sess.turn.relayTurnId = this.sessions.get(sessionId)?.turn.relayTurnId;
     // Events are handled strictly in order: handleEvent awaits (image resize
     // on tool_execution_end), and an unawaited dispatch let a later
     // message_end/agent_settled settle the turn before that tool_complete,
@@ -929,7 +245,9 @@ export class PiAdapter extends AgentAdapter {
     const enqueue = (work: () => void | Promise<void>) => {
       events = events.then(work).catch((err) => logger.error({ err, sessionId }, 'Pi event handling failed'));
     };
-    proc.onEvent = (e) => enqueue(() => this.handleEvent(sessionId, e));
+    // Queued events of a process that has since been replaced (lazy resume
+    // while its queue was still draining) must not touch the replacement.
+    proc.onEvent = (e) => enqueue(() => (this.sessions.get(sessionId) === sess ? handleEvent(this, sessionId, e) : undefined));
     proc.onExit = (code) => enqueue(() => this.handleProcessExit(sessionId, sess, code));
     proc.start();
     this.sessions.set(sessionId, sess);
@@ -945,22 +263,47 @@ export class PiAdapter extends AgentAdapter {
     // RelayClient/CardManager: keep its id/card so the next answer can use a
     // recovery prompt after lazy resume.
     sess.exitObserved = true;
+    this.stopAwaitingSubagents(sess);
+    if (this.sessions.get(sessionId) !== sess) {
+      // A replacement process already owns the session: this late exit must
+      // not cancel its cards, evict it, or announce anything for it.
+      sess.turn.settleSilently();
+      return;
+    }
+    // Background runs of the dead process will never report to a new one.
+    const retired = this.subagentTrackers.get(sessionId)?.retirePending() ?? [];
+    this.emitSubagentSteps(sessionId, sess, retired);
     this.clearPendingPerms(sessionId);
     this.pendingModeSignals.delete(sessionId);
+    if (!sess.turn.isSettled && !sess.aborting && sess.pendingQuestions.size > 0) {
+      // Waiting on ask_user: the turn is not failed. Relay keeps the question
+      // recoverable on eviction and turns the answer into a recovery prompt.
+      sess.turn.settleSilently();
+      this.onSessionEvicted?.(sessionId);
+      return;
+    }
+    // A prompt still in preflight never reached agent_start: its failure
+    // belongs to that prompt, not to the previous run.
+    if (sess.promptPreflight && !sess.turn.isSettled) sess.turn.captureTurnId();
     // A concrete provider error must cross the adapter boundary before idle;
     // otherwise Relay would freeze the turn as successful on process death.
-    if (sess.pendingError) {
-      this.emitError(sessionId, sess, sess.pendingError);
-      sess.pendingError = undefined;
-    } else if (!sess.aborting && sess.settledTurn !== sess.logicalTurn) {
+    let error = sess.turn.pendingError;
+    if (!error && !sess.aborting && !sess.turn.isSettled) {
       // Pi died mid-turn (crash, killed, broken runtime). Without this the
       // turn ends silently and clients show an empty "no reply" turn.
       const reason = sess.proc.crashReason();
       const exit = code === null ? '' : ` (exit code ${code})`;
       logger.warn({ sessionId, code, reason }, 'pi exited during a turn');
-      this.emitError(sessionId, sess, `Pi stopped unexpectedly${exit}${reason ? `: ${reason}` : ''}`);
+      error = `Pi stopped unexpectedly${exit}${reason ? `: ${reason}` : ''}`;
     }
-    this.emitIdleOnce(sessionId, sess);
+    sess.turn.clearError();
+    if (sess.turn.isSettled) {
+      if (error) this.emitError(sessionId, sess, error);
+    } else {
+      // Unfinished prose is never a reply when the process died.
+      sess.turn.discardProse();
+      sess.turn.finish({ error });
+    }
     this.onSessionEvicted?.(sessionId);
   }
 
@@ -984,24 +327,15 @@ export class PiAdapter extends AgentAdapter {
       this.onQuestionAutoResolved?.(sessionId, questionId);
     }
     s.pendingQuestions.clear();
+    s.foreignDialogs?.clear();
   }
 
-  private touch(id: string) {
+  touch(id: string) {
     const s = this.sessions.get(id);
     if (s) s.lastActivity = Date.now();
   }
 
-  /** Emit the DEFERRED narration segment (if any) to the TRACE axis — it is now
-   *  a confirmed intermediate step (superseded by a newer narration or a tool),
-   *  so it can never be the graduating reply. Clears the pending slot. */
-  private flushPendingNarration(sessionId: string, s: PiSession): void {
-    if (s.pendingNarration) {
-      this.onNarrationTrace?.(sessionId, { content: s.pendingNarration, ...this.lifecycleEvent(s) });
-      s.pendingNarration = '';
-    }
-  }
-
-  private setCompacting(
+  setCompacting(
     sessionId: string,
     active: boolean,
     event: Omit<import('./base.js').CompactionEvent, 'phase'> = {},
@@ -1021,39 +355,26 @@ export class PiAdapter extends AgentAdapter {
     this.onCompaction?.(sessionId, { phase: 'end', ...event, ...owner });
   }
 
-  private normalizeCompactionReason(value: unknown): import('./base.js').CompactionReason | undefined {
+  normalizeCompactionReason(value: unknown): import('./base.js').CompactionReason | undefined {
     return value === 'manual' || value === 'threshold' || value === 'overflow' ? value : undefined;
   }
 
-  private lifecycleEvent(s?: PiSession): { turnId?: string } {
-    const turnId = s?.eventTurnId ?? s?.relayTurnId;
-    return turnId ? { turnId } : {};
-  }
-
-  private emitMessage(sessionId: string, s: PiSession, content: string): void {
-    this.onMessage?.(sessionId, { content, ...this.lifecycleEvent(s) });
+  lifecycleEvent(s?: PiSession): { turnId?: string } {
+    return s ? s.turn.event() : {};
   }
 
   private emitError(sessionId: string, s: PiSession, message: string): void {
     this.onError?.(sessionId, { message, ...this.lifecycleEvent(s) });
   }
 
-  private emitIdleOnce(sessionId: string, s: PiSession): void {
-    if (s.settledTurn === s.logicalTurn) return;
-    s.settledTurn = s.logicalTurn;
-    const event = this.lifecycleEvent(s);
-    if (event.turnId) this.onIdle?.(sessionId, event);
-    else this.onIdle?.(sessionId);
-  }
-
-  private subagentTracker(sessionId: string): PiSubagentTracker {
+  subagentTracker(sessionId: string): PiSubagentTracker {
     let t = this.subagentTrackers.get(sessionId);
     if (!t) { t = new PiSubagentTracker(readSubagentOutput); this.subagentTrackers.set(sessionId, t); }
     return t;
   }
 
   /** Forward subagent steps from the tracker to Kraki's trace. */
-  private emitSubagentSteps(sessionId: string, s: PiSession | undefined, emits: PiSubagentEmit[]): void {
+  emitSubagentSteps(sessionId: string, s: PiSession | undefined, emits: PiSubagentEmit[]): void {
     for (const em of emits) {
       const turn = this.lifecycleEvent(s);
       if (em.kind === 'narration') this.onNarrationTrace?.(sessionId, { ...turn, content: em.content, parentToolCallId: em.parentToolCallId });
@@ -1065,39 +386,56 @@ export class PiAdapter extends AgentAdapter {
     }
   }
 
-  private stopAwaitingSubagents(s: PiSession): void {
+  stopAwaitingSubagents(s: PiSession): void {
     s.awaitingSubagents = false;
     if (s.subagentGrace) clearTimeout(s.subagentGrace);
     s.subagentGrace = undefined;
+    if (s.subagentHoldTimer) clearTimeout(s.subagentHoldTimer);
+    s.subagentHoldTimer = undefined;
+  }
+
+  /** (Re)start the hold's inactivity bound: background runs that report
+   *  nothing for SUBAGENT_HOLD_IDLE_MS are given up on and the turn settles. */
+  private armSubagentHoldTimer(sessionId: string, s: PiSession): void {
+    if (s.subagentHoldTimer) clearTimeout(s.subagentHoldTimer);
+    s.subagentHoldTimer = setTimeout(() => {
+      if (!s.awaitingSubagents || this.sessions.get(sessionId) !== s) return;
+      logger.warn({ sessionId }, 'pi background subagents reported nothing for too long; settling');
+      this.emitSubagentSteps(sessionId, s, this.subagentTrackers.get(sessionId)?.retirePending() ?? []);
+      this.stopAwaitingSubagents(s);
+      s.turn.finish();
+    }, PiAdapter.SUBAGENT_HOLD_IDLE_MS);
   }
 
   /** At the run boundary: keep the Kraki turn open while background subagents
    *  still work (pi wakes the agent with their results). */
-  private holdForSubagents(sessionId: string, s: PiSession): boolean {
+  holdForSubagents(sessionId: string, s: PiSession): boolean {
     const tracker = this.subagentTrackers.get(sessionId);
     if (!tracker || tracker.activeAsyncRuns() === 0) return false;
     // Prose so far ("started…") is an intermediate step, not the reply.
-    this.flushPendingNarration(sessionId, s);
-    s.lastNarration = '';
-    s.toolSinceLastNarration = false;
+    s.turn.holdOpen();
     s.awaitingSubagents = true;
+    this.armSubagentHoldTimer(sessionId, s);
     logger.info({ sessionId, running: tracker.activeAsyncRuns() }, 'pi turn held open for background subagents');
     return true;
   }
 
   /** Background runs may have finished: if no wake run follows, settle. */
-  private checkSubagentsDone(sessionId: string, s: PiSession): void {
-    if (!s.awaitingSubagents || this.subagentTrackers.get(sessionId)?.activeAsyncRuns()) return;
+  checkSubagentsDone(sessionId: string, s: PiSession): void {
+    if (!s.awaitingSubagents) return;
+    this.armSubagentHoldTimer(sessionId, s);
+    if (this.subagentTrackers.get(sessionId)?.activeAsyncRuns()) return;
     if (s.subagentGrace) clearTimeout(s.subagentGrace);
     s.subagentGrace = setTimeout(() => {
       if (!s.awaitingSubagents || this.sessions.get(sessionId) !== s) return;
       logger.info({ sessionId }, 'pi background subagents finished without a wake run; settling');
       this.stopAwaitingSubagents(s);
-      this.emitIdleOnce(sessionId, s);
+      s.turn.finish();
     }, PiAdapter.SUBAGENT_CONTINUATION_GRACE_MS);
   }
 
   static SUBAGENT_CONTINUATION_GRACE_MS = 5_000;
+  static SUBAGENT_HOLD_IDLE_MS = 30 * 60_000;
 
   /**
    * Settle the user-visible answer once Pi has confirmed a non-retrying run and
@@ -1105,24 +443,19 @@ export class PiAdapter extends AgentAdapter {
    * Compaction remains a separate maintenance callback and can continue after
    * this idle.
    */
-  private settleConversationalTurnAtAgentEnd(sessionId: string, s: PiSession, willRetry: boolean): void {
+  settleConversationalTurnAtAgentEnd(sessionId: string, s: PiSession, willRetry: boolean): void {
     // agent_end.willRetry covers transient retries, NOT every compaction
     // recovery. Only a completed answer may settle before agent_settled.
-    if (willRetry || s.aborting || s.settledTurn === s.logicalTurn || s.lastStopReason !== 'stop') return;
+    if (willRetry || s.aborting || s.turn.isSettled || s.lastStopReason !== 'stop') return;
     if (this.subagentTrackers.get(sessionId)?.activeAsyncRuns()) return;
-
-    const reply = s.lastNarration.trim();
-    if (s.toolSinceLastNarration || !reply) return;
-
-    s.pendingNarration = '';
-    this.emitMessage(sessionId, s, reply);
-    this.emitIdleOnce(sessionId, s);
+    if (!s.turn.hasReply) return;
+    s.turn.finish();
   }
 
   setTurnIdentity(sessionId: string, turnId: string): void {
     const s = this.sessions.get(sessionId);
     if (!s) return;
-    s.relayTurnId = turnId;
+    s.turn.relayTurnId = turnId;
     // A new prompt captures its identity at agent_start. Keep the previous
     // snapshot until that boundary so a late callback from the old run cannot
     // fall back to this newly assigned relayTurnId.
@@ -1130,20 +463,15 @@ export class PiAdapter extends AgentAdapter {
 
   isTurnSettled(sessionId: string): boolean {
     const s = this.sessions.get(sessionId);
-    return !!s && s.settledTurn === s.logicalTurn;
+    return !!s && s.turn.isSettled;
   }
 
+  /** A new logical turn (prompt, follow-up, or a steer after the last settled). */
   private resetTurnTracking(s: PiSession): void {
     this.stopAwaitingSubagents(s);
-    s.logicalTurn += 1;
-    s.settledTurn = undefined;
-    s.narrationSegments = 0;
-    s.toolSinceLastNarration = false;
-    s.lastNarration = '';
+    s.turn.beginTurn();
     s.lastStopReason = undefined;
-    s.pendingError = undefined;
     s.pendingMaintenanceIdle = false;
-    s.pendingNarration = '';
     s.aborting = false;
   }
 
@@ -1152,7 +480,7 @@ export class PiAdapter extends AgentAdapter {
    *  Queued/handled/rejected commands retire the scope at ACK; agent_start may
    *  retire it earlier. A late ACK must not clear a newer submission's scope. */
   private async withPromptPreflight(s: PiSession, submit: () => Promise<unknown>): Promise<void> {
-    const preflight = s.relayTurnId ? { turnId: s.relayTurnId } : {};
+    const preflight = s.turn.relayTurnId ? { turnId: s.turn.relayTurnId } : {};
     s.promptPreflight = preflight;
     try {
       await submit();
@@ -1224,16 +552,16 @@ export class PiAdapter extends AgentAdapter {
 
           idleSince ??= Date.now();
           if (Date.now() - idleSince >= this.promptWatchdog.idleStallMs) {
-            throw new Error('pi prompt was not acknowledged and pi reported neither streaming nor compaction');
+            throw new PromptWatchdogError('pi prompt was not acknowledged and pi reported neither streaming nor compaction');
           }
         } catch (err) {
           if (cancellation.signal.aborted) return;
+          if (err instanceof PromptWatchdogError) throw err;
           const message = (err as Error).message;
-          if (message === 'pi prompt was not acknowledged and pi reported neither streaming nor compaction') throw err;
           consecutiveProbeFailures += 1;
           logger.warn({ sessionId, err: message, consecutiveProbeFailures }, 'pi prompt watchdog state probe failed');
           if (!s.proc.alive || consecutiveProbeFailures >= this.promptWatchdog.probeFailureLimit) {
-            throw new Error(`pi prompt acknowledgement could not be reconciled: ${message}`);
+            throw new PromptWatchdogError(`pi prompt acknowledgement could not be reconciled: ${message}`);
           }
         }
       }
@@ -1242,391 +570,9 @@ export class PiAdapter extends AgentAdapter {
     }
   }
 
-  // ── Event mapping: pi session.subscribe → Kraki callbacks ──
-  private async handleEvent(sessionId: string, e: { type: string; [k: string]: unknown }): Promise<void> {
-    this.touch(sessionId);
-    switch (e.type) {
-      case 'compaction_start': {
-        const reason = this.normalizeCompactionReason(e.reason);
-        this.setCompacting(sessionId, true, { reason });
-        const s = this.sessions.get(sessionId);
-        // The start event closes the tiny ordering gap between the final
-        // provider answer and background maintenance. Publish compaction first,
-        // then settle the conversational turn while maintenance remains active.
-        if (s && s.pendingMaintenanceIdle && (reason === 'threshold' || reason === 'overflow')) {
-          s.pendingMaintenanceIdle = false;
-          this.settleConversationalTurnAtAgentEnd(sessionId, s, false);
-        }
-        break;
-      }
-      case 'compaction_end':
-        this.setCompacting(sessionId, false, {
-          reason: this.normalizeCompactionReason(e.reason),
-          aborted: e.aborted === true,
-          willRetry: e.willRetry === true,
-          errorMessage: typeof e.errorMessage === 'string' ? e.errorMessage : undefined,
-        });
-        break;
-      case 'agent_start': {
-        const s = this.sessions.get(sessionId);
-        // A run while held: pi woke the agent with background results; it
-        // continues the same Kraki turn.
-        if (s?.awaitingSubagents) this.stopAwaitingSubagents(s);
-        if (s) {
-          s.eventTurnId = s.relayTurnId;
-          s.promptPreflight = undefined;
-          s.pendingMaintenanceIdle = false;
-        }
-        // Streaming proves any preceding compaction is over even if its end
-        // event was missed during resume/reconciliation.
-        this.setCompacting(sessionId, false);
-        break;
-      }
-      case 'message_update': {
-        // Real model/tool activity also proves a stale compaction indicator is
-        // no longer current. Clear only the adapter-owned compaction lifecycle;
-        // CardManager independently protects newer action-slot owners.
-        this.setCompacting(sessionId, false);
-        const s = this.sessions.get(sessionId);
-        const am = (e as { assistantMessageEvent?: AssistantStreamEvent }).assistantMessageEvent;
-        if (am?.type === 'text_delta' && typeof am.delta === 'string') {
-          this.onMessageDelta?.(sessionId, { content: am.delta, ...this.lifecycleEvent(s) });
-        }
-        break;
-      }
-      case 'message_end': {
-        const m = (e as { message?: { role?: string; content?: Array<{ type: string; text?: string }>; stopReason?: string; errorMessage?: string } }).message;
-        if (m?.role === 'custom') {
-          // pi-subagents background run notifications.
-          const custom = m as unknown as { customType?: string; content?: unknown };
-          const text = typeof custom.content === 'string' ? custom.content : Array.isArray(custom.content) ? custom.content.map((c: { text?: string }) => c.text ?? '').join('\n') : '';
-          const tracker = this.subagentTrackers.get(sessionId);
-          const s = this.sessions.get(sessionId);
-          if (tracker && custom.customType === 'subagent-notify') this.emitSubagentSteps(sessionId, s, tracker.onAsyncNotify(text));
-          if (tracker && custom.customType === 'subagent-incremental-child-notify') this.emitSubagentSteps(sessionId, s, tracker.onChildNotify(text));
-          if (s) this.checkSubagentsDone(sessionId, s);
-        }
-        if (m?.role === 'assistant') {
-          const s = this.sessions.get(sessionId);
-          // A backend failure (bad model, 400, quota, rate-limit) surfaces here
-          // as stopReason:'error' with an empty content[] and an errorMessage.
-          // Hold it until agent_end says whether Pi will retry; a later successful
-          // message_end supersedes this provisional failure.
-          if (s) {
-            s.lastStopReason = m.stopReason;
-            if (m.stopReason === 'error') {
-              // A failure without an errorMessage is still a failure: keep a
-              // non-empty message so it is reported instead of ending as a
-              // silent reply-less turn.
-              s.pendingError = m.errorMessage?.trim()
-                || 'The model request failed without an error message. Try sending again.';
-            } else {
-              s.pendingError = undefined;
-            }
-          }
-          const prose = (m.content ?? [])
-            .filter((c) => c.type === 'text' && typeof c.text === 'string')
-            .map((c) => c.text as string)
-            .join('')
-            .trim();
-          if (m.stopReason !== 'error' && prose) {
-            if (s) {
-              // Ordinary NARRATION: streams live to the draft bubble (see
-              // message_update). RECONCILE the live draft NOW on every segment
-              // (onNarration → card.onNarrationFinal) so the throttled draft is
-              // squared with the finalized prose before the bubble lands — no
-              // draft→spine size-jump. But DEFER the TRACE mirror: this segment
-              // might still graduate verbatim into the concluding bubble, so we
-              // hold it as `pendingNarration` and only trace it once it is
-              // confirmed intermediate (a newer narration or a tool follows) —
-              // never the trailing reply. Flush the PREVIOUS pending here (a new
-              // segment supersedes it). Tracked to decide the reply at agent_end.
-              this.onNarration?.(sessionId, { content: prose, ...this.lifecycleEvent(s) });
-              this.flushPendingNarration(sessionId, s);
-              s.pendingNarration = prose;
-              s.narrationSegments += 1;
-              s.lastNarration = prose;
-              s.toolSinceLastNarration = false;
-            }
-          }
-          void this.refreshUsage(sessionId);
-        }
-        break;
-      }
-      case 'tool_execution_start': {
-        this.setCompacting(sessionId, false);
-        const toolName = String(e.toolName ?? 'tool');
-        // ask_user surfaces via extension_ui_request (→ question card), not as a
-        // TRACE step — swallow its tool_* so it doesn't leak into the trace.
-        if (toolName === 'ask_user') break;
-        // A real tool ran — the current narration (if any) is no longer the
-        // trailing reply.
-        // The pending narration is now confirmed intermediate (a tool follows it),
-        // so FLUSH it to the trace BEFORE the tool step to keep chronological order.
-        const s = this.sessions.get(sessionId);
-        if (s) {
-          this.flushPendingNarration(sessionId, s);
-          s.toolSinceLastNarration = true;
-        }
-        const subagent = toolName === PI_SUBAGENT_TOOL && typeof e.toolCallId === 'string'
-          ? this.subagentTracker(sessionId).onStart(e.toolCallId, (e.args as Record<string, unknown>) ?? {})
-          : undefined;
-        this.onToolStart?.(sessionId, {
-          ...this.lifecycleEvent(s),
-          toolName,
-          args: (e.args as Record<string, unknown>) ?? {},
-          toolCallId: e.toolCallId as string | undefined,
-          ...(subagent && { subagent }),
-        });
-        break;
-      }
-      case 'tool_execution_update': {
-        if (e.toolName !== PI_SUBAGENT_TOOL || typeof e.toolCallId !== 'string') break;
-        const emits = this.subagentTrackers.get(sessionId)?.onUpdate(e.toolCallId, e.partialResult) ?? [];
-        this.emitSubagentSteps(sessionId, this.sessions.get(sessionId), emits);
-        break;
-      }
-      case 'tool_execution_end': {
-        const toolName = String(e.toolName ?? 'tool');
-        // ask_user is a human-interaction tool, not TRACE.
-        if (toolName === 'ask_user') break;
-        // pi tool results are `{ content: [TextContent|ImageContent], details }`.
-        // Extract text for the trace and externalize any image blocks (e.g. from
-        // the show_image tool) into the attachment store so their bytes reach
-        // connected devices — mirrors the claude/copilot outbound image path.
-        const outputAttachments: import('@kraki/protocol').Attachment[] = [];
-        let resultText: string;
-        const raw = e.result as unknown;
-        const blocks =
-          raw && typeof raw === 'object' && Array.isArray((raw as { content?: unknown }).content)
-            ? ((raw as { content: Array<Record<string, unknown>> }).content)
-            : null;
-        if (blocks) {
-          resultText = blocks
-            .filter(c => c.type === 'text' && typeof c.text === 'string')
-            .map(c => c.text as string)
-            .join('\n');
-          if (this.attachmentStore) {
-            for (const c of blocks) {
-              if (c.type === 'image' && typeof c.data === 'string' && typeof c.mimeType === 'string') {
-                try {
-                  const bytes = Buffer.from(c.data, 'base64');
-                  const mime = c.mimeType;
-                  const { bytes: resized, mimeType: outMime } = await fitToMaxDimension(bytes, mime).catch(() => ({ bytes, mimeType: mime }));
-                  outputAttachments.push(this.attachmentStore.put(sessionId, resized, outMime, {}));
-                } catch (err) {
-                  logger.warn({ err, sessionId }, 'failed to store pi image attachment');
-                }
-              }
-            }
-          }
-        } else {
-          resultText = typeof raw === 'string' ? raw : JSON.stringify(raw ?? '');
-        }
-        const details = raw && typeof raw === 'object' && (raw as { details?: unknown }).details;
-        if ((toolName === 'show_report' || toolName === 'show_html') && this.attachmentStore && details && typeof details === 'object') {
-          const htmlPath = (details as { htmlPath?: unknown }).htmlPath;
-          const lowerHtmlPath = typeof htmlPath === 'string' ? htmlPath.toLowerCase() : '';
-          if (typeof htmlPath === 'string' && (lowerHtmlPath.endsWith('.html') || lowerHtmlPath.endsWith('.htm'))) {
-            try {
-              const html = readFileSync(htmlPath);
-              const title = typeof (details as { title?: unknown }).title === 'string' ? (details as { title: string }).title : undefined;
-              const name = typeof (details as { name?: unknown }).name === 'string' ? (details as { name: string }).name : 'report.html';
-              // show_report validates its own 1 MB policy before returning; a Pi
-              // session started before the rename still has show_html, whose
-              // original 10 MB safety cap stays until that session restarts.
-              if (html.length <= (toolName === 'show_html' ? LEGACY_SHOW_HTML_MAX_BYTES : REPORT_MAX_BYTES)) {
-                outputAttachments.push(this.attachmentStore.put(sessionId, html, 'text/html', { name, caption: title }));
-              }
-            } catch (err) {
-              logger.warn({ err, sessionId }, 'failed to store pi HTML artifact');
-            }
-          }
-        }
-        if (outputAttachments.length > 0 && !resultText) resultText = 'Output is ready.';
-        let subagent: import('@kraki/protocol').SubagentInfo | undefined;
-        if (toolName === PI_SUBAGENT_TOOL && typeof e.toolCallId === 'string') {
-          const tracker = this.subagentTrackers.get(sessionId);
-          const end = tracker?.onEnd(e.toolCallId, raw, e.isError === true);
-          if (end) {
-            this.emitSubagentSteps(sessionId, this.sessions.get(sessionId), end.emits);
-            // A background launch: the step stays running until the run reports.
-            if (end.async) break;
-            subagent = end.subagent;
-          }
-        }
-        this.onToolComplete?.(sessionId, {
-          ...this.lifecycleEvent(this.sessions.get(sessionId)),
-          toolName,
-          result: resultText,
-          toolCallId: e.toolCallId as string | undefined,
-          success: e.isError !== true,
-          ...(subagent && { subagent }),
-          ...(outputAttachments.length > 0 && { attachments: outputAttachments }),
-        });
-        break;
-      }
-      case 'turn_end':
-        // One agentic run = many turns (one per LLM round). Refresh usage but
-        // DON'T signal idle here, so the arm groups all rounds (text + tools)
-        // into a single turn. Idle is only the run boundary (agent_end).
-        void this.refreshUsage(sessionId);
-        break;
-      case 'agent_end': {
-        void this.refreshUsage(sessionId);
-        logger.info({
-          sessionId,
-          turnId: this.sessions.get(sessionId)?.logicalTurn,
-          phase: 'agent_end',
-          attempt: typeof e.attempt === 'number' ? e.attempt : undefined,
-          willRetry: e.willRetry === true,
-        }, 'pi agent lifecycle');
-        const s = this.sessions.get(sessionId);
-        // Pi emits willRetry=false before non-retry threshold/overflow
-        // compaction. Remember that the conversational answer may settle at
-        // compaction_start; keep agent_settled as the fully-drained runtime
-        // boundary when no maintenance event follows.
-        if (s && e.willRetry === false) {
-          s.pendingMaintenanceIdle = true;
-        }
-        break;
-      }
-      case 'agent_settled': {
-        void this.refreshUsage(sessionId);
-        logger.info({
-          sessionId,
-          turnId: this.sessions.get(sessionId)?.logicalTurn,
-          phase: 'agent_settled',
-          attempt: typeof e.attempt === 'number' ? e.attempt : undefined,
-          willRetry: false,
-        }, 'pi agent lifecycle');
-        const s = this.sessions.get(sessionId);
-        if (!s) {
-          this.onIdle?.(sessionId);
-          break;
-        }
-        s.pendingMaintenanceIdle = false;
-        // A duplicate settled callback must not crystallize the same logical turn
-        // twice. The identity is reset only when a new prompt is accepted.
-        if (s.settledTurn === s.logicalTurn) break;
-        if (s.aborting) {
-          // abortSession owns the terminal idle(reason=aborted) notification.
-          s.pendingNarration = '';
-          break;
-        }
-        // Resolve a provisional backend failure only at this authoritative run
-        // boundary. Recoverable attempts were suppressed by willRetry above.
-        if (s.lastStopReason === 'error' || s.lastStopReason === 'aborted') {
-          s.pendingNarration = '';
-          if (s.lastStopReason === 'error' && s.pendingError) {
-            this.emitError(sessionId, s, s.pendingError);
-            s.pendingError = undefined;
-          }
-          this.emitIdleOnce(sessionId, s);
-          break;
-        }
-        if (this.holdForSubagents(sessionId, s)) break;
-        // A natural closing answer: the last narration was not followed by a
-        // tool, so it IS the model's final reply — graduate it verbatim (and
-        // discard its deferred trace so it isn't ALSO the last Step).
-        if (!s.toolSinceLastNarration && s.lastNarration.trim()) {
-          s.pendingNarration = '';
-          this.emitMessage(sessionId, s, s.lastNarration.trim());
-          this.emitIdleOnce(sessionId, s);
-          break;
-        }
-        // The run ended on a tool call with no closing prose. Kraki relays that
-        // as-is: the turn is its Steps, with no extra model call and nothing
-        // injected into the user's pi session. (A closing summary, if wanted,
-        // belongs in the user's own pi configuration.)
-        this.flushPendingNarration(sessionId, s);
-        this.emitIdleOnce(sessionId, s);
-        break;
-      }
-      case 'session_shutdown':
-        this.onSessionEnded?.(sessionId, { reason: 'pi shutdown' });
-        break;
-      case 'extension_ui_request': {
-        if (typeof e.id !== 'string') break;
-        const s = this.sessions.get(sessionId);
-        if (!s) break;
-        // pi-subagents' documented RPC-host status feed for background runs.
-        if (e.method === 'setWidget' && e.widgetKey === 'subagent-async') {
-          const line = Array.isArray(e.widgetLines) ? String(e.widgetLines[0] ?? '') : '';
-          const prefix = 'PI_SUBAGENT_ASYNC_JSON:';
-          const tracker = this.subagentTrackers.get(sessionId);
-          if (tracker && line.startsWith(prefix)) {
-            try {
-              this.emitSubagentSteps(sessionId, s, tracker.onAsyncSnapshot(JSON.parse(line.slice(prefix.length))));
-            } catch (err) {
-              logger.debug({ sessionId, err: (err as Error).message }, 'pi: unreadable subagent status snapshot');
-            }
-          } else if (tracker && !line) {
-            // The widget is cleared once no background run remains.
-            this.emitSubagentSteps(sessionId, s, tracker.onAsyncSnapshot({ runs: [] }));
-          }
-          this.checkSubagentsDone(sessionId, s);
-          break;
-        }
-        // ask_user surfaces via ctx.ui.select (choices) / ctx.ui.input (free-form)
-        // → a Kraki question card. The arm's answer returns via respondToQuestion
-        // → the matching extension_ui_response.
-        if (e.method === 'select' || e.method === 'input') {
-          const qid = e.id;
-          s.pendingQuestions.set(qid, qid);
-          const choices = Array.isArray(e.options) ? (e.options as string[]) : undefined;
-          this.onQuestionRequest?.(sessionId, {
-            ...this.lifecycleEvent(s),
-            id: qid,
-            question: String(e.title ?? 'The agent has a question'),
-            choices,
-          });
-          break;
-        }
-        // The permission-gate extension asks ctx.ui.confirm(toolName, inputJson)
-        // before every non-capability tool → the adapter applies its mode policy:
-        // auto-approve silently (no card) OR raise a Kraki permission card whose
-        // decision returns via respondToPermission → extension_ui_response. Other
-        // UI methods (notify/status/…) are unused and need no reply.
-        if (e.method !== 'confirm') break;
-        const permId = e.id;
-        const toolName = String(e.title ?? 'tool');
-        const inputJson = typeof e.message === 'string' ? e.message : '';
-        let input: Record<string, unknown> = {};
-        try {
-          const parsed = inputJson ? JSON.parse(inputJson) : {};
-          if (parsed && typeof parsed === 'object') input = parsed as Record<string, unknown>;
-        } catch { /* leave input empty on malformed JSON */ }
-        if (toolName === 'bash' && isKrakiSelfManagementCommand(shellCommandFromInput(input))) {
-          s.proc.sendRaw({
-            type: 'extension_ui_response',
-            id: permId,
-            confirmed: false,
-            error: SELF_MANAGEMENT_DENIAL_REASON,
-          });
-          logger.warn({ sessionId }, 'blocked tentacle self-management command');
-          break;
-        }
-        if (shouldAutoApprove(s.mode, toolName, input)) {
-          // Silent approve — no card. Respond immediately so the tool runs.
-          s.proc.sendRaw({ type: 'extension_ui_response', id: permId, confirmed: true });
-          logger.debug({ sessionId, toolName, mode: s.mode }, 'pi tool auto-approved');
-          break;
-        }
-        s.pendingPerms.set(permId, permId);
-        const { toolArgs, description } = parsePiPermission(toolName, inputJson);
-        logger.debug({ sessionId, permId, toolName: toolArgs.toolName }, 'pi permission requested');
-        this.onPermissionRequest?.(sessionId, { ...this.lifecycleEvent(s), id: permId, toolArgs, description });
-        break;
-      }
-      default:
-        break;
-    }
-  }
-
   /** Pull authoritative cumulative usage from pi (get_session_stats) and map
    *  pi's field names (input/output/cacheRead/cacheWrite/cost) → Kraki SessionUsage. */
-  private async refreshUsage(sessionId: string): Promise<void> {
+  async refreshUsage(sessionId: string): Promise<void> {
     const s = this.sessions.get(sessionId);
     if (!s?.proc.alive) return;
     try {
@@ -1651,7 +597,7 @@ export class PiAdapter extends AgentAdapter {
 
   async createSession(config: CreateSessionConfig): Promise<{ sessionId: string }> {
     const sessionId = config.sessionId ?? randomUUID();
-    const model = config.model ?? this.getDefaultModel();
+    const model = config.model ?? getDefaultModel(this);
     const thinking = effortToThinking(config.reasoningEffort);
     // Co-locate pi's transcript inside the Kraki session dir. Passing the exact
     // path via `--session` makes pi write there natively (verified: pi reports
@@ -1686,7 +632,7 @@ export class PiAdapter extends AgentAdapter {
     const sess = this.spawn(
       sessionId,
       meta?.cwd ?? process.cwd(),
-      meta?.model ?? this.getDefaultModel(),
+      meta?.model ?? getDefaultModel(this),
       meta?.mode ?? MUTATING_DEFAULT_MODE,
       sessionFile,
       meta?.thinking,
@@ -1739,13 +685,22 @@ export class PiAdapter extends AgentAdapter {
       // A steer is only an interjection while this logical turn is active. Once
       // Pi has settled it, explicitly convert the late steer into a fresh prompt
       // so it cannot inherit the previous turn's narration/finalization state.
-      if (s.settledTurn === s.logicalTurn) {
+      if (s.turn.isSettled) {
         this.resetTurnTracking(s);
-        await this.withPromptPreflight(s, () => s.proc.request('prompt', promptPayload, { timeoutMs: null }));
+        try {
+          await this.withPromptPreflight(s, () => s.proc.request('prompt', promptPayload, { timeoutMs: null }));
+        } catch (err) {
+          this.failSubmission(sessionId, s, err as Error);
+          throw err;
+        }
       } else {
         // While active, Pi queues the interjection before the next LLM call and
         // it remains part of the current logical turn.
         await s.proc.request('prompt', { ...promptPayload, streamingBehavior: 'steer' }, { timeoutMs: null });
+        // The run settled while Pi was accepting the steer: Pi runs the steer
+        // as a new run. Reopen the turn so that run's reply and idle are
+        // reported (a stopped turn stays closed).
+        if (s.turn.isSettled && !s.turn.isAborted) this.resetTurnTracking(s);
       }
       return;
     }
@@ -1756,7 +711,12 @@ export class PiAdapter extends AgentAdapter {
       // Queue this canonical new turn with Pi's official follow-up behavior: it
       // ACKs immediately, survives compaction, and starts after maintenance.
       this.resetTurnTracking(s);
-      await this.withPromptPreflight(s, () => s.proc.request('prompt', { ...promptPayload, streamingBehavior: 'followUp' }, { timeoutMs: null }));
+      try {
+        await this.withPromptPreflight(s, () => s.proc.request('prompt', { ...promptPayload, streamingBehavior: 'followUp' }, { timeoutMs: null }));
+      } catch (err) {
+        this.failSubmission(sessionId, s, err as Error);
+        throw err;
+      }
       return;
     }
 
@@ -1769,7 +729,8 @@ export class PiAdapter extends AgentAdapter {
     try {
       await this.withPromptPreflight(s, () => this.awaitPromptAcceptance(sessionId, s, promptPayload));
     } catch (err) {
-      const message = (err as Error).message;
+      let failure = err as Error;
+      const message = failure.message;
       // pi can get into a state where the adapter has emitted idle (agent_end
       // was received) but pi's internal RPC layer still thinks it's processing.
       // A genuinely live human prompt must never enter this path — RelayClient
@@ -1781,31 +742,57 @@ export class PiAdapter extends AgentAdapter {
           throw new Error('Pi is waiting for a human response; the message was not sent as a new prompt.');
         }
         logger.warn({ sessionId }, 'pi stuck in processing state — awaiting abort before retry');
-        s.aborting = true;
         try {
-          await s.proc.request('abort');
-          const state = await s.proc.request<{ isStreaming?: boolean; isCompacting?: boolean }>('get_state');
-          if (state.isStreaming || state.isCompacting) {
-            throw new Error('Pi remained busy after abort acknowledgement');
+          s.aborting = true;
+          try {
+            await s.proc.request('abort');
+            const state = await s.proc.request<{ isStreaming?: boolean; isCompacting?: boolean }>('get_state');
+            if (state.isStreaming || state.isCompacting) {
+              throw new Error('Pi remained busy after abort acknowledgement');
+            }
+          } finally {
+            s.aborting = false;
           }
-        } finally {
-          s.aborting = false;
+          // The explicit rejection proves the first prompt was NOT accepted. Only
+          // this path may retry, after authoritative abort + idle reconciliation.
+          await this.withPromptPreflight(s, () => this.awaitPromptAcceptance(sessionId, s, promptPayload));
+          return;
+        } catch (retryErr) {
+          failure = retryErr as Error;
         }
-        // The explicit rejection proves the first prompt was NOT accepted. Only
-        // this path may retry, after authoritative abort + idle reconciliation.
-        await this.withPromptPreflight(s, () => this.awaitPromptAcceptance(sessionId, s, promptPayload));
-        return;
       }
-      logger.warn({ sessionId, err: message }, 'pi prompt request failed');
-      this.emitError(sessionId, s, message);
-      // Unexpected process exit owns its terminal idle in proc.onExit. Other
-      // transport/watchdog failures still need to release the active UI here.
-      if (!s.exitObserved) this.emitIdleOnce(sessionId, s);
+      logger.warn({ sessionId, err: failure.message }, 'pi prompt request failed');
+      this.failSubmission(sessionId, s, failure);
+      if (failure instanceof PromptWatchdogError && s.proc.alive) {
+        // The prompt is still pending inside pi and could run later, after the
+        // turn was announced as failed. Retire this process (as Stop does);
+        // the next input lazy-resumes the on-disk transcript.
+        this.compactingSessions.delete(sessionId);
+        s.proc.kill();
+      }
       // RelayClient records this as rejected, making a replay with the same
       // clientId retry the already-persisted transcript row. Do not turn an
       // unacknowledged adapter request into a falsely delivered input.
-      throw err;
+      throw failure;
     }
+  }
+
+  /** A submission that opened a new logical turn failed before pi started it:
+   *  report the error and idle on that turn (not the previous run's id). */
+  private failSubmission(sessionId: string, s: PiSession, err: Error): void {
+    // Unexpected process exit owns its terminal idle in proc.onExit. Other
+    // transport/watchdog failures still need to release the active UI here.
+    if (s.exitObserved || s.turn.isSettled) {
+      this.emitError(sessionId, s, err.message);
+      return;
+    }
+    // Stamp the failure with this submission's turn; late events of the
+    // previous run keep that run's id afterwards.
+    const previousRun = s.turn.eventTurnId;
+    s.turn.captureTurnId();
+    s.turn.discardProse();
+    s.turn.finish({ error: err.message });
+    s.turn.eventTurnId = previousRun;
   }
 
   async abortSession(sessionId: string): Promise<void> {
@@ -1814,8 +801,12 @@ export class PiAdapter extends AgentAdapter {
 
     // Stop means stop the delegated background work too: a run finishing later
     // would wake the agent into a turn nobody is listening to.
-    const backgroundRuns = this.subagentTrackers.get(sessionId)?.pendingAsyncRunIds() ?? [];
+    const tracker = this.subagentTrackers.get(sessionId);
+    const backgroundRuns = tracker?.pendingAsyncRunIds() ?? [];
     this.stopAwaitingSubagents(s);
+    // They will not report back into this turn: stop counting them as active,
+    // or every later turn would be held for them.
+    this.emitSubagentSteps(sessionId, s, tracker?.retirePending() ?? []);
     for (const runId of backgroundRuns) {
       s.proc.request('prompt', { message: `/subagents-stop ${runId}` }, { timeoutMs: 10_000 })
         .catch((err) => logger.debug({ sessionId, runId, err: (err as Error).message }, 'pi: could not stop background subagent'));
@@ -1830,8 +821,16 @@ export class PiAdapter extends AgentAdapter {
       // canonical history and marks the active input ledger aborted/settled;
       // future inputs waiting in Relay's own chain are not touched. Otherwise
       // Pi can retain a follow-up after the UI has announced this turn aborted.
-      const cleared = await s.proc.request<{ steering?: string[]; followUp?: string[] }>('clear_queue');
-      logger.debug({ sessionId, steering: cleared?.steering?.length ?? 0, followUp: cleared?.followUp?.length ?? 0 }, 'cleared Pi queue before explicit abort');
+      // An older Pi without clear_queue answers "Unknown command": it has no
+      // queue to clear, so Stop must still abort. Any other failure keeps the
+      // turn open (the queue may still hold a continuation).
+      try {
+        const cleared = await s.proc.request<{ steering?: string[]; followUp?: string[] }>('clear_queue');
+        logger.debug({ sessionId, steering: cleared?.steering?.length ?? 0, followUp: cleared?.followUp?.length ?? 0 }, 'cleared Pi queue before explicit abort');
+      } catch (err) {
+        if (!/unknown command/i.test((err as Error).message)) throw err;
+        logger.warn({ sessionId }, 'pi: this Pi has no clear_queue; aborting without it');
+      }
       // Release dialogs only after clearing the queue, so resolving the last
       // tool cannot begin a queued continuation in the cancellation window.
       // Relay has already captured the visible card and retains abort history.
@@ -1839,6 +838,7 @@ export class PiAdapter extends AgentAdapter {
         s.proc.sendRaw({ type: 'extension_ui_response', id: questionId, cancelled: true });
       }
       s.pendingQuestions.clear();
+      s.foreignDialogs?.clear();
       for (const permissionId of s.pendingPerms.keys()) {
         s.proc.sendRaw({ type: 'extension_ui_response', id: permissionId, confirmed: false });
       }
@@ -1850,7 +850,7 @@ export class PiAdapter extends AgentAdapter {
       // RelayClient owns the visible aborted idle boundary, but the adapter must
       // still record that this logical turn is terminal. Otherwise the stricter
       // idle-eviction gate would retain an acknowledged-aborted Pi forever.
-      s.settledTurn = s.logicalTurn;
+      s.turn.settleSilently();
 
       const pendingAcceptance = s.promptAcceptanceAbort;
       if (pendingAcceptance) {
@@ -1874,10 +874,7 @@ export class PiAdapter extends AgentAdapter {
       logger.warn({ sessionId, permissionId }, 'respondToPermission: no pending permission');
       return 'not_found';
     }
-    // 'approve' and 'always_allow' both run the tool this time. Per-session
-    // "always allow" persistence is a future enhancement — for now it behaves
-    // like a one-off approve.
-    const confirmed = decision !== 'deny';
+    const confirmed = decision === 'approve';
     s.proc.sendRaw({ type: 'extension_ui_response', id: permissionId, confirmed });
     // pi's confirm channel is boolean; relay the reason as a steer into the
     // active run so the model learns why the tool was blocked.
@@ -1902,15 +899,22 @@ export class PiAdapter extends AgentAdapter {
     if (!s.proc.alive) return 'session_gone';
 
     const answerValue = typeof answer === 'string' ? { text: answer } : answer;
+    const foreign = s.foreignDialogs?.get(questionId);
+    if (foreign) {
+      // Another extension's dialog takes a plain value: it has no channel for
+      // images (same open question as image answers on text-only agents).
+      s.foreignDialogs?.delete(questionId);
+      s.pendingQuestions.delete(questionId);
+      s.proc.sendRaw(foreign === 'confirm'
+        ? { type: 'extension_ui_response', id: questionId, confirmed: answerValue.text.trim().toLowerCase() === PI_CONFIRM_CHOICES[0].toLowerCase() }
+        : { type: 'extension_ui_response', id: questionId, value: answerValue.text });
+      logger.debug({ sessionId, questionId, method: foreign }, 'pi extension dialog answered');
+      return 'accepted';
+    }
     const images = (answerValue.attachments ?? [])
       .filter((a): a is import('@kraki/protocol').ImageAttachment => a.type === 'image')
       .map(a => ({ type: 'image' as const, data: a.data, mimeType: a.mimeType }));
-    const envelope = JSON.stringify({
-      __krakiAnswer: 1,
-      text: answerValue.text,
-      ...(images.length > 0 && { images }),
-    });
-    s.proc.sendRaw({ type: 'extension_ui_response', id: questionId, value: envelope });
+    s.proc.sendRaw({ type: 'extension_ui_response', id: questionId, value: krakiAnswerEnvelope(answerValue.text, images) });
     s.pendingQuestions.delete(questionId);
     logger.debug({ sessionId, questionId, images: images.length }, 'pi question answered');
     return 'accepted';
@@ -1944,7 +948,7 @@ export class PiAdapter extends AgentAdapter {
       // Clone (copy-on-write): transcripts reach hundreds of MB.
       try { cloneFile(srcFile, forkFile); } catch (err) { logger.debug({ err: (err as Error).message }, 'fork copy failed'); }
     }
-    const next = this.spawn(newSessionId, src?.cwd ?? process.cwd(), src?.model ?? this.getDefaultModel(), src?.mode ?? MUTATING_DEFAULT_MODE, forkFile, src?.thinking);
+    const next = this.spawn(newSessionId, src?.cwd ?? process.cwd(), src?.model ?? getDefaultModel(this), src?.mode ?? MUTATING_DEFAULT_MODE, forkFile, src?.thinking);
     this.persistMeta(newSessionId, next);
     return { sessionId: newSessionId };
   }
@@ -1970,6 +974,16 @@ export class PiAdapter extends AgentAdapter {
         s.proc.sendRaw({ type: 'extension_ui_response', id: permissionId, confirmed: true });
         s.pendingPerms.delete(permissionId);
         this.onPermissionAutoResolved?.(sessionId, permissionId, 'approved');
+      }
+    }
+    // Delegate also answers the agent's own open questions (not other
+    // extensions' dialogs, which still need the human).
+    if (mode === 'delegate') {
+      for (const questionId of s.pendingQuestions.keys()) {
+        if (s.foreignDialogs?.has(questionId)) continue;
+        s.proc.sendRaw({ type: 'extension_ui_response', id: questionId, value: krakiAnswerEnvelope(DELEGATE_ANSWER) });
+        s.pendingQuestions.delete(questionId);
+        this.onQuestionAutoResolved?.(sessionId, questionId);
       }
     }
     logger.debug({ sessionId, mode }, 'pi session mode changed');
@@ -2035,7 +1049,7 @@ export class PiAdapter extends AgentAdapter {
     const model = context.model
       ?? this.sessions.get(sessionId)?.model
       ?? this.loadMeta(sessionId)?.model
-      ?? this.getDefaultModel();
+      ?? getDefaultModel(this);
     const [provider, modelId] = this.resolveModelId(model);
     const args = [
       '--print', '--no-session', '--no-tools', '--no-extensions', '--no-skills',
@@ -2049,7 +1063,7 @@ export class PiAdapter extends AgentAdapter {
       let err = '';
       let done = false;
       const finish = (value: string | null) => { if (!done) { done = true; clearTimeout(timer); resolve(value); } };
-      const child = spawn(...cliSpawnArgs(this.cliPath, args), { cwd: tmpdir(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      const child = spawn(...cliSpawnArgs(this.cliPath, args), { cwd: tmpdir(), env: agentEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       const timer = setTimeout(() => { child.kill(); logger.warn({ sessionId }, 'pi title generation timed out'); finish(null); }, 45_000);
       child.stdout.on('data', (d) => { out += d.toString(); });
       child.stderr.on('data', (d) => { err += d.toString(); });
@@ -2070,171 +1084,31 @@ export class PiAdapter extends AgentAdapter {
   /** Raw `--list-models` catalog. Only a successful read is cached: a failed
    *  read (e.g. pi is slow right after login while the machine is busy) must
    *  not leave the agent with no models until the daemon restarts. */
-  private cachedModels: PiModelRow[] | null = null;
-  private modelsLoad: Promise<PiModelRow[] | null> | null = null;
-  private modelRetryTimer: ReturnType<typeof setTimeout> | null = null;
-  private modelRetryAttempt = 0;
-  private modelListFailed = false;
-  private lastModelListError: string | undefined;
+  cachedModels: PiModelRow[] | null = null;
+  modelsLoad: Promise<PiModelRow[] | null> | null = null;
+  modelRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  modelRetryAttempt = 0;
+  modelListFailed = false;
+  lastModelListError: string | undefined;
 
   override modelListError(): string | undefined {
     return this.modelListFailed ? this.lastModelListError : undefined;
   }
-  private stopped = false;
-  private modelScope: string[] | undefined;
-  private scopeLoaded = false;
-
-  private fetchModels(): PiModelRow[] {
-    // Cache only the raw catalog: reread preferences for every capabilities
-    // request so an already-running adapter can pick up scope changes.
-    try {
-      this.modelScope = readPiModelScope();
-      this.scopeLoaded = true;
-    } catch {
-      logger.warn('Could not read Pi enabledModels; retaining last valid scope');
-      if (!this.scopeLoaded) return [];
-    }
-    return scopePiModels(this.cachedModels ?? [], this.modelScope);
-  }
-
-  /** Load the raw catalog without blocking the daemon's event loop. Concurrent
-   *  callers share one pi process. On failure the list stays unloaded, a
-   *  backoff retry is scheduled, and the eventual success is announced via
-   *  `onCapabilitiesChanged` so apps receive the models without a restart. */
-  private ensureRawModels(): Promise<PiModelRow[] | null> {
-    if (this.cachedModels) return Promise.resolve(this.cachedModels);
-    if (this.modelsLoad) return this.modelsLoad;
-    const load = (async () => {
-      const started = Date.now();
-      try {
-        const rows = parsePiListModels(await runPiListModels(this.cliPath, this.modelListTimeoutMs));
-        if (this.stopped) return null;
-        this.cachedModels = rows;
-        const recovered = this.modelListFailed;
-        this.modelListFailed = false;
-        this.modelRetryAttempt = 0;
-        this.clearModelRetry();
-        logger.info({ count: rows.length, elapsedMs: Date.now() - started, recovered }, 'Fetched pi model list');
-        if (recovered) this.onCapabilitiesChanged?.();
-        return rows;
-      } catch (err) {
-        const e = err as PiListModelsError;
-        this.modelListFailed = true;
-        this.lastModelListError = e.message;
-        logger.warn({
-          err: e.message,
-          elapsedMs: Date.now() - started,
-          timeoutMs: this.modelListTimeoutMs,
-          timedOut: e.timedOut ?? false,
-          exitCode: e.exitCode,
-          signal: e.signal,
-          stdoutTail: e.stdoutTail,
-          stderrTail: e.stderrTail,
-          attempt: this.modelRetryAttempt + 1,
-        }, 'Could not fetch pi model list; will retry');
-        this.scheduleModelRetry();
-        return null;
-      } finally {
-        this.modelsLoad = null;
-      }
-    })();
-    this.modelsLoad = load;
-    return load;
-  }
-
-  private scheduleModelRetry(): void {
-    if (this.stopped || this.modelRetryTimer) return;
-    const delays = this.modelListRetryDelaysMs;
-    const delay = delays[Math.min(this.modelRetryAttempt, delays.length - 1)];
-    this.modelRetryAttempt += 1;
-    this.modelRetryTimer = setTimeout(() => {
-      this.modelRetryTimer = null;
-      void this.ensureRawModels();
-    }, delay);
-    this.modelRetryTimer.unref?.();
-  }
-
-  private clearModelRetry(): void {
-    if (this.modelRetryTimer) clearTimeout(this.modelRetryTimer);
-    this.modelRetryTimer = null;
-  }
-
-  /** Synchronous last resort for session spawn paths that need a default model
-   *  before any async capabilities request completed. Same behavior as before
-   *  (blocking read), except that a failure is not cached. */
-  private ensureRawModelsSync(): void {
-    // This blocks the daemon's event loop (up to the list timeout); after a
-    // failure, leave recovery to the scheduled async retry instead of
-    // blocking again on every session spawn.
-    if (this.cachedModels || this.modelListFailed) return;
-    try {
-      const stdout = execSync(`"${this.cliPath}" --list-models`, {
-        encoding: 'utf-8',
-        timeout: this.modelListTimeoutMs,
-        env: process.env,
-      });
-      this.cachedModels = parsePiListModels(stdout);
-      logger.info({ count: this.cachedModels.length }, 'Fetched pi model list (sync)');
-      if (this.modelListFailed) {
-        this.modelListFailed = false;
-        this.clearModelRetry();
-        this.onCapabilitiesChanged?.();
-      }
-    } catch (err) {
-      logger.warn({ err: (err as Error).message }, 'Could not fetch pi model list (sync)');
-      this.modelListFailed = true;
-      this.lastModelListError = (err as Error).message;
-      this.scheduleModelRetry();
-    }
-  }
-
-  private getDefaultModel(): string {
-    this.ensureRawModelsSync();
-    const models = this.fetchModels();
-    if (this.modelScope?.length || !this.scopeLoaded) {
-      if (!models.length) throw new Error('No Pi models match enabledModels; check Pi settings');
-      return `${models[0].provider}/${models[0].model}`;
-    }
-    return resolveDefaultModel(models);
-  }
+  stopped = false;
+  modelScope: string[] | undefined;
+  scopeLoaded = false;
 
   async listModels(): Promise<string[]> {
-    await this.ensureRawModels();
-    return this.fetchModels().map(m => `${m.provider}/${m.model}`);
+    await ensureRawModels(this);
+    return fetchModels(this).map(m => `${m.provider}/${m.model}`);
   }
 
-  private cachedEfforts: Map<string, ReasoningEffort[]> | null = null;
-
-  /** Ask pi for its catalog over a throwaway rpc process. This is the only
-   *  interface that exposes each model's thinkingLevelMap, and thus the only way
-   *  to tell a model that genuinely has `max` (Opus 5, Fable 5, GLM 5.2) from one
-   *  whose top rung is `low` (GPT-5.6 Luna). Best-effort: on any failure the
-   *  caller keeps the old fixed ladder rather than losing the model list. Failed
-   *  lookups are deliberately NOT cached, so a transient pi startup/RPC failure
-   *  heals on the next capabilities refresh instead of lasting until daemon
-   *  restart. */
-  private async fetchEfforts(): Promise<Map<string, ReasoningEffort[]>> {
-    if (this.cachedEfforts) return this.cachedEfforts;
-    try {
-      const efforts = new Map<string, ReasoningEffort[]>();
-      const models = await queryPiCatalog(this.cliPath);
-      for (const m of models) {
-        if (!m?.id || !m?.provider) continue;
-        efforts.set(`${m.provider}/${m.id}`, piThinkingLevelsFor(m));
-      }
-      logger.info({ count: efforts.size }, 'Fetched pi thinking levels');
-      this.cachedEfforts = efforts;
-      return efforts;
-    } catch (err) {
-      logger.warn({ err: (err as Error).message }, 'Could not fetch pi thinking levels, using default ladder');
-      return new Map();
-    }
-  }
+  cachedEfforts: Map<string, ReasoningEffort[]> | null = null;
 
   async listModelDetails(): Promise<ModelDetail[]> {
-    await this.ensureRawModels();
-    const byModel = await this.fetchEfforts();
-    return this.fetchModels().map(m => {
+    await ensureRawModels(this);
+    const byModel = await fetchEfforts(this);
+    return fetchModels(this).map(m => {
       const id = `${m.provider}/${m.model}`;
       const efforts = byModel.get(id) ?? (m.reasoning ? FALLBACK_EFFORTS : []);
       return {
@@ -2257,7 +1131,7 @@ export class PiAdapter extends AgentAdapter {
     for (const [id, s] of this.sessions) {
       if (
         s.proc.alive
-        && s.settledTurn === s.logicalTurn
+        && s.turn.isSettled
         && !this.compactingSessions.has(id)
         && s.pendingQuestions.size === 0
         && s.pendingPerms.size === 0

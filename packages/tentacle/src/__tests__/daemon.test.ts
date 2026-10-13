@@ -32,6 +32,8 @@ const mockSaveDaemonIdentity = vi.fn();
 const mockLoadDaemonIdentity = vi.fn();
 const mockClearDaemonIdentity = vi.fn();
 const mockLoadDaemonReady = vi.fn();
+const mockLoadDaemonSupervisorPid = vi.fn();
+const mockClearDaemonSupervisorPid = vi.fn();
 const mockClearDaemonReady = vi.fn();
 const mockMkdirSync = vi.fn();
 const mockOpenSync = vi.fn();
@@ -85,6 +87,8 @@ vi.mock('../config.js', () => ({
   clearDaemonIdentity: (...args: unknown[]) => mockClearDaemonIdentity(...args),
   loadDaemonReady: (...args: unknown[]) => mockLoadDaemonReady(...args),
   clearDaemonReady: (...args: unknown[]) => mockClearDaemonReady(...args),
+  loadDaemonSupervisorPid: (...args: unknown[]) => mockLoadDaemonSupervisorPid(...args),
+  clearDaemonSupervisorPid: (...args: unknown[]) => mockClearDaemonSupervisorPid(...args),
 }));
 
 import {
@@ -103,6 +107,7 @@ import {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  mockLoadDaemonSupervisorPid.mockReturnValue(null);
   vi.useRealTimers();
   mockLoadDaemonPid.mockReturnValue(null);
   mockOpenSync.mockReturnValue(99);
@@ -517,11 +522,15 @@ describe('startDaemon()', () => {
     expect(mockClearDaemonReady).toHaveBeenCalledTimes(1);
   });
 
-  it('waits for bootstrap before saving the PID', async () => {
+  it('launches the worker under a supervisor and returns the worker PID once it is ready', async () => {
     vi.useFakeTimers();
-    const { child } = makeFakeChild(42);
+    const { child } = makeFakeChild(41); // the supervisor
     mockSpawn.mockReturnValue(child);
+    // No previous daemon; then the supervised worker publishes PID 42 and readiness.
+    mockLoadDaemonPid.mockImplementation(() => (mockSpawn.mock.calls.length > 0 ? 42 : null));
     mockLoadDaemonReady.mockReturnValue(42);
+    const inherited = process.env.KRAKI_SUPERVISED;
+    process.env.KRAKI_SUPERVISED = '999'; // `kraki start` typed under a supervised agent
 
     const startPromise = startDaemon(fakeConfig);
 
@@ -533,22 +542,44 @@ describe('startDaemon()', () => {
     expect(opts.stdio).toEqual(['ignore', 99, 99]);
     expect(opts.env.NODE_ENV).toBe('production');
     expect(opts.env.LOG_LEVEL).toBe('info');
+    expect(opts.env.KRAKI_SUPERVISE).toBe('1');
+    expect(opts.env.KRAKI_SUPERVISED).toBeUndefined();
     expect(mockMkdirSync).toHaveBeenCalled();
     expect(mockOpenSync).toHaveBeenCalledWith(getDaemonBootstrapLogPath(), 'w');
     expect(mockCloseSync).toHaveBeenCalledWith(99);
-    expect(mockSaveDaemonPid).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(100);
 
     await expect(startPromise).resolves.toBe(42);
-    expect(mockSaveDaemonPid).toHaveBeenCalledWith(42);
+    // daemon.pid stays the worker's (the worker writes it), never the supervisor's.
+    expect(mockSaveDaemonPid).not.toHaveBeenCalled();
     expect(child.unref).toHaveBeenCalled();
+    if (inherited === undefined) delete process.env.KRAKI_SUPERVISED; else process.env.KRAKI_SUPERVISED = inherited;
+  });
+
+  it('is not ready while the readiness file belongs to a different PID than daemon.pid', async () => {
+    vi.useFakeTimers();
+    const { child } = makeFakeChild(41);
+    mockSpawn.mockReturnValue(child);
+    mockLoadDaemonPid.mockImplementation(() => (mockSpawn.mock.calls.length > 0 ? 43 : null));
+    mockLoadDaemonReady.mockReturnValue(42); // a stale ready file
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    let settled = false;
+    const startPromise = startDaemon(fakeConfig).then(() => { settled = true; }, () => { settled = true; });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(settled).toBe(false);
+    mockLoadDaemonReady.mockReturnValue(43);
+    await vi.advanceTimersByTimeAsync(200);
+    await startPromise;
+    expect(settled).toBe(true);
+    killSpy.mockRestore();
   });
 
   it('uses debug LOG_LEVEL when verbose logging is configured', async () => {
     vi.useFakeTimers();
     const { child } = makeFakeChild(55);
     mockSpawn.mockReturnValue(child);
+    mockLoadDaemonPid.mockImplementation(() => (mockSpawn.mock.calls.length > 0 ? 55 : null));
     mockLoadDaemonReady.mockReturnValue(55);
 
     const startPromise = startDaemon({
@@ -654,6 +685,62 @@ describe('startDaemon()', () => {
 // ── stopDaemon ──────────────────────────────────────────
 
 describe('stopDaemon()', () => {
+  it('stops the supervisor before the worker, so the worker is not restarted', () => {
+    mockLoadDaemonSupervisorPid.mockReturnValue(500);
+    mockLoadDaemonPid.mockReturnValue(501);
+    const signals: Array<[number, unknown]> = [];
+    const gone = new Set<number>();
+    mockExecFileSync.mockImplementation((command: string) => {
+      if (command === '/bin/launchctl') throw new Error('not loaded');
+      return '/path/to/kraki __daemon-worker';
+    });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
+      if (signal === 0) { if (gone.has(pid)) throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' }); return true; }
+      signals.push([pid, signal]);
+      // SIGTERM to the supervisor ends both (it forwards to the worker).
+      if (pid === 500 && signal === 'SIGTERM') { gone.add(500); gone.add(501); }
+      return true;
+    }) as typeof process.kill);
+
+    expect(stopDaemon('linux')).toBe(true);
+    expect(signals[0]).toEqual([500, 'SIGTERM']);
+    expect(mockClearDaemonSupervisorPid).toHaveBeenCalled();
+    expect(mockClearDaemonPid).toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
+  it('stops a supervisor whose worker is between restarts (no live worker)', () => {
+    mockLoadDaemonSupervisorPid.mockReturnValue(600);
+    mockLoadDaemonPid.mockReturnValue(null);
+    mockExecFileSync.mockImplementation((command: string) => {
+      if (command === '/bin/launchctl') throw new Error('not loaded');
+      return '/path/to/kraki __daemon-worker';
+    });
+    let stopped = false;
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((_pid: number, signal?: string | number) => {
+      if (signal === 'SIGTERM') { stopped = true; return true; }
+      if (signal === 0 && stopped) throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+      return true;
+    }) as typeof process.kill);
+    stopDaemon('linux');
+    expect(killSpy).toHaveBeenCalledWith(600, 'SIGTERM');
+    expect(mockClearDaemonSupervisorPid).toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
+  it('fails closed when the recorded supervisor cannot be identified', () => {
+    mockLoadDaemonSupervisorPid.mockReturnValue(700);
+    mockLoadDaemonPid.mockReturnValue(701);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((_pid: number, signal?: string | number) => {
+      if (signal === 0) throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      return true;
+    }) as typeof process.kill);
+    expect(stopDaemon('linux')).toBe(false);
+    expect(killSpy).not.toHaveBeenCalledWith(700, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalledWith(701, 'SIGTERM');
+    killSpy.mockRestore();
+  });
+
   it('returns false when no daemon is running (no PID file)', () => {
     mockLoadDaemonPid.mockReturnValue(null);
     expect(stopDaemon()).toBe(false);

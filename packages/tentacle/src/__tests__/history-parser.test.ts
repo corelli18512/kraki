@@ -26,6 +26,20 @@ describe('history-parser', () => {
   });
 
   describe('parseEventsFile', () => {
+    it('skips rows that are valid JSON but not events instead of throwing', () => {
+      const events = [
+        'null', '[]', '42', '{"type":"user.message"}', '{"type":"user.message","data":null}',
+        '{"type":"assistant.message","data":{"content":{"not":"text"},"toolRequests":"x"}}',
+        makeEvent('user.message', { content: 'still imported' }, '2026-04-10T12:01:00Z'),
+      ].join('\n');
+      writeFileSync(join(dir, 'events.jsonl'), events, 'utf8');
+
+      const { messages } = parseEventsFile(join(dir, 'events.jsonl'));
+
+      expect(messages.at(-1)?.type).toBe('user_message');
+      expect(messages.every((m) => typeof m.payload === 'string')).toBe(true);
+    });
+
     it('should extract metadata from session.start', () => {
       const events = [
         makeEvent('session.start', {
@@ -127,6 +141,27 @@ describe('history-parser', () => {
       const { messages } = parseEventsFile(join(dir, 'events.jsonl'));
       expect(messages).toHaveLength(1);
       expect(messages[0].type).toBe('idle');
+    });
+
+    it('keeps a subagent\'s prose and turn boundary out of the parent conversation', () => {
+      // Copilot tags every event of a task-tool subagent with a top-level agentId.
+      const sub = (type: string, data: Record<string, unknown>) => JSON.stringify({ type, data, agentId: 'task-1', timestamp: '2026-04-10T12:00:00Z' });
+      const events = [
+        makeEvent('session.start', { sessionId: 'test', context: { cwd: '/' } }),
+        makeEvent('tool.execution_start', { toolName: 'task', toolCallId: 'task-1', arguments: {} }),
+        sub('assistant.message', { content: 'internal subagent musing' }),
+        sub('tool.execution_start', { toolName: 'grep', toolCallId: 'g1', arguments: { pattern: 'x' } }),
+        sub('tool.execution_complete', { toolName: 'grep', toolCallId: 'g1', success: true, result: { content: 'a.ts' } }),
+        sub('assistant.turn_end', { turnId: '0' }),
+        makeEvent('assistant.message', { content: 'parent reply' }),
+      ].join('\n');
+      writeFileSync(join(dir, 'events.jsonl'), events, 'utf8');
+
+      const { messages } = parseEventsFile(join(dir, 'events.jsonl'));
+      expect(messages.map((m) => m.type)).toEqual(['tool_start', 'tool_start', 'tool_complete', 'agent_message']);
+      expect(JSON.parse(messages[1].payload)).toMatchObject({ toolName: 'grep', parentToolCallId: 'task-1' });
+      expect(JSON.parse(messages[2].payload)).toMatchObject({ toolCallId: 'g1', parentToolCallId: 'task-1' });
+      expect(JSON.parse(messages[3].payload)).toEqual({ content: 'parent reply' });
     });
 
     it('should skip hook and subagent events', () => {

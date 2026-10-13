@@ -60,6 +60,7 @@ struct KrakiApp: App {
         switch appState.pendingPairingPrompt {
         case .confirmRelay: return "Connect to a Self-Hosted Server?"
         case .alreadyConnected: return "Already Connected"
+        case .replaceComputerKey(_, let name): return "New Key for \(name)?"
         case nil: return ""
         }
     }
@@ -140,6 +141,7 @@ struct KrakiApp: App {
                     }
                 #endif
             }
+            .overlay(alignment: .top) { PairingFeedbackToast() }
             .environment(appState)
             .preferredColorScheme(effectiveColorScheme)
             // Pairing QR scanned with the iPhone Camera (universal link) or
@@ -178,6 +180,12 @@ struct KrakiApp: App {
                 case .alreadyConnected(let link, _):
                     Button("Log Out and Connect", role: .destructive) { appState.logoutAndPair(link) }
                     Button("Keep Current", role: .cancel) { appState.pendingPairingPrompt = nil }
+                case .replaceComputerKey(let link, _):
+                    Button("Pair Anyway", role: .destructive) {
+                        appState.pendingPairingPrompt = nil
+                        appState.openPairingLink(link, relayConfirmed: true, keyChangeConfirmed: true)
+                    }
+                    Button("Cancel", role: .cancel) { appState.pendingPairingPrompt = nil }
                 }
             } message: { prompt in
                 switch prompt {
@@ -186,6 +194,8 @@ struct KrakiApp: App {
                 case .alreadyConnected(_, let login):
                     Text(login.map { "This iPhone is already connected as \($0). To connect a different account, log out first." }
                         ?? "This iPhone is already connected. To connect a different account, log out first.")
+                case .replaceComputerKey(_, let name):
+                    Text("This code has a different key than the one you paired with \(name). Continue only if you reinstalled Kraki there — otherwise someone may be trying to intercept your sessions.")
                 }
             }
         }

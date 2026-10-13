@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { restartDelayMs, isCleanExit, runSupervisor } from '../daemon-supervisor.js';
+import { restartDelayMs, isCleanExit, runSupervisor, PERMANENT_EXIT_CODE } from '../daemon-supervisor.js';
 
 describe('daemon supervisor', () => {
   it('backs off 1s, 2s, 4s … capped at 60s', () => {
@@ -37,6 +37,35 @@ describe('daemon supervisor', () => {
     const log = readFileSync(join(dir, 'sup.log'), 'utf8');
     expect(log).toMatch(/restarting/);
     expect(log).toMatch(/exited cleanly/);
+  });
+
+  it('records its PID while running and removes it when done', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-sup-'));
+    const pidFile = join(dir, 'daemon-supervisor.pid');
+    const worker = join(dir, 'worker.mjs');
+    writeFileSync(worker, `
+      import { readFileSync } from 'node:fs';
+      if (readFileSync(${JSON.stringify(pidFile)}, 'utf8') !== String(process.ppid)) process.exit(5);
+      process.exit(0);
+    `);
+    const code = await runSupervisor({ command: process.execPath, args: [worker], logFile: join(dir, 'sup.log'), pidFile, delay: () => 10, maxStarts: 2 });
+    expect(code).toBe(0);
+    expect(existsSync(pidFile)).toBe(false);
+  });
+
+  it('does not restart a worker that exits with the permanent code (no config)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kraki-sup-'));
+    const counter = join(dir, 'runs');
+    const worker = join(dir, 'worker.mjs');
+    writeFileSync(worker, `
+      import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+      const f = ${JSON.stringify(counter)};
+      writeFileSync(f, String(existsSync(f) ? Number(readFileSync(f, 'utf8')) + 1 : 1));
+      process.exit(${PERMANENT_EXIT_CODE});
+    `);
+    const code = await runSupervisor({ command: process.execPath, args: [worker], logFile: join(dir, 'sup.log'), delay: () => 10, maxStarts: 5 });
+    expect(code).toBe(PERMANENT_EXIT_CODE);
+    expect(readFileSync(counter, 'utf8')).toBe('1');
   });
 
   it('forwards SIGTERM to the worker and does not restart it', async () => {

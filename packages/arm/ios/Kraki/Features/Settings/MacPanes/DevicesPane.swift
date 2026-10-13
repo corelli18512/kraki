@@ -9,6 +9,9 @@ struct DevicesPane: View {
     @Environment(TentacleCLIManager.self) private var tentacleCLI
     @State private var showingPairing = false
     @State private var removing: DeviceSummary?
+    @State private var securityDevice: DeviceSummary?
+    @State private var pasteFor: DeviceSummary?
+    @State private var pasteGeneric = false
 
     private var devices: [DeviceSummary] {
         appState.deviceStore.devices.values
@@ -30,7 +33,9 @@ struct DevicesPane: View {
                                   isThisMac: device.id == tentacleCLI.configInfo?.deviceId,
                                   canRemove: Self.canRemove(device, appDeviceId: appState.deviceId,
                                                             thisMacDeviceId: tentacleCLI.configInfo?.deviceId),
-                                  onRemove: { removing = device })
+                                  trust: device.role == .tentacle ? appState.trustState(for: device.id) : nil,
+                                  onRemove: { removing = device },
+                                  onSecurity: { securityDevice = device })
                     }
                 }
             }
@@ -52,10 +57,37 @@ struct DevicesPane: View {
                     .accessibilityIdentifier("prefs.devices.addPhone")
                 }
                 .padding(.vertical, 4)
+                HStack(spacing: 12) {
+                    Image(systemName: "lock.shield")
+                        .font(.system(size: 20))
+                        .foregroundStyle(Color.krakiPrimary)
+                        .frame(width: 26)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Pair with another computer")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("Run `kraki connect` there and paste the link it shows.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Paste Link…") { pasteGeneric = true }
+                        .accessibilityIdentifier("prefs.devices.pasteLink")
+                }
+                .padding(.vertical, 4)
             }
         }
         .formStyle(.grouped)
         .sheet(isPresented: $showingPairing) { PairingSheet() }
+        .sheet(item: $securityDevice) { device in
+            ComputerSecuritySheet(device: device) {
+                if !appState.macPairLocallyIfPossible(device) {
+                    securityDevice = nil
+                    DispatchQueue.main.async { pasteFor = device }
+                }
+            }
+        }
+        .sheet(item: $pasteFor) { device in PastePairingLinkSheet(computer: device) }
+        .sheet(isPresented: $pasteGeneric) { PastePairingLinkSheet(computer: nil) }
         .alert(
             "Remove \(removing?.name ?? "device")?",
             isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })
@@ -104,7 +136,9 @@ private struct DeviceRow: View {
     var hasProgress = false
     var isThisMac = false
     var canRemove = false
+    var trust: ComputerTrustState?
     var onRemove: () -> Void = {}
+    var onSecurity: () -> Void = {}
     var body: some View {
       VStack(alignment: .leading, spacing: 8) {
         HStack(spacing: 10) {
@@ -130,15 +164,18 @@ private struct DeviceRow: View {
                 .foregroundStyle(Color.textMuted)
             }
             Spacer()
+            if let trust {
+                Button(action: onSecurity) {
+                    TrustStatusBadge(state: trust)
+                }
+                .buttonStyle(.borderless)
+                .help("Security settings for \(device.name)")
+                .accessibilityIdentifier("prefs.devices.security.\(device.id)")
+            }
             if canRemove {
                 Button("Remove…", action: onRemove)
                     .controlSize(.small)
                     .accessibilityIdentifier("prefs.devices.remove.\(device.id)")
-            } else {
-                Text(String(device.id.prefix(10)) + "…")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(Color.textMuted)
-                    .help(device.id)
             }
         }
         if update != nil || hasProgress {
@@ -147,6 +184,34 @@ private struct DeviceRow: View {
         }
       }
         .padding(.vertical, 4)
+    }
+}
+
+/// A computer's pairing and trusted devices (DeviceTrustViews.swift).
+struct ComputerSecuritySheet: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.dismiss) private var dismiss
+    let device: DeviceSummary
+    var onPair: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                Section(device.name) {
+                    ComputerSecurityRows(device: device, onPair: onPair)
+                }
+            }
+            .formStyle(.grouped)
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+            .padding(14)
+        }
+        .frame(width: 480, height: 460)
+        .task {
+            if appState.trustState(for: device.id) == .paired { appState.requestTrustedDevices(device.id) }
+        }
     }
 }
 

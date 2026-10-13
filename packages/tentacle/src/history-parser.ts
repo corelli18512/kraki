@@ -24,6 +24,49 @@ interface SdkEvent {
   data: Record<string, unknown>;
   id?: string;
   timestamp?: string;
+  /** Set on events of a subagent (task tool): the id of its dispatching tool
+   *  call. The root agent's events never carry it. */
+  agentId?: string;
+}
+
+/**
+ * Parse one events.jsonl line into an event, or null when it is not one.
+ * The file is written by another program (Copilot CLI) and can hold torn or
+ * unexpected rows; valid JSON is not enough (`null`, arrays, rows without
+ * `data`), and a bad row must never stop an import or the live watcher.
+ */
+export function parseEventLine(line: string): SdkEvent | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const event = parsed as Record<string, unknown>;
+  if (typeof event.type !== 'string') return null;
+  const data = event.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  return {
+    type: event.type,
+    data: data as Record<string, unknown>,
+    ...(typeof event.id === 'string' && { id: event.id }),
+    ...(typeof event.timestamp === 'string' && { timestamp: event.timestamp }),
+    ...(typeof event.agentId === 'string' && event.agentId && { agentId: event.agentId }),
+  };
+}
+
+/** {@link convertEvent} for untrusted rows: a row of the right shape whose
+ *  fields have unexpected types is skipped instead of throwing. */
+export function convertEventSafely(
+  event: SdkEvent,
+  meta: ParsedSessionMeta,
+): { type: string; payload: string; ts: string } | null {
+  try {
+    return convertEvent(event, event.timestamp ?? new Date().toISOString(), meta);
+  } catch {
+    return null;
+  }
 }
 
 // ── Converted message format (matches SessionManager's LoggedMessage) ──
@@ -69,15 +112,9 @@ export function parseEventsFile(eventsPath: string): {
   for (const line of content.split('\n')) {
     if (!line.trim()) continue;
 
-    let event: SdkEvent;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      continue; // skip corrupt lines
-    }
-
-    const ts = event.timestamp ?? new Date().toISOString();
-    const converted = convertEvent(event, ts, meta);
+    const event = parseEventLine(line);
+    if (!event) continue; // skip corrupt or unexpected lines
+    const converted = convertEventSafely(event, meta);
     if (converted) {
       seq++;
       messages.push({ seq, ...converted });
@@ -137,6 +174,9 @@ export function convertEvent(
     }
 
     case 'assistant.message': {
+      // A subagent's prose is its own work (it reports back through the task
+      // tool's result), never a reply of the parent — as in the live adapter.
+      if (event.agentId) return null;
       const content = event.data.content as string ?? '';
       if (!content) return null; // skip empty messages (SDK sends these before tool calls)
       return {
@@ -152,7 +192,7 @@ export function convertEvent(
       const toolCallId = event.data.toolCallId as string | undefined;
       return {
         type: 'tool_start',
-        payload: JSON.stringify({ toolName, args, toolCallId }),
+        payload: JSON.stringify({ toolName, args, toolCallId, ...(event.agentId && { parentToolCallId: event.agentId }) }),
         ts,
       };
     }
@@ -181,12 +221,15 @@ export function convertEvent(
           result: result.slice(0, 5000), // Cap result size for backfill
           toolCallId,
           success,
+          ...(event.agentId && { parentToolCallId: event.agentId }),
         }),
         ts,
       };
     }
 
     case 'assistant.turn_end': {
+      // A subagent's turn boundary is not the parent's.
+      if (event.agentId) return null;
       return {
         type: 'idle',
         payload: JSON.stringify({}),

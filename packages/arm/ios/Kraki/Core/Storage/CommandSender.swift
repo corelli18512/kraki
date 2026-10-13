@@ -82,7 +82,7 @@ final class CommandSender {
     @ObservationIgnored private var outboxURL: URL?
     private static let outboxWriteQueue = DispatchQueue(label: "chat.kraki.outbox.write", qos: .utility)
 
-    private weak var appState: AppState?
+    private(set) weak var appState: AppState?
 
     init(appState: AppState, outboxURL: URL? = nil) {
         self.appState = appState
@@ -156,6 +156,8 @@ final class CommandSender {
         // the Tentacle's key not known yet) is transient: keep the input queued
         // and dispatch it when the path is back instead of dropping it.
         guard isSignedIn else { return false }
+        // A steer's bubble appears now: freeze the live draft above it.
+        if delivery == .steer, answerTo == nil { appState?.messageStore.splitCardAtSteer(sessionId, anchor: clientId) }
         if !send(["type": "send_input", "payload": payload], sessionId: sessionId) {
             undispatched.insert(clientId)
         }
@@ -216,14 +218,8 @@ final class CommandSender {
             pendingPayload[Self.afterSeqKey] = AnyCodable(head)
         }
         nextLocalOrder += 1
-        let pending = ChatMessage(
-            type: "pending_input",
-            seq: 0,
-            sessionId: sessionId,
-            deviceId: appState?.deviceId,
-            timestamp: ISO8601.now(),
-            payload: pendingPayload
-        )
+        let pending = ChatMessage(type: "pending_input", seq: 0, sessionId: sessionId, deviceId: appState?.deviceId,
+                                  timestamp: ISO8601.now(), payload: pendingPayload)
         return (pending, payload)
     }
 
@@ -257,6 +253,7 @@ final class CommandSender {
                                                   attachments: attachments, delivery: delivery,
                                                   answerTo: answerTo, state: .correcting)
         pending.payload["originalText"] = AnyCodable(text)
+        if delivery == .steer, answerTo == nil { appState?.messageStore.splitCardAtSteer(sessionId, anchor: clientId) }
         appState?.sendMetrics.created(clientId, kind: .voice, textLength: text.utf8.count,
                                       attachments: attachments?.count ?? 0, pathUp: isDeliveryPathUp(sessionId))
         var bucket = outbox[sessionId] ?? [:]
@@ -287,15 +284,16 @@ final class CommandSender {
               var bucket = outbox[sessionId], var message = bucket[clientId] else { return }
         let fade: [Int]? = uncorrected.flatMap { $0.length > 0 ? [$0.location, $0.length] : nil }
         let oldFade = message.payload["uncorrected"]?.value as? [Int]
-        guard message.content != text || fade != oldFade
-                || (original != nil && original != originalText(sessionId: sessionId, clientId: clientId))
-        else { return }
+        let originalChanged = original != nil && original != originalText(sessionId: sessionId, clientId: clientId)
+        guard message.content != text || fade != oldFade || originalChanged else { return }
         message.payload["content"] = AnyCodable(text)
         if let fade { message.payload["uncorrected"] = AnyCodable(fade) }
         else { message.payload.removeValue(forKey: "uncorrected") }
         if let original { message.payload["originalText"] = AnyCodable(original) }
         bucket[clientId] = message
         outbox[sessionId] = bucket
+        // The original is what a relaunch restores: keep the durable copy current.
+        if originalChanged { persistOutbox() }
     }
 
     /// Correction finished: send `text` now. No-op (false) if the user
@@ -395,7 +393,7 @@ final class CommandSender {
                     }
                     continue
                 }
-                guard !self.isLinkBusy else { continue }
+                guard !self.isLinkBusy, !self.waitsBehindRunningTurn(sessionId, clientId: clientId) else { continue }
                 stalled += step
                 if !resent, stalled >= timeout / 2, self.canResendAutomatically(sessionId) {
                     resent = true
@@ -649,9 +647,7 @@ final class CommandSender {
                     clientId: clientId,
                     timestamp: message.timestamp,
                     order: message.payload["localOrder"]?.intValue ?? 0,
-                    // A still-correcting voice input restores as failed with
-                    // its original transcript, never a half-corrected one.
-                    text: message.payload["originalText"]?.stringValue ?? message.content ?? "",
+                    text: Self.durableText(message, wire: payload),
                     delivery: message.payload["delivery"]?.stringValue,
                     attachments: persistedAttachments,
                     answerTo: message.answerTo,
@@ -743,15 +739,6 @@ final class CommandSender {
         }
         return resolvePrompt(sessionId: sessionId, promptId: permissionId, decision: "deny") {
             self.send(["type": "deny", "payload": payload], sessionId: sessionId)
-        }
-    }
-
-    @discardableResult
-    func alwaysAllow(sessionId: String, permissionId: String, toolKind: String? = nil) -> Bool {
-        var payload: [String: Any] = ["permissionId": permissionId]
-        if let toolKind { payload["toolKind"] = toolKind }
-        return resolvePrompt(sessionId: sessionId, promptId: permissionId, decision: "always_allow") {
-            self.send(["type": "always_allow", "payload": payload], sessionId: sessionId)
         }
     }
 

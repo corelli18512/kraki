@@ -8,11 +8,15 @@ export default defineConfig({
     include: ['src/**/*.test.ts'],
     exclude: ['src/**/*.live.test.ts'],
     testTimeout: 10_000,
+    // These tests drive unpaired (legacy-protocol) apps. Their temporary
+    // computers would otherwise enforce device trust like a fresh install.
+    env: { KRAKI_DEVICE_TRUST: 'compatible' },
   },
   resolve: {
     alias: {
       '@kraki/head': resolve(__dirname, '../head/src/index.ts'),
       '@kraki/tentacle': resolve(__dirname, '../tentacle/src/index.ts'),
+      '@kraki/protocol/schemas': resolve(__dirname, '../protocol/src/schemas.ts'),
       '@kraki/protocol': resolve(__dirname, '../protocol/src/index.ts'),
       '@kraki/crypto': resolve(__dirname, '../crypto/src/index.ts'),
       '@kraki/voice-broker/mock': resolve(__dirname, '../voice-broker/src/mock-doubao.ts'),

@@ -87,7 +87,7 @@ extension SessionDigest {
 
 final class MessageRouter {
 
-    private weak var appState: AppState?
+    private(set) weak var appState: AppState?
     private var retired = false
     let encryptionHandler: EncryptionHandler
 
@@ -176,6 +176,7 @@ final class MessageRouter {
                 // A Tentacle that was away may have missed inputs the Relay
                 // could not hold; re-send what is still waiting for it.
                 if summary.role == .tentacle {
+                    appState?.deviceTrustDevicesChanged()
                     // A Tentacle that (re)connected forgot this app's features.
                     if appState?.deviceStore.deviceFeatures[summary.id]?.contains(PayloadFragments.feature) == true {
                         declareClientFeatures(to: summary.id)
@@ -226,22 +227,7 @@ final class MessageRouter {
             KLog.d("✅ push_token_registered")
 
         case "notification_preview":
-            // Relay-forwarded encrypted push preview for an online Mac.
-            #if os(macOS)
-            guard let appState, let deviceId = appState.deviceId,
-                  let payload = json["payload"] as? [String: Any],
-                  let blob = payload["blob"] as? String,
-                  let key = payload["key"] as? String,
-                  let envelope = try? JSONSerialization.data(withJSONObject: ["blob": blob, "keys": [deviceId: key]]),
-                  let decrypted = try? encryptionHandler.decryptInbound(envelope),
-                  let text = String(data: decrypted.message, encoding: .utf8) else {
-                KLog.d("⚠️ notification_preview could not be decrypted")
-                return
-            }
-            Task { @MainActor in
-                MacNotifications.shared.present(decryptedPreview: text, appState: appState, route: "head")
-            }
-            #endif
+            handleNotificationPreview(json)
 
         case "voice_lease_grant":
             if let lease = Self.decodeVoiceLease(json["lease"]) {
@@ -315,14 +301,9 @@ final class MessageRouter {
     /// Route a decrypted inner message to the appropriate store(s).
     @MainActor
     func handleDataMessage(_ json: Data) {
-        guard !retired, let appState,
-              let dict = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
-              let type = dict["type"] as? String else {
-            KLog.d("⚠️ Failed to parse decrypted inner message")
-            return
-        }
-
-        KLog.d("📨 Inner message: \(type)")
+        // Device-trust messages are handled (or dropped) first.
+        guard !retired, let appState, case let (dict, type)? = Self.parseInner(json),
+              !handleDeviceTrust(type: type, dict: dict, appState: appState) else { return }
 
         // ── Messages without a sessionId ─────────────────────────────────
 
@@ -456,12 +437,11 @@ final class MessageRouter {
         // ── Chat messages ────────────────────────────────────────────────
 
         case "user_message":
-            let delivery = payload?["delivery"] as? String
             // A normal persisted user message starts a fresh turn and clears
             // stale transient card state. A steer remains inside the current
             // agent lifecycle: keep its draft/action intact while ensuring the
-            // late-frame gate stays open.
-            appState.messageStore.beginCardTurn(sessionId, delivery: delivery)
+            // late-frame gate stays open, and freeze the draft above it.
+            appState.messageStore.beginCardTurn(sessionId, userMessage: payload, seq: dict["seq"] as? Int)
             // Persist + materialise the real user_message, then clear
             // any optimistic pending placeholder our outbox is
             // holding for the matching clientId. The render layer
@@ -489,7 +469,7 @@ final class MessageRouter {
         case "agent_message":
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             appState.messageStore.clearRuntimeStatusIfCompacting(sessionId)
-            appState.messageStore.endCardTurn(sessionId)
+            appState.messageStore.landAgentMessage(sessionId, isQuestion: payload?["question"] is [String: Any])
             if let content = payload?["content"] as? String {
                 appState.sessionStore.setAgentTextActivity(sessionId, text: content)
             }
@@ -618,7 +598,8 @@ final class MessageRouter {
             }
 
         case "error":
-            appState.messageStore.clearCard(sessionId)
+            // Not a turn boundary: a retrying turn can recover, and its card
+            // (e.g. a pending permission) must stay. Turn end is signalled separately.
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             let errorText = payload?["message"] as? String ?? "Error"
             // If this error correlates to a pending create/fork/import
