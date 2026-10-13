@@ -819,7 +819,10 @@ struct MessageInputView: View {
                 // calling the submit handler routes the return key
                 // through the same path as the in-app send icon,
                 // matching `.submitLabel(.send)`'s visual hint.
-                if newValue.hasSuffix("\n") {
+                // Only a single typed newline at the end is the return key:
+                // pasted text that happens to end with a newline is kept as
+                // a draft, not sent.
+                if Self.isReturnKeySubmit(old: text, new: newValue) {
                     let trimmed = String(newValue.dropLast())
                     sessionStore.setDraft(sessionId, trimmed)
                     handleModeSubmit()
@@ -1110,7 +1113,4 @@ struct PrimaryGlassCircle: View {
         }
     }
 }
-
-
-
 #endif

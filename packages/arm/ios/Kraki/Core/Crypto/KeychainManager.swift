@@ -198,7 +198,10 @@ public final class KeychainManager {
             return try generateAndStoreKeyPair(tag: Self.signingKeyTag)
         } catch {
             #if os(macOS)
-            usingEphemeralKeys = true
+            // Process-wide, not just this instance: the auth path and the
+            // decryptor each own a KeychainManager, and must not end up with
+            // one ephemeral and one stored key (nothing would decrypt).
+            activateEphemeralKeys()
             return try ephemeralKeyPair(tag: Self.signingKeyTag)
             #else
             throw error
@@ -221,7 +224,10 @@ public final class KeychainManager {
             return try generateAndStoreKeyPair(tag: Self.encryptionKeyTag)
         } catch {
             #if os(macOS)
-            usingEphemeralKeys = true
+            // Process-wide, not just this instance: the auth path and the
+            // decryptor each own a KeychainManager, and must not end up with
+            // one ephemeral and one stored key (nothing would decrypt).
+            activateEphemeralKeys()
             return try ephemeralKeyPair(tag: Self.encryptionKeyTag)
             #else
             throw error

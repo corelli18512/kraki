@@ -198,7 +198,9 @@ func formatCost(_ cost: Double) -> String {
 
 /// Format milliseconds into a human-readable duration: "2.3s", "1m 23s".
 func formatDuration(_ ms: Double) -> String {
-    let totalSeconds = ms / 1_000
+    // Peer-reported: Int(_:) traps on NaN, infinity or values beyond Int.
+    guard ms.isFinite, ms >= 0 else { return "—" }
+    let totalSeconds = min(ms / 1_000, 1e12)
     if totalSeconds < 60 {
         return String(format: "%.1fs", totalSeconds)
     }

@@ -15,9 +15,9 @@ final class ChatUXRegressionTests: XCTestCase {
     }
 
     private var roots: [URL] = []
-    private var windows: [UIWindow] = []
+    var windows: [UIWindow] = []
     private var states: [AppState] = []
-    private let sid = "ux-gate"
+    let sid = "ux-gate"
     private let dev = "ux-gate-device"
 
     override func tearDown() async throws {
@@ -60,7 +60,7 @@ final class ChatUXRegressionTests: XCTestCase {
     /// `onScreen`: attach the window to the simulator's real UIWindowScene so
     /// Core Animation actually renders (needed to sample presentation layers;
     /// a scene-less window never composites and finishes animations at once).
-    private func makeFixture(total: Int, onScreen: Bool = false,
+    func makeFixture(total: Int, onScreen: Bool = false,
                              outbound: (([String: Any]) -> Bool)? = nil) throws -> Fx {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ux-gate-\(UUID().uuidString)")
         roots.append(root)
@@ -111,7 +111,7 @@ final class ChatUXRegressionTests: XCTestCase {
         return nil
     }
 
-    private func drain(_ ms: Int) {
+    func drain(_ ms: Int) {
         RunLoop.main.run(until: Date().addingTimeInterval(Double(ms) / 1000))
     }
 
