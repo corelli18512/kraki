@@ -198,8 +198,8 @@ struct MacChatView: View {
     private var currentMode: SessionMode {
         appState.sessionStore.sessionModes[sessionId] ?? session?.mode ?? .auto
     }
-    /// Always, like iPhone: with the computer offline the Composer says so and
-    /// queues the message until it reconnects (it used to just disappear).
+    /// Always (iPhone does the same): with the computer offline the Composer
+    /// stays mounted, says so, and queues the message until it reconnects.
     private var composerVisible: Bool { true }
     private var effectiveBottomInputHeight: CGFloat {
         // The Composer is a floating overlay. Keep one stable base clearance so
