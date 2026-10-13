@@ -141,19 +141,21 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (!el || !box) return;
     const fit = () => {
       const desktop = window.matchMedia('(min-width: 768px)').matches;
-      if (desktop) {
-        const micWidth = box.querySelector('.kmic') ? 32 : 0;
-        const clearWidth = text.trim() || image ? 26 : 0;
-        el.style.width = `${Math.max(1, box.clientWidth - 5 - 44 - clearWidth - micWidth)}px`;
-      }
+      const micWidth = box.querySelector('.kmic') ? (desktop ? 32 : 44) : 0;
+      const clearWidth = desktop && (text.trim() || image) ? 26 : 0;
+      el.style.width = `${Math.max(1, box.clientWidth - (desktop ? 5 : 0) - 44 - clearWidth - micWidth)}px`;
+      el.style.padding = desktop ? '1px 4px' : '14px 16px 14px 4px';
       el.style.height = '0px';
       const cs = getComputedStyle(el);
       const line = parseFloat(cs.lineHeight) || 20;
       const padding = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
       const stacked = !!text.trim() && (text.includes('\n') || el.scrollHeight > line + padding + 0.5);
       setMultiline(stacked);
+      el.style.padding = '';
       if (desktop) el.style.width = `${Math.max(1, box.clientWidth - 5 - (stacked ? 12 : 44 + (text.trim() || image ? 26 : 0) + (box.querySelector('.kmic') ? 32 : 0)))}px`;
-      el.style.height = `${Math.min(Math.max(el.scrollHeight, line + padding), desktop ? 3 * line + padding : 168)}px`;
+      if (!desktop) el.style.width = '';
+      const fittedPadding = desktop ? padding : stacked ? 17 : 28;
+      el.style.height = `${Math.min(Math.max(el.scrollHeight, line + fittedPadding), desktop ? 3 * line + padding : 168)}px`;
       el.style.width = '';
       updateComposerScrollFade(el);
     };
