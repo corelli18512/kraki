@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { outbox, useOutbox, checkDeadlines } from '../chat/outbox';
-import { alignedRawPrefixLength, stagedVoice } from './staged-input';
+import { alignedRawPrefixLength, mergeVoiceDraft, stagedVoice } from './staged-input';
 
 describe('staged voice input — IOSVoiceComposer completion', () => {
   let send: ReturnType<typeof vi.fn>;
@@ -84,6 +84,12 @@ describe('staged voice input — IOSVoiceComposer completion', () => {
     expect(useOutbox.getState().entries[0]).toMatchObject({ state: 'failed', text: 'raw' });
     checkDeadlines();
     expect(send).not.toHaveBeenCalled();
+  });
+  it('preserves native whitespace, punctuation and CJK boundaries when appending speech', () => {
+    expect(mergeVoiceDraft('Hello ', 'world')).toBe('Hello world');
+    expect(mergeVoiceDraft('Hello', 'world')).toBe('Hello world');
+    expect(mergeVoiceDraft('Hello', ', world')).toBe('Hello, world');
+    expect(mergeVoiceDraft('你好', '世界')).toBe('你好世界');
   });
   it('aligns corrected prefixes ignoring case/whitespace and retaining raw tails', () => {
     expect(alignedRawPrefixLength('hello', 'Hello world')).toBe(5);

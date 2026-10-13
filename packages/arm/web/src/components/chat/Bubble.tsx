@@ -118,7 +118,8 @@ function PendingMark({ clientId, state, ctx }: { clientId: string; state: Pendin
       <button
         type="button"
         className={`kfailed-mark is-${state}`}
-        aria-label={state === 'correcting' ? 'Correcting voice input. Click for options' : state === 'unconfirmed' ? 'Awaiting confirmation. Retry or delete' : 'Not delivered. Retry or delete'}
+        aria-label={state === 'correcting' ? 'Correcting voice input. Click for options' : state === 'unconfirmed' ? 'Awaiting confirmation. Click to retry or delete' : 'Not delivered. Click to retry or delete'}
+        title={state === 'correcting' ? 'Correcting voice input' : state === 'unconfirmed' ? 'Delivery not confirmed yet. Retry uses the same message ID.' : 'Not delivered'}
         onClick={() => setOpen((v) => !v)}
       >{state === 'correcting' ? <AudioLines aria-hidden /> : state === 'unconfirmed' ? <CircleHelp aria-hidden /> : '!'}</button>
       {open && (

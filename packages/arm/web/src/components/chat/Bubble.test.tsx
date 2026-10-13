@@ -102,7 +102,7 @@ describe('Bubble — local delivery lifecycle', () => {
       clientId: 'p', sessionId: 's1', text: 'heard text', timestamp: '', order: 1, state,
     } };
     render(<Bubble row={row} ctx={{ sessionId: 's1', hueSeed: 's1', onRetry, onDelete, onEditPending }} />);
-    fireEvent.click(screen.getByRole('button', { name: state === 'correcting' ? 'Correcting voice input. Click for options' : 'Awaiting confirmation. Retry or delete' }));
+    fireEvent.click(screen.getByRole('button', { name: state === 'correcting' ? 'Correcting voice input. Click for options' : 'Awaiting confirmation. Click to retry or delete' }));
     if (state === 'correcting') expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('menuitem', { name: state === 'correcting' ? 'Send Original' : 'Retry' }));
     expect(onRetry).toHaveBeenCalledWith('p');

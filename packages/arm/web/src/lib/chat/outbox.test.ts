@@ -223,6 +223,29 @@ describe('outbox', () => {
     expect(outbox.forSession('s')[0].state).toBe('sending');
   });
 
+  it('a late echo clears an unconfirmed input instead of leaving a failed preview', () => {
+    const id = outbox.send('s', 'hi');
+    run(Date.now(), 22);
+    expect(outbox.forSession('s')[0].state).toBe('unconfirmed');
+    expect(outbox.confirm('s', id, 'hi')).toBe(true);
+    expect(outbox.forSession('s')).toEqual([]);
+  });
+
+  it('unconfirmed inputs re-greet and reload with the same id, never create a duplicate', () => {
+    outbox.configure({ send: async (m) => { sent.push(m); return true; }, isDeliveryPathUp: () => true, acceptsResend: () => true });
+    const id = outbox.send('s', 'hi');
+    let t = run(Date.now(), 22);
+    expect(outbox.forSession('s')[0].state).toBe('unconfirmed');
+    outbox.resendUnconfirmed(() => true);
+    expect(outbox.forSession('s')[0].state).toBe('sending');
+    t = run(t, 22);
+    expect(outbox.forSession('s')[0].state).toBe('unconfirmed');
+    outbox.reloadForTesting();
+    checkDeadlines();
+    expect(outbox.forSession('s')[0]).toMatchObject({ clientId: id, state: 'sending' });
+    expect(new Set(sent.map((m) => (m.payload as { clientId: string }).clientId))).toEqual(new Set([id]));
+  });
+
   it('discard returns the text', () => {
     const id = outbox.send('s', 'hi');
     expect(outbox.discard(id)).toBe('hi');

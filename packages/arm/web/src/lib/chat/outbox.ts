@@ -14,8 +14,8 @@
  * Entries survive a reload. Whether they reached the Tentacle is unknown, so
  * they wait (`needsResend`) until the session's Tentacle greets: one that
  * deduplicates by clientId (`idempotent_input`) gets them again
- * automatically; an older one would run a duplicate, so they are marked
- * `failed` for the user to decide.
+ * automatically; an older one would run a duplicate, so they keep awaiting
+ * the echo and become `unconfirmed` after the stalled window.
  */
 import { create } from 'zustand';
 import type { Attachment } from '@kraki/protocol';
@@ -130,7 +130,7 @@ function ensureTicker(): void {
 }
 
 /** One confirmation tick (every second). The echo is the confirmation; only
- *  stalled time counts toward failure (see `OutboxDeps.isDeliveryPathUp`). */
+ *  stalled time counts toward unconfirmed status (see `OutboxDeps.isDeliveryPathUp`). */
 export function checkDeadlines(now = Date.now()): void {
   const step = lastTickAt === null ? 0 : Math.max(0, Math.min(now - lastTickAt, MAX_STEP_MS));
   lastTickAt = now;
@@ -147,7 +147,7 @@ export function checkDeadlines(now = Date.now()): void {
       traceEvent({ comp: 'arm', evt: 'OUTBOX-RESEND-DECISION', clientId: entry.clientId, accepts });
       if (accepts) {
         setState(entry.clientId, 'sending');
-        transmit(clearResend(entry));
+        transmit(clearResend(entry), true);
       } else {
         clearResend(entry);
         // No deduplication: wait for an echo, never infer failure or run it twice.

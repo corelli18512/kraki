@@ -317,6 +317,11 @@ export function finishDictation(mode: VoiceFinish) {
     r.staged = staged;
   }
   r.finishMode = mode;
+  // Send during lease/microphone admission must not open the mic afterwards.
+  if (!r.capture && useVoice.getState().phase === 'connecting') {
+    fail('Voice input did not finish. Nothing more was recorded.');
+    return;
+  }
   r.capture?.stop();
   r.capture = null;
   useVoice.setState({ phase: 'finishing', staged: !!r.staged, levels: [] });

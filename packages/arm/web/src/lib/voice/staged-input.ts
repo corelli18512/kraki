@@ -27,8 +27,19 @@ export function alignedRawPrefixLength(corrected: string, raw: string): number {
   return offset > 0 ? rawIndices[offset - 1] + 1 : 0;
 }
 
+const CJK_RANGES = [[0x1100, 0x11ff], [0x2e80, 0x2fff], [0x3000, 0x303f], [0x3040, 0x30ff], [0x3100, 0x31ff],
+  [0x3130, 0x318f], [0x3400, 0x4dbf], [0x4e00, 0x9fff], [0xac00, 0xd7af], [0xf900, 0xfaff],
+  [0xfe30, 0xfe4f], [0xff00, 0xffef], [0x20000, 0x2fa1f]];
+
+/** IOSVoiceComposer.needsSeparator at the web's existing append-to-draft boundary. */
+function needsSeparator(left: string | undefined, right: string | undefined): boolean {
+  if (!left || !right || !left.trim() || !right.trim()) return false;
+  const isCJK = (c: string) => CJK_RANGES.some(([min, max]) => c.codePointAt(0)! >= min && c.codePointAt(0)! <= max);
+  return !isCJK(left) && !isCJK(right) && !'([{<“‘/-'.includes(left) && !'.,!?;:)]}>%”’/-…'.includes(right);
+}
+
 export function mergeVoiceDraft(base: string, spoken: string): string {
-  return [base.trimEnd(), spoken].filter(Boolean).join(base && !/\s$/.test(base) ? ' ' : '');
+  return base + (needsSeparator(Array.from(base).at(-1), Array.from(spoken)[0]) ? ' ' : '') + spoken;
 }
 
 /** IOSVoiceComposer staged completion: failed recognition returns text to the draft,
@@ -40,7 +51,7 @@ export function stagedVoice(clientId: string, base: string, hasAttachment: boole
       if (text === raw) { outbox.updateStaged(clientId, mergeVoiceDraft(base, raw), mergeVoiceDraft(base, raw)); return; }
       covered = Math.max(covered, alignedRawPrefixLength(text, raw));
       const rest = Array.from(raw).slice(covered).join('');
-      const spoken = text + (text && rest && !/\s$/.test(text) && !/^\s/.test(rest) ? ' ' : '') + rest;
+      const spoken = mergeVoiceDraft(text, rest);
       outbox.updateStaged(clientId, mergeVoiceDraft(base, spoken), mergeVoiceDraft(base, raw));
     },
     complete(text, raw, completed) {

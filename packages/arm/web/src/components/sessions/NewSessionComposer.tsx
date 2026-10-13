@@ -61,8 +61,9 @@ const EFFORT_FILL: Record<ReasoningEffort, number> = { low: 0, medium: 1, high: 
 /** SF desktopcomputer: filled display, slim stem and foot (not an outline monitor). */
 function DesktopComputer({ className }: { className: string }) {
   return <svg viewBox="0 0 20 20" className={className} aria-hidden="true" fill="currentColor">
-    <rect x="1" y="2" width="18" height="12" rx="1.5" />
-    <path d="M8.5 14h3v2.5H15v1H5v-1h3.5z" />
+    <path fillRule="evenodd" d="M1.5 2h17A1.5 1.5 0 0 1 20 3.5v11a1.5 1.5 0 0 1-1.5 1.5h-17A1.5 1.5 0 0 1 0 14.5v-11A1.5 1.5 0 0 1 1.5 2ZM1.5 3v9.5h17v-9.5Z" />
+    <rect x="1.5" y="3" width="17" height="9.5" fillOpacity="0.25" />
+    <path d="M8 16h4v1.5h1.5V19h-7v-1.5H8z" />
   </svg>;
 }
 
