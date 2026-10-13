@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Real RSA-4096 key generation per app: slow on a loaded machine.
 vi.setConfig({ testTimeout: 60_000 });
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -746,5 +746,24 @@ describe('device trust — final review', () => {
     env.deliver(withheld, phone.id);
     expect(readTrustPolicy(join(home, 'trust'))).toEqual({ enforce: true, revision: rev + 1 });
     expect(env.client.deviceTrust!.enforced).toBe(true);
+  });
+});
+
+describe('device trust — follow-up review', () => {
+  it('DT503-07: a stale lock is taken over, a live one is never removed', () => {
+    const dir = join(home, 'trust');
+    mkdirSync(dir, { recursive: true });
+    // Abandoned lock (holder died): taken over.
+    writeFileSync(join(dir, 'policy.lock'), 'dead.token');
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(join(dir, 'policy.lock'), old, old);
+    const store = new TrustStore(dir);
+    expect(store.setPolicy({ enforce: true })).toBe(true);
+    expect(existsSync(join(dir, 'policy.lock'))).toBe(false);
+    // Live lock (fresh): the writer waits, then gives up without touching it.
+    writeFileSync(join(dir, 'policy.lock'), 'live.token');
+    expect(() => store.setPolicy({ enforce: false })).toThrow(/locked/);
+    expect(readFileSync(join(dir, 'policy.lock'), 'utf8')).toBe('live.token');
+    expect(readTrustPolicy(dir).enforce).toBe(true);
   });
 });

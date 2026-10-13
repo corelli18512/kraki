@@ -415,18 +415,6 @@ enum DeviceTrustInbound {
     /// where session ownership is known) drops any that touch a session of a
     /// paired computer.
     static let unsignedKey = "__krakiUnsigned"
-    /// A signed `trust_revoked` from a pinned computer in compatible mode:
-    /// forget the pin right here on the decrypt queue, so the unpaired
-    /// messages that follow it are accepted (not taken for forgeries).
-    static func applyRevocation(_ data: Data, store: TentacleTrustStore = .shared) {
-        guard let inner = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              inner["type"] as? String == "trust_revoked",
-              let from = inner[signedByKey] as? String, from == inner["deviceId"] as? String,
-              store.pin(from) != nil,
-              (inner["payload"] as? [String: Any])?["enforced"] as? Bool != true else { return }
-        store.update(from) { $0 = nil }
-    }
-
     /// Session ownership: a pinned claimant outranks an unpinned owner.
     static func claimantOutranksOwner(_ claimant: String, _ owner: String) -> Bool {
         TentacleTrustStore.shared.pin(claimant) != nil && TentacleTrustStore.shared.pin(owner) == nil

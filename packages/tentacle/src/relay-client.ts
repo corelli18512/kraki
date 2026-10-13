@@ -1668,6 +1668,9 @@ export class RelayClient {
   /** The trusted-devices list, for paired apps' Settings. */
   private trustedDevicesMessage(): Record<string, unknown> {
     const trust = this.deviceTrust!;
+    // Report what is on disk now (the CLI may have just changed it), so the
+    // revision an app's next request names is current.
+    if (trust.store.refresh()) queueMicrotask(() => this.reevaluateAllApps());
     return {
       type: 'trusted_devices',
       deviceId: this.authInfo?.deviceId ?? '',

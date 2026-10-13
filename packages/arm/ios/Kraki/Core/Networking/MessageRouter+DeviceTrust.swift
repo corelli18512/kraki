@@ -60,7 +60,7 @@ extension MessageRouter {
     func handleDeviceTrust(type: String, dict: [String: Any], appState: AppState) -> Bool {
         let unsigned = dict[DeviceTrustInbound.unsignedKey] as? Bool == true
         let signedBy = dict[DeviceTrustInbound.signedByKey] as? String
-        if let signedBy { appState.noteSignedFrom(signedBy) }
+        if let signedBy { appState.noteSignedFrom(signedBy, type: type) }
         if unsigned, TentacleTrustStore.shared.hasPins {
             let store = TentacleTrustStore.shared
             for sid in Self.referencedSessionIds(dict) {
@@ -84,8 +84,7 @@ extension MessageRouter {
             }
             if type == "pair_result" { appState.handlePairResult(dict) } else { appState.handleTrustedDevices(dict) }
         case "trust_revoked":
-            // Only from the computer itself, signed (the pin was already
-            // dropped on the decrypt queue when it is compatible).
+            // Only from the computer itself, signed.
             guard let signedBy, signedBy == dict["deviceId"] as? String else { return true }
             appState.handleTrustRevoked(dict)
         case "trust_required":
@@ -107,6 +106,7 @@ extension MessageRouter {
             guard let owner = appState.sessionStore.sessions[sid]?.deviceId, owner != signer,
                   store.pin(owner) == nil else { continue }
             KLog.d("🔏 device trust: \(sid.prefix(12)) taken back from unpinned \(owner.prefix(12)) — dropping its history")
+            appState.messageProvider?.resetSession(sid)
             appState.messageStore.deleteSessionMessages(sid)
             appState.sessionStore.sessionPreviews[sid] = nil
         }

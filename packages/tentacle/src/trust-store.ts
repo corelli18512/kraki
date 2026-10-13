@@ -24,7 +24,7 @@
  */
 
 import {
-  chmodSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync,
+  chmodSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -135,28 +135,45 @@ function writePrivateJson(path: string, value: unknown): void {
   renameSync(tmp, path);
 }
 
-/** Run `fn` holding `<dir>/<name>` (a lock file shared by every process). */
+/**
+ * Run `fn` holding `<dir>/<name>`, a lock file shared by every process. The
+ * file holds a unique token: only its owner removes it, and a lock older than
+ * 10 s (its holder died — critical sections take milliseconds) is taken over
+ * by renaming it aside and checking it is still the one inspected, so a lock
+ * another process just acquired is never removed.
+ */
 function withTrustLock<T>(dir: string, name: string, fn: () => T): T {
   ensureDir(dir);
   const lock = join(dir, name);
+  const token = `${process.pid}.${randomUUID()}`;
   const deadline = Date.now() + 3_000;
-  let fd: number | null = null;
-  while (fd === null) {
+  for (;;) {
     try {
-      fd = openSync(lock, 'wx', 0o600);
+      writeFileSync(lock, token, { mode: 0o600, flag: 'wx' });
+      break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-      // A holder that died leaves the lock behind; it is stale after 10 s.
-      try { if (Date.now() - statSync(lock).mtimeMs > 10_000) unlinkSync(lock); } catch { /* raced */ }
-      if (Date.now() > deadline) throw new Error('Device trust settings are locked by another process');
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
     }
+    try {
+      const st = statSync(lock);
+      if (Date.now() - st.mtimeMs > 10_000) {
+        const seen = readFileSync(lock, 'utf8');
+        const aside = `${lock}.${token}.stale`;
+        renameSync(lock, aside);
+        const moved = readFileSync(aside, 'utf8');
+        if (moved === seen) unlinkSync(aside);
+        // Someone replaced it between our read and rename: put theirs back.
+        else try { linkSync(aside, lock); } finally { unlinkSync(aside); }
+        continue;
+      }
+    } catch { /* raced with its owner: retry */ }
+    if (Date.now() > deadline) throw new Error('Device trust settings are locked by another process');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
   }
   try {
     return fn();
   } finally {
-    closeSync(fd);
-    try { unlinkSync(lock); } catch { /* gone */ }
+    try { if (readFileSync(lock, 'utf8') === token) unlinkSync(lock); } catch { /* gone */ }
   }
 }
 

@@ -115,8 +115,8 @@ enum PairingFailureText {
         case "no_local_enrollment": return "Kraki on this Mac could not confirm the pairing. Restart Kraki and try again."
         case "stale", "from_future": return "This device's clock is off. Check the date and time, then scan again."
         case "trust_required": return "This computer only accepts paired devices. Scan its code to pair."
-        case "revoked": return "This device is no longer paired with it and now connects without device trust. Scan its code to pair again."
-        case "revoked_enforced": return "This device is no longer paired with it. Scan its code to pair again."
+        case "revoked": return "This device's pairing was revoked. Scan the computer's code to pair again, or Forget Pairing to connect without device trust."
+        case "policy_conflict": return "The setting was just changed on the computer or another device. Check it and try again."
         case "policy_unconfirmed": return "The computer didn't confirm the change. Check that it's online, then try again."
         case "local_keys_missing": return "Kraki on this Mac hasn't set up pairing yet. Update or restart Kraki, then try again."
         default: return "Pairing was refused (\(reason)). Run `kraki connect` on the computer and scan the new code."
@@ -332,25 +332,24 @@ extension AppState {
 
     /// The computer stopped trusting this app (revoked here, on another
     /// device or with `kraki devices revoke`).
+    ///
+    /// The computer's keys stay pinned (nothing is ever sent to a key the
+    /// relay reports): the user scans its code to pair again, or chooses
+    /// Forget Pairing. A relay replaying an old notice can't remove a pin —
+    /// the next signed message from the computer restores the pairing.
     func handleTrustRevoked(_ dict: [String: Any]) {
-        guard let tentacleId = dict["deviceId"] as? String else { return }
-        let enforced = (dict["payload"] as? [String: Any])?["enforced"] as? Bool == true
+        guard let tentacleId = dict["deviceId"] as? String, TentacleTrustStore.shared.pin(tentacleId) != nil else { return }
         let name = deviceStore.devices[tentacleId]?.name ?? "your computer"
         deviceTrust.info[tentacleId] = nil
         deviceTrust.stoppedSigning.remove(tentacleId)
-        if enforced {
-            // Must pair again to connect at all.
-            TentacleTrustStore.shared.update(tentacleId) { pin in
-                guard var updated = pin else { return }
-                updated.paired = false
-                updated.lastError = "trust_required"
-                pin = updated
-            }
-        } else {
-            // Compatible: back to the unpaired connection (pin already dropped).
-            TentacleTrustStore.shared.update(tentacleId) { $0 = nil }
+        deviceTrust.dismissedBanners.remove(tentacleId)
+        TentacleTrustStore.shared.update(tentacleId) { pin in
+            guard var updated = pin else { return }
+            updated.paired = false
+            updated.lastError = "revoked"
+            pin = updated
         }
-        deviceTrust.feedback = .failed(name: name, reason: enforced ? "revoked_enforced" : "revoked")
+        deviceTrust.feedback = .failed(name: name, reason: "revoked")
         KLog.d("🔓 device trust: \(tentacleId.prefix(12)) revoked this device")
     }
 
@@ -365,6 +364,11 @@ extension AppState {
                                       via: d["via"] as? String ?? "qr", pairedAt: d["pairedAt"] as? String ?? "")
         }
         let enforced = payload["enforced"] as? Bool == true
+        if let pending = deviceTrust.info[tentacleId]?.pendingEnforce, pending != enforced {
+            // Our request named an older revision: the setting was changed
+            // elsewhere in the meantime and the computer kept that choice.
+            deviceTrust.feedback = .failed(name: deviceStore.devices[tentacleId]?.name ?? "your computer", reason: "policy_conflict")
+        }
         deviceTrust.info[tentacleId] = ComputerTrustInfo(
             enforced: enforced, policyLocked: payload["policyLocked"] as? Bool == true, devices: devices,
             policyRevision: (payload["policyRevision"] as? NSNumber)?.intValue ?? 0)
@@ -412,9 +416,19 @@ extension AppState {
         KLog.d("⚠️ device trust: \(tentacleId.prefix(12)) sent unsigned messages")
     }
 
-    /// A signed message from the computer: it still signs.
-    func noteSignedFrom(_ tentacleId: String) {
+    /// A signed message from the computer: it still signs — and still trusts
+    /// this app, if it is ordinary traffic (an earlier "revoked" notice was
+    /// then an old one the relay held back).
+    func noteSignedFrom(_ tentacleId: String, type: String) {
         if deviceTrust.stoppedSigning.contains(tentacleId) { deviceTrust.stoppedSigning.remove(tentacleId) }
+        guard !["trust_revoked", "trust_required", "pair_result"].contains(type),
+              let pin = TentacleTrustStore.shared.pin(tentacleId), !pin.paired, pin.lastError == "revoked" else { return }
+        TentacleTrustStore.shared.update(tentacleId) { pin in
+            guard var updated = pin else { return }
+            updated.paired = true
+            updated.lastError = nil
+            pin = updated
+        }
     }
 
     /// Stop using device trust with this computer (e.g. Kraki was downgraded
@@ -473,7 +487,7 @@ extension AppState {
         let existing = TentacleTrustStore.shared.pin(tentacleId)
         // Same keys, and paired or pairing in progress: nothing to do.
         if let existing, existing.identityKey == ik, existing.encryptionKey == xk,
-           existing.paired || existing.lastError == nil { return }
+           existing.paired || existing.lastError == nil || existing.lastError == "revoked" { return }
         TentacleTrustStore.shared.update(tentacleId) { pin in
             pin = TentaclePin(identityKey: ik, encryptionKey: xk, paired: false, secret: nil, via: "local", pinnedAt: Date())
         }

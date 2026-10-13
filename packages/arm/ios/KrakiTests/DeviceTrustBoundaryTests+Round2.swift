@@ -120,21 +120,23 @@ extension DeviceTrustBoundaryTests {
         XCTAssertNotNil(payload["keys"], "unpaired again: legacy RSA envelope")
     }
 
-    /// PR review: a signed trust_revoked (compatible) drops the pin before the
-    /// unpaired messages behind it are decrypted; unsigned ones change nothing.
-    func testSignedRevocationReturnsToUnpairedConnection() throws {
+    /// trust_revoked never removes a pin: the computer is marked revoked
+    /// (pair again or Forget Pairing). Unsigned notices change nothing, and a
+    /// replayed old one is undone by the next signed message (DT503-06).
+    func testRevocationKeepsThePinAndAReplayedOneIsUndone() throws {
         pin()
         try seedSession()
-        // Unsigned "revocation" from the relay: ignored.
         try route(legacyEnvelope(message("trust_revoked", device: computer, payload: ["enforced": false]), src: computer))
-        XCTAssertNotNil(TentacleTrustStore.shared.pin(computer))
-        // Signed by the computer: the pin goes at once (decrypt queue)…
+        XCTAssertEqual(app.trustState(for: computer), .paired, "unsigned notice ignored")
         try route(signedEnvelope(message("trust_revoked", device: computer, payload: ["enforced": false]), key: signer))
-        XCTAssertNil(TentacleTrustStore.shared.pin(computer))
-        // …so its unpaired messages that follow are accepted.
-        try route(legacyEnvelope(message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "unpaired", "state": "idle"]]]), src: computer))
-        XCTAssertEqual(app.sessionStore.sessions[sid]?.title, "unpaired")
-        XCTAssertNotEqual(app.trustState(for: computer), .stoppedSigning)
+        XCTAssertNotNil(TentacleTrustStore.shared.pin(computer), "keys stay pinned")
+        XCTAssertEqual(app.trustState(for: computer), .failed("revoked"))
+        // Still encrypting to the pinned key, never to a relay-reported one.
+        XCTAssertTrue(app.sendEncryptedMessage(message("send_input", session: sid, payload: ["text": "after revoke"])))
+        XCTAssertEqual(try XCTUnwrap(outbound().last)["v"] as? Int, 2)
+        // The computer's next ordinary signed message: the notice was stale.
+        try route(signedEnvelope(message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "t", "state": "idle"]]]), key: signer))
+        XCTAssertEqual(app.trustState(for: computer), .paired)
     }
 
     /// PR review: a relay-assigned app id never becomes a path outside local-enroll.
@@ -163,6 +165,26 @@ extension DeviceTrustBoundaryTests {
         XCTAssertEqual(app.sessionStore.sessions[sid]?.deviceId, computer)
         XCTAssertFalse(app.messageDatabase.messagesAfter(sid, afterSeq: 0, limit: 100).contains { $0.content == "FORGED" })
         XCTAssertNotEqual(app.sessionStore.sessionPreviews[sid]?.text, "FORGED")
+    }
+
+    /// DT503-02: messages buffered in the provider (a seq gap) are dropped
+    /// with the takeover, not re-drained into the authenticated session.
+    func testTakeoverDropsBufferedUnauthenticatedMessages() throws {
+        pin()
+        let relayKey = try CryptoManager().generateKeyPair()
+        let relayPublic = try CryptoManager().exportPublicKeySPKI(relayKey.publicKey)
+        app.deviceStore.setDevices([
+            DeviceSummary(id: computer, name: "Pinned", role: .tentacle, kind: .desktop, encryptionKey: relayPublic, online: true),
+            DeviceSummary(id: other, name: "Relay made", role: .tentacle, kind: .desktop, encryptionKey: relayPublic, online: true),
+        ])
+        try route(legacyEnvelope(message("session_list", device: other, payload: ["sessions": [["id": sid, "title": "forged", "state": "idle", "lastSeq": 0]]]), src: other))
+        // Forged seq 2 with nothing before it: held in the provider's buffer.
+        try route(legacyEnvelope(message("agent_message", device: other, session: sid, payload: ["content": "BUFFERED_FORGERY"]).merging(["seq": 2]) { $1 }, src: other))
+        try route(signedEnvelope(message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "authentic", "state": "idle", "lastSeq": 1]]]), key: signer))
+        // The computer's genuine seq 1.
+        try route(signedEnvelope(message("agent_message", device: computer, session: sid, payload: ["content": "AUTHENTIC"]).merging(["seq": 1]) { $1 }, key: signer))
+        let contents = app.messageDatabase.messagesAfter(sid, afterSeq: 0, limit: 100).compactMap(\.content)
+        XCTAssertFalse(contents.contains("BUFFERED_FORGERY"), "\(contents)")
     }
 
     #if os(iOS)
