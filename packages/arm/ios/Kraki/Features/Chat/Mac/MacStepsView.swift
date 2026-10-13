@@ -52,6 +52,9 @@ struct MacStepsView: View {
                             systemImage: "checkmark.circle",
                             description: Text("This turn completed without a recorded tool trace.")
                         )
+                        // Fill the body so the header stays pinned to the top of the sheet;
+                        // without this the whole sheet content is vertically centered.
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if let current = subagentPath.last {
                         SubagentPageView(
                             sessionId: sessionId,
