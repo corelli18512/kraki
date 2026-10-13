@@ -55,6 +55,7 @@
 
 .kp-section + .kp-section-untitled { margin-top:10px; }
 .kp-voice fieldset > .kp-row { border-top:1px solid #e6e6e6; }
+.dark .kp-voice fieldset > .kp-row { border-color:#34393b; }
 .kp-row > .text-text-secondary { color:#808080; }
 .kp-about .kp-brand-title { color:#052847; }
 .dark .kp-about .kp-brand-title { color:#dbe8f4; }
