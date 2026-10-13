@@ -386,6 +386,12 @@
   font-weight: 800;
   cursor: pointer;
 }
+.kfailed-mark.is-unconfirmed, .kfailed-mark.is-correcting { background: none; }
+.kfailed-mark.is-unconfirmed { color: #ff9500; }
+.dark .kfailed-mark.is-unconfirmed { color: #ff9f0a; }
+.kfailed-mark.is-correcting { color: rgba(0, 0, 0, 0.5); }
+.dark .kfailed-mark.is-correcting { color: rgba(255, 255, 255, 0.55); }
+.kfailed-mark svg { width: 14px; height: 14px; }
 .kmenu {
   position: absolute;
   bottom: 28px;
@@ -987,7 +993,7 @@
   .kcomposer-field {
     min-height: 36px; padding-right: 5px; border: 0; border-radius: 18px;
     background: rgba(253, 253, 254, 0.85);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06), inset 0 0 0 0.5px rgba(255, 255, 255, 0.65);
+    box-shadow: 0 16px 32px rgba(0, 0, 0, 0.065), inset 0 0 0 0.5px rgba(255, 255, 255, 0.65);
   }
   .dark .kcomposer-field { background: rgba(40, 40, 40, 0.8); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16), inset 0 0 0 0.5px rgba(255, 255, 255, 0.12); }
   .kcomposer-text { padding: 8px 0; }
@@ -1003,7 +1009,8 @@
   .kcomposer-attach { padding-left: 6px; height: 36px; color: rgba(0, 0, 0, 0.5); }
   .dark .kcomposer-attach { color: rgba(255, 255, 255, 0.55); }
   .kcomposer-attach svg { width: 19px; height: 19px; stroke-width: 2.1; }
-  .kcomposer-unattach:disabled { opacity: 0.4; cursor: default; }
+  /* Native disabled controls dim their secondary tint before the explicit .4 opacity. */
+  .kcomposer-attach:disabled, .kcomposer-unattach:disabled { opacity: 0.2; cursor: default; }
   .kcomposer-unattach { width: 12px; height: 12px; }
   .kcomposer-unattach svg { width: 8px; height: 8px; }
   .kcomposer-field .kmic { width: 32px; height: 36px; }

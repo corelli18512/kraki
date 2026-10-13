@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useMemo, useLayoutEffect, useRef, useState } from 'react';
 import type { AgentCapabilities, DeviceSummary, ReasoningEffort } from '@kraki/protocol';
-import { ArrowUp, Monitor, Laptop, MoonStar, Smartphone, Check, ChevronDown } from 'lucide-react';
+import { ArrowUp, Laptop, MoonStar, Smartphone, Check, ChevronDown } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import { desktop } from '../../lib/desktop';
@@ -57,6 +57,15 @@ const EFFORT_DETAIL: Record<ReasoningEffort, string> = {
   low: 'Fastest replies', medium: 'Balanced', high: 'Thinks longer on hard problems', xhigh: 'Most thorough, slowest', max: 'Most thorough, slowest',
 };
 const EFFORT_FILL: Record<ReasoningEffort, number> = { low: 0, medium: 1, high: 2, xhigh: 3, max: 3 };
+
+/** SF desktopcomputer: filled display, slim stem and foot (not an outline monitor). */
+function DesktopComputer({ className }: { className: string }) {
+  return <svg viewBox="0 0 20 20" className={className} aria-hidden="true" fill="currentColor">
+    <path fillRule="evenodd" d="M1.5 2h17A1.5 1.5 0 0 1 20 3.5v11a1.5 1.5 0 0 1-1.5 1.5h-17A1.5 1.5 0 0 1 0 14.5v-11A1.5 1.5 0 0 1 1.5 2ZM1.5 3v9.5h17v-9.5Z" />
+    <rect x="1.5" y="3" width="17" height="9.5" fillOpacity="0.25" />
+    <path d="M8 16h4v1.5h1.5V19h-7v-1.5H8z" />
+  </svg>;
+}
 
 /** gauge.with.dots.needle.{0,33,67,100}percent */
 function EffortGauge({ effort }: { effort?: ReasoningEffort }) {
@@ -326,7 +335,7 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
                       title={d.id === localId ? localName : d.name}
                       detail={d.id === localId ? d.name : null}
                       selected={d.id === deviceId}
-                      mark={d.id === localId ? <Laptop className="ns-online" /> : <Monitor className="ns-online" />}
+                      mark={d.id === localId ? <Laptop className="ns-online" /> : <DesktopComputer className="ns-online" />}
                       onClick={() => { setDeviceId(d.id); userPickedDevice.current = true; close(); }}
                     />
                   ))}
@@ -334,7 +343,7 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
                 {offline.length > 0 && (
                   <ChoiceSection title="Offline">
                     {offline.slice(0, 6).map((d) => (
-                      <ChoiceRow key={d.id} title={d.name} detail="Open Kraki on it to use it" enabled={false} mark={<Monitor className="ns-offline" />} />
+                      <ChoiceRow key={d.id} title={d.name} detail="Open Kraki on it to use it" enabled={false} mark={<DesktopComputer className="ns-offline" />} />
                     ))}
                     {offline.length > 6 && <div className="ns-more">and {offline.length - 6} more offline</div>}
                   </ChoiceSection>

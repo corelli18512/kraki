@@ -4,7 +4,7 @@
  *
  * A sent message shows at once as the user's own bubble (`sending`). The
  * Tentacle echo (`user_message` carrying the same `clientId`) confirms it and
- * the entry disappears as the real bubble lands. It becomes `failed`
+ * the entry disappears as the real bubble lands. It becomes `unconfirmed`
  * (Retry / Delete) only after 30 s of *stalled* time, accumulated in steps:
  * relay connected and live, device online, and no payload arriving. Time on a
  * dead, reconnecting or busy link never counts: unconfirmed is not failed.
@@ -14,14 +14,15 @@
  * Entries survive a reload. Whether they reached the Tentacle is unknown, so
  * they wait (`needsResend`) until the session's Tentacle greets: one that
  * deduplicates by clientId (`idempotent_input`) gets them again
- * automatically; an older one would run a duplicate, so they are marked
- * `failed` for the user to decide.
+ * automatically; an older one would run a duplicate, so they keep awaiting
+ * the echo and become `unconfirmed` after the stalled window.
  */
 import { create } from 'zustand';
 import type { Attachment } from '@kraki/protocol';
 import { traceEvent } from '../trace';
 
-export type PendingState = 'sending' | 'failed';
+export type PendingState = 'sending' | 'unconfirmed' | 'failed' | 'correcting';
+export interface InputOptions { attachments?: Attachment[]; delivery?: 'prompt' | 'steer'; answerTo?: string }
 
 export interface PendingInput {
   clientId: string;
@@ -37,6 +38,9 @@ export interface PendingInput {
   state: PendingState;
   /** Unknown fate: send again once the Tentacle is known to deduplicate. */
   needsResend?: boolean;
+  /** A staged voice input not yet accepted by transport; safe even without deduplication. */
+  needsDispatch?: boolean;
+  originalText?: string;
 }
 
 interface OutboxDeps {
@@ -79,7 +83,7 @@ function restore(): PendingInput[] {
     if (!raw) return [];
     const stored = JSON.parse(raw) as PendingInput[];
     if (!Array.isArray(stored)) return [];
-    const restored = stored.map((e) => (e.state === 'failed' ? e : { ...e, state: 'sending' as const, needsResend: true }));
+    const restored = stored.map((e) => (e.state === 'failed' || e.state === 'correcting' ? { ...e, state: 'failed' as const, text: e.originalText ?? e.text } : { ...e, state: 'sending' as const, needsResend: true }));
     if (restored.some((e) => e.needsResend)) ensureTicker();
     return restored;
   } catch {
@@ -126,22 +130,28 @@ function ensureTicker(): void {
 }
 
 /** One confirmation tick (every second). The echo is the confirmation; only
- *  stalled time counts toward failure (see `OutboxDeps.isDeliveryPathUp`). */
+ *  stalled time counts toward unconfirmed status (see `OutboxDeps.isDeliveryPathUp`). */
 export function checkDeadlines(now = Date.now()): void {
   const step = lastTickAt === null ? 0 : Math.max(0, Math.min(now - lastTickAt, MAX_STEP_MS));
   lastTickAt = now;
   for (const entry of useOutbox.getState().entries) {
-    if (entry.state !== 'sending') continue;
+    if (entry.state !== 'sending' && entry.state !== 'unconfirmed') continue;
+    if (entry.needsDispatch) {
+      if (deps?.isDeliveryPathUp(entry.sessionId)) transmit(entry, true);
+      continue;
+    }
     if (entry.needsResend) {
       if (!deps?.isDeliveryPathUp(entry.sessionId)) continue;
       const accepts = deps.acceptsResend?.(entry.sessionId);
       if (accepts === undefined) continue;
       traceEvent({ comp: 'arm', evt: 'OUTBOX-RESEND-DECISION', clientId: entry.clientId, accepts });
       if (accepts) {
-        transmit(clearResend(entry));
+        setState(entry.clientId, 'sending');
+        transmit(clearResend(entry), true);
       } else {
         clearResend(entry);
-        setState(entry.clientId, 'failed');
+        // No deduplication: wait for an echo, never infer failure or run it twice.
+        stalls.set(entry.clientId, { stalledMs: 0, resent: false });
       }
       continue;
     }
@@ -156,9 +166,9 @@ export function checkDeadlines(now = Date.now()): void {
       void deps.send({ type: 'send_input', sessionId: entry.sessionId, payload: wirePayload(entry) });
     }
     if (stall.stalledMs >= confirmationTimeoutMs) {
-      traceEvent({ comp: 'arm', evt: 'OUTBOX-FAILED', clientId: entry.clientId, stalledMs: stall.stalledMs });
+      traceEvent({ comp: 'arm', evt: 'OUTBOX-UNCONFIRMED', clientId: entry.clientId, stalledMs: stall.stalledMs });
       stalls.delete(entry.clientId);
-      setState(entry.clientId, 'failed');
+      setState(entry.clientId, 'unconfirmed');
     }
   }
 }
@@ -168,7 +178,7 @@ function clearResend(entry: PendingInput): PendingInput {
   return { ...entry, needsResend: undefined };
 }
 
-function transmit(entry: PendingInput): void {
+function transmit(entry: PendingInput, queueOnRefusal = false): void {
   stalls.set(entry.clientId, { stalledMs: 0, resent: false });
   lastTickAt ??= Date.now();
   ensureTicker();
@@ -176,7 +186,10 @@ function transmit(entry: PendingInput): void {
   if (!send) { setState(entry.clientId, 'failed'); return; }
   void send({ type: 'send_input', sessionId: entry.sessionId, payload: wirePayload(entry) }).then((ok) => {
     traceEvent({ comp: 'arm', evt: 'OUTBOX-TRANSMIT', clientId: entry.clientId, ok });
-    if (!ok) { stalls.delete(entry.clientId); setState(entry.clientId, 'failed'); }
+    if (!useOutbox.getState().entries.some((e) => e.clientId === entry.clientId)) return;
+    if (queueOnRefusal) {
+      update((entries) => entries.map((e) => e.clientId === entry.clientId ? { ...e, needsDispatch: !ok || undefined } : e));
+    } else if (!ok) { stalls.delete(entry.clientId); setState(entry.clientId, 'failed'); }
   });
 }
 
@@ -206,7 +219,7 @@ export const outbox = {
   },
 
   /** Send a message (optimistic bubble + transport). Returns its clientId. */
-  send(sessionId: string, text: string, opts: { attachments?: Attachment[]; delivery?: 'prompt' | 'steer'; answerTo?: string } = {}): string {
+  send(sessionId: string, text: string, opts: InputOptions = {}): string {
     const entries = useOutbox.getState().entries;
     const entry: PendingInput = {
       clientId: newClientId(),
@@ -224,10 +237,47 @@ export const outbox = {
     return entry.clientId;
   },
 
+  /** Local voice send: nothing goes to transport until recognition completes. */
+  stage(sessionId: string, text: string, opts: InputOptions = {}): string {
+    const entries = useOutbox.getState().entries;
+    const entry: PendingInput = {
+      clientId: newClientId(), sessionId, text: text || '…', originalText: text,
+      ...opts, delivery: opts.answerTo ? undefined : opts.delivery === 'steer' ? 'steer' : undefined,
+      timestamp: new Date().toISOString(),
+      order: entries.reduce((n, e) => Math.max(n, e.order), 0) + 1, state: 'correcting',
+    };
+    update((list) => [...list, entry]);
+    return entry.clientId;
+  },
+
+  isStaged(clientId: string): boolean {
+    return useOutbox.getState().entries.some((e) => e.clientId === clientId && e.state === 'correcting');
+  },
+
+  updateStaged(clientId: string, text: string, originalText: string): void {
+    update((list) => list.map((e) => e.clientId === clientId && e.state === 'correcting'
+      ? { ...e, text: text || '…', originalText } : e));
+  },
+
+  dispatchStaged(clientId: string, text: string): boolean {
+    const entry = useOutbox.getState().entries.find((e) => e.clientId === clientId && e.state === 'correcting');
+    if (!entry) return false; // deleted / sent original: late speech events cannot resurrect it
+    const sending = { ...entry, text, state: 'sending' as const };
+    update((list) => list.map((e) => e.clientId === clientId ? sending : e));
+    transmit(sending, true);
+    return true;
+  },
+
+  failStaged(clientId: string, text: string): void {
+    update((list) => list.map((e) => e.clientId === clientId && e.state === 'correcting'
+      ? { ...e, text, originalText: text, state: 'failed' as const } : e));
+  },
+
   /** Resend with the SAME clientId (idempotent on the Tentacle side). */
   retry(clientId: string): void {
     const entry = useOutbox.getState().entries.find((e) => e.clientId === clientId);
     if (!entry) return;
+    if (entry.state === 'correcting') { this.dispatchStaged(clientId, entry.originalText ?? entry.text); return; }
     setState(clientId, 'sending');
     transmit({ ...entry, state: 'sending' });
   },
@@ -237,7 +287,7 @@ export const outbox = {
    *  An older Tentacle is left alone: those inputs keep waiting for their
    *  echo (the normal confirmation timeout applies). */
   resendUnconfirmed(inSession: (sessionId: string) => boolean): void {
-    const eligible = (e: PendingInput) => e.state === 'sending' && inSession(e.sessionId)
+    const eligible = (e: PendingInput) => (e.state === 'sending' || e.state === 'unconfirmed') && inSession(e.sessionId)
       && deps?.acceptsResend?.(e.sessionId) === true;
     traceEvent({ comp: 'arm', evt: 'OUTBOX-REGREET', pending: useOutbox.getState().entries.filter((e) => e.state === 'sending').map((e) => e.clientId), eligible: useOutbox.getState().entries.filter(eligible).map((e) => e.clientId) });
     if (!useOutbox.getState().entries.some(eligible)) return;

@@ -1,3 +1,4 @@
+import { outbox, checkDeadlines } from './outbox';
 import { describe, expect, it } from 'vitest';
 import { sessionTimeLabel, sessionTimestamp, sessionPendingPreview, type SessionPendingInput } from './session-card';
 
@@ -53,5 +54,24 @@ describe('sessionTimestamp (native effective preview date)', () => {
     for (const preview of [undefined, '', 'invalid']) expect(sessionTimestamp(preview, created)).toBe(created);
     expect(sessionTimestamp(undefined, 'invalid')).toBe('');
     expect(sessionTimestamp()).toBe('');
+  });
+});
+
+describe('native delivery preview lifecycle producers', () => {
+  it('projects actual correcting/unconfirmed outbox states, with failed-first native priority', () => {
+    outbox.reset();
+    outbox.configure({ send: async () => true, isDeliveryPathUp: () => true });
+    outbox.setConfirmationTimeout(1000);
+    const staged = outbox.stage('s', 'raw words');
+    expect(sessionPendingPreview(outbox.forSession('s'), 's', false)).toMatchObject({ text: 'raw words', status: 'correcting' });
+    outbox.dispatchStaged(staged, 'Fixed words');
+    checkDeadlines(Date.now() + 2000);
+    expect(sessionPendingPreview(outbox.forSession('s'), 's', false)).toMatchObject({ text: 'Awaiting confirmation · Fixed words', status: 'unconfirmed' });
+    const failed = outbox.stage('s', 'older failure');
+    outbox.failStaged(failed, 'older failure');
+    outbox.stage('s', 'newer correcting');
+    expect(sessionPendingPreview(outbox.forSession('s'), 's', true)).toMatchObject({ text: 'Send failed · older failure', status: 'failed' });
+    outbox.reset();
+    outbox.setConfirmationTimeout(30_000);
   });
 });

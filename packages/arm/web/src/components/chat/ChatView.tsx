@@ -260,6 +260,10 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
     onOpenSteps: (seq) => setStepsFor({ seq }),
     onRetry: (clientId) => outbox.retry(clientId),
     onDelete: (clientId) => { outbox.discard(clientId); },
+    onEditPending: (clientId) => {
+      const entry = outbox.forSession(sessionId).find((e) => e.clientId === clientId && e.state === 'correcting');
+      if (entry && composerRef.current?.editStaged(entry)) outbox.discard(clientId);
+    },
     onOpenArtifact,
   }), [sessionId, afterSubmit, onOpenArtifact]);
 
@@ -340,6 +344,14 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
           reachable={reachable}
           busy={sessionActive}
           onSend={onSend}
+          onStageVoice={(text, attachments, voiceIntent) => {
+            const id = outbox.stage(sessionId, text, {
+              attachments, delivery: voiceIntent === 'steer' ? 'steer' : 'prompt',
+              answerTo: voiceIntent === 'answerQuestion' ? questions.at(-1)?.id : undefined,
+            });
+            afterSubmit();
+            return id;
+          }}
           onAbort={() => wsClient.abortSession(sessionId)}
         />
       </div>

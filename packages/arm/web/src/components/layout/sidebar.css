@@ -301,6 +301,7 @@
 .ksr-delivery.is-sending { color: var(--s-brand); animation: ksr-send 1.3s infinite ease-in-out; }
 .ksr-delivery.is-correcting { color: var(--s-brand); animation: ksr-correct 1.8s infinite ease-in-out; }
 .ksr-delivery.is-unconfirmed { color: #ff9500; }
+.dark .ksr-delivery.is-unconfirmed { color: #ff9f0a; }
 .ksr-delivery.is-failed { color: #ff3b30; }
 .ksr-delivery.is-queued { color: var(--s-text-3); }
 @keyframes ksr-send { 0%, 100% { opacity: .78; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-.65px); } }

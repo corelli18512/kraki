@@ -44,7 +44,11 @@ describe('NewSessionComposer', () => {
     render(<NewSessionComposer />);
     fireEvent.click(screen.getByTestId('new-session-device'));
     expect(screen.getByRole('listbox')).toHaveTextContent('Online');
-    expect(screen.getByRole('option', { name: 'Offline computer Open Kraki on it to use it' })).toBeDisabled();
+    const unavailable = screen.getByRole('option', { name: 'Offline computer Open Kraki on it to use it' });
+    expect(unavailable).toBeDisabled();
+    fireEvent.click(unavailable);
+    expect(screen.getByTestId('new-session-device')).toHaveTextContent('Online computer');
+    expect(screen.getByRole('option', { name: 'Online computer' }).querySelector('svg rect')).toHaveAttribute('fill-opacity', '0.25');
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   });
