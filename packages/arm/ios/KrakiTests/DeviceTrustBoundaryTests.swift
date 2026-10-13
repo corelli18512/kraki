@@ -453,6 +453,7 @@ final class DeviceTrustBoundaryTests: XCTestCase {
         pin()
         try seedSession()
         let inner: [String: Any] = ["nid": UUID().uuidString, "sessionId": sid, "type": "question", "title": "Pinned session", "summary": "forged preview"]
+        try requireKeychain()
         let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: legacyEnvelope(inner)) as? [String: Any])
         let key = try XCTUnwrap((envelope["keys"] as? [String: String])?[selfId])
         XCTAssertEqual(try notification(blob: try XCTUnwrap(envelope["blob"] as? String), key: key).body, "Open Kraki to view the update.", "The relay can construct RSA ciphertext but cannot sign as the paired computer")
@@ -475,6 +476,7 @@ final class DeviceTrustBoundaryTests: XCTestCase {
         var posts = 0
         MacNotifications.shared.postHandlerForTesting = { _, _, _ in posts += 1 }
         let inner: [String: Any] = ["nid": UUID().uuidString, "sessionId": sid, "type": "question", "summary": "forged preview"]
+        try requireKeychain()
         let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: legacyEnvelope(inner)) as? [String: Any])
         let blob = try XCTUnwrap(envelope["blob"] as? String)
         let key = try XCTUnwrap((envelope["keys"] as? [String: String])?[selfId])
@@ -489,6 +491,7 @@ final class DeviceTrustBoundaryTests: XCTestCase {
         var posts = 0
         MacNotifications.shared.postHandlerForTesting = { _, _, _ in posts += 1 }
         let inner: [String: Any] = ["nid": UUID().uuidString, "sessionId": sid, "type": "question", "summary": "forged preview"]
+        try requireKeychain()
         let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: legacyEnvelope(inner)) as? [String: Any])
         let blob = try XCTUnwrap(envelope["blob"] as? String)
         let key = try XCTUnwrap((envelope["keys"] as? [String: String])?[selfId])
