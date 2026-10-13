@@ -105,14 +105,14 @@ export class DeviceTrust {
     plaintext: string,
     targets: string[],
     legacyKey: (deviceId: string) => string | undefined,
-  ): Array<{ payload: string; targets: string[] }> {
-    const out: Array<{ payload: string; targets: string[] }> = [];
+  ): Array<{ payload: string; targets: string[]; group: 'trusted' | 'legacy' }> {
+    const out: Array<{ payload: string; targets: string[]; group: 'trusted' | 'legacy' }> = [];
     const trusted = targets.filter((t) => this.store.has(t));
     if (trusted.length > 0) {
       const signed = this.sign(plaintext, trusted.length === 1 ? trusted[0]! : ANY_RECIPIENT);
       const blob = encryptV2(signed, trusted.map((t) => ({ recipientId: t, publicKey: this.store.get(t)!.encryptionKey })));
       this.stats.v2Out++;
-      out.push({ payload: JSON.stringify({ v: 2, blob }), targets: trusted });
+      out.push({ payload: JSON.stringify({ v: 2, blob }), targets: trusted, group: 'trusted' });
     }
     if (!this.enforced) {
       const legacy = targets.filter((t) => !this.store.has(t));
@@ -125,7 +125,7 @@ export class DeviceTrust {
       if (recipients.length > 0) {
         const { blob, keys } = encryptToBlob(plaintext, recipients);
         this.stats.rsaOut++;
-        out.push({ payload: JSON.stringify({ blob, keys }), targets: recipients.map((r) => r.deviceId) });
+        out.push({ payload: JSON.stringify({ blob, keys }), targets: recipients.map((r) => r.deviceId), group: 'legacy' });
       }
     }
     return out;

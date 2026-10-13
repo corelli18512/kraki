@@ -777,3 +777,22 @@ describe('device trust — post-merge review', () => {
     expect(readdirSync(dir).filter((f) => f.endsWith('.json'))).toHaveLength(1);
   });
 });
+
+describe('device trust — post-merge GPT review', () => {
+  it('POST503-01: paired and legacy groups coalesce separately', () => {
+    const env = setup('compatible');
+    const phone = makeApp('dev_phone');
+    const legacy = makeApp('dev_legacy');
+    joined(env, phone);
+    joined(env, legacy);
+    env.deliver(pairRequest(env, phone, createPairingSecret(home)), phone.id);
+    const keys: Array<string | undefined> = [];
+    const pulseSend = env.client.pulse.send as unknown as ReturnType<typeof vi.fn>;
+    pulseSend.mockImplementation(((_p: string, _t: unknown, _d: boolean, key?: string) => { keys.push(key); return 0; }) as never);
+    (env.client as unknown as { currentSessionByArm: Map<string, string | null> }).currentSessionByArm.set(phone.id, 's1');
+    (env.client as unknown as { currentSessionByArm: Map<string, string | null> }).currentSessionByArm.set(legacy.id, 's1');
+    env.client.sendEncrypted({ type: 'compacting', sessionId: 's1', payload: { phase: 'start' } } as never);
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+  });
+});

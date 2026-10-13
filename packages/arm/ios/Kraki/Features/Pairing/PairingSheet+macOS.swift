@@ -25,6 +25,9 @@ struct PairingSheet: View {
     /// Apps this Mac's computer trusted when the card opened.
     /// Set once this Mac knows its computer's trusted list (nil until then).
     @State private var trustedBaseline: Set<String>?
+    /// Every app of the account when the card opened: if the trusted list
+    /// only arrives later, an app outside this set paired while it was open.
+    @State private var accountAppsAtOpen: Set<String> = []
     private var previewPayload: TentacleCLIManager.PairingPayload?
     private var previewConnected: DeviceSummary?
 
@@ -98,6 +101,7 @@ struct PairingSheet: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: connected?.id)
         .task {
             baseline = Set(onlineApps.map(\.id))
+            accountAppsAtOpen = Set(appState.deviceStore.devices.values.filter { $0.role == .app }.map(\.id))
             if let apps = trustedApps { trustedBaseline = Set(apps) }
             if let local = AppState.localTentacleId { appState.requestTrustedDevices(local) }
             if previewPayload == nil { await renewLoop() }
@@ -109,9 +113,11 @@ struct PairingSheet: View {
         }
         .onChange(of: trustedApps?.sorted()) { _, ids in
             guard let ids else { return }
-            // The first list only sets the baseline: those were paired before.
+            // The first list sets the baseline; an app in it that wasn't on
+            // the account when the card opened paired meanwhile.
             guard let known = trustedBaseline else {
                 trustedBaseline = Set(ids)
+                if let newId = ids.first(where: { !accountAppsAtOpen.contains($0) }) { markConnected(newId) }
                 return
             }
             guard let newId = ids.first(where: { !known.contains($0) }) else { return }
