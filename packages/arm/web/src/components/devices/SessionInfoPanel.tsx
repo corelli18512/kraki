@@ -291,7 +291,7 @@ export function SessionInfoPanel({ session, usage, models, modelDetails, onClose
             <Row label="Name">{device.name}</Row>
             <Row label="Status">
               <span className="flex items-center gap-1">
-                <i className="h-1.5 w-1.5 rounded-full" style={{ background: device.online ? '#34c759' : '#808080' }} />
+                <i className={`h-1.5 w-1.5 rounded-full${device.online ? ' ksi-online-dot' : ''}`} style={device.online ? undefined : { background: '#808080' }} />
                 {device.online ? 'Online' : 'Offline'}
               </span>
             </Row>
