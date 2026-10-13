@@ -91,7 +91,7 @@ describe('SessionRow', () => {
     unmount();
     useStore.getState().setDevices([{ id: 'd1', name: 'MacBook', role: 'tentacle', online: false }]);
     row();
-    expect(screen.getByText('offline')).toBeInTheDocument();
+    expect(screen.queryByText('offline')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Offline')).toBeInTheDocument();
   });
 

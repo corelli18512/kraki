@@ -48,6 +48,7 @@ export interface SessionPreview {
 }
 
 export interface WebSessionSummary extends SessionSummary {
+  createdAt?: string;
   /** Tentacle-owned Spine head/read cursors carried by session_list. */
   lastSeq?: number;
   readSeq?: number;

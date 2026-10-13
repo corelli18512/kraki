@@ -482,6 +482,21 @@ describe('KrakiWSClient', () => {
       expect(useStore.getState().unreadCount.get('sess-1')).toBe(1);
     });
 
+    it('preserves sidebar creation time and effort from digests and model updates', async () => {
+      const client = new KrakiWSClient('ws://localhost:9999');
+      await connectAndAuth(client);
+      receiveInner({
+        type: 'session_list', deviceId: 'dev-1', seq: 40, timestamp: '',
+        payload: { sessions: [{ id: 'sess-1', agent: 'pi', model: 'deepseek/deepseek-flash', reasoningEffort: 'low', state: 'idle', mode: 'auto', lastSeq: 0, readSeq: 0, messageCount: 0, createdAt: '2026-01-01T09:00:00Z' }] },
+      });
+      expect(useStore.getState().sessions.get('sess-1')).toMatchObject({ createdAt: '2026-01-01T09:00:00Z', reasoningEffort: 'low' });
+      receiveInner({
+        type: 'session_model_set', deviceId: 'dev-1', sessionId: 'sess-1', seq: 41, timestamp: '',
+        payload: { model: 'deepseek/deepseek-flash', reasoningEffort: 'high' },
+      });
+      expect(useStore.getState().sessions.get('sess-1')?.reasoningEffort).toBe('high');
+    });
+
     it('routes session_created and creates session', async () => {
       const client = new KrakiWSClient('ws://localhost:9999');
       await connectAndAuth(client);
@@ -500,6 +515,7 @@ describe('KrakiWSClient', () => {
       expect(session?.agent).toBe('claude');
       expect(session?.model).toBe('claude-4');
       expect(session?.state).toBe('active');
+      expect(session?.createdAt).toBeTruthy();
     });
 
     it('routes session_ended and updates state', async () => {

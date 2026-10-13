@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Archive, ChevronDown, ChevronRight } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
-import type { SessionSummary } from '@kraki/protocol';
+import type { WebSessionSummary } from '../../types/store';
 import { SessionRow } from './SessionRow';
 
 /** Total archived sessions across this account's computers. */
@@ -55,13 +55,15 @@ export function ArchivedSessions({ narrow, selectedId }: { narrow: boolean; sele
             deviceName: devices.get(deviceId)?.name ?? '',
             agent: digest.agent,
             model: digest.model,
+            reasoningEffort: digest.reasoningEffort,
+            createdAt: digest.createdAt,
             title: digest.title,
             autoTitle: digest.autoTitle,
             state: 'idle',
             messageCount: digest.messageCount,
             lastSeq: digest.lastSeq,
             readSeq: digest.readSeq,
-          } as SessionSummary}
+          } as WebSessionSummary}
           selected={digest.id === selectedId}
           pinned={false}
           narrow={narrow}

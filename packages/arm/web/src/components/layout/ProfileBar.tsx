@@ -18,7 +18,7 @@ function SignOutIcon({ className }: { className?: string }) {
   );
 }
 
-export function ProfileBar({ compact = false }: { compact?: boolean } = {}) {
+export function ProfileBar({ compact = false, menu = false }: { compact?: boolean; menu?: boolean } = {}) {
   const user = useStore((s) => s.user);
   const [imgError, setImgError] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -43,7 +43,7 @@ export function ProfileBar({ compact = false }: { compact?: boolean } = {}) {
 
   return (
     <>
-      <div className={compact ? 'flex min-w-0 shrink items-center gap-2 px-1.5 py-1' : 'flex shrink-0 items-center gap-3 border-t border-border-primary px-4 py-2.5'}>
+      {menu ? <><div className="ksr-menu-divider" role="separator" /><span className="ksb-profile-name">{user.login}</span><button type="button" role="menuitem" onClick={() => setConfirming(true)}><SignOutIcon /> Sign Out…</button></> : <div className={compact ? 'flex min-w-0 shrink items-center gap-2 px-1.5 py-1' : 'flex shrink-0 items-center gap-3 border-t border-border-primary px-4 py-2.5'}>
         {isGitHub && !imgError ? (
           <img
             src={githubAvatarUrl(user.login)}
@@ -70,7 +70,7 @@ export function ProfileBar({ compact = false }: { compact?: boolean } = {}) {
         >
           <SignOutIcon className="h-4 w-4" />
         </button>
-      </div>
+      </div>}
 
       {/* Sign-out confirmation dialog */}
       {confirming && (
