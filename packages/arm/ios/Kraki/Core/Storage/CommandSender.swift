@@ -287,15 +287,16 @@ final class CommandSender {
               var bucket = outbox[sessionId], var message = bucket[clientId] else { return }
         let fade: [Int]? = uncorrected.flatMap { $0.length > 0 ? [$0.location, $0.length] : nil }
         let oldFade = message.payload["uncorrected"]?.value as? [Int]
-        guard message.content != text || fade != oldFade
-                || (original != nil && original != originalText(sessionId: sessionId, clientId: clientId))
-        else { return }
+        let originalChanged = original != nil && original != originalText(sessionId: sessionId, clientId: clientId)
+        guard message.content != text || fade != oldFade || originalChanged else { return }
         message.payload["content"] = AnyCodable(text)
         if let fade { message.payload["uncorrected"] = AnyCodable(fade) }
         else { message.payload.removeValue(forKey: "uncorrected") }
         if let original { message.payload["originalText"] = AnyCodable(original) }
         bucket[clientId] = message
         outbox[sessionId] = bucket
+        // The original is what a relaunch restores: keep the durable copy current.
+        if originalChanged { persistOutbox() }
     }
 
     /// Correction finished: send `text` now. No-op (false) if the user
@@ -649,9 +650,7 @@ final class CommandSender {
                     clientId: clientId,
                     timestamp: message.timestamp,
                     order: message.payload["localOrder"]?.intValue ?? 0,
-                    // A still-correcting voice input restores as failed with
-                    // its original transcript, never a half-corrected one.
-                    text: message.payload["originalText"]?.stringValue ?? message.content ?? "",
+                    text: Self.durableText(message, wire: payload),
                     delivery: message.payload["delivery"]?.stringValue,
                     attachments: persistedAttachments,
                     answerTo: message.answerTo,
