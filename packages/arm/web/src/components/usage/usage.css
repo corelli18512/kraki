@@ -31,7 +31,8 @@
 .ua-flex { flex: 1; }
 .ua-grid { display: flex; flex-wrap: wrap; }
 .ua-grid-compact { gap: 6px; padding: 9px; }
-.ua-grid-detail { gap: 12px; padding: 18px; }
+.ua-grid-detail { flex-direction:column; gap:12px; padding:18px; }
+.ua-detail-row { display:flex; gap:12px; }
 .ua-detail { overflow-y: auto; min-height: 0; }
 
 .ua-compact-card {
@@ -54,8 +55,8 @@
 
 .ua-card {
   position: relative;
-  flex: 1 1 232px;
-  min-width: 190px;
+  flex:0 0 auto;
+  min-width:0;
   height: 272px;
   box-sizing: border-box;
   display: flex;

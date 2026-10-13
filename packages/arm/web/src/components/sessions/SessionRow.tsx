@@ -13,6 +13,7 @@ import { collapseWhitespace, resolveCardStatus, sessionTimeLabel, sessionTimesta
 import { SessionCardMetadata } from './SessionCardMetadata';
 import { AgentAvatar } from '../common/AgentAvatar';
 import { SwipeableCard } from './SwipeableCard';
+import { SettingsAlert } from '../layout/SettingsControls';
 
 function StatusGlyph({ status, draft, delivery }: { status: SessionCardStatus; draft: boolean; delivery?: SessionDeliveryStatus }) {
   if (delivery) return <svg viewBox="0 0 16 16" className={`ksr-glyph ksr-delivery is-${delivery}`} fill="none" stroke="currentColor" strokeWidth={1.3} strokeLinecap="round" strokeLinejoin="round" role="img" aria-label={DELIVERY_LABEL[delivery]}>
@@ -172,16 +173,15 @@ export const SessionRow = memo(function SessionRow({
       )}
 
       {confirmDelete && (
-        <div className="kdialog-backdrop" onClick={() => setConfirmDelete(false)} role="dialog" aria-modal="true">
-          <div className="kdialog" onClick={(e) => e.stopPropagation()}>
-            <h3>Delete session?</h3>
-            <p>This permanently deletes the session and its messages on {machine ?? 'the device'}.</p>
-            <div className="kdialog-buttons">
-              <button type="button" onClick={() => setConfirmDelete(false)}>Cancel</button>
-              <button type="button" className="is-destructive" onClick={() => { wsClient.deleteSession(session.id); setConfirmDelete(false); }}>Delete</button>
-            </div>
-          </div>
-        </div>
+        <SettingsAlert
+          viewport
+          stacked
+          title="Delete this session? This cannot be undone."
+          body=""
+          confirm="Delete Session"
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => { wsClient.deleteSession(session.id); setConfirmDelete(false); }}
+        />
       )}
     </>
   );

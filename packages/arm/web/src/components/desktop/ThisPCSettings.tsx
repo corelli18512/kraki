@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { desktop, type BuiltInBridge, type BuiltInState, type DesktopSettingsState } from '../../lib/desktop';
-import { SettingsRow, SettingsSection } from '../layout/SettingsControls';
+import { SettingsRow, SettingsSection, SettingsSwitch } from '../layout/SettingsControls';
 import { AgentsPanel, useAgentsCheck } from './AgentsPanel';
 import './desktop-setup.css';
 
@@ -36,49 +36,6 @@ function AgentsSheet({ builtIn, onClose }: { builtIn: BuiltInBridge; onClose: ()
     </div>
   );
 }
-
-function Row({ title, detail, children }: { title: string; detail?: string; children?: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-3 py-1">
-      <div className="min-w-0">
-        <p className="text-sm text-text-primary">{title}</p>
-        {detail && <p className="text-[11px] text-text-muted">{detail}</p>}
-      </div>
-      {children && <div className="flex shrink-0 items-center gap-2">{children}</div>}
-    </div>
-  );
-}
-
-function Switch({
-  on,
-  disabled,
-  onChange,
-  label,
-}: {
-  on: boolean;
-  disabled?: boolean;
-  onChange: (v: boolean) => void;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label={label}
-      disabled={disabled}
-      onClick={() => onChange(!on)}
-      className={`relative h-6 w-11 rounded-full transition-colors disabled:opacity-50 ${on ? 'bg-kraki-500' : 'bg-slate-300 dark:bg-slate-600'}`}
-    >
-      <span
-        className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${on ? 'translate-x-5' : 'translate-x-0'}`}
-      />
-    </button>
-  );
-}
-
-const button =
-  'rounded-md bg-black/[0.085] px-2.5 py-1 text-xs text-text-primary hover:bg-black/[0.12] disabled:opacity-50 dark:bg-white/[0.14] dark:hover:bg-white/[0.2]';
 
 export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
   const [state, setState] = useState<BuiltInState | null>(null);
@@ -150,13 +107,13 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
       <SettingsSection title="Agents">
         {external ? (
           <>
-            <Row
-              title="Kraki"
+            <SettingsRow
+              label="Kraki"
               detail="The command-line Kraki runs the agents on this PC. You update it from a terminal."
             >
               <button
                 type="button"
-                className={button}
+                className="kp-button"
                 disabled={!!busy}
                 onClick={() => {
                   void act('switch', builtIn.enable, () => localStorage.setItem(OWNER_KEY, 'builtIn'));
@@ -164,21 +121,21 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
               >
                 {busy === 'switch' ? 'Switching…' : 'Use built-in Kraki'}
               </button>
-            </Row>
+            </SettingsRow>
             <p className="kp-foot">
               Switching stops the command-line Kraki's background service and keeps your sign-in and sessions.
             </p>
           </>
         ) : (
-          <Row
-            title="Run agents on this PC"
+          <SettingsRow
+            label="Run agents on this PC"
             detail={
               runsAgents
                 ? 'Kraki runs in the background and starts when you sign in to Windows.'
                 : 'When off, this PC only controls agents on your other computers.'
             }
           >
-            <Switch
+            <SettingsSwitch
               label="Run agents on this PC"
               on={runsAgents}
               disabled={!!busy}
@@ -187,17 +144,17 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
                 else void act('off', builtIn.disable, () => localStorage.setItem(ROLE_KEY, 'remoteOnly'));
               }}
             />
-          </Row>
+          </SettingsRow>
         )}
         {!state.available && (
-          <Row title="Kraki isn't installed" detail="Install Kraki, or locate an existing command-line installation.">
-            <a className={button} href="https://kraki.chat/docs" target="_blank" rel="noreferrer">
+          <SettingsRow label="Kraki isn't installed" detail="Install Kraki, or locate an existing command-line installation.">
+            <a className="kp-button" href="https://kraki.chat/docs" target="_blank" rel="noreferrer">
               Install Kraki…
             </a>
-          </Row>
+          </SettingsRow>
         )}
         <SettingsRow label="Coding agents">
-          <button type="button" className={button} onClick={() => setAgentsOpen(true)}>
+          <button type="button" className="kp-button" onClick={() => setAgentsOpen(true)}>
             Check Coding Agents…
           </button>
         </SettingsRow>
@@ -206,7 +163,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
             {settings.locateCli && (
               <button
                 type="button"
-                className={button}
+                className="kp-button"
                 disabled={!!busy}
                 onClick={() => {
                   void act('locate', settings.locateCli!);
@@ -218,7 +175,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
             {settings.recheckCli && (
               <button
                 type="button"
-                className={button}
+                className="kp-button"
                 disabled={!!busy}
                 onClick={() => {
                   void act('check', settings.recheckCli!);
@@ -240,7 +197,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
               {(external || state.owned) && (
                 <button
                   type="button"
-                  className={button}
+                  className="kp-button"
                   disabled={!!busy}
                   onClick={() => {
                     void act('offline', () => presence('stop'));
@@ -251,7 +208,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
               )}
               <button
                 type="button"
-                className={button}
+                className="kp-button"
                 disabled={!!busy || (!state.owned && !external)}
                 onClick={() => {
                   void act('restart', () => presence('restart'));
@@ -263,7 +220,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
           ) : (
               <button
                 type="button"
-                className={button}
+                className="kp-button"
                 disabled={!!busy || (!runsAgents && !external)}
                 onClick={() => {
                   void act('online', () => presence('start'));
@@ -275,7 +232,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
         </div>
         {settings?.setLaunchAtLogin && os && (
           <SettingsRow label="Start automatically at login">
-            <Switch
+            <SettingsSwitch
               label="Start automatically at login"
               on={os.launchAtLogin}
               disabled={!!busy}
@@ -289,7 +246,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
       {settings?.setAllowRemoteUpdates && os && (
         <SettingsSection title="Updates">
           <SettingsRow label="Allow remote updates">
-            <Switch
+            <SettingsSwitch
               label="Allow remote updates"
               on={os.allowRemoteUpdates}
               disabled={!!busy}
@@ -305,11 +262,11 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
         {(logsPath ?? os?.logsPath) && <p className="kp-foot py-2 break-all font-mono">{logsPath ?? os?.logsPath}</p>}
         <div className="kp-row" style={{ justifyContent: 'flex-start' }}>
           {(settings?.showLogsInExplorer || builtIn.showLogsInExplorer) && (
-            <button type="button" className={button} onClick={settings?.showLogsInExplorer ?? builtIn.showLogsInExplorer}>
+            <button type="button" className="kp-button" onClick={settings?.showLogsInExplorer ?? builtIn.showLogsInExplorer}>
               Show in Explorer
             </button>
           )}
-          <button type="button" className={button} onClick={() => builtIn.openLogs()}>
+          <button type="button" className="kp-button" onClick={() => builtIn.openLogs()}>
             Open Logs Window
           </button>
         </div>

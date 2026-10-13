@@ -24,6 +24,8 @@ describe('ThisPCSettings capability-driven native parity', () => {
   it('groups Agents/Online/Updates/Logs and goes offline without disabling the role', async () => {
     render(<ThisPCSettings builtIn={builtIn} />);
     await screen.findByRole('heading', { name: 'Online' });
+    for (const toggle of screen.getAllByRole('switch')) expect(toggle).toHaveClass('kp-switch');
+    expect(screen.getByRole('button', { name: 'Go Offline' })).toHaveClass('kp-button');
     for (const label of ['Agents', 'Updates', 'Logs', os.logsPath]) expect(screen.getByText(label)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Go Offline' }));
     await waitFor(() => expect(bridge.goOffline).toHaveBeenCalled());
