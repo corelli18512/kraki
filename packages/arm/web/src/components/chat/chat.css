@@ -365,6 +365,13 @@
   cursor: pointer;
 }
 .ksteps:hover { color: var(--k-text); }
+/* AppKit tertiarySystemFill is translucent, without a material blur. */
+.dark .ksteps {
+  background: rgba(118, 118, 128, 0.1);
+  backdrop-filter: none;
+  color: var(--color-label-secondary);
+}
+.dark .ksteps:hover { color: var(--color-label-primary); }
 
 /* Not delivered: a red mark beside the message. */
 .kfailed {
@@ -568,6 +575,17 @@
 .kperm-approve { border-color: transparent !important; background: var(--k-user) !important; color: #fff !important; }
 .kperm-approve:hover { filter: brightness(1.08); }
 .kperm-deny svg { color: #ef4444; }
+
+/* SwiftUI's dark Color.orange/red/green resolve differently from AppKit's
+ * system colours. Keep these action tints local, leaving light mode intact. */
+.dark .kslot-lock { color: #ff9230; }
+.dark .kslot-outcome.is-failed,
+.dark .kslot-outcome.is-failed .kslot-icon,
+.dark .kperm-deny svg,
+.dark .kslot-permission-error { color: #ff4245; }
+.dark .kperm-outcome { background: rgba(48, 209, 88, 0.12); color: #30d158; }
+.dark .kperm-outcome.is-denied { background: rgba(255, 66, 69, 0.12); color: #ff4245; }
+.dark .kslot-permission-args { background: var(--color-surface-tertiary); }
 
 /* ── Markdown (TextKit / Mac bubble styles) ─────────────────────── */
 
@@ -853,7 +871,7 @@
   font: 500 13px/16px var(--k-font);
 }
 .kcompacting-spinner { width: 16px; height: 16px; flex: none; color: var(--k-text-3); animation: kspin 0.8s linear infinite; }
-.dark .kcompacting { background: rgba(36, 36, 36, 0.8); }
+.dark .kcompacting { background: rgba(33, 36, 49, 0.8); }
 .kcomposer { position: relative; display: flex; align-items: flex-end; gap: var(--k-gap); }
 .kcomposer-field {
   position: relative;
@@ -1086,7 +1104,7 @@
 .kstep-icon { width: 18px; height: 18px; flex-shrink: 0; }
 .kstep-good { color: #34d399; }
 .kstep-bad { color: #ff3b30; }  /* Mac systemRed (live-turn LT-08) */
-.dark .kstep-bad { color: #ff453a; }
+.dark .kstep-bad { color: #ff4245; }
 
 .kstep-permission { color: var(--color-label-secondary); font-size: 15px; line-height: 18px; }
 .kstep-outcome { display: block; margin-top: 3px; padding-left: 26px; }
@@ -1171,6 +1189,14 @@
     line-height: 16px;
   }
   .kperm-approve { box-shadow: none !important; }
+  /* Native hover: white 7% overlay, accent 68% ring and accent 18% glow.
+   * The blue underlay reproduces the shadow visible through the native fill. */
+  .dark .kchoice:not(.kperm-approve):hover {
+    background-color: color-mix(in srgb, var(--k-bg) 75%, transparent);
+    background-image: linear-gradient(rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.07)),
+      linear-gradient(rgba(0, 122, 255, 0.07), rgba(0, 122, 255, 0.07));
+    box-shadow: inset 0 0 0 1.2px rgba(0, 122, 255, 0.68), 0 1px 5px rgba(0, 122, 255, 0.18);
+  }
   .kslot-permission-q { line-height: 18px; }
   .kslot-permission-caption { line-height: 15px; }
 }
