@@ -38,6 +38,9 @@
 .ksb.is-wide { position: relative; background: var(--s-bg); }
 .app-main-wide { border-left: 1px solid transparent; }
 .app-main-wide::before { content: ""; position: absolute; top: 20px; left: -1px; bottom: 20px; width: 1px; background: color-mix(in srgb, var(--color-border-primary, #e2e8f0) 55%, transparent); pointer-events: none; z-index: 20; }
+/* Keep the dark hairline inside main's overflow clip, without moving content. */
+.dark .app-main-wide { border-left: 0; padding-left: 1px; }
+.dark .app-main-wide::before { left: 0; }
 .dark .ksb.is-wide { --s-border: #475569; }
 
 .ksb-scroll { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
@@ -63,6 +66,8 @@
 .ksb-search svg { width: 11px; height: 11px; flex-shrink: 0; }
 .ksb-search input { min-width: 0; flex: 1; border: none; outline: none; background: none; color: var(--s-text); font: 11px var(--s-font); }
 .ksb-search input::placeholder { color: var(--s-text-2); }
+.dark .ksb-search svg { color: var(--s-text-3); }
+.dark .ksb-search input::placeholder { color: var(--color-label-secondary); }
 .ksb-icon {
   display: flex;
   width: 26px;
@@ -168,6 +173,7 @@
 .ksr-spacer { flex: 1; }
 .ksr-unread { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: #ef4444; }
 .ksr.is-wide .ksr-unread { width: 7px; height: 7px; }
+.dark .ksr-unread { background: #ff4245; }
 .ksr-time { flex-shrink: 0; color: var(--s-text-3); font-size: 11px; font-variant-numeric: tabular-nums; }
 .ksr.is-wide .ksr-time { font-size: 10px; }
 .ksr-line2 { gap: 5px; color: var(--s-text-2); }
@@ -189,6 +195,7 @@
 .ksr.is-wide .ksr-line3.is-draft, .ksr.is-wide .ksr-line3.is-draft .ksr-glyph { color: #c65d5d; }
 .ksr.is-narrow .ksr-line3 { font-size: 13px; line-height: 18px; }
 .ksr-glyph { display: inline-flex; width: 14px; height: 14px; flex-shrink: 0; align-items: center; justify-content: center; }
+.dark .ksr-attention { color: #d97706; }
 .ksr-muted { color: var(--s-text-3); }
 .ksr-brand { color: var(--s-brand); }
 .ksr-mini { width: 10px; height: 10px; border-width: 1.5px; }

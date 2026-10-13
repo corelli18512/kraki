@@ -16,6 +16,14 @@ function row(selected = false) {
 beforeEach(() => { useStore.getState().reset(); useOutbox.setState({ entries: [] }); vi.restoreAllMocks(); });
 
 describe('SessionRow Mac sidebar', () => {
+  it.each([
+    ['question', 'Waiting for an answer'],
+    ['permission', 'Waiting for approval'],
+  ])('gives %s the native dark attention tint hook without changing light amber', (type, label) => {
+    useStore.getState().setSessionPreview('s', { text: 'Waiting', type, timestamp: session.createdAt! });
+    row();
+    expect(screen.getByLabelText(label)).toHaveClass('ksr-attention', 'text-amber-600');
+  });
   it('uses a small model avatar, effort, createdAt fallback, and no offline title pill', () => {
     useStore.getState().setDevices([{ id: 'd', role: 'tentacle', name: 'Local Mac', online: false }]);
     const { container } = row();

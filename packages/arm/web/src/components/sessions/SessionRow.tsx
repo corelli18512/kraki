@@ -24,8 +24,8 @@ function StatusGlyph({ status, draft, delivery }: { status: SessionCardStatus; d
   switch (status) {
     case 'active': return <span className="ksr-dots" {...common}><i /><i /><i /></span>;
     case 'compacting': return <span className="ksr-glyph" {...common}><span className="kspinner ksr-mini" /></span>;
-    case 'waiting': return <MessageCircleQuestion className="ksr-glyph text-amber-600" strokeWidth={2.2} {...common} />;
-    case 'approval': return <ShieldQuestion className="ksr-glyph text-amber-600" strokeWidth={2.2} {...common} />;
+    case 'waiting': return <MessageCircleQuestion className="ksr-glyph ksr-attention text-amber-600" strokeWidth={2.2} {...common} />;
+    case 'approval': return <ShieldQuestion className="ksr-glyph ksr-attention text-amber-600" strokeWidth={2.2} {...common} />;
     case 'error': return <CircleSlash className="ksr-glyph text-red-500" strokeWidth={2.2} {...common} />;
     case 'offline': return <WifiOff className="ksr-glyph ksr-muted" strokeWidth={2.2} {...common} />;
     case 'agentMessage': return <BotMessageSquare className="ksr-glyph ksr-brand" strokeWidth={1.9} {...common} />;
