@@ -105,7 +105,8 @@ struct NewSessionComposer: View {
     }
     private var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var canStart: Bool {
-        availability == .ready && !selectedDeviceId.isEmpty && !selectedAgentId.isEmpty && !selectedModel.isEmpty
+        // Cached agents outlive a computer going offline: it must be reachable.
+        availability == .ready && appState.isTentacleOnline(selectedDeviceId) && !selectedAgentId.isEmpty && !selectedModel.isEmpty
     }
     private var canSubmit: Bool { hasText && canStart }
     /// The send control: while recording it sends the voice message.
@@ -197,12 +198,14 @@ struct NewSessionComposer: View {
         .onChange(of: voiceComposer.editorRequest) { _, _ in
             if voiceComposer.editorSessionID == Self.draftID { requestFocus() }
         }
-        // ↑ while recording: the correction has finished (or failed) — start
-        // with what is in the editor now.
-        .onChange(of: voiceFinishing) { _, finishing in
-            guard !finishing, !voiceOwnsComposer, sendAfterVoice else { return }
+        // ↑ while recording: the utterance has ended in the editor. Start with
+        // what is there only if it completed with a final transcript; after a
+        // failure the text so far stays in the box (the failure row explains).
+        // Also fires when it ended synchronously (the mic had not started).
+        .onChange(of: voiceComposer.draftCompletion) { _, done in
+            guard let done, done.sessionID == Self.draftID, sendAfterVoice else { return }
             sendAfterVoice = false
-            submit()
+            if done.completed { submit() }
         }
         .onChange(of: selectedDeviceId) { _, id in onDeviceChanged(); onDeviceSelected(id) }
         // Computers come online after the composer appeared (first launch, a

@@ -118,17 +118,28 @@ final class MacComposerVoiceKeyProbeView: NSView {
         isHidden = true
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.enabled, event.window === self.window else { return event }
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            if flags == .option, event.keyCode == 49 {
-                self.onToggle?()
-                return nil
+            switch Self.action(keyCode: event.keyCode, flags: event.modifierFlags,
+                               isRepeat: event.isARepeat, voiceActive: self.voiceActive) {
+            case .toggle: self.onToggle?()
+            case .cancel: self.onCancel?()
+            case .swallow: break
+            case .pass: return event
             }
-            if self.voiceActive, flags.isEmpty, event.keyCode == 53 {
-                self.onCancel?()
-                return nil
-            }
-            return event
+            return nil
         }
+    }
+
+    enum KeyAction: Equatable { case toggle, cancel, swallow, pass }
+
+    /// Option-Space toggles recording once per press (a held key's repeats are
+    /// swallowed, not toggled or typed as NBSP); Esc cancels while recording.
+    /// Caps Lock and the keypad/fn state flags do not change the shortcut.
+    static func action(keyCode: UInt16, flags: NSEvent.ModifierFlags, isRepeat: Bool,
+                       voiceActive: Bool) -> KeyAction {
+        let modifiers = flags.shortcutModifiers
+        if modifiers == .option, keyCode == 49 { return isRepeat ? .swallow : .toggle }
+        if voiceActive, modifiers.isEmpty, keyCode == 53 { return .cancel }
+        return .pass
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -172,7 +183,7 @@ final class MacComposerPasteProbeView: NSView {
             guard let self,
                   self.enabled,
                   event.window === self.window,
-                  event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+                  event.modifierFlags.shortcutModifiers == .command,
                   event.charactersIgnoringModifiers?.lowercased() == "v",
                   let image = Self.image(from: .general) else {
                 return event
@@ -391,4 +402,12 @@ enum MacComposerPasteFocusRegression {
     }
 }
 #endif
+
+extension NSEvent.ModifierFlags {
+    /// The modifiers a keyboard shortcut compares: device-independent, without
+    /// the Caps Lock, keypad and fn state flags.
+    var shortcutModifiers: NSEvent.ModifierFlags {
+        intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
+    }
+}
 #endif

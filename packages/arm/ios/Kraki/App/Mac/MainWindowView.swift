@@ -480,6 +480,16 @@ struct MainWindowView: View {
                sessions[selectedSessionId] != nil {
                 prepareSelectedSession(selectedSessionId)
             }
+            // The open Session is gone (deleted from Session Info or another
+            // device, or dropped by its computer's list): close its chat and
+            // composer rather than accept input for a Session nobody owns.
+            if let selectedSessionId,
+               chatPresentation?.sessionId == selectedSessionId,
+               sessions[selectedSessionId] == nil,
+               !appState.sessionStore.isPending(selectedSessionId) {
+                htmlArtifactSessions.close(sessionId: selectedSessionId)
+                self.selectedSessionId = nil
+            }
             #if DEBUG
             if let target = ProcessInfo.processInfo.environment["KRAKI_OPEN_SESSION_ID"],
                selectedSessionId != target,
