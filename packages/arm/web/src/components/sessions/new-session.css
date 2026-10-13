@@ -11,8 +11,8 @@
   font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
 }
 .ns-start-inner { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 22px; }
-.ns-start-title { margin: 0; font-size: 24px; font-weight: 600; color: var(--color-text-primary); letter-spacing: -0.2px; }
-.dark .ns-start-title { color: #f8fafc; }
+.ns-start-title { margin: 0; font-size: 24px; font-weight: 600; color: var(--color-text-title, #052847); letter-spacing: -0.2px; }
+.dark .ns-start-title { color: #dbe8f4; }
 .ns-start-composer { width: 100%; max-width: 640px; }
 .ns-phone-link {
   display: inline-flex; align-items: center; gap: 5px;

@@ -7,9 +7,10 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ErrorBanner } from './components/common/ErrorBanner';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useStore } from './hooks/useStore';
+import { useNarrow } from './hooks/useNarrow';
 import { useSessionShortcuts } from './hooks/useSessionShortcuts';
 import { wsClient } from './lib/ws-client';
-import { desktop, desktopCredentials } from './lib/desktop';
+import { desktop, desktopCredentials, isDesktop } from './lib/desktop';
 import { ConnectPhoneHost } from './components/devices/ConnectPhoneCard';
 import { UsagePanel } from './components/usage/UsagePanel';
 import { VoiceConsentHost } from './components/chat/Voice';
@@ -70,6 +71,7 @@ function RelayBlockingOverlay({
 
 export function App() {
   useWebSocket();
+  const narrow = useNarrow();
   useSessionShortcuts();
   const inSession = useLocation().pathname.startsWith('/session/');
   const inDevices = useLocation().pathname === '/devices';
@@ -133,7 +135,7 @@ export function App() {
 
   if (status === 'awaiting_login' || desktopSetupGate) {
     return (
-      <div className="app-viewport flex overflow-hidden bg-surface-primary">
+      <div className={`app-viewport flex overflow-hidden bg-surface-primary ${isDesktop ? 'min-w-[800px]' : ''}`}>
         <ErrorBanner />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           <ErrorBoundary>
@@ -145,15 +147,12 @@ export function App() {
   }
 
   return (
-    <div className="app-viewport flex overflow-hidden bg-surface-primary">
+    <div className={`app-viewport flex overflow-hidden bg-surface-primary ${isDesktop ? 'min-w-[800px]' : ''}`}>
       <ErrorBanner />
-      <aside className="hidden w-[288px] shrink-0 flex-col border-r border-border-primary md:flex" aria-hidden={showBlockingOverlay}>
+      <aside className={`${narrow ? (inSubPage ? 'hidden' : 'flex') + ' w-full' : 'flex w-[280px] border-r border-border-primary'} shrink-0 flex-col`} aria-hidden={showBlockingOverlay}>
         <Sidebar />
       </aside>
-      <aside className={`w-full shrink-0 flex-col md:hidden ${inSubPage ? 'hidden' : 'flex'}`} aria-hidden={showBlockingOverlay}>
-        <Sidebar />
-      </aside>
-      <main className={`relative min-w-0 flex-1 flex-col overflow-hidden ${inSubPage ? 'flex' : 'hidden md:flex'}`} aria-hidden={showBlockingOverlay}>
+      <main className={`relative min-w-0 flex-1 flex-col overflow-hidden ${!narrow || inSubPage ? 'flex' : 'hidden'}`} aria-hidden={showBlockingOverlay}>
         <ErrorBoundary>
           <Outlet />
         </ErrorBoundary>

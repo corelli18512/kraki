@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { BotMessageSquare, Download, Gauge, MonitorCloud, Plus, Search, Settings, UserCog, X } from 'lucide-react';
+import { BotMessageSquare, Download, Gauge, MonitorCloud, Menu, Plus, Search, Settings, UserCog, X } from 'lucide-react';
 import { OPEN_USAGE_EVENT, USAGE_SHORTCUT } from '../usage/UsagePanel';
 import { useStore } from '../../hooks/useStore';
 import { useShowsReconnecting } from '../../hooks/useShowsReconnecting';
@@ -77,6 +77,7 @@ export function Sidebar() {
   const [newOpen, setNewOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [plusMenu, setPlusMenu] = useState(false);
+  const [appMenu, setAppMenu] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Tray › Settings… (Kraki for Windows).
   useEffect(() => desktop?.onOpen?.('settings', () => { if (narrow) setTab('settings'); else setSettingsOpen(true); }), [narrow]);
@@ -94,7 +95,13 @@ export function Sidebar() {
     if (sessionId) navigate('/');
   };
 
-  const list = total === 0 && archivedCount === 0
+  const list = query.trim() && sorted.length === 0
+    ? <div className="ksb-noresults" data-testid="sidebar-no-results">
+        <Search aria-hidden strokeWidth={1} />
+        <p>No matching sessions</p>
+        <span>Try another search</span>
+      </div>
+    : total === 0 && archivedCount === 0
     ? (narrow
       ? <EmptySessions onNew={() => setNewOpen(true)} onImport={() => setImportOpen(true)} />
       : (
@@ -117,7 +124,6 @@ export function Sidebar() {
             setOpenSwipeId={setOpenSwipeId}
           />
         ))}
-        {sorted.length === 0 && query && <p className="ksb-noresults">No sessions match “{query}”.</p>}
         {!query && <ArchivedSessions narrow={narrow} selectedId={sessionId} />}
       </div>
     );
@@ -133,6 +139,18 @@ export function Sidebar() {
     return (
       <div className="ksb is-wide">
         <div className="ksb-top">
+          <div className="ksb-app-menu-wrap">
+            <button type="button" className="ksb-icon" aria-label="App menu" aria-expanded={appMenu} onClick={() => setAppMenu((v) => !v)}><Menu strokeWidth={1.8} /></button>
+            {appMenu && <>
+              <div className="ksb-menu-dismiss" onClick={() => setAppMenu(false)} />
+              <div className="ksb-plus-menu ksb-app-menu" role="menu" onKeyDown={(e) => { if (e.key === 'Escape') setAppMenu(false); }}>
+                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); navigate('/devices'); }}><MonitorCloud /> Devices</button>
+                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); window.dispatchEvent(new Event(OPEN_USAGE_EVENT)); }} title={`Account Usage (hold ${USAGE_SHORTCUT})`} data-testid="sidebar-usage"><Gauge /> Account Usage</button>
+                <button type="button" role="menuitem" onClick={() => { setAppMenu(false); setSettingsOpen(true); }}><Settings /> Settings…</button>
+                <ProfileBar menu />
+              </div>
+            </>}
+          </div>
           <label className="ksb-search">
             <Search aria-hidden />
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" aria-label="Search sessions" />
@@ -159,12 +177,6 @@ export function Sidebar() {
         {reconnecting && <div className="ksb-status"><span className="kspinner ksb-spin" /> Connecting…</div>}
         {status === 'connecting' && !reconnecting && total === 0 && <div className="ksb-status"><span className="kspinner ksb-spin" /> Connecting…</div>}
         <div className="ksb-scroll">{list}</div>
-        <div className="ksb-footer">
-          <ProfileBar compact />
-          <button type="button" className="ksb-icon" aria-label="Devices" title="Devices" onClick={() => navigate('/devices')}><MonitorCloud /></button>
-          <button type="button" className="ksb-icon" aria-label="Account Usage" title={`Account Usage (hold ${USAGE_SHORTCUT})`} onClick={() => window.dispatchEvent(new Event(OPEN_USAGE_EVENT))} data-testid="sidebar-usage"><Gauge /></button>
-          <button type="button" className="ksb-icon" aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}><Settings /></button>
-        </div>
         <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         {dialogs}
       </div>
