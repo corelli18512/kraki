@@ -1,4 +1,4 @@
-/** History and subscription messages: pages, ranges, turn traces, live snapshots, session lists; and the ProducerMessage union. */
+// History and subscription messages: pages, ranges, turn traces, live snapshots, session lists; and the ProducerMessage union.
 
 import { type BaseEnvelope } from './message-base.js';
 import { type SessionCreatedMessage, type SessionEndedMessage, type UserMessage, type AgentMessage, type AgentMessageDelta, type PermissionRequest, type ToolStartMessage, type ToolCompleteMessage, type AgentNarrationMessage, type CardActionState, type CardAction, type CompactingMessage, type IdleMessage, type ActiveMessage, type ErrorMessage, type SystemMessage, type InterruptedTurnMessage, type TurnStatusMessage, type SessionModeSetMessage, type SessionModelSetMessage, type SessionDeletedMessage, type SessionTitleUpdatedMessage, type DeviceGreetingMessage } from './producer-messages.js';

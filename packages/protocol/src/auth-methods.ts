@@ -1,4 +1,4 @@
-/** Auth credentials: a discriminated union by method. */
+// Auth credentials: a discriminated union by method.
 
 // ============================================================
 // Auth credentials — discriminated union by method

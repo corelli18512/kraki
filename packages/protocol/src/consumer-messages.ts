@@ -1,4 +1,4 @@
-/** Consumer messages (app → tentacle) and the ConsumerMessage union. */
+// Consumer messages (app → tentacle) and the ConsumerMessage union.
 
 import { type Attachment } from './attachments.js';
 import { type RequestSessionMessagesMessage, type RequestSessionMessagesRangeMessage, type RequestTurnTraceMessage, type RequestCardMessage, type ClientFeaturesMessage, type SetSessionSubscriptionMessage } from './history-messages.js';

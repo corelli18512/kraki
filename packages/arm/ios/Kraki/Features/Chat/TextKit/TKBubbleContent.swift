@@ -3,6 +3,8 @@
 import UIKit
 import SwiftUI
 
+// MARK: - Shared TextKit2 measurement
+
 enum TKMeasure {
     static func naturalWidth(_ attr: NSAttributedString) -> CGFloat {
         guard attr.length > 0 else { return 0 }

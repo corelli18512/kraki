@@ -1,4 +1,4 @@
-/** Relay envelopes: what the relay sees (unicast/multicast/broadcast, pulse frames, ping/pong) and the head control types. */
+// Relay envelopes: what the relay sees (unicast/multicast/broadcast, pulse frames, ping/pong) and the head control types.
 
 // ============================================================
 // Relay envelopes (visible to relay)

@@ -25,11 +25,40 @@ export function normalize(violations, readLines) {
   return violations.map((v) => {
     const file = v.file;
     if (!cache.has(file)) cache.set(file, readLines(file));
-    const subject = v.rule_id === 'file_length' ? '' : (cache.get(file)[(v.line ?? 1) - 1] ?? '').trim();
+    const subject = v.rule_id === 'file_length' ? '' : declarationIdentity(cache.get(file), (v.line ?? 1) - 1);
     const numbers = (v.reason.match(/\d+/g) ?? []).map(Number);
     const size = SIZED.has(v.rule_id) ? numbers.at(-1) ?? 0 : 0;
     return { rule: v.rule_id, file, subject, size, line: v.line, reason: v.reason };
   });
+}
+
+const TYPE_DECL = /^(\s*)(?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|internal|private|fileprivate|open|final|indirect)\s+)*(?:class|struct|enum|extension|protocol|actor)\s+([\w.]+)/;
+
+/**
+ * A violation's declaration, stable across unrelated edits: the enclosing
+ * types (outermost first) and the full signature up to its body. Two
+ * `func render() {` in different types, or overloads whose first line is the
+ * same, never share an allowance.
+ */
+export function declarationIdentity(lines, index) {
+  const signature = [];
+  for (let i = index; i < lines.length && i < index + 20; i++) {
+    const code = (lines[i] ?? '').replace(/\/\/.*$/, '').trim();
+    const brace = code.indexOf('{');
+    signature.push(brace >= 0 ? code.slice(0, brace + 1) : code);
+    if (brace >= 0) break;
+  }
+  const owners = [];
+  let indent = ((lines[index] ?? '').match(/^\s*/) ?? [''])[0].length;
+  for (let i = index - 1; i >= 0 && indent > 0; i--) {
+    const m = TYPE_DECL.exec(lines[i] ?? '');
+    if (m && m[1].length < indent) {
+      owners.unshift(m[2]);
+      indent = m[1].length;
+    }
+  }
+  const sig = signature.join(' ').replace(/\s+/g, ' ');
+  return owners.length ? `${owners.join('.')} :: ${sig}` : sig;
 }
 
 const keyOf = (v) => `${v.rule}\u0000${v.file}\u0000${v.subject}`;

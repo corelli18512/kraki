@@ -18,10 +18,10 @@ export function testScope(paths, full = false) {
       || path === 'scripts/ios-voice-hold-gate.sh' || path.startsWith('scripts/test-native')) {
       scope.native = true;
       scope.resilience = true;
-      // TypeScript tests that read these Swift files to keep both sides in sync
-      // (head-control-types.test.ts, monitor schema-sync.test.ts).
-      if (/^packages\/arm\/ios\/Kraki\/App\/AppState(\+[^/]*)?\.swift$/.test(path)
-        || path === 'packages/arm/ios/Kraki/Core/Diagnostics/DiagRecorder.swift') {
+      // TypeScript tests read app Swift sources to keep both sides in sync
+      // (head-control-types reads AppState*.swift; monitor schema-sync reads
+      // every Swift file under Kraki/), so any of them runs TypeScript CI too.
+      if (/^packages\/arm\/ios\/Kraki\/.*\.swift$/.test(path)) {
         scope.typescript = true;
       }
     } else if (path.startsWith('packages/protocol/')) {

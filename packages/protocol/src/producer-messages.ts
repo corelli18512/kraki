@@ -1,4 +1,4 @@
-/** Producer messages (tentacle → app): sessions, turns, tools, cards, status, greeting. */
+// Producer messages (tentacle → app): sessions, turns, tools, cards, status, greeting.
 
 import type { ToolArgs } from './tools.js';
 import { type ContentRef, type Attachment } from './attachments.js';

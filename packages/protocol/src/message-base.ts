@@ -1,4 +1,4 @@
-/** The base every inner message extends (inside the encrypted blob, invisible to the relay). */
+// The base every inner message extends (inside the encrypted blob, invisible to the relay).
 
 // ============================================================
 // Inner message base (inside encrypted blob, invisible to relay)
