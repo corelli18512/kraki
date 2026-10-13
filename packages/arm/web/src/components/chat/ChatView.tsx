@@ -1,8 +1,9 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { ChevronUp, ChevronsDown, Loader } from 'lucide-react';
 import type { Attachment, ContentRef } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
 import { useNarrow } from '../../hooks/useNarrow';
+import { agentNavigationColors } from '../../lib/color';
 import { useOutbox, outbox } from '../../lib/chat/outbox';
 import { openQuestions, payloadOf, rowKey, seqOf, spineRows } from '../../lib/chat/spine';
 import { messageProvider } from '../../lib/message-provider';
@@ -263,6 +264,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const intent = composerIntent(sessionActive, questions.length > 0, permissionOpen);
   const canAbort = sessionActive || showLive;
   const reachable = connected && deviceOnline;
+  const navigationColors = agentNavigationColors(sessionId);
 
   return (
     <div className="kchat" data-session={sessionId}>
@@ -296,7 +298,12 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
         </div>
       )}
 
-      <div className="kjump" style={{ bottom: composerHeight + 8 }}>
+      <div className="kjump" style={{
+        // MacComposerMetrics: bottomPadding12 + control36 + stackGap9.
+        bottom: narrow ? composerHeight + 8 : 57,
+        '--k-jump-light': navigationColors.light,
+        '--k-jump-dark': navigationColors.dark,
+      } as CSSProperties}>
         <button
           type="button"
           className={`kround ${showUp ? 'is-visible' : ''} ${atBottom ? '' : 'is-raised'}`}
