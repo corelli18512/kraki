@@ -785,13 +785,31 @@ private final class MacSessionActivityDotsView: NSView, VisibilityTickClient {
         CATransaction.commit()
     }
 
-    func configure(color: NSColor, reduceMotion: Bool) {
+    private var dotColor: NSColor?
+
+    /// `NSColor.cgColor` resolves a dynamic colour against the *current drawing*
+    /// appearance (the system's), not this view's. Resolve under the view's
+    /// effective appearance so the in-app Dark theme gets the dark brand blue.
+    private func applyDotColor() {
+        guard let dotColor else { return }
+        var resolved = dotColor.cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance { resolved = dotColor.cgColor }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for dot in dotLayers {
-            dot.backgroundColor = color.cgColor
+            dot.backgroundColor = resolved
         }
         CATransaction.commit()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyDotColor()
+    }
+
+    func configure(color: NSColor, reduceMotion: Bool) {
+        dotColor = color
+        applyDotColor()
 
         let reduceMotionChanged = self.reduceMotion != reduceMotion
         self.reduceMotion = reduceMotion
