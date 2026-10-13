@@ -48,6 +48,16 @@ describe('Markdown — native transcript rendering', () => {
     expect(getComputedStyle(table.querySelector('th')!).borderTopLeftRadius).toBe('10px');
   });
 
+  it('uses 18pt unordered depth independently of 25pt ordered markers', () => {
+    const { container } = render(<Markdown text={'- Alpha\n  - Beta\n\n1. One\n   1. Two\n      - Three'} />);
+    const lists = container.querySelectorAll('ul, ol');
+    expect([...lists].map((list) => getComputedStyle(list).paddingLeft)).toEqual(['18px', '18px', '25px', '25px', '18px']);
+    expect(getComputedStyle(lists[3]).marginLeft).toBe('-7px');
+    expect(getComputedStyle(lists[4]).marginLeft).toBe('-7px');
+    for (const li of container.querySelectorAll('li')) expect(getComputedStyle(li).paddingLeft).toBe('0px');
+    expect(chatCss).toContain('color: var(--color-label-secondary);');
+  });
+
   it('uses native syntax colors and preserves fence whitespace', () => {
     const { container } = render(<Markdown text={'```python\ndef hello(name):\n    print("Hello", name)\n```'} />);
     const code = container.querySelector('pre code')!;
