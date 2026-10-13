@@ -2,7 +2,6 @@
 
 import { WebSocket } from 'ws';
 import type { DeviceSummary, DeviceRole, DeviceKind } from '@kraki/protocol';
-import { Storage } from '../storage.js';
 import type { HeadServer } from '../server.js';
 
 export function broadcastDeviceRemoved(server: HeadServer, userId: string, removedDeviceId: string): void {

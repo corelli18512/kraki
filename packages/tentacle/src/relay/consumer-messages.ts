@@ -13,7 +13,7 @@ import { handleRequestCard, handleSessionMessages, handleSessionMessagesRange, h
 import { clearOpenQuestions, deliverQuestionAnswer, resolvePermission, soleOpenQuestion } from './questions.js';
 import { deleteSessionEverywhere, handleCreateSession, handleDeleteArchivedSessions, handleForkSession, handleImportSession, handleRequestArchivedSessions, handleRequestLocalSessions, handleSetAutoArchiveDays, unarchiveOnUse } from './session-commands.js';
 import { ensureSessionResumed, sendToAdapter } from './session-resume.js';
-import { acceptMaintenanceFollowUp, acceptsAdapterEvent, beginAdapterTurn, beginSteerAcceptance, clearCompacting, dispatchInput, finishSteerAcceptance, finishTurnWithStatus, reechoInput, reserveInput, resolveTurnIdle, sendTurnIdle, settleAdapterIdle, updateInputLedger, waitForTurnIdle } from './turns.js';
+import { acceptMaintenanceFollowUp, acceptsAdapterEvent, beginAdapterTurn, beginSteerAcceptance, clearCompacting, dispatchInput, finishSteerAcceptance, finishTurnWithStatus, reechoInput, reserveInput, resolveTurnIdle, sendTurnIdle, updateInputLedger, waitForTurnIdle } from './turns.js';
 import { logger, traceLog, describeFailure } from './shared.js';
 
 export function handleConsumerMessage(client: RelayClient, raw: unknown): void {

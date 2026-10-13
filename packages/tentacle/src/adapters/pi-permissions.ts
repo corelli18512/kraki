@@ -3,7 +3,6 @@
 import type { ToolArgs } from '@kraki/protocol';
 import { DEFAULT_SESSION_MODE } from '@kraki/protocol';
 import { krakiAutoApproves, type SessionMode, type ToolKind } from './permission-policy.js';
-import { PiRpcProcess } from './pi-rpc.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Section 2 — adapter: pools one PiRpcProcess per Kraki session

@@ -1,6 +1,6 @@
 /** The Pi adapter's model list: fetching, retrying, the default model, efforts per model. */
 
-import { spawn, execSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { readPiModelScope, scopePiModels } from './pi-model-scope.js';
 import type { ReasoningEffort } from '@kraki/protocol';
 import type { PiAdapter } from './pi.js';

@@ -1,6 +1,6 @@
 /** History requests: replay, message pages and ranges, turn traces, subscriptions, the live card. */
 
-import type { ProducerMessage, SessionLiveSnapshot, SessionDigest } from '@kraki/protocol';
+import type { SessionLiveSnapshot, SessionDigest } from '@kraki/protocol';
 import { RelayClient } from '../relay-client.js';
 import { logger } from './shared.js';
 

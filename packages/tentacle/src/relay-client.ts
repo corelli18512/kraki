@@ -27,14 +27,13 @@ import { AttachmentPacer } from './attachment-pacer.js';
 import { SleepGuard } from './sleep-guard.js';
 import { LocalLinkServer } from './local-link.js';
 import { broadcastAccountUsage, sendAccountUsageTo } from './relay/account-usage.js';
-import { wireAdapterEvents, recordTrace } from './relay/adapter-events.js';
+import { wireAdapterEvents } from './relay/adapter-events.js';
 import { sendAttachmentChunk } from './relay/attachments.js';
 import { handleConsumerMessage } from './relay/consumer-messages.js';
 import { dispatchPushPreview } from './relay/push-preview.js';
 import { latestOpenAttention, restorePendingHumanActions } from './relay/questions.js';
-import { handleForkSession, initEventsWatcher, maybeAutoArchive } from './relay/session-commands.js';
-import { resumeDisconnectedSessions, ensureSessionResumed } from './relay/session-resume.js';
-import { sendTurnIdle } from './relay/turns.js';
+import { initEventsWatcher, maybeAutoArchive } from './relay/session-commands.js';
+import { resumeDisconnectedSessions } from './relay/session-resume.js';
 import { logger, traceLog, type RelayClientOptions, DEFAULT_AUTO_ARCHIVE_DAYS, type RelayClientState, coalesceKeyFor, isAcceptableRegionRedirect } from './relay/shared.js';
 export { SessionResumeError, type RelayClientOptions, DEFAULT_AUTO_ARCHIVE_DAYS, type RelayClientState, coalesceKeyFor, isAcceptableRegionRedirect } from './relay/shared.js';
 

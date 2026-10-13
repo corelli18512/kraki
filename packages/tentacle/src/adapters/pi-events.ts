@@ -3,7 +3,6 @@
 import { PI_SUBAGENT_TOOL } from './pi-subagent.js';
 import { readFileSync } from 'node:fs';
 import { REPORT_MAX_BYTES } from '../report-policy.js';
-import { TurnTracker } from './turn-tracker.js';
 import { fitToMaxDimension } from '../image-resize.js';
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 import type { PiAdapter } from './pi.js';

@@ -1,6 +1,6 @@
 /** Shared by HeadServer and its handler modules: per-socket state, options, limits. */
 
-import type { VoiceResource, VoiceCapability } from '@kraki/protocol';
+import type { VoiceResource } from '@kraki/protocol';
 import { LeaseIssuer } from '../lease-issuer.js';
 import type { AuthProvider } from '../auth.js';
 import type { PushManager } from '../push/index.js';

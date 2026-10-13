@@ -33,7 +33,7 @@ import { cloneFile } from '../fs-clone.js';
 import { handleEvent } from './pi-events.js';
 import { fetchModels, ensureRawModels, clearModelRetry, getDefaultModel, fetchEfforts } from './pi-models.js';
 import { effortToThinking, type PiModelRow, PI_LIST_MODELS_TIMEOUT_MS, PI_LIST_MODELS_RETRY_DELAYS_MS, FALLBACK_EFFORTS, defaultEffortFor } from './pi-catalog.js';
-import { type Mode, MUTATING_DEFAULT_MODE, shouldAutoApprove, toolsForMode } from './pi-permissions.js';
+import { type Mode, MUTATING_DEFAULT_MODE, toolsForMode } from './pi-permissions.js';
 import { PiRpcProcess } from './pi-rpc.js';
 import { logger, PROMPT_ACK_GRACE_MS, PROMPT_WATCHDOG_INTERVAL_MS, PROMPT_PROBE_FAILURE_LIMIT, PROMPT_IDLE_STALL_MS, type PiSession, readSubagentOutput, EVICTION_INTERVAL_MS, IDLE_TTL_MS, KRAKI_SYSTEM_PROMPT, type PromptWatchdogOptions } from './pi-session.js';
 export { effortToThinking, type PiListModelsError, summarizeCrash, runPiListModels, type PiCatalogModel, FALLBACK_EFFORTS, piThinkingLevelsFor, defaultEffortFor, queryPiCatalog } from './pi-catalog.js';
