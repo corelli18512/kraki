@@ -6,8 +6,8 @@ import type { ChatMessage } from '../types/store';
  *  - tool_start → tool_complete merge by toolCallId; a later tool_complete for
  *    the same id replaces an earlier one (a background subagent completes
  *    twice: launch receipt, then report).
- *  - a dispatch step (one carrying `subagent`) keeps the position where it
- *    started, so its card sits where the agent delegated.
+ *  - every tool keeps the position where it started, so permission records
+ *    and narration remain in the order the agent emitted them.
  *  - steps carrying `parentToolCallId` belong to that subagent's page.
  */
 

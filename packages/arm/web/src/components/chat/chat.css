@@ -797,6 +797,22 @@
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
   background: linear-gradient(to bottom, color-mix(in srgb, var(--k-bg) 0%, transparent), var(--k-bg) 38%);
 }
+.kcompacting {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 8px;
+  margin: 0 auto 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(232, 236, 237, 0.8);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  color: var(--k-text-2);
+  font: 500 13px/16px var(--k-font);
+}
+.kcompacting-spinner { width: 16px; height: 16px; flex: none; color: var(--k-text-3); animation: kspin 0.8s linear infinite; }
+.dark .kcompacting { background: rgba(36, 36, 36, 0.8); }
 .kcomposer { position: relative; display: flex; align-items: flex-end; gap: var(--k-gap); }
 .kcomposer-field {
   position: relative;
@@ -1031,6 +1047,25 @@
   .ksheet-close svg path { stroke: var(--k-bg); }
   .ksheet-back { font-size: 14px; }
   .ksheet-body { flex: 1; min-height: 0; padding: 16px; font-size: 15px; }
+}
+
+/* Mac action metrics; keep the iPhone choice sizing independent. */
+@media (min-width: 768px) {
+  .kslot { margin-top: 8px; }
+  .kslot-alone { margin-top: 0; }
+  .kslot-tool { line-height: 14px; }
+  .kagent-stack:has(.kslot-permission) { min-width: min(408px, 95%); }
+  .kbubble-agent:has(.kslot-permission) { width: 100%; }
+  .kchoice, .kslot-permission-buttons .kchoice {
+    padding: 6px 14px;
+    border: none;
+    box-shadow: inset 0 0 0 0.5px var(--k-border);
+    font-size: 13px;
+    line-height: 16px;
+  }
+  .kperm-approve { box-shadow: none !important; }
+  .kslot-permission-q { line-height: 18px; }
+  .kslot-permission-caption { line-height: 15px; }
 }
 
 @media (max-width: 767px) {

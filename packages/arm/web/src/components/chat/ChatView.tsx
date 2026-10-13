@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronUp, ChevronsDown } from 'lucide-react';
+import { ChevronUp, ChevronsDown, Loader } from 'lucide-react';
 import type { Attachment, ContentRef } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
 import { useNarrow } from '../../hooks/useNarrow';
@@ -77,7 +77,8 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
     [messages, answerKey, atHead],
   );
 
-  const sessionActive = session?.state === 'active' || session?.state === 'compacting' || runtime?.status === 'compacting';
+  const isCompacting = session?.state === 'compacting' || runtime?.status === 'compacting';
+  const sessionActive = session?.state === 'active' || isCompacting;
   const action = card?.action ?? null;
   const actionLive = action?.type === 'tool_start' || action?.type === 'tool_complete'
     || (action?.type === 'tool_batch' && action.payload.running > 0) || action?.type === 'permission';
@@ -86,7 +87,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   // until a spine bubble concludes the segment (a reply, a question, a
   // terminal status) — not only while the card happens to have content.
   const showLive = !!card && !card.closed && (sessionActive || permissionOpen)
-    && (card.text.length > 0 || actionLive || sessionActive);
+    && (card.text.length > 0 || actionLive || session?.state === 'active');
 
   // Row objects are reused while their record is unchanged, so memoized
   // bubbles only re-render when their own content changes.
@@ -316,6 +317,12 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
       </div>
 
       <div className="kcomposer-dock" ref={composerBox}>
+        {isCompacting && (
+          <div className="kcompacting" role="status" aria-label="Compacting context">
+            <Loader className="kcompacting-spinner" aria-hidden />
+            <span>Compacting context…</span>
+          </div>
+        )}
         <Composer
           ref={composerRef}
           sessionId={sessionId}
