@@ -37,7 +37,7 @@
     "test:live": "pnpm --filter @kraki/tests test:live",
     "lint": "biome lint",
     "validate": "pnpm lint && pnpm build && pnpm test",
-    "reset": "rm -rf ~/.kraki && echo '\ud83e\udd91 Cleared ~/.kraki \u2014 run pnpm dev:tentacle to set up fresh'",
+    "reset": "pnpm dev:reset",
     "clean": "pnpm -r clean"
   },
   "engines": {
