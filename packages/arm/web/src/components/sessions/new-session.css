@@ -102,23 +102,23 @@
 .ns-popover {
   position: absolute;
   top: calc(100% + 13px);
-  left: calc(50% - 141px);
+  left: calc(50% - 143px);
   z-index: 60;
-  width: 282px;
+  width: 286px;
   box-sizing: border-box;
-  padding: 8px;
+  padding: 8px 10px;
   display: flex;
   flex-direction: column;
   gap: 2px;
   border-radius: 24px;
   background: rgba(250, 250, 250, 0.95);
   backdrop-filter: blur(24px);
-  border: 1px solid rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(0, 0, 0, 0.33);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.08);
   animation: ns-pop 0.14s ease-out;
 }
 .dark .ns-popover { background: rgba(40, 40, 40, 0.95); border-color: rgba(255, 255, 255, 0.08); box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5); }
-.ns-popover-arrow { position: absolute; top: -11px; left: calc(50% - 14px); fill: #fafafa; stroke: rgba(0, 0, 0, 0.25); stroke-width: 1; pointer-events: none; }
+.ns-popover-arrow { position: absolute; top: -11px; left: calc(50% - 14px); fill: #fafafa; stroke: rgba(0, 0, 0, 0.33); stroke-width: 1; pointer-events: none; }
 .dark .ns-popover-arrow { fill: #282828; stroke: rgba(255, 255, 255, 0.08); }
 .ns-popover:has(.ns-section) { gap: 8px; }
 @keyframes ns-pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
@@ -136,7 +136,7 @@
   cursor: pointer;
 }
 .ns-choice:hover:not(:disabled) { background: color-mix(in srgb, var(--color-text-primary) 8%, transparent); }
-.ns-choice:disabled { cursor: default; }
+.ns-choice:disabled { cursor: default; opacity: 0.5; }
 .ns-choice-mark { width: 18px; display: inline-flex; justify-content: center; flex: none; }
 .ns-choice-mark svg { width: 15px; height: 15px; }
 .ns-choice-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
