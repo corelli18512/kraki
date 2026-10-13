@@ -6,7 +6,6 @@ import SwiftUI
 struct AboutPane: View {
     @Environment(TentacleCLIManager.self) private var tentacleCLI
     @Environment(AppState.self) private var appState
-    @State private var copied = false
 
     private var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -45,20 +44,11 @@ struct AboutPane: View {
             }
 
             VStack(spacing: 3) {
+                versionRow("Kraki for Mac", value: "\(version) (\(build))")
                 versionRow("Background Service", value: tentacleVersion)
-                ForEach(DiagnosticsSummary.rows(appState: appState), id: \.label) { row in
-                    versionRow(row.label, value: row.value)
-                }
+                versionRow("Relay", value: appState.relayVersion ?? "—")
             }
             .padding(.top, 6)
-
-            Button(copied ? "Copied" : "Copy Diagnostics") {
-                let text = "Background Service: \(tentacleVersion)\n" + DiagnosticsSummary.text(appState: appState)
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-                copied = true
-            }
-            .controlSize(.small)
 
             Divider().frame(width: 220).padding(.vertical, 6)
 

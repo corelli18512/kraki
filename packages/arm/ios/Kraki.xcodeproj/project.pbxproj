@@ -16,7 +16,6 @@
 		030741A547AC17FE92C3A217 /* ThisMacSetupSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 593F51D017203A91FAB57F80 /* ThisMacSetupSnapshot.swift */; };
 		0313E21470C38A392FB20B51 /* StabilityTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E35AD5263921130DD1A18D /* StabilityTrackerTests.swift */; };
 		0449F8113EE71D0A83B333FD /* MacAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6813B385E0446BBC371C8AD3 /* MacAppDelegate.swift */; };
-		044F8421188967748990B316 /* DiagnosticsSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 174ADE7BF077A13AD4CB362E /* DiagnosticsSummary.swift */; };
 		0582DF7B78E54F35D4FA6278 /* ChatPerfListVC+HeldOlderPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E1663364BCDFF5693E61FCD /* ChatPerfListVC+HeldOlderPage.swift */; };
 		0586AEFC6250C23DFFDEB549 /* TransientScrollIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E6FEB24831FDD84C765A2FE /* TransientScrollIndicator.swift */; };
 		058F05193E5F187FE59EA1F9 /* MacToolActivityRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E5E8774CBFF404F8D467E90 /* MacToolActivityRow.swift */; };
@@ -311,7 +310,6 @@
 		832C89E3B652B1D41983AE67 /* MacAppDelegate+Rendering.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2094AEF0FE03BEA927602B65 /* MacAppDelegate+Rendering.swift */; };
 		83708A5CFDCAF5DF4D42B03A /* MacPresenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70B56E49F0EA690CE7F1B08 /* MacPresenceTests.swift */; };
 		83936B1E21CD7A7B83230630 /* VoiceVocabularySync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CEA6A534E6C629E191BE060 /* VoiceVocabularySync.swift */; };
-		844E491B6B3EBF85DAF770A8 /* DiagnosticsSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 174ADE7BF077A13AD4CB362E /* DiagnosticsSummary.swift */; };
 		846189C0712D27DE650B1BDD /* ThisMacSetupStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACF9B7682A158350E82AECB6 /* ThisMacSetupStep.swift */; };
 		84954F7CDDC34A4F2B61CF3C /* NativeStyleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E77A84041CFCAABE6E3E2B01 /* NativeStyleTests.swift */; };
 		84CB45E78AD2AC208A053E49 /* SessionInfoSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 427AD031BE9C726645DEA33E /* SessionInfoSheet.swift */; };
@@ -652,7 +650,6 @@
 		141616DC70091EA4EEE28FA6 /* TKTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TKTable.swift; sourceTree = "<group>"; };
 		146981F5DD365EB404690F89 /* MacMainThreadProfileScenarioTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMainThreadProfileScenarioTests.swift; sourceTree = "<group>"; };
 		14DE4C914007046BE9F67973 /* VoiceDraftStyling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceDraftStyling.swift; sourceTree = "<group>"; };
-		174ADE7BF077A13AD4CB362E /* DiagnosticsSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsSummary.swift; sourceTree = "<group>"; };
 		179780D06C1EF0B6ED5E0C38 /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		1844CDC99B687DFFEE1E79CD /* MacChatDocumentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatDocumentView.swift; sourceTree = "<group>"; };
 		19777D98E181CB40434BABBD /* MacQuestionAnswerOnceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacQuestionAnswerOnceTests.swift; sourceTree = "<group>"; };
@@ -1432,7 +1429,6 @@
 				0E80769CD696851C28434036 /* AppColorScheme.swift */,
 				2D232DC800AF0619C33F5790 /* AttachmentImageCache.swift */,
 				59A0EADC2F8D9117AA3642F8 /* DeviceDates.swift */,
-				174ADE7BF077A13AD4CB362E /* DiagnosticsSummary.swift */,
 				49118B9C5B861B64143ACD87 /* EventMonitorForwarding.swift */,
 				9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */,
 				2759E8054C05F69DD4F25A5E /* KrakiLogger.swift */,
@@ -2178,7 +2174,6 @@
 				E28B775963A2EDAC7D4F166E /* DiagRecorder.swift in Sources */,
 				B9904E6233735C93F73DEC6F /* DiagRunLoop.swift in Sources */,
 				F31C758A34766D63EDB6AAF6 /* DiagSettingsSection.swift in Sources */,
-				044F8421188967748990B316 /* DiagnosticsSummary.swift in Sources */,
 				D087D8336F9F7A82D73AB4DD /* EncryptionHandler.swift in Sources */,
 				46AEB1D619ECB0277B3D042F /* EventMonitorForwarding.swift in Sources */,
 				D7C26171A2AF89D6276D6276 /* ExistingCLIChoiceView.swift in Sources */,
@@ -2421,7 +2416,6 @@
 				C90E77716E24E622BAB738CF /* DiagRecorder.swift in Sources */,
 				4BD2A0DCBADF5436E42767AA /* DiagRunLoop.swift in Sources */,
 				613A478009D713D6D8D81F36 /* DiagSettingsSection.swift in Sources */,
-				844E491B6B3EBF85DAF770A8 /* DiagnosticsSummary.swift in Sources */,
 				8BC5CECD42EA24EE4D580AC6 /* EncryptionHandler.swift in Sources */,
 				A6B46931BCA6C909B23C8B9F /* EventMonitorForwarding.swift in Sources */,
 				34D126CB8B7709D243BC02C6 /* ExistingCLIChoiceView.swift in Sources */,

@@ -41,10 +41,6 @@ struct AccountPane: View {
                     if let email = user.email {
                         LabeledContent("Email",  value: email)
                     }
-                    if let did = appState.deviceId {
-                        LabeledContent("Device ID", value: String(did.prefix(12)) + "…")
-                            .help(did)
-                    }
                 }
 
                 Section {
@@ -93,10 +89,10 @@ struct AccountPane: View {
     }
 
     private func providerLabel(for user: UserInfo) -> String {
-        // UserInfo may or may not expose a provider — fall back to a
-        // sensible default so the chip stays informative without
-        // pretending to know.
-        return "GitHub"
+        switch user.provider {
+        case "github", nil: return "GitHub"
+        case let other?: return other.capitalized
+        }
     }
 }
 
