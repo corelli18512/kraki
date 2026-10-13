@@ -110,7 +110,8 @@
   mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.78) 30%, rgba(0, 0, 0, 0.5) 55%, rgba(0, 0, 0, 0.22) 78%, transparent);
   pointer-events: none;
 }
-.dark .khead.is-wide::before { background: rgba(0, 0, 0, 0.55); }
+/* AppKit ultra-thin material plus the black tint, before the eased mask. */
+.dark .khead.is-wide::before { background: rgba(15, 15, 15, 0.7); }
 .khead.is-wide .khead-title {
   max-width: min(460px, calc(100% - 300px));
   height: 32px;
@@ -208,7 +209,15 @@
   transition: background 0.3s ease, color 0.3s ease;
 }
 .khead-segments button[aria-checked="true"] { color: white; }
-.dark .khead.is-wide .khead-capsule, .dark .khead-segments { background: rgba(40, 40, 40, 0.8); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16), inset 0 0 0 0.5px rgba(255, 255, 255, 0.12); }
+.dark .khead.is-wide .khead-title,
+.dark .khead.is-wide .khead-capsule,
+.dark .khead.is-wide .khead-segments {
+  background: rgba(28, 30, 32, 0.55);
+  border-color: transparent;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16), inset 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+}
 .khead-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; }
 .khead-menu {
   position: absolute;
@@ -365,6 +374,13 @@
   cursor: pointer;
 }
 .ksteps:hover { color: var(--k-text); }
+/* Native tertiarySystemFill and secondaryLabel composite over both the
+ * clear chat and the bubble; neither is an opaque slate semantic color. */
+.dark .ksteps {
+  background: rgba(255, 255, 255, 0.048);
+  backdrop-filter: none;
+  color: rgba(255, 255, 255, 0.55);
+}
 
 /* Not delivered: a red mark beside the message. */
 .kfailed {
@@ -715,6 +731,12 @@
 .ktable .ktable-grid th:first-child { border-top-left-radius: 10px; }
 .ktable .ktable-grid th:last-child { border-top-right-radius: 10px; }
 .ktable-grid tbody td { box-shadow: inset 0 0.5px var(--kt-hair); color: var(--color-label-primary); }
+/* The native header hairline sits over the header tint, not the body. */
+.dark .ktable { --kt-hair: rgba(255, 255, 255, 0.13); }
+.dark .ktable .ktable-grid th {
+  background-image: linear-gradient(to top, var(--kt-hair) 0.5px, transparent 0.5px);
+}
+.dark .ktable .ktable-grid tbody tr:first-child td { box-shadow: none; }
 .ktable-grid td.is-num { white-space: nowrap; }
 .ktable-grid code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--k-text) 8%, transparent); font: 12.5px var(--k-mono); }
 .ktable-grid a { color: #0056a8; }
@@ -726,6 +748,9 @@
   box-shadow: 1px 0 0 var(--kt-hair);
 }
 .ktable-grid.is-sticky th:first-child { background-image: linear-gradient(var(--kt-head), var(--kt-head)); }
+.dark .ktable .ktable-grid.is-sticky th:first-child {
+  background-image: linear-gradient(to top, var(--kt-hair) 0.5px, transparent 0.5px), linear-gradient(var(--kt-head), var(--kt-head));
+}
 .ktable-footer {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   height: 34px; padding: 0 10px;
@@ -811,6 +836,10 @@
   }
   .dark .kjump .kround {
     color: var(--k-jump-dark);
+    background: rgba(27, 28, 38, 0.6);
+    border-color: rgba(110, 136, 208, 0.25);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
   }
 }
 .kround.is-visible { opacity: 1; transform: scale(1); pointer-events: auto; }
@@ -837,6 +866,23 @@
   z-index: 6;
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
   background: linear-gradient(to bottom, color-mix(in srgb, var(--k-bg) 0%, transparent), var(--k-bg) 38%);
+}
+/* Independent Mac bar-material edge fade; it does not alter the composer
+ * dock or the scroll clearance. The light treatment remains unchanged. */
+@media (min-width: 768px) {
+  .dark .kchat::after {
+    content: "";
+    position: absolute;
+    right: 18px;
+    bottom: 0;
+    left: 18px;
+    z-index: 4;
+    height: 88px;
+    border-radius: 22px;
+    background: rgba(2, 6, 23, 0.32);
+    mask-image: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.58) 62%, black);
+    pointer-events: none;
+  }
 }
 .kcompacting {
   display: flex;
@@ -1148,8 +1194,12 @@
   .dark .ksheet-head { border-color: rgba(255,255,255,.1); }
   .ksheet-head h3 { font-size: 17px; color: var(--color-text-title); }
   .ksheet-close { padding: 0; color: var(--k-text-3); }
+  .dark .ksheet-close:focus-visible {
+    border-radius: 2px;
+    outline: 3px solid #0e588a;
+    outline-offset: 0;
+  }
   .ksheet-close svg { width: 15px; height: 15px; }
-  .dark .ksheet-close:focus-visible { outline: 3px solid #0e588a; outline-offset: 0; border-radius: 1px; }
   .ksheet-close svg circle { fill: currentColor; stroke: none; }
   .ksheet-close svg path { stroke: var(--k-bg); }
   .ksheet-back { font-size: 14px; }
