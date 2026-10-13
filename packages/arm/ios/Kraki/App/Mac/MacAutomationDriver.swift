@@ -224,6 +224,10 @@ final class MacAutomationDriver {
                 send(error: "invalid_state", message: "No production window is mounted", id: id, on: connection); return
             }
             window.setContentSize(NSSize(width: max(width, 700), height: max(height, 500)))
+            // Keep the whole window on screen: partly off-screen content renders black in captures.
+            if let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
+                window.setFrameOrigin(NSPoint(x: visible.minX, y: visible.maxY - window.frame.height))
+            }
             window.contentView?.layoutSubtreeIfNeeded()
             send(result: ["width": Double(window.contentLayoutRect.width), "height": Double(window.contentLayoutRect.height)], id: id, on: connection)
         case "snapshot":
@@ -709,6 +713,22 @@ final class MacAutomationDriver {
                 }
                 send(result: result, id: id, on: connection)
             }
+        case "closeAuxWindows":
+            // Debug-only: close every visible window except the main chat window
+            // (Settings, artifact/report viewers, account usage) and dismiss sheets.
+            let main = NSApp.windows
+                .filter { $0.isVisible && $0.contentView != nil && $0.sheetParent == nil && $0.frame.width > 300 && $0.frame.height > 200 }
+                .first { $0.title.isEmpty || $0.title == "Kraki" || $0.title == "Kraki (Dev)" }
+            var closed: [String] = []
+            for w in NSApp.windows where w.isVisible && w !== main {
+                if let parent = w.sheetParent { parent.endSheet(w); closed.append("sheet") ; continue }
+                if w.level != .normal || w.frame.width < 200 { continue } // menu-bar extra, popovers, panels
+                closed.append(w.title.isEmpty ? String(describing: type(of: w)) : w.title)
+                w.performClose(nil)
+                if w.isVisible { w.orderOut(nil) }
+            }
+            main?.makeKeyAndOrderFront(nil)
+            send(result: ["closed": closed], id: id, on: connection)
         case "localLinkProbe":
             // Debug-only fault injection for local-link tests.
             guard let appState else {
@@ -2072,14 +2092,17 @@ final class MacAutomationDriver {
     }
 
     private func captureWindow(path: String, sheetOnly: Bool) -> Result<NSSize, CaptureError> {
+        // Only on-screen windows: a closed artifact/settings window that AppKit
+        // keeps around (ordered out, often larger) used to win and render black.
         let candidates = NSApp.windows.filter {
-            $0.contentView != nil && $0.frame.width > 300 && $0.frame.height > 200
+            $0.contentView != nil && $0.isVisible && $0.frame.width > 300 && $0.frame.height > 200
         }
         let window: NSWindow? = {
             if sheetOnly {
                 return candidates.first(where: { $0.sheetParent != nil })
                     ?? candidates.min(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
             }
+            if let main = NSApp.mainWindow, candidates.contains(main), main.sheetParent == nil { return main }
             return candidates.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
         }()
         guard let window, let view = window.contentView else { return .failure(.noWindow) }
