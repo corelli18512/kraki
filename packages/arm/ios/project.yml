@@ -246,6 +246,8 @@ targets:
       - path: KrakiTests/DeviceTrustBoundaryTests+Round2.swift
       - path: KrakiTests/DeviceTrustUsabilityTests.swift
       - path: KrakiTests/E2EV2NodeVectors.swift
+      - path: KrakiTests/SteerSplitTests.swift
+      - path: KrakiTests/ComposerAnswerImagesTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.tests
@@ -303,7 +305,6 @@ targets:
       - path: Kraki/Shared/NavigationIDs.swift
       - path: Kraki/Shared/ToolStatusIcon.swift
       - path: Kraki/Shared/PermissionDiffPreview.swift
-      - path: Kraki/Shared/DiagnosticsSummary.swift
       - path: Kraki/Shared/DeviceDates.swift
       # Session list UI shared by iOS and Mac (status glyphs, metadata row, update badges).
       - path: Kraki/Shared/SessionUI
@@ -341,6 +342,7 @@ targets:
       - path: Kraki/Features/Chat/ChatLoadingState.swift
       - path: Kraki/Features/Chat/ComposerOverlayReporting.swift
       - path: Kraki/Features/Chat/ComposerLatchSettling.swift
+      - path: Kraki/Features/Chat/ComposerAnswerImages.swift
       - path: Kraki/Features/Chat/ChatScrollPolicy.swift
       - path: Kraki/Features/Chat/Sizing/HeightMeasurementScheduler.swift
       - path: Kraki/Features/Chat/Mac

@@ -131,7 +131,15 @@ struct MessageInputView: View {
         return false
     }
     private var canSend: Bool {
-        !isRecordingHere && !voiceSendPending && (isStructuredResponse ? hasText : (hasText || hasImage))
+        guard !isRecordingHere, !voiceSendPending else { return false }
+        if submissionIntent == .answerQuestion {
+            return ComposerAnswerImages.canSubmit(hasText: hasText, hasImage: hasImage, agent: session?.agent)
+        }
+        return isStructuredResponse ? hasText : (hasText || hasImage)
+    }
+    private var canAttachImage: Bool {
+        ComposerAnswerImages.canAttach(isIdle: isIdle, answeringQuestion: submissionIntent == .answerQuestion,
+                                       agent: session?.agent)
     }
     /// Agent running and nothing typed: the primary button stops the turn.
     /// As soon as there is something to send it becomes Send (steer).
@@ -578,14 +586,16 @@ struct MessageInputView: View {
             // bubble-corrected send as a prompt.
             let delivery: CommandSender.InputDelivery = submissionIntent == .steer ? .steer : .prompt
             let answerTo = submissionIntent == .answerQuestion ? pendingQuestion?.id : nil
+            let attachments = answerTo == nil ? imageAttachments
+                : ComposerAnswerImages.attachments(imageAttachments, agent: session?.agent)
             let staged = withAnimation(Self.expandAnimation) {
-                voice.send(attachments: imageAttachments, delivery: delivery, answerTo: answerTo)
+                voice.send(attachments: attachments, delivery: delivery, answerTo: answerTo)
             }
             guard staged else {
                 showSubmitFailure()
                 return
             }
-            clearImage()
+            if attachments != nil { clearImage() }
             didSubmitFromComposer()
         }
     }
@@ -747,8 +757,8 @@ struct MessageInputView: View {
             }
         }
         .padding(.leading, 4)
-        .disabled(!isIdle)
-        .opacity(isIdle ? 1 : 0.4)
+        .disabled(!canAttachImage)
+        .opacity(canAttachImage ? 1 : 0.4)
     }
 
     private var imageAttachments: [ImageAttachment]? {
@@ -907,19 +917,19 @@ struct MessageInputView: View {
         didSubmitFromComposer()
     }
 
+    /// The answer carries the attached image when the agent takes images in
+    /// answers (Pi); otherwise the image stays in the composer.
     private func handleQuestionAnswer() {
-        guard hasText, let q = pendingQuestion else { return }
-        let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard appState.commandSender?.answer(
-            sessionId: sessionId,
-            questionId: q.id,
-            answer: answer
-        ) == true else {
-            // Keep the typed answer so the user can retry.
-            showSubmitFailure()
+        let agent = session?.agent
+        guard ComposerAnswerImages.canSubmit(hasText: hasText, hasImage: hasImage, agent: agent),
+              let q = pendingQuestion else { return }
+        guard ComposerAnswerImages.send(appState.commandSender, sessionId: sessionId, questionId: q.id,
+                                        text: text, staged: imageAttachments, agent: agent) else {
+            showSubmitFailure() // Keep the typed answer so the user can retry.
             return
         }
         sessionStore.setDraft(sessionId, "")
+        if ComposerAnswerImages.allowed(agent: agent) { clearImage() }
         didSubmitFromComposer()
     }
 

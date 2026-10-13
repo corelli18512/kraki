@@ -14,7 +14,9 @@ extension MessageStore {
         }
         guard var card = cards[sessionId] else { return }
         card.text = ""
-        if card.action == nil {
+        // Drafts frozen above earlier steers stay until the turn ends.
+        card.steerSplit.consumed = ""
+        if card.action == nil && card.steerSplit.frozen.isEmpty {
             cards.removeValue(forKey: sessionId)
         } else {
             cards[sessionId] = card

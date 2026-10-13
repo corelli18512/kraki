@@ -3515,8 +3515,9 @@ describe('RelayClient pending-question digest', () => {
     send(800, 'running', 'cid-running');
     await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
     send(801, 'queued', 'cid-queued');
-    await vi.waitFor(() => expect(ledger.get('cid-queued')?.status).toBe('persisted'));
-    // The app lost the echo (reconnect) and re-sends the same clientId while
+    // Queued behind the running turn: admitted, persisted only at dispatch.
+    await vi.waitFor(() => expect(ledger.get('cid-queued')?.status).toBe('pending'));
+    // The app has no echo yet (or lost it) and re-sends the same clientId while
     // the first copy is still waiting for the running turn to finish.
     send(802, 'queued', 'cid-queued');
     send(803, 'queued', 'cid-queued');

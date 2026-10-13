@@ -437,12 +437,11 @@ final class MessageRouter {
         // ── Chat messages ────────────────────────────────────────────────
 
         case "user_message":
-            let delivery = payload?["delivery"] as? String
             // A normal persisted user message starts a fresh turn and clears
             // stale transient card state. A steer remains inside the current
             // agent lifecycle: keep its draft/action intact while ensuring the
-            // late-frame gate stays open.
-            appState.messageStore.beginCardTurn(sessionId, delivery: delivery)
+            // late-frame gate stays open, and freeze the draft above it.
+            appState.messageStore.beginCardTurn(sessionId, userMessage: payload, seq: dict["seq"] as? Int)
             // Persist + materialise the real user_message, then clear
             // any optimistic pending placeholder our outbox is
             // holding for the matching clientId. The render layer

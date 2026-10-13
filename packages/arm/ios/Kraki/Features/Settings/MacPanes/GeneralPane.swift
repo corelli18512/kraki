@@ -24,17 +24,6 @@ struct GeneralPane: View {
                     Text("Dark").tag(AppColorScheme.dark)
                 }
                 .pickerStyle(.segmented)
-
-                HStack(spacing: 6) {
-                    ForEach([0xFBBF24, 0x34D399, 0x22D3EE, 0xF4836E, 0x6366F1], id: \.self) { hex in
-                        Circle()
-                            .fill(Color(hex: UInt(hex)))
-                            .frame(width: 12, height: 12)
-                    }
-                    Text("Brand palette preview")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.textMuted)
-                }
             }
 
             Section("Account Usage") {

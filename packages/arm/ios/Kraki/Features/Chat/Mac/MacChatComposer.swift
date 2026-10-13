@@ -145,6 +145,9 @@ struct MacChatComposer: View {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     private var hasImage: Bool { imageData != nil }
+    private var stagedImageAttachments: [ImageAttachment]? {
+        imageData.map { [ImageAttachment(type: "image", mimeType: imageMimeType, data: $0.base64EncodedString())] }
+    }
     private var voiceController: KrakiVoiceInputController { appState.voiceInputController }
     private var voiceComposer: IOSVoiceComposer { appState.iosVoiceComposer }
     private var voiceOwnsComposer: Bool { voiceComposer.isRecording(in: sessionId) }
@@ -155,7 +158,14 @@ struct MacChatComposer: View {
     }
     private var canSend: Bool {
         if voiceOwnsComposer { return true }
+        if submissionIntent == .answerQuestion {
+            return !voiceSendPending && ComposerAnswerImages.canSubmit(hasText: hasText, hasImage: hasImage, agent: session?.agent)
+        }
         return !voiceSendPending && (isStructuredResponse ? hasText : (hasText || hasImage))
+    }
+    private var canAttachImage: Bool {
+        ComposerAnswerImages.canAttach(isIdle: isIdle, answeringQuestion: submissionIntent == .answerQuestion,
+                                       agent: session?.agent)
     }
     private var canShowVoice: Bool {
         VoiceComposerAccessPolicy.isVisible(
@@ -272,7 +282,7 @@ struct MacChatComposer: View {
             }
             .background {
                 MacComposerPasteProbe(
-                    enabled: isFocused && isIdle,
+                    enabled: isFocused && canAttachImage,
                     onPasteImage: { image in
                         attachImage(image)
                         requestComposerFocus()
@@ -424,7 +434,7 @@ struct MacChatComposer: View {
         .onPasteCommand(
             of: [.image, .fileURL],
             validator: { providers in
-                guard isIdle else { return nil }
+                guard canAttachImage else { return nil }
                 return providers.first(where: { provider in
                     provider.hasItemConformingToTypeIdentifier(UTType.image.identifier)
                         || provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
@@ -634,8 +644,8 @@ struct MacChatComposer: View {
             }
         }
         .padding(.leading, 6)
-        .disabled(!isIdle || voiceOwnsComposer)
-        .opacity(isIdle && !voiceOwnsComposer ? 1 : 0.4)
+        .disabled(!canAttachImage || voiceOwnsComposer)
+        .opacity(canAttachImage && !voiceOwnsComposer ? 1 : 0.4)
         .background {
             #if DEBUG
             MacComposerControlGeometryProbe(identifier: "chat-attach-image")
@@ -678,12 +688,11 @@ struct MacChatComposer: View {
             // Free-form answers use main's answerTo-aware staged outbox;
             // only permission denial still requires review in the editor.
             if pendingPermission != nil { voiceComposer.finishToDraft(); return }
-            let attachments = imageData.map {
-                [ImageAttachment(type: "image", mimeType: imageMimeType, data: $0.base64EncodedString())]
-            }
+            let attachments = pendingQuestion == nil ? stagedImageAttachments
+                : ComposerAnswerImages.attachments(stagedImageAttachments, agent: session?.agent)
             if voiceComposer.send(attachments: attachments, delivery: submissionIntent == .steer ? .steer : .prompt,
                                   answerTo: pendingQuestion?.id) {
-                clearImage()
+                if attachments != nil { clearImage() }
                 didSubmitFromComposer()
                 requestComposerFocus()
             }
@@ -704,18 +713,15 @@ struct MacChatComposer: View {
             sessionStore.setDraft(sessionId, "")
             didSubmitFromComposer()
         case .answerQuestion:
-            guard hasText, let question = pendingQuestion else { return }
-            let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard appState.commandSender?.answer(
-                sessionId: sessionId,
-                questionId: question.id,
-                answer: answer,
-                attachments: imageData.map {
-                    [ImageAttachment(type: "image", mimeType: imageMimeType, data: $0.base64EncodedString())]
-                }
-            ) == true else { NSSound.beep(); return }
+            // The image goes with the answer only when the agent takes it (Pi).
+            let agent = session?.agent
+            guard ComposerAnswerImages.canSubmit(hasText: hasText, hasImage: hasImage, agent: agent),
+                  let question = pendingQuestion else { return }
+            guard ComposerAnswerImages.send(appState.commandSender, sessionId: sessionId, questionId: question.id,
+                                            text: text, staged: stagedImageAttachments, agent: agent)
+            else { NSSound.beep(); return }
             sessionStore.setDraft(sessionId, "")
-            clearImage()
+            if ComposerAnswerImages.allowed(agent: agent) { clearImage() }
             didSubmitFromComposer()
         case .prompt, .steer:
             handleSend()
@@ -726,9 +732,7 @@ struct MacChatComposer: View {
         guard canSend else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let sendText = trimmed.isEmpty ? "[image]" : trimmed
-        let attachments = imageData.map {
-            [ImageAttachment(type: "image", mimeType: imageMimeType, data: $0.base64EncodedString())]
-        }
+        let attachments = stagedImageAttachments
         let delivery: CommandSender.InputDelivery = submissionIntent == .steer ? .steer : .prompt
         guard appState.commandSender?.sendInput(
             sessionId: sessionId,
@@ -771,7 +775,7 @@ struct MacChatComposer: View {
     }
 
     private func chooseImage() {
-        guard isIdle else { return }
+        guard canAttachImage else { return }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false

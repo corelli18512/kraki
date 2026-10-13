@@ -78,9 +78,6 @@ struct DeviceDetailView: View {
                 if let version {
                     infoRow("Version", value: version)
                 }
-                if isCurrentDevice {
-                    infoRow("This device", value: "Yes", valueColor: Color.krakiPrimary)
-                }
             }
 
             if device.role == .tentacle {

@@ -916,6 +916,8 @@ final class MessageStore {
         /// or a frozen row's question choices / terminal outcome
         /// (`ChatMessage.frozenCard`), as a `ChatMessage` (type + payload).
         var action: ChatMessage?
+        /// Draft frozen above each steer of the turn (MessageStore+SteerSplit).
+        var steerSplit = SteerSplit()
     }
     var cards: [String: SessionCard] = [:]
     /// A concluded turn rejects late coalesced deltas/card snapshots so its
@@ -1090,17 +1092,17 @@ final class MessageStore {
         cardHoldUntil[sessionId] = seq
     }
 
-    /// The card as the conversation may show it.
+    /// The card as the conversation may show it: below the latest steer, only
+    /// the words that followed it.
     func visibleCard(_ sessionId: String) -> SessionCard? {
         guard let card = cards[sessionId] else { return nil }
         if let until = cardHoldUntil[sessionId], persistedHead(sessionId) < until { return nil }
-        return card
+        return card.afterLatestSteer
     }
 
     /// Land-and-clear: the concluding bubble landed on the spine, drop the card.
     func clearCard(_ sessionId: String) {
-        guard cards[sessionId] != nil else { return }
-        cards.removeValue(forKey: sessionId)
+        if cards[sessionId] != nil { cards.removeValue(forKey: sessionId) }
     }
 
     /// `turn_trace_batch`: replace a turn's pulled steps.

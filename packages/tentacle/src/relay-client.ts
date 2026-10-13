@@ -1097,8 +1097,12 @@ export class RelayClient {
     // recordTrace() (tool_start / agent_narration flow there, NOT through send());
     // stamp the running total onto agent_message / system_message bubbles here.
     if (sessionId) {
-      if (type === 'user_message' && (enriched.payload as { delivery?: string } | undefined)?.delivery !== 'steer') {
-        this.turnStepCounts.set(sessionId, 0);
+      const input = type === 'user_message' ? enriched.payload as { delivery?: string; answerTo?: string } | undefined : undefined;
+      if (type === 'user_message' && input?.delivery !== 'steer') {
+        // An answer to the agent's question continues the turn that asked: its
+        // steps keep counting, but what follows the answer needs its own
+        // outcome (reply or steps-only anchor).
+        if (!input?.answerTo) this.turnStepCounts.set(sessionId, 0);
         this.turnHasOutcome.delete(sessionId);
         this.lastAgentContent.delete(sessionId);
       } else if (type === 'agent_message' || type === 'system_message' || type === 'interrupted_turn' || type === 'turn_status') {

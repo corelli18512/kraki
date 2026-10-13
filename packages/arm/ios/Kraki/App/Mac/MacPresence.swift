@@ -215,7 +215,9 @@ enum MacMenuBarIcon {
             switch badge {
             case .none: break
             case .attention:
-                drawDot(center: NSPoint(x: rect.maxX - 3.2, y: rect.maxY - 3.2), radius: 3.2, color: .systemOrange)
+                // Small and blue: an orange dot in the menu bar is macOS's
+                // "microphone in use" indicator.
+                drawDot(center: NSPoint(x: rect.maxX - 2.4, y: rect.maxY - 2.6), radius: 2.2, color: .systemBlue)
             case .problem:
                 drawDot(center: NSPoint(x: rect.maxX - 3.6, y: rect.minY + 3.6), radius: 3.6, color: .systemRed, mark: "!")
             }
