@@ -50,6 +50,9 @@ export function testScope(paths, full = false) {
       scope.typescript = true;
     } else if (path.startsWith('scripts/')) {
       scope.typescript = true;
+    } else if (path.startsWith('ops/watch/')) {
+      // Relay alerting: its own node tests run in the scope job on every run.
+      continue;
     } else if (path.startsWith('.github/workflows/') || path === '.github/actionlint.yaml') {
       // Linted by actionlint in the scope job on every run; release/deploy
       // workflows have their own build/smoke checks.

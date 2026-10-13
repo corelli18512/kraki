@@ -19,6 +19,8 @@
  */
 
 import { config as dotenvConfig } from 'dotenv';
+import { metrics } from './metrics.js';
+import { handleObservability, pingRelayDatabase, type ReadinessContext } from './observability.js';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -500,9 +502,20 @@ const head = new HeadServer(storage!, {
 });
 
 const startedAt = Date.now();
+metrics().startLoopMonitor();
+const readinessContext: ReadinessContext = {
+  version: VERSION,
+  startedAt,
+  pingDatabase: () => pingRelayDatabase(storage!.rawDb),
+  expectedPushProviders: PUSH_PROVIDERS,
+  loadedPushProviders: () => pushManager?.providerNames() ?? [],
+  gauges: () => head.getGauges(),
+};
 
 const httpServer = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+
+  if (handleObservability(req, res, readinessContext)) return;
 
   // Diagnostics belong to @kraki/monitor on a separate upstream. A missing
   // proxy rule must not silently return Head's generic 200 health response.

@@ -3,6 +3,7 @@
 // ------------------------------------------------------------
 
 import { getLogger } from '../logger.js';
+import { metrics } from '../metrics.js';
 import { trace } from '../trace.js';
 import type { Storage, StoredPushToken } from '../storage.js';
 import type { PushProvider } from './provider.js';
@@ -39,6 +40,7 @@ export class PushManager {
       const result = results[i];
       const token = tokens[i];
       if (result.status === 'rejected') {
+        metrics().inc('push.threw');
         logger.warn('Push send threw unexpectedly', { deviceId: token.deviceId, provider: token.provider, error: result.reason });
       }
     }
@@ -60,12 +62,19 @@ export class PushManager {
       return;
     }
 
+    metrics().inc('push.attempted');
     const result = await provider.send(
       storedToken.token,
       { blob: pushPreview.blob, key: deviceKey },
       { environment: storedToken.environment ?? undefined, bundleId: storedToken.bundleId ?? undefined },
     );
 
+    if (result.success) metrics().inc('push.sent');
+    else if (result.gone) metrics().inc('push.gone');
+    else {
+      metrics().inc('push.failed');
+      if (/ProviderToken|Forbidden|BadCertificate|403/i.test(result.error ?? '')) metrics().inc('push.authError');
+    }
     if (result.gone) {
       this.storage.deletePushToken(storedToken.deviceId, storedToken.provider);
       trace('PUSH-SEND', { deviceId: storedToken.deviceId, provider: storedToken.provider, sent: true, gone: true });
@@ -73,6 +82,11 @@ export class PushManager {
     } else {
       trace('PUSH-SEND', { deviceId: storedToken.deviceId, provider: storedToken.provider, sent: true });
     }
+  }
+
+  /** Names of the loaded providers (`apns`, `web_push`). */
+  providerNames(): string[] {
+    return [...this.providers.keys()];
   }
 
   close(): void {

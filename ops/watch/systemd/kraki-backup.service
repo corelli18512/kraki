@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily backup of the Kraki relay database
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/kraki/watch.env
+ExecStart=/opt/kraki-watch/backup-relay-db.sh
+PrivateTmp=yes
