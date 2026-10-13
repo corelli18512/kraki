@@ -10,6 +10,7 @@ import { useStore } from './hooks/useStore';
 import { useNarrow } from './hooks/useNarrow';
 import { useSessionShortcuts } from './hooks/useSessionShortcuts';
 import { wsClient } from './lib/ws-client';
+import { desktopNeedsYou } from './lib/desktop-needs-you';
 import { desktop, desktopCredentials, isDesktop } from './lib/desktop';
 import { ConnectPhoneHost } from './components/devices/ConnectPhoneCard';
 import { UsagePanel } from './components/usage/UsagePanel';
@@ -106,13 +107,7 @@ export function App() {
   const previews = useStore((s) => s.sessionPreviews);
   useEffect(() => {
     if (!desktop?.setNeedsYou) return;
-    const list = [...sessions.values()].flatMap((s) => {
-      const preview = previews.get(s.id);
-      const reason = preview?.type === 'permission' ? 'Needs approval' : preview?.type === 'question' ? 'Has a question' : null;
-      // Untitled yet: the question or request itself says what it is about.
-      const title = s.title || s.autoTitle || preview?.text?.replace(/\s+/g, ' ').slice(0, 48) || 'Session';
-      return reason ? [{ id: s.id, title, reason }] : [];
-    });
+    const list = desktopNeedsYou(sessions, previews);
     desktop.setNeedsYou(list);
   }, [sessions, previews]);
 

@@ -85,6 +85,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [agentsOpen, setAgentsOpen] = useState(false);
+  const [logsPath, setLogsPath] = useState<string | null>(null);
   const [os, setOs] = useState<DesktopSettingsState | null>(null);
   const settings = desktop?.settings;
 
@@ -93,6 +94,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
       const next = await builtIn.state();
       setState((prev) => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
       if (settings) setOs(await settings.state());
+      if (builtIn.logsPath) setLogsPath(await builtIn.logsPath());
     } catch { setError('Couldn’t read this PC’s status.'); }
   }, [builtIn, settings]);
   useEffect(() => {
@@ -112,19 +114,26 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
       else after?.();
       await refresh();
     } catch {
-      setError('Couldn’t update this PC.');
+      setError('Couldn’t update this PC’s status.');
     } finally {
       setBusy(null);
     }
   };
 
   if (!state) return <p className="kp-foot" role={error ? 'alert' : 'status'}>{error ?? 'Checking…'}</p>;
-  const external = !state.owned && (state.cliDaemon || state.cliLogin);
+  const external = !state.owned && (localStorage.getItem(OWNER_KEY) === 'external' || state.cliDaemon || state.cliLogin);
+  const presence = (action: 'start' | 'stop' | 'restart') => {
+    if (external) return builtIn.externalPresence?.(action)
+      ?? Promise.resolve({ ok: false, error: 'External service control is unavailable.' });
+    if (action === 'start') return settings?.goOnline?.() ?? builtIn.enable();
+    if (action === 'stop') return settings?.goOffline?.() ?? builtIn.disable({ keepOwnership: true });
+    return builtIn.restart();
+  };
   const runsAgents = state.owned;
   const status =
-    busy === 'online'
+    busy === 'online' || busy === 'on' || busy === 'switch'
       ? 'Going online…'
-      : busy === 'offline'
+      : busy === 'offline' || busy === 'off'
         ? 'Going offline…'
         : busy === 'restart'
           ? 'Reconnecting…'
@@ -228,13 +237,13 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
         <div className="kp-row" style={{ justifyContent: 'flex-start' }}>
           {state.running ? (
             <>
-              {settings?.goOffline && (
+              {(external || state.owned) && (
                 <button
                   type="button"
                   className={button}
                   disabled={!!busy}
                   onClick={() => {
-                    void act('offline', settings.goOffline!);
+                    void act('offline', () => presence('stop'));
                   }}
                 >
                   Go Offline
@@ -243,27 +252,25 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
               <button
                 type="button"
                 className={button}
-                disabled={!!busy || !state.owned}
+                disabled={!!busy || (!state.owned && !external)}
                 onClick={() => {
-                  void act('restart', builtIn.restart);
+                  void act('restart', () => presence('restart'));
                 }}
               >
                 Reconnect
               </button>
             </>
           ) : (
-            settings?.goOnline && (
               <button
                 type="button"
                 className={button}
-                disabled={!!busy}
+                disabled={!!busy || (!runsAgents && !external)}
                 onClick={() => {
-                  void act('online', settings.goOnline!);
+                  void act('online', () => presence('start'));
                 }}
               >
                 Go Online
               </button>
-            )
           )}
         </div>
         {settings?.setLaunchAtLogin && os && (
@@ -295,10 +302,10 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
         </SettingsSection>
       )}
       <SettingsSection title="Logs">
-        {os?.logsPath && <p className="kp-foot py-2 break-all font-mono">{os.logsPath}</p>}
+        {(logsPath ?? os?.logsPath) && <p className="kp-foot py-2 break-all font-mono">{logsPath ?? os?.logsPath}</p>}
         <div className="kp-row" style={{ justifyContent: 'flex-start' }}>
-          {settings?.showLogsInExplorer && (
-            <button type="button" className={button} onClick={settings.showLogsInExplorer}>
+          {(settings?.showLogsInExplorer || builtIn.showLogsInExplorer) && (
+            <button type="button" className={button} onClick={settings?.showLogsInExplorer ?? builtIn.showLogsInExplorer}>
               Show in Explorer
             </button>
           )}

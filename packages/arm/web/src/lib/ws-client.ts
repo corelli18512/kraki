@@ -2,6 +2,7 @@ import * as voice from './voice/voice';
 import { useAccountDeletion, DELETION_TIMEOUT_MS } from './account-deletion';
 import { canRefreshUsage } from './usage';
 import { desktop, desktopCredentials, setDesktopSignedOut } from './desktop';
+import { presentDesktopPreview } from './desktop-notifications';
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
 import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, type SessionMode } from '@kraki/protocol';
@@ -375,6 +376,10 @@ export class KrakiWSClient {
 
   /** Route a decrypted inner message through subscription gating and the normal pipeline. */
   private dispatchInner(inner: InnerMessage) {
+    if (inner.type === 'local_notification') {
+      presentDesktopPreview(inner.payload.preview);
+      return;
+    }
     if (inner.type === 'device_greeting') this.onTentacleGreeting(inner as unknown as { deviceId: string; payload?: { features?: unknown } });
     if (inner.type === 'session_subscription_set') {
       this.subscription.onAck(inner as SessionSubscriptionSetMessage);
@@ -1064,6 +1069,14 @@ export class KrakiWSClient {
       }
 
       // --- Control messages ---
+      case 'notification_preview': {
+        const deviceId = getStore().deviceId;
+        if (desktop && deviceId) {
+          void this.encryption.keyStore.decryptFromBlob({ blob: msg.payload.blob, keys: { [deviceId]: msg.payload.key } }, deviceId)
+            .then(presentDesktopPreview).catch(() => {});
+        }
+        break;
+      }
       case 'auth_ok':
         this.transport.setAuthenticated(true);
         processAuthOk(msg, this.transport.url, {
@@ -1073,6 +1086,7 @@ export class KrakiWSClient {
         // Bring up the pulse endpoint + start the tick loop.
         this.pulse.onConnected();
         this.startPulseTick();
+        if (desktop && getStore().deviceId) this.sendToHead({ type: 'register_push_token', payload: { provider: 'local', token: getStore().deviceId } });
         this.attachmentPulls.resume();
         this.localLink?.start();
         this.localLink?.poke();
