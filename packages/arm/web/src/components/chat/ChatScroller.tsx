@@ -232,6 +232,7 @@ function ChatScrollerInner<Row extends ScrollerRow>(
     if (!box) return;
     const ro = new ResizeObserver(() => settle());
     ro.observe(box);
+    if (scroller.current) ro.observe(scroller.current);
     return () => ro.disconnect();
   }, [settle]);
 
@@ -322,13 +323,14 @@ function ChatScrollerInner<Row extends ScrollerRow>(
 
   return (
     <div ref={scroller} className="kchat-list" data-chat-scroll style={{ overflowAnchor: 'none' }}>
-      <div style={{ paddingTop: topInset }}>{header}</div>
-      <div ref={content}>
-        {rows.map((row) => (
-          <div key={row.key} data-scroll-key={row.key}>{renderRow(row)}</div>
-        ))}
+      <div className="kchat-scroll-content" style={{ paddingTop: topInset, paddingBottom: bottomInset }}>
+        {header}
+        <div ref={content} className="kchat-scroll-rows">
+          {rows.map((row) => (
+            <div key={row.key} data-scroll-key={row.key}>{renderRow(row)}</div>
+          ))}
+        </div>
       </div>
-      <div style={{ height: bottomInset }} aria-hidden />
     </div>
   );
 }

@@ -21,6 +21,7 @@ function StepRow({ msg, sessionId, forceExpanded, cancelled }: { msg: ChatMessag
         type={msg.type === 'tool_start' ? 'start' : 'complete'}
         toolName={String(p.toolName ?? 'tool')}
         headline={String(p.headline ?? '')}
+        args={p.args as Record<string, unknown> | undefined}
         argsRef={p.argsRef as ContentRef | undefined}
         resultRef={p.resultRef as ContentRef | undefined}
         sessionId={sessionId}
@@ -36,10 +37,11 @@ function StepRow({ msg, sessionId, forceExpanded, cancelled }: { msg: ChatMessag
     const decision = p.decision as string | undefined;
     const reason = typeof p.reason === 'string' ? p.reason.trim() : '';
     return (
-      <div className="kstep-note">
-        <Lock className="kstep-icon" aria-hidden />
-        <span>{String(p.description || (p.toolName ? `Run ${String(p.toolName)}` : 'Permission'))}</span>
-        {decision && <span className={decision === 'deny' ? 'kstep-bad' : 'kstep-good'}>{decision === 'deny' ? (reason ? `Denied: ${reason}` : 'Denied') : decision === 'always_allow' ? 'Always allowed' : 'Approved'}</span>}
+      <div className="kstep-permission">
+        <div className="kstep-note"><Lock className="kstep-icon" aria-hidden />
+          <span>{String(p.description || (p.toolName ? `Run ${String(p.toolName)}` : 'Permission'))}</span>
+        </div>
+        {decision && <span className={`kstep-outcome ${decision === 'deny' ? 'kstep-bad' : 'kstep-good'}`}>{decision === 'deny' ? (reason ? `Denied: ${reason}` : 'Denied') : decision === 'always_allow' ? 'Always allowed' : 'Approved'}</span>}
       </div>
     );
   }
@@ -136,7 +138,7 @@ export function StepsList({ messages, agent: _agent, sessionId, streamingText, a
         if (msg.type === 'agent_message' || msg.type === 'agent_narration') {
           return (
             <div key={key} className="kstep-prose">
-              <Markdown text={(msg.payload as { content: string }).content} />
+              {(msg.payload as { content: string }).content}
             </div>
           );
         }

@@ -1,8 +1,9 @@
+import { SettingsAlert } from '../layout/SettingsControls';
 import { useMemo, useState } from 'react';
 import { Archive, ChevronDown, ChevronRight } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
-import type { SessionSummary } from '@kraki/protocol';
+import type { WebSessionSummary } from '../../types/store';
 import { SessionRow } from './SessionRow';
 
 /** Total archived sessions across this account's computers. */
@@ -55,13 +56,15 @@ export function ArchivedSessions({ narrow, selectedId }: { narrow: boolean; sele
             deviceName: devices.get(deviceId)?.name ?? '',
             agent: digest.agent,
             model: digest.model,
+            reasoningEffort: digest.reasoningEffort,
+            createdAt: digest.createdAt,
             title: digest.title,
             autoTitle: digest.autoTitle,
             state: 'idle',
             messageCount: digest.messageCount,
             lastSeq: digest.lastSeq,
             readSeq: digest.readSeq,
-          } as SessionSummary}
+          } as WebSessionSummary}
           selected={digest.id === selectedId}
           pinned={false}
           narrow={narrow}
@@ -86,42 +89,31 @@ export function ArchiveSettings() {
 
   return (
     <div className="space-y-2">
-      <label className="flex items-center justify-between gap-3 text-sm text-text-primary">
-        <span>Archive sessions after</span>
+      <label className="kp-group kp-row" style={{ padding: '8px 10px' }}>
+        <span>Archive After</span>
         <select
-          className="rounded-md border border-border-primary bg-surface-secondary px-2 py-1 text-sm"
+          className="rounded-md bg-transparent px-2 text-[13px]"
           value={days}
           onChange={(e) => {
             const value = Number(e.target.value);
             for (const id of deviceIds) wsClient.setAutoArchiveDays(id, value);
           }}
         >
-          {[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d} days without messages</option>)}
+          {[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d} days</option>)}
           <option value={0}>Never</option>
         </select>
       </label>
-      <p className="text-xs text-text-muted">Pinned sessions are never archived. Opening an archived session brings it back.</p>
+      <p className="kp-section-footer">Sessions without new messages for this long are archived. Pinned sessions are never archived.</p>
       {count > 0 && !confirming && (
         <button type="button" className="text-sm text-red-500 hover:underline" onClick={() => setConfirming(true)}>
-          Delete {count} archived session{count === 1 ? '' : 's'}…
+          Delete {count} Archived Session{count === 1 ? '' : 's'}…
         </button>
       )}
-      {confirming && (
-        <div className="flex flex-wrap items-center gap-3 text-sm">
-          <span className="text-text-secondary">Delete {count} archived session{count === 1 ? '' : 's'} from your computers? This can't be undone.</span>
-          <button
-            type="button"
-            className="text-red-500 hover:underline"
-            onClick={() => {
-              for (const [id, i] of info) if (i.count > 0) wsClient.deleteArchivedSessions(id);
-              setConfirming(false);
-            }}
-          >
-            Delete
-          </button>
-          <button type="button" className="text-text-secondary hover:underline" onClick={() => setConfirming(false)}>Cancel</button>
-        </div>
-      )}
+      {confirming && <SettingsAlert title="Delete archived sessions from your computers? This can't be undone." body="" confirm="Delete" onCancel={() => setConfirming(false)} onConfirm={() => {
+        for (const [id, i] of info) if (i.count > 0) wsClient.deleteArchivedSessions(id);
+        setConfirming(false);
+      }} />}
+
     </div>
   );
 }

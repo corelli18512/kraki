@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { isDesktop } from '../lib/desktop';
 
 /** Below this width the app uses the iPhone layout (one pane, floating
  *  controls); at and above it the Mac layout (sidebar + chat). */
@@ -13,7 +14,7 @@ function subscribe(onChange: () => void): () => void {
 export function useNarrow(): boolean {
   return useSyncExternalStore(
     subscribe,
-    () => window.matchMedia(NARROW_QUERY).matches,
+    () => !isDesktop && window.matchMedia(NARROW_QUERY).matches,
     () => false,
   );
 }

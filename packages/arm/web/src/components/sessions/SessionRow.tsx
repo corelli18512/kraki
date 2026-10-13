@@ -1,18 +1,23 @@
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { modelDisplayName, sessionDisplayTitle } from '../../lib/session-status';
 import { useNavigate } from 'react-router';
-import type { SessionSummary } from '@kraki/protocol';
+import type { WebSessionSummary } from '../../types/store';
+import { useOutbox } from '../../lib/chat/outbox';
 import {
-  BellOff, BellRing, BotMessageSquare, CircleSlash, CircleUser, GitFork, Keyboard,
+  Archive, MoreHorizontal, Pencil, BellOff, BellRing, BotMessageSquare, CircleSlash, CircleUser, GitFork, Keyboard,
   MessageCircleQuestion, Pin, PinOff, ShieldQuestion, Trash2, WifiOff,
 } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
-import { collapseWhitespace, resolveCardStatus, sessionTimeLabel, STATUS_LABEL, type SessionCardStatus } from '../../lib/chat/session-card';
+import { collapseWhitespace, resolveCardStatus, sessionTimeLabel, STATUS_LABEL, type SessionCardStatus, sessionPendingPreview, DELIVERY_LABEL, type SessionDeliveryStatus } from '../../lib/chat/session-card';
+import { SessionCardMetadata } from './SessionCardMetadata';
 import { AgentAvatar } from '../common/AgentAvatar';
 import { SwipeableCard } from './SwipeableCard';
 
-function StatusGlyph({ status, draft }: { status: SessionCardStatus; draft: boolean }) {
+function StatusGlyph({ status, draft, delivery }: { status: SessionCardStatus; draft: boolean; delivery?: SessionDeliveryStatus }) {
+  if (delivery) return <svg viewBox="0 0 16 16" className={`ksr-glyph ksr-delivery is-${delivery}`} fill="none" stroke="currentColor" strokeWidth={1.3} strokeLinecap="round" strokeLinejoin="round" role="img" aria-label={DELIVERY_LABEL[delivery]}>
+    <path d="M8 9V1.5M5.5 4L8 1.5 10.5 4M4 6H2.5L1 11v3h14v-3l-1.5-5H12M1 11h4l1 1.5h4l1-1.5h4" />
+  </svg>;
   const label = STATUS_LABEL[status];
   const common = { 'aria-label': label, role: label ? 'img' : undefined } as const;
   switch (status) {
@@ -33,7 +38,7 @@ function StatusGlyph({ status, draft }: { status: SessionCardStatus; draft: bool
 export const SessionRow = memo(function SessionRow({
   session, selected, pinned, narrow, openSwipeId, setOpenSwipeId, archived,
 }: {
-  session: SessionSummary;
+  session: WebSessionSummary;
   /** Archived row (F2): preview from the archive listing; opening restores it. */
   archived?: { preview?: { text: string; type: string; timestamp: string }; onOpen: () => void };
   selected: boolean;
@@ -53,13 +58,16 @@ export const SessionRow = memo(function SessionRow({
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  const entries = useOutbox((s) => s.entries);
+  const connected = useStore((s) => s.status === 'connected');
+  const pending = archived ? undefined : sessionPendingPreview(entries, session.id, connected && device?.online !== false);
   const draftText = collapseWhitespace(draft);
-  const hasDraft = !!draftText && !selected;
-  const previewText = hasDraft ? draftText : collapseWhitespace(preview?.text);
-  const status = resolveCardStatus(session.state, preview?.type, device?.online, hasDraft, compacting);
+  const hasDraft = !pending && !!draftText;
+  const previewText = pending?.text ?? (hasDraft ? draftText : collapseWhitespace(preview?.text));
+  const status = pending ? 'delivery' : resolveCardStatus(session.state, preview?.type, device?.online, hasDraft, compacting);
   const title = sessionDisplayTitle(session);
   const machine = session.deviceName || device?.name;
-  const time = sessionTimeLabel(preview?.timestamp ?? '');
+  const time = sessionTimeLabel(pending?.timestamp || preview?.timestamp || session.createdAt || '');
 
   const togglePin = () => wsClient.pinSession(session.id, !pinned);
   const toggleRead = () => (unread ? wsClient.markRead(session.id) : wsClient.markUnread(session.id));
@@ -67,10 +75,20 @@ export const SessionRow = memo(function SessionRow({
   const onContextMenu = useCallback((e: React.MouseEvent) => {
     if (narrow || archived) return;
     e.preventDefault();
-    setMenu({ x: e.clientX, y: e.clientY });
-    const close = () => { setMenu(null); window.removeEventListener('click', close); };
-    setTimeout(() => window.addEventListener('click', close), 0);
-  }, [narrow]);
+    setMenu({ x: Math.max(0, Math.min(e.clientX, window.innerWidth - 118)), y: Math.max(0, Math.min(e.clientY, window.innerHeight - 166)) });
+  }, [narrow, archived]);
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    window.addEventListener('click', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [menu]);
 
   const row = (
     <button
@@ -81,29 +99,29 @@ export const SessionRow = memo(function SessionRow({
       aria-current={selected ? 'page' : undefined}
     >
       <span className="ksr-avatar">
-        <AgentAvatar agent={session.agent} sessionId={session.id} size={narrow ? 'lg' : 'row'} />
+        <AgentAvatar agent={session.agent} model={session.model} sessionId={session.id} size={narrow ? 'lg' : 'sm'} />
       </span>
       <span className="ksr-body">
         <span className="ksr-line1">
           <span className="ksr-title">{title}</span>
-          {device && !device.online && <span className="ksr-offline">offline</span>}
+          {narrow && device && !device.online && <span className="ksr-offline">offline</span>}
           {pinned && <Pin className="ksr-pin" aria-label="Pinned" />}
           <span className="ksr-spacer" />
           {unread && <span className="ksr-unread" aria-label="Unread" />}
           {time && <span className="ksr-time">{time}</span>}
         </span>
-        <span className="ksr-line2">
+        {narrow ? <span className="ksr-line2">
           {machine && (
             <>
-              <span className={`ksr-devdot ${device?.online ? 'is-online' : ''}`} />
+              {narrow && <span className={`ksr-devdot ${device?.online ? 'is-online' : ''}`} />}
               <span className="ksr-machine">{machine}</span>
             </>
           )}
           {machine && session.model && <span className="ksr-sep" />}
           {session.model && <span className="ksr-model">{modelDisplayName(session.model, deviceAgents, session.agent)}</span>}
-        </span>
-        <span className="ksr-line3">
-          <StatusGlyph status={status} draft={hasDraft} />
+        </span> : <SessionCardMetadata machine={machine} model={session.model ? modelDisplayName(session.model, deviceAgents, session.agent) : undefined} effort={session.reasoningEffort} />}
+        <span className={`ksr-line3 ${hasDraft ? 'is-draft' : ''}`}>
+          <span className="ksr-status-slot"><StatusGlyph status={status} draft={hasDraft} delivery={pending?.status} /></span>
           {previewText
             ? <span className="ksr-preview">{previewText}</span>
             : <span className="ksr-preview is-empty">Session created</span>}
@@ -119,6 +137,7 @@ export const SessionRow = memo(function SessionRow({
           actions={[
             { icon: pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />, label: pinned ? 'Unpin' : 'Pin', bgClass: 'bg-teal-500', onClick: () => { togglePin(); setOpenSwipeId?.(null); } },
             { icon: unread ? <BellOff className="h-4 w-4" /> : <BellRing className="h-4 w-4" />, label: unread ? 'Read' : 'Unread', bgClass: 'bg-blue-500', onClick: () => { toggleRead(); setOpenSwipeId?.(null); } },
+            { icon: <MoreHorizontal className="h-4 w-4" />, label: 'More', bgClass: 'bg-slate-500', onClick: () => { setOpenSwipeId?.(null); setMenu({ x: 16, y: Math.min(window.innerHeight - 280, 100) }); } },
             { icon: <Trash2 className="h-4 w-4" />, label: 'Delete', bgClass: 'bg-red-500', onClick: () => { setOpenSwipeId?.(null); setConfirmDelete(true); } },
           ]}
           isOpen={openSwipeId === session.id}
@@ -132,16 +151,22 @@ export const SessionRow = memo(function SessionRow({
       {menu && (
         <div className="ksr-menu" style={{ left: menu.x, top: menu.y }} role="menu">
           <button type="button" role="menuitem" onClick={() => { togglePin(); setMenu(null); }}>
-            {pinned ? <PinOff /> : <Pin />} {pinned ? 'Unpin' : 'Pin to top'}
+            {pinned ? <PinOff /> : <Pin />} {pinned ? 'Unpin' : 'Pin'}
           </button>
           <button type="button" role="menuitem" onClick={() => { toggleRead(); setMenu(null); }}>
-            {unread ? <BellOff /> : <BellRing />} {unread ? 'Mark read' : 'Mark unread'}
+            {unread ? <BellOff /> : <BellRing />} {unread ? 'Mark Read' : 'Mark Unread'}
           </button>
+          {/* Mac: Rename lives in Session Info, opened over the selected chat. */}
+          <button type="button" role="menuitem" onClick={() => { navigate(`/session/${session.id}?info=1`); setMenu(null); }}><Pencil /> Rename…</button>
           <button type="button" role="menuitem" onClick={() => { wsClient.forkSession(session.id); setMenu(null); }}>
-            <GitFork /> Fork session
+            <GitFork /> Fork
           </button>
+          <button type="button" role="menuitem" onClick={() => { wsClient.archiveSession(session.id, true); if (selected) navigate('/'); setMenu(null); }}>
+            <Archive /> Archive
+          </button>
+          <div className="ksr-menu-divider" role="separator" />
           <button type="button" role="menuitem" className="is-destructive" onClick={() => { setMenu(null); setConfirmDelete(true); }}>
-            <Trash2 /> Delete session
+            <Trash2 /> Delete…
           </button>
         </div>
       )}

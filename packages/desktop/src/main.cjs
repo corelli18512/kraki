@@ -133,7 +133,7 @@ function createWindow() {
     height: bounds?.height ?? 820,
     x: bounds?.x,
     y: bounds?.y,
-    minWidth: 400,
+    minWidth: 800,
     minHeight: 560,
     show: false,
     title: 'Kraki',
