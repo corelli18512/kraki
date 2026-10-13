@@ -3765,6 +3765,29 @@ describe('RelayClient pending-question digest', () => {
     expect(sm.markIdle).toHaveBeenCalledTimes(1);
   });
 
+  it('applies the idle deferred during steer acceptance when the adapter turn stays settled', async () => {
+    const { adapter, ws, sm } = buildClient();
+    let accept!: () => void;
+    (adapter.sendMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise<void>((resolve) => { accept = resolve; }),
+    );
+    ws.emit('message', Buffer.from(consumerJson({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 619,
+      timestamp: new Date().toISOString(), payload: { text: 'one more thing', delivery: 'steer' },
+    })));
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    (adapter.onIdle as (sid: string, event: { turnId: string }) => void)('sess_1', { turnId: 'sess_1:0' });
+    // The adapter ended the turn and did not reopen it for the steer.
+    (adapter.isTurnSettled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    const markActiveBefore = (sm.markActive as ReturnType<typeof vi.fn>).mock.calls.length;
+    accept();
+    await vi.waitFor(() => expect(sm.markIdle).toHaveBeenCalledTimes(1));
+    await vi.runAllTimersAsync();
+    expect((sm.markActive as ReturnType<typeof vi.fn>).mock.calls.length).toBe(markActiveBefore);
+    const types = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1]);
+    expect(types.at(-1)).toBe('idle');
+  });
+
   it('does not release the normal prompt queue for an idle racing steer acceptance', async () => {
     const { adapter, ws } = buildClient();
     ws.emit('message', Buffer.from(consumerJson({

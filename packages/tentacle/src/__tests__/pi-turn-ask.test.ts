@@ -1195,6 +1195,34 @@ describe('pi ask_user → question card', () => {
 });
 
 describe('pi agent lifecycle boundaries', () => {
+  it('reopens the turn when it settles while Pi is accepting a steer, so the steered run reports', async () => {
+    const { adapter, proc, session, emit } = makeAdapter();
+    const onMessage = vi.fn();
+    const onIdle = vi.fn();
+    adapter.onMessage = onMessage;
+    adapter.onIdle = onIdle;
+    let acknowledge!: () => void;
+    proc.request.mockImplementationOnce(() => new Promise<void>((resolve) => { acknowledge = resolve; }));
+
+    const sending = adapter.sendMessage('s1', 'one more thing', undefined, { delivery: 'steer' });
+    // The running turn ends during the steer RPC.
+    await emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'first reply' }], stopReason: 'stop' } });
+    await emit({ type: 'agent_end' });
+    await emit({ type: 'agent_settled' });
+    expect(onIdle).toHaveBeenCalledTimes(1);
+    acknowledge();
+    await sending;
+    expect(session.turn.isSettled).toBe(false);
+
+    // Pi runs the steer as a new run.
+    await emit({ type: 'agent_start' });
+    await emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'steered reply' }], stopReason: 'stop' } });
+    await emit({ type: 'agent_end' });
+    await emit({ type: 'agent_settled' });
+    expect(onMessage).toHaveBeenLastCalledWith('s1', { content: 'steered reply' });
+    expect(onIdle).toHaveBeenCalledTimes(2);
+  });
+
   it('converts a post-settlement steer into a fresh prompt and settles its reply', async () => {
     const { adapter, proc, session, emit } = makeAdapter();
     const onMessage = vi.fn();

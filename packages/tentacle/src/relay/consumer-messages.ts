@@ -300,6 +300,9 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
             // ACK cannot become the final visible state. A later provider idle
             // still settles the steered work normally.
             finishSteerAcceptance(client, sessionId, true);
+            // Unless that turn has already settled (no later idle would
+            // clear an active reasserted now).
+            if (client.settledAdapterTurnIds.get(sessionId) === reservation.turnId) return;
             client.send({ type: 'active', sessionId, payload: {} });
             client.sessionManager.markActive(sessionId);
           }).catch((err) => {

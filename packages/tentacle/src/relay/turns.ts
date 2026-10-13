@@ -251,7 +251,11 @@ export function finishSteerAcceptance(client: RelayClient, sessionId: string, ac
   client.steerAcceptanceInFlight.delete(sessionId);
   const deferredIdle = client.idleDuringSteerAcceptance.delete(sessionId);
   if (!deferredIdle) return;
-  if (accepted) {
+  if (accepted && client.adapter.isTurnSettled?.(sessionId) === true) {
+    // The turn ended while the steer was being accepted and the adapter did
+    // not reopen it for the steer: no later idle will come. Apply this one.
+    settleAdapterIdle(client, sessionId);
+  } else if (accepted) {
     // The old provider error was already broadcast immediately. A successful
     // interjection recovered the session, so it must not freeze as the outcome
     // of the newer work when that work eventually idles.
