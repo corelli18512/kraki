@@ -4,6 +4,18 @@ import { existsSync, readFileSync } from 'node:fs';
 import type { ContentRef } from '@kraki/protocol';
 import type { TraceLine } from './types.js';
 
+/** Whether a logged user_message (its JSON) starts a new turn. A steer, or an
+ *  answer to the agent's question (`answerTo`), belongs to the running turn.
+ *  Legacy/corrupt payloads retain the historical boundary behavior. */
+export function userMessageStartsTurn(loggedPayload: string): boolean {
+  try {
+    const parsed = JSON.parse(loggedPayload) as { payload?: { delivery?: string; answerTo?: string } };
+    return parsed.payload?.delivery !== 'steer' && !parsed.payload?.answerTo;
+  } catch {
+    return true;
+  }
+}
+
 /** Trace entries tagged with a turn's start seq, in recorded order. */
 export function readTraceEntries(tracePath: string, turnStartSeq: number): unknown[] {
   if (!existsSync(tracePath)) return [];

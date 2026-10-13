@@ -19,7 +19,7 @@ import { SessionLinkTable } from './session/link-table.js';
 import { forEachLogLine, lastLoggedSeq, type LogIndex, upgradeLegacyEntry } from './session/log-file.js';
 import { readSessionPreview } from './session/preview.js';
 import { isSafeId, toWellFormedText } from './session/text.js';
-import { readTraceEntries, turnArtifacts } from './session/turn-trace.js';
+import { readTraceEntries, turnArtifacts, userMessageStartsTurn } from './session/turn-trace.js';
 import type {
   InputLedgerEntry, LoggedMessage, PendingHumanAction, RunRecord, SessionContext, SessionLink,
   SessionListEntry, SessionMeta, SessionMode, TraceLine,
@@ -799,17 +799,9 @@ export class SessionManager {
 
     // A normal user_message begins a new turn — remember its seq so trace
     // entries recorded until the next normal prompt can be tagged to this turn.
-    // A steer is a visible user interjection inside the current agent lifecycle
-    // and must not split its TRACE history.
-    if (type === 'user_message') {
-      try {
-        const parsed = JSON.parse(payload) as { payload?: { delivery?: string } };
-        if (parsed.payload?.delivery !== 'steer') meta.currentTurnStartSeq = seq;
-      } catch {
-        // Legacy/corrupt payloads retain the historical boundary behavior.
-        meta.currentTurnStartSeq = seq;
-      }
-    }
+    // A steer, or an answer to the agent's question, is user input inside the
+    // current agent lifecycle and must not split its TRACE history.
+    if (type === 'user_message' && userMessageStartsTurn(payload)) meta.currentTurnStartSeq = seq;
 
     meta.lastSeq = seq;
     // Preserve the existing two-cursor contract. Ordinary Spine bookkeeping
@@ -855,15 +847,8 @@ export class SessionManager {
         if (!meta.idleSeqs) meta.idleSeqs = [];
         meta.idleSeqs.push(seq - messages.length + i + 1);
       }
-      if (messages[i].type === 'user_message') {
-        try {
-          const parsed = JSON.parse(messages[i].payload) as { payload?: { delivery?: string } };
-          if (parsed.payload?.delivery !== 'steer') {
-            meta.currentTurnStartSeq = seq - messages.length + i + 1;
-          }
-        } catch {
-          meta.currentTurnStartSeq = seq - messages.length + i + 1;
-        }
+      if (messages[i].type === 'user_message' && userMessageStartsTurn(messages[i].payload)) {
+        meta.currentTurnStartSeq = seq - messages.length + i + 1;
       }
     }
 
@@ -986,16 +971,11 @@ export class SessionManager {
     const meta = this.readMeta(sessionId);
     if (!meta) return { entries: [], complete: false, turnStartSeq: 0 };
 
-    // Resolve the turn start: greatest non-steer user_message seq <= bubbleSeq.
+    // Resolve the turn start: greatest turn-starting user_message seq <= bubbleSeq.
     let turnStartSeq = 0;
     for (const m of this.getMessagesAfterSeq(sessionId, 0)) {
       if (m.type !== 'user_message' || m.seq > bubbleSeq || m.seq <= turnStartSeq) continue;
-      try {
-        const parsed = JSON.parse(m.payload) as { payload?: { delivery?: string } };
-        if (parsed.payload?.delivery === 'steer') continue;
-      } catch {
-        // Legacy/corrupt payloads retain the historical boundary behavior.
-      }
+      if (!userMessageStartsTurn(m.payload)) continue;
       turnStartSeq = m.seq;
     }
 
