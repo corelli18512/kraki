@@ -425,7 +425,13 @@ export class SessionManager {
       // Stop if the fork was deleted (a failed fork); never recreate it.
       const gone = () => this.cancelledAttachmentLinks.has(forkId) || !existsSync(join(this.sessionDir(forkId), 'meta.json'));
       if (gone()) return;
-      await fsp.mkdir(to, { recursive: true });
+      // Not recursive: if the fork is deleted before this runs (the mkdir is
+      // queued on the I/O pool), recreating its folder would leave it behind.
+      try {
+        await fsp.mkdir(to);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return;
+      }
       let names: string[] = [];
       try { names = await fsp.readdir(from); } catch { /* source gone */ }
       const queue = [...names];

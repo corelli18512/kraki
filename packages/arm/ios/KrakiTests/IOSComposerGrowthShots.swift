@@ -69,6 +69,17 @@ final class IOSComposerGrowthShots: XCTestCase {
         return -1
     }
 
+    /// The composer has finished growing: its height unchanged for 0.3 s
+    /// (at most 5 s). A fixed delay sampled a still-growing editor on slow CI.
+    private func settleGrowth() {
+        var last = boxHeight(), stableSince = Date(), started = Date()
+        while Date().timeIntervalSince(started) < 5, Date().timeIntervalSince(stableSince) < 0.3 {
+            drain(0.05)
+            let now = boxHeight()
+            if abs(now - last) > 0.5 { last = now; stableSince = Date() }
+        }
+    }
+
     static let texts: [(String, String)] = [
         ("1-line", "Fix the failing tests"),
         ("2-lines", "Fix the failing tests in my-app, then run the suite again"),
@@ -82,6 +93,7 @@ final class IOSComposerGrowthShots: XCTestCase {
             for (name, text) in Self.texts {
                 app.sessionStore.setDraft(sid, text)
                 drain(0.7)
+                settleGrowth()
                 try shot("ios-text-\(name)-\(suffix)")
                 if let f = fade { log += "text-\(name)-\(suffix): top=\(f.debugEdges.top) bottom=\(f.debugEdges.bottom)\n" }
             }

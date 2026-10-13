@@ -741,7 +741,12 @@ final class SessionStoreTests: XCTestCase {
 
         await coordinator.bootstrap(appState: app)
         XCTAssertEqual(coordinator.phase, .preparingAuthenticated)
-        try await Task.sleep(for: .milliseconds(40))
+        // The 10 ms watchdog runs on the main actor: wait for it, bounded,
+        // instead of a fixed 40 ms (a busy CI runner can be later than that).
+        let deadline = Date().addingTimeInterval(2)
+        while coordinator.phase != .authenticated, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
 
         XCTAssertEqual(coordinator.phase, .authenticated)
         XCTAssertFalse(coordinator.isLaunchGateVisible)
