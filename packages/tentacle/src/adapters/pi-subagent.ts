@@ -410,14 +410,16 @@ export class PiSubagentTracker {
       }
       if (typeof row.finalOutput === 'string') child.finalOutput = row.finalOutput;
 
-      if (finished && child.synthetic && !child.completed.has('__self__')) {
-        child.completed.add('__self__');
-        // Close child tools that never reported back.
+      // A finished child's tools that never reported back are over too.
+      if (finished) {
         for (const id of child.started) {
           if (child.completed.has(id)) continue;
           child.completed.add(id);
           emits.push({ kind: 'complete', toolCallId: `${parent}:${id}`, toolName: 'tool', result: '', success: false, parentToolCallId: parent });
         }
+      }
+      if (finished && child.synthetic && !child.completed.has('__self__')) {
+        child.completed.add('__self__');
         const report = child.finalOutput ?? child.draft ?? '';
         child.draft = undefined;
         emits.push({ kind: 'complete', toolCallId: child.id, toolName: PI_SUBAGENT_TOOL, result: report, success: status === 'completed', parentToolCallId: d.toolCallId, subagent: child.info });

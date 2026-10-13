@@ -316,6 +316,21 @@ export class CardManager {
     return snapshot;
   }
 
+  /** The turn settled while tools it started never reported back. Drop them
+   *  (a lingering one would show "running" on every later turn) and return
+   *  them so RelayClient can close their TRACE steps. */
+  closeRunningTools(sessionId: string): RunningTool[] {
+    const c = this.cards.get(sessionId);
+    if (!c || c.runningTools.size === 0) return [];
+    const open = [...c.runningTools.values()];
+    c.runningTools.clear();
+    if (c.action?.type === 'tool_start' || c.action?.type === 'tool_batch') {
+      c.action = null;
+      this.syncAction(sessionId, c);
+    }
+    return open;
+  }
+
   /** Authoritative full state used for durable pending and terminal history. */
   state(sessionId: string): { draft: string; action: CardActionState | null } {
     const c = this.cards.get(sessionId);

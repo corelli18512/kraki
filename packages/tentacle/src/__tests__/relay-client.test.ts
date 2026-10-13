@@ -2948,6 +2948,31 @@ describe('RelayClient trace mirroring (off-spine)', () => {
     } finally { cleanup(); }
   });
 
+  it('a successful idle closes tools that never reported back (no phantom running chip)', () => {
+    const { adapter, sm, client, cleanup } = buildClient();
+    try {
+      const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+      (adapter.onToolStart as (sid: string, e: Record<string, unknown>) => void)('sess_1', {
+        toolName: 'bash', args: { command: 'sleep 99' }, toolCallId: 'tc-lost',
+      });
+      (adapter.onMessage as (sid: string, e: Record<string, unknown>) => void)('sess_1', { content: 'Done.' });
+      (adapter.onIdle as (sid: string) => void)('sess_1');
+
+      const closed = smMock.appendTrace.mock.calls
+        .map((c) => JSON.parse(c[2]) as { type: string; payload: Record<string, unknown> })
+        .filter((e) => e.type === 'tool_complete' && e.payload.toolCallId === 'tc-lost');
+      expect(closed).toHaveLength(1);
+      expect(closed[0].payload).toMatchObject({ success: false, termination: 'interrupted' });
+      expect(client.card.state('sess_1').action).toBeNull();
+
+      // The next turn's card does not inherit it.
+      (adapter.onToolStart as (sid: string, e: Record<string, unknown>) => void)('sess_1', {
+        toolName: 'view', args: { path: '/a' }, toolCallId: 'tc-next',
+      });
+      expect(client.card.state('sess_1').action).toMatchObject({ type: 'tool_start', payload: { toolCallId: 'tc-next' } });
+    } finally { cleanup(); }
+  });
+
   it('mirrors tool_start/tool_complete to appendTrace (off-spine), broadcasts card_action not raw tool events', () => {
     const { adapter, sm, ws, cleanup } = buildClient();
     try {

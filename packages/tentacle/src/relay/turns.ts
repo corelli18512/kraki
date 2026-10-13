@@ -301,6 +301,7 @@ export function settleAdapterIdle(client: RelayClient, sessionId: string, event?
     });
   } else {
     clearOpenQuestions(client, sessionId);
+    closeTraceTools(client, sessionId, client.card.closeRunningTools(sessionId), 'interrupted');
     anchorStepsOnlyTurn(client, sessionId);
   }
   resolveTurnIdle(client, sessionId);
@@ -419,24 +420,7 @@ export function finishTurnWithStatus(
 ): void {
   const termination = action.type === 'user_abort' ? 'cancelled' : 'interrupted';
   const snapshot = client.card.terminate(sessionId, action);
-
-  for (const tool of snapshot.runningTools) {
-    recordTrace(client, {
-      type: 'tool_complete',
-      sessionId,
-      payload: {
-        ...tool.payload,
-        success: false,
-        termination,
-        ...(tool.payload.subagent && { subagent: { ...tool.payload.subagent, status: termination === 'cancelled' ? 'stopped' : 'failed' } }),
-      },
-    });
-    const id = tool.payload.toolCallId;
-    if (id) {
-      client.lastArgsByToolCallId.delete(id);
-      client.lastArgsRefByToolCallId.delete(id);
-    }
-  }
+  closeTraceTools(client, sessionId, snapshot.runningTools, termination);
   client.sessionToolCallIds.delete(sessionId);
 
   if (snapshot.previousAction?.type === 'permission' && !snapshot.previousAction.payload.decision) {
@@ -459,6 +443,33 @@ export function finishTurnWithStatus(
   }, action.type === 'failed');
   clearOpenQuestions(client, sessionId);
   client.card.clear(sessionId);
+}
+
+/** Close the TRACE steps of tools the turn ended without hearing back from. */
+function closeTraceTools(
+  client: RelayClient,
+  sessionId: string,
+  runningTools: Array<Extract<CardActionState, { type: 'tool_start' }>>,
+  termination: 'cancelled' | 'interrupted',
+): void {
+  for (const tool of runningTools) {
+    recordTrace(client, {
+      type: 'tool_complete',
+      sessionId,
+      payload: {
+        ...tool.payload,
+        success: false,
+        termination,
+        ...(tool.payload.subagent && { subagent: { ...tool.payload.subagent, status: termination === 'cancelled' ? 'stopped' : 'failed' } }),
+      },
+    });
+    const id = tool.payload.toolCallId;
+    if (id) {
+      client.lastArgsByToolCallId.delete(id);
+      client.lastArgsRefByToolCallId.delete(id);
+      client.sessionToolCallIds.get(sessionId)?.delete(id);
+    }
+  }
 }
 
 /** Drop any in-flight toolCallId state for a session — called when a
