@@ -85,6 +85,12 @@ class MacEdgeFadingScrollView: NSScrollView {
 // MARK: - Scrollable native Composer text input
 
 final class MacComposerTextView: NSTextView {
+    /// The draft's own undo history, separate from the window's: the app
+    /// replaces the whole draft (Send, Clear, voice, Edit) and must be able
+    /// to drop the typing records that point into the previous text.
+    private let draftUndoManager = UndoManager()
+    override var undoManager: UndoManager? { draftUndoManager }
+
     var onSubmit: (() -> Void)?
     var onPasteCompleted: (() -> Void)?
     var onTakeOver: (() -> Void)?
@@ -355,6 +361,11 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
         return scrollView
     }
 
+    static func dropUndoHistory(of textView: MacComposerTextView) {
+        textView.breakUndoCoalescing()
+        textView.undoManager?.removeAllActions()
+    }
+
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? MacComposerTextView else { return }
@@ -369,6 +380,11 @@ struct MacComposerScrollableTextInput: NSViewRepresentable {
             context.coordinator.isApplying = true
             let selection = textView.selectedRange()
             textView.string = text
+            // Send, Clear, voice and Edit replace the whole draft without an
+            // undo record. Older typing records still hold ranges into the
+            // previous text: Cmd-Z would delete the wrong characters of the
+            // new draft (or raise NSRangeException), so drop them.
+            Self.dropUndoHistory(of: textView)
             textView.setSelectedRange(NSRange(location: min(selection.location, textView.string.utf16.count), length: 0))
             context.coordinator.isApplying = false
         }

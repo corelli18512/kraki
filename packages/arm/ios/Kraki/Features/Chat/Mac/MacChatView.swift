@@ -1012,7 +1012,9 @@ private struct MacSessionInfoSheet: View {
     }
 
     private func macFormatDuration(_ milliseconds: Double) -> String {
-        let seconds = milliseconds / 1_000
+        // Peer-reported: Int(_:) traps on NaN, infinity or values beyond Int.
+        guard milliseconds.isFinite, milliseconds >= 0 else { return "—" }
+        let seconds = min(milliseconds / 1_000, 1e12)
         if seconds < 60 { return String(format: "%.1fs", seconds) }
         return "\(Int(seconds) / 60)m \(Int(seconds) % 60)s"
     }

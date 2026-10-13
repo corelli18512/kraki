@@ -76,6 +76,28 @@ extension ChatPerfListVC {
             warmWindow()
             return
         }
+        // Edge deltas only describe the change when everything between the
+        // edges survived unchanged. The window can trim its newest rows while
+        // the live card stays last, putting the deletion in the MIDDLE; a batch
+        // built from edge counts then disagrees with the data source and UIKit
+        // throws. Every caller (nav-older included) gets the check here.
+        let oldMid = e.deleteFront ..< (oldCount - e.deleteBack)
+        let newMid = e.insertFront ..< (newIds.count - e.insertBack)
+        guard oldMid.lowerBound <= oldMid.upperBound, newMid.lowerBound <= newMid.upperBound,
+              items[oldMid].elementsEqual(newIds[newMid]) else {
+            chatPerfLog.log("[apply] \(reason) midInvalid → anchored diff")
+            if applyAnchoredDiff(old: items, new: newIds) { return }
+            UIView.performWithoutAnimation {
+                loadingOlder = hasLoadedWindow && !atOldest
+                loadingNewer = showsNewerSpinner
+                items = newIds
+                paginationSnapshotDeferred = false
+                collectionView.reloadData()
+                collectionView.layoutIfNeeded()
+            }
+            warmWindow()
+            return
+        }
         let iF = e.insertFront, dF = e.deleteFront, iB = e.insertBack, dB = e.deleteBack
 
         // FRONT-SHIFT via SIZER-SUM (faithful 1:1 port of the validated test-page

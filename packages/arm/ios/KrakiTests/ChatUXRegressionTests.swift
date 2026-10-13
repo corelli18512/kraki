@@ -60,6 +60,21 @@ final class ChatUXRegressionTests: XCTestCase {
     /// `onScreen`: attach the window to the simulator's real UIWindowScene so
     /// Core Animation actually renders (needed to sample presentation layers;
     /// a scene-less window never composites and finishes animations at once).
+    func testClosedChatControllerIsReleased() throws {
+        weak var weakVC: ChatPerfListVC?
+        try autoreleasepool {
+            let fx = try makeFixture(total: 40)
+            weakVC = fx.vc
+            let window = windows.removeLast()
+            fx.vc.viewWillDisappear(false)
+            fx.vc.viewDidDisappear(false)
+            window.rootViewController = nil
+            window.isHidden = true
+        }
+        drain(300)
+        XCTAssertNil(weakVC, "the frame monitor (or something else) still retains the chat controller")
+    }
+
     private func makeFixture(total: Int, onScreen: Bool = false,
                              outbound: (([String: Any]) -> Bool)? = nil) throws -> Fx {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ux-gate-\(UUID().uuidString)")

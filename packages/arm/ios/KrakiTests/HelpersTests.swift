@@ -3,6 +3,40 @@ import XCTest
 
 final class HelpersTests: XCTestCase {
 
+    // MARK: - Review group 1 regressions
+
+    func testFormatDurationNeverTrapsOnPeerValues() {
+        XCTAssertEqual(formatDuration(83_000), "1m 23s")
+        XCTAssertEqual(formatDuration(.nan), "—")
+        XCTAssertEqual(formatDuration(.infinity), "—")
+        XCTAssertEqual(formatDuration(-5), "—")
+        XCTAssertFalse(formatDuration(1e30).isEmpty)
+    }
+
+    func testOnlyASingleTrailingNewlineIsTheReturnKey() {
+        XCTAssertTrue(MessageInputView.isReturnKeySubmit(old: "hello", new: "hello\n"))
+        XCTAssertTrue(MessageInputView.isReturnKeySubmit(old: "", new: "\n"))
+        // Pasting text that ends with a newline keeps it as a draft.
+        XCTAssertFalse(MessageInputView.isReturnKeySubmit(old: "", new: "pasted line\n"))
+        XCTAssertFalse(MessageInputView.isReturnKeySubmit(old: "a ", new: "a two\nlines\n"))
+        XCTAssertFalse(MessageInputView.isReturnKeySubmit(old: "ab", new: "a\nb"))
+    }
+
+    func testAccountUsagePercentIsClampedAtDecode() throws {
+        let json = #"{"id":"w","kind":"weekly","remainingPercent":1e300}"#
+        let window = try JSONDecoder().decode(AccountUsageWindow.self, from: Data(json.utf8))
+        XCTAssertEqual(window.remainingPercent, 100)
+        let negative = try JSONDecoder().decode(AccountUsageWindow.self, from: Data(#"{"id":"w","kind":"weekly","remainingPercent":-3}"#.utf8))
+        XCTAssertEqual(negative.remainingPercent, 0)
+    }
+
+    func testOpenRecoveringFallbackDatabaseWorksInMemory() throws {
+        let db = MessageDatabase(inMemory: ())
+        let message = ChatMessage(type: "user_message", seq: 1, sessionId: "s", deviceId: "d",
+                                  timestamp: "2026-10-13T00:00:00.000Z", payload: ["content": AnyCodable("hi")])
+        try db.insert("s", [message])
+    }
+
     // MARK: - formatTokenCount
 
     func testFormatTokenCountZero() {

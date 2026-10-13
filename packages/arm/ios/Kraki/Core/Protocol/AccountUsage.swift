@@ -18,6 +18,21 @@ struct AccountUsageWindow: Codable, Hashable, Sendable, Identifiable {
     var resetDate: Date? { resetsAt.flatMap(ISO8601.parse) }
 }
 
+extension AccountUsageWindow {
+    /// Peer-reported. Views do `Int(remainingPercent.rounded())`, which traps
+    /// on NaN/infinity/huge values, so keep it a real percentage.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        kind = try c.decode(String.self, forKey: .kind)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        let percent = try c.decode(Double.self, forKey: .remainingPercent)
+        remainingPercent = percent.isFinite ? min(100, max(0, percent)) : 0
+        resetsAt = try c.decodeIfPresent(String.self, forKey: .resetsAt)
+        durationSeconds = try c.decodeIfPresent(Double.self, forKey: .durationSeconds)
+    }
+}
+
 struct AccountUsage: Codable, Hashable, Sendable, Identifiable {
     let accountKey: String
     /// `claude` | `codex`

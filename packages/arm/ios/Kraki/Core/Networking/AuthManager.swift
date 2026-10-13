@@ -637,7 +637,10 @@ final class AuthManager {
                 // instead of stranding the window signed out.
                 let failedWithoutCLIToken = cliGitHubToken == nil
                 #endif
-                clearStoredCredentials()
+                // Retire the whole identity (decryptor, Pulse, stores), not
+                // just the Keychain entry: a re-pair in this process must
+                // start clean (1-07 of the 2026-10-13 review).
+                appState.resetIdentity(clearRelayURL: false)
                 appState.onAuthFailed(
                     error: reason ?? "Authentication failed. Please scan a new pairing QR code."
                 )
