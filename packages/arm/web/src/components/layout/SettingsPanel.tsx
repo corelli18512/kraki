@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Bell, CheckCircle, CircleUser, Info, Laptop, Mic, Monitor, Settings, Smartphone, X } from 'lucide-react';
+import { CheckCircle, Smartphone, X } from 'lucide-react';
 import { VoiceSettings } from './VoiceSettings';
 import { DeleteAccountSection } from './DeleteAccount';
 import { SettingsAlert, SettingsRow, SettingsSection, SettingsSwitch } from './SettingsControls';
@@ -23,20 +23,14 @@ import { DeviceUpdateBox } from '../devices/DeviceUpdateBox';
 import { signOut } from './ProfileBar';
 import { setUsageShortcut, shortcutFromEvent, useUsageShortcut } from '../../lib/usage-shortcut';
 import './settings.css';
+import { SettingsTabIcon } from './SettingsTabIcon';
+import { deviceLastOnline } from '../../lib/device-last-online';
 import {
   notificationsEnabled as readNotificationsEnabled,
   setNotificationsEnabled as saveNotificationsEnabled,
 } from '../../lib/notification-prefs';
 
-const tabs = [
-  ['General', Settings],
-  ['Account', CircleUser],
-  ['Voice Input', Mic],
-  ['Notifications', Bell],
-  ['This PC', Monitor],
-  ['Devices', Laptop],
-  ['About', Info],
-] as const;
+const tabs = ['General', 'Account', 'Voice Input', 'Notifications', 'This PC', 'Devices', 'About'] as const;
 
 export function SettingsPanel({
   open,
@@ -160,7 +154,8 @@ export function SettingsPanel({
     [desktop ? 'Kraki Windows' : 'Kraki Web', `${desktop?.version ?? version}${isBeta ? '-beta' : ''}`],
     ...[...state.devices.values()]
       .filter((d) => d.role === 'tentacle')
-      .map((d) => [d.name, `Kraki ${state.deviceVersions.get(d.id) ?? '—'}`]),
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((d) => [d.name, `Kraki ${state.deviceVersions.get(d.id) ?? '—'}${d.online ? '' : ' · offline'}`]),
     ['Relay', `${new URL(wsClient.url || 'ws://localhost').hostname} · ${state.relayVersion ?? '—'}`],
   ];
   const general = (
@@ -384,7 +379,7 @@ export function SettingsPanel({
         {[...state.devices.values()]
           .sort((a, b) => a.name.localeCompare(b.name))
           .map((d) => (
-            <div key={d.id}>
+            <div key={d.id} className="kp-device">
               <div className="kp-row" style={{ gap: 10 }}>
                 <span
                   className="h-2 w-2 shrink-0 rounded-full"
@@ -392,10 +387,11 @@ export function SettingsPanel({
                 />
                 <div className="flex-1">
                   <p className="font-medium">{d.name}</p>
-                  <p className="text-[10px] font-semibold uppercase tracking-[.4px] text-text-muted">
-                    {d.role === 'tentacle' ? 'Computer' : 'App'}{' '}
-                    {d.role === 'tentacle' && state.deviceVersions.get(d.id)}
-                  </p>
+                  <div className="kp-device-meta">
+                    <span className="text-[10px] font-semibold uppercase tracking-[.4px]">{d.role === 'tentacle' ? 'Computer' : 'App'}</span>
+                    {d.role === 'tentacle' && <span>{state.deviceVersions.get(d.id)}</span>}
+                    {!d.online && deviceLastOnline(d.lastSeen) && <span>Last online {deviceLastOnline(d.lastSeen)}</span>}
+                  </div>
                 </div>
                 {builtInKnown && !d.online && d.id !== state.deviceId && d.id !== builtInId ? (
                   <button type="button" className="kp-button" onClick={() => setRemoving(d)}>
@@ -492,7 +488,7 @@ export function SettingsPanel({
           </button>
         </div>
         <div className="kp-tabs" role="tablist" aria-label="Settings">
-          {tabs.map(([name, Icon]) => (
+          {tabs.map((name) => (
             <button
               type="button"
               role="tab"
@@ -509,14 +505,14 @@ export function SettingsPanel({
                     : e.key === 'End'
                       ? buttons.length - 1
                       : (index + (e.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
-                setTab(tabs[next][0]);
+                setTab(tabs[next]);
                 buttons[next].focus();
               }}
               aria-controls="settings-pane"
               key={name}
               onClick={() => setTab(name)}
             >
-              <Icon />
+              <SettingsTabIcon name={name} />
               {name}
             </button>
           ))}
@@ -525,7 +521,7 @@ export function SettingsPanel({
           id="settings-pane"
           role="tabpanel"
           aria-label={tab}
-          className="kp-pane"
+          className={`kp-pane${tab === 'About' ? ' kp-pane-about' : ''}`}
           data-testid="settings-scroll"
           key={tab}
         >

@@ -2,19 +2,19 @@
 .ksi-header { display:flex; align-items:center; justify-content:space-between; padding:14px 20px; border-bottom:1px solid var(--color-border-primary); flex-shrink:0; height:52px; }
 .ksi-header h2 { font-size:17px; font-weight:600; }
 .ksi-header button { font-size:13px; padding:2px 10px; border-radius:5px; background:#e5e5e5; }
-.ksi-body { overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:20px; min-height:0; }
+.ksi-body { overflow-y:auto; padding:20px 30px 20px 20px; display:flex; flex-direction:column; gap:20px; min-height:0; }
 .ksi-body section { display:flex; flex-direction:column; gap:9px; }
 .ksi-body h3 { text-transform:uppercase; color:#808080; font-size:10px; line-height:13px; font-weight:600; }
 .ksi-row { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:15px; line-height:18px; min-height:18px; }
 .ksi-row > span { color:#808080; flex-shrink:0; }
 .ksi-row > div { min-width:0; text-align:right; }
-.ksi-row select { max-width:250px; font-size:13px; padding:2px 6px; border-radius:5px; background:#e5e5e5; }
+.ksi-row select { width:214px; max-width:250px; height:24px; font-size:13px; padding:2px 6px; border-radius:5px; background:#e5e5e5; }
 .ksi-id { display:flex; align-items:center; gap:7px; max-width:285px; }
 .ksi-id > span { font:12.5px monospace; white-space:nowrap; }
 .ksi-id button { width:64px; height:24px; display:flex; align-items:center; justify-content:flex-end; gap:4px; color:var(--color-text-secondary); font-size:11px; flex-shrink:0; }
 .ksi-efforts { display:flex; width:max-content; max-width:250px; padding:1px; border-radius:5px; background:#e5e5e5; font-size:13px; }
-.ksi-efforts button { min-width:48px; flex:1; line-height:16px; border-radius:4px; padding:2px 4px; }
-.ksi-efforts button[aria-checked=true] { background:#0b5b9c; color:white; }
+.ksi-efforts button { min-width:48.67px; height:22px; flex:1; line-height:16px; border-radius:4px; padding:2px 4px; }
+.ksi-efforts button[aria-checked=true] { background:#007aff; color:white; }
 .ksi-progress { height:4px; border-radius:3px; overflow:hidden; background:var(--color-surface-tertiary); }
 .ksi-progress div { height:100%; }
 .ksi-actions { display:flex; gap:12px; }

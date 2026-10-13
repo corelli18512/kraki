@@ -44,6 +44,18 @@ describe('SessionRow Mac sidebar', () => {
     expect(archive).toHaveBeenCalledWith('s', true);
     expect(screen.getByTestId('location').textContent).toBe('/');
   });
+  it('uses the canonical safe sidebar deletion alert, canceling without mutation', () => {
+    const remove = vi.spyOn(wsClient, 'deleteSession').mockImplementation(() => {});
+    row();
+    fireEvent.contextMenu(screen.getByRole('button', { name: /Sidebar test/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+    expect(screen.getByRole('alertdialog', { name: 'Delete Session' })).toHaveTextContent('Delete this session? This cannot be undone.');
+    expect(screen.getByRole('button', { name: 'Delete Session' })).toBeInTheDocument();
+    expect(screen.queryByText(/permanently deletes.*Local Mac/)).toBeNull();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(remove).not.toHaveBeenCalled();
+  });
   it('projects pending delivery before drafts and live preview, restoring draft when pending clears', () => {
     useStore.getState().setStatus('connected');
     useStore.getState().setDraft('s', 'unsent draft');

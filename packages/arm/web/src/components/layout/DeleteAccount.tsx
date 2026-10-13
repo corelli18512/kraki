@@ -31,7 +31,7 @@ export function DeleteAccountSection() {
           onCancel={() => setStep('none')} onConfirm={() => setStep('final')} />
       )}
       {step === 'final' && (
-        <Dialog testId="delete-final" title="Delete account permanently?" body="This can't be undone." confirm="Delete Account"
+        <Dialog stacked testId="delete-final" title="Delete account permanently?" body="This can't be undone." confirm="Delete Account"
           onCancel={() => setStep('none')} onConfirm={() => { setStep('none'); wsClient.requestAccountDeletion(); }} />
       )}
     </section>

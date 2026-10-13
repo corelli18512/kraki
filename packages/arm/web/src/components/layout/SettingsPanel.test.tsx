@@ -93,6 +93,7 @@ describe('SettingsPanel native preferences parity', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     expect(commands.requestAccountDeletion).not.toHaveBeenCalled();
     expect(screen.getByRole('alertdialog', { name: 'Delete account permanently?' })).toBeInTheDocument();
+    expect(screen.getByTestId('delete-final').querySelector('.kp-alert-actions')).toHaveClass('is-stacked');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(commands.requestAccountDeletion).not.toHaveBeenCalled();
   });
@@ -109,6 +110,19 @@ describe('SettingsPanel native preferences parity', () => {
     expect(screen.getByRole('alertdialog', { name: 'Remove Old phone?' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     expect(commands.removeDevice).toHaveBeenCalledWith('old');
+  });
+  it('shows offline last-online metadata and sorts About diagnostics with offline suffixes', () => {
+    useStore.setState({ devices: new Map([
+      ['z', { id: 'z', name: 'Zulu', role: 'tentacle', online: true }],
+      ['a', { id: 'a', name: 'Alpha', role: 'tentacle', online: false, lastSeen: new Date().toISOString() }],
+      ['b', { id: 'b', name: 'Browser', role: 'app', online: true, lastSeen: new Date().toISOString() }],
+    ]), deviceVersions: new Map([['a', '0.38.7'], ['z', '0.38.8']]) });
+    const { container } = open(); tab('Devices');
+    expect(screen.getAllByText('Last online today')).toHaveLength(1);
+    expect(container.querySelectorAll('.kp-device')).toHaveLength(3);
+    tab('About');
+    const rows = [...container.querySelectorAll('.kp-diagnostic')];
+    expect(rows.slice(2, 4).map((row) => row.textContent)).toEqual(['ALPHAKraki 0.38.7 · offline', 'ZULUKraki 0.38.8']);
   });
   it('provides empty vocabulary and disables dependent controls when correction is off', () => {
     open(); tab('Voice Input');
