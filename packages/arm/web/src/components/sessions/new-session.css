@@ -35,9 +35,10 @@
   transition: border-color 0.6s ease-in-out, box-shadow 0.6s ease-in-out;
   cursor: text;
 }
-.dark .ns-composer { background: rgba(40, 40, 40, 0.8); }
+/* Calibrated dark regular Glass; pills and disabled start composite onto this surface. */
+.dark .ns-composer { background: rgba(24, 26, 33, 0.8); }
 .ns-composer.ns-focused { border-color: color-mix(in srgb, #0b5b9c 45%, transparent); }
-.dark .ns-composer.ns-focused { border-color: color-mix(in srgb, #5ea0d7 45%, transparent); }
+.dark .ns-composer.ns-focused { border-color: rgba(110, 180, 243, 0.45); }
 /* "+" / Ctrl+N: the border briefly brightens, then settles — no glow. */
 .ns-composer.ns-nudged { border-color: rgba(11, 91, 156, 0.9); box-shadow: 0 0 0 0.5px rgba(11, 91, 156, 0.9); transition: border-color 0.12s ease-out, box-shadow 0.12s ease-out; }
 .dark .ns-composer.ns-nudged { border-color: rgba(94, 160, 215, 0.9); box-shadow: 0 0 0 0.5px rgba(94, 160, 215, 0.9); }
@@ -126,9 +127,9 @@
   backdrop-filter: blur(24px);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.23), 0 2px 6px rgba(0, 0, 0, 0.08), inset 0 0 0 0.5px rgba(0, 0, 0, 0.34), inset 0 0 0 1px rgba(255, 255, 255, 0.85);
 }
-.dark .ns-popover::before { background: rgba(40, 40, 40, 0.95); box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), inset 0 0 0 0.5px rgba(255, 255, 255, 0.08); }
+.dark .ns-popover::before { background: rgba(19, 22, 34, 0.95); box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), inset 0 0 0 0.5px #53586e; }
 .ns-popover-arrow { position: absolute; top: -9px; left: calc(50% - 14px); fill: #fafafa; stroke: rgba(0, 0, 0, 0.33); stroke-width: 1; pointer-events: none; }
-.dark .ns-popover-arrow { fill: #282828; stroke: rgba(255, 255, 255, 0.08); }
+.dark .ns-popover-arrow { fill: #161924; stroke: #53586e; }
 .ns-popover:has(.ns-section) { gap: 8px; }
 @keyframes ns-pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .ns-scroll { max-height: 302px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }

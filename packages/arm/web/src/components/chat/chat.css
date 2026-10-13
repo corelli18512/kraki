@@ -218,6 +218,8 @@
   -webkit-backdrop-filter: blur(20px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16), inset 0 0 0 0.5px rgba(255, 255, 255, 0.12);
 }
+/* Dark regular Glass: navy material and a cool rim, independent of the mode thumb. */
+.dark .khead.is-wide .khead-capsule, .dark .khead-segments { background: rgba(19, 21, 24, 0.95); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16), inset 0 0 0 0.5px rgba(79, 86, 136, 0.2); }
 .khead-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; }
 .khead-menu {
   position: absolute;
@@ -1043,16 +1045,17 @@
   .kprimary svg { width: 17px; height: 19px; stroke-width: 3; }
   .kprimary.is-offline { opacity: 0.6; }
   .kprimary.is-disabled { background: rgba(253, 253, 254, 0.85); color: rgba(0, 0, 0, 0.25); backdrop-filter: blur(20px); }
-  .dark .kprimary.is-disabled { background: rgba(40, 40, 40, 0.8); color: rgba(255, 255, 255, 0.25); }
+  .dark .kprimary { box-shadow: inset 0 0 0 0.5px #4dd8ef; }
+  .dark .kprimary.is-disabled { background: rgba(15, 17, 29, 0.8); color: rgba(255, 255, 255, 0.25); box-shadow: inset 0 0 0 0.5px rgba(52, 67, 108, 0.3); }
   .kprimary.is-stop { background: #c72929; }
-  .dark .kprimary.is-stop { background: #9e2b2b; }
+  .dark .kprimary.is-stop { background: #9e2b2b; box-shadow: inset 0 0 0 0.5px #d73333; }
   .kprimary-stop { width: 12px !important; height: 12px !important; stroke-width: 0 !important; }
   .kcomposer-field {
     min-height: 36px; padding-right: 5px; border: 0; border-radius: 18px;
     background: rgba(253, 253, 254, 0.85);
     box-shadow: 0 16px 32px rgba(0, 0, 0, 0.065), inset 0 0 0 0.5px rgba(255, 255, 255, 0.65);
   }
-  .dark .kcomposer-field { background: rgba(40, 40, 40, 0.8); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16), inset 0 0 0 0.5px rgba(255, 255, 255, 0.12); }
+  .dark .kcomposer-field { background: rgba(22, 25, 32, 0.8); box-shadow: 0 8px 24px rgba(36, 48, 44, 0.4), inset 0 0 0 0.5px rgba(138, 156, 236, 0.2); }
   .kcomposer-text { padding: 8px 0; }
   .kcomposer-field textarea, .kcomposer-field.is-multiline textarea {
     font-size: 15px; line-height: 18px; padding: 1px 4px; color: rgba(0, 0, 0, 0.85);
@@ -1062,7 +1065,7 @@
   .kcomposer-field.is-multiline .kcomposer-text { margin-left: 12px; flex-basis: calc(100% - 12px); margin-bottom: -6px; }
   .dark .kcomposer-field textarea { color: rgba(255, 255, 255, 0.85); }
   .kcomposer-field textarea::placeholder { color: rgba(0, 0, 0, 0.26); }
-  .dark .kcomposer-field textarea::placeholder { color: rgba(255, 255, 255, 0.3); }
+  .dark .kcomposer-field textarea::placeholder { color: rgba(255, 255, 255, 0.25); }
   .kcomposer-attach { padding-left: 6px; height: 36px; color: rgba(0, 0, 0, 0.5); }
   .dark .kcomposer-attach { color: rgba(255, 255, 255, 0.55); }
   .kcomposer-attach svg { width: 19px; height: 19px; stroke-width: 2.1; }
@@ -1075,7 +1078,7 @@
   .kcomposer-clear { display: flex; align-items: center; justify-content: center; width: 26px; height: 36px; flex: none; padding: 0; border: 0; background: none; color: rgba(0, 0, 0, 0.26); cursor: pointer; }
   .kcomposer-clear svg { width: 17px; height: 17px; fill: currentColor; stroke: #fdfdfe; stroke-width: 1.5; }
   .dark .kcomposer-clear { color: rgba(255, 255, 255, 0.25); }
-  .dark .kcomposer-clear svg { stroke: #282828; }
+  .dark .kcomposer-clear svg { stroke: #12151f; }
   .kcomposer-field.is-multiline .kcomposer-clear { margin-left: auto; }
   .kcomposer-field.is-multiline .kcomposer-clear + .kmic { margin-left: 0; }
   .kcomposer-field.is-multiline .kcomposer-unattach { top: auto; bottom: 16px; }
