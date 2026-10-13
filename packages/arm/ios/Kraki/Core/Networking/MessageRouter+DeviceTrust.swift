@@ -20,11 +20,27 @@ extension MessageRouter {
             }
             return
         }
-        // Unsigned previews never once a computer is pinned (same rule as the
-        // iOS Notification Service Extension); paired computers' previews also
-        // reach this Mac signed, or over the local link.
+        // Once a computer is pinned, an unsigned preview's text can't be
+        // trusted (same rule as the iOS Notification Service Extension). It
+        // is still shown — generically — for a session of a computer this Mac
+        // is not paired with, so unpaired computers keep notifying.
         guard DeviceTrustPush.legacyPreviewAllowed() else {
-            KLog.d("⛔️ device trust: dropped unsigned notification_preview")
+            guard let appState,
+                  let payload = json["payload"] as? [String: Any],
+                  let blob = payload["blob"] as? String, let key = payload["key"] as? String,
+                  let text = encryptionHandler.decryptUnauthenticated(blob: blob, key: key),
+                  let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+                  let sid = object["sessionId"] as? String else {
+                KLog.d("⛔️ device trust: dropped unsigned notification_preview")
+                return
+            }
+            Task { @MainActor in
+                guard let generic = Self.genericPreview(for: sid, nid: object["nid"] as? String, appState: appState) else {
+                    KLog.d("⛔️ device trust: dropped unsigned notification_preview for a paired or unknown session")
+                    return
+                }
+                MacNotifications.shared.present(decryptedPreview: generic, appState: appState, route: "head")
+            }
             return
         }
         guard let appState, let deviceId = appState.deviceId,
@@ -41,6 +57,19 @@ extension MessageRouter {
             MacNotifications.shared.present(decryptedPreview: text, appState: appState, route: "head")
         }
         #endif
+    }
+
+    /// A generic notification for a session of an unpaired computer, using
+    /// only local knowledge (the session's title) — nil for a session of a
+    /// pinned computer or one this app doesn't know.
+    @MainActor
+    static func genericPreview(for sessionId: String, nid: String?, appState: AppState) -> String? {
+        guard let session = appState.sessionStore.sessions[sessionId],
+              TentacleTrustStore.shared.pin(session.deviceId) == nil else { return nil }
+        var object: [String: Any] = ["type": "update", "sessionId": sessionId, "title": session.displayTitle]
+        if let nid { object["nid"] = nid }
+        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return nil }
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// A decrypted inner message and its type (logged).
@@ -74,6 +103,11 @@ extension MessageRouter {
         }
         if type == "session_list", let signedBy {
             Self.dropUnauthenticatedHistory(listedBy: signedBy, dict: dict, appState: appState)
+            // The ordering watermark may come from unsigned (possibly forged,
+            // future-dated) lists: the computer's first signed one resets it.
+            if appState.deviceTrust.signedSnapshotSeen.insert(signedBy).inserted {
+                appState.sessionStore.lastSessionListSnapshotAt[signedBy] = nil
+            }
         }
         switch type {
         case "pair_result", "trusted_devices":

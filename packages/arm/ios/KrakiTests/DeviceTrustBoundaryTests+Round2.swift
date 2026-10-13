@@ -213,6 +213,57 @@ extension DeviceTrustBoundaryTests {
         XCTAssertFalse(landed, "a read started before the reset must not land")
     }
 
+    #if os(macOS)
+    /// Post-merge: once this Mac is paired with any computer, an unsigned
+    /// preview about an UNPAIRED computer's session still notifies — with
+    /// generic text and the local title, never the relay-supplied text.
+    func testMacNotifiesGenericallyForUnpairedComputers() async throws {
+        try requireKeychain()
+        pin()
+        let unpairedSession = "unpaired-session"
+        let digest = try XCTUnwrap(SessionDigest(json: ["id": unpairedSession, "agent": "copilot", "title": "Local title", "state": "idle"]))
+        app.sessionStore.upsertSession(digest, deviceId: other, deviceName: "Unpaired computer")
+        var posts: [(String, String, String)] = []
+        MacNotifications.shared.postHandlerForTesting = { posts.append(($0, $1, $2)) }
+        let inner: [String: Any] = ["nid": UUID().uuidString, "sessionId": unpairedSession, "type": "question", "summary": "RELAY TEXT"]
+        let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: legacyEnvelope(inner)) as? [String: Any])
+        let blob = try XCTUnwrap(envelope["blob"] as? String)
+        let key = try XCTUnwrap((envelope["keys"] as? [String: String])?[selfId])
+        app.messageRouter?.handleRawMessage(try json(["type": "notification_preview", "payload": ["blob": blob, "key": key]]))
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(posts.count, 1)
+        XCTAssertEqual(posts.first?.0, unpairedSession)
+        XCTAssertEqual(posts.first?.1, "Local title")
+        XCTAssertEqual(posts.first?.2, PushPreviewFormat.fallbackBody)
+    }
+    #endif
+
+    /// Post-merge: a future-dated unsigned list (from before pinning) can't
+    /// make the computer's signed lists look stale.
+    func testFutureDatedUnsignedListDoesNotBlockSignedLists() throws {
+        try requireKeychain()
+        let relayKey = try CryptoManager().generateKeyPair()
+        let relayPublic = try CryptoManager().exportPublicKeySPKI(relayKey.publicKey)
+        app.deviceStore.setDevices([DeviceSummary(id: computer, name: "Computer", role: .tentacle, kind: .desktop, encryptionKey: relayPublic, online: true)])
+        var forged = message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "forged", "state": "idle"]]])
+        forged["timestamp"] = "2099-01-01T00:00:00.000Z"
+        try route(legacyEnvelope(forged, src: computer))
+        XCTAssertEqual(app.sessionStore.sessions[sid]?.title, "forged")
+        pin()
+        try route(signedEnvelope(message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "authentic", "state": "idle"]]]), key: signer))
+        XCTAssertEqual(app.sessionStore.sessions[sid]?.title, "authentic")
+        // Forget Pairing, a forged future-dated list, then pair again: same result.
+        app.forgetPairing(computer)
+        var forged2 = message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "forged again", "state": "idle"]]])
+        forged2["timestamp"] = "2100-01-01T00:00:00.000Z"
+        try route(legacyEnvelope(forged2, src: computer))
+        XCTAssertEqual(app.sessionStore.sessions[sid]?.title, "forged again")
+        app.pinFromPairingLink(try link(identity: signer, encryption: recipient))
+        TentacleTrustStore.shared.update(computer) { $0?.paired = true }
+        try route(signedEnvelope(message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "authentic again", "state": "idle"]]]), key: signer))
+        XCTAssertEqual(app.sessionStore.sessions[sid]?.title, "authentic again")
+    }
+
     #if os(iOS)
     /// APPS-02: a push without a usable envelope shows generic text, not the relay's.
     func testNotificationServiceIgnoresRelayTextWithoutEnvelope() throws {
