@@ -109,9 +109,9 @@ describe('Sidebar native search and ordering', () => {
       { ...base, id: 'pinned', title: 'Pinned', createdAt: '2020-01-01T00:00:00Z' },
     ]);
     for (const id of ['a', 'b', 'c']) {
-      useStore.getState().setSessionPreview(id, { text: '', type: 'agent', timestamp: '2026-06-10T10:00:00Z' });
+      useStore.getState().setSessionPreview(id, { text: '', type: 'agent', timestamp: id === 'b' ? '2026-06-10T10:00:00+00:00' : '2026-06-10T10:00:00Z' });
     }
-    useStore.getState().setSessionPreview('d', { text: '', type: 'agent', timestamp: '2026-06-10T12:00:00+01:00' });
+    useStore.getState().setSessionPreview('d', { text: '', type: 'agent', timestamp: '2026-06-10T09:30:00-02:00' });
     useStore.getState().setPinnedSessions(new Set(['pinned']));
     const { container } = render(<MemoryRouter><Sidebar /></MemoryRouter>);
     expect([...container.querySelectorAll('.ksr-title')].map((e) => e.textContent)).toEqual(['Pinned', 'D', 'B', 'C', 'A']);
