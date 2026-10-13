@@ -1060,6 +1060,11 @@
 /* Subagent card in Steps: opens the subagent's own page. */
 .ksub-card { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: none; box-shadow: inset 0 0 0 .5px var(--k-border, #e2e8f0); border-radius: 12px; background: var(--k-bg, #fff); color: var(--k-text); text-align: left; cursor: pointer; font: inherit; }
 .ksub-card:hover { background: var(--k-fill, rgba(120,120,128,.12)); }
+@media (min-width: 768px) {
+  .dark .ksub-card:hover { background: var(--k-bg); }
+  .dark .ksheet-back { color: var(--k-user); }
+}
+.dark .ksub-name, .dark .ksub-page-task { color: var(--color-text-title); }
 .ksub-status { display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex-shrink: 0; }
 .ksub-status svg { width: 14px; height: 14px; stroke-width: 1.5; }
 .ksub-status-running { color: var(--k-text-2, #64748b); animation: kspin 1s linear infinite; }
@@ -1079,6 +1084,7 @@
 .ksub-page-facts { margin: 0 0 16px; font-size: 10px; line-height: 12px; color: var(--k-text-3, #94a3b8); }
 .ksub-empty { margin: 0; color: var(--k-text-2, #64748b); font-size: 10px; line-height: 13px; }
 .ksub-report { margin-top: 12px; padding-top: 6px; border-top: 0.5px solid var(--k-border, #e2e8f0); font-size: 11px; color: var(--color-text-title); line-height: 14px; }
+.dark .ksub-report { border-top-color: rgba(255,255,255,.1); }
 .ksub-report-label { font-size: 10px; line-height: 12px; font-weight: 600; color: var(--k-text-2, #64748b); text-transform: uppercase; margin-bottom: 6px; }
 .ksheet-loading { display: flex; align-items: center; gap: 8px; color: var(--k-text-2, #64748b); font-size: 13px; }
 .kstep-prose { color: var(--k-text-2, #64748b); font-size: 15px; line-height: 18px; white-space: pre-wrap; }
@@ -1120,7 +1126,8 @@
 .ktool-chevron { margin-left: auto; flex-shrink: 0; width: 11px; height: 11px; color: var(--color-label-tertiary); }
 .ktool-chevron.is-expanded { transform: rotate(90deg); }
 .ktool-detail { margin-top: 4px; padding: 12px; border-radius: 8px; background: #f3f3f3; color: var(--color-label-secondary); font-size: 11px; line-height: 14px; }
-.dark .ktool-detail { background: rgba(120,120,128,.16); }
+/* Native quaternary at 50% over the dark Steps surface. */
+.dark .ktool-detail { background: #0e1222; }
 .ktool-detail section + section { margin-top: 8px; }
 .ktool-detail h4 { margin: 0 0 2px; font-size: 11px; font-weight: 600; }
 .ktool-detail pre { margin: 0; white-space: pre-wrap; font: 11px/14px var(--k-mono); max-height: 240px; overflow: auto; }
@@ -1133,7 +1140,8 @@
   /* Native sheets disable/fade the presenting content by 50%, then dim it
    *  with 20% black. White remains #ccc; blue #0b5b9c becomes #6b8aa4. */
   .ksheet-backdrop { background: rgba(170,170,170,.6); backdrop-filter: none; }
-  .dark .ksheet-backdrop { background: rgba(1,4,15,.6); }
+  /* AppKit fades the presenting content toward neutral gray, not blue-black. */
+  .dark .ksheet-backdrop { background: rgba(22,23,23,.6); }
   .ksheet { width: 420px; height: 480px; max-height: min(480px, calc(100dvh - 32px)); border-radius: 24px; border-color: rgba(0,0,0,.4); }
   .dark .ksheet { border-color: rgba(255,255,255,.2); }
   .ksheet-head { height: 44px; padding: 0 16px; flex-shrink: 0; border-color: rgba(0,0,0,.1); }
@@ -1141,6 +1149,7 @@
   .ksheet-head h3 { font-size: 17px; color: var(--color-text-title); }
   .ksheet-close { padding: 0; color: var(--k-text-3); }
   .ksheet-close svg { width: 15px; height: 15px; }
+  .dark .ksheet-close:focus-visible { outline: 3px solid #0e588a; outline-offset: 0; border-radius: 1px; }
   .ksheet-close svg circle { fill: currentColor; stroke: none; }
   .ksheet-close svg path { stroke: var(--k-bg); }
   .ksheet-back { font-size: 14px; }
@@ -1218,7 +1227,10 @@
 .kreport-card-chevron { width: 12px; height: 12px; color: var(--k-text-3); flex-shrink: 0; }
 .dark .kreport-card { background: rgba(30,30,30,.78); border-color: rgba(255,255,255,.72); }
 .dark .kreport-card:hover { background: rgba(10,132,255,.09); border-color: rgba(10,132,255,.42); }
-.dark .kreport-card-icon { background: rgba(10,132,255,.1); color: #0a84ff; }
+.dark .kreport-card-icon { background: rgba(10,132,255,.1); }
+.dark .kreport-card-text strong { color: var(--color-label-primary); }
+.dark .kreport-card-text small { color: var(--color-label-secondary); }
+.dark .kreport-card-chevron { color: var(--color-label-tertiary); }
 .kimage-single { max-width: 360px; }
 .kimage-stack { position: relative; width: calc(360px + var(--image-stack-offset)); max-width: 100%; }
 .kimage-stack-card { position: absolute; width: calc(100% - var(--image-stack-offset)); height: 184px; }
@@ -1249,10 +1261,13 @@
 .kreport-panel.is-expanded { position: absolute; inset: 0; width: 100%; border-left: 0; }
 .kreport-header { display: flex; flex-shrink: 0; align-items: center; gap: 9px; height: 37px; padding: 0 12px 8px; border-bottom: 1px solid color-mix(in srgb, var(--k-border) 70%, transparent); }
 .kreport-header-icon { width: 20px; height: 20px; flex-shrink: 0; color: #007aff; padding: 2px; }
-.dark .kreport-header-icon { color: #0a84ff; }
+.dark .kreport-header-text strong, .dark .kreport-state strong { color: var(--color-text-title); }
 .kreport-header-text small { display: block; font-size: 9.5px; line-height: 12px; color: var(--k-text-3); }
 .kreport-header button { width: 26px; height: 26px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: var(--k-text-2); cursor: pointer; border-radius: 4px; }
 .kreport-header button:hover { background: var(--k-fill); }
+@media (min-width: 768px) {
+  .dark .kreport-header button:hover { background: none; }
+}
 .kreport-header button svg { width: 13px; height: 13px; }
 .kreport-frame { min-height: 0; flex: 1; width: 100%; border: 0; background: white; }
 .kreport-state { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center; font-size: 12px; color: var(--k-text-2); }
@@ -1267,8 +1282,10 @@
 }
 .kagent-stack:has(.kreport-cards) { width: 95%; }
 .kbubble-agent:has(.kreport-cards) { width: 100%; }
-/* The native ultra-thin toolbar material is light even over the dark canvas. */
-.dark .kimage-toolbar { background: rgba(40,40,40,.97); }
+/* Resolved native dark ultra-thin material above the image canvas. */
+.dark .kimage-toolbar { background: rgb(22,25,26); }
+/* Native disabling fades the label only, leaving the white10% backing intact. */
+.dark .kimage-toolbar button:disabled { opacity: 1; color: rgba(255,255,255,.45); }
 
 .dark .kimage-placeholder.is-error svg, .dark .kreport-export-error { color: #ff453a; }
 .dark .kreport-state.is-error svg { color: #ff9f0a; }
