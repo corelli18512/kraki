@@ -1,5 +1,6 @@
 import type { Attachment, ContentRef } from '@kraki/protocol';
-import { AlertTriangle, ArrowUpRight, FileText } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight } from 'lucide-react';
+import { RichTextDocumentIcon } from './RichTextDocumentIcon';
 import { useState, type CSSProperties } from 'react';
 import { useAttachment } from '../../hooks/useAttachment';
 import { getState } from '../../lib/attachments';
@@ -26,7 +27,7 @@ export function HtmlArtifactCards({ artifacts, onOpen }: { artifacts: ContentRef
       {artifacts.map((artifact) => {
         const title = htmlArtifactTitle(artifact);
         return <button key={artifact.id} type="button" className="kreport-card" onClick={() => onOpen?.(artifact)} aria-label={`Open report ${title}`} disabled={!onOpen}>
-          <span className="kreport-card-icon"><FileText /></span>
+          <span className="kreport-card-icon"><RichTextDocumentIcon /></span>
           <span className="kreport-card-text"><strong>{title}</strong><small>Report · {formatReportBytes(artifact.size)}</small></span>
           <ArrowUpRight className="kreport-card-chevron" />
         </button>;
