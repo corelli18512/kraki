@@ -11,8 +11,8 @@
   font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
 }
 .ns-start-inner { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 22px; }
-.ns-start-title { margin: 0; font-size: 24px; line-height: 29px; font-weight: 600; color: #062647; letter-spacing: -0.2px; }
-.dark .ns-start-title { color: #f8fafc; }
+.ns-start-title { margin: 0; font-size: 24px; line-height: 29px; font-weight: 600; color: #052847; letter-spacing: -0.2px; }
+.dark .ns-start-title { color: #dbe8f4; }
 .ns-start-composer { width: 100%; max-width: 640px; }
 .ns-phone-link {
   display: inline-flex; align-items: center; gap: 5px;
@@ -52,10 +52,11 @@
   padding: 1px 4px;
   font-size: 15px; line-height: 18px;
   font-family: inherit;
-  color: var(--color-text-primary);
+  color: rgba(0, 0, 0, 0.85);
   overflow-y: auto;
   scrollbar-width: none;
 }
+.dark .ns-text { color: rgba(255, 255, 255, 0.85); }
 .ns-text::-webkit-scrollbar { display: none; }
 .ns-text::placeholder { color: var(--color-text-muted); }
 
@@ -94,7 +95,7 @@
   cursor: pointer;
 }
 .dark .ns-send { background: #5ea0d7; }
-.ns-send svg { width: 15px; height: 15px; }
+.ns-send svg { width: 15px; height: 17px; }
 .ns-send:disabled { opacity: 0.15; cursor: default; }
 
 /* Popovers (the pills' choice lists) */
@@ -117,8 +118,8 @@
   animation: ns-pop 0.14s ease-out;
 }
 .dark .ns-popover { background: rgba(40, 40, 40, 0.95); border-color: rgba(255, 255, 255, 0.08); box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5); }
-.ns-popover::after { content: ""; position: absolute; top: -7px; left: calc(50% - 7px); width: 14px; height: 14px; transform: rotate(45deg); background: #fafafa; border-left: 1px solid rgba(0, 0, 0, 0.08); border-top: 1px solid rgba(0, 0, 0, 0.08); }
-.dark .ns-popover::after { background: #282828; border-color: rgba(255, 255, 255, 0.08); }
+.ns-popover-arrow { position: absolute; top: -11px; left: calc(50% - 14px); fill: #fafafa; stroke: rgba(0, 0, 0, 0.25); stroke-width: 1; pointer-events: none; }
+.dark .ns-popover-arrow { fill: #282828; stroke: rgba(255, 255, 255, 0.08); }
 .ns-popover:has(.ns-section) { gap: 8px; }
 @keyframes ns-pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .ns-scroll { max-height: 302px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }

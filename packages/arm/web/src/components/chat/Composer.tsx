@@ -223,7 +223,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           {image ? <img src={image.preview} alt="Attached" /> : <ImagePlus aria-hidden />}
         </button>
         {image && (
-          <button type="button" className="kcomposer-unattach" aria-label="Remove image" onClick={() => setImage(null)}>
+          <button type="button" className="kcomposer-unattach" disabled={busy} aria-label="Remove image" onClick={() => setImage(null)}>
             <X aria-hidden />
           </button>
         )}
@@ -267,7 +267,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       </div>
       <button
         type="button"
-        className={`kprimary is-${glyph} ${!voiceSend && !showsStop && !canSend ? 'is-disabled' : ''} ${!voiceSend && showsStop && !reachable ? 'is-unreachable' : ''}`}
+        className={`kprimary is-${glyph} ${!voiceSend && !showsStop && !canSend ? 'is-disabled' : ''} ${!voiceSend && showsStop && !reachable ? 'is-unreachable' : ''} ${canSend && !reachable ? 'is-offline' : ''}`}
         aria-label={label}
         data-testid={voiceSend ? 'voice-send' : showsStop ? 'chat-stop' : 'chat-send'}
         onClick={primary}

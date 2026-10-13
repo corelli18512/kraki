@@ -114,7 +114,12 @@ function Popover({ onClose, children, wide }: { onClose: () => void; children: R
     document.addEventListener('keydown', key, true);
     return () => { clearTimeout(timer); document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key, true); };
   }, [onClose]);
-  return <div ref={ref} className={wide ? 'ns-popover ns-popover-wide' : 'ns-popover'} role="listbox">{children}</div>;
+  return <div ref={ref} className={wide ? 'ns-popover ns-popover-wide' : 'ns-popover'} role="listbox">
+    <svg className="ns-popover-arrow" width="28" height="12" viewBox="0 0 28 12" aria-hidden>
+      <path d="M0 12C4 12 5 11 7 9L12 3Q14 1 16 3L21 9C23 11 24 12 28 12" />
+    </svg>
+    {children}
+  </div>;
 }
 
 function ChoiceRow({ title, detail, selected, enabled = true, mark, onClick }: {
