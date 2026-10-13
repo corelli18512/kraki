@@ -76,7 +76,7 @@ vi.mock('@kraki/crypto', async () => {
 });
 
 import { SessionResumeError, RelayClient } from '../relay-client.js';
-import { beginAdapterTurn, finishTurnWithStatus } from '../relay/turns.js';
+import { beginAdapterTurn, finishTurnWithStatus, inputFingerprint, reserveInput } from '../relay/turns.js';
 import { handleConsumerMessage } from '../relay/consumer-messages.js';
 import { AttachmentStore } from '../attachment-store.js';
 import { createHash } from 'node:crypto';
@@ -2468,6 +2468,48 @@ describe('RelayClient delta debounce', () => {
   });
 });
 
+describe('RelayClient subscriptions across a Tentacle reconnect', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+    vi.useFakeTimers();
+  });
+
+  it('keeps the subscription of an App that stayed online, so live deltas keep flowing', () => {
+    const adapter = createAdapter();
+    const client = new RelayClient(
+      adapter as unknown as Parameters<typeof RelayClient>[0],
+      createSessionManager() as unknown as Parameters<typeof RelayClient>[1],
+      { relayUrl: 'ws://localhost:4000', authMethod: 'open', device: { name: 'Test', role: 'tentacle' }, reconnectDelay: 10 },
+      createKeyManager() as unknown as Parameters<typeof RelayClient>[3],
+    );
+    const authOk = JSON.stringify({
+      type: 'auth_ok', deviceId: 'dev_1', authMethod: 'open',
+      user: { id: 'u1', login: 'test', provider: 'local' },
+      devices: [{ id: 'consumer-dev', name: 'Phone', role: 'app', online: true, encryptionKey: 'consumer-pub' }],
+    });
+    client.connect();
+    sockets[0].emit('open');
+    sockets[0].emit('message', Buffer.from(authOk));
+    subscribeForTest(client, 's1');
+
+    // The Head replaced our socket (Wi-Fi switch): the App saw no device_left
+    // and still holds its confirmed subscription.
+    sockets[0].close();
+    vi.advanceTimersByTime(1_000);
+    const ws = sockets[sockets.length - 1];
+    expect(ws).not.toBe(sockets[0]);
+    ws.emit('open');
+    ws.emit('message', Buffer.from(authOk));
+    ws.sent.length = 0;
+
+    (adapter.onMessageDelta as (sid: string, e: { content: string }) => void)('s1', { content: 'still streaming' });
+    vi.advanceTimersByTime(40);
+    const deltas = decodePulseSends(ws.sent).filter((m) => m.type === 'agent_message_delta');
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0].payload).toMatchObject({ content: 'still streaming' });
+  });
+});
+
 describe('RelayClient handleSessionMessagesRange', () => {
   beforeEach(() => {
     sockets.length = 0;
@@ -2903,6 +2945,31 @@ describe('RelayClient trace mirroring (off-spine)', () => {
       });
       expect(smMock.appendMessage).not.toHaveBeenCalled();
       expect(smMock.appendTrace).not.toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+
+  it('a successful idle closes tools that never reported back (no phantom running chip)', () => {
+    const { adapter, sm, client, cleanup } = buildClient();
+    try {
+      const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+      (adapter.onToolStart as (sid: string, e: Record<string, unknown>) => void)('sess_1', {
+        toolName: 'bash', args: { command: 'sleep 99' }, toolCallId: 'tc-lost',
+      });
+      (adapter.onMessage as (sid: string, e: Record<string, unknown>) => void)('sess_1', { content: 'Done.' });
+      (adapter.onIdle as (sid: string) => void)('sess_1');
+
+      const closed = smMock.appendTrace.mock.calls
+        .map((c) => JSON.parse(c[2]) as { type: string; payload: Record<string, unknown> })
+        .filter((e) => e.type === 'tool_complete' && e.payload.toolCallId === 'tc-lost');
+      expect(closed).toHaveLength(1);
+      expect(closed[0].payload).toMatchObject({ success: false, termination: 'interrupted' });
+      expect(client.card.state('sess_1').action).toBeNull();
+
+      // The next turn's card does not inherit it.
+      (adapter.onToolStart as (sid: string, e: Record<string, unknown>) => void)('sess_1', {
+        toolName: 'view', args: { path: '/a' }, toolCallId: 'tc-next',
+      });
+      expect(client.card.state('sess_1').action).toMatchObject({ type: 'tool_start', payload: { toolCallId: 'tc-next' } });
     } finally { cleanup(); }
   });
 
@@ -3698,6 +3765,79 @@ describe('RelayClient pending-question digest', () => {
     expect(sm.markIdle).toHaveBeenCalledTimes(1);
   });
 
+  it('a steer admitted during a lazy resume joins the prompt it follows, not a stale turn', async () => {
+    const { adapter, ws, sm, client } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    let state: 'disconnected' | 'active' | 'idle' = 'disconnected';
+    smMock.getMeta.mockImplementation(() => ({ id: 'sess_1', agent: 'pi', state, lastSeq: 10 }));
+    smMock.resumeSession.mockImplementation(() => { state = 'active'; return { context: {} }; });
+    smMock.markActive.mockImplementation(() => { state = 'active'; });
+    smMock.markIdle.mockImplementation(() => { state = 'idle'; });
+    // Left from the turn before the session was evicted.
+    const internals = client as unknown as { activeInputTurnIds: Map<string, string>; settledAdapterTurnIds: Map<string, string> };
+    internals.activeInputTurnIds.set('sess_1', 'sess_1:5');
+    internals.settledAdapterTurnIds.set('sess_1', 'sess_1:5');
+    let resumed!: () => void;
+    (adapter.resumeSession as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise<{ sessionId: string }>((resolve) => { resumed = () => resolve({ sessionId: 'sess_1' }); }),
+    );
+    const send = (seq: number, text: string, extra: Record<string, unknown> = {}) => ws.emit('message', Buffer.from(consumerJson({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq,
+      timestamp: new Date().toISOString(), payload: { text, clientId: `resume-${seq}`, ...extra },
+    })));
+    send(630, 'prompt A');
+    await vi.waitFor(() => expect(adapter.resumeSession).toHaveBeenCalledTimes(1));
+    send(631, 'and also this', { delivery: 'steer' });
+    resumed();
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+    await vi.runAllTimersAsync();
+
+    const turnA = (adapter.setTurnIdentity as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    expect(internals.activeInputTurnIds.get('sess_1')).toBe(turnA);
+    (adapter.onIdle as (sid: string, event: { turnId: string }) => void)('sess_1', { turnId: turnA });
+    expect(smMock.markIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it('a duplicate input resend does not advance the next prompt turn anchor', () => {
+    const { sm, client } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 'sess_1', state: 'idle', lastSeq: 10 });
+    smMock.getInputLedgerEntry.mockReturnValue({
+      version: 1, clientId: 'dup', status: 'settled', requestedDelivery: 'prompt', delivery: 'prompt',
+      turnId: 'sess_1:9', contentLength: 3, contentHash: inputFingerprint(client, 'old').contentHash, userSeq: 9,
+      updatedAt: new Date().toISOString(),
+    });
+    const anchors = (client as unknown as { nextInputTurnAnchors: Map<string, number> }).nextInputTurnAnchors;
+    expect(reserveInput(client, 'sess_1', 'dup', 'prompt', 'old')).toMatchObject({ duplicate: true });
+    expect(reserveInput(client, 'sess_1', 'dup', 'prompt', 'different')).toMatchObject({ conflict: true });
+    expect(anchors.has('sess_1')).toBe(false);
+    smMock.getInputLedgerEntry.mockReturnValue(null);
+    expect(reserveInput(client, 'sess_1', 'fresh', 'prompt', 'new').turnId).toBe('sess_1:11');
+  });
+
+  it('applies the idle deferred during steer acceptance when the adapter turn stays settled', async () => {
+    const { adapter, ws, sm } = buildClient();
+    let accept!: () => void;
+    (adapter.sendMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise<void>((resolve) => { accept = resolve; }),
+    );
+    ws.emit('message', Buffer.from(consumerJson({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 619,
+      timestamp: new Date().toISOString(), payload: { text: 'one more thing', delivery: 'steer' },
+    })));
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    (adapter.onIdle as (sid: string, event: { turnId: string }) => void)('sess_1', { turnId: 'sess_1:0' });
+    // The adapter ended the turn and did not reopen it for the steer.
+    (adapter.isTurnSettled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    const markActiveBefore = (sm.markActive as ReturnType<typeof vi.fn>).mock.calls.length;
+    accept();
+    await vi.waitFor(() => expect(sm.markIdle).toHaveBeenCalledTimes(1));
+    await vi.runAllTimersAsync();
+    expect((sm.markActive as ReturnType<typeof vi.fn>).mock.calls.length).toBe(markActiveBefore);
+    const types = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1]);
+    expect(types.at(-1)).toBe('idle');
+  });
+
   it('does not release the normal prompt queue for an idle racing steer acceptance', async () => {
     const { adapter, ws } = buildClient();
     ws.emit('message', Buffer.from(consumerJson({
@@ -3858,18 +3998,56 @@ describe('RelayClient pending-question digest', () => {
     expect(sm.clearPendingHumanAction).not.toHaveBeenCalledWith('sess_1');
   });
 
+  it('a competing answer to a question being answered is not turned into a recovery prompt', async () => {
+    const { adapter, askQ, answerQ, sm } = buildClient();
+    let accept!: (r: string) => void;
+    (adapter.respondToQuestion as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => new Promise<string>((resolve) => { accept = resolve; }))
+      .mockResolvedValueOnce('not_found');
+    askQ('q1');
+    answerQ('q1', 'a');
+    await vi.waitFor(() => expect(adapter.respondToQuestion).toHaveBeenCalledTimes(1));
+    // Another device answers the same question while the first is in flight.
+    answerQ('q1', 'b');
+    await Promise.resolve();
+    accept('accepted');
+    await vi.runAllTimersAsync();
+
+    expect(adapter.respondToQuestion).toHaveBeenCalledTimes(1);
+    const prompts = (adapter.sendMessage as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[1]));
+    expect(prompts.some((p) => p.includes('A previous turn was interrupted'))).toBe(false);
+    const users = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => JSON.parse(c[2]) as { type: string; payload: Record<string, unknown> })
+      .filter((m) => m.type === 'user_message');
+    expect(users.map((m) => m.payload.answerTo)).toEqual(['q1', undefined]);
+  });
+
   it('rejects ambiguous composer text when multiple questions are pending', async () => {
-    const { adapter, askQ, ws } = buildClient();
+    const { adapter, askQ, ws, sm, client } = buildClient();
     askQ('q1');
     askQ('q2');
     ws.sent.length = 0;
     ws.emit('message', Buffer.from(consumerJson({
       type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 505,
-      timestamp: new Date().toISOString(), payload: { text: 'ambiguous answer' },
+      timestamp: new Date().toISOString(), payload: { text: 'ambiguous answer', clientId: 'c-ambiguous' },
     })));
     await vi.runAllTimersAsync();
     expect(adapter.respondToQuestion).not.toHaveBeenCalled();
     expect(adapter.sendMessage).not.toHaveBeenCalled();
+    // Rejected before persistence: no user bubble the agent never got.
+    expect((sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.some((c) => c[1] === 'user_message')).toBe(false);
+    expect((sm.recordInputLedger as ReturnType<typeof vi.fn>).mock.calls.some((c) => c[1].status === 'persisted')).toBe(false);
+    const errors = (sm.appendMessage as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[1] === 'error');
+    expect(errors.some((c) => String(c[2]).includes('Multiple questions are pending'))).toBe(true);
+
+    // A retry of that clientId is a fresh attempt, not a lost duplicate.
+    const reserved = (sm.recordInputLedger as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1]).filter((e) => e.clientId === 'c-ambiguous').at(-1);
+    expect(reserved.userSeq).toBeUndefined();
+    const rejected = { ...reserved, status: 'rejected' };
+    (sm.getInputLedgerEntry as ReturnType<typeof vi.fn>).mockReturnValue(rejected);
+    const retry = reserveInput(client, 'sess_1', 'c-ambiguous', 'prompt', 'ambiguous answer');
+    expect(retry).toMatchObject({ duplicate: false, recovery: false });
   });
 
   it('routes image-only composer input to the sole pending question', async () => {
@@ -3884,6 +4062,65 @@ describe('RelayClient pending-question digest', () => {
       'sess_1', 'q1', { text: '', attachments: [image] }, true,
     ));
     expect(adapter.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('a prompt the adapter rejects closes its turn as failed instead of staying active', async () => {
+    const { adapter, ws, sm } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    (adapter.sendMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('model gpt-old is not supported'));
+    ws.emit('message', Buffer.from(consumerJson({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq: 620,
+      timestamp: new Date().toISOString(), payload: { text: 'hello', clientId: 'rejected-turn' },
+    })));
+    await vi.runAllTimersAsync();
+
+    const rows = smMock.appendMessage.mock.calls.map((c) => ({ type: c[1], payload: JSON.parse(c[2]).payload }));
+    const types = rows.map((r) => r.type);
+    expect(types.filter((t) => t === 'error')).toHaveLength(1);
+    const status = rows.find((r) => r.type === 'turn_status');
+    expect(status?.payload).toMatchObject({ action: { type: 'failed', payload: { message: expect.stringContaining('gpt-old') } } });
+    expect(rows.find((r) => r.type === 'idle')?.payload).toMatchObject({ reason: 'failed' });
+    expect(types.indexOf('idle')).toBeGreaterThan(types.indexOf('error'));
+    expect(smMock.markIdle).toHaveBeenCalledWith('sess_1');
+  });
+
+  it('a late Stop acknowledgement for turn A never settles the queued turn B', async () => {
+    const { adapter, ws, sm, client } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    const releases: Array<() => void> = [];
+    (adapter.abortSession as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise<void>((resolve) => { releases.push(resolve); }),
+    );
+    const send = (seq: number, text: string) => ws.emit('message', Buffer.from(consumerJson({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq,
+      timestamp: new Date().toISOString(), payload: { text, clientId: `stop-${seq}` },
+    })));
+    const stop = (seq: number) => ws.emit('message', Buffer.from(consumerJson({
+      type: 'abort_session', sessionId: 'sess_1', deviceId: 'app-x', seq,
+      timestamp: new Date().toISOString(), payload: {},
+    })));
+    const turns = (client as unknown as { activeInputTurnIds: Map<string, string> }).activeInputTurnIds;
+    send(610, 'turn A');
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(1));
+    const turnA = turns.get('sess_1');
+    send(611, 'turn B');
+    // Double-tap Stop (or Stop from two devices) while A runs.
+    stop(612);
+    stop(613);
+    await Promise.resolve();
+    releases.shift()?.();
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+    const turnB = turns.get('sess_1');
+    expect(turnB).not.toBe(turnA);
+    for (const release of releases.splice(0)) release();
+    await vi.runAllTimersAsync();
+
+    expect(turns.get('sess_1')).toBe(turnB);
+    expect((client as unknown as { settledAdapterTurnIds: Map<string, string> }).settledAdapterTurnIds.get('sess_1')).toBe(turnA);
+    expect(smMock.markInputLedgerSettled.mock.calls.map((c) => c[1])).not.toContain(turnB);
+    expect(smMock.markIdle).toHaveBeenCalledTimes(1);
+    const idles = smMock.appendMessage.mock.calls.filter((c) => c[1] === 'idle');
+    expect(idles).toHaveLength(1);
   });
 
   it('does not persist terminal history when explicit abort sees an empty card', async () => {

@@ -172,6 +172,9 @@ export class RelayClient {
 
   activeInputTurnIds = new Map<string, string>();
   nextInputTurnAnchors = new Map<string, number>();
+  /** Turn id ('' when none) whose Stop is awaiting the adapter, per session:
+   *  a second Stop for the same turn joins it instead of settling again. */
+  abortsInFlight = new Map<string, string>();
 
   // ── Push preview state ─────────────────────────────
   /** Final reply of the CURRENT turn per session (for the turn-end push).
@@ -298,6 +301,9 @@ export class RelayClient {
    *  auto-resolve, cleared when the turn ends. Insertion order is preserved so
    *  the newest open question wins the preview slot. */
   openQuestions = new Map<string, Map<string, PendingHumanAction>>();
+  /** `${sessionId}\u0000${questionId}` of answers being delivered. Claimed
+   *  before the first await, so a competing answer sees it as no longer open. */
+  answeringQuestions = new Set<string>();
 
   /**
    * Connect to the relay. Auto-reconnects on disconnect.
@@ -1463,6 +1469,10 @@ export class RelayClient {
     const localIds = new Set(this.localLink?.peerIds() ?? []);
     const keptFeatures = new Map([...this.appFeatures].filter(([id]) => localIds.has(id)));
     const keptSubs = new Map([...this.currentSessionByArm].filter(([id]) => localIds.has(id)));
+    // An App that stayed online across this Tentacle's reconnect still holds
+    // its confirmed subscription: when the Head replaces our old socket it
+    // sends the App no device_left, so the App never re-subscribes. Keep it.
+    const previousSubs = this.currentSessionByArm;
     this.consumerKeys.clear();
     this.onlineConsumers.clear();
     this.appFeatures = keptFeatures;
@@ -1483,7 +1493,7 @@ export class RelayClient {
           this.consumerKeys.set(d.id, key);
           if (d.online) {
             this.onlineConsumers.add(d.id);
-            this.currentSessionByArm.set(d.id, null);
+            this.currentSessionByArm.set(d.id, previousSubs.get(d.id) ?? null);
           }
         }
       }

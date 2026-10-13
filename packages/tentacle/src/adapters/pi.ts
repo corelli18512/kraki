@@ -646,6 +646,10 @@ export class PiAdapter extends AgentAdapter {
         // While active, Pi queues the interjection before the next LLM call and
         // it remains part of the current logical turn.
         await s.proc.request('prompt', { ...promptPayload, streamingBehavior: 'steer' }, { timeoutMs: null });
+        // The run settled while Pi was accepting the steer: Pi runs the steer
+        // as a new run. Reopen the turn so that run's reply and idle are
+        // reported (a stopped turn stays closed).
+        if (s.turn.isSettled && !s.turn.isAborted) this.resetTurnTracking(s);
       }
       return;
     }
