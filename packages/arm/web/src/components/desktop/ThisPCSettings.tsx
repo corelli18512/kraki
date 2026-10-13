@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { desktop, type BuiltInBridge, type BuiltInState, type DesktopSettingsState } from '../../lib/desktop';
 import { SettingsRow, SettingsSection } from '../layout/SettingsControls';
 import { AgentsPanel, useAgentsCheck } from './AgentsPanel';
+import { useDesktopSheet } from './useDesktopSheet';
 import './desktop-setup.css';
 
 const ROLE_KEY = 'kraki-desktop.role';
@@ -14,6 +15,7 @@ const OWNER_KEY = 'kraki-desktop.owner';
 
 function AgentsSheet({ builtIn, onClose }: { builtIn: BuiltInBridge; onClose: () => void }) {
   const check = useAgentsCheck(builtIn);
+  const sheet = useDesktopSheet(onClose);
   return (
     <div
       className="ds-sheet-backdrop"
@@ -21,9 +23,12 @@ function AgentsSheet({ builtIn, onClose }: { builtIn: BuiltInBridge; onClose: ()
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="ds-sheet" role="dialog" aria-modal="true" aria-label="Coding agents on this PC">
-        <div className="ds-sheet-title">Coding agents on this PC</div>
-        <div className="ds-section-body">
+      <div ref={sheet} tabIndex={-1} className="ds-sheet ds-local-agents-sheet" role="dialog" aria-modal="true" aria-label="Coding Agents on This PC">
+        <div className="ds-local-agents-header">
+          <div className="ds-sheet-title">Coding Agents on This PC</div>
+          <p className="ds-local-agents-help">Kraki uses the agents installed and signed in on this PC. Install or sign in to an agent in its own app or in Terminal, then click Check Again.</p>
+        </div>
+        <div className="ds-local-agents-panel">
           <AgentsPanel check={check} />
         </div>
         <div className="ds-sheet-actions">
@@ -85,6 +90,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [agentsOpen, setAgentsOpen] = useState(false);
+  const closeAgents = useCallback(() => setAgentsOpen(false), []);
   const [logsPath, setLogsPath] = useState<string | null>(null);
   const [os, setOs] = useState<DesktopSettingsState | null>(null);
   const settings = desktop?.settings;
@@ -288,9 +294,9 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
       </SettingsSection>
       {settings?.setAllowRemoteUpdates && os && (
         <SettingsSection title="Updates">
-          <SettingsRow label="Allow remote updates">
+          <SettingsRow label="Let my other devices update Kraki on this PC">
             <Switch
-              label="Allow remote updates"
+              label="Let my other devices update Kraki on this PC"
               on={os.allowRemoteUpdates}
               disabled={!!busy}
               onChange={(on) => {
@@ -298,11 +304,15 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
               }}
             />
           </SettingsRow>
-          <p className="kp-foot">Allow your other devices to update Kraki on this PC.</p>
+          <p className="kp-foot ds-updates-help">From your phone or another computer, you can update Kraki here when a new version is out. Kraki restarts for a few seconds; running sessions are only stopped if you choose to.</p>
         </SettingsSection>
       )}
       <SettingsSection title="Logs">
-        {(logsPath ?? os?.logsPath) && <p className="kp-foot py-2 break-all font-mono">{logsPath ?? os?.logsPath}</p>}
+        {(logsPath ?? os?.logsPath) && (
+          <SettingsRow label="Path">
+            <span className="ds-logs-path text-text-secondary">{logsPath ?? os?.logsPath}</span>
+          </SettingsRow>
+        )}
         <div className="kp-row" style={{ justifyContent: 'flex-start' }}>
           {(settings?.showLogsInExplorer || builtIn.showLogsInExplorer) && (
             <button type="button" className={button} onClick={settings?.showLogsInExplorer ?? builtIn.showLogsInExplorer}>
@@ -322,7 +332,7 @@ export function ThisPCSettings({ builtIn }: { builtIn: BuiltInBridge }) {
           {error}
         </p>
       )}
-      {agentsOpen && <AgentsSheet builtIn={builtIn} onClose={() => setAgentsOpen(false)} />}
+      {agentsOpen && <AgentsSheet builtIn={builtIn} onClose={closeAgents} />}
     </div>
   );
 }

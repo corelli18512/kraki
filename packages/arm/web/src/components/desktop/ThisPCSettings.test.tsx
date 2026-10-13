@@ -1,17 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ThisPCSettings } from './ThisPCSettings';
+import { SettingsPanel } from '../layout/SettingsPanel';
 import { desktop, type BuiltInBridge, type BuiltInState } from '../../lib/desktop';
 const bridge = vi.hoisted(() => ({
   state: vi.fn(), goOnline: vi.fn(), goOffline: vi.fn(), setAllowRemoteUpdates: vi.fn(), setLaunchAtLogin: vi.fn(), showLogsInExplorer: vi.fn(), locateCli: vi.fn(), recheckCli: vi.fn(),
 }));
-vi.mock('../../lib/desktop', () => ({ desktop: { settings: bridge } }));
+vi.mock('../../lib/desktop', () => ({ desktop: { settings: bridge }, desktopCredentials: () => null }));
+vi.mock('../../lib/ws-client', () => ({ wsClient: { url: 'ws://localhost:4430' } }));
+vi.mock('../../lib/push', () => ({ isPushSupported: () => false, getPushPermission: () => 'default' }));
+vi.mock('../../hooks/useTheme', () => ({ useTheme: () => ({ theme: 'system', setTheme: vi.fn() }) }));
+vi.mock('../layout/ProfileBar', () => ({ signOut: vi.fn() }));
 const builtIn = { state: vi.fn(), disable: vi.fn(), enable: vi.fn(), restart: vi.fn(), openLogs: vi.fn() } as unknown as BuiltInBridge;
 const os = { usageShortcut: 'F6', usageShortcutEnabled: true, launchAtLogin: true, keepRunningInTray: true, notificationPermission: 'granted', logsPath: 'C:\\Kraki\\logs', allowRemoteUpdates: false };
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
   desktop!.settings = bridge;
+  desktop!.builtIn = undefined;
   bridge.state.mockResolvedValue(os);
   bridge.goOnline.mockResolvedValue({ ok: true });
   bridge.goOffline.mockResolvedValue({ ok: true });
@@ -33,6 +39,54 @@ describe('ThisPCSettings capability-driven native parity', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Logs Window' }));
     expect(builtIn.openLogs).toHaveBeenCalled();
   });
+  it('labels the selectable logs path as a body-text SettingsRow and keeps the full Mac update explanation', async () => {
+    render(<ThisPCSettings builtIn={builtIn} />);
+    const path = await screen.findByText(os.logsPath);
+    expect(path.parentElement).toHaveClass('kp-row');
+    expect(within(path.parentElement!).getByText('Path')).toBeInTheDocument();
+    expect(path).toHaveClass('ds-logs-path');
+    expect(path).not.toHaveClass('font-mono');
+    expect(screen.getByText('From your phone or another computer, you can update Kraki here when a new version is out. Kraki restarts for a few seconds; running sessions are only stopped if you choose to.')).toBeInTheDocument();
+  });
+  it('dismisses only the foreground catalog/agents sheet before Settings and restores focus', async () => {
+    desktop!.builtIn = {
+      ...builtIn,
+      checkAgents: vi.fn(async (onEvent) => {
+        onEvent({ event: 'agent', id: 'pi', name: 'Pi', status: 'needs_login', models: 0 });
+        return { ok: true };
+      }),
+    };
+    const onClose = vi.fn();
+    const view = render(<SettingsPanel open onClose={onClose} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'This PC' }));
+    const opener = await screen.findByRole('button', { name: 'Check Coding Agents…' });
+    opener.focus();
+    fireEvent.click(opener);
+    const agents = await screen.findByRole('dialog', { name: 'Coding Agents on This PC' });
+    expect(agents).toHaveClass('ds-local-agents-sheet');
+    expect(agents).toHaveTextContent('Kraki uses the agents installed and signed in on this PC. Install or sign in to an agent in its own app or in Terminal, then click Check Again.');
+    const done = within(agents).getByRole('button', { name: 'Done' });
+    expect(done).toHaveFocus();
+    fireEvent.keyDown(done, { key: 'Tab' });
+    const supported = await within(agents).findByRole('button', { name: 'Supported agents' });
+    supported.focus();
+    fireEvent.click(supported);
+    const catalog = screen.getByRole('dialog', { name: 'Supported coding agents' });
+    expect(catalog).not.toHaveClass('ds-local-agents-sheet');
+    fireEvent.keyDown(within(catalog).getByRole('button', { name: 'Done' }), { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Supported coding agents' })).not.toBeInTheDocument();
+    expect(agents).toBeInTheDocument();
+    expect(supported).toHaveFocus();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(supported, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Coding Agents on This PC' })).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(opener, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    view.unmount();
+    desktop!.builtIn = undefined;
+  });
   it('shows status-query failures rather than an empty pane', async () => {
     vi.mocked(builtIn.state).mockRejectedValue(new Error('unavailable'));
     render(<ThisPCSettings builtIn={builtIn} />);
@@ -41,7 +95,7 @@ describe('ThisPCSettings capability-driven native parity', () => {
   it('uses actual startup/update preferences and displays bridge errors', async () => {
     bridge.setAllowRemoteUpdates.mockResolvedValue({ ok: false, error: 'Policy could not be saved.' });
     render(<ThisPCSettings builtIn={builtIn} />);
-    fireEvent.click(await screen.findByRole('switch', { name: 'Allow remote updates' }));
+    fireEvent.click(await screen.findByRole('switch', { name: 'Let my other devices update Kraki on this PC' }));
     await waitFor(() => expect(bridge.setAllowRemoteUpdates).toHaveBeenCalledWith(true));
     expect(await screen.findByRole('alert')).toHaveTextContent('Policy could not be saved.');
   });
