@@ -27,6 +27,7 @@ describe('chat.css — dark live-turn action colours', () => {
     ['kperm-outcome is-denied', 'rgb(239, 68, 68)', 'rgb(255, 66, 69)'],
     ['kperm-outcome', 'rgb(22, 163, 74)', 'rgb(48, 209, 88)'],
     ['kstep-bad', 'rgb(255, 59, 48)', 'rgb(255, 66, 69)'],
+    ['ktool-badge is-failed', 'rgb(255, 59, 48)', 'rgb(255, 66, 69)'],
   ])('preserves light and resolves native dark tint for %s', (className, light, dark) => {
     expect(styleFor(className, false).color).toBe(light);
     expect(styleFor(className, true).color).toBe(dark);

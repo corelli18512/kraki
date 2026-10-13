@@ -110,8 +110,13 @@
   mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.78) 30%, rgba(0, 0, 0, 0.5) 55%, rgba(0, 0, 0, 0.22) 78%, transparent);
   pointer-events: none;
 }
-/* AppKit ultra-thin material plus the black tint, before the eased mask. */
-.dark .khead.is-wide::before { background: rgba(15, 15, 15, 0.7); }
+/* Dark ultra-thin material retains the blue content tint under the black fade. */
+.dark .khead.is-wide::before {
+  background: rgba(13, 14, 17, 0.85);
+  backdrop-filter: blur(20px) saturate(1.45);
+  -webkit-backdrop-filter: blur(20px) saturate(1.45);
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.84) 16%, rgba(0, 0, 0, 0.77) 21%, rgba(0, 0, 0, 0.7) 30%, rgba(0, 0, 0, 0.5) 55%, rgba(0, 0, 0, 0.22) 78%, transparent);
+}
 .khead.is-wide .khead-title {
   max-width: min(460px, calc(100% - 300px));
   height: 32px;
@@ -212,14 +217,19 @@
 .dark .khead.is-wide .khead-title,
 .dark .khead.is-wide .khead-capsule,
 .dark .khead.is-wide .khead-segments {
-  background: rgba(28, 30, 32, 0.55);
+  background: rgba(30, 34, 32, 0.4);
   border-color: transparent;
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16), inset 0 0 0 0.5px rgba(255, 255, 255, 0.12);
 }
-/* Dark regular Glass: navy material and a cool rim, independent of the mode thumb. */
-.dark .khead.is-wide .khead-capsule, .dark .khead-segments { background: rgba(19, 21, 24, 0.95); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16), inset 0 0 0 0.5px rgba(79, 86, 136, 0.2); }
+/* Regular Glass transmits content tint while preserving the empty-canvas track/rim. */
+.dark .khead.is-wide .khead-capsule, .dark .khead-segments {
+  background: rgba(26, 28, 28, 0.6);
+  backdrop-filter: blur(20px) saturate(1.65);
+  -webkit-backdrop-filter: blur(20px) saturate(1.65);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16), inset 0 0 0 0.5px rgba(79, 86, 136, 0.2);
+}
 .khead-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; }
 .khead-menu {
   position: absolute;
@@ -1045,8 +1055,10 @@
   .kprimary svg { width: 17px; height: 19px; stroke-width: 3; }
   .kprimary.is-offline { opacity: 0.6; }
   .kprimary.is-disabled { background: rgba(253, 253, 254, 0.85); color: rgba(0, 0, 0, 0.25); backdrop-filter: blur(20px); }
-  .dark .kprimary { box-shadow: inset 0 0 0 0.5px #4dd8ef; }
-  .dark .kprimary.is-disabled { background: rgba(15, 17, 29, 0.8); color: rgba(255, 255, 255, 0.25); box-shadow: inset 0 0 0 0.5px rgba(52, 67, 108, 0.3); }
+  .dark .kprimary { box-shadow: inset 0 0 0 0.5px #4dd8ef, inset 0 0 0 1px rgba(77, 212, 237, 0.6); }
+  .dark .kprimary.is-disabled { background: rgba(15, 17, 29, 0.8); color: #fff; box-shadow: inset 0 0 0 0.5px rgba(52, 67, 108, 0.3); }
+  /* Dim the SVG as one image; translucent Lucide paths otherwise double-paint their junction. */
+  .dark .kprimary.is-disabled svg { opacity: 0.28; }
   .kprimary.is-stop { background: #c72929; }
   .dark .kprimary.is-stop { background: #9e2b2b; box-shadow: inset 0 0 0 0.5px #d73333; }
   .kprimary-stop { width: 12px !important; height: 12px !important; stroke-width: 0 !important; }
@@ -1179,7 +1191,7 @@
 .ktool-badge.is-failed { color: #ff3b30; }
 .ktool-badge.is-stopped { color: #ff9500; }
 .dark .ktool-badge.is-done { color: #30d158; }
-.dark .ktool-badge.is-failed { color: #ff453a; }
+.dark .ktool-badge.is-failed { color: #ff4245; }
 .dark .ktool-badge.is-stopped { color: #ff9f0a; }
 .ktool-name { flex-shrink: 0; border-radius: 4px; padding: 1px 5px; font: 12px/15px var(--k-mono); background: var(--color-surface-tertiary); color: var(--color-label-secondary); }
 .ktool-headline { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-label-secondary); font-size: 12px; line-height: 14px; }

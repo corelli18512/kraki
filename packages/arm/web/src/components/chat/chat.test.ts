@@ -25,15 +25,28 @@ function composite(source: number[], alpha: number, background: number[]): numbe
 }
 
 describe('chat.css — dark Mac transcript materials', () => {
-  it('shares neutral glass across the wide header controls without changing their foreground', () => {
+  it('transmits content tint through dark header glass without changing its foreground', () => {
     const title = rule('.dark .khead.is-wide .khead-title');
     const mode = rule('.dark .khead.is-wide .khead-capsule');
-    expect(title.background).toBe('rgba(28, 30, 32, 0.55)');
-    // The mode capsule/segments use the composer-owned regular-Glass calibration (composer-D-04).
-    expect(mode.background).toBe('rgba(19, 21, 24, 0.95)');
-    expect(title.getPropertyValue('backdrop-filter')).toBe('blur(20px)');
+    expect(title.background).toBe('rgba(30, 34, 32, 0.4)');
+    // Composer-D-04 empty-canvas track/rim and transcript-D2-01 blue-content points.
+    expect(mode.background).toBe('rgba(26, 28, 28, 0.6)');
+    expect(mode.getPropertyValue('backdrop-filter')).toBe('blur(20px) saturate(1.65)');
+    expect(title.getPropertyValue('backdrop-filter')).toBe('blur(20px) saturate(1.1)');
     expect(title.color).toBeUndefined();
-    expect(rule('.dark .khead.is-wide::before').background).toBe('rgba(15, 15, 15, 0.7)');
+    const fade = rule('.dark .khead.is-wide::before');
+    expect(fade.background).toBe('rgba(13, 14, 17, 0.85)');
+    expect(fade.getPropertyValue('backdrop-filter')).toBe('blur(20px) saturate(1.45)');
+    expect(fade.getPropertyValue('mask-image')).toContain('rgba(0, 0, 0, 0.77) 21%');
+  });
+
+  it('adds only a dark inward blue rim and composites the disabled arrow as one SVG', () => {
+    expect(rule('.dark .kprimary', true).getPropertyValue('box-shadow')).toBe('inset 0 0 0 0.5px #4dd8ef, inset 0 0 0 1px rgba(77, 212, 237, 0.6)');
+    expect(rule('.dark .kprimary.is-disabled', true).color).toBe('#fff');
+    expect(rule('.dark .kprimary.is-disabled svg', true).opacity).toBe('0.28');
+    expect(rule('.kprimary.is-disabled', true).color).toBe('rgba(0, 0, 0, 0.25)');
+    expect(rule('.dark .kprimary.is-stop', true).getPropertyValue('box-shadow')).toBe('inset 0 0 0 0.5px #d73333');
+    expect(composite([255, 255, 255], 0.28, [12, 15, 28])).toEqual([80, 82, 92]);
   });
 
   it('composites translucent Steps fill and dots over both clear chat and a tinted bubble', () => {

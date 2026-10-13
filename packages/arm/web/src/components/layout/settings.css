@@ -113,7 +113,7 @@
 .dark .kp-offline-dot { background:color-mix(in srgb, var(--color-text-muted) 50%, transparent); }
 .dark .kp-about .kp-button { background:#151928; }
 .dark .kp-about hr { border-color:#1b1e2e; }
-.dark .kp-button.is-recording { outline:3px solid #226d97; outline-offset:2px; }
+.dark .kp-button.is-recording { outline:3px solid #226d97; outline-offset:1px; }
 .dark .kp-alert button:focus-visible,
 .dark .kp-alert-actions button:first-child:focus { outline-color:#1a648e; }
 /* Native sheets lift the navy canvas with a neutral wash instead of black dimming. */

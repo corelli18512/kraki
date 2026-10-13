@@ -21,7 +21,7 @@
   animation: ua-in 0.38s cubic-bezier(0.2, 0.9, 0.3, 1.12);
   transition: width 0.3s cubic-bezier(0.2, 0.9, 0.3, 1), border-radius 0.3s;
 }
-.dark .ua-panel { background: rgba(30, 41, 59, 0.96); border-color: rgba(255, 255, 255, 0.12); box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55); }
+.dark .ua-panel { background: rgba(32, 35, 48, 0.96); border-color: rgba(255, 255, 255, 0.12); box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55); }
 .ua-panel.is-compact { width: min(460px, calc(100vw - 24px)); border-radius: 22px; }
 .ua-panel.is-detail { width: min(790px, calc(100vw - 24px)); border-radius: 24px; }
 .ua-panel.is-closing { animation: ua-out 0.18s ease-in forwards; }
@@ -74,7 +74,7 @@
   content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
   background: radial-gradient(220px circle at var(--hx) var(--hy), rgba(255, 255, 255, 0.7), transparent 70%);
 }
-.dark .ua-card.is-hover::before { background: radial-gradient(220px circle at var(--hx) var(--hy), rgba(255, 255, 255, 0.1), transparent 70%); }
+.dark .ua-card.is-hover::before { background: radial-gradient(220px circle at var(--hx) var(--hy), rgba(255, 255, 255, 0.1), transparent); }
 .ua-card > * { position: relative; }
 
 .ua-tile { display: flex; flex-direction: column; }
@@ -137,8 +137,9 @@
 .ua-update { display: flex; align-items: center; gap: 5px; padding: 0 18px 12px; margin-top: -6px; font-size: 11px; color: var(--color-text-secondary); }
 .ua-update svg { width: 12px; height: 12px; }
 
-/* Dark branches of UsagePeekView: keep the panel in the app's appearance. */
-.dark .ua-panel { --color-text-primary:#dfe0e0; --color-text-secondary:#9fa1a2; --color-text-muted:#74777a; }
+/* Corrected dark UsagePeek hosting environment; scoped away from Settings Form ink. */
+.dark .ua-panel { --color-text-primary:#e9eaeb; --color-text-secondary:#7c7c7c; --color-text-muted:#74777a; }
+.dark .ua-chip.is-gpt { background:#e9e9eb; }
 .dark .ua-compact-card.is-current { background:color-mix(in srgb, #5ea0d7 8%, transparent); }
 .dark .ua-card.is-current { background:color-mix(in srgb, #5ea0d7 7%, transparent); }
 .dark .ua-card.is-current.is-hover { background:color-mix(in srgb, #5ea0d7 11%, transparent); }
