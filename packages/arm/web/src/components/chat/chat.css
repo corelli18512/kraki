@@ -102,7 +102,7 @@
 }
 .khead.is-wide .khead-title:hover { opacity: 0.75; }
 .khead.is-wide .khead-mode { position: absolute; right: 16px; }
-.khead.is-wide .khead-capsule { background: none; box-shadow: none; border: none; }
+
 
 /* iPhone: floating glass capsules over a Messages-like top fade. */
 .khead.is-narrow {
@@ -174,7 +174,22 @@
   border-radius: 22px;
   font: 600 14px/18px var(--k-font);
 }
-.khead.is-wide .khead-capsule { height: 32px; padding: 0 8px; }
+.khead.is-wide .khead-capsule, .khead-segments {
+  height: 32px; border-radius: 16px; border: 0;
+  background: rgba(253, 253, 254, 0.85);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08), inset 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  backdrop-filter: blur(20px) saturate(1.6);
+  font: 600 12.5px/18px var(--k-font);
+}
+.khead.is-wide .khead-capsule { padding: 0 13px; }
+.khead-segments { display: flex; align-items: center; padding: 3px; }
+.khead-segments button {
+  height: 26px; padding: 0 13px; border: 0; border-radius: 13px;
+  background: transparent; color: var(--k-text-2); font: inherit; cursor: pointer;
+  transition: background 0.3s ease, color 0.3s ease;
+}
+.khead-segments button[aria-checked="true"] { color: white; }
+.dark .khead.is-wide .khead-capsule, .dark .khead-segments { background: rgba(40, 40, 40, 0.8); }
 .khead-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; }
 .khead-menu {
   position: absolute;
@@ -730,10 +745,12 @@
   color: var(--k-text);
   font: 16px/20px var(--k-font);
 }
+.kcomposer-text { display: flex; flex: 1; min-width: 0; }
 .kcomposer-field textarea::placeholder { color: var(--k-text-3); }
 /* Multi-line drafts: text across the box, attach/mic in a row below (Mac/iOS). */
 .kcomposer-field.is-multiline { flex-wrap: wrap; }
-.kcomposer-field.is-multiline textarea { order: -1; flex-basis: 100%; padding: 13px 16px 4px; }
+.kcomposer-field.is-multiline .kcomposer-text { order: -1; flex-basis: 100%; }
+.kcomposer-field.is-multiline textarea { padding: 13px 16px 4px; }
 .kcomposer-field.is-multiline .kmic { margin-left: auto; }
 
 /* Mic and dictation */
@@ -782,6 +799,8 @@
   color: var(--k-text-2);
   cursor: pointer;
 }
+.kcomposer-attach:disabled { opacity: 0.4; cursor: default; }
+.kcomposer-clear { display: none; }
 .kcomposer-attach svg { width: 20px; height: 20px; }
 .kcomposer-attach img { width: 28px; height: 28px; border-radius: 6px; object-fit: cover; }
 .kcomposer-unattach {
@@ -824,11 +843,37 @@
 .kprimary-stop { width: 14px !important; height: 14px !important; fill: currentColor; }
 
 @media (min-width: 768px) {
-  .kcomposer-dock { padding: 8px 16px 14px; }
-  .kprimary { width: 36px; height: 36px; margin-bottom: 6px; }
-  .kprimary svg { width: 17px; height: 17px; }
-  .kcomposer-field { min-height: 48px; }
-  .kcomposer-field textarea { font-size: 15px; }
+  .kcomposer-dock { padding: 6px 16px 12px; }
+  .kcomposer { gap: 8px; }
+  .kprimary { width: 36px; height: 36px; margin-bottom: 0; box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.2); }
+  .kprimary svg { width: 15px; height: 15px; stroke-width: 3; }
+  .kprimary.is-disabled { background: rgba(0, 0, 0, 0.1); }
+  .dark .kprimary.is-disabled { background: rgba(255, 255, 255, 0.1); }
+  .kprimary.is-stop { background: #c72929; }
+  .dark .kprimary.is-stop { background: #9e2b2b; }
+  .kprimary-stop { width: 11px !important; height: 11px !important; stroke-width: 0 !important; }
+  .kcomposer-field {
+    min-height: 36px; padding-right: 5px; border: 0; border-radius: 18px;
+    background: rgba(253, 253, 254, 0.85);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06), inset 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  }
+  .dark .kcomposer-field { background: rgba(40, 40, 40, 0.8); }
+  .kcomposer-text { padding: 8px 0; }
+  .kcomposer-field textarea, .kcomposer-field.is-multiline textarea {
+    font-size: 15px; line-height: 18px; padding: 1px 4px;
+    max-height: 56px; overflow-y: auto; scrollbar-width: none;
+  }
+  .kcomposer-field textarea::-webkit-scrollbar { display: none; }
+  .kcomposer-field.is-multiline .kcomposer-text { margin-left: 12px; flex-basis: calc(100% - 12px); margin-bottom: -6px; }
+  .kcomposer-attach { height: 36px; }
+  .kcomposer-field .kmic { width: 32px; height: 36px; }
+  .kcomposer-field .kmic svg { width: 15px; height: 15px; }
+  .kcomposer-clear { display: flex; align-items: center; justify-content: center; width: 26px; height: 36px; flex: none; padding: 0; border: 0; background: none; color: var(--k-text-3); cursor: pointer; }
+  .kcomposer-clear svg { width: 14px; height: 14px; fill: currentColor; stroke: #fdfdfe; stroke-width: 1.5; }
+  .dark .kcomposer-clear svg { stroke: #282828; }
+  .kcomposer-field.is-multiline .kcomposer-clear { margin-left: auto; }
+  .kcomposer-field.is-multiline .kcomposer-clear + .kmic { margin-left: 0; }
+  .kcomposer-field.is-multiline .kcomposer-unattach { top: auto; bottom: 16px; }
 }
 
 /* ── Steps sheet ────────────────────────────────────────────────── */
