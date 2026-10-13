@@ -541,4 +541,42 @@ describe('CodexAdapter (fake app-server child process)', () => {
     expect(input.map((i) => i.type)).toEqual(['text', 'localImage']);
     expect(readFileSync(input[1].path!)).toEqual(PNG_1PX);
   });
+
+  it('after a crash, concurrent sends wait for the respawned server to finish its handshake', async () => {
+    await started({ FAKE_CODEX_INIT_DELAY_MS: '150' });
+    const a = await session();
+    const b = await session();
+    await turn(a, 'CRASH', 'rt-1');
+    await h.idleCount(1);
+    await Promise.all([turn(a, 'from a', 'rt-2'), turn(b, 'from b', 'rt-3')]);
+    await h.idleCount(3);
+    expect(h.of('error').map((e) => e.message)).toEqual([expect.stringMatching(/exited unexpectedly/)]);
+    expect(h.of('message').map((m) => m.content).sort()).toEqual(['echo: from a', 'echo: from b']);
+    expect(h.sent('initialize')).toHaveLength(2);
+  });
+
+  it('a crash during turn/start does not settle the queued turn that already started', async () => {
+    await started();
+    const sid = await session();
+    const first = turn(sid, 'CRASHSTART', 'rt-1');
+    await turn(sid, 'queued', 'rt-2', 'follow_up');
+    await first.catch(() => {});
+    await h.waitFor((e) => e.type === 'idle' && e.turnId === 'rt-2', 'idle rt-2');
+    expect(h.of('error')[0]).toMatchObject({ message: /exited unexpectedly/, turnId: 'rt-1' });
+    expect(h.of('message')).toEqual([expect.objectContaining({ content: 'echo: queued', turnId: 'rt-2' })]);
+  });
+
+  it('a queued input that fails to start does not strand the rest of the queue', async () => {
+    await started();
+    const sid = await session();
+    await turn(sid, 'PAUSE first', 'rt-1');
+    await turn(sid, 'BADSTART', 'rt-2', 'follow_up');
+    await turn(sid, 'third', 'rt-3', 'follow_up');
+    await h.waitFor((e) => e.type === 'idle' && e.turnId === 'rt-3', 'idle rt-3');
+    expect(h.of('error')).toEqual([expect.objectContaining({ message: 'bad start', turnId: 'rt-2' })]);
+    expect(h.of('message').map((m) => [m.content, m.turnId])).toEqual([
+      ['echo: PAUSE first', 'rt-1'],
+      ['echo: third', 'rt-3'],
+    ]);
+  });
 });

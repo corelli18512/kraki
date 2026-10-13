@@ -125,7 +125,9 @@ export class ChaosStack {
       authMethod: 'open',
       // 'default': exactly what a user gets (policy file / install defaults).
       ...(this.trustMode === 'compatible' ? { deviceTrust: 'compatible' as const } : {}),
-      // The Swift harness is not the same-Mac App: keep it on the Head.
+      // These scenarios test the relay path. A local link would let the Mac
+      // test App bypass the fault proxy, and would publish its discovery file
+      // in the real ~/.kraki (KRAKI_HOME is unset here).
       localLink: false,
     }, this.keys, this.attachments);
     this.relay.onStateChange = (state) => this.log('tentacle_state', { state });

@@ -256,7 +256,6 @@ struct MainWindowView: View {
 
     @Environment(AppState.self) private var appState
     @Environment(TentacleCLIManager.self) private var tentacleCLI
-    @Environment(\.requestReview) private var requestReview
 
     @SceneStorage("mac.sidebarVisible")
     private var sidebarVisible: Bool = true
@@ -413,8 +412,10 @@ struct MainWindowView: View {
         .onReceive(NotificationCenter.default.publisher(for: .macDeleteSession)) { note in
             pendingDeleteSessionId = (note.userInfo?["sessionId"] as? String) ?? selectedSessionId
         }
-        .onReceive(NotificationCenter.default.publisher(for: .macRequestReview)) { _ in
-            requestReview()
+        .onReceive(NotificationCenter.default.publisher(for: .macArchiveSession)) { note in
+            guard let id = note.userInfo?["sessionId"] as? String else { return }
+            if selectedSessionId == id { selectedSessionId = nil }
+            appState.commandSender?.archiveSession(sessionId: id, archived: true)
         }
         #if DEBUG
         .onReceive(NotificationCenter.default.publisher(for: .macNativeAutomationAction)) { note in
@@ -484,6 +485,16 @@ struct MainWindowView: View {
                chatPresentation?.sessionId != selectedSessionId,
                sessions[selectedSessionId] != nil {
                 prepareSelectedSession(selectedSessionId)
+            }
+            // The open Session is gone (deleted from Session Info or another
+            // device, or dropped by its computer's list): close its chat and
+            // composer rather than accept input for a Session nobody owns.
+            if let selectedSessionId,
+               chatPresentation?.sessionId == selectedSessionId,
+               sessions[selectedSessionId] == nil,
+               !appState.sessionStore.isPending(selectedSessionId) {
+                htmlArtifactSessions.close(sessionId: selectedSessionId)
+                self.selectedSessionId = nil
             }
             #if DEBUG
             if let target = ProcessInfo.processInfo.environment["KRAKI_OPEN_SESSION_ID"],

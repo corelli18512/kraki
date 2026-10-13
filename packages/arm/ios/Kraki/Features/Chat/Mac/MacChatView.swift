@@ -1012,9 +1012,9 @@ private struct MacSessionInfoSheet: View {
     }
 
     private func macFormatDuration(_ milliseconds: Double) -> String {
-        let seconds = milliseconds / 1_000
-        if seconds < 60 { return String(format: "%.1fs", seconds) }
-        return "\(Int(seconds) / 60)m \(Int(seconds) % 60)s"
+        guard milliseconds.isFinite, milliseconds >= 0 else { return "—" } // peer value: Int() would trap
+        let seconds = min(milliseconds / 1_000, 1e12)
+        return seconds < 60 ? String(format: "%.1fs", seconds) : "\(Int(seconds) / 60)m \(Int(seconds) % 60)s"
     }
 
     private func contextBandColor(_ ratio: Double) -> Color {

@@ -62,6 +62,11 @@ protocol IOSVoiceComposerHost: AnyObject {
     /// A staged prompt was transmitted (composer latches "awaiting active").
     private(set) var dispatchedSessionID: String?
     private(set) var dispatchSignal = UUID()
+    /// How the last utterance that ended in the editor (✓, or a failure while
+    /// recording) finished; `completed` only with a final transcript. The Mac
+    /// new-session composer starts a deferred send only for a completed one.
+    struct DraftCompletion: Equatable { let sessionID: String; let completed: Bool; let id: UUID }
+    private(set) var draftCompletion: DraftCompletion?
     private var startTask: Task<Void, Never>?
 
     init(host: IOSVoiceComposerHost) { self.host = host }
@@ -327,6 +332,7 @@ protocol IOSVoiceComposerHost: AnyObject {
             // keeps what was heard as a draft; it is never sent.
             commit(final)
             operation = nil
+            draftCompletion = DraftCompletion(sessionID: op.sessionID, completed: result.completed, id: op.id)
         case .staged(let clientID):
             operation = nil
             let sessionID = op.sessionID
@@ -335,9 +341,10 @@ protocol IOSVoiceComposerHost: AnyObject {
             let original = Self.insert(raw, into: op.base, range: op.range).0
             if result.completed && spoke {
                 dispatch(sessionID, clientID, corrected, op.delivery)
-            } else if !spoke {
+            } else if !spoke && !result.failed {
                 // Nothing was said: send what the user had already written or
-                // attached, otherwise there is nothing to send.
+                // attached, otherwise there is nothing to send. (A failure
+                // before any words arrived is not "nothing said": below.)
                 if !op.base.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     dispatch(sessionID, clientID, op.base, op.delivery)
                 } else if op.hasAttachment {
@@ -362,7 +369,8 @@ protocol IOSVoiceComposerHost: AnyObject {
             } else {
                 // Images cannot go back into the box: keep the message as not
                 // sent (Retry sends what was heard, or Delete).
-                host.failVoiceInput(sessionID: sessionID, clientID: clientID, text: original)
+                let kept = original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "[image]" : original
+                host.failVoiceInput(sessionID: sessionID, clientID: clientID, text: kept)
                 host.voiceInputController.appendFailureDetail(Self.keptUnsentDetail, for: sessionID)
             }
         }

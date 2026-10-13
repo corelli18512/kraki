@@ -115,9 +115,11 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
     private func start(_ host: VoiceHost, _ voice: IOSVoiceComposer, session id: String = "a", range: NSRange? = nil) async -> VoiceSession {
         voice.begin(sessionID: id, selection: range, context: .init(fields: [:], vocabulary: []))
         await settle()
+        try? await waitBriefly { host.voiceInputController.state == .obtainingLease }  // busy CI: not a fixed 20 ms
         let now = Int(Date().timeIntervalSince1970)
         host.voiceInputController.receiveLease(.init(payload: .init(ver: 1, iss: "test", sub: "test-user", did: "test-device", iat: now, exp: now + 600, quotaSeconds: 600, resource: "voice/doubao", jti: UUID().uuidString), signature: "test", alg: "RSA-SHA256"))
         await settle()
+        try? await waitBriefly { !host.factory.sessions.isEmpty }
         guard let session = host.factory.sessions.last else {
             XCTFail("No synthetic session; controller=\(host.voiceInputController.state)")
             return VoiceSession { _ in }
@@ -634,5 +636,42 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
         XCTAssertEqual(insert("ok", "say .", 4).0, "say ok.")
         XCTAssertEqual(insert("x", "").0, "x")
         XCTAssertEqual(insert("", "keep").0, "keep")
+    }
+}
+
+/// Review group 2 (2026-10-13): Send before the first partial arrived.
+extension IOSVoiceComposerTests {
+    /// 2-09: a failure before any words arrived is not "nothing was said":
+    /// the typed draft goes back into the box instead of being sent.
+    func testFailureBeforeFirstPartialRestoresDraftInsteadOfSendingIt() async {
+        let (host, voice) = make()
+        host.sessionStore.setDraft("a", "Please also")
+        let session = await start(host, voice)
+        voice.send(attachments: nil, delivery: .prompt)
+        session.event(.failed("socket disconnected")); await settle()
+        XCTAssertTrue(host.transmitted.isEmpty, "the incomplete draft must not be sent")
+        XCTAssertTrue(host.staged.isEmpty)
+        XCTAssertEqual(host.sessionStore.drafts["a"], "Please also")
+    }
+
+    func testFailureBeforeFirstPartialWithImageKeepsAnUnsentBubble() async {
+        let (host, voice) = make()
+        let session = await start(host, voice)
+        voice.send(attachments: [ImageAttachment(type: "image", mimeType: "image/png", data: "AA==")], delivery: .prompt)
+        session.event(.failed("socket disconnected")); await settle()
+        XCTAssertTrue(host.transmitted.isEmpty, "a lone image must not be sent for a failed dictation")
+        XCTAssertEqual(host.last?.state, "failed")
+        XCTAssertEqual(host.last?.text, "[image]")
+    }
+
+    /// 2-10: a final without `rawText` is the complete transcript even when no
+    /// partial preceded it.
+    func testFinalWithoutAnyPartialIsSent() async {
+        let (host, voice) = make()
+        let session = await start(host, voice)
+        voice.send(attachments: nil, delivery: .prompt)
+        await final("run the tests", session)
+        XCTAssertEqual(host.transmitted.map(\.1), ["run the tests"])
+        XCTAssertEqual(host.last?.state, "sending")
     }
 }

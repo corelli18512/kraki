@@ -47,6 +47,11 @@ interface CardState {
   runningTools: Map<string, RunningTool>;
   /** Signature of the last broadcast action, to suppress redundant sends. */
   lastActionKey: string;
+  /** Unresolved permissions waiting behind the one in the slot (FIFO). The
+   *  agent can ask several in parallel; each must stay answerable, so a newer
+   *  request never displaces a pending one. The next takes the slot when the
+   *  current one is resolved. */
+  queuedPrompts: PromptAction[];
 }
 
 /** How a permission was resolved (threaded through from the arm). */
@@ -82,7 +87,7 @@ export class CardManager {
   private get(sessionId: string): CardState {
     let c = this.cards.get(sessionId);
     if (!c) {
-      c = { draftText: '', resetNext: false, action: null, runningTools: new Map(), lastActionKey: 'null' };
+      c = { draftText: '', resetNext: false, action: null, runningTools: new Map(), lastActionKey: 'null', queuedPrompts: [] };
       this.cards.set(sessionId, c);
     }
     return c;
@@ -246,20 +251,42 @@ export class CardManager {
     this.syncAction(sessionId, c);
   }
 
+  /** A permission request. It takes the slot unless another permission is
+   *  still pending there; then it waits in {@link CardState.queuedPrompts} and
+   *  is shown once the earlier one is answered (or withdrawn). */
   onPrompt(sessionId: string, action: PromptAction): void {
     const c = this.get(sessionId);
+    const current = c.action;
+    if (this.slotBlocksTool(c) && current?.type === 'permission' && current.payload.id !== action.payload.id) {
+      const queued = c.queuedPrompts.findIndex((p) => p.payload.id === action.payload.id);
+      if (queued >= 0) c.queuedPrompts[queued] = action;
+      else c.queuedPrompts.push(action);
+      return;
+    }
     c.action = action;
     this.syncAction(sessionId, c);
   }
 
   /** Resolve a permission. If it still occupies the slot, update it IN PLACE to
    *  a resolved (read-only) state showing the decision and keep it displayed —
-   *  no fallback to any prior tool. Without a resolution the slot clears. */
+   *  no fallback to any prior tool. Without a resolution the slot clears. When
+   *  another permission is waiting, it takes the slot instead: an open request
+   *  matters more than showing the decision. A queued request that is
+   *  resolved (e.g. auto-approved or withdrawn) simply leaves the queue. */
   resolvePrompt(sessionId: string, id: string, resolution?: PromptResolution): void {
     const c = this.cards.get(sessionId);
-    const a = c?.action;
-    if (!c || !a || a.type !== 'permission' || a.payload.id !== id) return;
-    if (resolution) {
+    if (!c) return;
+    const queued = c.queuedPrompts.findIndex((p) => p.payload.id === id);
+    if (queued >= 0) {
+      c.queuedPrompts.splice(queued, 1);
+      return;
+    }
+    const a = c.action;
+    if (!a || a.type !== 'permission' || a.payload.id !== id) return;
+    const next = c.queuedPrompts.shift();
+    if (next) {
+      c.action = next;
+    } else if (resolution) {
       c.action = { ...a, payload: { ...a.payload, decision: resolution.decision } };
     } else {
       c.action = null;
@@ -273,17 +300,35 @@ export class CardManager {
     draft: string;
     previousAction: CardActionState | null;
     runningTools: RunningTool[];
+    queuedPrompts: PromptAction[];
   } {
     const c = this.get(sessionId);
     const snapshot = {
       draft: c.draftText,
       previousAction: c.action,
       runningTools: [...c.runningTools.values()],
+      queuedPrompts: c.queuedPrompts,
     };
     c.runningTools.clear();
+    c.queuedPrompts = [];
     c.action = action;
     this.syncAction(sessionId, c);
     return snapshot;
+  }
+
+  /** The turn settled while tools it started never reported back. Drop them
+   *  (a lingering one would show "running" on every later turn) and return
+   *  them so RelayClient can close their TRACE steps. */
+  closeRunningTools(sessionId: string): RunningTool[] {
+    const c = this.cards.get(sessionId);
+    if (!c || c.runningTools.size === 0) return [];
+    const open = [...c.runningTools.values()];
+    c.runningTools.clear();
+    if (c.action?.type === 'tool_start' || c.action?.type === 'tool_batch') {
+      c.action = null;
+      this.syncAction(sessionId, c);
+    }
+    return open;
   }
 
   /** Authoritative full state used for durable pending and terminal history. */
@@ -297,7 +342,7 @@ export class CardManager {
   /** Turn ended (idle/abort) — wipe the card and broadcast the cleared state. */
   clear(sessionId: string): void {
     this.cards.set(sessionId, {
-      draftText: '', resetNext: false, action: null, runningTools: new Map(), lastActionKey: 'null',
+      draftText: '', resetNext: false, action: null, runningTools: new Map(), lastActionKey: 'null', queuedPrompts: [],
     });
     this.broadcast({ type: 'agent_message_delta', sessionId, payload: { content: '', reset: true } });
     this.broadcast({ type: 'card_action', sessionId, payload: { action: null } });

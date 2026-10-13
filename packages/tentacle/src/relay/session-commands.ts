@@ -263,7 +263,9 @@ export async function handleImportSession(client: RelayClient, msg: ConsumerMess
 
     let adapterFailed = false;
     try {
-      await client.adapter.createSession({ sessionId: krakiSessionId, model: parsedMeta.model, cwd });
+      // An imported Copilot CLI session belongs to the Copilot agent, whatever
+      // agent happens to be registered first (no Copilot → read-only import).
+      await client.adapter.createSession({ sessionId: krakiSessionId, model: parsedMeta.model, cwd, agentId: 'copilot' });
     } catch (err) {
       adapterFailed = true;
       logger.warn({ err: (err as Error).message, krakiSessionId }, 'SDK resume failed — session imported as read-only');

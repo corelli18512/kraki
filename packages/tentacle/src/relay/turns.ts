@@ -102,14 +102,21 @@ export function reserveInput(
   const turnAnchor = effectiveDelivery === 'steer'
     ? proposedAnchor
     : Math.max(proposedAnchor, (client.nextInputTurnAnchors.get(sessionId) ?? 0) + 1);
-  if (effectiveDelivery === 'prompt') client.nextInputTurnAnchors.set(sessionId, turnAnchor);
+  // Only an input admitted as new claims its anchor: a duplicate or conflict
+  // resend must not shift the next prompt's turn id.
+  const claimAnchor = () => {
+    if (effectiveDelivery === 'prompt') client.nextInputTurnAnchors.set(sessionId, turnAnchor);
+  };
   // An accepted active-turn steer stays inside the provider run that is
   // already in flight. Reuse its identity so provider callbacks captured at
   // that run boundary remain admissible; only a stale steer opens a new turn.
   const turnId = effectiveDelivery === 'steer' && !staleSteer
     ? client.activeInputTurnIds.get(sessionId) ?? `${sessionId}:${turnAnchor}`
     : `${sessionId}:${turnAnchor}`;
-  if (!clientId) return { duplicate: false, conflict: false, recovery: false, effectiveDelivery, turnId };
+  if (!clientId) {
+    claimAnchor();
+    return { duplicate: false, conflict: false, recovery: false, effectiveDelivery, turnId };
+  }
 
   const fingerprint = inputFingerprint(client, text, attachments);
   const ledgerEntries = client.sessionManager.getInputLedger?.(sessionId) ?? [];
@@ -139,7 +146,9 @@ export function reserveInput(
       client.admittedInputs.add(`${sessionId}\u0000${clientId}`);
       return { duplicate: false, conflict: false, recovery: true, effectiveDelivery: existing.delivery === 'steer' ? 'steer' : 'prompt', turnId: existing.turnId, entry: existing };
     }
-    if (existing.status === 'pending') {
+    // `rejected` without a row: refused before persistence (ambiguous
+    // answer). A retry is a fresh attempt, like a reservation left pending.
+    if (existing.status === 'pending' || (existing.status === 'rejected' && existing.userSeq === undefined)) {
       const recoveredSeq = client.sessionManager.findUserMessageSeqByClientId(sessionId, clientId);
       if (recoveredSeq !== null) {
         const recovered: InputLedgerEntry = {
@@ -198,6 +207,7 @@ export function reserveInput(
   };
   client.sessionManager.recordInputLedger(sessionId, entry);
   client.admittedInputs.add(`${sessionId}\u0000${clientId}`);
+  claimAnchor();
   return { duplicate: false, conflict: false, recovery: false, effectiveDelivery, turnId, entry };
 }
 
@@ -249,7 +259,11 @@ export function finishSteerAcceptance(client: RelayClient, sessionId: string, ac
   client.steerAcceptanceInFlight.delete(sessionId);
   const deferredIdle = client.idleDuringSteerAcceptance.delete(sessionId);
   if (!deferredIdle) return;
-  if (accepted) {
+  if (accepted && client.adapter.isTurnSettled?.(sessionId) === true) {
+    // The turn ended while the steer was being accepted and the adapter did
+    // not reopen it for the steer: no later idle will come. Apply this one.
+    settleAdapterIdle(client, sessionId);
+  } else if (accepted) {
     // The old provider error was already broadcast immediately. A successful
     // interjection recovered the session, so it must not freeze as the outcome
     // of the newer work when that work eventually idles.
@@ -299,6 +313,7 @@ export function settleAdapterIdle(client: RelayClient, sessionId: string, event?
     });
   } else {
     clearOpenQuestions(client, sessionId);
+    closeTraceTools(client, sessionId, client.card.closeRunningTools(sessionId), 'interrupted');
     anchorStepsOnlyTurn(client, sessionId);
   }
   resolveTurnIdle(client, sessionId);
@@ -417,8 +432,39 @@ export function finishTurnWithStatus(
 ): void {
   const termination = action.type === 'user_abort' ? 'cancelled' : 'interrupted';
   const snapshot = client.card.terminate(sessionId, action);
+  closeTraceTools(client, sessionId, snapshot.runningTools, termination);
+  client.sessionToolCallIds.delete(sessionId);
 
-  for (const tool of snapshot.runningTools) {
+  if (snapshot.previousAction?.type === 'permission' && !snapshot.previousAction.payload.decision) {
+    recordTrace(client, {
+      type: 'permission',
+      sessionId,
+      payload: { ...snapshot.previousAction.payload, cancelled: true },
+    });
+  }
+  for (const prompt of snapshot.queuedPrompts) {
+    recordTrace(client, { type: 'permission', sessionId, payload: { ...prompt.payload, cancelled: true } });
+  }
+
+  const finishedAt = action.type === 'user_abort' ? action.payload.abortedAt : action.payload.failedAt;
+  const steps = client.turnStepCounts.get(sessionId) ?? 0;
+  client.send({
+    type: 'turn_status',
+    sessionId,
+    payload: { draft: snapshot.draft, action, finishedAt, steps },
+  }, action.type === 'failed');
+  clearOpenQuestions(client, sessionId);
+  client.card.clear(sessionId);
+}
+
+/** Close the TRACE steps of tools the turn ended without hearing back from. */
+function closeTraceTools(
+  client: RelayClient,
+  sessionId: string,
+  runningTools: Array<Extract<CardActionState, { type: 'tool_start' }>>,
+  termination: 'cancelled' | 'interrupted',
+): void {
+  for (const tool of runningTools) {
     recordTrace(client, {
       type: 'tool_complete',
       sessionId,
@@ -433,27 +479,9 @@ export function finishTurnWithStatus(
     if (id) {
       client.lastArgsByToolCallId.delete(id);
       client.lastArgsRefByToolCallId.delete(id);
+      client.sessionToolCallIds.get(sessionId)?.delete(id);
     }
   }
-  client.sessionToolCallIds.delete(sessionId);
-
-  if (snapshot.previousAction?.type === 'permission' && !snapshot.previousAction.payload.decision) {
-    recordTrace(client, {
-      type: 'permission',
-      sessionId,
-      payload: { ...snapshot.previousAction.payload, cancelled: true },
-    });
-  }
-
-  const finishedAt = action.type === 'user_abort' ? action.payload.abortedAt : action.payload.failedAt;
-  const steps = client.turnStepCounts.get(sessionId) ?? 0;
-  client.send({
-    type: 'turn_status',
-    sessionId,
-    payload: { draft: snapshot.draft, action, finishedAt, steps },
-  }, action.type === 'failed');
-  clearOpenQuestions(client, sessionId);
-  client.card.clear(sessionId);
 }
 
 /** Drop any in-flight toolCallId state for a session — called when a

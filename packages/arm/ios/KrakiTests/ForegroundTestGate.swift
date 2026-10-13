@@ -10,3 +10,11 @@ func requireForegroundUITests(file: StaticString = #filePath, line: UInt = #line
     try XCTSkipUnless(ProcessInfo.processInfo.environment["KRAKI_RUN_UI_TESTS"] == "1",
                       "Window/voice suite: set KRAKI_RUN_UI_TESTS=1 (runs in CI)", file: file, line: line)
 }
+
+/// Polls `done` on the main actor for up to `seconds` (CI runners can run a
+/// short timer late; a fixed sleep made bounded-timing tests flaky).
+@MainActor
+func waitBriefly(seconds: TimeInterval = 2, _ done: () -> Bool) async throws {
+    let deadline = Date().addingTimeInterval(seconds)
+    while !done(), Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+}

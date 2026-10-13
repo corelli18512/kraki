@@ -186,6 +186,9 @@ export class RelayClient {
 
   activeInputTurnIds = new Map<string, string>();
   nextInputTurnAnchors = new Map<string, number>();
+  /** Turn id ('' when none) whose Stop is awaiting the adapter, per session:
+   *  a second Stop for the same turn joins it instead of settling again. */
+  abortsInFlight = new Map<string, string>();
 
   // ── Push preview state ─────────────────────────────
   /** Final reply of the CURRENT turn per session (for the turn-end push).
@@ -328,6 +331,9 @@ export class RelayClient {
    *  auto-resolve, cleared when the turn ends. Insertion order is preserved so
    *  the newest open question wins the preview slot. */
   openQuestions = new Map<string, Map<string, PendingHumanAction>>();
+  /** `${sessionId}\u0000${questionId}` of answers being delivered. Claimed
+   *  before the first await, so a competing answer sees it as no longer open. */
+  answeringQuestions = new Set<string>();
 
   /**
    * Connect to the relay. Auto-reconnects on disconnect.
@@ -358,7 +364,16 @@ export class RelayClient {
       // (same-Mac pairing reads them), then load the policy before anything
       // from the relay is accepted.
       this.ensureDeviceTrustReady();
-      const auth = this.buildAuthPayload(device);
+      let auth: AuthMethod;
+      try {
+        auth = this.buildAuthPayload(device);
+      } catch (err) {
+        // A throw inside the ws 'open' listener is an uncaughtException: the
+        // worker would exit and the supervisor restart it into the same state.
+        this.onFatalError?.(err instanceof Error ? err.message : String(err));
+        this.disconnect();
+        return;
+      }
       ws.send(JSON.stringify({ type: 'auth', auth, device }));
     });
 
@@ -493,6 +508,10 @@ export class RelayClient {
 
   /** Called once when the relay reports that the account was deleted. */
   onAccountDeleted: (() => void) | null = null;
+  /** The relay no longer knows this device and no credential remains to sign
+   *  in again (removed from the account while offline). Permanent until the
+   *  user runs setup; restarting cannot help. */
+  onDeviceRemoved: (() => void) | null = null;
 
   private handleMessage(msg: Record<string, unknown>): void {
     if (msg.type === 'auth_ok') {
@@ -540,6 +559,15 @@ export class RelayClient {
         return;
       }
       if (authError.code === 'unknown_device' && this.preferChallengeAuth && this.options.device.deviceId && this.keyManager) {
+        if (!this.hasFullAuthCredential()) {
+          // Removed from the account (e.g. while offline) and no token to sign
+          // in again with: nothing will ever succeed until the user signs in.
+          logger.warn('This computer was removed from the account and has no saved sign-in');
+          this.disconnect();
+          if (this.onDeviceRemoved) this.onDeviceRemoved();
+          else this.onFatalError?.('This computer was removed from your Kraki account. Run `kraki` to sign in again.');
+          return;
+        }
         logger.warn('Challenge auth rejected for unknown device; retrying with full auth');
         this.preferChallengeAuth = false;
         this.ws?.close();
@@ -689,6 +717,12 @@ export class RelayClient {
     // ONLY after E2E decryption above (or via the Pulse path); a plaintext
     // frame from the relay must never reach handleConsumerMessage.
     logger.debug({ type: msg.type }, 'Ignoring unrecognized relay frame');
+  }
+
+  /** Whether a non-challenge sign-in is possible (open relay, or a saved token/key). */
+  private hasFullAuthCredential(): boolean {
+    const method = this.options.authMethod;
+    return method === 'open' || !!this.options.token;
   }
 
   private buildAuthPayload(device: DeviceInfo): AuthMethod {
@@ -1726,6 +1760,10 @@ export class RelayClient {
     const localIds = new Set(this.localLink?.peerIds() ?? []);
     const keptFeatures = new Map([...this.appFeatures].filter(([id]) => localIds.has(id)));
     const keptSubs = new Map([...this.currentSessionByArm].filter(([id]) => localIds.has(id)));
+    // An App that stayed online across this Tentacle's reconnect still holds
+    // its confirmed subscription: when the Head replaces our old socket it
+    // sends the App no device_left, so the App never re-subscribes. Keep it.
+    const previousSubs = this.currentSessionByArm;
     this.consumerKeys.clear();
     this.onlineConsumers.clear();
     this.appFeatures = keptFeatures;
@@ -1754,7 +1792,7 @@ export class RelayClient {
           this.consumerKeys.set(d.id, key);
           if (d.online) {
             this.onlineConsumers.add(d.id);
-            this.currentSessionByArm.set(d.id, null);
+            this.currentSessionByArm.set(d.id, previousSubs.get(d.id) ?? null);
           }
         }
       }

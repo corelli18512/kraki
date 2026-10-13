@@ -12,6 +12,7 @@
  *  - Session lifecycle: create, resume, fork, kill, abort
  */
 
+import { agentEnv } from '../agent-env.js';
 import type { SessionUsage, ModelDetail, Attachment } from '@kraki/protocol';
 import { AgentAdapter, type CreateSessionConfig, type SessionInfo, type PermissionDecision, type QuestionAnswer, type QuestionResponseResult, type PermissionResponseResult, type SendMessageOptions } from './base.js';
 import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
@@ -25,7 +26,7 @@ import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } 
 import { linkIntoShadow } from './shadow-link.js';
 import { cloneTree } from '../fs-clone.js';
 import { handleSDKMessage } from './claude-messages.js';
-import { makeCanUseToolHandler, emitQuestionCard, broadcastPendingResolutions } from './claude-permissions.js';
+import { makeCanUseToolHandler, emitQuestionCard, broadcastPendingResolutions, releasePendingForMode } from './claude-permissions.js';
 import { resetSubagentPhase } from './claude-subagents.js';
 import { loadClaudeSettingsEnv, claudeConfigSource, secureStorageEnv, isClaudeLoggedOut, aliasEnvKey } from './claude-env.js';
 import { getErrorMessage } from './claude-errors.js';
@@ -38,6 +39,9 @@ export { toolNameToKind, editsToDiff } from './claude-tools.js';
 export { linkIntoShadow };
 
 // ── Adapter ─────────────────────────────────────────────
+
+/** Upper bound for the startup model/account probe. */
+const CLAUDE_PROBE_TIMEOUT_MS = 20_000;
 
 export class ClaudeAdapter extends AgentAdapter {
   sessions = new Map<string, SessionEntry>();
@@ -140,7 +144,7 @@ export class ClaudeAdapter extends AgentAdapter {
     return {
       // Kraki relays the user's own Claude Code configuration as-is; it does not
       // switch agent features on or off (e.g. background tasks).
-      ...process.env,
+      ...agentEnv(),
       ...loadClaudeSettingsEnv(claudeConfigSource().dir),
       ...extra,
     };
@@ -217,8 +221,16 @@ export class ClaudeAdapter extends AgentAdapter {
     // whether ANY credential is configured; Kraki does not guess from env vars.
     const env = this.claudeEnv(secureStorageEnv());
     let loggedOut = false;
+    const ac = new AbortController();
+    // A wedged Claude CLI must not hold the daemon (and every other agent)
+    // back from starting: bound the probe and always tear it down.
+    let probeTimer: ReturnType<typeof setTimeout> | undefined;
+    const probeDeadline = new Promise<never>((_, reject) => {
+      probeTimer = setTimeout(() => reject(new Error(`Claude did not answer within ${CLAUDE_PROBE_TIMEOUT_MS / 1000}s`)), CLAUDE_PROBE_TIMEOUT_MS);
+      probeTimer.unref?.();
+    });
+    probeDeadline.catch(() => { /* observed via Promise.race */ });
     try {
-      const ac = new AbortController();
       const noop = (async function* () { /* never yields — query blocks waiting for input */ })();
       const q = sdk.query({
         prompt: noop,
@@ -229,14 +241,13 @@ export class ClaudeAdapter extends AgentAdapter {
           ...(this.claudeExecutablePath && { pathToClaudeCodeExecutable: this.claudeExecutablePath }),
         },
       });
-      const models = await q.supportedModels();
+      const models = await Promise.race([q.supportedModels(), probeDeadline]);
       try {
-        const account = await (q as { accountInfo?: () => Promise<unknown> }).accountInfo?.();
+        const account = await Promise.race([(q as { accountInfo?: () => Promise<unknown> }).accountInfo?.(), probeDeadline]);
         loggedOut = isClaudeLoggedOut(account);
       } catch (err) {
         logger.debug({ err: (err as Error).message }, 'Claude accountInfo unavailable');
       }
-      ac.abort();
       if (models.length > 0) {
         // Resolve SDK aliases to actual backend model names via env overrides,
         // then deduplicate so the UI shows real models (e.g. "deepseek-v4-pro[1m]")
@@ -270,6 +281,9 @@ export class ClaudeAdapter extends AgentAdapter {
     } catch (err) {
       this.lastModelListError = (err as Error).message;
       logger.warn({ err: (err as Error).message }, 'Could not fetch model list from SDK');
+    } finally {
+      clearTimeout(probeTimer);
+      ac.abort();
     }
 
     if (loggedOut) {
@@ -801,6 +815,7 @@ export class ClaudeAdapter extends AgentAdapter {
         logger.warn({ err, sessionId }, 'Failed to set SDK permission mode');
       });
     }
+    releasePendingForMode(this, sessionId, mode);
 
     logger.debug({ sessionId, mode }, 'Session permission mode changed');
   }

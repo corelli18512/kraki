@@ -159,7 +159,10 @@ export async function handleDynamicTool(adapter: CodexAdapter, req: RpcServerReq
     case 'show_image': {
       adapter.flushNarration(s);
       const callId = str(params.callId) || makeId('tool');
-      adapter.onToolStart?.(s.sessionId, { toolName: 'show_image', args, toolCallId: callId, ...adapter.turnEvent(s) });
+      // Captured before the resize await: a Stop + new prompt meanwhile must
+      // not relabel this completion as the new turn's.
+      const turn = adapter.turnEvent(s);
+      adapter.onToolStart?.(s.sessionId, { toolName: 'show_image', args, toolCallId: callId, ...turn });
       const result = await showImageHandler(args, { sessionId: s.sessionId });
       const text = result.content.filter((c) => c.type === 'text').map((c) => (c as { text: string }).text).join('\n');
       const refs: import('@kraki/protocol').ContentRef[] = [];
@@ -177,7 +180,7 @@ export async function handleDynamicTool(adapter: CodexAdapter, req: RpcServerReq
         toolCallId: callId,
         success: !result.isError,
         ...(refs.length > 0 && { attachments: refs }),
-        ...adapter.turnEvent(s),
+        ...turn,
       });
       return rpc.respond(req.id, { contentItems: [{ type: 'inputText', text: text || 'Done.' }], success: !result.isError });
     }

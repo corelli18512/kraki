@@ -463,9 +463,12 @@ final class TKBubbleContent {
     private static func lighteningUncorrected(_ body: NSAttributedString, message: ChatMessage) -> NSAttributedString? {
         guard message.payload["localState"]?.stringValue == "correcting",
               let fade = message.payload["uncorrected"]?.arrayValue?.compactMap(\.intValue), fade.count == 2,
-              let source = message.content else { return nil }
+              let source = message.content,
+              // A negative start or length (malformed payload) makes
+              // substring(with:) trap; validate like the Mac bubble does.
+              fade[0] >= 0, fade[1] > 0,
+              fade[0] <= source.utf16.count, fade[1] <= source.utf16.count - fade[0] else { return nil }
         let sourceRange = NSRange(location: fade[0], length: fade[1])
-        guard NSMaxRange(sourceRange) <= (source as NSString).length else { return nil }
         let faded = (source as NSString).substring(with: sourceRange)
         let rendered = body.string as NSString
         // Plain transcripts render 1:1; otherwise locate the same tail text.

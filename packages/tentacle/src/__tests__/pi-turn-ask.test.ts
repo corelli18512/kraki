@@ -20,7 +20,7 @@ import { pathToFileURL } from 'node:url';
 import { KRAKI_SYSTEM_PROMPT, PiAdapter, summarizeCrash } from '../adapters/pi.js';
 import { handleEvent } from '../adapters/pi-events.js';
 import { turnFixture } from './helpers/turn-fixture.js';
-import { PI_KRAKI_TOOLS_SOURCE } from '../adapters/pi-kraki-tools.js';
+import { KRAKI_DIALOG_PREFIX, PI_KRAKI_TOOLS_SOURCE } from '../adapters/pi-kraki-tools.js';
 
 interface StubProc {
   alive: boolean;
@@ -215,6 +215,16 @@ describe('pi abort', () => {
     expect(session.pendingQuestions.has('q1')).toBe(true);
     expect(session.turn.isSettled).toBe(false);
     expect(session.aborting).toBe(false);
+  });
+
+  it('still aborts on an older Pi that has no clear_queue', async () => {
+    const { adapter, sid, proc, session } = makeAdapter();
+    proc.request.mockImplementation((type) => type === 'clear_queue'
+      ? Promise.reject(new Error('Unknown command: clear_queue'))
+      : Promise.resolve());
+    await adapter.abortSession(sid);
+    expect(proc.request).toHaveBeenCalledWith('abort');
+    expect(session.turn.isSettled).toBe(true);
   });
 
   it('cancels pending question and permission UI requests before aborting', async () => {
@@ -1045,7 +1055,7 @@ describe('pi ask_user → question card', () => {
     const { adapter, session, emit } = makeAdapter();
     const onQuestionRequest = vi.fn();
     adapter.onQuestionRequest = onQuestionRequest;
-    emit({ type: 'extension_ui_request', method: 'select', id: 'q1', title: 'Pick a color', options: ['red', 'blue'] });
+    emit({ type: 'extension_ui_request', method: 'select', id: 'q1', title: `${KRAKI_DIALOG_PREFIX}Pick a color`, options: ['red', 'blue'] });
     expect(onQuestionRequest).toHaveBeenCalledWith('s1', {
       id: 'q1',
       question: 'Pick a color',
@@ -1058,7 +1068,7 @@ describe('pi ask_user → question card', () => {
     const { adapter, emit } = makeAdapter();
     const onQuestionRequest = vi.fn();
     adapter.onQuestionRequest = onQuestionRequest;
-    emit({ type: 'extension_ui_request', method: 'input', id: 'q2', title: 'Your name?' });
+    emit({ type: 'extension_ui_request', method: 'input', id: 'q2', title: `${KRAKI_DIALOG_PREFIX}Your name?` });
     expect(onQuestionRequest).toHaveBeenCalledWith('s1', {
       id: 'q2',
       question: 'Your name?',
@@ -1071,7 +1081,7 @@ describe('pi ask_user → question card', () => {
     session.mode = 'safe';
     const onPermissionRequest = vi.fn();
     adapter.onPermissionRequest = onPermissionRequest;
-    emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: 'bash', message: JSON.stringify({ command: 'ls' }) });
+    emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: `${KRAKI_DIALOG_PREFIX}bash`, message: JSON.stringify({ command: 'ls' }) });
     expect(onPermissionRequest).toHaveBeenCalledTimes(1);
     expect(session.pendingPerms.get('p1')).toBe('p1');
   });
@@ -1081,7 +1091,7 @@ describe('pi ask_user → question card', () => {
     session.mode = 'safe';
     const onPermissionRequest = vi.fn();
     adapter.onPermissionRequest = onPermissionRequest;
-    emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: 'read', message: JSON.stringify({ path: '/repo/a.ts' }) });
+    emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: `${KRAKI_DIALOG_PREFIX}read`, message: JSON.stringify({ path: '/repo/a.ts' }) });
     expect(onPermissionRequest).not.toHaveBeenCalled();
     expect(proc.sendRaw).toHaveBeenCalledWith({ type: 'extension_ui_response', id: 'p1', confirmed: true });
     expect(session.pendingPerms.has('p1')).toBe(false);
@@ -1092,7 +1102,7 @@ describe('pi ask_user → question card', () => {
     session.mode = 'safe';
     const onPermissionRequest = vi.fn();
     adapter.onPermissionRequest = onPermissionRequest;
-    emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: 'write', message: JSON.stringify({ path: '/tmp/a.txt', content: 'x' }) });
+    emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: `${KRAKI_DIALOG_PREFIX}write`, message: JSON.stringify({ path: '/tmp/a.txt', content: 'x' }) });
     expect(onPermissionRequest).toHaveBeenCalledTimes(1);
     expect(session.pendingPerms.get('p1')).toBe('p1');
   });
@@ -1102,7 +1112,7 @@ describe('pi ask_user → question card', () => {
     session.mode = 'auto';
     const onPermissionRequest = vi.fn();
     adapter.onPermissionRequest = onPermissionRequest;
-    emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: 'write', message: JSON.stringify({ path: '/repo/a.ts', content: 'x' }) });
+    emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: `${KRAKI_DIALOG_PREFIX}write`, message: JSON.stringify({ path: '/repo/a.ts', content: 'x' }) });
     expect(onPermissionRequest).not.toHaveBeenCalled();
     expect(proc.sendRaw).toHaveBeenCalledWith({ type: 'extension_ui_response', id: 'p1', confirmed: true });
   });
@@ -1115,7 +1125,7 @@ describe('pi ask_user → question card', () => {
     adapter.onPermissionRequest = onPermissionRequest;
     adapter.onPermissionAutoResolved = onPermissionAutoResolved;
 
-    emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: 'bash', message: JSON.stringify({ command: 'rm -f build.tmp' }) });
+    emit({ type: 'extension_ui_request', method: 'confirm', id: 'p1', title: `${KRAKI_DIALOG_PREFIX}bash`, message: JSON.stringify({ command: 'rm -f build.tmp' }) });
     expect(onPermissionRequest).toHaveBeenCalledTimes(1);
     expect(session.pendingPerms.has('p1')).toBe(true);
 
@@ -1185,6 +1195,34 @@ describe('pi ask_user → question card', () => {
 });
 
 describe('pi agent lifecycle boundaries', () => {
+  it('reopens the turn when it settles while Pi is accepting a steer, so the steered run reports', async () => {
+    const { adapter, proc, session, emit } = makeAdapter();
+    const onMessage = vi.fn();
+    const onIdle = vi.fn();
+    adapter.onMessage = onMessage;
+    adapter.onIdle = onIdle;
+    let acknowledge!: () => void;
+    proc.request.mockImplementationOnce(() => new Promise<void>((resolve) => { acknowledge = resolve; }));
+
+    const sending = adapter.sendMessage('s1', 'one more thing', undefined, { delivery: 'steer' });
+    // The running turn ends during the steer RPC.
+    await emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'first reply' }], stopReason: 'stop' } });
+    await emit({ type: 'agent_end' });
+    await emit({ type: 'agent_settled' });
+    expect(onIdle).toHaveBeenCalledTimes(1);
+    acknowledge();
+    await sending;
+    expect(session.turn.isSettled).toBe(false);
+
+    // Pi runs the steer as a new run.
+    await emit({ type: 'agent_start' });
+    await emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'steered reply' }], stopReason: 'stop' } });
+    await emit({ type: 'agent_end' });
+    await emit({ type: 'agent_settled' });
+    expect(onMessage).toHaveBeenLastCalledWith('s1', { content: 'steered reply' });
+    expect(onIdle).toHaveBeenCalledTimes(2);
+  });
+
   it('converts a post-settlement steer into a fresh prompt and settles its reply', async () => {
     const { adapter, proc, session, emit } = makeAdapter();
     const onMessage = vi.fn();

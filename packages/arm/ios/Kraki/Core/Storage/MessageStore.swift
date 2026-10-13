@@ -950,11 +950,12 @@ final class MessageStore {
 
     /// Restore the gate from persisted conversation truth when opening a DB
     /// window. `session.state == active` is not sufficient because a reconnect
-    /// snapshot may race after the preceding turn already concluded.
+    /// snapshot may race after the preceding turn already concluded. A question
+    /// `agent_message` is not a boundary: it does not conclude the turn.
     func restoreCardTurnGate(_ sessionId: String, from messages: [ChatMessage]) {
         guard let boundary = messages.last(where: {
             ["user_message", "agent_message", "turn_status", "interrupted_turn",
-             "system_message", "idle", "session_ended"].contains($0.type)
+             "system_message", "idle", "session_ended"].contains($0.type) && $0.questionSpec == nil
         }) else { return }
         if boundary.type == "user_message" {
             closedCardTurns.remove(sessionId)
@@ -1056,11 +1057,12 @@ final class MessageStore {
 
     /// Atomically replace transient card state from a successful subscription
     /// ACK. Unlike incremental delta/action handlers this is an authoritative
-    /// reconnect/page-entry snapshot, so it may reopen the card gate when the
-    /// digest says a turn is live and the snapshot actually carries draft or
-    /// action state. Empty idle/ended snapshots keep the concluded-turn gate
-    /// closed and can never resurrect a stale bubble. (An open question is on
-    /// the spine, not in the card, so it needs no exception here.)
+    /// reconnect/page-entry snapshot, so it reopens the card gate whenever the
+    /// digest says a turn is live, even before that turn has any draft or
+    /// action (its user_message may only arrive by history replay, which
+    /// never calls beginCardTurn). Idle/ended snapshots close the gate and can
+    /// never resurrect a stale bubble. (An open question is on the spine, not
+    /// in the card, so it needs no exception here.)
     func replaceCardFromSubscription(
         _ sessionId: String,
         draft: String,
@@ -1068,13 +1070,12 @@ final class MessageStore {
         state: SessionState
     ) {
         cards.removeValue(forKey: sessionId)
-        let hasLiveCard = !draft.isEmpty || action != nil
-        let liveState = state == .active || state == .compacting
-        guard liveState && hasLiveCard else {
-            if !liveState { closedCardTurns.insert(sessionId) }
+        guard state == .active || state == .compacting else {
+            closedCardTurns.insert(sessionId)
             return
         }
         closedCardTurns.remove(sessionId)
+        guard !draft.isEmpty || action != nil else { return }
         cards[sessionId] = SessionCard(text: draft, action: action)
     }
 

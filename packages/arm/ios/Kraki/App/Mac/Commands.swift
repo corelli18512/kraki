@@ -1,9 +1,8 @@
-/// MacCommands — Top menu bar layout for the mac target.
+/// MacCommands — the top menu bar of Kraki for Mac.
 ///
-/// All shortcuts come from the plan's keyboard map. Heavier actions
-/// (new session, pairing, search) are stubbed with TODO markers; they
-/// route to AppState and TentacleCLIManager primitives once the
-/// corresponding sheets/views land.
+/// Shortcut rules: never take a key a text field uses while typing a
+/// message (⌘↑/⌘↓ jump to the start/end, ⌘⌫ deletes to the line start),
+/// and keep the standard window keys (⌘W, ⌘M, ⌘H) working.
 
 #if os(macOS)
 import SwiftUI
@@ -26,6 +25,11 @@ struct MacCommands: Commands {
         return appState.sessionStore.sessions[id]?.pinned ?? false
     }
 
+    private var activeSessionUnread: Bool {
+        guard let id = appState.sessionStore.activeSessionId else { return false }
+        return appState.sessionStore.isUnread(id)
+    }
+
     var body: some Commands {
         // File menu — emptied here; the whole menu is removed in
         // MacAppDelegate (New Session now lives under the Session menu).
@@ -39,8 +43,32 @@ struct MacCommands: Commands {
         // dev boxes) and irrelevant to Kraki.
         CommandGroup(replacing: .systemServices) { }
 
-        // Remove Hide / Hide Others / Show All — not wanted for this app.
-        CommandGroup(replacing: .appVisibility) { }
+        // (Grouped: a Commands body takes at most ten direct children.)
+        windowCommands
+        mainCommands
+    }
+
+    @CommandsBuilder
+    private var windowCommands: some Commands {
+        // Hide Kraki (⌘H) stays; Hide Others / Show All are not wanted.
+        CommandGroup(replacing: .appVisibility) {
+            Button("Hide Kraki") { NSApp.hide(nil) }
+                .keyboardShortcut("h", modifiers: .command)
+        }
+
+        // Window menu: only what a single-window app needs. The File menu is
+        // removed (MacAppDelegate), so Close Window lives here; without it
+        // ⌘W would close nothing, not even Settings.
+        CommandGroup(before: .windowSize) {
+            Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
+                .keyboardShortcut("w", modifiers: .command)
+        }
+        CommandGroup(replacing: .windowList) { }
+        CommandGroup(replacing: .windowArrangement) { }
+    }
+
+    @CommandsBuilder
+    private var mainCommands: some Commands {
 
         // View menu — replace the default toolbar items (Show/Customize
         // Toolbar — we have no toolbar) with our own toggles + zoom.
@@ -96,7 +124,8 @@ struct MacCommands: Commands {
                     userInfo: ["direction": -1]
                 )
             }
-            .keyboardShortcut(.upArrow, modifiers: .command)
+            // ⌥⌘: plain ⌘↑ jumps to the start of the message being typed.
+            .keyboardShortcut(.upArrow, modifiers: [.command, .option])
             .disabled(appState.sessionStore.sessions.isEmpty)
 
             Button("Next Session") {
@@ -106,27 +135,35 @@ struct MacCommands: Commands {
                     userInfo: ["direction": 1]
                 )
             }
-            .keyboardShortcut(.downArrow, modifiers: .command)
+            .keyboardShortcut(.downArrow, modifiers: [.command, .option])
             .disabled(appState.sessionStore.sessions.isEmpty)
 
             Divider()
 
-            ForEach(1...9, id: \.self) { number in
-                Button("Session \(number)") {
+            // ⌘1–⌘9 open the first nine sessions in sidebar order, by title.
+            // The list is sorted once per menu update (not once per item).
+            let firstNine = Array(appState.sessionStore.navigationOrderedSessions.prefix(9))
+            ForEach(Array(firstNine.enumerated()), id: \.element.id) { index, session in
+                Button(Self.menuTitle(session.displayTitle)) {
                     NotificationCenter.default.post(
                         name: .macNavigateSession,
                         object: nil,
-                        userInfo: ["index": number - 1]
+                        userInfo: ["index": index]
                     )
                 }
-                .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
-                // The shortcut only needs a count. Sorting every Session here
-                // made each streaming delta sort the full Session collection
-                // once per menu item through SwiftUI's command graph.
-                .disabled(appState.sessionStore.sessions.count < number)
+                .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
             }
 
             Divider()
+
+            Button("Rename…") {
+                guard let id = appState.sessionStore.activeSessionId else { return }
+                // Rename lives in Session Info, which the open chat presents.
+                MacSessionInfoRequest.pending = id
+                NotificationCenter.default.post(name: .macOpenSessionInfo, object: nil,
+                                                userInfo: ["sessionId": id])
+            }
+            .disabled(!hasActiveSession)
 
             Button(activeSessionPinned ? "Unpin Session" : "Pin Session") {
                 guard let id = appState.sessionStore.activeSessionId,
@@ -135,15 +172,27 @@ struct MacCommands: Commands {
             }
             .disabled(!hasActiveSession)
 
-            Button("Mark Unread") {
-                guard let id = appState.sessionStore.activeSessionId else { return }
-                appState.commandSender?.markUnread(sessionId: id)
+            Button(activeSessionUnread ? "Mark Read" : "Mark Unread") {
+                guard let id = appState.sessionStore.activeSessionId,
+                      let session = appState.sessionStore.sessions[id] else { return }
+                if appState.sessionStore.isUnread(id) {
+                    appState.commandSender?.markRead(sessionId: id, seq: session.lastSeq)
+                } else {
+                    appState.commandSender?.markUnread(sessionId: id)
+                }
             }
             .disabled(!hasActiveSession)
 
             Button("Fork Session") {
                 guard let id = appState.sessionStore.activeSessionId else { return }
                 appState.commandSender?.forkSession(sessionId: id)
+            }
+            .disabled(!hasActiveSession)
+
+            Button("Archive") {
+                guard let id = appState.sessionStore.activeSessionId else { return }
+                NotificationCenter.default.post(name: .macArchiveSession, object: nil,
+                                                userInfo: ["sessionId": id])
             }
             .disabled(!hasActiveSession)
 
@@ -156,7 +205,7 @@ struct MacCommands: Commands {
                     userInfo: ["sessionId": id]
                 )
             }
-            .keyboardShortcut(.delete, modifiers: .command)
+            // No shortcut: ⌘⌫ deletes to the line start while typing.
             .disabled(!hasActiveSession)
         }
 
@@ -170,23 +219,30 @@ struct MacCommands: Commands {
         #endif
 
         // "This Mac" menu: whether this Mac is online (MacPresence.swift).
+        // The status is polled, so there is no Refresh item. A Mac that only
+        // controls other computers gets just its status and the agents window.
         CommandMenu("This Mac") {
             Text(tentacleCLI.onlineStatus.title)
 
-            Button("Bring This Mac Online") {
-                Task { await tentacleCLI.goOnline() }
-            }
-            .disabled(!tentacleCLI.canGoOnline)
+            if tentacleCLI.onlineStatus != .controlsOthersOnly {
+                // Only the action that applies now (as in the menu bar menu).
+                if tentacleCLI.canGoOffline {
+                    Button("Take This Mac Offline") {
+                        Task { await tentacleCLI.goOffline() }
+                    }
+                } else {
+                    Button("Bring This Mac Online") {
+                        Task { await tentacleCLI.goOnline() }
+                    }
+                    .disabled(!tentacleCLI.canGoOnline)
+                }
 
-            Button("Take This Mac Offline") {
-                Task { await tentacleCLI.goOffline() }
+                Button("Reconnect This Mac…") {
+                    guard MacReconnectConfirmation.confirm(appState: appState, tentacleCLI: tentacleCLI) else { return }
+                    Task { await tentacleCLI.restartDaemon() }
+                }
+                .disabled(!tentacleCLI.canStopDaemon)
             }
-            .disabled(!tentacleCLI.canGoOffline)
-
-            Button("Reconnect This Mac") {
-                Task { await tentacleCLI.restartDaemon() }
-            }
-            .disabled(!tentacleCLI.canStopDaemon)
 
             Divider()
 
@@ -194,13 +250,12 @@ struct MacCommands: Commands {
                 openWindow(id: "local-agents")
             }
 
-            Divider()
+            if tentacleCLI.onlineStatus != .controlsOthersOnly {
+                Divider()
 
-            Button("Show Logs in Finder") {
-                tentacleCLI.openLogsInFinder()
-            }
-            Button("Refresh Status") {
-                Task { await tentacleCLI.refreshDaemonState() }
+                Button("Show Logs in Finder") {
+                    tentacleCLI.openLogsInFinder()
+                }
             }
         }
 
@@ -235,18 +290,45 @@ struct MacCommands: Commands {
             }
         }
 
-        // Help menu — replace the default (search field + nothing useful)
-        // with Feedback + Rate, mirroring the iOS Settings screen.
+        // Help menu — replace the default (search field + nothing useful).
+        // No "Rate Kraki": the Mac app isn't on the App Store, where a review
+        // request would go.
         CommandGroup(replacing: .help) {
             Button("Send Feedback…") {
                 if let url = URL(string: "https://github.com/corelli18512/kraki/issues/new") {
                     NSWorkspace.shared.open(url)
                 }
             }
-            Button("Rate Kraki") {
-                NotificationCenter.default.post(name: .macRequestReview, object: nil)
-            }
         }
+    }
+
+    /// Session titles can be long; menus don't wrap.
+    static func menuTitle(_ title: String) -> String {
+        title.count > 48 ? String(title.prefix(47)) + "…" : title
+    }
+}
+
+/// Reconnecting restarts the service on this Mac, which stops every running
+/// turn here: ask first when one is running.
+@MainActor
+enum MacReconnectConfirmation {
+    static func runningSessionsHere(appState: AppState, tentacleCLI: TentacleCLIManager) -> Int {
+        guard let here = tentacleCLI.configInfo?.deviceId else { return 0 }
+        return appState.sessionStore.sessions.values.filter { $0.deviceId == here && $0.state != .idle }.count
+    }
+
+    static func confirm(appState: AppState, tentacleCLI: TentacleCLIManager) -> Bool {
+        let running = runningSessionsHere(appState: appState, tentacleCLI: tentacleCLI)
+        guard running > 0 else { return true }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Reconnect this Mac?"
+        alert.informativeText = running == 1
+            ? "A session is running on this Mac. Reconnecting restarts Kraki here and stops it."
+            : "\(running) sessions are running on this Mac. Reconnecting restarts Kraki here and stops them."
+        alert.addButton(withTitle: "Reconnect")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 }
 
@@ -279,7 +361,7 @@ extension Notification.Name {
     static let macToggleSidebar   = Notification.Name("mac.toggleSidebar")
     static let macNavigateSession  = Notification.Name("mac.navigateSession")
     static let macDeleteSession   = Notification.Name("mac.deleteSession")
-    static let macRequestReview   = Notification.Name("mac.requestReview")
+    static let macArchiveSession  = Notification.Name("mac.archiveSession")
     static let macCheckForUpdates  = Notification.Name("mac.checkForUpdates")
 }
 

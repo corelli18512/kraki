@@ -340,6 +340,7 @@ targets:
       - path: Kraki/Features/Chat/TurnSpineProjection.swift
       - path: Kraki/Features/Chat/ChatLoadingState.swift
       - path: Kraki/Features/Chat/ComposerOverlayReporting.swift
+      - path: Kraki/Features/Chat/ComposerLatchSettling.swift
       - path: Kraki/Features/Chat/ChatScrollPolicy.swift
       - path: Kraki/Features/Chat/Sizing/HeightMeasurementScheduler.swift
       - path: Kraki/Features/Chat/Mac

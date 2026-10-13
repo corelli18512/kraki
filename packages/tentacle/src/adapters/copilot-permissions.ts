@@ -4,7 +4,7 @@ import type { PermissionRequest, PermissionRequestResult } from '@github/copilot
 import { parsePermission } from '../parse-permission.js';
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 import { DEFAULT_SESSION_MODE } from '@kraki/protocol';
-import { krakiAutoApproves } from './permission-policy.js';
+import { DELEGATE_ANSWER, krakiAutoApproves, type SessionMode } from './permission-policy.js';
 import type { CopilotAdapter } from './copilot.js';
 import { logger, copilotToolKind, type UserInputRequest, type UserInputResponse, type PendingPermission, type PendingQuestion, makeId } from './copilot-session.js';
 
@@ -100,6 +100,24 @@ export function cleanupSessionPermissions(adapter: CopilotAdapter, sessionId: st
       adapter.pendingToolIdentity.delete(id);
     }
     adapter.sessionToolCallIds.delete(sessionId);
+  }
+}
+
+/** Entering auto/delegate approves the permissions already waiting (as the
+ *  new mode would have); delegate also answers the open questions. */
+export function releasePendingForMode(adapter: CopilotAdapter, sessionId: string, mode: SessionMode): void {
+  const entry = adapter.sessions.get(sessionId);
+  if (!entry || (mode !== 'auto' && mode !== 'delegate')) return;
+  for (const [permId, p] of entry.pendingPermissions) {
+    p.resolve({ kind: 'approve-once' });
+    entry.pendingPermissions.delete(permId);
+    adapter.onPermissionAutoResolved?.(sessionId, permId, 'approved');
+  }
+  if (mode !== 'delegate') return;
+  for (const [qId, q] of entry.pendingQuestions) {
+    q.resolve({ answer: DELEGATE_ANSWER, wasFreeform: true });
+    entry.pendingQuestions.delete(qId);
+    adapter.onQuestionAutoResolved?.(sessionId, qId);
   }
 }
 

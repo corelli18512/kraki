@@ -146,11 +146,11 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         // After the policy above: a login launch switches back to menu-bar-only.
         installPresenceObservers()
 
-        // Remove the "File" and "Window" menus. SwiftUI synthesizes both,
-        // but this app has no file concept (New Session lives under
-        // Session) and is single-window. SwiftUI builds the main menu
-        // during launch, so we strip them on the next runloop tick and
-        // again whenever the app reactivates.
+        // Remove the "File" menu. SwiftUI synthesizes it, but this app has
+        // no file concept (New Session lives under Session; Close Window is
+        // in the Window menu, see MacCommands). SwiftUI builds the main menu
+        // during launch, so we strip it on the next runloop tick and again
+        // whenever the app reactivates.
         removeUnwantedMenus()
         DispatchQueue.main.async { [weak self] in self?.removeUnwantedMenus() }
 
@@ -221,35 +221,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        if let delay = ProcessInfo.processInfo.environment["KRAKI_MENUBAR_DUMP_AFTER"].flatMap(Double.init) {
-            // Check of the menu bar menu without opening it (no focus steal):
-            // log every item SwiftUI builds for it.
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                let button = NSApp.windows
-                    .filter { NSStringFromClass(type(of: $0)).contains("StatusBarWindow") }
-                    .compactMap { $0.contentView?.firstDescendant(ofType: NSStatusBarButton.self) }
-                    .first
-                // SwiftUI keeps the menu on its NSStatusItem, not on the button.
-                guard let menu = (button?.value(forKey: "_statusItem") as? NSStatusItem)?.menu else {
-                    NSLog("[menubar-dump] no menu")
-                    return
-                }
-                NSLog("[menubar-dump] icon template=%d size=%@", button?.image?.isTemplate == true ? 1 : 0,
-                      NSStringFromSize(button?.image?.size ?? .zero))
-                menu.delegate?.menuNeedsUpdate?(menu)
-                menu.update()
-                for item in menu.items {
-                    NSLog("[menubar-dump] %@", item.isSeparatorItem ? "----" : [
-                        item.isSectionHeader ? "[header]" : nil,
-                        item.title,
-                        item.subtitle.map { "· \($0)" },
-                        item.image == nil ? nil : "(image)",
-                        item.keyEquivalent.isEmpty ? nil : "⌘\(item.keyEquivalent)",
-                        item.isEnabled ? nil : "(disabled)",
-                    ].compactMap { $0 }.joined(separator: " "))
-                }
-            }
-        }
+        scheduleMenuDumpsIfRequested()
 
         if ProcessInfo.processInfo.environment["KRAKI_RENDER_BUBBLE_TEST"] == "1" {
             renderBubbleTestToPNG()
@@ -331,16 +303,74 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         // SwiftUI can rebuild the main menu on reactivation — re-strip
-        // the menus we don't want so they never reappear.
+        // the File menu so it never reappears.
         removeUnwantedMenus()
     }
 
-    /// Removes the synthesized "File" and "Window" menus from the menu
-    /// bar. This app has no file concept (New Session lives under Session)
-    /// and is single-window, so the standard Window menu is noise.
+    /// KRAKI_MENUBAR_DUMP_AFTER / KRAKI_MAINMENU_DUMP_AFTER=<seconds>: log the
+    /// menu bar menu / the whole main menu, for checks without opening them
+    /// or needing Accessibility access.
+    private func scheduleMenuDumpsIfRequested() {
+        if let delay = ProcessInfo.processInfo.environment["KRAKI_MENUBAR_DUMP_AFTER"].flatMap(Double.init) {
+            // Check of the menu bar menu without opening it (no focus steal):
+            // log every item SwiftUI builds for it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                let button = NSApp.windows
+                    .filter { NSStringFromClass(type(of: $0)).contains("StatusBarWindow") }
+                    .compactMap { $0.contentView?.firstDescendant(ofType: NSStatusBarButton.self) }
+                    .first
+                // SwiftUI keeps the menu on its NSStatusItem, not on the button.
+                guard let menu = (button?.value(forKey: "_statusItem") as? NSStatusItem)?.menu else {
+                    NSLog("[menubar-dump] no menu")
+                    return
+                }
+                NSLog("[menubar-dump] icon template=%d size=%@", button?.image?.isTemplate == true ? 1 : 0,
+                      NSStringFromSize(button?.image?.size ?? .zero))
+                menu.delegate?.menuNeedsUpdate?(menu)
+                menu.update()
+                for item in menu.items {
+                    NSLog("[menubar-dump] %@", item.isSeparatorItem ? "----" : [
+                        item.isSectionHeader ? "[header]" : nil,
+                        item.title,
+                        item.subtitle.map { "· \($0)" },
+                        item.image == nil ? nil : "(image)",
+                        item.keyEquivalent.isEmpty ? nil : "⌘\(item.keyEquivalent)",
+                        item.isEnabled ? nil : "(disabled)",
+                    ].compactMap { $0 }.joined(separator: " "))
+                }
+            }
+        }
+        if let delay = ProcessInfo.processInfo.environment["KRAKI_MAINMENU_DUMP_AFTER"].flatMap(Double.init) {
+            // Check of the main menu bar without opening it: log every menu,
+            // item and shortcut as built (after SwiftUI and removeUnwantedMenus).
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                func keys(_ item: NSMenuItem) -> String? {
+                    guard !item.keyEquivalent.isEmpty else { return nil }
+                    let m = item.keyEquivalentModifierMask
+                    let names: [UInt16: String] = [0xF700: "↑", 0xF701: "↓", 0x08: "⌫", 0x7F: "⌫"]
+                    let key = item.keyEquivalent.utf16.first.flatMap { names[$0] } ?? item.keyEquivalent.uppercased()
+                    return (m.contains(.control) ? "⌃" : "") + (m.contains(.option) ? "⌥" : "")
+                        + (m.contains(.shift) ? "⇧" : "") + (m.contains(.command) ? "⌘" : "") + key
+                }
+                for top in NSApp.mainMenu?.items ?? [] {
+                    guard let menu = top.submenu else { continue }
+                    menu.update()
+                    NSLog("[mainmenu-dump] == %@", menu.title)
+                    for item in menu.items where !item.isHidden {
+                        NSLog("[mainmenu-dump] %@", item.isSeparatorItem ? "  ----" : "  " + [
+                            item.title, keys(item), item.isEnabled ? nil : "(disabled)",
+                        ].compactMap { $0 }.joined(separator: "  "))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Removes the synthesized "File" menu from the menu bar. The Window
+    /// menu stays (trimmed in MacCommands): it carries ⌘W and ⌘M.
     private func removeUnwantedMenus() {
         guard let mainMenu = NSApp.mainMenu else { return }
-        for title in ["File", "Window"] {
+        for title in ["File"] {
             if let item = mainMenu.items.first(where: { $0.submenu?.title == title }) {
                 mainMenu.removeItem(item)
             }

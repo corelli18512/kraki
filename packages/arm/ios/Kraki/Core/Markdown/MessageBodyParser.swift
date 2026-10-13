@@ -588,7 +588,8 @@ func parseTableSeparator(_ line: String) -> [TableAlignment]? {
         // Strip leading/trailing colons before verifying the dashes.
         var dashes = trimmed
         if hasLeftColon { dashes.removeFirst() }
-        if hasRightColon { dashes.removeLast() }
+        // A lone ":" is both prefix and suffix: removing twice would trap.
+        if hasRightColon, !dashes.isEmpty { dashes.removeLast() }
         guard !dashes.isEmpty, dashes.allSatisfy({ $0 == "-" }) else { return nil }
         switch (hasLeftColon, hasRightColon) {
         case (true, true):  alignments.append(.center)

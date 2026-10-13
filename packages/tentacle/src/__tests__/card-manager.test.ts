@@ -321,3 +321,58 @@ describe('CardManager lifecycle', () => {
     expect((card.snapshot('s1')[0].payload as { content: string }).content).toBe('');
   });
 });
+
+describe('CardManager — parallel permissions', () => {
+  const slotId = (card: CardManager) => {
+    const a = card.state('s1').action;
+    return a?.type === 'permission' ? `${a.payload.id}:${a.payload.decision ?? 'open'}` : a?.type ?? null;
+  };
+
+  it('a second pending permission waits; the first stays answerable', () => {
+    const { card } = setup();
+    card.onPrompt('s1', permission('p1'));
+    card.onPrompt('s1', permission('p2'));
+    expect(slotId(card)).toBe('p1:open');
+    card.resolvePrompt('s1', 'p1', { decision: 'approve' });
+    expect(slotId(card)).toBe('p2:open');
+    card.resolvePrompt('s1', 'p2', { decision: 'deny' });
+    expect(slotId(card)).toBe('p2:deny');
+  });
+
+  it('a queued permission resolved elsewhere leaves the queue without touching the slot', () => {
+    const { card } = setup();
+    card.onPrompt('s1', permission('p1'));
+    card.onPrompt('s1', permission('p2'));
+    card.onPrompt('s1', permission('p3'));
+    card.resolvePrompt('s1', 'p2', { decision: 'approve' }); // e.g. Always Allow
+    expect(slotId(card)).toBe('p1:open');
+    card.resolvePrompt('s1', 'p1');
+    expect(slotId(card)).toBe('p3:open');
+  });
+
+  it('a pending permission is not hidden by tools while others wait', () => {
+    const { card } = setup();
+    card.onPrompt('s1', permission('p1'));
+    card.onPrompt('s1', permission('p2'));
+    card.onToolStart('s1', { type: 'tool_start', payload: { toolName: 'bash', args: {}, headline: 'ls', toolCallId: 't1' } } as CardActionState as never);
+    expect(slotId(card)).toBe('p1:open');
+  });
+
+  it('terminate reports queued permissions and clears them', () => {
+    const { card } = setup();
+    card.onPrompt('s1', permission('p1'));
+    card.onPrompt('s1', permission('p2'));
+    const snap = card.terminate('s1', { type: 'user_abort', payload: { abortedAt: 'now' } } as never);
+    expect(snap.queuedPrompts.map((p) => p.payload.id)).toEqual(['p2']);
+    card.onPrompt('s1', permission('p4'));
+    expect(slotId(card)).toBe('p4:open');
+  });
+
+  it('re-announcing the pending permission updates it in place', () => {
+    const { card } = setup();
+    card.onPrompt('s1', permission('p1', 'old'));
+    card.onPrompt('s1', permission('p1', 'new'));
+    const a = card.state('s1').action;
+    expect(a?.type === 'permission' && a.payload.description).toBe('new');
+  });
+});

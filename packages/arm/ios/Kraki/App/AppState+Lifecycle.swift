@@ -84,6 +84,16 @@ extension AppState {
         #if os(macOS)
         localLink?.stop()
         #endif
+        resetIdentity(clearRelayURL: true)
+    }
+
+    /// Drop everything tied to the current device identity: credentials, the
+    /// decrypt pipeline (its router caches the old private key), Pulse
+    /// streams, and the per-account stores and outbox. Used by sign-out and
+    /// when the relay proves the stored credentials invalid (device removed,
+    /// key mismatch); without it a re-pair in the same process could not
+    /// decrypt anything and a different account would inherit old state.
+    func resetIdentity(clearRelayURL: Bool) {
         pulseManager?.resetForIdentityChange()
         // The old decrypt pipeline may already have queued main-actor work.
         // Retire its router as well as the transport before clearing stores.
@@ -95,7 +105,7 @@ extension AppState {
         // A new sign-in is a new device: computers pair it again.
         resetDeviceTrust()
         preferencesManager?.resetVocabulary()
-        clearStoredRelayURL()
+        if clearRelayURL { clearStoredRelayURL() }
         deviceId = nil
         user = nil
         githubClientId = nil
@@ -141,7 +151,15 @@ extension AppState {
         Task { await pushManager?.handleForeground() }
         #endif
         voiceInputController.resumeWarmConnection()
-        guard hasCompletedInitialConnect else { return }
+        // A first sign-in that was interrupted by going to the background
+        // (no auth_ok yet) must resume too; only skip when there is nothing
+        // to sign in with (the login/pairing screen owns that connection).
+        #if os(macOS)
+        let hasCredentials = isSigningInWithCredentials
+        #else
+        let hasCredentials = hasStoredCredentials
+        #endif
+        guard hasCompletedInitialConnect || hasCredentials else { return }
         if !forceReconnect, let wsClient, wsClient.state != .disconnected { return }
         wsClient?.resetBackoffAndReconnect()
     }

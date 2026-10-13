@@ -126,6 +126,20 @@ describe('ClaudeAdapter — audit findings C1–C7', () => {
     await expect(claude.start()).rejects.toThrow(/not logged in/);
   });
 
+  it('a Claude CLI that never answers the startup probe does not block start, and the probe is aborted', async () => {
+    vi.useFakeTimers();
+    let abort: AbortController | undefined;
+    sdk.query.mockImplementation(({ options }: { options: { abortController: AbortController } }) => {
+      abort = options.abortController;
+      return { supportedModels: () => new Promise(() => {}) };
+    });
+    const started = claude.start();
+    await vi.waitUntil(() => sdk.query.mock.calls.length > 0, { timeout: 5000, interval: 0 }).catch(() => {});
+    for (let i = 0; i < 25 && !abort?.signal.aborted; i++) await vi.advanceTimersByTimeAsync(1000);
+    await expect(started).resolves.toBeUndefined();
+    expect(abort?.signal.aborted).toBe(true);
+  });
+
   it('C5 uses an explicit CLAUDE_CONFIG_DIR when creating its session shadow', async () => {
     const custom = join(root, 'custom-claude'); mkdirSync(custom); mkdirSync(join(root, '.claude'));
     writeFileSync(join(custom, 'settings.json'), JSON.stringify({ marker: 'explicit-config' }));

@@ -71,6 +71,9 @@ extension ChatPerfListVC {
         var hasher = Hasher()
         hasher.combine(text)
         hasher.combine(vm.card?.action?.id ?? "")
+        // Every card action decodes with the same id; the permission id is
+        // what tells a newer pending request apart from the one shown.
+        hasher.combine(vm.card?.action?.payload["id"]?.stringValue ?? "")
         hasher.combine(vm.card?.action?.type ?? "")
         hasher.combine(vm.card?.action?.payload["decision"]?.stringValue ?? "")
         hasher.combine(vm.card?.action?.payload["localPending"]?.boolValue ?? false)
@@ -105,14 +108,17 @@ extension ChatPerfListVC {
     static let topContentPadding: CGFloat = ChatHeaderMetrics.height + 16
 
     func startHitchMonitor() {
-        let link = CADisplayLink(target: self, selector: #selector(onFrame(_:)))
-        link.add(to: .main, forMode: .common)
-        displayLink = link
+        startFrameMonitor()
     }
 
     func startFrameMonitor() {
-        let link = CADisplayLink(target: self, selector: #selector(onFrame(_:)))
+        // CADisplayLink retains its target. Targeting the controller directly
+        // kept every opened chat alive forever (deinit, which invalidates the
+        // link, could never run). The proxy holds the controller weakly.
+        let proxy = ChatDisplayLinkProxy(self)
+        let link = CADisplayLink(target: proxy, selector: #selector(ChatDisplayLinkProxy.onFrame(_:)))
         link.add(to: .main, forMode: .common)
+        displayLink?.invalidate()
         displayLink = link
     }
 
@@ -146,6 +152,25 @@ extension ChatPerfListVC {
         hitches: \(hitchCount) worst:\(String(format: "%.0f", worstFrameMs))ms
         loading: \(loading.isEmpty ? "—" : loading)
         """
+    }
+}
+
+/// Weak bridge between a `CADisplayLink` and the chat controller (see
+/// `startFrameMonitor`). Invalidates the link once the controller is gone.
+@MainActor
+final class ChatDisplayLinkProxy: NSObject {
+    private weak var target: ChatPerfListVC?
+
+    init(_ target: ChatPerfListVC) {
+        self.target = target
+    }
+
+    @objc func onFrame(_ link: CADisplayLink) {
+        guard let target else {
+            link.invalidate()
+            return
+        }
+        target.onFrame(link)
     }
 }
 #endif

@@ -809,9 +809,12 @@ export class Storage {
   }
 
   /**
-   * Delete push tokens from stale devices of the same user.
+   * Delete Web Push tokens from stale devices of the same user.
    * A device is considered stale if it is not currently connected
    * AND its last_seen is older than the given threshold (default 24h).
+   * Only `web_push` rows are pruned: an abandoned PWA install never reports
+   * itself gone, but a phone that simply was not opened for a day is a healthy
+   * APNs target (APNs reports dead tokens itself, which deletes them).
    * Returns the number of tokens deleted.
    */
   deleteStaleUserPushTokens(userId: string, excludeDeviceId: string, onlineDeviceIds: string[], maxAgeHours = 24): number {
@@ -821,7 +824,7 @@ export class Storage {
     const allExcluded = [excludeDeviceId, ...onlineDeviceIds];
     const placeholders = allExcluded.map(() => '?').join(',');
     const result = this.db.prepare(`
-      DELETE FROM push_tokens WHERE device_id IN (
+      DELETE FROM push_tokens WHERE provider = 'web_push' AND device_id IN (
         SELECT d.id FROM devices d
         WHERE d.user_id = ?
           AND d.id NOT IN (${placeholders})

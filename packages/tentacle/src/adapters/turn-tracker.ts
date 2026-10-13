@@ -42,6 +42,8 @@ export class TurnTracker {
   eventTurnId: string | undefined;
 
   private settled = true;
+  /** The agent started the open turn (its id is captured). */
+  private started = false;
   private aborted = false;
   private error: string | undefined;
   /** Prose not yet classified (adapters that stream blocks accumulate here). */
@@ -73,6 +75,7 @@ export class TurnTracker {
   beginTurn(options: { captureNow?: boolean } = {}): void {
     this.settled = false;
     this.aborted = false;
+    this.started = false;
     this.error = undefined;
     this.resetProse();
     if (options.captureNow) this.captureTurnId();
@@ -81,7 +84,12 @@ export class TurnTracker {
   /** The agent started working on the newest prompt. */
   captureTurnId(): void {
     this.eventTurnId = this.relayTurnId;
+    this.started = true;
   }
+
+  /** True when a turn is open but the agent has not started it yet (events
+   *  are still stamped with the previous run's id). */
+  get awaitingStart(): boolean { return !this.settled && !this.started; }
 
   /** Prose the agent produced; classified at the next tool / turn end.
    *  Consecutive pieces are joined with `joiner`. */

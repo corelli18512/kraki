@@ -211,13 +211,8 @@ struct MacChatComposer: View {
                     .offset(y: -28)
                     .allowsHitTesting(false)
             }
-            .onChange(of: session?.state) { _, newState in
-                awaitingActive = false
-                if newState == .idle { abortPending = false }
-            }
-            .onChange(of: appState.isFullyOnline) { _, online in
-                if !online { abortPending = false }
-            }
+            .settlesComposerLatches(sessionId: sessionId, state: session?.state,
+                                    awaitingActive: $awaitingActive, abortPending: $abortPending)
             .task(id: sessionId) {
                 if let activeVoiceSession = voiceController.activeSessionID,
                    activeVoiceSession != sessionId {

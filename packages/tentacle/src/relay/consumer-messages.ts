@@ -13,7 +13,7 @@ import { handleRequestCard, handleSessionMessages, handleSessionMessagesRange, h
 import { clearOpenQuestions, deliverQuestionAnswer, resolvePermission, soleOpenQuestion } from './questions.js';
 import { deleteSessionEverywhere, handleCreateSession, handleDeleteArchivedSessions, handleForkSession, handleImportSession, handleRequestArchivedSessions, handleRequestLocalSessions, handleSetAutoArchiveDays, unarchiveOnUse } from './session-commands.js';
 import { ensureSessionResumed, sendToAdapter } from './session-resume.js';
-import { acceptMaintenanceFollowUp, acceptsAdapterEvent, beginAdapterTurn, beginSteerAcceptance, clearCompacting, dispatchInput, finishSteerAcceptance, finishTurnWithStatus, reechoInput, reserveInput, resolveTurnIdle, sendTurnIdle, updateInputLedger, waitForTurnIdle } from './turns.js';
+import { acceptMaintenanceFollowUp, acceptsAdapterEvent, beginAdapterTurn, beginSteerAcceptance, clearCompacting, dispatchInput, finishSteerAcceptance, finishTurnWithStatus, reechoInput, reserveInput, resolveTurnIdle, sendTurnIdle, settleAdapterIdle, updateInputLedger, waitForTurnIdle } from './turns.js';
 import { logger, traceLog, describeFailure } from './shared.js';
 
 export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
@@ -213,11 +213,22 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
         // An answer targets an open question explicitly (`answerTo`); a
         // composer message without it answers the sole open question. An
         // `answerTo` for a question that is no longer open is delivered as
-        // an ordinary message (not recorded as an answer).
+        // an ordinary message (not recorded as an answer). So is an answer
+        // to a question another answer is already being delivered to.
         const requestedAnswerTo = msg.payload.answerTo as string | undefined;
-        const answering = requestedAnswerTo
+        const targeted = requestedAnswerTo
           ? client.openQuestions.get(sessionId)?.get(requestedAnswerTo) ?? null
           : soleOpenQuestion(client, sessionId);
+        const answerClaim = targeted ? `${sessionId}\u0000${targeted.questionId}` : '';
+        const answering = targeted && !client.answeringQuestions.has(answerClaim) ? targeted : null;
+        // Composer text with several open questions is ambiguous. Reject it
+        // before it is persisted: a stored user_message would look sent and
+        // would start a new turn boundary for input the agent never gets.
+        if (!answering && !requestedAnswerTo && (client.openQuestions.get(sessionId)?.size ?? 0) > 1) {
+          updateInputLedger(client, sessionId, clientId, 'rejected');
+          client.send({ type: 'error', sessionId, payload: { message: 'Multiple questions are pending. Answer the intended question directly.' } });
+          break;
+        }
         let persistedSeq = inputEntry?.userSeq;
         if (!reservation.recovery) {
           const userMessage = {
@@ -250,6 +261,7 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
         });
 
         if (answering) {
+          client.answeringQuestions.add(answerClaim);
           updateInputLedger(client, sessionId, clientId, 'dispatching');
           const delivery = deliverQuestionAnswer(client, sessionId, answering, {
             text: msg.payload.text === '[image]' ? '' : msg.payload.text,
@@ -261,15 +273,11 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
             updateInputLedger(client, sessionId, clientId, 'rejected');
             logger.error({ err, sessionId }, 'question answer from composer failed');
             client.send({ type: 'error', sessionId, payload: { message: describeFailure('Failed to deliver answer', err) } });
+          }).finally(() => {
+            client.answeringQuestions.delete(answerClaim);
           });
           break;
         }
-        if (!requestedAnswerTo && (client.openQuestions.get(sessionId)?.size ?? 0) > 1) {
-          updateInputLedger(client, sessionId, clientId, 'rejected');
-          client.send({ type: 'error', sessionId, payload: { message: 'Multiple questions are pending. Answer the intended question directly.' } });
-          break;
-        }
-
         if (effectiveDelivery === 'steer') {
           void dispatchInput(client, sessionId, async () => {
             beginSteerAcceptance(client, sessionId);
@@ -277,9 +285,13 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
             // Reassert active after resume so an idle/send race cannot leave a
             // successfully accepted interjection running behind an idle UI.
             client.send({ type: 'active', sessionId, payload: {} });
-            beginAdapterTurn(client, sessionId, reservation.turnId);
+            // A steer joins the turn running when it reaches the adapter. Its
+            // admission-time id can be stale (admitted while a lazy resume and
+            // the prompt it follows were still being dispatched).
+            const steerTurnId = client.activeInputTurnIds.get(sessionId) ?? reservation.turnId;
+            beginAdapterTurn(client, sessionId, steerTurnId);
             client.sessionManager.markActive(sessionId);
-            traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-STEER', sessionId, clientId, turnId: reservation.turnId });
+            traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-STEER', sessionId, clientId, turnId: steerTurnId });
             updateInputLedger(client, sessionId, clientId, 'dispatching');
             const delivery = sendToAdapter(client, sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'steer' });
             await delivery;
@@ -290,7 +302,7 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
               evt: 'INPUT-DELIVERED',
               sessionId,
               clientId,
-              turnId: reservation.turnId,
+              turnId: steerTurnId,
               delivery: 'steer',
             });
             // The adapter ACK is the ownership boundary for the interjection.
@@ -298,6 +310,9 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
             // ACK cannot become the final visible state. A later provider idle
             // still settles the steered work normally.
             finishSteerAcceptance(client, sessionId, true);
+            // Unless that turn has already settled (no later idle would
+            // clear an active reasserted now).
+            if (client.settledAdapterTurnIds.get(sessionId) === steerTurnId) return;
             client.send({ type: 'active', sessionId, payload: {} });
             client.sessionManager.markActive(sessionId);
           }).catch((err) => {
@@ -324,6 +339,9 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
                 client.send({ type: 'active', sessionId, payload: {} });
                 client.sessionManager.markActive(sessionId);
               }
+              // A retried rejected input reuses its turn id; that turn was
+              // closed as failed and now runs again.
+              if (client.settledAdapterTurnIds.get(sessionId) === reservation.turnId) client.settledAdapterTurnIds.delete(sessionId);
               beginAdapterTurn(client, sessionId, reservation.turnId);
               traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-SEND', sessionId, clientId, queueBehindMaintenance, turnId: reservation.turnId });
               updateInputLedger(client, sessionId, clientId, 'dispatching');
@@ -369,7 +387,23 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
             client.maintenanceFollowUps.delete(sessionId);
             updateInputLedger(client, sessionId, clientId, 'rejected');
             logger.error({ err, sessionId }, 'send input failed');
-            client.send({ type: 'error', sessionId, payload: { message: describeFailure('Failed to deliver message', err) } });
+            const message = describeFailure('Failed to deliver message', err);
+            client.send({ type: 'error', sessionId, payload: { message } });
+            // The adapter refused the prompt after this turn was announced
+            // active (e.g. Codex turn/start rejected a retired model). No
+            // provider idle will follow: close the turn as failed here.
+            const turnId = reservation.turnId;
+            if (client.activeInputTurnIds.get(sessionId) === turnId
+              && client.settledAdapterTurnIds.get(sessionId) !== turnId
+              && client.sessionManager.getMeta(sessionId)?.state === 'active') {
+              client.errorPersistedForTurn.set(sessionId, turnId);
+              client.pendingTerminalErrors.set(sessionId, { message, source: 'adapter', turnId });
+              try {
+                settleAdapterIdle(client, sessionId, { turnId });
+              } catch (settleErr) {
+                logger.error({ err: settleErr, sessionId }, 'closing the rejected turn failed');
+              }
+            }
           })
           .finally(() => {
             if (client.inputChains.get(sessionId) === next) client.inputChains.delete(sessionId);
@@ -395,9 +429,17 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
           .catch((err) => logger.error({ err, sessionId }, 'killSession failed'));
         break;
       case 'abort_session': {
+        // The Stop belongs to the turn running now. Its acknowledgement may
+        // arrive after that turn settled and a queued prompt took over; it
+        // must never settle the successor.
+        const turnId = client.activeInputTurnIds.get(sessionId);
+        const abortKey = turnId ?? '';
+        if (client.abortsInFlight.get(sessionId) === abortKey) break;
+        client.abortsInFlight.set(sessionId, abortKey);
         const snapshot = client.card.state(sessionId);
         client.adapter.abortSession(sessionId)
           .then(() => {
+            if (client.activeInputTurnIds.get(sessionId) !== turnId) return;
             // An open question is visible state too: record the abort so
             // the conversation shows "User aborted" after it.
             if (snapshot.draft || snapshot.action || client.openQuestions.has(sessionId)) {
@@ -410,7 +452,6 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
               client.card.clear(sessionId);
             }
             client.pendingTerminalErrors.delete(sessionId);
-            const turnId = client.activeInputTurnIds.get(sessionId);
             client.settledAdapterTurnIds.set(sessionId, turnId ?? '__unidentified__');
             if (turnId) client.sessionManager.markInputLedgerSettled(sessionId, turnId);
             resolveTurnIdle(client, sessionId);
@@ -424,6 +465,9 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
           .catch((err) => {
             logger.error({ err, sessionId }, 'abortSession failed');
             client.send({ type: 'error', sessionId, payload: { message: `Failed to abort session: ${(err as Error).message}` } });
+          })
+          .finally(() => {
+            if (client.abortsInFlight.get(sessionId) === abortKey) client.abortsInFlight.delete(sessionId);
           });
         break;
       }

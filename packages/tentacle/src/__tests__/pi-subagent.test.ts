@@ -41,6 +41,18 @@ describe('PiSubagentTracker — official example', () => {
     expect(end.subagent).toMatchObject({ name: 'scout', status: 'completed', tokens: 240 });
   });
 
+  it('single: a child aborted mid-tool closes that tool when it finishes', () => {
+    const t = new PiSubagentTracker();
+    t.onStart(D, { agent: 'scout', task: 'Run it' });
+    const out = t.onUpdate(D, official([toolCall('b', 'bash', { command: 'sleep 99' })]));
+    const end = t.onEnd(D, official([toolCall('b', 'bash', { command: 'sleep 99' })], { stopReason: 'aborted' }), true);
+    expect(summary([...out, ...end.emits])).toEqual([
+      `start bash ${D}:b <- ${D}`,
+      `complete tool ${D}:b <- ${D}`,
+    ]);
+    expect(end.emits.find((e) => e.kind === 'complete')).toMatchObject({ success: false });
+  });
+
   it('parallel: one synthetic subagent per task, each completing with its report', () => {
     const t = new PiSubagentTracker();
     expect(t.onStart(D, { tasks: [{ agent: 'scout', task: 'A' }, { agent: 'scout', task: 'B' }] })).toEqual({ name: 'parallel', task: '2 subagents', status: 'running' });

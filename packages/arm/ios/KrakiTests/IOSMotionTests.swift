@@ -70,8 +70,13 @@ final class IOSMotionTests: XCTestCase {
             for ip in cv.indexPathsForVisibleItems {
                 guard let cell = cv.cellForItem(at: ip) as? TKBubbleCell,
                       cell.contentSnapshot?.message.seq == seq else { continue }
+                // Everything as composited in the last frame: the cell's own
+                // presentation too. Mixing its model frame (already moved by a
+                // layout pass mid-frame) with the presentation scroll offset
+                // read a half-applied layout as a jump on slow CI machines.
                 let layer = cv.layer.presentation() ?? cv.layer
-                return cell.frame.minY - layer.bounds.minY + layer.sublayerTransform.m42
+                let cellLayer = cell.layer.presentation() ?? cell.layer
+                return cellLayer.frame.minY - layer.bounds.minY + layer.sublayerTransform.m42
             }
             return nil
         }

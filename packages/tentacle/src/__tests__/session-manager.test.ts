@@ -1,3 +1,4 @@
+import { pbkdf2 } from 'node:crypto';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SessionManager, type InputLedgerEntry } from '../session-manager.js';
 import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync, appendFileSync } from 'node:fs';
@@ -21,6 +22,14 @@ describe('SessionManager', () => {
 
   afterEach(() => {
     try { rmSync(dir, { recursive: true }); } catch {}
+  });
+
+  it('starts and lists resumable sessions despite stray entries in the sessions folder', () => {
+    const { sessionId } = sm.createSession('copilot', 'gpt-4');
+    mkdirSync(join(dir, 'sess copy'));
+    writeFileSync(join(dir, '.DS_Store'), '');
+    const restarted = new SessionManager(dir);
+    expect(restarted.getResumableSessions().map((m) => m.id)).toContain(sessionId);
   });
 
   // ── Create ────────────────────────────────────────────
@@ -1644,8 +1653,12 @@ describe('SessionManager fork attachment linking', () => {
     const { sessionId } = sm.createSession('pi');
     mkdirSync(join(dir, sessionId, 'attachments'), { recursive: true });
     for (let i = 0; i < 200; i++) writeFileSync(join(dir, sessionId, 'attachments', `a${i}.json`), '{}');
+    // Keep the I/O thread pool busy (as in a loaded test run): the linker's
+    // first mkdir then runs after the delete and must not recreate the fork.
+    const busy = Array.from({ length: 4 }, () => new Promise((r) => pbkdf2('x', 'y', 20_000, 32, 'sha256', r)));
     const fork = sm.forkSession(sessionId)!;
     sm.deleteSession(fork.sessionId);
+    await Promise.all(busy);
     await sm.linkForkAttachments(fork.sessionId, sessionId);
     expect(existsSync(join(dir, fork.sessionId))).toBe(false);
     rmSync(dir, { recursive: true, force: true });

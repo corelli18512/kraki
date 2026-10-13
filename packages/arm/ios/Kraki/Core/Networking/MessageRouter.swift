@@ -470,7 +470,7 @@ final class MessageRouter {
         case "agent_message":
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             appState.messageStore.clearRuntimeStatusIfCompacting(sessionId)
-            appState.messageStore.endCardTurn(sessionId)
+            appState.messageStore.landAgentMessage(sessionId, isQuestion: payload?["question"] is [String: Any])
             if let content = payload?["content"] as? String {
                 appState.sessionStore.setAgentTextActivity(sessionId, text: content)
             }
@@ -599,7 +599,8 @@ final class MessageRouter {
             }
 
         case "error":
-            appState.messageStore.clearCard(sessionId)
+            // Not a turn boundary: a retrying turn can recover, and its card
+            // (e.g. a pending permission) must stay. Turn end is signalled separately.
             appState.messageProvider?.ingestTailCandidate(sessionId, json: json)
             let errorText = payload?["message"] as? String ?? "Error"
             // If this error correlates to a pending create/fork/import

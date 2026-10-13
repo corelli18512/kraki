@@ -59,19 +59,23 @@ export function makeResumeConfig(
   };
 }
 
-export async function resumeTrackedSession(adapter: CopilotAdapter, sessionId: string): Promise<SessionEntry> {
+/** `carriedTurn`: the open turn of a send retrying across a runtime rebuild
+ *  (the rebuild cleared the session entries). */
+export async function resumeTrackedSession(adapter: CopilotAdapter, sessionId: string, carriedTurn?: TurnTracker): Promise<SessionEntry> {
   adapter.ensureClient();
 
   sanitizeEventsBeforeResume(adapter, sessionId);
 
-  const pendingPermissions = new Map<string, PendingPermission>();
-  const pendingQuestions = new Map<string, PendingQuestion>();
+  // A resume during a running turn (send recovery) keeps that turn and its
+  // still-open permission/question requests, so their cards stay answerable.
+  const existing = adapter.sessions.get(sessionId);
+  const pendingPermissions = existing?.pendingPermissions ?? new Map<string, PendingPermission>();
+  const pendingQuestions = existing?.pendingQuestions ?? new Map<string, PendingQuestion>();
   const session = await adapter.client!.resumeSession(
     sessionId,
     makeResumeConfig(adapter, sessionId, pendingPermissions, pendingQuestions),
   );
-  // A resume during a running turn (send recovery) keeps that turn.
-  const previous = adapter.sessions.get(sessionId)?.turn;
+  const previous = carriedTurn ?? adapter.sessions.get(sessionId)?.turn;
   const entry = { session, pendingPermissions, pendingQuestions, turn: previous ?? new TurnTracker(adapter, sessionId) };
 
   adapter.sessions.set(sessionId, entry);
