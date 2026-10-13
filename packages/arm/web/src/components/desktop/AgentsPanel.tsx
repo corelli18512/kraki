@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AgentCheckEvent, BuiltInBridge } from '../../lib/desktop';
+import { useDesktopSheet } from './useDesktopSheet';
 import './desktop-setup.css';
 
 export type AgentStatus = 'checking' | 'ready' | 'needs_login' | 'not_installed' | 'error';
@@ -96,6 +97,7 @@ type Check = ReturnType<typeof useAgentsCheck>;
 
 export function AgentsPanel({ check }: { check: Check }) {
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const closeCatalog = useCallback(() => setCatalogOpen(false), []);
   const summary = check.running ? 'Checking…'
     : check.readyCount === 0 ? (check.installed.length === 0 ? '' : 'No agent is ready yet.')
       : check.readyCount === 1 ? 'Ready to use.' : `${check.readyCount} agents ready.`;
@@ -134,20 +136,16 @@ export function AgentsPanel({ check }: { check: Check }) {
         )}
         <button type="button" className="ds-button ds-button-small" disabled={check.running} onClick={check.run}>Check Again</button>
       </div>
-      {catalogOpen && <SupportedAgentsSheet check={check} onClose={() => setCatalogOpen(false)} />}
+      {catalogOpen && <SupportedAgentsSheet check={check} onClose={closeCatalog} />}
     </div>
   );
 }
 
 function SupportedAgentsSheet({ check, onClose }: { check: Check; onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' || e.key === 'Enter') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  const sheet = useDesktopSheet(onClose);
   return (
     <div className="ds-sheet-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="ds-sheet" role="dialog" aria-modal="true" aria-label="Supported coding agents">
+      <div ref={sheet} tabIndex={-1} className="ds-sheet" role="dialog" aria-modal="true" aria-label="Supported coding agents">
         <div className="ds-sheet-title">Supported coding agents</div>
         <div className="ds-muted ds-sheet-detail">Kraki runs the agents you install on this PC, with your own accounts. Install an agent and sign in to it once in a terminal, then click Check Again.</div>
         <div>
