@@ -231,6 +231,7 @@ targets:
       - path: KrakiTests/AccountUsageTests.swift
       - path: KrakiTests/PushPreviewFormatTests.swift
       - path: KrakiTests/VoiceVocabularySyncTests.swift
+      - path: KrakiTests/ComposerAnswerImagesTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac.tests
@@ -323,6 +324,7 @@ targets:
       - path: Kraki/Features/Chat/ChatLoadingState.swift
       - path: Kraki/Features/Chat/ComposerOverlayReporting.swift
       - path: Kraki/Features/Chat/ComposerLatchSettling.swift
+      - path: Kraki/Features/Chat/ComposerAnswerImages.swift
       - path: Kraki/Features/Chat/ChatScrollPolicy.swift
       - path: Kraki/Features/Chat/Sizing/HeightMeasurementScheduler.swift
       - path: Kraki/Features/Chat/Mac
