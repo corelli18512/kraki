@@ -22,6 +22,7 @@ extension ComputerTrustState {
         case .needsPairing: return "Needs pairing"
         case .notPaired: return "Not paired"
         case .unsupported: return "Update needed"
+        case .stoppedSigning: return "Not signing"
         }
     }
 
@@ -33,6 +34,7 @@ extension ComputerTrustState {
         case .needsPairing: return "lock.open.fill"
         case .notPaired: return "shield.slash"
         case .unsupported: return "arrow.down.circle"
+        case .stoppedSigning: return "exclamationmark.shield.fill"
         }
     }
 
@@ -43,6 +45,7 @@ extension ComputerTrustState {
         case .failed: return Color(hex: 0xDC2626)
         case .needsPairing: return Color(hex: 0xD97706)
         case .notPaired, .unsupported: return .secondary
+        case .stoppedSigning: return Color(hex: 0xD97706)
         }
     }
 
@@ -66,12 +69,14 @@ extension ComputerTrustState {
             return "Not paired yet. Pairing makes this device's messages with \(computer) signed and end-to-end encrypted to keys you exchange in person: run `kraki connect` on it and scan the code."
         case .unsupported:
             return "Update Kraki on \(computer) to pair this device with it."
+        case .stoppedSigning:
+            return "\(computer) is sending messages without its signature, so Kraki ignores them. This happens when Kraki on \(computer) was downgraded to an older version: update it again, or forget the pairing to keep using it without device trust. If you didn't change anything there, keep the pairing."
         }
     }
 
     var needsAction: Bool {
         switch self {
-        case .failed, .needsPairing, .notPaired: return true
+        case .failed, .needsPairing, .notPaired, .stoppedSigning: return true
         default: return false
         }
     }
@@ -107,6 +112,7 @@ struct ComputerSecurityRows: View {
     var onPair: (() -> Void)?
 
     @State private var revoking: TrustedDeviceEntry?
+    @State private var confirmForget = false
 
     private var state: ComputerTrustState { appState.trustState(for: device.id) }
     private var info: ComputerTrustInfo? { appState.deviceTrust.info[device.id] }
@@ -179,11 +185,25 @@ struct ComputerSecurityRows: View {
             }
         }
 
-        if state != .paired, state != .unsupported, let onPair {
+        if state != .paired, state != .unsupported, state != .stoppedSigning, let onPair {
             Button(action: onPair) {
                 Label(pairActionTitle, systemImage: pairActionSymbol)
             }
             .accessibilityIdentifier("trust.pairButton")
+        }
+
+        if TentacleTrustStore.shared.pin(device.id) != nil {
+            Button(role: .destructive) { confirmForget = true } label: {
+                Label("Forget Pairing", systemImage: "lock.open")
+            }
+            .foregroundStyle(Color(hex: 0xDC2626))
+            .accessibilityIdentifier("trust.forgetButton")
+            .confirmationDialog("Forget pairing with \(device.name)?", isPresented: $confirmForget, titleVisibility: .visible) {
+                Button("Forget Pairing", role: .destructive) { appState.forgetPairing(device.id) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This device goes back to an unpaired connection with \(device.name): its messages are no longer signed, and Kraki's servers are no longer kept out. You can pair again by scanning the computer's code.")
+            }
         }
     }
 
@@ -267,6 +287,15 @@ struct ComputerSecurityRows: View {
 struct PairingNeededBanner: View {
     @Environment(AppState.self) private var appState
     var onPair: (DeviceSummary) -> Void
+    @State private var confirmForget: DeviceSummary?
+
+    private func bannerTitle(_ state: ComputerTrustState, _ device: DeviceSummary) -> String {
+        switch state {
+        case .needsPairing: return "Pair with \(device.name)"
+        case .stoppedSigning: return "\(device.name) stopped signing its messages"
+        default: return "Pairing with \(device.name) failed"
+        }
+    }
 
     var body: some View {
         if let device = appState.computersNeedingPairing.first {
@@ -276,7 +305,7 @@ struct PairingNeededBanner: View {
                     .foregroundStyle(state.tint)
                     .font(.system(size: 15))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(state == .needsPairing ? "Pair with \(device.name)" : "Pairing with \(device.name) failed")
+                    Text(bannerTitle(state, device))
                         .font(.system(size: 13, weight: .semibold))
                     Text(trustCopy: state == .needsPairing
                          ? "It only accepts devices paired with it. Run `kraki connect` there and scan the code."
@@ -284,11 +313,19 @@ struct PairingNeededBanner: View {
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button(pairTitle) { onPair(device) }
-                        .font(.system(size: 12, weight: .semibold))
-                        .buttonStyle(.borderless)
-                        .padding(.top, 2)
-                        .accessibilityIdentifier("trust.banner.pair")
+                    if state == .stoppedSigning {
+                        Button("Forget Pairing…") { confirmForget = device }
+                            .font(.system(size: 12, weight: .semibold))
+                            .buttonStyle(.borderless)
+                            .padding(.top, 2)
+                            .accessibilityIdentifier("trust.banner.forget")
+                    } else {
+                        Button(pairTitle) { onPair(device) }
+                            .font(.system(size: 12, weight: .semibold))
+                            .buttonStyle(.borderless)
+                            .padding(.top, 2)
+                            .accessibilityIdentifier("trust.banner.pair")
+                    }
                 }
                 Spacer(minLength: 0)
                 Button {
@@ -308,6 +345,17 @@ struct PairingNeededBanner: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .accessibilityIdentifier("trust.banner")
+            .confirmationDialog("Forget pairing with \(confirmForget?.name ?? "")?",
+                                isPresented: Binding(get: { confirmForget != nil }, set: { if !$0 { confirmForget = nil } }),
+                                titleVisibility: .visible) {
+                Button("Forget Pairing", role: .destructive) {
+                    if let id = confirmForget?.id { appState.forgetPairing(id) }
+                    confirmForget = nil
+                }
+                Button("Cancel", role: .cancel) { confirmForget = nil }
+            } message: {
+                Text("Only do this if you downgraded Kraki on that computer. This device then connects to it unpaired, and Kraki's servers are no longer kept out.")
+            }
         }
     }
 

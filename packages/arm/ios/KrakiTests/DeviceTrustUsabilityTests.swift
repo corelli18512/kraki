@@ -265,7 +265,7 @@ final class DeviceTrustUsabilityTests: XCTestCase {
     #endif
 
     func testAllBadgeStates() async throws {
-        let states: [ComputerTrustState] = [.paired, .pairing, .failed("bad_proof"), .needsPairing, .notPaired, .unsupported]
+        let states: [ComputerTrustState] = [.paired, .pairing, .failed("bad_proof"), .needsPairing, .notPaired, .unsupported, .stoppedSigning]
         try await screenshot(VStack(alignment: .leading, spacing: 24) {
             Text("Production trust badge states").font(.headline)
             ForEach(Array(states.enumerated()), id: \.offset) { _, state in TrustStatusBadge(state: state) }

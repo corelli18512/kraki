@@ -469,7 +469,9 @@ enum DeviceTrustInbound {
         // Without a claimed sender it cannot be told apart from a pinned computer.
         guard let claimed, !claimed.isEmpty else { return .rejected("unsigned_unattributed") }
         for id in [src, claimed].compactMap({ $0 }) where store.pin(id) != nil {
-            return .rejected("unsigned_from_pinned")
+            // The id lets the app notice a computer that stopped signing
+            // (e.g. Kraki downgraded there).
+            return .rejected("unsigned_from_pinned:\(id)")
         }
         marked[unsignedKey] = true
         guard let out = try? JSONSerialization.data(withJSONObject: marked) else { return .rejected("bad_json") }

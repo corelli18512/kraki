@@ -72,6 +72,7 @@ beforeEach(() => {
   vi.mocked(handleConsumerMessage).mockClear();
 });
 afterEach(() => {
+  delete process.env.KRAKI_FRESH_INSTALL_ENFORCE;
   vi.useRealTimers();
   vi.mocked(fs.unlinkSync).mockReset().mockImplementation(realUnlink);
   for (const socket of localSockets.splice(0)) socket.terminate();
@@ -553,6 +554,7 @@ describe('Tentacle policy and replay persistence', () => {
   });
 
   it('VT-FRESH-STARTUP: a fresh computer enforces before its first relay frame', async () => {
+    process.env.KRAKI_FRESH_INSTALL_ENFORCE = '1'; // future default; the race fix must hold
     const env = setup('policy', { fresh: true });
     // setup creates the identity via the same KeyManager lazy call used by auth.
     // The store existed first, as it does in daemon-worker.ts.
@@ -567,6 +569,7 @@ describe('Tentacle policy and replay persistence', () => {
     const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     await new Promise<void>(resolve => server.once('listening', resolve));
     const { port } = server.address() as { port: number };
+    process.env.KRAKI_FRESH_INSTALL_ENFORCE = '1'; // future default; the race fix must hold
     const env = setup('policy', { fresh: true, socket: true });
     // Warm the same lazy key calls used by buildAuthPayload, avoiding RSA CPU timing.
     env.keyManager.getCompactPublicKey();

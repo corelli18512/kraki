@@ -18,6 +18,19 @@ import type { KeyPair } from '@kraki/crypto';
 import { getConfigDir } from './config.js';
 import { initTrustPolicy } from './trust-store.js';
 
+/**
+ * Whether a computer set up from scratch starts with "Only paired devices" on.
+ *
+ * Transition release: off. Apps that predate device trust (and the web and
+ * Windows apps) cannot pair yet, so a new computer must still serve them; the
+ * apps suggest turning it on once every device is paired. A later release
+ * flips this default — computers that already have a policy keep theirs.
+ * `KRAKI_FRESH_INSTALL_ENFORCE=1` previews that behaviour (tests).
+ */
+export function freshInstallEnforces(): boolean {
+  return process.env.KRAKI_FRESH_INSTALL_ENFORCE === '1';
+}
+
 const KEYS_DIR_NAME = 'keys';
 const PRIVATE_KEY_FILE = 'private.pem';
 const PUBLIC_KEY_FILE = 'public.pem';
@@ -66,7 +79,7 @@ export class KeyManager {
       // before the RSA key becomes visible: any process that sees private.pem
       // without a policy would take it for an upgrade (compatible), and an
       // interrupted first start must not leave that ambiguity either.
-      initTrustPolicy(this.trustDir, true);
+      initTrustPolicy(this.trustDir, freshInstallEnforces());
       const generated = generateKeyPair();
       const tmp = `${privPath}.${process.pid}.${Date.now()}.tmp`;
       writeFileSync(tmp, generated.privateKey, { mode: 0o600 });
@@ -125,7 +138,7 @@ export class KeyManager {
       // from before) start compatible so their apps keep working until they
       // pair; fresh installs enforce.
       const upgraded = !this.freshInstall && existsSync(join(this.keysDir, PRIVATE_KEY_FILE));
-      initTrustPolicy(this.trustDir, !upgraded);
+      initTrustPolicy(this.trustDir, upgraded ? false : freshInstallEnforces());
     }
     const privateKey = importIdentityPrivateKey(
       this.loadOrCreate(IDENTITY_PRIVATE_KEY_FILE, () => generateIdentityKeyPair().privateKey),

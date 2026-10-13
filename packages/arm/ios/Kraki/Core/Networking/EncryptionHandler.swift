@@ -203,6 +203,10 @@ final class EncryptionHandler {
             messageData = data
         case .rejected(let reason):
             KLog.d("⛔️ device trust: rejected payload (\(reason)) src=\(json["src"] as? String ?? "-")")
+            if reason.hasPrefix("unsigned_from_pinned:") {
+                let id = String(reason.dropFirst("unsigned_from_pinned:".count))
+                DispatchQueue.main.async { [weak appState] in appState?.noteUnsignedFromPinned(id) }
+            }
             throw EncryptionError.untrusted(reason)
         }
 

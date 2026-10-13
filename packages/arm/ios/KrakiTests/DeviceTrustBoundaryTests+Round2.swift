@@ -93,6 +93,33 @@ extension DeviceTrustBoundaryTests {
         XCTAssertNil(DeviceTrustWire.parseSigned(odd))
     }
 
+    /// Transition: a paired computer that starts sending unsigned messages
+    /// (Kraki downgraded there) is flagged; a signed message clears it; the
+    /// user can forget the pairing and fall back to the unpaired connection.
+    func testDowngradedComputerIsFlaggedAndCanBeForgotten() throws {
+        pin()
+        let relayKey = try CryptoManager().generateKeyPair()
+        let reported = try CryptoManager().exportPublicKeySPKI(relayKey.publicKey)
+        app.deviceStore.setDevices([DeviceSummary(id: computer, name: "Pinned", role: .tentacle, kind: .desktop, encryptionKey: reported, online: true)])
+        try seedSession()
+        try route(legacyEnvelope(message("agent_message", device: computer, session: sid, payload: ["content": "unsigned"]), src: computer))
+        let flagged = expectation(description: "flagged")
+        DispatchQueue.main.async { flagged.fulfill() }
+        wait(for: [flagged], timeout: 2)
+        XCTAssertEqual(app.trustState(for: computer), .stoppedSigning)
+        XCTAssertFalse(app.computersNeedingPairing.isEmpty, "the banner offers to forget the pairing")
+        // The real computer still signing clears it.
+        try route(signedEnvelope(message("session_list", device: computer, payload: ["sessions": [["id": sid, "title": "t", "state": "idle"]]]), key: signer))
+        XCTAssertEqual(app.trustState(for: computer), .paired)
+        // Forgetting goes back to the legacy (unpaired) path.
+        app.forgetPairing(computer)
+        XCTAssertNil(TentacleTrustStore.shared.pin(computer))
+        XCTAssertEqual(app.trustState(for: computer), .notPaired)
+        XCTAssertTrue(app.sendEncryptedMessage(message("send_input", session: sid, payload: ["text": "after forget"])))
+        let payload = try XCTUnwrap(outbound().last)
+        XCTAssertNotNil(payload["keys"], "unpaired again: legacy RSA envelope")
+    }
+
     #if os(iOS)
     /// APPS-02: a push without a usable envelope shows generic text, not the relay's.
     func testNotificationServiceIgnoresRelayTextWithoutEnvelope() throws {

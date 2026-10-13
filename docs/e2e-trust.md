@@ -75,8 +75,13 @@ computer — `ts` within −15/+10 min and an unseen nonce (persisted in
 | pairing | accepted | accepted |
 
 The mode lives in `~/.kraki/trust/policy.json`, reloaded every 2 s:
-- **default**: a fresh install (RSA keys generated now) enforces; an install
-  upgraded from a version without device trust starts compatible.
+- **default (transition release): compatible**, for upgraded *and* fresh
+  installs, so every existing app — including apps without device trust, web
+  and Windows — keeps working right after upgrading. Paired apps suggest
+  turning "Only paired devices" on once all devices are paired. A later
+  release makes fresh installs enforce (`freshInstallEnforces()`;
+  `KRAKI_FRESH_INSTALL_ENFORCE=1` previews it); an existing policy file always
+  wins, so no computer changes mode by upgrading.
 - `kraki devices enforce on|off`, or a paired app (signed `set_trust_policy`).
 - `KRAKI_DEVICE_TRUST=enforce|compatible` fixes it for the process (tests).
 
@@ -158,6 +163,24 @@ KrakiTests/DeviceTrustBoundaryTests.swift, 28+ cases) found and now pin:
   control wrappers are refused on the local link even when fragmented; a local
   enrollment must be consumed before trust is granted; upgraded installs
   create device-trust keys at startup (same-Mac pairing).
+
+## Compatibility (transition release)
+
+| | old CLI | new CLI (compatible, default) | new CLI (enforce, opt-in) |
+|---|---|---|---|
+| old iOS/Mac app, web, Windows | ✓ | ✓ unpaired, as today | ✗ until updated and paired |
+| new iOS/Mac app | ✓ unpaired ("Update needed") | ✓ paired after a QR scan / automatically on the same Mac; unpaired until then | ✓ once paired |
+
+- No Head change: the current relay forwards everything (push previews
+  included) unchanged.
+- Old apps ignore the new QR parameters and greeting fields.
+- Downgrading a computer to an old CLI after pairing: the app sees unsigned
+  messages from a paired computer, drops them and shows "Not signing" with
+  **Forget Pairing** (a signed message from the computer clears the warning).
+  Forgetting returns this device to the unpaired connection.
+- Mixed setups: notifications from unpaired computers show generic text on
+  apps that paired with any computer.
+- Recommended order: release the apps first, then the CLI.
 
 ## Hardening from review round 2 (2026-10-13)
 

@@ -60,6 +60,7 @@ extension MessageRouter {
     func handleDeviceTrust(type: String, dict: [String: Any], appState: AppState) -> Bool {
         let unsigned = dict[DeviceTrustInbound.unsignedKey] as? Bool == true
         let signedBy = dict[DeviceTrustInbound.signedByKey] as? String
+        if let signedBy { appState.noteSignedFrom(signedBy) }
         if unsigned, TentacleTrustStore.shared.hasPins {
             let store = TentacleTrustStore.shared
             for sid in Self.referencedSessionIds(dict) {

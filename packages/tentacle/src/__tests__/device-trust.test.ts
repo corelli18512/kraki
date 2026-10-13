@@ -181,6 +181,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete process.env.KRAKI_FRESH_INSTALL_ENFORCE;
   if (savedHome === undefined) delete process.env.KRAKI_HOME; else process.env.KRAKI_HOME = savedHome;
   rmSync(home, { recursive: true, force: true });
 });
@@ -503,7 +504,15 @@ describe('device trust — administration from paired apps', () => {
 });
 
 describe('device trust — default policy', () => {
-  it('a fresh install enforces; an upgraded install stays compatible', () => {
+  it('transition release: a fresh install starts compatible, so apps without device trust keep working', () => {
+    const fresh = new KeyManager(join(home, 'transition', 'keys'));
+    fresh.getKeyPair();
+    expect(existsSync(join(home, 'transition', 'keys', 'identity-ed25519.key'))).toBe(true);
+    expect(readTrustPolicy(join(home, 'transition', 'trust')).enforce).toBe(false);
+  });
+
+  it('(future default) a fresh install enforces; an upgraded install stays compatible', () => {
+    process.env.KRAKI_FRESH_INSTALL_ENFORCE = '1';
     const fresh = new KeyManager(join(home, 'fresh', 'keys'));
     fresh.getKeyPair();
     expect(existsSync(join(home, 'fresh', 'keys', 'identity-ed25519.key'))).toBe(true);
@@ -541,6 +550,7 @@ describe('device trust — push previews', () => {
 
 describe('device trust — review regressions', () => {
   it('REV-03: a store created before the keys picks up the fresh-install policy on connect', () => {
+    process.env.KRAKI_FRESH_INSTALL_ENFORCE = '1';
     const keyManager = new KeyManager(join(home, 'late', 'keys'));
     const client = new RelayClient(createAdapter() as never, createSessionManager() as never, {
       relayUrl: 'ws://localhost:4000', authMethod: 'open',
@@ -622,6 +632,7 @@ describe('device trust — round 2 regressions', () => {
   });
 
   it('PROT2-01: a second process seeing the new RSA key cannot pick compatible for a fresh install', () => {
+    process.env.KRAKI_FRESH_INSTALL_ENFORCE = '1';
     const keys = join(home, 'race', 'keys');
     new KeyManager(keys).getKeyPair();
     // Remove the identity key, as if the first process stopped right after the RSA key.

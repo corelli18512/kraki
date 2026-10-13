@@ -39,6 +39,9 @@ enum ComputerTrustState: Equatable {
     case notPaired
     /// The computer's Kraki predates device trust.
     case unsupported
+    /// Paired, but the computer now sends unsigned messages (Kraki was
+    /// probably downgraded there) — or something is forging them.
+    case stoppedSigning
 }
 
 /// UI-facing device-trust state. The authoritative pins live in
@@ -58,6 +61,8 @@ final class DeviceTrustModel {
     var feedback: PairingFeedback?
     /// Computers the user dismissed the "needs pairing" banner for.
     var dismissedBanners: Set<String> = []
+    /// Paired computers that sent unsigned messages since their last signed one.
+    var stoppedSigning: Set<String> = []
 
     @ObservationIgnored private var lastPairRequest: [String: Date] = [:]
     @ObservationIgnored var retryScheduled = false
@@ -72,6 +77,7 @@ final class DeviceTrustModel {
         pairingRequired = []
         feedback = nil
         dismissedBanners = []
+        stoppedSigning = []
         lastPairRequest = [:]
         retryScheduled = false
         revision += 1
@@ -124,7 +130,7 @@ extension AppState {
     func trustState(for tentacleId: String) -> ComputerTrustState {
         _ = deviceTrust.revision
         if let pin = TentacleTrustStore.shared.pin(tentacleId) {
-            if pin.paired { return .paired }
+            if pin.paired { return deviceTrust.stoppedSigning.contains(tentacleId) ? .stoppedSigning : .paired }
             if pin.lastError == "trust_required" { return .needsPairing }
             if let error = pin.lastError { return .failed(error) }
             return .pairing
@@ -154,7 +160,7 @@ extension AppState {
             .filter { $0.role == .tentacle && !deviceTrust.dismissedBanners.contains($0.id) }
             .filter {
                 switch trustState(for: $0.id) {
-                case .needsPairing, .failed: return true
+                case .needsPairing, .failed, .stoppedSigning: return true
                 default: return false
                 }
             }
@@ -369,6 +375,36 @@ extension AppState {
             "type": type, "deviceId": deviceId ?? "", "seq": 0,
             "timestamp": ISO8601.now(), "payload": payload,
         ], routingTarget: tentacleId)
+    }
+
+    /// A paired computer's message arrived unsigned (and was dropped).
+    func noteUnsignedFromPinned(_ tentacleId: String) {
+        guard TentacleTrustStore.shared.pairedPin(tentacleId) != nil,
+              !deviceTrust.stoppedSigning.contains(tentacleId) else { return }
+        deviceTrust.stoppedSigning.insert(tentacleId)
+        deviceTrust.dismissedBanners.remove(tentacleId)
+        KLog.d("⚠️ device trust: \(tentacleId.prefix(12)) sent unsigned messages")
+    }
+
+    /// A signed message from the computer: it still signs.
+    func noteSignedFrom(_ tentacleId: String) {
+        if deviceTrust.stoppedSigning.contains(tentacleId) { deviceTrust.stoppedSigning.remove(tentacleId) }
+    }
+
+    /// Stop using device trust with this computer (e.g. Kraki was downgraded
+    /// there): forget its keys and go back to the unpaired connection. If the
+    /// computer still signs, tell it to forget this app too.
+    func forgetPairing(_ tentacleId: String) {
+        if TentacleTrustStore.shared.pairedPin(tentacleId) != nil, !deviceTrust.stoppedSigning.contains(tentacleId),
+           let selfId = deviceId {
+            revokeTrustedDevice(selfId, on: tentacleId)
+        }
+        TentacleTrustStore.shared.update(tentacleId) { $0 = nil }
+        deviceTrust.info[tentacleId] = nil
+        deviceTrust.stoppedSigning.remove(tentacleId)
+        deviceTrust.pairingRequired.remove(tentacleId)
+        deviceTrust.clearPairRequest(tentacleId)
+        KLog.d("🔓 device trust: forgot pairing with \(tentacleId.prefix(12))")
     }
 
     /// Logout / account deletion: computers must pair this install again.
