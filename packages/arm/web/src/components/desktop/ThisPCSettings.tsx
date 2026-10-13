@@ -33,7 +33,7 @@ function AgentsSheet({ builtIn, onClose }: { builtIn: BuiltInBridge; onClose: ()
         </div>
         <div className="ds-sheet-actions">
           <span className="ds-spacer" />
-          <button type="button" className="ds-button ds-button-primary" onClick={onClose}>
+          <button type="button" className="ds-button ds-button-primary ds-button-default" onClick={onClose}>
             Done
           </button>
         </div>
