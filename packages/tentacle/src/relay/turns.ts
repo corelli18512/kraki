@@ -102,14 +102,21 @@ export function reserveInput(
   const turnAnchor = effectiveDelivery === 'steer'
     ? proposedAnchor
     : Math.max(proposedAnchor, (client.nextInputTurnAnchors.get(sessionId) ?? 0) + 1);
-  if (effectiveDelivery === 'prompt') client.nextInputTurnAnchors.set(sessionId, turnAnchor);
+  // Only an input admitted as new claims its anchor: a duplicate or conflict
+  // resend must not shift the next prompt's turn id.
+  const claimAnchor = () => {
+    if (effectiveDelivery === 'prompt') client.nextInputTurnAnchors.set(sessionId, turnAnchor);
+  };
   // An accepted active-turn steer stays inside the provider run that is
   // already in flight. Reuse its identity so provider callbacks captured at
   // that run boundary remain admissible; only a stale steer opens a new turn.
   const turnId = effectiveDelivery === 'steer' && !staleSteer
     ? client.activeInputTurnIds.get(sessionId) ?? `${sessionId}:${turnAnchor}`
     : `${sessionId}:${turnAnchor}`;
-  if (!clientId) return { duplicate: false, conflict: false, recovery: false, effectiveDelivery, turnId };
+  if (!clientId) {
+    claimAnchor();
+    return { duplicate: false, conflict: false, recovery: false, effectiveDelivery, turnId };
+  }
 
   const fingerprint = inputFingerprint(client, text, attachments);
   const ledgerEntries = client.sessionManager.getInputLedger?.(sessionId) ?? [];
@@ -200,6 +207,7 @@ export function reserveInput(
   };
   client.sessionManager.recordInputLedger(sessionId, entry);
   client.admittedInputs.add(`${sessionId}\u0000${clientId}`);
+  claimAnchor();
   return { duplicate: false, conflict: false, recovery: false, effectiveDelivery, turnId, entry };
 }
 

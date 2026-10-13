@@ -76,7 +76,7 @@ vi.mock('@kraki/crypto', async () => {
 });
 
 import { SessionResumeError, RelayClient } from '../relay-client.js';
-import { beginAdapterTurn, finishTurnWithStatus, reserveInput } from '../relay/turns.js';
+import { beginAdapterTurn, finishTurnWithStatus, inputFingerprint, reserveInput } from '../relay/turns.js';
 import { handleConsumerMessage } from '../relay/consumer-messages.js';
 import { AttachmentStore } from '../attachment-store.js';
 import { createHash } from 'node:crypto';
@@ -3763,6 +3763,56 @@ describe('RelayClient pending-question digest', () => {
       'sess_1', { turnId: 'sess_1:0' },
     );
     expect(sm.markIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it('a steer admitted during a lazy resume joins the prompt it follows, not a stale turn', async () => {
+    const { adapter, ws, sm, client } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    let state: 'disconnected' | 'active' | 'idle' = 'disconnected';
+    smMock.getMeta.mockImplementation(() => ({ id: 'sess_1', agent: 'pi', state, lastSeq: 10 }));
+    smMock.resumeSession.mockImplementation(() => { state = 'active'; return { context: {} }; });
+    smMock.markActive.mockImplementation(() => { state = 'active'; });
+    smMock.markIdle.mockImplementation(() => { state = 'idle'; });
+    // Left from the turn before the session was evicted.
+    const internals = client as unknown as { activeInputTurnIds: Map<string, string>; settledAdapterTurnIds: Map<string, string> };
+    internals.activeInputTurnIds.set('sess_1', 'sess_1:5');
+    internals.settledAdapterTurnIds.set('sess_1', 'sess_1:5');
+    let resumed!: () => void;
+    (adapter.resumeSession as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise<{ sessionId: string }>((resolve) => { resumed = () => resolve({ sessionId: 'sess_1' }); }),
+    );
+    const send = (seq: number, text: string, extra: Record<string, unknown> = {}) => ws.emit('message', Buffer.from(consumerJson({
+      type: 'send_input', sessionId: 'sess_1', deviceId: 'app-x', seq,
+      timestamp: new Date().toISOString(), payload: { text, clientId: `resume-${seq}`, ...extra },
+    })));
+    send(630, 'prompt A');
+    await vi.waitFor(() => expect(adapter.resumeSession).toHaveBeenCalledTimes(1));
+    send(631, 'and also this', { delivery: 'steer' });
+    resumed();
+    await vi.waitFor(() => expect(adapter.sendMessage).toHaveBeenCalledTimes(2));
+    await vi.runAllTimersAsync();
+
+    const turnA = (adapter.setTurnIdentity as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    expect(internals.activeInputTurnIds.get('sess_1')).toBe(turnA);
+    (adapter.onIdle as (sid: string, event: { turnId: string }) => void)('sess_1', { turnId: turnA });
+    expect(smMock.markIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it('a duplicate input resend does not advance the next prompt turn anchor', () => {
+    const { sm, client } = buildClient();
+    const smMock = sm as Record<string, ReturnType<typeof vi.fn>>;
+    smMock.getMeta.mockReturnValue({ id: 'sess_1', state: 'idle', lastSeq: 10 });
+    smMock.getInputLedgerEntry.mockReturnValue({
+      version: 1, clientId: 'dup', status: 'settled', requestedDelivery: 'prompt', delivery: 'prompt',
+      turnId: 'sess_1:9', contentLength: 3, contentHash: inputFingerprint(client, 'old').contentHash, userSeq: 9,
+      updatedAt: new Date().toISOString(),
+    });
+    const anchors = (client as unknown as { nextInputTurnAnchors: Map<string, number> }).nextInputTurnAnchors;
+    expect(reserveInput(client, 'sess_1', 'dup', 'prompt', 'old')).toMatchObject({ duplicate: true });
+    expect(reserveInput(client, 'sess_1', 'dup', 'prompt', 'different')).toMatchObject({ conflict: true });
+    expect(anchors.has('sess_1')).toBe(false);
+    smMock.getInputLedgerEntry.mockReturnValue(null);
+    expect(reserveInput(client, 'sess_1', 'fresh', 'prompt', 'new').turnId).toBe('sess_1:11');
   });
 
   it('applies the idle deferred during steer acceptance when the adapter turn stays settled', async () => {

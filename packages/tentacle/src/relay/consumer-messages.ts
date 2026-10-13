@@ -279,9 +279,13 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
             // Reassert active after resume so an idle/send race cannot leave a
             // successfully accepted interjection running behind an idle UI.
             client.send({ type: 'active', sessionId, payload: {} });
-            beginAdapterTurn(client, sessionId, reservation.turnId);
+            // A steer joins the turn running when it reaches the adapter. Its
+            // admission-time id can be stale (admitted while a lazy resume and
+            // the prompt it follows were still being dispatched).
+            const steerTurnId = client.activeInputTurnIds.get(sessionId) ?? reservation.turnId;
+            beginAdapterTurn(client, sessionId, steerTurnId);
             client.sessionManager.markActive(sessionId);
-            traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-STEER', sessionId, clientId, turnId: reservation.turnId });
+            traceLog.info({ ns: process.hrtime.bigint().toString(), comp: 'tentacle', evt: 'APP-ADAPTER-STEER', sessionId, clientId, turnId: steerTurnId });
             updateInputLedger(client, sessionId, clientId, 'dispatching');
             const delivery = sendToAdapter(client, sessionId, msg.payload.text, msg.payload.attachments, { delivery: 'steer' });
             await delivery;
@@ -292,7 +296,7 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
               evt: 'INPUT-DELIVERED',
               sessionId,
               clientId,
-              turnId: reservation.turnId,
+              turnId: steerTurnId,
               delivery: 'steer',
             });
             // The adapter ACK is the ownership boundary for the interjection.
@@ -302,7 +306,7 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
             finishSteerAcceptance(client, sessionId, true);
             // Unless that turn has already settled (no later idle would
             // clear an active reasserted now).
-            if (client.settledAdapterTurnIds.get(sessionId) === reservation.turnId) return;
+            if (client.settledAdapterTurnIds.get(sessionId) === steerTurnId) return;
             client.send({ type: 'active', sessionId, payload: {} });
             client.sessionManager.markActive(sessionId);
           }).catch((err) => {
