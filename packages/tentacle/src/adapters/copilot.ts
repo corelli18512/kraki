@@ -29,7 +29,7 @@ import { KRAKI_MODES_PROMPT, modeChangeSignal, type SessionMode } from './permis
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 import { wireEvents } from './copilot-events.js';
 import { startEvictionSweep, stopEvictionSweep, touchSession } from './copilot-eviction.js';
-import { makePermissionHandler, makeQuestionHandler, cleanupSessionPermissions, broadcastPendingResolutions } from './copilot-permissions.js';
+import { makePermissionHandler, makeQuestionHandler, cleanupSessionPermissions, broadcastPendingResolutions, releasePendingForMode } from './copilot-permissions.js';
 import { resumeTrackedSession, handleUnavailableSession, linkCopilotStore } from './copilot-resume.js';
 import { resolveCopilotCliPath, getCopilotConfigDir } from './copilot-paths.js';
 import { loadCopilotSdk } from './copilot-sdk.js';
@@ -827,6 +827,7 @@ export class CopilotAdapter extends AgentAdapter {
     if ((prev ?? DEFAULT_SESSION_MODE) !== mode) {
       this.pendingModeSignals.set(sessionId, mode);
     }
+    releasePendingForMode(this, sessionId, mode);
     logger.debug({ sessionId, mode }, 'Session permission mode changed');
   }
 

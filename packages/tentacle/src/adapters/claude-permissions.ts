@@ -2,7 +2,7 @@
 
 import { isKrakiSelfManagementCommand, SELF_MANAGEMENT_DENIAL_REASON, shellCommandFromInput } from '../self-management-guard.js';
 import { DEFAULT_SESSION_MODE } from '@kraki/protocol';
-import { krakiAutoApproves } from './permission-policy.js';
+import { DELEGATE_ANSWER, krakiAutoApproves, type SessionMode } from './permission-policy.js';
 import type { ClaudeAdapter } from './claude.js';
 import { logger, type PermissionResult, type PendingPermission, type AskUserQuestionItem, type PendingQuestion, makeId } from './claude-session.js';
 import { toolNameToKind, parseClaudeToolCall } from './claude-tools.js';
@@ -166,6 +166,29 @@ export function emitQuestionCard(
   });
 
   pendingQuestions.set(qId, { resolve, questionId: qId, questions, qIndex: index, collected });
+}
+
+/** Entering auto/delegate approves the permissions already waiting (as the
+ *  new mode would have); delegate also answers the open questions. */
+export function releasePendingForMode(adapter: ClaudeAdapter, sessionId: string, mode: SessionMode): void {
+  const entry = adapter.sessions.get(sessionId);
+  if (!entry || (mode !== 'auto' && mode !== 'delegate')) return;
+  for (const [permId, p] of entry.pendingPermissions) {
+    p.resolve({ behavior: 'allow', updatedInput: p.input });
+    entry.pendingPermissions.delete(permId);
+    adapter.onPermissionAutoResolved?.(sessionId, permId, 'approved');
+  }
+  if (mode !== 'delegate') return;
+  for (const [qId, q] of entry.pendingQuestions) {
+    const questions = q.questions ?? [];
+    const answers = { ...(q.collected ?? {}) };
+    for (const item of questions.slice(q.qIndex ?? 0)) {
+      if (item?.question) answers[item.question] = DELEGATE_ANSWER;
+    }
+    q.resolve({ behavior: 'allow', updatedInput: { questions, answers } });
+    entry.pendingQuestions.delete(qId);
+    adapter.onQuestionAutoResolved?.(sessionId, qId);
+  }
 }
 
 export function broadcastPendingResolutions(adapter: ClaudeAdapter, sessionId: string): void {

@@ -37,13 +37,13 @@ import { CodexRpcProcess, type RpcNotification } from './codex-rpc.js';
 import { getConfigDir } from '../config.js';
 import { showImageTool } from '../mcp/tools/show-image.js';
 import { TurnTracker } from './turn-tracker.js';
-import { KRAKI_MODES_PROMPT, modeChangeSignal } from './permission-policy.js';
+import { DELEGATE_ANSWER, KRAKI_MODES_PROMPT, modeChangeSignal } from './permission-policy.js';
 import { TITLE_SYSTEM_PROMPT, buildTitlePrompt, cleanTitle, type TitleContext } from './title.js';
 import { tmpdir } from 'node:os';
 import { handleNotification } from './codex-notifications.js';
 import { handleServerRequest, emitNativeQuestion } from './codex-requests.js';
 import { str } from './codex-items.js';
-import { logger, type Mode, DEFAULT_MODE, KRAKI_EFFORTS, mapCodexModels, makeId, errMessage, type PendingPermission, type QueuedInput, type CodexSession, type SessionSidecar, type CodexAdapterOptions, type CodexChildThread } from './codex-session.js';
+import { logger, codexShouldAutoApprove, type Mode, DEFAULT_MODE, KRAKI_EFFORTS, mapCodexModels, makeId, errMessage, type PendingPermission, type QueuedInput, type CodexSession, type SessionSidecar, type CodexAdapterOptions, type CodexChildThread } from './codex-session.js';
 export { unwrapShellCommand } from './codex-items.js';
 export { codexShouldAutoApprove, mapCodexModels, type CodexAdapterOptions } from './codex-session.js';
 
@@ -586,6 +586,31 @@ export class CodexAdapter extends AgentAdapter {
     if (!s) return;
     if (s.mode !== mode) s.modeSignal = mode;
     s.mode = mode;
+    this.releasePendingForMode(s);
+  }
+
+  /** Entering auto/delegate approves the permissions already waiting (as the
+   *  new mode would have); delegate also answers the open questions. */
+  private releasePendingForMode(s: CodexSession): void {
+    if ((s.mode !== 'auto' && s.mode !== 'delegate') || !this.rpc?.alive) return;
+    for (const [id, p] of s.pendingPermissions) {
+      if (!codexShouldAutoApprove(s.mode, p.toolKind)) continue;
+      this.answerPermission(p, true);
+      s.pendingPermissions.delete(id);
+      this.onPermissionAutoResolved?.(s.sessionId, id, 'approved');
+    }
+    if (s.mode !== 'delegate') return;
+    for (const [id, q] of s.pendingQuestions) {
+      if (q.source === 'ask_user') {
+        this.rpc.respond(q.rpcId, { contentItems: [{ type: 'inputText', text: DELEGATE_ANSWER }], success: true });
+      } else {
+        const answers = { ...(q.collected ?? {}) };
+        for (const item of (q.questions ?? []).slice(q.index ?? 0)) answers[item.id] = { answers: [DELEGATE_ANSWER] };
+        this.rpc.respond(q.rpcId, { answers });
+      }
+      s.pendingQuestions.delete(id);
+      this.onQuestionAutoResolved?.(s.sessionId, id);
+    }
   }
 
   async setSessionModel(sessionId: string, model: string, reasoningEffort?: string): Promise<void> {
