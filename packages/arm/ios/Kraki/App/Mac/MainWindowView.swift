@@ -256,7 +256,6 @@ struct MainWindowView: View {
 
     @Environment(AppState.self) private var appState
     @Environment(TentacleCLIManager.self) private var tentacleCLI
-    @Environment(\.requestReview) private var requestReview
 
     @SceneStorage("mac.sidebarVisible")
     private var sidebarVisible: Bool = true
@@ -407,8 +406,10 @@ struct MainWindowView: View {
         .onReceive(NotificationCenter.default.publisher(for: .macDeleteSession)) { note in
             pendingDeleteSessionId = (note.userInfo?["sessionId"] as? String) ?? selectedSessionId
         }
-        .onReceive(NotificationCenter.default.publisher(for: .macRequestReview)) { _ in
-            requestReview()
+        .onReceive(NotificationCenter.default.publisher(for: .macArchiveSession)) { note in
+            guard let id = note.userInfo?["sessionId"] as? String else { return }
+            if selectedSessionId == id { selectedSessionId = nil }
+            appState.commandSender?.archiveSession(sessionId: id, archived: true)
         }
         #if DEBUG
         .onReceive(NotificationCenter.default.publisher(for: .macNativeAutomationAction)) { note in

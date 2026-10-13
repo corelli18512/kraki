@@ -146,11 +146,11 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         // After the policy above: a login launch switches back to menu-bar-only.
         installPresenceObservers()
 
-        // Remove the "File" and "Window" menus. SwiftUI synthesizes both,
-        // but this app has no file concept (New Session lives under
-        // Session) and is single-window. SwiftUI builds the main menu
-        // during launch, so we strip them on the next runloop tick and
-        // again whenever the app reactivates.
+        // Remove the "File" menu. SwiftUI synthesizes it, but this app has
+        // no file concept (New Session lives under Session; Close Window is
+        // in the Window menu, see MacCommands). SwiftUI builds the main menu
+        // during launch, so we strip it on the next runloop tick and again
+        // whenever the app reactivates.
         removeUnwantedMenus()
         DispatchQueue.main.async { [weak self] in self?.removeUnwantedMenus() }
 
@@ -251,6 +251,31 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        if let delay = ProcessInfo.processInfo.environment["KRAKI_MAINMENU_DUMP_AFTER"].flatMap(Double.init) {
+            // Check of the main menu bar without opening it: log every menu,
+            // item and shortcut as built (after SwiftUI and removeUnwantedMenus).
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                func keys(_ item: NSMenuItem) -> String? {
+                    guard !item.keyEquivalent.isEmpty else { return nil }
+                    let m = item.keyEquivalentModifierMask
+                    let names: [UInt16: String] = [0xF700: "↑", 0xF701: "↓", 0x08: "⌫", 0x7F: "⌫"]
+                    let key = item.keyEquivalent.utf16.first.flatMap { names[$0] } ?? item.keyEquivalent.uppercased()
+                    return (m.contains(.control) ? "⌃" : "") + (m.contains(.option) ? "⌥" : "")
+                        + (m.contains(.shift) ? "⇧" : "") + (m.contains(.command) ? "⌘" : "") + key
+                }
+                for top in NSApp.mainMenu?.items ?? [] {
+                    guard let menu = top.submenu else { continue }
+                    menu.update()
+                    NSLog("[mainmenu-dump] == %@", menu.title)
+                    for item in menu.items where !item.isHidden {
+                        NSLog("[mainmenu-dump] %@", item.isSeparatorItem ? "  ----" : "  " + [
+                            item.title, keys(item), item.isEnabled ? nil : "(disabled)",
+                        ].compactMap { $0 }.joined(separator: "  "))
+                    }
+                }
+            }
+        }
+
         if ProcessInfo.processInfo.environment["KRAKI_RENDER_BUBBLE_TEST"] == "1" {
             renderBubbleTestToPNG()
         } else if ProcessInfo.processInfo.environment["KRAKI_RENDER_CHAT_TEST"] == "1" {
@@ -331,16 +356,15 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         // SwiftUI can rebuild the main menu on reactivation — re-strip
-        // the menus we don't want so they never reappear.
+        // the File menu so it never reappears.
         removeUnwantedMenus()
     }
 
-    /// Removes the synthesized "File" and "Window" menus from the menu
-    /// bar. This app has no file concept (New Session lives under Session)
-    /// and is single-window, so the standard Window menu is noise.
+    /// Removes the synthesized "File" menu from the menu bar. The Window
+    /// menu stays (trimmed in MacCommands): it carries ⌘W and ⌘M.
     private func removeUnwantedMenus() {
         guard let mainMenu = NSApp.mainMenu else { return }
-        for title in ["File", "Window"] {
+        for title in ["File"] {
             if let item = mainMenu.items.first(where: { $0.submenu?.title == title }) {
                 mainMenu.removeItem(item)
             }
