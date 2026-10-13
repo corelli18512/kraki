@@ -60,16 +60,15 @@ private final class MacHTMLArtifactButton: NSButton {
     func configure(artifact: ContentRef, onOpen: @escaping (ContentRef) -> Void) {
         self.artifact = artifact
         self.onOpen = onOpen
-        let title = artifact.caption?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = artifact.name?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let displayTitle = !(title ?? "").isEmpty
-            ? title!
-            : (!(name ?? "").isEmpty ? name! : "Report")
+        let displayTitle = [artifact.caption, artifact.name]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? "Report"
         titleLabel.stringValue = displayTitle
         detailLabel.stringValue = "Report · \(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))"
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
         setAccessibilityLabel("Open report \(displayTitle)")
+        toolTip = MacControlHelp.report(displayTitle)
         needsDisplay = true
     }
 

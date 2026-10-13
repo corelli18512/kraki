@@ -374,7 +374,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         jumpButton.target = self
         jumpButton.action = #selector(jumpTapped)
         jumpButton.isHidden = true
-        jumpButton.setAccessibilityLabel("Jump to latest")
+        jumpButton.setAccessibilityLabel("Jump to latest", toolTip: MacControlHelp.jumpToLatest)
         addSubview(jumpButton)
 
         latestStartButton.image = NSImage(
@@ -386,7 +386,7 @@ final class MacChatScrollView: MacSmoothScrollView {
         latestStartButton.target = self
         latestStartButton.action = #selector(latestStartTapped)
         latestStartButton.isHidden = true
-        latestStartButton.setAccessibilityLabel("Jump to previous reply start")
+        latestStartButton.setAccessibilityLabel("Jump to previous reply start", toolTip: MacControlHelp.jumpToReplyStart)
         addSubview(latestStartButton)
 
         unseenDot.wantsLayer = true

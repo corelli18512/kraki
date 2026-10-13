@@ -362,7 +362,7 @@ final class MacChatBubbleCell: NSView {
         stepsButton.target = self
         stepsButton.action = #selector(stepsTapped)
         stepsButton.isHidden = true
-        stepsButton.setAccessibilityLabel("Show steps")
+        stepsButton.setAccessibilityLabel("Show steps", toolTip: MacControlHelp.showSteps)
 
         deliveryStatus.isBordered = false
         deliveryStatus.imagePosition = .imageOnly

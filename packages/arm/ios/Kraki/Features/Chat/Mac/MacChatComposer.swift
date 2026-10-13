@@ -4,7 +4,7 @@ import CoreText
 import SwiftUI
 import UniformTypeIdentifiers
 
-private enum MacComposerIntent: Equatable {
+enum MacComposerIntent: Equatable {
     case prompt
     case steer
     case answerQuestion
@@ -486,9 +486,16 @@ struct MacChatComposer: View {
         .buttonStyle(.plain)
         .disabled(role == .stop ? (abortPending || !isDeviceReachable) : !canSend)
         .opacity(role == .stop ? (isDeviceReachable ? 1 : 0.5) : (canSend && !isDeviceReachable ? 0.6 : 1))
-        .accessibilityLabel(voiceOwnsComposer ? (pendingPermission != nil ? "Edit voice text" : (pendingQuestion != nil ? "Submit voice answer" : "Send voice message")) : (role == .stop ? "Stop agent" : sendAccessibilityLabel))
+        .accessibilityLabel(MacControlHelp.accessibilityLabel(primaryAction))
         .accessibilityIdentifier(voiceOwnsComposer ? "voice-send" : "chat-primary")
-        .accessibilityHint(role == .stop ? "Aborts the current agent turn" : sendAccessibilityHint)
+        .accessibilityHint(MacControlHelp.accessibilityHint(primaryAction))
+        .controlHelp(MacControlHelp.primary(primaryAction, canSend: canSend, deviceReachable: isDeviceReachable,
+                                            deviceName: session.flatMap { appState.deviceStore.devices[$0.deviceId]?.name }))
+    }
+
+    private var primaryAction: MacControlHelp.Primary {
+        .of(voice: voiceOwnsComposer, permission: pendingPermission != nil, question: pendingQuestion != nil,
+            stop: primaryRole == .stop, stopping: abortPending, intent: submissionIntent)
     }
 
     private var clearButton: some View {
@@ -504,25 +511,7 @@ struct MacChatComposer: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Clear message")
-    }
-
-    private var sendAccessibilityLabel: String {
-        switch submissionIntent {
-        case .answerQuestion: return "Submit answer"
-        case .denyPermission: return "Deny with reason"
-        case .steer: return "Steer agent"
-        case .prompt: return "Send message"
-        }
-    }
-
-    private var sendAccessibilityHint: String {
-        switch submissionIntent {
-        case .answerQuestion: return "Answers the pending question"
-        case .denyPermission: return "Denies the permission with this reason"
-        case .steer: return "Interjects into the active agent turn"
-        case .prompt: return "Sends the current message"
-        }
+        .labelAndHelp(MacControlHelp.clearMessage)
     }
 
     private var inlineVoiceButton: some View {
@@ -543,6 +532,8 @@ struct MacChatComposer: View {
         .accessibilityLabel("Start voice input")
         .accessibilityIdentifier("chat-voice-microphone")
         .accessibilityHint("Click or press Option-Space to dictate into this draft")
+        .controlHelp(MacControlHelp.voice(available: appState.voiceCapability != nil,
+                                          busy: voiceController.isBusy))
     }
 
     @ViewBuilder
@@ -624,6 +615,8 @@ struct MacChatComposer: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .disabled(!canUseImageSlot)
+                    .controlHelp(attachHelp)
                     Button(action: clearImage) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 12))
@@ -632,7 +625,8 @@ struct MacChatComposer: View {
                     }
                     .buttonStyle(.plain)
                     .offset(x: -1, y: 4)
-                    .accessibilityLabel("Remove image")
+                    .disabled(!canUseImageSlot)
+                    .labelAndHelp(MacControlHelp.removeImage)
                 }
             } else {
                 Button(action: chooseImage) {
@@ -641,11 +635,12 @@ struct MacChatComposer: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .disabled(!canUseImageSlot)
+                .controlHelp(attachHelp)
             }
         }
         .padding(.leading, 6)
-        .disabled(!canAttachImage || voiceOwnsComposer)
-        .opacity(canAttachImage && !voiceOwnsComposer ? 1 : 0.4)
+        .opacity(canUseImageSlot ? 1 : 0.4)
         .background {
             #if DEBUG
             MacComposerControlGeometryProbe(identifier: "chat-attach-image")
@@ -654,6 +649,15 @@ struct MacChatComposer: View {
         .accessibilityIdentifier("chat-attach-image")
         .accessibilityLabel("Attach image")
         .accessibilityValue(previewImage == nil ? "No image selected" : "Image selected")
+    }
+
+    private var canUseImageSlot: Bool { canAttachImage && !voiceOwnsComposer }
+
+    /// Per button, not on the slot: an outer `.help` would replace the ×'s own.
+    /// Outside `.disabled` so it still shows (and says why) when greyed out.
+    private var attachHelp: String {
+        MacControlHelp.attachImage(blocked: .of(voice: voiceOwnsComposer, canAttach: canAttachImage,
+            answering: submissionIntent == .answerQuestion, agent: session?.agent), hasImage: previewImage != nil)
     }
 
     private func requestAbort() {

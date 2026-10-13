@@ -137,6 +137,7 @@ struct MacComposerVoiceSurface: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Cancel voice input")
             .accessibilityIdentifier("voice-cancel")
+            .help(MacControlHelp.voiceCancel)
             .background {
                 #if DEBUG
                 MacComposerControlGeometryProbe(identifier: "voice-cancel")
@@ -156,6 +157,7 @@ struct MacComposerVoiceSurface: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Edit voice text")
             .accessibilityIdentifier("voice-to-text")
+            .help(MacControlHelp.voiceEdit)
             .background {
                 #if DEBUG
                 MacComposerControlGeometryProbe(identifier: "voice-to-text")
