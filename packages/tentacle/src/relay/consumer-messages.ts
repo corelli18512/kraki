@@ -230,35 +230,48 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
           break;
         }
         let persistedSeq = inputEntry?.userSeq;
-        if (!reservation.recovery) {
-          const userMessage = {
-            type: 'user_message' as const,
+        // A prompt that arrives while an earlier prompt's turn is still
+        // running (second device, stale steer) waits in the input chain. Its
+        // user_message is persisted when it dispatches, not now: persisting
+        // would start a new turn boundary while the agent still works on the
+        // earlier turn (its Steps, artifacts and push text would move to this
+        // prompt). Until then the ledger keeps it `pending`, so the app keeps
+        // its optimistic bubble and resends it after a daemon restart.
+        const previous = client.inputChains.get(sessionId);
+        const persistAtDispatch = !reservation.recovery && !answering && effectiveDelivery === 'prompt' && !!previous;
+        const persistInput = () => {
+          if (!reservation.recovery) {
+            const userMessage = {
+              type: 'user_message' as const,
+              sessionId,
+              payload: {
+                content: msg.payload.text,
+                ...(msg.payload.attachments?.length && { attachments: msg.payload.attachments }),
+                ...(msg.payload.clientId && { clientId: msg.payload.clientId }),
+                ...(effectiveDelivery === 'steer' && !answering && { delivery: 'steer' as const }),
+                ...(answering && { answerTo: answering.questionId }),
+              },
+            };
+            client.send(userMessage);
+            // send() assigns the per-session sequence by mutating the outbound
+            // message. Reuse it instead of rescanning messages.jsonl.
+            persistedSeq = (userMessage as typeof userMessage & { seq?: number }).seq;
+            updateInputLedger(client, sessionId, clientId, 'persisted', persistedSeq);
+          }
+          traceLog.info({
+            ns: process.hrtime.bigint().toString(),
+            comp: 'tentacle',
+            evt: 'INPUT-PERSISTED',
             sessionId,
-            payload: {
-              content: msg.payload.text,
-              ...(msg.payload.attachments?.length && { attachments: msg.payload.attachments }),
-              ...(msg.payload.clientId && { clientId: msg.payload.clientId }),
-              ...(effectiveDelivery === 'steer' && !answering && { delivery: 'steer' as const }),
-              ...(answering && { answerTo: answering.questionId }),
-            },
-          };
-          client.send(userMessage);
-          // send() assigns the per-session sequence by mutating the outbound
-          // message. Reuse it instead of rescanning messages.jsonl.
-          persistedSeq = (userMessage as typeof userMessage & { seq?: number }).seq;
-          updateInputLedger(client, sessionId, clientId, 'persisted', persistedSeq);
-        }
-        traceLog.info({
-          ns: process.hrtime.bigint().toString(),
-          comp: 'tentacle',
-          evt: 'INPUT-PERSISTED',
-          sessionId,
-          clientId,
-          seq: persistedSeq ?? undefined,
-          turnId: reservation.turnId,
-          textLen: msg.payload.text.length,
-          contentHash: inputEntry?.contentHash,
-        });
+            clientId,
+            seq: persistedSeq ?? undefined,
+            turnId: reservation.turnId,
+            textLen: msg.payload.text.length,
+            contentHash: inputEntry?.contentHash,
+            atDispatch: persistAtDispatch,
+          });
+        };
+        if (!persistAtDispatch) persistInput();
 
         if (answering) {
           client.answeringQuestions.add(answerClaim);
@@ -324,8 +337,8 @@ export function handleConsumerMessage(client: RelayClient, raw: unknown): void {
           break;
         }
 
-        const previous = client.inputChains.get(sessionId);
         const deliver = async () => {
+          if (persistAtDispatch) persistInput();
           const idle = waitForTurnIdle(client, sessionId);
           try {
             const dispatch = dispatchInput(client, sessionId, async () => {

@@ -526,6 +526,9 @@ export class CodexAdapter extends AgentAdapter {
     // it as a new turn, but for the relay it is the same logical turn. Settling
     // that turn now would make the relay drop everything the steer produces.
     const continuesSameTurn = !!next?.relayTurnId && next.relayTurnId === ev.turnId && !s.turn.isAborted;
+    // The continuation produces the turn's reply: this run's prose is a step
+    // (as Pi does while a turn is held open), not a second reply.
+    if (continuesSameTurn && !error && !s.turn.pendingError) s.turn.holdOpen();
     s.turn.finish({ error, idle: !continuesSameTurn });
     this.onFlushComplete?.(s.sessionId);
     if (next) this.startQueued(s, next);

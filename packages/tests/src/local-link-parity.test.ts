@@ -284,6 +284,10 @@ async function runScript(mode: "head" | "link"): Promise<RunResult> {
 		);
 		await until(() => ofType(macInbox, "user_message").length >= 1);
 		await settle();
+		// The phone's turn ends first: a normal prompt sent while a turn is
+		// still running is persisted only when it dispatches (after that idle).
+		adapter.onIdle?.(S);
+		await settle();
 		macSend(
 			cmd(mac, "send_input", S, { text: "from mac", clientId: "c-mac-1" }),
 		);

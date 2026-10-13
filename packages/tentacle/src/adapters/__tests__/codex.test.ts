@@ -473,6 +473,21 @@ describe('CodexAdapter (fake app-server child process)', () => {
     ]);
   });
 
+  it('a steer queued while the turn starts continues it: the first answer is a step, the continuation is the reply (2-48)', async () => {
+    await started();
+    const sid = await session();
+    const first = turn(sid, 'PAUSE first', 'rt-1');
+    // turn/start is still in flight: Codex cannot steer yet, so it is queued.
+    await turn(sid, 'more', 'rt-1', 'steer');
+    await first;
+    await h.idleCount(1);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(h.sent('turn/start')).toHaveLength(2);
+    expect(h.of('idle')).toHaveLength(1);
+    expect(h.of('message').map((m) => [m.content, m.turnId])).toEqual([['echo: more', 'rt-1']]);
+    expect(h.of('narration_trace').map((m) => [m.content, m.turnId])).toEqual([['echo: PAUSE first', 'rt-1']]);
+  });
+
   it('compaction items drive the compaction status', async () => {
     await started();
     const sid = await session();
