@@ -10,7 +10,23 @@
 
 # @kraki/crypto
 
-End-to-end encryption helpers for Kraki.
+Encryption helpers owned and maintained in the Kraki monorepo.
+
+- `src/v2.ts`: synchronous Node X25519/HKDF-SHA256/AES-256-GCM envelope.
+- `src/web/` (`@kraki/crypto/web`): asynchronous Web Crypto implementation.
+- `SwiftCrypto/`: CryptoKit implementation (module name `CoinfraCrypto` retained for source compatibility).
+- `src/trust.ts`: Ed25519 message signatures and replay helpers.
+- `src/__tests__/fixtures/`: canonical cross-language vectors.
+
+The Web Crypto implementation was imported from `corelli18512/coinfra` at
+`e23b2f8ef093605186cb910663778e0b711d8bfe` (crypto 0.2.0); Swift is the implementation
+already shipped by Kraki. Kraki is now the source of truth for all three.
+Historical wire identifiers (including `coinfra-crypto/v1 kek`) are protocol
+constants, not repository names: do not rename them when moving code.
+See `ENVELOPE.md` for the imported envelope specification. The old external npm
+package is not required to build or release Kraki.
+
+The legacy RSA APIs below remain available for older clients.
 
 > Preview: `@kraki/crypto` is still evolving with the rest of the protocol and device model.
 

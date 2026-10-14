@@ -2,14 +2,13 @@
  * Device trust on the Tentacle: seal outbound payloads to pinned app keys,
  * authenticate inbound commands, and accept pairings.
  *
- * Two modes, from `<KRAKI_HOME>/trust/policy.json` (`kraki devices enforce
- * on|off`, or a paired app), overridable with `KRAKI_DEVICE_TRUST`:
+ * Shipping RelayClient uses compatible mode (account access). The historical
+ * enforcement path remains for old-protocol regression/transition fixtures:
  * - **enforced**: only paired apps receive
  *   anything and only their signed messages are acted on. The relay can drop
  *   or delay traffic, but cannot read it, inject commands or enroll a device.
  * - **compatible**: paired apps get signed X25519 payloads and must
- *   sign; unpaired apps keep the legacy RSA path. This is the migration step:
- *   pair every app, then enforce.
+ *   sign; unpaired account apps keep the legacy RSA path. No pairing gate.
  *
  * See docs/e2e-trust.md.
  */
@@ -41,14 +40,6 @@ export interface PairOutcome {
   /** The app's X25519 key from the claim (to answer even on failure). */
   encryptionKey?: string;
   device?: TrustedDevice;
-}
-
-/** A fixed mode from the environment, if set. */
-export function deviceTrustModeFromEnv(): 'enforce' | 'compatible' | undefined {
-  const v = process.env.KRAKI_DEVICE_TRUST;
-  if (v === 'enforce' || v === '1') return 'enforce';
-  if (v === 'compatible' || v === '0') return 'compatible';
-  return undefined;
 }
 
 /** Messages only a paired app may send (checked by signature). */

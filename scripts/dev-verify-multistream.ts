@@ -23,7 +23,7 @@
  * Run: pnpm exec tsx scripts/dev-verify-multistream.ts
  */
 import { WebSocketServer, WebSocket } from 'ws';
-import { StreamSet, Endpoint } from '@coinfra/pulse';
+import { StreamSet, Endpoint } from '@kraki/pulse';
 import { generateKeyPair, exportPublicKey, importPublicKey, encryptToBlob, decryptFromBlob } from '@kraki/crypto';
 
 async function main(): Promise<void> {

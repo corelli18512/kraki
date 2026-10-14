@@ -85,14 +85,14 @@ function createSessionManager(): Record<string, unknown> {
 /** What the (compromised) Head sees leave the Tentacle. */
 interface Sent { payload: Record<string, unknown>; target: string | string[] | undefined }
 
-function setup(mode: 'enforce' | 'compatible' | 'policy') {
+function setup(mode: 'enforce' | 'compatible' | 'policy' | 'account') {
   const keyManager = new KeyManager(join(process.env.KRAKI_HOME!, 'keys'));
   const adapter = createAdapter();
   const client = new RelayClient(adapter as never, createSessionManager() as never, {
     relayUrl: 'ws://localhost:4000',
     authMethod: 'open',
     device: { name: 'Test Mac', role: 'tentacle', deviceId: TENTACLE },
-    ...(mode === 'policy' ? {} : { deviceTrust: mode }),
+    ...(mode === 'account' ? {} : { deviceTrust: mode }), // historical fixture or shipping defaults
     localLink: false,
   }, keyManager);
   const sent: Sent[] = [];
@@ -511,18 +511,88 @@ describe('device trust — default policy', () => {
     expect(readTrustPolicy(join(home, 'transition', 'trust')).enforce).toBe(false);
   });
 
-  it('(future default) a fresh install enforces; an upgraded install stays compatible', () => {
+  it('fresh and upgraded installs stay account-access even with the retired environment flag', () => {
     process.env.KRAKI_FRESH_INSTALL_ENFORCE = '1';
     const fresh = new KeyManager(join(home, 'fresh', 'keys'));
     fresh.getKeyPair();
     expect(existsSync(join(home, 'fresh', 'keys', 'identity-ed25519.key'))).toBe(true);
-    expect(readTrustPolicy(join(home, 'fresh', 'trust')).enforce).toBe(true);
+    expect(readTrustPolicy(join(home, 'fresh', 'trust')).enforce).toBe(false);
 
     const old = new KeyManager(join(home, 'old', 'keys'));
     writeFileSync(join(home, 'old', 'keys', 'private.pem'), generateKeyPair().privateKey, { mode: 0o600 });
     new KeyManager(join(home, 'old', 'keys')).getPublicIdentity();
     expect(readTrustPolicy(join(home, 'old', 'trust')).enforce).toBe(false);
     void old;
+  });
+});
+
+describe('account access — shipping rollback with existing protocol', () => {
+  it('retires an enforced policy without changing existing keys, signatures or v2 previews', async () => {
+    const old = setup('enforce');
+    const phone = makeApp('dev_paired_phone');
+    joined(old, phone);
+    old.deliver(pairRequest(old, phone, createPairingSecret(home)), phone.id);
+    old.client.deviceTrust!.store.setPolicy({ enforce: true });
+    const identity = old.keyManager.getPublicIdentity();
+    const pin = old.client.deviceTrust!.store.get(phone.id);
+    old.client.disconnect();
+
+    const migrated = setup('account');
+    expect(migrated.client.deviceTrust!.enforced).toBe(false);
+    expect(migrated.client.deviceTrust!.policyLocked).toBe(true);
+    expect(readTrustPolicy(join(home, 'trust')).enforce).toBe(false);
+    expect(existsSync(join(home, 'trust', 'policy.pairing-only.json'))).toBe(true);
+    expect(migrated.keyManager.getPublicIdentity()).toEqual(identity);
+    expect(migrated.client.deviceTrust!.store.get(phone.id)).toEqual(pin);
+    joined(migrated, phone);
+    expect(readable(migrated, phone).some((m) => m.type === 'session_list' && m.__signed === true)).toBe(true);
+    expect(migrated.sent.filter((s) => s.target === phone.id).every((s) => isV2Payload(s.payload))).toBe(true);
+
+    const browser = makeApp('dev_new_browser');
+    joined(migrated, browser);
+    expect(readable(migrated, browser).some((m) => m.type === 'session_list')).toBe(true);
+    expect(readable(migrated, browser).some((m) => m.type === 'trust_required')).toBe(false);
+    const input = encryptToBlob(JSON.stringify({ type: 'send_input', deviceId: browser.id, sessionId: 's1',
+      payload: { text: 'account login without scanning' } }),
+    [{ deviceId: TENTACLE, publicKey: migrated.keyManager.getKeyPair().publicKey }]);
+    migrated.deliver(input as never, browser.id);
+    await flush();
+    expect(sendInputCalls(migrated)).toHaveLength(1);
+    migrated.client.disconnect();
+  });
+
+  it('old clients cannot re-enable the pairing gate with a signed policy request', () => {
+    const env = setup('account');
+    const phone = makeApp('dev_phone');
+    joined(env, phone);
+    env.deliver(pairRequest(env, phone, createPairingSecret(home)), phone.id);
+    env.deliver(appSend(env, phone, { type: 'set_trust_policy', payload: {
+      enforce: true, revision: env.client.deviceTrust!.store.policyRevision,
+    } }), phone.id);
+    expect(env.client.deviceTrust!.enforced).toBe(false);
+    expect(readable(env, phone).filter((m) => m.type === 'trusted_devices').at(-1)?.payload)
+      .toMatchObject({ enforced: false, policyLocked: true });
+    const fresh = makeApp('dev_new_app');
+    joined(env, fresh);
+    expect(env.client.consumerKeys.has(fresh.id)).toBe(true);
+    env.client.disconnect();
+  });
+
+  it('retired process flags cannot gate a new account login', () => {
+    const previous = process.env.KRAKI_DEVICE_TRUST;
+    process.env.KRAKI_DEVICE_TRUST = 'enforce';
+    process.env.KRAKI_FRESH_INSTALL_ENFORCE = '1';
+    try {
+      const env = setup('account');
+      const fresh = makeApp('dev_fresh');
+      joined(env, fresh);
+      expect(env.client.deviceTrust!.enforced).toBe(false);
+      expect(readable(env, fresh).some((m) => m.type === 'session_list')).toBe(true);
+      env.client.disconnect();
+    } finally {
+      if (previous === undefined) delete process.env.KRAKI_DEVICE_TRUST;
+      else process.env.KRAKI_DEVICE_TRUST = previous;
+    }
   });
 });
 
@@ -559,7 +629,7 @@ describe('device trust — review regressions', () => {
     expect(client.deviceTrust!.enforced).toBe(false); // nothing on disk yet
     keyManager.getKeyPair(); // what the connect handler does first
     (client as unknown as { ensureDeviceTrustReady(): void }).ensureDeviceTrustReady();
-    expect(client.deviceTrust!.enforced).toBe(true);
+    expect(client.deviceTrust!.enforced).toBe(false);
   });
 
   it('REV-04: a paired app re-pairs with a fresh code, and a lost pair_result can be retried', () => {
@@ -631,14 +701,14 @@ describe('device trust — round 2 regressions', () => {
     expect(env.client.deviceTrust!.enforced).toBe(true);
   });
 
-  it('PROT2-01: a second process seeing the new RSA key cannot pick compatible for a fresh install', () => {
+  it('PROT2-01: interrupted key creation cannot restore retired enforcement', () => {
     process.env.KRAKI_FRESH_INSTALL_ENFORCE = '1';
     const keys = join(home, 'race', 'keys');
     new KeyManager(keys).getKeyPair();
     // Remove the identity key, as if the first process stopped right after the RSA key.
     rmSyncFs(join(keys, 'identity-ed25519.key'), { force: true });
     new KeyManager(keys).getPublicIdentity();
-    expect(readTrustPolicy(join(home, 'race', 'trust')).enforce).toBe(true);
+    expect(readTrustPolicy(join(home, 'race', 'trust')).enforce).toBe(false);
   });
 
   it('PROT2-03: an absorbed external revocation withdraws the app everywhere, previews included', async () => {

@@ -1,6 +1,7 @@
 packages:
   - packages/protocol
   - packages/crypto
+  - packages/pulse
   - packages/head
   - packages/monitor
   - packages/tentacle

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { decodeFrame } from '@coinfra/pulse';
+import { decodeFrame } from '@kraki/pulse';
 
 const { sockets, MockSocket } = vi.hoisted(() => {
   const sockets: Array<{

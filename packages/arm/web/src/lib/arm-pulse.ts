@@ -1,4 +1,4 @@
-import { decodeFrame, type Effect, Endpoint, StreamSet } from '@coinfra/pulse';
+import { decodeFrame, type Effect, Endpoint, StreamSet } from '@kraki/pulse';
 import type { InnerMessage } from '@kraki/protocol';
 import { createLogger } from './logger';
 import { traceEvent } from './trace';

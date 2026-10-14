@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { patchInstalledLibraries, patchPackage } from './patch-npm-deps.mjs';
+import { normalizeFixtureTarball, patchInstalledLibraries, patchPackage } from './patch-npm-deps.mjs';
 
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'kraki-npm-deps-test-'));
@@ -44,6 +44,27 @@ test('dependency-free crypto overlay needs no npm operation', (t) => {
   const pkg = { name: '@kraki/crypto', version: '0.2.2' };
   for (const dir of [source, target]) writeFileSync(join(dir, 'package.json'), JSON.stringify(pkg));
   patchPackage(source, target, () => assert.fail('no install needed'));
+});
+
+test('normalizes only the local Pulse tarball edge in the installed CI fixture', (t) => {
+  const { dir } = fixture(t);
+  const file = join(dir, 'package.json');
+  writeFileSync(file, JSON.stringify({ name: '@kraki/tentacle', version: '0.35.99', dependencies: {
+    '@kraki/pulse': 'file:/tmp/kraki-pulse-0.5.1.tgz', '@kraki/crypto': '0.2.3',
+  } }));
+  normalizeFixtureTarball(dir, '@kraki/pulse', '0.5.1');
+  const pkg = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(pkg.dependencies['@kraki/pulse'], '0.5.1');
+  assert.equal(pkg.dependencies['@kraki/crypto'], '0.2.3');
+  assert.equal(pkg.version, '0.35.99');
+  const before = readFileSync(file, 'utf8');
+  normalizeFixtureTarball(dir, '@kraki/pulse', '0.5.2');
+  assert.equal(readFileSync(file, 'utf8'), before, 'published version edges are untouched');
+});
+
+test('tarball normalization refuses a non-Tentacle parent', (t) => {
+  const { target } = fixture(t);
+  assert.throws(() => normalizeFixtureTarball(target, '@kraki/pulse', '0.5.1'), /Not a Tentacle fixture/);
 });
 
 test('missing installation fails instead of silently leaving an old package', (t) => {

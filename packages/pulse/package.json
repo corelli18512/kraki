@@ -1,0 +1,40 @@
+{
+  "name": "@kraki/pulse",
+  "version": "0.5.1",
+  "description": "Kraki's reliable transport core: sequencing, acknowledgments and cursor-based resume. Pure logic, no I/O.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "types": "./dist/index.d.mts",
+  "files": ["dist", "LICENSE"],
+  "publishConfig": { "access": "public" },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:swift": "swift test --package-path SwiftPulse",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/ws": "^8.5.0",
+    "fast-check": "^4.8.0",
+    "tsdown": "^0.22.3",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "ws": "^8.18.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/corelli18512/kraki",
+    "directory": "packages/pulse"
+  }
+}

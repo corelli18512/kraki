@@ -11,6 +11,36 @@ import XCTest
 
 /// Round-2 security review regressions (docs/e2e-trust.md).
 extension DeviceTrustBoundaryTests {
+    func testAccountAccessNoticeRetainsRecoveryWithoutAPairingGate() {
+        XCTAssertEqual(AccountAccessNotice(state: .needsPairing), .updateComputer)
+        XCTAssertEqual(AccountAccessNotice(state: .failed("revoked")), .checkSavedConnection)
+        XCTAssertEqual(AccountAccessNotice(state: .stoppedSigning), .checkSavedConnection)
+        for state in [ComputerTrustState.paired, .pairing, .notPaired, .unsupported] {
+            XCTAssertNil(AccountAccessNotice(state: state))
+        }
+    }
+
+    func testSavedConnectionWarningDoesNotSilentlyDiscardPinnedKeys() {
+        pin()
+        let before = TentacleTrustStore.shared.pin(computer)
+        app.deviceTrust.stoppedSigning.insert(computer)
+        XCTAssertEqual(AccountAccessNotice(state: app.trustState(for: computer)), .checkSavedConnection)
+        XCTAssertEqual(TentacleTrustStore.shared.pin(computer), before)
+        // This action is behind the shipping banner's explicit confirmation.
+        app.forgetPairing(computer)
+        XCTAssertNil(TentacleTrustStore.shared.pin(computer))
+        XCTAssertFalse(app.deviceTrust.stoppedSigning.contains(computer))
+    }
+
+    func testRevokedSavedConnectionHasAnAccountAccessRecoveryPath() {
+        pin()
+        app.handleTrustRevoked(["deviceId": computer])
+        XCTAssertEqual(AccountAccessNotice(state: app.trustState(for: computer)), .checkSavedConnection)
+        XCTAssertNotNil(TentacleTrustStore.shared.pin(computer))
+        app.forgetPairing(computer)
+        XCTAssertNil(TentacleTrustStore.shared.pin(computer))
+    }
+
     /// APPS-01: a cold launch (stored credentials, not yet connected) asks too.
     func testColdLaunchLinkCannotReplacePinWithoutConfirmation() throws {
         pin()

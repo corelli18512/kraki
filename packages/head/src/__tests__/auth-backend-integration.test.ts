@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { WebSocket } from 'ws';
-import { decodeFrame } from '@coinfra/pulse';
+import { decodeFrame } from '@kraki/pulse';
 import type { AuthMethod, DeviceInfo } from '@kraki/protocol';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { Storage } from '../storage.js';

@@ -1,4 +1,4 @@
-import { decodeFrameWithStream, Endpoint, StreamSet, type Effect } from '@coinfra/pulse';
+import { decodeFrameWithStream, Endpoint, StreamSet, type Effect } from '@kraki/pulse';
 import { describe, expect, it } from 'vitest';
 import { ArmPulse, type ArmPulseHost } from './arm-pulse';
 
