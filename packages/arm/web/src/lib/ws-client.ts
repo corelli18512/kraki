@@ -1,7 +1,8 @@
 import * as voice from './voice/voice';
 import { useAccountDeletion, DELETION_TIMEOUT_MS } from './account-deletion';
 import { canRefreshUsage } from './usage';
-import { desktopCredentials, setDesktopSignedOut } from './desktop';
+import { desktop, desktopCredentials, setDesktopSignedOut } from './desktop';
+import { presentDesktopPreview } from './desktop-notifications';
 import type { ContentRef, InnerMessage, SessionListMessage, SessionSubscriptionSetMessage, AuthOkMessage, AuthInfoResponse, ServerErrorMessage, AuthChallengeMessage, DeviceJoinedMessage, DeviceLeftMessage, RelayEnvelope, Message, SessionState } from '@kraki/protocol';
 import { outbox } from './chat/outbox';
 import { HEAD_PULSE_TARGET, PAYLOAD_FRAGMENT_FEATURE, PayloadAssembler, isPayloadFragment, normalizeSessionMode, type SessionMode } from '@kraki/protocol';
@@ -18,6 +19,7 @@ import { allowAutoRead, isAutoReadSuppressed, suppressAutoRead } from './read-vi
 import * as commands from './commands';
 import { createLogger, setLogBroadcast } from './logger';
 import { ArmPulse } from './arm-pulse';
+import { LocalLinkClient, REPLAYABLE_ACROSS_ROUTES, STALE_ROUTE_DROPPED } from './local-link';
 import { traceEvent } from './trace';
 import { SessionSubscriptionController } from './session-subscription';
 import { failAttachment } from './attachments';
@@ -42,6 +44,8 @@ export class KrakiWSClient {
   private handlers: MessageHandler[] = [];
   private pulse: ArmPulse;
   private subscription: SessionSubscriptionController;
+  /** Desktop shell only: direct loopback route to the Tentacle on this machine. */
+  readonly localLink: LocalLinkClient | null;
   private pulseTick: ReturnType<typeof setInterval> | null = null;
   /** Reassembles payloads a Tentacle split into small parts (so a large
    *  message never looks like a dead link on a slow network). */
@@ -51,7 +55,7 @@ export class KrakiWSClient {
   /** Last time pulse delivered anything (a whole payload or a fragment). */
   private lastDeliveryAt = 0;
   private attachmentPulls = new AttachmentPullQueue(({ sessionId, id, index }) => {
-    if (getStore().status !== 'connected') return false;
+    if (getStore().status !== 'connected' && !this.localLink?.isLinked(getStore().sessions.get(sessionId)?.deviceId)) return false;
     const deviceId = getStore().deviceId;
     this.sendEncrypted({
       type: 'request_attachment',
@@ -142,7 +146,8 @@ export class KrakiWSClient {
     this.subscription = new SessionSubscriptionController({
       isConnected: () => getStore().status === 'connected',
       resolveTentacle: (sessionId) => getStore().sessions.get(sessionId)?.deviceId,
-      send: (tentacleId, sessionId) => this.sendSessionSubscription(tentacleId, sessionId),
+      send: (tentacleId, sessionId, requestId) => this.sendSessionSubscription(tentacleId, sessionId, requestId),
+      isRouteIndependent: (tentacleId) => this.localLink?.isLinked(tentacleId) === true,
       applySnapshot: (msg) => this.applySubscriptionSnapshot(msg),
       reportError: (message) => getStore().setLastError(message),
     });
@@ -152,12 +157,24 @@ export class KrakiWSClient {
       {
         now: () => Date.now(),
         sendPulseFrame: (pulseB64, to) => this.sendPulseEnvelope(pulseB64, to),
-        onDelivered: (blobB64) => this.handlePulseDelivered(blobB64),
+        onDelivered: (blobB64) => this.handlePulseDelivered(blobB64, 'head'),
         onAcked: (seqUpTo) => this.cmdState.resolvePulseAcked(seqUpTo),
         onResetInbound: () => this.assembler.clear(),
       },
       `arm:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
     );
+
+    this.localLink = desktop?.localLinkDiscovery ? new LocalLinkClient({
+      readDiscovery: () => desktop!.localLinkDiscovery!(),
+      appId: () => getStore().deviceId ?? null,
+      tentacleKey: (tentacleId) => {
+        const d = getStore().devices.get(tentacleId);
+        return d?.role === 'tentacle' ? d.publicKey ?? undefined : undefined;
+      },
+      sign: (message) => this.encryption.keyStore.signChallenge(message),
+      onLinkChange: (tentacleId, linked, unacked) => this.onLocalLinkChange(tentacleId, linked, unacked),
+      onDelivered: (payloadJson) => this.handlePulseDelivered(payloadJson),
+    }) : null;
 
     // Visibility change listener removed — replay is now handled by tentacle,
     // not the relay. Tab focus/blur doesn't trigger relay-side replay anymore.
@@ -191,6 +208,8 @@ export class KrakiWSClient {
 
   disconnect() {
     this.clearReplayTracking();
+    // Sign-out / identity change: the link belongs to the old identity.
+    this.localLink?.stop();
     this.transport.disconnect();
   }
 
@@ -209,7 +228,7 @@ export class KrakiWSClient {
     return this.subscription.confirmed === sessionId;
   }
 
-  private async sendSessionSubscription(tentacleId: string, sessionId: string | null): Promise<boolean> {
+  private async sendSessionSubscription(tentacleId: string, sessionId: string | null, requestId?: string): Promise<boolean> {
     const deviceId = getStore().deviceId;
     if (!deviceId) return false;
     const msg = {
@@ -217,11 +236,11 @@ export class KrakiWSClient {
       deviceId,
       seq: 0,
       timestamp: new Date().toISOString(),
-      payload: { sessionId },
+      payload: { sessionId, ...(requestId && { requestId }) },
     };
     const encrypted = await this.encryption.encryptForDevice(msg, tentacleId);
     if (!encrypted) return false;
-    this.pulse.send(JSON.stringify({ blob: encrypted.blob, keys: encrypted.keys }), encrypted.to, false);
+    this.route(JSON.stringify({ blob: encrypted.blob, keys: encrypted.keys }), encrypted.to, false, false);
     return true;
   }
 
@@ -236,6 +255,8 @@ export class KrakiWSClient {
       deviceName: device?.name ?? msg.deviceId,
       agent: digest.agent,
       model: digest.model,
+      reasoningEffort: digest.reasoningEffort,
+      createdAt: digest.createdAt,
       title: digest.title,
       autoTitle: digest.autoTitle,
       state: digest.state,
@@ -272,9 +293,32 @@ export class KrakiWSClient {
         return;
       }
       traceEvent({ comp: 'arm', evt: 'APP-ENCRYPT-OK', type: msg.type as string, clientId, blobLen: enc.blob.length, to: enc.to });
-      const seq = this.pulse.send(JSON.stringify({ blob: enc.blob, keys: enc.keys }), enc.to, durable);
+      const seq = this.route(JSON.stringify({ blob: enc.blob, keys: enc.keys }), enc.to, durable,
+        REPLAYABLE_ACROSS_ROUTES.has(msg.type as string));
       onSeq?.(seq);
     });
+  }
+
+  /** The Tentacle on this machine is reached over the local link; everything
+   *  else over the Head. The ciphertext is the same either way. */
+  private route(payloadJson: string, to: string, durable: boolean, replayable: boolean): bigint {
+    if (this.localLink?.isLinked(to) && this.localLink.send(payloadJson, to, replayable)) return 0n;
+    return this.pulse.send(payloadJson, to, durable);
+  }
+
+  /** The route to `tentacleId` switched between the Head and the local link.
+   *  Like a Tentacle (re)join: drop connection-scoped subscription authority
+   *  (the Tentacle sends session_list on the new route, the new barrier) and
+   *  re-ask the attachment chunk that was in flight on the old route. Commands
+   *  the dead link accepted but never confirmed go out over the Head. The
+   *  Tentacle's greeting on the new route re-sends unconfirmed inputs. */
+  private onLocalLinkChange(tentacleId: string, linked: boolean, unacked: Array<{ payload: string; target: string }>): void {
+    traceEvent({ comp: 'arm', evt: 'LOCAL-LINK', tentacleId, linked, replay: unacked.length });
+    this.subscription.onTentacleAuthorityReset(tentacleId);
+    this.attachmentPulls.disconnect();
+    this.attachmentPulls.resume();
+    for (const { payload, target } of unacked) this.pulse.send(payload, target, false);
+    if (linked) getStore().setDeviceOnline(tentacleId, true);
   }
 
   /** Put a pulse frame on the wire as a unicast envelope to the tentacle via
@@ -290,9 +334,9 @@ export class KrakiWSClient {
    *    preferences_updated, voice). Head↔device has no E2E, so dispatch `msg`
    *    directly, no decrypt.
    *  - `{blob, keys}` — the E2E ciphertext from a tentacle; decrypt then dispatch. */
-  private handlePulseDelivered(payloadJson: string) {
+  private handlePulseDelivered(payloadJson: string, route: 'head' | 'link' = 'link', fragmentSender?: string) {
     this.lastDeliveryAt = Date.now();
-    let parsed: { from?: string; msg?: InnerMessage; blob?: string; keys?: Record<string, string> };
+    let parsed: { from?: string; src?: string; msg?: InnerMessage; blob?: string; keys?: Record<string, string> };
     try {
       parsed = JSON.parse(payloadJson);
     } catch {
@@ -300,7 +344,7 @@ export class KrakiWSClient {
     }
     if (isPayloadFragment(parsed)) {
       const whole = this.assembler.accept(parsed);
-      if (whole !== null) this.handlePulseDelivered(whole);
+      if (whole !== null) this.handlePulseDelivered(whole, route, (parsed as { src?: string }).src);
       return;
     }
     if (parsed.from === HEAD_PULSE_TARGET && parsed.msg) {
@@ -312,7 +356,16 @@ export class KrakiWSClient {
     }
     if (typeof parsed.blob === 'string' && parsed.keys) {
       const decryptStart = performance.now();
+      // Through the Head from a Tentacle this App is linked to: sent before the
+      // switch. Its live, connection-scoped state would land after the link's
+      // fresh snapshot and duplicate or revert it; the rest still applies.
+      const sender = parsed.src ?? fragmentSender;
+      const staleRoute = route === 'head' && this.localLink?.isLinked(sender) === true;
       void this.encryption.decryptBlob(parsed.blob, parsed.keys).then((inner) => {
+        if (inner && staleRoute && STALE_ROUTE_DROPPED.has((inner as { type?: string }).type ?? '')) {
+          if (this.localLink) this.localLink.stats.staleHeadFrames++;
+          return;
+        }
         if (inner) {
           traceEvent({ comp: 'arm', evt: 'APP-DECRYPT', type: (inner as { type?: string }).type, sessionId: (inner as { sessionId?: string }).sessionId, clientId: (inner as { payload?: { clientId?: string } }).payload?.clientId, decryptMs: performance.now() - decryptStart });
           this.dispatchInner(inner);
@@ -323,6 +376,10 @@ export class KrakiWSClient {
 
   /** Route a decrypted inner message through subscription gating and the normal pipeline. */
   private dispatchInner(inner: InnerMessage) {
+    if (inner.type === 'local_notification') {
+      presentDesktopPreview(inner.payload.preview);
+      return;
+    }
     if (inner.type === 'device_greeting') this.onTentacleGreeting(inner as unknown as { deviceId: string; payload?: { features?: unknown } });
     if (inner.type === 'session_subscription_set') {
       this.subscription.onAck(inner as SessionSubscriptionSetMessage);
@@ -409,9 +466,10 @@ export class KrakiWSClient {
    *  session's device online: an input can go out now. */
   private isDeliveryPathUp(sessionId: string): boolean {
     const store = getStore();
+    const deviceId = store.sessions.get(sessionId)?.deviceId;
+    if (this.localLink?.isLinked(deviceId)) return true;
     if (store.status !== 'connected') return false;
     if (this.transport.msSinceLastRx() > LIVE_LINK_QUIET_MS) return false;
-    const deviceId = store.sessions.get(sessionId)?.deviceId;
     return !!deviceId && store.devices.get(deviceId)?.online === true;
   }
 
@@ -626,6 +684,8 @@ export class KrakiWSClient {
       deviceName: device?.name ?? deviceId,
       agent: digest.agent,
       model: digest.model,
+      reasoningEffort: digest.reasoningEffort,
+      createdAt: digest.createdAt,
       title: digest.title,
       autoTitle: digest.autoTitle,
       state: digest.state as SessionState,
@@ -744,6 +804,8 @@ export class KrakiWSClient {
         deviceName: device?.name ?? tentacleDeviceId,
         agent: ts.agent,
         model: ts.model,
+        reasoningEffort: ts.reasoningEffort,
+        createdAt: ts.createdAt,
         title: ts.title,
         autoTitle: ts.autoTitle,
         state: ts.state as SessionState,
@@ -1005,6 +1067,14 @@ export class KrakiWSClient {
       }
 
       // --- Control messages ---
+      case 'notification_preview': {
+        const deviceId = getStore().deviceId;
+        if (desktop && deviceId) {
+          void this.encryption.keyStore.decryptFromBlob({ blob: msg.payload.blob, keys: { [deviceId]: msg.payload.key } }, deviceId)
+            .then(presentDesktopPreview).catch(() => {});
+        }
+        break;
+      }
       case 'auth_ok':
         this.transport.setAuthenticated(true);
         processAuthOk(msg, this.transport.url, {
@@ -1014,7 +1084,11 @@ export class KrakiWSClient {
         // Bring up the pulse endpoint + start the tick loop.
         this.pulse.onConnected();
         this.startPulseTick();
+        if (desktop && getStore().deviceId) this.sendToHead({ type: 'register_push_token', payload: { provider: 'local', token: getStore().deviceId } });
         this.attachmentPulls.resume();
+        this.localLink?.start();
+        this.localLink?.poke();
+        this.subscription.resume();
         {
           const ok = msg as unknown as { voice?: import('@kraki/protocol').VoiceCapability; voiceVocabulary?: import('@kraki/protocol').VoiceWord[] };
           voice.onAuthOk(ok.voice, ok.voiceVocabulary);
@@ -1092,7 +1166,9 @@ export class KrakiWSClient {
           // Head emits device_joined for every authenticated connection epoch,
           // including same-device socket replacement where no device_left is
           // broadcast. Tentacle rebuilds currentSessionByArm during that auth.
-          if (joined.device.role === 'tentacle') {
+          // A linked Tentacle reconnecting to the Head keeps the link's
+          // subscription (it only rebuilds Head-routed authority).
+          if (joined.device.role === 'tentacle' && !this.localLink?.isLinked(joined.device.id)) {
             this.subscription.onTentacleAuthorityReset(joined.device.id);
             if (this.deviceFeatures.get(joined.device.id)?.has(PAYLOAD_FRAGMENT_FEATURE)) {
               this.declareClientFeatures(joined.device.id);
@@ -1105,6 +1181,8 @@ export class KrakiWSClient {
 
       case 'device_left': {
         const left = msg as DeviceLeftMessage;
+        // Still reachable over the local link: nothing changes for this App.
+        if (left.deviceId && this.localLink?.isLinked(left.deviceId)) break;
         if (left.deviceId) {
           this.subscription.onTentacleAuthorityReset(left.deviceId);
           getStore().clearDeviceAgents(left.deviceId);

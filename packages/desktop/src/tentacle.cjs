@@ -232,14 +232,15 @@ class BuiltInKraki {
    * First-time setup. `openSignIn(url)` must resolve with the
    * kraki://auth/callback?… URL (or null when the user closed it).
    */
-  setup({ deviceName, forceLogin, onEvent, openSignIn }) {
+  setup({ deviceName, forceLogin, useCode, onEvent, openSignIn }) {
     // Cancel at once; the PATH refresh is async and must not let an old
     // setup run on.
     this.cancelSetup();
     const attempt = this.setupAttempt;
     return refreshRegistryPath().then(() => new Promise((resolve) => {
       if (attempt !== this.setupAttempt) { resolve({ ok: false, code: -1, detail: 'cancelled' }); return; }
-      const args = ['setup', '--json', '--oauth'];
+      const args = ['setup', '--json'];
+      if (!useCode) args.push('--oauth');
       if (deviceName) args.push('--device-name', deviceName);
       if (forceLogin) args.push('--force-login');
       let done = null;
@@ -308,9 +309,16 @@ class BuiltInKraki {
   }
 
   /** Stop for good: the supervisor (not just the worker) and the login entry. */
+  async launchAtLogin() {
+    return process.platform === 'win32' && !!(await reg(['query', RUN_KEY, '/v', APP_RUN_VALUE]));
+  }
+
   async setLoginItem(on) {
     if (process.platform !== 'win32') return;
-    if (on) await reg(['add', RUN_KEY, '/v', APP_RUN_VALUE, '/t', 'REG_SZ', '/d', `"${this.appPath}" --login`, '/f']);
+    if (on) {
+      const result = await reg(['add', RUN_KEY, '/v', APP_RUN_VALUE, '/t', 'REG_SZ', '/d', `"${this.appPath}" --login`, '/f']);
+      if (result === null) throw new Error('Windows could not add Kraki to Startup apps. Open Settings → Apps → Startup, then try again.');
+    }
     else await reg(['delete', RUN_KEY, '/v', APP_RUN_VALUE, '/f']);
   }
 
@@ -350,9 +358,35 @@ class BuiltInKraki {
 
   /** Restart after an agent was installed or an app update. */
   async restart() {
+    const login = await this.launchAtLogin();
     await this.disable({ keepOwnership: true });
+    if (login) await this.setLoginItem(true);
     await this.start();
   }
 }
 
-module.exports = { BuiltInKraki, OWNER, currentPath, mergePath, parseRegistryPath, recordedPid };
+/**
+ * The local-link discovery record of the Tentacle on this machine (written by
+ * the daemon, 0600 in the user's KRAKI_HOME), for the Web client to connect to
+ * it directly. Only a small JSON file is ever returned, never other paths.
+ */
+function readLocalLinkDiscovery(home = krakiHome()) {
+  try {
+    const file = path.join(home, 'local-link.json');
+    const stat = statSync(file);
+    if (stat.size > 4096 || stat.mtimeMs < bootTime() - 5000) return null;
+    const raw = readFileSync(file, 'utf8');
+    const discovery = JSON.parse(raw);
+    // Discovery survives a crash. Never advertise a stopped daemon (owned
+    // or external), or a record from a prior boot whose PID may be reused.
+    if (!Number.isSafeInteger(discovery?.pid) || discovery.pid <= 0) return null;
+    try { process.kill(discovery.pid, 0); } catch (e) {
+      if (e.code !== 'EPERM') return null;
+    }
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { BuiltInKraki, OWNER, currentPath, mergePath, parseRegistryPath, readLocalLinkDiscovery, recordedPid };

@@ -1,7 +1,9 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronUp, ChevronsDown } from 'lucide-react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { ChevronUp, ChevronsDown, Loader } from 'lucide-react';
 import type { Attachment, ContentRef } from '@kraki/protocol';
 import { useStore } from '../../hooks/useStore';
+import { useNarrow } from '../../hooks/useNarrow';
+import { agentNavigationColors } from '../../lib/color';
 import { useOutbox, outbox } from '../../lib/chat/outbox';
 import { openQuestions, payloadOf, rowKey, seqOf, spineRows } from '../../lib/chat/spine';
 import { messageProvider } from '../../lib/message-provider';
@@ -76,7 +78,8 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
     [messages, answerKey, atHead],
   );
 
-  const sessionActive = session?.state === 'active' || session?.state === 'compacting' || runtime?.status === 'compacting';
+  const isCompacting = session?.state === 'compacting' || runtime?.status === 'compacting';
+  const sessionActive = session?.state === 'active' || isCompacting;
   const action = card?.action ?? null;
   const actionLive = action?.type === 'tool_start' || action?.type === 'tool_complete'
     || (action?.type === 'tool_batch' && action.payload.running > 0) || action?.type === 'permission';
@@ -84,8 +87,10 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   // While a turn runs, its live bubble stays from the first word or action
   // until a spine bubble concludes the segment (a reply, a question, a
   // terminal status) — not only while the card happens to have content.
+  // A pending question waits for the human, not another empty typing row;
+  // genuine draft text or tool/permission work still gets its own live row.
   const showLive = !!card && !card.closed && (sessionActive || permissionOpen)
-    && (card.text.length > 0 || actionLive || sessionActive);
+    && (card.text.trim().length > 0 || actionLive || (session?.state === 'active' && questions.length === 0));
 
   // Row objects are reused while their record is unchanged, so memoized
   // bubbles only re-render when their own content changes.
@@ -117,6 +122,10 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const atBottomRef = useRef(true);
   const [unseen, setUnseen] = useState(false);
   const [composerHeight, setComposerHeight] = useState(72);
+  const narrow = useNarrow();
+  // Mac's floating composer grows over chat, without moving the newest edge.
+  // ChatBottomObstruction: 36 capsule + 2×12 bottom padding − 6 row margin.
+  const bottomClearance = narrow ? composerHeight + 8 : 54;
   const [upTarget, setUpTarget] = useState<string | null>(null);
   const composerRef = useRef<ComposerHandle>(null);
   const composerBox = useRef<HTMLDivElement>(null);
@@ -251,12 +260,17 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
     onOpenSteps: (seq) => setStepsFor({ seq }),
     onRetry: (clientId) => outbox.retry(clientId),
     onDelete: (clientId) => { outbox.discard(clientId); },
+    onEditPending: (clientId) => {
+      const entry = outbox.forSession(sessionId).find((e) => e.clientId === clientId && e.state === 'correcting');
+      if (entry && composerRef.current?.editStaged(entry)) outbox.discard(clientId);
+    },
     onOpenArtifact,
   }), [sessionId, afterSubmit, onOpenArtifact]);
 
   const intent = composerIntent(sessionActive, questions.length > 0, permissionOpen);
   const canAbort = sessionActive || showLive;
   const reachable = connected && deviceOnline;
+  const navigationColors = agentNavigationColors(sessionId);
 
   return (
     <div className="kchat" data-session={sessionId}>
@@ -266,7 +280,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
         rows={visibleRows}
         renderRow={(row: ChatRow) => <Bubble row={row} ctx={ctx} />}
         topInset={topInset + 8}
-        bottomInset={composerHeight + 8}
+        bottomInset={bottomClearance}
         header={(hiddenAbove > 0 || hasOlder) ? <div className="ktop-loader"><span className="kspinner" /></div> : null}
         onAtBottomChange={(bottom) => {
           atBottomRef.current = bottom;
@@ -290,7 +304,12 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
         </div>
       )}
 
-      <div className="kjump" style={{ bottom: composerHeight + 8 }}>
+      <div className="kjump" style={{
+        // MacComposerMetrics: bottomPadding12 + control36 + stackGap9.
+        bottom: narrow ? composerHeight + 8 : 57,
+        '--k-jump-light': navigationColors.light,
+        '--k-jump-dark': navigationColors.dark,
+      } as CSSProperties}>
         <button
           type="button"
           className={`kround ${showUp ? 'is-visible' : ''} ${atBottom ? '' : 'is-raised'}`}
@@ -311,13 +330,28 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
       </div>
 
       <div className="kcomposer-dock" ref={composerBox}>
+        {isCompacting && (
+          <div className="kcompacting" role="status" aria-label="Compacting context">
+            <Loader className="kcompacting-spinner" aria-hidden />
+            <span>Compacting context…</span>
+          </div>
+        )}
         <Composer
           ref={composerRef}
           sessionId={sessionId}
           intent={intent}
           canAbort={canAbort}
           reachable={reachable}
+          busy={sessionActive}
           onSend={onSend}
+          onStageVoice={(text, attachments, voiceIntent) => {
+            const id = outbox.stage(sessionId, text, {
+              attachments, delivery: voiceIntent === 'steer' ? 'steer' : 'prompt',
+              answerTo: voiceIntent === 'answerQuestion' ? questions.at(-1)?.id : undefined,
+            });
+            afterSubmit();
+            return id;
+          }}
           onAbort={() => wsClient.abortSession(sessionId)}
         />
       </div>

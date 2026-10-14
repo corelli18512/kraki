@@ -11,8 +11,8 @@
   font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
 }
 .ns-start-inner { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 22px; }
-.ns-start-title { margin: 0; font-size: 24px; font-weight: 600; color: var(--color-text-primary); letter-spacing: -0.2px; }
-.dark .ns-start-title { color: #f8fafc; }
+.ns-start-title { margin: 0; font-size: 24px; line-height: 29px; font-weight: 600; color: var(--color-text-title, #052847); letter-spacing: -0.2px; }
+.dark .ns-start-title { color: #dbe8f4; }
 .ns-start-composer { width: 100%; max-width: 640px; }
 .ns-phone-link {
   display: inline-flex; align-items: center; gap: 5px;
@@ -26,38 +26,44 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px 16px 10px;
+  padding: 5px 15px 9px;
   border-radius: 18px;
-  background: var(--color-surface-secondary);
+  background: rgba(250, 250, 250, 0.85);
+  backdrop-filter: blur(20px) saturate(1.6);
   border: 1px solid color-mix(in srgb, var(--color-border-primary) 60%, transparent);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
   transition: border-color 0.6s ease-in-out, box-shadow 0.6s ease-in-out;
   cursor: text;
 }
-.dark .ns-composer { background: color-mix(in srgb, var(--color-surface-secondary) 55%, transparent); box-shadow: none; }
+/* Calibrated dark regular Glass; pills and disabled start composite onto this surface. */
+.dark .ns-composer { background: rgba(24, 26, 33, 0.8); }
 .ns-composer.ns-focused { border-color: color-mix(in srgb, #0b5b9c 45%, transparent); }
-.dark .ns-composer.ns-focused { border-color: color-mix(in srgb, #5ea0d7 45%, transparent); }
+.dark .ns-composer.ns-focused { border-color: rgba(110, 180, 243, 0.45); }
 /* "+" / Ctrl+N: the border briefly brightens, then settles — no glow. */
 .ns-composer.ns-nudged { border-color: rgba(11, 91, 156, 0.9); box-shadow: 0 0 0 0.5px rgba(11, 91, 156, 0.9); transition: border-color 0.12s ease-out, box-shadow 0.12s ease-out; }
 .dark .ns-composer.ns-nudged { border-color: rgba(94, 160, 215, 0.9); box-shadow: 0 0 0 0.5px rgba(94, 160, 215, 0.9); }
 
+.ns-editor { padding: 8px 0; margin-left: -4px; display: flex; }
 .ns-text {
   width: 100%;
   resize: none;
   border: 0;
   outline: none;
   background: transparent;
-  padding: 0;
-  font-size: 14px; line-height: 20px;
+  padding: 1px 4px;
+  font-size: 15px; line-height: 18px;
   font-family: inherit;
-  color: var(--color-text-primary);
+  color: rgba(0, 0, 0, 0.85);
   overflow-y: auto;
+  scrollbar-width: none;
 }
+.dark .ns-text { color: rgba(255, 255, 255, 0.85); }
+.ns-text::-webkit-scrollbar { display: none; }
 .ns-text::placeholder { color: var(--color-text-muted); }
 
 .ns-bar { display: flex; align-items: center; gap: 6px; cursor: default; }
 .ns-spacer { flex: 1; min-width: 8px; }
-.ns-pill-wrap { position: relative; }
+.ns-pill-wrap { position: relative; display: flex; } /* exact 25px box: no inline baseline slack under the pill (COMPOSER3-01) */
 .ns-pill {
   display: inline-flex;
   align-items: center;
@@ -68,7 +74,7 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
   color: var(--color-text-secondary);
-  font-weight: 500; font-size: 11.5px;
+  font-weight: 500; font-size: 11.5px; line-height: 15px;
   font-family: inherit;
   white-space: nowrap;
   cursor: pointer;
@@ -78,6 +84,7 @@
 .ns-pill:disabled { opacity: 1; }
 .ns-pill-text { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
 .ns-pill-chevron { width: 9px; height: 9px; opacity: 0.6; }
+.ns-pill .text-text-primary { color: var(--color-text-primary) !important; }
 .ns-pill svg:not(.ns-pill-chevron) { flex: none; }
 .ns-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
 
@@ -88,32 +95,46 @@
   background: #0b5b9c; color: #fff;
   cursor: pointer;
 }
-.ns-send svg { width: 15px; height: 15px; }
-.ns-send:disabled { opacity: 0.3; cursor: default; }
+.dark .ns-send { background: #5ea0d7; }
+.ns-send svg { width: 15px; height: 17px; }
+.ns-send:disabled { opacity: 0.15; cursor: default; }
 
 /* Popovers (the pills' choice lists) */
 .ns-popover {
   position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
+  top: calc(100% + 9.5px); /* painted rim core lands on native y486.5 */
+  left: calc(50% - 143px);
   z-index: 60;
-  width: 280px;
+  width: 286px;
   box-sizing: border-box;
-  padding: 8px;
+  padding: 9px 11px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  border-radius: 12px;
-  background: var(--color-surface-primary);
-  border: 1px solid color-mix(in srgb, var(--color-border-primary) 70%, transparent);
-  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.18), 0 2px 6px rgba(15, 23, 42, 0.08);
+  gap: 2px;
+  border-radius: 24px;
   animation: ns-pop 0.14s ease-out;
 }
-.dark .ns-popover { background: #1e293b; border-color: rgba(255, 255, 255, 0.08); box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5); }
+/* The 280pt native content frame has a separate outer system-chrome rim. */
+.ns-popover::before {
+  content: "";
+  position: absolute;
+  inset: 2.5px;
+  transform: translateX(-0.5px);
+  z-index: -1;
+  pointer-events: none;
+  border-radius: 21.5px;
+  background: rgba(250, 250, 250, 0.95);
+  backdrop-filter: blur(24px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.23), 0 2px 6px rgba(0, 0, 0, 0.08), inset 0 0 0 0.5px rgba(0, 0, 0, 0.34), inset 0 0 0 1px rgba(255, 255, 255, 0.85);
+}
+.dark .ns-popover::before { background: rgba(19, 22, 34, 0.95); box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), inset 0 0 0 0.5px #53586e; }
+.ns-popover-arrow { position: absolute; top: -9px; left: calc(50% - 14px); fill: #fafafa; stroke: rgba(0, 0, 0, 0.33); stroke-width: 1; pointer-events: none; }
+.dark .ns-popover-arrow { fill: #161924; stroke: #53586e; }
+.ns-popover:has(.ns-section) { gap: 8px; }
 @keyframes ns-pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
-.ns-scroll { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.ns-scroll { max-height: 302px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .ns-section { display: flex; flex-direction: column; gap: 2px; }
-.ns-section-title { padding: 4px 10px 2px; font-size: 9.5px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--color-text-muted); }
+.ns-section-title { padding: 4px 10px 2px; font-size: 9.5px; line-height: 12px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--color-text-muted); }
 .ns-choice {
   display: flex; align-items: center; gap: 10px;
   width: 100%;
@@ -125,19 +146,19 @@
   cursor: pointer;
 }
 .ns-choice:hover:not(:disabled) { background: color-mix(in srgb, var(--color-text-primary) 8%, transparent); }
-.ns-choice:disabled { cursor: default; }
+.ns-choice:disabled { cursor: default; opacity: 0.5; }
 .ns-choice-mark { width: 18px; display: inline-flex; justify-content: center; flex: none; }
 .ns-choice-mark svg { width: 15px; height: 15px; }
 .ns-choice-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.ns-choice-title { font-size: 12.5px; font-weight: 500; color: var(--color-text-primary); }
+.ns-choice-title { font-size: 12.5px; line-height: 15px; font-weight: 500; color: var(--color-text-primary); }
 .ns-choice-disabled { color: var(--color-text-muted); }
-.ns-choice-detail { font-size: 10.5px; color: var(--color-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ns-choice-detail { font-size: 10.5px; line-height: 13px; color: var(--color-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ns-choice-check { width: 12px; height: 12px; color: #0b5b9c; flex: none; }
 .dark .ns-choice-check { color: #5ea0d7; }
 .ns-online { color: #34D399; }
 .ns-offline { color: var(--color-text-muted); }
 .ns-muted-mark { color: var(--color-text-secondary); display: inline-flex; }
-.ns-more { padding: 2px 10px 0; font-size: 10.5px; color: var(--color-text-muted); }
+.ns-more { padding: 2px 10px 0; font-size: 10.5px; line-height: 13px; color: var(--color-text-muted); }
 
 /* Status under the box */
 .ns-hint { display: flex; align-items: center; gap: 6px; padding-left: 4px; font-size: 11.5px; color: var(--color-text-muted); }

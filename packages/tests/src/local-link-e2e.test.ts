@@ -274,6 +274,9 @@ describe("Local link e2e: same-machine App ⇄ Tentacle bypassing the Head", () 
 		);
 		await until(() => userTexts(macLocal.received).includes("from phone"));
 		await until(() => userTexts(phone.received).includes("from phone"));
+		// The agent finishes that turn (a new input during a running turn is queued).
+		adapter.onIdle?.("s-this-mac");
+		await waitMs(100);
 
 		// 2. Mac types (over the local link) -> the phone sees it via the Head.
 		macLocal.sendReliable(input(mac.deviceId, "from mac"));

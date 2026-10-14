@@ -4,6 +4,7 @@ import type { SessionState } from '@kraki/protocol';
 
 interface AgentAvatarProps {
   agent: string;
+  model?: string;
   sessionId?: string;
   size?: 'sm' | 'md' | 'row' | 'lg';
   status?: SessionState;
@@ -92,7 +93,7 @@ function AgentIcon({ agent, className }: { agent: string; className?: string }) 
   }
 }
 
-export function AgentAvatar({ agent, sessionId, size = 'md', status, badge, pinned }: AgentAvatarProps) {
+export function AgentAvatar({ agent, model, sessionId, size = 'md', status, badge, pinned }: AgentAvatarProps) {
   const s = sizeMap[size];
   const hue = stringToHue(sessionId ?? agent);
 
@@ -106,10 +107,11 @@ export function AgentAvatar({ agent, sessionId, size = 'md', status, badge, pinn
   return (
     <div className="relative inline-flex shrink-0">
       <div
-        className={`flex items-center justify-center ${s.container}`}
+        className={`relative overflow-hidden flex items-center justify-center ${s.container}`}
         style={{ backgroundColor: `hsl(${hue}, 50%, 90%)`, color: `hsl(${hue}, 60%, 40%)` }}
       >
         <AgentIcon agent={agent} className={s.icon} />
+        {model && <ModelSlash model={model} dimension={size === 'sm' ? 28 : size === 'lg' ? 44 : 36} />}
       </div>
       {BadgeIcon && (
         <span className="absolute -bottom-1 -right-1.5 rounded-full bg-surface-primary p-[1px] text-kraki-500">
@@ -126,4 +128,26 @@ export function AgentAvatar({ agent, sessionId, size = 'md', status, badge, pinn
       )}
     </div>
   );
+}
+
+/** Same model-family matching and corner-band geometry as ModelSlashCorner. */
+export function modelLogoFamily(model: string): string | undefined {
+  const value = model.toLowerCase();
+  if (value.includes('deepseek')) return 'DeepSeek';
+  if (value.includes('gemini')) return 'Gemini';
+  if (/glm|zai|z\.ai|zhipu/.test(value)) return 'ZAI';
+  if (/gpt|openai|(^|[/_-])o[134]([/_-]|$)/.test(value)) return 'OpenAI';
+  if (/claude|anthropic/.test(value)) return 'Claude';
+}
+
+function ModelSlash({ model, dimension }: { model: string; dimension: number }) {
+  const family = modelLogoFamily(model);
+  if (!family) return null;
+  const colors: Record<string, string> = { Claude: '#c15a38', OpenAI: '#147e69', ZAI: '#247bbb', DeepSeek: '#4d62c3', Gemini: '#8068b5' };
+  const scale = dimension / 28;
+  const mask = `url(/model-logos/Model${family}.svg)`;
+  return <span aria-hidden data-model-family={family} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+    <span style={{ position: 'absolute', width: 24 * scale, height: 13 * scale, right: -7 * scale, bottom: -4.3 * scale, transform: 'rotate(-38deg)', background: colors[family] + 'e0', borderTop: `${0.5 * scale}px solid #ffffff99` }} />
+    <span style={{ position: 'absolute', width: 6.8 * scale, height: 6.8 * scale, right: 0.8 * scale, bottom: 0.8 * scale, background: '#fff', maskImage: mask, maskSize: 'contain', maskRepeat: 'no-repeat' }} />
+  </span>;
 }

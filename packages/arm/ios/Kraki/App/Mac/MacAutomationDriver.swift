@@ -205,6 +205,7 @@ final class MacAutomationDriver {
         let id = request["id"]
         let params = request["params"] as? [String: Any] ?? [:]
 
+        if handleWindowCommand(method, params: params, id: id, connection: connection) { return }
         switch method {
         case "ping":
             send(result: [
@@ -215,17 +216,6 @@ final class MacAutomationDriver {
                 "hasKeyWindow": NSApp.keyWindow != nil,
                 "hasMainWindow": NSApp.mainWindow != nil,
             ], id: id, on: connection)
-        case "resizeWindow":
-            let width = CGFloat(params["width"] as? Double ?? 1_600)
-            let height = CGFloat(params["height"] as? Double ?? 900)
-            guard let window = NSApp.windows
-                .filter({ $0.contentView != nil && $0.frame.width > 300 && $0.frame.height > 200 })
-                .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
-                send(error: "invalid_state", message: "No production window is mounted", id: id, on: connection); return
-            }
-            window.setContentSize(NSSize(width: max(width, 700), height: max(height, 500)))
-            window.contentView?.layoutSubtreeIfNeeded()
-            send(result: ["width": Double(window.contentLayoutRect.width), "height": Double(window.contentLayoutRect.height)], id: id, on: connection)
         case "snapshot":
             send(result: snapshot(), id: id, on: connection)
         case "mockSnapshot":

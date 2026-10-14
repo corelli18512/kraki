@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, useLayoutEffect, useSyncExternalStore } from 'react';
+import { ChevronLeft, CircleCheck, CircleX } from 'lucide-react';
 import type { ContentRef } from '@kraki/protocol';
 import { useAttachmentText } from '../../hooks/useAttachment';
 import { callIdOf, contentsLabel, formatDuration, formatTokens, mergeSteps, subagentOf, subagentStatus } from '../../lib/subagent-steps';
@@ -94,7 +94,11 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
   onClose: () => void;
 }) {
   const live = bubbleSeq === null;
+  const body = useRef<HTMLDivElement>(null);
   const { steps, targetSeq } = useTurnSteps(sessionId, live, bubbleSeq ?? undefined);
+
+  const loaded = useSyncExternalStore(messageProvider.subscribeTurnTraces,
+    () => messageProvider.isTurnTraceLoaded(sessionId, targetSeq));
 
   useEffect(() => {
     if (targetSeq < 0) return;
@@ -128,10 +132,45 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, path.length]);
 
+  // A native .sheet is modal: focus moves into it, Tab cycles inside it, and the
+  // trigger regains focus on dismissal (transcript3-01).
+  const sheet = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    sheet.current?.focus({ preventScroll: true });
+    const contain = (e: FocusEvent) => {
+      const el = sheet.current;
+      if (el && e.target instanceof Node && !el.contains(e.target)) el.focus({ preventScroll: true });
+    };
+    const trap = (e: KeyboardEvent) => {
+      const el = sheet.current;
+      if (e.key !== 'Tab' || !el) return;
+      const controls = [...el.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])')];
+      if (!controls.length) { e.preventDefault(); return; }
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === el || !el.contains(active))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (active === last || active === el || !el.contains(active))) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('focusin', contain);
+    window.addEventListener('keydown', trap, true);
+    return () => {
+      document.removeEventListener('focusin', contain);
+      window.removeEventListener('keydown', trap, true);
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, []);
+
+  // Native Steps opens at the newest trace edge and follows live additions.
+  useLayoutEffect(() => {
+    if (body.current && path.length === 0) body.current.scrollTop = body.current.scrollHeight;
+  }, [steps, path.length]);
+
   const title = current ? (subagentOf(current)?.name ?? 'Subagent') : 'Steps';
   return (
     <div className="ksheet-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label="Steps">
-      <div className="ksheet" onClick={(e) => e.stopPropagation()}>
+      <div ref={sheet} tabIndex={-1} className="ksheet" onClick={(e) => e.stopPropagation()}>
         <div className="ksheet-head">
           {path.length > 0 && (
             <button type="button" onClick={back} className="ksheet-back" aria-label="Back">
@@ -139,11 +178,18 @@ export function StepsModal({ sessionId, bubbleSeq, agent, onClose }: {
             </button>
           )}
           <h3>{title}</h3>
-          <button type="button" onClick={onClose} className="ksheet-close" aria-label="Close steps"><X aria-hidden /></button>
+          {live && <span className="ksheet-live">LIVE</span>}
+          <button type="button" onClick={onClose} className="ksheet-close" aria-label="Close steps"><CircleX aria-hidden /></button>
         </div>
-        <div className="ksheet-body" key={path.join('/')}>
-          {steps.length === 0 ? (
-            <p className="ksheet-loading"><span className="kspinner" /> Loading steps…</p>
+        <div ref={body} className="ksheet-body" key={path.join('/')}>
+          {steps.length === 0 ? loaded ? (
+            <div className="ksheet-empty">
+              <CircleCheck aria-hidden />
+              <h4>No steps recorded</h4>
+              <p>This turn completed without a recorded tool trace.</p>
+            </div>
+          ) : (
+            <div className="ksheet-waiting"><span className="kspinner" /><p>Loading steps…</p></div>
           ) : current ? (
             <SubagentPage msg={current} merged={merged} steps={steps} agent={agent} sessionId={sessionId} onOpen={open} />
           ) : (

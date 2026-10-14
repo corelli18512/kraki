@@ -90,13 +90,19 @@ export function DesktopSetup({ builtIn }: { builtIn: BuiltInBridge }) {
     return <Intro onFinished={() => { localStorage.setItem(INTRO_KEY, '1'); setIntroDone(true); }} />;
   }
 
+  if (step === 'detecting') return (
+    <div className="ds-page ds-launch" data-testid="desktop-launch" role="status" aria-label="Opening Kraki">
+      <KrakiLogo className="ds-launch-logo" />
+      <div className="ds-launch-activity" />
+    </div>
+  );
+
   return (
     <div className="ds-page" data-testid="desktop-setup">
       <Backdrop />
       <div className="ds-scroll">
         <AccountDeletedNotice />
         <div className="ds-card">
-          {step === 'detecting' && <span className="ds-spinner" />}
           {step === 'chooseOwner' && (
             <ChooseOwner
               builtIn={builtIn}
@@ -237,18 +243,35 @@ function SignInStep({ builtIn, again, onDone }: { builtIn: BuiltInBridge; again:
   const [phase, setPhase] = useState<SignInPhase>({ kind: 'idle' });
   useEffect(() => () => builtIn.cancelSetup(), [builtIn]);
 
-  const start = useCallback(() => {
+  const attempt = useRef(0);
+  const [copied, setCopied] = useState(false);
+  const cancel = () => { attempt.current++; builtIn.cancelSetup(); setPhase({ kind: 'idle' }); };
+  const start = useCallback((useCode = false) => {
+    const current = ++attempt.current;
+    setCopied(false);
     setPhase({ kind: 'starting' });
-    void builtIn.setup({ forceLogin }, (e: SetupEvent) => {
+    void builtIn.setup({ forceLogin, useCode }, (e: SetupEvent) => {
+      if (current !== attempt.current) return;
       if (e.event === 'oauth_url') setPhase({ kind: 'waiting' });
       else if (e.event === 'device_code') setPhase({ kind: 'code', code: e.userCode, uri: e.verificationUri });
       else if (e.event === 'authenticated') setPhase({ kind: 'configuring', username: e.username });
       else if (e.event === 'error') setPhase({ kind: 'failed', message: e.message });
     }).then((result) => {
+      if (current !== attempt.current) return;
       if (result.ok) onDone();
       else setPhase((p) => (p.kind === 'failed' ? p : { kind: 'failed', message: 'Sign-in did not finish. Try again.' }));
     });
   }, [builtIn, forceLogin, onDone]);
+
+  const code = phase.kind === 'code' ? phase.code : null;
+  const uri = phase.kind === 'code' ? phase.uri : null;
+  useEffect(() => {
+    if (!code || !uri) return;
+    let live = true;
+    void navigator.clipboard.writeText(code).then(() => { if (live) setCopied(true); }).catch(() => {});
+    window.open(uri, '_blank');
+    return () => { live = false; };
+  }, [code, uri]);
 
   if (phase.kind === 'starting') return <Progress label="Contacting GitHub…" />;
   if (phase.kind === 'configuring') {
@@ -259,20 +282,25 @@ function SignInStep({ builtIn, again, onDone }: { builtIn: BuiltInBridge; again:
       <StepCard step="Step 2 of 2" title="Continue in the sign-in window" detail="Approve Kraki on GitHub. If you're already signed in to GitHub, that's one click.">
         <div className="ds-actions">
           <div className="ds-progress ds-muted"><span className="ds-spinner ds-spinner-mini" />Waiting for GitHub…</div>
-          <button type="button" className="ds-button" onClick={() => { builtIn.cancelSetup(); setPhase({ kind: 'idle' }); }}>Cancel</button>
+          <div className="ds-row">
+            <button type="button" className="ds-button" onClick={() => builtIn.showSignInWindow?.()}>Show Sign-in Window</button>
+            <button type="button" className="ds-button" onClick={cancel}>Cancel</button>
+          </div>
+          <button type="button" className="ds-link" onClick={() => start(true)}>Sign in with a code instead</button>
         </div>
       </StepCard>
     );
   }
   if (phase.kind === 'code') {
     return (
-      <StepCard step="Step 2 of 2" title="Enter this code on GitHub" detail="Open GitHub in your browser, paste the code there and approve Kraki.">
+      <StepCard step="Step 2 of 2" title="Enter this code on GitHub" detail={copied ? "The code is copied and GitHub is open in your browser. Paste it there and approve Kraki." : "Open GitHub in your browser, paste the code there and approve Kraki."}>
         <div className="ds-actions">
           <div className="ds-device-code" data-testid="desktop-device-code">{phase.code}</div>
           <div className="ds-row">
-            <button type="button" className="ds-button" onClick={() => { void navigator.clipboard.writeText(phase.code); window.open(phase.uri, '_blank'); }}>Copy Code &amp; Open GitHub</button>
-            <button type="button" className="ds-button" onClick={() => { builtIn.cancelSetup(); setPhase({ kind: 'idle' }); }}>Cancel</button>
+            <button type="button" className="ds-button" onClick={() => { void navigator.clipboard.writeText(phase.code).then(() => setCopied(true)).catch(() => {}); window.open(phase.uri, '_blank'); }}>Copy Code &amp; Open GitHub</button>
+            <button type="button" className="ds-button" onClick={cancel}>Cancel</button>
           </div>
+          <div className="ds-progress ds-muted"><span className="ds-spinner ds-spinner-mini" />Waiting for approval…</div>
         </div>
       </StepCard>
     );
@@ -286,11 +314,14 @@ function SignInStep({ builtIn, again, onDone }: { builtIn: BuiltInBridge; again:
         : 'Sign in with GitHub. The coding agents on this PC become available here, on your phone and on your other computers.'}
     >
       <div className="ds-actions">
-        <button type="button" className="ds-github" onClick={start} data-testid="desktop-setup-signin">
+        <button type="button" className="ds-github" onClick={() => start()} data-testid="desktop-setup-signin">
           <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" /></svg>
           Sign in with GitHub
         </button>
-        {phase.kind === 'failed' && <div className="ds-warning">{phase.message}</div>}
+        {phase.kind === 'failed' && <>
+          <div className="ds-warning">{phase.message}</div>
+          <button type="button" className="ds-link" onClick={() => start(true)}>Sign in with a code instead</button>
+        </>}
       </div>
     </StepCard>
   );
@@ -309,7 +340,7 @@ function BackgroundStep({ builtIn, onStarted }: { builtIn: BuiltInBridge; onStar
     });
     return () => { live = false; };
   }, [builtIn, onStarted, attempt]);
-  if (!error) return <Progress label="Starting Kraki in the background…" />;
+  if (!error) return <Progress label="Bringing this PC online…" />;
   return (
     <StepCard title="Kraki couldn't start" detail={error}>
       <div className="ds-row">

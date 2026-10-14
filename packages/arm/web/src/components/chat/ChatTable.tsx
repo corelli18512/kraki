@@ -2,8 +2,8 @@
  * Chat tables — the Mac/iOS ChatTable design (6a83a59f) for the Web:
  *
  * - a half size below body text, semibold secondary header, tabular
- *   right-aligned numbers, cell Markdown rendered; one rounded frame, header
- *   tint, row rules only;
+ *   right-aligned numbers, cell Markdown rendered; header tint and row rules
+ *   only, continuous with the bubble;
  * - a table wider than the bubble scrolls sideways with the first column
  *   pinned and an edge fade;
  * - bubbles preview 8 rows with a footer ("Showing 8 of 60 rows · 14
@@ -298,7 +298,7 @@ export function ChatTable({ node, components }: { node: Element; components: Rec
     : overflows ? `${model.columnCount} columns · scroll for more` : '';
 
   return (
-    <div className="ktable" data-testid="chat-table">
+    <div className="ktable" data-testid="chat-table" data-copy-text={toTSV(model)}>
       <SideScroll onOverflow={setOverflows}>
         <Grid model={model} components={components} rows={rows} sticky={overflows} />
       </SideScroll>

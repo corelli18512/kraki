@@ -15,6 +15,19 @@ import Combine
 import QuartzCore
 import SwiftUI
 
+/// The panel is its own window, so it does not inherit the main window's
+/// `.preferredColorScheme`; apply the app theme here or it follows the
+/// macOS system appearance instead of the user's Kraki theme.
+private struct UsagePeekThemedRoot: View {
+    let controller: UsagePeekController
+    @AppStorage("colorScheme") private var colorScheme: AppColorScheme = .system
+
+    var body: some View {
+        UsagePeekView(controller: controller)
+            .preferredColorScheme(colorScheme.scheme)
+    }
+}
+
 private final class UsagePeekPanel: NSPanel {
     var onDismiss: (() -> Void)?
     override var canBecomeKey: Bool { true }
@@ -274,7 +287,7 @@ final class UsagePeekController: NSObject, ObservableObject, NSWindowDelegate {
         panel.animationBehavior = .none
         panel.delegate = self
         panel.onDismiss = { [weak self] in self?.dismiss(reason: "esc") }
-        let hosting = NSHostingView(rootView: UsagePeekView(controller: self).environment(appState))
+        let hosting = NSHostingView(rootView: UsagePeekThemedRoot(controller: self).environment(appState))
         hosting.sizingOptions = []
         hosting.autoresizingMask = [.width, .height]
         panel.contentView = hosting

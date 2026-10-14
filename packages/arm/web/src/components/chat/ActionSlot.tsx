@@ -83,7 +83,7 @@ export function ActionSlot({ action, handlers }: { action: SlotAction; handlers:
       return (
         <div className={`kslot-outcome ${failed ? 'is-failed' : ''}`}>
           {failed ? <OctagonX className="kslot-icon" aria-hidden /> : <CircleStop className="kslot-icon" aria-hidden />}
-          <span className="kslot-outcome-label">{failed ? 'Turn failed' : 'User aborted'}</span>
+          <span className="kslot-outcome-label">{failed ? 'Turn failed' : 'Stopped'}</span>
           {detail && <span className="kslot-outcome-detail">{detail}</span>}
         </div>
       );

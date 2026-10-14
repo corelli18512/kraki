@@ -76,7 +76,7 @@ export interface RelayClientOptions {
   /** Persist a new auto-archive setting chosen from an app. */
   saveAutoArchiveDays?: (days: number) => void;
   /** Serve same-machine Apps over a loopback link instead of the Head.
-   *  Default: on for macOS unless KRAKI_LOCAL_LINK=0; off elsewhere. */
+   *  Default: on unless KRAKI_LOCAL_LINK=0. */
   localLink?: boolean;
   /** Device trust (docs/e2e-trust.md). 'enforce': only paired apps are
    *  served and only their signed commands accepted. 'compatible': paired apps

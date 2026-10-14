@@ -1,14 +1,16 @@
 import { memo, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { CircleHelp, AudioLines } from 'lucide-react';
 import type { Attachment, ContentRef } from '@kraki/protocol';
 import type { SessionCard } from '../../types/store';
 import type { PendingInput } from '../../lib/chat/outbox';
 import {
   attachmentsOf, contentOf, frozenCardOf, payloadOf, questionSpecOf, seqOf, type SpineItem,
 } from '../../lib/chat/spine';
-import { stringToHue } from '../../lib/color';
+import { agentBubbleColors } from '../../lib/color';
 import { Markdown, StreamingMarkdown } from './Markdown';
 import { ActionSlot, type ActionHandlers, type SlotAction } from './ActionSlot';
 import { HtmlArtifactCards, ImageAttachments } from './Attachments';
+import { MessageBubble } from './MessageBubble';
 
 export type ChatRow =
   | { kind: 'spine'; key: string; item: SpineItem }
@@ -24,6 +26,7 @@ export interface BubbleContext extends ActionHandlers {
   onOpenSteps?: (seq: number | null) => void;
   onRetry?: (clientId: string) => void;
   onDelete?: (clientId: string) => void;
+  onEditPending?: (clientId: string) => void;
   onOpenArtifact?: (artifact: ContentRef) => void;
 }
 
@@ -64,7 +67,7 @@ export const Bubble = memo(function Bubble({ row, ctx }: { row: ChatRow; ctx: Bu
     const text = row.kind === 'spine' ? contentOf(row.item.message) || 'System notice' : '';
     return (
       <div className="krow krow-agent">
-        <div className="kbubble kbubble-system"><Markdown text={text} /></div>
+        <MessageBubble className="kbubble kbubble-system"><Markdown text={text} /></MessageBubble>
       </div>
     );
   }
@@ -79,29 +82,29 @@ function UserRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
   const images = attachments.filter(isImage);
   return (
     <div
-      className={`krow krow-user ${state === 'sending' ? 'is-sending' : ''}`}
+      className={`krow krow-user ${state === 'sending' || state === 'unconfirmed' ? 'is-sending' : ''}`}
       data-row-key={row.key}
       data-delivery={state}
     >
       <div className="kuser-stack">
         {showText && (
-          <div className="kbubble kbubble-user">
+          <MessageBubble className="kbubble kbubble-user">
             <Markdown text={text} />
-          </div>
+          </MessageBubble>
         )}
         {images.length > 0 && (
           <div className="kattachments kattachments-user"><ImageAttachments attachments={images} sessionId={ctx.sessionId} /></div>
         )}
-        {state === 'failed' && row.kind === 'pending' && (
-          <FailedMark clientId={row.entry.clientId} ctx={ctx} />
+        {state && state !== 'sending' && row.kind === 'pending' && (
+          <PendingMark clientId={row.entry.clientId} state={state} ctx={ctx} />
         )}
       </div>
     </div>
   );
 }
 
-/** Not delivered: a red mark beside the message; click → Retry / Delete. */
-function FailedMark({ clientId, ctx }: { clientId: string; ctx: BubbleContext }) {
+/** Pending input actions mirror Mac's delivery-status menu. */
+function PendingMark({ clientId, state, ctx }: { clientId: string; state: PendingInput['state']; ctx: BubbleContext }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -114,13 +117,15 @@ function FailedMark({ clientId, ctx }: { clientId: string; ctx: BubbleContext })
     <div className="kfailed" ref={ref}>
       <button
         type="button"
-        className="kfailed-mark"
-        aria-label="Not delivered. Retry or delete"
+        className={`kfailed-mark is-${state}`}
+        aria-label={state === 'correcting' ? 'Correcting voice input. Click for options' : state === 'unconfirmed' ? 'Awaiting confirmation. Click to retry or delete' : 'Not delivered. Click to retry or delete'}
+        title={state === 'correcting' ? 'Correcting voice input' : state === 'unconfirmed' ? 'Delivery not confirmed yet. Retry uses the same message ID.' : 'Not delivered'}
         onClick={() => setOpen((v) => !v)}
-      >!</button>
+      >{state === 'correcting' ? <AudioLines aria-hidden /> : state === 'unconfirmed' ? <CircleHelp aria-hidden /> : '!'}</button>
       {open && (
         <div className="kmenu" role="menu">
-          <button type="button" role="menuitem" onClick={() => { setOpen(false); ctx.onRetry?.(clientId); }}>Retry</button>
+          <button type="button" role="menuitem" onClick={() => { setOpen(false); ctx.onRetry?.(clientId); }}>{state === 'correcting' ? 'Send Original' : 'Retry'}</button>
+          {state === 'correcting' && <button type="button" role="menuitem" onClick={() => { setOpen(false); ctx.onEditPending?.(clientId); }}>Edit</button>}
           <button type="button" role="menuitem" className="is-destructive" onClick={() => { setOpen(false); ctx.onDelete?.(clientId); }}>Delete</button>
         </div>
       )}
@@ -158,14 +163,15 @@ function AgentRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
   const images = attachments.filter(isImage);
   const reports = htmlArtifacts(attachments);
   const hasBody = !!text.trim();
-  const hue = stringToHue(ctx.hueSeed);
+  const colors = agentBubbleColors(ctx.hueSeed);
+  const palette = { '--k-agent-light': colors.light, '--k-agent-dark': colors.dark } as CSSProperties;
   const isQuestion = row.kind === 'spine' && !!questionSpecOf(row.item.message);
 
   if (!hasBody && !action && images.length === 0 && reports.length === 0) {
     // A live turn with nothing streamed yet: the typing indicator.
     return live ? (
       <div className="krow krow-agent" data-row-key={row.key}>
-        <div className="kbubble kbubble-agent kbubble-typing" style={{ '--hue': hue } as CSSProperties}>
+        <div className="kbubble kbubble-agent kbubble-typing" style={palette}>
           <span className="ktyping" aria-label="Agent is working"><i /><i /><i /></span>
         </div>
       </div>
@@ -175,21 +181,23 @@ function AgentRow({ row, ctx }: { row: ChatRow; ctx: BubbleContext }) {
   return (
     <div className="krow krow-agent" data-row-key={row.key} data-question={isQuestion ? 'true' : undefined}>
       <div className="kagent-stack">
-        {(hasBody || action) && (
-          <div className="kbubble kbubble-agent" style={{ '--hue': hue } as CSSProperties}>
+        {(hasBody || action || reports.length > 0) && (
+          <MessageBubble
+            className="kbubble kbubble-agent"
+            style={palette}
+            onShowSteps={steps > 0 && ctx.onOpenSteps ? () => ctx.onOpenSteps?.(live ? null : stepsSeq) : undefined}
+          >
             {hasBody && (live ? <StreamingMarkdown text={text} /> : <Markdown text={text} />)}
             {action && (
               <div className={`kslot ${hasBody ? '' : 'kslot-alone'}`}>
                 <ActionSlot action={action} handlers={ctx} />
               </div>
             )}
-          </div>
+            {reports.length > 0 && <HtmlArtifactCards artifacts={reports} onOpen={ctx.onOpenArtifact} />}
+          </MessageBubble>
         )}
         {images.length > 0 && (
           <div className="kattachments"><ImageAttachments attachments={images} sessionId={ctx.sessionId} /></div>
-        )}
-        {reports.length > 0 && (
-          <div className="kattachments"><HtmlArtifactCards artifacts={reports} onOpen={ctx.onOpenArtifact} /></div>
         )}
         {steps > 0 && (hasBody || action) && (
           <button

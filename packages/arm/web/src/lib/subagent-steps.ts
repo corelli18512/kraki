@@ -6,8 +6,8 @@ import type { ChatMessage } from '../types/store';
  *  - tool_start → tool_complete merge by toolCallId; a later tool_complete for
  *    the same id replaces an earlier one (a background subagent completes
  *    twice: launch receipt, then report).
- *  - a dispatch step (one carrying `subagent`) keeps the position where it
- *    started, so its card sits where the agent delegated.
+ *  - every tool keeps the position where it started, so permission records
+ *    and narration remain in the order the agent emitted them.
  *  - steps carrying `parentToolCallId` belong to that subagent's page.
  */
 
@@ -19,8 +19,7 @@ export const parentOf = (m: ChatMessage): string | undefined => payloadOf(m).par
 export const subagentOf = (m: ChatMessage): SubagentInfo | undefined => payloadOf(m).subagent;
 export const callIdOf = (m: ChatMessage): string | undefined => payloadOf(m).toolCallId;
 
-/** Merge tool lifecycles. Non-dispatch tools keep the existing contract (a
- *  finished tool sits at its completion position); dispatches stay put. */
+/** Merge tool lifecycles at their start position, as on Mac. */
 export function mergeSteps(messages: ChatMessage[]): ChatMessage[] {
   return mergeToolSteps(mergePermissionSteps(messages));
 }
@@ -65,8 +64,6 @@ function mergeToolSteps(messages: ChatMessage[]): ChatMessage[] {
     }
     if (placed.has(id)) continue;
     const done = lastComplete.get(id);
-    const isDispatch = startInfo.has(id) || (done && subagentOf(done));
-    if (m.type === 'tool_start' && done && !isDispatch) continue; // shown at completion
     placed.add(id);
     const shown = done ?? m;
     const info = startInfo.has(id) || subagentOf(shown)

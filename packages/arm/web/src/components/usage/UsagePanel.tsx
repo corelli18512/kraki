@@ -7,7 +7,7 @@
  * out while still holding and it shrinks back; release and it fades away.
  * "Account Usage" (sidebar) opens it pinned, in detail.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useParams } from 'react-router';
 import type { AccountUsage, AccountUsageWindow, DeviceSummary } from '@kraki/protocol';
 import { ArrowDownCircle, Gauge, Laptop, RotateCw } from 'lucide-react';
@@ -19,6 +19,8 @@ import {
 } from '../../lib/usage';
 import { desktop } from '../../lib/desktop';
 import './usage.css';
+import { detailUsageLayout } from '../../lib/usage-layout';
+import { matchesUsageShortcut, useUsageShortcut } from '../../lib/usage-shortcut';
 
 export const OPEN_USAGE_EVENT = 'kraki:open-usage';
 export const USAGE_SHORTCUT = 'F6';
@@ -54,13 +56,20 @@ export function UsageRing({ window: w, stale, size, lineWidth, delay = 0, animat
   }, [target, delay, animateIn]);
   const r = (size - lineWidth) / 2;
   const c = 2 * Math.PI * r;
-  const gid = `ur-${state}`;
+  const gid = `ur-${useId().replaceAll(':', '')}`;
+  // Preserve the accepted light interpolation and the native endpoints; the
+  // dark amber interior stop matches SwiftUI's rendered stroke interpolation.
   return (
     <div className={`ur ur-${state}`} style={{ width: size, height: size }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
         <defs>
           <linearGradient id={gid} x1="0" y1="0" x2="1" y2="1">
             <stop offset="0" className="ur-c0" />
+            <stop offset="1" className="ur-c1" />
+          </linearGradient>
+          <linearGradient id={`${gid}-dark`} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" className="ur-c0" />
+            <stop offset="0.85" stopColor="#ff9115" />
             <stop offset="1" className="ur-c1" />
           </linearGradient>
         </defs>
@@ -71,7 +80,7 @@ export function UsageRing({ window: w, stale, size, lineWidth, delay = 0, animat
             strokeDasharray={`${(c * Math.max(0.0001, value / 100)).toFixed(2)} ${c.toFixed(2)}`}
             transform={`rotate(-90 ${size / 2} ${size / 2})`}
             className="ur-arc"
-            style={{ filter: `drop-shadow(0 0 ${lineWidth * 0.3}px var(--ur-glow))` }}
+            style={{ filter: `drop-shadow(0 0 ${lineWidth * 0.3}px var(--ur-glow))`, '--ur-dark-gradient': `url(#${gid}-dark)` } as CSSProperties}
           />
         )}
       </svg>
@@ -207,7 +216,7 @@ function Empty({ outdated }: { outdated: DeviceSummary[] }) {
   );
 }
 
-function Card({ merged, isCurrent, index, now }: { merged: MergedAccountUsage; isCurrent: boolean; index: number; now: number }) {
+function Card({ merged, isCurrent, index, now, width }: { merged: MergedAccountUsage; isCurrent: boolean; index: number; now: number; width: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
   const size = ref.current?.getBoundingClientRect();
@@ -218,6 +227,7 @@ function Card({ merged, isCurrent, index, now }: { merged: MergedAccountUsage; i
       ref={ref}
       className={`ua-card${isCurrent ? ' is-current' : ''}${hover ? ' is-hover' : ''}`}
       style={{
+        width,
         transform: reduceMotion() ? undefined : `perspective(700px) rotateX(${rx}deg) rotateY(${ry}deg) translateY(${hover ? -2 : 0}px)`,
         '--hx': hover && size ? `${(hover.x / size.width) * 100}%` : '50%',
         '--hy': hover && size ? `${(hover.y / size.height) * 100}%` : '50%',
@@ -279,14 +289,14 @@ export function UsagePanel() {
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (e.key !== USAGE_SHORTCUT || e.repeat) return;
+      if (!matchesUsageShortcut(e) || e.repeat) return;
       e.preventDefault();
       if (mode !== 'closed' && pinned) { close(); return; }
       held.current = true;
       open(inside.current ? 'detail' : 'compact', false);
     };
     const up = (e: KeyboardEvent) => {
-      if (e.key !== USAGE_SHORTCUT) return;
+      if ((e.key.length === 1 ? e.key.toUpperCase() : e.key) !== useUsageShortcut.getState().shortcut.split('+').at(-1)) return;
       held.current = false;
       if (!pinned) close();
     };
@@ -313,6 +323,14 @@ export function UsagePanel() {
     return () => window.removeEventListener('keydown', key);
   }, [pinned, close]);
 
+  const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const resize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, []);
+  const layout = detailUsageLayout(accounts.map((m) => Math.max(1, ringWindows(m.account).length)), Math.min(790, viewportWidth - 24));
+
   if (mode === 'closed') return null;
   const detailed = mode === 'detail';
   return (
@@ -321,6 +339,7 @@ export function UsagePanel() {
       <div
         className={`ua-panel ${detailed ? 'is-detail' : 'is-compact'}${closing ? ' is-closing' : ''}`}
         role="dialog"
+        style={detailed ? { width: layout.width } : undefined}
         aria-label="Account Usage"
         data-testid="usage-panel"
         onMouseEnter={() => { inside.current = true; if (held.current) setMode('detail'); }}
@@ -330,7 +349,9 @@ export function UsagePanel() {
         {accounts.length === 0 ? <Empty outdated={outdated} /> : detailed ? (
           <div className="ua-detail">
             <div className="ua-grid ua-grid-detail">
-              {accounts.map((m, i) => <Card key={m.id} merged={m} isCurrent={m.id === current} index={i} now={now} />)}
+              {layout.rows.map((row, r) => <div className="ua-detail-row" key={r}>
+                {row.map((i) => <Card key={accounts[i].id} merged={accounts[i]} isCurrent={accounts[i].id === current} index={i} now={now} width={layout.widths[i]} />)}
+              </div>)}
             </div>
             {outdated.length > 0 && <div className="ua-update"><ArrowDownCircle />{usageUpdateHint(outdated)}</div>}
           </div>

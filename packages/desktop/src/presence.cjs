@@ -58,7 +58,7 @@ function trayIcon(status, needsYou) {
  */
 function trayMenu(status, managed, needsYou, act) {
   const items = [
-    { label: TITLE[status] ?? TITLE.checking, enabled: false },
+    { label: TITLE[status] ?? TITLE.checking, click: act.settings },
   ];
   if (DETAIL[status]) items.push({ label: DETAIL[status], enabled: false });
   if (needsYou.length) {

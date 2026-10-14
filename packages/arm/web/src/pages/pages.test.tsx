@@ -157,7 +157,7 @@ describe('SessionPage', () => {
 });
 
 describe('Composer', () => {
-  const baseProps = { sessionId: 's1', canAbort: false, reachable: true, onSend: vi.fn(), onAbort: vi.fn() };
+  const baseProps = { sessionId: 's1', canAbort: false, reachable: true, busy: false, onSend: vi.fn(), onAbort: vi.fn() };
 
   it('a waiting permission makes the composer its deny reason', async () => {
     expect(composerIntent(true, false, true)).toBe('denyPermission');
@@ -224,27 +224,31 @@ describe('Composer', () => {
       configurable: true,
       get(this: HTMLElement) {
         if (!(this instanceof HTMLTextAreaElement)) return 0;
-        const twoRows = this.parentElement?.classList.contains('is-multiline');
-        const perLine = twoRows ? 120 : 60;
+        const perLine = parseFloat(this.style.width) > 160 ? 120 : 60;
         return 20 * Math.max(1, Math.ceil(this.value.length / perLine));
       },
     });
+    const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(200);
+    const media = window.matchMedia;
+    window.matchMedia = () => ({ matches: true } as MediaQueryList);
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       useStore.getState().setDraft('s1', draft);
       render(<Composer {...baseProps} intent="prompt" />);
       const field = screen.getByRole('textbox');
-      expect(field.parentElement).toHaveClass('is-multiline');
+      expect(field.closest('.kcomposer-field')).toHaveClass('is-multiline');
       // Shorter than where it went to two rows: back to one row; empty: one row.
       fireEvent.change(field, { target: { value: 'short' } });
-      expect(field.parentElement).not.toHaveClass('is-multiline');
+      expect(field.closest('.kcomposer-field')).not.toHaveClass('is-multiline');
       fireEvent.change(field, { target: { value: 'line one\nline two' } });
-      expect(field.parentElement).toHaveClass('is-multiline');
+      expect(field.closest('.kcomposer-field')).toHaveClass('is-multiline');
       fireEvent.change(field, { target: { value: '' } });
-      expect(field.parentElement).not.toHaveClass('is-multiline');
+      expect(field.closest('.kcomposer-field')).not.toHaveClass('is-multiline');
       expect(errors.mock.calls.flat().join(' ')).not.toMatch(/Maximum update depth/);
     } finally {
       errors.mockRestore();
+      width.mockRestore();
+      window.matchMedia = media;
       if (sh) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', sh);
       else delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
     }

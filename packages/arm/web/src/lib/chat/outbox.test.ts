@@ -42,7 +42,7 @@ describe('outbox', () => {
     expect(payload().delivery).toBe('steer');
   });
 
-  it('fails only after the full window of stalled time; retry keeps the clientId', () => {
+  it('becomes unconfirmed only after the full window of stalled time; retry keeps the clientId', () => {
     const id = outbox.send('s', 'hi');
     let t = Date.now();
     pathUp = false;
@@ -52,7 +52,7 @@ describe('outbox', () => {
     t = run(t, 19);
     expect(outbox.forSession('s')[0].state).toBe('sending');
     t = run(t, 2);
-    expect(outbox.forSession('s')[0].state).toBe('failed');
+    expect(outbox.forSession('s')[0].state).toBe('unconfirmed');
     outbox.retry(id);
     expect(outbox.forSession('s')[0].state).toBe('sending');
     expect(payload().clientId).toBe(id);
@@ -98,10 +98,10 @@ describe('outbox', () => {
     t = run(t, 6); // 32 s after sending, but only 6 s stalled
     expect(outbox.forSession('s')[0].state).toBe('sending');
     t = run(t, 25);
-    expect(outbox.forSession('s')[0].state).toBe('failed');
+    expect(outbox.forSession('s')[0].state).toBe('unconfirmed');
   });
 
-  it('a busy link pauses the failure clock but never delays a resend', () => {
+  it('a busy link pauses the confirmation clock but never delays a resend', () => {
     outbox.setConfirmationTimeout(30_000);
     let busy = true;
     const resent: Record<string, unknown>[] = [];
@@ -119,7 +119,7 @@ describe('outbox', () => {
     expect(resent.length).toBe(2);
     busy = false;
     t = run(t, 31);
-    expect(outbox.forSession('s')[0].state).toBe('failed');
+    expect(outbox.forSession('s')[0].state).toBe('unconfirmed');
   });
 
   it('a throttled background tick counts at most 2 s', () => {
@@ -158,7 +158,7 @@ describe('outbox', () => {
     outbox.send('s', 'hi');
     run(Date.now(), 31);
     expect(sent).toHaveLength(1);
-    expect(outbox.forSession('s')[0].state).toBe('failed');
+    expect(outbox.forSession('s')[0].state).toBe('unconfirmed');
   });
 
   it('a restored (reloaded) input is resent once its Tentacle is known to deduplicate', async () => {
@@ -197,7 +197,8 @@ describe('outbox', () => {
     });
     fresh.checkDeadlines();
     expect(resent).toEqual([]);
-    expect(fresh.outbox.forSession('s')[0].state).toBe('failed');
+    run(Date.now(), 22);
+    expect(fresh.outbox.forSession('s')[0].state).toBe('unconfirmed');
     fresh.outbox.reset();
   });
 
@@ -220,6 +221,29 @@ describe('outbox', () => {
     outbox.resendUnconfirmed((sid) => sid === 's');
     expect(sent).toEqual([]);
     expect(outbox.forSession('s')[0].state).toBe('sending');
+  });
+
+  it('a late echo clears an unconfirmed input instead of leaving a failed preview', () => {
+    const id = outbox.send('s', 'hi');
+    run(Date.now(), 22);
+    expect(outbox.forSession('s')[0].state).toBe('unconfirmed');
+    expect(outbox.confirm('s', id, 'hi')).toBe(true);
+    expect(outbox.forSession('s')).toEqual([]);
+  });
+
+  it('unconfirmed inputs re-greet and reload with the same id, never create a duplicate', () => {
+    outbox.configure({ send: async (m) => { sent.push(m); return true; }, isDeliveryPathUp: () => true, acceptsResend: () => true });
+    const id = outbox.send('s', 'hi');
+    let t = run(Date.now(), 22);
+    expect(outbox.forSession('s')[0].state).toBe('unconfirmed');
+    outbox.resendUnconfirmed(() => true);
+    expect(outbox.forSession('s')[0].state).toBe('sending');
+    t = run(t, 22);
+    expect(outbox.forSession('s')[0].state).toBe('unconfirmed');
+    outbox.reloadForTesting();
+    checkDeadlines();
+    expect(outbox.forSession('s')[0]).toMatchObject({ clientId: id, state: 'sending' });
+    expect(new Set(sent.map((m) => (m.payload as { clientId: string }).clientId))).toEqual(new Set([id]));
   });
 
   it('discard returns the text', () => {

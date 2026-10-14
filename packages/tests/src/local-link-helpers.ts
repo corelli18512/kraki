@@ -18,9 +18,11 @@ import {
 	appProofMessage,
 	tentacleProofMessage,
 } from "../../tentacle/src/local-link.js";
+import { AgentAdapter } from "../../tentacle/src/adapters/base.js";
 import { waitMs } from "./helpers.js";
 
-export class EmitAdapter {
+/** Inherits every default from the real AgentAdapter so Relay sees a faithful adapter. */
+export class EmitAdapter extends AgentAdapter {
 	onSessionCreated:
 		| ((e: { sessionId: string; agent: string; model?: string }) => void)
 		| null = null;
@@ -50,14 +52,15 @@ export class EmitAdapter {
 		return { sessionId };
 	}
 	async sendMessage() {}
-	async respondToPermission() {}
-	async respondToQuestion() {}
+	async respondToPermission() {
+		return "accepted" as const;
+	}
+	async respondToQuestion() {
+		return "accepted" as const;
+	}
 	async killSession() {}
 	async abortSession() {}
-	listModels() {
-		return [];
-	}
-	listModelDetails() {
+	async listSessions() {
 		return [];
 	}
 }

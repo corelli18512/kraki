@@ -15,7 +15,7 @@
  * across remounts (e.g. virtualised chat lists).
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import type { ContentRef } from '@kraki/protocol';
 
@@ -31,6 +31,7 @@ interface UseAttachmentResult {
   status: 'loading' | 'ready' | 'error';
   url: string | null;
   error: string | null;
+  retry: () => void;
 }
 
 interface UseAttachmentTextResult {
@@ -124,14 +125,18 @@ export function useAttachment(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ref.id, tick]);
 
+  const retry = useCallback(() => {
+    if (markFetching(ref, true)) requestPull(sessionId, ref);
+  }, [ref, sessionId, requestPull]);
+
   const state = getState(ref.id) as AttachmentState | undefined;
   if (state?.kind === 'ready' && url) {
-    return { status: 'ready', url, error: null };
+    return { status: 'ready', url, error: null, retry };
   }
   if (state?.kind === 'error') {
-    return { status: 'error', url: null, error: state.reason };
+    return { status: 'error', url: null, error: state.reason, retry };
   }
-  return { status: 'loading', url: null, error: null };
+  return { status: 'loading', url: null, error: null, retry };
 }
 
 /** Sibling of {@link useAttachment} that decodes the bytes as UTF-8 text.

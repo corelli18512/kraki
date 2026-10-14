@@ -1,241 +1,596 @@
+import { useEffect, useState } from 'react';
+import { CheckCircle, Smartphone, X } from 'lucide-react';
 import { VoiceSettings } from './VoiceSettings';
 import { DeleteAccountSection } from './DeleteAccount';
-import { desktop } from '../../lib/desktop';
+import { SettingsAlert, SettingsRow, SettingsSection, SettingsSwitch } from './SettingsControls';
+import { desktop, type DesktopSettingsState } from '../../lib/desktop';
 import { ThisPCSettings } from '../desktop/ThisPCSettings';
-import { useEffect, useState } from 'react';
 import { useTheme } from '../../hooks/useTheme';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
-import { isPushSupported, isPushSubscribed, subscribeToPush, unsubscribeFromPush, getPushPermission } from '../../lib/push';
+import {
+  isPushSupported,
+  isPushSubscribed,
+  subscribeToPush,
+  unsubscribeFromPush,
+  getPushPermission,
+} from '../../lib/push';
 import { CHANNEL_SWITCHING_ENABLED, getCurrentChannel, setChannel } from '../../lib/auth';
 import { version } from '../../../package.json';
 import { ArchiveSettings } from '../sessions/ArchivedSessions';
+import { CONNECT_PHONE_EVENT } from '../devices/ConnectPhoneCard';
+import { DeviceUpdateBox } from '../devices/DeviceUpdateBox';
+import { signOut } from './ProfileBar';
+import { setUsageShortcut, shortcutFromEvent, useUsageShortcut } from '../../lib/usage-shortcut';
+import './settings.css';
+import { SettingsTabIcon } from './SettingsTabIcon';
+import { deviceLastOnline } from '../../lib/device-last-online';
+import {
+  notificationsEnabled as readNotificationsEnabled,
+  setNotificationsEnabled as saveNotificationsEnabled,
+} from '../../lib/notification-prefs';
 
-export function SettingsPanel({ open, onClose, inline, className }: { open: boolean; onClose: () => void; inline?: boolean; className?: string }) {
+const tabs = ['General', 'Account', 'Voice Input', 'Notifications', 'This PC', 'Devices', 'About'] as const;
+
+export function SettingsPanel({
+  open,
+  onClose,
+  inline,
+  className,
+}: {
+  open: boolean;
+  onClose: () => void;
+  inline?: boolean;
+  className?: string;
+}) {
   const { theme, setTheme } = useTheme();
-  const relayVersion = useStore((s) => s.relayVersion);
-  const status = useStore((s) => s.status);
-  const devices = useStore((s) => s.devices);
-  const deviceVersions = useStore((s) => s.deviceVersions);
+  const state = useStore();
+  const [tab, setTab] = useState<string>('General');
   const [diagCopied, setDiagCopied] = useState(false);
-  const vapidPublicKey = useStore((s) => s.vapidPublicKey);
-  const isInternal = useStore((s) => s.user?.preferences?.internal === true);
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
+  const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
+  const [builtInId, setBuiltInId] = useState<string | null>(null);
+  const [builtInKnown, setBuiltInKnown] = useState(!desktop?.builtIn);
+  const [os, setOs] = useState<DesktopSettingsState | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushLoading, setPushLoading] = useState(false);
-  const pushSupported = isPushSupported();
-  const pushDenied = getPushPermission() === 'denied';
+  const [notificationsEnabled, setNotificationsEnabled] = useState(readNotificationsEnabled);
+  const [permission, setPermission] = useState(getPushPermission());
+  const shortcut = useUsageShortcut();
+  const bridge = desktop?.settings;
   const isBeta = getCurrentChannel() === 'beta';
 
-  // Check current push subscription state on mount
   useEffect(() => {
-    if (!pushSupported) return;
-    isPushSubscribed().then(setPushEnabled);
-  }, [pushSupported, open]);
-
-  // Close on Escape (overlay mode only)
+    if (!open) return;
+    if (isPushSupported()) void isPushSubscribed().then(setPushEnabled);
+    void desktop?.builtIn?.state().then((s) => { setBuiltInId(s.deviceId); setBuiltInKnown(true); }).catch(() => setError('Couldn’t identify this PC. Device removal is unavailable.'));
+    void bridge
+      ?.state()
+      .then((s) => {
+        setOs(s);
+        setUsageShortcut(s.usageShortcut, s.usageShortcutEnabled);
+      })
+      .catch(() => setError('Couldn’t read system preferences.'));
+  }, [open, bridge]);
   useEffect(() => {
     if (!open || inline) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (useUsageShortcut.getState().recording) useUsageShortcut.setState({ recording: false });
+        else onClose();
+      }
     };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
+    window.addEventListener('keydown', key);
+    return () => {
+      window.removeEventListener('keydown', key);
+    };
   }, [open, onClose, inline]);
 
-  const wsUrl = wsClient.url;
-  const clientVersion = `${version}${isBeta ? '-beta' : ''}${typeof __GIT_HASH__ === 'string' ? ` (${__GIT_HASH__})` : ''}`;
-  const computers = [...devices.values()].filter((d) => d.role === 'tentacle').sort((a, b) => a.name.localeCompare(b.name));
-  const diagnosticsLines = [
-    `Kraki web: ${clientVersion}`,
-    ...computers.map((d) => `${d.name}: Kraki ${deviceVersions.get(d.id) ?? 'unknown'}${d.online ? '' : ' · offline'}`),
-    `Relay: ${wsUrl.replace(/^wss?:\/\//, '')} · ${relayVersion ?? '—'}`,
+  useEffect(() => {
+    if (!open) useUsageShortcut.setState({ recording: false });
+  }, [open]);
+
+  async function updateOs(fn: (() => Promise<{ ok: boolean; error?: string }>) | undefined) {
+    if (!fn) return;
+    try {
+      const result = await fn();
+      setError(result.ok ? null : (result.error ?? 'Couldn’t save this preference.'));
+      if (result.ok && bridge) setOs(await bridge.state());
+    } catch {
+      setError('Couldn’t save this preference.');
+    }
+  }
+  async function updateShortcut(key: string, enabled: boolean) {
+    if (bridge?.setUsageShortcut) {
+      try {
+        const result = await bridge.setUsageShortcut(key, enabled);
+        if (!result.ok) {
+          setError(result.error ?? 'Couldn’t register this shortcut.');
+          return;
+        }
+      } catch {
+        setError('Couldn’t register this shortcut.');
+        return;
+      }
+    }
+    setError(null);
+    setUsageShortcut(key, enabled);
+  }
+  async function updateNotifications(on: boolean) {
+    setError(null);
+    if (!desktop && isPushSupported() && (state.vapidPublicKey || pushEnabled)) {
+      setPushLoading(true);
+      try {
+        if (!on) {
+          if (pushEnabled && !(await unsubscribeFromPush())) {
+            setError('Couldn’t turn off push notifications.');
+            return;
+          }
+          wsClient.unregisterPushToken({ provider: 'web_push' });
+          setPushEnabled(false);
+        } else if (state.vapidPublicKey) {
+          const token = await subscribeToPush(state.vapidPublicKey);
+          if (!token) {
+            setError('Notifications are blocked. Turn them on in site Settings.');
+            return;
+          }
+          wsClient.registerPushToken({ provider: 'web_push', token });
+          setPushEnabled(true);
+        }
+      } catch {
+        setError('Couldn’t update push notifications.');
+        return;
+      } finally {
+        setPushLoading(false);
+        setPermission(getPushPermission());
+      }
+    }
+    saveNotificationsEnabled(on);
+    setNotificationsEnabled(on);
+  }
+  const diagnostics = [
+    ['Background Service', os ? (state.deviceVersions.get(builtInId ?? '') ?? '—') : '—'],
+    [desktop ? 'Kraki Windows' : 'Kraki Web', `${desktop?.version ?? version}${isBeta ? '-beta' : ''}`],
+    ...[...state.devices.values()]
+      .filter((d) => d.role === 'tentacle')
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((d) => [d.name, `Kraki ${state.deviceVersions.get(d.id) ?? '—'}${d.online ? '' : ' · offline'}`]),
+    ['Relay', `${new URL(wsClient.url || 'ws://localhost').hostname} · ${state.relayVersion ?? '—'}`],
   ];
-
-
-  const content = (
-    <div className="space-y-6">
-      {desktop?.builtIn && <ThisPCSettings builtIn={desktop.builtIn} />}
-      <section>
-        <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-          Appearance
-        </h3>
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm text-text-primary">Appearance</p>
-          <div role="radiogroup" aria-label="Appearance" className="flex rounded-lg bg-surface-tertiary p-0.5 text-[12px]">
+  const general = (
+    <>
+      <SettingsSection title="Appearance">
+        <SettingsRow label="Theme">
+          <div className="kp-segment" role="radiogroup" aria-label="Theme">
             {(['system', 'light', 'dark'] as const).map((option) => (
               <button
-                key={option}
                 type="button"
                 role="radio"
                 aria-checked={theme === option}
+                key={option}
                 onClick={() => {
                   setTheme(option);
                   wsClient.updatePreferences({ theme: option });
                 }}
-                className={`rounded-md px-2.5 py-1 font-medium transition-colors ${
-                  theme === option ? 'bg-surface-primary text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'
-                }`}
               >
-                {option === 'system' ? 'System' : option === 'light' ? 'Light' : 'Dark'}
+                {option[0].toUpperCase() + option.slice(1)}
               </button>
             ))}
           </div>
+        </SettingsRow>
+        <div className="kp-row kp-palette" style={{ justifyContent: 'flex-start', gap: 6 }}>
+          {['#FBBF24', '#34D399', '#22D3EE', '#F4836E', '#6366F1'].map((color) => (
+            <span key={color} style={{ width: 12, height: 12, borderRadius: '50%', background: color }} />
+          ))}
+          <span className="kp-foot" style={{ fontWeight: 500 }}>
+            Brand palette preview
+          </span>
         </div>
-      </section>
-
-      {pushSupported && vapidPublicKey && (
-        <section>
-          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-            Notifications
-          </h3>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-text-primary">Push notifications</p>
-              <p className="text-[11px] text-text-muted">
-                {pushDenied
-                  ? 'Blocked by browser — reset in site settings'
-                  : 'Get notified when agents need attention'}
-              </p>
-            </div>
-            <button
-              disabled={pushLoading || pushDenied}
-              onClick={async () => {
-                setPushLoading(true);
-                try {
-                  if (pushEnabled) {
-                    const ok = await unsubscribeFromPush();
-                    if (ok) {
-                      wsClient.unregisterPushToken({ provider: 'web_push' });
-                      setPushEnabled(false);
-                    }
-                  } else {
-                    const token = await subscribeToPush(vapidPublicKey);
-                    if (token) {
-                      wsClient.registerPushToken({ provider: 'web_push', token });
-                      setPushEnabled(true);
-                    }
-                  }
-                } finally {
-                  setPushLoading(false);
-                }
-              }}
-              className={`relative h-6 w-11 rounded-full transition-colors ${
-                pushDenied ? 'cursor-not-allowed opacity-40 bg-slate-300' :
-                pushEnabled ? 'bg-kraki-500' : 'bg-slate-300'
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                  pushEnabled && !pushDenied ? 'translate-x-5' : 'translate-x-0'
-                }`}
-              />
-            </button>
-          </div>
-        </section>
-      )}
-
-      {isInternal && CHANNEL_SWITCHING_ENABLED && (
-        <section>
-          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-            Dogfood
-          </h3>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-text-primary">Beta channel</p>
-              <p className="text-[11px] text-text-muted">
-                {isBeta ? 'Using latest unreleased build' : 'Switch to unreleased builds'}
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                const next = isBeta ? 'stable' : 'beta';
-                wsClient.updatePreferences({ channel: next });
-                setChannel(next);
-              }}
-              className={`relative h-6 w-11 rounded-full transition-colors ${
-                isBeta ? 'bg-amber-500' : 'bg-slate-300'
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                  isBeta ? 'translate-x-5' : 'translate-x-0'
-                }`}
-              />
-            </button>
-          </div>
-        </section>
-      )}
-
-      <section>
-        <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-          Connection
-        </h3>
-        <div>
-          <p className="text-sm text-text-primary">Relay server</p>
-          <p className="mt-1 rounded-lg bg-surface-secondary px-3 py-2 font-mono text-xs text-text-secondary">
-            {wsUrl.replace(/^wss?:\/\//, '')}
-          </p>
-        </div>
-      </section>
-
-      <section>
-        <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-          Sessions
-        </h3>
-        <ArchiveSettings />
-      </section>
-
-      <VoiceSettings />
-
-      {status === 'connected' && <DeleteAccountSection />}
-
-      <section>
-        <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-          About
-        </h3>
-        <div className="space-y-1 text-xs text-text-secondary">
-          {diagnosticsLines.map((line) => <p key={line}>{line}</p>)}
+      </SettingsSection>
+      <SettingsSection title="Account Usage">
+        <SettingsRow label={`Hold ${shortcut.shortcut} to peek at account usage`}>
+          <SettingsSwitch
+            label="Peek at account usage"
+            on={shortcut.enabled}
+            onChange={(on) => {
+              void updateShortcut(shortcut.shortcut, on);
+            }}
+          />
+        </SettingsRow>
+        <SettingsRow label="Shortcut">
           <button
             type="button"
-            className="mt-1 rounded-md border border-border-primary px-2 py-1 text-xs text-text-secondary hover:bg-surface-secondary"
-            onClick={() => {
-              void navigator.clipboard?.writeText(diagnosticsLines.join('\n')).then(() => setDiagCopied(true));
+            className={`kp-button${shortcut.recording ? ' is-recording' : ''}`}
+            style={{ width: 230, height: 26 }}
+            onClick={() => useUsageShortcut.setState({ recording: true })}
+            onBlur={() => useUsageShortcut.setState({ recording: false })}
+            onKeyDown={(e) => {
+              if (!shortcut.recording) return;
+              e.preventDefault();
+              e.stopPropagation();
+              if (e.key === 'Escape') {
+                useUsageShortcut.setState({ recording: false });
+                return;
+              }
+              const key = shortcutFromEvent(e.nativeEvent);
+              if (key) {
+                useUsageShortcut.setState({ recording: false });
+                void updateShortcut(key, shortcut.enabled);
+              }
             }}
           >
-            {diagCopied ? 'Copied' : 'Copy diagnostics'}
+            {shortcut.recording ? 'Press a shortcut…' : shortcut.shortcut}
           </button>
-          <p>Agent-agnostic relay for AI coding agents</p>
+        </SettingsRow>
+        <p className="kp-foot">
+          Click the shortcut to choose another key: F1–F20, or a combination with Ctrl, Alt or Win. With Kraki in front
+          the panel opens inside its window{bridge?.setUsageShortcut ? '; over other apps it floats' : ''}. “Account
+          Usage” {desktop ? 'in the tray' : 'in the sidebar'} opens it any time.
+        </p>
+      </SettingsSection>
+      {state.archiveInfo.size > 0 && <section className="kp-section">
+        <h3>Sessions</h3>
+        <ArchiveSettings />
+      </section>}
+      {bridge && os && (
+        <SettingsSection title="Behavior">
+          {bridge.setKeepRunningInTray && (
+            <SettingsRow label="Keep running in tray when window closes">
+              <SettingsSwitch
+                label="Keep running in tray when window closes"
+                on={os.keepRunningInTray}
+                onChange={(on) => {
+                  void updateOs(() => bridge.setKeepRunningInTray!(on));
+                }}
+              />
+            </SettingsRow>
+          )}
+          {bridge.setLaunchAtLogin && (
+            <SettingsRow label="Open Kraki at login">
+              <SettingsSwitch
+                label="Open Kraki at login"
+                on={os.launchAtLogin}
+                onChange={(on) => {
+                  void updateOs(() => bridge.setLaunchAtLogin!(on));
+                }}
+              />
+            </SettingsRow>
+          )}
+        </SettingsSection>
+      )}
+    </>
+  );
+  const account = state.user ? (
+    <>
+      <SettingsSection>
+        <div className="kp-row" style={{ gap: 14, justifyContent: 'flex-start', padding: '14px 0' }}>
+          <div className="kp-avatar flex h-12 w-12 items-center justify-center rounded-full bg-kraki-500/15 text-base font-bold text-kraki-500">
+            {(state.user.email ?? state.user.login).slice(0, 2).toUpperCase()}
+          </div>
+          <div>
+            <p className="kp-account-name text-sm font-semibold">{state.user.email ?? state.user.login}</p>
+            <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-text-secondary">
+              <CheckCircle size={10} color="#34D399" />
+              Signed in via{' '}
+              {state.user.provider === 'github'
+                ? 'GitHub'
+                : state.user.provider === 'open'
+                  ? 'Open authentication'
+                  : state.user.provider}
+            </p>
+          </div>
         </div>
-      </section>
+      </SettingsSection>
+      <SettingsSection title="Identity">
+        <SettingsRow label="Login">
+          <span className="text-text-secondary">{state.user.login}</span>
+        </SettingsRow>
+        {state.user.email && (
+          <SettingsRow label="Email">
+            <span>{state.user.email}</span>
+          </SettingsRow>
+        )}
+        <SettingsRow label="Device ID">
+          <span title={state.deviceId ?? ''} className="text-text-secondary">
+            {state.deviceId?.slice(0, 12)}…
+          </span>
+        </SettingsRow>
+      </SettingsSection>
+      <SettingsSection>
+        <div className="kp-row">
+          <button type="button" className="kp-button text-red-600" onClick={() => setConfirmSignOut(true)}>
+            Sign Out…
+          </button>
+        </div>
+      </SettingsSection>
+      {state.status === 'connected' && (
+        <div className="kp-section kp-section-untitled">
+          <DeleteAccountSection />
+        </div>
+      )}
+    </>
+  ) : (
+    <p className="text-center text-text-secondary">Not signed in.</p>
+  );
+  const notifications = (
+    <>
+      <SettingsSection title="System permission">
+        <SettingsRow label="Status">
+          <span className="text-text-secondary">
+            {(os?.notificationPermission ?? permission) === 'granted'
+              ? 'Granted'
+              : (os?.notificationPermission ?? permission) === 'denied'
+                ? `Off — turn on in ${desktop ? 'System' : 'site'} Settings`
+                : 'Not asked yet'}
+          </span>
+        </SettingsRow>
+        <div className="kp-row" style={{ justifyContent: 'flex-start' }}>
+          {!desktop && isPushSupported() && permission === 'default' && (
+            <button
+              type="button"
+              className="kp-button"
+              onClick={() => {
+                void Notification.requestPermission().then(setPermission);
+              }}
+            >
+              Allow Notifications…
+            </button>
+          )}
+          {bridge?.openNotificationSettings && (
+            <button type="button" className="kp-button" onClick={bridge.openNotificationSettings}>
+              Open System Settings…
+            </button>
+          )}
+        </div>
+      </SettingsSection>
+      <SettingsSection title="In-app">
+        <SettingsRow label="Notify me when an agent replies or needs me">
+          <SettingsSwitch
+            label="Notify me when an agent replies or needs me"
+            on={notificationsEnabled}
+            disabled={pushLoading}
+            onChange={(on) => {
+              void updateNotifications(on);
+            }}
+          />
+        </SettingsRow>
+        <p className="kp-foot">
+          Shown while Kraki is running{desktop ? ' (also from the tray)' : ''}, except for the Session you are looking
+          at.
+        </p>
+      </SettingsSection>
+      {!desktop && (
+        <SettingsSection title="Web Push">
+          <p className="kp-foot" style={{ border: 0 }}>
+            {state.vapidPublicKey && isPushSupported()
+              ? pushEnabled
+                ? 'Push notifications are on, including when this browser is closed.'
+                : 'Turn notifications on to receive replies and requests when this browser is closed.'
+              : 'Push notifications aren’t available with this relay.'}
+          </p>
+        </SettingsSection>
+      )}
+    </>
+  );
+  const devices = (
+    <>
+      <SettingsSection title="Paired devices">
+        {[...state.devices.values()]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((d) => (
+            <div key={d.id} className="kp-device">
+              <div className="kp-row" style={{ gap: 10 }}>
+                <span
+                  className={`h-2 w-2 shrink-0 rounded-full${d.online ? '' : ' kp-offline-dot'}`}
+                  style={d.online ? { background: '#34D399' } : undefined}
+                />
+                <div className="flex-1">
+                  <p className="kp-device-name font-medium">{d.name}</p>
+                  <div className="kp-device-meta">
+                    <span className="text-[10px] font-semibold uppercase tracking-[.4px]">{d.role === 'tentacle' ? 'Computer' : 'App'}</span>
+                    {d.role === 'tentacle' && <span>{state.deviceVersions.get(d.id)}</span>}
+                    {!d.online && deviceLastOnline(d.lastSeen) && <span>Last online {deviceLastOnline(d.lastSeen)}</span>}
+                  </div>
+                </div>
+                {builtInKnown && !d.online && d.id !== state.deviceId && d.id !== builtInId ? (
+                  <button type="button" className="kp-button" onClick={() => setRemoving(d)}>
+                    Remove…
+                  </button>
+                ) : (
+                  <span className="font-mono text-[10px] text-text-muted" title={d.id}>
+                    {d.id.slice(0, 10)}…
+                  </span>
+                )}
+              </div>
+              <DeviceUpdateBox device={d} />
+            </div>
+          ))}
+      </SettingsSection>
+      {desktop?.builtIn?.connectPhone && (
+        <SettingsSection>
+          <div className="kp-row">
+            <Smartphone size={20} className="text-kraki-500" />
+            <div>
+              <p>Use Kraki on your phone</p>
+              <p className="kp-foot">Scan a code with your phone to see and run your sessions there.</p>
+            </div>
+            <button
+              type="button"
+              className="kp-button shrink-0"
+              onClick={() => window.dispatchEvent(new Event(CONNECT_PHONE_EVENT))}
+            >
+              Show Code…
+            </button>
+          </div>
+        </SettingsSection>
+      )}
+    </>
+  );
+  const about = (
+    <div className="kp-about">
+      <img src="/settings-logo-light.png" alt="Kraki" className="kp-about-logo dark:hidden" />
+      <img src="/settings-logo-dark.png" alt="" className="kp-about-logo hidden dark:block" />
+      <div className="text-center">
+        <p className="kp-brand-title font-mono text-[18px] font-black tracking-[3.5px]">KRAKI</p>
+        <p className="mt-1 text-[10px] font-medium uppercase tracking-[.3px] text-text-muted">
+          Multi-device · Multi-agent · Coding
+        </p>
+      </div>
+      <dl className="mt-1.5 space-y-[3px]">
+        {diagnostics.map(([label, value]) => (
+          <div className="kp-diagnostic" key={label}>
+            <dt>{label.toUpperCase()}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <button
+        type="button"
+        className="kp-button"
+        onClick={() => {
+          void navigator.clipboard
+            .writeText(diagnostics.map(([label, value]) => `${label}: ${value}`).join('\n'))
+            .then(() => setDiagCopied(true))
+            .catch(() => setError('Couldn’t copy diagnostics.'));
+        }}
+      >
+        {diagCopied ? 'Copied' : 'Copy Diagnostics'}
+      </button>
+      <hr className="my-1.5 w-[220px] border-border-primary" />
+      <div className="flex gap-4 text-xs font-medium text-kraki-500">
+        {[
+          ['Website', 'https://kraki.chat'],
+          ['Documentation', 'https://kraki.chat/docs'],
+          ['GitHub', 'https://github.com/corelli18512/kraki'],
+        ].map(([label, href]) => (
+          <a key={label} href={href} target="_blank" rel="noreferrer">
+            {label}
+          </a>
+        ))}
+      </div>
+      <p className="mt-auto text-[10px] text-text-muted">© 2026 Kraki</p>
     </div>
   );
-
-  // Inline mode: render content directly, no overlay
-  if (inline) {
-    return open ? content : null;
-  }
-
-  // Overlay mode: slide-over panel
+  if (!open) return null;
   return (
     <div className={className}>
-      {open && <div className="fixed inset-0 z-40 bg-black/30" onClick={onClose} />}
-      <div className={`fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-border-primary bg-surface-primary shadow-xl transition-transform duration-300 sm:w-80 ${
-        open ? 'translate-x-0' : '-translate-x-full'
-      }`}>
-        <div className="flex h-11 shrink-0 items-center justify-between border-b border-border-primary px-4">
-          <h2 className="text-sm font-semibold text-text-primary">Settings</h2>
-          <button
-            onClick={onClose}
-            className="rounded-md p-1 text-text-secondary hover:bg-surface-tertiary hover:text-text-primary"
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
+      <div
+        className={inline ? 'kp-inline' : 'kp-window'}
+        role="dialog"
+        aria-label="Settings"
+        data-testid="settings-window"
+      >
+        <div className="kp-title">
+          {tab}
+          <button type="button" className="kp-close" aria-label="Close settings" onClick={onClose}>
+            <X size={9} />
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4" data-testid="settings-scroll">
-          {content}
+        <div className="kp-tabs" role="tablist" aria-label="Settings">
+          {tabs.map((name) => (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === name}
+              tabIndex={tab === name ? 0 : -1}
+              onKeyDown={(e) => {
+                if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+                e.preventDefault();
+                const buttons = [...e.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>('[role=tab]')];
+                const index = buttons.indexOf(e.currentTarget);
+                const next =
+                  e.key === 'Home'
+                    ? 0
+                    : e.key === 'End'
+                      ? buttons.length - 1
+                      : (index + (e.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+                setTab(tabs[next]);
+                buttons[next].focus();
+              }}
+              aria-controls="settings-pane"
+              key={name}
+              onClick={() => setTab(name)}
+            >
+              <SettingsTabIcon name={name} />
+              {name}
+            </button>
+          ))}
         </div>
+        <div
+          id="settings-pane"
+          role="tabpanel"
+          aria-label={tab}
+          className={`kp-pane${tab === 'About' ? ' kp-pane-about' : ''}`}
+          data-testid="settings-scroll"
+          key={tab}
+        >
+          {tab === 'General' ? (
+            general
+          ) : tab === 'Account' ? (
+            account
+          ) : tab === 'Voice Input' ? (
+            <VoiceSettings />
+          ) : tab === 'Notifications' ? (
+            notifications
+          ) : tab === 'This PC' ? (
+            desktop?.builtIn ? (
+              <ThisPCSettings builtIn={desktop.builtIn} />
+            ) : (
+              <p className="kp-foot">
+                Run Kraki for Windows to run agents on this PC. The browser controls your other computers.
+              </p>
+            )
+          ) : tab === 'Devices' ? (
+            devices
+          ) : (
+            about
+          )}
+          {error && (
+            <p role="alert" className="mt-2 text-xs text-red-500">
+              {error}
+            </p>
+          )}
+          {tab === 'General' && state.user?.preferences?.internal === true && CHANNEL_SWITCHING_ENABLED && (
+            <SettingsSection title="Dogfood">
+              <SettingsRow label="Beta channel">
+                <SettingsSwitch
+                  label="Beta channel"
+                  on={isBeta}
+                  onChange={() => {
+                    const next = isBeta ? 'stable' : 'beta';
+                    wsClient.updatePreferences({ channel: next });
+                    setChannel(next);
+                  }}
+                />
+              </SettingsRow>
+            </SettingsSection>
+          )}
+        </div>
+        {confirmSignOut && (
+          <SettingsAlert
+            title={`Sign out of Kraki on ${desktop ? 'this PC' : 'this browser'}?`}
+            body={`Conversations cached ${desktop ? 'on this PC' : 'in this browser'} are removed. Your computers keep all sessions; sign in again to see them.`}
+            confirm="Sign Out"
+            onCancel={() => setConfirmSignOut(false)}
+            onConfirm={() => {
+              signOut();
+              onClose();
+            }}
+          />
+        )}
+        {removing && (
+          <SettingsAlert
+            title={`Remove ${removing.name}?`}
+            body="It's signed out of your account. To use it again, sign in or pair it again."
+            confirm="Remove"
+            onCancel={() => setRemoving(null)}
+            onConfirm={() => {
+              wsClient.removeDevice(removing.id);
+              setRemoving(null);
+            }}
+          />
+        )}
       </div>
     </div>
   );

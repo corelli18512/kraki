@@ -7,9 +7,9 @@
  * some text. `StartSessionView` is the idle pane (nothing selected) built
  * around it.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useLayoutEffect, useRef, useState } from 'react';
 import type { AgentCapabilities, DeviceSummary, ReasoningEffort } from '@kraki/protocol';
-import { ArrowUp, Monitor, Laptop, MoonStar, Smartphone, Check, ChevronDown } from 'lucide-react';
+import { ArrowUp, Laptop, MoonStar, Smartphone, Check, ChevronDown } from 'lucide-react';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import { desktop } from '../../lib/desktop';
@@ -18,11 +18,13 @@ import { MicButton, VoiceError, VoiceRow, VoiceTranscript, useDictation, useStar
 import { finishDictation, voiceSettings, type VoiceFinish } from '../../lib/voice/voice';
 import { newSessionContext } from '../../lib/voice/context';
 import './new-session.css';
+import { updateComposerScrollFade } from '../chat/Composer';
 
 const LAST_DEVICE_KEY = 'kraki:last-device';
 const AGENT_PREF_KEY = 'kraki:last-agent-by-device';
 const MODEL_PREF_KEY = 'kraki:last-model';
 const EFFORT_PREF_KEY = 'kraki:last-effort';
+const NEW_SESSION_DRAFT_ID = 'kraki.new-session-draft';
 
 const readJson = <T,>(key: string): Record<string, T> => {
   try { return JSON.parse(localStorage.getItem(key) ?? '{}') as Record<string, T>; } catch { return {}; }
@@ -56,15 +58,27 @@ const EFFORT_DETAIL: Record<ReasoningEffort, string> = {
 };
 const EFFORT_FILL: Record<ReasoningEffort, number> = { low: 0, medium: 1, high: 2, xhigh: 3, max: 3 };
 
+/** SF desktopcomputer: filled display, slim stem and foot (not an outline monitor). */
+function DesktopComputer({ className }: { className: string }) {
+  return <svg viewBox="0 0 20 20" className={className} aria-hidden="true" fill="currentColor">
+    <path fillRule="evenodd" d="M1.5 2h17A1.5 1.5 0 0 1 20 3.5v11a1.5 1.5 0 0 1-1.5 1.5h-17A1.5 1.5 0 0 1 0 14.5v-11A1.5 1.5 0 0 1 1.5 2ZM1.5 3v9.5h17v-9.5Z" />
+    <rect x="1.5" y="3" width="17" height="9.5" fillOpacity="0.25" />
+    <path d="M8 16h4v1.5h1.5V19h-7v-1.5H8z" />
+  </svg>;
+}
+
 /** gauge.with.dots.needle.{0,33,67,100}percent */
 function EffortGauge({ effort }: { effort?: ReasoningEffort }) {
   const level = effort ? EFFORT_FILL[effort] : 1;
   const angle = -150 + level * 40;
   return (
     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
-      <path d="M2.3 11.5a6.2 6.2 0 1 1 11.4 0" strokeLinecap="round" />
-      <line x1="8" y1="9" x2={8 + 4.2 * Math.cos((angle * Math.PI) / 180)} y2={9 + 4.2 * Math.sin((angle * Math.PI) / 180)} strokeLinecap="round" />
-      <circle cx="8" cy="9" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="8" r="6.4" />
+      {[-150, -90, -30, 30, 90, 150].map((degrees) => <circle key={degrees}
+        cx={8 + 4.6 * Math.cos(degrees * Math.PI / 180)} cy={8 + 4.6 * Math.sin(degrees * Math.PI / 180)}
+        r="0.65" fill="currentColor" stroke="none" />)}
+      <line x1="8" y1="8" x2={8 + 4.2 * Math.cos((angle * Math.PI) / 180)} y2={8 + 4.2 * Math.sin((angle * Math.PI) / 180)} strokeLinecap="round" />
+      <circle cx="8" cy="8" r="1.1" fill="currentColor" stroke="none" />
     </svg>
   );
 }
@@ -105,11 +119,16 @@ function Popover({ onClose, children, wide }: { onClose: () => void; children: R
   useEffect(() => {
     const down = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
     const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } };
-    setTimeout(() => document.addEventListener('mousedown', down), 0);
+    const timer = setTimeout(() => document.addEventListener('mousedown', down), 0);
     document.addEventListener('keydown', key, true);
-    return () => { document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key, true); };
+    return () => { clearTimeout(timer); document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key, true); };
   }, [onClose]);
-  return <div ref={ref} className={wide ? 'ns-popover ns-popover-wide' : 'ns-popover'} role="listbox">{children}</div>;
+  return <div ref={ref} className={wide ? 'ns-popover ns-popover-wide' : 'ns-popover'} role="listbox">
+    <svg className="ns-popover-arrow" width="28" height="12" viewBox="0 0 28 12" aria-hidden>
+      <path d="M0 12C4 12 5 11 7 9L12 3Q14 1 16 3L21 9C23 11 24 12 28 12" />
+    </svg>
+    {children}
+  </div>;
 }
 
 function ChoiceRow({ title, detail, selected, enabled = true, mark, onClick }: {
@@ -148,7 +167,9 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
   const online = useMemo(() => tentacles.filter((d) => d.online), [tentacles]);
   const offline = useMemo(() => tentacles.filter((d) => !d.online), [tentacles]);
 
-  const [text, setText] = useState('');
+  const text = useStore((s) => s.drafts.get(NEW_SESSION_DRAFT_ID) ?? '');
+  const setDraft = useStore((s) => s.setDraft);
+  const setText = (value: string) => setDraft(NEW_SESSION_DRAFT_ID, value);
   const [deviceId, setDeviceId] = useState('');
   const [agentId, setAgentId] = useState('');
   const [model, setModel] = useState('');
@@ -229,16 +250,22 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
     return () => window.removeEventListener(FOCUS_COMPOSER_EVENT, onFocus);
   }, [nudge]);
 
-  // Grow with the text: minRows…10 lines.
-  useEffect(() => {
+  const dictation = useDictation('new');
+
+  // Same native 1pt editor inset, outside 8pt padding, and ten-line cap.
+  useLayoutEffect(() => {
     const el = textRef.current;
     if (!el) return;
-    el.style.height = 'auto';
-    const line = 20;
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, minRows * line), 10 * line)}px`;
-  }, [text, minRows]);
-
-  const dictation = useDictation('new');
+    const fit = () => {
+      el.style.height = '0px';
+      el.style.height = `${Math.min(Math.max(el.scrollHeight, minRows * 18 + 2), 10 * 18 + 2)}px`;
+      updateComposerScrollFade(el);
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    if (el.parentElement) observer.observe(el.parentElement);
+    return () => observer.disconnect();
+  }, [text, minRows, dictation.active]);
   const onVoiceFinal = (spoken: string, mode: VoiceFinish) => {
     const full = [text.trimEnd(), spoken].filter(Boolean).join(' ');
     if (mode === 'send' && full.trim() && availability === 'ready' && deviceId && agentId && model) submit(full);
@@ -264,20 +291,23 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
   return (
     <div className="ns-composer-wrap">
       <div
-        className={`ns-composer${focused ? ' ns-focused' : ''}${nudged ? ' ns-nudged' : ''}`}
+        className={`ns-composer${focused || openPill ? ' ns-focused' : ''}${nudged ? ' ns-nudged' : ''}`}
         onMouseDown={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); textRef.current?.focus(); } }}
       >
         <VoiceError owner="new" />
         {dictation.active ? (
           <div className="ns-dictation"><VoiceTranscript owner="new" /><VoiceRow owner="new" /></div>
         ) : (
+        <div className="ns-editor">
         <textarea
           ref={textRef}
           className="ns-text"
           value={text}
           rows={minRows}
           placeholder={placeholder}
+          aria-label={placeholder}
           onChange={(e) => setText(e.target.value)}
+          onScroll={(e) => updateComposerScrollFade(e.currentTarget)}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onKeyDown={(e) => {
@@ -288,6 +318,7 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
           }}
           data-testid="new-session-text"
         />
+        </div>
         )}
         <div className="ns-bar">
           <div className="ns-pill-wrap">
@@ -304,7 +335,7 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
                       title={d.id === localId ? localName : d.name}
                       detail={d.id === localId ? d.name : null}
                       selected={d.id === deviceId}
-                      mark={d.id === localId ? <Laptop className="ns-online" /> : <Monitor className="ns-online" />}
+                      mark={d.id === localId ? <Laptop className="ns-online" /> : <DesktopComputer className="ns-online" />}
                       onClick={() => { setDeviceId(d.id); userPickedDevice.current = true; close(); }}
                     />
                   ))}
@@ -312,7 +343,7 @@ export function NewSessionComposer({ placeholder = 'Describe a task, e.g. \u201c
                 {offline.length > 0 && (
                   <ChoiceSection title="Offline">
                     {offline.slice(0, 6).map((d) => (
-                      <ChoiceRow key={d.id} title={d.name} detail="Open Kraki on it to use it" enabled={false} mark={<Monitor className="ns-offline" />} />
+                      <ChoiceRow key={d.id} title={d.name} detail="Open Kraki on it to use it" enabled={false} mark={<DesktopComputer className="ns-offline" />} />
                     ))}
                     {offline.length > 6 && <div className="ns-more">and {offline.length - 6} more offline</div>}
                   </ChoiceSection>

@@ -45,7 +45,8 @@ struct WelcomeView: View {
     /// start one (nil otherwise: setup/attention states keep their cards).
     /// Value: true for an account with no sessions yet.
     private var startSession: Bool? {
-        if appState.devLocalActive { return nil }
+        // Dev-local keeps its own card, unless a parity test asks for the production pane.
+        if appState.devLocalActive, ProcessInfo.processInfo.environment["KRAKI_PRODUCTION_IDLE"] != "1" { return nil }
         if builtInAttentionCard != nil { return nil }
         if !appState.sessionStore.sessions.isEmpty { return false }
         guard appState.connectionStatus == .connected else { return nil }

@@ -43,11 +43,19 @@ export type VoicePhase = 'idle' | 'connecting' | 'recording' | 'finishing' | 'fa
 /** What the finished transcript is for: send it, or put it in the draft to edit. */
 export type VoiceFinish = 'send' | 'edit';
 
+/** A sent utterance lives in the local outbox while recognition/correction finishes. */
+export interface StagedVoice {
+  update: (text: string, rawText: string) => void;
+  complete: (text: string, rawText: string, completed: boolean) => void;
+}
+export type StageVoice = (rawText: string) => StagedVoice | null;
+
 interface VoiceState {
   capability: VoiceCapability | null;
   /** The recording's owner (a session id or 'new'), so only one composer shows it. */
   owner: string | null;
   phase: VoicePhase;
+  staged: boolean;
   rawText: string;
   correctionText: string;
   levels: number[];
@@ -62,7 +70,7 @@ interface VoiceState {
 }
 
 export const useVoice = create<VoiceState>(() => ({
-  capability: null, owner: null, phase: 'idle', rawText: '', correctionText: '', levels: [], startedAt: null,
+  capability: null, owner: null, phase: 'idle', staged: false, rawText: '', correctionText: '', levels: [], startedAt: null,
   error: null, words: [], serverWords: [], outbox: [], consentPending: false, settingsRev: 0,
 }));
 
@@ -173,11 +181,15 @@ interface Recording {
   done: boolean;
   finishMode: VoiceFinish | null;
   onFinal: (text: string, mode: VoiceFinish) => void;
+  onStage?: StageVoice;
+  staged?: StagedVoice;
+  rawText: string;
   timer: ReturnType<typeof setTimeout> | null;
 }
 let rec: Recording | null = null;
 
 function fail(message: string) {
+  rec?.staged?.complete(rec.rawText, rec.rawText, false);
   cleanup();
   useVoice.setState({ phase: 'failed', error: message });
 }
@@ -196,13 +208,13 @@ const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : '10000000-1000-400
  * Start dictating for `owner`. Returns false when the one-time notice must be
  * accepted first (it is shown; call again after `acceptConsent`).
  */
-export async function startDictation(owner: string, context: VoiceContext, onFinal: (text: string, mode: VoiceFinish) => void): Promise<boolean> {
+export async function startDictation(owner: string, context: VoiceContext, onFinal: (text: string, mode: VoiceFinish) => void, onStage?: StageVoice): Promise<boolean> {
   const st = useVoice.getState();
   if (!st.capability) { useVoice.setState({ phase: 'failed', owner, error: "Voice input isn't available in this region." }); return true; }
   if (!voiceSettings.consented) { useVoice.setState({ consentPending: true, owner }); return false; }
   if (rec) cancelDictation();
   if (!transport?.connected()) { useVoice.setState({ phase: 'failed', owner, error: "Couldn't connect to Kraki. Check your connection and try again." }); return true; }
-  useVoice.setState({ owner, phase: 'connecting', rawText: '', correctionText: '', levels: [], error: null, startedAt: Date.now() });
+  useVoice.setState({ owner, phase: 'connecting', staged: false, rawText: '', correctionText: '', levels: [], error: null, startedAt: Date.now() });
   const recordingId = uuid();
   let ws: WebSocket;
   try {
@@ -212,7 +224,7 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
     return true;
   }
   ws.binaryType = 'arraybuffer';
-  const r: Recording = { ws, recordingId, capture: null, pending: [], ready: false, finishSent: false, done: false, finishMode: null, onFinal, timer: null };
+  const r: Recording = { ws, recordingId, capture: null, pending: [], ready: false, finishSent: false, done: false, finishMode: null, onFinal, onStage, rawText: '', timer: null };
   rec = r;
   const send = (m: Record<string, unknown>) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); };
   const flush = () => { if (!r.ready) return; for (const p of r.pending) ws.send(p.buffer.slice(p.byteOffset, p.byteOffset + p.byteLength)); r.pending = []; if (r.finishMode && !r.finishSent) sendFinish(); };
@@ -241,16 +253,24 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
         if (m.sessionFinal === true) {
           const text = String(m.text ?? '').trim();
           const mode = r.finishMode ?? 'edit';
+          const raw = typeof m.rawText === 'string' ? m.rawText : r.rawText || text;
           r.done = true;
           cleanup();
-          useVoice.setState({ phase: 'idle', rawText: '', correctionText: '', levels: [], owner: null, startedAt: null });
-          r.onFinal(text, mode);
+          useVoice.setState({ phase: 'idle', staged: false, rawText: '', correctionText: '', levels: [], owner: null, startedAt: null });
+          if (r.staged) r.staged.complete(text, raw, true);
+          else r.onFinal(text, mode);
         } else {
-          useVoice.setState({ rawText: String(m.text ?? '') });
+          r.rawText = String(m.text ?? '');
+          r.staged?.update(r.rawText, r.rawText);
+          useVoice.setState({ rawText: r.rawText });
         }
         break;
       case 'correction_delta':
-        if (voiceSettings.correction) useVoice.setState({ correctionText: String(m.text ?? '') });
+        if (voiceSettings.correction) {
+          const text = String(m.text ?? '');
+          r.staged?.update(text, r.rawText);
+          useVoice.setState({ correctionText: text });
+        }
         break;
       case 'session_denied':
         fail(DENIED[String(m.reason)] ?? String(m.detail ?? 'Voice input was refused.'));
@@ -291,18 +311,29 @@ export async function startDictation(owner: string, context: VoiceContext, onFin
 export function finishDictation(mode: VoiceFinish) {
   const r = rec;
   if (!r || r.finishMode) return;
+  if (mode === 'send' && r.onStage) {
+    const staged = r.onStage(r.rawText);
+    if (!staged) return;
+    r.staged = staged;
+  }
   r.finishMode = mode;
+  // Send during lease/microphone admission must not open the mic afterwards.
+  if (!r.capture && useVoice.getState().phase === 'connecting') {
+    fail('Voice input did not finish. Nothing more was recorded.');
+    return;
+  }
   r.capture?.stop();
   r.capture = null;
-  useVoice.setState({ phase: 'finishing', levels: [] });
+  useVoice.setState({ phase: 'finishing', staged: !!r.staged, levels: [] });
   if (r.ready && !r.finishSent) { r.finishSent = true; r.ws.send(JSON.stringify({ type: 'finish', recordingId: r.recordingId })); }
   if (r.timer) clearTimeout(r.timer);
   r.timer = setTimeout(() => { if (rec === r) fail("The voice service didn't finish. Try again."); }, 25_000);
 }
 
 export function cancelDictation() {
+  rec?.staged?.complete(rec.rawText, rec.rawText, false);
   cleanup();
-  useVoice.setState({ phase: 'idle', rawText: '', correctionText: '', levels: [], error: null, owner: null, startedAt: null });
+  useVoice.setState({ phase: 'idle', staged: false, rawText: '', correctionText: '', levels: [], error: null, owner: null, startedAt: null });
 }
 
 export function dismissVoiceError() {

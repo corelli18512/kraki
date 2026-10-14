@@ -26,7 +26,7 @@ import {
 class TurnAdapter extends EmitAdapter {
 	async sendMessage() {}
 	getSessionUsage() {
-		return undefined;
+		return null;
 	}
 	setSessionUsage() {}
 	setTurnIdentity() {}

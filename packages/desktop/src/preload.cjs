@@ -6,6 +6,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 const arg = (name) => (process.argv.find((a) => a.startsWith(`--${name}=`)) ?? '').split('=').slice(1).join('=');
 
 contextBridge.exposeInMainWorld('krakiDesktop', {
+  // Browser report copies are exported by the main process, not page paths.
+  exportHtmlReport: (html, name) => ipcRenderer.invoke('kraki:export-html-report', html, name),
   platform: process.platform,
   version: arg('kraki-version'),
   oauthRedirectOrigin: arg('kraki-oauth-origin') || 'https://app.kraki.chat',
@@ -28,14 +30,32 @@ contextBridge.exposeInMainWorld('krakiDesktop', {
       try { return await ipcRenderer.invoke('kraki:builtin-setup', opts ?? {}); } finally { ipcRenderer.removeListener('kraki:builtin-setup-event', listener); }
     },
     cancelSetup: () => ipcRenderer.send('kraki:builtin-cancel-setup'),
+    showSignInWindow: () => ipcRenderer.send('kraki:builtin-show-signin'),
     connectPhone: () => ipcRenderer.invoke('kraki:builtin-connect'),
     enable: () => ipcRenderer.invoke('kraki:builtin-enable'),
-    disable: () => ipcRenderer.invoke('kraki:builtin-disable'),
+    disable: (opts) => ipcRenderer.invoke('kraki:builtin-disable', opts),
+    externalPresence: (action) => ipcRenderer.invoke('kraki:builtin-external-presence', action),
     restart: () => ipcRenderer.invoke('kraki:builtin-restart'),
     credentials: () => ipcRenderer.sendSync('kraki:builtin-credentials'),
     openLogs: () => ipcRenderer.send('kraki:builtin-open-logs'),
+    logsPath: () => ipcRenderer.invoke('kraki:builtin-logs-path'),
+    showLogsInExplorer: () => ipcRenderer.send('kraki:builtin-show-logs'),
   } : undefined,
+  settings: {
+    state: () => ipcRenderer.invoke('kraki:settings-state'),
+    setUsageShortcut: (shortcut, enabled) => ipcRenderer.invoke('kraki:settings-shortcut', shortcut, enabled),
+    setLaunchAtLogin: (enabled) => ipcRenderer.invoke('kraki:settings-login', enabled),
+    setKeepRunningInTray: (enabled) => ipcRenderer.invoke('kraki:settings-tray', enabled),
+    openNotificationSettings: () => ipcRenderer.send('kraki:settings-notifications'),
+    showLogsInExplorer: () => ipcRenderer.send('kraki:builtin-show-logs'),
+    locateCli: () => ipcRenderer.invoke('kraki:settings-locate-cli'),
+    recheckCli: () => ipcRenderer.invoke('kraki:settings-recheck-cli'),
+    goOnline: () => ipcRenderer.invoke('kraki:settings-go-online'),
+    goOffline: () => ipcRenderer.invoke('kraki:settings-go-offline'),
+    setAllowRemoteUpdates: (enabled) => ipcRenderer.invoke('kraki:settings-remote-updates', enabled),
+  },
   setNeedsYou: (list) => ipcRenderer.send('kraki:needs-you', list),
+  localLinkDiscovery: () => ipcRenderer.invoke('kraki:local-link-discovery'),
   /** Tray › Account Usage / Settings… */
   onOpen: (what, handler) => {
     const channel = what === 'usage' ? 'kraki:open-usage' : 'kraki:open-settings';

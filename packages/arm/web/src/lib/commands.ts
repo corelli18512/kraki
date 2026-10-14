@@ -5,6 +5,8 @@ import { getStore } from './store-adapter';
 export class CommandState {
   readonly pendingPrompts = new Map<string, string>();
   readonly pendingCreateRequests = new Set<string>();
+  /** Fork requests → their source session, to seed the fork's history. */
+  readonly forkSources = new Map<string, string>();
   /** Count of in-flight mode changes per session (for echo suppression). */
   readonly pendingModeChanges = new Map<string, number>();
 
@@ -37,6 +39,7 @@ export class CommandState {
   clearRequest(requestId: string): void {
     this.pendingPrompts.delete(requestId);
     this.pendingCreateRequests.delete(requestId);
+    this.forkSources.delete(requestId);
   }
 
   /** Track an outgoing mode change so the echo can be suppressed. */
@@ -177,6 +180,7 @@ export function forkSession(
 ): void {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   state.pendingCreateRequests.add(requestId);
+  state.forkSources.set(requestId, sourceSessionId);
   send({
     type: 'fork_session',
     sessionId: sourceSessionId,

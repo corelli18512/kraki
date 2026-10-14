@@ -39,7 +39,7 @@ describe('StepsList tool_start → tool_complete merge (protocol contract)', () 
     renderSteps([
       makeMsg('tool_start', { toolName: 'bash', headline: '$ sleep 1', toolCallId: 't2' }, 1),
     ]);
-    expect(screen.getByText(/Running/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Running bash/i })).toBeInTheDocument();
   });
 
   it('interleaves narration prose with a merged tool chip', () => {
@@ -120,6 +120,37 @@ describe('StepsList subagent groups', () => {
 });
 
 describe('permission steps', () => {
+  it('keeps a completed tool before its denied permission and renders the outcome below the title', () => {
+    const { container } = renderSteps([
+      makeMsg('agent_narration', { content: 'Running the sleep now.' }, 1),
+      makeMsg('tool_start', { toolName: 'bash', headline: '$ sleep 12', toolCallId: 'sleep' }, 2),
+      makeMsg('permission', { id: 'p', description: 'sleep 12', toolName: 'bash' }, 3),
+      makeMsg('permission', { id: 'p', decision: 'deny' }, 4),
+      makeMsg('tool_complete', { toolName: 'bash', headline: '$ sleep 12', toolCallId: 'sleep', success: false }, 5),
+    ]);
+    const prose = screen.getByText('Running the sleep now.');
+    const tool = screen.getByText('bash');
+    const title = screen.getByText('sleep 12');
+    expect(prose.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(tool.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelector('.kstep-permission-lock')).toHaveClass('kstep-icon');
+    expect(container.querySelector('.kstep-permission-lock')).toHaveAttribute('preserveAspectRatio', 'none');
+    expect(container.querySelector('.kstep-outcome')).toHaveTextContent('Denied');
+    expect(title.closest('.kstep-note')).not.toContainElement(screen.getByText('Denied'));
+  });
+
+  it('uses the latest completion at the first start and retains tools whose start was lost', async () => {
+    const { mergeSteps } = await import('../../lib/subagent-steps');
+    const start = makeMsg('tool_start', { toolCallId: 't', toolName: 'bash' }, 1);
+    const narration = makeMsg('agent_narration', { content: 'Waiting.' }, 2);
+    const latest = makeMsg('tool_complete', { toolCallId: 't', success: false }, 5);
+    const lostStart = makeMsg('tool_complete', { toolCallId: 'lost' }, 6);
+    expect(mergeSteps([
+      start, narration, start,
+      makeMsg('tool_complete', { toolCallId: 't', success: true }, 4), latest, lostStart,
+    ])).toEqual([latest, narration, lostStart]);
+  });
+
   it('a request and its decision show as one step with the outcome and deny reason', async () => {
     const { mergeSteps } = await import('../../lib/subagent-steps');
     const perm = (seq: number, payload: Record<string, unknown>) =>
@@ -133,5 +164,33 @@ describe('permission steps', () => {
     expect(merged).toHaveLength(2);
     expect(merged[0].payload).toMatchObject({ description: 'Edit win.txt', decision: 'approve' });
     expect(merged[1].payload).toMatchObject({ description: 'Delete win.txt', decision: 'deny', reason: 'keep it' });
+  });
+});
+
+describe('StepsList — native trace order and text', () => {
+  it('places completed bash before the permission it waited on, with outcome below', () => {
+    renderSteps([
+      makeMsg('agent_narration', { content: 'First line\nSecond line' }, 1),
+      makeMsg('tool_start', { toolName: 'bash', toolCallId: 't', headline: 'sleep 12' }, 2),
+      makeMsg('permission', { id: 'p', description: 'sleep 12' }, 3),
+      makeMsg('permission', { id: 'p', decision: 'deny' }, 4),
+      makeMsg('tool_complete', { toolName: 'bash', toolCallId: 't', headline: 'sleep 12', success: false }, 5),
+    ]);
+    expect([...document.querySelectorAll('.kstep-prose, .ktool, .kstep-permission')].map((n) => n.className))
+      .toEqual(['kstep-prose', 'ktool', 'kstep-permission']);
+    expect(document.querySelector('.kstep-prose')?.textContent).toBe('First line\nSecond line');
+    expect(screen.getByText('Denied')).toHaveClass('kstep-outcome', 'kstep-bad');
+    expect(screen.getByText('Denied').parentElement).toHaveClass('kstep-permission');
+  });
+
+  it('keeps the latest duplicate completion and handles lost/late starts', async () => {
+    const { mergeSteps } = await import('../../lib/subagent-steps');
+    const merged = mergeSteps([
+      makeMsg('tool_complete', { toolName: 'bash', toolCallId: 't', headline: 'old' }, 1),
+      makeMsg('tool_start', { toolName: 'bash', toolCallId: 't' }, 2),
+      makeMsg('tool_complete', { toolName: 'bash', toolCallId: 't', headline: 'latest' }, 3),
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].payload).toMatchObject({ headline: 'latest' });
   });
 });

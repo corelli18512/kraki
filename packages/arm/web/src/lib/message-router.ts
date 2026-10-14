@@ -10,12 +10,6 @@ import type { SessionPreview } from '../types/store';
 import { traceEvent } from './trace';
 import { allowAutoRead, suppressAutoRead } from './read-visibility';
 import { outbox } from './chat/outbox';
-import { notifyDesktop } from './desktop';
-
-function sessionTitle(sid: string): string {
-  const s = getStore().sessions.get(sid);
-  return s?.title ?? s?.autoTitle ?? 'Kraki';
-}
 
 const logger = createLogger('msg-router');
 
@@ -128,10 +122,6 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
   if (msg.type === 'card_action') {
     const cardAction = msg as CardAction;
     if (cardAction.sessionId) store.setCardAction(cardAction.sessionId, cardAction.payload.action);
-    const action = cardAction.payload.action;
-    if (cardAction.sessionId && action?.type === 'permission' && !action.payload.decision) {
-      notifyDesktop(cardAction.sessionId, sessionTitle(cardAction.sessionId), `Approval needed: ${action.payload.description || action.payload.toolName}`);
-    }
     return;
   }
 
@@ -225,13 +215,14 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
           deviceName: device?.name ?? msg.deviceId,
           agent: msg.payload.agent as import('@kraki/protocol').AgentId,
           model: msg.payload.model,
+          createdAt: msg.timestamp,
           state: 'active',
           messageCount: 0,
           lastSeq: msg.payload.lastSeq ?? 0,
           readSeq: msg.payload.lastSeq ?? 0,
         });
         // Set an initial preview so new sessions sort to the top of the list
-        updatePreview(sid, { text: 'New session', type: 'session_created', timestamp: msg.timestamp ?? new Date().toISOString() }, false);
+        updatePreview(sid, { text: 'Session created', type: 'session_created', timestamp: msg.timestamp ?? new Date().toISOString() }, false);
       }
       // Clear pending state — session is now real
       store.removePendingSession(sid);
@@ -243,11 +234,23 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       }
       // Set tentacle info so message provider can route replay requests
       messageProvider.setTentacleInfo(sid, lastSeq ?? 0, msg.deviceId);
+      const reqId = msg.payload.requestId;
+      const forkSource = reqId ? ctx.cmdState.forkSources.get(reqId) : undefined;
+      if (reqId) ctx.cmdState.forkSources.delete(reqId);
       if (lastSeq && lastSeq > 0) {
         const fromSeq = Math.max(1, lastSeq - 49);
-        messageProvider.fetchRange(sid, fromSeq, lastSeq, { initial: true });
+        const load = () => messageProvider.fetchRange(sid, fromSeq, lastSeq, { initial: true });
+        // Our own fork: seed it from our copy of the source first (as on Mac/iOS),
+        // so the load finds it locally; anything missing is still fetched.
+        if (forkSource) {
+          void import('./message-db')
+            .then((db) => db.seedFork(sid, forkSource, fromSeq, lastSeq))
+            .catch(() => 0)
+            .finally(load);
+        } else {
+          load();
+        }
       }
-      const reqId = msg.payload.requestId;
       const wasOurRequest = reqId ? ctx.cmdState.pendingCreateRequests.delete(reqId) : false;
       // The first prompt of a session we created goes out as an ordinary
       // message now that the session exists (as on iOS/Mac).
@@ -274,8 +277,6 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
       logger.info('agent_message received', { sessionId: sid, contentLen: msg.payload.content?.length });
       traceEvent({ comp: 'arm', evt: 'APP-AGENT-MESSAGE', sessionId: sid, contentLen: msg.payload.content?.length });
       store.appendMessage(sid, msg);
-      const question = (msg.payload as { question?: { text?: string } }).question;
-      if (question) notifyDesktop(sid, sessionTitle(sid), question.text || 'The agent has a question');
       // The sidebar preview is owned by the session_list digest (the tentacle is
       // the single authority). The agent reply becomes the preview only once the
       // turn closes and the tentacle broadcasts; setting it here would show
@@ -334,10 +335,6 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     case 'idle': {
       const idled = store.sessions.get(sid);
       if (idled) store.upsertSession({ ...idled, state: 'idle' });
-      if (idled?.state === 'active') {
-        const reply = [...(store.messages.get(sid) ?? [])].reverse().find((m) => m.type === 'agent_message');
-        notifyDesktop(sid, sessionTitle(sid), (reply?.payload as { content?: string } | undefined)?.content || 'Finished');
-      }
       store.appendMessage(sid, msg);
       // A closing idle can arrive even if the immediately preceding agent
       // message was dropped in transit. Reconcile the authoritative spine tail
@@ -404,11 +401,11 @@ export function handleDataMessage(msg: InnerMessage, ctx: RouterContext): void {
     }
 
     case 'session_model_set': {
-      const { model } = (msg as SessionModelSetMessage).payload;
+      const { model, reasoningEffort } = (msg as SessionModelSetMessage).payload;
       if (model) {
         const session = store.sessions.get(sid);
         if (session) {
-          store.upsertSession({ ...session, model });
+          store.upsertSession({ ...session, model, reasoningEffort });
         }
       }
       break;

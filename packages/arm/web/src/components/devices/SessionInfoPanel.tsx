@@ -1,318 +1,332 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { modelDisplayName, sessionDisplayTitle } from '../../lib/session-status';
-import { useNavigate } from 'react-router';
 import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import type { SessionSummary, SessionUsage, ModelDetail, ContextTier } from '@kraki/protocol';
-import { MessageSquare, GitFork, Trash2, Pencil } from 'lucide-react';
+import { Check, Copy, GitFork, Pencil, Trash2 } from 'lucide-react';
+import { SettingsAlert } from '../layout/SettingsControls';
+import '../layout/settings.css';
+import './session-info.css';
 
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
+export function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  const value = n / (n < 1_000_000 ? 1000 : 1_000_000);
+  return `${value.toFixed(value < 10 ? 1 : 0)}${n < 1_000_000 ? 'K' : 'M'}`;
 }
-
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="ksi-row">
+      <span>{label}</span>
+      <div>{children}</div>
+    </div>
+  );
+}
 interface Props {
-  session: SessionSummary;
+  session: SessionSummary & { createdAt?: string };
   usage?: SessionUsage;
   models?: string[];
   modelDetails?: ModelDetail[];
   onClose: () => void;
 }
-
 export function SessionInfoPanel({ session, usage, models, modelDetails, onClose }: Props) {
-  const navigate = useNavigate();
-  const mode = useStore((s) => s.sessionModes.get(session.id) ?? 'auto');
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    rootRef.current?.querySelector('button')?.focus();
+    return () => previous?.focus();
+  }, []);
+  const device = useStore((s) => s.devices.get(session.deviceId));
+  const version = useStore((s) => s.deviceVersions.get(session.deviceId));
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [showModelPicker, setShowModelPicker] = useState(false);
-  const [pendingModel, setPendingModel] = useState<string | null>(null);
-  const [pendingEffort, setPendingEffort] = useState<string | undefined>(undefined);
-  const [pendingContextTier, setPendingContextTier] = useState<ContextTier | undefined>(undefined);
   const [editing, setEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
-  const titleInputRef = useRef<HTMLInputElement>(null);
-
-  const activeModel = pendingModel ?? session.model;
-  const activeModelDetail = modelDetails?.find((d) => d.id === activeModel);
-  const hasUsage = usage && (usage.inputTokens > 0 || usage.outputTokens > 0);
-
-  const openPicker = () => {
-    setPendingModel(session.model ?? null);
-    setPendingEffort(undefined);
-    setPendingContextTier(undefined);
-    setShowModelPicker(true);
-  };
-
-  const cancelPicker = () => {
-    setShowModelPicker(false);
-    setPendingModel(null);
-    setPendingEffort(undefined);
-    setPendingContextTier(undefined);
-  };
-
-  const applyModel = () => {
-    if (pendingModel) {
-      wsClient.setSessionModel(session.id, pendingModel, pendingEffort, pendingContextTier === 'long_context' ? pendingContextTier : undefined);
-    }
-    setShowModelPicker(false);
-    setPendingModel(null);
-    setPendingEffort(undefined);
-    setPendingContextTier(undefined);
-  };
-
-  const sessionName = sessionDisplayTitle(session);
-
-  const startEditing = useCallback(() => {
-    setTitleDraft(session.title ?? session.autoTitle ?? '');
-    setEditing(true);
-  }, [session.title, session.autoTitle]);
-
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [effort, setEffort] = useState(session.reasoningEffort);
+  const [contextTier, setContextTier] = useState<ContextTier>('default');
+  const detail = modelDetails?.find((d) => d.id === session.model);
+  const efforts = detail?.supportsReasoningEffort ? (detail.supportedReasoningEfforts ?? []) : [];
+  const selectedEffort = effort ?? detail?.defaultReasoningEffort ?? efforts[0];
   useEffect(() => {
-    if (editing) titleInputRef.current?.focus();
-  }, [editing]);
-
-  const saveTitle = useCallback(() => {
+    setEffort(session.reasoningEffort);
+  }, [session.model, session.reasoningEffort]);
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
+  const saveTitle = () => {
     wsClient.renameSession(session.id, titleDraft.trim());
     setEditing(false);
-  }, [session.id, titleDraft]);
-
+  };
+  const contextRatio =
+    usage?.contextTokens != null && detail?.contextWindow
+      ? Math.min(1, usage.contextTokens / detail.contextWindow)
+      : null;
+  const created = session.createdAt
+    ? new Date(session.createdAt.includes('T') ? session.createdAt : `${session.createdAt.replace(' ', 'T')}Z`)
+    : null;
   return (
-    <div className="flex h-full flex-col">
-      {/* Header — tappable to rename */}
-      <div className="shrink-0 px-5 py-3">
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={onClose}
-            className="mr-0.5 text-text-secondary hover:text-text-primary sm:hidden"
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          {editing ? (
-            <input
-              ref={titleInputRef}
-              value={titleDraft}
-              onChange={(e) => setTitleDraft(e.target.value)}
-              onBlur={saveTitle}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') saveTitle();
-                if (e.key === 'Escape') setEditing(false);
-              }}
-              className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-text-primary outline-none border-b border-kraki-400"
-              placeholder="Session title…"
-              maxLength={80}
-            />
-          ) : (
-            <button
-              onClick={startEditing}
-              className="group flex min-w-0 items-center gap-1.5"
-            >
-              <span className="truncate text-sm font-semibold text-text-primary">{sessionName}</span>
-              <Pencil className="h-3 w-3 shrink-0 text-text-muted opacity-0 transition-opacity group-hover:opacity-100" />
-            </button>
-          )}
-        </div>
+    <div
+      className="ksi-panel"
+      ref={rootRef}
+      onKeyDown={(e) => {
+        if (e.key !== 'Tab') return;
+        const controls = [
+          ...e.currentTarget.querySelectorAll<HTMLElement>(
+            'button:not(:disabled),input:not(:disabled),select:not(:disabled)',
+          ),
+        ];
+        if (e.shiftKey && document.activeElement === controls[0]) {
+          e.preventDefault();
+          controls.at(-1)?.focus();
+        } else if (!e.shiftKey && document.activeElement === controls.at(-1)) {
+          e.preventDefault();
+          controls[0]?.focus();
+        }
+      }}
+    >
+      <div className="ksi-header">
+        <h2>Session Info</h2>
+        <button type="button" onClick={onClose}>
+          Done
+        </button>
       </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 space-y-4">
-        {/* Info rows */}
-        <div className="space-y-1.5">
-          <div className="flex justify-between text-[11px]">
-            <span className="text-text-muted">Agent</span>
-            <span className="font-medium text-text-secondary">{session.agent}</span>
-          </div>
-          <div className="flex justify-between text-[11px]">
-            <span className="text-text-muted">Status</span>
-            <span className="font-medium text-text-secondary capitalize">{session.state}</span>
-          </div>
-          <div className="flex justify-between text-[11px]">
-            <span className="text-text-muted">Mode</span>
-            <span className="font-medium text-text-secondary capitalize">{mode}</span>
-          </div>
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="text-text-muted">ID</span>
-            <span className="font-mono text-[10px] text-text-muted truncate ml-2">{session.id}</span>
-          </div>
-        </div>
-
-        {/* Model — same row style as above, value has bg to imply clickable */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="text-text-muted">Model</span>
-            <button
-              onClick={() => models && models.length > 1 ? (showModelPicker ? cancelPicker() : openPicker()) : undefined}
-              className={`rounded-md px-2 font-medium transition-colors ${
-                models && models.length > 1
-                  ? 'bg-ocean-500/10 text-text-secondary hover:bg-ocean-500/20 cursor-pointer'
-                  : 'text-text-secondary cursor-default'
-              }`}
-            >
-              {modelDisplayName(session.model, [{ modelDetails }]) ?? 'Unknown'}
-            </button>
-          </div>
-          {showModelPicker && models && (
-            <>
-              <div className="max-h-40 overflow-y-auto rounded-lg border border-border-primary bg-surface-secondary">
+      <div className="ksi-body">
+        <section>
+          <h3>Session</h3>
+          <Row label="Title">
+            {editing ? (
+              <input
+                autoFocus
+                aria-label="Session title"
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onBlur={saveTitle}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveTitle();
+                  if (e.key === 'Escape') {
+                    e.stopPropagation();
+                    setEditing(false);
+                  }
+                }}
+                className="min-w-0 w-full bg-transparent text-right outline-none"
+                maxLength={80}
+              />
+            ) : (
+              <button
+                type="button"
+                className="flex min-w-0 items-center gap-1"
+                onClick={() => {
+                  setTitleDraft(session.title ?? session.autoTitle ?? '');
+                  setEditing(true);
+                }}
+              >
+                <span className="truncate">{sessionDisplayTitle(session)}</span>
+                <Pencil size={11} className="shrink-0 text-text-secondary" />
+              </button>
+            )}
+          </Row>
+          <Row label="Session ID">
+            <div className="ksi-id">
+              <span title={session.id} aria-label={`Session ID ${session.id}`}>
+                {session.id}
+              </span>
+              <button
+                type="button"
+                aria-label={copied ? 'Session ID copied' : 'Copy Session ID'}
+                onClick={() => {
+                  void navigator.clipboard
+                    .writeText(session.id)
+                    .then(() => {
+                      clearTimeout(copyTimer.current);
+                      setCopied(true);
+                      setCopyError(false);
+                      copyTimer.current = setTimeout(() => setCopied(false), 1500);
+                    })
+                    .catch(() => setCopyError(true));
+                }}
+              >
+                {copied ? (
+                  <>
+                    <Check size={11} />
+                    Copied
+                  </>
+                ) : (
+                  <Copy size={11} />
+                )}
+              </button>
+            </div>
+          </Row>
+          {copyError && (
+            <p role="alert" className="text-xs text-red-500">
+              Couldn’t copy Session ID.
+            </p>
+          )}
+          <Row label="Agent">{session.agent}</Row>
+          <Row label="Model">
+            {models?.length ? (
+              <select
+                aria-label="Model"
+                value={session.model ?? models[0]}
+                onChange={(e) => {
+                  const next = modelDetails?.find((d) => d.id === e.target.value);
+                  const preferred = next?.defaultReasoningEffort ?? next?.supportedReasoningEfforts?.[0];
+                  setEffort(preferred);
+                  setContextTier('default');
+                  wsClient.setSessionModel(session.id, e.target.value, preferred);
+                }}
+              >
                 {models.map((m) => (
+                  <option key={m} value={m}>
+                    {modelDisplayName(m, [{ modelDetails }]) ?? m}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              (modelDisplayName(session.model, [{ modelDetails }]) ?? '—')
+            )}
+          </Row>
+          {efforts.length > 0 && (
+            <Row label="Thinking">
+              <div className="ksi-efforts" role="radiogroup" aria-label="Thinking">
+                {efforts.map((e) => (
                   <button
-                    key={m}
-                    onClick={() => setPendingModel(m)}
-                    className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11px] transition-colors ${
-                      activeModel === m
-                        ? 'bg-ocean-500/15 text-ocean-400 font-medium'
-                        : 'text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
-                    }`}
+                    type="button"
+                    role="radio"
+                    aria-checked={selectedEffort === e}
+                    key={e}
+                    onClick={() => {
+                      setEffort(e);
+                      wsClient.setSessionModel(
+                        session.id,
+                        session.model!,
+                        e,
+                        contextTier === 'long_context' ? contextTier : undefined,
+                      );
+                    }}
                   >
-                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${activeModel === m ? 'bg-ocean-400' : 'bg-transparent'}`} />
-                    {m}
+                    {e === 'xhigh' ? 'XHigh' : e[0].toUpperCase() + e.slice(1)}
                   </button>
                 ))}
               </div>
-              {activeModelDetail?.supportsReasoningEffort && activeModelDetail.supportedReasoningEfforts && (
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-text-muted">Thinking</span>
-                  {activeModelDetail.supportedReasoningEfforts.map((effort) => (
-                    <button
-                      key={effort}
-                      onClick={() => setPendingEffort(effort)}
-                      className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                        (pendingEffort ?? activeModelDetail.defaultReasoningEffort) === effort
-                          ? 'bg-ocean-500/15 text-ocean-400'
-                          : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
-                      }`}
-                    >
-                      {effort === 'xhigh' ? 'XHigh' : effort === 'max' ? 'Max' : effort.charAt(0).toUpperCase() + effort.slice(1)}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {activeModelDetail?.supportedContextTiers && activeModelDetail.supportedContextTiers.length > 1 && (
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-text-muted">Context</span>
-                  <button
-                    onClick={() => setPendingContextTier('default')}
-                    className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                      pendingContextTier !== 'long_context'
-                        ? 'bg-ocean-500/15 text-ocean-400'
-                        : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
-                    }`}
-                  >
-                    Default
-                  </button>
-                  <button
-                    onClick={() => setPendingContextTier('long_context')}
-                    className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                      pendingContextTier === 'long_context'
-                        ? 'bg-ocean-500/15 text-ocean-400'
-                        : 'bg-surface-tertiary text-text-secondary hover:bg-surface-tertiary/80 hover:text-text-primary'
-                    }`}
-                  >
-                    1M tokens
-                  </button>
-                </div>
-              )}
-              <div className="flex justify-end gap-2">
-                <button
-                  onClick={cancelPicker}
-                  className="rounded-md px-2.5 py-1 text-[10px] font-medium text-text-muted transition-colors hover:bg-surface-tertiary hover:text-text-secondary"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={applyModel}
-                  className="rounded-md bg-ocean-500 px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-ocean-600"
-                >
-                  Apply
-                </button>
-              </div>
-            </>
+            </Row>
           )}
-        </div>
-
-        {/* Token usage */}
-        {hasUsage && (
-          <div className="space-y-1">
-            <div className="flex justify-between text-[11px]">
-              <span className="text-text-muted">Input</span>
-              <span className="font-medium text-text-secondary">{formatTokens(usage.inputTokens)}</span>
-            </div>
-            <div className="flex justify-between text-[11px]">
-              <span className="text-text-muted">Output</span>
-              <span className="font-medium text-text-secondary">{formatTokens(usage.outputTokens)}</span>
-            </div>
-            {usage.cacheReadTokens > 0 && (
-              <div className="flex justify-between text-[11px]">
-                <span className="text-text-muted">Cache read</span>
-                <span className="text-text-secondary">{formatTokens(usage.cacheReadTokens)}</span>
-              </div>
+          {detail?.supportedContextTiers && detail.supportedContextTiers.length > 1 && (
+            <Row label="Context tier">
+              <select
+                aria-label="Context tier"
+                value={contextTier}
+                onChange={(e) => {
+                  const tier = e.target.value as ContextTier;
+                  setContextTier(tier);
+                  wsClient.setSessionModel(
+                    session.id,
+                    session.model!,
+                    selectedEffort,
+                    tier === 'long_context' ? tier : undefined,
+                  );
+                }}
+              >
+                <option value="default">Default</option>
+                <option value="long_context">1M tokens</option>
+              </select>
+            </Row>
+          )}
+          <Row label="Created">
+            {created && !Number.isNaN(created.getTime())
+              ? created.toLocaleString(undefined, {
+                  year: 'numeric',
+                  month: 'short',
+                  day: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                })
+              : '—'}
+          </Row>
+        </section>
+        {usage && (
+          <section>
+            <h3>Usage</h3>
+            {usage.contextTokens != null && (
+              <>
+                <Row label="Context">
+                  {formatTokens(usage.contextTokens)}
+                  {detail?.contextWindow
+                    ? ` / ${formatTokens(detail.contextWindow)}  ·  ${Math.round((contextRatio ?? 0) * 100)}%`
+                    : ''}
+                </Row>
+                {contextRatio != null && (
+                  <div
+                    role="progressbar"
+                    aria-label="Context usage"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(contextRatio * 100)}
+                    className="ksi-progress"
+                  >
+                    <div
+                      style={{
+                        width: `${contextRatio * 100}%`,
+                        background: contextRatio >= 0.85 ? '#ef4444' : contextRatio >= 0.6 ? '#fbbf24' : '#34c759',
+                      }}
+                    />
+                  </div>
+                )}
+              </>
             )}
-            {usage.cacheWriteTokens > 0 && (
-              <div className="flex justify-between text-[11px]">
-                <span className="text-text-muted">Cache write</span>
-                <span className="text-text-secondary">{formatTokens(usage.cacheWriteTokens)}</span>
-              </div>
-            )}
-          </div>
+            <Row label="Input tokens">{formatTokens(usage.inputTokens)}</Row>
+            <Row label="Output tokens">{formatTokens(usage.outputTokens)}</Row>
+            <Row label="Cache read">{formatTokens(usage.cacheReadTokens)}</Row>
+            <Row label="Cache write">{formatTokens(usage.cacheWriteTokens)}</Row>
+            <hr className="border-border-primary" />
+            <Row label="Total cost">${usage.totalCost.toFixed(usage.totalCost < 0.01 ? 4 : 3)}</Row>
+            <Row label="Duration">
+              {usage.totalDurationMs < 60000
+                ? `${(usage.totalDurationMs / 1000).toFixed(1)}s`
+                : `${Math.floor(usage.totalDurationMs / 60000)}m ${Math.floor(usage.totalDurationMs / 1000) % 60}s`}
+            </Row>
+          </section>
         )}
-
-        {/* Actions */}
-        <div className="space-y-1">
+        {device && (
+          <section>
+            <h3>Device</h3>
+            <Row label="Name">{device.name}</Row>
+            <Row label="Status">
+              <span className="flex items-center gap-1">
+                <i className={`h-1.5 w-1.5 rounded-full${device.online ? ' ksi-online-dot' : ''}`} style={device.online ? undefined : { background: '#808080' }} />
+                {device.online ? 'Online' : 'Offline'}
+              </span>
+            </Row>
+            {version && <Row label="Version">{version}</Row>}
+          </section>
+        )}
+        <div className="ksi-actions">
           <button
-            onClick={() => { navigate(`/session/${session.id}`); onClose(); }}
-            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-text-secondary transition-colors hover:bg-surface-tertiary hover:text-text-primary"
+            type="button"
+            onClick={() => {
+              wsClient.forkSession(session.id);
+              onClose();
+            }}
           >
-            <MessageSquare className="h-3.5 w-3.5" /> Open chat
+            <GitFork size={16} />
+            Fork
           </button>
-          <button
-            onClick={() => { wsClient.forkSession(session.id); onClose(); }}
-            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-text-secondary transition-colors hover:bg-surface-tertiary hover:text-text-primary"
-          >
-            <GitFork className="h-3.5 w-3.5" /> Fork session
-          </button>
-          <button
-            onClick={() => setConfirmDelete(true)}
-            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-red-500 transition-colors hover:bg-red-500/10"
-          >
-            <Trash2 className="h-3.5 w-3.5" /> Delete session
+          <button type="button" onClick={() => setConfirmDelete(true)}>
+            <Trash2 size={16} />
+            Delete
           </button>
         </div>
       </div>
-
-      {/* Confirm delete dialog */}
       {confirmDelete && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm"
-          onClick={() => setConfirmDelete(false)}
-          onKeyDown={(e) => e.key === 'Escape' && setConfirmDelete(false)}
-          role="dialog"
-          aria-modal="true"
-          tabIndex={-1}
-        >
-          <div
-            className="mx-4 w-full max-w-sm rounded-xl border border-border-primary bg-surface-primary p-6 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-sm font-semibold text-text-primary">Delete session?</h3>
-            <p className="mt-2 text-xs text-text-secondary">
-              This will permanently delete this session and all its messages.
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                onClick={() => setConfirmDelete(false)}
-                className="rounded-lg px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-tertiary"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => { wsClient.deleteSession(session.id); setConfirmDelete(false); onClose(); }}
-                className="rounded-lg bg-red-700 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-800"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
+        <SettingsAlert
+          title="Delete Session"
+          body="This will permanently delete this session and all its messages."
+          confirm="Delete"
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => {
+            wsClient.deleteSession(session.id);
+            setConfirmDelete(false);
+            onClose();
+          }}
+        />
       )}
     </div>
   );

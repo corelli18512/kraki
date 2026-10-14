@@ -24,6 +24,8 @@ export function ChatHeader({
   backBadge?: number;
 }) {
   const [menu, setMenu] = useState(false);
+  const [hovering, setHovering] = useState(false);
+  const [interaction, setInteraction] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
   const current = MODES.find((m) => m.id === mode) ?? MODES[1];
 
@@ -36,6 +38,12 @@ export function ChatHeader({
     return () => { document.removeEventListener('mousedown', close); window.removeEventListener('keydown', esc); };
   }, [menu]);
 
+  useEffect(() => {
+    if (narrow || !menu || hovering) return;
+    const timer = setTimeout(() => setMenu(false), 3000);
+    return () => clearTimeout(timer);
+  }, [narrow, menu, hovering, interaction]);
+
   return (
     <header className={`khead ${narrow ? 'is-narrow' : 'is-wide'}`}>
       {narrow && (
@@ -47,12 +55,18 @@ export function ChatHeader({
       <button type="button" className="khead-title" onClick={onTitle} title="Session details">
         <span>{title}</span>
       </button>
-      <div className="khead-mode" ref={menuRef}>
-        <button type="button" className="khead-capsule" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>
+      <div className="khead-mode" ref={menuRef} onMouseEnter={() => setHovering(true)} onMouseLeave={() => setHovering(false)}>
+        {menu && !narrow ? <div className="khead-segments" role="menu" aria-label="Session mode picker">
+          {MODES.map((m) => <button key={m.id} type="button" role="menuitemradio" aria-checked={m.id === mode}
+            style={{ background: m.id === mode ? m.color : undefined }}
+            onClick={() => { if (m.id !== mode) onMode(m.id); setInteraction((v) => v + 1); }}>
+            {m.label}
+          </button>)}
+        </div> : <button type="button" className="khead-capsule" aria-label={`Session mode, ${current.label}`} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>
           <span className="khead-dot" style={{ background: current.color }} />
           {current.label}
-        </button>
-        {menu && (
+        </button>}
+        {menu && narrow && (
           <div className="khead-menu" role="menu">
             {MODES.map((m) => (
               <button

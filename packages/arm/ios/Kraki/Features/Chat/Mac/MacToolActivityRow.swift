@@ -237,8 +237,36 @@ struct MacToolActivityRow: View {
 
     private func formatArgs(_ args: [String: AnyCodable]) -> String {
         args.sorted { $0.key < $1.key }
-            .map { "\($0.key): \($0.value)" }
+            .map { "\($0.key): \(Self.formatArgValue($0.value.value))" }
             .joined(separator: "\n")
+    }
+
+    /// Strings verbatim; everything else as compact JSON (never Swift's debug
+    /// description, which dumps `Optional(<__NSArrayI 0x…>)` for collections).
+    static func formatArgValue(_ raw: Any?) -> String {
+        guard let value = plainJSON(raw), !(value is NSNull) else { return "null" }
+        if let string = value as? String { return string }
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .withoutEscapingSlashes]),
+           let json = String(data: data, encoding: .utf8) {
+            return json
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: [value], options: [.withoutEscapingSlashes]),
+           let json = String(data: data, encoding: .utf8) {
+            return String(json.dropFirst().dropLast())
+        }
+        return String(describing: value)
+    }
+
+    /// AnyCodable decoded by JSONDecoder nests AnyCodable wrappers; unwrap them
+    /// into Foundation JSON values.
+    private static func plainJSON(_ value: Any?) -> Any? {
+        switch value {
+        case let wrapped as AnyCodable: return plainJSON(wrapped.value)
+        case let array as [Any?]: return array.map { plainJSON($0) ?? NSNull() }
+        case let dict as [String: Any?]: return dict.mapValues { plainJSON($0) ?? NSNull() }
+        default: return value
+        }
     }
 }
 

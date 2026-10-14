@@ -327,6 +327,51 @@ Real-App checks, using a Debug-only `attachmentProbe` automation command:
   right after sending (re-sent through the Head). Each arrived exactly once
   and byte-exact in the Tentacle's record.
 
+## Windows / Linux desktop app (2026-10-12)
+
+The desktop shell (`packages/desktop`, Electron) runs the web client, which
+now has the same local link (`packages/arm/web/src/lib/local-link.ts`).
+
+- **Discovery:** the shell's main process reads `<KRAKI_HOME>/local-link.json`
+  (at most 4 KB) and hands it to the page over IPC (`localLinkDiscovery`).
+- **Origin:** the page connects from `app://kraki`. The Tentacle accepts no
+  Origin (native clients) or exactly `app://kraki`, which no web page can
+  claim. Every other origin is still refused before the handshake.
+- **Listener:** the Tentacle now listens on every platform (it was macOS
+  only), unless `KRAKI_LOCAL_LINK=0`. On Windows the discovery file is
+  replaced with a retried rename, since a reader briefly holding the file
+  open makes a rename fail.
+- **Behaviour, same as the Mac App:**
+  - Strict handshake state machine.
+  - Commands for the linked Tentacle go over the link.
+  - Head frames from the linked Tentacle drop their live state (deltas,
+    card, subscription ACKs).
+  - A linked Tentacle's subscription survives Head blips; a Head
+    `device_left`/`device_joined` for it changes nothing.
+  - On link loss, unconfirmed idempotent commands are re-sent through the
+    Head, and the in-flight attachment chunk is re-requested.
+  - Retries back off from 2 s to 60 s.
+  - Desktop notifications come from the live messages, so they arrive on
+    time over the link with no extra dedup.
+- **Fork parity (#455):** the requesting device seeds the fork's history from
+  its cached copy of the source, as on Mac/iOS (`message-db.seedFork`).
+
+Verification:
+- `local-link-desktop.test.ts` runs the real web `LocalLinkClient` against a
+  real Head and Tentacle in Node: link from `app://kraki`, both directions,
+  0 Head frames for it, browser origin refused, a fake `ready`-only server
+  never trusted, replay hand-off on drop. Mutations caught: a bare `ready`
+  accepted, and the desktop origin refused.
+- Web unit tests: subscription request ids and independent routes;
+  `ws-client` routing, stale-frame drop, `device_left`, replay; `seedFork`.
+- **Real desktop shell (Electron, run on macOS with an isolated data dir,
+  hidden window, driven over CDP):** paired through the Head, linked from
+  `app://kraki`. A message typed in the composer and its reply both went over
+  the link, with 0 Tentacle frames for this App through the Head. After a
+  daemon restart it relinked by itself and the next message worked the same
+  way. Each message ran exactly once in the Tentacle's record.
+- **Not yet run on real Windows** (the Windows PC was unreachable).
+
 ## Known gaps / next steps
 
 - **No offline mode yet.** The Tentacle already serves linked Apps while its

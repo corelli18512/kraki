@@ -25,3 +25,12 @@ test('online/offline toggle and needs-you items', () => {
   assert.equal(p.trayIcon('online', 1), 'attention');
   assert.equal(p.trayIcon('offline', 1), 'offline');
 });
+test('status opens settings and Needs You limits entries without losing overflow count', () => {
+  let opened = false;
+  const list = Array.from({ length: 25 }, (_, i) => ({ id: String(i), title: 'New Session', reason: 'Asked you a question' }));
+  const menu = p.trayMenu('online', true, list, { settings: () => { opened = true; } });
+  menu[0].click();
+  assert.equal(opened, true);
+  assert.equal(menu.filter((item) => item.label === 'New Session — Asked you a question').length, 5);
+  assert.ok(menu.some((item) => item.label === '20 more…'));
+});
