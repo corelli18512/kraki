@@ -1,4 +1,8 @@
 import XCTest
+import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 @testable import Kraki
 
 @MainActor
@@ -60,6 +64,43 @@ final class PerformanceNoticeTests: XCTestCase {
         await wait(0.3)
         XCTAssertTrue(n.isVisible)
     }
+
+    #if os(iOS)
+    func testPhoneUsesCenteredModalAlertUntilAnExplicitChoice() async throws {
+        try requireForegroundUITests()
+        let n = notice()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView:
+            Button("Background action") {}
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .modifier(PerformanceNoticePresentation(notice: n))
+        )
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        await wait(0.1)
+        n.showForTesting()
+        let deadline = Date().addingTimeInterval(5)
+        while host.presentedViewController == nil, Date() < deadline { await wait(0.05) }
+        let alert = try XCTUnwrap(host.presentedViewController as? UIAlertController)
+        XCTAssertEqual(alert.preferredStyle, .alert, "Centered modal, not a bottom action sheet or floating card")
+        XCTAssertEqual(alert.title, PerformanceNoticeCopy.title)
+        XCTAssertEqual(alert.actions.map(\.title), ["Don't Share", "OK"])
+        XCTAssertTrue(alert.message?.contains(PerformanceNoticeCopy.settingsHint) == true)
+        XCTAssertFalse(n.hasBeenSeen, "Showing the alert is not a choice")
+
+        // The native presentation owns input and accessibility focus while
+        // displayed; the original content stays underneath it, not alongside.
+        XCTAssertTrue(host.presentedViewController === alert)
+        n.choose(share: false)
+        let dismissalDeadline = Date().addingTimeInterval(5)
+        while host.presentedViewController != nil, Date() < dismissalDeadline { await wait(0.05) }
+        XCTAssertNil(host.presentedViewController)
+        XCTAssertTrue(n.hasBeenSeen)
+        XCTAssertEqual(declined, 1)
+    }
+    #endif
 
     func testWaitsForTheNotificationPermissionAnswer() async {
         var pending = true

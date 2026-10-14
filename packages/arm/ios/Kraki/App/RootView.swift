@@ -203,7 +203,7 @@ struct RootView: View {
                     .allowsHitTesting(launchCoordinator.phase == .authenticated)
                     .accessibilityHidden(launchCoordinator.phase != .authenticated)
                     #if KRAKI_DIAG && !KRAKI_DIAG_TEST_BUILD
-                    .performanceNotice(bottomPadding: 58)
+                    .performanceNotice()
                     #endif
                     .background(
                         IOSLaunchPresentationReadyProbe {

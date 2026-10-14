@@ -372,7 +372,7 @@ struct MainWindowView: View {
         }
         .sheet(item: $trustPasteFor) { device in PastePairingLinkSheet(computer: device) }
         #if KRAKI_DIAG && !KRAKI_DIAG_TEST_BUILD
-        .performanceNotice(bottomPadding: 28)
+        .performanceNotice()
         #endif
         .onReceive(NotificationCenter.default.publisher(for: .macToggleSidebar)) { _ in
             withAnimation(.easeInOut(duration: 0.22)) { sidebarVisible.toggle() }
