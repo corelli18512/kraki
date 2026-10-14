@@ -326,11 +326,16 @@ struct ChatScrollPolicy: Equatable {
         }
     }
 
-    /// Recomputes follow state after native geometry is stable without treating
-    /// a programmatic reflection as user movement.
+    /// Geometry can lag behind streaming growth or a tail glide. Preserve the
+    /// follow intent; only user movement/navigation or an unread landing may
+    /// cancel it. Near-tail geometry can still reattach a reader coming back.
     mutating func refreshFollowingTail(distanceToBottom: CGFloat) {
+        guard unreadEntry != .anchored else {
+            followingTail = false
+            return
+        }
         followingTail = entryBottomLocked
-            || (!scrollingTowardOlder && isNearTail(distanceToBottom))
+            || (!scrollingTowardOlder && (followingTail || isNearTail(distanceToBottom)))
     }
 
     /// Updates the comparison baseline after a programmatic pin or reflected

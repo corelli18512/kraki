@@ -81,6 +81,7 @@ class MacChatUXTestCase: XCTestCase {
         size: NSSize = NSSize(width: 900, height: 760),
         longReplies: Bool = false,
         dbFrom: Int = 1,
+        fromNotification: Bool = false,
         outbound: (([String: Any]) -> Bool)? = nil
     ) throws -> Fx {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("mac-ux-gate-\(UUID().uuidString)")
@@ -105,6 +106,10 @@ class MacChatUXTestCase: XCTestCase {
         app.testOutboundMessageHandler = { msg, _, _ in outbound?(msg) ?? true }
         app.messageProvider?.setTentacleInfo(sessionId: sid, lastSeq: total, deviceId: dev)
         _ = app.messageProvider?.openSession(sid, reanchorLatest: true)
+        if fromNotification {
+            app.sessionStore.notificationEntrySessions.insert(sid)
+            app.sessionStore.captureEntryUnreadBoundary(sid)
+        }
         let vm = ChatViewModel(sessionId: sid, appState: app)
         vm.refreshMessageCache()
         let root2 = MacChatView(sessionId: sid, prebuiltViewModel: vm).environment(app)

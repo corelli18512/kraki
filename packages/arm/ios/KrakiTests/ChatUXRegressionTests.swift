@@ -45,14 +45,6 @@ final class ChatUXRegressionTests: XCTestCase {
         return ("agent_message", pool[(seq / 2) % pool.count])
     }
 
-    static func longAnswer(_ minimum: Int) -> String {
-        var text = ""
-        while text.count < minimum {
-            text += code + "\n\n" + zh + "\n\n" + list + "\n\n" + table + "\n\n" + en + "\n\n"
-        }
-        return text
-    }
-
     // MARK: Fixture
 
     struct Fx { let vc: ChatPerfListVC; let cv: UICollectionView; let app: AppState }
@@ -60,7 +52,7 @@ final class ChatUXRegressionTests: XCTestCase {
     /// `onScreen`: attach the window to the simulator's real UIWindowScene so
     /// Core Animation actually renders (needed to sample presentation layers;
     /// a scene-less window never composites and finishes animations at once).
-    func makeFixture(total: Int, onScreen: Bool = false,
+    func makeFixture(total: Int, onScreen: Bool = false, fromNotification: Bool = false,
                              outbound: (([String: Any]) -> Bool)? = nil) throws -> Fx {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ux-gate-\(UUID().uuidString)")
         roots.append(root)
@@ -83,6 +75,10 @@ final class ChatUXRegressionTests: XCTestCase {
         app.testOutboundMessageHandler = { msg, _, _ in outbound?(msg) ?? true }
         app.messageProvider?.setTentacleInfo(sessionId: sid, lastSeq: total, deviceId: dev)
         _ = app.messageStore.loadInitialWindow(sid)
+        if fromNotification {
+            app.sessionStore.notificationEntrySessions.insert(sid)
+            app.sessionStore.captureEntryUnreadBoundary(sid)
+        }
         let vc = ChatPerfListVC(sessionId: sid, appState: app, agent: "claude", bottomContentInset: 54)
         let frame = CGRect(x: 0, y: 0, width: 402, height: 874)
         let window: UIWindow
