@@ -22,12 +22,10 @@ struct PairingSheet: View {
     @State private var connected: DeviceSummary?
     /// App devices already online when the card opened; anything new is "the phone".
     @State private var baseline: Set<String> = []
-    /// Apps this Mac's computer trusted when the card opened.
-    /// Set once this Mac knows its computer's trusted list (nil until then).
-    @State private var trustedBaseline: Set<String>?
-    /// Every app of the account when the card opened: if the trusted list
-    /// only arrives later, an app outside this set paired while it was open.
-    @State private var accountAppsAtOpen: Set<String> = []
+    /// Signed pairing state captured before exposing a code, never from a
+    /// late list that might already include the phone that just scanned it.
+    @State private var trustedBaseline: [TrustedDeviceEntry]?
+    @State private var loadAttempt = 0
     private var previewPayload: TentacleCLIManager.PairingPayload?
     private var previewConnected: DeviceSummary?
 
@@ -48,9 +46,22 @@ struct PairingSheet: View {
     }
 
     /// Apps this Mac's computer reports as paired (when this app is paired with it).
-    private var trustedApps: [String]? {
+    private var trustedApps: [TrustedDeviceEntry]? {
         guard let local = AppState.localTentacleId, let info = appState.deviceTrust.info[local] else { return nil }
-        return info.devices.map(\.id).filter { $0 != appState.deviceId }
+        return info.devices.filter { $0.id != appState.deviceId }
+    }
+
+    private var requiresTrustedBaseline: Bool {
+        guard let local = AppState.localTentacleId else { return false }
+        return appState.trustState(for: local) == .paired || !presenceMeansConnected
+    }
+
+    /// An existing account phone may keep its id; an already-trusted phone
+    /// that pairs again changes pairedAt. Neither depends on wall-clock slack.
+    static func newlyPaired(_ entries: [TrustedDeviceEntry], baseline: [TrustedDeviceEntry]) -> String? {
+        entries.first { entry in
+            !baseline.contains { $0.id == entry.id && $0.pairedAt == entry.pairedAt }
+        }?.id
     }
 
     /// A newly online app counts as "connected" only when the computer is
@@ -99,36 +110,24 @@ struct PairingSheet: View {
         .background { cardBackground }
         .presentationBackground(.clear)
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: connected?.id)
-        .task {
+        .task(id: loadAttempt) {
             baseline = Set(onlineApps.map(\.id))
-            accountAppsAtOpen = Set(appState.deviceStore.devices.values.filter { $0.role == .app }.map(\.id))
-            // Paired with this Mac's computer: get its signed trusted list
-            // before showing a code, so the baseline is exact (an app already
-            // on the account may pair without a new device id).
-            if let local = AppState.localTentacleId, appState.trustState(for: local) == .paired, trustedApps == nil {
-                appState.requestTrustedDevices(local)
-                for _ in 0..<30 where trustedApps == nil { try? await Task.sleep(for: .milliseconds(100)) }
-            } else if let local = AppState.localTentacleId {
-                appState.requestTrustedDevices(local)
-            }
-            if let apps = trustedApps { trustedBaseline = Set(apps) }
+            if let local = AppState.localTentacleId { appState.requestTrustedDevices(local) }
             if previewPayload == nil { await renewLoop() }
         }
         .onChange(of: onlineApps.map(\.id).sorted()) { _, ids in
+            guard payload != nil else { return }
+            if let entries = trustedApps, let known = trustedBaseline,
+               let newId = Self.newlyPaired(entries, baseline: known) {
+                markConnected(newId)
+            }
             guard presenceMeansConnected else { return }
             guard let newId = ids.first(where: { !baseline.contains($0) }) else { return }
             markConnected(newId)
         }
-        .onChange(of: trustedApps?.sorted()) { _, ids in
-            guard let ids else { return }
-            // The first list sets the baseline; an app in it that wasn't on
-            // the account when the card opened paired meanwhile.
-            guard let known = trustedBaseline else {
-                trustedBaseline = Set(ids)
-                if let newId = ids.first(where: { !accountAppsAtOpen.contains($0) }) { markConnected(newId) }
-                return
-            }
-            guard let newId = ids.first(where: { !known.contains($0) }) else { return }
+        .onChange(of: trustedApps) { _, entries in
+            guard payload != nil, let entries, let known = trustedBaseline,
+                  let newId = Self.newlyPaired(entries, baseline: known) else { return }
             markConnected(newId)
         }
     }
@@ -178,7 +177,7 @@ struct PairingSheet: View {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.system(size: 20))
                             .foregroundStyle(Color(hex: 0xC2410C))
-                        Button("Try again") { Task { await load() } }
+                        Button("Try again") { loadAttempt += 1 }
                             .controlSize(.small)
                     }
                 }
@@ -259,11 +258,47 @@ struct PairingSheet: View {
         error = nil
         copied = false
         do {
-            payload = try await tentacleCLI.requestPairingPayload()
+            if requiresTrustedBaseline && trustedBaseline == nil {
+                payload = nil
+                payload = try await Self.withTrustedBaseline(read: { trustedApps }, pause: {
+                    try await Task.sleep(for: .milliseconds(100))
+                }) { entries in
+                    trustedBaseline = entries
+                    return try await tentacleCLI.requestPairingPayload()
+                }
+            } else {
+                if trustedBaseline == nil { trustedBaseline = trustedApps }
+                payload = try await tentacleCLI.requestPairingPayload()
+            }
+        } catch is CancellationError {
+            // Dismissal/retry cancels the task; do not turn it into a UI error.
         } catch {
+            payload = nil
             self.error = error.localizedDescription
         }
         loading = false
+    }
+
+    /// No code (including a copyable link) is created on timeout. Retry uses
+    /// this same gate; the baseline is installed before code generation.
+    static func withTrustedBaseline<T>(
+        read: () -> [TrustedDeviceEntry]?,
+        pause: () async throws -> Void,
+        create: ([TrustedDeviceEntry]) async throws -> T
+    ) async throws -> T {
+        for attempt in 0...30 {
+            try Task.checkCancellation()
+            if let entries = read() { return try await create(entries) }
+            if attempt < 30 { try await pause() }
+        }
+        throw BaselineError.unavailable
+    }
+
+    enum BaselineError: LocalizedError {
+        case unavailable
+        var errorDescription: String? {
+            "Could not load this Mac’s trusted devices. Check the connection and try again."
+        }
     }
 
     private func qrImage(for string: String) -> NSImage? {
