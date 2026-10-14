@@ -28,13 +28,50 @@ extension ChatUXRegressionTests {
         try exerciseFinalSegment(returnToTail: true)
     }
 
+    func testFinalSegmentFollowsAfterDraggingBackToTail() throws {
+        try exerciseFinalSegment(returnToTail: true, usingDrag: true)
+    }
+
+    func testScrollingUpAgainStopsFollowDuringStreaming() throws {
+        let fx = try makeFixture(total: 40, onScreen: true)
+        drain(900)
+        try beginFinalSegmentTurn(fx)
+        drag(fx, by: -300)
+        fx.vc.automationTapDown()
+        drain(700)
+        fx.app.messageStore.applyCardMessage(sid, Self.zh, reset: true)
+        fx.vc.syncLiveUpdates(); drain(400)
+        XCTAssertTrue(fx.vc.followingBottom)
+        drag(fx, by: -12)
+        drain(400)
+        XCTAssertFalse(fx.vc.followingBottom)
+        let offset = fx.cv.contentOffset.y
+        let height = fx.cv.contentSize.height
+        for _ in 0..<30 {
+            fx.app.messageStore.applyCardMessage(sid, "\n" + Self.en, reset: false)
+            fx.vc.syncLiveUpdates(); drain(32)
+            XCTAssertFalse(fx.vc.followingBottom)
+            XCTAssertEqual(fx.cv.contentOffset.y, offset, accuracy: 1)
+        }
+        drain(600)
+        XCTAssertGreaterThan(fx.cv.contentSize.height - height, 500)
+        XCTAssertEqual(fx.cv.contentOffset.y, offset, accuracy: 1)
+    }
+
+    private func drag(_ fx: Fx, by delta: CGFloat) {
+        fx.vc.scrollViewWillBeginDragging(fx.cv)
+        fx.vc.automationUserScrollActive = true
+        fx.cv.contentOffset.y += delta
+        fx.vc.scrollViewDidScroll(fx.cv)
+        fx.vc.automationUserScrollActive = false
+        fx.vc.scrollViewDidEndDragging(fx.cv, willDecelerate: false)
+    }
+
     func testNotificationEntryStopsFollowingWhenFinalAnswerOutgrowsViewport() throws {
         try exerciseFinalSegment(returnToTail: false, fromNotification: true)
     }
 
-    private func exerciseFinalSegment(returnToTail: Bool, fromNotification: Bool = false) throws {
-        let fx = try makeFixture(total: 40, onScreen: true, fromNotification: fromNotification)
-        drain(900)
+    private func beginFinalSegmentTurn(_ fx: Fx) throws {
         fx.app.messageStore.beginCardTurn(sid)
         let user = try JSONSerialization.data(withJSONObject: [
             "type": "user_message", "seq": 41, "sessionId": sid, "deviceId": dev,
@@ -44,15 +81,23 @@ extension ChatUXRegressionTests {
         fx.app.messageProvider?.ingestTailCandidate(sid, json: user)
         fx.vc.syncLiveUpdates()
         drain(500)
+    }
+
+    private func exerciseFinalSegment(
+        returnToTail: Bool, fromNotification: Bool = false, usingDrag: Bool = false
+    ) throws {
+        let fx = try makeFixture(total: 40, onScreen: true, fromNotification: fromNotification)
+        drain(900)
+        try beginFinalSegmentTurn(fx)
         if returnToTail {
-            fx.vc.scrollViewWillBeginDragging(fx.cv)
-            fx.vc.automationUserScrollActive = true
-            fx.cv.contentOffset.y -= 300
-            fx.vc.scrollViewDidScroll(fx.cv)
-            fx.vc.automationUserScrollActive = false
-            fx.vc.scrollViewDidEndDragging(fx.cv, willDecelerate: false)
-            fx.vc.scrollToBottom(animated: false)
-            drain(500)
+            drag(fx, by: -300)
+            if usingDrag {
+                drag(fx, by: fx.vc.distanceToBottom())
+            } else {
+                fx.vc.automationTapDown()
+            }
+            drain(700)
+            XCTAssertLessThan(abs(fx.vc.distanceToBottom()), 2)
         }
         XCTAssertTrue(fx.vc.followingBottom)
         for step in 1...3 {
@@ -100,7 +145,7 @@ extension ChatUXRegressionTests {
         attachStreamingTrace(trace)
         let streamingDistance = fx.vc.distanceToBottom()
         drain(600)
-        print("FINALFOLLOW ios notification=\(fromNotification) returned=\(returnToTail) hidden=\(worstHidden) modelDistance=\(worstModelDistance) longestHiddenSeconds=\(longestHidden) lostFrames=\(lostFollowFrames) streamDistance=\(streamingDistance) settled=\(fx.vc.distanceToBottom()) travel=\(fx.cv.contentOffset.y - startOffset) policy=\(fx.vc.scrollPolicy)")
+        print("FINALFOLLOW ios notification=\(fromNotification) returned=\(returnToTail) drag=\(usingDrag) hidden=\(worstHidden) modelDistance=\(worstModelDistance) longestHiddenSeconds=\(longestHidden) lostFrames=\(lostFollowFrames) streamDistance=\(streamingDistance) settled=\(fx.vc.distanceToBottom()) travel=\(fx.cv.contentOffset.y - startOffset) policy=\(fx.vc.scrollPolicy)")
         if fromNotification {
             XCTAssertEqual(fx.vc.automationUnreadEntry, .anchored)
             XCTAssertGreaterThan(worstHidden, fx.cv.bounds.height)
