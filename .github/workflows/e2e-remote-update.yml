@@ -54,6 +54,7 @@ jobs:
           node -e "const f='packages/tentacle/package.json';const p=require('./'+f);p.version=process.env.OLD;require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
           pnpm --filter @kraki/protocol --filter @kraki/crypto run build
           pnpm --filter @kraki/tentacle run build
+          node --test scripts/e2e/remote-update/patch-npm-deps.test.mjs
           echo "NEW=$(gh release view --repo corelli18512/kraki --json tagName -q .tagName | sed 's/^v//')" >> "$GITHUB_ENV"
         env:
           GH_TOKEN: ${{ github.token }}
@@ -87,14 +88,25 @@ jobs:
               echo "KRAKI=$HOME/.local/bin/kraki" >> "$GITHUB_ENV"; echo "OLD_ARTIFACT=$HOME/old-app.tar.gz" >> "$GITHUB_ENV"
               ;;
             npm)
-              # The protocol bump in this branch isn't on npm yet; its runtime
-              # is unchanged, so depend on the published one.
-              node -e "const f='packages/protocol/package.json';const p=require('./'+f);p.version=require('child_process').execSync('npm view @kraki/protocol version').toString().trim();require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
+              # Main's workspace versions may not be published yet. Install
+              # published versions, then overlay complete current libraries.
+              node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { spawnSync } from 'node:child_process';
+          for (const name of ['protocol', 'crypto']) {
+            const result = spawnSync('npm', ['view', `@kraki/${name}`, 'version'], { encoding: 'utf8', shell: process.platform === 'win32' });
+            if (result.status !== 0) throw new Error(result.stderr);
+            const file = `packages/${name}/package.json`;
+            const pkg = JSON.parse(readFileSync(file, 'utf8'));
+            pkg.version = result.stdout.trim();
+            writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
+          }
+          NODE
               (cd packages/tentacle && pnpm pack --pack-destination "$HOME")
-              TGZ=$(ls "$HOME"/kraki-tentacle-*.tgz | head -1)
+              TGZ="$HOME/kraki-tentacle-$OLD.tgz"
               npm install -g "$TGZ"
-              # …but run this repo's protocol/crypto code (main may be ahead of npm).
               bash scripts/e2e/remote-update/patch-npm-deps.sh
+              NODE_ENV=production node scripts/e2e/remote-update/check-npm-install.mjs
               echo "KRAKI=kraki" >> "$GITHUB_ENV"; echo "OLD_ARTIFACT=$TGZ" >> "$GITHUB_ENV"
               ;;
           esac
@@ -114,6 +126,7 @@ jobs:
           echo '{"requestId":"e2e-a","when":"now"}' > "$RELAY_DIR/send.json"
           node scripts/e2e/remote-update/wait-result.mjs 420 updated
           node scripts/e2e/remote-update/wait-online.mjs "$KRAKI" "$NEW" 30
+          if [ "$KIND" = npm ]; then NODE_ENV=production node scripts/e2e/remote-update/check-npm-install.mjs; fi
 
       - name: "B: a new version that never comes online is rolled back"
         run: |
@@ -122,7 +135,7 @@ jobs:
           case "$KIND" in
             binary) cp "$OLD_ARTIFACT" "$KRAKI" ;;
             app) rm -rf "$HOME/.kraki-app/Kraki.app"; tar -xzf "$OLD_ARTIFACT" -C "$HOME/.kraki-app" ;;
-            npm) npm install -g "$OLD_ARTIFACT"; bash scripts/e2e/remote-update/patch-npm-deps.sh ;;
+            npm) npm install -g "$OLD_ARTIFACT"; bash scripts/e2e/remote-update/patch-npm-deps.sh; NODE_ENV=production node scripts/e2e/remote-update/check-npm-install.mjs ;;
           esac
           rm -f "$HOME/.kraki/remote-update/result.json"
           "$KRAKI" start --login || true
@@ -155,4 +168,6 @@ jobs:
           echo "── result"; cat "$HOME/.kraki/remote-update/result.json" 2>/dev/null || true
           echo "── login-start.log"; cat "$HOME/.kraki/logs/login-start.log" 2>/dev/null || true
           echo "── relay"; cat "$RELAY_DIR/relay.log" || true
-          echo "── daemon.log"; tail -60 "$HOME/.kraki/logs/daemon.log" 2>/dev/null || true
+          echo "── daemon-bootstrap.log"; tail -100 "$HOME/.kraki/logs/daemon-bootstrap.log" 2>/dev/null || true
+          echo "── daemon-supervisor.log"; tail -60 "$HOME/.kraki/logs/daemon-supervisor.log" 2>/dev/null || true
+          echo "── daemon logs"; tail -60 "$HOME"/.kraki/logs/daemon*.log 2>/dev/null || true
