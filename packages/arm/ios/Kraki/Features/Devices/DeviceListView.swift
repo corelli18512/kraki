@@ -162,7 +162,7 @@ private struct DeviceRow: View {
 
             if isSelf {
                 Text("You")
-                    .font(.system(size: 10, weight: .semibold))
+                    .scaledFont(10, weight: .semibold)
                     .foregroundStyle(Color.krakiPrimary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)

@@ -18,18 +18,20 @@ import UIKit
 enum BubbleActionMetrics {
     static let outcomeIconSize: CGFloat = 13
     static let outcomeSpacing: CGFloat = 8
-    static let outcomeLabelFont = UIFont.systemFont(ofSize: 13, weight: .medium)
-    static let outcomeDetailFont = UIFont.systemFont(ofSize: 12)
+    // Scaled like the SwiftUI text they measure (`.scaledFont`), so a card
+    // still hugs its content at larger text sizes.
+    static var outcomeLabelFont: UIFont { ScaledFont.uiFont(13, weight: .medium) }
+    static var outcomeDetailFont: UIFont { ScaledFont.uiFont(12) }
     static func outcomeSymbol(failed: Bool) -> String { failed ? "xmark.octagon.fill" : "stop.circle.fill" }
     static func outcomeLabel(failed: Bool) -> String { failed ? "Turn failed" : "Stopped" }
 
-    static let choiceFont = UIFont.systemFont(ofSize: 14, weight: .medium)
+    static var choiceFont: UIFont { ScaledFont.uiFont(14, weight: .medium) }
     static let choicePaddingH: CGFloat = 14
 
     /// Natural width of the "Stopped" / "Turn failed" row.
     static func outcomeWidth(failed: Bool, detail: String?) -> CGFloat {
         let symbol = UIImage(systemName: outcomeSymbol(failed: failed),
-                             withConfiguration: UIImage.SymbolConfiguration(font: .systemFont(ofSize: outcomeIconSize)))
+                             withConfiguration: UIImage.SymbolConfiguration(font: ScaledFont.uiFont(outcomeIconSize)))
         var width = ceil(symbol?.size.width ?? outcomeIconSize) + outcomeSpacing
             + textWidth(outcomeLabel(failed: failed), outcomeLabelFont)
         // The detail sits on its own line(s) below; the bubble clamps it.
@@ -63,7 +65,7 @@ struct BubbleActionSlot: View {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.mini)
                     Text(running == 1 ? "1 tool running in parallel…" : "\(running) tools running in parallel…")
-                        .font(.system(size: 13)).foregroundStyle(Color.textSecondary)
+                        .scaledFont(13).foregroundStyle(Color.textSecondary)
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -84,7 +86,7 @@ struct BubbleActionSlot: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: BubbleActionMetrics.outcomeSpacing) {
                 Image(systemName: BubbleActionMetrics.outcomeSymbol(failed: failed))
-                    .font(.system(size: BubbleActionMetrics.outcomeIconSize))
+                    .scaledFont(BubbleActionMetrics.outcomeIconSize)
                     .foregroundStyle(failed ? Color.red : Color.textMuted)
                 Text(BubbleActionMetrics.outcomeLabel(failed: failed))
                     .font(Font(BubbleActionMetrics.outcomeLabelFont))
@@ -108,12 +110,12 @@ struct BubbleActionSlot: View {
                 ProgressView().controlSize(.mini)
             } else {
                 Image(systemName: (m.payload["success"]?.boolValue ?? true) ? "checkmark.circle.fill" : "xmark.circle.fill")
-                    .font(.system(size: 13))
+                    .scaledFont(13)
                     .foregroundStyle((m.payload["success"]?.boolValue ?? true) ? Color.green : Color.red)
             }
-            Text(m.toolName ?? "tool").font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundStyle(Color.textPrimary)
+            Text(m.toolName ?? "tool").scaledFont(12, weight: .semibold, design: .monospaced).foregroundStyle(Color.textPrimary)
             if let h = m.headline, !h.isEmpty {
-                Text(h).font(.system(size: 12, design: .monospaced)).foregroundStyle(Color.textSecondary)
+                Text(h).scaledFont(12, design: .monospaced).foregroundStyle(Color.textSecondary)
                     .lineLimit(1).truncationMode(.middle)
             }
             Spacer(minLength: 0)
@@ -128,14 +130,14 @@ struct BubbleActionSlot: View {
         return VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(PermissionPromptCopy.title(message))
-                    .font(.system(size: 15, weight: .semibold))
+                    .scaledFont(15, weight: .semibold)
                     .foregroundStyle(Color.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 if decision == nil {
                     HStack(spacing: 5) {
-                        Image(systemName: "lock.fill").font(.system(size: 10, weight: .semibold)).foregroundStyle(.orange)
+                        Image(systemName: "lock.fill").scaledFont(10, weight: .semibold).foregroundStyle(.orange)
                         Text(PermissionPromptCopy.caption)
-                            .font(.system(size: 12))
+                            .scaledFont(12)
                             .foregroundStyle(Color.textSecondary)
                     }
                 }
@@ -145,7 +147,7 @@ struct BubbleActionSlot: View {
             } else if let summary = permissionArgsSummary(message),
                summary != message.toolDescription {
                 Text(summary)
-                    .font(.system(size: 11, design: .monospaced))
+                    .scaledFont(11, design: .monospaced)
                     .foregroundStyle(Color.textSecondary)
                     .lineLimit(3)
                     .truncationMode(.middle)
@@ -184,7 +186,7 @@ struct BubbleActionSlot: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: symbol)
-                    .font(.system(size: 11, weight: .bold))
+                    .scaledFont(11, weight: .bold)
                     .foregroundStyle(primary ? Color.white : Color.red)
                 Text(label)
                     .font(Font(BubbleActionMetrics.choiceFont))
@@ -250,7 +252,7 @@ struct BubbleActionSlot: View {
             HStack(spacing: 4) {
                 ProgressView().controlSize(.mini)
                 Text("Sending…")
-                    .font(.system(size: 11))
+                    .scaledFont(11)
                     .foregroundStyle(Color.textSecondary)
             }
             .accessibilityElement(children: .combine)
@@ -261,7 +263,7 @@ struct BubbleActionSlot: View {
     private func localErrorLabel(_ message: ChatMessage) -> some View {
         if let error = message.payload["localError"]?.stringValue {
             Label(error, systemImage: "exclamationmark.circle.fill")
-                .font(.system(size: 12, weight: .medium))
+                .scaledFont(12, weight: .medium)
                 .foregroundStyle(.red)
                 .fixedSize(horizontal: false, vertical: true)
         }

@@ -96,7 +96,7 @@ struct SessionListView: View {
                 #endif
 
             Text("Preview")
-                .font(.system(size: 10, weight: .semibold))
+                .scaledFont(10, weight: .semibold)
                 .foregroundColor(Color.krakiPrimary)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
@@ -112,7 +112,7 @@ struct SessionListView: View {
                     Image(systemName: showFilterRow
                           ? "line.3.horizontal.decrease.circle.fill"
                           : "line.3.horizontal.decrease.circle")
-                        .font(.system(size: 20, weight: .regular))
+                        .scaledFont(20, weight: .regular)
                         .foregroundColor(selectedDeviceFilter != nil || showFilterRow ? .krakiPrimary : Color(.tertiaryLabel))
                 }
             }
@@ -154,7 +154,7 @@ struct SessionListView: View {
     private func filterPill(label: String, isSelected: Bool, isEnabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: 12, weight: .medium))
+                .scaledFont(12, weight: .medium)
                 .foregroundStyle(isSelected ? Color.white : (isEnabled ? Color.primary : Color.secondary))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)

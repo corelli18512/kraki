@@ -1,6 +1,15 @@
 import Foundation
 import SwiftUI
 
+extension Color {
+    /// The last-message preview line on a Session card (iOS list and Mac
+    /// sidebar): a little darker than secondary text so it stays readable.
+    static let sessionPreviewText = Color(
+        light: PlatformColor(red: 0x5B / 255, green: 0x6B / 255, blue: 0x80 / 255, alpha: 1),
+        dark: PlatformColor(red: 0xA3 / 255, green: 0xB1 / 255, blue: 0xC4 / 255, alpha: 1)
+    )
+}
+
 /// Product-level Session Card projection shared by iOS and macOS.
 /// Platform views own only their native cell/container mechanics.
 enum SessionCardStatus: Equatable {
@@ -153,7 +162,7 @@ struct SessionCardStatusGlyph: View {
                 LucideIcon(.circleSlash, size: 14, strokeWidth: 2.2, color: .red)
             case .offline:
                 Image(systemName: "wifi.slash")
-                    .font(.system(size: 11, weight: .semibold))
+                    .scaledFont(11, weight: .semibold)
                     .foregroundStyle(.tertiary)
             case .agentMessage:
                 LucideIcon(.botMessageSquare, size: SessionStatusGlyphMetrics.agentSize, strokeWidth: 1.9, color: .krakiPrimary)

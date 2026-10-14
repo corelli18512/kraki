@@ -624,7 +624,7 @@ struct MacSidebarSessionRow: View {
             if let previewText = projection.previewText {
                 Text(previewText)
                     .font(.system(size: 11))
-                    .foregroundStyle(projection.isDraft ? macDraftAccent : Color.textSecondary)
+                    .foregroundStyle(projection.isDraft ? macDraftAccent : Color.sessionPreviewText)
                     .lineLimit(1)
                     .truncationMode(.tail)
             } else {

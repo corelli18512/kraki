@@ -41,6 +41,11 @@ private struct SessionCardBody: View {
         )
     }
 
+    /// Row heights that grow with the text size setting (Dynamic Type) and
+    /// are exactly 20 / 18 pt at the default size.
+    @ScaledMetric(relativeTo: .body) private var titleRowHeight: CGFloat = 20
+    @ScaledMetric(relativeTo: .footnote) private var lineRowHeight: CGFloat = 18
+
     private var deviceStatusColor: Color {
         guard projection.deviceOnline == true else { return .gray }
         if appState.deviceStore.pendingGreetingIds.contains(session.deviceId) {
@@ -64,11 +69,11 @@ private struct SessionCardBody: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 titleRow
-                    .frame(height: 20)
+                    .frame(height: titleRowHeight)
                 metadataRow
-                    .frame(minHeight: 18)
+                    .frame(minHeight: lineRowHeight)
                 previewRow
-                    .frame(height: 18)
+                    .frame(height: lineRowHeight)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -79,14 +84,14 @@ private struct SessionCardBody: View {
     private var titleRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
             Text(cardTitle)
-                .font(.system(size: 18, weight: .semibold))
+                .scaledFont(18, weight: .semibold)
                 .foregroundStyle(Color.textTitle)
                 .lineLimit(1)
                 .truncationMode(.tail)
 
             if projection.deviceOnline == false {
                 Text("offline")
-                    .font(.system(size: 9, weight: .medium))
+                    .scaledFont(9, weight: .medium)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
@@ -95,7 +100,7 @@ private struct SessionCardBody: View {
 
             if projection.isPinned {
                 Image(systemName: "pin.fill")
-                    .font(.system(size: 8, weight: .bold))
+                    .scaledFont(8, weight: .bold)
                     .foregroundStyle(Color.krakiPrimary)
             }
 
@@ -135,7 +140,7 @@ private struct SessionCardBody: View {
             if let previewText = projection.previewText {
                 Text(previewText)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.sessionPreviewText)
                     .lineLimit(1)
                     .truncationMode(.tail)
             } else {

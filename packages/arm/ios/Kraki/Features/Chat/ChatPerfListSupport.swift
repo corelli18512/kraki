@@ -157,6 +157,12 @@ final class RealCellSizer {
 
     func cached(_ id: String) -> CGFloat? { cache[id] }
 
+    /// Forget every height (the text size changed).
+    func reset() {
+        cache.removeAll(keepingCapacity: true)
+        estimateCache.removeAll(keepingCapacity: true)
+    }
+
     func prepare(width: CGFloat) {
         guard width > 0 else { return }
         resetIfWidthChanged(width)

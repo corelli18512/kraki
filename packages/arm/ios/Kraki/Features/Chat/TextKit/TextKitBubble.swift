@@ -40,10 +40,27 @@ enum TKMetrics {
 
 // MARK: - Markdown → NSAttributedString
 
+/// The text size setting (Dynamic Type) the chat's text and heights are built
+/// for. It is part of every content cache key, so after the user changes the
+/// text size nothing is reused from the old size. Refreshed on the main thread
+/// by the chat list when it loads and when the setting changes.
+enum TKTextSize {
+    nonisolated(unsafe) private(set) static var key = ""
+
+    /// Reads the current setting; true when it differs from the last one.
+    @MainActor @discardableResult
+    static func refresh() -> Bool {
+        let current = UIApplication.shared.preferredContentSizeCategory.rawValue
+        guard current != key else { return false }
+        key = current
+        return true
+    }
+}
+
 func tkContentCacheKey(prefix: String, content: String) -> NSString {
     var hasher = Hasher()
     hasher.combine(content)
-    return "\(prefix)\u{1F}\(content.utf8.count)\u{1F}\(hasher.finalize())" as NSString
+    return "\(prefix)\u{1F}\(TKTextSize.key)\u{1F}\(content.utf8.count)\u{1F}\(hasher.finalize())" as NSString
 }
 
 extension Notification.Name {

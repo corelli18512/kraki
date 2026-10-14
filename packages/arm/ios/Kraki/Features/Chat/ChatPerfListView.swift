@@ -297,27 +297,23 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     var hitchCount = 0
     var worstFrameMs: Double = 0
     let overlay = UILabel()
-    private var codeHighlightObserver: NSObjectProtocol?
+    var codeHighlightObserver: NSObjectProtocol?
     private var composerSubmitObserver: NSObjectProtocol?
-    private var codeHighlightSettleWork: DispatchWorkItem?
-    private var pendingCodeHighlightRefresh = false
+    var textSizeObserver: NSObjectProtocol?
+    var codeHighlightSettleWork: DispatchWorkItem?
+    var pendingCodeHighlightRefresh = false
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
         chatPerfLog.log("[cfg] renderer=textkit localSeamless=\(localSeamless)")
         chatPerfLog.log("[diag] viewDidLoad turns=\(messages.count) ids=\(items.count) winTop=\(vm.windowTopSeq) winBot=\(vm.windowBottomSeq) sessionLast=\(vm.sessionLastSeq) filtered=\(vm.filteredMessages.count)")
+        TKTextSize.refresh()
         setupCollectionView()
         let endSelection = UITapGestureRecognizer(target: self, action: #selector(endTextSelectionTap(_:)))
         endSelection.cancelsTouchesInView = false
         endSelection.delegate = textSelectionTapDelegate
         collectionView.addGestureRecognizer(endSelection)
-        codeHighlightObserver = NotificationCenter.default.addObserver(
-            forName: .tkCodeHighlightReady,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.handleCodeHighlightReady()
-        }
+        installRelayoutObservers()
         setupJumpButton()
         composerSubmitObserver = NotificationCenter.default.addObserver(
             forName: .krakiComposerSubmitted,
@@ -343,6 +339,9 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     deinit {
         if let composerSubmitObserver {
             NotificationCenter.default.removeObserver(composerSubmitObserver)
+        }
+        if let textSizeObserver {
+            NotificationCenter.default.removeObserver(textSizeObserver)
         }
         displayLink?.invalidate()
         warmKickWork?.cancel()
@@ -491,7 +490,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// the action slot set to the terminal outcome or the question's choices
     /// (`ChatMessage.frozenCard`). Mirrors web `MessageBubble`
     /// (#162/#164/#168): no separate chrome, just the live card stopped.
-    private func frozenRow(_ index: Int) -> (message: ChatMessage, card: MessageStore.SessionCard)? {
+    func frozenRow(_ index: Int) -> (message: ChatMessage, card: MessageStore.SessionCard)? {
         guard index < items.count, let message = message(items[index]),
               let card = message.frozenCard else { return nil }
         return (message, card)
@@ -525,65 +524,6 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     /// scroll (the UITextInteraction is the only per-cell fling cost), on at rest.
     private func setVisibleBodiesInteractive(_ on: Bool) {
         for c in collectionView.visibleCells { (c as? TKBubbleCell)?.setBodyInteractive(on) }
-    }
-
-    private func handleCodeHighlightReady() {
-        pendingCodeHighlightRefresh = true
-        scheduleCodeHighlightRefreshIfNeeded()
-    }
-
-    private func scheduleCodeHighlightRefreshIfNeeded() {
-        guard pendingCodeHighlightRefresh,
-              collectionView != nil,
-              !collectionView.isDragging,
-              !collectionView.isTracking,
-              !collectionView.isDecelerating else { return }
-        codeHighlightSettleWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            self?.refreshVisibleCodeHighlights()
-        }
-        codeHighlightSettleWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: work)
-    }
-
-    private func refreshVisibleCodeHighlights() {
-        guard pendingCodeHighlightRefresh,
-              !collectionView.isDragging,
-              !collectionView.isTracking,
-              !collectionView.isDecelerating else { return }
-        pendingCodeHighlightRefresh = false
-        codeHighlightSettleWork = nil
-
-        for indexPath in collectionView.indexPathsForVisibleItems.sorted() {
-            guard let cell = collectionView.cellForItem(at: indexPath) as? TKBubbleCell,
-                  cell.hasProvisionalCodeHighlight else { continue }
-            let finalContent: TKBubbleContent?
-            if let (message, card) = frozenRow(indexPath.item) {
-                finalContent = TKBubbleContent.live(
-                    card: card,
-                    agent: agentName,
-                    sessionId: sessionId,
-                    steps: message.steps ?? 0,
-                    isFrozen: true,
-                    frozenTimestamp: message.finishedAt ?? message.timestamp,
-                    attachments: message.contentRefAttachments
-                )
-            } else if indexPath.item < items.count,
-                      let message = message(items[indexPath.item]) {
-                TKBubbleContent.bust(message.id)
-                finalContent = TKBubbleContent.make(
-                    message: message,
-                    sessionId: sessionId,
-                    agent: agentName
-                )
-            } else {
-                finalContent = nil
-            }
-            guard let finalContent, !finalContent.hasProvisionalCodeHighlight else { continue }
-            cell.configure(finalContent, cellWidth: collectionView.bounds.width)
-            cell.setBodyInteractive(true)
-            cell.setNeedsLayout()
-        }
     }
 
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
@@ -786,7 +726,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     ///     that stale target. We halt the momentum in place so it re-bases.
     /// When fully at rest, the plain offset write is already jump-free.
     /// Last laid-out live card height (see sizeForItemAt).
-    private var lastLiveCardHeight: CGFloat?
+    var lastLiveCardHeight: CGFloat?
     /// True while this controller writes contentOffset to keep content
     /// anchored; such writes must not be read as user scroll direction.
     var applyingProgrammaticShift = false

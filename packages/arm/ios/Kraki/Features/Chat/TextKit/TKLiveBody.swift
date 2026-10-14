@@ -37,6 +37,12 @@ final class TKLiveBody {
         registry.removeValue(forKey: sessionId)
     }
 
+    /// Drop every live body (the text size changed). The next build passes the
+    /// whole draft, so a fresh body catches up at once.
+    static func discardAll() {
+        registry.removeAll()
+    }
+
     private(set) var text = ""
     private(set) var revision = 0
 
@@ -227,7 +233,7 @@ enum TKBodyChunks {
                 attachments += "\(range.location):\(table.tableLayout.contentKey),"
             }
         }
-        let key = "\(Int(width * 2))\u{1F}\(chunk.length)\u{1F}\(attachments)\u{1F}\(chunk.string)" as NSString
+        let key = "\(Int(width * 2))\u{1F}\(TKTextSize.key)\u{1F}\(chunk.length)\u{1F}\(attachments)\u{1F}\(chunk.string)" as NSString
         if let hit = heightCache.object(forKey: key) { return CGFloat(hit.doubleValue) }
         let measured = TKMeasure.height(chunk, width: width)
         heightCache.setObject(NSNumber(value: Double(measured)), forKey: key)
