@@ -916,8 +916,8 @@ final class MessageStore {
         /// or a frozen row's question choices / terminal outcome
         /// (`ChatMessage.frozenCard`), as a `ChatMessage` (type + payload).
         var action: ChatMessage?
-        /// The steer the card is drawn above (MessageStore+SteerPlacement).
-        var aboveSteer: String?
+        /// Which steer the card is drawn above (MessageStore+SteerPlacement).
+        var steer = SteerPlacement()
     }
     var cards: [String: SessionCard] = [:]
     /// A concluded turn rejects late coalesced deltas/card snapshots so its

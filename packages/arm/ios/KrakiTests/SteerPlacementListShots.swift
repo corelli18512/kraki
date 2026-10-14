@@ -69,7 +69,7 @@ import UIKit
     /// The agent's next segment (`reset`). Samples the move frame by frame:
     /// the same cell travels, animated, no row disappears, the bottom stays pinned.
     private func newSegmentMovesCardBelow() throws {
-        let liveCell = liveCellView()
+        let cellsBefore = collection?.visibleCells ?? []
         let rowCount = collection?.numberOfItems(inSection: 0) ?? -1
         app.messageStore.applyCardMessage(sid, "Got it, I'll remove the emoji from the headings too.", reset: true)
         var moving: [String] = []
@@ -80,7 +80,8 @@ import UIKit
             noteOverlaps("move")
         }
         print("STEER_MOVE samples=\(moving.joined(separator: ","))")
-        XCTAssertTrue(liveCellView() === liveCell, "the same cell moves (no delete + insert)")
+        XCTAssertTrue(liveCellView().map { cell in cellsBefore.contains { $0 === cell } } == true,
+                      "the cells on screen are reused in place (no reload, no delete + insert)")
         XCTAssertTrue(moving.contains { $0.contains(":true:") }, "the move is animated: \(moving)")
         XCTAssertTrue(moving.allSatisfy { $0.hasPrefix("\(rowCount):") }, "no row disappears during the move: \(moving)")
         XCTAssertTrue(moving.allSatisfy { $0.hasSuffix(":0") }, "the reader stays pinned through the move: \(moving)")

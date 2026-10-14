@@ -125,6 +125,7 @@
 		29FFC9E9F372B2E4E761152D /* MacTransientScroller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7BE0D26660EA48B8CDE8F2A /* MacTransientScroller.swift */; };
 		2A26932045F45889AB8373D9 /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA32D66EC88B6BEDF4675518 /* Commands.swift */; };
 		2B734C69AB104A3752E06468 /* CoinfraCrypto in Frameworks */ = {isa = PBXBuildFile; productRef = 03C78132D872366BA3910E8E /* CoinfraCrypto */; };
+		2BF44615643296C73D4E3211 /* SteerPlacementTallCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37CA1183423B4FF99C9BEEFC /* SteerPlacementTallCardTests.swift */; };
 		2C0D85737E6D0F881D7CF1D0 /* ThemePlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBACFBCC6FD0563946CD080A /* ThemePlatform.swift */; };
 		2C1831EFAF427D90721F787F /* ToolChipHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = F163484AD442AE1D67F4E8A7 /* ToolChipHeader.swift */; };
 		2C6DBB413182C89A9F9FC673 /* mermaid-complex-report.html in Resources */ = {isa = PBXBuildFile; fileRef = 74D308174966E96925EB69B8 /* mermaid-complex-report.html */; };
@@ -750,6 +751,7 @@
 		36547BB6B68E22C1BEB7D1CD /* KrakiMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KrakiMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		36FC4EAA96F9E5781C9A7449 /* MacSetupIntro.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSetupIntro.swift; sourceTree = "<group>"; };
 		37B56341037B8B54A732E91A /* ToolStatusIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolStatusIcon.swift; sourceTree = "<group>"; };
+		37CA1183423B4FF99C9BEEFC /* SteerPlacementTallCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteerPlacementTallCardTests.swift; sourceTree = "<group>"; };
 		3A130A3774A3144CDA4C6023 /* ComposerHitAreaUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerHitAreaUITests.swift; sourceTree = "<group>"; };
 		3AC679062E3ABAECE586C024 /* UsagePeekController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsagePeekController.swift; sourceTree = "<group>"; };
 		3C03EA1CEA9C063EB869C687 /* MacAutomationDriver+Regressions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MacAutomationDriver+Regressions.swift"; sourceTree = "<group>"; };
@@ -1777,6 +1779,7 @@
 				0BEDEAE0119875B478A984D6 /* SessionSubscriptionControllerTests.swift */,
 				50E35AD5263921130DD1A18D /* StabilityTrackerTests.swift */,
 				46FAD598FE27CA110A28CF20 /* SteerPlacementListShots.swift */,
+				37CA1183423B4FF99C9BEEFC /* SteerPlacementTallCardTests.swift */,
 				823FAA98B92DAC38750F1B5B /* SteerPlacementTests.swift */,
 				6AF5C73500B408088F5F6C78 /* SubagentStepsTests.swift */,
 				F19F9B78235755F4432E4C6A /* TableRenderShotsIOS.swift */,
@@ -2221,6 +2224,7 @@
 				A1202BE92B11878D6FBCC712 /* SessionSubscriptionControllerTests.swift in Sources */,
 				0313E21470C38A392FB20B51 /* StabilityTrackerTests.swift in Sources */,
 				135E3AA61778C42CFAF4ADAC /* SteerPlacementListShots.swift in Sources */,
+				2BF44615643296C73D4E3211 /* SteerPlacementTallCardTests.swift in Sources */,
 				3E1C2BFD2B076097D46A177E /* SteerPlacementTests.swift in Sources */,
 				5955DE981CE3DC14839835D3 /* SubagentStepsTests.swift in Sources */,
 				BF03C77E144C6ACBF90D6620 /* TableRenderShotsIOS.swift in Sources */,

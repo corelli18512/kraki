@@ -12,13 +12,28 @@
 import Foundation
 
 extension MessageStore {
+    struct SteerPlacement: Equatable {
+        /// The steer the card is drawn above (its clientId, or the echoed row id).
+        var anchor: String?
+        /// Steers the card has already gone below this turn. A steer's echo
+        /// can arrive after the agent's next segment began (Tentacle persists
+        /// it when the agent takes it); it must not pull the card back up.
+        var passed: Set<String> = []
+
+        mutating func followSteer() {
+            if let anchor { passed.insert(anchor) }
+            anchor = nil
+        }
+    }
+
     /// A steer appeared (its local bubble, or another device's echo): keep the
     /// visible card above it. The first steer of the segment wins, so a later
-    /// steer or the echo of the same one changes nothing.
+    /// steer or the echo of the same one changes nothing, and a steer the card
+    /// already went below never anchors it again.
     func placeCardAboveSteer(_ sessionId: String, anchor: String) {
-        guard var card = cards[sessionId], card.aboveSteer == nil,
+        guard var card = cards[sessionId], card.steer.anchor == nil, !card.steer.passed.contains(anchor),
               !card.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || card.action != nil else { return }
-        card.aboveSteer = anchor
+        card.steer.anchor = anchor
         cards[sessionId] = card
     }
 
@@ -35,9 +50,11 @@ extension MessageStore {
 extension MessageStore.SessionCard {
     /// A new segment (reset, or words after an empty draft) follows the steer.
     mutating func followSteerOnNewSegment(reset: Bool, content: String) {
-        if reset || (text.isEmpty && !content.isEmpty) { aboveSteer = nil }
+        if reset || (text.isEmpty && !content.isEmpty) { steer.followSteer() }
     }
 
+    /// The steer the card is drawn above, if any.
+    var aboveSteer: String? { steer.anchor }
 
     /// Where the live card row goes among the list `rows`: right above its
     /// steer (the pending bubble or the echoed row, matched by clientId or row

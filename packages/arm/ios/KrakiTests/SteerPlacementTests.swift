@@ -100,6 +100,22 @@ final class SteerPlacementTests: XCTestCase {
         XCTAssertNil(app.messageStore.cards[sid])
     }
 
+    /// Tentacle persists a steer when the agent takes it, so its echo can
+    /// arrive after the new segment began: the card stays below it.
+    func testEchoAfterNewSegmentKeepsCardBelowSteer() throws {
+        delta("Writing the essay.")
+        let sender = try XCTUnwrap(app.commandSender)
+        XCTAssertTrue(sender.sendInput(sessionId: sid, text: "Add seals", delivery: .steer))
+        let clientId = try XCTUnwrap(sender.pendingInputs(sid).first?.payload["clientId"]?.stringValue)
+        delta("Seals are marine mammals.", reset: true)
+        XCTAssertEqual(shown(), ["user: Refactor it", "user: Add seals", "live: Seals are marine mammals."])
+        try route("user_message", seq: 2, ["content": "Add seals", "clientId": clientId, "delivery": "steer"])
+        XCTAssertEqual(shown(), ["user: Refactor it", "user: Add seals", "live: Seals are marine mammals."])
+        // A later steer of the same turn holds the card above it again.
+        try route("user_message", seq: 3, ["content": "Shorter", "clientId": "b", "delivery": "steer"])
+        XCTAssertEqual(shown(), ["user: Refactor it", "user: Add seals", "live: Seals are marine mammals.", "user: Shorter"])
+    }
+
     func testSteerFromAnotherDeviceKeepsCardAboveItsEcho() throws {
         delta("Reading the tests.")
         try route("user_message", seq: 2, ["content": "Skip the slow ones", "clientId": "other-device", "delivery": "steer"])

@@ -15,7 +15,7 @@ extension MessageStore {
         guard var card = cards[sessionId] else { return }
         card.text = ""
         // The question landed below the steer; what follows goes there too.
-        card.aboveSteer = nil
+        card.steer.followSteer()
         if card.action == nil {
             cards.removeValue(forKey: sessionId)
         } else {

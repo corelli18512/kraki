@@ -1,65 +1,94 @@
-/// The live card changing places with the rows next to it (steer placement).
+/// The live card going below the rows it sat above (steer placement).
 
 #if os(iOS)
 import UIKit
 
 extension ChatPerfListVC {
-    static let liveCardMoveDuration: TimeInterval = 0.5
-
-    /// `old` with only the live card moved to where `new` puts it: its index
-    /// there, or last when it lands as the reply or goes. Nil when it stays.
-    /// A steer the agent has not read yet holds the card above it
-    /// (MessageStore+SteerPlacement); the agent's next segment, or the turn
+    /// The live card was above another row and is now last, or gone (its
+    /// reply landed). A steer the agent has not read yet holds the card above
+    /// it (MessageStore+SteerPlacement); the agent's next segment, or the turn
     /// ending, takes it below.
-    func liveCardMoved(old: [String], new: [String]) -> [String]? {
-        guard let from = old.firstIndex(of: Self.liveCardID) else { return nil }
-        var moved = old
-        moved.remove(at: from)
-        let to = min(new.firstIndex(of: Self.liveCardID) ?? moved.count, moved.count)
-        guard to != from else { return nil }
-        moved.insert(Self.liveCardID, at: to)
-        return moved
+    static func liveCardMovesDown(old: [String], new: [String]) -> Bool {
+        guard let from = old.firstIndex(of: liveCardID), from < old.count - 1 else { return false }
+        return new.last == liveCardID || !new.contains(liveCardID)
     }
 
-    /// One animated collection-view move (not delete + insert, which flashes):
-    /// the card travels to its new row while the rows it passes slide the other
-    /// way, with its new content. A reader pinned to the bottom stays pinned
-    /// through the move.
-    func applyLiveCardMove(old: [String], to moved: [String]) -> Bool {
-        guard let from = old.firstIndex(of: Self.liveCardID),
-              let to = moved.firstIndex(of: Self.liveCardID),
-              collectionView.numberOfItems(inSection: 0) == old.count else { return false }
+    /// The rows change in place, as any tail change (the cells stay, their
+    /// content is reassigned; no collection-view move, which leaves stale or
+    /// hidden cells and blank frames when the card is taller than the screen,
+    /// and no animated scroll). Then every bubble that was on screen glides
+    /// from where it was drawn to its new place: the steer slides up, the card
+    /// slides down below it (anchored at its bottom edge, as its height
+    /// changes with the new segment). A reader pinned to the bottom stays pinned.
+    func applyLiveCardMove(old: [String], new: [String]) -> Bool {
         let following = shouldFollowLiveTail
-        let liveCell = collectionView.cellForItem(at: IndexPath(item: from, section: 0)) as? TKBubbleCell
-        items = moved
-        let move = {
-            // New content inside the animation: its bubble resizes with the move.
-            if let liveCell {
-                self.configureCell(liveCell, at: IndexPath(item: to, section: 0))
-                liveCell.layoutIfNeeded()
-            }
-            let context = UICollectionViewFlowLayoutInvalidationContext()
-            context.invalidateFlowLayoutDelegateMetrics = true
-            self.collectionView.collectionViewLayout.invalidateLayout(with: context)
-            self.collectionView.performBatchUpdates {
-                self.collectionView.moveItem(at: IndexPath(item: from, section: 0), to: IndexPath(item: to, section: 0))
-            }
-            self.collectionView.layoutIfNeeded()
+        let before = Dictionary(collectionView.visibleCells.compactMap { cell in
+            glideKey(cell).map { ($0, screenFrame(cell, presented: true)) }
+        }, uniquingKeysWith: { first, _ in first })
+        // A height or scroll animation still running (the previous revision
+        // growing) would keep drawing the old geometry over the new one, and
+        // with a card taller than the screen that is an empty viewport. The
+        // glides below start from what is drawn now instead.
+        stopGeometryAnimations()
+        guard applyTailInPlace(old: old, new: new, glidingLiveCardMove: false) else { return false }
+        UIView.performWithoutAnimation {
+            collectionView.layoutIfNeeded()
             if following {
-                let maxY = self.followPinOffset(keepingRevealed: true)
-                self.collectionView.contentOffset.y = maxY
-                self.scrollPolicy.pinToTail(observedOffset: maxY)
+                let maxY = followPinOffset(keepingRevealed: true)
+                collectionView.contentOffset.y = maxY
+                scrollPolicy.pinToTail(observedOffset: maxY)
+                collectionView.layoutIfNeeded()
             }
         }
-        if UIAccessibility.isReduceMotionEnabled {
-            UIView.performWithoutAnimation(move)
-        } else {
-            UIView.animate(withDuration: Self.liveCardMoveDuration, delay: 0, usingSpringWithDamping: 0.9,
-                           initialSpringVelocity: 0, options: [.beginFromCurrentState, .allowUserInteraction],
-                           animations: move)
+        stopGeometryAnimations()
+        chatPerfLog.log("[apply] live-card-move rows=\(old.count)->\(new.count)")
+        guard !UIAccessibility.isReduceMotionEnabled else { return true }
+        for cell in collectionView.visibleCells {
+            guard var key = glideKey(cell), let indexPath = collectionView.indexPath(for: cell) else { continue }
+            // The reply that replaced the card lands from the card's place.
+            if before[key] == nil, !new.contains(Self.liveCardID), indexPath.item == new.count - 1 { key = Self.liveCardID }
+            guard let old = before[key] else { continue }
+            let now = screenFrame(cell, presented: false)
+            let delta = key == Self.liveCardID ? old.maxY - now.maxY : old.minY - now.minY
+            guard abs(delta) > 0.5 else { continue }
+            let glide = CASpringAnimation(keyPath: "transform.translation.y")
+            glide.fromValue = delta
+            glide.toValue = 0
+            glide.isAdditive = true
+            glide.damping = 26
+            glide.stiffness = 300
+            glide.duration = glide.settlingDuration
+            cell.layer.add(glide, forKey: "kraki.liveCardMove")
         }
-        chatPerfLog.log("[apply] live-card-move from=\(from) to=\(to)")
         return true
+    }
+
+    /// A bubble's identity across the move: the live card, an input by its
+    /// clientId (its pending and echoed rows share it), else the row id.
+    private func glideKey(_ cell: UICollectionViewCell) -> String? {
+        guard let content = (cell as? TKBubbleCell)?.contentSnapshot else { return nil }
+        if content.isLive { return Self.liveCardID }
+        return content.message.payload["clientId"]?.stringValue ?? content.message.id
+    }
+
+    /// Where the cell is drawn in the viewport (`presented`: as on screen
+    /// now, mid-animation too; else its final place).
+    private func screenFrame(_ cell: UICollectionViewCell, presented: Bool) -> CGRect {
+        guard presented else { return cell.frame.offsetBy(dx: 0, dy: -collectionView.contentOffset.y) }
+        let offset = collectionView.layer.presentation()?.bounds.minY ?? collectionView.contentOffset.y
+        return (cell.layer.presentation()?.frame ?? cell.frame).offsetBy(dx: 0, dy: -offset)
+    }
+
+    /// Ends running scroll and frame animations of the list and its cells
+    /// (they jump to their end); entrances and glides are additive and stay.
+    private func stopGeometryAnimations() {
+        func stop(_ layer: CALayer) {
+            for key in layer.animationKeys() ?? [] where key.hasPrefix("bounds") || key.hasPrefix("position") {
+                layer.removeAnimation(forKey: key)
+            }
+        }
+        stop(collectionView.layer)
+        collectionView.visibleCells.forEach { stop($0.layer) }
     }
 }
 #endif
