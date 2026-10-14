@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { Endpoint } from '@coinfra/pulse';
+import { Endpoint } from '@kraki/pulse';
 import { PulseHub, type PulseHubHost } from '../packages/head/src/pulse-hub.js';
 
 const b64 = (u: Uint8Array): string => Buffer.from(u).toString('base64');

@@ -16,11 +16,11 @@ packages:
     url: https://github.com/raspu/Highlightr.git
     exactVersion: 2.3.0
   Pulse:
-    path: ./Vendor/Pulse
+    path: ../../pulse/SwiftPulse
   VoiceInputCore:
     path: ./Vendor/VoiceInputCore
   CoinfraCrypto:
-    path: ./Vendor/CoinfraCrypto
+    path: ../../crypto/SwiftCrypto
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle.git
     exactVersion: 2.9.5

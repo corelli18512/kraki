@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { useAccountDeletion } from './account-deletion';
-import { decodeFrame } from '@coinfra/pulse';
+import { decodeFrame } from '@kraki/pulse';
 import { KrakiWSClient, wsClient } from '../lib/ws-client';
 import { useStore } from '../hooks/useStore';
 import { messageProvider } from './message-provider';

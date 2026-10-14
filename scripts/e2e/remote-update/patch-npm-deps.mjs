@@ -34,7 +34,7 @@ export function patchPackage(source, target, install = npm) {
 }
 
 export function patchInstalledLibraries(repo, root) {
-  for (const name of ['protocol', 'crypto']) {
+  for (const name of ['protocol', 'crypto', 'pulse']) {
     const targets = [
       join(root, '@kraki/tentacle/node_modules/@kraki', name),
       join(root, '@kraki', name),

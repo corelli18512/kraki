@@ -124,9 +124,7 @@ async function main() {
   mkdirSync(seaDir, { recursive: true });
 
   console.log('🔨 Building tentacle prerequisites...');
-  runPnpm(['--filter', '@kraki/protocol', 'build'], { cwd: repoRoot });
-  runPnpm(['--filter', '@kraki/crypto', 'build'], { cwd: repoRoot });
-  runPnpm(['--filter', '@kraki/tentacle', 'build'], { cwd: repoRoot });
+  runPnpm(['--filter', '@kraki/tentacle...', 'build'], { cwd: repoRoot });
 
   console.log('📦 Bundling tentacle CLI...');
   await bundleCli();

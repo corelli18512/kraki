@@ -945,12 +945,12 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build packages
-        run: pnpm --filter @kraki/protocol build && pnpm --filter @kraki/crypto build && pnpm --filter @kraki/tentacle build && pnpm --filter @kraki/head build
+        run: pnpm --filter @kraki/tentacle... --filter @kraki/head... build
 
       - name: Shared packages are not stale on npm
         # A changed protocol/crypto with an unchanged version would be skipped
         # below, and tentacle/head published against the old copy.
-        run: node scripts/release/check-published.mjs packages/protocol packages/crypto
+        run: node scripts/release/check-published.mjs packages/protocol packages/crypto packages/pulse
 
       - name: Pack and publish
         run: |
@@ -960,6 +960,7 @@ jobs:
           specs=(
             "packages/protocol|@kraki/protocol"
             "packages/crypto|@kraki/crypto"
+            "packages/pulse|@kraki/pulse"
             "packages/tentacle|@kraki/tentacle"
             "packages/head|@kraki/head"
           )

@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import readline from 'node:readline';
 const require = createRequire(new URL('../../packages/head/package.json', import.meta.url));
 const { WebSocketServer, WebSocket } = require('ws');
-const { Endpoint, StreamSet } = require('@coinfra/pulse');
+const { Endpoint, StreamSet } = require('@kraki/pulse');
 const server = createServer();
 const wss = new WebSocketServer({ noServer: true, autoPong: false });
 const counts = new Map(), sockets = new Set();

@@ -36,7 +36,7 @@ jobs:
       - name: Install and build the local stack
         run: |
           pnpm install --frozen-lockfile
-          pnpm --filter @kraki/protocol --filter @kraki/crypto --filter @kraki/head --filter @kraki/tentacle --filter @kraki/voice-broker build
+          pnpm --filter @kraki/head... --filter @kraki/tentacle... --filter @kraki/voice-broker... build
       - run: brew install xcodegen
       - name: Full scenario matrix and random chaos
         env:

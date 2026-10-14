@@ -687,6 +687,7 @@
 		07D6E0A7CA95492AFFEAA610 /* MacStepsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacStepsView.swift; sourceTree = "<group>"; };
 		07E9F259AD6F525A5F3E63DD /* MacChatTopEdgeFade.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatTopEdgeFade.swift; sourceTree = "<group>"; };
 		09D438FF41D78B8547E66208 /* TextKitPureSpineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextKitPureSpineTests.swift; sourceTree = "<group>"; };
+		0AA0FA14691119F27955AC9D /* SwiftCrypto */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SwiftCrypto; path = ../../crypto/SwiftCrypto; sourceTree = SOURCE_ROOT; };
 		0B49EB7064E3E13899D443B5 /* LICENSE-mermaid.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "LICENSE-mermaid.txt"; sourceTree = "<group>"; };
 		0B5C9B91D8E0CF8C6D63E91D /* CryptoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoTests.swift; sourceTree = "<group>"; };
 		0BEDEAE0119875B478A984D6 /* SessionSubscriptionControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSubscriptionControllerTests.swift; sourceTree = "<group>"; };
@@ -754,6 +755,7 @@
 		36FC4EAA96F9E5781C9A7449 /* MacSetupIntro.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSetupIntro.swift; sourceTree = "<group>"; };
 		37B56341037B8B54A732E91A /* ToolStatusIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolStatusIcon.swift; sourceTree = "<group>"; };
 		37CA1183423B4FF99C9BEEFC /* SteerPlacementTallCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteerPlacementTallCardTests.swift; sourceTree = "<group>"; };
+		39C948CE4CF2E3E0DB588D74 /* SwiftPulse */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SwiftPulse; path = ../../pulse/SwiftPulse; sourceTree = SOURCE_ROOT; };
 		3A130A3774A3144CDA4C6023 /* ComposerHitAreaUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerHitAreaUITests.swift; sourceTree = "<group>"; };
 		3AC679062E3ABAECE586C024 /* UsagePeekController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsagePeekController.swift; sourceTree = "<group>"; };
 		3C03EA1CEA9C063EB869C687 /* MacAutomationDriver+Regressions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MacAutomationDriver+Regressions.swift"; sourceTree = "<group>"; };
@@ -893,7 +895,6 @@
 		8A5512B1E06F9B368B5AA468 /* MacNotificationDedupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNotificationDedupTests.swift; sourceTree = "<group>"; };
 		8D27255376DC3CA0C11B7405 /* SessionEffortE2EUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionEffortE2EUITests.swift; sourceTree = "<group>"; };
 		8D720ACC636683293D505371 /* MacChatBubbleCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatBubbleCell.swift; sourceTree = "<group>"; };
-		8F5846AD3085321DA3A42727 /* Pulse */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Pulse; path = Vendor/Pulse; sourceTree = SOURCE_ROOT; };
 		8F69BA2DA3E65AD7981E3F51 /* MacChatScrollView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatScrollView.swift; sourceTree = "<group>"; };
 		8F7A9DE94395DCACB82420EF /* IOSMotionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSMotionTests.swift; sourceTree = "<group>"; };
 		903F7944488AA6630F10C8DE /* MacSubagentStepsShots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSubagentStepsShots.swift; sourceTree = "<group>"; };
@@ -1050,7 +1051,6 @@
 		F1E5D28B402A345F0D22B851 /* AccountPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountPane.swift; sourceTree = "<group>"; };
 		F46E7049E9F5C6491855EAAA /* AppState+DeviceTrust.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+DeviceTrust.swift"; sourceTree = "<group>"; };
 		F499644AEF4467B28CDD1A6A /* PreferencesWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindow.swift; sourceTree = "<group>"; };
-		F59CEE297D0DBE6F701F8D7D /* CoinfraCrypto */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CoinfraCrypto; path = Vendor/CoinfraCrypto; sourceTree = SOURCE_ROOT; };
 		F5FED91289B8EAF2ACA20F81 /* ChatTableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTableTests.swift; sourceTree = "<group>"; };
 		F6612B64B8037EF4E603EB59 /* TabBarNavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarNavigationUITests.swift; sourceTree = "<group>"; };
 		F70B56E49F0EA690CE7F1B08 /* MacPresenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPresenceTests.swift; sourceTree = "<group>"; };
@@ -1432,8 +1432,8 @@
 		A52B4557FE045496F98B459B /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				F59CEE297D0DBE6F701F8D7D /* CoinfraCrypto */,
-				8F5846AD3085321DA3A42727 /* Pulse */,
+				0AA0FA14691119F27955AC9D /* SwiftCrypto */,
+				39C948CE4CF2E3E0DB588D74 /* SwiftPulse */,
 				9EAEB25D42AF6E6FEEA99513 /* VoiceInputCore */,
 			);
 			name = Packages;
@@ -2027,8 +2027,8 @@
 				67485AEC5E20A50F92197C43 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
 				C1BACD62B59892C792C08AB1 /* XCRemoteSwiftPackageReference "Highlightr" */,
 				DADBF5538A6575068485F6DC /* XCRemoteSwiftPackageReference "Sparkle" */,
-				CDE00FA51D22D5E3305E4171 /* XCLocalSwiftPackageReference "Vendor/CoinfraCrypto" */,
-				3F224EC43C74D3ECE997EFD2 /* XCLocalSwiftPackageReference "Vendor/Pulse" */,
+				8D5CEE35EDD830C5A5CDC098 /* XCLocalSwiftPackageReference "../../crypto/SwiftCrypto" */,
+				02D5E8DF4A06562FAC13BCD6 /* XCLocalSwiftPackageReference "../../pulse/SwiftPulse" */,
 				A64FCAB32F5BA20F2CEE80BC /* XCLocalSwiftPackageReference "Vendor/VoiceInputCore" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -3689,17 +3689,17 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		3F224EC43C74D3ECE997EFD2 /* XCLocalSwiftPackageReference "Vendor/Pulse" */ = {
+		02D5E8DF4A06562FAC13BCD6 /* XCLocalSwiftPackageReference "../../pulse/SwiftPulse" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = Vendor/Pulse;
+			relativePath = ../../pulse/SwiftPulse;
+		};
+		8D5CEE35EDD830C5A5CDC098 /* XCLocalSwiftPackageReference "../../crypto/SwiftCrypto" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../crypto/SwiftCrypto;
 		};
 		A64FCAB32F5BA20F2CEE80BC /* XCLocalSwiftPackageReference "Vendor/VoiceInputCore" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/VoiceInputCore;
-		};
-		CDE00FA51D22D5E3305E4171 /* XCLocalSwiftPackageReference "Vendor/CoinfraCrypto" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = Vendor/CoinfraCrypto;
 		};
 /* End XCLocalSwiftPackageReference section */
 

@@ -26,7 +26,7 @@ export function testScope(paths, full = false) {
       }
     } else if (path.startsWith('packages/protocol/')) {
       Object.keys(scope).forEach(key => { scope[key] = true; });
-    } else if (path.startsWith('packages/crypto/')) {
+    } else if (path.startsWith('packages/crypto/') || path.startsWith('packages/pulse/')) {
       // The Swift CryptoManager must stay byte-compatible with it.
       scope.typescript = true;
       scope.binary = true;

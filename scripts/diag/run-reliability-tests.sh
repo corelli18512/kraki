@@ -4,7 +4,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD="$(mktemp -d "${TMPDIR:-/tmp}/kraki-reliability.XXXXXX")"
 trap 'rm -rf "$BUILD"' EXIT
 swiftc -O -emit-library -emit-module -module-name Pulse \
-  "$ROOT"/packages/arm/ios/Vendor/Pulse/Sources/Pulse/*.swift \
+  "$ROOT"/packages/pulse/SwiftPulse/Sources/Pulse/*.swift \
   -emit-module-path "$BUILD/Pulse.swiftmodule" -o "$BUILD/libPulse.dylib"
 swiftc -D DEBUG -swift-version 5 -I "$BUILD" -L "$BUILD" -lPulse \
   "$ROOT/packages/arm/ios/Kraki/Shared/EventMonitorForwarding.swift" \

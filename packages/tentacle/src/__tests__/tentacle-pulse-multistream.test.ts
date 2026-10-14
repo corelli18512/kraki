@@ -1,4 +1,4 @@
-import { decodeFrameWithStream, Endpoint, StreamSet, type Effect } from '@coinfra/pulse';
+import { decodeFrameWithStream, Endpoint, StreamSet, type Effect } from '@kraki/pulse';
 import { describe, expect, it } from 'vitest';
 import { streamForType, TentaclePulse, type TentaclePulseHost } from '../tentacle-pulse.js';
 

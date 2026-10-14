@@ -1,7 +1,7 @@
 {
   "name": "@kraki/crypto",
   "version": "0.2.3",
-  "description": "E2E encryption library for Kraki — hybrid RSA-OAEP + AES-256-GCM",
+  "description": "Kraki encryption: X25519/HKDF/AES-GCM, Ed25519 and legacy RSA compatibility",
   "repository": {
     "type": "git",
     "url": "https://github.com/corelli18512/kraki",
@@ -14,14 +14,17 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": [
-    "dist"
-  ],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./web": { "types": "./dist/web/index.d.ts", "default": "./dist/web/index.js" }
+  },
+  "files": ["dist", "LICENSE.coinfra"],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:swift": "swift test --package-path SwiftCrypto",
     "clean": "rm -rf dist"
   },
   "publishConfig": {

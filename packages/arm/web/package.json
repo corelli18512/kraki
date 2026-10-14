@@ -17,7 +17,7 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "@coinfra/pulse": "^0.5.1",
+    "@kraki/pulse": "workspace:*",
     "@kraki/protocol": "workspace:*",
     "hast-util-to-jsx-runtime": "^2.3.6",
     "highlight.js": "^11.10.0",
