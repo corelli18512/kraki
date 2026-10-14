@@ -447,7 +447,7 @@ struct PastePairingLinkSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(computer.map { "Pair with \($0.name)" } ?? "Pair with a computer")
                 .font(.system(size: 17, weight: .semibold))
-            Text("On the computer, run `kraki connect` and copy the link under the QR code. Paste it here.")
+            Text(trustCopy: "On the computer, run `kraki connect --url-only` and paste the link it prints here.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

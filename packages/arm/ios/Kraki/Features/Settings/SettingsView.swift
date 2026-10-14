@@ -15,12 +15,15 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            #if KRAKI_DIAG
+            #if KRAKI_DIAG_TEST_BUILD
             DiagSettingsSection()
             #endif
             accountSection
             preferencesSection
             ArchiveSettingsSection()
+            #if KRAKI_DIAG && !KRAKI_DIAG_TEST_BUILD
+            DiagSettingsSection()
+            #endif
             aboutSection
             rateSection
             if appState.user != nil {

@@ -169,6 +169,18 @@ final class EncryptionHandler {
             throw EncryptionError.notAddressedToUs
         }
 
+        let plaintext = try decryptLegacy(blob: blob, keys: keys, deviceId: deviceId)
+        return try authenticate(plaintext, envelope: json, deviceId: deviceId)
+    }
+
+    /// RSA (legacy) decryption only — no sender or trust checks. Callers must
+    /// treat the result as unauthenticated (see notification previews).
+    func decryptUnauthenticated(blob: String, key: String) -> String? {
+        guard let deviceId = appState?.deviceId else { return nil }
+        return try? decryptLegacy(blob: blob, keys: [deviceId: key], deviceId: deviceId)
+    }
+
+    private func decryptLegacy(blob: String, keys: [String: String], deviceId: String) throws -> String {
         let cryptoPayload = CryptoBlobPayload(blob: blob, keys: keys)
         let encryptionKey: (privateKey: SecKey, publicKey: SecKey)
         keyStateLock.lock()
@@ -189,9 +201,8 @@ final class EncryptionHandler {
             deviceId: deviceId,
             privateKey: encryptionKey.privateKey
         )
-
         KLog.d("🔓 Decrypted: \(String(plaintext.prefix(100)))")
-        return try authenticate(plaintext, envelope: json, deviceId: deviceId)
+        return plaintext
     }
 
     /// Signature/attribution checks (DeviceTrust.swift), then the existing

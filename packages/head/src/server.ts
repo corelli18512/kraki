@@ -1,4 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws';
+import { metrics } from './metrics.js';
 import type { IncomingMessage as HttpIncomingMessage } from 'http';
 import type { Server } from 'http';
 import type { AuthMessage, VoiceCapability, BlobPayload } from '@kraki/protocol';
@@ -91,6 +92,7 @@ export class HeadServer {
         if (state && !state.isAlive) {
           // Missed last pong — connection is dead. Log diagnostic timing so
           // post-mortems can tell network drop from event-loop block.
+          metrics().inc('conn.pongTimeout');
           getLogger().info('Terminating stale connection (no pong)', {
             deviceId,
             msSincePingSent: state.lastPingSentAt ? now - state.lastPingSentAt : null,
@@ -138,6 +140,9 @@ export class HeadServer {
       try {
         durableRows = (this.storage.rawDb.prepare('SELECT COUNT(*) AS n FROM pulse_outbox').get() as { n: number }).n;
       } catch { /* table may not exist yet */ }
+      const metricsNow = metrics();
+      metricsNow.lastHealthAt = Date.now();
+      const loop = metricsNow.takeLoopDelay();
       getLogger().info('health', {
         conns: this.connections.size,
         endpoints: this.pulseHub.endpointCount(),
@@ -145,7 +150,8 @@ export class HeadServer {
         rssMb: Math.round(mem.rss / 1048576),
         heapUsedMb: Math.round(mem.heapUsed / 1048576),
         heapTotalMb: Math.round(mem.heapTotal / 1048576),
-        evlLagMs: undefined,
+        evlLagMs: loop?.p99Ms,
+        evlMaxMs: loop?.maxMs,
       });
     }, HeadServer.PING_INTERVAL);
   }
@@ -282,7 +288,9 @@ export class HeadServer {
       }
     });
 
+    metrics().inc('conn.opened');
     ws.on('close', (code: number, reason: Buffer) => {
+      metrics().inc('conn.closed');
       if (state.authTimer) clearTimeout(state.authTimer);
       const reasonStr = reason?.toString?.() || '';
       if (state.deviceId) {
@@ -514,6 +522,7 @@ export class HeadServer {
     // socket's send buffer without bound. Drop the connection instead; every
     // reliable frame is still in the pulse outbox and resends on reconnect.
     if (ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
+      metrics().inc('conn.stalledClosed');
       getLogger().warn('Closing stalled connection (send buffer full)', { deviceId, bufferedBytes: ws.bufferedAmount });
       ws.terminate();
       return false;
@@ -521,6 +530,8 @@ export class HeadServer {
     // `to` lets the receiver's own pulse layer know which stream this is; blob
     // is empty because the payload (if any) is inside the pulse frame.
     ws.send(JSON.stringify({ type: 'unicast', to: deviceId, pulse: pulseB64, blob: '', keys: {} }));
+    metrics().inc('pulse.frames.out');
+    metrics().inc('pulse.bytes.out', pulseB64.length);
     return true;
   }
 
@@ -668,6 +679,22 @@ export class HeadServer {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'server_error', message }));
     }
+  }
+
+  /** Live gauges for `/internal/metrics` (counts only). */
+  getGauges(): Record<string, number> {
+    let durableRows = -1;
+    try {
+      durableRows = (this.storage.rawDb.prepare('SELECT COUNT(*) AS n FROM pulse_outbox').get() as { n: number }).n;
+    } catch { /* table may not exist yet */ }
+    const mem = process.memoryUsage();
+    return {
+      connections: this.connections.size,
+      endpoints: this.pulseHub.endpointCount(),
+      durableRows,
+      rssMb: Math.round(mem.rss / 1048576),
+      heapUsedMb: Math.round(mem.heapUsed / 1048576),
+    };
   }
 
   getStats(): {

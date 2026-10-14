@@ -22,6 +22,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { metrics } from './metrics.js';
 import type Database from 'better-sqlite3';
 import { decodeFrame, decodeFrameWithStream, type Effect, encodeFrame, Endpoint, type Snapshot, StreamSet } from '@coinfra/pulse';
 import { HEAD_PULSE_TARGET, PULSE_SENDER_FIELD, type PulseFrameField, type UnicastEnvelope } from '@kraki/protocol';
@@ -375,6 +376,17 @@ export class PulseHub {
    */
   onPulseEnvelope(fromDevice: string, env: PulseFrameField & { to?: string | string[] }): void {
     if (this.closed || !this.db.open || !env.pulse) return;
+    const started = performance.now();
+    metrics().inc('pulse.frames.in');
+    metrics().inc('pulse.bytes.in', env.pulse.length);
+    try {
+      this.handlePulseEnvelope(fromDevice, env, env.pulse);
+    } finally {
+      metrics().frameHandling.observe(performance.now() - started);
+    }
+  }
+
+  private handlePulseEnvelope(fromDevice: string, env: PulseFrameField & { to?: string | string[] }, pulse: string): void {
     const d = this.ep(fromDevice);
     // A frame addressed to HEAD_PULSE_TARGET is consumed by the head itself, not
     // forwarded to a device. It still rides the source stream (same seq/ack/
@@ -389,8 +401,8 @@ export class PulseHub {
       : (Array.isArray(env.to)
           ? env.to
           : (env.to ? [env.to] : this.host.broadcastTargets(fromDevice)));
-    const inLen = env.pulse.length;
-    const bytes = b64decode(env.pulse);
+    const inLen = pulse.length;
+    const bytes = b64decode(pulse);
     const decoded = decodeFrameWithStream(bytes);
     if (decoded) this.pulseSeenNow.add(fromDevice);
     if (decoded?.frame.t === 'hello') {
@@ -523,10 +535,12 @@ export class PulseHub {
         case 'deliver':
           if (selfBound) {
             trace('HUB-DELIVER-SELF', { from: deviceId, seq: String(e.seq), len: e.payload.length });
+            metrics().inc('pulse.deliveredToHead');
             // Terminus at head: consume the plaintext control payload with the
             // source connection's auth context, instead of forwarding.
             this.host.onDeliverToSelf(deviceId, e.payload);
           } else {
+            metrics().inc('pulse.forwarded');
             trace('HUB-FORWARD', { from: deviceId, stream: e.streamId ?? 0, seq: String(e.seq), fp: fp(e.payload), len: e.payload.length, durable: e.durable, coalesceKey: e.coalesceKey, dests: dests ?? [] });
             // Store-and-forward bridge: forward the reliable payload onto each
             // destination device's SAME stream (live or bulk), preserving

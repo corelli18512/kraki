@@ -138,6 +138,9 @@ rollback() {
   exit 1
 }
 
+# Planned restart: keep kraki-watch from paging about it (no-op if not installed).
+if command -v kraki-watch >/dev/null 2>&1; then kraki-watch maintenance 10 || true; fi
+
 echo "==> systemctl restart kraki-relay"
 if ! systemctl restart kraki-relay; then
   rollback "systemctl restart failed"

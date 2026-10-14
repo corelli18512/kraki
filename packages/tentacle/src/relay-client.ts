@@ -1230,8 +1230,13 @@ export class RelayClient {
       const plaintext = JSON.stringify(msg);
       // Paired apps: one signed X25519 payload to their pinned keys. Others
       // (compatible mode only): the legacy RSA payload.
+      // One payload per encryption group; each group supersedes only its
+      // own earlier updates (a shared coalesce key would let the legacy
+      // payload drop the paired apps' one from the retransmit outbox).
+      const coalesceKey = coalesceKeyFor(msg);
       for (const sealed of this.deviceTrust!.seal(plaintext, usableTargets, (id) => this.consumerKeys.get(id))) {
-        this.sendPayload(sealed.payload, sealed.targets, false, coalesceKeyFor(msg), streamForType(msg.type));
+        const groupKey = coalesceKey && sealed.group === 'trusted' ? `${coalesceKey}:trusted` : coalesceKey;
+        this.sendPayload(sealed.payload, sealed.targets, false, groupKey, streamForType(msg.type));
       }
     } catch (err) {
       logger.error({ err }, 'Encrypted multicast failed');

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Kraki relay database backup
+
+[Timer]
+OnCalendar=*-*-* 19:00:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

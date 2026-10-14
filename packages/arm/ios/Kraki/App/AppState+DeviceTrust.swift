@@ -63,6 +63,8 @@ final class DeviceTrustModel {
     var dismissedBanners: Set<String> = []
     /// Paired computers that sent unsigned messages since their last signed one.
     var stoppedSigning: Set<String> = []
+    /// Computers whose signed session_list was seen (this run).
+    @ObservationIgnored var signedSnapshotSeen: Set<String> = []
 
     @ObservationIgnored private var lastPairRequest: [String: Date] = [:]
     @ObservationIgnored var retryScheduled = false
@@ -78,6 +80,7 @@ final class DeviceTrustModel {
         feedback = nil
         dismissedBanners = []
         stoppedSigning = []
+        signedSnapshotSeen = []
         lastPairRequest = [:]
         retryScheduled = false
         revision += 1
@@ -182,6 +185,8 @@ extension AppState {
         deviceTrust.clearPairRequest(trust.tentacleId)
         deviceTrust.pairingRequired.remove(trust.tentacleId)
         deviceTrust.dismissedBanners.remove(trust.tentacleId)
+        // A new pin: its first signed session list resets the ordering watermark again.
+        deviceTrust.signedSnapshotSeen.remove(trust.tentacleId)
         KLog.d("🔏 device trust: pinned \(trust.tentacleId.prefix(12)) from QR")
     }
 
@@ -441,6 +446,7 @@ extension AppState {
         }
         TentacleTrustStore.shared.update(tentacleId) { $0 = nil }
         deviceTrust.info[tentacleId] = nil
+        deviceTrust.signedSnapshotSeen.remove(tentacleId)
         deviceTrust.stoppedSigning.remove(tentacleId)
         deviceTrust.pairingRequired.remove(tentacleId)
         deviceTrust.clearPairRequest(tentacleId)
@@ -491,6 +497,7 @@ extension AppState {
         TentacleTrustStore.shared.update(tentacleId) { pin in
             pin = TentaclePin(identityKey: ik, encryptionKey: xk, paired: false, secret: nil, via: "local", pinnedAt: Date())
         }
+        deviceTrust.signedSnapshotSeen.remove(tentacleId)
         deviceTrust.pairingRequired.remove(tentacleId)
         // The enrollment the computer checks: this app's keys, written by
         // this user, private.

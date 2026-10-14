@@ -15,5 +15,6 @@ for marker in (b'KrakiDiag.interaction', b'kraki.diag.enabled'):
     assert marker in s, f'Diagnostic delivery lacks {marker!r}'
 assert (b'chat.kraki.mac.signing-key' if mac else b'chat.kraki.ios.signing-key') in s
 assert b'group.chat.kraki.ios.diag' not in s, 'Wrong storage identity'
+assert b'Diagnostics \xc2\xb7 Test Build' in s, 'Diagnostic delivery lacks the test-build diagnostics section'
 print('PASS: explicit diagnostic delivery, existing identity, collector + user toggle present')
 PY

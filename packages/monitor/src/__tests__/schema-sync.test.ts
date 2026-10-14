@@ -59,3 +59,25 @@ describe('native diagnostics vocabulary', () => {
     for (const stage of src.matchAll(/stage = "([a-z]+)"/g)) expect(fields.stage(stage[1]), stage[1]).toBe(true);
   });
 });
+
+describe('reply.summary', () => {
+  const batch = (d: Record<string, unknown>) => ({
+    schema: 1, batchId: '11111111-1111-4111-8111-111111111111', processId: '22222222-2222-4222-8222-222222222222',
+    platform: 'ios', version: '0.1.32', build: '132',
+    events: [{ t: 1, m: 1, seq: 1, ev: 'reply.summary', d }],
+  });
+  const ok = { kind: 'typed', outcome: 'completed', durationMs: 48213.2, firstActivityMs: 2311.7, firstTextMs: 5120.3, deltas: 180, maxGapMs: 812.4, stalls: 0 };
+
+  it('is stored with every field', async () => {
+    const { sanitizeDiagBatch } = await import('../diag-api.js');
+    const clean = sanitizeDiagBatch(batch(ok), '11111111-1111-4111-8111-111111111111');
+    expect(clean?.stripped).toBe(0);
+    expect((clean?.batch.events as Array<{ d: unknown }>)[0].d).toEqual(ok);
+  });
+
+  it('rejects a value outside its format (where free text would leak)', async () => {
+    const { sanitizeDiagBatch } = await import('../diag-api.js');
+    expect(sanitizeDiagBatch(batch({ ...ok, outcome: 'the agent said hello' }), '11111111-1111-4111-8111-111111111111')).toBeNull();
+    expect(sanitizeDiagBatch(batch({ ...ok, maxGapMs: 'slow' }), '11111111-1111-4111-8111-111111111111')).toBeNull();
+  });
+});
