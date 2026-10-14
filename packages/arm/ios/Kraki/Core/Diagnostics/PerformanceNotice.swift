@@ -77,7 +77,13 @@ final class PerformanceNotice {
     }
 }
 
-/// The notice card. Floats above the content near the bottom edge.
+enum PerformanceNoticeCopy {
+    static let title = "Help Improve Kraki"
+    static let explanation = "Kraki sends timings like how fast messages are delivered and replies start, plus connection drops and crashes, so we can find problems and make Kraki better. Never message text, voice or attachments."
+    static let settingsHint = "You can change this anytime in Settings › Privacy."
+}
+
+/// Non-modal desktop card; the phone uses a system alert instead.
 struct PerformanceNoticeCard: View {
     let notice: PerformanceNotice
 
@@ -86,14 +92,14 @@ struct PerformanceNoticeCard: View {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles")
                     .foregroundStyle(Color.accentColor)
-                Text("Help Improve Kraki")
+                Text(PerformanceNoticeCopy.title)
                     .font(.headline)
             }
-            Text("Kraki sends timings like how fast messages are delivered and replies start, plus connection drops and crashes, so we can find problems and make Kraki better. Never message text, voice or attachments.")
+            Text(PerformanceNoticeCopy.explanation)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("You can change this anytime in Settings › Privacy.")
+            Text(PerformanceNoticeCopy.settingsHint)
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
             HStack(spacing: 10) {
@@ -113,31 +119,46 @@ struct PerformanceNoticeCard: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
         .shadow(color: .black.opacity(0.18), radius: 24, y: 8)
-        .padding(.horizontal, 16)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("performance-notice")
     }
 }
 
 extension View {
-    /// Shows the performance data notice over this view when it is due.
-    func performanceNotice(bottomPadding: CGFloat) -> some View {
-        modifier(PerformanceNoticeOverlay(bottomPadding: bottomPadding))
+    /// Desktop: bottom-right, non-modal. Phone: centered, modal system alert.
+    func performanceNotice() -> some View {
+        modifier(PerformanceNoticePresentation())
     }
 }
 
-private struct PerformanceNoticeOverlay: ViewModifier {
-    let bottomPadding: CGFloat
-    @State private var notice = PerformanceNotice.shared
+struct PerformanceNoticePresentation: ViewModifier {
+    @State var notice = PerformanceNotice.shared
 
     func body(content: Content) -> some View {
-        content.overlay(alignment: .bottom) {
+        #if os(macOS)
+        content.overlay(alignment: .bottomTrailing) {
             if notice.isVisible {
                 PerformanceNoticeCard(notice: notice)
-                    .padding(.bottom, bottomPadding)
+                    .padding(16)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        #else
+        // A native alert blocks touch and accessibility focus behind it, stays
+        // centered, and handles Dynamic Type. Only an explicit choice marks
+        // it seen; a system presentation dismissal must not imply consent.
+        content.alert(PerformanceNoticeCopy.title, isPresented: Binding(
+            get: { notice.isVisible },
+            set: { _ in }
+        )) {
+            Button("Don't Share") { notice.choose(share: false) }
+                .accessibilityIdentifier("performance-notice-decline")
+            Button("OK") { notice.choose(share: true) }
+                .accessibilityIdentifier("performance-notice-ok")
+        } message: {
+            Text("\(PerformanceNoticeCopy.explanation)\n\n\(PerformanceNoticeCopy.settingsHint)")
+        }
+        #endif
     }
 }
 
