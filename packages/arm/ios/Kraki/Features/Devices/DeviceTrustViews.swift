@@ -4,23 +4,57 @@
 
 import SwiftUI
 
-/// An older computer may still enforce pairing until it is upgraded. Do not
-/// silently show an empty session list, or ask users to start pairing again.
+/// Removing the pairing gate must not hide failures of an existing pinned
+/// connection. Never discard those keys automatically to make login succeed.
+enum AccountAccessNotice: Equatable {
+    case updateComputer
+    case checkSavedConnection
+
+    init?(state: ComputerTrustState) {
+        switch state {
+        case .needsPairing: self = .updateComputer
+        case .failed, .stoppedSigning: self = .checkSavedConnection
+        default: return nil
+        }
+    }
+}
+
 struct AccountAccessUpgradeBanner: View {
     @Environment(AppState.self) private var appState
+    @State private var resetting: DeviceSummary?
 
     var body: some View {
-        if let device = appState.computersNeedingPairing.first(where: {
-            appState.trustState(for: $0.id) == .needsPairing
-        }) {
+        if let device = appState.computersNeedingPairing.first,
+           let notice = AccountAccessNotice(state: appState.trustState(for: device.id)) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Update Kraki on \(device.name)").font(.headline)
-                Text("This computer still uses the older access settings. Update Kraki there to connect with your account, without pairing.")
-                    .font(.caption).foregroundStyle(.secondary)
+                if notice == .updateComputer {
+                    Text("Update Kraki on \(device.name)").font(.headline)
+                    Text("This computer still uses the older access settings. Update Kraki there to connect with your account, without pairing.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Check saved connection to \(device.name)").font(.headline)
+                    Text("Kraki could not verify the saved connection. Update Kraki on this computer first. Only reset if you changed or reinstalled it; otherwise keep the saved keys and investigate.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Reset Saved Connection…") { resetting = device }
+                        .accessibilityIdentifier("accountAccess.resetConnection")
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
-            .accessibilityIdentifier("accountAccess.updateComputer")
+            .accessibilityIdentifier(notice == .updateComputer ? "accountAccess.updateComputer" : "accountAccess.checkConnection")
+            .confirmationDialog(
+                "Reset saved connection to \(resetting?.name ?? "")?",
+                isPresented: Binding(get: { resetting != nil }, set: { if !$0 { resetting = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button("Reset Saved Connection", role: .destructive) {
+                    if let id = resetting?.id { appState.forgetPairing(id) }
+                    resetting = nil
+                }
+                Button("Cancel", role: .cancel) { resetting = nil }
+            } message: {
+                Text("This removes this device's saved verification keys for the computer, not your account or sessions. The encrypted connection will rely on account authorization instead of those keys. Only continue if you expected the change; reconnect the app afterward if needed.")
+            }
         }
     }
 }

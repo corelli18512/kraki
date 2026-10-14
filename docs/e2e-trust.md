@@ -64,7 +64,10 @@ old computer has enforcement enabled. An older enforcing computer still owns
 its policy: a new app cannot bypass it. The app shows an update-computer hint
 instead of asking for another scan. An already established pinned connection
 continues to reject unsigned/invalid traffic; downgrade/invalid-key recovery is
-not an automatic plaintext or unsigned fallback.
+not an automatic plaintext or unsigned fallback. A saved-connection failure
+remains visible with a confirmed "Reset Saved Connection" action. It warns users
+to reset only after an expected change, rather than silently deleting pinned keys
+or making a failed/revoked connection impossible to recover from.
 
 ## Package ownership
 
