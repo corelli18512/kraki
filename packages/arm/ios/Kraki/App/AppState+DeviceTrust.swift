@@ -390,6 +390,8 @@ extension AppState {
         sendTrustAdmin(tentacleId, type: "revoke_device", payload: ["deviceId": deviceId])
     }
 
+    #if DEBUG
+    /// Historical protocol fixture; the shipping UI no longer changes access policy.
     func setOnlyPairedDevices(_ enforce: Bool, on tentacleId: String) {
         guard var info = deviceTrust.info[tentacleId] else { return }
         // Shown as "Applying…" until the computer's signed list confirms it.
@@ -403,6 +405,8 @@ extension AppState {
             self.deviceTrust.feedback = .failed(name: self.deviceStore.devices[tentacleId]?.name ?? "your computer", reason: "policy_unconfirmed")
         }
     }
+
+    #endif
 
     private func sendTrustAdmin(_ tentacleId: String, type: String, payload: [String: Any]) {
         guard TentacleTrustStore.shared.pairedPin(tentacleId) != nil else { return }

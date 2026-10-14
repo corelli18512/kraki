@@ -18,7 +18,7 @@ import {
   encryptToBlob, decryptFromBlob, signChallenge,
 } from '@kraki/crypto';
 import type { KeyPair } from '@kraki/crypto';
-import { Endpoint } from '@coinfra/pulse';
+import { Endpoint } from '@kraki/pulse';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import type { BlobPayload } from '@kraki/protocol';
 import { mkdirSync, rmSync } from 'fs';

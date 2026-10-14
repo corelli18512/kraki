@@ -160,10 +160,6 @@ private struct DeviceRow: View {
 
             Spacer()
 
-            if device.role == .tentacle {
-                TrustStatusBadge(state: appState.trustState(for: device.id), compact: appState.trustState(for: device.id) == .paired)
-            }
-
             if isSelf {
                 Text("You")
                     .font(.system(size: 10, weight: .semibold))

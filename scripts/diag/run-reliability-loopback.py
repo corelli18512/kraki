@@ -6,7 +6,7 @@ with tempfile.TemporaryDirectory(prefix='kraki-reliability-net-') as tmp:
     b = pathlib.Path(tmp)
     src = ROOT / 'packages/arm/ios'
     subprocess.run(['swiftc', '-O', '-emit-library', '-emit-module', '-module-name', 'Pulse',
-                    *map(str, (src/'Vendor/Pulse/Sources/Pulse').glob('*.swift')),
+                    *map(str, (src/'../../pulse/SwiftPulse/Sources/Pulse').glob('*.swift')),
                     '-emit-module-path', str(b/'Pulse.swiftmodule'), '-o', str(b/'libPulse.dylib')], check=True)
     subprocess.run(['swiftc', '-swift-version', '5', '-I', tmp, '-L', tmp, '-lPulse',
                     str(src/'Kraki/Core/Networking/PulseManager.swift'),

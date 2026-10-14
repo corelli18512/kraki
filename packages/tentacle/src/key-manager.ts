@@ -18,17 +18,11 @@ import type { KeyPair } from '@kraki/crypto';
 import { getConfigDir } from './config.js';
 import { initTrustPolicy } from './trust-store.js';
 
-/**
- * Whether a computer set up from scratch starts with "Only paired devices" on.
- *
- * Transition release: off. Apps that predate device trust (and the web and
- * Windows apps) cannot pair yet, so a new computer must still serve them; the
- * apps suggest turning it on once every device is paired. A later release
- * flips this default — computers that already have a policy keep theirs.
- * `KRAKI_FRESH_INSTALL_ENFORCE=1` previews that behaviour (tests).
+/** Account access is permanent, not a transition to mandatory pairing.
+ * Retained as a named policy seam so regression tests cover every key path.
  */
 export function freshInstallEnforces(): boolean {
-  return process.env.KRAKI_FRESH_INSTALL_ENFORCE === '1';
+  return false;
 }
 
 const KEYS_DIR_NAME = 'keys';
@@ -75,10 +69,8 @@ export class KeyManager {
       // the loser uses the winner's. Before this, both wrote their own and the
       // device registered one key while the disk kept the other — the
       // computer could not reconnect after its next restart.
-      // A fresh install enforces device trust from the start. Record that
-      // before the RSA key becomes visible: any process that sees private.pem
-      // without a policy would take it for an upgrade (compatible), and an
-      // interrupted first start must not leave that ambiguity either.
+      // Record account access before publishing the RSA key, so concurrent
+      // processes observe one consistent policy even after an interrupted start.
       initTrustPolicy(this.trustDir, freshInstallEnforces());
       const generated = generateKeyPair();
       const tmp = `${privPath}.${process.pid}.${Date.now()}.tmp`;
@@ -90,8 +82,7 @@ export class KeyManager {
         }
       }
       try { unlinkSync(tmp); } catch { /* ignore */ }
-      // A fresh install: create the device-trust keys with it, and enforce
-      // device trust from the start (its first app pairs through the QR).
+      // Create v2 keys too. QR sign-in can negotiate them, but is not required.
       this.freshInstall = true;
     }
 
@@ -134,9 +125,7 @@ export class KeyManager {
     if (this.identityKey) return this.identityKey;
     const path = join(this.keysDir, IDENTITY_PRIVATE_KEY_FILE);
     if (!existsSync(path)) {
-      // First device-trust key on this computer. Upgraded installs (RSA keys
-      // from before) start compatible so their apps keep working until they
-      // pair; fresh installs enforce.
+      // Both fresh and upgraded computers allow account login without pairing.
       const upgraded = !this.freshInstall && existsSync(join(this.keysDir, PRIVATE_KEY_FILE));
       initTrustPolicy(this.trustDir, upgraded ? false : freshInstallEnforces());
     }

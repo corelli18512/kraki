@@ -1,0 +1,24 @@
+{
+  "_comment": "Byte-exact wire fixtures shared by the TS and Swift test suites. Both MUST encode each frame to `hex` and decode `hex` back to the fields. See spec/FIXTURES.md. Generated + cross-checked against hand-computed hex; do not edit by hand. Wire v1 with durable fields: HELLO trailing (durFlags u8, maxRetentionMs u64); DATA leading (msgFlags u8).",
+  "version": 1,
+  "frames": [
+    { "name": "F1_hello_cold", "type": "hello", "fields": { "epoch": "a", "recvEpoch": "", "recvCursor": "0", "durableSupported": false, "maxRetentionMs": "0" }, "hex": "b101010161000000000000000000000000000000000000" },
+    { "name": "F2_hello_warm", "type": "hello", "fields": { "epoch": "node-7", "recvEpoch": "phone-3", "recvCursor": "42", "durableSupported": false, "maxRetentionMs": "0" }, "hex": "b10101066e6f64652d370770686f6e652d33000000000000002a000000000000000000" },
+    { "name": "F2b_hello_durable", "type": "hello", "fields": { "epoch": "head-1", "recvEpoch": "", "recvCursor": "0", "durableSupported": true, "maxRetentionMs": "2592000000" }, "hex": "b1010106686561642d3100000000000000000001000000009a7ec800" },
+    { "name": "F3_data_first", "type": "data", "fields": { "seq": "1", "ack": "0", "payloadHex": "deadbeef", "durable": false }, "hex": "b10102000000000000000001000000000000000000000004deadbeef" },
+    { "name": "F3b_data_durable", "type": "data", "fields": { "seq": "7", "ack": "0", "payloadHex": "deadbeef", "durable": true }, "hex": "b10102010000000000000007000000000000000000000004deadbeef" },
+    { "name": "F4_data_empty", "type": "data", "fields": { "seq": "258", "ack": "257", "payloadHex": "", "durable": false }, "hex": "b10102000000000000000102000000000000010100000000" },
+    { "name": "F5_ack", "type": "ack", "fields": { "ack": "65535" }, "hex": "b10103000000000000ffff" },
+    { "name": "F6_reset", "type": "reset", "fields": { "epoch": "node-7", "oldest": "100" }, "hex": "b10104066e6f64652d370000000000000064" },
+    { "name": "F7_heartbeat", "type": "heartbeat", "fields": { "ack": "42" }, "hex": "b10105000000000000002a" },
+    { "name": "F8_data_bigseq", "type": "data", "fields": { "seq": "72057594037927937", "ack": "0", "payloadHex": "41", "durable": false }, "hex": "b1010200010000000000000100000000000000000000000141" },
+    { "name": "F9_hello_utf8", "type": "hello", "fields": { "epoch": "é", "recvEpoch": "", "recvCursor": "0", "durableSupported": false, "maxRetentionMs": "0" }, "hex": "b1010102c3a9000000000000000000000000000000000000" }
+  ],
+  "malformed": [
+    { "name": "BAD_MAGIC", "hex": "b201030000000000000001" },
+    { "name": "BAD_VERSION", "hex": "b102030000000000000001" },
+    { "name": "UNKNOWN_TYPE", "hex": "b101090000000000000001" },
+    { "name": "TRUNCATED_DATA", "hex": "b101020000" },
+    { "name": "EMPTY", "hex": "" }
+  ]
+}

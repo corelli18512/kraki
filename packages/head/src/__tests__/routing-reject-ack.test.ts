@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
-import { decodeFrame, Endpoint, type Effect } from '@coinfra/pulse';
+import { decodeFrame, Endpoint, type Effect } from '@kraki/pulse';
 import { HeadServer } from '../server.js';
 import { Storage } from '../storage.js';
 import { OpenAuthProvider } from '../auth.js';

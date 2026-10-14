@@ -6,7 +6,7 @@
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { WebSocket } from 'ws';
-import { decodeFrame, Endpoint } from '@coinfra/pulse';
+import { decodeFrame, Endpoint } from '@kraki/pulse';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { Storage } from '../storage.js';
 import { HeadServer } from '../server.js';

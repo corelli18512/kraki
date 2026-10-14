@@ -42,6 +42,11 @@ if sys.argv[3] == 'ios':
 spec = (root / 'project.yml').read_text()
 spec = spec.replace('chat.kraki.ios', 'chat.kraki.testscope.ios').replace('chat.kraki.mac', 'chat.kraki.testscope.mac')
 spec = spec.replace('/tmp/kraki-mac-tests-data', str(work / 'data'))
+# The generated project lives outside the repo. Resolve owned Swift packages
+# explicitly rather than depending on a coincidentally named /tmp sibling.
+for name, package in [('pulse', 'SwiftPulse'), ('crypto', 'SwiftCrypto')]:
+    spec = spec.replace(f'path: ../../{name}/{package}', f'path: {root.parent.parent / name / package}')
+spec = spec.replace('path: ./Vendor/VoiceInputCore', f'path: {root / "Vendor/VoiceInputCore"}')
 (work / 'project.yml').write_text(spec)
 # Build-setting paths are relative to PROJECT_DIR rather than the source root.
 for path in root.iterdir():

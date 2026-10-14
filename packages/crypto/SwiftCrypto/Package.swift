@@ -9,5 +9,6 @@ let package = Package(
     ],
     targets: [
         .target(name: "CoinfraCrypto"),
+        .testTarget(name: "CoinfraCryptoTests", dependencies: ["CoinfraCrypto"]),
     ]
 )

@@ -3,7 +3,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { generateKeyPairSync, createSign, randomUUID } from 'crypto';
-import { decodeFrame, Endpoint } from '@coinfra/pulse';
+import { decodeFrame, Endpoint } from '@kraki/pulse';
 import { HEAD_PULSE_TARGET } from '@kraki/protocol';
 import { HeadServer } from '../server.js';
 import { Storage } from '../storage.js';

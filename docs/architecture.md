@@ -18,7 +18,7 @@ Agent <-> tentacle == pulse/WSS ==> head (relay) == pulse/WSS ==> arm
 
 ## Pulse reliable transport
 
-All application and control messages ride [`@coinfra/pulse`](https://github.com/corelli18512/coinfra/tree/main/packages/pulse) — a resumable, reliable byte-channel that replaces raw WebSocket fire-and-forget. Only the auth handshake, keepalive pings, and the pulse-envelope carrier remain on bare WebSocket.
+All application and control messages ride [`@kraki/pulse`](../packages/pulse/README.md) — a resumable, reliable byte-channel that replaces raw WebSocket fire-and-forget. Only the auth handshake, keepalive pings, and the pulse-envelope carrier remain on bare WebSocket.
 
 **Per-hop model**: arm ⇄ head ⇄ tentacle each run a pulse `Endpoint`. The head is a multi-connection hub with SQLite-backed durable store-and-forward. Every device gets its own endpoint on the head.
 

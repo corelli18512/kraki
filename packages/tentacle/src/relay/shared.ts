@@ -78,11 +78,11 @@ export interface RelayClientOptions {
   /** Serve same-machine Apps over a loopback link instead of the Head.
    *  Default: on unless KRAKI_LOCAL_LINK=0. */
   localLink?: boolean;
-  /** Device trust (docs/e2e-trust.md). 'enforce': only paired apps are
-   *  served and only their signed commands accepted. 'compatible': paired apps
-   *  use signed X25519, others the legacy RSA path. Default: 'enforce' when
-   *  KRAKI_DEVICE_TRUST=enforce, else 'compatible'. */
-  deviceTrust?: 'enforce' | 'compatible';
+  /** @internal Historical-protocol test fixture only; not a CLI/config option.
+   *  Shipping clients omit this and always allow signed-in account devices.
+   *  'policy' reproduces the previous release's on-disk enforcement behaviour
+   *  so old/new transition and signature-boundary tests remain meaningful. */
+  deviceTrust?: 'enforce' | 'compatible' | 'policy';
 }
 
 export const DEFAULT_AUTO_ARCHIVE_DAYS = 14;
