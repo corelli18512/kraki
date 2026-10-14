@@ -8,9 +8,8 @@ export default defineConfig({
     include: ['src/**/*.test.ts'],
     exclude: ['src/**/*.live.test.ts'],
     testTimeout: 10_000,
-    // These tests drive unpaired (legacy-protocol) apps. Their temporary
-    // computers would otherwise enforce device trust like a fresh install.
-    env: { KRAKI_DEVICE_TRUST: 'compatible' },
+    // Unpaired apps exercise the shipping account-access default. Historical
+    // enforcing peers are selected explicitly by the trust/transition fixtures.
   },
   resolve: {
     alias: {

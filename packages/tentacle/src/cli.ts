@@ -49,7 +49,7 @@ function printHelp(): void {
     head('Get started'),
     cmd('kraki', 'Set up this computer and start Kraki'),
     cmd('kraki connect', 'Show a QR code to connect your phone'),
-    cmd('kraki devices', 'Apps that can control this computer (revoke, enforce)'),
+    cmd('kraki devices', 'Saved encryption connections (account login grants access)'),
     '',
     head('Everyday'),
     cmd('kraki status', 'Is Kraki running and connected?'),

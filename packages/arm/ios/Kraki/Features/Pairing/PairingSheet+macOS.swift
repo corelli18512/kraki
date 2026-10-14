@@ -51,9 +51,9 @@ struct PairingSheet: View {
         return info.devices.filter { $0.id != appState.deviceId }
     }
 
-    private var requiresTrustedBaseline: Bool {
-        guard let local = AppState.localTentacleId else { return false }
-        return appState.trustState(for: local) == .paired || !presenceMeansConnected
+    /// Account presence is sufficient; no second pairing acknowledgment gate.
+    static func newlyConnected(_ ids: [String], baseline: Set<String>) -> String? {
+        ids.first { !baseline.contains($0) }
     }
 
     /// An existing account phone may keep its id; an already-trusted phone
@@ -62,23 +62,6 @@ struct PairingSheet: View {
         entries.first { entry in
             !baseline.contains { $0.id == entry.id && $0.pairedAt == entry.pairedAt }
         }?.id
-    }
-
-    /// A newly online app counts as "connected" only when the computer is
-    /// known not to require pairing.
-    private var presenceMeansConnected: Bool {
-        guard let local = AppState.localTentacleId else { return true }
-        if let info = appState.deviceTrust.info[local] { return !info.enforced }
-        switch appState.trustState(for: local) {
-        case .unsupported, .notPaired: return true
-        default: return false
-        }
-    }
-
-    /// The computer only serves paired apps: "connected" means "paired".
-    private var waitsForPairing: Bool {
-        guard let local = AppState.localTentacleId else { return false }
-        return appState.deviceTrust.info[local]?.enforced == true
     }
 
     var body: some View {
@@ -121,8 +104,7 @@ struct PairingSheet: View {
                let newId = Self.newlyPaired(entries, baseline: known) {
                 markConnected(newId)
             }
-            guard presenceMeansConnected else { return }
-            guard let newId = ids.first(where: { !baseline.contains($0) }) else { return }
+            guard let newId = Self.newlyConnected(ids, baseline: baseline) else { return }
             markConnected(newId)
         }
         .onChange(of: trustedApps) { _, entries in
@@ -229,9 +211,7 @@ struct PairingSheet: View {
             Text("Connected")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Color.textPrimary)
-            Text(waitsForPairing
-                 ? "\(device.name) is paired with this Mac and can now see and run your sessions."
-                 : "\(device.name) can now see and run your sessions.")
+            Text("\(device.name) can now see and run your sessions.")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.textSecondary)
                 .multilineTextAlignment(.center)
@@ -258,18 +238,10 @@ struct PairingSheet: View {
         error = nil
         copied = false
         do {
-            if requiresTrustedBaseline && trustedBaseline == nil {
-                payload = nil
-                payload = try await Self.withTrustedBaseline(read: { trustedApps }, pause: {
-                    try await Task.sleep(for: .milliseconds(100))
-                }) { entries in
-                    trustedBaseline = entries
-                    return try await tentacleCLI.requestPairingPayload()
-                }
-            } else {
-                if trustedBaseline == nil { trustedBaseline = trustedApps }
-                payload = try await tentacleCLI.requestPairingPayload()
-            }
+            // Capture optional signed state before exposing the code, but do
+            // not wait for it: QR is a convenient sign-in method, not a gate.
+            if trustedBaseline == nil { trustedBaseline = trustedApps }
+            payload = try await tentacleCLI.requestPairingPayload()
         } catch is CancellationError {
             // Dismissal/retry cancels the task; do not turn it into a UI error.
         } catch {
@@ -277,28 +249,6 @@ struct PairingSheet: View {
             self.error = error.localizedDescription
         }
         loading = false
-    }
-
-    /// No code (including a copyable link) is created on timeout. Retry uses
-    /// this same gate; the baseline is installed before code generation.
-    static func withTrustedBaseline<T>(
-        read: () -> [TrustedDeviceEntry]?,
-        pause: () async throws -> Void,
-        create: ([TrustedDeviceEntry]) async throws -> T
-    ) async throws -> T {
-        for attempt in 0...30 {
-            try Task.checkCancellation()
-            if let entries = read() { return try await create(entries) }
-            if attempt < 30 { try await pause() }
-        }
-        throw BaselineError.unavailable
-    }
-
-    enum BaselineError: LocalizedError {
-        case unavailable
-        var errorDescription: String? {
-            "Could not load this Mac’s trusted devices. Check the connection and try again."
-        }
     }
 
     private func qrImage(for string: String) -> NSImage? {

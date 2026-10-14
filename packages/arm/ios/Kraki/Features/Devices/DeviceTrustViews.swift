@@ -4,6 +4,27 @@
 
 import SwiftUI
 
+/// An older computer may still enforce pairing until it is upgraded. Do not
+/// silently show an empty session list, or ask users to start pairing again.
+struct AccountAccessUpgradeBanner: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        if let device = appState.computersNeedingPairing.first(where: {
+            appState.trustState(for: $0.id) == .needsPairing
+        }) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Update Kraki on \(device.name)").font(.headline)
+                Text("This computer still uses the older access settings. Update Kraki there to connect with your account, without pairing.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .accessibilityIdentifier("accountAccess.updateComputer")
+        }
+    }
+}
+
 extension Text {
     /// Copy that marks commands with backticks (`kraki connect`) renders them as code.
     init(trustCopy: String) {
@@ -83,6 +104,9 @@ extension ComputerTrustState {
 }
 
 /// Small icon + label for device rows.
+#if DEBUG
+// Historical UI fixtures for old/new protocol regression tests only. Shipping
+// device screens expose account access, not pairing status or enforcement.
 struct TrustStatusBadge: View {
     let state: ComputerTrustState
     var compact = false
@@ -367,6 +391,8 @@ struct PairingNeededBanner: View {
         #endif
     }
 }
+
+#endif
 
 // MARK: - Feedback
 
