@@ -6,6 +6,22 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.85</title>
+            <pubDate>Wed, 14 Oct 2026 19:16:35 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.85</sparkle:fullReleaseNotesLink>
+            <sparkle:version>87</sparkle:version>
+            <sparkle:shortVersionString>0.2.85</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Kraki for Mac 0.2.85
+
+- Fix replies stopping their automatic scroll after you scroll up and then return to the bottom. Long replies now keep following as new text arrives, including after multiple tool steps.
+- Returning with either the ↓ button or scrolling to the bottom resumes following. Scrolling up again still pauses it so you can read earlier messages.
+- Keep the existing first-unread-message positioning when opening a conversation from a notification.
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.85/Kraki.app.zip" length="93614252" type="application/octet-stream" sparkle:edSignature="Tvbw/ZLrr6m9g8kJDvOtQUYfk7OXnrNcBaIu+bqr1RO2L7HE/Xz5z//9RYQlHXb4AkhKNC2DQVj2KN1ZNncsBw=="/>
+        </item>
+        <item>
             <title>0.2.84</title>
             <pubDate>Wed, 14 Oct 2026 17:52:30 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -49,24 +65,9 @@ Update the computer CLI to 0.38.9 first if it has the old pairing-only setting e
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.83/Kraki.app.zip" length="93738206" type="application/octet-stream" sparkle:edSignature="+vgbDhgA3B/1A9kko+kdASFszHXnQ3+HVsWdDAeXS8mhyK9Wo+3p+CA49QzKnONsWgrNyZeiVo1KgRnlnVRsBA=="/>
         </item>
-        <item>
-            <title>0.2.82</title>
-            <pubDate>Mon, 12 Oct 2026 08:34:01 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.82</sparkle:fullReleaseNotesLink>
-            <sparkle:version>84</sparkle:version>
-            <sparkle:shortVersionString>0.2.82</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's new in Kraki 0.2.82
-
-- **Pick up where you left off:** opening a conversation with new messages (a red dot, or from a notification) now starts at the first message you haven't read when the new part is longer than one screen. If it fits, you land at the bottom as before. It stays there while more arrives, until you scroll, tap ↓ or send.
-- **Smoother replies:** while a reply streams, the conversation glides up line by line instead of jumping. A reply that arrives all at once slides in smoothly, with no jump.
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.82/Kraki.app.zip" length="92924000" type="application/octet-stream" sparkle:edSignature="6Y6wlGZlKtsJvuzzlFVVFZ97ibh3xMT1oqlEoHLUI5fQkPAhvmVxDlmJcpxEeO3fHgfEw/fl1GylianwCgpXAA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: g7Cz3UzvJGAcxKdqgpQqAZLs8xpfgFNwuHj4bs8tl6NU+fCYvmMNHvRmXOQetG417J+EBDGLgZDaR94APi53BQ==
-length: 6271
+edSignature: VKdFjS/9ZCMCW7WrOTsFzPUDhKp/49VQBuZm6EygMM7ru0yy4yFxeRFZIo8FbWOT2ubVqQtmA/EO1M8WF+LvDw==
+length: 6212
 -->
