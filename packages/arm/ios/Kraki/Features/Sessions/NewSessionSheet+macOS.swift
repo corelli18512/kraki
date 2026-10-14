@@ -12,9 +12,8 @@
 ///
 /// Voice input is the chat Composer's: the same mic / ⌥Space, recording
 /// surface (live transcript over the waveform, Cancel / Edit), and the same
-/// progressive correction in the real editor. There is no Session to stage a
-/// bubble in yet, so ↑ while recording finishes into the editor, waits for
-/// the correction, then starts the Session with the corrected text.
+/// progressive correction in the real editor. ↑ opens the chat immediately;
+/// its staged bubble corrects while session creation proceeds independently.
 import AppKit
 import SwiftUI
 
@@ -61,13 +60,15 @@ struct NewSessionComposer: View {
     @State private var focusRequest = 0
     @State private var nativeEditorHasText = false
     @State private var selection: NSRange?
-    /// ↑ pressed while recording: start once the correction has landed.
-    @State private var sendAfterVoice = false
     @State private var editorWidth: CGFloat = 0
-    /// The editor height for the current text: growth past the minimum eases.
+    @State private var voiceStartHeight: CGFloat = 0
+    /// Recording shares the editor's width, growing range and initial height.
     private var editorHeightKey: CGFloat {
-        voiceOwnsComposer ? -1 : MacComposerScrollableTextInput.fittedHeight(
-            text, width: editorWidth, minLines: CGFloat(minLines), maxLines: 10)
+        let preview = voiceComposer.preview
+        let visible = voiceOwnsComposer ? preview.prefix + preview.spoken + preview.suffix : text
+        let fitted = MacComposerScrollableTextInput.fittedHeight(
+            visible, width: editorWidth, minLines: CGFloat(minLines), maxLines: 10)
+        return voiceOwnsComposer ? max(voiceStartHeight, fitted) : fitted
     }
 
     private var voiceController: KrakiVoiceInputController { appState.voiceInputController }
@@ -110,10 +111,7 @@ struct NewSessionComposer: View {
     }
     private var canSubmit: Bool { hasText && canStart }
     /// The send control: while recording it sends the voice message.
-    private var sendEnabled: Bool {
-        if sendAfterVoice { return false }
-        return voiceOwnsComposer ? canStart : canSubmit
-    }
+    private var sendEnabled: Bool { voiceOwnsComposer ? canStart : canSubmit }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -186,26 +184,16 @@ struct NewSessionComposer: View {
         .onDisappear {
             // Leaving for a Session: an utterance in progress becomes the draft.
             voiceComposer.depart(sessionID: Self.draftID)
-            sendAfterVoice = false
         }
         .onReceive(NotificationCenter.default.publisher(for: .macFocusNewSessionComposer)) { _ in
             if !voiceOwnsComposer { requestFocus() }
             nudge()
         }
         .onChange(of: voiceOwnsComposer) { was, owns in
-            if was, !owns, !sendAfterVoice { requestFocus() }
+            if was, !owns { requestFocus() }
         }
         .onChange(of: voiceComposer.editorRequest) { _, _ in
             if voiceComposer.editorSessionID == Self.draftID { requestFocus() }
-        }
-        // ↑ while recording: the utterance has ended in the editor. Start with
-        // what is there only if it completed with a final transcript; after a
-        // failure the text so far stays in the box (the failure row explains).
-        // Also fires when it ended synchronously (the mic had not started).
-        .onChange(of: voiceComposer.draftCompletion) { _, done in
-            guard let done, done.sessionID == Self.draftID, sendAfterVoice else { return }
-            sendAfterVoice = false
-            if done.completed { submit() }
         }
         .onChange(of: selectedDeviceId) { _, id in onDeviceChanged(); onDeviceSelected(id) }
         // Computers come online after the composer appeared (first launch, a
@@ -306,11 +294,11 @@ struct NewSessionComposer: View {
     private var textArea: some View {
         Group {
             if voiceOwnsComposer {
-                // Same height as the editor it replaces: the box never jumps;
-                // a long utterance scrolls and keeps its newest words in view.
+                // Preserve an expanded draft, then grow with speech up to the
+                // same ten-line cap as the editor (not a fixed three-line box).
                 MacComposerVoiceTranscriptOnly(controller: voiceController, preview: voiceComposer.preview,
-                                               topAligned: true, showsWaveform: false)
-                    .frame(height: MacComposerScrollableTextInput.height(lines: CGFloat(minLines)))
+                                               topAligned: true, showsWaveform: false, maxVisibleLines: 10)
+                    .frame(height: editorHeightKey)
                     .padding(.leading, 4) // the editor's text inset
                     .padding(.vertical, MacComposerMetrics.textVerticalPadding)
             } else {
@@ -353,16 +341,15 @@ struct NewSessionComposer: View {
                 Image(systemName: "mic")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .opacity(voiceFinishing && !sendAfterVoice ? 0 : 1)
-                // A pending send already spins on ↑; one spinner is enough.
-                if voiceFinishing && !sendAfterVoice { ProgressView().controlSize(.small) }
+                    .opacity(voiceFinishing ? 0 : 1)
+                if voiceFinishing { ProgressView().controlSize(.small) }
             }
             .frame(width: 30, height: 30)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!canStartVoice || sendAfterVoice)
-        .opacity((canStartVoice || voiceFinishing) && !sendAfterVoice ? 1 : 0.4)
+        .disabled(!canStartVoice)
+        .opacity(canStartVoice || voiceFinishing ? 1 : 0.4)
         .background {
             #if DEBUG
             MacComposerControlGeometryProbe(identifier: "mac.newSession.voice")
@@ -446,21 +433,21 @@ struct NewSessionComposer: View {
     }
 
     /// Typing, selecting or IME in the editor: a late correction must not
-    /// overwrite it, and a pending voice send is called off.
+    /// overwrite it.
     private func takeOverFromVoice() {
         voiceComposer.takeOver(sessionID: Self.draftID)
-        sendAfterVoice = false
     }
 
     private func handleVoiceButton() {
         if voiceOwnsComposer { voiceComposer.finishToDraft(); return }
-        guard canStartVoice, !sendAfterVoice else { return }
+        guard canStartVoice else { return }
         guard VoiceConsent.isGranted else {
             showVoiceConsent = true
             return
         }
         MacChatComposer.playVoiceStartCue()
         voiceController.clearFailure()
+        voiceStartHeight = editorHeightKey
         focused = false
         let context = VoiceSessionContextBuilder.buildNewSession(
             agent: selectedAgentId,
@@ -472,20 +459,15 @@ struct NewSessionComposer: View {
 
     private var sendButton: some View {
         Button(action: submit) {
-            ZStack {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.white)
-                    .opacity(sendAfterVoice ? 0 : 1)
-                if sendAfterVoice { ProgressView().controlSize(.small).tint(.white) }
-            }
-            .frame(width: 30, height: 30)
-            .background(Circle().fill(Color.krakiPrimary))
-            .opacity(sendEnabled || sendAfterVoice ? 1 : 0.3)
+            Image(systemName: "arrow.up")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(Color.krakiPrimary))
+                .opacity(sendEnabled ? 1 : 0.3)
         }
         .buttonStyle(.plain)
-        // Waiting to start: stays solid with its spinner (presses are ignored).
-        .disabled(!sendEnabled && !sendAfterVoice)
+        .disabled(!sendEnabled)
         .background {
             #if DEBUG
             MacComposerControlGeometryProbe(identifier: "mac.newSession.create")
@@ -533,25 +515,23 @@ struct NewSessionComposer: View {
     // MARK: Actions
 
     private func submit() {
-        if sendAfterVoice { return }
-        if voiceOwnsComposer {
-            // No Session to stage a bubble in: finish into the editor (the
-            // correction shows there as usual), then start when it is done.
-            guard canStart else { return }
-            sendAfterVoice = true
-            voiceComposer.finishToDraft()
-            return
-        }
-        // Return during a correction: send what is shown; the late
-        // correction must not write into the cleared composer.
-        voiceComposer.takeOver(sessionID: Self.draftID)
-        guard canSubmit else { return }
+        guard sendEnabled, let sender = appState.commandSender else { return }
         SessionPrefs.saveLastDevice(selectedDeviceId)
         SessionPrefs.saveLastAgent(deviceId: selectedDeviceId, agentId: selectedAgentId)
         SessionPrefs.saveLastModel(deviceId: selectedDeviceId, agentId: selectedAgentId, model: selectedModel)
         if let reasoningEffort { SessionPrefs.saveLastEffort(model: selectedModel, effort: reasoningEffort) }
+        if voiceOwnsComposer {
+            let request = sender.createSession(targetDeviceId: selectedDeviceId, agentId: selectedAgentId,
+                model: selectedModel, reasoningEffort: reasoningEffort, voice: true)
+            guard let placeholder = sender.pendingPlaceholderIds[request],
+                  voiceComposer.send(attachments: nil, delivery: .prompt, targetSessionID: placeholder) else { return }
+            onCreated()
+            return
+        }
+        // Explicit Return after Edit sends the visible draft, not a late correction.
+        voiceComposer.takeOver(sessionID: Self.draftID)
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        appState.commandSender?.createSession(
+        sender.createSession(
             targetDeviceId: selectedDeviceId, agentId: selectedAgentId, model: selectedModel,
             reasoningEffort: reasoningEffort, prompt: prompt, cwd: nil, title: nil
         )

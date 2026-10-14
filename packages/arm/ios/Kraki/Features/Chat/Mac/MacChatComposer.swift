@@ -100,7 +100,14 @@ struct MacChatComposer: View {
         return MacComposerScrollableTextInput.fittedHeight(text, width: oneRowText)
             > MacComposerMetrics.minimumTextHeight + 0.5
     }
-    @State private var voiceSurfaceWidth: CGFloat = 0
+    @State private var inputBoxWidth: CGFloat = 0
+    private var voiceBoxHeight: CGFloat {
+        guard inputBoxWidth > 1 else { return Self.inputBoxHeight }
+        let pieces = MacComposerVoiceTranscriptOnly.pieces(controller: voiceController, preview: voiceComposer.preview)
+        // The same width/height owns the glass and its contents. Don't let the
+        // flexible HStack negotiate a one-line shell around a stacked Layout.
+        return MacVoiceSurfaceLayout(pieces: pieces).geometry(width: inputBoxWidth - 44 - 9).height
+    }
 
     init(
         sessionId: String,
@@ -157,6 +164,7 @@ struct MacChatComposer: View {
         return true
     }
     private var canSend: Bool {
+        if sessionStore.isPending(sessionId) { return false }
         if voiceOwnsComposer { return true }
         if submissionIntent == .answerQuestion {
             return !voiceSendPending && ComposerAnswerImages.canSubmit(hasText: hasText, hasImage: hasImage, agent: session?.agent)
@@ -164,7 +172,7 @@ struct MacChatComposer: View {
         return !voiceSendPending && (isStructuredResponse ? hasText : (hasText || hasImage))
     }
     private var canAttachImage: Bool {
-        ComposerAnswerImages.canAttach(isIdle: isIdle, answeringQuestion: submissionIntent == .answerQuestion,
+        !sessionStore.isPending(sessionId) && ComposerAnswerImages.canAttach(isIdle: isIdle, answeringQuestion: submissionIntent == .answerQuestion,
                                        agent: session?.agent)
     }
     private var canShowVoice: Bool {
@@ -173,7 +181,7 @@ struct MacChatComposer: View {
         )
     }
     private var canStartVoice: Bool {
-        VoiceComposerAccessPolicy.canStart(
+        !sessionStore.isPending(sessionId) && VoiceComposerAccessPolicy.canStart(
             capabilityAvailable: appState.voiceCapability != nil,
             voiceControllerBusy: voiceController.isBusy
         )
@@ -320,16 +328,16 @@ struct MacChatComposer: View {
             primaryButton
                 .padding(.bottom, (Self.inputBoxHeight - MacComposerMetrics.control) / 2)
         }
-        // Growing / shrinking (a new line, the transcript wrapping) eases
-        // instead of jumping; the bottom edge stays put, so it grows upward.
-        .animation(.easeOut(duration: 0.18), value: contentHeightKey)
+        // Typed drafts ease upward. Voice Layout changes its action column
+        // immediately; interpolating only the shell leaves text/buttons outside
+        // the glass. Commit voice geometry atomically (waveform still animates).
+        .animation(voiceOwnsComposer ? nil : .easeOut(duration: 0.18), value: contentHeightKey)
     }
 
     /// The height the box's content will take for the current text.
     private var contentHeightKey: CGFloat {
         if voiceOwnsComposer {
-            let pieces = MacComposerVoiceTranscriptOnly.pieces(controller: voiceController, preview: voiceComposer.preview)
-            return 10_000 + MacVoiceSurfaceLayout(pieces: pieces).geometry(width: voiceSurfaceWidth).height
+            return 10_000 + voiceBoxHeight
         }
         return (stacksRows ? 1_000 : 0) + MacComposerScrollableTextInput.fittedHeight(text, width: textInputWidth)
     }
@@ -345,7 +353,6 @@ struct MacChatComposer: View {
                         onFinish: { voiceComposer.finishToDraft() },
                         onCancel: { voiceComposer.cancel() }
                     )
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width - 9 } action: { voiceSurfaceWidth = $0 }
                 }
             } else {
                 // One layout places the same views in one or two rows: the
@@ -367,8 +374,16 @@ struct MacChatComposer: View {
             }
         }
         .frame(maxWidth: .infinity)
+        .frame(height: voiceOwnsComposer ? voiceBoxHeight : nil)
         .frame(minHeight: Self.inputBoxHeight)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { inputBoxWidth = $0 }
+        .clipShape(RoundedRectangle(cornerRadius: Self.inputBoxHeight / 2, style: .continuous))
         .background { inputBoxGlassBackground }
+        .background {
+            #if DEBUG
+            MacComposerControlGeometryProbe(identifier: "chat-input-box")
+            #endif
+        }
         .contentShape(RoundedRectangle(cornerRadius: Self.inputBoxHeight / 2, style: .continuous))
     }
 
@@ -840,7 +855,7 @@ struct MacChatComposer: View {
     private func attachImage(_ image: NSImage) {
         let maxSize = 3 * 1024 * 1024
         for quality in [0.8, 0.6] {
-            if let data = Self.jpegData(from: image, maxDimension: 1024, quality: quality),
+            if let data = MacComposerImages.jpegData(from: image, maxDimension: 1024, quality: quality),
                data.count <= maxSize {
                 imageData = data
                 previewImage = NSImage(data: data)
@@ -857,40 +872,6 @@ struct MacChatComposer: View {
         previewImage = nil
     }
 
-    private static func jpegData(from image: NSImage, maxDimension: CGFloat, quality: CGFloat) -> Data? {
-        let source = image.size
-        guard source.width > 0, source.height > 0 else { return nil }
-        let scale = min(1, maxDimension / max(source.width, source.height))
-        let target = NSSize(width: max(1, source.width * scale), height: max(1, source.height * scale))
-        guard let bitmap = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: Int(target.width.rounded()),
-            pixelsHigh: Int(target.height.rounded()),
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: 0,
-            bitsPerPixel: 0
-        ) else { return nil }
-        bitmap.size = target
-        NSGraphicsContext.saveGraphicsState()
-        guard let context = NSGraphicsContext(bitmapImageRep: bitmap) else {
-            NSGraphicsContext.restoreGraphicsState()
-            return nil
-        }
-        NSGraphicsContext.current = context
-        image.draw(
-            in: NSRect(origin: .zero, size: target),
-            from: NSRect(origin: .zero, size: source),
-            operation: .copy,
-            fraction: 1
-        )
-        context.flushGraphics()
-        NSGraphicsContext.restoreGraphicsState()
-        return bitmap.representation(using: .jpeg, properties: [.compressionFactor: quality])
-    }
 }
 
 // MARK: - Resting layout

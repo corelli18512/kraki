@@ -181,10 +181,12 @@ struct MacComposerVoiceTranscriptOnly: View {
     var topAligned = false
     /// The new-session composer shows iOS's level bars in its bottom row.
     var showsWaveform = true
+    var maxVisibleLines: CGFloat = MacComposerMetrics.maxVisibleTextLines
 
     var body: some View {
         let pieces = Self.pieces(controller: controller, preview: preview)
-        MacComposerScrollableVoiceTranscript(pieces: pieces, revision: revision, topAligned: topAligned)
+        MacComposerScrollableVoiceTranscript(pieces: pieces, revision: revision, topAligned: topAligned,
+                                             maxVisibleLines: maxVisibleLines)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background {
                 if showsWaveform { waveform }
@@ -524,6 +526,7 @@ struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
     let pieces: [MacComposerVoiceTranscriptView.Piece]
     let revision: String
     var topAligned = false
+    var maxVisibleLines: CGFloat = MacComposerMetrics.maxVisibleTextLines
 
     final class Coordinator {
         var revision = ""
@@ -631,7 +634,7 @@ struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
             width: width,
             height: min(
                 max(MacComposerMetrics.minimumTextHeight, proposal.height ?? MacComposerVoiceTranscriptView.measure(pieces, width: width)),
-                MacComposerMetrics.minimumTextHeight + MacComposerVoiceTranscriptView.lineHeight * (MacComposerMetrics.maxVisibleTextLines - 1)
+                MacComposerMetrics.minimumTextHeight + MacComposerVoiceTranscriptView.lineHeight * (maxVisibleLines - 1)
             )
         )
     }

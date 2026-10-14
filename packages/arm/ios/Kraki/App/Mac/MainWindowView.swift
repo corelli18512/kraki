@@ -753,6 +753,14 @@ private struct MacPendingSessionView: View {
     let sessionId: String
 
     var body: some View {
+        if appState.commandSender?.pendingVoicePlaceholders.contains(sessionId) == true {
+            MacStartingVoiceChat(sessionID: sessionId, appState: appState)
+        } else {
+            status
+        }
+    }
+
+    private var status: some View {
         VStack(spacing: 14) {
             if let reason = appState.sessionStore.pendingSessionErrors[sessionId] {
                 Image(systemName: "exclamationmark.circle")

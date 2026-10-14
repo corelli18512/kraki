@@ -449,13 +449,6 @@ final class KrakiVoiceInputController {
         self.host = host
     }
 
-    /// A lease is a device credential, not a usage allowance: Head grants the
-    /// audio budget incrementally on the broker connection, charged to the
-    /// UTC day the audio is used. Only its signed validity window matters.
-    static func isLeaseUsable(_ lease: VoiceLease, nowUnixSec: Int) -> Bool {
-        lease.payload.exp > nowUnixSec + 5 && lease.payload.iat <= nowUnixSec + 30
-    }
-
     private var hostIdentity: VoiceConnectionIdentity? {
         guard let host, let capability = host.voiceCapability,
               let userID = host.voiceUserID, let deviceID = host.voiceDeviceID else { return nil }
@@ -810,6 +803,13 @@ final class KrakiVoiceInputController {
         if warmConnectionDesired { prepare() }
     }
 
+    /// A new-session voice send moves from draft → placeholder → real chat
+    /// without restarting capture/correction or changing its generation.
+    func transferOwner(from source: String, to destination: String) {
+        if activeSessionID == source { activeSessionID = destination }
+        if failedSessionID == source { failedSessionID = destination }
+    }
+
     func hasFailure(for sessionID: String) -> Bool {
         guard case .failed = state else { return false }
         return failedSessionID == nil || failedSessionID == sessionID
@@ -1024,17 +1024,6 @@ final class KrakiVoiceInputController {
         // rejection gets a fresh lease with backoff so a misconfigured broker
         // can never cause a tight lease-issuance loop.
         scheduleReconnect(immediate: quotaExhausted || leaseDayChanged)
-    }
-
-    /// The broker or Head refused this particular lease (expired, revoked,
-    /// unknown after a Head reset, or signed by a rotated key). Retrying the
-    /// same lease can never succeed; a newly issued one can.
-    static func isLeaseRejection(_ reason: String) -> Bool {
-        [
-            "lease_expired", "lease_revoked", "not_found", "bad_signature",
-            "malformed_lease", "not_yet_valid", "authorization_expired",
-            "wrong_user", "wrong_device",
-        ].contains { reason.localizedCaseInsensitiveContains($0) }
     }
 
     /// Broker `quota_exhausted` means this signed lease's rolling allowance was

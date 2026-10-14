@@ -34,7 +34,7 @@ protocol IOSVoiceComposerHost: AnyObject {
     }
     struct Operation {
         let id: UUID
-        let sessionID: String
+        var sessionID: String
         let base: String
         let range: NSRange
         let startedAt: Date
@@ -63,8 +63,7 @@ protocol IOSVoiceComposerHost: AnyObject {
     private(set) var dispatchedSessionID: String?
     private(set) var dispatchSignal = UUID()
     /// How the last utterance that ended in the editor (✓, or a failure while
-    /// recording) finished; `completed` only with a final transcript. The Mac
-    /// new-session composer starts a deferred send only for a completed one.
+    /// recording) finished; `completed` only with a final transcript.
     struct DraftCompletion: Equatable { let sessionID: String; let completed: Bool; let id: UUID }
     private(set) var draftCompletion: DraftCompletion?
     private var startTask: Task<Void, Never>?
@@ -73,8 +72,8 @@ protocol IOSVoiceComposerHost: AnyObject {
 
     /// Draft owner for the Mac new-session composer: there is no Session yet,
     /// so its text lives under this reserved key in `SessionStore.drafts`.
-    /// It only supports Edit (✓); a send waits for the correction and then
-    /// creates the Session (no staged bubble without a Session).
+    /// Send transfers the transaction into the new Session's placeholder;
+    /// creation and correction then proceed independently in the chat.
     static let newSessionDraftID = "kraki.new-session-draft"
 
     private func ownsDraft(_ store: SessionStore, _ id: String) -> Bool {
@@ -219,8 +218,10 @@ protocol IOSVoiceComposerHost: AnyObject {
     /// ↑ — send the whole message; it is transmitted after correction.
     @discardableResult
     func send(attachments: [ImageAttachment]?, delivery: CommandSender.InputDelivery,
-              answerTo: String? = nil) -> Bool {
+              answerTo: String? = nil, targetSessionID: String? = nil) -> Bool {
         guard var op = operation, op.phase == .recording, let host else { return false }
+        let source = op.sessionID
+        if let targetSessionID { op.sessionID = targetSessionID }
         let text = Self.insert(op.raw, into: op.base, range: op.range).0
         guard let clientID = host.stageVoiceInput(sessionID: op.sessionID, text: text.isEmpty ? "…" : text,
                                                   attachments: attachments, delivery: delivery,
@@ -237,9 +238,20 @@ protocol IOSVoiceComposerHost: AnyObject {
         op.delivery = delivery
         operation = op
         // The composer is free for the next message immediately.
-        host.sessionStore.setDraft(op.sessionID, "")
+        host.sessionStore.setDraft(source, "")
+        host.voiceInputController.transferOwner(from: source, to: op.sessionID)
         finishSpeech(op)
         return true
+    }
+
+    /// The server assigned the real id; keep the same staged transaction and
+    /// callbacks so progressive correction cannot race navigation or resend.
+    func transferStagedSession(from source: String, to destination: String) {
+        if var op = operation, op.sessionID == source, case .staged = op.phase {
+            op.sessionID = destination
+            operation = op
+        }
+        host?.voiceInputController.transferOwner(from: source, to: destination)
     }
 
     private func finishSpeech(_ op: Operation) {
