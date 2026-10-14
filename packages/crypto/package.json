@@ -1,6 +1,6 @@
 {
   "name": "@kraki/crypto",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Kraki encryption: X25519/HKDF/AES-GCM, Ed25519 and legacy RSA compatibility",
   "repository": {
     "type": "git",
