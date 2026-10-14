@@ -33,6 +33,12 @@ extension MessageStore {
 }
 
 extension MessageStore.SessionCard {
+    /// A new segment (reset, or words after an empty draft) follows the steer.
+    mutating func followSteerOnNewSegment(reset: Bool, content: String) {
+        if reset || (text.isEmpty && !content.isEmpty) { aboveSteer = nil }
+    }
+
+
     /// Where the live card row goes among the list `rows`: right above its
     /// steer (the pending bubble or the echoed row, matched by clientId or row
     /// id), else last. A steer not among the rows (paged out, or its unsent

@@ -973,8 +973,7 @@ final class MessageStore {
         // Non-empty model output proves the runtime advanced beyond compaction.
         if !content.isEmpty { clearRuntimeStatusIfCompacting(sessionId) }
         var card = cards[sessionId] ?? SessionCard()
-        // A new segment (reset, or words after an empty draft) follows the steer.
-        if reset || (card.text.isEmpty && !content.isEmpty) { card.aboveSteer = nil }
+        card.followSteerOnNewSegment(reset: reset, content: content)
         card.text = reset ? content : card.text + content
         if !content.isEmpty, card.action?.payload["retained"]?.boolValue == true {
             // Narration resumed: the retained resolved prompt is now superseded,
@@ -1096,9 +1095,8 @@ final class MessageStore {
 
     /// The card as the conversation may show it.
     func visibleCard(_ sessionId: String) -> SessionCard? {
-        guard let card = cards[sessionId] else { return nil }
         if let until = cardHoldUntil[sessionId], persistedHead(sessionId) < until { return nil }
-        return card
+        return cards[sessionId]
     }
 
     /// Land-and-clear: the concluding bubble landed on the spine, drop the card.
