@@ -156,8 +156,8 @@ final class CommandSender {
         // the Tentacle's key not known yet) is transient: keep the input queued
         // and dispatch it when the path is back instead of dropping it.
         guard isSignedIn else { return false }
-        // A steer's bubble appears now: freeze the live draft above it.
-        if delivery == .steer, answerTo == nil { appState?.messageStore.splitCardAtSteer(sessionId, anchor: clientId) }
+        // A steer's bubble appears now: the live card stays above it.
+        if delivery == .steer, answerTo == nil { appState?.messageStore.placeCardAboveSteer(sessionId, anchor: clientId) }
         if !send(["type": "send_input", "payload": payload], sessionId: sessionId) {
             undispatched.insert(clientId)
         }
@@ -253,7 +253,7 @@ final class CommandSender {
                                                   attachments: attachments, delivery: delivery,
                                                   answerTo: answerTo, state: .correcting)
         pending.payload["originalText"] = AnyCodable(text)
-        if delivery == .steer, answerTo == nil { appState?.messageStore.splitCardAtSteer(sessionId, anchor: clientId) }
+        if delivery == .steer, answerTo == nil { appState?.messageStore.placeCardAboveSteer(sessionId, anchor: clientId) }
         appState?.sendMetrics.created(clientId, kind: .voice, textLength: text.utf8.count,
                                       attachments: attachments?.count ?? 0, pathUp: isDeliveryPathUp(sessionId))
         var bucket = outbox[sessionId] ?? [:]

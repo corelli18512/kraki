@@ -456,7 +456,8 @@ extension ChatPerfListVC {
     func animateItemGeometry(at indexPath: IndexPath, animated: Bool) {
         let shouldFollow = shouldFollowLiveTail
         let context = UICollectionViewFlowLayoutInvalidationContext()
-        context.invalidateItems(at: [indexPath])
+        // Rows below a growing card (a steer it sits above) move with it.
+        context.invalidateItems(at: (indexPath.item..<max(indexPath.item + 1, collectionView.numberOfItems(inSection: 0))).map { IndexPath(item: $0, section: 0) })
         // An item-only invalidation updates FlowLayout's content size but NOT
         // UIScrollView.contentSize (every tail pin / distance reads the latter).
         // Report the growth PLUS any drift already present, so the scroll view
@@ -739,8 +740,11 @@ extension ChatPerfListVC {
     /// echoed message, live card → landed answer) keep their existing cell and
     /// are simply reconfigured. A reload re-dequeues every visible cell, which
     /// re-assigns all text and backgrounds and reads as a flash.
-    func applyTailInPlace(old: [String], new: [String]) -> Bool {
+    func applyTailInPlace(old: [String], new: [String], glidingLiveCardMove: Bool = true) -> Bool {
         guard !old.isEmpty, !new.isEmpty, collectionView.window != nil else { return false }
+        // The live card goes below the rows it sat above: same in-place apply,
+        // then the bubbles glide from where they were (ChatPerfListVC+LiveCardMove).
+        if glidingLiveCardMove, Self.liveCardMovesDown(old: old, new: new) { return applyLiveCardMove(old: old, new: new) }
         let shared = min(old.count, new.count)
         var prefix = 0
         while prefix < shared, old[prefix] == new[prefix] { prefix += 1 }

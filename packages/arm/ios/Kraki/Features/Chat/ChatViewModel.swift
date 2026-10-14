@@ -117,13 +117,7 @@ final class ChatViewModel {
     }
 
     /// Confirmed spine bubbles plus optimistic pending input.
-    var displayMessages: [ChatMessage] { placingSteerSplits(Self.place(pendingMessages, in: cachedMessages)) }
-
-    /// Each draft frozen at a steer goes right above that steer
-    /// (`MessageStore+SteerSplit`); the live card shows what followed.
-    private func placingSteerSplits(_ rows: [ChatMessage]) -> [ChatMessage] {
-        card?.placingFrozenSteerDrafts(in: rows, sessionId: sessionId) ?? rows
-    }
+    var displayMessages: [ChatMessage] { Self.place(pendingMessages, in: cachedMessages) }
 
     /// In-flight inputs follow the conversation tail. One that FAILED stays
     /// where it was written: later messages that did go through land below it
@@ -177,13 +171,13 @@ final class ChatViewModel {
         let answering = Self.answeringIDs(pending)
         let atHead = windowAtHead
         if let memo = currentSpineMemo, memo.revision == revision, memo.answering == answering, memo.atHead == atHead {
-            return placingSteerSplits(Self.place(pendingMessages(landedIn: memo.messages), in: memo.messages))
+            return Self.place(pendingMessages(landedIn: memo.messages), in: memo.messages)
         }
         let spine = Self.renderable(TurnSpineProjection.project(
             Self.presentingQuestions(filteredMessages, pending: pending, atHead: atHead)
         ))
         currentSpineMemo = (revision, answering, atHead, spine)
-        return placingSteerSplits(Self.place(pendingMessages(landedIn: spine), in: spine))
+        return Self.place(pendingMessages(landedIn: spine), in: spine)
     }
 
     private func pendingMessages(landedIn spine: [ChatMessage]) -> [ChatMessage] {

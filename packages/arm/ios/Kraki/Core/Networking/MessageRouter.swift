@@ -443,7 +443,7 @@ final class MessageRouter {
             // A normal persisted user message starts a fresh turn and clears
             // stale transient card state. A steer remains inside the current
             // agent lifecycle: keep its draft/action intact while ensuring the
-            // late-frame gate stays open, and freeze the draft above it.
+            // late-frame gate stays open, and keep the card above the steer.
             appState.messageStore.beginCardTurn(sessionId, userMessage: payload, seq: dict["seq"] as? Int)
             // Persist + materialise the real user_message, then clear
             // any optimistic pending placeholder our outbox is
