@@ -28,7 +28,10 @@ export function createBuildInfo({ component, version, env = process.env, cwd = p
   }
   const workflow = env.GITHUB_WORKFLOW_REF?.split('@')[0]?.replace(`${repository}/`, '');
   if (!workflows.has(workflow)) throw new Error('Unexpected release workflow');
-  if (!/^refs\/(heads|tags)\/[\w./-]+$/.test(env.GITHUB_REF || '')) throw new Error('Invalid build ref');
+  const ref = env.GITHUB_REF || '';
+  const validRef = /^refs\/(heads|tags)\/[\w./-]+$/.test(ref)
+    || (channel === 'ci' && /^refs\/pull\/[1-9][0-9]*\/merge$/.test(ref));
+  if (!validRef || ref.trim() !== ref) throw new Error('Invalid build ref');
   const runURL = `https://github.com/${repository}/actions/runs/${env.GITHUB_RUN_ID}/attempts/${env.GITHUB_RUN_ATTEMPT}`;
   return {
     ...base, repository, commit: sourceCommit, ref: env.GITHUB_REF, workflow,

@@ -109,11 +109,16 @@ for CLI binaries is separate from npm provenance for package tarballs.
 4. Verification is fail-closed before publication. It checks the artifact digest,
    allowed repository/workflow, source ref/SHA, exact run/attempt from the signing
    certificate, and GitHub-hosted runner policy.
+   Artifact names include the attempt, and the full platform inventory is required.
+   **Rerun all jobs** after a failed release attempt: a failed-jobs-only rerun must
+   not silently combine older build attempts or ship only part of a matrix.
    GitHub downloads are reverified after publication. Publication across multiple
    services is not atomic: a later failure cannot undo an earlier npm/Apple upload.
 5. `.github/workflows/windows-release.yml` builds the bundled CLI and web UI from
    the same commit, checks metadata inside the packaged ASAR, smoke-tests the
-   staged helper, and attests the final NSIS installer. `mode=dry-run` produces
+   staged helper, and attests the final NSIS installer. Relevant PRs build the
+   installer with read-only permissions; only a separate release-only publication
+   job gets OIDC/attestation/write permissions. `mode=dry-run` also produces
    artifacts without publishing. Authenticode still requires a separate signing
    certificate/service; an attestation does not remove SmartScreen warnings.
 6. Proof generation uses the existing commit-pinned official attestation action

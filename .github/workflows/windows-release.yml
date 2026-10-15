@@ -3,6 +3,17 @@ name: Windows Release
 on:
   push:
     tags: ['win-v*']
+  pull_request:
+    paths:
+      - '.github/workflows/windows-release.yml'
+      - 'scripts/release/**'
+      - 'packages/desktop/**'
+      - 'packages/arm/web/**'
+      - 'packages/tentacle/**'
+      - 'packages/protocol/**'
+      - 'packages/crypto/**'
+      - 'packages/pulse/**'
+      - 'pnpm-lock.yaml'
   workflow_dispatch:
     inputs:
       mode:
@@ -13,13 +24,10 @@ on:
         required: true
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
-  checks: read
+  contents: read
 
 concurrency:
-  group: windows-release-${{ github.ref_name }}
+  group: windows-release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -27,9 +35,14 @@ env:
 
 jobs:
   build:
-    name: Build and attest Windows installer
+    name: Build Windows installer
     runs-on: windows-2022
     timeout-minutes: 45
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     defaults:
       run:
         shell: bash
@@ -115,15 +128,42 @@ jobs:
           done
           node scripts/release/artifacts.mjs manifest release-assets windows "$VERSION"
 
+      - name: Preserve build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-installer-${{ github.sha }}-${{ github.run_attempt }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    name: Attest and publish Windows installer
+    needs: build
+    if: github.event_name == 'push' || inputs.mode == 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-installer-${{ github.sha }}-${{ github.run_attempt }}
+          path: release-assets
+
       - name: Attest installer and manifest
         id: provenance
-        if: env.KRAKI_BUILD_CHANNEL == 'release'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: 'release-assets/*'
 
       - name: Verify provenance before publication
-        if: env.KRAKI_BUILD_CHANNEL == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
           PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
@@ -132,20 +172,14 @@ jobs:
           node scripts/release/artifacts.mjs verify release-assets "$PROVENANCE_BUNDLE"
           cp "$PROVENANCE_BUNDLE" release-assets/provenance.json
 
-      - name: Preserve build artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: windows-installer-${{ github.sha }}-${{ github.run_attempt }}
-          path: release-assets/*
-          if-no-files-found: error
-
       - name: Publish Windows release
-        if: env.KRAKI_BUILD_CHANNEL == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          NOTES=(--generate-notes)
+          if [ -f "release-notes/$GITHUB_REF_NAME.md" ]; then NOTES=(--notes-file "release-notes/$GITHUB_REF_NAME.md"); fi
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --latest=false --title "$GITHUB_REF_NAME" --generate-notes release-assets/*
+            --latest=false --title "$GITHUB_REF_NAME" "${NOTES[@]}" release-assets/*
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir verify-release
           node scripts/release/artifacts.mjs verify verify-release verify-release/provenance.json

@@ -245,6 +245,7 @@ jobs:
           TAG="ios-build-${VERSION}-${BUILD_NUMBER}-${GITHUB_RUN_ATTEMPT}"
           NOTES="$RUNNER_TEMP/ios-build-notes.md"
           {
+            if [ -f "release-notes/ios-v$VERSION.md" ]; then cat "release-notes/ios-v$VERSION.md"; echo; fi
             echo "Source: https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA"
             echo "Build: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT"
             echo
@@ -267,7 +268,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ios-testflight-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build }}
+          name: ios-testflight-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/ios-export
             ${{ runner.temp }}/ios-provenance/*.json

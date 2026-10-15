@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync, readFileSync, symlinkSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createBuildInfo } from './build-info.mjs';
-import { createManifest, checkManifest, verificationArgs, checkVerifiedIdentity } from './artifacts.mjs';
+import { createManifest, checkManifest, verificationArgs, checkVerifiedIdentity, requireReleaseArtifacts } from './artifacts.mjs';
 
 const commit = 'a'.repeat(40);
 const env = {
@@ -25,6 +25,20 @@ test('local builds do not claim CI identity even in an inherited GitHub environm
   assert.deepEqual(build({ KRAKI_BUILD_CHANNEL: '' }), { schemaVersion: 1, component: 'cli', version: '1.2.3', channel: 'local' });
 });
 test('CI dry runs are distinguishable from releases', () => assert.equal(build({ KRAKI_BUILD_CHANNEL: 'ci' }).channel, 'ci'));
+test('PR builds carry a CI identity but cannot claim release provenance', () => {
+  assert.equal(build({ KRAKI_BUILD_CHANNEL: 'ci', GITHUB_REF: 'refs/pull/524/merge' }).channel, 'ci');
+  assert.throws(() => build({ GITHUB_REF: 'refs/pull/524/merge' }), /Invalid build ref/);
+});
+test('partial reruns cannot publish an incomplete platform set', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kraki-release-inventory-'));
+  try {
+    writeFileSync(join(dir, 'kraki-cli-linux-x64'), 'one matrix job');
+    assert.throws(() => requireReleaseArtifacts(dir, 'cli', '1.2.3'), /rerun ALL jobs/);
+    writeFileSync(join(dir, 'Kraki-Setup-1.2.3-x64.exe'), 'installer');
+    requireReleaseArtifacts(dir, 'windows', '1.2.3');
+    assert.throws(() => requireReleaseArtifacts(dir, 'windows', '9.9.9'), /Missing release artifact/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 for (const [key, value] of Object.entries({
   GITHUB_SHA: 'b'.repeat(40), GITHUB_REPOSITORY: 'attacker/kraki', GITHUB_RUN_ID: '0',
   GITHUB_RUN_ATTEMPT: '../2', GITHUB_WORKFLOW_REF: 'corelli18512/kraki/.github/workflows/ci.yml@main',
@@ -89,6 +103,7 @@ test('release workflows keep proof-before-publish ordering and immutable source 
   assert.ok(!release.includes('ref: ${{ needs.prepare.outputs.checkout_ref }}'));
   assert.ok(release.indexOf('Verify provenance before publication') < release.indexOf('- name: Create GitHub Release'));
   assert.ok(release.includes('Verify downloaded release assets'));
+  assert.ok(release.includes('pattern: build-kraki-*-${{ github.run_attempt }}'));
   assert.ok(release.includes('--provenance'));
   const ios = readFileSync(new URL('../../.github/workflows/ios-testflight.yml', import.meta.url), 'utf8');
   assert.ok(ios.indexOf('Verify provenance before submitting') < ios.indexOf('- name: Upload IPA to TestFlight'));

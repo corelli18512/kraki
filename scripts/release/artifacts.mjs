@@ -13,6 +13,21 @@ export async function digest(path) {
   return hash.digest('hex');
 }
 
+export function requireReleaseArtifacts(dir, component, version) {
+  const expected = {
+    cli: ['kraki-cli-linux-x64', 'kraki-cli-windows-x64.exe', 'kraki-cli-macos-arm64', 'kraki-cli-macos-x64',
+      'kraki-macos-arm64.app.tar.gz', 'kraki-macos-x64.app.tar.gz'],
+    mac: ['Kraki.dmg', 'Kraki.app.zip', 'kraki-mac-gui-universal.app.tar.gz'],
+    ios: ['Kraki.ipa'],
+    windows: [`Kraki-Setup-${version}-x64.exe`],
+  }[component];
+  if (!expected) throw new Error(`Unknown release component: ${component}`);
+  const available = new Set(readdirSync(dir));
+  for (const name of expected) {
+    if (!available.has(name)) throw new Error(`Missing release artifact ${name}; rerun ALL jobs, not only failed jobs`);
+  }
+}
+
 export async function createManifest(dir, build) {
   const files = readdirSync(dir).sort();
   if (!files.length) throw new Error('No release artifacts');
@@ -62,6 +77,7 @@ async function main() {
   const [command, dir, ...args] = process.argv.slice(2);
   if (command === 'manifest') {
     const [component, version] = args;
+    requireReleaseArtifacts(dir, component, version);
     const manifest = await createManifest(dir, createBuildInfo({ component, version }));
     writeFileSync(join(dir, 'release-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
     const files = [...manifest.artifacts.map(a => a.name), 'release-manifest.json'];
