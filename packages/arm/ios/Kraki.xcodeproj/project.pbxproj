@@ -324,6 +324,7 @@
 		7A7983AE00BE327C4008314C /* MacChatHeaderControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAEADA84650AE3CD811E50BB /* MacChatHeaderControls.swift */; };
 		7A7EEBE855E6DBDCDBCB3EBD /* ChatTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C53C8A022BE56BE5CC38B95 /* ChatTable.swift */; };
 		7B5CFBFA05AFADBB72B0F6BE /* MacChatDocumentView+Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEE3AA24462E25401F874CF4 /* MacChatDocumentView+Diagnostics.swift */; };
+		7B613EFC576D568C7731B5A1 /* ForegroundActivityReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7769239D4911C0C1F99ECFC /* ForegroundActivityReporter.swift */; };
 		7BBD19F5A147F45F78BF1822 /* DeviceTrustTransitionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65223EBFDECB21D2ACB05153 /* DeviceTrustTransitionTests.swift */; };
 		7BDBCEA332A4B5887D14A7F0 /* mermaid.min.js in Resources */ = {isa = PBXBuildFile; fileRef = 291B381B54DD41127DED6D5C /* mermaid.min.js */; };
 		7C4D14018E54194F6130DEE6 /* IOSChatAlignmentPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42193782E1B81A0047924216 /* IOSChatAlignmentPreview.swift */; };
@@ -438,6 +439,7 @@
 		AC18F08F7BBB9522884D6D49 /* MacComposerImages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 666795A58E1EE6E0839FD43A /* MacComposerImages.swift */; };
 		AC24682A92524CE758701DD7 /* ChatPlaceholderView+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5626ED6495E1877F3D9A7F74 /* ChatPlaceholderView+macOS.swift */; };
 		AC4B1561A3AAB98347D6DA23 /* MacComposerVoice.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF8680E8FA7950959D1553DE /* MacComposerVoice.swift */; };
+		AC613A168CC7841203916667 /* ForegroundActivityReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7769239D4911C0C1F99ECFC /* ForegroundActivityReporter.swift */; };
 		ACCC4EFF07C66FF2D6FF0822 /* MacChatDocumentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1844CDC99B687DFFEE1E79CD /* MacChatDocumentView.swift */; };
 		AD1C9F6656C17255E677D0C3 /* VoiceVocabularySyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26329C426760297CCBD32FD1 /* VoiceVocabularySyncTests.swift */; };
 		AD9F79BAADA10A360A04AC36 /* DesignReferenceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29EA90BF55E0CBD5E9301D5A /* DesignReferenceUITests.swift */; };
@@ -554,6 +556,7 @@
 		D9B11494E7559F593EEB0F58 /* AppState+VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5397CE9AB925FCDD8531D41F /* AppState+VoiceInput.swift */; };
 		DA146D38E38EA06776C68831 /* ProtocolTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C8B3E613E598F2D688BE4DE /* ProtocolTypes.swift */; };
 		DA761F29446D005358B330AF /* DeviceTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = 063CF9F10027975D232E4285 /* DeviceTrust.swift */; };
+		DA8FF31D360B63E1953A3FB6 /* ForegroundActivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B6120A0345B12D686F876C7 /* ForegroundActivityTests.swift */; };
 		DAE5FA29EA55D45F7ADD6C84 /* MacControlHelp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44F5223AB6217CE3932616F /* MacControlHelp.swift */; };
 		DBBFE3E9B4C411BF57463010 /* ComposerLatchSettlingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87A4C10D0C63C99D5F304157 /* ComposerLatchSettlingTests.swift */; };
 		DC6D863897748FFB7C6F2040 /* MacChatTopEdgeFade.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07E9F259AD6F525A5F3E63DD /* MacChatTopEdgeFade.swift */; };
@@ -712,6 +715,7 @@
 		0AA0FA14691119F27955AC9D /* SwiftCrypto */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SwiftCrypto; path = ../../crypto/SwiftCrypto; sourceTree = SOURCE_ROOT; };
 		0B49EB7064E3E13899D443B5 /* LICENSE-mermaid.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "LICENSE-mermaid.txt"; sourceTree = "<group>"; };
 		0B5C9B91D8E0CF8C6D63E91D /* CryptoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoTests.swift; sourceTree = "<group>"; };
+		0B6120A0345B12D686F876C7 /* ForegroundActivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForegroundActivityTests.swift; sourceTree = "<group>"; };
 		0BEDEAE0119875B478A984D6 /* SessionSubscriptionControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSubscriptionControllerTests.swift; sourceTree = "<group>"; };
 		0C23602EA58067E4AE252F62 /* ImportSessionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportSessionSheet.swift; sourceTree = "<group>"; };
 		0CCED07CCC2115423AD55B45 /* MacSessionActivityDots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSessionActivityDots.swift; sourceTree = "<group>"; };
@@ -1068,6 +1072,7 @@
 		E6783BD1527A13261E67330A /* ModePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModePickerView.swift; sourceTree = "<group>"; };
 		E72790D159855C5D594CC7C6 /* SessionPreviewGlyphLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionPreviewGlyphLayer.swift; sourceTree = "<group>"; };
 		E7635B3827574C0F3685DEC6 /* CommandSender+QueuedPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CommandSender+QueuedPrompt.swift"; sourceTree = "<group>"; };
+		E7769239D4911C0C1F99ECFC /* ForegroundActivityReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForegroundActivityReporter.swift; sourceTree = "<group>"; };
 		E77A84041CFCAABE6E3E2B01 /* NativeStyleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeStyleTests.swift; sourceTree = "<group>"; };
 		E805046685AE086D68B890D4 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
 		E83F65DF5E2CEEFA6DA23D6C /* PairingSheetDetectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingSheetDetectionTests.swift; sourceTree = "<group>"; };
@@ -1241,6 +1246,7 @@
 			children = (
 				8261534E96234C67C920EDCA /* AuthManager.swift */,
 				41EB27413D7A5189B3C42D36 /* EncryptionHandler.swift */,
+				E7769239D4911C0C1F99ECFC /* ForegroundActivityReporter.swift */,
 				E2EFD5BF1FB2C036AFDC23BF /* LocalLinkClient.swift */,
 				654A17BD8AED96C7CD6AA7A5 /* MessageRouter.swift */,
 				FE418F194A53663504E9F28E /* MessageRouter+DeviceTrust.swift */,
@@ -1801,6 +1807,7 @@
 				CEB9006B05BFDEB74A7F5815 /* DeviceTrustUsabilityTests.swift */,
 				01C03CDBEA5BAFA47F71D2F1 /* E2EV2NodeVectors.swift */,
 				C847C12C5865CC3884732BFE /* ExperienceTrackersTests.swift */,
+				0B6120A0345B12D686F876C7 /* ForegroundActivityTests.swift */,
 				49BC47F1AAD6F888FD15878C /* ForegroundTestGate.swift */,
 				654D5AD31E3D716C02D89156 /* ForkNavigationTests.swift */,
 				64BDD6DDB8BD5DCDD324CDA5 /* HelpersTests.swift */,
@@ -2255,6 +2262,7 @@
 				B584C35EFD559395DF1AE19F /* DeviceTrustUsabilityTests.swift in Sources */,
 				CF720C64187D7FE76D4BAFC7 /* E2EV2NodeVectors.swift in Sources */,
 				7F3644FF333A604190D2C39D /* ExperienceTrackersTests.swift in Sources */,
+				DA8FF31D360B63E1953A3FB6 /* ForegroundActivityTests.swift in Sources */,
 				3E437588025F139129368109 /* ForegroundTestGate.swift in Sources */,
 				F2A1E16FC453A5C1301BBB84 /* ForkNavigationTests.swift in Sources */,
 				DCDE31F2BEB3BB9017D46BE8 /* HelpersTests.swift in Sources */,
@@ -2384,6 +2392,7 @@
 				D7C26171A2AF89D6276D6276 /* ExistingCLIChoiceView.swift in Sources */,
 				EB8DEE5994FE4F2012FFDDA7 /* ExperienceTrackers.swift in Sources */,
 				E584D9C40B57680AF34DE750 /* FlatBubbleTestView.swift in Sources */,
+				7B613EFC576D568C7731B5A1 /* ForegroundActivityReporter.swift in Sources */,
 				2EB7589D7EBECE7995E65571 /* GeneralPane.swift in Sources */,
 				6088B1B7B0692F4375FF68BC /* GitHubMark.swift in Sources */,
 				52A7B220249880A6B603CE4E /* HTMLReportSupport.swift in Sources */,
@@ -2645,6 +2654,7 @@
 				A6B46931BCA6C909B23C8B9F /* EventMonitorForwarding.swift in Sources */,
 				34D126CB8B7709D243BC02C6 /* ExistingCLIChoiceView.swift in Sources */,
 				5723493174679389435FE27D /* ExperienceTrackers.swift in Sources */,
+				AC613A168CC7841203916667 /* ForegroundActivityReporter.swift in Sources */,
 				331E5FA13A1DB2C8327BB977 /* GeneralPane.swift in Sources */,
 				3C7F7695CD5685A48330A3D5 /* GitHubMark.swift in Sources */,
 				8A7F59C78081DABAED337632 /* HTMLReportSupport.swift in Sources */,
@@ -3447,7 +3457,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 88;
+				CURRENT_PROJECT_VERSION = 89;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -3458,7 +3468,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.86;
+				MARKETING_VERSION = 0.2.87;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.dev;
 				PRODUCT_NAME = "Kraki Dev";
 				SDKROOT = macosx;
@@ -3561,7 +3571,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 88;
+				CURRENT_PROJECT_VERSION = 89;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -3571,7 +3581,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.86;
+				MARKETING_VERSION = 0.2.87;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.diag;
 				PRODUCT_NAME = "Kraki Diag";
 				SDKROOT = macosx;
@@ -3586,7 +3596,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 88;
+				CURRENT_PROJECT_VERSION = 89;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -3597,7 +3607,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.86;
+				MARKETING_VERSION = 0.2.87;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac;
 				PRODUCT_NAME = Kraki;
 				SDKROOT = macosx;
@@ -3612,7 +3622,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 88;
+				CURRENT_PROJECT_VERSION = 89;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -3623,7 +3633,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.86;
+				MARKETING_VERSION = 0.2.87;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac;
 				PRODUCT_NAME = Kraki;
 				SDKROOT = macosx;

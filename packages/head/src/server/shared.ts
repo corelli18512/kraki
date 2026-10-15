@@ -22,6 +22,8 @@ export interface ClientState {
   ip?: string;
   isAlive: boolean;
   authenticatedAt?: number;
+  /** At most one daily activity write per authenticated app socket/day. */
+  foregroundDay?: string;
   pendingNonce?: string;
   /** An `auth` / `auth_response` is awaiting its backend. */
   authInFlight?: boolean;

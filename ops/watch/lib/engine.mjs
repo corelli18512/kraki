@@ -69,13 +69,20 @@ export function evaluate(prev, results, now, config) {
       if (r.ok) continue;
       state.day.fired[r.severity] += 1;
       state.day.incidents.push({ id: r.id, severity: r.severity, title: r.title, startedAt: now, endedAt: now });
-      if (r.severity !== 'info') notes.push(message('fire', r.severity, `${label}：${r.title}`, r.detail, quiet));
+      if (r.severity !== 'info' && r.notify !== false) notes.push(message('fire', r.severity, `${label}：${r.title}`, r.detail, quiet));
       continue;
     }
     const a = state.alerts[r.id] ?? { status: 'ok', fails: 0 };
     state.alerts[r.id] = a;
     a.title = r.title;
+    a.unknown = r.unknown === true;
+    if (a.unknown) {
+      a.fails = 0; a.successes = 0;
+      if (a.status !== 'firing') delete a.firstFailAt;
+      continue; // No data is neither a success nor a recovery.
+    }
     if (!r.ok) {
+      a.successes = 0;
       a.fails += 1;
       a.firstFailAt ??= now;
       a.detail = r.detail ?? '';
@@ -98,17 +105,19 @@ export function evaluate(prev, results, now, config) {
         const open = escalated ? openIncident(state, r.id) : null;
         if (open) open.severity = r.severity;
         else state.day.incidents.push({ id: r.id, severity: r.severity, title: r.title, startedAt: a.firstFailAt, endedAt: null });
-        if (r.severity === 'info') continue;
+        if (r.severity === 'info' || r.notify === false) continue;
         notes.push(message('fire', r.severity, `${label}：${r.title}`, a.detail, quiet));
-      } else if (r.severity !== 'info' && now - a.lastNotifiedAt >= REPEAT_MS[a.severity]) {
+      } else if (r.severity !== 'info' && r.notify !== false && now - a.lastNotifiedAt >= REPEAT_MS[a.severity]) {
         a.lastNotifiedAt = now;
         notes.push(message('repeat', a.severity, `${label}：${r.title}（仍未恢复 · 已持续 ${minutesText(now - a.firstFailAt)}）`, a.detail, quiet));
       }
     } else {
       if (a.status === 'firing') {
+        a.successes = r.recoverOk === false ? 0 : (a.successes ?? 0) + 1;
+        if (a.successes < (r.recoverAfter ?? 1)) continue;
         const lasted = minutesText(now - a.firstFailAt);
         for (const i of state.day.incidents) if (i.id === r.id && i.endedAt === null) i.endedAt = now;
-        if (a.severity !== 'info') notes.push(message('resolve', a.severity, `${label}：已恢复 · ${r.title}`, `持续 ${lasted}`, quiet));
+        if (a.severity !== 'info' && r.notify !== false) notes.push(message('resolve', a.severity, `${label}：已恢复 · ${r.title}`, `持续 ${lasted}`, quiet));
       }
       state.alerts[r.id] = { status: 'ok', fails: 0, title: r.title };
     }

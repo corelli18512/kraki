@@ -1,0 +1,33 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { ForegroundActivity } from './foreground-activity';
+
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+it('reports only focused visible use, throttles repeats, and removes observers on disconnect', () => {
+  vi.useFakeTimers();
+  let visible = 'hidden';
+  let focused = false;
+  vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visible as DocumentVisibilityState);
+  vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
+  const send = vi.fn();
+  const activity = new ForegroundActivity(send);
+  activity.start();
+  vi.advanceTimersByTime(120000);
+  expect(send).not.toHaveBeenCalled();
+  visible = 'visible'; focused = true;
+  window.dispatchEvent(new Event('focus'));
+  document.dispatchEvent(new Event('visibilitychange'));
+  expect(send).toHaveBeenCalledTimes(1);
+  vi.advanceTimersByTime(60000);
+  expect(send).toHaveBeenCalledTimes(2);
+  focused = false;
+  vi.advanceTimersByTime(120000);
+  expect(send).toHaveBeenCalledTimes(2);
+  activity.stop();
+  focused = true;
+  window.dispatchEvent(new Event('focus'));
+  vi.advanceTimersByTime(60000);
+  expect(send).toHaveBeenCalledTimes(2);
+  activity.start();
+  expect(send).toHaveBeenCalledTimes(3);
+  activity.stop();
+});

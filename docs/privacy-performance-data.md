@@ -52,6 +52,37 @@ relay, signed by the device's existing key. Kept 14 days, then deleted.
 > 的服务器上，14 天后删除，不用于广告，也不提供给任何第三方。你可以随时在
 > "设置 → 隐私 → 共享性能数据"中关闭；关闭后尚未发送的数据会被删除。
 
+## Foreground usage counts — publish before the activity-reporting release
+
+This is separate from optional performance diagnostics. Updated authenticated
+clients send a content-free foreground heartbeat (not queued/replayed); the relay
+records only account + Beijing calendar date, at most once per day. Background
+agents/connections do not count. The operational daily tally is not disabled by
+**Share Performance Data**. Do not describe that toggle as disabling all account
+usage records.
+
+> **Basic usage counts.** To understand how many accounts use Kraki each day, we
+> record that your signed-in app was in the foreground on a particular date.
+> This record contains your account identifier and the date, not conversations,
+> actions or precise foreground times. Daily records are retained for 35 calendar
+> days and removed with account deletion. Servers combine these counts using
+> keyed pseudonyms so the same account is counted only once across devices and
+> regions. This basic account activity tally is separate from optional performance
+> diagnostics and is not controlled by Share Performance Data. It is not used for
+> advertising or cross-app tracking.
+
+> **基本使用统计。** 为了了解每天有多少账号使用 Kraki，我们记录已登录的 App
+> 是否在某一天处于前台；只保留账号标识和日期，不记录对话、操作内容或精确的
+> 前台使用时间。每日记录保留 35 个自然日，删除账号时也会删除。不同服务器用
+> 带密钥的去标识化标记合并计数，同一账号跨设备、跨地区只计算一次。这项基本
+> 账号活跃统计独立于可选的性能诊断，不受“共享性能数据”开关控制，不用于广告
+> 或跨 App 跟踪。
+
+Release review: add **Usage Data → Product Interaction**, linked to the user,
+Analytics, not tracking, alongside existing account identifiers. Review the actual
+store questionnaire and applicable consent/legal obligations before publication;
+this engineering description is not a legal compliance determination.
+
 ## App Store privacy labels (iOS and Mac)
 
 Add, or confirm, these entries under **Data Linked to You** (linked because

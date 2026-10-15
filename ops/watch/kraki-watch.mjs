@@ -26,6 +26,7 @@ const STATE_DIR = env.KRAKI_WATCH_STATE_DIR ?? '/var/lib/kraki-watch';
 const STATE_FILE = join(STATE_DIR, 'state.json');
 const MAINT_FILE = join(STATE_DIR, 'maintenance-until');
 const NOTIFY = env.KRAKI_WATCH_NOTIFY === '1';
+const DIGEST_NOTIFY = (env.KRAKI_WATCH_DIGEST_NOTIFY ?? env.KRAKI_WATCH_NOTIFY) === '1';
 
 async function loadState() {
   try { return JSON.parse(await readFile(STATE_FILE, 'utf8')); } catch { return emptyState(); }
@@ -38,13 +39,20 @@ async function saveState(state) {
   await rename(tmp, STATE_FILE);
 }
 
+async function saveDigest(note) {
+  await mkdir(STATE_DIR, { recursive: true });
+  const file = join(STATE_DIR, 'digest-latest.json');
+  await writeFile(`${file}.tmp`, JSON.stringify(note), { mode: 0o600 });
+  await rename(`${file}.tmp`, file);
+}
+
 /** The whole run (checks + delivery) must end well inside the unit's 50 s timeout. */
 const RUN_BUDGET_MS = Number(env.KRAKI_WATCH_RUN_BUDGET_MS) || 40_000;
 const RANK = { critical: 0, warning: 1, info: 2 };
 
 async function deliver(n, attempts = 2, timeoutMs = 6000) {
   const line = `${n.kind}/${n.severity}: ${n.title}${n.body ? ` | ${n.body.replace(/\n/g, ' ¶ ')}` : ''}`;
-  if (!NOTIFY) {
+  if (!(n.kind === 'digest' ? DIGEST_NOTIFY : NOTIFY)) {
     console.log(`[shadow] ${line}`);
     return { ok: true };
   }
@@ -61,7 +69,7 @@ async function collectSnapshot(config, state, now) {
   const tasks = (config.probes ?? []).map(async (p) => ({ ...p, ...(await (p.kind === 'ws' ? collect.probeWs(p) : collect.probeHttp(p))) }));
   const units = (config.units ?? []).map(async (u) => ({ ...u, ...(await collect.unitStatus(u.unit)) }));
   const certDue = (config.certs ?? []).length > 0 && !(state.lastCertAt && now - state.lastCertAt < 3600_000);
-  const [probes, unitList, disk, memHost, logs, metrics, certs, backup] = await Promise.all([
+  const [probes, unitList, disk, memHost, logs, metrics, certs, backup, insights] = await Promise.all([
     Promise.all(tasks),
     Promise.all(units),
     collect.diskUsage(config.disk?.path ?? '/'),
@@ -70,8 +78,9 @@ async function collectSnapshot(config, state, now) {
     config.metricsUrl ? collect.relayMetrics(config.metricsUrl) : null,
     certDue ? Promise.all(config.certs.map((h) => collect.certDaysLeft(h))) : undefined,
     config.backupStatus ? collect.readJson(config.backupStatus) : undefined,
+    config.insightsPath ? collect.readJson(config.insightsPath) : undefined,
   ]);
-  return { now, maintenance: await inMaintenance(now), probes, units: unitList, disk, memHost, logs, metrics, certs, backup, certDue };
+  return { now, maintenance: await inMaintenance(now), probes, units: unitList, disk, memHost, logs, metrics, certs, backup, certDue, insights };
 }
 
 async function runOnce(config) {
@@ -95,7 +104,9 @@ async function runOnce(config) {
   const retries = routeRetries(state, state.undelivered ?? [], now, config);
   const fresh = [...out.notifications];
   if (digestDue(state, now, config)) {
-    fresh.push(formatDigest(state, now, config));
+    const note = formatDigest(state, now, config);
+    await saveDigest(note);
+    fresh.push(note);
     state = rollDigest(state, now, config);
   }
   // Critical first, fresh before retried, one copy of each message: a slow
@@ -164,7 +175,11 @@ async function main() {
     return;
   }
   if (cmd === 'digest-now') {
-    const result = await deliver(formatDigest(await loadState(), Date.now(), config));
+    const state = await loadState();
+    if (config.insightsPath) state.day.notes.insights = await collect.readJson(config.insightsPath);
+    const note = formatDigest(state, Date.now(), config);
+    await saveDigest(note);
+    const result = await deliver(note);
     if (!result.ok) throw new Error('Bark digest delivery failed');
     return;
   }

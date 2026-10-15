@@ -1,4 +1,13 @@
-# kraki-watch: relay alerting
+# kraki-watch
+
+Product statistics and event-time client experience observation are provided by
+[`ops/insights`](../insights/README.md). Host configs read its private summary;
+`experienceNotify:false` keeps new experience rules silent independently of
+infrastructure rules. `KRAKI_WATCH_DIGEST_NOTIFY=1` can enable only the passive
+09:00 digest while `KRAKI_WATCH_NOTIFY=0` keeps alerts shadowed; both remain off
+until explicit operator approval. Full digest text is retained in
+`/var/lib/kraki-watch/digest-latest.json`; large phone payloads are shortened.
+: relay alerting
 
 Alerts for the two production relays (Tokyo `relay.kraki.chat`, China
 `cn.relay.kraki.chat`) and the services around them, delivered to a phone with

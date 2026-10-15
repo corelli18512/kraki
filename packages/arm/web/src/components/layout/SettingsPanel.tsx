@@ -460,8 +460,9 @@ export function SettingsPanel({
       </button>
       {desktop && <BuildProvenance info={desktop.buildInfo} />}
       <hr className="my-1.5 w-[220px] border-border-primary" />
-      <div className="flex gap-4 text-xs font-medium text-kraki-500">
+      <div className="flex flex-wrap justify-center gap-4 text-xs font-medium text-kraki-500">
         {[
+          ['Privacy Policy', 'https://app.kraki.chat/privacy/'],
           ['Website', 'https://kraki.chat'],
           ['Documentation', 'https://kraki.chat/docs'],
           ['GitHub', 'https://github.com/corelli18512/kraki'],
