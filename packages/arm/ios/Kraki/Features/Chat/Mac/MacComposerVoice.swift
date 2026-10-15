@@ -181,10 +181,12 @@ struct MacComposerVoiceTranscriptOnly: View {
     var topAligned = false
     /// The new-session composer shows iOS's level bars in its bottom row.
     var showsWaveform = true
+    var maxVisibleLines: CGFloat = MacComposerMetrics.maxVisibleTextLines
 
     var body: some View {
         let pieces = Self.pieces(controller: controller, preview: preview)
-        MacComposerScrollableVoiceTranscript(pieces: pieces, revision: revision, topAligned: topAligned)
+        MacComposerScrollableVoiceTranscript(pieces: pieces, revision: revision, topAligned: topAligned,
+                                             maxVisibleLines: maxVisibleLines)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background {
                 if showsWaveform { waveform }
@@ -351,12 +353,13 @@ final class MacComposerVoiceTranscriptView: NSView {
         needsDisplay = true
     }
 
-    /// Short speech is vertically centered within its current viewport.
-    /// Long speech keeps its complete document height and native tail scroll.
+    /// Only the compact one-row surface centers short speech. Stacking the
+    /// actions widens the text lane, so a wrapped line may fit on one line
+    /// again while its viewport stays tall. Use the actual allocated height
+    /// (also on resize), not the reflowed line count, to keep it at the top.
     var textDrawingRect: CGRect {
-        // Wrapped speech starts at the top: two lines in the stacked (three
-        // line tall) surface must not float in the middle.
-        if topAligned || contentHeight > Self.lineHeight * 1.5 { return bounds }
+        if topAligned || bounds.height > MacComposerMetrics.minimumTextHeight + 0.5
+            || contentHeight > Self.lineHeight * 1.5 { return bounds }
         let inset = max(0, (bounds.height - contentHeight) / 2)
         return bounds.insetBy(dx: 0, dy: inset)
     }
@@ -524,6 +527,7 @@ struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
     let pieces: [MacComposerVoiceTranscriptView.Piece]
     let revision: String
     var topAligned = false
+    var maxVisibleLines: CGFloat = MacComposerMetrics.maxVisibleTextLines
 
     final class Coordinator {
         var revision = ""
@@ -611,6 +615,7 @@ struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.documentView?.topAligned = topAligned
         context.coordinator.apply(pieces: pieces, revision: revision, to: scrollView)
         // SwiftUI may deliver the first update before the representable has
         // its final width. Re-apply after AppKit has committed that layout.
@@ -631,7 +636,7 @@ struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
             width: width,
             height: min(
                 max(MacComposerMetrics.minimumTextHeight, proposal.height ?? MacComposerVoiceTranscriptView.measure(pieces, width: width)),
-                MacComposerMetrics.minimumTextHeight + MacComposerVoiceTranscriptView.lineHeight * (MacComposerMetrics.maxVisibleTextLines - 1)
+                MacComposerMetrics.minimumTextHeight + MacComposerVoiceTranscriptView.lineHeight * (maxVisibleLines - 1)
             )
         )
     }

@@ -19,6 +19,8 @@ final class CommandSender {
     /// during optimistic create/fork. When `session_created` arrives
     /// with this requestId, the router swaps placeholderId → real id.
     var pendingPlaceholderIds: [String: String] = [:]
+    /// A voice send already lives in the chat while create_session is in flight.
+    var pendingVoicePlaceholders: Set<String> = []
     /// First messages of create requests that timed out, by requestId.
     @ObservationIgnored private var timedOutCreatePrompts: [String: String] = [:]
     /// Debug automation correlation: resolved request id → authoritative
@@ -95,12 +97,15 @@ final class CommandSender {
     /// Send an encrypted message through the WebSocket.
     /// The actual encryption + routing is handled by AppState/networking layer.
     @discardableResult
-    private func send(
+    func send(
         _ payload: [String: Any],
         sessionId: String? = nil,
         connectionScoped: Bool = false
     ) -> Bool {
         guard let appState else { return false }
+        // A placeholder is a local route, never a server session. Completed
+        // corrections queue until resolution moves the outbox to the real id.
+        if let sessionId, appState.sessionStore.isPending(sessionId) || pendingVoicePlaceholders.contains(sessionId) { return false }
         var msg = payload
         if let sessionId { msg["sessionId"] = sessionId }
         msg["deviceId"] = appState.deviceId ?? ""
@@ -263,6 +268,20 @@ final class CommandSender {
         outboundPayloads[clientId] = payload
         persistOutbox()
         return clientId
+    }
+
+    /// Keep client ids, original text and correction styling across creation.
+    func movePendingInputs(from source: String, to destination: String) {
+        guard let bucket = outbox.removeValue(forKey: source) else { return }
+        for (clientID, message) in bucket {
+            confirmationTasks.removeValue(forKey: clientID)?.cancel()
+            outbox[destination, default: [:]][clientID] = ChatMessage(
+                type: message.type, seq: message.seq, sessionId: destination,
+                deviceId: appState?.sessionStore.sessions[destination]?.deviceId,
+                timestamp: message.timestamp, payload: message.payload)
+        }
+        persistOutbox()
+        resendPendingInputs(sessionId: destination, reason: "session_created")
     }
 
     func isStaged(sessionId: String, clientId: String) -> Bool {
@@ -678,7 +697,13 @@ final class CommandSender {
         guard let outboxURL,
               let data = try? Data(contentsOf: outboxURL),
               let stored = try? JSONDecoder().decode([StoredPending].self, from: data) else { return }
-        for item in stored {
+        for item in stored.sorted(by: { $0.order < $1.order }) {
+            // Creation requests don't survive a relaunch. Never resend an
+            // orphaned placeholder id; recover its durable text as a new draft.
+            if item.sessionId.hasPrefix("pending-") {
+                recoverNewSessionText(item.text)
+                continue
+            }
             if appState?.messageDatabase.hasConfirmedInput(item.sessionId, clientId: item.clientId) == true { continue }
             #if KRAKI_DIAG
             var diagFields: [DiagField: DiagValue] = [.clientId: .id(item.clientId), .phase: .tag("restored")]
@@ -718,6 +743,7 @@ final class CommandSender {
                 armConfirmationTimeout(sessionId: item.sessionId, clientId: item.clientId)
             }
         }
+        if stored.contains(where: { $0.sessionId.hasPrefix("pending-") }) { persistOutbox() }
     }
 
     // MARK: - Permissions
@@ -868,7 +894,8 @@ final class CommandSender {
         reasoningEffort: ReasoningEffort? = nil,
         prompt: String? = nil,
         cwd: String? = nil,
-        title: String? = nil
+        title: String? = nil,
+        voice: Bool = false
     ) -> String {
         let requestId = "req_" + UUID().uuidString.lowercased()
         let placeholderId = "pending-\(UUID().uuidString.lowercased())"
@@ -884,6 +911,7 @@ final class CommandSender {
         }
 
         pendingPlaceholderIds[requestId] = placeholderId
+        if voice { pendingVoicePlaceholders.insert(placeholderId) }
 
         if let appState {
             appState.sessionStore.addPendingSession(placeholderId)
@@ -1011,6 +1039,7 @@ final class CommandSender {
     /// or timeout). Does NOT touch the SessionStore's pending entry —
     /// that's owned by router/UI for swap-out logic.
     func clearPendingRequest(_ requestId: String) {
+        if let placeholder = pendingPlaceholderIds[requestId] { recoverVoicePlaceholder(placeholder) }
         pendingCreateRequests.removeValue(forKey: requestId)
         pendingCreateTitles.removeValue(forKey: requestId)
         pendingPlaceholderIds.removeValue(forKey: requestId)
@@ -1098,51 +1127,6 @@ final class CommandSender {
 
     func archiveSession(sessionId: String, archived: Bool) {
         send(["type": "archive_session", "payload": ["archived": archived]], sessionId: sessionId)
-    }
-
-    /// App-side connection-scoped: not retained for app reconnect replay. A
-    /// request already accepted by Head may still be forwarded after reconnect;
-    /// the worker coalesces reads and owns the provider cooldown/Retry-After.
-    @discardableResult
-    func refreshAccountUsage(deviceIds: Set<String>? = nil, automatic: Bool = false,
-                             now: Date = Date()) -> Int {
-        guard let appState, appState.connectionStatus == .connected else { return 0 }
-        let store = appState.deviceStore
-        var sent = 0
-        for id in store.usageRefreshTargets(deviceIds: deviceIds) where store.canRefreshUsage(id, automatic: automatic, now: now) {
-            let requestId = UUID().uuidString
-            store.beginUsageRefresh(id, requestId: requestId, now: now)
-            guard send(["type": "refresh_account_usage", "targetDeviceId": id,
-                        "payload": ["requestId": requestId]], connectionScoped: true) else {
-                store.finishUsageRefresh(id, requestId: requestId, error: "connection")
-                continue
-            }
-            sent += 1
-            let timeout = usageRefreshTimeout
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: timeout)
-                self?.appState?.deviceStore.finishUsageRefresh(id, requestId: requestId, error: "timeout")
-            }
-        }
-        return sent
-    }
-
-    /// Ask a computer to update Kraki (remote update). `when`: nil asks first
-    /// if sessions are running; "now" stops them; "idle" waits for them.
-    @discardableResult
-    func updateDevice(_ deviceId: String, when: String? = nil) -> Bool {
-        guard let appState else { return false }
-        let store = appState.deviceStore
-        let requestId = UUID().uuidString
-        var payload: [String: Any] = ["requestId": requestId]
-        if let when { payload["when"] = when }
-        let info = store.deviceUpdates[deviceId]
-        store.setUpdateProgress(deviceId, DeviceUpdateProgress(phase: .requested, requestId: requestId, from: info?.current, to: info?.latest))
-        guard send(["type": "update_device", "targetDeviceId": deviceId, "payload": payload], connectionScoped: true) else {
-            store.setUpdateProgress(deviceId, DeviceUpdateProgress(phase: .failed, requestId: requestId, error: "Not connected."))
-            return false
-        }
-        return true
     }
 
     func requestArchivedSessions(targetDeviceId: String) {
@@ -1256,6 +1240,7 @@ final class CommandSender {
         // real session into the store; we just need to retire the
         // placeholder entry and re-point navigation.
         if let placeholderId = pendingPlaceholderIds.removeValue(forKey: requestId) {
+            resolveVoicePlaceholder(placeholderId, sessionID: sessionId)
             // The placeholder route removes its pending mark when the user
             // backs out of "Starting session…". In that case the new Session
             // only appears in the list; it must not pull the user back in.
@@ -1303,6 +1288,7 @@ final class CommandSender {
     func failPendingRequest(_ requestId: String, reason: String) {
         guard let appState else { return }
         if let placeholderId = pendingPlaceholderIds.removeValue(forKey: requestId) {
+            recoverVoicePlaceholder(placeholderId)
             appState.sessionStore.setPendingError(placeholderId, reason: reason)
             // A fast-failing fork never showed its page: show it now, with
             // the error, so the failure isn't silent.
@@ -1325,6 +1311,7 @@ final class CommandSender {
         pendingCreateRequests.removeAll()
         pendingCreateTitles.removeAll()
         pendingPlaceholderIds.removeAll()
+        pendingVoicePlaceholders.removeAll()
         deferredForks.removeAll()
         forkSources.removeAll()
         placeholdersShown.removeAll()

@@ -318,6 +318,7 @@ struct MessageInputView: View {
         .frame(maxWidth: .infinity)
         .frame(minHeight: Self.inputBoxHeight)
         .background { inputBoxGlassBackground }
+        .voiceGeometryProbe("box")
         .contentShape(Self.boxShape)
         .animation(Self.expandAnimation, value: isRecordingHere)
         // A new line (typing) or a wrapping transcript eases the box taller
@@ -378,6 +379,7 @@ struct MessageInputView: View {
             .frame(maxWidth: .infinity,
                    minHeight: IOSComposerMetrics.recordingMinHeight - Self.inputBoxHeight,
                    alignment: .topLeading)
+            .voiceGeometryProbe("header")
     }
 
     private var recordingHeaderContent: some View {
@@ -480,6 +482,7 @@ struct MessageInputView: View {
         }
         .font(.body)
         .accessibilityIdentifier("voice-transcript")
+        .voiceGeometryProbe("text")
     }
 
     private var voiceListeningStatus: String {
@@ -489,11 +492,6 @@ struct MessageInputView: View {
         case .recording: return "Listening…"
         default: return "Starting…"
         }
-    }
-
-    private static func elapsed(from start: Date, to now: Date) -> String {
-        let seconds = max(0, Int(now.timeIntervalSince(start)))
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 
     @ViewBuilder

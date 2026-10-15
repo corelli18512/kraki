@@ -16,7 +16,7 @@ final class NewSessionDeferredSendTests: XCTestCase {
     private let device = "voice-test-device"
 
     override func setUp() async throws {
-        try requireForegroundUITests()
+        if ProcessInfo.processInfo.environment["KRAKI_NEW_SESSION_VOICE_SHOTS"] != "1" { try requireForegroundUITests() }
         savedLast = SessionPrefs.lastDeviceId()
         SessionPrefs.saveLastDevice(device)
         driver = IOSVoiceHoldScenarioDriver(automaticCorrections: false)
@@ -61,21 +61,25 @@ final class NewSessionDeferredSendTests: XCTestCase {
         drain(settle)
     }
 
-    /// 2-16 (a): recognition fails while a send waits for the correction: no
-    /// Session starts from the partial text; it stays in the box.
-    func testFailedRecognitionDuringDeferredSendDoesNotStartSession() throws {
+    /// Creation is immediate, but recognition failure must never send partial
+    /// text to the agent. Recover it in the destination chat's draft.
+    func testFailedRecognitionReturnsTextToDestinationChat() throws {
         try press("mac.newSession.voice")
         XCTAssertTrue(app.iosVoiceComposer.isRecording(in: key))
         let heard = app.iosVoiceComposer.rawText
         XCTAssertFalse(heard.isEmpty)
         try press("mac.newSession.create")
+        let sender = try XCTUnwrap(app.commandSender)
+        let request = try XCTUnwrap(sender.pendingPlaceholderIds.keys.first)
+        let placeholder = try XCTUnwrap(sender.pendingPlaceholderIds[request])
         driver.emit(.failed("gateway error: Doubao ASR error 45000081: wait packet timeout"))
         drain(300)
-        XCTAssertTrue(createdPrompts.isEmpty, "a failed transcript never starts a Session")
-        XCTAssertEqual(draft, heard, "what was heard stays in the box")
-
-        try press("mac.newSession.create")
-        XCTAssertEqual(createdPrompts, [heard], "the send button is usable again")
+        XCTAssertEqual(createdPrompts, [""], "create never contains raw speech")
+        XCTAssertEqual(app.sessionStore.drafts[placeholder], heard)
+        sender.resolveCreateRequest(request, sessionId: "voice-a")
+        XCTAssertEqual(app.sessionStore.drafts["voice-a"], heard)
+        XCTAssertTrue(sender.pendingInputs("voice-a").isEmpty)
+        XCTAssertTrue(app.voiceInputController.hasFailure(for: "voice-a"))
     }
 
     /// 2-16 (b): ↑ before the mic started ends the utterance synchronously;
@@ -86,10 +90,28 @@ final class NewSessionDeferredSendTests: XCTestCase {
         try press("mac.newSession.voice", settle: 0)
         try press("mac.newSession.create", settle: 300)
         XCTAssertNil(app.iosVoiceComposer.operation)
-        XCTAssertEqual(draft, "Typed first")
+        XCTAssertEqual(draft, "")
+        let placeholder = try XCTUnwrap(app.commandSender?.pendingPlaceholderIds.values.first)
+        XCTAssertEqual(app.sessionStore.navigateToSession, placeholder)
+        XCTAssertEqual(app.commandSender?.pendingInputs(placeholder).first?.content, "Typed first")
+    }
 
+    func testCreationFailureRestoresSpeechAndFencesLateCorrection() throws {
+        try press("mac.newSession.voice")
+        let heard = app.iosVoiceComposer.rawText
         try press("mac.newSession.create")
-        XCTAssertEqual(createdPrompts, ["Typed first"], "the send button is usable again")
+        let sender = try XCTUnwrap(app.commandSender)
+        let request = try XCTUnwrap(sender.pendingPlaceholderIds.keys.first)
+        let placeholder = try XCTUnwrap(sender.pendingPlaceholderIds[request])
+        sender.failPendingRequest(request, reason: "Computer disconnected")
+        XCTAssertEqual(draft, heard)
+        XCTAssertNil(app.iosVoiceComposer.operation)
+        XCTAssertTrue(sender.pendingInputs(placeholder).isEmpty)
+        driver.emit(.final("Late correction", rawText: heard))
+        sender.resolveCreateRequest(request, sessionId: "voice-a")
+        drain(100)
+        XCTAssertEqual(draft, heard)
+        XCTAssertTrue(sender.pendingInputs("voice-a").isEmpty)
     }
 
     /// 2-40: an offline computer with cached agents is not a place to start a

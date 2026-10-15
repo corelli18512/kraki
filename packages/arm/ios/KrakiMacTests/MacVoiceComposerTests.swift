@@ -102,21 +102,15 @@ import CryptoKit
         let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
         attachment.name = "mac-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
     }
-    func testSelectedD1CueIsBundledAndUnchanged() throws {
-        let data = try XCTUnwrap(NSDataAsset(name: "VoiceStartCue")?.data)
-        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        XCTAssertEqual(digest, "d16a5be4e7390c40225bd3024462212dfa26cd24a07080014f14c6794b6a3f9e")
-        let sound = try XCTUnwrap(NSSound(data: data))
-        XCTAssertEqual(sound.duration, 0.202, accuracy: 0.005)
-    }
-
     func testSingleAndMultilinePaddingStaysOutsideScrollingViewport() throws {
         let host = NSHostingView(rootView: MacChatComposer(sessionId: sid).environment(app))
         host.sizingOptions = [.intrinsicContentSize]
         window.contentView = host
         window.setContentSize(NSSize(width: 820, height: 100))
         var measurements: [[String: Any]] = []
+        let controlRow = MacComposerMetrics.capsuleHeight - MacComposerRestingLayout.rowOverlap
         func measure(_ name: String, voice: Bool, expectedHeight: CGFloat) throws {
+            let extraRow = !voice && expectedHeight > MacComposerMetrics.capsuleHeight ? controlRow : 0
             drain(250)
             // Avoid using a stale fitting size from the previously mounted
             // full Chat view as the first window-height proposal.
@@ -130,7 +124,8 @@ import CryptoKit
             if voice {
                 let v = try XCTUnwrap(views(host).compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
                 scroll = try XCTUnwrap(v.enclosingScrollView)
-                drawn = v.convert(v.textDrawingRect, to: nil)
+                let rect = v.textDrawingRect
+                drawn = v.convert(CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: v.contentHeight), to: nil)
                 if name.contains("overflow") {
                     XCTAssertGreaterThan(v.contentHeight, scroll.contentView.bounds.height)
                     XCTAssertEqual(scroll.contentView.bounds.maxY, v.bounds.height, accuracy: 1)
@@ -148,16 +143,17 @@ import CryptoKit
             let top = MacComposerMetrics.bottomPadding + height - viewport.maxY
             let bottom = viewport.minY - MacComposerMetrics.bottomPadding
             XCTAssertEqual(top, MacComposerMetrics.textVerticalPadding, accuracy: 0.5, name)
-            XCTAssertEqual(bottom, MacComposerMetrics.textVerticalPadding, accuracy: 0.5, name)
+            XCTAssertEqual(bottom, MacComposerMetrics.textVerticalPadding + extraRow, accuracy: 0.5, name)
             let visible = drawn.intersection(viewport)
             let topText = MacComposerMetrics.bottomPadding + height - visible.maxY
             let bottomText = visible.minY - MacComposerMetrics.bottomPadding
             if !name.contains("overflow") && !name.contains("trailing") {
-                // Two-line voice now accommodates a 64pt action column:
-                // text remains centered, with the same 8pt outer viewport inset.
-                let expectedTextPadding = (height - visible.height) / 2
-                XCTAssertEqual(topText, expectedTextPadding, accuracy: 0.5, name)
-                XCTAssertEqual(bottomText, expectedTextPadding, accuracy: 0.5, name)
+                // Expanded speech starts at the top even when the actions
+                // need more height than its glyphs; typing has a bottom toolbar.
+                let expectedTop = voice && height > MacComposerMetrics.capsuleHeight
+                    ? MacComposerMetrics.textVerticalPadding : (height - extraRow - visible.height) / 2
+                XCTAssertEqual(topText, expectedTop, accuracy: 0.5, name)
+                XCTAssertEqual(bottomText, height - visible.height - expectedTop, accuracy: 0.5, name)
             }
             measurements.append(["state": name, "capsuleHeight": height, "topSpace": topText,
                                  "bottomSpace": bottomText, "viewportTopPadding": top, "viewportBottomPadding": bottom])
@@ -170,16 +166,16 @@ import CryptoKit
         ]
         for (name, text, height) in samples {
             app.sessionStore.setDraft(sid, text)
-            try measure("typed-" + name, voice: false, expectedHeight: height)
+            try measure("typed-" + name, voice: false, expectedHeight: height + (name == "one" ? 0 : controlRow))
         }
         app.sessionStore.setDraft(sid, "\u{7B2C}\u{4E00}\u{884C}\u{6587}\u{5B57}\n")
-        try measure("typed-trailing-newline", voice: false, expectedHeight: 54)
+        try measure("typed-trailing-newline", voice: false, expectedHeight: 54 + controlRow)
         app.sessionStore.setDraft(sid, "")
         app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
         drain(400)
         XCTAssertTrue(app.iosVoiceComposer.isRecording)
         for (name, text, height) in samples {
-            app.voiceInputController.debugApplyPartial(text)
+            app.iosVoiceComposer.receive(text, id: try XCTUnwrap(app.iosVoiceComposer.operation).id)
             try measure("voice-" + name, voice: true, expectedHeight: name == "two" ? 70 : height)
         }
         try JSONSerialization.data(withJSONObject: measurements, options: [.prettyPrinted, .sortedKeys])
@@ -230,7 +226,10 @@ import CryptoKit
         drain(250)
         let editor = try XCTUnwrap(views(window.contentView!).compactMap { $0 as? NSTextView }.first(where: \.isEditable))
         let scroll = try XCTUnwrap(editor.enclosingScrollView)
-        XCTAssertEqual(try controlFrame("chat-attach-image").midY, scroll.convert(scroll.bounds, to: nil).midY, accuracy: 0.5)
+        let image = try controlFrame("chat-attach-image")
+        XCTAssertEqual(image.minY, MacComposerMetrics.bottomPadding, accuracy: 0.5,
+                       "typed multiline image lives in the bottom toolbar, not centered beside text")
+        XCTAssertLessThanOrEqual(image.maxY, scroll.convert(scroll.bounds, to: nil).minY)
         try capture("polish-typed-multiline")
     }
 
@@ -570,5 +569,15 @@ import CryptoKit
         drain(2100)
         XCTAssertEqual(app.sessionStore.drafts[sid], raw + " human")
         XCTAssertTrue(sent.isEmpty)
+    }
+}
+
+extension MacVoiceComposerTests {
+    func testSelectedD1CueIsBundledAndUnchanged() throws {
+        let data = try XCTUnwrap(NSDataAsset(name: "VoiceStartCue")?.data)
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(digest, "d16a5be4e7390c40225bd3024462212dfa26cd24a07080014f14c6794b6a3f9e")
+        let sound = try XCTUnwrap(NSSound(data: data))
+        XCTAssertEqual(sound.duration, 0.202, accuracy: 0.005)
     }
 }
