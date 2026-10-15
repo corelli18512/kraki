@@ -29,6 +29,22 @@ function run(cmd, args, cwd) {
   return execFileSync(cmd, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
+/**
+ * Build provenance (dist/build-info.json) names the commit and workflow run
+ * that built the package, so it differs on every build of unchanged code.
+ * Only the identity it states (component, version) has to match.
+ */
+function contentOf(path) {
+  const data = readFileSync(path);
+  if (!path.endsWith('build-info.json')) return data;
+  try {
+    const { schemaVersion, component, version } = JSON.parse(data.toString('utf8'));
+    return Buffer.from(JSON.stringify({ schemaVersion, component, version }));
+  } catch {
+    return data;
+  }
+}
+
 /** relative path → sha256 of every file under `root`. */
 function files(root) {
   const out = new Map();
@@ -36,7 +52,7 @@ function files(root) {
     for (const name of readdirSync(dir)) {
       const path = join(dir, name);
       if (statSync(path).isDirectory()) walk(path);
-      else out.set(relative(root, path), createHash('sha256').update(readFileSync(path)).digest('hex'));
+      else out.set(relative(root, path), createHash('sha256').update(contentOf(path)).digest('hex'));
     }
   };
   walk(root);
