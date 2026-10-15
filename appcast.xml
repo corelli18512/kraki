@@ -6,6 +6,20 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.88</title>
+            <pubDate>Thu, 15 Oct 2026 12:45:53 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.88</sparkle:fullReleaseNotesLink>
+            <sparkle:version>90</sparkle:version>
+            <sparkle:shortVersionString>0.2.88</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Kraki for Mac 0.2.88
+
+- The last-message preview in the sidebar is slightly darker and easier to read.
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.88/Kraki.app.zip" length="93668564" type="application/octet-stream" sparkle:edSignature="fZztUby4ImyOvy0t7RcrnXb4DABfSgHuZjsqr4rCQwv7nDQ5qLhbvpKGkGkG+QhEX9ZEiwlFicKjFxRKwo+tBg=="/>
+        </item>
+        <item>
             <title>0.2.87</title>
             <pubDate>Thu, 15 Oct 2026 10:30:12 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -42,25 +56,9 @@ Developer ID signing, Apple notarization and Sparkle update signatures remain in
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.86/Kraki.app.zip" length="93658042" type="application/octet-stream" sparkle:edSignature="NtgoKLSIXn6xgxP90Tw+QiKyqH5cWtqg4AujSrXXWaFePHn8ikRBd0/Ej4d6FCFjoqrctlH2EXNIzDi0k+GjCg=="/>
         </item>
-        <item>
-            <title>0.2.85</title>
-            <pubDate>Wed, 14 Oct 2026 19:16:35 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.85</sparkle:fullReleaseNotesLink>
-            <sparkle:version>87</sparkle:version>
-            <sparkle:shortVersionString>0.2.85</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Kraki for Mac 0.2.85
-
-- Fix replies stopping their automatic scroll after you scroll up and then return to the bottom. Long replies now keep following as new text arrives, including after multiple tool steps.
-- Returning with either the ↓ button or scrolling to the bottom resumes following. Scrolling up again still pauses it so you can read earlier messages.
-- Keep the existing first-unread-message positioning when opening a conversation from a notification.
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.85/Kraki.app.zip" length="93614252" type="application/octet-stream" sparkle:edSignature="Tvbw/ZLrr6m9g8kJDvOtQUYfk7OXnrNcBaIu+bqr1RO2L7HE/Xz5z//9RYQlHXb4AkhKNC2DQVj2KN1ZNncsBw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: ydHEfXpW2LgrqrCcZ71sSrICtmyGtubKDw0QChtqHuR11KC6XAfRaD9X7y9CbgE7AxQLG+YB8NdyjKGRa3dXBw==
-length: 4778
+edSignature: j0lJdhA9XO52AqlmM7H52yBNCAqYFJwZoPKyBuHQgSwnU5JC13MnzoSb32SR2qY93vd/wqo0b4/a8RfC5E3rAg==
+length: 4416
 -->
