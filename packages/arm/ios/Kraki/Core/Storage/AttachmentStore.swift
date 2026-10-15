@@ -446,13 +446,14 @@ final class AttachmentStore {
     @MainActor
     private func chunkTimedOut(_ key: FlightKey, generation: Int) {
         guard inFlight[key]?.generation == generation else { return }
-        clearFlight(key)
+        // Its siblings were sent on the same path and are likely lost too:
+        // take them back with it, so one lost burst is one attempt.
+        clearFlights(for: key.id)
         streamingWhole.remove(key.id)
         chunkWindow.lost()
         let count = (attempts[key.id] ?? 0) + 1
         attempts[key.id] = count
         if count >= Self.maxAttempts {
-            clearFlights(for: key.id)
             wants[key.id] = nil
             attempts[key.id] = nil
             states[key.id] = .error(reason: "Timed out loading this attachment")

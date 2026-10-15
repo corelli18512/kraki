@@ -140,6 +140,19 @@ final class AttachmentSchedulerTests: XCTestCase {
         XCTAssertEqual(store.window, 2, "four are")
     }
 
+    func testALostBurstOfChunksCountsAsOneAttempt() async {
+        let img = id("01234567")
+        let store = makeStore(dwell: 0, timeout: 0.3)
+        store.setTransportReady(true)
+        store.requestIfNeeded(id: img, sessionId: "s", priority: .userOpened)
+        for index in 0..<4 { await chunk(store, img, index, 8, "\(index)") }
+        XCTAssertEqual(store.inFlightCountForTesting, 3, "the window opened to three")
+        await settle(0.4)                                    // all three are lost
+        XCTAssertEqual(store.state(for: img), .awaitingChunks(received: 4, total: 8),
+                       "one lost burst is one attempt, not three")
+        XCTAssertEqual(store.inFlightCountForTesting, 1, "retried one at a time")
+    }
+
     func testATimedOutChunkFallsBackToOne() async {
         let lost = id("lost-window")
         let store = makeStore(dwell: 0, timeout: 0.05)
