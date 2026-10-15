@@ -3,13 +3,15 @@ import XCTest
 @testable import Kraki
 
 /// Lazy, paced attachment loading: nothing transfers unless shown or opened,
-/// at most three chunks are in flight, the user's report takes the next
+/// an adaptive 1–3 chunks are in flight, the user's report takes the next
 /// free slot, and transfers pause/resume with the connection.
 @MainActor
 final class AttachmentSchedulerTests: XCTestCase {
     private var dir: URL!
     private var requests: [(id: String, session: String, index: Int)] = []
     private var sendSucceeds = true
+    /// Test clock for round-trip times; nil uses real time.
+    private var clock: TimeInterval?
 
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-attach-\(UUID().uuidString)")
@@ -22,7 +24,8 @@ final class AttachmentSchedulerTests: XCTestCase {
     }
 
     private func makeStore(dwell: TimeInterval = 0.05, timeout: TimeInterval = 30) -> AttachmentStore {
-        AttachmentStore(cacheDirectory: dir, visibleDwell: dwell, chunkTimeout: timeout) { [weak self] id, session, index in
+        AttachmentStore(cacheDirectory: dir, visibleDwell: dwell, chunkTimeout: timeout,
+                        now: { [weak self] in self?.clock ?? ProcessInfo.processInfo.systemUptime }) { [weak self] id, session, index in
             self?.requests.append((id, session, index))
             return self?.sendSucceeds ?? true
         }
@@ -75,39 +78,75 @@ final class AttachmentSchedulerTests: XCTestCase {
         XCTAssertNil(store.state(for: passing))
     }
 
-    func testUpToThreeChunksInFlightAndTheOpenedReportTakesTheNextSlot() async {
-        let image = id("abcde")
+    func testTheWindowOpensOnACalmLinkAndTheOpenedReportTakesTheNextSlot() async {
+        let image = id("abcdef")
         let report = id("<p>r</p>")
         let other = id("xy")
         let store = makeStore(dwell: 0)
         store.setTransportReady(true)
         store.requestIfNeeded(id: image, sessionId: "s")
         await settle()
-        XCTAssertEqual(requests.map(\.index), [0], "only the first chunk until the size is known")
+        XCTAssertEqual(requests.map(\.index), [0], "one chunk at first, as before")
 
-        // The first chunk tells the total: fill the free slots.
-        await chunk(store, image, 0, 5, "a")
+        await chunk(store, image, 0, 6, "a")
+        XCTAssertEqual(requests.map(\.index), [0, 1])
+        await chunk(store, image, 1, 6, "b")
+        XCTAssertEqual(store.window, 2, "unqueued arrivals open a second slot")
         XCTAssertEqual(requests.map(\.index), [0, 1, 2, 3])
-        XCTAssertEqual(store.inFlightCountForTesting, AttachmentStore.maxInFlight)
 
         // All slots busy: nothing more until one frees up.
         store.requestIfNeeded(id: other, sessionId: "s")
         store.requestIfNeeded(id: report, sessionId: "s", priority: .userOpened)
         await settle()
-        XCTAssertEqual(requests.count, 4, "never more than three chunks in flight")
+        XCTAssertEqual(requests.count, 4, "never more chunks in flight than the window")
 
-        await chunk(store, image, 1, 5, "b")
+        await chunk(store, image, 2, 6, "c")
         XCTAssertEqual(requests.last?.id, report, "the user-opened report takes the freed slot")
         await chunk(store, report, 0, 1, "<p>r</p>")
         guard case .ready = store.state(for: report) else { return XCTFail("report not ready") }
-        XCTAssertEqual(requests.last.map { [$0.id, String($0.index)] }, [image, "4"],
-                       "the earlier image continues before the later one")
-        await chunk(store, image, 2, 5, "c")
+        XCTAssertEqual(store.window, AttachmentChunkWindow.maxInFlight)
+        XCTAssertEqual(requests.suffix(2).map(\.index), [4, 5], "the earlier image continues before the later one")
+        XCTAssertEqual(store.inFlightCountForTesting, 3)
+        await chunk(store, image, 3, 6, "d")
         XCTAssertEqual(requests.last?.id, other)
-        await chunk(store, image, 3, 5, "d")
-        await chunk(store, image, 4, 5, "e")
-        XCTAssertEqual(store.text(for: image), "abcde")
-        XCTAssertEqual(store.state(for: image), .ready(mimeType: "text/plain", data: Data("abcde".utf8)))
+        await chunk(store, image, 4, 6, "e")
+        await chunk(store, image, 5, 6, "f")
+        XCTAssertEqual(store.text(for: image), "abcdef")
+    }
+
+    func testQueueingDelayShrinksTheWindowAndAProbeWaitsLongerAfterward() async {
+        clock = 0
+        let big = id("0123456789ab")
+        let store = makeStore(dwell: 0)
+        store.setTransportReady(true)
+        store.requestIfNeeded(id: big, sessionId: "s", priority: .userOpened)
+        clock = 0.6; await chunk(store, big, 0, 12, "0")   // baseline 0.6 (one chunk alone)
+        clock = 1.2; await chunk(store, big, 1, 12, "1")   // calm: window 2, chunks 2 and 3 sent at 1.2
+        XCTAssertEqual(store.window, 2)
+        clock = 1.8; await chunk(store, big, 2, 12, "2")   // 4 sent at 1.8
+        clock = 2.4; await chunk(store, big, 3, 12, "3")   // rtt 1.2: queued behind chunk 2
+        XCTAssertEqual(store.window, 1, "a slow link drops back to one chunk at a time")
+        XCTAssertEqual(store.inFlightCountForTesting, 1)
+        // The failed probe doubles the calm stretch needed before the next.
+        clock = 3.0; await chunk(store, big, 4, 12, "4")   // sent 1.8: still the queued one
+        var t = 3.0
+        for index in 5..<8 {
+            t += 0.6; clock = t
+            await chunk(store, big, index, 12, "\(index)")
+        }
+        XCTAssertEqual(store.window, 1, "three calm chunks are not enough after a failed probe")
+        t += 0.6; clock = t
+        await chunk(store, big, 8, 12, "8")
+        XCTAssertEqual(store.window, 2, "four are")
+    }
+
+    func testATimedOutChunkFallsBackToOne() async {
+        let lost = id("lost-window")
+        let store = makeStore(dwell: 0, timeout: 0.05)
+        store.setTransportReady(true)
+        store.requestIfNeeded(id: lost, sessionId: "s", priority: .userOpened)
+        await settle(0.1)
+        XCTAssertEqual(store.window, 1)
     }
 
     func testClosingTheViewerKeepsLoadingAnImageStillOnScreen() async {
@@ -124,15 +163,17 @@ final class AttachmentSchedulerTests: XCTestCase {
         XCTAssertEqual(store.text(for: img), "pq")
     }
 
-    func testSeveralImagesStartTogether() async {
+    func testSeveralImagesLoadTogetherOnceTheLinkProvesFast() async {
         let a = id("a"), b = id("b"), c = id("c"), d = id("d")
         let store = makeStore(dwell: 0)
         store.setTransportReady(true)
         for key in [a, b, c, d] { store.requestIfNeeded(id: key, sessionId: "s") }
         await settle()
-        XCTAssertEqual(requests.map(\.id), [a, b, c], "three images start at once, in order")
+        XCTAssertEqual(requests.map(\.id), [a], "in order, one at first")
+        await chunk(store, a, 0, 1, "a")
         await chunk(store, b, 0, 1, "b")
-        XCTAssertEqual(requests.last?.id, d)
+        XCTAssertEqual(store.window, 2)
+        XCTAssertEqual(requests.map(\.id), [a, b, c, d], "the rest load together")
         XCTAssertEqual(store.text(for: b), "b")
     }
 
@@ -154,11 +195,11 @@ final class AttachmentSchedulerTests: XCTestCase {
         store.setTransportReady(true)
         store.requestIfNeeded(id: r, sessionId: "s", priority: .userOpened)
         await chunk(store, r, 0, 3, "1")
-        XCTAssertEqual(requests.map(\.index), [0, 1, 2])
+        XCTAssertEqual(requests.last?.index, 1)
         store.setTransportReady(false)
         XCTAssertNil(store.inFlightForTesting)
         store.setTransportReady(true)
-        XCTAssertEqual(requests.suffix(2).map { [$0.id, String($0.index)] }, [[r, "1"], [r, "2"]])
+        XCTAssertEqual(requests.last.map { [$0.id, String($0.index)] }, [r, "1"])
         XCTAssertEqual(store.state(for: r), .awaitingChunks(received: 1, total: 3))
     }
 
