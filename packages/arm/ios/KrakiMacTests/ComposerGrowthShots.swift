@@ -143,6 +143,53 @@ final class ComposerGrowthShots: XCTestCase {
         }
     }
 
+    /// At the stacking threshold the wider text lane fits one line again.
+    /// The actions still need a tall shell: the line must not center in it.
+    func testStackedVoiceReflowKeepsSingleLineAtTop() throws {
+        app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
+        drain(500)
+        let id = try XCTUnwrap(app.iosVoiceComposer.operation).id
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            window.appearance = NSAppearance(named: appearance)
+            for width in [420.0, 640, 900] {
+                window.setContentSize(NSSize(width: width, height: 240))
+                app.iosVoiceComposer.receive("Short", id: id)
+                drain(250)
+                let transcript = try XCTUnwrap(views(try XCTUnwrap(window.contentView))
+                    .compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
+                let scroll = try XCTUnwrap(transcript.enclosingScrollView)
+                let narrow = scroll.contentView.bounds.width
+                // Find the first CJK string that wraps in the narrow layout.
+                let text = try XCTUnwrap((1...100).map { String(repeating: "字", count: $0) }.first {
+                    MacComposerVoiceTranscriptView.measure([($0, 1)], width: narrow)
+                        > MacComposerMetrics.minimumTextHeight + 0.5
+                })
+                app.iosVoiceComposer.receive(text, id: id)
+                for _ in 0..<16 {
+                    drain(16)
+                    try assertVoiceFitsGlass()
+                    if scroll.contentView.bounds.height > MacComposerMetrics.minimumTextHeight + 0.5 {
+                        XCTAssertEqual(transcript.textDrawingRect.minY, 0, accuracy: 0.5,
+                                       "top alignment must hold during the layout transition too")
+                    }
+                }
+                XCTAssertGreaterThan(scroll.contentView.bounds.width, narrow + 30)
+                XCTAssertLessThan(transcript.contentHeight, MacComposerVoiceTranscriptView.lineHeight * 1.5,
+                                  "must exercise two narrow lines reflowing into one wide line")
+                XCTAssertGreaterThan(scroll.contentView.bounds.height, 40)
+                try shot("voice-reflow-\(Int(width))-\(appearance.rawValue)")
+                XCTAssertEqual(transcript.textDrawingRect.minY, 0, accuracy: 0.5,
+                               "expanded single-line speech belongs at the top, not in the middle")
+                // Resizing without receiving a new partial must also refit.
+                window.setContentSize(NSSize(width: width + 80, height: 240))
+                drain(250)
+                if scroll.contentView.bounds.height > MacComposerMetrics.minimumTextHeight + 0.5 {
+                    XCTAssertEqual(transcript.textDrawingRect.minY, 0, accuracy: 0.5)
+                }
+            }
+        }
+    }
+
     func testVoiceWrapTransitionKeepsGlassAndLayoutTogether() throws {
         app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
         drain(500)

@@ -353,12 +353,13 @@ final class MacComposerVoiceTranscriptView: NSView {
         needsDisplay = true
     }
 
-    /// Short speech is vertically centered within its current viewport.
-    /// Long speech keeps its complete document height and native tail scroll.
+    /// Only the compact one-row surface centers short speech. Stacking the
+    /// actions widens the text lane, so a wrapped line may fit on one line
+    /// again while its viewport stays tall. Use the actual allocated height
+    /// (also on resize), not the reflowed line count, to keep it at the top.
     var textDrawingRect: CGRect {
-        // Wrapped speech starts at the top: two lines in the stacked (three
-        // line tall) surface must not float in the middle.
-        if topAligned || contentHeight > Self.lineHeight * 1.5 { return bounds }
+        if topAligned || bounds.height > MacComposerMetrics.minimumTextHeight + 0.5
+            || contentHeight > Self.lineHeight * 1.5 { return bounds }
         let inset = max(0, (bounds.height - contentHeight) / 2)
         return bounds.insetBy(dx: 0, dy: inset)
     }
@@ -614,6 +615,7 @@ struct MacComposerScrollableVoiceTranscript: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.documentView?.topAligned = topAligned
         context.coordinator.apply(pieces: pieces, revision: revision, to: scrollView)
         // SwiftUI may deliver the first update before the representable has
         // its final width. Re-apply after AppKit has committed that layout.

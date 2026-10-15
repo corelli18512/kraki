@@ -294,6 +294,7 @@
 		6E1808A6EEB532CAB95FB4D5 /* MacChatBubbleContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA4B2EA2532F558EBA4F7D16 /* MacChatBubbleContent.swift */; };
 		6E3960E992C991C57D4002BF /* MacAutomationDriver+Regressions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C03EA1CEA9C063EB869C687 /* MacAutomationDriver+Regressions.swift */; };
 		6E4A4503459C98F003D5DFF6 /* SteerPlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 823FAA98B92DAC38750F1B5B /* SteerPlacementTests.swift */; };
+		6F0F9C3D1B942F7CF642D5A6 /* MessageInputView+VoiceGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9F8E0A38A253B293B8D135B /* MessageInputView+VoiceGeometry.swift */; };
 		6F355E1177288E02FB77EFDD /* Messages.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BC3B39CCEB12DE1DD65808 /* Messages.swift */; };
 		6F36555AE0DC8F192F6F376A /* MacSteerPlacementMotionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A006864BDF76F105F7DD91A4 /* MacSteerPlacementMotionTests.swift */; };
 		6F7C13F76FDD7E9103905674 /* MacMockData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63302839C21EFDE37CC56C13 /* MacMockData.swift */; };
@@ -1010,6 +1011,7 @@
 		C847C12C5865CC3884732BFE /* ExperienceTrackersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExperienceTrackersTests.swift; sourceTree = "<group>"; };
 		C8DA497DCE23973F7E7C380E /* NewSessionVoiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionVoiceTests.swift; sourceTree = "<group>"; };
 		C97B0E319E0F6D893D83C12A /* PushManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushManager.swift; sourceTree = "<group>"; };
+		C9F8E0A38A253B293B8D135B /* MessageInputView+VoiceGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MessageInputView+VoiceGeometry.swift"; sourceTree = "<group>"; };
 		CA4B2EA2532F558EBA4F7D16 /* MacChatBubbleContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatBubbleContent.swift; sourceTree = "<group>"; };
 		CAEADA84650AE3CD811E50BB /* MacChatHeaderControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatHeaderControls.swift; sourceTree = "<group>"; };
 		CB922ECF579C3FD8B1C99006 /* KrakiTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KrakiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -1854,6 +1856,7 @@
 				7A84BF94261411BEF2B51101 /* LazyImageView.swift */,
 				102ABECDD210B084B5B19319 /* MessageInputView.swift */,
 				3F4F992D734D92C92F1EFFA9 /* MessageInputView+ReturnKey.swift */,
+				C9F8E0A38A253B293B8D135B /* MessageInputView+VoiceGeometry.swift */,
 				E6783BD1527A13261E67330A /* ModePickerView.swift */,
 				7B237CA6F4416BC4603A4614 /* PhotoAttachmentLoad.swift */,
 				536629FAE2D87965671B981F /* StepsSheetView.swift */,
@@ -2454,6 +2457,7 @@
 				BC462CF6898FC87ADB1A1AE9 /* MessageBodyParser.swift in Sources */,
 				CDD3FC5A96DCC43FE52A4BCA /* MessageDatabase.swift in Sources */,
 				3785B7B14E162AEFB114FC8D /* MessageInputView+ReturnKey.swift in Sources */,
+				6F0F9C3D1B942F7CF642D5A6 /* MessageInputView+VoiceGeometry.swift in Sources */,
 				CB2D37D2D7F4BB782B250DDF /* MessageInputView.swift in Sources */,
 				87DF8395030B8C3D235D6DD2 /* MessageProvider.swift in Sources */,
 				F7B50B27C50074C2E07495C8 /* MessageRouter+DeviceTrust.swift in Sources */,
