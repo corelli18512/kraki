@@ -4,6 +4,17 @@ import SwiftUI
 import Observation
 
 extension AppState {
+    func updateReadVisibility(appForeground: Bool, conversationVisible: Bool) {
+        let becameReadable = appForeground && conversationVisible
+            && (!isAppForeground || !isConversationWindowVisible)
+        isAppForeground = appForeground
+        isConversationWindowVisible = conversationVisible
+        foregroundActivity.refresh()
+        guard becameReadable, let sessionId = sessionStore.activeSessionId else { return }
+        markSessionReadIfVisible(sessionId)
+        SessionNotifications.removeDelivered(forSession: sessionId)
+    }
+
     /// Connect to local relay with open auth — DEBUG only.
     /// Bypasses pairing and OAuth for fast dev iteration.
     ///
@@ -94,6 +105,7 @@ extension AppState {
     /// key mismatch); without it a re-pair in the same process could not
     /// decrypt anything and a different account would inherit old state.
     func resetIdentity(clearRelayURL: Bool) {
+        foregroundActivity.stop()
         pulseManager?.resetForIdentityChange()
         // The old decrypt pipeline may already have queued main-actor work.
         // Retire its router as well as the transport before clearing stores.
@@ -251,6 +263,7 @@ extension AppState {
             stability.connecting()
         case .disconnected: break
         }
+        if state != .connected { foregroundActivity.stop() }
         switch state {
         case .connected:
             connectionStatus = .authenticating
@@ -296,6 +309,7 @@ extension AppState {
         // — setting it to true again is a no-op.
         self.hasCompletedInitialConnect = true
         stability.authenticated()
+        foregroundActivity.refresh()
 
         // The relay rejects Pulse frames before auth and only starts its peer
         // endpoint after sending auth_ok. Start our endpoint at the same

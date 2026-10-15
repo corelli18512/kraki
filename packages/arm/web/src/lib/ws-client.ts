@@ -24,6 +24,7 @@ import { traceEvent } from './trace';
 import { SessionSubscriptionController } from './session-subscription';
 import { failAttachment } from './attachments';
 import { AttachmentPullQueue } from './attachment-pull-queue';
+import { ForegroundActivity } from './foreground-activity';
 
 const logger = createLogger('ws-client');
 
@@ -47,6 +48,9 @@ export class KrakiWSClient {
   /** Desktop shell only: direct loopback route to the Tentacle on this machine. */
   readonly localLink: LocalLinkClient | null;
   private pulseTick: ReturnType<typeof setInterval> | null = null;
+  private foregroundActivity = new ForegroundActivity(() => {
+    this.transport.sendRaw({ type: 'ping', foreground: true });
+  });
   /** Reassembles payloads a Tentacle split into small parts (so a large
    *  message never looks like a dead link on a slow network). */
   private assembler = new PayloadAssembler();
@@ -986,6 +990,7 @@ export class KrakiWSClient {
 
   /** Clear all in-progress tracking (used on disconnect/close). */
   private clearReplayTracking(): void {
+    this.foregroundActivity.stop();
     messageProvider.clear();
   }
 
@@ -1084,6 +1089,7 @@ export class KrakiWSClient {
         // Bring up the pulse endpoint + start the tick loop.
         this.pulse.onConnected();
         this.startPulseTick();
+        this.foregroundActivity.start();
         if (desktop && getStore().deviceId) this.sendToHead({ type: 'register_push_token', payload: { provider: 'local', token: getStore().deviceId } });
         this.attachmentPulls.resume();
         this.localLink?.start();

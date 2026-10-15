@@ -319,15 +319,10 @@ final class AppState {
         }
     }
 
-    func updateReadVisibility(appForeground: Bool, conversationVisible: Bool) {
-        let becameReadable = appForeground && conversationVisible
-            && (!isAppForeground || !isConversationWindowVisible)
-        isAppForeground = appForeground
-        isConversationWindowVisible = conversationVisible
-        guard becameReadable, let sessionId = sessionStore.activeSessionId else { return }
-        markSessionReadIfVisible(sessionId)
-        SessionNotifications.removeDelivered(forSession: sessionId)
-    }
+    @ObservationIgnored lazy var foregroundActivity = ForegroundActivityReporter(
+        eligible: { [weak self] in self?.isAppForeground == true && self?.connectionStatus == .connected },
+        send: { [weak self] in self?.wsClient?.sendRaw(#"{"type":"ping","foreground":true}"#, queueOnFailure: false) }
+    )
 
     /// macOS dev-local mode: connected to a local `pnpm dev` relay with no
     /// login. Gating for the welcome screen / sidebar. iOS is always

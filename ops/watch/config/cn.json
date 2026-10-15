@@ -7,6 +7,8 @@
   "relayUnit": "kraki-relay",
   "metricsUrl": "http://127.0.0.1:4000/internal/metrics",
   "backupStatus": "/var/lib/kraki-watch/backup.json",
+  "insightsPath": "/var/lib/kraki-insights/summary.json",
+  "experienceNotify": false,
   "disk": { "path": "/", "warning": 85, "critical": 95 },
   "units": [
     { "unit": "kraki-bark", "name": "国内 Bark 推送服务", "severity": "critical" },

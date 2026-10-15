@@ -97,7 +97,7 @@ export interface StoredRegion {
   lastSeenAt?: string;
 }
 
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 
 /**
  * Audio a live broker connection may run ahead of its last usage report.
@@ -454,6 +454,18 @@ export class Storage {
       `);
     }
 
+    if (currentVersion < 14) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS daily_active_users (
+          day TEXT NOT NULL,
+          user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+          PRIMARY KEY (day, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS usage_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT OR IGNORE INTO usage_metadata VALUES ('started_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+      `);
+    }
+
     this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
     this.sweepDeletedDevices();
   }
@@ -770,6 +782,26 @@ export class Storage {
   }
 
   // --- Device activity ---
+
+  private usagePrunedDay = '';
+
+  /** One account/day, never connection counts. Only authenticated foreground
+   * app pings call this; the server supplies the date, not the client. */
+  recordForegroundActivity(userId: string, now = Date.now()): void {
+    const day = new Date(now + 8 * 3600_000).toISOString().slice(0, 10);
+    this.stmt('INSERT OR IGNORE INTO daily_active_users (day, user_id) VALUES (?, ?)').run(day, userId);
+    this.pruneForegroundActivity(now);
+  }
+
+  /** Also called by the health tick, so an idle service still expires rows. */
+  pruneForegroundActivity(now = Date.now()): void {
+    const day = new Date(now + 8 * 3600_000).toISOString().slice(0, 10);
+    if (this.usagePrunedDay !== day) {
+      const oldest = new Date(now + 8 * 3600_000 - 34 * 86400_000).toISOString().slice(0, 10);
+      this.db.prepare('DELETE FROM daily_active_users WHERE day < ?').run(oldest);
+      this.usagePrunedDay = day;
+    }
+  }
 
   /** Update last_seen timestamp for a device (called on disconnect). */
   touchDeviceLastSeen(deviceId: string): void {

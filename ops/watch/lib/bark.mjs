@@ -3,7 +3,19 @@ import { deliveryConfig } from './config.mjs';
 
 /** Bark request body for a kraki-watch notification. Pure. */
 export function barkPayload(n, deviceKey) {
-  const base = { device_key: deviceKey, title: n.title, body: n.body || ' ', isArchive: '1' };
+  const shorten = (s, bytes) => {
+    if (Buffer.byteLength(s, 'utf8') <= bytes) return s;
+    let out = '', size = 0;
+    for (const c of s) { size += Buffer.byteLength(c, 'utf8'); if (size > bytes - 3) return out + '…'; out += c; }
+    return out;
+  };
+  const base = { device_key: deviceKey, title: shorten(n.title, 256), body: shorten(n.body || ' ', 2700), isArchive: '1' };
+  // Leave APNs envelope headroom (4 KB limit), including JSON escaping. Keep
+  // full aggregates on the server; an oversized digest must not be lost.
+  while (Buffer.byteLength(JSON.stringify(base), 'utf8') > 3000) {
+    if (Buffer.byteLength(base.body, 'utf8') <= 32) throw new Error('Bark payload envelope too large');
+    base.body = shorten(base.body, Math.max(32, Buffer.byteLength(base.body, 'utf8') - 256));
+  }
   if (n.kind === 'digest') return { ...base, level: 'active', group: 'Kraki 日报' };
   if (n.severity === 'critical' && (n.kind === 'fire' || n.kind === 'repeat')) {
     // critical: rings through silent mode and Focus; call: rings for ~30 s.

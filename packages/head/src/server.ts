@@ -130,6 +130,8 @@ export class HeadServer {
 
       // Sweep expired pairing tokens
       this.authBackend.sweepPairingTokens?.();
+      try { this.storage.pruneForegroundActivity(); }
+      catch { logger.warn('Failed to prune foreground usage counters'); }
 
       // Periodic health snapshot — ALWAYS on (not trace-gated). Cheap (one line
       // / 30s) and is the canary for the OOM / event-loop-stall class of bugs
@@ -494,6 +496,18 @@ export class HeadServer {
     }
 
     if (msg.type === 'ping') {
+      // Backward-compatible, unqueued foreground heartbeat. Never infer DAU
+      // from authentication, background traffic, diagnostic opt-in or agents.
+      const day = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+      if (msg.foreground === true && state.foregroundDay !== day && state.userId && state.deviceId
+        && this.storage.getDevice(state.deviceId)?.role === 'app') {
+        try {
+          this.storage.recordForegroundActivity(state.userId);
+          state.foregroundDay = day;
+        } catch {
+          getLogger().warn('Daily activity recording failed');
+        }
+      }
       ws.send(JSON.stringify({ type: 'pong' }));
       return;
     }

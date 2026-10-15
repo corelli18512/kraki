@@ -117,6 +117,9 @@ export interface BlobPayload {
 /** Ping / pong control messages for connection keepalive. */
 export interface PingMessage {
   type: 'ping';
+  /** App is actually foreground now. Best-effort raw WS only, never queued.
+   * Head records one account/Beijing-date for product usage, not diagnostics. */
+  foreground?: boolean;
 }
 
 export interface PongMessage {

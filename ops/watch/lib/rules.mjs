@@ -13,6 +13,8 @@
 //
 // `mem` is rules' own memory kept in state.rules (history, unit restarts).
 
+import { experienceChecks } from './experience.mjs';
+
 const MIN = 60_000;
 const WINDOW_MS = 10 * MIN;
 
@@ -231,5 +233,10 @@ export function evaluateRules(snap, memIn, config) {
   const versions = [...new Set(Object.entries(digest.notes).filter(([k]) => k.startsWith('version:')).map(([, v]) => v))];
   if (versions.length > 0) push({ id: 'K-VERSION', severity: 'info', failAfter: 1, ok: versions.length === 1, title: '两台 relay 版本不一致', detail: versions.join(' / ') });
 
+  if (config.insightsPath) {
+    const experience = experienceChecks(snap.insights, now, config, mem);
+    results.push(...experience.rules);
+    digest.notes.insights = experience.notes;
+  }
   return { results, mem, digest };
 }
