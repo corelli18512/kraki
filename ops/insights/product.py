@@ -47,9 +47,12 @@ def account_snapshot(path, key, primary, now):
         db.close()
 
 
-def combine_product(local, peer, now, max_age=180000):
+def combine_product(local, peer, now, max_age=180000, *, checked_at=None):
     sources = [s for s in [local, peer] if s]
-    fresh = lambda s: isinstance(s.get('asOf'), (int, float)) and 0 <= now - s['asOf'] <= max_age
+    # Calendar windows use the snapshot time; freshness uses the time the peer
+    # read finished. A peer may legitimately publish while SSH is in flight.
+    checked_at = now if checked_at is None else checked_at
+    fresh = lambda s: isinstance(s.get('asOf'), (int, float)) and 0 <= checked_at - s['asOf'] <= max_age
     authoritative = [s for s in sources if s.get('primary') and fresh(s)]
     registration = authoritative[0]['registration'] if len(authoritative) == 1 else None
     keys_match = len(sources) == 2 and sources[0].get('keyId') == sources[1].get('keyId')

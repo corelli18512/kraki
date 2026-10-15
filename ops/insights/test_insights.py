@@ -110,6 +110,40 @@ class InsightsTests(unittest.TestCase):
             edge['asOf'] = NOW; edge['keyId'] = 'mismatch'
             self.assertIsNone(combine_product(primary, edge, NOW)['days'][yesterday]['observedDau'])
 
+    def test_peer_freshness_uses_completion_time_without_relaxing_age_or_future_gates(self):
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/'head.db'; database(path)
+            primary=account_snapshot(path, KEY, True, NOW)
+            edge=account_snapshot(path, KEY, False, NOW+1000)
+            yesterday=day_bounds(NOW-DAY)[0]
+            result=combine_product(primary,edge,NOW,checked_at=NOW+2000)
+            self.assertEqual(result['freshHosts'],2)
+            self.assertEqual(result['days'][yesterday]['observedDau'],1)
+            # Still reject timestamps after completion, and a peer that became
+            # older than three minutes while its response was being fetched.
+            for at in [NOW+2001,NOW-180000+1000]:
+                edge['asOf']=at
+                result=combine_product(primary,edge,NOW,checked_at=NOW+2000)
+                self.assertEqual(result['freshHosts'],1)
+                self.assertIsNone(result['days'][yesterday]['observedDau'])
+
+    def test_job_accounts_for_time_spent_reading_peer(self):
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);(root/'diag').mkdir();(root/'state').mkdir();(root/'key').write_bytes(KEY)
+            database(root/'head.db')
+            before=(root/'head.db').read_bytes()
+            peer={'product':account_snapshot(root/'head.db',KEY,False,NOW+1000)}
+            times=iter([100,102])
+            with patch('run.peer_snapshot',return_value=peer):
+                build({'host':'tokyo','primary':True,'headDb':str(root/'head.db'),'hmacKeyFile':str(root/'key'),
+                       'diagDirectory':str(root/'diag')},root/'state',NOW,clock=lambda:next(times))
+            summary=json.loads((root/'state'/'summary.json').read_text())
+            self.assertEqual(summary['product']['freshHosts'],2)
+            self.assertEqual(summary['product']['days'][day_bounds(NOW-DAY)[0]]['observedDau'],1)
+            self.assertEqual(summary['daily']['date'],day_bounds(NOW-DAY)[0])
+            self.assertNotIn('keyId',json.dumps(summary))
+            self.assertEqual(before,(root/'head.db').read_bytes())
+
     def test_old_head_is_unknown_not_zero_and_ambiguous_primary_rejected(self):
         with tempfile.TemporaryDirectory() as root:
             path=Path(root)/'head.db'; database(path, False)
