@@ -83,7 +83,10 @@ for (const dir of dirs.map((d) => resolve(d))) {
     const remote = files(unpacked(join(work, 'npm')));
     // Source maps embed build paths; everything else must match.
     const changed = [...new Set([...local.keys(), ...remote.keys()])]
-      .filter((f) => !f.endsWith('.map') && local.get(f) !== remote.get(f));
+      .filter((f) => !f.endsWith('.map') && local.get(f) !== remote.get(f))
+      // The release writes build-info.json only when it publishes, after
+      // this check: a local build does not have it yet.
+      .filter((f) => !(f.endsWith('build-info.json') && !local.has(f)));
     if (changed.length > 0) {
       failed = true;
       console.error(`::error::${spec} is already on npm but its contents changed. Bump its version, or dependents are published against the stale copy.`);
