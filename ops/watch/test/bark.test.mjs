@@ -20,6 +20,42 @@ test('Bark POST uses a JSON body, never a key in the URL; success needs code 200
   assert.deepEqual(result, { ok: true });
 });
 
+test('real HTTP digest requests remain passive and silent for every severity and quiet-hour state', async () => {
+  const received = [];
+  const server = createServer((req, res) => {
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      received.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      res.setHeader('Content-Type', 'application/json');
+      res.end('{"code":200}');
+    });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    for (const severity of ['info', 'warning', 'critical']) {
+      for (const quiet of [false, true]) {
+        const result = await sendBark({ kind: 'digest', severity, quiet, title: '日报', body: '观察数据' }, {
+          ...options, server: `http://127.0.0.1:${server.address().port}`,
+        });
+        assert.deepEqual(result, { ok: true });
+      }
+    }
+    assert.equal(received.length, 6);
+    for (const payload of received) {
+      assert.equal(payload.level, 'passive');
+      assert.equal(payload.sound, 'silence');
+      assert.equal(payload.group, 'Kraki 日报');
+      assert.equal(payload.isArchive, '1');
+      assert.equal(payload.call, undefined);
+      assert.equal(payload.volume, undefined);
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('HTTP success with a Bark error, HTML, empty or unrelated JSON is a failure', async () => {
   for (const body of ['{"code":400,"message":"test-secret"}', '<html>test-secret</html>', '', '{}', 'null']) {
     const result = await sendBark(notice, { ...options, fetchImpl: async () => new Response(body) });

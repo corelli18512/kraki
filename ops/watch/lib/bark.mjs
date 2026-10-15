@@ -16,7 +16,9 @@ export function barkPayload(n, deviceKey) {
     if (Buffer.byteLength(base.body, 'utf8') <= 32) throw new Error('Bark payload envelope too large');
     base.body = shorten(base.body, Math.max(32, Buffer.byteLength(base.body, 'utf8') - 256));
   }
-  if (n.kind === 'digest') return { ...base, level: 'active', group: 'Kraki 日报' };
+  // Digest severity describes its contents, never an interruption escalation.
+  // Bark bundles silence.caf; also avoid its default audible sound as a fallback.
+  if (n.kind === 'digest') return { ...base, level: 'passive', sound: 'silence', group: 'Kraki 日报' };
   if (n.severity === 'critical' && (n.kind === 'fire' || n.kind === 'repeat')) {
     // critical: rings through silent mode and Focus; call: rings for ~30 s.
     return { ...base, level: 'critical', volume: '8', call: '1', group: 'Kraki 紧急' };
