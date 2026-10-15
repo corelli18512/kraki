@@ -44,6 +44,9 @@ concurrency:
   group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
+env:
+  KRAKI_BUILD_CHANNEL: ${{ (github.event_name == 'push' || github.event.inputs.mode == 'publish') && 'release' || 'ci' }}
+
 # ─── Prepare ─────────────────────────────────────────────
 
 jobs:
@@ -95,6 +98,12 @@ jobs:
 
           git checkout --detach "${checkout_ref}"
           release_sha="$(git rev-parse HEAD)"
+          # Attestation certificates describe the workflow ref, not arbitrary
+          # code checked out later. Never claim one source while building another.
+          if [ "$release_sha" != "$GITHUB_SHA" ]; then
+            echo "Dispatch this workflow on the release tag itself (gh workflow run release.yml --ref TAG), not main."
+            exit 1
+          fi
 
           {
             echo "checkout_ref=${checkout_ref}"
@@ -222,7 +231,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.checkout_ref }}
+          ref: ${{ needs.prepare.outputs.release_sha }}
 
       - name: Enable corepack
         run: corepack enable
@@ -402,7 +411,7 @@ jobs:
       - name: Upload binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: build-${{ matrix.asset_name }}
+          name: build-${{ matrix.asset_name }}-${{ github.run_attempt }}
           path: packages/tentacle/dist/sea/${{ matrix.asset_name }}
           if-no-files-found: error
 
@@ -410,7 +419,7 @@ jobs:
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: build-${{ matrix.asset_name }}-app
+          name: build-${{ matrix.asset_name }}-app-${{ github.run_attempt }}
           path: packages/tentacle/dist/sea/kraki-macos-*.app.tar.gz
           if-no-files-found: error
 
@@ -432,7 +441,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ needs.prepare.outputs.checkout_ref }}
+          ref: ${{ needs.prepare.outputs.release_sha }}
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
@@ -495,6 +504,16 @@ jobs:
           fi
           node packages/tentacle/scripts/smoke-test-binary.mjs "$HELPER/Contents/MacOS/kraki"
 
+      - name: Embed native build identity
+        run: |
+          VERSION=$(awk '
+            /^targets:/ { in_targets=1; next }
+            in_targets && /^  KrakiMac:/ { in_mac=1; next }
+            in_mac && /^  [A-Za-z0-9_]+:/ { exit }
+            in_mac && /MARKETING_VERSION:/ { gsub(/"/, "", $2); print $2; exit }
+          ' packages/arm/ios/project.yml)
+          node scripts/release/build-info.mjs packages/arm/ios/Kraki/Resources/build-info.json mac "$VERSION"
+
       - name: Archive KrakiMac (Developer ID; diagnostics only on explicit -diag tag)
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -521,6 +540,7 @@ jobs:
           set -euo pipefail
           APP="$RUNNER_TEMP/KrakiMac.xcarchive/Products/Applications/Kraki.app"
           test -f "$APP/Contents/MacOS/Kraki"
+          cmp packages/arm/ios/Kraki/Resources/build-info.json "$APP/Contents/Resources/build-info.json"
           if [ '${{ endsWith(needs.prepare.outputs.release_tag, '-diag') }}' = 'true' ]; then
             bash scripts/diag/verify-diagnostic-delivery.sh "$APP"
           else
@@ -635,7 +655,7 @@ jobs:
       - name: Preserve matching dSYMs for diagnostics
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: mac-symbols-${{ needs.prepare.outputs.release_sha }}
+          name: mac-symbols-${{ needs.prepare.outputs.release_sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/KrakiMac.xcarchive/dSYMs
           retention-days: 90
           if-no-files-found: error
@@ -643,7 +663,7 @@ jobs:
       - name: Upload Sparkle update archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: build-kraki-mac-sparkle-update
+          name: build-kraki-mac-sparkle-update-${{ github.run_attempt }}
           path: ${{ runner.temp }}/Kraki.app.zip
           if-no-files-found: error
 
@@ -675,7 +695,7 @@ jobs:
       - name: Upload .app bundle artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: build-kraki-mac-gui-universal-app
+          name: build-kraki-mac-gui-universal-app-${{ github.run_attempt }}
           path: ${{ runner.temp }}/kraki-mac-gui-universal.app.tar.gz
           if-no-files-found: error
 
@@ -712,7 +732,7 @@ jobs:
       - name: Upload disk image artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: build-kraki-mac-dmg
+          name: build-kraki-mac-dmg-${{ github.run_attempt }}
           path: ${{ runner.temp }}/Kraki.dmg
           if-no-files-found: error
 
@@ -747,32 +767,55 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      - name: Check out release tooling
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+
       - name: Download build artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: build-kraki-*
+          pattern: build-kraki-*-${{ github.run_attempt }}
           path: release-assets
           merge-multiple: true
 
-      - name: Generate checksums
+      - name: Generate release manifest and checksums
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
-          (
-            cd release-assets
-            sha256sum * > SHA256SUMS.txt
-          )
-          cat release-assets/SHA256SUMS.txt
+          if [[ "$RELEASE_TAG" == mac-v* ]]; then
+            COMPONENT=mac; VERSION="${RELEASE_TAG#mac-v}"
+          else
+            COMPONENT=cli; VERSION="${RELEASE_TAG#v}"
+          fi
+          node scripts/release/artifacts.mjs manifest release-assets "$COMPONENT" "$VERSION"
 
       - name: Attest build provenance
+        id: provenance
         if: needs.prepare.outputs.publish_mode == 'publish'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: 'release-assets/*'
 
+      - name: Verify provenance before publication and preserve proof
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          node scripts/release/artifacts.mjs verify release-assets "$PROVENANCE_BUNDLE"
+          cp "$PROVENANCE_BUNDLE" release-assets/provenance.json
+
       - name: Upload release assets bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-assets-${{ needs.prepare.outputs.release_sha }}
+          name: release-assets-${{ needs.prepare.outputs.release_sha }}-${{ github.run_attempt }}
           path: release-assets
           if-no-files-found: error
 
@@ -789,12 +832,23 @@ jobs:
             v*) latest=true ;;
             *) latest=false ;;
           esac
+          NOTES=(--generate-notes)
+          if [ -f "release-notes/$RELEASE_TAG.md" ]; then NOTES=(--notes-file "release-notes/$RELEASE_TAG.md"); fi
           gh release create "$RELEASE_TAG" \
             --repo "${{ github.repository }}" \
             --title "$RELEASE_TAG" \
-            --generate-notes \
+            "${NOTES[@]}" \
             --latest="$latest" \
             release-assets/*
+
+      - name: Verify downloaded release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir verify-release
+          node scripts/release/artifacts.mjs verify verify-release verify-release/provenance.json
 
   # ─── Publish Sparkle appcast ───────────────────────────
 
@@ -920,7 +974,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ needs.prepare.outputs.checkout_ref }}
+          ref: ${{ needs.prepare.outputs.release_sha }}
 
       - name: Enable corepack
         run: corepack enable
@@ -976,6 +1030,7 @@ jobs:
             fi
 
             echo "::group::Publishing ${pkg}@${version}"
+            node scripts/release/build-info.mjs "$dir/dist/build-info.json" "$pkg" "$dir/package.json"
             pnpm --dir "$dir" pack --pack-destination "$ARTIFACT_DIR"
             tarball_name="$(node -p "const p = require('./${dir}/package.json'); p.name.replace(/^@/, '').replace('/', '-') + '-' + p.version + '.tgz'")"
             npm publish "$ARTIFACT_DIR/$tarball_name" --access public --provenance

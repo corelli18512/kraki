@@ -14,6 +14,9 @@ const { BuiltInKraki, readLocalLinkDiscovery } = require('./tentacle.cjs');
 const presence = require('./presence.cjs');
 const permissions = require('./permissions.cjs');
 const settings = require('./settings.cjs');
+const buildInfo = require('./build-info.json');
+// Public, immutable build identity; never read from runtime env/renderer URLs.
+ipcMain.on('kraki:build-info', (event) => { event.returnValue = buildInfo; });
 
 const SCHEME = 'app';
 const HOST = 'kraki';

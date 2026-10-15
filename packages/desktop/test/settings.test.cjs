@@ -27,7 +27,7 @@ test('external CLI only probes --version without daemon commands', { skip: proce
 test('settings preload exposes the agreed capability names and forwards fixed IPC', async () => {
   let bridge;
   const calls = [];
-  const ipcRenderer = { invoke: (...args) => { calls.push(args); return Promise.resolve({ ok: true }); }, send: (...args) => { calls.push(args); } };
+  const ipcRenderer = { sendSync: (channel) => { assert.equal(channel, 'kraki:build-info'); return { schemaVersion: 1, channel: 'local' }; }, invoke: (...args) => { calls.push(args); return Promise.resolve({ ok: true }); }, send: (...args) => { calls.push(args); } };
   vm.runInNewContext(readFileSync(path.join(__dirname, '../src/preload.cjs'), 'utf8'), {
     require: () => ({ contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } }, ipcRenderer }),
     process: { platform: 'win32', argv: ['--kraki-builtin=1'] },

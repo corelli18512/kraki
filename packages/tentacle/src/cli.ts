@@ -59,6 +59,7 @@ function printHelp(): void {
     cmd('kraki stop', 'Stop Kraki'),
     cmd('kraki restart', 'Restart Kraki (e.g. after installing an agent)'),
     cmd('kraki update', 'Install the latest version'),
+    cmd('kraki build-info', 'Build source, GitHub Run ID and provenance (--json)'),
     '',
     head('Settings'),
     cmd('kraki config', 'Print the current config'),
@@ -138,6 +139,13 @@ async function main(): Promise<void> {
 
   if (cmd === '--help' || cmd === '-h') {
     printHelp();
+    return;
+  }
+
+  if (cmd === 'build-info') {
+    const { getBuildInfo, formatBuildInfo } = await import('./build-info.js');
+    const info = getBuildInfo();
+    console.log(args.includes('--json') ? JSON.stringify(info, null, 2) : formatBuildInfo(info));
     return;
   }
 

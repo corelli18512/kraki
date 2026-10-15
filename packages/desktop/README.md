@@ -29,6 +29,11 @@ Local testing only: `KRAKI_DESKTOP_DEBUG_PORT` (remote debugging),
 `KRAKI_DESKTOP_QUERY` (e.g. `relay=ws://<lan-ip>:4470&token=<pairing>`),
 `KRAKI_DESKTOP_ALLOW_INSECURE=1` (plain ws:// relay), `KRAKI_DESKTOP_LOG_NOTIFY=1`.
 
-Not done yet: code signing (SmartScreen warns on unsigned installers),
-auto-update (electron-updater + GitHub Releases), CI build, real GitHub OAuth
-check.
+Official installers are built by `.github/workflows/windows-release.yml` on
+`win-v*` tags, with a source/Run ID embedded in About and signed GitHub artifact
+provenance for the final installer. Dispatch with `mode=dry-run` to build without
+publishing. See [build provenance](../../docs/BUILD_PROVENANCE.md).
+
+Not done yet: Windows code signing (SmartScreen can still warn on unsigned
+installers) and auto-update (electron-updater + GitHub Releases). GitHub artifact
+provenance does not replace Authenticode or assert installer safety.

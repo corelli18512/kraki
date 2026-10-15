@@ -4,6 +4,7 @@
 import SwiftUI
 
 struct AboutPane: View {
+    var buildInfo: BuildInfo = .current
     @Environment(TentacleCLIManager.self) private var tentacleCLI
     @Environment(AppState.self) private var appState
 
@@ -21,6 +22,15 @@ struct AboutPane: View {
     }
 
     var body: some View {
+        // Settings has a fixed 540 × 420 window; provenance must stay reachable
+        // without clipping the links/copyright below the new rows.
+        ScrollView {
+            aboutContent
+        }
+        .background(Color.surfacePrimary)
+    }
+
+    private var aboutContent: some View {
         VStack(spacing: 14) {
             Spacer().frame(height: 20)
 
@@ -50,6 +60,14 @@ struct AboutPane: View {
             }
             .padding(.top, 6)
 
+            VStack(spacing: 12) {
+                BuildProvenanceView(info: buildInfo)
+            }
+            .font(.system(size: 12))
+            .padding(14)
+            .frame(maxWidth: 420)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+
             Divider().frame(width: 220).padding(.vertical, 6)
 
             HStack(spacing: 16) {
@@ -66,9 +84,8 @@ struct AboutPane: View {
                 .font(.system(size: 10))
                 .foregroundStyle(Color.textMuted)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
         .padding(24)
-        .background(Color.surfacePrimary)
     }
 
     private func versionRow(_ label: String, value: String) -> some View {

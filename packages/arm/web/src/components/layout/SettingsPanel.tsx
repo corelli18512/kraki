@@ -17,6 +17,7 @@ import {
 } from '../../lib/push';
 import { CHANNEL_SWITCHING_ENABLED, getCurrentChannel, setChannel } from '../../lib/auth';
 import { version } from '../../../package.json';
+import { BuildProvenance } from './BuildProvenance';
 import { ArchiveSettings } from '../sessions/ArchivedSessions';
 import { CONNECT_PHONE_EVENT } from '../devices/ConnectPhoneCard';
 import { DeviceUpdateBox } from '../devices/DeviceUpdateBox';
@@ -457,6 +458,7 @@ export function SettingsPanel({
       >
         {diagCopied ? 'Copied' : 'Copy Diagnostics'}
       </button>
+      {desktop && <BuildProvenance info={desktop.buildInfo} />}
       <hr className="my-1.5 w-[220px] border-border-primary" />
       <div className="flex gap-4 text-xs font-medium text-kraki-500">
         {[

@@ -207,6 +207,19 @@ async function runCli(args: string[]): Promise<void> {
   }
 }
 
+describe('CLI build-info', () => {
+  it('prints machine-readable local build information without starting a daemon', async () => {
+    await runCli(['build-info', '--json']);
+    // The command lazy-loads its module. Under full-suite load a fixed 50 ms
+    // sleep is not a completion signal; wait for the actual JSON response.
+    const info = await vi.waitFor(() => JSON.parse(consoleOutput.join('\n')));
+    expect(info.channel).toBe('local');
+    expect(info.platform).toBe(process.platform);
+    expect(mockStartDaemon).not.toHaveBeenCalled();
+    expect(mockRunSetup).not.toHaveBeenCalled();
+  });
+});
+
 // ── --help ──────────────────────────────────────────────
 
 describe('CLI --help', () => {

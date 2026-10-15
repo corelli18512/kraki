@@ -1,0 +1,185 @@
+name: Windows Release
+
+on:
+  push:
+    tags: ['win-v*']
+  pull_request:
+    paths:
+      - '.github/workflows/windows-release.yml'
+      - 'scripts/release/**'
+      - 'packages/desktop/**'
+      - 'packages/arm/web/**'
+      - 'packages/tentacle/**'
+      - 'packages/protocol/**'
+      - 'packages/crypto/**'
+      - 'packages/pulse/**'
+      - 'pnpm-lock.yaml'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Build only, or publish from the selected win-v tag
+        type: choice
+        options: [dry-run, publish]
+        default: dry-run
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  KRAKI_BUILD_CHANNEL: ${{ (github.event_name == 'push' || inputs.mode == 'publish') && 'release' || 'ci' }}
+
+jobs:
+  build:
+    name: Build Windows installer
+    runs-on: windows-2022
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Validate release identity and CI
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./packages/desktop/package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if [ "$KRAKI_BUILD_CHANNEL" = release ]; then
+            test "$GITHUB_REF" = "refs/tags/win-v$VERSION" || { echo "Select the matching win-v$VERSION tag"; exit 1; }
+            git fetch origin main
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+            STATUS=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" \
+              --jq '.check_runs[] | select(.name == "Validate") | .conclusion' | head -1)
+            test "$STATUS" = success || { echo "Required Validate check has not passed"; exit 1; }
+          fi
+
+      - name: Install locked dependencies
+        run: |
+          pnpm install --frozen-lockfile --filter @kraki/tentacle... --filter @kraki/arm-web...
+          npm ci --prefix packages/desktop
+
+      - name: Test desktop shell and provenance
+        run: |
+          node --test packages/desktop/test/*.test.cjs
+          node --test scripts/release/*.test.mjs
+
+      - name: Build and test bundled CLI from the same source
+        run: |
+          set -euo pipefail
+          cd packages/desktop
+          node scripts/prepare-kraki.mjs
+          cd ../..
+          node packages/tentacle/scripts/smoke-test-binary.mjs packages/desktop/kraki/kraki.exe
+
+      - name: Embed build identity and build web UI
+        run: |
+          set -euo pipefail
+          node scripts/release/build-info.mjs packages/desktop/src/build-info.json windows packages/desktop/package.json
+          cd packages/desktop
+          node scripts/prepare-web.mjs
+
+      - name: Package Windows installer
+        # Authenticode remains a separate certificate/service setup. The
+        # unsigned preview installer still gets GitHub artifact provenance.
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run --prefix packages/desktop dist:win
+
+      - name: Verify packaged build identity and bundled helper
+        run: |
+          set -euo pipefail
+          node scripts/release/verify-desktop.mjs
+          node packages/tentacle/scripts/smoke-test-binary.mjs packages/desktop/release/win-unpacked/resources/kraki/kraki.exe
+
+      - name: Prepare final installer manifest
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          cp packages/desktop/release/Kraki-Setup-*.exe release-assets/
+          for file in packages/desktop/release/*.blockmap; do
+            if [ -f "$file" ]; then cp "$file" release-assets/; fi
+          done
+          node scripts/release/artifacts.mjs manifest release-assets windows "$VERSION"
+
+      - name: Preserve build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-installer-${{ github.sha }}-${{ github.run_attempt }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    name: Attest and publish Windows installer
+    needs: build
+    if: github.event_name == 'push' || inputs.mode == 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-installer-${{ github.sha }}-${{ github.run_attempt }}
+          path: release-assets
+
+      - name: Attest installer and manifest
+        id: provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: 'release-assets/*'
+
+      - name: Verify provenance before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          node scripts/release/artifacts.mjs verify release-assets "$PROVENANCE_BUNDLE"
+          cp "$PROVENANCE_BUNDLE" release-assets/provenance.json
+
+      - name: Publish Windows release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          NOTES=(--generate-notes)
+          if [ -f "release-notes/$GITHUB_REF_NAME.md" ]; then NOTES=(--notes-file "release-notes/$GITHUB_REF_NAME.md"); fi
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --latest=false --title "$GITHUB_REF_NAME" "${NOTES[@]}" release-assets/*
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir verify-release
+          node scripts/release/artifacts.mjs verify verify-release verify-release/provenance.json

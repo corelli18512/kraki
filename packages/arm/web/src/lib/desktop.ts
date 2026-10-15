@@ -91,7 +91,18 @@ export interface DesktopSettingsBridge {
   setAllowRemoteUpdates?: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
 }
 
+export interface DesktopBuildInfo {
+  schemaVersion: number;
+  channel: string;
+  repository?: string;
+  commit?: string;
+  workflow?: string;
+  runId?: string;
+  runAttempt?: string;
+}
+
 export interface KrakiDesktopBridge {
+  buildInfo?: DesktopBuildInfo;
   settings?: DesktopSettingsBridge;
   /** Export a self-contained report to the system browser; never accepts a path. */
   exportHtmlReport?: (html: string, name: string) => Promise<{ ok: boolean; error?: string }>;

@@ -6,6 +6,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setMachOUuid } from './macho-uuid.mjs';
+import { createBuildInfo } from '../../../scripts/release/build-info.mjs';
 
 const SENTINEL_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -95,6 +96,7 @@ async function bundleCli() {
     },
     define: {
       __KRAKI_VERSION__: JSON.stringify(version),
+      __KRAKI_BUILD_INFO__: JSON.stringify(createBuildInfo({ component: 'cli', version, cwd: repoRoot })),
       // esbuild rewrites `import.meta` to an empty object `{}` when
       // bundling .mjs sources into CJS, so any `import.meta.url` access
       // becomes `undefined`. The Claude Agent SDK reads `import.meta.url`

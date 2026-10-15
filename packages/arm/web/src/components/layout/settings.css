@@ -25,6 +25,11 @@
 .kp-switch:disabled { opacity:.4; }
 .kp-about { display:flex; flex-direction:column; align-items:center; gap:14px; padding:20px 4px 4px; min-height:100%; }
 .kp-about-logo { width:96px; height:96px; border-radius:22px; filter:drop-shadow(0 8px 18px #0000002e); }
+.kp-build-source { width:100%; max-width:420px; flex-shrink:0; padding:4px 14px; border-radius:10px; background:var(--color-surface-secondary); font-size:12px; color:var(--color-text-primary); }
+.kp-build-source > a,.kp-build-source > div { display:flex; justify-content:space-between; align-items:center; gap:12px; min-height:36px; }
+.kp-build-source > a:hover { color:var(--color-kraki-500); }
+.kp-build-source > a:focus-visible { outline:2px solid var(--color-kraki-500); outline-offset:2px; border-radius:3px; }
+.kp-build-source > a > span:last-child,.kp-build-source > div > span:last-child { color:var(--color-text-secondary); font-variant-numeric:tabular-nums; }
 .kp-diagnostic { display:flex; gap:6px; align-items:center; }
 .kp-diagnostic dt { width:150px; text-align:right; font:900 9px monospace; letter-spacing:.5px; color:var(--color-text-muted); }
 .kp-diagnostic dd { font:11px monospace; color:var(--color-text-secondary); }

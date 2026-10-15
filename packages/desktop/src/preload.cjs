@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('krakiDesktop', {
   exportHtmlReport: (html, name) => ipcRenderer.invoke('kraki:export-html-report', html, name),
   platform: process.platform,
   version: arg('kraki-version'),
+  buildInfo: ipcRenderer.sendSync('kraki:build-info'),
   oauthRedirectOrigin: arg('kraki-oauth-origin') || 'https://app.kraki.chat',
   notify: (n) => ipcRenderer.send('kraki:notify', {
     title: String(n?.title ?? ''), body: String(n?.body ?? ''), sessionId: n?.sessionId ? String(n.sessionId) : undefined,
