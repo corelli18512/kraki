@@ -23,6 +23,7 @@ def event(ev='send.summary', at=NOW - 1000, **data):
 
 def database(path, active=True):
     db = sqlite3.connect(path)
+    db.execute('PRAGMA user_version = ' + ('14' if active else '13'))
     db.execute('CREATE TABLE users(user_id TEXT PRIMARY KEY, provider TEXT, created_at TEXT)')
     db.executemany('INSERT INTO users VALUES(?,?,?)', [('u1', 'github', '2026-10-14 18:00:00'), ('u2', 'github', '2026-10-15 16:00:00'), ('test', 'open', '2026-10-14 18:00:00')])
     if active:
@@ -107,7 +108,7 @@ class InsightsTests(unittest.TestCase):
             edge['asOf'] = NOW; edge['keyId'] = 'mismatch'
             self.assertIsNone(combine_product(primary, edge, NOW)['days'][yesterday]['observedDau'])
 
-    def test_old_head_is_unknown_not_zero_and_first_day_incomplete(self):
+    def test_old_head_is_unknown_not_zero_and_ambiguous_primary_rejected(self):
         with tempfile.TemporaryDirectory() as root:
             path=Path(root)/'head.db'; database(path, False)
             p=account_snapshot(path, KEY, True, NOW)
@@ -115,6 +116,37 @@ class InsightsTests(unittest.TestCase):
             day=day_bounds(NOW-DAY)[0]
             self.assertIsNone(combine_product(p,p,NOW)['days'][day]['observedDau'])
             self.assertIsNone(combine_product(p,p,NOW)['registration'], 'two primary sources must not be summed')
+
+    def test_pre_collection_history_unknown_but_first_day_has_partial_observations(self):
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/'head.db'; database(path)
+            primary=account_snapshot(path, KEY, True, NOW)
+            edge=account_snapshot(path, KEY, False, NOW)
+            today, start, _=day_bounds(NOW)
+            yesterday=day_bounds(NOW-DAY)[0]
+            # Even one host starting exactly at the next day's boundary means
+            # there was no global observation coverage on the preceding day.
+            edge['activityStartedAt']='2026-10-15T16:00:00Z'
+            days=combine_product(primary,edge,NOW)['days']
+            self.assertIsNone(days[yesterday]['observedDau'])
+            self.assertFalse(days[yesterday]['dayComplete'])
+            self.assertEqual(days[today]['observedDau'],0)
+            self.assertTrue(days[today]['dayComplete'])
+            edge['activityStartedAt']='2026-10-15T18:00:00Z'
+            days=combine_product(primary,edge,NOW)['days']
+            self.assertIsNone(days[yesterday]['observedDau'])
+            self.assertEqual(days[today]['observedDau'],0)
+            self.assertFalse(days[today]['dayComplete'])
+            edge['activityStartedAt']=None
+            self.assertIsNone(combine_product(primary,edge,NOW)['days'][today]['observedDau'])
+
+    def test_rollback_to_old_schema_does_not_claim_activity_collection(self):
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/'head.db'; database(path)
+            db=sqlite3.connect(path);db.execute('PRAGMA user_version=13');db.close()
+            snapshot=account_snapshot(path, KEY, True, NOW)
+            self.assertEqual(snapshot['registration']['total'],2)
+            self.assertEqual(snapshot['activity'],{},'retained additive tables do not prove the old relay records foreground pings')
 
     def test_index_dedup_retry_late_future_corrupt_and_bounded_backlog(self):
         with tempfile.TemporaryDirectory() as root:

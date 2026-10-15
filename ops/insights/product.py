@@ -34,7 +34,8 @@ def account_snapshot(path, key, primary, now):
                 by_day[day] = db.execute("SELECT count(*) FROM users WHERE provider <> 'open' AND julianday(created_at)>=julianday(?,'unixepoch') AND julianday(created_at)<julianday(?,'unixepoch')", (start / 1000, end / 1000)).fetchone()[0]
             out['registration'] = {'total': total, 'newByDay': by_day,
                 'definition': 'currently retained registered accounts; not lifetime including deleted accounts'}
-        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='daily_active_users'").fetchone():
+        schema = db.execute('PRAGMA user_version').fetchone()[0]
+        if schema >= 14 and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='daily_active_users'").fetchone():
             row = db.execute("SELECT value FROM usage_metadata WHERE key='started_at'").fetchone()
             out['activityStartedAt'] = row[0] if row else None
             for day, _, _ in days:
@@ -54,7 +55,7 @@ def combine_product(local, peer, now, max_age=180000):
     keys_match = len(sources) == 2 and sources[0].get('keyId') == sources[1].get('keyId')
     joined = {}
     for n in range(3):
-        day, start, _ = day_bounds(now - DAY * n)
+        day, start, end = day_bounds(now - DAY * n)
         known = [s for s in sources if fresh(s) and day in s.get('activity', {})]
         # Never quietly report a local count as the global count.
         complete_hosts = keys_match and len(known) == 2
@@ -63,7 +64,10 @@ def combine_product(local, peer, now, max_age=180000):
         for s in known:
             try: starts.append(dt.datetime.fromisoformat(s['activityStartedAt'].replace('Z', '+00:00')).timestamp() * 1000)
             except (ValueError, TypeError, KeyError, AttributeError): pass
-        joined[day] = {'observedDau': len(values) if complete_hosts else None,
+        # A partial first day has observations, but a day entirely before either
+        # host began recording has no history: unknown, not an apparent zero.
+        history_available = len(starts) == 2 and max(starts) < end
+        joined[day] = {'observedDau': len(values) if complete_hosts and history_available else None,
                        'hostsComplete': complete_hosts,
                        'dayComplete': complete_hosts and len(starts) == 2 and max(starts) <= start,
                        'coverage': 'new foreground-reporting clients only; not guaranteed full-product DAU'}
