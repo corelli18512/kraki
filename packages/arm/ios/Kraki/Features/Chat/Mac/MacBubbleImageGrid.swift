@@ -1,20 +1,41 @@
 #if os(macOS)
 import SwiftUI
 
+/// One page of the preview. An attachment that is still loading opens too:
+/// its page shows progress and swaps in the image when the bytes arrive.
 struct MacImagePreviewItem: Identifiable {
     let id = UUID()
-    let image: NSImage
+    let image: NSImage?
     let title: String
+    /// Set for an attachment ref; the page resolves it from the store.
+    var attachmentID: String?
+
+    init(image: NSImage, title: String) {
+        self.image = image
+        self.title = title
+    }
+
+    init(attachmentID: String, title: String) {
+        self.image = nil
+        self.title = title
+        self.attachmentID = attachmentID
+    }
 }
 
 struct MacImagePreviewSelection: Identifiable {
     let id = UUID()
     let items: [MacImagePreviewItem]
     let initialIndex: Int
+    /// Where pages that are still loading get their bytes.
+    var attachmentStore: AttachmentStore?
+    var sessionId = ""
 
-    init(items: [MacImagePreviewItem], initialIndex: Int = 0) {
+    init(items: [MacImagePreviewItem], initialIndex: Int = 0,
+         attachmentStore: AttachmentStore? = nil, sessionId: String = "") {
         self.items = items
         self.initialIndex = min(max(initialIndex, 0), max(items.count - 1, 0))
+        self.attachmentStore = attachmentStore
+        self.sessionId = sessionId
     }
 
     init(image: NSImage, title: String) {
@@ -93,23 +114,28 @@ struct MacBubbleImageGrid: View {
         return inline + refs.map(Entry.ref)
     }
 
-    private var resolvedItems: [(entryID: String, item: MacImagePreviewItem)] {
-        entries.compactMap { entry in
+    /// Every image of the message, loaded or not: the viewer opens on any
+    /// of them and pages through all (loading pages show progress).
+    private var previewItems: [(entryID: String, item: MacImagePreviewItem)] {
+        entries.map { entry in
             switch entry {
             case .image(let id, let item):
                 return (id, item)
             case .ref(let ref):
-                guard case .ready(_, let data) = attachmentStore?.state(for: ref.id),
-                      let image = AttachmentImageCache.image(id: ref.id, data: data) else { return nil }
-                return (
-                    ref.id,
-                    MacImagePreviewItem(
-                        image: image,
-                        title: ref.caption ?? ref.name ?? "Image"
-                    )
-                )
+                return (ref.id, MacImagePreviewItem(attachmentID: ref.id, title: ref.caption ?? ref.name ?? "Image"))
             }
         }
+    }
+
+    private func open(_ entryID: String) {
+        let items = previewItems
+        guard !items.isEmpty else { return }
+        onOpenImage(MacImagePreviewSelection(
+            items: items.map(\.item),
+            initialIndex: items.firstIndex(where: { $0.entryID == entryID }) ?? 0,
+            attachmentStore: attachmentStore,
+            sessionId: sessionId
+        ))
     }
 
     var body: some View {
@@ -127,24 +153,20 @@ struct MacBubbleImageGrid: View {
     @ViewBuilder
     private func single(_ entry: Entry) -> some View {
         switch entry {
-        case .image(_, let item):
+        case .image(let entryID, let item):
             let size = MacImageGalleryLayout.displaySize(
-                source: item.image.size,
+                source: item.image?.size ?? .zero,
                 maxWidth: maxWidth,
                 maxHeight: 240
             )
-            previewButton(item: item, selectionIndex: 0, cornerRadius: 12)
+            previewButton(image: item.image, entryID: entryID, cornerRadius: 12)
                 .frame(width: size.width, height: size.height)
         case .ref(let ref):
             switch attachmentStore?.state(for: ref.id) {
             case .ready(_, let data):
                 if let image = AttachmentImageCache.image(id: ref.id, data: data) {
-                    let item = MacImagePreviewItem(
-                        image: image,
-                        title: ref.caption ?? ref.name ?? "Image"
-                    )
                     let size = placeholderSize(ref)
-                    previewButton(item: item, selectionIndex: 0, cornerRadius: 10)
+                    previewButton(image: image, entryID: ref.id, cornerRadius: 10)
                         .frame(width: size.width, height: size.height)
                 } else {
                     errorPlaceholder(ref, label: "Invalid image")
@@ -197,7 +219,7 @@ struct MacBubbleImageGrid: View {
     private func stackedCard(_ entry: Entry, cardWidth: CGFloat) -> some View {
         switch entry {
         case .image(let entryID, let item):
-            previewButton(item: item, selectionIndex: resolvedIndex(for: entryID), cornerRadius: 12)
+            previewButton(image: item.image, entryID: entryID, cornerRadius: 12)
                 .frame(width: cardWidth, height: MacImageGalleryLayout.multiCardHeight)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay(cardBorder)
@@ -205,11 +227,7 @@ struct MacBubbleImageGrid: View {
             switch attachmentStore?.state(for: ref.id) {
             case .ready(_, let data):
                 if let image = AttachmentImageCache.image(id: ref.id, data: data) {
-                    let item = MacImagePreviewItem(
-                        image: image,
-                        title: ref.caption ?? ref.name ?? "Image"
-                    )
-                    previewButton(item: item, selectionIndex: resolvedIndex(for: ref.id), cornerRadius: 12)
+                    previewButton(image: image, entryID: ref.id, cornerRadius: 12)
                         .frame(width: cardWidth, height: MacImageGalleryLayout.multiCardHeight)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .overlay(cardBorder)
@@ -219,11 +237,17 @@ struct MacBubbleImageGrid: View {
             case .error(let reason):
                 stackedErrorCard(ref, label: reason.isEmpty ? "Couldn't load image" : reason, width: cardWidth)
             case .awaitingChunks, .fetching, .none:
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12).fill(Color.surfaceSecondary)
-                    ProgressView().controlSize(.small)
+                Button { open(ref.id) } label: {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12).fill(Color.surfaceSecondary)
+                        ProgressView().controlSize(.small)
+                    }
+                    .frame(width: cardWidth, height: MacImageGalleryLayout.multiCardHeight)
+                    .contentShape(Rectangle())
                 }
-                .frame(width: cardWidth, height: MacImageGalleryLayout.multiCardHeight)
+                .buttonStyle(.plain)
+                .help(openLabel)
+                .accessibilityLabel(openLabel)
                 .overlay(cardBorder)
             }
         }
@@ -235,25 +259,21 @@ struct MacBubbleImageGrid: View {
             .allowsHitTesting(false)
     }
 
+    private var openLabel: String { entries.count > 1 ? "Open image gallery" : "Open image preview" }
+
     private func previewButton(
-        item: MacImagePreviewItem,
-        selectionIndex: Int,
+        image: NSImage?,
+        entryID: String,
         cornerRadius: CGFloat
     ) -> some View {
         MacPreviewImageButton(
-            image: item.image,
+            image: image ?? NSImage(),
             cornerRadius: cornerRadius,
-            accessibilityLabel: resolvedItems.count > 1 ? "Open image gallery" : "Open image preview"
+            accessibilityLabel: openLabel
         ) {
-            let items = resolvedItems.map(\.item)
-            guard !items.isEmpty else { return }
-            onOpenImage(MacImagePreviewSelection(items: items, initialIndex: selectionIndex))
+            open(entryID)
         }
-        .help(resolvedItems.count > 1 ? "Open image gallery" : "Open image preview")
-    }
-
-    private func resolvedIndex(for entryID: String) -> Int {
-        resolvedItems.firstIndex(where: { $0.entryID == entryID }) ?? 0
+        .help(openLabel)
     }
 
     private func placeholderSize(_ ref: ContentRef) -> CGSize {
@@ -266,13 +286,20 @@ struct MacBubbleImageGrid: View {
         return MacImageGalleryLayout.displaySize(source: source, maxWidth: maxWidth, maxHeight: 192)
     }
 
+    /// Still loading, but already opens the viewer (which keeps loading).
     private func loadingPlaceholder(_ ref: ContentRef) -> some View {
         let size = placeholderSize(ref)
-        return ZStack {
-            RoundedRectangle(cornerRadius: 10).fill(.quaternary)
-            ProgressView().controlSize(.small)
+        return Button { open(ref.id) } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10).fill(.quaternary)
+                ProgressView().controlSize(.small)
+            }
+            .frame(width: size.width, height: size.height)
+            .contentShape(Rectangle())
         }
-        .frame(width: size.width, height: size.height)
+        .buttonStyle(.plain)
+        .help(openLabel)
+        .accessibilityLabel(openLabel)
     }
 
     private func errorPlaceholder(_ ref: ContentRef, label: String) -> some View {
@@ -453,11 +480,17 @@ struct MacImagePreviewOverlay: View {
                 .onTapGesture(perform: onClose)
                 .accessibilityHidden(true)
 
-            MacZoomableImageCanvas(
-                image: item.image,
-                zoom: $zoom,
-                onBackdropClick: onClose
-            )
+            Group {
+                if let image = resolvedImage(item) {
+                    MacZoomableImageCanvas(
+                        image: image,
+                        zoom: $zoom,
+                        onBackdropClick: onClose
+                    )
+                } else {
+                    pendingPage(item)
+                }
+            }
                 .id(item.id)
                 .padding(.top, 52)
                 .padding(18)
@@ -523,6 +556,66 @@ struct MacImagePreviewOverlay: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Image preview")
+        // Opened: every image of the message loads at user priority, so the
+        // neighbours are ready by the time the user pages to them.
+        .onAppear { holdAttachments(true) }
+        .onDisappear { holdAttachments(false) }
+    }
+
+    private func holdAttachments(_ hold: Bool) {
+        guard let store = selection.attachmentStore else { return }
+        let ids = selection.items.enumerated()
+            .sorted { abs($0.offset - selection.initialIndex) < abs($1.offset - selection.initialIndex) }
+            .compactMap(\.element.attachmentID)
+        for id in ids {
+            if hold {
+                store.requestIfNeeded(id: id, sessionId: selection.sessionId, priority: .userOpened)
+            } else {
+                store.release(id: id, priority: .userOpened)
+            }
+        }
+    }
+
+    private func resolvedImage(_ item: MacImagePreviewItem) -> NSImage? {
+        if let image = item.image { return image }
+        guard let id = item.attachmentID,
+              case .ready(_, let data) = selection.attachmentStore?.state(for: id) else { return nil }
+        return AttachmentImageCache.image(id: id, data: data)
+    }
+
+    @ViewBuilder
+    private func pendingPage(_ item: MacImagePreviewItem) -> some View {
+        let state = item.attachmentID.flatMap { selection.attachmentStore?.state(for: $0) }
+        VStack(spacing: 10) {
+            switch state {
+            case .error(let reason):
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.8))
+                Text(reason.isEmpty ? "Couldn't load image" : reason)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.75))
+                Button("Retry") {
+                    guard let id = item.attachmentID, let store = selection.attachmentStore else { return }
+                    store.requestIfNeeded(id: id, sessionId: selection.sessionId, priority: .userOpened)
+                    store.release(id: id, priority: .userOpened)
+                }
+            case .ready:
+                Text("Invalid image")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.75))
+            case .awaitingChunks(let received, let total?) where total > 1:
+                ProgressView(value: Double(received) / Double(total))
+                    .progressViewStyle(.circular)
+                Text("\(received * 100 / total)%")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.7))
+            default:
+                ProgressView()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityLabel("Loading image")
     }
 
     private func show(_ nextIndex: Int) {

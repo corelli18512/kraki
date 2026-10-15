@@ -2,20 +2,43 @@
 import SwiftUI
 import UIKit
 
+/// One page of the preview. An attachment that is still loading opens too:
+/// its page shows progress and swaps in the image when the bytes arrive.
 struct IOSImagePreviewItem: Identifiable {
     let id: String
-    let image: UIImage
+    let image: UIImage?
     let title: String
+    /// Set for an attachment ref; the page resolves it from the store.
+    var attachmentID: String?
+
+    init(id: String, image: UIImage, title: String) {
+        self.id = id
+        self.image = image
+        self.title = title
+    }
+
+    init(attachmentID: String, title: String) {
+        self.id = attachmentID
+        self.image = nil
+        self.title = title
+        self.attachmentID = attachmentID
+    }
 }
 
 struct IOSImagePreviewSelection: Identifiable {
     let id = UUID()
     let items: [IOSImagePreviewItem]
     let initialIndex: Int
+    /// Where pages that are still loading get their bytes.
+    var attachmentStore: AttachmentStore?
+    var sessionId = ""
 
-    init(items: [IOSImagePreviewItem], initialIndex: Int = 0) {
+    init(items: [IOSImagePreviewItem], initialIndex: Int = 0,
+         attachmentStore: AttachmentStore? = nil, sessionId: String = "") {
         self.items = items
         self.initialIndex = min(max(initialIndex, 0), max(items.count - 1, 0))
+        self.attachmentStore = attachmentStore
+        self.sessionId = sessionId
     }
 }
 
@@ -109,24 +132,28 @@ struct BubbleImageGallery: View {
             + refs.map(Entry.ref)
     }
 
-    private var resolvedItems: [(entryID: String, item: IOSImagePreviewItem)] {
-        entries.compactMap { entry in
+    /// Every image of the message, loaded or not: the viewer opens on any
+    /// of them and swipes through all (loading pages show progress).
+    private var previewItems: [(entryID: String, item: IOSImagePreviewItem)] {
+        entries.map { entry in
             switch entry {
             case .image(let id, let image):
                 return (id, IOSImagePreviewItem(id: id, image: image, title: "Image"))
             case .ref(let ref):
-                guard case .ready(_, let data) = attachmentStore?.state(for: ref.id),
-                      let image = AttachmentImageCache.image(id: ref.id, data: data) else { return nil }
-                return (
-                    ref.id,
-                    IOSImagePreviewItem(
-                        id: ref.id,
-                        image: image,
-                        title: ref.caption ?? ref.name ?? "Image"
-                    )
-                )
+                return (ref.id, IOSImagePreviewItem(attachmentID: ref.id, title: ref.caption ?? ref.name ?? "Image"))
             }
         }
+    }
+
+    private func open(_ entryID: String) {
+        let items = previewItems
+        guard !items.isEmpty else { return }
+        onOpenImage(IOSImagePreviewSelection(
+            items: items.map(\.item),
+            initialIndex: items.firstIndex(where: { $0.entryID == entryID }) ?? 0,
+            attachmentStore: attachmentStore,
+            sessionId: sessionId
+        ))
     }
 
     var body: some View {
@@ -170,7 +197,7 @@ struct BubbleImageGallery: View {
                     size: size
                 )
             case .awaitingChunks, .fetching, .none:
-                loadingPlaceholder(size: size, cornerRadius: 12)
+                loadingPlaceholder(size: size, cornerRadius: 12, entryID: ref.id)
             }
         }
     }
@@ -237,7 +264,8 @@ struct BubbleImageGallery: View {
             case .awaitingChunks, .fetching, .none:
                 loadingPlaceholder(
                     size: CGSize(width: width, height: IOSImageGalleryLayout.multiCardHeight),
-                    cornerRadius: 12
+                    cornerRadius: 12,
+                    entryID: ref.id
                 )
                 .overlay(cardBorder)
             }
@@ -252,15 +280,7 @@ struct BubbleImageGallery: View {
 
     private func imageButton(image: UIImage, entryID: String, cornerRadius: CGFloat) -> some View {
         Button {
-            let resolved = resolvedItems
-            guard !resolved.isEmpty else { return }
-            let selected = resolved.firstIndex(where: { $0.entryID == entryID }) ?? 0
-            onOpenImage(
-                IOSImagePreviewSelection(
-                    items: resolved.map(\.item),
-                    initialIndex: selected
-                )
-            )
+            open(entryID)
         } label: {
             Image(uiImage: image)
                 .resizable()
@@ -270,7 +290,7 @@ struct BubbleImageGallery: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(resolvedItems.count > 1 ? "Open image gallery" : "Open image preview")
+        .accessibilityLabel(entries.count > 1 ? "Open image gallery" : "Open image preview")
     }
 
     private func placeholderSize(_ ref: ContentRef) -> CGSize {
@@ -281,12 +301,20 @@ struct BubbleImageGallery: View {
         )
     }
 
-    private func loadingPlaceholder(size: CGSize, cornerRadius: CGFloat) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: cornerRadius).fill(.quaternary)
-            ProgressView().controlSize(.small)
+    /// Still loading, but already opens the viewer (which keeps loading).
+    private func loadingPlaceholder(size: CGSize, cornerRadius: CGFloat, entryID: String) -> some View {
+        Button {
+            open(entryID)
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: cornerRadius).fill(.quaternary)
+                ProgressView().controlSize(.small)
+            }
+            .frame(width: size.width, height: size.height)
+            .contentShape(Rectangle())
         }
-        .frame(width: size.width, height: size.height)
+        .buttonStyle(.plain)
+        .accessibilityLabel(entries.count > 1 ? "Open image gallery" : "Open image preview")
     }
 
     private func errorPlaceholder(_ ref: ContentRef, label: String, size: CGSize) -> some View {
@@ -406,7 +434,7 @@ struct IOSImagePreviewGallery: View {
             // (a zoomed image pans first, then the page turns at its edge).
             TabView(selection: $index) {
                 ForEach(Array(selection.items.enumerated()), id: \.offset) { offset, page in
-                    IOSZoomableImageCanvas(image: page.image, onBackdropTap: { dismiss() })
+                    IOSImagePreviewPage(item: page, selection: selection, onBackdropTap: { dismiss() })
                         .padding(.top, 52)
                         .padding(.bottom, selection.items.count > 1 ? 54 : 18)
                         .padding(.horizontal, 12)
@@ -467,6 +495,25 @@ struct IOSImagePreviewGallery: View {
         .statusBarHidden(true)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Image preview")
+        // Opened: every image of the message loads at user priority, so the
+        // neighbours are ready by the time the user swipes to them.
+        .onAppear { holdAttachments(true) }
+        .onDisappear { holdAttachments(false) }
+    }
+
+    private func holdAttachments(_ hold: Bool) {
+        guard let store = selection.attachmentStore else { return }
+        // The page being looked at first, then its neighbours in order.
+        let ids = selection.items.enumerated()
+            .sorted { abs($0.offset - selection.initialIndex) < abs($1.offset - selection.initialIndex) }
+            .compactMap(\.element.attachmentID)
+        for id in ids {
+            if hold {
+                store.requestIfNeeded(id: id, sessionId: selection.sessionId, priority: .userOpened)
+            } else {
+                store.release(id: id, priority: .userOpened)
+            }
+        }
     }
 
     private func show(_ nextIndex: Int) {
@@ -488,6 +535,78 @@ struct IOSImagePreviewGallery: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
+    }
+}
+
+/// One preview page: the image, or — while its attachment is still on the
+/// way — progress that turns into the image without leaving the viewer.
+private struct IOSImagePreviewPage: View {
+    let item: IOSImagePreviewItem
+    let selection: IOSImagePreviewSelection
+    let onBackdropTap: () -> Void
+
+    var body: some View {
+        if let image = item.image {
+            IOSZoomableImageCanvas(image: image, onBackdropTap: onBackdropTap)
+        } else if let id = item.attachmentID {
+            switch selection.attachmentStore?.state(for: id) {
+            case .ready(_, let data):
+                if let image = AttachmentImageCache.image(id: id, data: data) {
+                    IOSZoomableImageCanvas(image: image, onBackdropTap: onBackdropTap)
+                } else {
+                    message("Invalid image", retry: false)
+                }
+            case .error(let reason):
+                message(reason.isEmpty ? "Couldn't load image" : reason, retry: true)
+            case .awaitingChunks(let received, let total?) where total > 1:
+                loading(fraction: Double(received) / Double(total))
+            default:
+                loading(fraction: nil)
+            }
+        }
+    }
+
+    private func loading(fraction: Double?) -> some View {
+        VStack(spacing: 12) {
+            if let fraction {
+                ProgressView(value: fraction)
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+                Text("\(Int(fraction * 100))%")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.7))
+            } else {
+                ProgressView().tint(.white)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onBackdropTap)
+        .accessibilityLabel("Loading image")
+    }
+
+    private func message(_ text: String, retry: Bool) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.8))
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.75))
+                .multilineTextAlignment(.center)
+            if retry, let id = item.attachmentID, let store = selection.attachmentStore {
+                Button("Retry") {
+                    // A retry after an error starts over; the extra hold is
+                    // matched so the gallery's release still balances.
+                    store.requestIfNeeded(id: id, sessionId: selection.sessionId, priority: .userOpened)
+                    store.release(id: id, priority: .userOpened)
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

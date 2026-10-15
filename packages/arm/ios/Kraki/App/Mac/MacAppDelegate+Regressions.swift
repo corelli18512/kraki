@@ -182,7 +182,7 @@ extension MacAppDelegate {
             onAnswerQuestion: { _, _ in },
             onOpenImage: { selection in
                 openedCount = selection.items.count
-                openedFirstSize = selection.items.first?.image.size ?? .zero
+                openedFirstSize = selection.items.first?.image?.size ?? .zero
             },
             onOpenHTMLArtifact: { _ in },
             onHeightInvalidated: {}
