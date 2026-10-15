@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, ChevronLeft } from 'lucide-react';
+import { Check, ChevronDown, ChevronLeft } from 'lucide-react';
+import { hasWindowsTitleBar } from '../../lib/desktop';
 
 export type SessionMode = import('@kraki/protocol').SessionMode;
 
@@ -27,25 +28,32 @@ export function ChatHeader({
   const [hovering, setHovering] = useState(false);
   const [interaction, setInteraction] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const current = MODES.find((m) => m.id === mode) ?? MODES[1];
 
   useEffect(() => {
     if (!menu) return;
     const close = (e: MouseEvent) => { if (!menuRef.current?.contains(e.target as Node)) setMenu(false); };
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(false); };
+    if (hasWindowsTitleBar) menuRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMenu(false);
+        if (hasWindowsTitleBar) triggerRef.current?.focus();
+      }
+    };
     document.addEventListener('mousedown', close);
     window.addEventListener('keydown', esc);
     return () => { document.removeEventListener('mousedown', close); window.removeEventListener('keydown', esc); };
   }, [menu]);
 
   useEffect(() => {
-    if (narrow || !menu || hovering) return;
+    if (hasWindowsTitleBar || narrow || !menu || hovering) return;
     const timer = setTimeout(() => setMenu(false), 3000);
     return () => clearTimeout(timer);
   }, [narrow, menu, hovering, interaction]);
 
   return (
-    <header className={`khead ${narrow ? 'is-narrow' : 'is-wide'}`}>
+    <header className={`khead ${narrow ? 'is-narrow' : 'is-wide'}${hasWindowsTitleBar ? ' is-windows' : ''}`}>
       {narrow && (
         <button type="button" className="khead-round" aria-label="Back" onClick={onBack}>
           <ChevronLeft aria-hidden />
@@ -56,26 +64,42 @@ export function ChatHeader({
       <button type="button" className={`khead-title${menu && !narrow ? ' is-hidden' : ''}`} aria-hidden={menu && !narrow ? true : undefined} tabIndex={menu && !narrow ? -1 : undefined} onClick={onTitle} title="Session details">
         <span>{title}</span>
       </button>
-      <div className="khead-mode" ref={menuRef} onMouseEnter={() => setHovering(true)} onMouseLeave={() => setHovering(false)}>
-        {menu && !narrow ? <div className="khead-segments" role="menu" aria-label="Session mode picker">
+      {hasWindowsTitleBar && <span className="khead-separator" aria-hidden="true" />}
+      <div className="khead-mode" ref={menuRef} onMouseEnter={() => setHovering(true)} onMouseLeave={() => setHovering(false)}
+        onBlur={(e) => { if (hasWindowsTitleBar && !e.currentTarget.contains(e.relatedTarget)) setMenu(false); }}
+        onKeyDown={(e) => {
+          if (!hasWindowsTitleBar || !menu || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+          e.preventDefault();
+          const options = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+          const index = options.indexOf(document.activeElement as HTMLButtonElement);
+          const next = e.key === 'Home' ? 0 : e.key === 'End' ? options.length - 1
+            : (index + (e.key === 'ArrowDown' ? 1 : options.length - 1)) % options.length;
+          options[next]?.focus();
+        }}>
+        {menu && !narrow && !hasWindowsTitleBar ? <div className="khead-segments" role="menu" aria-label="Session mode picker">
           {MODES.map((m) => <button key={m.id} type="button" role="menuitemradio" aria-checked={m.id === mode}
             style={{ background: m.id === mode ? m.color : undefined }}
             onClick={() => { if (m.id !== mode) onMode(m.id); setInteraction((v) => v + 1); }}>
             {m.label}
           </button>)}
-        </div> : <button type="button" className="khead-capsule" aria-label={`Session mode, ${current.label}`} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>
+        </div> : <button ref={triggerRef} type="button" className="khead-capsule" aria-label={`Session mode, ${current.label}`} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>
           <span className="khead-dot" style={{ background: current.color }} />
           {current.label}
+          {hasWindowsTitleBar && <ChevronDown className="khead-chevron" aria-hidden="true" />}
         </button>}
-        {menu && narrow && (
-          <div className="khead-menu" role="menu">
+        {menu && (narrow || hasWindowsTitleBar) && (
+          <div className="khead-menu" role="menu" aria-label="Session mode picker">
             {MODES.map((m) => (
               <button
                 key={m.id}
                 type="button"
                 role="menuitemradio"
                 aria-checked={m.id === mode}
-                onClick={() => { setMenu(false); if (m.id !== mode) onMode(m.id); }}
+                onClick={() => {
+                  setMenu(false);
+                  if (m.id !== mode) onMode(m.id);
+                  if (hasWindowsTitleBar) triggerRef.current?.focus();
+                }}
               >
                 <span className="khead-dot" style={{ background: m.color }} />
                 <span className="khead-menu-text">

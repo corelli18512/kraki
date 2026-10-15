@@ -14,6 +14,7 @@ const { BuiltInKraki, readLocalLinkDiscovery } = require('./tentacle.cjs');
 const presence = require('./presence.cjs');
 const permissions = require('./permissions.cjs');
 const settings = require('./settings.cjs');
+const windowsTitleBar = require('./windows-titlebar.cjs');
 const buildInfo = require('./build-info.json');
 // Public, immutable build identity; never read from runtime env/renderer URLs.
 ipcMain.on('kraki:build-info', (event) => { event.returnValue = buildInfo; });
@@ -51,6 +52,7 @@ if (!app.requestSingleInstanceLock()) {
 
 /** @type {BrowserWindow | null} */
 let win = null;
+windowsTitleBar.registerTitleBarTheme(ipcMain, () => win, process.platform);
 /** @type {Tray | null} */
 let tray = null;
 let quitting = false;
@@ -143,6 +145,7 @@ function createWindow() {
     icon: path.join(ASSETS, 'icon.png'),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#020617' : '#ffffff',
     autoHideMenuBar: true,
+    ...windowsTitleBar.windowOptions(process.platform, nativeTheme.shouldUseDarkColors),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -153,6 +156,7 @@ function createWindow() {
       allowRunningInsecureContent: process.env.KRAKI_DESKTOP_ALLOW_INSECURE === '1',
       additionalArguments: [
         `--kraki-version=${app.getVersion()}`,
+        `--kraki-titlebar-overlay=${process.platform === 'win32' ? '1' : '0'}`,
         `--kraki-oauth-origin=${OAUTH_REDIRECT_ORIGIN}`,
         `--kraki-device-name=Kraki ${process.platform === 'win32' ? 'Windows' : 'Linux'}`,
         `--kraki-builtin=${builtIn?.available() ? '1' : '0'}`,

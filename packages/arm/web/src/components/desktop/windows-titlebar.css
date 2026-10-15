@@ -1,0 +1,124 @@
+/* Electron's live WCO geometry accounts for maximize, DPI and page zoom.
+   The fallback is only for the brief interval before the native env vars exist. */
+html[data-windows-titlebar] {
+  --windows-titlebar-height: env(titlebar-area-height, 44px);
+  --windows-caption-width: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 138px)));
+}
+
+html[data-windows-titlebar] .kwindows-titlebar {
+  position: fixed;
+  top: 0;
+  left: 280px;
+  right: var(--windows-caption-width);
+  height: var(--windows-titlebar-height);
+  z-index: 8;
+  background: var(--color-surface-primary);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+html[data-windows-titlebar] .app-viewport:not(:has(> aside)) > .kwindows-titlebar,
+html[data-windows-titlebar] .app-viewport:has(> aside.w-full) > .kwindows-titlebar { left: 0; }
+html[data-windows-titlebar] .app-viewport > aside.w-full { padding-top: var(--windows-titlebar-height); }
+html[data-windows-titlebar]:has(.khead.is-windows) .kwindows-titlebar { display: none; }
+/* Home, devices, setup and pending/missing sessions still have a drag strip. */
+html[data-windows-titlebar] .app-viewport > main:not(:has(.khead.is-windows)) {
+  padding-top: var(--windows-titlebar-height);
+}
+
+/* Modal content must never become a native drag hit target. Full-viewport
+   sheets start below the caption buttons; centered windows retain their layout. */
+html[data-windows-titlebar] :is(button, a, input, select, textarea, [role="menu"], [role="dialog"], [role="alertdialog"]) {
+  -webkit-app-region: no-drag;
+}
+html[data-windows-titlebar] :is([role="dialog"], [role="alertdialog"]).fixed,
+html[data-windows-titlebar] .ksheet-backdrop {
+  top: var(--windows-titlebar-height);
+}
+html[data-windows-titlebar] [role="dialog"]:not(.fixed):not(.ksheet-backdrop):not(.kimage-viewer) {
+  max-height: calc(100dvh - 2 * var(--windows-titlebar-height));
+}
+html[data-windows-titlebar] :is(.ksi-sheet, .ksheet) {
+  max-height: calc(100dvh - var(--windows-titlebar-height) - 32px);
+}
+html[data-windows-titlebar] .kimage-toolbar { padding-right: calc(14px + var(--windows-caption-width)); }
+/* A report can occupy the viewport's right edge instead of the chat header. */
+html[data-windows-titlebar] .kreport-panel { padding-top: var(--windows-titlebar-height); }
+html[data-windows-titlebar] .kreport-panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: var(--windows-caption-width);
+  width: 32px;
+  height: var(--windows-titlebar-height);
+  -webkit-app-region: drag;
+}
+
+html[data-windows-titlebar] .khead.is-windows {
+  height: 56px;
+  width: min(100%, calc(100vw - 280px));
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 0;
+  padding: 7px calc(var(--windows-caption-width) + 32px) 0 14px;
+  background: var(--k-bg);
+  pointer-events: auto;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+html[data-windows-titlebar] .khead.is-windows.is-narrow { height: 64px; width: min(100%, 100vw); }
+html[data-windows-titlebar] .khead.is-windows::before { display: none; }
+html[data-windows-titlebar] .khead.is-windows :is(.khead-title, .khead-capsule, .khead-round) {
+  height: 30px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  color: var(--k-text-2);
+  filter: none;
+}
+html[data-windows-titlebar] .khead.is-windows .khead-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 432px;
+  margin: 0;
+  padding: 0 7px 0 0;
+  text-align: left;
+  color: var(--color-text-title);
+  font: 600 13px/18px "Segoe UI", var(--k-font);
+}
+html[data-windows-titlebar] .khead.is-windows :is(.khead-title, .khead-capsule, .khead-round):hover,
+html[data-windows-titlebar] .khead.is-windows .khead-capsule[aria-expanded="true"] { background: var(--k-fill); }
+html[data-windows-titlebar] .khead.is-windows button:focus-visible { outline: 2px solid var(--color-kraki-400); outline-offset: 2px; }
+html[data-windows-titlebar] .khead.is-windows .khead-separator {
+  width: 1px;
+  height: 15px;
+  flex-shrink: 0;
+  margin: 7px 12px 0 9px;
+  background: var(--k-border);
+}
+html[data-windows-titlebar] .khead.is-windows .khead-mode { position: relative; top: auto; right: auto; }
+html[data-windows-titlebar] .khead.is-windows .khead-capsule {
+  gap: 7px;
+  padding: 0 9px 0 7px;
+  font: 400 12px/18px "Segoe UI", var(--k-font);
+}
+html[data-windows-titlebar] .khead.is-windows .khead-dot { width: 6px; height: 6px; }
+html[data-windows-titlebar] .khead.is-windows .khead-chevron { width: 10px; height: 10px; margin-left: 3px; }
+html[data-windows-titlebar] .khead.is-windows .khead-menu {
+  left: 0;
+  right: auto;
+  top: max(calc(100% + 6px), calc(var(--windows-titlebar-height) - 7px));
+  width: 238px;
+  min-width: 238px;
+  padding: 5px;
+  border-radius: 6px;
+}
+html[data-windows-titlebar] .khead.is-windows .khead-menu button { padding: 9px 10px; border-radius: 4px; }
+html[data-windows-titlebar] .khead.is-windows .khead-menu button[aria-checked="true"] { background: var(--k-fill); }
+html[data-windows-titlebar] .khead.is-windows .khead-menu-text { font-size: 12px; font-weight: 500; }
+html[data-windows-titlebar] .khead.is-windows .khead-menu-text small { font-size: 10px; }
+
+@media (display-mode: fullscreen) {
+  html[data-windows-titlebar] { --windows-caption-width: 0px; --windows-titlebar-height: 0px; }
+}

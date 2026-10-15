@@ -9,6 +9,11 @@ contextBridge.exposeInMainWorld('krakiDesktop', {
   // Browser report copies are exported by the main process, not page paths.
   exportHtmlReport: (html, name) => ipcRenderer.invoke('kraki:export-html-report', html, name),
   platform: process.platform,
+  titleBarOverlay: process.platform === 'win32' && arg('kraki-titlebar-overlay') === '1' ? {
+    setTheme: (theme) => {
+      if (theme === 'light' || theme === 'dark') ipcRenderer.send('kraki:titlebar-theme', theme);
+    },
+  } : undefined,
   version: arg('kraki-version'),
   buildInfo: ipcRenderer.sendSync('kraki:build-info'),
   oauthRedirectOrigin: arg('kraki-oauth-origin') || 'https://app.kraki.chat',

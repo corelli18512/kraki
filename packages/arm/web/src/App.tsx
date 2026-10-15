@@ -16,6 +16,7 @@ import { ConnectPhoneHost } from './components/devices/ConnectPhoneCard';
 import { UsagePanel } from './components/usage/UsagePanel';
 import { VoiceConsentHost } from './components/chat/Voice';
 import { OwnerChoiceHost } from './components/desktop/OwnerChoiceHost';
+import { WindowsTitleBar } from './components/desktop/WindowsTitleBar';
 
 function RelayBlockingOverlay({
   status,
@@ -131,6 +132,7 @@ export function App() {
   if (status === 'awaiting_login' || desktopSetupGate) {
     return (
       <div className={`app-viewport flex overflow-hidden bg-surface-primary ${isDesktop ? 'min-w-[800px]' : ''}`}>
+        <WindowsTitleBar />
         <ErrorBanner />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           <ErrorBoundary>
@@ -143,6 +145,7 @@ export function App() {
 
   return (
     <div className={`app-viewport flex overflow-hidden bg-surface-primary ${isDesktop ? 'min-w-[800px]' : ''}`}>
+      <WindowsTitleBar />
       <ErrorBanner />
       <aside className={`${narrow ? (inSubPage ? 'hidden' : 'flex') + ' w-full' : 'flex w-[280px]'} shrink-0 flex-col`} aria-hidden={showBlockingOverlay}>
         <Sidebar />
