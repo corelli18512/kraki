@@ -16,6 +16,7 @@ install -d -m 0755 /opt/kraki-insights
 install -d -m 0700 /var/lib/kraki-insights
 for file in run.py indexer.py product.py metrics.py; do install -m 0644 "$DIR/$file" "/opt/kraki-insights/$file"; done
 install -m 0755 "$DIR/export" /opt/kraki-insights/export
+printf '%s\n' "${KRAKI_INSIGHTS_REVISION:-unknown}" > /opt/kraki-insights/REVISION
 if [ ! -e /etc/kraki/insights.json ]; then
   (umask 077; printf '{"host":"%s","primary":%s,"headDb":"%s","hmacKeyFile":"/etc/kraki/insights-hmac.key","diagDirectory":"/var/lib/kraki-diag","stateDirectory":"/var/lib/kraki-insights"}\n' "$HOST" "$PRIMARY" "$DB" > /etc/kraki/insights.json)
 fi

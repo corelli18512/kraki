@@ -69,9 +69,12 @@ export function experienceDigest(snapshot, now) {
     const ms = (n) => n == null ? '—' : `${(n / 1000).toFixed(2)}s`;
     const old = prior.get(g.id)?.p95Ms;
     const change = Number.isFinite(old) && old > 0 && Number.isFinite(g.p95Ms) ? ` 较前日${Math.round((g.p95Ms / old - 1) * 100)}%` : '';
-    lines.push(`  ${g.title} ${g.platform}/${g.kind} v${g.version}：n=${g.samples} P50/95/99 ${ms(g.p50Ms)}/${ms(g.p95Ms)}/${ms(g.p99Ms)}${change}；失败 ${g.failures}/${g.success + g.failures}${g.samples < 20 ? '（样本少）' : ''}`);
+    lines.push(`  ${g.title} ${g.platform}/${g.kind} v${g.version}：n=${g.samples} P50/95/99 ${ms(g.p50Ms)}/${ms(g.p95Ms)}/${ms(g.p99Ms)}${change}；失败 ${g.failures}/${g.success + g.failures}${g.incomplete ? ` 未完成${g.incomplete}` : ''}${g.cancelled ? ` 取消${g.cancelled}` : ''}${g.samples < 20 ? '（样本少）' : ''}`);
   }
   if (metrics.length > 6) lines.push(`  另 ${metrics.length - 6} 组见服务器统计文件`);
+  if (snapshot.pending?.unresolved) lines.push(`  近期未结束发送 ${snapshot.pending.unresolved} 条（待确认，不等于丢失）`);
+  const excluded = Object.values(daily?.excluded ?? {}).reduce((sum, n) => sum + n, 0);
+  if (excluded) lines.push(`  排除已标记离线/后台/恢复、权限/额度等样本 ${excluded} 条`);
   const latest = snapshot.quality?.latestEventAt;
   lines.push(`  最近事件：${Number.isFinite(latest) ? `${Math.max(0, Math.round((now - latest) / 60000))} 分钟前` : '无'}；非全量用户覆盖`);
   if (snapshot.quality?.scan?.backlog) lines.push('  数据尚在补处理，暂停体验判定');

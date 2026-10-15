@@ -53,7 +53,7 @@ Rotate both together; historical local account/day rows are re-hashed on export.
   device count and excluded samples remain separately visible. No samples means
   **unknown**, not 0 ms or 100% success. Optional/foreground-delayed diagnostics
   are biased coverage; Web/Windows performance is not yet instrumented.
-- Initial P95 candidates: send echo 5s (exclude offline/background/restored),
+- Initial P95 candidates: send echo 5s (exclude records flagged offline/background/restored),
   voice release→result 4s, warm foreground current content 3s, cold/wake 5s,
   session current content 1.5s, foreground outage 8s. Agent reply first-text time
   is reported only, **never judged against a relay/network latency target**.
@@ -62,6 +62,10 @@ Rotate both together; historical local account/day rows are re-hashed on export.
   A stale job (>3m), incomplete scan, disabled collector, or too few samples pauses
   judgment: it cannot manufacture a recovery. Overlapping windows are sustained
   observations of the same data, not three independent statistical experiments.
+  Existing `send.summary.background` means a failure was shown in the background;
+  it is not a full foreground/background timeline. Unmarked background intervals
+  cannot always be excluded. Treat these candidates as observations to calibrate,
+  not a validated foreground-only service guarantee.
 - Failure/timeout candidate: >=20 outcomes, >=3 failures, >1% (voice >2%). Send
   displayed problems >1%; reply text-stall incidence >2% among replies with >=2
   deltas, >=3 affected replies and >=20 observed replies. Recover after 3 sufficient

@@ -6,6 +6,7 @@ import { experienceChecks, experienceDigest } from '../lib/experience.mjs';
 import { emptyState, evaluate } from '../lib/engine.mjs';
 import { barkPayload } from '../lib/bark.mjs';
 import { deliveryConfig } from '../lib/config.mjs';
+import { formatDigest } from '../lib/digest.mjs';
 
 const NOW = Date.parse('2026-10-15T06:00:00Z');
 const config = { host: 'tokyo', timezone: 'Asia/Shanghai', quietHours: [23, 8] };
@@ -83,6 +84,15 @@ test('digest shows unknown versus zero, coverage and bounded Unicode/JSON payloa
   const payload = barkPayload({ kind: 'digest', title: '日报'.repeat(500), body: ('😊中文"\\').repeat(2000) }, 'test-key');
   assert.ok(Buffer.byteLength(JSON.stringify(payload)) < 3500);
   assert.ok(!payload.body.includes('\uFFFD'));
+});
+
+test('digest never titles missing experience coverage all healthy, and puts critical gaps before large stats', () => {
+  const state = emptyState();
+  const cfg = { ...config, insightsPath: '/private/summary.json' };
+  assert.ok(!formatDigest(state, NOW, cfg).title.includes('全部正常'));
+  state.alerts.backup = { status: 'firing', severity: 'critical', title: '备份缺失' };
+  const note = formatDigest(state, NOW, cfg);
+  assert.ok(note.body.startsWith('严重异常 1 项：备份缺失'));
 });
 
 test('digest delivery can be enabled while alarms remain shadow; requires a key', () => {

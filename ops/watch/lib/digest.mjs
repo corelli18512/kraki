@@ -15,6 +15,8 @@ export function formatDigest(state, now, config) {
   const incidentIds = new Set(day.incidents.filter((i) => i.severity !== 'info').map((i) => i.id));
   const problems = incidentIds.size + Object.entries(state.alerts).filter(([id, a]) => a.status === 'firing' && a.severity !== 'info' && !incidentIds.has(id)).length;
   const lines = [];
+  const critical = Object.values(state.alerts).filter(a => a.status === 'firing' && a.severity === 'critical');
+  if (critical.length) lines.push(`严重异常 ${critical.length} 项：${critical.slice(0, 2).map(a => a.title).join('；')}${critical.length > 2 ? '…' : ''}`, '');
   if (config.insightsPath) {
     const observed = day.incidents.filter(i => i.id.startsWith('K-EXP-')).length;
     lines.push(`体验观察：本周期命中 ${observed} 项规则（不代表已推送告警）`, ...experienceDigest(day.notes.insights, now), '');
@@ -64,7 +66,7 @@ export function formatDigest(state, now, config) {
   return {
     kind: 'digest',
     severity: problems > 0 ? 'warning' : 'info',
-    title: `Kraki 日报 · ${label} · ${problems > 0 ? `${problems} 个问题` : '全部正常'}`,
+    title: `Kraki 日报 · ${label} · ${problems > 0 ? `${problems} 个问题` : config.insightsPath ? '基础检查正常 · 体验观察中' : '全部正常'}`,
     body: lines.join('\n'),
     quiet: false,
   };

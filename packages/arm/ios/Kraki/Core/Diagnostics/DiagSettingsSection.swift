@@ -15,10 +15,15 @@ struct DiagSettingsSection: View {
         #else
         Section {
             Toggle("Share Performance Data", isOn: $enabled)
+            if let url = URL(string: "https://app.kraki.chat/privacy/") {
+                Link("Privacy Policy", destination: url)
+            }
         } header: {
             Text("Privacy")
         } footer: {
-            Text("Sends timings such as how long messages take to deliver and replies to start, connection drops, voice errors and crashes, so we can find problems and make Kraki better. Never message text, drafts, voice, attachments or file names. Turning this off stops sending and deletes anything not yet sent.")
+            Text("Sends timings such as how long messages take to deliver and replies to start, connection drops, voice errors and crashes, so we can find problems and make Kraki better. "
+                 + "Never message text, drafts, voice, attachments or file names. "
+                 + "Turning this off stops performance uploads and deletes unsent performance data. Basic daily account activity counts are separate.")
         }
         .onChange(of: enabled) { _, value in KrakiDiag.setEnabled(value) }
         #endif

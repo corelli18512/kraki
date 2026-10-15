@@ -117,6 +117,11 @@ export function DashboardPage() {
           {wsClient.url}
         </p>
 
+        <a href="https://app.kraki.chat/privacy/" target="_blank" rel="noreferrer"
+          className="mt-4 text-xs text-text-muted underline underline-offset-2 hover:text-text-primary">
+          Privacy Policy
+        </a>
+
         {onMac && (
           <a
             href={macDmgUrl}
