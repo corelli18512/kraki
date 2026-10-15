@@ -15,7 +15,7 @@ import {
   unsubscribeFromPush,
   getPushPermission,
 } from '../../lib/push';
-import { CHANNEL_SWITCHING_ENABLED, getCurrentChannel, setChannel } from '../../lib/auth';
+import { getCurrentChannel } from '../../lib/auth';
 import { version } from '../../../package.json';
 import { BuildProvenance } from './BuildProvenance';
 import { ArchiveSettings } from '../sessions/ArchivedSessions';
@@ -554,18 +554,10 @@ export function SettingsPanel({
               {error}
             </p>
           )}
-          {tab === 'General' && state.user?.preferences?.internal === true && CHANNEL_SWITCHING_ENABLED && (
+          {tab === 'General' && !desktop && state.user?.preferences?.internal === true && (
             <SettingsSection title="Dogfood">
-              <SettingsRow label="Beta channel">
-                <SettingsSwitch
-                  label="Beta channel"
-                  on={isBeta}
-                  onChange={() => {
-                    const next = isBeta ? 'stable' : 'beta';
-                    wsClient.updatePreferences({ channel: next });
-                    setChannel(next);
-                  }}
-                />
+              <SettingsRow label="Builds" detail="Internal account: you get every new build first.">
+                <span data-testid="release-channel">{isBeta ? 'Dogfood' : 'Switching…'}</span>
               </SettingsRow>
             </SettingsSection>
           )}

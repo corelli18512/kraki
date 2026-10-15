@@ -252,6 +252,65 @@ describe('Edge-mode auth: local preferences merged into user response', () => {
   });
 });
 
+describe('Edge-mode auth: the account service owns `internal`', () => {
+  let env: EdgeTestEnv;
+  beforeEach(async () => { env = await createEdgeTestEnv(); });
+  afterEach(async () => { await env.cleanup(); });
+
+  const backendUser = (preferences?: Record<string, unknown>) => ({
+    id: 'u_remote', login: 'remote-user', provider: 'open', email: 'remote@example.com', preferences,
+  });
+
+  it('first sign-in on the edge: internal and the backend preferences both arrive', async () => {
+    env.backend.user = backendUser({ theme: 'light', internal: true });
+    const { authOk, ws } = await connectEdge(env.port, 'dev_int_1', 'app');
+    expect((authOk.user as Record<string, unknown>).preferences).toEqual({ theme: 'light', internal: true });
+    // Mirrored locally, so the edge's own preferences_updated keeps it.
+    expect(env.storage.getUser('u_remote')?.preferences).toEqual({ internal: true });
+    ws.close();
+  });
+
+  it('a theme change on the edge keeps internal in preferences_updated', async () => {
+    env.backend.user = backendUser({ internal: true });
+    const { ws } = await connectEdge(env.port, 'dev_int_2', 'app');
+    ws.send(JSON.stringify({ type: 'update_preferences', preferences: { theme: 'dark', internal: false } }));
+    // preferences_updated carries exactly the stored, merged preferences.
+    const start = Date.now();
+    while (env.storage.getUser('u_remote')?.preferences?.theme !== 'dark' && Date.now() - start < 2000) {
+      await new Promise(r => setTimeout(r, 10));
+    }
+    expect(env.storage.getUser('u_remote')?.preferences).toEqual({ internal: true, theme: 'dark' });
+    ws.close();
+  });
+
+  it('stale local internal is overridden by the backend (revoked on main)', async () => {
+    env.storage.upsertUser('u_remote', 'remote-user', 'open');
+    env.storage.updatePreferences('u_remote', { theme: 'dark' });
+    env.storage.setInternal('u_remote', true);
+    env.backend.user = backendUser({ theme: 'dark' });
+    const { authOk, ws } = await connectEdge(env.port, 'dev_int_3', 'app');
+    expect((authOk.user as Record<string, unknown>).preferences).toEqual({ theme: 'dark' });
+    expect(env.storage.getUser('u_remote')?.preferences).toEqual({ theme: 'dark' });
+    ws.close();
+  });
+
+  it('a stable account never becomes internal on the edge', async () => {
+    env.backend.user = backendUser({ theme: 'light' });
+    const { authOk, ws } = await connectEdge(env.port, 'dev_int_4', 'app');
+    expect((authOk.user as Record<string, unknown>).preferences).toEqual({ theme: 'light' });
+    ws.close();
+  });
+
+  it('backend without preferences keeps the local value', async () => {
+    env.storage.upsertUser('u_remote', 'remote-user', 'open');
+    env.storage.setInternal('u_remote', true);
+    env.backend.user = backendUser(undefined);
+    const { authOk, ws } = await connectEdge(env.port, 'dev_int_5', 'app');
+    expect((authOk.user as Record<string, unknown>).preferences).toEqual({ internal: true });
+    ws.close();
+  });
+});
+
 describe('Edge-mode auth: response shape regression', () => {
   let env: EdgeTestEnv;
   beforeEach(async () => { env = await createEdgeTestEnv(); });

@@ -148,6 +148,9 @@ export function processAuthOk(
   // Drain any encrypted messages queued before auth
   deps.drainEncryptedQueue();
   // Session sync happens when tentacle sends session_list (triggered by device_joined)
+  // Last: it may reload into the account's channel, and this device must
+  // already be saved (a first pairing would otherwise be lost).
+  applyAccountChannel(msg.user?.preferences);
 }
 
 /** Process auth_error: return to login page with error message. */
@@ -219,31 +222,57 @@ export function processAuthError(
   }
 }
 
-/** Beta/stable channel switching (Settings › Dogfood, account preference). */
-export const CHANNEL_SWITCHING_ENABLED = false;
-
 /** Apply user preferences to local state. Called on auth_ok and preferences_updated. */
 export function applyPreferences(prefs: Record<string, unknown> | undefined): void {
   if (!prefs) return;
-  // Internal users get debug logging automatically
-  setDebugLogging(prefs.internal === true);
   if (typeof prefs.theme === 'string' && ['light', 'dark', 'system'].includes(prefs.theme)) {
     setTheme(prefs.theme as 'light' | 'dark' | 'system');
   }
-  // Channel switching is off for now (dogfood distribution to be redesigned):
-  // the account's `channel` preference is kept but not acted on.
-  // Channel switching: set cookie so nginx serves the correct build. Only on
-  // the hosted web app: Kraki for Windows ships its own build (app://), where
-  // the cookie never sticks — reloading there looped forever (account with
-  // channel=beta). And never reload unless the cookie actually took.
-  if (CHANNEL_SWITCHING_ENABLED && typeof prefs.channel === 'string' && /^[a-z]+$/.test(prefs.channel) && !window.krakiDesktop) {
-    const current = getCurrentChannel();
-    if (prefs.channel !== current) {
-      setChannelCookie(prefs.channel);
-      if (getCurrentChannel() === prefs.channel) window.location.reload();
-      else logger.warn('Channel cookie not stored; staying on this build', { channel: prefs.channel });
-    }
+}
+
+/** The release channel an account gets: internal accounts dogfood ("beta"). */
+export function channelForAccount(prefs: Record<string, unknown> | undefined): 'beta' | 'stable' {
+  return prefs?.internal === true ? 'beta' : 'stable';
+}
+
+const CHANNEL_RELOAD_KEY = 'kraki.channelReload';
+
+/**
+ * Serve the account's release channel. Called with the full account on
+ * auth_ok only: `preferences_updated` can carry a partial set (an edge relay
+ * knows only what was changed there), and a missing `internal` there must not
+ * move an internal account to stable. The head owns `internal`; clients
+ * cannot set it.
+ *
+ * The hosted web app is one origin; the `kraki_channel=beta` cookie makes the
+ * server hand out the dogfood bundle. Kraki for Windows ships its own bundle
+ * (app://) where the cookie never sticks — it gets dogfood builds through its
+ * updater instead, so nothing happens there. Reloads only when the cookie
+ * actually changed, and at most once per tab session per target, so a server
+ * that ignores the cookie can never cause a reload loop.
+ */
+export function applyAccountChannel(prefs: Record<string, unknown> | undefined): void {
+  setDebugLogging(prefs?.internal === true);
+  if (window.krakiDesktop) return;
+  const desired = channelForAccount(prefs);
+  if (getCurrentChannel() === desired) {
+    try { sessionStorage.removeItem(CHANNEL_RELOAD_KEY); } catch { /* storage unavailable */ }
+    return;
   }
+  setChannelCookie(desired);
+  if (getCurrentChannel() !== desired) {
+    logger.warn('Channel cookie not stored; staying on this build', { channel: desired });
+    return;
+  }
+  let reloaded: string | null = null;
+  try { reloaded = sessionStorage.getItem(CHANNEL_RELOAD_KEY); } catch { /* storage unavailable */ }
+  if (reloaded === desired) {
+    logger.warn('Already reloaded for this channel; staying on this build', { channel: desired });
+    return;
+  }
+  try { sessionStorage.setItem(CHANNEL_RELOAD_KEY, desired); } catch { /* storage unavailable */ }
+  logger.info('Switching release channel', { channel: desired });
+  window.location.reload();
 }
 
 /** Read the current release channel from the cookie. */
@@ -251,12 +280,9 @@ export function getCurrentChannel(): string {
   return document.cookie.match(/(?:^|; )kraki_channel=([a-z]+)/)?.[1] ?? 'stable';
 }
 
-/** Set the release channel cookie and reload to pick up the new build. */
-export function setChannel(channel: string): void {
-  setChannelCookie(channel);
-  window.location.reload();
-}
-
-function setChannelCookie(channel: string): void {
-  document.cookie = `kraki_channel=${channel};path=/;max-age=${365 * 86400};SameSite=Lax`;
+function setChannelCookie(channel: 'beta' | 'stable'): void {
+  // Stable is the default: no cookie at all.
+  document.cookie = channel === 'beta'
+    ? `kraki_channel=beta;path=/;max-age=${365 * 86400};SameSite=Lax`
+    : 'kraki_channel=;path=/;max-age=0;SameSite=Lax';
 }

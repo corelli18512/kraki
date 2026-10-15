@@ -874,6 +874,56 @@ describe('HeadServer (thin relay)', () => {
     });
   });
 
+  describe('internal (dogfood) accounts', () => {
+    it('a client cannot make itself internal; only the operator can, and auth_ok carries it', async () => {
+      head = await createHead();
+      const { ws: a, authOk } = await authConnect(head.port, 'App', 'app', { deviceId: 'int-a' });
+      const userId = (authOk.user as Record<string, unknown>).id as string;
+      expect((authOk.user as Record<string, unknown>).preferences).toBeUndefined();
+
+      // Self-promotion attempt (together with a legitimate theme change).
+      const ack = waitForMessageOfType(a, 'preferences_updated');
+      a.send(JSON.stringify({ type: 'update_preferences', preferences: { internal: true, theme: 'dark' } }));
+      expect((await ack).preferences).toEqual({ theme: 'dark' });
+      a.close();
+      const { ws: b, authOk: stillStable } = await authConnect(head.port, 'App', 'app', { deviceId: 'int-b' });
+      expect((stillStable.user as Record<string, unknown>).preferences).toEqual({ theme: 'dark' });
+      b.close();
+
+      // Operator marks the account internal: the next sign-in carries it.
+      expect(head.storage.setInternal(userId, true)).toBe(true);
+      expect(head.storage.setInternal(userId, true)).toBe(false);
+      const { ws: c, authOk: internalOk } = await authConnect(head.port, 'App', 'app', { deviceId: 'int-c' });
+      expect((internalOk.user as Record<string, unknown>).preferences).toEqual({ theme: 'dark', internal: true });
+
+      // A client cannot clear it either, and theme changes keep it.
+      const ack2 = waitForMessageOfType(c, 'preferences_updated');
+      c.send(JSON.stringify({ type: 'update_preferences', preferences: { internal: false, theme: 'light' } }));
+      expect((await ack2).preferences).toEqual({ theme: 'light', internal: true });
+      c.close();
+
+      // Operator revokes: back to stable at the next sign-in.
+      expect(head.storage.setInternal(userId, false)).toBe(true);
+      const { ws: d, authOk: revokedOk } = await authConnect(head.port, 'App', 'app', { deviceId: 'int-d' });
+      expect((revokedOk.user as Record<string, unknown>).preferences).toEqual({ theme: 'light' });
+      d.close();
+    });
+
+    it('finds accounts by login and lists internal ones', async () => {
+      head = await createHead();
+      head.storage.upsertUser('u1', 'Corelli', 'github');
+      head.storage.upsertUser('u2', 'someone', 'github');
+      expect(head.storage.getUsersByLogin('corelli').map(u => u.userId)).toEqual(['u1']);
+      expect(head.storage.getInternalUsers()).toEqual([]);
+      head.storage.setInternal('u1', true);
+      expect(head.storage.getInternalUsers().map(u => u.userId)).toEqual(['u1']);
+      expect(head.storage.setInternal('missing', true)).toBe(false);
+      head.storage.setInternal('u1', false);
+      expect(head.storage.getUser('u1')?.preferences).toEqual({});
+      expect(head.storage.getInternalUsers()).toEqual([]);
+    });
+  });
+
   describe('account vocabulary sync', () => {
     it('syncs two app clients live and hydrates a reconnect without any tentacle', async () => {
       head = await createHead();

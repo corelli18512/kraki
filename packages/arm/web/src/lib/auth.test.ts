@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // Mock the browser globals + store adapter processAuthError touches.
 const localStorageMock = (() => {
@@ -115,46 +115,143 @@ describe('browserDeviceName', () => {
   });
 });
 
-describe('channel preference', () => {
-  it('is switched off: the account channel preference never reloads the app', async () => {
-    const { applyPreferences, CHANNEL_SWITCHING_ENABLED } = await import('./auth');
-    expect(CHANNEL_SWITCHING_ENABLED).toBe(false);
-    const reload = vi.fn();
-    const loc = window.location;
-    Object.defineProperty(window, 'location', { configurable: true, value: { ...loc, reload } });
-    try {
-      applyPreferences({ channel: 'beta' });
-      expect(reload).not.toHaveBeenCalled();
-    } finally {
-      Object.defineProperty(window, 'location', { configurable: true, value: loc });
+describe('release channel follows the account (internal = dogfood)', () => {
+  /** A cookie jar that behaves like a browser for one cookie: max-age=0 deletes. */
+  function installJar(initial: string, opts: { sticks?: boolean } = {}) {
+    let jar = new Map<string, string>();
+    for (const part of initial.split('; ').filter(Boolean)) {
+      const [k, v] = part.split('=');
+      jar.set(k, v);
     }
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => [...jar].map(([k, v]) => `${k}=${v}`).join('; '),
+      set: (raw: string) => {
+        if (opts.sticks === false) return;
+        const [pair, ...attrs] = raw.split(';');
+        const [k, v] = pair.split('=');
+        if (attrs.some((a) => a.trim() === 'max-age=0')) jar.delete(k);
+        else jar = new Map(jar).set(k, v);
+      },
+    });
+    return () => document.cookie;
+  }
+
+  const session = new Map<string, string>();
+  let reload: ReturnType<typeof vi.fn>;
+  const loc = window.location;
+  beforeEach(() => {
+    session.clear();
+    vi.stubGlobal('sessionStorage', {
+      getItem: (k: string) => session.get(k) ?? null,
+      setItem: (k: string, v: string) => { session.set(k, v); },
+      removeItem: (k: string) => { session.delete(k); },
+    });
+    reload = vi.fn();
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...loc, reload } });
+    delete (window as unknown as { krakiDesktop?: unknown }).krakiDesktop;
+  });
+  afterEach(() => {
+    Object.defineProperty(window, 'location', { configurable: true, value: loc });
+    delete (document as unknown as { cookie?: string }).cookie;
+    delete (window as unknown as { krakiDesktop?: unknown }).krakiDesktop;
   });
 
-  it.skipIf(true)('when enabled: never reloads inside Kraki for Windows, nor when the channel cookie does not stick', async () => {
+  it('maps the account to a channel', async () => {
+    const { channelForAccount } = await import('./auth');
+    expect(channelForAccount({ internal: true })).toBe('beta');
+    expect(channelForAccount({ internal: false })).toBe('stable');
+    expect(channelForAccount({ theme: 'dark' })).toBe('stable');
+    expect(channelForAccount({ internal: 'true' })).toBe('stable');
+    expect(channelForAccount({ internal: 1 })).toBe('stable');
+    expect(channelForAccount(undefined)).toBe('stable');
+    // The legacy self-chosen `channel` preference no longer counts.
+    expect(channelForAccount({ channel: 'beta' })).toBe('stable');
+  });
+
+  it('stable account on stable: nothing happens', async () => {
+    const { applyAccountChannel } = await import('./auth');
+    const jar = installJar('other=1');
+    applyAccountChannel({ theme: 'dark' });
+    applyAccountChannel(undefined);
+    applyAccountChannel({ channel: 'beta' });
+    expect(jar()).toBe('other=1');
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('internal account on stable: moves to dogfood once', async () => {
+    const { applyAccountChannel, getCurrentChannel } = await import('./auth');
+    const jar = installJar('');
+    applyAccountChannel({ internal: true });
+    expect(jar()).toBe('kraki_channel=beta');
+    expect(getCurrentChannel()).toBe('beta');
+    expect(reload).toHaveBeenCalledTimes(1);
+    // After the reload the dogfood bundle signs in again: settled, no reload.
+    applyAccountChannel({ internal: true });
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(session.size).toBe(0);
+  });
+
+  it('stable account left on dogfood (revoked, or another account in this browser): back to stable', async () => {
+    const { applyAccountChannel, getCurrentChannel } = await import('./auth');
+    const jar = installJar('a=1; kraki_channel=beta');
+    applyAccountChannel({ theme: 'light' });
+    expect(jar()).toBe('a=1');
+    expect(getCurrentChannel()).toBe('stable');
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('a self-set beta cookie does not give a stable account dogfood', async () => {
+    const { applyAccountChannel } = await import('./auth');
+    const jar = installJar('kraki_channel=beta');
+    applyAccountChannel({ internal: false, channel: 'beta' });
+    expect(jar()).toBe('');
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('internal account already on dogfood: nothing happens', async () => {
+    const { applyAccountChannel } = await import('./auth');
+    installJar('kraki_channel=beta');
+    applyAccountChannel({ internal: true, theme: 'dark' });
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('Kraki for Windows: never touches the cookie or reloads', async () => {
+    const { applyAccountChannel } = await import('./auth');
+    (window as unknown as { krakiDesktop?: unknown }).krakiDesktop = {};
+    const jar = installJar('');
+    applyAccountChannel({ internal: true });
+    expect(jar()).toBe('');
+    installJar('kraki_channel=beta');
+    applyAccountChannel({});
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('a cookie that does not stick never reloads', async () => {
+    const { applyAccountChannel } = await import('./auth');
+    installJar('', { sticks: false });
+    applyAccountChannel({ internal: true });
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('a server that ignores the cookie cannot cause a reload loop', async () => {
+    const { applyAccountChannel } = await import('./auth');
+    installJar('');
+    applyAccountChannel({ internal: true });
+    expect(reload).toHaveBeenCalledTimes(1);
+    // The "reloaded" page was still the stable bundle, which lost the cookie
+    // (e.g. cleared by an extension): it must not reload again this session.
+    installJar('');
+    applyAccountChannel({ internal: true });
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('theme updates (preferences_updated) never change the channel', async () => {
     const { applyPreferences } = await import('./auth');
-    const reload = vi.fn();
-    const loc = window.location;
-    Object.defineProperty(window, 'location', { configurable: true, value: { ...loc, reload } });
-    const cookie = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie')!;
-    try {
-      // Desktop app: ignored entirely.
-      (window as unknown as { krakiDesktop?: unknown }).krakiDesktop = {};
-      applyPreferences({ channel: 'beta' });
-      expect(reload).not.toHaveBeenCalled();
-      delete (window as unknown as { krakiDesktop?: unknown }).krakiDesktop;
-      // Cookie that never sticks (custom scheme): no reload loop.
-      Object.defineProperty(document, 'cookie', { configurable: true, get: () => '', set: () => {} });
-      applyPreferences({ channel: 'beta' });
-      expect(reload).not.toHaveBeenCalled();
-      // Normal web: switches once.
-      let jar = '';
-      Object.defineProperty(document, 'cookie', { configurable: true, get: () => jar, set: (v: string) => { jar = v.split(';')[0]; } });
-      applyPreferences({ channel: 'beta' });
-      expect(reload).toHaveBeenCalledTimes(1);
-    } finally {
-      Object.defineProperty(window, 'location', { configurable: true, value: loc });
-      delete (document as unknown as { cookie?: string }).cookie;
-      Object.defineProperty(Document.prototype, 'cookie', cookie);
-    }
+    const jar = installJar('kraki_channel=beta');
+    applyPreferences({ theme: 'dark' });
+    applyPreferences({ internal: false });
+    expect(jar()).toBe('kraki_channel=beta');
+    expect(reload).not.toHaveBeenCalled();
   });
 });
