@@ -1,5 +1,11 @@
 # kraki-watch
 
+All generated operational notifications and host/cohort labels are English-only.
+When updating a previously deployed non-English configuration, preserve thresholds,
+probe identities, counters and notification permissions; migrate cached display
+labels and probe-name keys with a private backup. Do not reset alert history to
+change its language. Retain Unicode payload tests for external diagnostic text.
+
 Product statistics and event-time client experience observation are provided by
 [`ops/insights`](../insights/README.md). Host configs read its private summary;
 `experienceNotify:false` keeps new experience rules silent independently of
@@ -173,7 +179,7 @@ end-to-end test runs the real script against a fake relay, fake Bark and fake
   host and UptimeRobot still watch.
 - **State**: `/var/lib/kraki-watch/state.json`. Deleting it resets all alerts.
 - **Bark unreachable or rejecting messages**: undelivered messages are kept
-  (up to 20) and retried on the next run, marked "[延迟送达]". Delivery requires
+  (up to 20) and retried on the next run, marked "[Delayed]". Delivery requires
   both HTTP success and Bark JSON `code: 200`. Redirects are rejected to avoid
   forwarding the key; logs omit upstream response bodies and raw error text.
 - **Missing key with notifications enabled**: fails before updating state or

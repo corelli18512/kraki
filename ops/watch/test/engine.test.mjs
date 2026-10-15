@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { digestDue, emptyState, evaluate, inQuietHours, rollDigest, routeRetries } from '../lib/engine.mjs';
 
-const config = { host: 'cn', label: '国内', timezone: 'Asia/Shanghai', quietHours: [23, 8], digestHour: 9 };
+const config = { host: 'cn', label: 'China', timezone: 'Asia/Shanghai', quietHours: [23, 8], digestHour: 9 };
 // 2026-10-13 14:00 Beijing = 06:00Z
 const DAY = Date.parse('2026-10-13T06:00:00Z');
 const NIGHT = Date.parse('2026-10-13T17:00:00Z'); // 01:00 Beijing
 const MIN = 60_000;
 
-const down = (over = {}) => ({ id: 'K-RELAY-DOWN@cn', severity: 'critical', failAfter: 3, ok: false, title: '国内 relay无法访问', detail: 'HTTP 502', ...over });
+const down = (over = {}) => ({ id: 'K-RELAY-DOWN@cn', severity: 'critical', failAfter: 3, ok: false, title: 'China relay unreachable', detail: 'HTTP 502', ...over });
 const up = (over = {}) => ({ ...down(over), ok: true });
 
 function runSeq(results, start, cfg = config) {
@@ -27,7 +27,7 @@ test('fires only after failAfter consecutive failures, once', () => {
   assert.equal(sent.length, 1);
   assert.equal(sent[0].minute, 2);
   assert.equal(sent[0].kind, 'fire');
-  assert.equal(sent[0].title, '国内：国内 relay无法访问');
+  assert.equal(sent[0].title, 'China: China relay unreachable');
   assert.equal(sent[0].body, 'HTTP 502');
   assert.equal(state.day.fired.critical, 1);
 });
@@ -41,15 +41,15 @@ test('critical repeats every 30 minutes with the duration, then resolves once', 
   const seq = [...Array(65).fill(down()), up(), up()];
   const { sent, state } = runSeq(seq, DAY);
   assert.deepEqual(sent.map((n) => [n.kind, n.minute]), [['fire', 2], ['repeat', 32], ['repeat', 62], ['resolve', 65]]);
-  assert.match(sent[1].title, /仍未恢复 · 已持续 32 分钟/);
-  assert.match(sent[3].title, /已恢复/);
-  assert.equal(sent[3].body, '持续 1 小时 5 分钟');
+  assert.match(sent[1].title, /unresolved · 32 min/);
+  assert.match(sent[3].title, /Recovered/);
+  assert.equal(sent[3].body, 'Duration 1 h 5 min');
   assert.equal(state.alerts['K-RELAY-DOWN@cn'].status, 'ok');
   assert.ok(state.day.incidents[0].endedAt);
 });
 
 test('critical rings at night; warnings wait for the morning batch', () => {
-  const warn = { id: 'K-DISK', severity: 'warning', failAfter: 1, ok: false, title: '磁盘快满了', detail: '已用 88%' };
+  const warn = { id: 'K-DISK', severity: 'warning', failAfter: 1, ok: false, title: 'Disk space running low', detail: '88% used' };
   let state = emptyState();
   let out = evaluate(state, [down({ failAfter: 1 }), warn], NIGHT, config);
   assert.deepEqual(out.notifications.map((n) => n.severity), ['critical']);
@@ -62,26 +62,26 @@ test('critical rings at night; warnings wait for the morning batch', () => {
   out = evaluate(out.state, [], Date.parse('2026-10-14T00:00:00Z'), config);
   assert.equal(out.notifications.length, 1);
   assert.equal(out.notifications[0].kind, 'deferred');
-  assert.match(out.notifications[0].title, /夜间 1 条警告/);
-  assert.match(out.notifications[0].body, /^01:00 国内：磁盘快满了 — 已用 88%/);
+  assert.match(out.notifications[0].title, /1 overnight warning/);
+  assert.match(out.notifications[0].body, /^01:00 China: Disk space running low — 88% used/);
   assert.equal(out.state.deferred.length, 0);
 });
 
 test('warning repeats at most every 6 hours', () => {
-  const warn = { id: 'K-DISK', severity: 'warning', failAfter: 1, ok: false, title: '磁盘快满了' };
+  const warn = { id: 'K-DISK', severity: 'warning', failAfter: 1, ok: false, title: 'Disk space running low' };
   const { sent } = runSeq(Array(7 * 60).fill(warn), Date.parse('2026-10-13T00:00:00Z')); // 08:00–15:00 Beijing
   assert.deepEqual(sent.map((n) => [n.kind, n.minute]), [['fire', 0], ['repeat', 360]]);
 });
 
 test('a warning that turns critical fires again as critical', () => {
-  const w = { id: 'K-DISK', severity: 'warning', failAfter: 1, ok: false, title: '磁盘快满了', detail: '88%' };
+  const w = { id: 'K-DISK', severity: 'warning', failAfter: 1, ok: false, title: 'Disk space running low', detail: '88%' };
   const c = { ...w, severity: 'critical', detail: '96%' };
   const { sent } = runSeq([w, w, c, c], DAY);
   assert.deepEqual(sent.map((n) => [n.kind, n.severity, n.minute]), [['fire', 'warning', 0], ['fire', 'critical', 2]]);
 });
 
 test('critical easing back to warning stops ringing; one incident, one recovery', () => {
-  const w = { id: 'K-DISK', severity: 'warning', failAfter: 1, ok: false, title: '磁盘快满了' };
+  const w = { id: 'K-DISK', severity: 'warning', failAfter: 1, ok: false, title: 'Disk space running low' };
   const c = { ...w, severity: 'critical' };
   const { sent, state } = runSeq([w, c, ...Array(40).fill(w), { ...w, ok: true }], DAY);
   assert.deepEqual(sent.map((n) => [n.kind, n.severity]), [['fire', 'warning'], ['fire', 'critical'], ['resolve', 'warning']]);
@@ -90,7 +90,7 @@ test('critical easing back to warning stops ringing; one incident, one recovery'
 });
 
 test('escalation is not reported as a recovery', () => {
-  const w = { id: 'K-DISK', severity: 'warning', failAfter: 1, ok: false, title: '磁盘快满了' };
+  const w = { id: 'K-DISK', severity: 'warning', failAfter: 1, ok: false, title: 'Disk space running low' };
   const { state } = runSeq([w, { ...w, severity: 'critical' }], DAY);
   assert.equal(state.day.incidents.length, 1);
   assert.equal(state.day.incidents[0].endedAt, null);
@@ -111,14 +111,14 @@ test('failed deliveries are re-routed through quiet hours', () => {
 });
 
 test('info is never pushed, only counted', () => {
-  const info = { id: 'K-AUTH-ABUSE', severity: 'info', failAfter: 1, ok: false, title: '疑似暴力尝试登录' };
+  const info = { id: 'K-AUTH-ABUSE', severity: 'info', failAfter: 1, ok: false, title: 'Possible sign-in abuse' };
   const { sent, state } = runSeq([info, info, { ...info, ok: true }], DAY);
   assert.equal(sent.length, 0);
   assert.equal(state.day.fired.info, 1);
 });
 
 test('one-off events notify once and need no recovery', () => {
-  const ev = { id: 'K-SVC-RESTART@kraki-relay', event: true, severity: 'warning', ok: false, title: 'relay 意外重启', detail: 'x' };
+  const ev = { id: 'K-SVC-RESTART@kraki-relay', event: true, severity: 'warning', ok: false, title: 'Relay unexpected restart', detail: 'x' };
   const { sent, state } = runSeq([ev, ev], DAY);
   assert.equal(sent.length, 2);
   assert.equal(state.alerts['K-SVC-RESTART@kraki-relay'], undefined);

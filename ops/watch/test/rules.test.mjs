@@ -7,7 +7,7 @@ import { accumulate, emptyState, evaluate, recordProbe } from '../lib/engine.mjs
 import { parseLine, summarize } from '../lib/logs.mjs';
 import { counterDeltas, evaluateRules } from '../lib/rules.mjs';
 
-const config = { host: 'cn', label: '国内', timezone: 'Asia/Shanghai', relayUnit: 'kraki-relay' };
+const config = { host: 'cn', label: 'China', timezone: 'Asia/Shanghai', relayUnit: 'kraki-relay' };
 const T0 = Date.parse('2026-10-13T06:00:00Z');
 const MIN = 60_000;
 const byId = (results, id) => results.find((r) => r.id === id);
@@ -66,7 +66,7 @@ test('unplanned restart is an event; three in an hour is critical flapping', () 
   const restart = byId(failing, 'K-SVC-RESTART@kraki-relay');
   assert.equal(restart.event, true);
   assert.match(restart.detail, /Error: boom 3/);
-  assert.equal(byId(failing, 'K-SVC-FLAP@kraki-relay').detail, '1 小时内重启 3 次');
+  assert.equal(byId(failing, 'K-SVC-FLAP@kraki-relay').detail, '3 restarts in 1 hour');
 });
 
 test('a restart during maintenance is not reported', () => {
@@ -129,7 +129,7 @@ test('unknown errors are summed and the top ones named', () => {
   const r = evaluateRules(snap({ logs: summarize(lines) }), {}, config);
   const e = byId(r.results, 'K-ERRORS');
   assert.equal(e.ok, false);
-  assert.equal(e.detail, '10 分钟 21 条：Disk I/O error ×15；Something else ×6');
+  assert.equal(e.detail, '21 errors in 10 min: Disk I/O error ×15; Something else ×6');
 });
 
 test('connection drop and durable backlog', () => {
@@ -165,13 +165,13 @@ test('certificates and backups', () => {
 test('backup gaps, malformed success, execution failure and stale success remain distinct', () => {
   const valid = { ok: true, at: new Date(T0 - 3600_000).toISOString(), sizeBytes: 100 };
   for (const [backup, status, expected] of [
-    [null, 'missing', /状态缺失/],
-    [{ ...valid, at: 'bad timestamp' }, 'invalid', /状态无效/],
-    [{ ...valid, ok: undefined }, 'invalid', /状态无效/],
-    [{ ...valid, sizeBytes: 0 }, 'invalid', /状态无效/],
-    [{ ...valid, at: new Date(T0 + 180_000).toISOString() }, 'invalid', /状态无效/],
-    [{ ok: false, error: 'integrity' }, 'failed', /任务失败/],
-    [{ ...valid, at: new Date(T0 - 27 * 3600_000).toISOString() }, 'stale', /记录过期/],
+    [null, 'missing', /status missing/],
+    [{ ...valid, at: 'bad timestamp' }, 'invalid', /status invalid/],
+    [{ ...valid, ok: undefined }, 'invalid', /status invalid/],
+    [{ ...valid, sizeBytes: 0 }, 'invalid', /status invalid/],
+    [{ ...valid, at: new Date(T0 + 180_000).toISOString() }, 'invalid', /status invalid/],
+    [{ ok: false, error: 'integrity' }, 'failed', /job failed/],
+    [{ ...valid, at: new Date(T0 - 27 * 3600_000).toISOString() }, 'stale', /record stale/],
   ]) {
     const result = evaluateRules(snap({ backup }), {}, config);
     const rule = byId(result.results, 'K-BACKUP');
@@ -182,26 +182,26 @@ test('backup gaps, malformed success, execution failure and stale success remain
     let state = evaluate(emptyState(), [rule], T0, config).state;
     state.day.notes.backup = result.digest.notes.backup;
     const note = formatDigest(state, T0, config);
-    assert.doesNotMatch(note.body, /备份  ✓/);
-    if (status === 'missing') assert.doesNotMatch(note.body, /执行失败|任务失败|备份  ✗/);
+    assert.doesNotMatch(note.body, /Backup  ✓/);
+    if (status === 'missing') assert.doesNotMatch(note.body, /job failed|record reports failure|Backup  ✗/);
   }
   const nearFuture = { ...valid, at: new Date(T0 + 30_000).toISOString() };
   assert.equal(byId(evaluateRules(snap({ backup: nearFuture }), {}, config).results, 'K-BACKUP').ok, true, 'allow a status written just after snapshot collection began');
 });
 
 test('digest renders the current open-incident reason and treats old ambiguous backup notes as unknown', () => {
-  const rule = { id: 'K-BACKUP', severity: 'critical', failAfter: 1, ok: false, title: '数据库备份失败或过期' };
+  const rule = { id: 'K-BACKUP', severity: 'critical', failAfter: 1, ok: false, title: 'Database backup failed or stale' };
   let state = evaluate(emptyState(), [rule], T0 - 60_000, config).state;
-  state = evaluate(state, [{ ...rule, title: '数据库备份状态缺失' }], T0, config).state;
+  state = evaluate(state, [{ ...rule, title: 'Database backup status missing' }], T0, config).state;
   state.day.notes.backup = { status: 'missing', failed: false };
   let note = formatDigest(state, T0, config);
-  assert.match(note.body, /数据库备份状态缺失（仍未恢复）/);
-  assert.doesNotMatch(note.body, /备份失败或过期/);
+  assert.match(note.body, /Database backup status missing \(unresolved\)/);
+  assert.doesNotMatch(note.body, /backup failed or stale/);
   for (const legacy of [{ failed: true }, { at: 'bad', sizeBytes: 100 }, { at: new Date(T0 + 180_000).toISOString(), sizeBytes: 100 }]) {
     state.day.notes.backup = legacy;
     note = formatDigest(state, T0, config);
-    assert.match(note.body, /旧状态不完整/);
-    assert.doesNotMatch(note.body, /备份  ✓|备份  ✗/);
+    assert.match(note.body, /Incomplete legacy status/);
+    assert.doesNotMatch(note.body, /Backup  ✓|Backup  ✗/);
   }
 });
 
@@ -209,7 +209,7 @@ test('slow probe uses the median of the last 10', () => {
   let mem = {};
   let r;
   for (let i = 0; i < 6; i++) {
-    r = evaluateRules(snap({ probes: [{ id: 'K-RELAY-DOWN', target: 'cn', name: '国内 relay', severity: 'critical', slow: true, ok: true, ms: i < 2 ? 100 : 3000 }] }), mem, config);
+    r = evaluateRules(snap({ probes: [{ id: 'K-RELAY-DOWN', target: 'cn', name: 'China relay', severity: 'critical', slow: true, ok: true, ms: i < 2 ? 100 : 3000 }] }), mem, config);
     mem = r.mem;
   }
   assert.equal(byId(r.results, 'K-SLOW@cn').ok, false);
@@ -307,42 +307,42 @@ test('a deploy does not report a connection drop, before or after', () => {
 test('daily summary text', () => {
   let state = emptyState();
   const now = Date.parse('2026-10-14T01:00:00Z');
-  state = evaluate(state, [{ id: 'X', severity: 'critical', failAfter: 1, ok: false, title: '国内 relay无法访问' }], Date.parse('2026-10-13T19:12:00Z'), config).state;
-  state = evaluate(state, [{ id: 'X', severity: 'critical', failAfter: 1, ok: true, title: '国内 relay无法访问' }], Date.parse('2026-10-13T19:16:00Z'), config).state;
-  for (let i = 0; i < 1000; i++) recordProbe(state, '国内 relay', i !== 0);
+  state = evaluate(state, [{ id: 'X', severity: 'critical', failAfter: 1, ok: false, title: 'China relay unreachable' }], Date.parse('2026-10-13T19:12:00Z'), config).state;
+  state = evaluate(state, [{ id: 'X', severity: 'critical', failAfter: 1, ok: true, title: 'China relay unreachable' }], Date.parse('2026-10-13T19:16:00Z'), config).state;
+  for (let i = 0; i < 1000; i++) recordProbe(state, 'China relay', i !== 0);
   accumulate(state, { totals: { 'm:auth.ok': 12, 'm:push.attempted': 424, 'm:push.sent': 420, 'm:push.failed': 4 }, peaks: { conns: 5, rssMb: 136 } });
   Object.assign(state.day.notes, { disk: 52, backup: { at: '2026-10-13T19:00:00Z', sizeBytes: 9_646_899, copied: true }, 'cert:cn.relay.kraki.chat': 61, 'cert:stt.kraki.chat': 80, 'version:cn': '0.20.1' });
   const d = formatDigest(state, now, config);
-  assert.equal(d.title, 'Kraki 日报 · 国内 · 1 个问题');
+  assert.equal(d.title, 'Kraki Daily · China · 1 issue');
   assert.equal(d.body, [
-    '可用性  国内 relay 99.90%',
-    '告警  紧急 1  警告 0  信息 0',
-    '  · 03:12 国内 relay无法访问（4 分钟，已恢复）',
-    '连接  峰值 5 / 登录 12',
-    '推送  成功 420 / 失败 4',
-    '资源  relay 内存峰值 136 MB  磁盘 52%',
-    '备份  ✓ 03:00 9.2 MB 已复制',
-    '证书  最近到期 cn.relay.kraki.chat 还有 61 天',
-    '版本  cn 0.20.1',
+    'Availability  China relay 99.90%',
+    'Alerts  critical 1  warning 0  info 0',
+    '  · 03:12 China relay unreachable (4 min, recovered)',
+    'Connections  peak 5 / sign-ins 12',
+    'Push  sent 420 / failed 4',
+    'Resources  peak relay memory 136 MB  disk 52%',
+    'Backup  ✓ 03:00 9.2 MB copied',
+    'Certificates  next expiry cn.relay.kraki.chat in 61 days',
+    'Versions  cn 0.20.1',
   ].join('\n'));
-  assert.equal(formatDigest(emptyState(), now, config).title, 'Kraki 日报 · 国内 · 全部正常');
+  assert.equal(formatDigest(emptyState(), now, config).title, 'Kraki Daily · China · All checks healthy');
 });
 
 test('a problem is counted once, whether it is still open or not', () => {
   const now = Date.parse('2026-10-14T01:00:00Z');
   let state = emptyState();
-  const r = { id: 'K-BACKUP', severity: 'critical', failAfter: 1, ok: false, title: '数据库备份失败或过期' };
+  const r = { id: 'K-BACKUP', severity: 'critical', failAfter: 1, ok: false, title: 'Database backup failed or stale' };
   state = evaluate(state, [r], now - 3600_000, config).state;
   state = evaluate(state, [r], now - 60_000, config).state;
   const d = formatDigest(state, now, config);
-  assert.equal(d.title, 'Kraki 日报 · 国内 · 1 个问题');
-  assert.match(d.body, /数据库备份失败或过期（仍未恢复）/);
-  assert.doesNotMatch(d.body, /仍未恢复：/);
+  assert.equal(d.title, 'Kraki Daily · China · 1 issue');
+  assert.match(d.body, /Database backup failed or stale \(unresolved\)/);
+  assert.doesNotMatch(d.body, /Unresolved:/);
   // Still firing from an earlier day: listed once as open.
   state.day = { ...state.day, incidents: [], fired: { critical: 0, warning: 0, info: 0 } };
   const d2 = formatDigest(state, now, config);
-  assert.equal(d2.title, 'Kraki 日报 · 国内 · 1 个问题');
-  assert.match(d2.body, /  · 仍未恢复：数据库备份失败或过期/);
+  assert.equal(d2.title, 'Kraki Daily · China · 1 issue');
+  assert.match(d2.body, /  · Unresolved: Database backup failed or stale/);
 });
 
 test('an older relay without /health/ready is not reported as not ready', () => {
@@ -353,7 +353,7 @@ test('an older relay without /health/ready is not reported as not ready', () => 
 
 test('Bark levels: critical rings, warnings are time-sensitive, night recoveries are passive', () => {
   const crit = barkPayload({ kind: 'fire', severity: 'critical', title: 't', body: 'b' }, 'KEY');
-  assert.deepEqual(crit, { device_key: 'KEY', title: 't', body: 'b', isArchive: '1', level: 'critical', volume: '8', call: '1', group: 'Kraki 紧急' });
+  assert.deepEqual(crit, { device_key: 'KEY', title: 't', body: 'b', isArchive: '1', level: 'critical', volume: '8', call: '1', group: 'Kraki Critical' });
   assert.equal(barkPayload({ kind: 'repeat', severity: 'critical', title: 't' }, 'K').level, 'critical');
   assert.equal(barkPayload({ kind: 'fire', severity: 'warning', title: 't' }, 'K').level, 'timeSensitive');
   assert.equal(barkPayload({ kind: 'resolve', severity: 'critical', title: 't', quiet: true }, 'K').level, 'passive');

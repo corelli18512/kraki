@@ -11,7 +11,7 @@ import { formatDigest } from '../lib/digest.mjs';
 const NOW = Date.parse('2026-10-15T06:00:00Z');
 const config = { host: 'tokyo', timezone: 'Asia/Shanghai', quietHours: [23, 8] };
 const id = 'send/ios/1.0(1)/typed';
-const group = { id, metric: 'send', title: '发送确认', samples: 20, total: 20, success: 20, failures: 0,
+const group = { id, metric: 'send', title: 'Send confirmation', samples: 20, total: 20, success: 20, failures: 0,
   p95Ms: 6000, p50Ms: 1000, p99Ms: 7000, targetMs: 5000, extreme: 0, problems: 0, failureRate: 0, problemRate: 0 };
 function snapshot(now, over = {}) {
   return { schema: 1, host: 'tokyo', asOf: now, recent: [{ ...group, latestEventAt: now, ...over }], quality: { scan: {} }, pending: { explicitFailures: 0 } };
@@ -80,7 +80,7 @@ test('digest shows unknown versus zero, coverage and bounded Unicode/JSON payloa
   const s = snapshot(NOW); s.daily = { date: '2026-10-14', metrics: [] };
   s.product = { registration: { total: 5, newByDay: { '2026-10-14': 0 } }, days: { '2026-10-14': { observedDau: null, dayComplete: false } } };
   const body = experienceDigest(s, NOW).join('\n');
-  assert.match(body, /注册总数 5/); assert.match(body, /昨日新增 0/); assert.match(body, /昨日活跃 未知/); assert.match(body, /暂无样本/);
+  assert.match(body, /Registered 5/); assert.match(body, /new yesterday 0/); assert.match(body, /Active yesterday unknown/); assert.match(body, /No samples/);
   const payload = barkPayload({ kind: 'digest', title: '日报'.repeat(500), body: ('😊中文"\\').repeat(2000) }, 'test-key');
   assert.ok(Buffer.byteLength(JSON.stringify(payload)) < 3500);
   assert.ok(!payload.body.includes('\uFFFD'));
@@ -89,10 +89,10 @@ test('digest shows unknown versus zero, coverage and bounded Unicode/JSON payloa
 test('digest never titles missing experience coverage all healthy, and puts critical gaps before large stats', () => {
   const state = emptyState();
   const cfg = { ...config, insightsPath: '/private/summary.json' };
-  assert.ok(!formatDigest(state, NOW, cfg).title.includes('全部正常'));
-  state.alerts.backup = { status: 'firing', severity: 'critical', title: '备份缺失' };
+  assert.ok(!formatDigest(state, NOW, cfg).title.includes('All checks healthy'));
+  state.alerts.backup = { status: 'firing', severity: 'critical', title: 'Backup missing' };
   const note = formatDigest(state, NOW, cfg);
-  assert.ok(note.body.startsWith('严重异常 1 项：备份缺失'));
+  assert.ok(note.body.startsWith('Critical issues: 1 — Backup missing'));
 });
 
 test('digest delivery can be enabled while alarms remain shadow; requires a key', () => {

@@ -35,7 +35,7 @@ test('real HTTP digest requests remain passive and silent for every severity and
   try {
     for (const severity of ['info', 'warning', 'critical']) {
       for (const quiet of [false, true]) {
-        const result = await sendBark({ kind: 'digest', severity, quiet, title: '日报', body: '观察数据' }, {
+        const result = await sendBark({ kind: 'digest', severity, quiet, title: 'Daily digest', body: 'Observation data' }, {
           ...options, server: `http://127.0.0.1:${server.address().port}`,
         });
         assert.deepEqual(result, { ok: true });
@@ -45,7 +45,7 @@ test('real HTTP digest requests remain passive and silent for every severity and
     for (const payload of received) {
       assert.equal(payload.level, 'passive');
       assert.equal(payload.sound, 'silence');
-      assert.equal(payload.group, 'Kraki 日报');
+      assert.equal(payload.group, 'Kraki Daily');
       assert.equal(payload.isArchive, '1');
       assert.equal(payload.call, undefined);
       assert.equal(payload.volume, undefined);

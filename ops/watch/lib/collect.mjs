@@ -42,21 +42,21 @@ export async function probeHttp(p) {
     if (p.expectRedirect) {
       const loc = res.headers.get('location') ?? '';
       const ok = res.status >= 300 && res.status < 400 && new RegExp(p.expectRedirect).test(loc);
-      return { ok, ms, detail: ok ? '' : `HTTP ${res.status} → ${loc || '(无跳转)'}` };
+      return { ok, ms, detail: ok ? '' : `HTTP ${res.status} → ${loc || '(no redirect)'}` };
     }
     const statusOk = (p.expectStatus ?? [200]).includes(res.status);
     if (p.readiness && statusOk && isLegacyRelayRoot(body)) {
       // Relay older than /health/ready answers every path with its root JSON.
-      return { ok: true, ms, legacy: true, detail: 'relay 版本没有就绪检查' };
+      return { ok: true, ms, legacy: true, detail: 'This relay version has no readiness endpoint' };
     }
     const bodyOk = !p.expectBody || body.includes(p.expectBody);
     let version = null;
     if (p.relay) {
       try { const j = JSON.parse(body); if (j.name === '@kraki/head') version = j.version; } catch { /* not JSON */ }
     }
-    return { ok: statusOk && bodyOk, ms, version, detail: statusOk && bodyOk ? '' : `HTTP ${res.status}${bodyOk ? '' : '，内容不对'}：${body.slice(0, 120)}` };
+    return { ok: statusOk && bodyOk, ms, version, detail: statusOk && bodyOk ? '' : `HTTP ${res.status}${bodyOk ? '' : ', unexpected content'}: ${body.slice(0, 120)}` };
   } catch (err) {
-    const detail = err?.name === 'TimeoutError' ? `超时 ${(p.timeoutMs ?? 10_000) / 1000} 秒` : (err?.cause?.code ?? err?.message ?? String(err));
+    const detail = err?.name === 'TimeoutError' ? `Timed out after ${(p.timeoutMs ?? 10_000) / 1000}s` : (err?.cause?.code ?? err?.message ?? String(err));
     return { ok: false, ms: Math.round(performance.now() - started), detail };
   }
 }
@@ -76,8 +76,8 @@ export function probeWs(p) {
     });
     const done = (r) => { resolve({ ms: Math.round(performance.now() - started), ...r }); req.destroy(); };
     req.on('upgrade', (res, socket) => { socket.destroy(); done({ ok: res.statusCode === 101, detail: '' }); });
-    req.on('response', (res) => { res.resume(); done({ ok: false, detail: `握手失败：HTTP ${res.statusCode}` }); });
-    req.on('timeout', () => done({ ok: false, detail: '握手超时' }));
+    req.on('response', (res) => { res.resume(); done({ ok: false, detail: `Handshake failed: HTTP ${res.statusCode}` }); });
+    req.on('timeout', () => done({ ok: false, detail: 'Handshake timed out' }));
     req.on('error', (err) => done({ ok: false, detail: err.code ?? err.message }));
     req.end();
   });
@@ -149,10 +149,10 @@ export function certDaysLeft(host) {
     const socket = tls.connect({ host, port: 443, servername: host, timeout: 10_000 }, () => {
       const cert = socket.getPeerCertificate();
       socket.destroy();
-      if (!cert?.valid_to) return resolve({ host, error: '没有证书' });
+      if (!cert?.valid_to) return resolve({ host, error: 'No certificate' });
       resolve({ host, daysLeft: Math.floor((Date.parse(cert.valid_to) - Date.now()) / 86_400_000) });
     });
-    socket.on('timeout', () => { socket.destroy(); resolve({ host, error: '连接超时' }); });
+    socket.on('timeout', () => { socket.destroy(); resolve({ host, error: 'Connection timed out' }); });
     socket.on('error', (err) => resolve({ host, error: err.code ?? err.message }));
   });
 }

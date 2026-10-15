@@ -4,12 +4,12 @@ import math
 
 # (id, title, latency field, good outcome, P95 limit in ms)
 SPECS = {
-    'send.summary': ('send', '发送确认', 'confirmMs', 'delivered', 5000),
-    'open.summary': ('open', '打开会话', 'viewCurrentMs', 'current', 1500),
-    'outage.summary': ('outage', '断线影响', 'impactMs', 'recovered', 8000),
-    'voice.summary': ('voice', '语音松手到结果', 'finalizeMs', 'final', 4000),
-    'ready.summary': ('ready', '内容就绪', 'viewCurrentMs', 'ready', 5000),
-    'reply.summary': ('reply', '回复首字（观察）', 'firstTextMs', 'completed', None),
+    'send.summary': ('send', 'Send confirmation', 'confirmMs', 'delivered', 5000),
+    'open.summary': ('open', 'Session open', 'viewCurrentMs', 'current', 1500),
+    'outage.summary': ('outage', 'Outage impact', 'impactMs', 'recovered', 8000),
+    'voice.summary': ('voice', 'Voice release to result', 'finalizeMs', 'final', 4000),
+    'ready.summary': ('ready', 'Content ready', 'viewCurrentMs', 'ready', 5000),
+    'reply.summary': ('reply', 'Reply first text (observed)', 'firstTextMs', 'completed', None),
 }
 NON_SERVICE_VOICE = {'permission', 'quota', 'lease_denied_quota_exhausted', 'identity_changed'}
 
