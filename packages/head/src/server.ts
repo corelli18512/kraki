@@ -131,7 +131,7 @@ export class HeadServer {
       // Sweep expired pairing tokens
       this.authBackend.sweepPairingTokens?.();
       try { this.storage.pruneForegroundActivity(); }
-      catch { logger.warn('Failed to prune foreground usage counters'); }
+      catch { getLogger().warn('Failed to prune foreground usage counters'); }
 
       // Periodic health snapshot — ALWAYS on (not trace-gated). Cheap (one line
       // / 30s) and is the canary for the OOM / event-loop-stall class of bugs
