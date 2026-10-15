@@ -46,6 +46,8 @@ The thresholds are first guesses; tune them after the shadow period.
 | `K-SVC-RESTART@unit` | warning (once) | the unit restarted outside a deploy (with the relay's last crash message) |
 | `K-SVC-FLAP@unit` | critical | 3+ restarts within an hour |
 | `K-DIAG-DOWN` | warning | diagnostics collector stopped / `/health` fails 5 in a row |
+| `K-BARK-DOWN@host` | critical | local private Bark `/bark/ping` fails 3 in a row (Bark unit is also monitored) |
+| `K-BARK-PEER@host` | critical | other host's public Bark ping fails 5 in a row; deliver through this host's own Bark |
 | `K-DISK` | warning → critical | root filesystem ≥ 85% / ≥ 95% |
 | `K-MEM-HOST` | warning | host available memory < 10% for 10 runs |
 | `K-MEM` | warning | relay RSS > 512 MB for 10 runs |
@@ -100,9 +102,11 @@ end-to-end test runs the real script against a fake relay, fake Bark and fake
 ## Setup
 
 1. **Bark**: install Bark on the iPhone and allow notifications including
-   *Critical Alerts*. Start with the official `https://api.day.app` service;
-   self-hosting is optional, not a rollout prerequisite. Copy just the key from
-   its sample URL (`https://api.day.app/<KEY>/…`). Treat both this key and
+   *Critical Alerts*. Our two-host deployment uses [private Bark servers](../bark/README.md),
+   with one key per host and local delivery (`BARK_SERVER=http://127.0.0.1:4080/bark`).
+   The official `https://api.day.app` remains a supported alternative for other
+   deployments. Copy just the key from the selected server's sample URL.
+   Treat both this key and
    heartbeat URLs as secrets: no repository, screenshots, issue bodies or shell
    command arguments. Store them in the root-only env file below.
 2. **Independent detection and delivery**: configure one healthchecks.io check
@@ -134,8 +138,9 @@ end-to-end test runs the real script against a fake relay, fake Bark and fake
    `check-config` is offline: checks delivery settings and JSON readability;
    it neither sends notifications/heartbeats nor changes alert state. It is not
    a full host or phone readiness check. Installation does **not** restart the
-   relay, but **does** start the watch timer and restart journald with new
-   retention settings. Add `--with-backup` only after backup configuration and
+   relay, but **does** start the watch timer. Journald is untouched unless
+   `--with-journal-policy` is explicitly passed (that option changes retention
+   and restarts journald). Add `--with-backup` only after backup configuration and
    restore verification. Relay readiness/metrics also require a separately
    authorized Head release; merging their code does not deploy them.
 5. **Shadow mode** for two days: `journalctl -u kraki-watch | grep shadow`
