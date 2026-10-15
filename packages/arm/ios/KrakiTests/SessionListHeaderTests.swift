@@ -11,7 +11,7 @@ final class SessionSearchTests: XCTestCase {
     }
 
     @MainActor
-    func testSearchMatchesTitleComputerModelAndPreviewWithinAComputer() throws {
+    func testSearchMatchesTitleIDComputerModelAndPreviewWithinAComputer() throws {
         let app = AppState(testDatabase: try MessageDatabase(databaseURL: FileManager.default.temporaryDirectory
             .appendingPathComponent("search-\(UUID().uuidString).sqlite")))
         for (id, name) in [("d1", "Mac mini"), ("d2", "Build Server")] {
@@ -19,7 +19,7 @@ final class SessionSearchTests: XCTestCase {
                                                     encryptionKey: nil, online: true, lastSeen: nil, createdAt: nil))
         }
         let lists: [(String, [[String: Any]])] = [
-            ("d1", [digest("a", "Fix voice layout"), digest("b", "Résumé parser", model: "claude-opus")]),
+            ("d1", [digest("a7c3e9f1-voice", "Fix voice layout"), digest("b", "Résumé parser", model: "claude-opus")]),
             ("d2", [digest("c", "Release notes")]),
         ]
         for (device, sessions) in lists {
@@ -33,9 +33,10 @@ final class SessionSearchTests: XCTestCase {
         func ids(_ device: String?, _ query: String) -> Set<String> {
             Set(store.filteredSessions(all, deviceId: device, matching: query).map(\.id))
         }
-        XCTAssertEqual(ids(nil, ""), ["a", "b", "c"])
-        XCTAssertEqual(ids(nil, "  "), ["a", "b", "c"], "whitespace is not a query")
-        XCTAssertEqual(ids(nil, "VOICE"), ["a"], "case-insensitive title")
+        XCTAssertEqual(ids(nil, ""), ["a7c3e9f1-voice", "b", "c"])
+        XCTAssertEqual(ids(nil, "  "), ["a7c3e9f1-voice", "b", "c"], "whitespace is not a query")
+        XCTAssertEqual(ids(nil, "Fix VOICE"), ["a7c3e9f1-voice"], "case-insensitive title")
+        XCTAssertEqual(ids(nil, "A7C3E9"), ["a7c3e9f1-voice"], "Session ID (prefix, any case)")
         XCTAssertEqual(ids(nil, "resume"), ["b"], "diacritic-insensitive")
         XCTAssertEqual(ids(nil, "opus"), ["b"], "model")
         XCTAssertEqual(ids(nil, "server"), ["c"], "computer name")

@@ -71,6 +71,10 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     /// Collapsed every time the list is created.
     private var archivedExpanded = false
 
+    /// Swipe colors (white labels keep ≥ 4.5:1 contrast in both appearances).
+    static let unreadActionColor = UIColor(red: 0xC4/255.0, green: 0x49/255.0, blue: 0x2F/255.0, alpha: 1) // coral
+    static let pinActionColor = UIColor(red: 0x0B/255.0, green: 0x5B/255.0, blue: 0x9C/255.0, alpha: 1) // Kraki blue
+
     static let archivedHeaderId = "__archived_header__"
     static let archivedPrefix = "archived:"
 
@@ -439,7 +443,9 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
               let sessionId = dataSource.itemIdentifier(for: indexPath),
               let session = appState.sessionStore.sessions[sessionId] else { return nil }
 
-        // Order in array = right to left visually. Visual: Pin | Fork | Unread
+        // Order in array = right to left visually. Visual: Pin | Unread.
+        // Colors echo the row's own indicators: the red unread dot (a warm,
+        // non-destructive coral) and the blue pin glyph (Kraki blue).
 
         // Unread (rightmost — closest to swipe edge). Seq-derived.
         let isUnread = appState.sessionStore.isUnread(sessionId)
@@ -452,26 +458,19 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
             completion(true)
         }
         unreadAction.image = renderLucideIconForSwipe(isUnread ? .bellOff : .bellRing)
-        unreadAction.backgroundColor = UIColor(red: 0x6B/255.0, green: 0x7D/255.0, blue: 0x94/255.0, alpha: 1) // soft slate
+        unreadAction.backgroundColor = Self.unreadActionColor
+        unreadAction.accessibilityLabel = isUnread ? "Mark as Read" : "Mark as Unread"
 
-        // Fork (middle)
-        let forkAction = UIContextualAction(style: .normal, title: "Fork") { _, _, completion in
-            appState.commandSender?.forkSession(sessionId: sessionId)
-            completion(true)
-        }
-        forkAction.image = renderLucideIconForSwipe(.gitFork)
-        forkAction.backgroundColor = UIColor(red: 0xC0/255.0, green: 0x8A/255.0, blue: 0x2F/255.0, alpha: 1) // warm amber
-
-        // Pin (leftmost)
+        // Pin (left)
         let pinned = session.pinned
         let pinAction = UIContextualAction(style: .normal, title: pinned ? "Unpin" : "Pin") { _, _, completion in
             appState.commandSender?.pinSession(sessionId: sessionId, pinned: !pinned)
             completion(true)
         }
         pinAction.image = renderLucideIconForSwipe(pinned ? .pinOff : .pin)
-        pinAction.backgroundColor = UIColor(red: 0x2F/255.0, green: 0x9C/255.0, blue: 0x8B/255.0, alpha: 1) // muted teal
+        pinAction.backgroundColor = Self.pinActionColor
 
-        let config = UISwipeActionsConfiguration(actions: [unreadAction, forkAction, pinAction])
+        let config = UISwipeActionsConfiguration(actions: [unreadAction, pinAction])
         config.performsFirstActionWithFullSwipe = false
         return config
     }
