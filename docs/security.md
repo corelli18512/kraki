@@ -2,7 +2,7 @@
 
 Kraki handles prompts, code, shell commands, and agent output. The goal is to let you use a relay without giving that relay any access to your content.
 
-This document explains what Kraki protects, what it does not protect, and what the relay can still see.
+This document explains what Kraki protects, what it does not protect, and what the relay can still see. The public [privacy policy](https://app.kraki.chat/privacy/) describes the separate account, voice, diagnostics and usage-data categories.
 
 ## Short version
 
@@ -56,7 +56,7 @@ The relay keeps account, device and delivery state in SQLite:
 
 The relay does not store plaintext conversation contents. Message history and replay are handled by `tentacle`. Custom Words are account data, not session data: their spellings and mishearings are persisted in the account's regional relay database and its backups. Synchronizing them does not require any tentacle to be online. Deleted words are removed from the database; existing backups may still contain them.
 
-The optional diagnostics collector (`packages/monitor`) stores client diagnostic batches that users choose to send; it is a separate service from the relay.
+The optional diagnostics collector (`packages/monitor`) stores allowlisted client diagnostic metadata; it is separate from the relay. Supported production iOS/Mac builds default to sharing, with a Settings opt-out. These uploads can contain opaque session/message identifiers, unlike the relay's opaque encrypted conversation payloads. They are linked to the account/device, not anonymous.
 
 ## What Kraki does not protect against
 
@@ -194,8 +194,9 @@ Voice input is the one feature that is **not** end-to-end encrypted. The first t
 
 - **Audio** goes to Kraki's cloud speech service (a `wss://*.kraki.chat` broker; the apps refuse any other broker the relay might advertise). It is transcribed by a third-party cloud speech-recognition provider.
 - **Correct Transcripts** (on by default): the transcript is sent to a third-party AI service that fixes recognition mistakes. With it go the user's Custom Words and, if **Use Conversation Context** is on (default), the conversation title, agent, model and up to 32 names or terms taken from the last 12 messages.
-- Conversation terms are filtered on the device: whole messages are never sent, and anything shaped like a credential (GitHub/Slack/OpenAI-style tokens, AWS key ids, JWTs, PEM blocks), a URL, host:port, e-mail address, file path, long hex string or high-entropy token is dropped. See `VoiceContextTermFilter`.
-- Both switches are in Settings → Voice Input. With context off, only Custom Words and the locale accompany the transcript.
+- Conversation terms are extracted on-device rather than uploading whole messages for correction. `VoiceContextTermFilter` rejects recognized credential, URL/path and similar patterns; this is heuristic, not a guarantee against every sensitive value. User-entered dictation and Custom Words are not a guaranteed redaction pipeline.
+- Both switches are in Settings → Voice Input. With context off, only Custom Words and the locale accompany the transcript. Turning correction off alone does not prevent context reaching the voice gateway; it prevents the AI correction call.
+- The hosted gateway currently uses Doubao/Volcengine recognition and DeepSeek correction. The speech provider receives audio and the supplied recognition-user id. The gateway sees request/session identifiers; the correction prompt strips `product`, `sessionId` and `inputMethod`. New-session context terms can include the selected computer name. Provider retention/training policies are not guaranteed by Kraki; see `docs/privacy-voice-input.md`.
 - The relay authorizes each voice connection with a signed, quota-limited lease.
 
 ## Local MCP server

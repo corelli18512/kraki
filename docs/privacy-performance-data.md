@@ -1,7 +1,8 @@
 # Performance data: privacy policy text and App Store labels
 
-Kraki's privacy policy lives outside this repository. This file holds the text
-to paste for the performance data the iOS and Mac apps send (Settings →
+Public privacy policy: https://app.kraki.chat/privacy/ (source:
+`packages/arm/web/public/privacy/index.html`). This file describes the performance
+data the iOS and Mac apps send (Settings →
 Privacy → Share Performance Data, on by default). Technical reference:
 `docs/stability-metrics.md` (events) and `docs/client-diagnostics-design.md`
 (transport, limits, collector). Keep them in sync.

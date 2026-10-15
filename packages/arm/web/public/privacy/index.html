@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="How Kraki handles accounts, encrypted conversations, cloud voice input, diagnostics and basic usage counts.">
+  <title>Privacy Policy — Kraki</title>
+  <link rel="canonical" href="https://app.kraki.chat/privacy/">
+  <style>
+    :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.7; background: #fafaf9; color: #202326; }
+    body { max-width: 780px; margin: auto; padding: 36px 24px 72px; }
+    header { border-bottom: 1px solid #d8dadd; padding-bottom: 24px; margin-bottom: 32px; }
+    nav { display: flex; gap: 20px; flex-wrap: wrap; }
+    a { color: #146947; text-underline-offset: .2em; overflow-wrap: anywhere; }
+    h1 { font-size: clamp(2rem, 5vw, 2.8rem); line-height: 1.15; letter-spacing: -.035em; margin-bottom: 12px; }
+    h2 { font-size: 1.3rem; line-height: 1.4; margin-top: 36px; }
+    h3 { font-size: 1.08rem; margin-bottom: 4px; }
+    p, ul { margin: 12px 0; }
+    li { margin: 8px 0; }
+    .muted { color: #626b72; }
+    .summary { padding: 14px 20px; background: #eef5f0; border-radius: 12px; }
+    section[lang="zh-CN"] { border-top: 1px solid #d8dadd; margin-top: 56px; padding-top: 24px; }
+    :target { scroll-margin-top: 24px; }
+    footer { margin-top: 48px; border-top: 1px solid #d8dadd; padding-top: 20px; }
+    @media (prefers-color-scheme: dark) { :root { background: #151719; color: #e7e9e8; } a { color: #8cdbb2; } .muted { color: #a8afb4; } .summary { background: #202d26; } header, footer, section[lang="zh-CN"] { border-color: #373c40; } }
+  </style>
+</head>
+<body>
+<header>
+  <nav aria-label="Page navigation"><a href="https://kraki.chat/">Kraki</a><a href="#en">English</a><a href="#zh" lang="zh-CN">中文</a></nav>
+  <h1>Privacy Policy</h1>
+  <p class="muted">Updated October 15, 2026 · Kraki apps and hosted services</p>
+</header>
+<main>
+<section id="en" lang="en" aria-label="English privacy policy">
+  <div class="summary"><strong>In brief:</strong> Conversations between your devices use end-to-end encryption. Account information, cloud voice input, optional performance diagnostics and basic account activity counts are separate data categories; they are not all end-to-end encrypted. We do not use this data for advertising or cross-app tracking.</div>
+
+  <h2>1. Who this policy covers</h2>
+  <p>Kraki, maintained by Corelli, lets you interact with coding agents running on your own computers from a phone, desktop app or browser. This policy describes our apps and the hosted services at kraki.chat and its subdomains. If you choose a separately operated, self-hosted relay, its operator is responsible for its server-side processing. Agent and AI services you choose also have their own policies.</p>
+  <p>Privacy contact: <a href="mailto:corelli@corelli.cloud">corelli@corelli.cloud</a>. Source code and technical documentation: <a href="https://github.com/corelli18512/kraki">Kraki on GitHub</a>.</p>
+
+  <h2>2. Accounts, devices and service operation</h2>
+  <p>For GitHub sign-in, we process your GitHub account identifier, username and email if GitHub provides it, and the credentials needed to verify the sign-in. We do not ask for your GitHub password. Credentials may be kept on your device to maintain sign-in.</p>
+  <p>We keep your account and region, registered device identifiers, device names and types, public keys, notification tokens, last-connection information and account preferences so your devices can connect, pair and receive messages. A central account service and regional relays exchange the account and device information needed to provide the service. Network requests expose information such as IP address, time, requested endpoint and connection or error status to the servers handling them. Operational logs help prevent abuse, maintain availability and investigate problems.</p>
+  <p><strong>Custom Words are not end-to-end encrypted.</strong> The words and optional mishearings you enter for dictation are readable account preferences, synchronized through the account service and potentially present in backups. Do not put secrets in this list.</p>
+
+  <h2>3. Conversations, agents, files and local storage</h2>
+  <p>Ordinary conversation payloads, agent output, approvals and transferred attachments are encrypted between your devices before the relay forwards them. The relay handles encrypted delivery queues and routing metadata, rather than a readable archive of your chats. This does not hide traffic patterns or device identities. Diagnostic uploads and cloud voice processing, described below, have different boundaries.</p>
+  <p>Plaintext is available on the devices that send or display it and on the computer running the agent. History, drafts, attachments, credentials and preferences may remain in local app, browser or agent storage. Encryption does not protect a compromised endpoint or make all device-trust and key-distribution risks disappear. See our <a href="https://github.com/corelli18512/kraki/blob/main/docs/security.md">security model</a> for the current limits.</p>
+  <p>The coding agent and model provider you configure may receive prompts, code, files, tool results or screenshots according to the actions and permissions you authorize. Their processing is governed by their own terms and settings, not by the relay's encryption. Opening external links or loading external resources may also disclose request information to the relevant website.</p>
+
+  <h2>4. Cloud voice input</h2>
+  <p><strong>Dictation is not end-to-end encrypted.</strong> When you record, audio is sent over an encrypted network connection through Kraki's voice gateway to a cloud speech-recognition provider. The service processes account/device authorization, recording/session identifiers and language or audio configuration. The speech provider can receive the user identifier supplied for the recognition session.</p>
+  <p>The hosted speech provider currently uses Doubao / Volcengine speech services (ByteDance). If <strong>Correct Transcripts</strong> is on, the transcript is sent to an AI correction service, currently DeepSeek, to correct recognition mistakes. Both correction and <strong>Use Conversation Context</strong> are on by default in supported clients.</p>
+  <p>The voice gateway can receive your locale and Custom Words. With conversation context enabled, it can also receive session metadata (including a session identifier, title, agent, model and mode) and a limited set of terms extracted on your device from recent messages; a new-session request may include the selected computer's name among these terms. The correction prompt can include the transcript, Custom Words, locale, title, agent/model and these terms. The current gateway removes its product, session-identifier and input-method fields from the correction-model prompt.</p>
+  <p>Clients extract terms rather than upload whole conversation messages for correction. They filter recognizable secret-like strings from extracted context, but this is a heuristic, not a guarantee that all sensitive information is removed. Your dictated text and your own Custom Words are not a secret-redaction service.</p>
+  <p>Turning off correction stops AI transcript correction, not speech recognition. Context can still be sent to the voice gateway unless you also turn off <strong>Use Conversation Context</strong>. With conversation context off, locale and Custom Words can still accompany dictation. You can manage these options in <strong>Settings → Voice Input</strong>, remove Custom Words, deny microphone access or not use dictation. The app shows a cloud-voice notice before the first recording.</p>
+  <p>The current Kraki voice gateway processes audio and transcripts in memory rather than intentionally keeping a recording/transcript archive. Final text can become part of your locally stored conversation. The relay stores voice authorization and daily seconds used to enforce limits, not recordings. Third-party providers have their own processing, retention and privacy terms; we do not promise zero retention or particular training restrictions on their behalf. Provider information: <a href="https://www.volcengine.com/">Volcengine</a>, <a href="https://www.deepseek.com/">DeepSeek</a>.</p>
+
+  <h2>5. Optional performance diagnostics</h2>
+  <p>Supported iOS and Mac releases send allowlisted performance metadata to Kraki's own diagnostic collector. <strong>Share Performance Data</strong> is on by default. After sign-in, a one-time notice explains it and offers <strong>OK</strong> and <strong>Don't Share</strong>. This notice is not a promise that no upload can occur before you respond.</p>
+  <p>Metadata includes event names, durations, counts and error categories: delivery confirmation, reply start and pauses, connection loss and recovery, voice failures, screen/content readiness and signals that the previous run ended unexpectedly. It can include app/build and system version, device architecture, a random per-launch identifier, and opaque device, session or message identifiers. It is linked to your device/account; it is not anonymous.</p>
+  <p>The allowlist excludes message text, drafts, recordings, transcripts, attachment contents, user file names/paths and browsing links. Uploads may use cellular data and may be delayed by foreground, power, thermal or network conditions. We use these records to find problems and improve Kraki, not for advertising.</p>
+  <p>You can turn this off in <strong>Settings → Privacy → Share Performance Data</strong>. This stops future performance uploads and deletes unsent performance data on that device; it does not immediately erase previously uploaded records or disable the separate account/operational records and basic activity tally below. Uploaded diagnostic batches are periodically removed after 14 days from receipt; the experience-statistics index retains selected event metadata for 14 days of event time. Records already uploaded can remain until that cleanup.</p>
+
+  <h2>6. Registration and basic daily activity counts</h2>
+  <p>We use the central account registry to count registrations. In versions supporting foreground activity reporting, a signed-in foreground app sends a small, unqueued heartbeat. The relay records only that an account was active on a Beijing/UTC+8 calendar date, once per account/day. This activity record does not contain conversation content, actions or precise foreground times. Normal connection and security logs described above are separate.</p>
+  <p>Background agents and always-connected computers do not count merely by being connected. Regional servers combine keyed pseudonyms to avoid counting the same account twice across devices or regions. Per-account daily activity records are retained for 35 calendar days, with periodic cleanup, and are removed when that account is deleted from the database holding them. Aggregate reports contain counts, not account names.</p>
+  <p><strong>This basic account activity tally is separate from optional performance diagnostics and is not controlled by Share Performance Data.</strong> It is used to understand product usage, not advertising or cross-app tracking. Older clients may not report it; statistics are not a guarantee of complete coverage.</p>
+
+  <h2>7. Push, browser resources and other providers</h2>
+  <p>We use Apple Push Notification service and browser push providers to reach your devices. They process delivery tokens and network/delivery metadata. Kraki forwards encrypted notification previews for the receiving device to decrypt; operating-system notification permissions control whether notifications can appear.</p>
+  <p>GitHub processes authentication and release-download requests. Apple processes app distribution, updates and platform services under its own terms. The web app uses browser storage for sign-in, encryption keys, cached content and preferences; it may fetch web fonts from Google Fonts. External resource hosts receive the request metadata needed to serve those resources. We do not embed advertising or cross-app tracking SDKs.</p>
+  <p>We use hosting and infrastructure providers to operate the service and may disclose information where required by law or necessary to address security and abuse. We do not sell personal information or provide conversation content to advertisers.</p>
+
+  <h2>8. Where information is processed and how long it remains</h2>
+  <p>Kraki currently operates hosted account/relay infrastructure in Japan and mainland China. Regional selection is a routing choice, not a guarantee that all data stays in that region: central authentication, cross-region operation and the providers above can involve other locations. Your own computers and configured agent/model providers are additional processing locations.</p>
+  <p>Account/device preferences and voice-usage accounting generally remain while needed to provide the account. Encrypted relay queues expire according to message-delivery policy; they are not a permanent chat archive. Diagnostic and activity-record limits are described above. Operational logs are cleaned by host log rotation and storage limits, which do not necessarily use those same day limits. Restricted backups may retain earlier copies until separately rotated or removed. Local app/agent data remains under the storage and deletion controls of those devices and tools.</p>
+
+  <h2>9. Your choices and deleting an account</h2>
+  <p>Use the in-app <strong>Delete Account</strong> control in account settings to request deletion. The account service and relay handling the request remove the account, associated device registrations, notification tokens, preferences/Custom Words and voice-usage records; the new daily-activity table is also removed for that account in those databases. Connected devices handled by that relay are signed out. Other regional copies, offline devices, diagnostics, logs and backups are not a promise of simultaneous erasure everywhere. Contact us if you need help with a region-specific copy or a privacy deletion request.</p>
+  <p>Random deleted-device identifiers and deletion dates can be retained to prevent an offline device from silently recreating the deleted account. Deleting a Kraki account does not delete your GitHub account, third-party agent/model records, or all files and history on your computers. Remove those through the relevant device, agent or provider. You can also revoke Kraki's GitHub authorization, remove device access, disable notifications and microphone permissions, and clear local app/browser data.</p>
+  <p>Depending on your jurisdiction, you may have rights to access, correct, delete, export or restrict processing of your personal information, object to certain processing, or withdraw consent where processing relies on it. Contact <a href="mailto:corelli@corelli.cloud">corelli@corelli.cloud</a>; we may need to verify account ownership. Do not post sensitive information in public GitHub issues.</p>
+
+  <h2>10. Children and policy updates</h2>
+  <p>Kraki is a software-development tool and is not directed at children. We do not intentionally collect children's personal information. Contact us if you believe a child has supplied such information.</p>
+  <p>We may update this page as the service changes, with a revised update date. Material changes to collection or choices will be explained through the app, release information or another appropriate notice. The English and Chinese sections describe the same practices.</p>
+</section>
+
+<section id="zh" lang="zh-CN" aria-label="中文隐私政策">
+  <h1>隐私政策</h1>
+  <p class="muted">更新于 2026 年 10 月 15 日 · Kraki 应用及托管服务</p>
+  <div class="summary"><strong>简要说明：</strong>设备之间的对话使用端到端加密。账号资料、云端语音输入、可选性能诊断和基本账号活跃统计是不同的数据类别，并非全部端到端加密。我们不将这些数据用于广告或跨 App 跟踪。</div>
+
+  <h2>1. 适用范围与联系方式</h2>
+  <p>Kraki 由 Corelli 维护，让你通过手机、桌面应用或浏览器使用自己电脑上的编程 agent。本政策介绍我们的应用及 kraki.chat 和其子域名上的托管服务。选择其他运营者自建的 relay 时，其服务端处理由该运营者负责；你选择的 agent 和 AI 服务也有各自的政策。</p>
+  <p>隐私联系方式：<a href="mailto:corelli@corelli.cloud">corelli@corelli.cloud</a>。源代码及技术说明：<a href="https://github.com/corelli18512/kraki">GitHub 上的 Kraki</a>。</p>
+
+  <h2>2. 账号、设备和服务运行</h2>
+  <p>通过 GitHub 登录时，我们处理 GitHub 账号标识、用户名、GitHub 提供的邮箱（如有），以及验证登录所需的凭证。我们不要求你的 GitHub 密码。登录凭证可能保存在你的设备上，以维持登录状态。</p>
+  <p>为实现连接、配对和消息送达，我们保存账号及地区、设备标识、设备名称和类型、公钥、通知令牌、最近连接信息及账号偏好。统一账号服务和区域 relay 会交换运行所需的账号、设备资料。处理请求的服务器能够获知 IP 地址、请求时间、接口及连接或错误状态等网络信息。运行日志用于防滥用、保障可用性和排查问题。</p>
+  <p><strong>自定义词汇不是端到端加密数据。</strong>你输入的词汇及误识别写法是可读的账号偏好，经账号服务同步，也可能存在于备份中。请不要在词汇表中填写秘密信息。</p>
+
+  <h2>3. 对话、agent、文件与本地存储</h2>
+  <p>普通对话载荷、agent 输出、授权决定和传输附件在设备端加密后由 relay 转发。relay 处理加密的待送达队列和路由元数据，而不是可读的聊天档案。这不会隐藏流量特征或设备身份。下述诊断上传和云端语音处理有不同的数据边界。</p>
+  <p>发送或显示内容的设备，以及运行 agent 的电脑能读取明文。历史记录、草稿、附件、凭证和偏好可能保存在应用、浏览器或 agent 的本地存储中。端到端加密无法保护已被入侵的终端，也不代表不存在设备信任和密钥分发风险。当前限制见<a href="https://github.com/corelli18512/kraki/blob/main/docs/security.md">安全模型说明</a>。</p>
+  <p>你配置的编程 agent 和模型服务商可能根据你授权的操作与权限接收提示词、代码、文件、工具结果或截图，其处理受自身条款和设置约束，不能由 relay 的加密来限制。打开外部链接或加载外部资源时，相应网站也可能收到请求信息。</p>
+
+  <h2>4. 云端语音输入</h2>
+  <p><strong>语音输入不是端到端加密的。</strong>录音时，音频通过加密网络连接经 Kraki 语音网关发送给云端语音识别服务商。服务还处理账号／设备授权、录音／会话标识及语言或音频参数。语音识别服务商可以收到识别请求所带的用户标识。</p>
+  <p>托管服务目前使用豆包／火山引擎（字节跳动）的语音识别。开启 <strong>Correct Transcripts（校正转写）</strong>时，转写文本会发送给 AI 校正服务，目前为 DeepSeek，以纠正识别错误。支持这些选项的客户端中，校正和 <strong>Use Conversation Context（使用会话上下文）</strong>默认开启。</p>
+  <p>语音网关可以收到语言地区和自定义词汇。开启会话上下文时，还可收到会话元数据（包括会话标识、标题、agent、模型和模式）及设备从最近消息中提取的有限术语；新建会话时，术语中可能包含所选电脑的名称。AI 校正提示词可以包含转写文本、自定义词汇、语言地区、标题、agent／模型和术语。当前网关会从模型提示词中移除产品标记、会话标识和输入方式字段。</p>
+  <p>客户端为校正提取术语，而不是上传完整会话消息，并过滤提取上下文中可识别的、类似秘密凭证的字符串。但这属于启发式过滤，不能保证移除所有敏感信息。口述文字和你自行填写的词汇表也不会经过一个保证有效的秘密信息脱敏服务。</p>
+  <p>关闭校正只会停止 AI 文本校正，不会停止语音识别；除非同时关闭“使用会话上下文”，上下文仍可能发送至语音网关。关闭会话上下文后，语言地区和自定义词汇仍可能随语音请求发送。你可以在<strong>设置 → Voice Input（语音输入）</strong>中管理选项、删除自定义词汇、拒绝麦克风权限，或不使用语音输入。App 会在首次录音前说明云端处理。</p>
+  <p>当前 Kraki 语音网关在内存中处理录音和转写，并不主动建立录音／转写档案。最终文字可能成为设备上保存的对话。relay 保存语音授权和每日使用秒数以执行额度限制，不保存录音。第三方服务商有各自的处理、保留和隐私条款；我们不代其承诺零保留或特定模型训练限制。服务商信息：<a href="https://www.volcengine.com/">火山引擎</a>、<a href="https://www.deepseek.com/">DeepSeek</a>。</p>
+
+  <h2>5. 可选性能诊断</h2>
+  <p>支持此功能的 iOS 和 Mac 正式版向 Kraki 自己的诊断服务发送白名单内的性能元数据。<strong>Share Performance Data（共享性能数据）</strong>默认开启。登录后的一次性提示会说明用途并提供 <strong>OK</strong> 和 <strong>Don't Share</strong>；这不代表回答提示之前绝不会上传。</p>
+  <p>数据包括事件名称、耗时、数量和错误类别，例如消息确认、回复开始和停顿、断线与恢复、语音错误、界面内容就绪及上次运行异常结束的信号；也可包括 App／构建及系统版本、设备架构、每次启动随机生成的标识，以及设备、会话或消息的不透明标识。这些数据与你的设备／账号关联，并非匿名数据。</p>
+  <p>白名单不包含消息正文、草稿、录音、转写文本、附件内容、用户文件名／路径或浏览链接。上传可能使用蜂窝数据，也可能受前台、功耗、温度和网络状态影响而延后。我们用它们发现问题、改善 Kraki，不用于广告。</p>
+  <p>你可在<strong>设置 → Privacy（隐私）→ Share Performance Data</strong>关闭。关闭后停止该设备后续的性能上传，并删除尚未发送的性能数据，但不会立即删除已上传记录，也不会关闭独立的账号、运行记录和下述基本活跃统计。诊断批次在接收满 14 天后定期清理；体验统计索引按事件发生时间保留 14 天的选定元数据。已经上传的记录可能保留至清理执行。</p>
+
+  <h2>6. 注册与基本每日活跃统计</h2>
+  <p>我们根据统一账号库统计注册人数。支持前台活跃上报的版本在已登录且处于前台时，发送小型、不排队补传的心跳。relay 只记录某账号在某个北京时间（UTC+8）自然日活跃过，同一账号每天一条。活跃记录本身不包含对话、操作内容或精确的前台使用时间；前述普通连接、安全日志是另一类记录。</p>
+  <p>后台 agent 和常驻连接的电脑不会仅因在线就算作活跃。不同地区的服务器通过带密钥的去标识化标记合并计数，同一账号跨设备、跨地区只计算一次。按账号保存的每日记录保留 35 个自然日并定期清理，在保存它的数据库中删除该账号时也会一并删除。汇总报告包含数量，不包含账号名称。</p>
+  <p><strong>基本账号活跃统计独立于可选性能诊断，不受“共享性能数据”开关控制。</strong>其用途是了解产品使用情况，不用于广告或跨 App 跟踪。旧版本可能不上报，因此统计不保证覆盖全部使用情况。</p>
+
+  <h2>7. 推送、浏览器资源及其他服务商</h2>
+  <p>我们使用 Apple 推送通知服务和浏览器推送服务送达通知；服务商处理通知令牌及网络／投递元数据。Kraki 转发加密的通知预览，由接收设备解密。系统通知权限控制通知能否显示。</p>
+  <p>GitHub 处理认证和版本下载请求。Apple 按其条款提供应用分发、更新及系统服务。网页版使用浏览器存储保存登录状态、密钥、缓存和偏好，也可能从 Google Fonts 加载网页字体。外部资源服务商会收到提供资源所需的请求元数据。我们不嵌入广告或跨 App 跟踪 SDK。</p>
+  <p>我们依赖托管及基础设施服务商运行服务，也可能在法律要求或处理安全、滥用问题确有必要时披露信息。我们不出售个人信息，不向广告商提供对话内容。</p>
+
+  <h2>8. 处理地区和保存时间</h2>
+  <p>Kraki 当前的托管账号／relay 基础设施位于日本和中国大陆。选择地区是路由选择，不代表所有数据只在该地区处理；统一认证、跨区运行及上述服务商可能涉及其他地点。你自己的电脑和配置的 agent／模型服务商也是额外的处理地点。</p>
+  <p>账号／设备偏好及语音用量记录通常在提供账号服务所需期间保留。relay 加密队列按消息投递规则过期，并不是永久聊天档案。诊断和活跃记录期限见上文。运行日志按主机日志轮替与容量限制清理，并不一定采用相同的天数限制。受限访问的备份可能保留旧副本，直至另行轮替或删除。本地应用／agent 数据遵循相应设备和工具的存储、删除控制。</p>
+
+  <h2>9. 你的选择和删除账号</h2>
+  <p>可在应用的账号设置中使用 <strong>Delete Account（删除账号）</strong>提出删除请求。账号服务和处理该请求的 relay 会删除账号、相关设备注册、通知令牌、偏好／自定义词汇及语音用量；新增加的每日活跃表也会在这些数据库中删除该账号的记录。该 relay 处理的已连接设备会被退出登录。这不代表其他区域副本、离线设备、诊断、日志和备份在全球同时立即消失。需要处理特定地区副本或其他隐私删除请求时，请联系我们。</p>
+  <p>系统可以保留已删除设备的随机标识和删除日期，防止离线设备再次联网时悄悄重建账号。删除 Kraki 账号不会删除 GitHub 账号、第三方 agent／模型记录，也不会删除电脑上的所有文件和历史；这些需要通过对应设备、agent 或服务商处理。你还可撤销 GitHub 对 Kraki 的授权、移除设备访问、关闭通知和麦克风权限，以及清理应用／浏览器本地数据。</p>
+  <p>依你所在地区的法律，你可能有权访问、更正、删除、导出或限制个人信息处理，对特定处理提出异议，或在处理基于同意时撤回同意。请联系 <a href="mailto:corelli@corelli.cloud">corelli@corelli.cloud</a>；我们可能需要核实账号归属。不要在公开 GitHub issue 中发送敏感资料。</p>
+
+  <h2>10. 儿童与政策变更</h2>
+  <p>Kraki 是软件开发工具，不面向儿童，也不主动收集儿童个人信息。如果你认为儿童向我们提供了此类信息，请联系我们。</p>
+  <p>服务变化时，我们可能更新本页并修改更新日期。涉及收集或选择的重要变化，会通过应用、发布说明或其他适当方式说明。中英文部分描述相同的数据实践。</p>
+</section>
+</main>
+<footer><nav aria-label="Footer"><a href="https://kraki.chat/">Kraki</a><a href="#en">English</a><a href="#zh" lang="zh-CN">中文</a><a href="mailto:corelli@corelli.cloud">Contact / 联系</a></nav></footer>
+</body>
+</html>

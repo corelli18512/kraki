@@ -1,59 +1,77 @@
-# Voice input: privacy policy text and App Store labels
+# Voice input: privacy policy and App Store checklist
 
-Kraki's privacy policy lives outside this repository. This file holds the
-text to paste for voice input, so the policy matches what the apps do
-(`docs/security.md` → "Voice input" is the technical reference). Keep the two
-in sync when voice input changes.
+Public policy: https://app.kraki.chat/privacy/ (source:
+`packages/arm/web/public/privacy/index.html`). Keep it synchronized with client and
+production gateway behavior. This is an engineering description, not a legal
+opinion or a claim that provider categories alone satisfy every jurisdiction.
 
-Providers are described by category, not by name. Neither the App Store
-(guideline 5.1.1, privacy labels), GDPR (Art. 13: "recipients or categories of
-recipients") nor China's PIPL (entrusted processing) requires naming them, as
-long as the categories, purposes and data are stated.
+## Verified data flow (2026-10-15)
 
-## Privacy policy — English
+The hosted gateway currently uses Doubao / Volcengine (ByteDance) ASR and DeepSeek
+correction. Confirm deployment configuration before changing provider claims.
 
-> **Voice input.** Your conversations with your computers are end-to-end
-> encrypted. Voice input is the exception: when you dictate, your recording is
-> sent through Kraki's voice service to a third-party speech recognition
-> provider, which turns it into text. If "Correct Transcripts" is on (the
-> default), the resulting text, your Custom Words, and limited conversation
-> context — the conversation's title, the agent and model, and names or terms
-> taken from recent messages (never whole messages, and never anything that
-> looks like a key, token, password, URL or file path) — are sent to a
-> third-party AI service that corrects recognition mistakes. These providers
-> process the data only to return the transcript to you. Kraki records how many
-> seconds of voice input each account uses per day, to enforce usage limits.
-> You can turn off correction and conversation context in Settings → Voice
-> Input, or not use voice input at all. The app explains this before your first
-> recording.
+| Recipient | Data |
+|---|---|
+| Kraki relay/account service | Account/device identity, signed voice leases, daily audio seconds; no voice recordings in the usage DB |
+| Kraki voice gateway | Audio, transcript, authorization/account/device and recording identifiers; locale, Custom Words, and enabled conversation context |
+| Speech provider | Audio, audio/model configuration and supplied recognition-user identifier |
+| Correction model, when enabled | Transcript, Custom Words, locale; enabled session title, agent/model/mode and extracted terms |
 
-## 隐私政策 — 中文
+Current gateway removes `product`, `sessionId` and `inputMethod` from the correction
+model's prompt. The gateway itself can still see them. New-session terms can
+include the selected computer name. Existing-session context extracts up to 32
+terms from the most recent 12 messages rather than uploading whole messages.
 
-> **语音输入。** 你与电脑之间的对话是端到端加密的，语音输入是例外：当你使用
-> 语音输入时，录音会经由 Kraki 的语音服务发送给第三方语音识别服务商，转写为
-> 文字。如果开启了"校正转写"（默认开启），转写文本、你的自定义词汇，以及有限
-> 的会话上下文——会话标题、所用的 agent 和模型、从最近消息中提取的名称或术语
-> （绝不包括完整消息，也不包括任何看起来像密钥、令牌、密码、网址或文件路径的
-> 内容）——会发送给第三方 AI 服务，用于纠正识别错误。上述服务商仅为向你返回转
-> 写结果而处理这些数据。Kraki 会记录每个账号每天使用语音输入的秒数，用于用量
-> 限制。你可以在"设置 → 语音输入"中关闭校正和会话上下文，也可以不使用语音输入。
-> App 会在你第一次录音前说明这些。
+**Correction off is not context off.** Clients can send vocabulary/context to the
+gateway even when AI correction is disabled. `Use Conversation Context` off omits
+session metadata/terms; locale and user-entered Custom Words remain. Neither option
+turns cloud recognition into on-device or end-to-end encrypted recognition.
 
-## App Store privacy labels (iOS and Mac)
+Context secret filtering is heuristic. It filters recognized token/credential,
+URL/path and similar patterns; it cannot guarantee removal of every sensitive
+value. Dictated text and user-entered vocabulary are not a guaranteed redaction
+pipeline. Do not promise otherwise in public copy.
 
-Add, or confirm, these entries under **Data Linked to You**:
+The inspected hosted gateway does not intentionally write an audio/transcript
+archive; audio/text is processed in memory. It logs operational categories,
+timings and usage. Final text can become part of local conversation history.
+Third-party retention/training terms have not been independently established:
+**do not promise zero retention or no training on a provider's behalf**.
+
+## Controls and disclosure
+
+- Before first dictation, the client explains that voice input uses cloud services.
+- Correction and conversation context default on in supported clients.
+- Settings → Voice Input controls both switches and Custom Words.
+- Microphone permission and choosing not to dictate control whether to record.
+- Custom Words are readable account preferences synchronized over TLS, **not E2E**.
+- Optional performance diagnostics are a separate feature; voice summaries contain
+  metadata, not audio/transcripts. Disabling diagnostics does not disable voice.
+
+Technical references: `docs/security.md`,
+`Kraki/Core/Speech/{VoiceProtocol.swift,VoiceVocabulary.swift}`,
+`packages/arm/web/src/lib/voice/{context.ts,voice.ts}`, and
+`packages/voice-broker/deploy/coinfra-lease-serve.mjs`. Inspect the deployed Coinfra
+bundle/provider settings too; source defaults alone are not proof of production.
+
+## App Store label checklist
+
+Review the actual build and current questionnaire before submission. Relevant
+categories to consider under **Data Linked to You**, not tracking:
 
 | Data type | Purpose | Notes |
 |---|---|---|
-| Audio Data | App Functionality | Dictation recordings, sent to the speech recognition provider |
-| Other User Content | App Functionality | Transcript, Custom Words and conversation context sent for correction |
-| Product Interaction → (usage) | App Functionality | Daily voice seconds per account, for usage limits |
+| User Content → Audio Data | App Functionality | Dictation, cloud processing |
+| User Content → Other User Content | App Functionality | Transcript, Custom Words, limited correction context |
+| Usage Data → Product Interaction | App Functionality | Daily per-account voice seconds for quota |
+| Identifiers → User ID / Device ID | App Functionality | Account-authorized voice and device identity |
 
-Not used for tracking. Linked to the user because voice use is authorized per
-account.
+Apple's questionnaire distinguishes transient processing from collection; verify
+provider processing/retention rather than infer label exemptions from gateway
+memory-only behavior. The public policy must still explain the actual data flow.
 
 ## Purpose strings
 
-The iOS and Mac `NSMicrophoneUsageDescription` already say recordings go to a
-cloud speech service ("Kraki records your voice while you dictate and sends it
-to its cloud speech service to turn it into text."). No change needed.
+`NSMicrophoneUsageDescription` already says the app sends recordings to its cloud
+speech service to turn them into text. That does not substitute for the fuller
+policy, provider disclosures or applicable consent requirements.
