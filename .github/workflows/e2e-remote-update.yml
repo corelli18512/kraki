@@ -52,7 +52,7 @@ jobs:
         run: |
           pnpm install --frozen-lockfile --filter @kraki/tentacle...
           node -e "const f='packages/tentacle/package.json';const p=require('./'+f);p.version=process.env.OLD;require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
-          pnpm --filter @kraki/protocol --filter @kraki/crypto run build
+          pnpm --filter @kraki/protocol --filter @kraki/crypto --filter @kraki/pulse run build
           pnpm --filter @kraki/tentacle run build
           node --test scripts/e2e/remote-update/patch-npm-deps.test.mjs
           echo "NEW=$(gh release view --repo corelli18512/kraki --json tagName -q .tagName | sed 's/^v//')" >> "$GITHUB_ENV"
@@ -101,6 +101,18 @@ jobs:
             pkg.version = result.stdout.trim();
             writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
           }
+          NODE
+              # Pulse is now owned by this workspace and may not have a first
+              # npm release yet. The fixture must work without publishing it.
+              (cd packages/pulse && pnpm pack --pack-destination "$HOME")
+              node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const pulse = JSON.parse(readFileSync('packages/pulse/package.json', 'utf8'));
+          const file = 'packages/tentacle/package.json';
+          const pkg = JSON.parse(readFileSync(file, 'utf8'));
+          pkg.dependencies['@kraki/pulse'] = `file:${join(process.env.HOME, `kraki-pulse-${pulse.version}.tgz`)}`;
+          writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
           NODE
               (cd packages/tentacle && pnpm pack --pack-destination "$HOME")
               TGZ="$HOME/kraki-tentacle-$OLD.tgz"

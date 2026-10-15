@@ -24,7 +24,7 @@
 import { randomUUID } from 'node:crypto';
 import { metrics } from './metrics.js';
 import type Database from 'better-sqlite3';
-import { decodeFrame, decodeFrameWithStream, type Effect, encodeFrame, Endpoint, type Snapshot, StreamSet } from '@coinfra/pulse';
+import { decodeFrame, decodeFrameWithStream, type Effect, encodeFrame, Endpoint, type Snapshot, StreamSet } from '@kraki/pulse';
 import { HEAD_PULSE_TARGET, PULSE_SENDER_FIELD, type PulseFrameField, type UnicastEnvelope } from '@kraki/protocol';
 import { getLogger } from './logger.js';
 import { fp, trace } from './trace.js';
@@ -266,7 +266,7 @@ export class PulseHub {
     // destination — reports "never disconnected", which both GC tiers skip, and
     // is never purged or evicted. `onDeviceConnected` clears the mark.
     //
-    // The option ships in @coinfra/pulse >= 0.5.0. Widen the type so this also
+    // The option ships in Pulse >= 0.5.0. Widen the type so this also
     // compiles against 0.4.1, where the constructor ignores the unknown key —
     // the runtime fallback below covers that version.
     type EpOpts = ConstructorParameters<typeof Endpoint>[0] & { createdAtMs?: number };

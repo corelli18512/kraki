@@ -375,7 +375,7 @@ export function SettingsPanel({
   );
   const devices = (
     <>
-      <SettingsSection title="Paired devices">
+      <SettingsSection title="Devices">
         {[...state.devices.values()]
           .sort((a, b) => a.name.localeCompare(b.name))
           .map((d) => (

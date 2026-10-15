@@ -210,7 +210,7 @@ jobs:
       - name: Install and build the local stack
         run: |
           pnpm install --frozen-lockfile
-          pnpm --filter @kraki/protocol --filter @kraki/crypto --filter @kraki/head --filter @kraki/tentacle --filter @kraki/voice-broker build
+          pnpm --filter @kraki/head... --filter @kraki/tentacle... --filter @kraki/voice-broker... build
 
       - name: Chaos stack smoke (protocol level)
         run: pnpm --filter @kraki/tests exec vitest run src/chaos/smoke.test.ts
@@ -291,7 +291,13 @@ jobs:
       - name: Test real WebSocket recovery against isolated peer
         run: |
           pnpm install --frozen-lockfile --ignore-scripts --filter @kraki/head...
+          pnpm --filter @kraki/pulse build
           python3 scripts/diag/run-reliability-loopback.py
+
+      - name: Test owned transport and crypto Swift packages
+        run: |
+          swift test --package-path packages/pulse/SwiftPulse
+          swift test --package-path packages/crypto/SwiftCrypto
 
       - name: Test native voice audio safety
         run: swift test --package-path packages/arm/ios/Vendor/VoiceInputCore

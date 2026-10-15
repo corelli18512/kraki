@@ -7,7 +7,7 @@
  * Apps send encrypted UnicastEnvelopes to specific tentacles.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { decodeFrame } from "@coinfra/pulse";
+import { decodeFrame } from "@kraki/pulse";
 import { generateKeyPair, exportPublicKey, importPublicKey, encryptToBlob, decryptFromBlob } from "@kraki/crypto";
 import {
   createTestEnv, connectApp, connectAppWithCrypto, createRelayClient,

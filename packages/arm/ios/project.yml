@@ -16,11 +16,11 @@ packages:
     url: https://github.com/raspu/Highlightr.git
     exactVersion: 2.3.0
   Pulse:
-    path: ./Vendor/Pulse
+    path: ../../pulse/SwiftPulse
   VoiceInputCore:
     path: ./Vendor/VoiceInputCore
   CoinfraCrypto:
-    path: ./Vendor/CoinfraCrypto
+    path: ../../crypto/SwiftCrypto
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle.git
     exactVersion: 2.9.5
@@ -373,8 +373,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.kraki.mac
         PRODUCT_NAME: Kraki
-        MARKETING_VERSION: "0.2.83"
-        CURRENT_PROJECT_VERSION: 85
+        MARKETING_VERSION: "0.2.85"
+        CURRENT_PROJECT_VERSION: 87
         GENERATE_INFOPLIST_FILE: false
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic

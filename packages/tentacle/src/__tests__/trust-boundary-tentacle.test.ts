@@ -112,7 +112,7 @@ function setup(mode: 'enforce' | 'compatible' | 'policy' = 'enforce', options: {
   const client = new RelayClient(adapter as never, sessionManager as never, {
     relayUrl: 'ws://127.0.0.1:1', authMethod: 'open',
     device: { name: 'QA Computer', role: 'tentacle', deviceId: COMPUTER },
-    ...(mode === 'policy' ? {} : { deviceTrust: mode }), localLink: options.local ?? false,
+    deviceTrust: mode, localLink: options.local ?? false, // historical protocol fixture
   }, keyManager);
   clients.push(client);
   const priv = client as unknown as PrivateClient;
@@ -553,8 +553,8 @@ describe('Tentacle policy and replay persistence', () => {
     expect(env.adapter.sendMessage).toHaveBeenCalledTimes(2);
   });
 
-  it('VT-FRESH-STARTUP: a fresh computer enforces before its first relay frame', async () => {
-    process.env.KRAKI_FRESH_INSTALL_ENFORCE = '1'; // future default; the race fix must hold
+  it('VT-FRESH-STARTUP: historical enforced fixture rejects an untrusted first relay frame', async () => {
+    writeTrustPolicy(join(home, 'trust'), { enforce: true });
     const env = setup('policy', { fresh: true });
     // setup creates the identity via the same KeyManager lazy call used by auth.
     // The store existed first, as it does in daemon-worker.ts.
@@ -569,7 +569,7 @@ describe('Tentacle policy and replay persistence', () => {
     const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     await new Promise<void>(resolve => server.once('listening', resolve));
     const { port } = server.address() as { port: number };
-    process.env.KRAKI_FRESH_INSTALL_ENFORCE = '1'; // future default; the race fix must hold
+    writeTrustPolicy(join(home, 'trust'), { enforce: true }); // historical enforced peer fixture
     const env = setup('policy', { fresh: true, socket: true });
     // Warm the same lazy key calls used by buildAuthPayload, avoiding RSA CPU timing.
     env.keyManager.getCompactPublicKey();

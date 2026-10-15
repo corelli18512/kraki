@@ -27,7 +27,8 @@ import { AttachmentPacer } from './attachment-pacer.js';
 import { SleepGuard } from './sleep-guard.js';
 import { LocalLinkServer } from './local-link.js';
 import { TrustStore } from './trust-store.js';
-import { DeviceTrust, deviceTrustModeFromEnv, TRUST_ADMIN_TYPES } from './relay/device-trust.js';
+import { DeviceTrust, TRUST_ADMIN_TYPES } from './relay/device-trust.js';
+import { restoreAccountAccess } from './account-access.js';
 import { broadcastAccountUsage, sendAccountUsageTo } from './relay/account-usage.js';
 import { wireAdapterEvents } from './relay/adapter-events.js';
 import { sendAttachmentChunk } from './relay/attachments.js';
@@ -281,11 +282,15 @@ export class RelayClient {
           // Next to this computer's keys (`<KRAKI_HOME>/trust`), so an
           // isolated KeyManager (tests, chaos stack) gets an isolated store.
           new TrustStore(this.keyManager.keysDir ? this.keyManager.trustDir : null),
-          options.deviceTrust ?? deviceTrustModeFromEnv(),
+          options.deviceTrust === 'policy' ? undefined : options.deviceTrust ?? 'compatible',
           () => this.authInfo?.deviceId,
         )
       : null;
     if (this.deviceTrust) {
+      // Explicit modes exist only for historical wire/transition fixtures.
+      // Shipping clients always use account access, even with an old on-disk
+      // policy, environment variable or an old app trying to re-enable it.
+      if (options.deviceTrust === undefined) restoreAccountAccess(this.deviceTrust.store);
       for (const d of this.deviceTrust.store.list()) this.pinnedKeys.set(d.id, d.encryptionKey);
       this.deviceTrust.store.onExternalChange = () => {
         this.reevaluateAllApps();
@@ -360,7 +365,7 @@ export class RelayClient {
       const device = {
         ...this.options.device,
         publicKey: this.keyManager?.getCompactPublicKey(),
-        // @coinfra/pulse ≥0.5.1: progress heartbeats never trigger resends.
+        // Pulse ≥0.5.1: progress heartbeats never trigger resends.
         pulseProgressAck: true,
       };
       // The keys exist now (a fresh install just created them and its default

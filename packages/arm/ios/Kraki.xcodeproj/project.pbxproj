@@ -185,6 +185,7 @@
 		3F8F3F91657CE99A91B498B6 /* MacAutomationDriver+ScrollGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F66F02FC54FEF2B7BA7235 /* MacAutomationDriver+ScrollGate.swift */; };
 		3F9854AE8D35E76D9D514EBA /* PreferencesWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F499644AEF4467B28CDD1A6A /* PreferencesWindow.swift */; };
 		4054EC9FBD2DF2BCDD28596D /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76E84B41258D35243F545BDB /* AppState.swift */; };
+		407799A905E0037244C7262B /* MacFinalSegmentFollowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5031E4D654F0D3309E6C2AF /* MacFinalSegmentFollowTests.swift */; };
 		40A1135A70EFBBC66418181C /* TurnSpineProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B52AA4B3D7FFBB698F94CE9 /* TurnSpineProjection.swift */; };
 		40A33A5867D20686790F9258 /* MacStepsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07D6E0A7CA95492AFFEAA610 /* MacStepsView.swift */; };
 		412CF463862B77B7A0C05992 /* PermissionDiffPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4870CD1AF2F8124715AA2BF6 /* PermissionDiffPreview.swift */; };
@@ -370,6 +371,7 @@
 		8F1503601B654CE252D93F35 /* AccountUsageRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A85ACE885B44CA61B0513FC /* AccountUsageRenderTests.swift */; };
 		8F51D496B6815109A20FE70C /* VoiceDraftStyling.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14DE4C914007046BE9F67973 /* VoiceDraftStyling.swift */; };
 		8F6280E0F252F3D0E4DEA9D7 /* SessionCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F98323AAD3C8D23F7A63AAC9 /* SessionCardView.swift */; };
+		90189CD8D492741DF703E951 /* ChatUXRegressionTests+FinalSegment.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7195DD69E693C4BFFD146B3 /* ChatUXRegressionTests+FinalSegment.swift */; };
 		905C91DB5410CEEDA060E7A1 /* SessionsSidebarView+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DEFD8A1D19846132D2AE32A /* SessionsSidebarView+macOS.swift */; };
 		90CB99F531524D18FF2BD990 /* BuiltInTentacle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EBD5FFCF0E54067B287536A /* BuiltInTentacle.swift */; };
 		914847D19343236FEB95A20D /* LiveBubbleTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5BAEA7249F10D6067F0886F /* LiveBubbleTestView.swift */; };
@@ -698,6 +700,7 @@
 		07D6E0A7CA95492AFFEAA610 /* MacStepsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacStepsView.swift; sourceTree = "<group>"; };
 		07E9F259AD6F525A5F3E63DD /* MacChatTopEdgeFade.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatTopEdgeFade.swift; sourceTree = "<group>"; };
 		09D438FF41D78B8547E66208 /* TextKitPureSpineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextKitPureSpineTests.swift; sourceTree = "<group>"; };
+		0AA0FA14691119F27955AC9D /* SwiftCrypto */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SwiftCrypto; path = ../../crypto/SwiftCrypto; sourceTree = SOURCE_ROOT; };
 		0B49EB7064E3E13899D443B5 /* LICENSE-mermaid.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "LICENSE-mermaid.txt"; sourceTree = "<group>"; };
 		0B5C9B91D8E0CF8C6D63E91D /* CryptoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoTests.swift; sourceTree = "<group>"; };
 		0BEDEAE0119875B478A984D6 /* SessionSubscriptionControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSubscriptionControllerTests.swift; sourceTree = "<group>"; };
@@ -768,6 +771,7 @@
 		36FC4EAA96F9E5781C9A7449 /* MacSetupIntro.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSetupIntro.swift; sourceTree = "<group>"; };
 		37B56341037B8B54A732E91A /* ToolStatusIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolStatusIcon.swift; sourceTree = "<group>"; };
 		37CA1183423B4FF99C9BEEFC /* SteerPlacementTallCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteerPlacementTallCardTests.swift; sourceTree = "<group>"; };
+		39C948CE4CF2E3E0DB588D74 /* SwiftPulse */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SwiftPulse; path = ../../pulse/SwiftPulse; sourceTree = SOURCE_ROOT; };
 		3A130A3774A3144CDA4C6023 /* ComposerHitAreaUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerHitAreaUITests.swift; sourceTree = "<group>"; };
 		3AC679062E3ABAECE586C024 /* UsagePeekController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsagePeekController.swift; sourceTree = "<group>"; };
 		3C03EA1CEA9C063EB869C687 /* MacAutomationDriver+Regressions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MacAutomationDriver+Regressions.swift"; sourceTree = "<group>"; };
@@ -908,7 +912,6 @@
 		8A5512B1E06F9B368B5AA468 /* MacNotificationDedupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNotificationDedupTests.swift; sourceTree = "<group>"; };
 		8D27255376DC3CA0C11B7405 /* SessionEffortE2EUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionEffortE2EUITests.swift; sourceTree = "<group>"; };
 		8D720ACC636683293D505371 /* MacChatBubbleCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatBubbleCell.swift; sourceTree = "<group>"; };
-		8F5846AD3085321DA3A42727 /* Pulse */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Pulse; path = Vendor/Pulse; sourceTree = SOURCE_ROOT; };
 		8F69BA2DA3E65AD7981E3F51 /* MacChatScrollView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacChatScrollView.swift; sourceTree = "<group>"; };
 		8F7A9DE94395DCACB82420EF /* IOSMotionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSMotionTests.swift; sourceTree = "<group>"; };
 		903F7944488AA6630F10C8DE /* MacSubagentStepsShots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSubagentStepsShots.swift; sourceTree = "<group>"; };
@@ -980,6 +983,7 @@
 		B5DA5D4B10C2EF6EA184D1E3 /* FlatBubbleTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlatBubbleTestView.swift; sourceTree = "<group>"; };
 		B60DD3157710F226FB5EF0DC /* MacSessionSidebarRevealTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSessionSidebarRevealTests.swift; sourceTree = "<group>"; };
 		B63002D8A915925E8EDD9BB1 /* AccountUsageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountUsageTests.swift; sourceTree = "<group>"; };
+		B7195DD69E693C4BFFD146B3 /* ChatUXRegressionTests+FinalSegment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatUXRegressionTests+FinalSegment.swift"; sourceTree = "<group>"; };
 		B88D48670B859C4CA3FFFA48 /* VoiceComposerPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceComposerPresentation.swift; sourceTree = "<group>"; };
 		BA35816AEE0E020E7C4DF9B2 /* LocalLinkHandshakeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLinkHandshakeTests.swift; sourceTree = "<group>"; };
 		BA89046ADC416DAEDEAC1FF1 /* HTMLReportSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTMLReportSupport.swift; sourceTree = "<group>"; };
@@ -1045,6 +1049,7 @@
 		E2E016C4ACE0484D7DB04166 /* MessageDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageDatabase.swift; sourceTree = "<group>"; };
 		E2EFD5BF1FB2C036AFDC23BF /* LocalLinkClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLinkClient.swift; sourceTree = "<group>"; };
 		E45FF5DF9F0159EB23B50D72 /* PulseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PulseManager.swift; sourceTree = "<group>"; };
+		E5031E4D654F0D3309E6C2AF /* MacFinalSegmentFollowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacFinalSegmentFollowTests.swift; sourceTree = "<group>"; };
 		E57D3E8B020B76BCD75B0243 /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
 		E6783BD1527A13261E67330A /* ModePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModePickerView.swift; sourceTree = "<group>"; };
 		E72790D159855C5D594CC7C6 /* SessionPreviewGlyphLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionPreviewGlyphLayer.swift; sourceTree = "<group>"; };
@@ -1067,7 +1072,6 @@
 		F1E5D28B402A345F0D22B851 /* AccountPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountPane.swift; sourceTree = "<group>"; };
 		F46E7049E9F5C6491855EAAA /* AppState+DeviceTrust.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+DeviceTrust.swift"; sourceTree = "<group>"; };
 		F499644AEF4467B28CDD1A6A /* PreferencesWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindow.swift; sourceTree = "<group>"; };
-		F59CEE297D0DBE6F701F8D7D /* CoinfraCrypto */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CoinfraCrypto; path = Vendor/CoinfraCrypto; sourceTree = SOURCE_ROOT; };
 		F5FED91289B8EAF2ACA20F81 /* ChatTableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTableTests.swift; sourceTree = "<group>"; };
 		F6612B64B8037EF4E603EB59 /* TabBarNavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarNavigationUITests.swift; sourceTree = "<group>"; };
 		F70B56E49F0EA690CE7F1B08 /* MacPresenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPresenceTests.swift; sourceTree = "<group>"; };
@@ -1454,8 +1458,8 @@
 		A52B4557FE045496F98B459B /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				F59CEE297D0DBE6F701F8D7D /* CoinfraCrypto */,
-				8F5846AD3085321DA3A42727 /* Pulse */,
+				0AA0FA14691119F27955AC9D /* SwiftCrypto */,
+				39C948CE4CF2E3E0DB588D74 /* SwiftPulse */,
 				9EAEB25D42AF6E6FEEA99513 /* VoiceInputCore */,
 			);
 			name = Packages;
@@ -1696,6 +1700,7 @@
 				FF864DCD55F230904C925921 /* MacControlHelpTests.swift */,
 				9464EBBC36F2A0D09CAC1282 /* MacDebugPromptFreeTests.swift */,
 				72AC8F0A5FEA54A824065B0C /* MacDeletedOpenSessionTests.swift */,
+				E5031E4D654F0D3309E6C2AF /* MacFinalSegmentFollowTests.swift */,
 				26348DF65A230EA0AF062C36 /* MacForkNavigationTests.swift */,
 				06A90838ED5EE9B2B784CA9E /* MacImageGridReuseTests.swift */,
 				B22CCCAF77AEAA34CF26F943 /* MacJumpControlResizeTests.swift */,
@@ -1763,6 +1768,7 @@
 				061382BF8F60896127BB9961 /* ChatScrollPolicyTests.swift */,
 				F5FED91289B8EAF2ACA20F81 /* ChatTableTests.swift */,
 				22F8C22AC09EBB3DFB038F97 /* ChatUXRegressionTests.swift */,
+				B7195DD69E693C4BFFD146B3 /* ChatUXRegressionTests+FinalSegment.swift */,
 				AA3C5E810AB7C57BC68F5279 /* ChatUXRegressionTests+Group1.swift */,
 				6443281641D821258B5F4577 /* ChatUXRegressionTests+Group2.swift */,
 				DD971364DF3118676437C396 /* ChatUXRegressionTests+QueuedPrompt.swift */,
@@ -2050,8 +2056,8 @@
 				67485AEC5E20A50F92197C43 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
 				C1BACD62B59892C792C08AB1 /* XCRemoteSwiftPackageReference "Highlightr" */,
 				DADBF5538A6575068485F6DC /* XCRemoteSwiftPackageReference "Sparkle" */,
-				CDE00FA51D22D5E3305E4171 /* XCLocalSwiftPackageReference "Vendor/CoinfraCrypto" */,
-				3F224EC43C74D3ECE997EFD2 /* XCLocalSwiftPackageReference "Vendor/Pulse" */,
+				8D5CEE35EDD830C5A5CDC098 /* XCLocalSwiftPackageReference "../../crypto/SwiftCrypto" */,
+				02D5E8DF4A06562FAC13BCD6 /* XCLocalSwiftPackageReference "../../pulse/SwiftPulse" */,
 				A64FCAB32F5BA20F2CEE80BC /* XCLocalSwiftPackageReference "Vendor/VoiceInputCore" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -2158,6 +2164,7 @@
 				4996504C6982E0B6A3503A86 /* MacControlHelpTests.swift in Sources */,
 				4D39341217A55F65E2B8A1FE /* MacDebugPromptFreeTests.swift in Sources */,
 				BAA759F664C7118D0EE166C8 /* MacDeletedOpenSessionTests.swift in Sources */,
+				407799A905E0037244C7262B /* MacFinalSegmentFollowTests.swift in Sources */,
 				E19D79C84A9086A2D90B4A8E /* MacForkNavigationTests.swift in Sources */,
 				4CE61C919657FE55CACE08B3 /* MacImageGridReuseTests.swift in Sources */,
 				3A56F3DD820C55EFFCD98CA4 /* MacJumpControlResizeTests.swift in Sources */,
@@ -2209,6 +2216,7 @@
 				9914A1454DA0A4958D6DD68E /* CardTurnGateTests.swift in Sources */,
 				E96A6C5AE2A674EBCEB5B49C /* ChatScrollPolicyTests.swift in Sources */,
 				F157AE24305F556B410DAA89 /* ChatTableTests.swift in Sources */,
+				90189CD8D492741DF703E951 /* ChatUXRegressionTests+FinalSegment.swift in Sources */,
 				D2F338565001E7FCA5AB451B /* ChatUXRegressionTests+Group1.swift in Sources */,
 				9249D65BD87FAE6A4BEFF762 /* ChatUXRegressionTests+Group2.swift in Sources */,
 				8E8A15038E4896B18E96E62B /* ChatUXRegressionTests+QueuedPrompt.swift in Sources */,
@@ -3411,7 +3419,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 85;
+				CURRENT_PROJECT_VERSION = 87;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -3422,7 +3430,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.83;
+				MARKETING_VERSION = 0.2.85;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.dev;
 				PRODUCT_NAME = "Kraki Dev";
 				SDKROOT = macosx;
@@ -3525,7 +3533,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 85;
+				CURRENT_PROJECT_VERSION = 87;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -3535,7 +3543,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.83;
+				MARKETING_VERSION = 0.2.85;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.diag;
 				PRODUCT_NAME = "Kraki Diag";
 				SDKROOT = macosx;
@@ -3550,7 +3558,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 85;
+				CURRENT_PROJECT_VERSION = 87;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -3561,7 +3569,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.83;
+				MARKETING_VERSION = 0.2.85;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac;
 				PRODUCT_NAME = Kraki;
 				SDKROOT = macosx;
@@ -3576,7 +3584,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 85;
+				CURRENT_PROJECT_VERSION = 87;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -3587,7 +3595,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.83;
+				MARKETING_VERSION = 0.2.85;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac;
 				PRODUCT_NAME = Kraki;
 				SDKROOT = macosx;
@@ -3723,17 +3731,17 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		3F224EC43C74D3ECE997EFD2 /* XCLocalSwiftPackageReference "Vendor/Pulse" */ = {
+		02D5E8DF4A06562FAC13BCD6 /* XCLocalSwiftPackageReference "../../pulse/SwiftPulse" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = Vendor/Pulse;
+			relativePath = ../../pulse/SwiftPulse;
+		};
+		8D5CEE35EDD830C5A5CDC098 /* XCLocalSwiftPackageReference "../../crypto/SwiftCrypto" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../crypto/SwiftCrypto;
 		};
 		A64FCAB32F5BA20F2CEE80BC /* XCLocalSwiftPackageReference "Vendor/VoiceInputCore" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/VoiceInputCore;
-		};
-		CDE00FA51D22D5E3305E4171 /* XCLocalSwiftPackageReference "Vendor/CoinfraCrypto" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = Vendor/CoinfraCrypto;
 		};
 /* End XCLocalSwiftPackageReference section */
 

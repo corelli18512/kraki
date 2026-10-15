@@ -12,7 +12,6 @@ struct DeviceDetailView: View {
 
     @State private var showRemoveConfirmation = false
     @State private var modelsExpanded = false
-    @State private var showScanner = false
 
     private var isCurrentDevice: Bool {
         device.id == appState.deviceId
@@ -77,14 +76,6 @@ struct DeviceDetailView: View {
                 infoRow("Last online", value: device.online ? "Now" : formatDate(device.lastSeen))
                 if let version {
                     infoRow("Version", value: version)
-                }
-            }
-
-            if device.role == .tentacle {
-                Section {
-                    ComputerSecurityRows(device: device, onPair: { showScanner = true })
-                } header: {
-                    Text("Security")
                 }
             }
 
@@ -181,14 +172,6 @@ struct DeviceDetailView: View {
             SessionDetailView(sessionId: nav.id)
                 .id(nav.id)
                 .environment(appState)
-        }
-        .sheet(isPresented: $showScanner) {
-            PairingView().environment(appState)
-        }
-        .task(id: appState.trustState(for: device.id) == .paired) {
-            if device.role == .tentacle, appState.trustState(for: device.id) == .paired {
-                appState.requestTrustedDevices(device.id)
-            }
         }
         .alert("Remove Device", isPresented: $showRemoveConfirmation) {
             Button("Cancel", role: .cancel) {}

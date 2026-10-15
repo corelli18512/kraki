@@ -91,6 +91,71 @@ final class ChatScrollPolicyTests: XCTestCase {
         XCTAssertTrue(policy.shouldFollowTail(distanceToBottom: 20))
     }
 
+    func testReturningToTailKeepsFollowingAcrossStreamingGeometryLag() {
+        var policy = ChatScrollPolicy()
+        policy.beginUserInteraction(offset: 1_000, distanceToBottom: 0)
+        policy.observeUserOffset(900, distanceToBottom: 100)
+        policy.endUserInteraction()
+        policy.beginTailNavigation(offset: 900, distanceToBottom: 100)
+        policy.pinToTail(observedOffset: 1_000)
+        policy.endNavigation()
+
+        for distance: CGFloat in [18, 33, 90, 400, 0] {
+            policy.refreshFollowingTail(distanceToBottom: distance)
+            XCTAssertTrue(policy.followingTail, "geometry lag alone is not user intent to leave the tail")
+            XCTAssertEqual(policy.direction, .newer)
+            XCTAssertFalse(policy.entryBottomLocked)
+        }
+    }
+
+    func testWheelReturnToTailKeepsFollowingButNewOlderIntentCancelsIt() {
+        var policy = ChatScrollPolicy()
+        policy.beginUserInteraction(offset: 1_000, distanceToBottom: 0)
+        policy.observeUserOffset(900, distanceToBottom: 100)
+        policy.observeUserOffset(1_000, distanceToBottom: 0)
+        policy.endUserInteraction()
+        policy.refreshFollowingTail(distanceToBottom: 80)
+        XCTAssertTrue(policy.followingTail)
+
+        policy.beginUserInteraction(offset: 1_000, distanceToBottom: 0)
+        policy.observeUserOffset(995, distanceToBottom: 5)
+        for distance: CGFloat in [5, 0, 100] {
+            policy.refreshFollowingTail(distanceToBottom: distance)
+            XCTAssertFalse(policy.followingTail, "even a small intentional up-scroll wins")
+            XCTAssertEqual(policy.direction, .older)
+        }
+    }
+
+    func testGeometryDoesNotReattachAnAwayReaderUntilNearTheTail() {
+        var policy = ChatScrollPolicy()
+        policy.leaveTailForUserNavigation(offset: 500)
+        policy.refreshFollowingTail(distanceToBottom: 300)
+        XCTAssertFalse(policy.followingTail)
+        policy.refreshFollowingTail(distanceToBottom: 24)
+        XCTAssertTrue(policy.followingTail)
+        policy.refreshFollowingTail(distanceToBottom: 60)
+        XCTAssertTrue(policy.followingTail)
+
+        policy.beginLatestMessageStartNavigation()
+        policy.refreshFollowingTail(distanceToBottom: 10)
+        XCTAssertFalse(policy.followingTail)
+    }
+
+    func testUnreadAnchorCannotBeReattachedByTransientNearTailGeometry() {
+        var policy = ChatScrollPolicy()
+        policy.resetForEntry(unreadBoundary: 41)
+        policy.anchorAtFirstUnread(offset: 300)
+        for distance: CGFloat in [0, 12, 33, 500] {
+            policy.refreshFollowingTail(distanceToBottom: distance)
+            XCTAssertFalse(policy.followingTail, "the unread landing owns the viewport until explicitly released")
+            XCTAssertEqual(policy.unreadEntry, .anchored)
+        }
+        policy.releaseUnreadAnchor(boundary: 41)
+        policy.refreshFollowingTail(distanceToBottom: 100)
+        XCTAssertTrue(policy.followingTail)
+        XCTAssertEqual(policy.unreadEntry, .armed(boundary: 41))
+    }
+
     func testOlderPagingContinuesWithFurtherOlderMovement() {
         var policy = ChatScrollPolicy()
         policy.beginUserInteraction(offset: 500, distanceToBottom: 500)

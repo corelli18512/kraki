@@ -2,7 +2,7 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Endpoint } from "@coinfra/pulse";
+import { Endpoint } from "@kraki/pulse";
 import {
 	decryptFromBlob,
 	encryptToBlob,

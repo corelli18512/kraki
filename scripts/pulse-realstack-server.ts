@@ -30,7 +30,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 
 // Import the COMPILED tentacle (dist), not src: tsx's tsconfig-paths resolver
-// mishandles the ESM-only `@coinfra/pulse` exports when walking TS source, but
+// mishandles the ESM-only `@kraki/pulse` exports when walking TS source, but
 // node resolves it cleanly from the built output (verified). dist is rebuilt in
 // main() before this matters.
 import { RelayClient, SessionManager, AgentAdapter, KeyManager, AttachmentStore } from '../packages/tentacle/dist/index.js';
@@ -238,7 +238,7 @@ async function main(): Promise<void> {
   preflightPorts();
 
   console.log('🔨 Building protocol + crypto + arm...');
-  execSync('pnpm --filter @kraki/protocol build && pnpm --filter @kraki/crypto build', { stdio: 'inherit', cwd: process.cwd() });
+  execSync('pnpm --filter @kraki/protocol --filter @kraki/crypto --filter @kraki/pulse build', { stdio: 'inherit', cwd: process.cwd() });
   execSync('pnpm --filter @kraki/arm-web build', { stdio: 'inherit', cwd: process.cwd() });
 
   // 1. Real head relay

@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { webcrypto } from 'node:crypto';
 import { MockRelayServer } from './helpers/mock-ws-server';
-import { Endpoint, StreamSet, type Effect } from '@coinfra/pulse';
+import { Endpoint, StreamSet, type Effect } from '@kraki/pulse';
 import type { WebSocket } from 'ws';
 
 const SESSION_ID = 'session-active-tail';

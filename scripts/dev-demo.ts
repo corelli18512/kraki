@@ -134,7 +134,7 @@ function requestPairingToken(relayUrl: string): Promise<string> {
 async function main(): Promise<void> {
   // 1. Build prerequisites
   console.log('🔨 Building protocol + crypto...');
-  execSync('pnpm --filter @kraki/protocol build && pnpm --filter @kraki/crypto build', {
+  execSync('pnpm --filter @kraki/protocol --filter @kraki/crypto --filter @kraki/pulse build', {
     stdio: 'inherit', cwd: process.cwd(),
   });
 

@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { decodeFrameWithStream, encodeFrame, Endpoint, StreamSet, type Effect } from '@coinfra/pulse';
+import { decodeFrameWithStream, encodeFrame, Endpoint, StreamSet, type Effect } from '@kraki/pulse';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PulseHub, type PulseHubGcConfig, type PulseHubHost } from '../pulse-hub.js';
 

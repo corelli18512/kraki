@@ -408,7 +408,7 @@ async function start(args: string[]): Promise<void> {
   writePid(PID_FILES.launcher, process.pid);
 
   console.log('🔨 Building protocol + crypto...');
-  execSync('pnpm --filter @kraki/protocol build && pnpm --filter @kraki/crypto build', {
+  execSync('pnpm --filter @kraki/protocol --filter @kraki/crypto --filter @kraki/pulse build', {
     cwd: process.cwd(),
     stdio: 'inherit',
   });
