@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, ChevronDown, ChevronLeft } from 'lucide-react';
 import { hasWindowsTitleBar } from '../../lib/desktop';
 
@@ -29,12 +30,16 @@ export function ChatHeader({
   const [interaction, setInteraction] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  const [menuAnchor, setMenuAnchor] = useState({ left: 0, top: 0 });
+  const containsModeTarget = (target: Node | null) => !!target
+    && (!!menuRef.current?.contains(target) || !!popupRef.current?.contains(target));
   const current = MODES.find((m) => m.id === mode) ?? MODES[1];
 
   useEffect(() => {
     if (!menu) return;
-    const close = (e: MouseEvent) => { if (!menuRef.current?.contains(e.target as Node)) setMenu(false); };
-    if (hasWindowsTitleBar) menuRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
+    const close = (e: MouseEvent) => { if (!containsModeTarget(e.target as Node)) setMenu(false); };
+    if (hasWindowsTitleBar) popupRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
     const esc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setMenu(false);
@@ -45,6 +50,49 @@ export function ChatHeader({
     window.addEventListener('keydown', esc);
     return () => { document.removeEventListener('mousedown', close); window.removeEventListener('keydown', esc); };
   }, [menu]);
+
+  useLayoutEffect(() => {
+    if (!hasWindowsTitleBar || !menu) return;
+    const position = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (rect) setMenuAnchor({ left: rect.left, top: rect.bottom + 6 });
+    };
+    position();
+    // WCO geometry can change without a viewport resize (e.g. maximize/DPI).
+    const observer = new ResizeObserver(position);
+    const header = menuRef.current?.parentElement;
+    if (header) observer.observe(header);
+    const titleButton = header?.querySelector('.khead-title');
+    if (titleButton) observer.observe(titleButton);
+    if (triggerRef.current) observer.observe(triggerRef.current);
+    window.addEventListener('resize', position);
+    return () => { observer.disconnect(); window.removeEventListener('resize', position); };
+  }, [menu]);
+
+  const dropdown = menu && (narrow || hasWindowsTitleBar) && (
+    <div className="khead-menu" role="menu" aria-label="Session mode picker">
+      {MODES.map((m) => (
+        <button
+          key={m.id}
+          type="button"
+          role="menuitemradio"
+          aria-checked={m.id === mode}
+          onClick={() => {
+            setMenu(false);
+            if (m.id !== mode) onMode(m.id);
+            if (hasWindowsTitleBar) triggerRef.current?.focus();
+          }}
+        >
+          <span className="khead-dot" style={{ background: m.color }} />
+          <span className="khead-menu-text">
+            <span>{m.label}</span>
+            <small>{m.hint}</small>
+          </span>
+          {m.id === mode && <Check className="khead-check" aria-hidden />}
+        </button>
+      ))}
+    </div>
+  );
 
   useEffect(() => {
     if (hasWindowsTitleBar || narrow || !menu || hovering) return;
@@ -66,11 +114,11 @@ export function ChatHeader({
       </button>
       {hasWindowsTitleBar && <span className="khead-separator" aria-hidden="true" />}
       <div className="khead-mode" ref={menuRef} onMouseEnter={() => setHovering(true)} onMouseLeave={() => setHovering(false)}
-        onBlur={(e) => { if (hasWindowsTitleBar && !e.currentTarget.contains(e.relatedTarget)) setMenu(false); }}
+        onBlur={(e) => { if (hasWindowsTitleBar && !containsModeTarget(e.relatedTarget)) setMenu(false); }}
         onKeyDown={(e) => {
           if (!hasWindowsTitleBar || !menu || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
           e.preventDefault();
-          const options = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+          const options = [...(popupRef.current ?? e.currentTarget).querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
           const index = options.indexOf(document.activeElement as HTMLButtonElement);
           const next = e.key === 'Home' ? 0 : e.key === 'End' ? options.length - 1
             : (index + (e.key === 'ArrowDown' ? 1 : options.length - 1)) % options.length;
@@ -87,30 +135,13 @@ export function ChatHeader({
           {current.label}
           {hasWindowsTitleBar && <ChevronDown className="khead-chevron" aria-hidden="true" />}
         </button>}
-        {menu && (narrow || hasWindowsTitleBar) && (
-          <div className="khead-menu" role="menu" aria-label="Session mode picker">
-            {MODES.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                role="menuitemradio"
-                aria-checked={m.id === mode}
-                onClick={() => {
-                  setMenu(false);
-                  if (m.id !== mode) onMode(m.id);
-                  if (hasWindowsTitleBar) triggerRef.current?.focus();
-                }}
-              >
-                <span className="khead-dot" style={{ background: m.color }} />
-                <span className="khead-menu-text">
-                  <span>{m.label}</span>
-                  <small>{m.hint}</small>
-                </span>
-                {m.id === mode && <Check className="khead-check" aria-hidden />}
-              </button>
-            ))}
-          </div>
-        )}
+        {dropdown && (hasWindowsTitleBar ? createPortal(
+          // Escape the min800 chat pane's overflow clipping at desktop zoom.
+          <div ref={popupRef} className="kchat-page khead-windows-popup" style={{
+            '--windows-mode-left': `${menuAnchor.left}px`,
+            '--windows-mode-top': `${menuAnchor.top}px`,
+          } as CSSProperties}>{dropdown}</div>, document.body,
+        ) : dropdown)}
       </div>
     </header>
   );

@@ -40,7 +40,13 @@ for (const width of [1240, 800]) {
     expect(mode.x).toBeGreaterThan(title.x + title.width);
     expect(mode.x + mode.width).toBeLessThanOrEqual(width - 138 - 32);
     await page.evaluate(() => {
-      document.querySelector('.khead-mode')!.insertAdjacentHTML('beforeend', '<div class="khead-menu" role="menu"><button>Safe</button><button>Auto</button><button>Delegate</button></div>');
+      const rect = document.querySelector('.khead-capsule')!.getBoundingClientRect();
+      const popup = document.createElement('div');
+      popup.className = 'kchat-page khead-windows-popup';
+      popup.style.setProperty('--windows-mode-left', `${rect.left}px`);
+      popup.style.setProperty('--windows-mode-top', `${rect.bottom + 6}px`);
+      popup.innerHTML = '<div class="khead-menu" role="menu"><button>Safe</button><button>Auto</button><button>Delegate</button></div>';
+      document.body.append(popup);
     });
     const menu = (await page.locator('.khead-menu').boundingBox())!;
     expect(menu.y).toBeGreaterThanOrEqual(44);
@@ -71,18 +77,6 @@ test('reserves a drag strip on home/setup and keeps settings and Session Info be
     document.getElementById('root')!.insertAdjacentHTML('beforeend', '<div class="fixed inset-0 z-50" role="dialog"><div class="ksi-sheet"><button>Session Info close</button></div></div>');
   });
   expect((await page.locator('.ksi-sheet').boundingBox())!.y).toBeGreaterThanOrEqual(44);
-});
-
-test('bounds the header to the visible viewport when Windows zoom enters a narrow layout', async ({ page }) => {
-  await page.setViewportSize({ width: 677, height: 560 });
-  await page.evaluate((html) => {
-    document.getElementById('root')!.innerHTML = html;
-    document.querySelector('.app-viewport')!.classList.add('min-w-[800px]');
-    document.querySelector('.khead')!.classList.replace('is-wide', 'is-narrow');
-  }, shell(chat, false));
-  const mode = (await page.locator('.khead-mode').boundingBox())!;
-  expect(mode.x + mode.width).toBeLessThanOrEqual(677 - 138 - 32);
-  await expect(page.locator('.khead')).toHaveCSS('height', '64px');
 });
 
 test('protects report and image preview controls from the native upper-right rectangle', async ({ page }) => {

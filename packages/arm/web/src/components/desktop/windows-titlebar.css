@@ -54,12 +54,16 @@ html[data-windows-titlebar] .kreport-panel::before {
 }
 
 html[data-windows-titlebar] .khead.is-windows {
+  /* Only the header compacts: Electron keeps the min800 body and 280px rail
+     even when page zoom makes the CSS viewport smaller than that body. */
+  --windows-header-space: calc(100vw - 280px - var(--windows-caption-width));
+  --windows-header-spacing: max(0px, calc((var(--windows-header-space) - 100px) / 8));
   height: 56px;
   width: min(100%, calc(100vw - 280px));
   align-items: flex-start;
   justify-content: flex-start;
   gap: 0;
-  padding: 7px calc(var(--windows-caption-width) + 32px) 0 14px;
+  padding: 7px calc(var(--windows-caption-width) + clamp(6px, var(--windows-header-spacing), 32px)) 0 clamp(2px, var(--windows-header-spacing), 14px);
   background: var(--k-bg);
   pointer-events: auto;
   -webkit-app-region: drag;
@@ -79,45 +83,74 @@ html[data-windows-titlebar] .khead.is-windows :is(.khead-title, .khead-capsule, 
 }
 html[data-windows-titlebar] .khead.is-windows .khead-title {
   flex: 0 1 auto;
-  min-width: 0;
+  min-width: 24px;
   max-width: 432px;
   margin: 0;
-  padding: 0 7px 0 0;
+  padding: 0 clamp(0px, var(--windows-header-spacing), 7px) 0 0;
   text-align: left;
   color: var(--color-text-title);
   font: 600 13px/18px "Segoe UI", var(--k-font);
 }
 html[data-windows-titlebar] .khead.is-windows :is(.khead-title, .khead-capsule, .khead-round):hover,
 html[data-windows-titlebar] .khead.is-windows .khead-capsule[aria-expanded="true"] { background: var(--k-fill); }
-html[data-windows-titlebar] .khead.is-windows button:focus-visible { outline: 2px solid var(--color-kraki-400); outline-offset: 2px; }
+html[data-windows-titlebar] .khead.is-windows button:focus-visible,
+html[data-windows-titlebar] .khead-windows-popup button:focus-visible {
+  outline: 2px solid var(--color-kraki-400);
+  outline-offset: 2px;
+}
+html[data-windows-titlebar] .khead.is-windows button:focus-visible {
+  outline-offset: clamp(-2px, calc(var(--windows-header-spacing) - 2px), 2px);
+}
 html[data-windows-titlebar] .khead.is-windows .khead-separator {
   width: 1px;
   height: 15px;
   flex-shrink: 0;
-  margin: 7px 12px 0 9px;
+  margin: 7px clamp(1px, var(--windows-header-spacing), 12px) 0 clamp(1px, var(--windows-header-spacing), 9px);
   background: var(--k-border);
 }
 html[data-windows-titlebar] .khead.is-windows .khead-mode { position: relative; top: auto; right: auto; }
 html[data-windows-titlebar] .khead.is-windows .khead-capsule {
-  gap: 7px;
-  padding: 0 9px 0 7px;
+  gap: clamp(1px, var(--windows-header-spacing), 7px);
+  padding: 0 clamp(1px, var(--windows-header-spacing), 9px) 0 clamp(1px, var(--windows-header-spacing), 7px);
   font: 400 12px/18px "Segoe UI", var(--k-font);
 }
-html[data-windows-titlebar] .khead.is-windows .khead-dot { width: 6px; height: 6px; }
-html[data-windows-titlebar] .khead.is-windows .khead-chevron { width: 10px; height: 10px; margin-left: 3px; }
-html[data-windows-titlebar] .khead.is-windows .khead-menu {
-  left: 0;
+html[data-windows-titlebar] .khead.is-windows .khead-dot {
+  width: clamp(3px, var(--windows-header-spacing), 6px);
+  height: clamp(3px, var(--windows-header-spacing), 6px);
+}
+html[data-windows-titlebar] .khead.is-windows .khead-chevron {
+  width: clamp(6px, var(--windows-header-spacing), 10px);
+  height: clamp(6px, var(--windows-header-spacing), 10px);
+  margin-left: clamp(0px, var(--windows-header-spacing), 3px);
+  flex-shrink: 0;
+}
+/* A body portal keeps the viewport-clamped popup clear of chat/sidebar clips,
+   while kchat-page supplies the same light/dark chat palette as its trigger. */
+html[data-windows-titlebar] .khead-windows-popup {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  overflow: visible;
+  background: transparent;
+  pointer-events: none;
+}
+html[data-windows-titlebar] .khead-windows-popup .khead-menu {
+  position: absolute;
+  left: clamp(8px, var(--windows-mode-left), calc(100vw - min(238px, calc(100vw - 16px)) - 8px));
   right: auto;
-  top: max(calc(100% + 6px), calc(var(--windows-titlebar-height) - 7px));
-  width: 238px;
-  min-width: 238px;
+  top: max(var(--windows-mode-top), var(--windows-titlebar-height));
+  width: min(238px, calc(100vw - 16px));
+  min-width: 0;
+  max-height: calc(100dvh - max(var(--windows-mode-top), var(--windows-titlebar-height)) - 8px);
+  overflow-y: auto;
+  pointer-events: auto;
   padding: 5px;
   border-radius: 6px;
 }
-html[data-windows-titlebar] .khead.is-windows .khead-menu button { padding: 9px 10px; border-radius: 4px; }
-html[data-windows-titlebar] .khead.is-windows .khead-menu button[aria-checked="true"] { background: var(--k-fill); }
-html[data-windows-titlebar] .khead.is-windows .khead-menu-text { font-size: 12px; font-weight: 500; }
-html[data-windows-titlebar] .khead.is-windows .khead-menu-text small { font-size: 10px; }
+html[data-windows-titlebar] .khead-windows-popup .khead-menu button { padding: 9px 10px; border-radius: 4px; }
+html[data-windows-titlebar] .khead-windows-popup .khead-menu button[aria-checked="true"] { background: var(--k-fill); }
+html[data-windows-titlebar] .khead-windows-popup .khead-menu-text { font-size: 12px; font-weight: 500; }
+html[data-windows-titlebar] .khead-windows-popup .khead-menu-text small { font-size: 10px; }
 
 @media (display-mode: fullscreen) {
   html[data-windows-titlebar] { --windows-caption-width: 0px; --windows-titlebar-height: 0px; }

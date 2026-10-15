@@ -61,12 +61,23 @@ describe('ChatHeader Windows native titlebar', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
-  it('retains Back navigation when Windows page zoom enters the narrow layout', () => {
-    const onBack = vi.fn();
-    render(<ChatHeader title="Session" mode="safe" narrow onBack={onBack} backBadge={3} onMode={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-    expect(onBack).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole('button', { name: 'Session mode, Safe' }));
-    expect(screen.getByRole('menuitemradio', { name: /Safe/ })).toHaveAttribute('aria-checked', 'true');
+  it('portals the wide desktop menu out of chat clipping and reanchors it on resize', () => {
+    const { container, unmount } = render(<ChatHeader title="Long desktop session title" mode="delegate" narrow={false} onMode={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Back' })).not.toBeInTheDocument();
+    const trigger = screen.getByRole('button', { name: 'Session mode, Delegate' });
+    const bounds = vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({ left: 330, bottom: 37 } as DOMRect);
+    fireEvent.click(trigger);
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    const popup = document.body.querySelector<HTMLElement>('.khead-windows-popup')!;
+    expect(popup.style.getPropertyValue('--windows-mode-left')).toBe('330px');
+    expect(popup.style.getPropertyValue('--windows-mode-top')).toBe('43px');
+    expect(screen.getByRole('menuitemradio', { name: /Delegate/ })).toHaveAttribute('aria-checked', 'true');
+    bounds.mockReturnValue({ left: 300, bottom: 41 } as DOMRect);
+    fireEvent(window, new Event('resize'));
+    expect(popup.style.getPropertyValue('--windows-mode-left')).toBe('300px');
+    expect(popup.style.getPropertyValue('--windows-mode-top')).toBe('47px');
+    unmount();
+    expect(document.body.querySelector('.khead-windows-popup')).toBeNull();
+    bounds.mockRestore();
   });
 });

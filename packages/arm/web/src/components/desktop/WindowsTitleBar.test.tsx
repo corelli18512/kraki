@@ -52,7 +52,11 @@ describe('Windows titlebar CSS source contracts (not native hit-testing proof)',
     expect(css).toContain('.app-viewport > main:not(:has(.khead.is-windows))');
     expect(css).toContain(':has(.khead.is-windows) .kwindows-titlebar { display: none; }');
     expect(css).toContain('.kreport-panel { padding-top: var(--windows-titlebar-height); }');
-    expect(css).toContain('padding: 7px calc(var(--windows-caption-width) + 32px) 0 14px;');
+    expect(css).toContain('--windows-header-space: calc(100vw - 280px - var(--windows-caption-width));');
+    expect(css).toContain('min-width: 24px;');
+    expect(css).toContain('.khead-windows-popup .khead-menu');
+    expect(css).toContain('left: clamp(8px, var(--windows-mode-left),');
+    expect(css).toContain('width: min(238px, calc(100vw - 16px));');
     expect(css).toContain('border-radius: 4px;');
     expect(css).toContain('background: transparent;');
     expect(css).toContain('box-shadow: none;');
