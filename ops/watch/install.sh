@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install or update kraki-watch on a relay host. Run as root:
-#   sh install.sh <tokyo|cn> [--with-backup]
+#   sh install.sh <tokyo|cn> [--with-backup] [--with-journal-policy]
 #
 # Idempotent. Installs into /opt/kraki-watch and systemd; never touches the
 # relay itself. A fresh install starts in shadow mode (KRAKI_WATCH_NOTIFY=0):
@@ -9,8 +9,19 @@
 set -eu
 
 HOST=${1:-}
-[ "$HOST" = tokyo ] || [ "$HOST" = cn ] || { echo "usage: $0 <tokyo|cn> [--with-backup]" >&2; exit 2; }
-WITH_BACKUP=${2:-}
+[ "$HOST" = tokyo ] || [ "$HOST" = cn ] || { echo "usage: $0 <tokyo|cn> [--with-backup] [--with-journal-policy]" >&2; exit 2; }
+shift
+WITH_BACKUP=0
+WITH_JOURNAL=0
+for arg in "$@"; do
+  case "$arg" in
+    --with-backup) WITH_BACKUP=1 ;;
+    --with-journal-policy) WITH_JOURNAL=1 ;;
+    *) echo "unknown option" >&2; exit 2 ;;
+  esac
+done
+# Check optional dependencies before making any changes.
+if [ "$WITH_BACKUP" = 1 ]; then command -v sqlite3 >/dev/null || { echo "sqlite3 missing" >&2; exit 1; }; fi
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 # Node >= 20 for fetch/statfs: the relay's own runtime if present, else the system node.
@@ -45,16 +56,17 @@ for unit in $("$NODE" -e 'for (const u of require("/etc/kraki/watch.json").units
   install -d -m 755 "/etc/systemd/system/$unit.service.d"
   install -m 644 "$HERE/systemd/watch-on-failure.conf" "/etc/systemd/system/$unit.service.d/kraki-watch.conf"
 done
-install -d -m 755 /etc/systemd/journald.conf.d
-install -m 644 "$HERE/systemd/journald-kraki.conf" /etc/systemd/journald.conf.d/kraki.conf
+if [ "$WITH_JOURNAL" = 1 ]; then
+  install -d -m 755 /etc/systemd/journald.conf.d
+  install -m 644 "$HERE/systemd/journald-kraki.conf" /etc/systemd/journald.conf.d/kraki.conf
+fi
 
-if [ "$WITH_BACKUP" = --with-backup ]; then
-  command -v sqlite3 >/dev/null || { echo "sqlite3 missing" >&2; exit 1; }
+if [ "$WITH_BACKUP" = 1 ]; then
   install -m 644 "$HERE/systemd/kraki-backup.service" "$HERE/systemd/kraki-backup.timer" /etc/systemd/system/
 fi
 
 systemctl daemon-reload
-systemctl restart systemd-journald
+if [ "$WITH_JOURNAL" = 1 ]; then systemctl restart systemd-journald; fi
 systemctl enable --now kraki-watch.timer
-[ "$WITH_BACKUP" = --with-backup ] && systemctl enable --now kraki-backup.timer
+if [ "$WITH_BACKUP" = 1 ]; then systemctl enable --now kraki-backup.timer; fi
 echo "kraki-watch installed for $HOST (node: $NODE)"
