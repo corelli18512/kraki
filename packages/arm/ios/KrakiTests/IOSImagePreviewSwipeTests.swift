@@ -46,15 +46,7 @@ import UIKit
             let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
                 window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
             }
-            let cg = image.cgImage!
-            let scale = image.scale
-            let x = Int(window.bounds.midX * scale), y = Int(window.bounds.midY * scale)
-            var pixel = [UInt8](repeating: 0, count: 4)
-            let ctx = CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
-                                space: CGColorSpaceCreateDeviceRGB(),
-                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-            ctx.draw(cg, in: CGRect(x: -x, y: y - cg.height + 1, width: cg.width, height: cg.height))
-            return (CGFloat(pixel[0]) / 255, CGFloat(pixel[1]) / 255, CGFloat(pixel[2]) / 255)
+            return self.centerColor(image)
         }
         let first = centerColor()
         XCTAssertGreaterThan(first.0, 0.8, "page 1 shows the red image")
@@ -124,17 +116,19 @@ import UIKit
         return image
     }
 
-    /// Green channel at the centre of a screenshot.
-    private func centerGreen(_ image: UIImage) -> CGFloat {
-        let cg = image.cgImage!
-        let x = cg.width / 2, y = cg.height / 2
+    /// RGB at the centre of a screenshot.
+    private func centerColor(_ image: UIImage) -> (CGFloat, CGFloat, CGFloat) {
         var pixel = [UInt8](repeating: 0, count: 4)
-        let ctx = CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
-                            space: CGColorSpaceCreateDeviceRGB(),
-                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        guard let cg = image.cgImage,
+              let ctx = CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return (0, 0, 0) }
+        let x = cg.width / 2, y = cg.height / 2
         ctx.draw(cg, in: CGRect(x: -x, y: y - cg.height + 1, width: cg.width, height: cg.height))
-        return CGFloat(pixel[1]) / 255
+        return (CGFloat(pixel[0]) / 255, CGFloat(pixel[1]) / 255, CGFloat(pixel[2]) / 255)
     }
+
+    private func centerGreen(_ image: UIImage) -> CGFloat { centerColor(image).1 }
 }
 
 private extension UIView {
