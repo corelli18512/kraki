@@ -209,16 +209,19 @@ test('reanchors an open wide desktop menu as viewport and caption geometry chang
   await testInfo.attach('resize-geometry', { path, contentType: 'application/json' });
 });
 
-async function overlayHitAtPopupIntersection(page: Page, overlaySelector: string) {
-  return page.evaluate((selector) => {
-    const popup = document.querySelector('.khead-windows-popup')!;
-    const menu = popup.querySelector('.khead-menu')!;
+async function overlayHitAtPopupIntersection(page: Page, overlaySelector: string,
+  previousMenu?: { x: number; y: number; right: number; bottom: number }) {
+  return page.evaluate(({ selector, previousMenu }) => {
+    const popup = document.querySelector('.khead-windows-popup');
+    const menu = popup?.querySelector('.khead-menu');
     const overlay = document.querySelector(selector)!;
     const bounds = (el: Element) => {
       const r = el.getBoundingClientRect();
       return { x: r.x, y: r.y, right: r.right, bottom: r.bottom };
     };
-    const m = bounds(menu), o = bounds(overlay);
+    const m = menu ? bounds(menu) : previousMenu;
+    if (!m) throw new Error('Expected an open popup or its pre-dismissal bounds');
+    const o = bounds(overlay);
     const overlap = { left: Math.max(m.x, o.x), top: Math.max(m.y, o.y), right: Math.min(m.right, o.right), bottom: Math.min(m.bottom, o.bottom) };
     if (overlap.right <= overlap.left || overlap.bottom <= overlap.top) throw new Error('Expected a real menu/overlay intersection');
     const point = { x: (overlap.left + overlap.right) / 2, y: (overlap.top + overlap.bottom) / 2 };
@@ -226,15 +229,15 @@ async function overlayHitAtPopupIntersection(page: Page, overlaySelector: string
     return {
       menu: m, overlay: o, point,
       overlayOwnsPoint: !!hit && overlay.contains(hit),
-      popupOwnsPoint: !!hit && popup.contains(hit),
+      popupOwnsPoint: !!hit && !!popup?.contains(hit),
       hitText: hit?.textContent,
       stack: document.elementsFromPoint(point.x, point.y).map((el) => ({ tag: el.tagName, class: el.className })),
       appTransform: getComputedStyle(document.querySelector('.app-viewport')!).transform,
     };
-  }, overlaySelector);
+  }, { selector: overlaySelector, previousMenu });
 }
 
-test('Sidebar settings callback owns hits above an already-open mode popup', async ({ page }, testInfo) => {
+test('Sidebar settings callback takes focus and dismisses an already-open mode popup', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 800, height: 560 });
   await page.route('**/*', (route) => ['127.0.0.1', 'localhost'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort());
   await page.goto(`${url}?caption=138&title=long&mode=delegate`);
@@ -242,11 +245,19 @@ test('Sidebar settings callback owns hits above an already-open mode popup', asy
   await trigger.focus();
   await page.keyboard.press('Enter');
   await expect(page.getByRole('menuitemradio', { name: /Delegate/ })).toBeFocused();
-  // The real callback registered by Sidebar, with no outside mousedown/focus.
+  const previousMenu = await page.getByRole('menu').evaluate((element) => {
+    const r = element.getBoundingClientRect();
+    return { x: r.x, y: r.y, right: r.right, bottom: r.bottom };
+  });
+  // The real callback registered by Sidebar, with no outside mousedown.
+  // Integrated rounded Settings must take focus and dismiss the old popup.
   await page.evaluate(() => (window as unknown as { openCallbacks: { settings: () => void } }).openCallbacks.settings());
   const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
   await expect(settings).toBeVisible();
-  const evidence = await overlayHitAtPopupIntersection(page, '.kp-window');
+  await expect(settings.getByRole('tab', { name: 'General', exact: true })).toBeFocused();
+  await expect(page.getByRole('menu', { name: 'Session mode picker' })).toHaveCount(0);
+  await expect(page.getByTestId('mode-actions')).toHaveText('');
+  const evidence = await overlayHitAtPopupIntersection(page, '.kp-window', previousMenu);
   const path = testInfo.outputPath('settings-ownership.json');
   await writeFile(path, JSON.stringify(evidence, null, 2));
   await testInfo.attach('settings-ownership', { path, contentType: 'application/json' });
