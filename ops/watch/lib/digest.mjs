@@ -16,45 +16,45 @@ export function formatDigest(state, now, config) {
   const problems = incidentIds.size + Object.entries(state.alerts).filter(([id, a]) => a.status === 'firing' && a.severity !== 'info' && !incidentIds.has(id)).length;
   const lines = [];
   const critical = Object.values(state.alerts).filter(a => a.status === 'firing' && a.severity === 'critical');
-  if (critical.length) lines.push(`严重异常 ${critical.length} 项：${critical.slice(0, 2).map(a => a.title).join('；')}${critical.length > 2 ? '…' : ''}`, '');
+  if (critical.length) lines.push(`Critical issues: ${critical.length} — ${critical.slice(0, 2).map(a => a.title).join('; ')}${critical.length > 2 ? '…' : ''}`, '');
   if (config.insightsPath) {
     const observed = day.incidents.filter(i => i.id.startsWith('K-EXP-')).length;
-    lines.push(`体验观察：本周期命中 ${observed} 项规则（不代表已推送告警）`, ...experienceDigest(day.notes.insights, now), '');
+    lines.push(`Experience observations: ${observed} rule hits this period (not necessarily notified)`, ...experienceDigest(day.notes.insights, now), '');
   }
 
   const avail = Object.entries(day.probes).map(([name, p]) => `${name} ${pct(p)}`);
-  if (avail.length) lines.push(`可用性  ${avail.join('  ')}`);
+  if (avail.length) lines.push(`Availability  ${avail.join('  ')}`);
 
   const fired = day.incidents.filter((i) => i.severity !== 'info');
-  lines.push(`告警  紧急 ${day.fired.critical}  警告 ${day.fired.warning}  信息 ${day.fired.info}`);
+  lines.push(`Alerts  critical ${day.fired.critical}  warning ${day.fired.warning}  info ${day.fired.info}`);
   for (const i of fired.slice(-6)) {
-    const span = i.endedAt ? `${minutesText(i.endedAt - i.startedAt)}，已恢复` : state.alerts[i.id]?.unknown ? '数据不足，尚未确认恢复' : '仍未恢复';
+    const span = i.endedAt ? `${minutesText(i.endedAt - i.startedAt)}, recovered` : state.alerts[i.id]?.unknown ? 'insufficient data; recovery unconfirmed' : 'unresolved';
     const title = !i.endedAt && state.alerts[i.id]?.status === 'firing' ? state.alerts[i.id].title : i.title;
-    lines.push(`  · ${localParts(i.startedAt, tz).hm} ${title}（${span}）`);
+    lines.push(`  · ${localParts(i.startedAt, tz).hm} ${title} (${span})`);
   }
   for (const [id, a] of Object.entries(state.alerts)) {
-    if (a.status === 'firing' && a.severity !== 'info' && !incidentIds.has(id)) lines.push(`  · ${a.unknown ? '数据不足，尚未确认恢复' : '仍未恢复'}：${a.title}`);
+    if (a.status === 'firing' && a.severity !== 'info' && !incidentIds.has(id)) lines.push(`  · ${a.unknown ? 'Insufficient data; recovery unconfirmed' : 'Unresolved'}: ${a.title}`);
   }
 
   const t = day.totals;
   const pk = day.peaks;
   const conn = [];
-  if (Number.isFinite(pk.conns)) conn.push(`峰值 ${pk.conns}`);
-  if (t['m:auth.ok'] !== undefined) conn.push(`登录 ${t['m:auth.ok']}`);
-  else if (t['log:login'] !== undefined) conn.push(`登录 ${t['log:login']}`);
-  if (t['m:auth.fail']) conn.push(`登录失败 ${t['m:auth.fail']}`);
-  if (conn.length) lines.push(`连接  ${conn.join(' / ')}`);
+  if (Number.isFinite(pk.conns)) conn.push(`peak ${pk.conns}`);
+  if (t['m:auth.ok'] !== undefined) conn.push(`sign-ins ${t['m:auth.ok']}`);
+  else if (t['log:login'] !== undefined) conn.push(`sign-ins ${t['log:login']}`);
+  if (t['m:auth.fail']) conn.push(`failed sign-ins ${t['m:auth.fail']}`);
+  if (conn.length) lines.push(`Connections  ${conn.join(' / ')}`);
 
   const pushParts = [];
-  if (t['m:push.attempted'] !== undefined) pushParts.push(`成功 ${t['m:push.sent'] ?? 0} / 失败 ${t['m:push.failed'] ?? 0}`);
-  else pushParts.push(`失败 ${t['log:pushFail'] ?? 0}`);
-  lines.push(`推送  ${pushParts.join(' ')}`);
-  if (t['m:pulse.forwarded'] !== undefined) lines.push(`转发消息  ${t['m:pulse.forwarded']}  relay 处理 p99 峰值 ${pk.frameP99Ms ?? '—'} ms`);
+  if (t['m:push.attempted'] !== undefined) pushParts.push(`sent ${t['m:push.sent'] ?? 0} / failed ${t['m:push.failed'] ?? 0}`);
+  else pushParts.push(`failed ${t['log:pushFail'] ?? 0}`);
+  lines.push(`Push  ${pushParts.join(' ')}`);
+  if (t['m:pulse.forwarded'] !== undefined) lines.push(`Forwarded messages  ${t['m:pulse.forwarded']}  peak relay processing P99 ${pk.frameP99Ms ?? '—'} ms`);
 
   const res = [];
-  if (Number.isFinite(pk.rssMb)) res.push(`relay 内存峰值 ${pk.rssMb} MB`);
-  if (day.notes.disk !== undefined) res.push(`磁盘 ${day.notes.disk}%`);
-  if (res.length) lines.push(`资源  ${res.join('  ')}`);
+  if (Number.isFinite(pk.rssMb)) res.push(`peak relay memory ${pk.rssMb} MB`);
+  if (day.notes.disk !== undefined) res.push(`disk ${day.notes.disk}%`);
+  if (res.length) lines.push(`Resources  ${res.join('  ')}`);
 
   const b = day.notes.backup;
   if (b) {
@@ -64,20 +64,20 @@ export function formatDigest(state, now, config) {
     const valid = !b.failed && Number.isFinite(age) && age >= -120_000 && Number.isFinite(b.sizeBytes) && b.sizeBytes > 0;
     const cachedStatus = b.status ?? (valid ? (age > 26 * 3600_000 ? 'stale' : 'ok') : 'unknown');
     const status = cachedStatus === 'ok' && !valid ? 'invalid' : cachedStatus;
-    const labels = { missing: '? 状态缺失，请核查定时备份', invalid: '? 状态无效，无法确认备份可用',
-      unknown: '? 旧状态不完整，等待重新检查', failed: '✗ 最近一次任务记录为失败', stale: '✗ 最近成功记录已超过 26 小时' };
-    lines.push(`备份  ${status === 'ok' ? `✓ ${localParts(Date.parse(b.at), tz).hm} ${(b.sizeBytes / 1048576).toFixed(1)} MB${b.copied === true ? ' 已复制' : b.copied === false ? ' 复制失败' : ''}` : labels[status] ?? labels.unknown}`);
+    const labels = { missing: '? Status missing; check scheduled backups', invalid: '? Invalid status; backup availability unconfirmed',
+      unknown: '? Incomplete legacy status; awaiting a fresh check', failed: '✗ Latest job record reports failure', stale: '✗ Last successful record is over 26 hours old' };
+    lines.push(`Backup  ${status === 'ok' ? `✓ ${localParts(Date.parse(b.at), tz).hm} ${(b.sizeBytes / 1048576).toFixed(1)} MB${b.copied === true ? ' copied' : b.copied === false ? ' copy failed' : ''}` : labels[status] ?? labels.unknown}`);
   }
 
   const certs = Object.entries(day.notes).filter(([k]) => k.startsWith('cert:')).map(([k, v]) => [k.slice(5), v]).sort((a, b) => a[1] - b[1]);
-  if (certs.length) lines.push(`证书  最近到期 ${certs[0][0]} 还有 ${certs[0][1]} 天`);
+  if (certs.length) lines.push(`Certificates  next expiry ${certs[0][0]} in ${certs[0][1]} days`);
   const versions = Object.entries(day.notes).filter(([k]) => k.startsWith('version:')).map(([k, v]) => `${k.slice(8)} ${v}`);
-  if (versions.length) lines.push(`版本  ${versions.join(' / ')}`);
+  if (versions.length) lines.push(`Versions  ${versions.join(' / ')}`);
 
   return {
     kind: 'digest',
     severity: problems > 0 ? 'warning' : 'info',
-    title: `Kraki 日报 · ${label} · ${problems > 0 ? `${problems} 个问题` : config.insightsPath ? '基础检查正常 · 体验观察中' : '全部正常'}`,
+    title: `Kraki Daily · ${label} · ${problems > 0 ? `${problems} issue${problems === 1 ? '' : 's'}` : config.insightsPath ? 'Core checks healthy · Experience under observation' : 'All checks healthy'}`,
     body: lines.join('\n'),
     quiet: false,
   };

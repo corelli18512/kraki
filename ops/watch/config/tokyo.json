@@ -1,6 +1,6 @@
 {
   "host": "tokyo",
-  "label": "东京",
+  "label": "Tokyo",
   "timezone": "Asia/Shanghai",
   "quietHours": [23, 8],
   "digestHour": 9,
@@ -11,23 +11,23 @@
   "experienceNotify": false,
   "disk": { "path": "/", "warning": 85, "critical": 95 },
   "units": [
-    { "unit": "kraki-bark", "name": "东京 Bark 推送服务", "severity": "critical" },
-    { "unit": "kraki-relay", "name": "东京 relay 进程", "severity": "critical" },
-    { "unit": "caddy", "name": "Caddy（东京反向代理）", "severity": "critical" },
-    { "unit": "kraki-diag", "id": "K-DIAG-DOWN", "name": "东京诊断服务", "severity": "warning" }
+    { "unit": "kraki-bark", "name": "Tokyo Bark service", "severity": "critical" },
+    { "unit": "kraki-relay", "name": "Tokyo relay process", "severity": "critical" },
+    { "unit": "caddy", "name": "Caddy (Tokyo reverse proxy)", "severity": "critical" },
+    { "unit": "kraki-diag", "id": "K-DIAG-DOWN", "name": "Tokyo diagnostics service", "severity": "warning" }
   ],
   "probes": [
-    { "id": "K-BARK-DOWN", "target": "tokyo", "name": "东京 Bark 本机接口", "url": "http://127.0.0.1:4080/bark/ping", "expectBody": "\"message\":\"pong\"", "severity": "critical", "failAfter": 3, "local": true },
-    { "id": "K-BARK-PEER", "target": "cn", "name": "国内 Bark（从东京看）", "url": "https://cn.relay.kraki.chat/bark/ping", "expectBody": "\"message\":\"pong\"", "severity": "critical", "failAfter": 5, "timeoutMs": 15000 },
-    { "id": "K-RELAY-DOWN", "target": "tokyo", "name": "东京 relay", "url": "https://relay.kraki.chat/", "expectBody": "\"status\":\"ok\"", "relay": true, "severity": "critical", "failAfter": 3, "local": true, "slow": true },
-    { "id": "K-RELAY-WS", "target": "tokyo", "kind": "ws", "name": "东京 relay WebSocket", "url": "wss://relay.kraki.chat/", "severity": "critical", "failAfter": 3, "local": true },
-    { "id": "K-RELAY-READY", "target": "tokyo", "name": "东京 relay 就绪检查", "url": "http://127.0.0.1:4000/health/ready", "expectBody": "\"status\":\"ready\"", "readiness": true, "severity": "critical", "failAfter": 3, "local": true },
-    { "id": "K-PEER-DOWN", "target": "cn", "name": "国内 relay（从东京看）", "url": "https://cn.relay.kraki.chat/", "expectBody": "\"status\":\"ok\"", "relay": true, "severity": "critical", "failAfter": 5, "timeoutMs": 15000 },
-    { "id": "K-WEB-DOWN", "target": "web", "name": "网页版", "url": "https://app.kraki.chat/", "severity": "critical", "failAfter": 3 },
-    { "id": "K-SITE-DOWN", "target": "site", "name": "官网", "url": "https://kraki.chat/", "severity": "warning", "failAfter": 5 },
-    { "id": "K-SITE-DOWN", "target": "dl-mac", "name": "Mac 下载链接", "url": "https://kraki.chat/download/mac", "expectRedirect": "/releases/download/mac-v[^/]+/Kraki\\.dmg$", "severity": "warning", "failAfter": 5 },
-    { "id": "K-SITE-DOWN", "target": "dl-win", "name": "Windows 下载链接", "url": "https://kraki.chat/download/windows", "expectRedirect": "/releases/download/win-v[^/]+/.+\\.exe$", "severity": "warning", "failAfter": 5 },
-    { "id": "K-VOICE-DOWN", "target": "stt", "name": "语音网关（stt.kraki.chat）", "url": "https://stt.kraki.chat/healthz", "expectBody": "\"ok\":true", "severity": "critical", "failAfter": 5, "timeoutMs": 15000 }
+    { "id": "K-BARK-DOWN", "target": "tokyo", "name": "Tokyo Bark local endpoint", "url": "http://127.0.0.1:4080/bark/ping", "expectBody": "\"message\":\"pong\"", "severity": "critical", "failAfter": 3, "local": true },
+    { "id": "K-BARK-PEER", "target": "cn", "name": "China Bark (from Tokyo)", "url": "https://cn.relay.kraki.chat/bark/ping", "expectBody": "\"message\":\"pong\"", "severity": "critical", "failAfter": 5, "timeoutMs": 15000 },
+    { "id": "K-RELAY-DOWN", "target": "tokyo", "name": "Tokyo relay", "url": "https://relay.kraki.chat/", "expectBody": "\"status\":\"ok\"", "relay": true, "severity": "critical", "failAfter": 3, "local": true, "slow": true },
+    { "id": "K-RELAY-WS", "target": "tokyo", "kind": "ws", "name": "Tokyo relay WebSocket", "url": "wss://relay.kraki.chat/", "severity": "critical", "failAfter": 3, "local": true },
+    { "id": "K-RELAY-READY", "target": "tokyo", "name": "Tokyo relay readiness", "url": "http://127.0.0.1:4000/health/ready", "expectBody": "\"status\":\"ready\"", "readiness": true, "severity": "critical", "failAfter": 3, "local": true },
+    { "id": "K-PEER-DOWN", "target": "cn", "name": "China relay (from Tokyo)", "url": "https://cn.relay.kraki.chat/", "expectBody": "\"status\":\"ok\"", "relay": true, "severity": "critical", "failAfter": 5, "timeoutMs": 15000 },
+    { "id": "K-WEB-DOWN", "target": "web", "name": "Web app", "url": "https://app.kraki.chat/", "severity": "critical", "failAfter": 3 },
+    { "id": "K-SITE-DOWN", "target": "site", "name": "Website", "url": "https://kraki.chat/", "severity": "warning", "failAfter": 5 },
+    { "id": "K-SITE-DOWN", "target": "dl-mac", "name": "Mac download link", "url": "https://kraki.chat/download/mac", "expectRedirect": "/releases/download/mac-v[^/]+/Kraki\\.dmg$", "severity": "warning", "failAfter": 5 },
+    { "id": "K-SITE-DOWN", "target": "dl-win", "name": "Windows download link", "url": "https://kraki.chat/download/windows", "expectRedirect": "/releases/download/win-v[^/]+/.+\\.exe$", "severity": "warning", "failAfter": 5 },
+    { "id": "K-VOICE-DOWN", "target": "stt", "name": "Voice gateway (stt.kraki.chat)", "url": "https://stt.kraki.chat/healthz", "expectBody": "\"ok\":true", "severity": "critical", "failAfter": 5, "timeoutMs": 15000 }
   ],
   "certs": ["relay.kraki.chat", "app.kraki.chat", "kraki.chat"]
 }

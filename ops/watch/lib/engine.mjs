@@ -37,9 +37,9 @@ export function inQuietHours(now, config) {
 
 export function minutesText(ms) {
   const m = Math.max(1, Math.round(ms / 60_000));
-  if (m < 60) return `${m} 分钟`;
+  if (m < 60) return `${m} min`;
   const h = Math.floor(m / 60);
-  return m % 60 ? `${h} 小时 ${m % 60} 分钟` : `${h} 小时`;
+  return m % 60 ? `${h} h ${m % 60} min` : `${h} h`;
 }
 
 export function emptyState() {
@@ -69,7 +69,7 @@ export function evaluate(prev, results, now, config) {
       if (r.ok) continue;
       state.day.fired[r.severity] += 1;
       state.day.incidents.push({ id: r.id, severity: r.severity, title: r.title, startedAt: now, endedAt: now });
-      if (r.severity !== 'info' && r.notify !== false) notes.push(message('fire', r.severity, `${label}：${r.title}`, r.detail, quiet));
+      if (r.severity !== 'info' && r.notify !== false) notes.push(message('fire', r.severity, `${label}: ${r.title}`, r.detail, quiet));
       continue;
     }
     const a = state.alerts[r.id] ?? { status: 'ok', fails: 0 };
@@ -106,10 +106,10 @@ export function evaluate(prev, results, now, config) {
         if (open) open.severity = r.severity;
         else state.day.incidents.push({ id: r.id, severity: r.severity, title: r.title, startedAt: a.firstFailAt, endedAt: null });
         if (r.severity === 'info' || r.notify === false) continue;
-        notes.push(message('fire', r.severity, `${label}：${r.title}`, a.detail, quiet));
+        notes.push(message('fire', r.severity, `${label}: ${r.title}`, a.detail, quiet));
       } else if (r.severity !== 'info' && r.notify !== false && now - a.lastNotifiedAt >= REPEAT_MS[a.severity]) {
         a.lastNotifiedAt = now;
-        notes.push(message('repeat', a.severity, `${label}：${r.title}（仍未恢复 · 已持续 ${minutesText(now - a.firstFailAt)}）`, a.detail, quiet));
+        notes.push(message('repeat', a.severity, `${label}: ${r.title} (unresolved · ${minutesText(now - a.firstFailAt)})`, a.detail, quiet));
       }
     } else {
       if (a.status === 'firing') {
@@ -117,7 +117,7 @@ export function evaluate(prev, results, now, config) {
         if (a.successes < (r.recoverAfter ?? 1)) continue;
         const lasted = minutesText(now - a.firstFailAt);
         for (const i of state.day.incidents) if (i.id === r.id && i.endedAt === null) i.endedAt = now;
-        if (a.severity !== 'info' && r.notify !== false) notes.push(message('resolve', a.severity, `${label}：已恢复 · ${r.title}`, `持续 ${lasted}`, quiet));
+        if (a.severity !== 'info' && r.notify !== false) notes.push(message('resolve', a.severity, `${label}: Recovered · ${r.title}`, `Duration ${lasted}`, quiet));
       }
       state.alerts[r.id] = { status: 'ok', fails: 0, title: r.title };
     }
@@ -131,7 +131,7 @@ export function evaluate(prev, results, now, config) {
   }
   if (!quiet && state.deferred.length > 0) {
     const lines = state.deferred.map((d) => `${localParts(d.at, config.timezone).hm} ${d.title}${d.body ? ` — ${d.body}` : ''}`);
-    notifications.push({ kind: 'deferred', severity: 'warning', title: `${label}：夜间 ${state.deferred.length} 条警告`, body: lines.join('\n'), quiet: false });
+    notifications.push({ kind: 'deferred', severity: 'warning', title: `${label}: ${state.deferred.length} overnight warning${state.deferred.length === 1 ? '' : 's'}`, body: lines.join('\n'), quiet: false });
     state.deferred = [];
   }
   return { state, notifications };

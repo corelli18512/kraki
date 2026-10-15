@@ -18,13 +18,13 @@ export function barkPayload(n, deviceKey) {
   }
   // Digest severity describes its contents, never an interruption escalation.
   // Bark bundles silence.caf; also avoid its default audible sound as a fallback.
-  if (n.kind === 'digest') return { ...base, level: 'passive', sound: 'silence', group: 'Kraki 日报' };
+  if (n.kind === 'digest') return { ...base, level: 'passive', sound: 'silence', group: 'Kraki Daily' };
   if (n.severity === 'critical' && (n.kind === 'fire' || n.kind === 'repeat')) {
     // critical: rings through silent mode and Focus; call: rings for ~30 s.
-    return { ...base, level: 'critical', volume: '8', call: '1', group: 'Kraki 紧急' };
+    return { ...base, level: 'critical', volume: '8', call: '1', group: 'Kraki Critical' };
   }
-  if (n.kind === 'resolve') return { ...base, level: n.quiet ? 'passive' : 'active', group: n.severity === 'critical' ? 'Kraki 紧急' : 'Kraki 警告' };
-  return { ...base, level: 'timeSensitive', group: 'Kraki 警告' };
+  if (n.kind === 'resolve') return { ...base, level: n.quiet ? 'passive' : 'active', group: n.severity === 'critical' ? 'Kraki Critical' : 'Kraki Warnings' };
+  return { ...base, level: 'timeSensitive', group: 'Kraki Warnings' };
 }
 
 export async function sendBark(n, { server = 'https://api.day.app', deviceKey, fetchImpl = fetch, attempts = 3, timeoutMs = 10_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {

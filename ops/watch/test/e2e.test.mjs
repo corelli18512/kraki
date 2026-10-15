@@ -54,15 +54,15 @@ before(async () => {
   await chmod(join(dir, 'journalctl'), 0o755);
   await writeFile(join(dir, 'backup.json'), JSON.stringify({ ok: true, at: new Date().toISOString(), sizeBytes: 100, prevSizeBytes: 100, copied: true }));
   await writeFile(join(dir, 'watch.json'), JSON.stringify({
-    host: 'test', label: '测试', timezone: 'Asia/Shanghai', quietHours: [0, 0], digestHour: 0,
+    host: 'test', label: 'Test', timezone: 'Asia/Shanghai', quietHours: [0, 0], digestHour: 0,
     // The test machine's real disk must not trip the disk alert.
     disk: { path: '/', warning: 101, critical: 102 },
     relayUnit: 'kraki-relay', metricsUrl: `http://127.0.0.1:${port}/internal/metrics`, backupStatus: join(dir, 'backup.json'),
-    units: [{ unit: 'kraki-relay', name: 'relay 进程', severity: 'critical' }],
+    units: [{ unit: 'kraki-relay', name: 'Relay process', severity: 'critical' }],
     probes: [
-      { id: 'K-RELAY-DOWN', target: 't', name: '测试 relay', url: `http://127.0.0.1:${port}/`, expectBody: '"status":"ok"', relay: true, severity: 'critical', failAfter: 3, local: true },
-      { id: 'K-RELAY-WS', target: 't', kind: 'ws', name: '测试 WebSocket', url: `ws://127.0.0.1:${port}/`, severity: 'critical', failAfter: 3 },
-      { id: 'K-RELAY-READY', target: 't', name: '就绪', url: `http://127.0.0.1:${port}/health/ready`, expectBody: '"status":"ready"', severity: 'critical', failAfter: 3 },
+      { id: 'K-RELAY-DOWN', target: 't', name: 'Test relay', url: `http://127.0.0.1:${port}/`, expectBody: '"status":"ok"', relay: true, severity: 'critical', failAfter: 3, local: true },
+      { id: 'K-RELAY-WS', target: 't', kind: 'ws', name: 'Test WebSocket', url: `ws://127.0.0.1:${port}/`, severity: 'critical', failAfter: 3 },
+      { id: 'K-RELAY-READY', target: 't', name: 'Readiness', url: `http://127.0.0.1:${port}/health/ready`, expectBody: '"status":"ready"', severity: 'critical', failAfter: 3 },
     ],
   }));
 });
@@ -112,7 +112,7 @@ test('relay down: one critical after three runs, then recovery', async () => {
   assert.equal(bark.length, 1);
   assert.deepEqual(
     { title: bark[0].title, level: bark[0].level, call: bark[0].call, key: bark[0].device_key },
-    { title: '测试：测试 relay无法访问', level: 'critical', call: '1', key: 'test-key' },
+    { title: 'Test: Test relay unreachable', level: 'critical', call: '1', key: 'test-key' },
   );
   assert.match(bark[0].body, /HTTP 502/);
   await run();
@@ -121,7 +121,7 @@ test('relay down: one critical after three runs, then recovery', async () => {
   relayStatus = 200;
   await run();
   assert.equal(bark.length, 2);
-  assert.match(bark[1].title, /^测试：已恢复 · /);
+  assert.match(bark[1].title, /^Test: Recovered · /);
   assert.equal(pings, 6);
 });
 
@@ -143,12 +143,12 @@ test('test-notify sends one critical and one warning', async () => {
 test('digest-now sends the summary', async () => {
   await run('digest-now');
   const d = bark[bark.length - 1];
-  assert.equal(d.group, 'Kraki 日报');
-  assert.match(d.title, /^Kraki 日报 · 测试 · /);
-  assert.match(d.body, /可用性  测试 relay/);
+  assert.equal(d.group, 'Kraki Daily');
+  assert.match(d.title, /^Kraki Daily · Test · /);
+  assert.match(d.body, /Availability  Test relay/);
   // First metrics sample is a baseline; each later run adds 5.
-  assert.match(d.body, /推送  成功 \d+ \/ 失败 0/);
-  assert.doesNotMatch(d.body, /推送  成功 0 /);
+  assert.match(d.body, /Push  sent \d+ \/ failed 0/);
+  assert.doesNotMatch(d.body, /Push  sent 0 /);
 });
 
 test('journal reads continue from the saved cursor (no line counted twice)', async () => {
@@ -173,19 +173,19 @@ test('a hanging Bark cannot lose alert state: saved first, retried next run', as
   child.kill('SIGKILL');
   const state = JSON.parse(await readFile(join(dir, 'state', 'state.json'), 'utf8'));
   assert.equal(state.alerts['K-RELAY-DOWN@t'].status, 'firing', 'state saved before delivery');
-  assert.ok(state.undelivered.some((n) => /测试 relay无法访问/.test(n.title)), 'critical queued for retry');
+  assert.ok(state.undelivered.some((n) => /Test relay unreachable/.test(n.title)), 'critical queued for retry');
   const before = bark.length;
   barkHangs = false;
   relayStatus = 200;
   await run();
-  assert.ok(bark.slice(before).some((b) => /\[延迟送达\].*测试 relay无法访问/.test(b.title) && b.level === 'critical'), 'retried as critical');
+  assert.ok(bark.slice(before).some((b) => /\[Delayed\].*Test relay unreachable/.test(b.title) && b.level === 'critical'), 'retried as critical');
 });
 
 test('a new critical is never pushed out of the outbox by older retries', async () => {
   await run('maintenance', '0');
   const statePath = join(dir, 'state', 'state.json');
   const state = JSON.parse(await readFile(statePath, 'utf8'));
-  state.undelivered = Array.from({ length: 25 }, (_, i) => ({ kind: 'repeat', severity: 'critical', title: `[延迟送达] old ${i}`, body: '', quiet: false }));
+  state.undelivered = Array.from({ length: 25 }, (_, i) => ({ kind: 'repeat', severity: 'critical', title: `[Delayed] old ${i}`, body: '', quiet: false }));
   state.alerts = {};
   await writeFile(statePath, JSON.stringify(state));
   barkHangs = true;
@@ -193,7 +193,7 @@ test('a new critical is never pushed out of the outbox by older retries', async 
   for (let i = 0; i < 3; i++) await runEnv({ KRAKI_WATCH_RUN_BUDGET_MS: '2500' });
   const after = JSON.parse(await readFile(statePath, 'utf8'));
   assert.equal(after.undelivered.length, 20);
-  assert.match(after.undelivered[0].title, /测试 relay无法访问/, 'fresh critical first');
+  assert.match(after.undelivered[0].title, /Test relay unreachable/, 'fresh critical first');
   barkHangs = false;
   relayStatus = 200;
   await run();

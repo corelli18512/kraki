@@ -111,17 +111,17 @@ async function runOnce(config) {
   }
   // Critical first, fresh before retried, one copy of each message: a slow
   // Bark cannot push a new critical out of the 20-message outbox.
-  const isRetry = (n) => n.title.startsWith('[延迟送达]');
+  const isRetry = (n) => n.title.startsWith('[Delayed]');
   const seen = new Set();
   const queue = [];
   for (const n of [...fresh, ...retries]) {
-    const key = `${n.kind}|${n.title.replace(/^\[延迟送达\] /, '')}`;
+    const key = `${n.kind}|${n.title.replace(/^\[Delayed\] /, '')}`;
     if (seen.has(key)) continue;
     seen.add(key);
     queue.push(n);
   }
   queue.sort((a, b) => ((RANK[a.severity] ?? 2) - (RANK[b.severity] ?? 2)) || (isRetry(a) - isRetry(b)));
-  const late = (n) => ({ ...n, title: n.title.startsWith('[延迟送达]') ? n.title : `[延迟送达] ${n.title}` });
+  const late = (n) => ({ ...n, title: n.title.startsWith('[Delayed]') ? n.title : `[Delayed] ${n.title}` });
 
   // Persist first: if delivery hangs until the unit is killed, the alert state
   // is safe and the queue is retried next run.
@@ -168,8 +168,8 @@ async function main() {
   }
   if (cmd === 'test-notify') {
     const label = config.label ?? config.host;
-    const critical = await deliver({ kind: 'fire', severity: 'critical', title: `${label}：测试紧急告警`, body: '这是 kraki-watch 的测试消息。请检查锁屏、静音/专注模式下的关键提醒是否正常。', quiet: false });
-    const warning = await deliver({ kind: 'fire', severity: 'warning', title: `${label}：测试警告`, body: '这是 kraki-watch 的测试消息（警告级别）', quiet: false });
+    const critical = await deliver({ kind: 'fire', severity: 'critical', title: `${label}: Critical alert test`, body: 'kraki-watch test. Check critical alert delivery and sound while locked, silenced, or in Focus mode.', quiet: false });
+    const warning = await deliver({ kind: 'fire', severity: 'warning', title: `${label}: Warning test`, body: 'kraki-watch test notification (warning level).', quiet: false });
     if (!critical.ok || !warning.ok) throw new Error('Bark test failed; inspect FAILED lines');
     console.log('Bark accepted both tests; confirm receipt and critical-alert sound on the phone.');
     return;

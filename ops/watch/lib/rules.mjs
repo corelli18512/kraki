@@ -54,14 +54,14 @@ export function evaluateRules(snap, memIn, config) {
   for (const p of snap.probes ?? []) {
     if (snap.maintenance && p.local) continue;
     const name = p.target ? `${p.id}@${p.target}` : p.id;
-    push({ id: name, severity: p.severity, failAfter: p.failAfter ?? 3, ok: p.ok, title: p.ok ? `${p.name}正常` : `${p.name}无法访问`, detail: p.detail });
+    push({ id: name, severity: p.severity, failAfter: p.failAfter ?? 3, ok: p.ok, title: p.ok ? `${p.name} healthy` : `${p.name} unreachable`, detail: p.detail });
     digest.probes.push({ name: p.name, ok: p.ok });
     if (p.slow && p.ok && Number.isFinite(p.ms)) {
       const list = (mem.probeMs[name] ??= []);
       list.push(p.ms);
       while (list.length > 10) list.shift();
       const med = median(list);
-      push({ id: `K-SLOW@${p.target ?? p.id}`, severity: 'warning', failAfter: 1, ok: !(list.length >= 5 && med > 2000), title: `${p.name}响应变慢`, detail: `最近 ${list.length} 次中位数 ${Math.round(med)} ms` });
+      push({ id: `K-SLOW@${p.target ?? p.id}`, severity: 'warning', failAfter: 1, ok: !(list.length >= 5 && med > 2000), title: `${p.name} responding slowly`, detail: `Median ${Math.round(med)} ms over the last ${list.length} checks` });
     }
     if (p.version) digest.notes[`version:${p.target ?? p.id}`] = p.version;
   }
@@ -71,7 +71,7 @@ export function evaluateRules(snap, memIn, config) {
     const m = (mem.units[u.unit] ??= { restarts: [] });
     const down = u.active !== 'active';
     if (!snap.maintenance) {
-      push({ id: u.id ?? `K-SVC-FAILED@${u.unit}`, severity: u.severity, failAfter: u.active === 'failed' ? 1 : 2, ok: !down, title: `${u.name}${down ? '已停止' : '运行中'}`, detail: down ? `systemd 状态：${u.active}` : '' });
+      push({ id: u.id ?? `K-SVC-FAILED@${u.unit}`, severity: u.severity, failAfter: u.active === 'failed' ? 1 : 2, ok: !down, title: `${u.name} ${down ? 'stopped' : 'running'}`, detail: down ? `systemd state: ${u.active}` : '' });
     }
     // Automatic restarts since the last run (several can happen between runs);
     // a new invocation without one is a manual/other restart.
@@ -83,12 +83,12 @@ export function evaluateRules(snap, memIn, config) {
     if ((newInvocation || autoRestarts > 0) && !snap.maintenance) {
       for (let i = 0; i < Math.max(1, autoRestarts); i++) m.restarts.push(now);
       const crash = u.unit === config.relayUnit ? snap.logs?.lastCrash : null;
-      push({ id: `K-SVC-RESTART@${u.unit}`, event: true, severity: 'warning', ok: false, title: `${u.name}意外重启`, detail: crash ? `最后的错误：${crash}` : '不是部署引起的重启' });
+      push({ id: `K-SVC-RESTART@${u.unit}`, event: true, severity: 'warning', ok: false, title: `${u.name} unexpected restart`, detail: crash ? `Last error: ${crash}` : 'Restart observed outside maintenance' });
     }
     if (u.invocationId) m.invocationId = u.invocationId;
     m.restarts = m.restarts.filter((t) => now - t < 60 * MIN);
     if (u.flap !== false) {
-      push({ id: `K-SVC-FLAP@${u.unit}`, severity: 'critical', failAfter: 1, ok: m.restarts.length < 3, title: `${u.name}反复重启`, detail: `1 小时内重启 ${m.restarts.length} 次` });
+      push({ id: `K-SVC-FLAP@${u.unit}`, severity: 'critical', failAfter: 1, ok: m.restarts.length < 3, title: `${u.name} restarting repeatedly`, detail: `${m.restarts.length} restarts in 1 hour` });
     }
     if (u.unit === config.relayUnit) m.activeSince = u.activeSince ?? m.activeSince;
   }
@@ -97,11 +97,11 @@ export function evaluateRules(snap, memIn, config) {
   if (snap.disk) {
     const pct = snap.disk.usedPct;
     const sev = pct >= (config.disk?.critical ?? 95) ? 'critical' : 'warning';
-    push({ id: 'K-DISK', severity: sev, failAfter: 1, ok: pct < (config.disk?.warning ?? 85), title: '磁盘快满了', detail: `已用 ${pct}%` });
+    push({ id: 'K-DISK', severity: sev, failAfter: 1, ok: pct < (config.disk?.warning ?? 85), title: 'Disk space running low', detail: `${pct}% used` });
     digest.notes.disk = pct;
   }
   if (snap.memHost) {
-    push({ id: 'K-MEM-HOST', severity: 'warning', failAfter: 10, ok: snap.memHost.availPct >= 10, title: '整机可用内存不足', detail: `可用 ${snap.memHost.availPct}%` });
+    push({ id: 'K-MEM-HOST', severity: 'warning', failAfter: 10, ok: snap.memHost.availPct >= 10, title: 'Host memory running low', detail: `${snap.memHost.availPct}% available` });
   }
 
   // ── Relay: health line, metrics, logs ─────────────────────────────────
@@ -117,7 +117,7 @@ export function evaluateRules(snap, memIn, config) {
     mem.lastHealthAt = now;
     digest.peaks.conns = health.conns;
     digest.peaks.rssMb = health.rssMb;
-    push({ id: 'K-MEM', severity: 'warning', failAfter: 10, ok: !(health.rssMb > (config.relayRssMb ?? 512)), title: 'relay 内存偏高', detail: `${health.rssMb} MB` });
+    push({ id: 'K-MEM', severity: 'warning', failAfter: 10, ok: !(health.rssMb > (config.relayRssMb ?? 512)), title: 'Relay memory usage high', detail: `${health.rssMb} MB` });
   }
   if (snap.metrics?.counters) {
     const uptime = snap.metrics.uptimeSec;
@@ -159,7 +159,7 @@ export function evaluateRules(snap, memIn, config) {
   if (relayUnit && relayUnit.active === 'active' && !snap.maintenance) {
     const since = Math.max(mem.lastHealthAt ?? 0, relayUnit.activeSince ?? 0);
     const silent = since > 0 && now - since > 3 * MIN;
-    push({ id: 'K-HEALTH-SILENT', severity: 'critical', failAfter: 1, ok: !silent, title: 'relay 卡住了（health 日志停止）', detail: since ? `最后一条 ${Math.round((now - since) / MIN)} 分钟前` : '' });
+    push({ id: 'K-HEALTH-SILENT', severity: 'critical', failAfter: 1, ok: !silent, title: 'Relay health log stalled', detail: since ? `Last entry ${Math.round((now - since) / MIN)} min ago` : '' });
   }
 
   if (logs) {
@@ -170,27 +170,27 @@ export function evaluateRules(snap, memIn, config) {
     const allMetrics = win.length > 0 && win.every((s) => s.metricDeltas);
     const attempted = sum((s) => s.metricDeltas?.['push.attempted']);
     const share = allMetrics && attempted > 0 ? pushFail / attempted : null;
-    push({ id: 'K-PUSH-FAIL', severity: 'warning', failAfter: 1, ok: !(pushFail >= 10 && (share === null || share > 0.2)), title: '推送大量失败', detail: `10 分钟 ${pushFail} 次失败${share === null ? '' : `（${Math.round(share * 100)}%）`}` });
+    push({ id: 'K-PUSH-FAIL', severity: 'warning', failAfter: 1, ok: !(pushFail >= 10 && (share === null || share > 0.2)), title: 'High push failure count', detail: `${pushFail} failures in 10 min${share === null ? '' : ` (${Math.round(share * 100)}%)`}` });
     const pushAuth = sum((s) => (s.metricDeltas ? s.metricDeltas['push.authError'] ?? 0 : s.pushAuth));
-    push({ id: 'K-PUSH-AUTH', severity: 'critical', failAfter: 1, ok: pushAuth < 3, title: '推送密钥失效（APNs 认证错误）', detail: `10 分钟 ${pushAuth} 次` });
-    push({ id: 'K-AUTH-FAIL', severity: 'warning', failAfter: 1, ok: count('authFail') < 10, title: '登录大量失败', detail: `10 分钟 ${count('authFail')} 次` });
-    push({ id: 'K-AUTH-ABUSE', severity: 'info', failAfter: 1, ok: count('authAbuse') < 100, title: '疑似暴力尝试登录', detail: `10 分钟 ${count('authAbuse')} 次` });
-    push({ id: 'K-STALL', severity: 'warning', failAfter: 1, ok: count('stall') < 5, title: '大量连接因发送堆积被断开', detail: `10 分钟 ${count('stall')} 次` });
-    push({ id: 'K-PULSE', severity: 'critical', failAfter: 1, ok: count('pulse') < 1, title: '可靠传输层数据出错（可能丢消息）', detail: `10 分钟 ${count('pulse')} 次` });
-    push({ id: 'K-REGION', severity: 'warning', failAfter: 1, ok: count('region') < 3, title: '东京与国内之间同步出错', detail: `10 分钟 ${count('region')} 次` });
-    push({ id: 'K-VOICE-ERR', severity: 'warning', failAfter: 1, ok: count('voice') < 1, title: '语音计费写入失败', detail: `10 分钟 ${count('voice')} 次` });
+    push({ id: 'K-PUSH-AUTH', severity: 'critical', failAfter: 1, ok: pushAuth < 3, title: 'Push credentials rejected (APNs authentication)', detail: `${pushAuth} events in 10 min` });
+    push({ id: 'K-AUTH-FAIL', severity: 'warning', failAfter: 1, ok: count('authFail') < 10, title: 'High sign-in failure count', detail: `${count('authFail')} events in 10 min` });
+    push({ id: 'K-AUTH-ABUSE', severity: 'info', failAfter: 1, ok: count('authAbuse') < 100, title: 'Possible sign-in abuse', detail: `${count('authAbuse')} events in 10 min` });
+    push({ id: 'K-STALL', severity: 'warning', failAfter: 1, ok: count('stall') < 5, title: 'Connections closed due to send backlog', detail: `${count('stall')} events in 10 min` });
+    push({ id: 'K-PULSE', severity: 'critical', failAfter: 1, ok: count('pulse') < 1, title: 'Reliable transport persistence error (messages at risk)', detail: `${count('pulse')} events in 10 min` });
+    push({ id: 'K-REGION', severity: 'warning', failAfter: 1, ok: count('region') < 3, title: 'Tokyo–China synchronization errors', detail: `${count('region')} events in 10 min` });
+    push({ id: 'K-VOICE-ERR', severity: 'warning', failAfter: 1, ok: count('voice') < 1, title: 'Voice usage persistence failed', detail: `${count('voice')} events in 10 min` });
     const errs = {};
     for (const s of win) for (const [k, v] of Object.entries(s.errors)) errs[k] = (errs[k] ?? 0) + v;
     const totalErrs = Object.values(errs).reduce((a, b) => a + b, 0);
-    const top = Object.entries(errs).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k} ×${v}`).join('；');
-    push({ id: 'K-ERRORS', severity: 'warning', failAfter: 1, ok: totalErrs < 20, title: 'relay 错误日志偏多', detail: `10 分钟 ${totalErrs} 条：${top}` });
+    const top = Object.entries(errs).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k} ×${v}`).join('; ');
+    push({ id: 'K-ERRORS', severity: 'warning', failAfter: 1, ok: totalErrs < 20, title: 'High relay error count', detail: `${totalErrs} errors in 10 min: ${top}` });
   }
 
   const withRows = mem.hist.filter((s) => Number.isFinite(s.durableRows));
   if (withRows.length > 0) {
     const latest = withRows[withRows.length - 1].durableRows;
     const old = withRows.find((s) => now - s.at >= 30 * MIN);
-    push({ id: 'K-DURABLE', severity: 'warning', failAfter: 1, ok: !(old && latest > 1000 && latest > old.durableRows), title: '待送达的离线消息在堆积', detail: `${old?.durableRows ?? '?'} → ${latest}（30 分钟）` });
+    push({ id: 'K-DURABLE', severity: 'warning', failAfter: 1, ok: !(old && latest > 1000 && latest > old.durableRows), title: 'Offline delivery backlog growing', detail: `${old?.durableRows ?? '?'} → ${latest} (30 min)` });
   }
   // A deploy drops every connection on purpose: forget the baseline.
   if (snap.maintenance) for (const s of mem.hist) delete s.conns;
@@ -199,17 +199,17 @@ export function evaluateRules(snap, memIn, config) {
     const cur = withConns[withConns.length - 1].conns;
     const before = withConns.filter((s) => now - s.at <= 5 * MIN && s !== withConns[withConns.length - 1]).map((s) => s.conns);
     const peak = before.length ? Math.max(...before) : 0;
-    push({ id: 'K-CONN-DROP', severity: 'warning', failAfter: 1, ok: !(peak >= 3 && cur < peak * 0.3), title: '大量客户端同时掉线', detail: `5 分钟内 ${peak} → ${cur}` });
+    push({ id: 'K-CONN-DROP', severity: 'warning', failAfter: 1, ok: !(peak >= 3 && cur < peak * 0.3), title: 'Sharp drop in connected clients', detail: `${peak} → ${cur} within 5 min` });
   }
 
   // ── Certificates (hourly) ──────────────────────────────────────────────
   for (const c of snap.certs ?? []) {
     const id = `K-CERT@${c.host}`;
     if (c.error) {
-      push({ id, severity: 'warning', failAfter: 3, ok: false, title: `无法检查 ${c.host} 的证书`, detail: c.error });
+      push({ id, severity: 'warning', failAfter: 3, ok: false, title: `Cannot check certificate for ${c.host}`, detail: c.error });
       continue;
     }
-    push({ id, severity: c.daysLeft < 3 ? 'critical' : 'warning', failAfter: 1, ok: c.daysLeft >= 14, title: `${c.host} 证书快到期`, detail: `还剩 ${c.daysLeft} 天` });
+    push({ id, severity: c.daysLeft < 3 ? 'critical' : 'warning', failAfter: 1, ok: c.daysLeft >= 14, title: `${c.host} certificate expiring`, detail: `${c.daysLeft} days remaining` });
     digest.notes[`cert:${c.host}`] = c.daysLeft;
   }
 
@@ -220,15 +220,15 @@ export function evaluateRules(snap, memIn, config) {
     const validSuccess = b?.ok === true && Number.isFinite(age) && age >= -2 * MIN
       && Number.isFinite(b.sizeBytes) && b.sizeBytes > 0;
     const status = !b ? 'missing' : b.ok === false ? 'failed' : !validSuccess ? 'invalid' : age > 26 * 60 * MIN ? 'stale' : 'ok';
-    const titles = { missing: '数据库备份状态缺失', failed: '数据库备份任务失败', invalid: '数据库备份状态无效', stale: '数据库备份记录过期', ok: '数据库备份检查' };
-    const detail = status === 'missing' ? '没有可验证备份状态，请核查定时任务；不等同于备份任务已执行失败'
-      : status === 'invalid' ? '成功状态的时间或大小无效，不能确认备份可用'
-      : status === 'failed' ? `最近一次记录为失败：${b.error ?? ''}` : `最近成功 ${Math.max(0, Math.round(age / 3600_000))} 小时前`;
+    const titles = { missing: 'Database backup status missing', failed: 'Database backup job failed', invalid: 'Database backup status invalid', stale: 'Database backup record stale', ok: 'Database backup check' };
+    const detail = status === 'missing' ? 'No verifiable backup status; check the schedule. This does not establish an executed job failure.'
+      : status === 'invalid' ? 'Invalid success timestamp or size; backup availability cannot be confirmed'
+      : status === 'failed' ? `Latest record reports failure: ${b.error ?? ''}` : `Last success ${Math.max(0, Math.round(age / 3600_000))} hours ago`;
     push({ id: 'K-BACKUP', severity: 'critical', failAfter: 1, ok: status === 'ok', title: titles[status], detail });
     if (validSuccess) {
-      push({ id: 'K-BACKUP-COPY', severity: 'critical', failAfter: 1, ok: b.copied !== false, title: '备份复制到另一台服务器失败', detail: b.copyError ?? '' });
+      push({ id: 'K-BACKUP-COPY', severity: 'critical', failAfter: 1, ok: b.copied !== false, title: 'Off-host backup copy failed', detail: b.copyError ?? '' });
       const shrank = b.prevSizeBytes > 0 && b.sizeBytes < b.prevSizeBytes * 0.5;
-      push({ id: 'K-BACKUP-SIZE', severity: 'warning', failAfter: 1, ok: !shrank, title: '新备份比前一天小了一半以上', detail: `${b.prevSizeBytes} → ${b.sizeBytes} 字节` });
+      push({ id: 'K-BACKUP-SIZE', severity: 'warning', failAfter: 1, ok: !shrank, title: 'Backup size fell by more than half', detail: `${b.prevSizeBytes} → ${b.sizeBytes} bytes` });
       digest.notes.backup = { status, at: b.at, sizeBytes: b.sizeBytes, copied: b.copied };
     } else {
       digest.notes.backup = { status, failed: status === 'failed' };
@@ -237,7 +237,7 @@ export function evaluateRules(snap, memIn, config) {
 
   // ── Versions (info) ────────────────────────────────────────────────────
   const versions = [...new Set(Object.entries(digest.notes).filter(([k]) => k.startsWith('version:')).map(([, v]) => v))];
-  if (versions.length > 0) push({ id: 'K-VERSION', severity: 'info', failAfter: 1, ok: versions.length === 1, title: '两台 relay 版本不一致', detail: versions.join(' / ') });
+  if (versions.length > 0) push({ id: 'K-VERSION', severity: 'info', failAfter: 1, ok: versions.length === 1, title: 'Relay versions differ', detail: versions.join(' / ') });
 
   if (config.insightsPath) {
     const experience = experienceChecks(snap.insights, now, config, mem);
