@@ -6,6 +6,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.89</title>
+            <pubDate>Thu, 15 Oct 2026 22:07:14 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.89</sparkle:fullReleaseNotesLink>
+            <sparkle:version>91</sparkle:version>
+            <sparkle:shortVersionString>0.2.89</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Kraki for Mac 0.2.89
+
+- Images load faster. Several images now download together when your connection is fast. On a slow connection images still load one piece at a time, so chat stays responsive.
+- You can open an image before it has finished loading. The viewer shows its progress and the picture appears in place when it arrives.
+- When a message has several images, you can page through all of them in the viewer, including ones that are still loading.
+- When the agent asks a question while other tools are still running, the chat shows only the question. Before, a second "tools running" bubble appeared under it.
+- Sidebar search also matches the start of a Session ID, and ignores accents.
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.89/Kraki.app.zip" length="93714525" type="application/octet-stream" sparkle:edSignature="uBBUZxIWNNM5JNSWXOZ4+3UHgbxwJUUdMoJaKSorSIiIDC5HYAZZGw6FSzhF97YUc/0mE5wxbhEd+KeT0Di0DQ=="/>
+        </item>
+        <item>
             <title>0.2.88</title>
             <pubDate>Thu, 15 Oct 2026 12:45:53 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -37,28 +55,9 @@ Privacy Policy: https://app.kraki.chat/privacy/
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.87/Kraki.app.zip" length="93888225" type="application/octet-stream" sparkle:edSignature="x1Jc8tdarpH/Czk1pp7y9vXl/gqsMOdynI3y8mQqM8eZMJaBE/3tf9GuhHiHAUo6nQ0dlwYu9WvgQzsBf7L3Cw=="/>
         </item>
-        <item>
-            <title>0.2.86</title>
-            <pubDate>Thu, 15 Oct 2026 08:58:32 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.86</sparkle:fullReleaseNotesLink>
-            <sparkle:version>88</sparkle:version>
-            <sparkle:shortVersionString>0.2.86</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Kraki for Mac 0.2.86
-
-- About now links to this version's GitHub build, source commit and build provenance.
-- Installation and update downloads include a signed provenance bundle and release manifest. You can verify their origin with GitHub CLI; the app does not claim to have verified itself.
-- Local development builds are clearly labeled and do not impersonate official releases.
-- Includes the latest voice-composer layout and new-session voice-handoff fixes from main.
-
-Developer ID signing, Apple notarization and Sparkle update signatures remain in place. See [how to verify a release](https://github.com/corelli18512/kraki/blob/mac-v0.2.86/docs/BUILD_PROVENANCE.md).
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.86/Kraki.app.zip" length="93658042" type="application/octet-stream" sparkle:edSignature="NtgoKLSIXn6xgxP90Tw+QiKyqH5cWtqg4AujSrXXWaFePHn8ikRBd0/Ej4d6FCFjoqrctlH2EXNIzDi0k+GjCg=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: j0lJdhA9XO52AqlmM7H52yBNCAqYFJwZoPKyBuHQgSwnU5JC13MnzoSb32SR2qY93vd/wqo0b4/a8RfC5E3rAg==
-length: 4416
+edSignature: 2h9tr8LR3mzP8DADhtBMu5R3Ixl6VniMgBdZIuKWr6IVlYU8Vyzlf5gzbmG0+o9J+eFX9vKjBxGvaIofREzaBw==
+length: 4439
 -->
