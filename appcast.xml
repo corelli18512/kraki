@@ -6,6 +6,25 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Kraki</title>
         <item>
+            <title>0.2.86</title>
+            <pubDate>Thu, 15 Oct 2026 08:58:32 +0000</pubDate>
+            <link>https://kraki.chat</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.86</sparkle:fullReleaseNotesLink>
+            <sparkle:version>88</sparkle:version>
+            <sparkle:shortVersionString>0.2.86</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Kraki for Mac 0.2.86
+
+- About now links to this version's GitHub build, source commit and build provenance.
+- Installation and update downloads include a signed provenance bundle and release manifest. You can verify their origin with GitHub CLI; the app does not claim to have verified itself.
+- Local development builds are clearly labeled and do not impersonate official releases.
+- Includes the latest voice-composer layout and new-session voice-handoff fixes from main.
+
+Developer ID signing, Apple notarization and Sparkle update signatures remain in place. See [how to verify a release](https://github.com/corelli18512/kraki/blob/mac-v0.2.86/docs/BUILD_PROVENANCE.md).
+]]></description>
+            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.86/Kraki.app.zip" length="93658042" type="application/octet-stream" sparkle:edSignature="NtgoKLSIXn6xgxP90Tw+QiKyqH5cWtqg4AujSrXXWaFePHn8ikRBd0/Ej4d6FCFjoqrctlH2EXNIzDi0k+GjCg=="/>
+        </item>
+        <item>
             <title>0.2.85</title>
             <pubDate>Wed, 14 Oct 2026 19:16:35 +0000</pubDate>
             <link>https://kraki.chat</link>
@@ -45,29 +64,9 @@ Update the computer CLI to 0.38.9 first if it has the old pairing-only setting e
 ]]></description>
             <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.84/Kraki.app.zip" length="93614310" type="application/octet-stream" sparkle:edSignature="FCjHUbKOMogUDTEzU2GSK4dCZUS8qzDrRhqhLuACexuwBxgoEo0FtQlBzlNB8oh7RfB60whPNubb+9CdMW5ODw=="/>
         </item>
-        <item>
-            <title>0.2.83</title>
-            <pubDate>Wed, 14 Oct 2026 04:48:29 +0000</pubDate>
-            <link>https://kraki.chat</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/corelli18512/kraki/releases/tag/mac-v0.2.83</sparkle:fullReleaseNotesLink>
-            <sparkle:version>85</sparkle:version>
-            <sparkle:shortVersionString>0.2.83</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[## What's new in Kraki 0.2.83
-
-- **Pair your devices with your computer:** scan the computer's QR code (or, on the same Mac, it pairs by itself) and your messages are signed and checked end to end, so the relay can't read or send commands as you. Each computer's settings show its safety code and trusted devices, and you can turn on "Only paired devices". Nothing changes until you do: unpaired apps keep working.
-- **Help Improve Kraki:** Kraki now shares performance data, such as how quickly replies arrive. A one-time notice explains it; turn it off any time in Settings → General → Share Performance Data.
-- **Hover text everywhere:** every icon-only button says what it does, and a greyed-out one says why.
-- **Menus that work with the composer:** ⌘W, ⌘M and ⌘H are back; switching sessions is now ⌥⌘↑/⌥⌘↓ so ⌘↑/⌘↓ move in the message you're typing; the Session menu lists your session titles and has Rename and Archive.
-- **Menu bar octopus:** a lighter icon, and a small blue dot when something needs you.
-- **Approvals cover one request:** "always allow" is gone everywhere; each approval applies to that request only.
-- **Fixes:** replies and questions no longer get stuck or misplaced after reconnects and steering; pasted text ending in a new line stays a draft; empty Steps keep their title at the top; tool arguments show readable values; Account Usage follows your dark/light theme; the working dots in the sidebar use the right blue in dark mode.
-]]></description>
-            <enclosure url="https://github.com/corelli18512/kraki/releases/download/mac-v0.2.83/Kraki.app.zip" length="93738206" type="application/octet-stream" sparkle:edSignature="+vgbDhgA3B/1A9kko+kdASFszHXnQ3+HVsWdDAeXS8mhyK9Wo+3p+CA49QzKnONsWgrNyZeiVo1KgRnlnVRsBA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: VKdFjS/9ZCMCW7WrOTsFzPUDhKp/49VQBuZm6EygMM7ru0yy4yFxeRFZIo8FbWOT2ubVqQtmA/EO1M8WF+LvDw==
-length: 6212
+edSignature: UNxNMwwZPe+P/YyW87gaadDSa0K0rKpD1XkS1XEqJOMdIKtelWAsMjk0pPhjg3A07XM9XQksgYEfCE3CWD3JDQ==
+length: 5395
 -->
