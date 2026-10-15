@@ -150,6 +150,14 @@ export function handleBackendAuthResult(server: HeadServer, ws: WebSocket, state
     server.storage.upsertUser(
       result.user.id, result.user.login, result.user.provider, result.user.email,
     );
+    // The account service owns `internal` (dogfood account). An edge keeps
+    // its own preferences row, which otherwise wins over the backend's in
+    // completeAuthHandshake and in preferences_updated: mirror the flag so an
+    // internal account is not dropped to stable builds by an edge, and a
+    // revoked one does not stay on dogfood. Missing preferences = unknown.
+    if (result.user.preferences && typeof result.user.preferences === 'object') {
+      server.storage.setInternal(result.user.id, result.user.preferences.internal === true);
+    }
     for (const d of result.devices) {
       try {
         server.storage.upsertDevice(
@@ -234,10 +242,22 @@ export function completeAuthHandshake(
   // NOT preferences. So a brand-new user record reads back with
   // preferences=undefined. Without this fallback, backend preferences would
   // be silently dropped at every first auth.
+  //
+  // Merged per key (local wins), so a local row holding only the mirrored
+  // `internal` flag does not hide the backend's other preferences. `internal`
+  // itself always comes from the backend when it answered with preferences:
+  // the account service owns it.
   const fullUser = server.storage.getUser(params.userId);
+  const backendPrefs = params.user.preferences;
+  const localPrefs = fullUser?.preferences;
+  let preferences = localPrefs || backendPrefs ? { ...(backendPrefs ?? {}), ...(localPrefs ?? {}) } : undefined;
+  if (preferences && backendPrefs) {
+    const { internal: _local, ...rest } = preferences;
+    preferences = backendPrefs.internal === true ? { ...rest, internal: true } : rest;
+  }
   const userResponse = {
     ...params.user,
-    preferences: publicPreferences(fullUser?.preferences ?? params.user.preferences),
+    preferences: publicPreferences(preferences),
   };
 
   // Devices list. If the caller provided one (edge mode), recompute online

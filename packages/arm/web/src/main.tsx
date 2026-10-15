@@ -10,19 +10,6 @@ import { trackVisualViewport } from './lib/visual-viewport';
 import './index.css';
 import { decidePairingLink, renderPairingInterstitial } from './lib/pairing-link';
 
-// Self-service channel switch: ?channel=beta or ?channel=stable
-// Sets cookie and reloads before React mounts.
-(function handleChannelParam() {
-  const params = new URLSearchParams(window.location.search);
-  const channel = params.get('channel');
-  if (channel && /^[a-z]+$/.test(channel)) {
-    document.cookie = `kraki_channel=${channel};path=/;max-age=${365 * 86400};SameSite=Lax`;
-    params.delete('channel');
-    const clean = params.toString();
-    window.location.replace(window.location.pathname + (clean ? `?${clean}` : ''));
-  }
-})();
-
 trackVisualViewport();
 
 function Root() {

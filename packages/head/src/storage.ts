@@ -500,12 +500,44 @@ export class Storage {
   updatePreferences(userId: string, preferences: Record<string, unknown>): void {
     const existing = this.getUser(userId);
     if (!existing) return;
-    // Custom Words change only through update_voice_vocabulary intents; a
-    // generic preferences write must never replace the list.
-    const { voiceVocabulary: _reserved, ...patch } = preferences;
+    // Custom Words change only through update_voice_vocabulary intents, and
+    // `internal` (dogfood account) only through setInternal: a generic
+    // preferences write from a client must never change either.
+    const { voiceVocabulary: _reserved, internal: _serverManaged, ...patch } = preferences;
     const merged = { ...(existing.preferences ?? {}), ...patch };
     this.db.prepare('UPDATE users SET preferences = ? WHERE user_id = ?')
       .run(JSON.stringify(merged), userId);
+  }
+
+  /**
+   * Mark an account internal (dogfood builds) or not. Only the operator
+   * (`kraki-relay internal`) and, on an edge, the account service's answer at
+   * sign-in call this; clients cannot. Returns whether anything changed.
+   */
+  setInternal(userId: string, internal: boolean): boolean {
+    const user = this.getUser(userId);
+    if (!user) return false;
+    const prefs = { ...(user.preferences ?? {}) };
+    if (internal ? prefs.internal === true : !('internal' in prefs)) return false;
+    if (internal) prefs.internal = true;
+    else delete prefs.internal;
+    this.db.prepare('UPDATE users SET preferences = ? WHERE user_id = ?').run(JSON.stringify(prefs), userId);
+    return true;
+  }
+
+  /** Accounts with this login (one per sign-in provider). */
+  getUsersByLogin(login: string): StoredUser[] {
+    const rows = this.db.prepare(
+      'SELECT user_id FROM users WHERE username = ? COLLATE NOCASE ORDER BY created_at'
+    ).all(login) as { user_id: string }[];
+    return rows.map(row => this.getUser(row.user_id)!).filter(Boolean);
+  }
+
+  getInternalUsers(): StoredUser[] {
+    const rows = this.db.prepare(
+      "SELECT user_id FROM users WHERE json_extract(preferences, '$.internal') = 1 ORDER BY created_at"
+    ).all() as { user_id: string }[];
+    return rows.map(row => this.getUser(row.user_id)!).filter(Boolean);
   }
 
   getVoiceVocabulary(userId: string): VoiceWord[] {

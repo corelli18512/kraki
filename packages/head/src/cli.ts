@@ -71,6 +71,9 @@ if (args.includes('--help') || args.includes('-h')) {
     kraki-relay register-edge
     kraki-relay join --main <https-url> --token <token> --region <code> --relay-url <wss-url>
     kraki-relay list-regions [--db <path>]
+    kraki-relay internal list | on <login> | off <login> [--db <path>]
+                      Internal (dogfood) accounts get dogfood builds. Main/standalone
+                      head only; signed-in apps pick a change up when they reconnect.
     kraki-relay print-voice-pubkey
 
   Options:
@@ -290,6 +293,39 @@ async function runSubcommand(): Promise<void> {
       storage.close();
     }
     process.exit(0);
+  }
+
+  if (COMMAND === 'internal') {
+    if (IS_CONNECTED_MODE) {
+      console.error('internal is only available on the main/standalone head (an edge mirrors it from main)');
+      process.exit(1);
+    }
+    const positional = args.filter((arg, i) => !arg.startsWith('--') && !args[i - 1]?.startsWith('--'));
+    const [action, login] = positional;
+    if (action !== 'list' && ((action !== 'on' && action !== 'off') || !login)) {
+      console.error('Usage: kraki-relay internal list | on <login> | off <login> [--db <path>]');
+      process.exit(1);
+    }
+    const storage = new Storage(DB_PATH);
+    let code = 0;
+    try {
+      if (action === 'list') {
+        for (const u of storage.getInternalUsers()) console.log(`${u.username}\t${u.provider}\t${u.userId}`);
+      } else {
+        const users = storage.getUsersByLogin(login);
+        if (users.length === 0) {
+          console.error(`No account with login "${login}"`);
+          code = 1;
+        }
+        for (const u of users) {
+          const changed = storage.setInternal(u.userId, action === 'on');
+          console.log(`${u.username} (${u.provider}, ${u.userId}): internal ${action}${changed ? '' : ' (unchanged)'}`);
+        }
+      }
+    } finally {
+      storage.close();
+    }
+    process.exit(code);
   }
 
   console.error(`Unknown command "${COMMAND}". Use --help for usage.`);
