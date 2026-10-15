@@ -5,9 +5,10 @@
 /// pings, and the relay link can be only a few Mbps. Bytes are therefore
 /// never pulled speculatively: something must be on screen (`.visible`) or
 /// explicitly opened by the user (`.userOpened`). Transfers are paced —
-/// one chunk per request, at most one chunk in flight — so a transfer can
-/// never queue megabytes in front of chat traffic, and a higher-priority
-/// request (the report the user just opened) takes over between chunks.
+/// one chunk per request, a small adaptive number of chunks in flight (1–3,
+/// see `window`) — so a transfer can never queue megabytes in front of chat
+/// traffic, and a higher-priority request (the report the user just opened)
+/// takes the next free slot.
 ///
 ///   nil            ← nothing wanted (or released while off-screen)
 ///   fetching       ← wanted; waiting for its turn / disk / first chunk
@@ -97,14 +98,24 @@ final class AttachmentStore {
         let id: String
         let index: Int
         let generation: Int
+        let sentAt: TimeInterval
+        var timeout: DispatchWorkItem?
+    }
+
+    private struct FlightKey: Hashable {
+        let id: String
+        let index: Int
     }
 
     @ObservationIgnored private var wants: [String: Want] = [:]
     @ObservationIgnored private var nextOrder = 0
     @ObservationIgnored private var dwellWork: [String: DispatchWorkItem] = [:]
-    @ObservationIgnored private var inFlight: InFlight?
+    @ObservationIgnored private var inFlight: [FlightKey: InFlight] = [:]
     @ObservationIgnored private var generation = 0
-    @ObservationIgnored private var timeoutWork: DispatchWorkItem?
+    @ObservationIgnored private var chunkWindow = AttachmentChunkWindow()
+    /// Chunks allowed in flight now (1...AttachmentChunkWindow.maxInFlight).
+    var window: Int { chunkWindow.size }
+    @ObservationIgnored private let now: () -> TimeInterval
     @ObservationIgnored private var attempts: [String: Int] = [:]
     /// Ids an older tentacle is streaming whole (it ignores `paced`); wait
     /// for the stream instead of requesting more chunks.
@@ -145,10 +156,12 @@ final class AttachmentStore {
 
     init(
         cacheDirectory: URL = KrakiDataPaths.attachmentCacheDirectory(),
-        visibleDwell: TimeInterval = 0.3,
+        visibleDwell: TimeInterval = 0.1,
         chunkTimeout: TimeInterval = 30,
+        now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         requestChunk: @escaping (String, String, Int) -> Bool
     ) {
+        self.now = now
         self.cacheDir = cacheDirectory
         self.visibleDwell = visibleDwell
         self.chunkTimeout = chunkTimeout
@@ -223,6 +236,13 @@ final class AttachmentStore {
         holders[id] = held.isEmpty ? nil : held
         // Another view still shows it at this priority or higher: keep it.
         if held.contains(where: { $0.key >= priority }) { return }
+        // Still shown at a lower priority (the viewer closed over its
+        // bubble): keep loading at that priority instead of stopping.
+        if let lower = held.keys.max(), var want = wants[id] {
+            want.priority = min(want.priority, lower)
+            wants[id] = want
+            return
+        }
         dwellWork.removeValue(forKey: id)?.cancel()
         if held.isEmpty, case .ready = states[id] {
             releasedReady.removeAll { $0 == id }
@@ -248,6 +268,7 @@ final class AttachmentStore {
         if !ready {
             clearInFlight()
             streamingWhole.removeAll()
+            chunkWindow.reset()
         }
         pump()
     }
@@ -258,8 +279,9 @@ final class AttachmentStore {
     /// the chunk timeout. Already-received chunks are kept.
     @MainActor
     func routeChanged() {
-        guard inFlight != nil else { return }
+        guard !inFlight.isEmpty else { return }
         clearInFlight()
+        chunkWindow.reset()
         pump()
     }
 
@@ -295,8 +317,10 @@ final class AttachmentStore {
     }
 
     var inFlightForTesting: (id: String, index: Int)? {
-        inFlight.map { ($0.id, $0.index) }
+        inFlight.values.min { $0.generation < $1.generation }.map { ($0.id, $0.index) }
     }
+
+    var inFlightCountForTesting: Int { inFlight.count }
     #endif
 
     // MARK: - Scheduling
@@ -316,32 +340,51 @@ final class AttachmentStore {
         pump()
     }
 
-    /// Request the next chunk of the most important wanted attachment.
+    /// Fill the free in-flight slots with the next chunks of the most
+    /// important wanted attachments (priority, then request order).
     @MainActor
     private func pump() {
-        guard transportReady, inFlight == nil else { return }
-        guard let (id, want) = wants
-            .filter({ !hydrating.contains($0.key) })
-            .max(by: { a, b in
-                a.value.priority != b.value.priority
-                    ? a.value.priority < b.value.priority
-                    : a.value.order > b.value.order
-            }) else { return }
-        let received = pendingChunks[id] ?? [:]
-        var index = 0
-        while received[index] != nil { index += 1 }
-        if let total = pendingTotal[id], index >= total { return }
-        generation += 1
-        let flight = InFlight(id: id, index: index, generation: generation)
-        inFlight = flight
-        armTimeout(for: flight)
-        guard requestChunk(id, want.sessionId, index) else {
-            // Not handed to the transport (e.g. the session's tentacle is
-            // unknown right now). Retry shortly without spending an attempt.
-            clearInFlight()
-            scheduleRetry()
-            return
+        guard transportReady else { return }
+        while inFlight.count < window, let (id, sessionId, index) = nextChunk() {
+            generation += 1
+            let key = FlightKey(id: id, index: index)
+            inFlight[key] = InFlight(id: id, index: index, generation: generation, sentAt: now())
+            armTimeout(for: key)
+            guard requestChunk(id, sessionId, index) else {
+                // Not handed to the transport (e.g. the session's tentacle is
+                // unknown right now). Retry shortly without spending an attempt.
+                clearFlight(key)
+                scheduleRetry()
+                return
+            }
         }
+    }
+
+    /// The next chunk worth requesting. Until an attachment's size is known
+    /// only its first chunk is asked for (its reply carries the total).
+    @MainActor
+    private func nextChunk() -> (id: String, sessionId: String, index: Int)? {
+        let ordered = wants
+            .filter { !hydrating.contains($0.key) && !streamingWhole.contains($0.key) }
+            .sorted { a, b in
+                a.value.priority != b.value.priority
+                    ? a.value.priority > b.value.priority
+                    : a.value.order < b.value.order
+            }
+        for (id, want) in ordered {
+            let received = pendingChunks[id] ?? [:]
+            guard let total = pendingTotal[id] else {
+                if inFlight[FlightKey(id: id, index: 0)] == nil, received[0] == nil {
+                    return (id, want.sessionId, 0)
+                }
+                continue
+            }
+            for index in 0..<total where received[index] == nil
+                && inFlight[FlightKey(id: id, index: index)] == nil {
+                return (id, want.sessionId, index)
+            }
+        }
+        return nil
     }
 
     @MainActor
@@ -372,33 +415,48 @@ final class AttachmentStore {
     }
 
     @MainActor
-    private func armTimeout(for flight: InFlight) {
-        timeoutWork?.cancel()
+    private func armTimeout(for key: FlightKey) {
+        guard var flight = inFlight[key] else { return }
+        flight.timeout?.cancel()
+        let generation = flight.generation
         let work = DispatchWorkItem { [weak self] in
-            self?.chunkTimedOut(flight)
+            self?.chunkTimedOut(key, generation: generation)
         }
-        timeoutWork = work
+        flight.timeout = work
+        inFlight[key] = flight
         DispatchQueue.main.asyncAfter(deadline: .now() + chunkTimeout, execute: work)
     }
 
     @MainActor
-    private func clearInFlight() {
-        inFlight = nil
-        timeoutWork?.cancel()
-        timeoutWork = nil
+    private func clearFlight(_ key: FlightKey) {
+        inFlight.removeValue(forKey: key)?.timeout?.cancel()
     }
 
     @MainActor
-    private func chunkTimedOut(_ flight: InFlight) {
-        guard inFlight?.generation == flight.generation else { return }
-        clearInFlight()
-        streamingWhole.remove(flight.id)
-        let count = (attempts[flight.id] ?? 0) + 1
-        attempts[flight.id] = count
+    private func clearFlights(for id: String) {
+        for key in inFlight.keys where key.id == id { clearFlight(key) }
+    }
+
+    @MainActor
+    private func clearInFlight() {
+        for flight in inFlight.values { flight.timeout?.cancel() }
+        inFlight.removeAll()
+    }
+
+    @MainActor
+    private func chunkTimedOut(_ key: FlightKey, generation: Int) {
+        guard inFlight[key]?.generation == generation else { return }
+        // Its siblings were sent on the same path and are likely lost too:
+        // take them back with it, so one lost burst is one attempt.
+        clearFlights(for: key.id)
+        streamingWhole.remove(key.id)
+        chunkWindow.lost()
+        let count = (attempts[key.id] ?? 0) + 1
+        attempts[key.id] = count
         if count >= Self.maxAttempts {
-            wants[flight.id] = nil
-            attempts[flight.id] = nil
-            states[flight.id] = .error(reason: "Timed out loading this attachment")
+            wants[key.id] = nil
+            attempts[key.id] = nil
+            states[key.id] = .error(reason: "Timed out loading this attachment")
         }
         pump()
     }
@@ -415,7 +473,9 @@ final class AttachmentStore {
         error: String?,
         paced: Bool
     ) {
-        let wasInFlight = inFlight?.id == id
+        let key = FlightKey(id: id, index: index)
+        let flightsForID = inFlight.keys.filter { $0.id == id }
+        let wasInFlight = !flightsForID.isEmpty
         // Chunks arrive from other devices: accept only well-formed chunks of
         // an attachment this app actually asked for.
         guard Self.isValidID(id),
@@ -425,7 +485,7 @@ final class AttachmentStore {
             return
         }
         if let error {
-            if wasInFlight { clearInFlight() }
+            clearFlights(for: id)
             wants[id] = nil
             attempts[id] = nil
             streamingWhole.remove(id)
@@ -454,15 +514,17 @@ final class AttachmentStore {
             pendingTotal[id] = nil
             wants[id] = nil
             streamingWhole.remove(id)
+            if paced, let flight = inFlight[key] {
+                chunkWindow.noteRoundTrip(now() - flight.sentAt, windowLimited: inFlight.count >= window)
+            }
+            clearFlights(for: id)
             guard Self.matchesID(assembled, id) else {
                 states[id] = .error(reason: "This attachment failed verification")
-                if wasInFlight { clearInFlight() }
                 pump()
                 return
             }
             states[id] = .ready(mimeType: mimeType, data: assembled)
             persistToDisk(id: id, mimeType: mimeType, data: assembled)
-            if wasInFlight { clearInFlight() }
             pump()
             return
         }
@@ -470,17 +532,20 @@ final class AttachmentStore {
         if wants[id] != nil || wasInFlight {
             states[id] = .awaitingChunks(received: buffer.count, total: total)
         }
-        guard wasInFlight, let flight = inFlight else { return }
+        guard wasInFlight else { return }
         if paced {
-            // Exactly the requested chunk: choose the next (possibly a
-            // higher-priority attachment) now.
-            clearInFlight()
+            // Exactly the requested chunk: its slot goes to the next chunk
+            // (possibly of a higher-priority attachment) now.
+            if let flight = inFlight[key] {
+                chunkWindow.noteRoundTrip(now() - flight.sentAt, windowLimited: inFlight.count >= window)
+            }
+            clearFlight(key)
             pump()
         } else {
             // An older tentacle streams the whole file for one request. Do
             // not request more; keep waiting while chunks keep coming.
             streamingWhole.insert(id)
-            armTimeout(for: flight)
+            for flight in flightsForID { armTimeout(for: flight) }
         }
     }
 
@@ -631,4 +696,61 @@ final class AttachmentStore {
         }
         return nil
     }
+}
+
+/// How many paced attachment chunks may be in flight at once.
+struct AttachmentChunkWindow {
+    /// Most chunks requested but not yet received, across all attachments.
+    /// One at a time is slow on a fast link: every 128 KiB chunk waits a full
+    /// app → relay → tentacle → relay → app round trip. Overlapping round
+    /// trips helps only when the link is fast; on a slow one a single chunk
+    /// already fills it and every extra chunk sits in front of chat (3 Mbps:
+    /// ~0.6 s each). So the window adapts like a background transfer
+    /// (LEDBAT): it grows while chunks arrive without queueing delay and
+    /// shrinks as soon as they queue.
+    static let maxInFlight = 3
+    /// Start as before (one); a fast link proves itself within a few chunks.
+    static let initialWindow = 1
+    /// Round-trip time above the fastest recent one that counts as queueing.
+    static let queueDelayTarget: TimeInterval = 0.25
+    /// Unqueued, window-limited chunks needed before trying one more. Each
+    /// failed probe doubles it (up to `maxGrowAfter`), so a link that is
+    /// simply slow stops being probed.
+    static let growAfter = 2
+    static let maxGrowAfter = 32
+
+    private(set) var size = initialWindow
+    private var goodStreak = 0
+    private var requiredStreak = growAfter
+    /// Recent chunk round trips; their minimum is the unqueued baseline.
+    private var rttSamples: [TimeInterval] = []
+
+    /// A paced chunk arrived `rtt` after it was requested. Queueing delay
+    /// (above the fastest recent round trip) shrinks the window; arrivals
+    /// without it, while the window was the limit, grow it.
+    mutating func noteRoundTrip(_ rtt: TimeInterval, windowLimited: Bool) {
+        rttSamples.append(rtt)
+        if rttSamples.count > 24 { rttSamples.removeFirst(rttSamples.count - 24) }
+        let base = rttSamples.min() ?? rtt
+        if rtt - base > Self.queueDelayTarget {
+            if size > 1 { requiredStreak = min(Self.maxGrowAfter, requiredStreak * 2) }
+            size = max(1, size - 1)
+            goodStreak = 0
+        } else if windowLimited {
+            goodStreak += 1
+            if goodStreak >= requiredStreak, size < Self.maxInFlight {
+                size += 1
+                goodStreak = 0
+            }
+        }
+    }
+
+    /// A lost chunk: back off to one until arrivals prove the link again.
+    mutating func lost() {
+        size = 1
+        goodStreak = 0
+    }
+
+    /// A new route or connection: what the old one measured no longer holds.
+    mutating func reset() { self = AttachmentChunkWindow() }
 }
