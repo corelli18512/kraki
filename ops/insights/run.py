@@ -47,7 +47,8 @@ def peer_snapshot(config):
         return None  # Freshness/host coverage explicitly degrades, not a cached zero.
 
 
-def build(config, state_dir, now):
+def build(config, state_dir, now, *, clock=time.monotonic):
+    started = clock()
     index = Index(state_dir / 'index.sqlite')
     try:
         scan = index.ingest(config['diagDirectory'], now)
@@ -73,7 +74,8 @@ def build(config, state_dir, now):
         # No per-account pseudonym sets go into watch state or notifications.
         summary = {k: v for k, v in snapshot.items() if k != 'product'}
         if config.get('primary'):
-            summary['product'] = combine_product(product, peer.get('product') if peer else None, now)
+            checked_at = now + (clock() - started) * 1000
+            summary['product'] = combine_product(product, peer.get('product') if peer else None, now, checked_at=checked_at)
         atomic_json(state_dir / 'summary.json', summary)
         return snapshot
     finally:
