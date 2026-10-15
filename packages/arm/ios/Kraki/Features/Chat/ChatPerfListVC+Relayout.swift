@@ -26,7 +26,10 @@ extension ChatPerfListVC {
     /// loaded window out again (like a width change), keeping the reader where
     /// they were: at the newest message, or on the row at the top.
     func relayoutForTextSizeChange() {
-        guard TKTextSize.refresh(), collectionView != nil else { return }
+        TKTextSize.refresh()
+        // Per list: another open chat may already have refreshed the key.
+        guard laidOutTextSize != TKTextSize.key, collectionView != nil else { return }
+        laidOutTextSize = TKTextSize.key
         let anchorItem = followingBottom ? nil : collectionView.indexPathsForVisibleItems.min()
         cancelPageMeasurements()
         cancelPendingWarm()

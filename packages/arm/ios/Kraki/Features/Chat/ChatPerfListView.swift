@@ -300,6 +300,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     var codeHighlightObserver: NSObjectProtocol?
     private var composerSubmitObserver: NSObjectProtocol?
     var textSizeObserver: NSObjectProtocol?
+    /// The text size this list's rows were laid out for (see TKTextSize).
+    var laidOutTextSize = ""
     var codeHighlightSettleWork: DispatchWorkItem?
     var pendingCodeHighlightRefresh = false
     override func viewDidLoad() {
@@ -308,6 +310,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         chatPerfLog.log("[cfg] renderer=textkit localSeamless=\(localSeamless)")
         chatPerfLog.log("[diag] viewDidLoad turns=\(messages.count) ids=\(items.count) winTop=\(vm.windowTopSeq) winBot=\(vm.windowBottomSeq) sessionLast=\(vm.sessionLastSeq) filtered=\(vm.filteredMessages.count)")
         TKTextSize.refresh()
+        laidOutTextSize = TKTextSize.key
         setupCollectionView()
         let endSelection = UITapGestureRecognizer(target: self, action: #selector(endTextSelectionTap(_:)))
         endSelection.cancelsTouchesInView = false
