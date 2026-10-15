@@ -61,10 +61,27 @@ describe('ChatView pending question live-row visibility', () => {
 
   it.each([
     { type: 'tool_start', payload: { toolName: 'read' } },
-    { type: 'tool_batch', payload: { running: 2 } },
-    { type: 'permission', payload: { id: 'p' } },
-  ])('preserves a genuine $type action after a pending question', (action) => {
+    { type: 'tool_complete', payload: { toolName: 'read' } },
+    { type: 'tool_batch', payload: { running: 6 } },
+  ])('keeps parallel $type activity out of a second bubble under the newest open question', (action) => {
     waitingCard('', action);
+    render(<ChatView sessionId="s" topInset={56} />);
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('0');
+  });
+
+  it('preserves a pending permission after a pending question', () => {
+    waitingCard('', { type: 'permission', payload: { id: 'p' } });
+    render(<ChatView sessionId="s" topInset={56} />);
+    expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
+  });
+
+  it('shows parallel tool activity again once the question has been answered', () => {
+    waitingCard('', { type: 'tool_batch', payload: { running: 6 } });
+    useStore.setState({
+      sessions: new Map([['s', { id: 's', state: 'active', lastSeq: 2 } as never]]),
+      messages: new Map([['s', [question, { type: 'user_message', seq: 2, sessionId: 's',
+        payload: { content: 'Amber', answerTo: 'q' } }] as never]]),
+    });
     render(<ChatView sessionId="s" topInset={56} />);
     expect(screen.getByTestId('live-rows')).toHaveTextContent('1');
   });

@@ -220,7 +220,31 @@ final class ChatViewModel {
 
     /// The live card (draft + action slot) for the in-progress turn, if any.
     var card: MessageStore.SessionCard? {
-        appState?.messageStore.visibleCard(sessionId)
+        guard let card = appState?.messageStore.visibleCard(sessionId) else { return nil }
+        let hidden = Self.cardHiddenByQuestion(card, spine: filteredMessages) { id in
+            self.questions.contains { $0.id == id }
+        }
+        return hidden ? nil : card
+    }
+
+    /// The live card has nothing of its own to say while the open question is
+    /// the newest row: hide it so the turn stays one bubble.
+    static func cardHiddenByQuestion(_ card: MessageStore.SessionCard, spine: [ChatMessage],
+                                     isOpen: (String) -> Bool) -> Bool {
+        guard cardYieldsToQuestion(card),
+              let spec = spine.last(where: shouldRender)?.questionSpec else { return false }
+        return isOpen(spec.id)
+    }
+
+    /// A card with no draft whose action is only tool activity (the agent ran
+    /// tools in parallel with `ask_user`). While the open question is the
+    /// newest row, that activity must not become a second bubble under it —
+    /// it stays reachable through Steps. A pending permission still shows:
+    /// it needs the human.
+    static func cardYieldsToQuestion(_ card: MessageStore.SessionCard) -> Bool {
+        guard card.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        guard let type = card.action?.type else { return true }
+        return type == "tool_start" || type == "tool_complete" || type == "tool_batch"
     }
 
     /// Rows newer than the window already stored on this device (local
