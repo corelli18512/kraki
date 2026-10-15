@@ -5,24 +5,26 @@ Alerts for the two production relays (Tokyo `relay.kraki.chat`, China
 [Bark](https://github.com/Finb/Bark). Free services only.
 
 ```
-UptimeRobot (outside view, every 5 min) ──────────────┐
-healthchecks.io (no heartbeat for 15 min) ────────────┤
-                                                      ├──> Bark ──> iPhone
-Tokyo: kraki-watch (every minute) ── probes China ────┤
-China: kraki-watch (every minute) ── probes Tokyo ────┘
+External uptime checks ───────────────> independent email
+healthchecks.io (missing heartbeat) ──> independent email (+ Bark if supported)
+Tokyo: kraki-watch ── probes China ──┐
+                                    ├──> Bark ──> iPhone
+China: kraki-watch ── probes Tokyo ──┘
 ```
 
 ## Levels
 
 | Level | When | On the phone | Repeats | 23:00–08:00 (Beijing) |
 |---|---|---|---|---|
-| Critical | users are or soon will be affected | rings through silent mode and Focus (`level=critical`, rings ~30 s) | every 30 min until it recovers, then one "recovered" | rings |
+| Critical | users are or soon will be affected | requests Critical Alerts (`level=critical`, `call=1`, ~30 s); requires phone permission and an on-device test | every 30 min until it recovers, then one "recovered" | requested even at night |
 | Warning | something is wrong, users not yet affected | time-sensitive notification | at most every 6 h | held, sent as one batch at 08:00 |
 | Info | worth knowing | not pushed | — | — |
 
-A daily summary arrives at 09:00 even when everything is fine. **No summary by
-09:30 means the alerting itself is broken.** The first run on a host only starts
-the day; the first summary comes the next morning.
+A daily summary is scheduled at 09:00 even when everything is fine. **No summary
+by 09:30 is a reason to check the monitoring/delivery chain**, not proof of a
+specific failure. The first run on a host only starts the day; the first summary
+comes the next morning. API acceptance is not proof that the phone displayed or
+sounded a notification.
 
 Messages carry the host, the problem and a number, never user data.
 
@@ -79,7 +81,8 @@ ops/watch/
   lib/rules.mjs        snapshot → check results
   lib/logs.mjs         relay log parsing
   lib/digest.mjs       daily summary text
-  lib/bark.mjs         Bark delivery
+  lib/bark.mjs         Bark delivery (JSON POST, response validation, bounded retries)
+  lib/config.mjs       secret-safe delivery configuration validation
   lib/collect.mjs      probes, systemd, journald, disk, memory, certificates
   config/tokyo.json    what each host checks
   config/cn.json
@@ -96,31 +99,58 @@ end-to-end test runs the real script against a fake relay, fake Bark and fake
 
 ## Setup
 
-1. **Bark**: install Bark on the iPhone, allow notifications including
-   *Critical Alerts*, copy the key from the URL it shows
-   (`https://api.day.app/<KEY>/…`).
-2. **healthchecks.io** (free): one check per host, period 1 min, grace 15 min,
-   integration "Bark" or webhook `https://api.day.app/<KEY>/<title>?level=critical`.
-   Copy each ping URL.
-3. **UptimeRobot** (free): HTTP(S) keyword monitors every 5 min on
-   `https://relay.kraki.chat/` and `https://cn.relay.kraki.chat/` (keyword
-   `"status":"ok"`) and `https://app.kraki.chat/`; alert contact: webhook to Bark.
-4. **Install on each host** as root (copy `ops/watch` and `scripts/backup-relay-db.sh`
-   from the same checkout):
+1. **Bark**: install Bark on the iPhone and allow notifications including
+   *Critical Alerts*. Start with the official `https://api.day.app` service;
+   self-hosting is optional, not a rollout prerequisite. Copy just the key from
+   its sample URL (`https://api.day.app/<KEY>/…`). Treat both this key and
+   heartbeat URLs as secrets: no repository, screenshots, issue bodies or shell
+   command arguments. Store them in the root-only env file below.
+2. **Independent detection and delivery**: configure one healthchecks.io check
+   per host (period 1 min, grace 15 min), with an email recipient independent of
+   Bark. Use an external uptime service for `https://relay.kraki.chat/`,
+   `https://cn.relay.kraki.chat/`, and `https://app.kraki.chat/`; use the
+   `"status":"ok"` keyword for relays if supported. Verify the chosen account's
+   current free limits, interval, keyword and email features when setting it up.
+   Do **not** assume UptimeRobot includes free webhooks. A Bark integration is
+   optional and must not replace the independent email route. Verify both
+   outage and recovery email delivery with a dedicated test check.
+3. **Stage configuration before installing**, on each host as root:
    ```sh
-   sh ops/watch/install.sh tokyo --with-backup   # on corelli-aws-tokyo-0
-   sh ops/watch/install.sh cn --with-backup      # on corelli-tecent-cloud-small-0
+   install -d -m 755 /etc/kraki
+   # Only for a first install; do not overwrite an existing secrets file.
+   test -f /etc/kraki/watch.env || install -m 600 ops/watch/watch.env.example /etc/kraki/watch.env
    ```
-   Then fill `/etc/kraki/watch.env`: `BARK_KEY`, `HC_PING_URL`, and the backup
-   settings (`KRAKI_DB`: Tokyo `/home/ubuntu/kraki-head.db`, China
-   `/var/lib/kraki/kraki-relay.db`; `KRAKI_BACKUP_REMOTE` to the other host).
-5. **Shadow mode** (the default, `KRAKI_WATCH_NOTIFY=0`) for two days:
-   `journalctl -u kraki-watch | grep shadow` shows what would have been sent.
-6. **Enable**: `KRAKI_WATCH_NOTIFY=1`, then `kraki-watch test-notify` (one
-   critical, one warning) and `kraki-watch digest-now`.
-7. **Drill**: stop the reverse proxy on one host for 4 minutes → a critical
-   within 3 minutes, recovery after restart; stop `kraki-watch.timer` → the
-   heartbeat alert within 15 minutes.
+   Fill `/etc/kraki/watch.env` using an editor: `BARK_KEY`, `HC_PING_URL`, and
+   backup settings if enabling backups (`KRAKI_DB`: Tokyo
+   `/home/ubuntu/kraki-head.db`, China `/var/lib/kraki/kraki-relay.db`). Keep
+   `KRAKI_WATCH_NOTIFY=0` initially. Set up restricted off-site-copy access and
+   verify a backup/restore to a temporary database before enabling backup timers.
+4. **Install only after deployment approval** (copy `ops/watch` and
+   `scripts/backup-relay-db.sh` from the same revision):
+   ```sh
+   sh ops/watch/install.sh tokyo   # Tokyo; use cn on the China host
+   kraki-watch check-config
+   ```
+   `check-config` is offline: checks delivery settings and JSON readability;
+   it neither sends notifications/heartbeats nor changes alert state. It is not
+   a full host or phone readiness check. Installation does **not** restart the
+   relay, but **does** start the watch timer and restart journald with new
+   retention settings. Add `--with-backup` only after backup configuration and
+   restore verification. Relay readiness/metrics also require a separately
+   authorized Head release; merging their code does not deploy them.
+5. **Shadow mode** for two days: `journalctl -u kraki-watch | grep shadow`
+   shows what would have been sent. Tune noisy thresholds before enabling.
+6. **Enable and verify with the operator present**: set `KRAKI_WATCH_NOTIFY=1`,
+   run `kraki-watch check-config`, then `kraki-watch test-notify` (one critical,
+   one warning) and `kraki-watch digest-now`. `test-notify` refuses shadow mode
+   and exits nonzero if Bark rejects either message. Confirm receipt on the
+   actual phone, then test critical sound while locked and in silent/Focus
+   modes. Do not perform a ringing test at night without agreement.
+7. **Safe drill first**: use a separate test config/state directory with an
+   intentionally unreachable local test endpoint, then restore that endpoint
+   and verify recovery. Exercise external heartbeat failure using a dedicated
+   test check. Do not stop production proxies, relays or watch timers for a
+   drill without separate, explicit outage approval.
 
 ## Operating
 
@@ -128,8 +158,16 @@ end-to-end test runs the real script against a fake relay, fake Bark and fake
   10 minutes (`scripts/deploy-edge-relay.sh` does it automatically). The other
   host and UptimeRobot still watch.
 - **State**: `/var/lib/kraki-watch/state.json`. Deleting it resets all alerts.
-- **Bark unreachable**: undelivered messages are kept (up to 20) and retried on
-  the next run, marked "[延迟送达]".
+- **Bark unreachable or rejecting messages**: undelivered messages are kept
+  (up to 20) and retried on the next run, marked "[延迟送达]". Delivery requires
+  both HTTP success and Bark JSON `code: 200`. Redirects are rejected to avoid
+  forwarding the key; logs omit upstream response bodies and raw error text.
+- **Missing key with notifications enabled**: fails before updating state or
+  sending a healthy heartbeat; it is never silently treated as shadow mode.
+- **Self-hosting limits**: a private Bark server avoids the author's HTTP
+  service, but the official iOS app still depends on Bark's Apple app identity
+  and APNs credentials, plus Apple delivery. Do not put the only notification
+  route on the same host it monitors; retain independent email.
 - **Off-site backups** need a dedicated key: `/root/.ssh/kraki-backup` on each
   host, its public key on the other host restricted to the incoming backup
   directory. Restore: `gunzip` the copy, stop the relay, replace the database,
