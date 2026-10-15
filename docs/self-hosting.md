@@ -107,19 +107,18 @@ The script pins `npm install` to `https://registry.npmjs.org` so it doesn't see 
 
 ### Daily database backups
 
-`scripts/backup-relay-db.sh` performs a WAL-safe `sqlite3 .backup` of the live DB and prunes copies older than 14 days. Install it once on the relay host:
+Backup scheduling, retention, off-site storage and notification delivery belong
+to the operator's infrastructure, not the product build. The previously bundled
+personal backup/monitoring tools are maintained separately; Kraki does not install
+or schedule them. See [the operations boundary](operations-boundary.md).
 
-```bash
-sudo install -m 0755 scripts/backup-relay-db.sh /usr/local/sbin/kraki-backup-relay-db.sh
-
-sudo tee /etc/cron.daily/kraki-backup >/dev/null <<'EOF'
-#!/bin/sh
-/usr/local/sbin/kraki-backup-relay-db.sh
-EOF
-sudo chmod +x /etc/cron.daily/kraki-backup
-```
-
-Backups land in `/root/kraki-backups/kraki-relay-YYYYMMDD.db`. Each one is integrity-checked before promotion; corrupt copies are discarded rather than retained.
+Use SQLite's online backup API or `sqlite3 .backup` for a consistent snapshot of
+the running database; do not copy only the main file while WAL writes are active.
+Run `PRAGMA integrity_check` on each snapshot before accepting it. Keep snapshots
+and configuration backups private, enforce a retention policy, verify off-site
+copies and periodically restore into an isolated test environment. An upgrade
+snapshot does not replace scheduled backups. Never overwrite a live database
+with an older snapshot as part of a code rollback.
 
 ### Capping journald
 

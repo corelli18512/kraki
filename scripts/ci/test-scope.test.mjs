@@ -14,7 +14,7 @@ const tentacle = { ...binary, resilience: true };
 const relay = { ...ts, resilience: true };
 for (const [name, paths, expected] of [
   ['docs do not launch platform tests', ['README.md', 'docs/a.md', 'packages/arm/ios/README.md'], none],
-  ['relay alerting is tested in the scope job only', ['ops/watch/lib/rules.mjs', 'ops/watch/config/cn.json'], none],
+  ['retired personal operations paths are no longer exempt from product checks', ['ops/watch/lib/rules.mjs', 'ops/watch/config/cn.json'], all],
   ['runtime markdown is not documentation', ['packages/tentacle/prompts/system.md'], tentacle],
   ['native-only', ['packages/arm/ios/KrakiTests/ChatScrollPolicyTests.swift'], native],
   ['app Swift read by TypeScript tests', ['packages/arm/ios/Kraki/App/Mac/MainWindowView.swift'], { ...native, typescript: true }],
