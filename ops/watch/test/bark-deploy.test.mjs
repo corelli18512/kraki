@@ -48,6 +48,11 @@ test('Bark deployment pins binaries, binds loopback, and disables request logs',
   assert.match(script, /sha256sum -c -/);
   assert.doesNotMatch(script, /systemctl (restart|stop) (kraki-relay|caddy|nginx)/);
   assert.equal(spawnSync('sh', ['-n', join(bark, 'install.sh')]).status, 0);
+  assert.equal(spawnSync('sh', ['-n', join(bark, 'apply-proxy.sh')]).status, 0);
+  const proxy = readFileSync(join(bark, 'apply-proxy.sh'), 'utf8');
+  assert.match(proxy, /cmp -s/);
+  assert.match(proxy, /trap rollback 0/);
+  assert.doesNotMatch(proxy, /systemctl (restart|stop)/);
 });
 
 test('each host checks its local Bark and the other host independently', () => {

@@ -54,6 +54,10 @@ or client release is involved. First record the relay's PID/start time and healt
    or reload fails, restore the backup. Leave existing relay/collector routes
    unchanged. For nginx, testing the candidate may require temporarily replacing
    the on-disk site file; the running config is unchanged until reload.
+   `sudo sh ops/bark/apply-proxy.sh caddy` (or `nginx`) implements this sequence
+   with a concurrency check and restores the previous file on failure. A proxy
+   reload can cause clients to briefly reconnect even though the relay process
+   is not restarted.
 3. Verify TLS public ping from the Mac and the other host, empty registration
    returns 400, and `/bark/push` and `/bark/info` return 404. Confirm existing
    HTTP/WS/collector/voice endpoints and relay PID/start time are unchanged.
@@ -84,6 +88,10 @@ Local tests (also run by the existing watch CI job):
 `node --test ops/watch/test/*.test.mjs`. Includes proxy-render safeguards,
 paired local/peer checks, Bark response/redirect handling and a real CLI/fake
 service stack. Unit file and real proxy validation must also run on Linux.
+`python3 ops/bark/smoke.py /path/to/bark-server` exercises the real binary on a
+random loopback port with a disposable DB: prefixed health, official App GET
+registration and token refresh, POST registration, and empty-request rejection.
+It never calls `/push`, prints no keys, and does not touch the real Bark DB.
 
 Installation keeps versioned binaries and prior service metadata under
 `/var/backups/kraki-bark/`. For rollback, restore the prior proxy file and validate
