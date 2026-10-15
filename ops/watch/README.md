@@ -1,4 +1,4 @@
-# kraki-watch
+# kraki-watch: relay monitoring
 
 All generated operational notifications and host/cohort labels are English-only.
 When updating a previously deployed non-English configuration, preserve thresholds,
@@ -11,9 +11,18 @@ Product statistics and event-time client experience observation are provided by
 `experienceNotify:false` keeps new experience rules silent independently of
 infrastructure rules. `KRAKI_WATCH_DIGEST_NOTIFY=1` can enable only the passive
 09:00 digest while `KRAKI_WATCH_NOTIFY=0` keeps alerts shadowed; both remain off
-until explicit operator approval. Full digest text is retained in
-`/var/lib/kraki-watch/digest-latest.json`; large phone payloads are shortened.
-: relay alerting
+until explicit operator approval.
+
+The phone receives a short English briefing: the most important open issue,
+service-check status, account/activity counts where available, and at most one
+sampled performance finding. Build numbers, percentile tables, probe lists and
+rule identifiers stay out of the notification. Missing data is not zero or healthy.
+
+The full diagnostic text remains in `/var/lib/kraki-watch/digest-latest.json`
+(`title` and `body`, as before); its `notification` field records the exact short
+briefing selected for delivery. Both scheduled and manual digests use this format.
+A performance highlight describes one version/workflow group; it is not a global
+rating. Successful timings and failures/cancellations remain distinct.
 
 Alerts for the two production relays (Tokyo `relay.kraki.chat`, China
 `cn.relay.kraki.chat`) and the services around them, delivered to a phone with
@@ -97,7 +106,8 @@ ops/watch/
   lib/engine.mjs       alert state: failAfter, repeats, recovery, quiet hours, summary timing
   lib/rules.mjs        snapshot → check results
   lib/logs.mjs         relay log parsing
-  lib/digest.mjs       daily summary text
+  lib/digest.mjs       full daily diagnostic report
+  lib/digest-summary.mjs  short phone briefing + unchanged full report
   lib/bark.mjs         Bark delivery (JSON POST, response validation, bounded retries)
   lib/config.mjs       secret-safe delivery configuration validation
   lib/collect.mjs      probes, systemd, journald, disk, memory, certificates

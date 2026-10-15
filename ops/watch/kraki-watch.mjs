@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { sendBark } from './lib/bark.mjs';
 import * as collect from './lib/collect.mjs';
 import { deliveryConfig } from './lib/config.mjs';
-import { formatDigest } from './lib/digest.mjs';
+import { formatDigestDelivery } from './lib/digest-summary.mjs';
 import { accumulate, digestDue, emptyState, evaluate, localParts, recordProbe, rollDigest, routeRetries } from './lib/engine.mjs';
 import { evaluateRules } from './lib/rules.mjs';
 
@@ -104,9 +104,9 @@ async function runOnce(config) {
   const retries = routeRetries(state, state.undelivered ?? [], now, config);
   const fresh = [...out.notifications];
   if (digestDue(state, now, config)) {
-    const note = formatDigest(state, now, config);
-    await saveDigest(note);
-    fresh.push(note);
+    const { report, notification } = formatDigestDelivery({ ...state, lastRunAt: now }, now, config);
+    await saveDigest({ ...report, notification });
+    fresh.push(notification);
     state = rollDigest(state, now, config);
   }
   // Critical first, fresh before retried, one copy of each message: a slow
@@ -177,9 +177,9 @@ async function main() {
   if (cmd === 'digest-now') {
     const state = await loadState();
     if (config.insightsPath) state.day.notes.insights = await collect.readJson(config.insightsPath);
-    const note = formatDigest(state, Date.now(), config);
-    await saveDigest(note);
-    const result = await deliver(note);
+    const { report, notification } = formatDigestDelivery(state, Date.now(), config);
+    await saveDigest({ ...report, notification });
+    const result = await deliver(notification);
     if (!result.ok) throw new Error('Bark digest delivery failed');
     return;
   }

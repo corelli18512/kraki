@@ -140,15 +140,20 @@ test('test-notify sends one critical and one warning', async () => {
   assert.deepEqual(bark.slice(-2).map((b) => b.level), ['critical', 'timeSensitive']);
 });
 
-test('digest-now sends the summary', async () => {
+test('digest-now sends a short briefing and privately retains the full diagnostic report', async () => {
   await run('digest-now');
   const d = bark[bark.length - 1];
   assert.equal(d.group, 'Kraki Daily');
-  assert.match(d.title, /^Kraki Daily · Test · /);
-  assert.match(d.body, /Availability  Test relay/);
-  // First metrics sample is a baseline; each later run adds 5.
-  assert.match(d.body, /Push  sent \d+ \/ failed 0/);
-  assert.doesNotMatch(d.body, /Push  sent 0 /);
+  assert.equal(d.title, 'Kraki Daily · Test');
+  assert.match(d.body, /Services:/);
+  assert.doesNotMatch(d.body, /Availability  |Push  |P50/);
+  assert.equal(d.level, 'passive'); assert.equal(d.sound, 'silence');
+  const full = JSON.parse(await readFile(join(dir, 'state', 'digest-latest.json'), 'utf8'));
+  assert.equal(full.notification.body, d.body);
+  assert.match(full.body, /Availability  Test relay/);
+  // First metrics sample is a baseline; each later run adds 5. No detail is lost.
+  assert.match(full.body, /Push  sent \d+ \/ failed 0/);
+  assert.doesNotMatch(full.body, /Push  sent 0 /);
 });
 
 test('journal reads continue from the saved cursor (no line counted twice)', async () => {
@@ -245,4 +250,23 @@ test('Bark application-level failure remains queued and is retried on recovery',
   await run();
   assert.ok(bark.slice(sent).some((n) => n.title.includes('retry-me')));
   assert.deepEqual(JSON.parse(await readFile(statePath, 'utf8')).undelivered, []);
+});
+
+test('scheduled digest also sends only the short passive briefing while alerts stay disabled', async () => {
+  const statePath = join(dir, 'state', 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  state.lastDigestDate = '2000-01-01';
+  await writeFile(statePath, JSON.stringify(state));
+  const sent = bark.length;
+  await runEnv({ KRAKI_WATCH_NOTIFY: '0', KRAKI_WATCH_DIGEST_NOTIFY: '1' });
+  assert.equal(bark.length, sent + 1);
+  const brief = bark.at(-1);
+  assert.equal(brief.title, 'Kraki Daily · Test');
+  assert.equal(brief.level, 'passive'); assert.equal(brief.sound, 'silence');
+  assert.equal(brief.call, undefined); assert.equal(brief.volume, undefined);
+  assert.match(brief.body, /Services:/); assert.doesNotMatch(brief.body, /Availability  |Push  /);
+  const full = JSON.parse(await readFile(join(dir, 'state', 'digest-latest.json'), 'utf8'));
+  assert.equal(full.notification.body, brief.body);
+  assert.match(full.body, /Availability  Test relay/);
+  assert.notEqual(JSON.parse(await readFile(statePath, 'utf8')).lastDigestDate, '2000-01-01');
 });
