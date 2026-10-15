@@ -37,6 +37,7 @@ final class SessionSearchTests: XCTestCase {
         XCTAssertEqual(ids(nil, "  "), ["a7c3e9f1-voice", "b", "c"], "whitespace is not a query")
         XCTAssertEqual(ids(nil, "Fix VOICE"), ["a7c3e9f1-voice"], "case-insensitive title")
         XCTAssertEqual(ids(nil, "A7C3E9"), ["a7c3e9f1-voice"], "Session ID (prefix, any case)")
+        XCTAssertEqual(ids(nil, "c3e9f1"), [], "hex inside an ID is not a match (avoids false hits)")
         XCTAssertEqual(ids(nil, "resume"), ["b"], "diacritic-insensitive")
         XCTAssertEqual(ids(nil, "opus"), ["b"], "model")
         XCTAssertEqual(ids(nil, "server"), ["c"], "computer name")

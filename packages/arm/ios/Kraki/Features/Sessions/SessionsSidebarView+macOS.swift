@@ -203,7 +203,7 @@ struct SessionsSidebarView: View {
 
     @Binding var selectedSessionId: String?
 
-    /// Search owned by the window rail. Filters title, Session ID, device,
+    /// Search owned by the window rail. Filters title, Session ID prefix, device,
     /// model and authoritative Preview without introducing a second sidebar header.
     var searchText: String = ""
 
