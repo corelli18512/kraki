@@ -5,6 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { deepStrictEqual } from 'node:assert';
+import { createBuildInfo } from '../../../scripts/release/build-info.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(__dirname, '..');
@@ -106,6 +108,15 @@ async function main() {
 
     const versionResult = runBinary(binaryPath, ['--version']);
     assertSuccess(binaryPath, ['--version'], versionResult);
+
+    const infoResult = runBinary(binaryPath, ['build-info', '--json'], {
+      KRAKI_HOME: tempHome, GITHUB_RUN_ID: 'runtime-env-must-not-override-the-build',
+    });
+    assertSuccess(binaryPath, ['build-info', '--json'], infoResult);
+    const { platform, arch, ...embedded } = JSON.parse(infoResult.stdout);
+    const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
+    deepStrictEqual(embedded, createBuildInfo({ component: 'cli', version, cwd: packageRoot }));
+    if (!platform || !arch) throw new Error('Missing binary platform/architecture');
 
     const helpResult = runBinary(binaryPath, ['--help']);
     assertSuccess(binaryPath, ['--help'], helpResult);

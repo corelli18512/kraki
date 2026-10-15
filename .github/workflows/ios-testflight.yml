@@ -17,7 +17,12 @@ on:
       - "ios-v*"
 
 permissions:
-  contents: read
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  KRAKI_BUILD_CHANNEL: release
 
 concurrency:
   group: ios-testflight
@@ -33,6 +38,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
@@ -54,6 +64,12 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "build=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Embed build identity
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          KRAKI_BUILD_NUMBER: ${{ steps.version.outputs.build }}
+        run: node scripts/release/build-info.mjs packages/arm/ios/Kraki/Resources/build-info.json ios "$VERSION"
 
       - name: Cache Swift packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -134,6 +150,7 @@ jobs:
           set -euo pipefail
           APP="$RUNNER_TEMP/Kraki.xcarchive/Products/Applications/Kraki.app"
           test -d "$APP"
+          cmp packages/arm/ios/Kraki/Resources/build-info.json "$APP/build-info.json"
           if [ '${{ inputs.diagnostics }}' = 'true' ]; then
             bash scripts/diag/verify-diagnostic-delivery.sh "$APP"
           else
@@ -178,6 +195,33 @@ jobs:
             -exportOptionsPlist packages/arm/ios/ExportOptions-AppStore.plist
           test -f "$RUNNER_TEMP/ios-export/Kraki.ipa"
 
+      - name: Prepare final IPA provenance
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          KRAKI_BUILD_NUMBER: ${{ steps.version.outputs.build }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ios-provenance"
+          cp "$RUNNER_TEMP/ios-export/Kraki.ipa" "$RUNNER_TEMP/ios-provenance/Kraki.ipa"
+          unzip -p "$RUNNER_TEMP/ios-provenance/Kraki.ipa" Payload/Kraki.app/build-info.json > "$RUNNER_TEMP/exported-build-info.json"
+          cmp packages/arm/ios/Kraki/Resources/build-info.json "$RUNNER_TEMP/exported-build-info.json"
+          node scripts/release/artifacts.mjs manifest "$RUNNER_TEMP/ios-provenance" ios "$VERSION"
+
+      - name: Attest final IPA and release manifest
+        id: provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: '${{ runner.temp }}/ios-provenance/*'
+
+      - name: Verify provenance before submitting to Apple
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          node scripts/release/artifacts.mjs verify "$RUNNER_TEMP/ios-provenance" "$PROVENANCE_BUNDLE"
+          cp "$PROVENANCE_BUNDLE" "$RUNNER_TEMP/ios-provenance/provenance.json"
+
       - name: Upload IPA to TestFlight
         env:
           API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
@@ -186,9 +230,38 @@ jobs:
           set -euo pipefail
           xcrun altool --upload-app \
             --type ios \
-            --file "$RUNNER_TEMP/ios-export/Kraki.ipa" \
+            --file "$RUNNER_TEMP/ios-provenance/Kraki.ipa" \
             --apiKey "$API_KEY_ID" \
             --apiIssuer "$API_ISSUER_ID"
+
+      - name: Publish durable iOS build record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ steps.version.outputs.build }}
+        run: |
+          set -euo pipefail
+          # One record per attempt; never overwrite another build's proof.
+          TAG="ios-build-${VERSION}-${BUILD_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          NOTES="$RUNNER_TEMP/ios-build-notes.md"
+          {
+            echo "Source: https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA"
+            echo "Build: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT"
+            echo
+            echo "Version $VERSION, build $BUILD_NUMBER (chat.kraki.ios). Submitted to Apple; processing/availability is managed by Apple."
+            echo "These attestations cover the uploaded IPA, not the app after Apple's distribution processing."
+            echo "The IPA is retained in the workflow artifacts; the signed manifest and proof below are the durable public record."
+          } > "$NOTES"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --latest=false --prerelease --title "iOS $VERSION ($BUILD_NUMBER), attempt $GITHUB_RUN_ATTEMPT" \
+            --notes-file "$NOTES" \
+            "$RUNNER_TEMP/ios-provenance/release-manifest.json" \
+            "$RUNNER_TEMP/ios-provenance/SHA256SUMS.txt" \
+            "$RUNNER_TEMP/ios-provenance/provenance.json"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/ios-public-record"
+          for FILE in release-manifest.json SHA256SUMS.txt provenance.json; do
+            cmp "$RUNNER_TEMP/ios-provenance/$FILE" "$RUNNER_TEMP/ios-public-record/$FILE"
+          done
 
       - name: Upload release diagnostics
         if: always()
@@ -197,6 +270,8 @@ jobs:
           name: ios-testflight-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build }}
           path: |
             ${{ runner.temp }}/ios-export
+            ${{ runner.temp }}/ios-provenance/*.json
+            ${{ runner.temp }}/ios-provenance/SHA256SUMS.txt
             ${{ runner.temp }}/Kraki.xcarchive/Info.plist
             ${{ runner.temp }}/Kraki.xcarchive/dSYMs
             ${{ runner.temp }}/ios-symbol-uuids.txt

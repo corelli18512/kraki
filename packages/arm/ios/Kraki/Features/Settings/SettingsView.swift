@@ -243,25 +243,7 @@ struct SettingsView: View {
     // MARK: - About Kraki (app + relay version, logo-and-name in header)
 
     private var aboutSection: some View {
-        Section {
-            LabeledContent("Kraki for iPhone") {
-                Text(appVersion)
-                    .foregroundStyle(.secondary)
-            }
-            LabeledContent("Relay") {
-                Text(appState.relayVersion ?? "—")
-                    .foregroundStyle(.secondary)
-            }
-        } header: {
-            HStack(spacing: 8) {
-                Image("KrakiLogo")
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 28, height: 28)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                Text("About Kraki")
-            }
-        }
+        AboutBuildSection(version: appVersion, relayVersion: appState.relayVersion ?? "—")
     }
 
     // MARK: - Rate Kraki + Report an issue (standalone two-button section)

@@ -68,8 +68,8 @@ jobs:
           echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  actionlint.tgz" | sha256sum -c -
           tar xzf actionlint.tgz actionlint
           ./actionlint -shellcheck= -color
-      - name: Test change routing
-        run: node --test scripts/ci/test-scope.test.mjs scripts/ci/swiftlint-ratchet.test.mjs
+      - name: Test change routing and release provenance
+        run: node --test scripts/ci/test-scope.test.mjs scripts/ci/swiftlint-ratchet.test.mjs scripts/release/*.test.mjs
       - name: Test relay alerting (ops/watch)
         run: |
           node --test ops/watch/test/*.test.mjs

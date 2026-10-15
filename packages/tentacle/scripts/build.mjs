@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import { cpSync, mkdirSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createBuildInfo, writeBuildInfo } from '../../../scripts/release/build-info.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(__dirname, '..');
@@ -33,3 +34,7 @@ if (process.platform === 'win32') {
 }
 
 cpSync(join(packageRoot, 'src', 'banner-data.json'), join(distDir, 'banner-data.json'));
+writeBuildInfo(join(distDir, 'build-info.json'), createBuildInfo({
+  component: 'cli', version: JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version,
+  cwd: packageRoot,
+}));
