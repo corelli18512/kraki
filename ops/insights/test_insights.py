@@ -4,13 +4,15 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 import uuid
 from indexer import Index
 from metrics import distributions, percentile, pending_sends
 from product import DAY, account_snapshot, combine_product, day_bounds
-from run import build
+from run import build, peer_snapshot
 
 NOW = 1792108800000  # 2026-10-16 00:00 UTC; Beijing 08:00
 KEY = b'k' * 32
@@ -172,6 +174,23 @@ class InsightsTests(unittest.TestCase):
             bad=owner/(str(uuid.uuid4())+'.json.gz'); bad.write_bytes(b'corrupt')
             self.assertEqual(index.ingest(root/'diag',NOW)['invalid'],1)
             index.close()
+
+    def test_peer_uses_only_dedicated_identity_and_rejects_wrong_or_invalid_exports(self):
+        config={'peer': {'host':'cn','keyFile':'/private/dedicated-key',
+                        'knownHostsFile':'/private/pinned-host','destination':'root@example.invalid'}}
+        valid={'schema':1,'host':'cn','product':{}}
+        with patch('run.subprocess.run') as ssh:
+            ssh.return_value=subprocess.CompletedProcess([],0,json.dumps(valid).encode(),b'')
+            self.assertEqual(peer_snapshot(config),valid)
+            args=ssh.call_args.args[0]
+            self.assertEqual(args[args.index('-F')+1],'/dev/null')
+            for option in ['ControlPath=none','IdentityAgent=none','IdentitiesOnly=yes',
+                           'StrictHostKeyChecking=yes','ClearAllForwardings=yes','BatchMode=yes']:
+                self.assertIn(option,args)
+            self.assertEqual(ssh.call_args.kwargs['timeout'],8)
+            for raw in [b'not json', b'{"schema":1,"host":"wrong"}', b'{"schema":2,"host":"cn"}']:
+                ssh.return_value=subprocess.CompletedProcess([],0,raw,b'')
+                self.assertIsNone(peer_snapshot(config))
 
     def test_real_build_produces_redacted_summary_and_no_head_writes(self):
         with tempfile.TemporaryDirectory() as root:

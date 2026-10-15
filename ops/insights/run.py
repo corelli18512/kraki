@@ -31,8 +31,11 @@ def peer_snapshot(config):
     peer = config.get('peer')
     if not peer: return None
     try:
-        # Dedicated restricted key, pinned host key, no interactive auth.
-        result = subprocess.run(['ssh', '-T', '-i', peer['keyFile'], '-o', 'IdentitiesOnly=yes',
+        # Ignore ambient SSH configuration/agents/multiplexed admin sessions:
+        # this must authenticate with the dedicated forced-command key.
+        result = subprocess.run(['ssh', '-F', '/dev/null', '-T', '-i', peer['keyFile'],
+            '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'IdentityAgent=none',
+            '-o', 'ClearAllForwardings=yes', '-o', 'IdentitiesOnly=yes',
             '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=yes',
             '-o', 'UserKnownHostsFile=' + peer['knownHostsFile'], peer['destination'], 'export'],
             capture_output=True, timeout=8, check=True)
