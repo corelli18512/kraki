@@ -3457,7 +3457,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 88;
+				CURRENT_PROJECT_VERSION = 89;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -3468,7 +3468,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.86;
+				MARKETING_VERSION = 0.2.87;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.dev;
 				PRODUCT_NAME = "Kraki Dev";
 				SDKROOT = macosx;
@@ -3571,7 +3571,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 88;
+				CURRENT_PROJECT_VERSION = 89;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -3581,7 +3581,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.86;
+				MARKETING_VERSION = 0.2.87;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac.diag;
 				PRODUCT_NAME = "Kraki Diag";
 				SDKROOT = macosx;
@@ -3596,7 +3596,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 88;
+				CURRENT_PROJECT_VERSION = 89;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -3607,7 +3607,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.86;
+				MARKETING_VERSION = 0.2.87;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac;
 				PRODUCT_NAME = Kraki;
 				SDKROOT = macosx;
@@ -3622,7 +3622,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kraki/KrakiMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 88;
+				CURRENT_PROJECT_VERSION = 89;
 				DEVELOPMENT_TEAM = 3A83X5JZ3S;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -3633,7 +3633,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.86;
+				MARKETING_VERSION = 0.2.87;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.kraki.mac;
 				PRODUCT_NAME = Kraki;
 				SDKROOT = macosx;
