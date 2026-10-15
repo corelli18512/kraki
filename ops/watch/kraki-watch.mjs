@@ -3,6 +3,7 @@
 //
 //   kraki-watch                   one check run (systemd timer, every minute)
 //   kraki-watch maintenance 10    silence local checks for 10 minutes (deploys)
+//   kraki-watch check-config      local delivery configuration check (no network)
 //   kraki-watch test-notify       send one critical and one normal test message
 //   kraki-watch digest-now        send today's summary now (does not reset it)
 //
@@ -15,6 +16,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { sendBark } from './lib/bark.mjs';
 import * as collect from './lib/collect.mjs';
+import { deliveryConfig } from './lib/config.mjs';
 import { formatDigest } from './lib/digest.mjs';
 import { accumulate, digestDue, emptyState, evaluate, localParts, recordProbe, rollDigest, routeRetries } from './lib/engine.mjs';
 import { evaluateRules } from './lib/rules.mjs';
@@ -42,12 +44,12 @@ const RANK = { critical: 0, warning: 1, info: 2 };
 
 async function deliver(n, attempts = 2, timeoutMs = 6000) {
   const line = `${n.kind}/${n.severity}: ${n.title}${n.body ? ` | ${n.body.replace(/\n/g, ' ¶ ')}` : ''}`;
-  if (!NOTIFY || !env.BARK_KEY) {
+  if (!NOTIFY) {
     console.log(`[shadow] ${line}`);
     return { ok: true };
   }
   const r = await sendBark(n, { server: env.BARK_SERVER || undefined, deviceKey: env.BARK_KEY, attempts, timeoutMs });
-  console.log(`[${r.ok ? 'sent' : `FAILED ${r.error}`}] ${line}`);
+  console.log(`[${r.ok ? 'accepted' : `FAILED ${r.error}`}] ${line}`);
   return r;
 }
 
@@ -133,6 +135,9 @@ async function runOnce(config) {
 
 async function main() {
   const [cmd, arg] = process.argv.slice(2);
+  if (cmd && !['maintenance', 'check-config', 'test-notify', 'digest-now'].includes(cmd)) {
+    throw new Error('Unknown command; use check-config, maintenance, test-notify or digest-now');
+  }
   if (cmd === 'maintenance') {
     const minutes = Number(arg ?? 10);
     await mkdir(STATE_DIR, { recursive: true });
@@ -140,15 +145,27 @@ async function main() {
     console.log(`maintenance for ${minutes} min`);
     return;
   }
+  const { errors, warnings } = deliveryConfig(env, { requireLive: cmd === 'test-notify' });
+  if (cmd === 'check-config') {
+    for (const warning of warnings) console.log(`WARN: ${warning}`);
+  }
+  if (errors.length) throw new Error(errors.join('; '));
   const config = JSON.parse(await readFile(env.KRAKI_WATCH_CONFIG ?? '/etc/kraki/watch.json', 'utf8'));
+  if (cmd === 'check-config') {
+    console.log('Delivery configuration valid; host config is readable JSON. No network requests or state changes made. Phone delivery is NOT verified.');
+    return;
+  }
   if (cmd === 'test-notify') {
     const label = config.label ?? config.host;
-    await deliver({ kind: 'fire', severity: 'critical', title: `${label}：测试紧急告警`, body: '这是 kraki-watch 的测试消息（紧急级别，静音也会响）', quiet: false });
-    await deliver({ kind: 'fire', severity: 'warning', title: `${label}：测试警告`, body: '这是 kraki-watch 的测试消息（警告级别）', quiet: false });
+    const critical = await deliver({ kind: 'fire', severity: 'critical', title: `${label}：测试紧急告警`, body: '这是 kraki-watch 的测试消息。请检查锁屏、静音/专注模式下的关键提醒是否正常。', quiet: false });
+    const warning = await deliver({ kind: 'fire', severity: 'warning', title: `${label}：测试警告`, body: '这是 kraki-watch 的测试消息（警告级别）', quiet: false });
+    if (!critical.ok || !warning.ok) throw new Error('Bark test failed; inspect FAILED lines');
+    console.log('Bark accepted both tests; confirm receipt and critical-alert sound on the phone.');
     return;
   }
   if (cmd === 'digest-now') {
-    await deliver(formatDigest(await loadState(), Date.now(), config));
+    const result = await deliver(formatDigest(await loadState(), Date.now(), config));
+    if (!result.ok) throw new Error('Bark digest delivery failed');
     return;
   }
   await runOnce(config);

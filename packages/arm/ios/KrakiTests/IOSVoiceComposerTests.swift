@@ -107,7 +107,11 @@ private final class VoiceHost: IOSVoiceComposerHost, KrakiVoiceInputHost {
 
 @MainActor final class IOSVoiceComposerTests: XCTestCase {
     override func setUpWithError() throws {
-        try requireForegroundUITests()
+        // This suite uses synthetic audio and an in-memory host, not windows
+        // or a microphone. Allow targeted headless transaction regressions.
+        if ProcessInfo.processInfo.environment["KRAKI_RUN_VOICE_TRANSACTION_TESTS"] != "1" {
+            try requireForegroundUITests()
+        }
         try super.setUpWithError()
     }
 

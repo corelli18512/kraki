@@ -21,6 +21,8 @@ final class IOSComposerGrowthShots: XCTestCase {
 
     override func setUp() async throws {
         if ProcessInfo.processInfo.environment["KRAKI_COMPOSER_SHOTS"] != "1" { try requireForegroundUITests() }
+        IOSVoiceGeometryProbe.enabled = true
+        IOSVoiceGeometryProbe.frames = [:]
         driver = IOSVoiceHoldScenarioDriver(automaticCorrections: false)
         app = IOSVoiceHoldScenarioFixture.makeAppState(driver: driver)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -46,6 +48,8 @@ final class IOSComposerGrowthShots: XCTestCase {
     override func tearDown() async throws {
         app?.iosVoiceComposer.discard(); app?.voiceInputController.forgetLease()
         window?.isHidden = true; window?.rootViewController = nil; window = nil
+        IOSVoiceGeometryProbe.enabled = false
+        IOSVoiceGeometryProbe.frames = [:]
     }
 
     private func drain(_ s: Double) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
@@ -179,6 +183,75 @@ final class IOSComposerGrowthShots: XCTestCase {
 
     private var transcriptScroll: UIScrollView? {
         all(host.view).compactMap { $0 as? UIScrollView }.first { !($0 is UITextView) && $0.contentSize.height > 1 }
+    }
+
+    func testRecordingTextStaysTopAlignedAcrossWrappingAndResize() throws {
+        for (style, suffix) in [(UIUserInterfaceStyle.light, "light"), (.dark, "dark")] {
+            try mount(style)
+            app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
+            drain(0.6)
+            let id = try XCTUnwrap(app.iosVoiceComposer.operation).id
+            for width in [320.0, 390, 600] {
+                window.frame = CGRect(x: 0, y: 0, width: width, height: 800)
+                host.view.frame = window.bounds
+                drain(0.3)
+                for (name, text) in [("short", "短句"), ("wrap", Self.voiceTexts[1].1),
+                                     ("long", Self.voiceTexts[2].1), ("short-again", "短句")] {
+                    app.iosVoiceComposer.receive(text, id: id)
+                    drain(0.4)
+                    let box = try XCTUnwrap(IOSVoiceGeometryProbe.frames["box"])
+                    let header = try XCTUnwrap(IOSVoiceGeometryProbe.frames["header"])
+                    let glyphs = try XCTUnwrap(IOSVoiceGeometryProbe.frames["text"])
+                    let scroll = try XCTUnwrap(transcriptScroll)
+                    XCTAssertEqual(header.minY, box.minY, accuracy: 1)
+                    XCTAssertGreaterThanOrEqual(header.maxY, box.minY)
+                    XCTAssertLessThanOrEqual(header.maxY, box.maxY)
+                    XCTAssertLessThanOrEqual(scroll.bounds.height, 132.5)
+                    if name != "long" {
+                        XCTAssertEqual(glyphs.minY - header.minY, 12, accuracy: 1,
+                                       "\(suffix) \(width) \(name): short text must start at the top")
+                        XCTAssertLessThanOrEqual(glyphs.maxY, header.maxY + 1)
+                    } else {
+                        XCTAssertEqual(scroll.contentOffset.y + scroll.bounds.height,
+                                       scroll.contentSize.height + scroll.adjustedContentInset.bottom,
+                                       accuracy: 2, "long speech follows the tail")
+                    }
+                    try shot("ios-align-\(Int(width))-\(name)-\(suffix)")
+                }
+            }
+            app.iosVoiceComposer.cancel()
+            drain(0.4)
+        }
+    }
+
+    func testStartingVoiceKeepsDraftWidthAndDoesNotShrinkExpandedDraft() throws {
+        for (style, suffix) in [(UIUserInterfaceStyle.light, "light"), (.dark, "dark")] {
+            try mount(style)
+            for lines in [1, 4, 6, 10] {
+                let draft = (1...lines).map { "Draft line \($0)" }.joined(separator: "\n")
+                app.sessionStore.setDraft(sid, draft)
+                drain(0.6)
+                let before = try XCTUnwrap(IOSVoiceGeometryProbe.frames["box"])
+                app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
+                drain(0.6)
+                // The scenario driver emits a canned first partial. Remove
+                // it so added speech cannot conceal a start-time collapse.
+                app.iosVoiceComposer.receive("", id: try XCTUnwrap(app.iosVoiceComposer.operation).id)
+                drain(0.3)
+                let after = try XCTUnwrap(IOSVoiceGeometryProbe.frames["box"])
+                XCTAssertEqual(after.width, before.width, accuracy: 1, "recording keeps the capsule width")
+                XCTAssertEqual(after.minX, before.minX, accuracy: 1)
+                // iPhone deliberately adds a transcript/control row; unlike
+                // Mac's new-session form it is not a fixed-height replacement.
+                XCTAssertGreaterThanOrEqual(after.height, before.height - 1, "an expanded draft must not collapse")
+                let preview = app.iosVoiceComposer.preview
+                XCTAssertEqual(preview.prefix + preview.spoken + preview.suffix, draft)
+                try shot("ios-start-\(lines)-lines-\(suffix)")
+                app.iosVoiceComposer.cancel()
+                drain(0.4)
+                XCTAssertEqual(app.sessionStore.drafts[sid], draft)
+            }
+        }
     }
 
     func testVoiceStatesAndFades() throws {

@@ -18,6 +18,7 @@ let relayStatus = 200;
 const bark = [];
 let pings = 0;
 let barkHangs = false;
+let barkCode = 200;
 let metricsCalls = 0;
 
 before(async () => {
@@ -27,7 +28,7 @@ before(async () => {
     if (req.url === '/push') {
       let body = '';
       req.on('data', (c) => { body += c; });
-      req.on('end', () => { bark.push(JSON.parse(body)); res.end('{"code":200}'); });
+      req.on('end', () => { bark.push(JSON.parse(body)); res.end(JSON.stringify({ code: barkCode })); });
       return;
     }
     if (req.url === '/ping') { pings++; res.end('OK'); return; }
@@ -196,4 +197,52 @@ test('a new critical is never pushed out of the outbox by older retries', async 
   barkHangs = false;
   relayStatus = 200;
   await run();
+});
+
+test('check-config is offline, redacted, and does not change state', async () => {
+  const before = await readFile(join(dir, 'state', 'state.json'), 'utf8');
+  const sent = bark.length;
+  const heartbeats = pings;
+  const out = await run('check-config');
+  assert.match(out, /Phone delivery is NOT verified/);
+  assert.doesNotMatch(out, /test-key|\/ping/);
+  assert.equal(bark.length, sent);
+  assert.equal(pings, heartbeats);
+  assert.equal(await readFile(join(dir, 'state', 'state.json'), 'utf8'), before);
+});
+
+test('enabled notifications with no key fail instead of silently clearing the queue as shadow', async () => {
+  const before = await readFile(join(dir, 'state', 'state.json'), 'utf8');
+  const heartbeats = pings;
+  await assert.rejects(runEnv({ BARK_KEY: '' }), /BARK_KEY is required/);
+  assert.equal(pings, heartbeats, 'a broken configuration must not send a healthy heartbeat');
+  assert.equal(await readFile(join(dir, 'state', 'state.json'), 'utf8'), before);
+});
+
+test('test-notify cannot claim success in shadow mode or with a rejected push', async () => {
+  const sent = bark.length;
+  await assert.rejects(runEnv({ KRAKI_WATCH_NOTIFY: '0' }, 'test-notify'), /shadow mode sends nothing/);
+  assert.equal(bark.length, sent);
+  barkCode = 400;
+  try {
+    await assert.rejects(run('test-notify'), /Bark test failed/);
+    await assert.rejects(run('digest-now'), /Bark digest delivery failed/);
+  } finally { barkCode = 200; }
+});
+
+test('Bark application-level failure remains queued and is retried on recovery', async () => {
+  const statePath = join(dir, 'state', 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  state.undelivered = [{ kind: 'fire', severity: 'critical', title: 'retry-me', body: '', quiet: false }];
+  await writeFile(statePath, JSON.stringify(state));
+  barkCode = 400;
+  try {
+    await run();
+    const failed = JSON.parse(await readFile(statePath, 'utf8'));
+    assert.ok(failed.undelivered.some((n) => n.title.includes('retry-me')));
+  } finally { barkCode = 200; }
+  const sent = bark.length;
+  await run();
+  assert.ok(bark.slice(sent).some((n) => n.title.includes('retry-me')));
+  assert.deepEqual(JSON.parse(await readFile(statePath, 'utf8')).undelivered, []);
 });

@@ -6,7 +6,7 @@ import XCTest
 
 /// The new-session composer dictates like the chat Composer: same recording
 /// surface, same progressive correction in the editor, and ↑ while recording
-/// starts the Session only with the corrected text. Synthetic speech, an
+/// opens the chat before correction; only final text reaches the agent. Synthetic speech, an
 /// offscreen window (never takes focus), no microphone or network.
 @MainActor
 final class NewSessionVoiceTests: XCTestCase {
@@ -131,29 +131,62 @@ final class NewSessionVoiceTests: XCTestCase {
         try capture("05-edit-final")
     }
 
-    func testSendWhileRecordingStartsWithTheCorrectedText() throws {
-        try press("mac.newSession.voice")
-        drain(300)
-        XCTAssertTrue(app.iosVoiceComposer.isRecording(in: key))
-        try press("mac.newSession.create")
-        XCTAssertFalse(app.iosVoiceComposer.isRecording)
-        XCTAssertTrue(createdPrompts.isEmpty, "raw speech is never sent")
-        XCTAssertNotNil(app.iosVoiceComposer.uncorrectedRange(in: key), "the correction shows in the editor while waiting")
-        try capture("06-send-waiting")
-
-        driver.emit(.correctionDelta("\u{8BF7}\u{628A}\u{8FD9}\u{4E2A}\u{529F}\u{80FD}"))
-        drain(150)
-        XCTAssertTrue(createdPrompts.isEmpty)
-        driver.emit(.final(corrected, rawText: raw))
-        drain(300)
-        XCTAssertEqual(createdPrompts, [corrected])
-        XCTAssertEqual(draft, "")
+    func testSendOpensChatAndCorrectsInBubbleBeforeDispatch() throws {
+        try assertVoiceHandoff(creationFirst: true)
     }
 
-    func testTypingDuringASendCorrectionCallsTheSendOff() throws {
+    func testCorrectionBeforeCreationWaitsForRealSessionAndSendsOnce() throws {
+        try assertVoiceHandoff(creationFirst: false)
+    }
+
+    private func assertVoiceHandoff(creationFirst: Bool) throws {
+        var inputs: [(String, String)] = []
+        app.testOutboundMessageHandler = { payload, _, _ in
+            if payload["type"] as? String == "send_input" {
+                inputs.append((payload["sessionId"] as? String ?? "", (payload["payload"] as? [String: Any])?["text"] as? String ?? ""))
+            }
+            return true
+        }
+        try press("mac.newSession.voice")
+        try press("mac.newSession.create")
+        let sender = try XCTUnwrap(app.commandSender)
+        let request = try XCTUnwrap(sender.pendingPlaceholderIds.keys.first)
+        let placeholder = try XCTUnwrap(sender.pendingPlaceholderIds[request])
+        let client = try XCTUnwrap(sender.pendingInputs(placeholder).first?.payload["clientId"]?.stringValue)
+        XCTAssertEqual(app.sessionStore.navigateToSession, placeholder, "navigation precedes correction")
+        XCTAssertEqual(sender.pendingInputs(placeholder).first?.payload["localState"]?.stringValue, "correcting")
+        XCTAssertEqual(draft, "")
+        XCTAssertTrue(inputs.isEmpty)
+        window.contentView = NSHostingView(rootView: MacStartingVoiceChat(sessionID: placeholder, appState: app).environment(app))
+        drain(350)
+        XCTAssertTrue(views(try XCTUnwrap(window.contentView)).compactMap { $0 as? MacChatBubbleCell }
+            .contains { $0.deliveryStatusForRegression?.contains("Correcting") == true }, "real chat renders the staged bubble")
+        app.sessionStore.setDraft(placeholder, "Follow-up")
+        if creationFirst { sender.resolveCreateRequest(request, sessionId: "voice-a") }
+        let owner = creationFirst ? "voice-a" : placeholder
+        driver.emit(.correctionDelta("请把这个功能"))
+        drain(150)
+        XCTAssertNotNil(sender.pendingInputs(owner).first?.payload["uncorrected"])
+        driver.emit(.final(corrected, rawText: raw))
+        drain(200)
+        if !creationFirst {
+            XCTAssertTrue(inputs.isEmpty, "a placeholder never goes to transport")
+            sender.resolveCreateRequest(request, sessionId: "voice-a")
+        }
+        XCTAssertEqual(inputs.map(\.0), ["voice-a"])
+        XCTAssertEqual(inputs.map(\.1), [corrected])
+        XCTAssertEqual(sender.pendingInputs("voice-a").first?.payload["clientId"]?.stringValue, client)
+        XCTAssertEqual(app.sessionStore.drafts["voice-a"], "Follow-up")
+        XCTAssertTrue(sender.pendingInputs(placeholder).isEmpty)
+        driver.emit(.final("Late duplicate", rawText: raw))
+        drain(80)
+        XCTAssertEqual(inputs.count, 1)
+    }
+
+    func testTypingDuringEditCorrectionPreventsLateOverwrite() throws {
         try press("mac.newSession.voice")
         drain(300)
-        try press("mac.newSession.create")
+        try press("voice-to-text")
         let editor = try XCTUnwrap(editor)
         editor.setSelectedRange(NSRange(location: 0, length: 1))
         window.makeFirstResponder(editor)
@@ -221,6 +254,64 @@ final class NewSessionVoiceTests: XCTestCase {
         XCTAssertGreaterThan(t.minY, c.maxY, "the transcript is above the bottom row (window coordinates are bottom-up)")
         XCTAssertEqual(c.minY, try XCTUnwrap(views(window.contentView!).first { $0.identifier?.rawValue == "mac.newSession.create" })
             .convert(.zero, to: nil).y, accuracy: 8, "Cancel / Edit share the send button's row")
+    }
+
+    func testStartingVoicePreservesExpandedDraftHeight() throws {
+        app.sessionStore.setDraft(key, (1...6).map { "Requirement \($0): keep the editor's size." }.joined(separator: "\n"))
+        drain(300)
+        let initial = try XCTUnwrap(editor?.enclosingScrollView).frame.height
+        try press("mac.newSession.voice")
+        drain(300)
+        let transcript = try XCTUnwrap(views(try XCTUnwrap(window.contentView)).compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
+        let recording = try XCTUnwrap(transcript.enclosingScrollView).frame.height
+        XCTAssertEqual(recording, initial, accuracy: 1, "entering voice must not shrink a six-line draft")
+    }
+
+    func testSheetKeepsItsFourLineViewportWhenRecordingStarts() throws {
+        window.contentView = NSHostingView(rootView: NewSessionSheet(isPresented: .constant(true))
+            .environment(app).environment(TentacleCLIManager()))
+        drain(300)
+        let height = try XCTUnwrap(editor?.enclosingScrollView).frame.height
+        XCTAssertEqual(height, MacComposerScrollableTextInput.height(lines: 4), accuracy: 1)
+        try press("mac.newSession.voice")
+        let transcript = try XCTUnwrap(views(try XCTUnwrap(window.contentView)).compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
+        XCTAssertEqual(transcript.enclosingScrollView?.frame.height ?? 0, height, accuracy: 1)
+    }
+
+    func testNewSessionSpeechGrowsPastThreeLinesAndCapsAtTen() throws {
+        try press("mac.newSession.voice")
+        let id = try XCTUnwrap(app.iosVoiceComposer.operation).id
+        for count in [6, 14] {
+            app.iosVoiceComposer.receive((1...count).map { "Spoken line \($0)" }.joined(separator: "\n"), id: id)
+            drain(300)
+            let transcript = try XCTUnwrap(views(try XCTUnwrap(window.contentView)).compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
+            let scroll = try XCTUnwrap(transcript.enclosingScrollView)
+            XCTAssertEqual(scroll.frame.height, MacComposerScrollableTextInput.height(lines: CGFloat(min(count, 10))), accuracy: 1)
+            XCTAssertEqual(scroll.contentView.bounds.maxY, transcript.frame.height, accuracy: 1)
+        }
+    }
+
+    func testStartingVoiceKeepsWidthWithRealisticModelName() throws {
+        app.deviceStore.setDeviceAgents("voice-test-device", agents: [
+            AgentCapabilities(type: "code", id: "pi", models: ["openai-codex/gpt-6-astra"], modelDetails: [
+                ModelDetail(id: "openai-codex/gpt-6-astra", name: "GPT-6 Astra", supportsReasoningEffort: true,
+                            supportedReasoningEfforts: [.medium, .high, .xhigh], defaultReasoningEffort: .xhigh)
+            ])
+        ])
+        drain(300)
+        func sendFrame() throws -> CGRect {
+            let marker = try XCTUnwrap(views(try XCTUnwrap(window.contentView)).first { $0.identifier?.rawValue == "mac.newSession.create" })
+            return marker.convert(marker.bounds, to: nil)
+        }
+        let before = try sendFrame()
+        let textWidth = try XCTUnwrap(editor?.enclosingScrollView).frame.width
+        try press("mac.newSession.voice")
+        drain(300)
+        let after = try sendFrame()
+        let transcript = try XCTUnwrap(views(try XCTUnwrap(window.contentView)).compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
+        let voiceWidth = try XCTUnwrap(transcript.enclosingScrollView).frame.width
+        XCTAssertEqual(after.maxX, before.maxX, accuracy: 1, "recording controls must not push the composer wider")
+        XCTAssertEqual(voiceWidth, textWidth - 4, accuracy: 1)
     }
 
     func testCancelKeepsTheTypedDraft() throws {

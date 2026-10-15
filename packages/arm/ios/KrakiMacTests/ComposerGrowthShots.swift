@@ -89,7 +89,7 @@ final class ComposerGrowthShots: XCTestCase {
         guard let mask = scroll?.layer?.mask as? CAGradientLayer, let colors = mask.colors as? [CGColor] else {
             fadeLog += "\(name): no fade\n"; return
         }
-        fadeLog += "\(name): top=\(colors.first!.alpha < 0.5) bottom=\(colors.last!.alpha < 0.5)\n"
+        fadeLog += "\(name): top=\((colors.first?.alpha ?? 1) < 0.5) bottom=\((colors.last?.alpha ?? 1) < 0.5)\n"
     }
 
     static let voiceTexts: [(String, String)] = [
@@ -101,6 +101,127 @@ final class ComposerGrowthShots: XCTestCase {
 
     /// Voice recording in the chat Composer at 1 / 2 / 3 / many lines, plus
     /// the box height sampled every 16 ms as the transcript wraps.
+    func testVoiceWrapGrowsInsideProductionChatOverlay() throws {
+        MacComposerMetrics.snapshotFlatGlass = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.setContentSize(NSSize(width: 1000, height: 970))
+        app.messageProvider?.setTentacleInfo(sessionId: sid, lastSeq: 0, deviceId: "voice-test-device")
+        _ = app.messageProvider?.openSession(sid, reanchorLatest: true)
+        window.contentView = NSHostingView(rootView: MacChatView(
+            sessionId: sid, prebuiltViewModel: ChatViewModel(sessionId: sid, appState: app)).environment(app))
+        drain(500)
+        app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
+        drain(500)
+        let id = try XCTUnwrap(app.iosVoiceComposer.operation).id
+        var heights: [CGFloat] = []
+        for text in ["Short speech", "First line\nSecond line", String(repeating: "这是持续增长的语音输入，", count: 40)] {
+            app.iosVoiceComposer.receive(text, id: id)
+            drain(500)
+            let transcript = try XCTUnwrap(views(try XCTUnwrap(window.contentView)).compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
+            let scroll = try XCTUnwrap(transcript.enclosingScrollView)
+            heights.append(scroll.frame.height)
+            XCTAssertEqual(scroll.contentView.bounds.maxY, transcript.frame.height, accuracy: 1)
+            try assertVoiceFitsGlass()
+        }
+        XCTAssertEqual(heights[0], 20, accuracy: 0.5)
+        XCTAssertGreaterThan(heights[1], heights[0] + 20, "two lines must grow the production overlay: \(heights)")
+        XCTAssertEqual(heights[2], 56, accuracy: 1)
+        for width in [1000.0, 820, 640, 420] {
+            window.setContentSize(NSSize(width: width, height: 700))
+            app.iosVoiceComposer.receive("Short", id: id)
+            drain(250)
+            var text = ""
+            for chunk in (0..<35).map({ _ in "这个语音输入框需要随着文字换行增长，" }) {
+                text += chunk
+                app.voiceInputController.debugApplyPartial(text)
+                drain(25)
+            }
+            drain(220)
+            let transcript = try XCTUnwrap(views(try XCTUnwrap(window.contentView)).compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
+            XCTAssertEqual(transcript.enclosingScrollView?.frame.height ?? 0, 56, accuracy: 1, "rapid partials at width \(width)")
+            try assertVoiceFitsGlass()
+        }
+    }
+
+    /// At the stacking threshold the wider text lane fits one line again.
+    /// The actions still need a tall shell: the line must not center in it.
+    func testStackedVoiceReflowKeepsSingleLineAtTop() throws {
+        app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
+        drain(500)
+        let id = try XCTUnwrap(app.iosVoiceComposer.operation).id
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            window.appearance = NSAppearance(named: appearance)
+            for width in [420.0, 640, 900] {
+                window.setContentSize(NSSize(width: width, height: 240))
+                app.iosVoiceComposer.receive("Short", id: id)
+                drain(250)
+                let transcript = try XCTUnwrap(views(try XCTUnwrap(window.contentView))
+                    .compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
+                let scroll = try XCTUnwrap(transcript.enclosingScrollView)
+                let narrow = scroll.contentView.bounds.width
+                // Find the first CJK string that wraps in the narrow layout.
+                let text = try XCTUnwrap((1...100).map { String(repeating: "字", count: $0) }.first {
+                    MacComposerVoiceTranscriptView.measure([($0, 1)], width: narrow)
+                        > MacComposerMetrics.minimumTextHeight + 0.5
+                })
+                app.iosVoiceComposer.receive(text, id: id)
+                for _ in 0..<16 {
+                    drain(16)
+                    try assertVoiceFitsGlass()
+                    if scroll.contentView.bounds.height > MacComposerMetrics.minimumTextHeight + 0.5 {
+                        XCTAssertEqual(transcript.textDrawingRect.minY, 0, accuracy: 0.5,
+                                       "top alignment must hold during the layout transition too")
+                    }
+                }
+                XCTAssertGreaterThan(scroll.contentView.bounds.width, narrow + 30)
+                XCTAssertLessThan(transcript.contentHeight, MacComposerVoiceTranscriptView.lineHeight * 1.5,
+                                  "must exercise two narrow lines reflowing into one wide line")
+                XCTAssertGreaterThan(scroll.contentView.bounds.height, 40)
+                try shot("voice-reflow-\(Int(width))-\(appearance.rawValue)")
+                XCTAssertEqual(transcript.textDrawingRect.minY, 0, accuracy: 0.5,
+                               "expanded single-line speech belongs at the top, not in the middle")
+                // Resizing without receiving a new partial must also refit.
+                window.setContentSize(NSSize(width: width + 80, height: 240))
+                drain(250)
+                if scroll.contentView.bounds.height > MacComposerMetrics.minimumTextHeight + 0.5 {
+                    XCTAssertEqual(transcript.textDrawingRect.minY, 0, accuracy: 0.5)
+                }
+            }
+        }
+    }
+
+    func testVoiceWrapTransitionKeepsGlassAndLayoutTogether() throws {
+        app.iosVoiceComposer.begin(sessionID: sid, selection: nil, context: .init(fields: [:], vocabulary: []))
+        drain(500)
+        let id = try XCTUnwrap(app.iosVoiceComposer.operation).id
+        for _ in 0..<4 {
+            app.iosVoiceComposer.receive("Short speech", id: id)
+            drain(250)
+            app.iosVoiceComposer.receive("First line\nSecond line", id: id)
+            for _ in 0..<15 {
+                drain(16)
+                try assertVoiceFitsGlass()
+            }
+        }
+    }
+
+    private func assertVoiceFitsGlass(file: StaticString = #filePath, line: UInt = #line) throws {
+        let all = views(try XCTUnwrap(window.contentView))
+        func frame(_ id: String) throws -> CGRect {
+            let v = try XCTUnwrap(all.first { $0.identifier?.rawValue == id })
+            return v.convert(v.bounds, to: nil)
+        }
+        let glass = try frame("chat-input-box")
+        let transcript = try XCTUnwrap(all.compactMap { $0 as? MacComposerVoiceTranscriptView }.first)
+        let scroll = try XCTUnwrap(transcript.enclosingScrollView)
+        let viewport = scroll.convert(scroll.bounds, to: nil)
+        for content in [viewport, try frame("voice-cancel"), try frame("voice-to-text")] {
+            XCTAssertGreaterThanOrEqual(content.minY, glass.minY - 0.5, "content \(content) below glass \(glass)", file: file, line: line)
+            XCTAssertLessThanOrEqual(content.maxY, glass.maxY + 0.5, "content \(content) above glass \(glass)", file: file, line: line)
+        }
+        XCTAssertEqual(glass.height, viewport.height + 16, accuracy: 0.5, file: file, line: line)
+    }
+
     func testVoiceStates() throws {
         for (suffix, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
             window.appearance = NSAppearance(named: appearance)
@@ -153,7 +274,10 @@ final class ComposerGrowthShots: XCTestCase {
         for i in 0..<20 { drain(16); hs.append(String(format: "%.1f", boxHeight())); if i == 3 || i == 8 { try shot("voice-growth-\(i)") } }
         try hs.joined(separator: " ").write(to: dir.appendingPathComponent("voice-growth.txt"), atomically: true, encoding: .utf8)
         let values = hs.compactMap(Double.init)
-        XCTAssertTrue(values.contains { $0 > 21 && $0 < 53 }, "the recording box must ease when the transcript wraps: \(hs)")
+        XCTAssertTrue(values.allSatisfy { abs($0 - 20) < 1 || abs($0 - 54) < 1 },
+                      "voice geometry switches atomically, never an interpolated shell around a final Layout: \(hs)")
+        XCTAssertEqual(values.last ?? 0, 54, accuracy: 1)
+        try assertVoiceFitsGlass()
         try fadeLog.write(to: dir.appendingPathComponent("fade-voice.txt"), atomically: true, encoding: .utf8)
         for s in ["light", "dark"] {
             XCTAssertTrue(fadeLog.contains("voice-tail-\(s): top=true bottom=false"), fadeLog)
