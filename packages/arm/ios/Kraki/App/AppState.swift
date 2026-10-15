@@ -321,6 +321,7 @@ final class AppState {
 
     @ObservationIgnored lazy var foregroundActivity = ForegroundActivityReporter(
         eligible: { [weak self] in self?.isAppForeground == true && self?.connectionStatus == .connected },
+        platformActive: AppState.isPlatformActiveForActivityReporting,
         send: { [weak self] in self?.wsClient?.sendRaw(#"{"type":"ping","foreground":true}"#, queueOnFailure: false) }
     )
 

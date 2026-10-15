@@ -4,6 +4,19 @@ import SwiftUI
 import Observation
 
 extension AppState {
+    /// Lifecycle hints may be optimistic during a cold/background launch.
+    /// Activity reporting additionally requires actual OS activation.
+    static func isPlatformActiveForActivityReporting() -> Bool {
+        guard Thread.isMainThread else { return false }
+        return MainActor.assumeIsolated {
+            #if os(macOS)
+            NSApp.isActive
+            #else
+            UIApplication.shared.applicationState == .active
+            #endif
+        }
+    }
+
     func updateReadVisibility(appForeground: Bool, conversationVisible: Bool) {
         let becameReadable = appForeground && conversationVisible
             && (!isAppForeground || !isConversationWindowVisible)

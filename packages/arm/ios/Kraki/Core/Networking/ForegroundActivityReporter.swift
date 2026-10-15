@@ -5,13 +5,16 @@ import Foundation
 /// Head chooses the date and deduplicates accounts across devices.
 final class ForegroundActivityReporter {
     private let eligible: () -> Bool
+    private let platformActive: () -> Bool
     private let send: () -> Void
     private let now: () -> Date
     private var timer: Timer?
     private var lastSent: Date?
 
-    init(eligible: @escaping () -> Bool, send: @escaping () -> Void, now: @escaping () -> Date = Date.init) {
+    init(eligible: @escaping () -> Bool, platformActive: @escaping () -> Bool,
+         send: @escaping () -> Void, now: @escaping () -> Date = Date.init) {
         self.eligible = eligible
+        self.platformActive = platformActive
         self.send = send
         self.now = now
     }
@@ -19,7 +22,7 @@ final class ForegroundActivityReporter {
     deinit { timer?.invalidate() }
 
     func refresh() {
-        guard eligible() else { stop(); return }
+        guard eligible(), platformActive() else { stop(); return }
         let time = now()
         if lastSent.map({ time.timeIntervalSince($0) >= 60 || time < $0 }) ?? true {
             send()
