@@ -19,6 +19,10 @@ import Observation
 struct SessionTable: UIViewControllerRepresentable {
     let appState: AppState
     let deviceFilter: String?  // nil = all devices
+    /// Live search text; empty shows every session.
+    var searchQuery: String = ""
+    /// Height of the floating header the rows scroll beneath (iOS 26).
+    var topContentInset: CGFloat = 0
     /// Archived sessions (F2): a collapsed group after the list. Passed in
     /// so SwiftUI re-runs `updateUIViewController` when they change.
     var archivedCount: Int = 0
@@ -29,6 +33,8 @@ struct SessionTable: UIViewControllerRepresentable {
         let vc = SessionTableController()
         vc.appState = appState
         vc.deviceFilter = deviceFilter
+        vc.searchQuery = searchQuery
+        vc.topContentInset = topContentInset
         vc.onCellTapped = onCellTapped
         vc.archivedCount = archivedCount
         vc.archivedIds = archivedIds
@@ -38,6 +44,8 @@ struct SessionTable: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: SessionTableController, context: Context) {
         vc.appState = appState
         vc.deviceFilter = deviceFilter
+        vc.searchQuery = searchQuery
+        vc.topContentInset = topContentInset
         vc.onCellTapped = onCellTapped
         vc.archivedCount = archivedCount
         vc.archivedIds = archivedIds
@@ -51,6 +59,12 @@ struct SessionTable: UIViewControllerRepresentable {
 final class SessionTableController: UIViewController, UITableViewDelegate {
     weak var appState: AppState?
     var deviceFilter: String?
+    var searchQuery = ""
+    /// Rows start below the floating header and scroll beneath it. Kept at
+    /// the top when the header grows or shrinks (search, active filter).
+    var topContentInset: CGFloat = 0 {
+        didSet { if oldValue != topContentInset { applyTopInset(previous: oldValue) } }
+    }
     var onCellTapped: ((String) -> Void)?
     var archivedCount = 0
     var archivedIds: [String] = []
@@ -163,14 +177,27 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     }
     func scrollViewDidScrollToTop(_ scrollView: UIScrollView) { scrollIndicator.endScrolling() }
 
+    private func applyTopInset(previous: CGFloat) {
+        guard let tableView else { return }
+        let wasAtTop = tableView.contentOffset.y <= -tableView.adjustedContentInset.top + 1
+        tableView.contentInset.top = topContentInset
+        tableView.verticalScrollIndicatorInsets.top = topContentInset
+        if wasAtTop {
+            tableView.contentOffset.y = -tableView.adjustedContentInset.top
+        }
+    }
+
     private func setupTableView() {
         tableView = UITableView(frame: view.bounds, style: .plain)
         tableView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         tableView.backgroundColor = UIColor(Color.surfacePrimary)
         tableView.separatorStyle = .none
+        tableView.keyboardDismissMode = .onDrag
+        tableView.accessibilityIdentifier = "session-list-table"
         tableView.delegate = self
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "session")
         view.addSubview(tableView)
+        applyTopInset(previous: 0)
         scrollIndicator.attach(to: tableView)
         view.backgroundColor = UIColor(Color.surfacePrimary)
     }
@@ -252,13 +279,8 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         }
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
-        let allSessions = appState.sessionStore.sortedSessions
-        let filtered: [SessionInfo]
-        if let deviceFilter {
-            filtered = allSessions.filter { $0.deviceId == deviceFilter }
-        } else {
-            filtered = allSessions
-        }
+        let filtered = appState.sessionStore.filteredSessions(
+            appState.sessionStore.sortedSessions, deviceId: deviceFilter, matching: searchQuery)
         var ids = filtered.map(\.id)
         snapshot.appendItems(ids)
         if archivedCount > 0 {
@@ -489,13 +511,12 @@ struct SessionRowContent: View {
         VStack(spacing: 0) {
             SessionCardView(sessionId: sessionId)
                 .padding(.vertical, 6)
-                .padding(.leading, 8)
-                .padding(.trailing, 16)
+                .padding(.horizontal, 16)
 
             if !isLast {
                 Color.borderPrimary
                     .frame(height: 1.0 / UIScreen.main.scale)
-                    .padding(.leading, 64) // leading(8) + avatar(44) + gap(12)
+                    .padding(.leading, 72) // leading(16) + avatar(44) + gap(12)
             }
         }
     }

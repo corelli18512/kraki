@@ -11,7 +11,9 @@ struct SessionListView: View {
     @Binding var navigationPath: NavigationPath
     @State private var showNewSession = false
     @State private var selectedDeviceFilter: String? = nil
-    @State private var showFilterRow = false
+    @State private var isSearching = false
+    @State private var searchQuery = ""
+    @State private var headerHeight: CGFloat = 0
     #if DEBUG
     @State private var showToolIconGallery = false
     #endif
@@ -22,8 +24,16 @@ struct SessionListView: View {
     private var sorted: [SessionInfo] { sessionStore.sortedSessions }
 
     private var filteredSessions: [SessionInfo] {
-        guard let id = selectedDeviceFilter else { return sorted }
-        return sorted.filter { $0.deviceId == id }
+        sessionStore.filteredSessions(sorted, deviceId: selectedDeviceFilter, matching: searchQuery)
+    }
+
+    private var isQuerying: Bool {
+        !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Archived Sessions aren't searched; their group is hidden meanwhile.
+    private var archivedCount: Int {
+        isQuerying ? 0 : sessionStore.archivedCount(deviceId: selectedDeviceFilter)
     }
 
     private var tentacleDevices: [DeviceSummary] {
@@ -32,7 +42,7 @@ struct SessionListView: View {
 
     var body: some View {
         Group {
-            if filteredSessions.isEmpty && sessionStore.archivedCount(deviceId: selectedDeviceFilter) == 0 {
+            if filteredSessions.isEmpty && archivedCount == 0 {
                 emptyState
             } else {
                 sessionList
@@ -46,17 +56,7 @@ struct SessionListView: View {
         .onChange(of: filteredSessions.count) { old, new in
             KLog.d("📂 [snapshot] SessionListView count change: \(old) → \(new)")
         }
-        .safeAreaInset(edge: .top) {
-            VStack(spacing: 0) {
-                brandHeader
-                AccountAccessUpgradeBanner()
-                if showFilterRow {
-                    deviceFilterRow
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-            }
-            .animation(.easeInOut(duration: 0.25), value: showFilterRow)
-        }
+        .modifier(FloatingSessionListHeader { header })
         .sheet(isPresented: $showNewSession) {
             NewSessionSheet()
                 .environment(appState)
@@ -76,106 +76,29 @@ struct SessionListView: View {
         #endif
     }
 
-    // MARK: - Brand Header (custom, not toolbar)
+    // MARK: - Header (floats over the list; Liquid Glass controls)
 
-    private var brandHeader: some View {
-        HStack(spacing: 6) {
-            // While the relay link has been down for a moment the product name
-            // reads "Connecting…"; it returns to the name once connected.
-            Text(appState.showsReconnecting ? "Connecting…" : "KRAKI")
-                .font(.system(size: appState.showsReconnecting ? 17 : 22,
-                              weight: appState.showsReconnecting ? .semibold : .heavy,
-                              design: appState.showsReconnecting ? .default : .monospaced))
-                .tracking(appState.showsReconnecting ? 0 : 2.5)
-                .foregroundColor(appState.showsReconnecting ? Color.textSecondary : .krakiPrimary)
-                .animation(.easeInOut(duration: 0.2), value: appState.showsReconnecting)
-                #if DEBUG
-                .onLongPressGesture(minimumDuration: 0.6) {
-                    showToolIconGallery = true
-                }
-                #endif
-
-            Text("Preview")
-                .scaledFont(10, weight: .semibold)
-                .foregroundColor(Color.krakiPrimary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.krakiPrimary.opacity(0.15), in: Capsule())
-
-            Spacer()
-
-            // Filter toggle button — hidden when only one device
-            if tentacleDevices.count > 1 {
-                Button {
-                    withAnimation { showFilterRow.toggle() }
-                } label: {
-                    Image(systemName: showFilterRow
-                          ? "line.3.horizontal.decrease.circle.fill"
-                          : "line.3.horizontal.decrease.circle")
-                        .scaledFont(20, weight: .regular)
-                        .foregroundColor(selectedDeviceFilter != nil || showFilterRow ? .krakiPrimary : Color(.tertiaryLabel))
-                }
-            }
+    private var header: some View {
+        VStack(spacing: 0) {
+            SessionListHeader(
+                isSearching: $isSearching,
+                query: $searchQuery,
+                deviceFilter: $selectedDeviceFilter,
+                devices: tentacleDevices,
+                sessionCount: { id in id.map { id in sorted.filter { $0.deviceId == id }.count } ?? sorted.count },
+                onWordmarkLongPress: wordmarkLongPress
+            )
+            AccountAccessUpgradeBanner()
         }
-        .padding(.leading, 20)
-        .padding(.trailing, 16)
-        .padding(.vertical, 10)
-        .background(Color.surfaceSecondary)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
     }
 
-    // MARK: - Device Filter Row (toggleable, floating glass pills)
-
-    private var deviceFilterRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                filterPill(label: "All", isSelected: selectedDeviceFilter == nil, isEnabled: true) {
-                    selectedDeviceFilter = nil
-                }
-
-                ForEach(tentacleDevices) { device in
-                    filterPill(
-                        label: device.name,
-                        isSelected: selectedDeviceFilter == device.id,
-                        isEnabled: tentacleDevices.count > 1
-                    ) {
-                        if tentacleDevices.count > 1 {
-                            selectedDeviceFilter = device.id
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 8)
-        }
-        .background(Color.surfaceSecondary.opacity(0.85))
-    }
-
-    @ViewBuilder
-    private func filterPill(label: String, isSelected: Bool, isEnabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .scaledFont(12, weight: .medium)
-                .foregroundStyle(isSelected ? Color.white : (isEnabled ? Color.primary : Color.secondary))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-        }
-        .background {
-            if #available(iOS 26.0, *) {
-                Capsule()
-                    .fill(isSelected ? Color.krakiPrimary : Color.clear)
-                    .overlay {
-                        if !isSelected {
-                            Capsule().fill(.regularMaterial)
-                        }
-                    }
-            } else {
-                Capsule()
-                    .fill(isSelected ? Color.krakiPrimary : Color(.tertiarySystemBackground))
-            }
-        }
-        .clipShape(Capsule())
-        .disabled(!isEnabled)
-        .opacity(isEnabled || isSelected ? 1 : 0.5)
+    private var wordmarkLongPress: (() -> Void)? {
+        #if DEBUG
+        return { showToolIconGallery = true }
+        #else
+        return nil
+        #endif
     }
 
     // MARK: - Session List (UIKit-backed for smooth row reorder)
@@ -186,24 +109,31 @@ struct SessionListView: View {
         // over. The system still applies `additionalSafeAreaInsets`
         // for the tab bar height, which propagates to the UITableView
         // as `contentInset.bottom` so the last row is still
-        // scroll-reachable.
+        // scroll-reachable. On iOS 26 rows also scroll beneath the
+        // floating header (the top scroll-edge effect keeps it legible).
         SessionTable(
             appState: appState,
             deviceFilter: selectedDeviceFilter,
-            archivedCount: sessionStore.archivedCount(deviceId: selectedDeviceFilter),
-            archivedIds: sessionStore.archivedSessionInfos(deviceId: selectedDeviceFilter).map(\.id)
+            searchQuery: searchQuery,
+            topContentInset: FloatingSessionListHeader<EmptyView>.floats ? headerHeight : 0,
+            archivedCount: archivedCount,
+            archivedIds: archivedCount == 0 ? [] : sessionStore.archivedSessionInfos(deviceId: selectedDeviceFilter).map(\.id)
         ) { sessionId in
             navigationPath.append(SessionNavID(id: sessionId))
         }
         .background(Color.surfacePrimary)
-        .ignoresSafeArea(.container, edges: .bottom)
+        .ignoresSafeArea(.container, edges: FloatingSessionListHeader<EmptyView>.floats ? [.top, .bottom] : .bottom)
     }
 
     // MARK: - Empty State
 
     @ViewBuilder
     private var emptyState: some View {
-        if selectedDeviceFilter != nil {
+        if isQuerying {
+            ContentUnavailableView.search(text: searchQuery.trimmingCharacters(in: .whitespacesAndNewlines))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.surfacePrimary)
+        } else if selectedDeviceFilter != nil {
             // A device filter is active but matches no sessions — the
             // user almost certainly has other sessions on other
             // devices. Different copy + an explicit "clear filter"
@@ -214,10 +144,10 @@ struct SessionListView: View {
                 Image(systemName: "line.3.horizontal.decrease.circle")
                     .font(.system(size: 56))
                     .foregroundStyle(.secondary)
-                Text("No sessions for this device")
+                Text("No sessions on this computer")
                     .font(.headline)
                     .foregroundStyle(.primary)
-                Text("Switch to another device, clear the filter, or start a new session on this one.")
+                Text("Choose another computer, clear the filter, or start a new session on this one.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -225,7 +155,7 @@ struct SessionListView: View {
                 Button {
                     withAnimation { selectedDeviceFilter = nil }
                 } label: {
-                    Text("Show all devices")
+                    Text("Show All Computers")
                         .font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
@@ -262,6 +192,32 @@ struct SessionListView: View {
                     .allowsHitTesting(false)
             }
             .background(Color.surfacePrimary)
+        }
+    }
+}
+
+// MARK: - Floating header
+
+/// iOS 26: the header floats over the list in a safe-area bar, so rows scroll
+/// beneath it with the system's soft scroll-edge effect (no opaque band that
+/// fights the Liquid Glass tab bar). Earlier systems keep an inset header.
+private struct FloatingSessionListHeader<Bar: View>: ViewModifier {
+    @ViewBuilder var bar: () -> Bar
+
+    static var floats: Bool {
+        if #available(iOS 26.0, *) { return true }
+        return false
+    }
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .safeAreaBar(edge: .top, spacing: 0) { bar() }
+                .scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            content.safeAreaInset(edge: .top, spacing: 0) {
+                bar().background(Color.surfacePrimary)
+            }
         }
     }
 }

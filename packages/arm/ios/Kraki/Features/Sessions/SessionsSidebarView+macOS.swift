@@ -226,19 +226,7 @@ struct SessionsSidebarView: View {
     }
 
     private var filteredSessions: [SessionInfo] {
-        let deviceFiltered: [SessionInfo]
-        if let deviceId = selectedDeviceFilter {
-            deviceFiltered = sortedSessions.filter { $0.deviceId == deviceId }
-        } else {
-            deviceFiltered = sortedSessions
-        }
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return deviceFiltered }
-        return deviceFiltered.filter { session in
-            let preview = appState.sessionStore.sessionPreviews[session.id]?.text ?? ""
-            return [session.displayTitle, session.deviceName, session.model ?? "", preview]
-                .contains { $0.localizedCaseInsensitiveContains(query) }
-        }
+        appState.sessionStore.filteredSessions(sortedSessions, deviceId: selectedDeviceFilter, matching: searchText)
     }
 
     // MARK: - Body
