@@ -29,6 +29,22 @@ function run(cmd, args, cwd) {
   return execFileSync(cmd, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
+/**
+ * Build provenance (dist/build-info.json) names the commit and workflow run
+ * that built the package, so it differs on every build of unchanged code.
+ * Only the identity it states (component, version) has to match.
+ */
+function contentOf(path) {
+  const data = readFileSync(path);
+  if (!path.endsWith('build-info.json')) return data;
+  try {
+    const { schemaVersion, component, version } = JSON.parse(data.toString('utf8'));
+    return Buffer.from(JSON.stringify({ schemaVersion, component, version }));
+  } catch {
+    return data;
+  }
+}
+
 /** relative path → sha256 of every file under `root`. */
 function files(root) {
   const out = new Map();
@@ -36,7 +52,7 @@ function files(root) {
     for (const name of readdirSync(dir)) {
       const path = join(dir, name);
       if (statSync(path).isDirectory()) walk(path);
-      else out.set(relative(root, path), createHash('sha256').update(readFileSync(path)).digest('hex'));
+      else out.set(relative(root, path), createHash('sha256').update(contentOf(path)).digest('hex'));
     }
   };
   walk(root);
@@ -67,7 +83,10 @@ for (const dir of dirs.map((d) => resolve(d))) {
     const remote = files(unpacked(join(work, 'npm')));
     // Source maps embed build paths; everything else must match.
     const changed = [...new Set([...local.keys(), ...remote.keys()])]
-      .filter((f) => !f.endsWith('.map') && local.get(f) !== remote.get(f));
+      .filter((f) => !f.endsWith('.map') && local.get(f) !== remote.get(f))
+      // The release writes build-info.json only when it publishes, after
+      // this check: a local build does not have it yet.
+      .filter((f) => !(f.endsWith('build-info.json') && !local.has(f)));
     if (changed.length > 0) {
       failed = true;
       console.error(`::error::${spec} is already on npm but its contents changed. Bump its version, or dependents are published against the stale copy.`);
