@@ -62,6 +62,7 @@ enum IOSNewSessionScenario {
                     createdAt: Date().addingTimeInterval(Double(-3_600 * (index + 1))), pinned: false))
                 app.messageProvider?.setTentacleInfo(sessionId: id, lastSeq: 12, deviceId: deviceID)
             }
+            if ProcessInfo.processInfo.environment["KRAKI_SCENARIO_SECOND_COMPUTER"] == "1" { addSecondComputer(app) }
             app.connectionStatus = .connected
             app.hasCompletedInitialConnect = true
             let tentacle = ScriptedTentacle(app: app)
@@ -73,6 +74,24 @@ enum IOSNewSessionScenario {
             return app
         } catch {
             fatalError("new-session scenario: \(error)")
+        }
+    }
+
+    static let secondDeviceID = "scenario-server"
+
+    /// A second computer, so the Session list offers its computer filter.
+    private static func addSecondComputer(_ app: AppState) {
+        app.deviceStore.devices[secondDeviceID] = DeviceSummary(
+            id: secondDeviceID, name: "Build Server", role: .tentacle, kind: .server,
+            publicKey: nil, encryptionKey: nil, online: true, lastSeen: nil, createdAt: nil)
+        for (index, title) in ["Release notes for 0.2.86", "Nightly build failures", "Rotate signing certificates",
+                                  "Flaky simulator tests", "Disk usage alert", "Upgrade the CI runners"].enumerated() {
+            let id = "server-\(index)"
+            app.sessionStore.upsertSession(SessionInfo(
+                id: id, deviceId: secondDeviceID, deviceName: "Build Server", agent: "pi", model: "m",
+                title: title, state: .idle, mode: .auto, lastSeq: 1, readSeq: 1, messageCount: 1,
+                createdAt: Date().addingTimeInterval(Double(-1_800 * (index + 1))), pinned: false))
+            app.messageProvider?.setTentacleInfo(sessionId: id, lastSeq: 1, deviceId: secondDeviceID)
         }
     }
 

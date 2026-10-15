@@ -19,6 +19,10 @@ import Observation
 struct SessionTable: UIViewControllerRepresentable {
     let appState: AppState
     let deviceFilter: String?  // nil = all devices
+    /// Live search text; empty shows every session.
+    var searchQuery: String = ""
+    /// Height of the floating header the rows scroll beneath (iOS 26).
+    var topContentInset: CGFloat = 0
     /// Archived sessions (F2): a collapsed group after the list. Passed in
     /// so SwiftUI re-runs `updateUIViewController` when they change.
     var archivedCount: Int = 0
@@ -29,6 +33,8 @@ struct SessionTable: UIViewControllerRepresentable {
         let vc = SessionTableController()
         vc.appState = appState
         vc.deviceFilter = deviceFilter
+        vc.searchQuery = searchQuery
+        vc.topContentInset = topContentInset
         vc.onCellTapped = onCellTapped
         vc.archivedCount = archivedCount
         vc.archivedIds = archivedIds
@@ -38,6 +44,8 @@ struct SessionTable: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: SessionTableController, context: Context) {
         vc.appState = appState
         vc.deviceFilter = deviceFilter
+        vc.searchQuery = searchQuery
+        vc.topContentInset = topContentInset
         vc.onCellTapped = onCellTapped
         vc.archivedCount = archivedCount
         vc.archivedIds = archivedIds
@@ -51,11 +59,21 @@ struct SessionTable: UIViewControllerRepresentable {
 final class SessionTableController: UIViewController, UITableViewDelegate {
     weak var appState: AppState?
     var deviceFilter: String?
+    var searchQuery = ""
+    /// Rows start below the floating header and scroll beneath it. Kept at
+    /// the top when the header grows or shrinks (search, active filter).
+    var topContentInset: CGFloat = 0 {
+        didSet { if oldValue != topContentInset { applyTopInset(previous: oldValue) } }
+    }
     var onCellTapped: ((String) -> Void)?
     var archivedCount = 0
     var archivedIds: [String] = []
     /// Collapsed every time the list is created.
     private var archivedExpanded = false
+
+    /// Swipe colors (white labels keep ≥ 4.5:1 contrast in both appearances).
+    static let unreadActionColor = UIColor(red: 0xC4/255.0, green: 0x49/255.0, blue: 0x2F/255.0, alpha: 1) // coral
+    static let pinActionColor = UIColor(red: 0x0B/255.0, green: 0x5B/255.0, blue: 0x9C/255.0, alpha: 1) // Kraki blue
 
     static let archivedHeaderId = "__archived_header__"
     static let archivedPrefix = "archived:"
@@ -163,14 +181,27 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
     }
     func scrollViewDidScrollToTop(_ scrollView: UIScrollView) { scrollIndicator.endScrolling() }
 
+    private func applyTopInset(previous: CGFloat) {
+        guard let tableView else { return }
+        let wasAtTop = tableView.contentOffset.y <= -tableView.adjustedContentInset.top + 1
+        tableView.contentInset.top = topContentInset
+        tableView.verticalScrollIndicatorInsets.top = topContentInset
+        if wasAtTop {
+            tableView.contentOffset.y = -tableView.adjustedContentInset.top
+        }
+    }
+
     private func setupTableView() {
         tableView = UITableView(frame: view.bounds, style: .plain)
         tableView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         tableView.backgroundColor = UIColor(Color.surfacePrimary)
         tableView.separatorStyle = .none
+        tableView.keyboardDismissMode = .onDrag
+        tableView.accessibilityIdentifier = "session-list-table"
         tableView.delegate = self
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "session")
         view.addSubview(tableView)
+        applyTopInset(previous: 0)
         scrollIndicator.attach(to: tableView)
         view.backgroundColor = UIColor(Color.surfacePrimary)
     }
@@ -252,13 +283,8 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
         }
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
-        let allSessions = appState.sessionStore.sortedSessions
-        let filtered: [SessionInfo]
-        if let deviceFilter {
-            filtered = allSessions.filter { $0.deviceId == deviceFilter }
-        } else {
-            filtered = allSessions
-        }
+        let filtered = appState.sessionStore.filteredSessions(
+            appState.sessionStore.sortedSessions, deviceId: deviceFilter, matching: searchQuery)
         var ids = filtered.map(\.id)
         snapshot.appendItems(ids)
         if archivedCount > 0 {
@@ -417,7 +443,9 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
               let sessionId = dataSource.itemIdentifier(for: indexPath),
               let session = appState.sessionStore.sessions[sessionId] else { return nil }
 
-        // Order in array = right to left visually. Visual: Pin | Fork | Unread
+        // Order in array = right to left visually. Visual: Pin | Unread.
+        // Colors echo the row's own indicators: the red unread dot (a warm,
+        // non-destructive coral) and the blue pin glyph (Kraki blue).
 
         // Unread (rightmost — closest to swipe edge). Seq-derived.
         let isUnread = appState.sessionStore.isUnread(sessionId)
@@ -430,26 +458,19 @@ final class SessionTableController: UIViewController, UITableViewDelegate {
             completion(true)
         }
         unreadAction.image = renderLucideIconForSwipe(isUnread ? .bellOff : .bellRing)
-        unreadAction.backgroundColor = UIColor(red: 0x6B/255.0, green: 0x7D/255.0, blue: 0x94/255.0, alpha: 1) // soft slate
+        unreadAction.backgroundColor = Self.unreadActionColor
+        unreadAction.accessibilityLabel = isUnread ? "Mark as Read" : "Mark as Unread"
 
-        // Fork (middle)
-        let forkAction = UIContextualAction(style: .normal, title: "Fork") { _, _, completion in
-            appState.commandSender?.forkSession(sessionId: sessionId)
-            completion(true)
-        }
-        forkAction.image = renderLucideIconForSwipe(.gitFork)
-        forkAction.backgroundColor = UIColor(red: 0xC0/255.0, green: 0x8A/255.0, blue: 0x2F/255.0, alpha: 1) // warm amber
-
-        // Pin (leftmost)
+        // Pin (left)
         let pinned = session.pinned
         let pinAction = UIContextualAction(style: .normal, title: pinned ? "Unpin" : "Pin") { _, _, completion in
             appState.commandSender?.pinSession(sessionId: sessionId, pinned: !pinned)
             completion(true)
         }
         pinAction.image = renderLucideIconForSwipe(pinned ? .pinOff : .pin)
-        pinAction.backgroundColor = UIColor(red: 0x2F/255.0, green: 0x9C/255.0, blue: 0x8B/255.0, alpha: 1) // muted teal
+        pinAction.backgroundColor = Self.pinActionColor
 
-        let config = UISwipeActionsConfiguration(actions: [unreadAction, forkAction, pinAction])
+        let config = UISwipeActionsConfiguration(actions: [unreadAction, pinAction])
         config.performsFirstActionWithFullSwipe = false
         return config
     }
@@ -489,13 +510,12 @@ struct SessionRowContent: View {
         VStack(spacing: 0) {
             SessionCardView(sessionId: sessionId)
                 .padding(.vertical, 6)
-                .padding(.leading, 8)
-                .padding(.trailing, 16)
+                .padding(.horizontal, 16)
 
             if !isLast {
                 Color.borderPrimary
                     .frame(height: 1.0 / UIScreen.main.scale)
-                    .padding(.leading, 64) // leading(8) + avatar(44) + gap(12)
+                    .padding(.leading, 72) // leading(16) + avatar(44) + gap(12)
             }
         }
     }
