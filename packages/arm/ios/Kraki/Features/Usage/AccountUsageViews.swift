@@ -132,7 +132,7 @@ struct AccountUsageRings: View {
                 VStack(spacing: 5) {
                     UsageWindowRing(window: nil, stale: stale, size: size, lineWidth: lineWidth, animateIn: false)
                     Text(account.error == "auth" ? "Sign-in needed" : "Unavailable")
-                        .font(.system(size: small ? 9.5 : 10.5)).foregroundStyle(.secondary)
+                        .scaledFont(small ? 9.5 : 10.5).foregroundStyle(.secondary)
                 }
             }
             ForEach(Array(windows.enumerated()), id: \.element.id) { index, w in
@@ -142,12 +142,12 @@ struct AccountUsageRings: View {
                         .modifier(UsageMatchedRing(namespace: geometry, id: "\(geometryScope)|\(account.id)|\(w.id)"))
                     VStack(spacing: 2) {
                         Text(UsageFormat.windowName(w))
-                            .font(.system(size: small ? 9.5 : 10.5, weight: .semibold))
+                            .scaledFont(small ? 9.5 : 10.5, weight: .semibold)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 6).padding(.vertical, 1.5)
                             .background(Color.primary.opacity(0.08), in: Capsule())
                         Text("↻ " + UsageFormat.shortReset(w.resetDate, now: now))
-                            .font(.system(size: small ? 9.5 : 10.5)).foregroundStyle(.secondary).monospacedDigit()
+                            .scaledFont(small ? 9.5 : 10.5).foregroundStyle(.secondary).monospacedDigit()
                     }
                     .fixedSize()
                 }
@@ -170,7 +170,7 @@ struct UsageProviderChip: View {
     let provider: String
     var body: some View {
         Text(provider == "codex" ? "GPT" : "Claude")
-            .font(.system(size: 8.5, weight: .bold)).tracking(0.3)
+            .scaledFont(8.5, weight: .bold).tracking(0.3)
             .padding(.horizontal, 4.5).padding(.vertical, 2.5)
             .foregroundStyle(provider == "codex" ? AnyShapeStyle(.background) : AnyShapeStyle(Color.white))
             .background(provider == "codex" ? Color.primary : Color(red: 0.85, green: 0.47, blue: 0.34),
@@ -200,18 +200,18 @@ struct AccountUsageTile: View {
             HStack(alignment: .top, spacing: 5) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(shortName ? account.shortLabel : (account.label ?? account.providerTitle))
-                        .font(.system(size: ringSize > 70 ? 14 : 12, weight: .semibold))
+                        .scaledFont(ringSize > 70 ? 14 : 12, weight: .semibold)
                         .lineLimit(1).truncationMode(.middle)
                         .help(account.label ?? account.providerTitle)
                     if showsPlan, let plan = account.planTitle {
-                        Text(plan).font(.system(size: 10.5)).foregroundStyle(.secondary)
+                        Text(plan).scaledFont(10.5).foregroundStyle(.secondary)
                     }
                 }
                 Spacer(minLength: 0)
                 VStack(alignment: .trailing, spacing: 3) {
                     UsageProviderChip(provider: account.provider)
                     if account.isStale(now: now) && !account.windows.isEmpty {
-                        Text("Stale").font(.system(size: 8.5, weight: .semibold)).foregroundStyle(.white)
+                        Text("Stale").scaledFont(8.5, weight: .semibold).foregroundStyle(.white)
                             .padding(.horizontal, 4).padding(.vertical, 1.5)
                             .background(Color.gray, in: RoundedRectangle(cornerRadius: 4))
                     }
@@ -248,22 +248,22 @@ struct AccountUsageRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(account.label ?? account.providerTitle)
-                        .font(.system(size: 15, weight: .semibold))
+                        .scaledFont(15, weight: .semibold)
                         .lineLimit(1).truncationMode(.middle)
                     UsageProviderChip(provider: account.provider)
                 }
                 HStack(spacing: 6) {
                     if let plan = account.planTitle {
-                        Text(plan).font(.system(size: 12)).foregroundStyle(.secondary)
+                        Text(plan).scaledFont(12).foregroundStyle(.secondary)
                     }
                     if account.isStale(now: now) && !account.windows.isEmpty {
-                        Text("Stale").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(.white)
+                        Text("Stale").scaledFont(9.5, weight: .semibold).foregroundStyle(.white)
                             .padding(.horizontal, 4).padding(.vertical, 1.5)
                             .background(Color.gray, in: RoundedRectangle(cornerRadius: 4))
                     }
                 }
                 Label(deviceText, systemImage: merged.devices.count > 1 ? "laptopcomputer.and.arrow.down" : "laptopcomputer")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .scaledFont(11).foregroundStyle(.secondary)
                     .labelStyle(.titleAndIcon)
                     .lineLimit(1)
                     .opacity(merged.allOffline ? 0.6 : 1)
@@ -291,7 +291,7 @@ struct AccountUsageReadStatus: View {
                     Text(status).foregroundStyle(.orange)
                 }
             }
-            .font(.system(size: 10.5)).foregroundStyle(.secondary)
+            .scaledFont(10.5).foregroundStyle(.secondary)
             .lineLimit(2)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -313,7 +313,7 @@ struct AccountUsageRefreshControls: View {
             HStack(spacing: 8) {
                 if busy { ProgressView().controlSize(.small) }
                 Text(status(ids: ids, connected: connected, busy: busy, ready: ready))
-                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                    .scaledFont(11).foregroundStyle(.secondary).lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Button {
                     appState.commandSender?.refreshAccountUsage(deviceIds: deviceIds)

@@ -402,6 +402,7 @@ final class TKBubbleContent {
     private static func visualCacheKey(_ message: ChatMessage) -> NSString {
         var hasher = Hasher()
         hasher.combine(message.id)
+        hasher.combine(TKTextSize.key)
         let text = message.content ?? message.result ?? ""
         hasher.combine(text.utf8.count)
         hasher.combine(Data(text.utf8.suffix(512)))

@@ -372,6 +372,7 @@
 		8C3224438F4F50CB8C0C8917 /* TKBubbleContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D29AB015ED1500FFB4FD8A04 /* TKBubbleContent.swift */; };
 		8C74A12E6D7EA7794FCB3FAA /* Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DC0BC1E6BC8D7882272DF9D /* Helpers.swift */; };
 		8DD4AE2E5880121FF778CCD3 /* KrakiPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACA594C1B063D6133CF3BC50 /* KrakiPlatform.swift */; };
+		8DEE4167B88B9381B2B3AFDC /* ScaledFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = B59CB6CFDB3B2D32D4522BCD /* ScaledFont.swift */; };
 		8E8A15038E4896B18E96E62B /* ChatUXRegressionTests+QueuedPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD971364DF3118676437C396 /* ChatUXRegressionTests+QueuedPrompt.swift */; };
 		8F1503601B654CE252D93F35 /* AccountUsageRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A85ACE885B44CA61B0513FC /* AccountUsageRenderTests.swift */; };
 		8F51D496B6815109A20FE70C /* VoiceDraftStyling.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14DE4C914007046BE9F67973 /* VoiceDraftStyling.swift */; };
@@ -409,6 +410,7 @@
 		9EE08983BA71456FEEF8F71E /* IOSClientAlignmentPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4037D4173EC6CC310DB2771 /* IOSClientAlignmentPreview.swift */; };
 		9F22AAB74FB6EB31386F8314 /* MessageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02010E839BEA2321FB4E19C7 /* MessageStore.swift */; };
 		9F9A095EF96B86C046F5C273 /* MacSubagentStepsShots.swift in Sources */ = {isa = PBXBuildFile; fileRef = 903F7944488AA6630F10C8DE /* MacSubagentStepsShots.swift */; };
+		9FEE18D2282B3849739AF617 /* ScaledFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = B59CB6CFDB3B2D32D4522BCD /* ScaledFont.swift */; };
 		A0F6713A8603F2C4C2A1803A /* MacChatComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B7DBD1AD1C67E1CFB6ED036 /* MacChatComposer.swift */; };
 		A1202BE92B11878D6FBCC712 /* SessionSubscriptionControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BEDEAE0119875B478A984D6 /* SessionSubscriptionControllerTests.swift */; };
 		A153BC6E1B2B1744F3BAB054 /* VoiceVocabularySyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26329C426760297CCBD32FD1 /* VoiceVocabularySyncTests.swift */; };
@@ -640,6 +642,7 @@
 		FA4AF6C487B11062A2F3C7DB /* AppColorScheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E80769CD696851C28434036 /* AppColorScheme.swift */; };
 		FC78727E338B18B601FFFF6E /* TKTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 141616DC70091EA4EEE28FA6 /* TKTable.swift */; };
 		FCE093CC69E41DAA6487FFF2 /* ChatPerfListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EDC494E5B0CBA712CCA550C /* ChatPerfListView.swift */; };
+		FD72A7C91DC011D9BE384C2D /* ChatPerfListVC+Relayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02085D4E841AF11F6930D76B /* ChatPerfListVC+Relayout.swift */; };
 		FF48C125D31E2EED8D0B5A03 /* DeviceTrustBoundaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE8B08A0D358AD93F667D18E /* DeviceTrustBoundaryTests.swift */; };
 		FFC61A378DD2C7BDA3FB7656 /* KrakiPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACA594C1B063D6133CF3BC50 /* KrakiPlatform.swift */; };
 /* End PBXBuildFile section */
@@ -702,6 +705,7 @@
 		01A6162027FE71CB62BA4255 /* DeviceListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceListView.swift; sourceTree = "<group>"; };
 		01C03CDBEA5BAFA47F71D2F1 /* E2EV2NodeVectors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = E2EV2NodeVectors.swift; sourceTree = "<group>"; };
 		02010E839BEA2321FB4E19C7 /* MessageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageStore.swift; sourceTree = "<group>"; };
+		02085D4E841AF11F6930D76B /* ChatPerfListVC+Relayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatPerfListVC+Relayout.swift"; sourceTree = "<group>"; };
 		028EF290442F58B03DADCF55 /* ChatPerfListVC+WindowApply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatPerfListVC+WindowApply.swift"; sourceTree = "<group>"; };
 		04931FBD16BAD83A75C006F3 /* IOSUnreadEntryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSUnreadEntryTests.swift; sourceTree = "<group>"; };
 		04BA085D5DB073C1C3E8D700 /* DeviceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceStore.swift; sourceTree = "<group>"; };
@@ -994,6 +998,7 @@
 		B25E8CC25E0F72D13A5394C5 /* PKCE.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PKCE.swift; sourceTree = "<group>"; };
 		B44F5223AB6217CE3932616F /* MacControlHelp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacControlHelp.swift; sourceTree = "<group>"; };
 		B5906FEF75EAE0DB111F19BD /* MacAutomationDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAutomationDriver.swift; sourceTree = "<group>"; };
+		B59CB6CFDB3B2D32D4522BCD /* ScaledFont.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScaledFont.swift; sourceTree = "<group>"; };
 		B5DA5D4B10C2EF6EA184D1E3 /* FlatBubbleTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlatBubbleTestView.swift; sourceTree = "<group>"; };
 		B60DD3157710F226FB5EF0DC /* MacSessionSidebarRevealTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSessionSidebarRevealTests.swift; sourceTree = "<group>"; };
 		B63002D8A915925E8EDD9BB1 /* AccountUsageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountUsageTests.swift; sourceTree = "<group>"; };
@@ -1579,6 +1584,7 @@
 				924794751B4507709362A1AE /* LucideIcon.swift */,
 				9656866F24E385A14F14E699 /* NavigationIDs.swift */,
 				4870CD1AF2F8124715AA2BF6 /* PermissionDiffPreview.swift */,
+				B59CB6CFDB3B2D32D4522BCD /* ScaledFont.swift */,
 				82693FAB48A09CEA26F30331 /* SwipeBackEnabler.swift */,
 				5AE2C1783288D65F53D7F362 /* TabActionInterceptor.swift */,
 				6FC184CE4CAFDEF1914453D4 /* TabBarHider.swift */,
@@ -1862,6 +1868,7 @@
 				23E4BA829D329FBDB4392A82 /* ChatPerfListVC+JumpControls.swift */,
 				CFFA9EFA491B39ED2F2722D1 /* ChatPerfListVC+LiveCardMove.swift */,
 				EF8DC5008AD095BB27028383 /* ChatPerfListVC+Navigation.swift */,
+				02085D4E841AF11F6930D76B /* ChatPerfListVC+Relayout.swift */,
 				4FC819A2213A114B1B7515F3 /* ChatPerfListVC+ScrollPaging.swift */,
 				59BBEF7E63321D2B55D25F62 /* ChatPerfListVC+Streaming.swift */,
 				028EF290442F58B03DADCF55 /* ChatPerfListVC+WindowApply.swift */,
@@ -2351,6 +2358,7 @@
 				12B0348138D73FEBDF96AEEA /* ChatPerfListVC+JumpControls.swift in Sources */,
 				11BFCEB1507FC6B0A8D90533 /* ChatPerfListVC+LiveCardMove.swift in Sources */,
 				3AE48B5AB212D4A8F8F9BB45 /* ChatPerfListVC+Navigation.swift in Sources */,
+				FD72A7C91DC011D9BE384C2D /* ChatPerfListVC+Relayout.swift in Sources */,
 				097DDEEE1A520F8C1E03AEDD /* ChatPerfListVC+ScrollPaging.swift in Sources */,
 				1A4C89EEDAE089C7889C708C /* ChatPerfListVC+Streaming.swift in Sources */,
 				50097AE50B00422F16FE2D53 /* ChatPerfListVC+WindowApply.swift in Sources */,
@@ -2520,6 +2528,7 @@
 				F5E796FF4FDE931F18A3680A /* PushManager.swift in Sources */,
 				1610D07455BDC8A6F0786E40 /* PushPreviewFormat.swift in Sources */,
 				20B41687BB12DE58A87BCDB0 /* RootView.swift in Sources */,
+				9FEE18D2282B3849739AF617 /* ScaledFont.swift in Sources */,
 				9C72DEC16861973F97419481 /* SessionCardMetadataRow.swift in Sources */,
 				B818C7A7582AF25F7A285F00 /* SessionCardPresentation.swift in Sources */,
 				09D96A4CAA9B66E0546321D5 /* SessionCardView.swift in Sources */,
@@ -2763,6 +2772,7 @@
 				26409CB796F338EFEF4A5DD1 /* PulseManager.swift in Sources */,
 				CFF4A3E2771A576F90878094 /* PushManager.swift in Sources */,
 				F94E3A952061354D9FF232CD /* PushPreviewFormat.swift in Sources */,
+				8DEE4167B88B9381B2B3AFDC /* ScaledFont.swift in Sources */,
 				26AFEE17709536D3947D11B7 /* SessionCardMetadataRow.swift in Sources */,
 				7470C4449140388181A10F09 /* SessionCardPresentation.swift in Sources */,
 				8F6280E0F252F3D0E4DEA9D7 /* SessionCardView.swift in Sources */,

@@ -81,7 +81,7 @@ struct SettingsView: View {
                         showLogoutConfirm = true
                     } label: {
                         Image(systemName: "rectangle.portrait.and.arrow.right")
-                            .font(.system(size: 15, weight: .medium))
+                            .scaledFont(15, weight: .medium)
                             .foregroundStyle(.secondary)
                             .frame(width: 34, height: 34)
                             .background(
@@ -174,7 +174,7 @@ struct SettingsView: View {
                     }
                 } label: {
                     Image(systemName: "gearshape.fill")
-                        .font(.system(size: 17, weight: .medium))
+                        .scaledFont(17, weight: .medium)
                         .foregroundStyle(Color.krakiPrimary)
                         .frame(width: 34, height: 34)
                         .contentShape(Rectangle())
@@ -256,10 +256,10 @@ struct SettingsView: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "star.fill")
-                            .font(.system(size: 13, weight: .semibold))
+                            .scaledFont(13, weight: .semibold)
                             .foregroundStyle(Color.krakiPrimary)
                         Text("Rate Kraki")
-                            .font(.system(size: 14, weight: .medium))
+                            .scaledFont(14, weight: .medium)
                             .foregroundStyle(Color.krakiPrimary)
                     }
                     .frame(maxWidth: .infinity)
@@ -275,10 +275,10 @@ struct SettingsView: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.bubble.fill")
-                            .font(.system(size: 13, weight: .semibold))
+                            .scaledFont(13, weight: .semibold)
                             .foregroundStyle(Color.krakiPrimary)
                         Text("Report an issue")
-                            .font(.system(size: 14, weight: .medium))
+                            .scaledFont(14, weight: .medium)
                             .foregroundStyle(Color.krakiPrimary)
                     }
                     .frame(maxWidth: .infinity)
