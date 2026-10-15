@@ -9,12 +9,15 @@
   "backupStatus": "/var/lib/kraki-watch/backup.json",
   "disk": { "path": "/", "warning": 85, "critical": 95 },
   "units": [
+    { "unit": "kraki-bark", "name": "国内 Bark 推送服务", "severity": "critical" },
     { "unit": "kraki-relay", "name": "国内 relay 进程", "severity": "critical" },
     { "unit": "nginx", "name": "nginx（国内反向代理）", "severity": "critical" },
     { "unit": "kraki-voice-broker", "id": "K-VOICE-DOWN@unit", "name": "语音网关进程", "severity": "critical" },
     { "unit": "kraki-diag", "id": "K-DIAG-DOWN", "name": "国内诊断服务", "severity": "warning" }
   ],
   "probes": [
+    { "id": "K-BARK-DOWN", "target": "cn", "name": "国内 Bark 本机接口", "url": "http://127.0.0.1:4080/bark/ping", "expectBody": "\"message\":\"pong\"", "severity": "critical", "failAfter": 3, "local": true },
+    { "id": "K-BARK-PEER", "target": "tokyo", "name": "东京 Bark（从国内看）", "url": "https://relay.kraki.chat/bark/ping", "expectBody": "\"message\":\"pong\"", "severity": "critical", "failAfter": 5, "timeoutMs": 15000 },
     { "id": "K-RELAY-DOWN", "target": "cn", "name": "国内 relay", "url": "https://cn.relay.kraki.chat/", "expectBody": "\"status\":\"ok\"", "relay": true, "severity": "critical", "failAfter": 3, "local": true, "slow": true },
     { "id": "K-RELAY-WS", "target": "cn", "kind": "ws", "name": "国内 relay WebSocket", "url": "wss://cn.relay.kraki.chat/", "severity": "critical", "failAfter": 3, "local": true },
     { "id": "K-RELAY-READY", "target": "cn", "name": "国内 relay 就绪检查", "url": "http://127.0.0.1:4000/health/ready", "expectBody": "\"status\":\"ready\"", "readiness": true, "severity": "critical", "failAfter": 3, "local": true },

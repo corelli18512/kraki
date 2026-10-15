@@ -1,0 +1,39 @@
+[Unit]
+Description=Private Bark push transport for Kraki monitoring
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=kraki-bark
+Group=kraki-bark
+ExecStart=/opt/kraki-bark/current/bark-server --addr 127.0.0.1:4080 --url-prefix /bark --data /var/lib/kraki-bark --max-batch-push-count 1 --concurrency 64
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+StateDirectory=kraki-bark
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+MemoryMax=128M
+CPUQuota=20%
+TasksMax=64
+# Upstream's access logger includes the full URL/body (device keys/tokens).
+# Do not retain either output stream; systemd still records process failures.
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target
