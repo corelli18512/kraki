@@ -75,8 +75,8 @@ deployments do not require a Head restart. See Monitor's migration instructions.
   answers a query, the 30 s health tick is running (event loop not stuck) and every
   push provider in `PUSH_PROVIDERS` loaded; otherwise `503 {"status":"not_ready","checks":…}`
   naming the failed check. Point uptime monitors here.
-- `GET /internal/metrics` — counters and timings for the host's own alerting
-  ([`ops/watch`](../../ops/watch/README.md)): connections, auth ok/failed by code,
+- `GET /internal/metrics` — counters and timings for independently managed
+  host monitoring: connections, auth ok/failed by code,
   pulse frames and bytes in/out, forwarded messages, push sent/failed, and how long
   the relay takes to handle one frame (histogram). Counts only: no device, user, IP
   or payload data. Answers **direct loopback requests only**; anything that came
