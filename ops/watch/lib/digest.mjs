@@ -29,7 +29,8 @@ export function formatDigest(state, now, config) {
   lines.push(`告警  紧急 ${day.fired.critical}  警告 ${day.fired.warning}  信息 ${day.fired.info}`);
   for (const i of fired.slice(-6)) {
     const span = i.endedAt ? `${minutesText(i.endedAt - i.startedAt)}，已恢复` : state.alerts[i.id]?.unknown ? '数据不足，尚未确认恢复' : '仍未恢复';
-    lines.push(`  · ${localParts(i.startedAt, tz).hm} ${i.title}（${span}）`);
+    const title = !i.endedAt && state.alerts[i.id]?.status === 'firing' ? state.alerts[i.id].title : i.title;
+    lines.push(`  · ${localParts(i.startedAt, tz).hm} ${title}（${span}）`);
   }
   for (const [id, a] of Object.entries(state.alerts)) {
     if (a.status === 'firing' && a.severity !== 'info' && !incidentIds.has(id)) lines.push(`  · ${a.unknown ? '数据不足，尚未确认恢复' : '仍未恢复'}：${a.title}`);
@@ -56,7 +57,17 @@ export function formatDigest(state, now, config) {
   if (res.length) lines.push(`资源  ${res.join('  ')}`);
 
   const b = day.notes.backup;
-  if (b) lines.push(b.failed ? '备份  ✗ 失败' : `备份  ✓ ${localParts(Date.parse(b.at), tz).hm} ${(b.sizeBytes / 1048576).toFixed(1)} MB${b.copied === true ? ' 已复制' : b.copied === false ? ' 复制失败' : ''}`);
+  if (b) {
+    // Older state collapsed missing status and execution failure into `failed`.
+    // Do not turn that ambiguous cached note into a claim that a backup ran.
+    const age = now - Date.parse(b.at);
+    const valid = !b.failed && Number.isFinite(age) && age >= -120_000 && Number.isFinite(b.sizeBytes) && b.sizeBytes > 0;
+    const cachedStatus = b.status ?? (valid ? (age > 26 * 3600_000 ? 'stale' : 'ok') : 'unknown');
+    const status = cachedStatus === 'ok' && !valid ? 'invalid' : cachedStatus;
+    const labels = { missing: '? 状态缺失，请核查定时备份', invalid: '? 状态无效，无法确认备份可用',
+      unknown: '? 旧状态不完整，等待重新检查', failed: '✗ 最近一次任务记录为失败', stale: '✗ 最近成功记录已超过 26 小时' };
+    lines.push(`备份  ${status === 'ok' ? `✓ ${localParts(Date.parse(b.at), tz).hm} ${(b.sizeBytes / 1048576).toFixed(1)} MB${b.copied === true ? ' 已复制' : b.copied === false ? ' 复制失败' : ''}` : labels[status] ?? labels.unknown}`);
+  }
 
   const certs = Object.entries(day.notes).filter(([k]) => k.startsWith('cert:')).map(([k, v]) => [k.slice(5), v]).sort((a, b) => a[1] - b[1]);
   if (certs.length) lines.push(`证书  最近到期 ${certs[0][0]} 还有 ${certs[0][1]} 天`);

@@ -162,6 +162,49 @@ test('certificates and backups', () => {
   assert.equal(byId(evaluateRules(snap({ backup: { ok: false, at, error: 'integrity' } }), {}, config).results, 'K-BACKUP').ok, false);
 });
 
+test('backup gaps, malformed success, execution failure and stale success remain distinct', () => {
+  const valid = { ok: true, at: new Date(T0 - 3600_000).toISOString(), sizeBytes: 100 };
+  for (const [backup, status, expected] of [
+    [null, 'missing', /状态缺失/],
+    [{ ...valid, at: 'bad timestamp' }, 'invalid', /状态无效/],
+    [{ ...valid, ok: undefined }, 'invalid', /状态无效/],
+    [{ ...valid, sizeBytes: 0 }, 'invalid', /状态无效/],
+    [{ ...valid, at: new Date(T0 + 180_000).toISOString() }, 'invalid', /状态无效/],
+    [{ ok: false, error: 'integrity' }, 'failed', /任务失败/],
+    [{ ...valid, at: new Date(T0 - 27 * 3600_000).toISOString() }, 'stale', /记录过期/],
+  ]) {
+    const result = evaluateRules(snap({ backup }), {}, config);
+    const rule = byId(result.results, 'K-BACKUP');
+    assert.equal(rule.ok, false);
+    assert.equal(rule.severity, 'critical', 'uncertain backup coverage is not downgraded or hidden');
+    assert.match(rule.title, expected);
+    assert.equal(result.digest.notes.backup.status, status);
+    let state = evaluate(emptyState(), [rule], T0, config).state;
+    state.day.notes.backup = result.digest.notes.backup;
+    const note = formatDigest(state, T0, config);
+    assert.doesNotMatch(note.body, /备份  ✓/);
+    if (status === 'missing') assert.doesNotMatch(note.body, /执行失败|任务失败|备份  ✗/);
+  }
+  const nearFuture = { ...valid, at: new Date(T0 + 30_000).toISOString() };
+  assert.equal(byId(evaluateRules(snap({ backup: nearFuture }), {}, config).results, 'K-BACKUP').ok, true, 'allow a status written just after snapshot collection began');
+});
+
+test('digest renders the current open-incident reason and treats old ambiguous backup notes as unknown', () => {
+  const rule = { id: 'K-BACKUP', severity: 'critical', failAfter: 1, ok: false, title: '数据库备份失败或过期' };
+  let state = evaluate(emptyState(), [rule], T0 - 60_000, config).state;
+  state = evaluate(state, [{ ...rule, title: '数据库备份状态缺失' }], T0, config).state;
+  state.day.notes.backup = { status: 'missing', failed: false };
+  let note = formatDigest(state, T0, config);
+  assert.match(note.body, /数据库备份状态缺失（仍未恢复）/);
+  assert.doesNotMatch(note.body, /备份失败或过期/);
+  for (const legacy of [{ failed: true }, { at: 'bad', sizeBytes: 100 }, { at: new Date(T0 + 180_000).toISOString(), sizeBytes: 100 }]) {
+    state.day.notes.backup = legacy;
+    note = formatDigest(state, T0, config);
+    assert.match(note.body, /旧状态不完整/);
+    assert.doesNotMatch(note.body, /备份  ✓|备份  ✗/);
+  }
+});
+
 test('slow probe uses the median of the last 10', () => {
   let mem = {};
   let r;

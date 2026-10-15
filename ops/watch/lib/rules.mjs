@@ -216,16 +216,22 @@ export function evaluateRules(snap, memIn, config) {
   // ── Backups ────────────────────────────────────────────────────────────
   if (snap.backup !== undefined) {
     const b = snap.backup;
-    const age = b?.at ? now - Date.parse(b.at) : Number.POSITIVE_INFINITY;
-    const failed = !b || b.ok === false || age > 26 * 60 * MIN;
-    push({ id: 'K-BACKUP', severity: 'critical', failAfter: 1, ok: !failed, title: '数据库备份失败或过期', detail: !b ? '没有备份记录' : b.ok === false ? `最近一次失败：${b.error ?? ''}` : `最近成功 ${Math.round(age / 3600_000)} 小时前` });
-    if (b?.ok) {
+    const age = typeof b?.at === 'string' ? now - Date.parse(b.at) : Number.NaN;
+    const validSuccess = b?.ok === true && Number.isFinite(age) && age >= -2 * MIN
+      && Number.isFinite(b.sizeBytes) && b.sizeBytes > 0;
+    const status = !b ? 'missing' : b.ok === false ? 'failed' : !validSuccess ? 'invalid' : age > 26 * 60 * MIN ? 'stale' : 'ok';
+    const titles = { missing: '数据库备份状态缺失', failed: '数据库备份任务失败', invalid: '数据库备份状态无效', stale: '数据库备份记录过期', ok: '数据库备份检查' };
+    const detail = status === 'missing' ? '没有可验证备份状态，请核查定时任务；不等同于备份任务已执行失败'
+      : status === 'invalid' ? '成功状态的时间或大小无效，不能确认备份可用'
+      : status === 'failed' ? `最近一次记录为失败：${b.error ?? ''}` : `最近成功 ${Math.max(0, Math.round(age / 3600_000))} 小时前`;
+    push({ id: 'K-BACKUP', severity: 'critical', failAfter: 1, ok: status === 'ok', title: titles[status], detail });
+    if (validSuccess) {
       push({ id: 'K-BACKUP-COPY', severity: 'critical', failAfter: 1, ok: b.copied !== false, title: '备份复制到另一台服务器失败', detail: b.copyError ?? '' });
       const shrank = b.prevSizeBytes > 0 && b.sizeBytes < b.prevSizeBytes * 0.5;
       push({ id: 'K-BACKUP-SIZE', severity: 'warning', failAfter: 1, ok: !shrank, title: '新备份比前一天小了一半以上', detail: `${b.prevSizeBytes} → ${b.sizeBytes} 字节` });
-      digest.notes.backup = { at: b.at, sizeBytes: b.sizeBytes, copied: b.copied };
+      digest.notes.backup = { status, at: b.at, sizeBytes: b.sizeBytes, copied: b.copied };
     } else {
-      digest.notes.backup = { failed: true };
+      digest.notes.backup = { status, failed: status === 'failed' };
     }
   }
 
