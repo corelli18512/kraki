@@ -33,4 +33,29 @@ final class QuestionAnswerStateTests: XCTestCase {
             XCTAssertEqual(presented[1].questionPresentation?.state, .answered, state)
         }
     }
+
+    // Tools running in parallel with ask_user must not draw a second bubble
+    // under the open question.
+    private func card(_ text: String, _ actionType: String?) -> MessageStore.SessionCard {
+        MessageStore.SessionCard(text: text, action: actionType.map { message($0, 0, ["running": 6]) })
+    }
+
+    func testToolOnlyCardHidesUnderOpenQuestion() {
+        for type in ["tool_batch", "tool_start", "tool_complete"] {
+            XCTAssertTrue(ChatViewModel.cardHiddenByQuestion(card("", type), spine: raw) { $0 == "q1" }, type)
+        }
+        XCTAssertTrue(ChatViewModel.cardHiddenByQuestion(card("  ", nil), spine: raw) { $0 == "q1" })
+    }
+
+    func testCardStaysWhenItHasSomethingOfItsOwn() {
+        // New narration, or a permission the human must decide.
+        XCTAssertFalse(ChatViewModel.cardHiddenByQuestion(card("Next", "tool_batch"), spine: raw) { _ in true })
+        XCTAssertFalse(ChatViewModel.cardHiddenByQuestion(card("", "permission"), spine: raw) { _ in true })
+    }
+
+    func testCardReturnsOnceQuestionIsNotOpenOrNotNewest() {
+        XCTAssertFalse(ChatViewModel.cardHiddenByQuestion(card("", "tool_batch"), spine: raw) { _ in false })
+        let steered = raw + [message("user_message", 3, ["content": "also", "delivery": "steer"])]
+        XCTAssertFalse(ChatViewModel.cardHiddenByQuestion(card("", "tool_batch"), spine: steered) { _ in true })
+    }
 }
