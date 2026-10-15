@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import { createServer, type ViteDevServer } from 'vite';
 
@@ -10,12 +10,18 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import '/src/index.css';
 import '/src/components/chat/chat.css';
-window.krakiDesktop = { platform: 'win32', titleBarOverlay: { setTheme() {} } };
-const [{ ChatHeader }, { WindowsTitleBar }, { useNarrow }, { Sidebar }, { Composer }, { useStore }, { MemoryRouter }] = await Promise.all([
+window.openCallbacks = {};
+window.krakiDesktop = {
+  platform: 'win32', titleBarOverlay: { setTheme() {} },
+  onOpen(name, callback) { window.openCallbacks[name] = callback; return () => delete window.openCallbacks[name]; },
+};
+const [{ ChatHeader }, { WindowsTitleBar }, { useNarrow }, { Sidebar }, { Composer }, { useStore }, { MemoryRouter }, { UsagePanel }, { setUsageShortcut }] = await Promise.all([
   import('/src/components/chat/ChatHeader.tsx'), import('/src/components/desktop/WindowsTitleBar.tsx'),
   import('/src/hooks/useNarrow.ts'), import('/src/components/layout/Sidebar.tsx'),
   import('/src/components/chat/Composer.tsx'), import('/src/hooks/useStore.ts'), import('react-router'),
+  import('/src/components/usage/UsagePanel.tsx'), import('/src/lib/usage-shortcut.ts'),
 ]);
+setUsageShortcut('F6', true);
 const params = new URLSearchParams(location.search);
 const title = params.get('title') === 'short' ? 'Hi' : 'Long desktop session title '.repeat(20);
 document.documentElement.style.setProperty('--windows-caption-width', params.get('caption') + 'px');
@@ -44,6 +50,7 @@ function Fixture() {
         ),
       )),
     ),
+    h(UsagePanel),
   ));
 }
 createRoot(document.getElementById('root')).render(h(Fixture));
@@ -200,4 +207,93 @@ test('reanchors an open wide desktop menu as viewport and caption geometry chang
   const path = testInfo.outputPath('resize-geometry.json');
   await writeFile(path, JSON.stringify(evidence, null, 2));
   await testInfo.attach('resize-geometry', { path, contentType: 'application/json' });
+});
+
+async function overlayHitAtPopupIntersection(page: Page, overlaySelector: string) {
+  return page.evaluate((selector) => {
+    const popup = document.querySelector('.khead-windows-popup')!;
+    const menu = popup.querySelector('.khead-menu')!;
+    const overlay = document.querySelector(selector)!;
+    const bounds = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x, y: r.y, right: r.right, bottom: r.bottom };
+    };
+    const m = bounds(menu), o = bounds(overlay);
+    const overlap = { left: Math.max(m.x, o.x), top: Math.max(m.y, o.y), right: Math.min(m.right, o.right), bottom: Math.min(m.bottom, o.bottom) };
+    if (overlap.right <= overlap.left || overlap.bottom <= overlap.top) throw new Error('Expected a real menu/overlay intersection');
+    const point = { x: (overlap.left + overlap.right) / 2, y: (overlap.top + overlap.bottom) / 2 };
+    const hit = document.elementFromPoint(point.x, point.y);
+    return {
+      menu: m, overlay: o, point,
+      overlayOwnsPoint: !!hit && overlay.contains(hit),
+      popupOwnsPoint: !!hit && popup.contains(hit),
+      hitText: hit?.textContent,
+      stack: document.elementsFromPoint(point.x, point.y).map((el) => ({ tag: el.tagName, class: el.className })),
+      appTransform: getComputedStyle(document.querySelector('.app-viewport')!).transform,
+    };
+  }, overlaySelector);
+}
+
+test('Sidebar settings callback owns hits above an already-open mode popup', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 800, height: 560 });
+  await page.route('**/*', (route) => ['127.0.0.1', 'localhost'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort());
+  await page.goto(`${url}?caption=138&title=long&mode=delegate`);
+  const trigger = page.locator('.khead-capsule');
+  await trigger.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('menuitemradio', { name: /Delegate/ })).toBeFocused();
+  // The real callback registered by Sidebar, with no outside mousedown/focus.
+  await page.evaluate(() => (window as unknown as { openCallbacks: { settings: () => void } }).openCallbacks.settings());
+  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  await expect(settings).toBeVisible();
+  const evidence = await overlayHitAtPopupIntersection(page, '.kp-window');
+  const path = testInfo.outputPath('settings-ownership.json');
+  await writeFile(path, JSON.stringify(evidence, null, 2));
+  await testInfo.attach('settings-ownership', { path, contentType: 'application/json' });
+  await page.screenshot({ path: testInfo.outputPath('settings-ownership.png') });
+  expect(evidence.overlayOwnsPoint).toBe(true);
+  expect(evidence.popupOwnsPoint).toBe(false);
+  await page.mouse.click(evidence.point.x, evidence.point.y);
+  await expect(page.getByTestId('mode-actions')).toHaveText('');
+  await expect(page.getByRole('menu', { name: 'Session mode picker' })).toHaveCount(0);
+  const account = settings.getByRole('tab', { name: 'Account', exact: true });
+  await account.click();
+  await expect(account).toBeFocused();
+  await expect(account).toHaveAttribute('aria-selected', 'true');
+  await settings.getByRole('button', { name: 'Close settings' }).click();
+  await trigger.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('menuitemradio', { name: /Delegate/ })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(trigger).toBeFocused();
+});
+
+test('keyboard-opened Account Usage owns hits while preserving mode-menu focus', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 800, height: 560 });
+  await page.route('**/*', (route) => ['127.0.0.1', 'localhost'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort());
+  await page.goto(`${url}?caption=138&title=long&mode=delegate`);
+  const trigger = page.locator('.khead-capsule');
+  await trigger.click();
+  await expect(page.getByRole('menuitemradio', { name: /Delegate/ })).toBeFocused();
+  await page.keyboard.down('F6');
+  const usage = page.getByRole('dialog', { name: 'Account Usage' });
+  await expect(usage).toBeVisible();
+  await expect(usage).toHaveCSS('transform', 'none');
+  const evidence = await overlayHitAtPopupIntersection(page, '.ua-panel');
+  const path = testInfo.outputPath('usage-ownership.json');
+  await writeFile(path, JSON.stringify(evidence, null, 2));
+  await testInfo.attach('usage-ownership', { path, contentType: 'application/json' });
+  await page.screenshot({ path: testInfo.outputPath('usage-ownership.png') });
+  expect(evidence.overlayOwnsPoint).toBe(true);
+  expect(evidence.popupOwnsPoint).toBe(false);
+  // Usage is a hold-to-peek overlay; opening/closing it must not steal focus.
+  await expect(page.getByRole('menuitemradio', { name: /Delegate/ })).toBeFocused();
+  await page.keyboard.up('F6');
+  await expect(usage).toHaveCount(0);
+  await page.keyboard.press('ArrowUp');
+  await expect(page.getByRole('menuitemradio', { name: /Auto/ })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(trigger).toHaveAttribute('aria-label', 'Session mode, Auto');
+  await expect(trigger).toBeFocused();
+  await expect(page.getByTestId('mode-actions')).toHaveText('auto');
 });

@@ -46,7 +46,7 @@ for (const width of [1240, 800]) {
       popup.style.setProperty('--windows-mode-left', `${rect.left}px`);
       popup.style.setProperty('--windows-mode-top', `${rect.bottom + 6}px`);
       popup.innerHTML = '<div class="khead-menu" role="menu"><button>Safe</button><button>Auto</button><button>Delegate</button></div>';
-      document.body.append(popup);
+      document.querySelector('.app-viewport')!.append(popup);
     });
     const menu = (await page.locator('.khead-menu').boundingBox())!;
     expect(menu.y).toBeGreaterThanOrEqual(44);

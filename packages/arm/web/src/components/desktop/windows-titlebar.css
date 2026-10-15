@@ -124,8 +124,8 @@ html[data-windows-titlebar] .khead.is-windows .khead-chevron {
   margin-left: clamp(0px, var(--windows-header-spacing), 3px);
   flex-shrink: 0;
 }
-/* A body portal keeps the viewport-clamped popup clear of chat/sidebar clips,
-   while kchat-page supplies the same light/dark chat palette as its trigger. */
+/* Portal outside chat clips, but inside the app's overlay stacking context so
+   Settings/Usage retain hit ownership. kchat-page supplies the chat palette. */
 html[data-windows-titlebar] .khead-windows-popup {
   position: fixed;
   inset: 0;

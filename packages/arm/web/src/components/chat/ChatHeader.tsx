@@ -35,6 +35,9 @@ export function ChatHeader({
   const containsModeTarget = (target: Node | null) => !!target
     && (!!menuRef.current?.contains(target) || !!popupRef.current?.contains(target));
   const current = MODES.find((m) => m.id === mode) ?? MODES[1];
+  const popupHost = hasWindowsTitleBar && menu
+    ? menuRef.current?.closest<HTMLElement>('.app-viewport') ?? document.body
+    : null;
 
   useEffect(() => {
     if (!menu) return;
@@ -52,10 +55,13 @@ export function ChatHeader({
   }, [menu]);
 
   useLayoutEffect(() => {
-    if (!hasWindowsTitleBar || !menu) return;
+    if (!popupHost) return;
     const position = () => {
       const rect = triggerRef.current?.getBoundingClientRect();
-      if (rect) setMenuAnchor({ left: rect.left, top: rect.bottom + 6 });
+      // The transformed app is the fixed popup's containing block. Standalone
+      // headers fall back to body, where fixed coordinates remain viewport-relative.
+      const origin = popupHost === document.body ? null : popupHost.getBoundingClientRect();
+      if (rect) setMenuAnchor({ left: rect.left - (origin?.left ?? 0), top: rect.bottom + 6 - (origin?.top ?? 0) });
     };
     position();
     // WCO geometry can change without a viewport resize (e.g. maximize/DPI).
@@ -67,7 +73,7 @@ export function ChatHeader({
     if (triggerRef.current) observer.observe(triggerRef.current);
     window.addEventListener('resize', position);
     return () => { observer.disconnect(); window.removeEventListener('resize', position); };
-  }, [menu]);
+  }, [popupHost]);
 
   const dropdown = menu && (narrow || hasWindowsTitleBar) && (
     <div className="khead-menu" role="menu" aria-label="Session mode picker">
@@ -135,12 +141,12 @@ export function ChatHeader({
           {current.label}
           {hasWindowsTitleBar && <ChevronDown className="khead-chevron" aria-hidden="true" />}
         </button>}
-        {dropdown && (hasWindowsTitleBar ? createPortal(
-          // Escape the min800 chat pane's overflow clipping at desktop zoom.
+        {dropdown && (popupHost ? createPortal(
+          // Escape chat clipping without escaping the app's overlay stacking context.
           <div ref={popupRef} className="kchat-page khead-windows-popup" style={{
             '--windows-mode-left': `${menuAnchor.left}px`,
             '--windows-mode-top': `${menuAnchor.top}px`,
-          } as CSSProperties}>{dropdown}</div>, document.body,
+          } as CSSProperties}>{dropdown}</div>, popupHost,
         ) : dropdown)}
       </div>
     </header>

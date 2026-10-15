@@ -61,7 +61,32 @@ describe('ChatHeader Windows native titlebar', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
-  it('portals the wide desktop menu out of chat clipping and reanchors it on resize', () => {
+  it('keeps the popup in the owning app context outside chat clipping', () => {
+    const onMode = vi.fn();
+    const { container } = render(<div className="app-viewport"><main style={{ overflow: 'hidden' }}>
+      <ChatHeader title="Session" mode="delegate" narrow={false} onMode={onMode} />
+    </main></div>);
+    const app = container.querySelector<HTMLElement>('.app-viewport')!;
+    const origin = vi.spyOn(app, 'getBoundingClientRect').mockReturnValue({ left: 10, top: 20 } as DOMRect);
+    const trigger = screen.getByRole('button', { name: 'Session mode, Delegate' });
+    const bounds = vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({ left: 330, bottom: 57 } as DOMRect);
+    fireEvent.click(trigger);
+    const popup = container.querySelector<HTMLElement>('.khead-windows-popup')!;
+    expect(popup.parentElement).toBe(app);
+    expect(container.querySelector('main [role="menu"]')).toBeNull();
+    expect(popup.style.getPropertyValue('--windows-mode-left')).toBe('320px');
+    expect(popup.style.getPropertyValue('--windows-mode-top')).toBe('43px');
+    expect(screen.getByRole('menuitemradio', { name: /Delegate/ })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: 'Home' });
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Safe/ }));
+    expect(onMode).toHaveBeenCalledWith('safe');
+    expect(trigger).toHaveFocus();
+    expect(container.querySelector('.khead-windows-popup')).toBeNull();
+    origin.mockRestore();
+    bounds.mockRestore();
+  });
+
+  it('falls back to body for a standalone header and reanchors on resize', () => {
     const { container, unmount } = render(<ChatHeader title="Long desktop session title" mode="delegate" narrow={false} onMode={vi.fn()} />);
     expect(screen.queryByRole('button', { name: 'Back' })).not.toBeInTheDocument();
     const trigger = screen.getByRole('button', { name: 'Session mode, Delegate' });
