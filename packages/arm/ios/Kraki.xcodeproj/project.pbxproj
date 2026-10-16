@@ -196,6 +196,7 @@
 		418D62DFD69B58881D3390EA /* LucideIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 924794751B4507709362A1AE /* LucideIcon.swift */; };
 		41CD9A1A40C53FE761E997D5 /* KeychainManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DF2FADB7D9A46A1299A30E2 /* KeychainManager.swift */; };
 		424639E4743ECEAC40710698 /* NoAgentsGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = F054D38D8C25B25EDF5F20F9 /* NoAgentsGuide.swift */; };
+		42A73DA33CF937412C9CAB30 /* AppReviewRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97A24E1855E05D9BF3C294D3 /* AppReviewRecoveryTests.swift */; };
 		42DC9831156547666EE02D51 /* TableRenderShots.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4E4873CEEEF25B24B5E8035 /* TableRenderShots.swift */; };
 		4301D37FC0E42C745BB47E4D /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A625A24B0C13AF8010778069 /* Theme.swift */; };
 		43833240798127A0E69CEDAD /* MacChatTestPages.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7EEFA1D37EABA740112779F /* MacChatTestPages.swift */; };
@@ -956,6 +957,7 @@
 		96154D6C2A9CDBEB4E0EE2F7 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		9656866F24E385A14F14E699 /* NavigationIDs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationIDs.swift; sourceTree = "<group>"; };
 		9684E802464B9754C3FE6FA3 /* MacMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdown.swift; sourceTree = "<group>"; };
+		97A24E1855E05D9BF3C294D3 /* AppReviewRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppReviewRecoveryTests.swift; sourceTree = "<group>"; };
 		97C99EF2A08DFF67F9951044 /* PendingTailBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingTailBufferTests.swift; sourceTree = "<group>"; };
 		988E1FEDE27DA558F60F7A66 /* UsagePeekView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsagePeekView.swift; sourceTree = "<group>"; };
 		98DCFE83552E9C0CD7A9240F /* BubbleImageReuseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BubbleImageReuseTests.swift; sourceTree = "<group>"; };
@@ -1802,6 +1804,7 @@
 				7EDC4E7B0132390BF839CB68 /* AccountDeletionTests.swift */,
 				1A85ACE885B44CA61B0513FC /* AccountUsageRenderTests.swift */,
 				B63002D8A915925E8EDD9BB1 /* AccountUsageTests.swift */,
+				97A24E1855E05D9BF3C294D3 /* AppReviewRecoveryTests.swift */,
 				7155B0057D71BDD112CB0B8E /* AttachmentSchedulerTests.swift */,
 				1E254833E8916A34AD087E56 /* BackgroundReconnectingTests.swift */,
 				98DCFE83552E9C0CD7A9240F /* BubbleImageReuseTests.swift */,
@@ -2259,6 +2262,7 @@
 				0945E8C2A9E0BCE6F37BD466 /* AccountDeletionTests.swift in Sources */,
 				8F1503601B654CE252D93F35 /* AccountUsageRenderTests.swift in Sources */,
 				AFE7AC4B7D79600C5D42DDFA /* AccountUsageTests.swift in Sources */,
+				42A73DA33CF937412C9CAB30 /* AppReviewRecoveryTests.swift in Sources */,
 				EBBE7FD227990872EBFAFA2C /* AttachmentSchedulerTests.swift in Sources */,
 				C7D6ED3B20B8C9D217AC5EDF /* BackgroundReconnectingTests.swift in Sources */,
 				0DD9F4003EAF25381AF7BC92 /* BubbleImageReuseTests.swift in Sources */,
