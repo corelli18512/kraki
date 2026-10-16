@@ -77,7 +77,7 @@ final class AccountUsageRenderTests: XCTestCase {
             let store = app.deviceStore
             store.setDevices([device("mbp", "MacBook Pro"), device("mini", "Mac mini"), device("old", "Old laptop", online: false)])
             for id in ["mbp", "mini"] {
-                store.setGreeting(id, name: store.devices[id]!.name,
+                store.setGreeting(id, name: store.devices[id]?.name ?? id,
                                   agents: [AgentCapabilities(type: "code", id: "pi", models: ["m"], modelDetails: nil)], version: "0.38.10")
                 store.setDeviceFeatures(id, features: features)
                 if !features.isEmpty { store.setDeviceUsage(id, accounts: accounts) }
