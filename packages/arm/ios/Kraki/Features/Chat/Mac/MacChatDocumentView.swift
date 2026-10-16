@@ -522,13 +522,6 @@ final class MacChatDocumentView: NSView {
         return itemFrames[index]
     }
 
-    /// The first loaded row after a read position (lowest seq above it).
-    func firstItem(afterSeq boundary: Int) -> (key: String, frame: NSRect)? {
-        let index = indexBySeq.compactMap { $0.key > boundary ? $0.value : nil }.min()
-        guard let index, index < itemFrames.count, index < itemKeys.count else { return nil }
-        return (itemKeys[index], itemFrames[index])
-    }
-
     func latestItemFrame() -> NSRect? {
         itemFrames.last
     }

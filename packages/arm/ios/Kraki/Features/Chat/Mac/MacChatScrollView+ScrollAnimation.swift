@@ -27,7 +27,7 @@ extension MacChatScrollView {
             // the first new row still shown takes over.
             var frame = unreadEntryKey.flatMap { chatDocumentView.frame(forKey: $0) }
             if frame == nil, let boundary = heldUnreadBoundary,
-               let first = chatDocumentView.firstItem(afterSeq: boundary) {
+               let first = chatDocumentView.firstItem(afterSeq: boundary, latestReplyFallback: unreadEntryHadGap && !hasUnloadedNewer) {
                 unreadEntryKey = first.key
                 frame = first.frame
             }
@@ -42,7 +42,7 @@ extension MacChatScrollView {
             cancelScrollAnimation()
             contentView.bounds.origin.y = held
         case .armed(let boundary):
-            guard let first = chatDocumentView.firstItem(afterSeq: boundary),
+            guard let first = chatDocumentView.firstItem(afterSeq: boundary, latestReplyFallback: unreadEntryHadGap && !hasUnloadedNewer),
                   let landing = ChatScrollPolicy.unreadEntryLanding(
                     rowStartLanding: landingOffset(forRowStart: first.frame.minY),
                     tailOffset: tail

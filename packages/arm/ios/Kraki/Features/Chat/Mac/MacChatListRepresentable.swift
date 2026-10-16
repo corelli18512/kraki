@@ -20,6 +20,8 @@ struct MacChatListRepresentable: NSViewRepresentable {
     let entryGeneration: Int
     /// Read position this Session was entered with (lands on the first new message).
     var unreadEntryBoundary: Int? = nil
+    /// The entry had a real red dot (SessionStore.entryUnreadGaps).
+    var unreadEntryHadGap = false
     let bottomContentInset: CGFloat
     /// Floating Composer growth above its resting footprint (scroll reach only).
     var composerOverlayInset: CGFloat = 0
@@ -44,7 +46,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
         // Do not expose the estimated top/anchor that NSScrollView starts with.
         // First usable layout performs an atomic bottom establishment below.
         scrollView.alphaValue = 0
-        scrollView.prepareForSession(sessionId, unreadBoundary: unreadEntryBoundary)
+        scrollView.prepareForSession(sessionId, unreadBoundary: unreadEntryBoundary, hadUnreadGap: unreadEntryHadGap)
         // A compact desktop tail is enough for several screens; older history
         // is restored from SQLite when the user reaches the top edge.
         messageStore.maxWindowPx = 4_800
@@ -122,7 +124,7 @@ struct MacChatListRepresentable: NSViewRepresentable {
             context.coordinator.forcePinOnNextUpdate = false
             context.coordinator.itemCache.removeAll(keepingCapacity: true)
             context.coordinator.itemCacheWidth = nil
-            scrollView.prepareForSession(sessionId, unreadBoundary: unreadEntryBoundary)
+            scrollView.prepareForSession(sessionId, unreadBoundary: unreadEntryBoundary, hadUnreadGap: unreadEntryHadGap)
         }
         messageStore.maxWindowPx = 4_800
         messageStore.heightForSeq = { [weak documentView = scrollView.chatDocumentView] sid, seq in

@@ -360,10 +360,27 @@ final class ChatScrollPolicyTests: XCTestCase {
     // MARK: Unread entry (red dot / notification)
 
     func testFirstUnreadRowIsTheLowestSeqAfterTheReadPosition() {
-        let rows: [(id: String, seq: Int?)] = [("a", 10), ("b", 11), ("live", nil), ("c", 12)]
+        let rows: [(id: String, seq: Int?, isUser: Bool)] = [
+            ("a", 10, false), ("b", 11, false), ("live", nil, false), ("c", 12, false),
+        ]
         XCTAssertEqual(ChatScrollPolicy.firstUnreadRow(rows, after: 10), "b")
-        XCTAssertNil(ChatScrollPolicy.firstUnreadRow(rows, after: 12), "nothing new loaded: stay at the tail")
-        XCTAssertNil(ChatScrollPolicy.firstUnreadRow([("live", nil)], after: 0))
+        XCTAssertNil(ChatScrollPolicy.firstUnreadRow(rows, after: 12), "no user message to start from: the tail")
+        XCTAssertNil(ChatScrollPolicy.firstUnreadRow([("live", nil, false)], after: 0))
+    }
+
+    /// The everyday case: send, leave, the reply lands. Tentacle moves the read
+    /// cursor along with the reply (only the turn's idle opens the gap), so
+    /// nothing is above it. The new part starts right after the user's message.
+    func testCursorOnTheReplyStillFindsTheLatestReplyStart() {
+        let rows: [(id: String, seq: Int?, isUser: Bool)] = [
+            ("old-user", 30, true), ("old-reply", 31, false),
+            ("user", 36, true), ("reply-1", 37, false), ("reply-2", 38, false),
+        ]
+        XCTAssertEqual(ChatScrollPolicy.firstUnreadRow(rows, after: 38, latestReplyFallback: true), "reply-1")
+        XCTAssertNil(ChatScrollPolicy.firstUnreadRow(rows, after: 38),
+                     "a notification on a read Session waits for the new reply instead")
+        XCTAssertNil(ChatScrollPolicy.firstUnreadRow(Array(rows.prefix(3)), after: 36, latestReplyFallback: true),
+                     "the user's message is the last row: nothing to land on")
     }
 
     func testLandsOnTheFirstUnreadOnlyWhenItsStartIsNotReadableAtTheTail() {
