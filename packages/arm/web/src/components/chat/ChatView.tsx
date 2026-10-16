@@ -147,7 +147,9 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
   const [unreadEntryLive, setUnreadEntryLive] = useState(true);
   useEffect(() => { setUnreadEntryLive(true); }, [sessionId]);
   const entryBoundary = unreadEntryLive ? entry.current.boundary : null;
-  const entryHadGap = entry.current.hadGap;
+  // Like iPhone (atNewest) and Mac (!hasUnloadedNewer): only once the rows
+  // reach the head, or a stale cached tail would land on an old reply.
+  const entryHadGap = entry.current.hadGap && atHead;
   const unreadTarget = useMemo(() => (entryBoundary === null ? null : firstUnreadKey(
     visibleRows.map((r) => r.kind === 'spine'
       ? { key: r.key, seq: seqOf(r.item.message) || undefined, isUser: r.item.message.type === 'user_message' }
