@@ -20,9 +20,11 @@ struct DeviceListView: View {
         tentacles.filter { !$0.online }
     }
 
-    private var accountsSectionShown: Bool {
-        !appState.deviceStore.mergedUsage().isEmpty || !appState.deviceStore.devicesNeedingUsageUpdate().isEmpty
-            || !appState.deviceStore.usageRefreshTargets().isEmpty
+    /// Usage is optional: most people never sign a Claude or Codex
+    /// subscription in on their computers. Show the section only when at least
+    /// one account has reported, never as an empty card with a Refresh button.
+    static func showsAccounts(_ store: DeviceStore) -> Bool {
+        !store.mergedUsage().isEmpty
     }
 
     var body: some View {
@@ -47,28 +49,8 @@ struct DeviceListView: View {
 
     private var deviceList: some View {
         List {
-            // Quota belongs to the account, so accounts come first, merged across devices.
-            let accounts = appState.deviceStore.mergedUsage()
-            let outdated = appState.deviceStore.devicesNeedingUsageUpdate()
-            if accountsSectionShown {
-                Section {
-                    AccountUsageRefreshControls()
-                    ForEach(Array(accounts.enumerated()), id: \.element.id) { index, merged in
-                        AccountUsageRow(merged: merged, delay: 0.05 + Double(index) * 0.04)
-                    }
-                } header: {
-                    Text("Accounts")
-                } footer: {
-                    if outdated.isEmpty {
-                        Text("Claude and Codex subscriptions signed in on your devices. An account shared by several devices is shown once.")
-                    } else {
-                        Label(UsageUpdateHint.text(outdated), systemImage: "arrow.down.circle")
-                    }
-                }
-            }
-
             if !onlineDevices.isEmpty {
-                Section(accountsSectionShown ? "Online devices" : "Online") {
+                Section("Online") {
                     ForEach(onlineDevices) { device in
                         NavigationLink(value: DeviceNavID(id: device.id)) {
                             DeviceRow(
@@ -82,7 +64,7 @@ struct DeviceListView: View {
             }
 
             if !offlineDevices.isEmpty {
-                Section(accountsSectionShown ? "Offline devices" : "Offline") {
+                Section("Offline") {
                     ForEach(offlineDevices) { device in
                         NavigationLink(value: DeviceNavID(id: device.id)) {
                             DeviceRow(
@@ -91,6 +73,27 @@ struct DeviceListView: View {
                                 hasGreeting: false
                             )
                         }
+                    }
+                }
+            }
+
+            // Subscription usage is secondary to the computers themselves, and
+            // per account (merged across devices): it follows the device list.
+            let accounts = appState.deviceStore.mergedUsage()
+            if !accounts.isEmpty {
+                let outdated = appState.deviceStore.devicesNeedingUsageUpdate()
+                Section {
+                    AccountUsageRefreshControls()
+                    ForEach(Array(accounts.enumerated()), id: \.element.id) { index, merged in
+                        AccountUsageRow(merged: merged, delay: 0.05 + Double(index) * 0.04)
+                    }
+                } header: {
+                    Text("Accounts")
+                } footer: {
+                    if outdated.isEmpty {
+                        Text("Claude and Codex subscriptions signed in on your devices. An account shared by several devices is shown once.")
+                    } else {
+                        Label(UsageUpdateHint.text(outdated), systemImage: "arrow.down.circle")
                     }
                 }
             }

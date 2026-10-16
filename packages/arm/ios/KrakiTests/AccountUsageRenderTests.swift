@@ -59,5 +59,51 @@ final class AccountUsageRenderTests: XCTestCase {
             window.isHidden = true
         }
     }
+
+    /// The three cases a user can be in: no Claude/Codex subscription signed in
+    /// anywhere, computers whose CLI predates account usage, and accounts present.
+    func testRenderAccountsEmptyStates() throws {
+        let dir = ProcessInfo.processInfo.environment["KRAKI_USAGE_RENDER_DIR"]
+        let usage = account("claude:1", "claude", "co•••ai@gmail.com", "default_claude_max_20x",
+                            [window("five_hour", 87, hours: 2.3), window("weekly", 64, hours: 52)])
+        for (name, features, accounts) in [("none", ["account_usage", "account_usage_refresh"], [AccountUsage]()),
+                                           ("old-cli", [String](), [AccountUsage]()),
+                                           ("accounts", ["account_usage", "account_usage_refresh"], [usage])] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-usage-empty-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
+            app.connectionStatus = .connected
+            app.testOutboundMessageHandler = { _, _, _ in true }
+            let store = app.deviceStore
+            store.setDevices([device("mbp", "MacBook Pro"), device("mini", "Mac mini"), device("old", "Old laptop", online: false)])
+            for id in ["mbp", "mini"] {
+                store.setGreeting(id, name: store.devices[id]!.name,
+                                  agents: [AgentCapabilities(type: "code", id: "pi", models: ["m"], modelDetails: nil)], version: "0.38.10")
+                store.setDeviceFeatures(id, features: features)
+                if !features.isEmpty { store.setDeviceUsage(id, accounts: accounts) }
+            }
+            let shown = DeviceListView.showsAccounts(store)
+            XCTAssertEqual(shown, !accounts.isEmpty, "\(name): Accounts only when there is something to show")
+            for style in [UIUserInterfaceStyle.light, .dark] {
+                let host = UIHostingController(rootView: NavigationStack { DeviceListView() }.environment(app))
+                host.overrideUserInterfaceStyle = style
+                let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+                window.windowLevel = .alert + 1
+                window.overrideUserInterfaceStyle = style
+                window.rootViewController = host
+                window.makeKeyAndVisible()
+                RunLoop.main.run(until: Date().addingTimeInterval(1.2))
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                if let dir, let png = image.pngData() {
+                    try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("ios-devices-\(name)-\(style == .dark ? "dark" : "light").png"))
+                }
+                window.isHidden = true
+            }
+        }
+    }
 }
 #endif
