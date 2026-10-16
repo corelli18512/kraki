@@ -350,96 +350,88 @@ struct AccountUsageSectionHeader: View {
     }
 }
 
-/// Icon-only refresh for the Accounts header. One glyph tells the whole story:
-/// it spins while the computers fetch, turns into a check when readings
-/// arrive, wiggles back if the refresh failed (the footer says why), and dims
-/// during the provider cool-down. Press feedback is immediate.
+/// Icon-only refresh for the Accounts header: a static arrow, the system
+/// spinner while computers fetch, then a check drawn in green. The three are
+/// separate views cross-faded, so only the spinner moves and the check always
+/// appears upright. A failed refresh returns to the arrow with a wiggle (the
+/// footer says why); the cool-down dims it.
 struct UsageRefreshButton: View {
     let busy: Bool
     let ready: Bool
     var failed = false
     let action: () -> Void
 
+    enum Phase { case idle, busy, done }
     @State private var showsDone = false
     @State private var failures = 0
-    /// Spin is time-driven so it can stop on a full turn, never mid-tilt.
-    @State private var spinStart: Date?
-    @State private var restAngle: Double = 0
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let size: CGFloat = 30
-    /// Degrees per second while refreshing (≈ 0.9 s a turn).
-    static let spinSpeed: Double = 400
+    static let doneDuration: Duration = .seconds(1.4)
 
+    private var phase: Phase { busy ? .busy : (showsDone ? .done : .idle) }
     private var enabled: Bool { ready && !busy }
-    private var spinning: Bool { spinStart != nil }
     private var tint: Color {
-        if showsDone { return .green }
-        return enabled || busy ? .krakiPrimary : Color.secondary.opacity(0.55)
+        switch phase {
+        case .done: return .green
+        case .busy: return .krakiPrimary
+        case .idle: return enabled ? .krakiPrimary : Color.secondary.opacity(0.55)
+        }
     }
 
     var body: some View {
         Button(action: action) {
             ZStack {
-                TimelineView(.animation(paused: !spinning)) { context in
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 14, weight: .bold))
-                        .rotationEffect(.degrees(angle(at: context.date)))
-                }
-                .symbolEffect(.wiggle, value: failures)
-                .opacity(showsDone ? 0 : (busy && reduceMotion ? 0.5 : 1))
-                .scaleEffect(showsDone ? 0.4 : 1)
-                Image(systemName: "checkmark")
-                    .font(.system(size: 14, weight: .heavy))
-                    .opacity(showsDone ? 1 : 0)
-                    .scaleEffect(showsDone ? 1 : 0.4)
+                Image(systemName: "arrow.clockwise")
+                    .symbolEffect(.wiggle, value: failures)
+                    .opacity(phase == .idle ? 1 : 0)
+                    .scaleEffect(phase == .idle ? 1 : 0.5)
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.krakiPrimary)
+                    .opacity(phase == .busy ? 1 : 0)
+                check
             }
+            .font(.system(size: 14, weight: .bold))
             .foregroundStyle(tint)
             .frame(width: Self.size, height: Self.size)
-            .background(tint.opacity(enabled || busy || showsDone ? 0.13 : 0.08), in: Circle())
+            .background(tint.opacity(phase == .idle && !enabled ? 0.08 : 0.13), in: Circle())
             .frame(width: 44, height: 44)
             .contentShape(Circle())
         }
         .buttonStyle(UsageRefreshPressStyle())
         .disabled(!enabled)
-        .animation(.spring(response: 0.32, dampingFraction: 0.62), value: showsDone)
+        .animation(.snappy(duration: 0.28), value: phase)
         .animation(.easeInOut(duration: 0.2), value: enabled)
-        .onAppear { if busy && !reduceMotion { spinStart = Date() } }
         .onChange(of: busy) { was, now in
-            if now, !was {
-                showsDone = false
-                if !reduceMotion { restAngle = 0; spinStart = Date() }
-            } else if was, !now {
-                settleSpin()
-                if failed {
-                    failures += 1
-                } else {
-                    showsDone = true
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .seconds(1.4))
-                        showsDone = false
-                    }
+            if now { showsDone = false; return }
+            guard was else { return }
+            if failed {
+                failures += 1
+            } else {
+                showsDone = true
+                Task { @MainActor in
+                    try? await Task.sleep(for: Self.doneDuration)
+                    showsDone = false
                 }
             }
         }
-        .padding(.trailing, -10) // align the glyph circle with the row edge, keep 44 pt hit area
+        .padding(.trailing, -10) // align the disc with the row edge, keep the 44 pt hit area
         .accessibilityLabel(busy ? "Refreshing accounts" : "Refresh accounts")
         .accessibilityHint("Refreshes readings without bypassing provider rate limits")
         .accessibilityIdentifier("account-usage-refresh")
     }
 
-    private func angle(at date: Date) -> Double {
-        guard let spinStart else { return restAngle }
-        return date.timeIntervalSince(spinStart) * Self.spinSpeed
-    }
-
-    /// Finish the current turn with an ease-out instead of snapping back.
-    private func settleSpin() {
-        guard let spinStart else { return }
-        let current = Date().timeIntervalSince(spinStart) * Self.spinSpeed
-        restAngle = current
-        self.spinStart = nil
-        withAnimation(.easeOut(duration: 0.45)) { restAngle = (current / 360).rounded(.up) * 360 }
+    /// Drawn on when it appears; hidden (not animated out) otherwise, so it is
+    /// fully gone before the arrow returns.
+    @ViewBuilder private var check: some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            Image(systemName: "checkmark")
+                .symbolEffect(.drawOn, isActive: phase != .done)
+                .opacity(phase == .done ? 1 : 0)
+                .animation(phase == .done ? nil : .easeOut(duration: 0.12), value: phase)
+        } else {
+            Image(systemName: "checkmark").opacity(phase == .done ? 1 : 0)
+        }
     }
 }
 
