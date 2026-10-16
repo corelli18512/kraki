@@ -29,6 +29,17 @@ final class MacUnreadEntryTests: MacChatUXTestCase {
         XCTAssertLessThanOrEqual(abs(distanceToBottom(fx)), 1.5)
     }
 
+    /// What Tentacle really sends after "send, leave, the reply lands": the
+    /// read cursor moved along with the reply (40) and only the turn's idle
+    /// (41, no row) makes the red dot. Lands on the reply's start.
+    func testRedDotWhoseCursorIsOnTheReplyOpensAtTheReplyStart() throws {
+        let fx = try open(stored: 40, readSeq: 40, lastSeq: 41, overrides: [40: Self.longAnswer(4_000)])
+        drain(1_200)
+        XCTAssertEqual(try XCTUnwrap(screenY(fx, seq: 40)), landing, accuracy: 2, "the reply starts at the top")
+        XCTAssertGreaterThan(distanceToBottom(fx), 300)
+        XCTAssertEqual(fx.sv.automationUnreadEntry, .anchored)
+    }
+
     func testRedDotWithAShortNewReplyOpensAtTheTail() throws {
         let fx = try open(stored: 40, readSeq: 38, overrides: [39: "继续", 40: "好的，已经改好了。"])
         drain(1_200)
@@ -85,7 +96,7 @@ final class MacUnreadEntryTests: MacChatUXTestCase {
 
     // MARK: Fixture
 
-    private func open(stored: Int, readSeq: Int, fromNotification: Bool = false,
+    private func open(stored: Int, readSeq: Int, lastSeq: Int? = nil, fromNotification: Bool = false,
                       overrides: [Int: String] = [:]) throws -> Fx {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("mac-unread-\(UUID().uuidString)")
         roots.append(root)
@@ -100,7 +111,7 @@ final class MacUnreadEntryTests: MacChatUXTestCase {
         states.append(app)
         app.sessionStore.sessions[sid] = SessionInfo(
             id: sid, deviceId: dev, deviceName: "PC", agent: "claude", model: "m", title: "unread",
-            state: .idle, mode: .auto, lastSeq: stored, readSeq: readSeq, messageCount: stored,
+            state: .idle, mode: .auto, lastSeq: lastSeq ?? stored, readSeq: readSeq, messageCount: stored,
             createdAt: Date(), pinned: false)
         app.deviceStore.devices[dev] = DeviceSummary(
             id: dev, name: "PC", role: .tentacle, kind: .desktop, publicKey: nil,

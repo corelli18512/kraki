@@ -432,9 +432,10 @@ final class MacChatScrollView: MacSmoothScrollView {
         }
     }
 
-    func prepareForSession(_ sessionId: String, unreadBoundary: Int? = nil) {
+    func prepareForSession(_ sessionId: String, unreadBoundary: Int? = nil, hadUnreadGap: Bool = false) {
         guard representedSessionId != sessionId else { return }
         representedSessionId = sessionId
+        unreadEntryHadGap = hadUnreadGap
         unreadEntryKey = nil
         heldUnreadBoundary = nil
         pendingUnreadBoundary = unreadBoundary
@@ -598,19 +599,6 @@ final class MacChatScrollView: MacSmoothScrollView {
             return
         }
         geometryAnchorLock = chatDocumentView.stableVisibleAnchor(in: contentView.bounds)
-    }
-
-    func setAgentTint(sessionId: String) {
-        let tint = NSColor(name: nil) { appearance in
-            let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            let hue = stringToHue(sessionId) / 360
-            let hsb = hslToHSB(h: hue, s: dark ? 0.75 : 0.70, l: dark ? 0.65 : 0.45)
-            return NSColor(calibratedHue: hsb.0, saturation: hsb.1, brightness: hsb.2, alpha: 1)
-        }
-        jumpButton.contentTintColor = tint
-        latestStartButton.contentTintColor = tint
-        jumpMaterial.layer?.borderColor = tint.withAlphaComponent(0.25).cgColor
-        latestStartMaterial.layer?.borderColor = tint.withAlphaComponent(0.25).cgColor
     }
 
     override func layout() {
@@ -786,6 +774,8 @@ final class MacChatScrollView: MacSmoothScrollView {
     /// The first new message whose start is held at the top.
     var unreadEntryKey: String?
     var heldUnreadBoundary: Int?
+    /// The entry had a real red dot (SessionStore.entryUnreadGaps).
+    var unreadEntryHadGap = false
     /// Entered with new messages and the user hasn't scrolled: an entry pin
     /// lands on the first new message's start when it wouldn't be readable at
     /// the tail, and keeps holding it there while heights settle.

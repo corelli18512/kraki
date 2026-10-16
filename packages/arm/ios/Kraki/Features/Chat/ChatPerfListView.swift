@@ -58,6 +58,8 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
     var scrollPolicy = ChatScrollPolicy()
     /// Read position this Session was entered with (new messages / notification).
     let unreadEntryBoundary: Int?
+    /// The entry had a real red dot (SessionStore.entryUnreadGaps).
+    let unreadEntryHadGap: Bool
     /// The first new message held under the top glass (UnreadEntry.anchored).
     var unreadAnchorID: String?
     var followingBottom: Bool { scrollPolicy.followingTail }
@@ -127,6 +129,7 @@ final class ChatPerfListVC: UIViewController, UICollectionViewDataSource, UIColl
         self.onOpenHTMLArtifact = onOpenHTMLArtifact
         self.vm = ChatViewModel(sessionId: sessionId, appState: appState)
         self.unreadEntryBoundary = appState.sessionStore.entryUnreadBoundaries[sessionId]
+        self.unreadEntryHadGap = appState.sessionStore.entryUnreadGaps.contains(sessionId)
         self.appState = appState
         self.store = appState.messageStore
         super.init(nibName: nil, bundle: nil)

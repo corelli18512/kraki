@@ -347,6 +347,7 @@ struct MacChatView: View {
                 sessionMode: currentMode,
                 entryGeneration: entryGeneration,
                 unreadEntryBoundary: appState.sessionStore.entryUnreadBoundaries[viewModel.sessionId],
+                unreadEntryHadGap: appState.sessionStore.entryUnreadGaps.contains(viewModel.sessionId),
                 bottomContentInset: effectiveBottomInputHeight,
                 composerOverlayInset: composerOverlay,
                 isLoadingOlder: viewModel.isLoadingOlder,

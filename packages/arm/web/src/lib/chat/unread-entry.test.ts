@@ -15,6 +15,17 @@ describe('unread entry (same rule as iPhone/Mac ChatScrollPolicy.UnreadEntry)', 
     expect(firstUnreadKey(rows, 12)).toBeNull();
   });
 
+  it('a red dot whose cursor already sits on the reply lands on the latest reply start', () => {
+    // Tentacle moves the read cursor along with the reply; only the idle opens the gap.
+    const rows = [
+      { key: 'u0', seq: 30, isUser: true }, { key: 'r0', seq: 31 },
+      { key: 'u1', seq: 36, isUser: true }, { key: 'r1', seq: 37 }, { key: 'r2', seq: 38 },
+    ];
+    expect(firstUnreadKey(rows, 38, true)).toBe('r1');
+    expect(firstUnreadKey(rows, 38)).toBeNull(); // a notification on a read Session waits for the reply
+    expect(firstUnreadKey(rows.slice(0, 3), 36, true)).toBeNull(); // nothing after the user's message
+  });
+
   it('lands on the first new row only when its start is not readable at the newest edge', () => {
     expect(unreadLanding(900, 900)).toBeNull();
     expect(unreadLanding(400, 900)).toBe(400);

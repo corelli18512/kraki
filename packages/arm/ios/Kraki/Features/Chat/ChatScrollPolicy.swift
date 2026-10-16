@@ -390,11 +390,23 @@ struct ChatScrollPolicy: Equatable {
 
     /// The first loaded row the reader hasn't read: the lowest seq above the
     /// boundary (rows without a seq — live/pending — never qualify).
+    ///
+    /// Usually nothing displayable is above it: Tentacle advances the read
+    /// cursor with every message appended while the Session was read, and only
+    /// the turn's end (idle, no row) opens the unread gap. So for the common
+    /// "I sent, left, and the reply arrived" the cursor already sits on the
+    /// reply. Then the new part is what follows the user's latest message:
+    /// the start of the latest reply. Only with `latestReplyFallback`: the
+    /// Session had a real unread gap and the loaded rows reach its head (a
+    /// notification tap on a read Session waits for the reply to sync).
     static func firstUnreadRow<ID>(
-        _ rows: [(id: ID, seq: Int?)],
-        after boundary: Int
+        _ rows: [(id: ID, seq: Int?, isUser: Bool)],
+        after boundary: Int,
+        latestReplyFallback: Bool = false
     ) -> ID? {
-        rows.first { ($0.seq ?? 0) > boundary }?.id
+        if let row = rows.first(where: { ($0.seq ?? 0) > boundary }) { return row.id }
+        guard latestReplyFallback, let lastUser = rows.lastIndex(where: { $0.isUser && $0.seq != nil }) else { return nil }
+        return rows[(lastUser + 1)...].first { $0.seq != nil && !$0.isUser }?.id
     }
 
     /// Where to land for the first unread row, or nil to stay at the tail

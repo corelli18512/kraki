@@ -28,10 +28,33 @@ export function captureEntryBoundary(sessionId: string): number | null {
   return store.unreadCount.has(sessionId) || fromNotification ? readSeq : null;
 }
 
+/** Whether the Session really has something unread (the red dot), not only a
+ *  notification click. Read it with captureEntryBoundary, before marking read. */
+export function hasUnreadGap(sessionId: string): boolean {
+  return getStore().unreadCount.has(sessionId);
+}
+
 /** The first rendered row after the read position (rows without a seq —
- *  live, pending — never qualify). */
-export function firstUnreadKey(rows: { key: string; seq?: number }[], boundary: number): string | null {
-  return rows.find((r) => (r.seq ?? 0) > boundary)?.key ?? null;
+ *  live, pending — never qualify).
+ *
+ *  Usually nothing displayable is above it: Tentacle advances the read cursor
+ *  with every message appended while the Session was read, and only the turn's
+ *  end (idle, no row) opens the unread gap. So for "I sent, left, and the
+ *  reply arrived" the cursor already sits on the reply; with
+ *  `latestReplyFallback` (a real red dot) the new part is then what follows the
+ *  user's latest message: the start of the latest reply. */
+export function firstUnreadKey(
+  rows: { key: string; seq?: number; isUser?: boolean }[],
+  boundary: number,
+  latestReplyFallback = false,
+): string | null {
+  const after = rows.find((r) => (r.seq ?? 0) > boundary);
+  if (after) return after.key;
+  if (!latestReplyFallback) return null;
+  let lastUser = -1;
+  rows.forEach((r, i) => { if (r.isUser && r.seq !== undefined) lastUser = i; });
+  if (lastUser < 0) return null;
+  return rows.slice(lastUser + 1).find((r) => r.seq !== undefined && !r.isUser)?.key ?? null;
 }
 
 /** Where to land for the first new row, or null to stay at the newest edge
