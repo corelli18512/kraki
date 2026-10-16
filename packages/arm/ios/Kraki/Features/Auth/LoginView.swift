@@ -176,6 +176,15 @@ struct LoginView: View {
     /// pairing instructions, and Scan QR button.
     @ViewBuilder
     private var actionArea: some View {
+        if let error = appState.lastError, !error.isEmpty {
+            Label(error, systemImage: "exclamationmark.circle")
+                .font(.footnote)
+                .foregroundStyle(.red)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, 12)
+                .accessibilityIdentifier("login.auth-error")
+        }
         // GitHub OAuth button — only shown once the relay has reported
         // its `githubClientId` via `auth_info_response`. Against a
         // relay that doesn't have GitHub OAuth configured (e.g. local

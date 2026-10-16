@@ -231,6 +231,17 @@ final class WebSocketClient: NSObject {
 
     func setRelayURL(_ newURL: String) {
         guard newURL != relayURL else {
+            // Logout clears AppState's relay preference but keeps this transport's
+            // URL. Pairing with the same computer must reconnect that deliberately
+            // closed socket, not leave the stashed pairing token waiting forever.
+            // Defer like the URL-change path, and let disconnect invalidate it.
+            if state == .disconnected {
+                let epoch = generation
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.generation == epoch else { return }
+                    self.connect()
+                }
+            }
             return
         }
         relayURL = newURL

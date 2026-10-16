@@ -50,6 +50,7 @@ enum BubbleActionMetrics {
 }
 
 struct BubbleActionSlot: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let action: ChatMessage
     var sessionMode: SessionMode = .auto
     var onResolvePermission: (String, String?, String) -> Void = { _, _, _ in }
@@ -164,7 +165,12 @@ struct BubbleActionSlot: View {
             }
             localErrorLabel(message)
             if decision == nil {
-                HStack(spacing: 6) {
+                // Large accessibility text needs full-width choices, not words
+                // broken in the middle inside two side-by-side capsules.
+                let layout = dynamicTypeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+                    : AnyLayout(HStackLayout(spacing: 6))
+                layout {
                     permissionButton("Approve", symbol: "checkmark", message, decision: "approve", primary: true)
                     permissionButton("Deny", symbol: "xmark", message, decision: "deny", primary: false)
                 }
@@ -285,7 +291,7 @@ final class BubbleActionHostView: UIView {
     var onAnswerQuestion: ((String, String) -> Void)?
     var onHeightChange: ((CGFloat) -> Void)?
 
-    var hostingController: UIHostingController<BubbleActionSlot?>?
+    var hostingController: UIHostingController<AnyView>?
     private var actionIdentity: String?
     private var lastReportedHeight: CGFloat = 0
 
@@ -296,7 +302,8 @@ final class BubbleActionHostView: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(action: ChatMessage?, sessionMode: SessionMode) {
+    func configure(action: ChatMessage?, sessionMode: SessionMode,
+                   measurementCategory: UIContentSizeCategory? = nil) {
         let nextIdentity = Self.identity(for: action)
         if actionIdentity != nextIdentity {
             hostingController?.view.removeFromSuperview()
@@ -305,16 +312,22 @@ final class BubbleActionHostView: UIView {
             lastReportedHeight = 0
         }
 
-        let slot = action.map { action in
+        let content = action.map { action in
             BubbleActionSlot(action: action, sessionMode: sessionMode,
                 onResolvePermission: { [weak self] id, tool, dec in self?.onResolvePermission?(id, tool, dec) },
                 onAnswerQuestion: { [weak self] id, ans in self?.onAnswerQuestion?(id, ans) })
         }
+        // Neither host has controller containment: even the visible host can
+        // render using its view's accessibility traits but sizeThatFits using
+        // default controller traits. Give BOTH paths the same explicit font
+        // environment. The chat list reconfigures cells on text-size changes.
+        let category = measurementCategory ?? UIApplication.shared.preferredContentSizeCategory
+        let slot = AnyView(content.environment(\.dynamicTypeSize, DynamicTypeSize(category) ?? .large))
         if let existing = hostingController {
             existing.rootView = slot
             existing.view.invalidateIntrinsicContentSize()
             existing.view.setNeedsLayout()
-        } else if slot != nil {
+        } else if action != nil {
             let host = UIHostingController(rootView: slot)
             host.view.backgroundColor = .clear
             host.view.clipsToBounds = true
@@ -352,13 +365,11 @@ final class BubbleActionHostView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        guard let hv = hostingController?.view else { return }
+        guard let controller = hostingController, let hv = controller.view else { return }
         hv.frame = bounds
         hv.setNeedsLayout()
-        let target = CGSize(width: max(1, bounds.width), height: UIView.layoutFittingCompressedSize.height)
-        let fit = hv.systemLayoutSizeFitting(target,
-            withHorizontalFittingPriority: .required,
-            verticalFittingPriority: .fittingSizeLevel)
+        let fit = controller.sizeThatFits(in:
+            CGSize(width: max(1, bounds.width), height: .greatestFiniteMagnitude))
         if abs(fit.height - lastReportedHeight) > 0.5 {
             lastReportedHeight = fit.height
             onHeightChange?(fit.height)
@@ -366,13 +377,12 @@ final class BubbleActionHostView: UIView {
     }
 
     func measuredHeight(forWidth width: CGFloat) -> CGFloat {
-        guard let hv = hostingController?.view else { return 0 }
+        guard let controller = hostingController, let hv = controller.view else { return 0 }
         hv.frame = CGRect(x: 0, y: 0, width: max(1, width), height: 1)
         hv.setNeedsLayout()
         hv.layoutIfNeeded()
-        let fit = hv.systemLayoutSizeFitting(CGSize(width: max(1, width), height: .greatestFiniteMagnitude),
-            withHorizontalFittingPriority: .required,
-            verticalFittingPriority: .fittingSizeLevel)
+        let fit = controller.sizeThatFits(in:
+            CGSize(width: max(1, width), height: .greatestFiniteMagnitude))
         return max(1, fit.height)
     }
 }
@@ -399,7 +409,8 @@ enum LiveMarkdown {
 /// spinning up a `UIHostingController` per measure call.
 enum TKActionMeasure {
     private static var shared: BubbleActionHostView?
-    static func height(action: ChatMessage, width: CGFloat) -> CGFloat {
+    static func height(action: ChatMessage, width: CGFloat,
+                       contentSizeCategory: UIContentSizeCategory = UIApplication.shared.preferredContentSizeCategory) -> CGFloat {
         // Compaction belongs to session runtime chrome, never to an action slot.
         guard action.type != "compaction" else { return 0 }
         // Measurement runs on the main thread (cellHeight is called from the
@@ -407,7 +418,9 @@ enum TKActionMeasure {
         assert(Thread.isMainThread)
         let host = shared ?? BubbleActionHostView(frame: .zero)
         shared = host
-        host.configure(action: action, sessionMode: .auto)
+        // Match the visible host's font environment before measuring. Otherwise
+        // the list reserves a short row and clips away the decision buttons.
+        host.configure(action: action, sessionMode: .auto, measurementCategory: contentSizeCategory)
         return host.measuredHeight(forWidth: width)
     }
 }

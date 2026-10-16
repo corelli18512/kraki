@@ -133,6 +133,7 @@ extension AppState {
     }
 
     private func startPairing(_ link: PairingLink) {
+        lastError = nil
         pendingPairingPrompt = nil
         deviceStore.keyPins.pendingQRFingerprint = link.keyFingerprint
         pinFromPairingLink(link)

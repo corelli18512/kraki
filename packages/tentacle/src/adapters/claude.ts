@@ -30,6 +30,7 @@ import { makeCanUseToolHandler, emitQuestionCard, broadcastPendingResolutions, r
 import { resetSubagentPhase } from './claude-subagents.js';
 import { loadClaudeSettingsEnv, claudeConfigSource, secureStorageEnv, isClaudeLoggedOut, aliasEnvKey } from './claude-env.js';
 import { getErrorMessage } from './claude-errors.js';
+import { claudeResumeTarget } from './claude-resume.js';
 import { logger, type SDKSystemMessage, type SDKUserMessage, type Options, type PermissionMode, type Query, type PendingPermission, type PendingQuestion, type SessionEntry, createInputChannel } from './claude-session.js';
 import { toolNameToKind } from './claude-tools.js';
 export { loadClaudeSettingsEnv, claudeConfigSource, secureStorageEnv, isClaudeLoggedOut } from './claude-env.js';
@@ -360,10 +361,14 @@ export class ClaudeAdapter extends AgentAdapter {
     // Recover the durable bits from the co-located sidecar. The SDK `resume`
     // option expects the SDK's own session UUID (NOT Kraki's id), and the
     // transcript path is cwd-mangled — so without these a fresh daemon spawns a
-    // blank session (the daemon-restart "no context" bug). Fall back to the
-    // Kraki id / process cwd for sessions created before co-location.
+    // blank session (the daemon-restart "no context" bug). An uninitialized
+    // session has no SDK history yet; never pass its non-UUID Kraki id as resume.
     const meta = this.loadMeta(sessionId);
-    if (meta?.sdkSessionId) this.sdkSessionIds.set(sessionId, meta.sdkSessionId);
+    const resumeId = claudeResumeTarget(sessionId, meta, this.claudeHome(sessionId));
+    if (resumeId && (meta?.sdkSessionId || !meta?.forkFrom)) {
+      this.sdkSessionIds.set(sessionId, resumeId);
+      this.persistMeta(sessionId, { sdkSessionId: resumeId });
+    }
 
     const entry: SessionEntry = {
       query: null,
@@ -380,7 +385,7 @@ export class ClaudeAdapter extends AgentAdapter {
       deferredConfig: {
         // A fork that never ran yet still has to be made from its source.
         ...(!meta?.sdkSessionId && meta?.forkFrom && { fork: true }),
-        resume: meta?.sdkSessionId ?? meta?.forkFrom ?? sessionId,
+        ...(resumeId && { resume: resumeId }),
         ...(meta?.cwd && { cwd: meta.cwd }),
         ...(meta?.model && { model: meta.model }),
         ...(meta?.reasoningEffort && { reasoningEffort: meta.reasoningEffort as CreateSessionConfig['reasoningEffort'] }),
@@ -403,6 +408,10 @@ export class ClaudeAdapter extends AgentAdapter {
     // config dir, so seed it by copying the source projects/ across, and resume
     // with the source's SDK session UUID (not the Kraki id).
     const srcMeta = this.loadMeta(sourceSessionId);
+    const resumeId = claudeResumeTarget(sourceSessionId,
+      this.sdkSessionIds.has(sourceSessionId)
+        ? { ...srcMeta, sdkSessionId: this.sdkSessionIds.get(sourceSessionId) }
+        : srcMeta, this.claudeHome(sourceSessionId));
     const srcProjects = join(this.claudeHome(sourceSessionId), 'projects');
     if (existsSync(srcProjects)) {
       try {
@@ -412,8 +421,6 @@ export class ClaudeAdapter extends AgentAdapter {
         logger.debug({ err: (err as Error).message }, 'claude fork copy failed');
       }
     }
-    const resumeId = srcMeta?.sdkSessionId ?? this.sdkSessionIds.get(sourceSessionId) ?? sourceSessionId;
-
     const entry: SessionEntry = {
       query: null,
       abortController,
@@ -425,8 +432,7 @@ export class ClaudeAdapter extends AgentAdapter {
       consumerLoop: Promise.resolve(),
       turn: new TurnTracker(this, newSessionId),
       deferredConfig: {
-        resume: resumeId,
-        fork: true,
+        ...(resumeId && { resume: resumeId, fork: true }),
         ...(srcMeta?.cwd && { cwd: srcMeta.cwd }),
         ...(srcMeta?.model && { model: srcMeta.model }),
         ...(srcMeta?.reasoningEffort && { reasoningEffort: srcMeta.reasoningEffort as CreateSessionConfig['reasoningEffort'] }),
