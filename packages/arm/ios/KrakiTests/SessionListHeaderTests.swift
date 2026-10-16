@@ -46,3 +46,14 @@ final class SessionSearchTests: XCTestCase {
         XCTAssertEqual(ids("d2", ""), ["c"])
     }
 }
+
+/// The account picture loads from GitHub's avatar CDN (reachable from
+/// mainland China), never via the github.com redirect.
+final class AccountAvatarURLTests: XCTestCase {
+    func testGitHubAvatarUsesTheCDNAndOtherAccountsGetNone() {
+        let url = AccountAvatar.url(for: UserInfo(id: "u", login: "octocat", provider: "github"), size: 40)
+        XCTAssertEqual(url?.absoluteString, "https://avatars.githubusercontent.com/octocat?s=120")
+        XCTAssertNil(AccountAvatar.url(for: UserInfo(id: "u", login: "octocat", provider: "open"), size: 40))
+        XCTAssertNil(AccountAvatar.url(for: UserInfo(id: "u", login: "../x", provider: "github"), size: 40))
+    }
+}

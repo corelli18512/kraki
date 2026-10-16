@@ -6,9 +6,13 @@ import { useStore } from '../../hooks/useStore';
 import { wsClient } from '../../lib/ws-client';
 import { STORAGE_KEY } from '../../lib/transport';
 
-/** Derive a GitHub avatar URL from a login name. */
+/**
+ * GitHub avatar by login from GitHub's avatar CDN. `github.com/<login>.png` is
+ * only a redirect to the same image, and github.com is often unreachable from
+ * mainland China while avatars.githubusercontent.com is not.
+ */
 function githubAvatarUrl(login: string, size = 64): string {
-  return `https://github.com/${login}.png?size=${size}`;
+  return `https://avatars.githubusercontent.com/${encodeURIComponent(login)}?s=${size}`;
 }
 
 function SignOutIcon({ className }: { className?: string }) {
