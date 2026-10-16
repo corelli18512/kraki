@@ -341,26 +341,113 @@ struct AccountUsageSectionHeader: View {
             HStack(alignment: .center) {
                 Text("Accounts")
                 Spacer()
-                Button {
+                UsageRefreshButton(busy: model.busy, ready: model.ready, failed: model.isNotice) {
                     appState.commandSender?.refreshAccountUsage(deviceIds: deviceIds)
-                } label: {
-                    HStack(spacing: 4) {
-                        if model.busy {
-                            ProgressView().controlSize(.mini)
-                        } else {
-                            Image(systemName: "arrow.clockwise").scaledFont(12, weight: .semibold)
-                        }
-                        Text(model.busy ? "Refreshing" : "Refresh")
-                    }
-                    .scaledFont(15, weight: .medium)
                 }
-                .buttonStyle(.borderless)
-                .disabled(!model.ready || model.busy)
-                .accessibilityHint("Refreshes readings without bypassing provider rate limits")
-                .accessibilityIdentifier("account-usage-refresh")
             }
             .textCase(nil)
         }
+    }
+}
+
+/// Icon-only refresh for the Accounts header. One glyph tells the whole story:
+/// it spins while the computers fetch, turns into a check when readings
+/// arrive, wiggles back if the refresh failed (the footer says why), and dims
+/// during the provider cool-down. Press feedback is immediate.
+struct UsageRefreshButton: View {
+    let busy: Bool
+    let ready: Bool
+    var failed = false
+    let action: () -> Void
+
+    @State private var showsDone = false
+    @State private var failures = 0
+    /// Spin is time-driven so it can stop on a full turn, never mid-tilt.
+    @State private var spinStart: Date?
+    @State private var restAngle: Double = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    static let size: CGFloat = 30
+    /// Degrees per second while refreshing (≈ 0.9 s a turn).
+    static let spinSpeed: Double = 400
+
+    private var enabled: Bool { ready && !busy }
+    private var spinning: Bool { spinStart != nil }
+    private var tint: Color {
+        if showsDone { return .green }
+        return enabled || busy ? .krakiPrimary : Color.secondary.opacity(0.55)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                TimelineView(.animation(paused: !spinning)) { context in
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 14, weight: .bold))
+                        .rotationEffect(.degrees(angle(at: context.date)))
+                }
+                .symbolEffect(.wiggle, value: failures)
+                .opacity(showsDone ? 0 : (busy && reduceMotion ? 0.5 : 1))
+                .scaleEffect(showsDone ? 0.4 : 1)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 14, weight: .heavy))
+                    .opacity(showsDone ? 1 : 0)
+                    .scaleEffect(showsDone ? 1 : 0.4)
+            }
+            .foregroundStyle(tint)
+            .frame(width: Self.size, height: Self.size)
+            .background(tint.opacity(enabled || busy || showsDone ? 0.13 : 0.08), in: Circle())
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+        }
+        .buttonStyle(UsageRefreshPressStyle())
+        .disabled(!enabled)
+        .animation(.spring(response: 0.32, dampingFraction: 0.62), value: showsDone)
+        .animation(.easeInOut(duration: 0.2), value: enabled)
+        .onAppear { if busy && !reduceMotion { spinStart = Date() } }
+        .onChange(of: busy) { was, now in
+            if now, !was {
+                showsDone = false
+                if !reduceMotion { restAngle = 0; spinStart = Date() }
+            } else if was, !now {
+                settleSpin()
+                if failed {
+                    failures += 1
+                } else {
+                    showsDone = true
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(1.4))
+                        showsDone = false
+                    }
+                }
+            }
+        }
+        .padding(.trailing, -10) // align the glyph circle with the row edge, keep 44 pt hit area
+        .accessibilityLabel(busy ? "Refreshing accounts" : "Refresh accounts")
+        .accessibilityHint("Refreshes readings without bypassing provider rate limits")
+        .accessibilityIdentifier("account-usage-refresh")
+    }
+
+    private func angle(at date: Date) -> Double {
+        guard let spinStart else { return restAngle }
+        return date.timeIntervalSince(spinStart) * Self.spinSpeed
+    }
+
+    /// Finish the current turn with an ease-out instead of snapping back.
+    private func settleSpin() {
+        guard let spinStart else { return }
+        let current = Date().timeIntervalSince(spinStart) * Self.spinSpeed
+        restAngle = current
+        self.spinStart = nil
+        withAnimation(.easeOut(duration: 0.45)) { restAngle = (current / 360).rounded(.up) * 360 }
+    }
+}
+
+private struct UsageRefreshPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.86 : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.6), value: configuration.isPressed)
     }
 }
 
