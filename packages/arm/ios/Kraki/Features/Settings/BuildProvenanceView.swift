@@ -40,6 +40,8 @@ struct BuildProvenanceView: View {
 }
 
 #if os(iOS)
+/// Two groups: this app (its version and the build it came from), then the
+/// relay it is connected to — a separate component with its own version.
 struct AboutBuildSection: View {
     var version: String
     var relayVersion: String
@@ -48,7 +50,6 @@ struct AboutBuildSection: View {
     var body: some View {
         Section {
             LabeledContent("Kraki for iPhone", value: version)
-            LabeledContent("Relay", value: relayVersion)
             BuildProvenanceView(info: buildInfo)
         } header: {
             HStack(spacing: 8) {
@@ -63,6 +64,9 @@ struct AboutBuildSection: View {
             if buildInfo.hasBuildRecord {
                 Text("Build records identify the source and IPA submitted to Apple. Apple processes the app for distribution.")
             }
+        }
+        Section("Relay") {
+            LabeledContent("Version", value: relayVersion)
         }
     }
 }
