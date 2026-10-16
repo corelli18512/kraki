@@ -83,17 +83,19 @@ struct DeviceListView: View {
             if !accounts.isEmpty {
                 let outdated = appState.deviceStore.devicesNeedingUsageUpdate()
                 Section {
-                    AccountUsageRefreshControls()
                     ForEach(Array(accounts.enumerated()), id: \.element.id) { index, merged in
                         AccountUsageRow(merged: merged, delay: 0.05 + Double(index) * 0.04)
                     }
                 } header: {
-                    Text("Accounts")
+                    AccountUsageSectionHeader()
                 } footer: {
-                    if outdated.isEmpty {
-                        Text("Claude and Codex subscriptions signed in on your devices. An account shared by several devices is shown once.")
-                    } else {
-                        Label(UsageUpdateHint.text(outdated), systemImage: "arrow.down.circle")
+                    VStack(alignment: .leading, spacing: 6) {
+                        AccountUsageRefreshNotice()
+                        if outdated.isEmpty {
+                            Text("Claude and Codex subscriptions signed in on your devices. An account shared by several devices is shown once.")
+                        } else {
+                            Label(UsageUpdateHint.text(outdated), systemImage: "arrow.down.circle")
+                        }
                     }
                 }
             }

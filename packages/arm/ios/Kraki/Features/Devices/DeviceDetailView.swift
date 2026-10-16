@@ -89,12 +89,13 @@ struct DeviceDetailView: View {
             if device.online, appState.deviceStore.deviceFeatures[device.id]?.contains("account_usage") == true
                 || appState.deviceStore.deviceUsage[device.id]?.accounts.isEmpty == false {
                 Section {
-                    AccountUsageRefreshControls(deviceIds: [device.id])
                     ForEach(appState.deviceStore.usageForDevice(device.id)) { reading in
                         AccountUsageRow(merged: reading)
                     }
                 } header: {
-                    Text("Accounts")
+                    AccountUsageSectionHeader(deviceIds: [device.id])
+                } footer: {
+                    AccountUsageRefreshNotice(deviceIds: [device.id])
                 }
             }
 

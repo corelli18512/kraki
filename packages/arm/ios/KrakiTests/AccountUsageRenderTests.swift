@@ -105,5 +105,58 @@ final class AccountUsageRenderTests: XCTestCase {
             }
         }
     }
+
+    /// Three accounts (Claude Max, Codex, a Claude account needing sign-in),
+    /// scrolled to the Accounts section, for proportion review.
+    func testRenderThreeAccounts() throws {
+        let dir = ProcessInfo.processInfo.environment["KRAKI_USAGE_RENDER_DIR"]
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kraki-usage-three-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = AppState(testDatabase: try MessageDatabase(databaseURL: root.appendingPathComponent("m.sqlite")))
+        app.connectionStatus = .connected
+        app.testOutboundMessageHandler = { _, _, _ in true }
+        let store = app.deviceStore
+        store.setDevices([device("mbp", "MacBook Pro"), device("mini", "Mac mini"), device("old", "Old laptop", online: false)])
+        for id in ["mbp", "mini"] {
+            store.setGreeting(id, name: store.devices[id]?.name ?? id,
+                              agents: [AgentCapabilities(type: "code", id: "pi", models: ["m"], modelDetails: nil)], version: "0.38.10")
+            store.setDeviceFeatures(id, features: ["account_usage", "account_usage_refresh"])
+        }
+        store.setDeviceUsage("mbp", accounts: [
+            account("claude:1", "claude", "co•••ai@gmail.com", "default_claude_max_20x", [window("five_hour", 87, hours: 2.3), window("weekly", 64, hours: 52)]),
+            account("codex:1", "codex", "co•••12@outlook.com", "prolite", [window("weekly", 23, hours: 141)])])
+        store.setDeviceUsage("mini", accounts: [
+            account("claude:1", "claude", "co•••ai@gmail.com", "default_claude_max_20x", [window("five_hour", 87, hours: 2.3), window("weekly", 64, hours: 52)]),
+            account("claude:2", "claude", "wo•••rk@studio.dev", "default_claude_max_5x", [window("five_hour", 9, hours: 0.6), window("weekly", 71, hours: 98)], error: "auth", ageHours: 1.5)])
+        // Idle header: Mac mini refreshed 30 s ago (cool-down), MacBook Pro may refresh manually.
+        for (id, ago) in [("mini", 30.0), ("mbp", 120.0)] {
+            store.beginUsageRefresh(id, requestId: "r-\(id)", now: Date().addingTimeInterval(-ago))
+            store.finishUsageRefresh(id, requestId: "r-\(id)")
+        }
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            let host = UIHostingController(rootView: NavigationStack { DeviceListView() }.environment(app))
+            host.overrideUserInterfaceStyle = style
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+            window.windowLevel = .alert + 1
+            window.overrideUserInterfaceStyle = style
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            RunLoop.main.run(until: Date().addingTimeInterval(1.0))
+            func all(_ v: UIView) -> [UIView] { [v] + v.subviews.flatMap(all) }
+            if let scroll = all(host.view).compactMap({ $0 as? UICollectionView }).first {
+                scroll.setContentOffset(CGPoint(x: 0, y: max(0, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)), animated: false)
+            }
+            RunLoop.main.run(until: Date().addingTimeInterval(1.4))
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            if let dir, let png = image.pngData() {
+                try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("ios-three-\(style == .dark ? "dark" : "light").png"))
+            }
+            window.isHidden = true
+        }
+    }
 }
 #endif
