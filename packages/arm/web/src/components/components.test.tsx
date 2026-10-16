@@ -58,6 +58,13 @@ describe('ProfileBar', () => {
     expect(screen.getByText('octocat')).toBeInTheDocument();
     expect(screen.getByText('octo@example.com')).toBeInTheDocument();
   });
+
+  it('loads the avatar from GitHub\'s avatar CDN, not github.com', () => {
+    useStore.getState().setUser({ id: 'u1', login: 'octocat', provider: 'github' });
+    const { container } = renderWithRouter(<ProfileBar />);
+    expect(container.querySelector('img')?.getAttribute('src'))
+      .toBe('https://avatars.githubusercontent.com/octocat?s=64');
+  });
 });
 
 // ============================================================
