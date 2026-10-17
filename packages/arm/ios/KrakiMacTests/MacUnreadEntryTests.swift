@@ -29,6 +29,17 @@ final class MacUnreadEntryTests: MacChatUXTestCase {
         XCTAssertLessThanOrEqual(abs(distanceToBottom(fx)), 1.5)
     }
 
+    /// What Tentacle really sends after "send, leave, the reply lands": the
+    /// read cursor moved along with the reply (40) and only the turn's idle
+    /// (41, no row) makes the red dot. Lands on the reply's start.
+    func testRedDotWhoseCursorIsOnTheReplyOpensAtTheReplyStart() throws {
+        let fx = try open(stored: 40, readSeq: 40, idleAt: 41, overrides: [40: Self.longAnswer(4_000)])
+        drain(1_200)
+        XCTAssertEqual(try XCTUnwrap(screenY(fx, seq: 40)), landing, accuracy: 2, "the reply starts at the top")
+        XCTAssertGreaterThan(distanceToBottom(fx), 300)
+        XCTAssertEqual(fx.sv.automationUnreadEntry, .anchored)
+    }
+
     func testRedDotWithAShortNewReplyOpensAtTheTail() throws {
         let fx = try open(stored: 40, readSeq: 38, overrides: [39: "继续", 40: "好的，已经改好了。"])
         drain(1_200)
@@ -85,7 +96,9 @@ final class MacUnreadEntryTests: MacChatUXTestCase {
 
     // MARK: Fixture
 
-    private func open(stored: Int, readSeq: Int, fromNotification: Bool = false,
+    /// `idleAt`: the turn ended with Tentacle's `idle` row at that seq (no
+    /// bubble; it is what leaves readSeq below lastSeq for a red dot).
+    private func open(stored: Int, readSeq: Int, idleAt: Int? = nil, fromNotification: Bool = false,
                       overrides: [Int: String] = [:]) throws -> Fx {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("mac-unread-\(UUID().uuidString)")
         roots.append(root)
@@ -96,17 +109,21 @@ final class MacUnreadEntryTests: MacChatUXTestCase {
                                timestamp: "2026-10-09T00:00:00.000Z",
                                payload: ["content": AnyCodable(overrides[seq] ?? b.text)])
         })
+        if let idleAt {
+            try db.insert(sid, [ChatMessage(type: "idle", seq: idleAt, sessionId: sid, deviceId: dev,
+                                               timestamp: "2026-10-09T00:00:01.000Z", payload: [:])])
+        }
         let app = AppState(testDatabase: db)
         states.append(app)
         app.sessionStore.sessions[sid] = SessionInfo(
             id: sid, deviceId: dev, deviceName: "PC", agent: "claude", model: "m", title: "unread",
-            state: .idle, mode: .auto, lastSeq: stored, readSeq: readSeq, messageCount: stored,
+            state: .idle, mode: .auto, lastSeq: idleAt ?? stored, readSeq: readSeq, messageCount: stored,
             createdAt: Date(), pinned: false)
         app.deviceStore.devices[dev] = DeviceSummary(
             id: dev, name: "PC", role: .tentacle, kind: .desktop, publicKey: nil,
             encryptionKey: nil, online: true, lastSeen: nil, createdAt: nil)
         app.testOutboundMessageHandler = { _, _, _ in true }
-        app.messageProvider?.setTentacleInfo(sessionId: sid, lastSeq: stored, deviceId: dev)
+        app.messageProvider?.setTentacleInfo(sessionId: sid, lastSeq: idleAt ?? stored, deviceId: dev)
         _ = app.messageProvider?.openSession(sid, reanchorLatest: true)
         // As MainWindowView does on selection, before marking the Session read.
         if fromNotification { app.sessionStore.notificationEntrySessions.insert(sid) }

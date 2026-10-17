@@ -14,7 +14,7 @@ import { Composer, composerIntent, type ComposerHandle, type ComposerIntent } fr
 import type { PermissionDecision } from './ActionSlot';
 import { StepsModal } from './StepsModal';
 import { ChatScroller, type ChatScrollerHandle } from './ChatScroller';
-import { captureEntryBoundary, firstUnreadKey } from '../../lib/chat/unread-entry';
+import { captureEntryBoundary, firstUnreadKey, hasUnreadGap } from '../../lib/chat/unread-entry';
 import './chat.css';
 
 const EMPTY: ChatMessage[] = [];
@@ -140,17 +140,23 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
 
   // Entered with new messages: the read position, captured on this entry's
   // first render — before SessionPage's effect marks the Session read.
-  const entry = useRef<{ sessionId: string; boundary: number | null } | null>(null);
+  const entry = useRef<{ sessionId: string; boundary: number | null; hadGap: boolean } | null>(null);
   if (entry.current?.sessionId !== sessionId) {
-    entry.current = { sessionId, boundary: captureEntryBoundary(sessionId) };
+    entry.current = { sessionId, hadGap: hasUnreadGap(sessionId), boundary: captureEntryBoundary(sessionId) };
   }
   const [unreadEntryLive, setUnreadEntryLive] = useState(true);
   useEffect(() => { setUnreadEntryLive(true); }, [sessionId]);
   const entryBoundary = unreadEntryLive ? entry.current.boundary : null;
+  // Like iPhone (atNewest) and Mac (!hasUnloadedNewer): only once the rows
+  // reach the head, or a stale cached tail would land on an old reply.
+  const entryHadGap = entry.current.hadGap && atHead;
   const unreadTarget = useMemo(() => (entryBoundary === null ? null : firstUnreadKey(
-    visibleRows.map((r) => ({ key: r.key, seq: r.kind === 'spine' ? seqOf(r.item.message) : undefined })),
+    visibleRows.map((r) => r.kind === 'spine'
+      ? { key: r.key, seq: seqOf(r.item.message) || undefined, isUser: r.item.message.type === 'user_message' }
+      : { key: r.key }),
     entryBoundary,
-  )), [visibleRows, entryBoundary]);
+    entryHadGap,
+  )), [visibleRows, entryBoundary, entryHadGap]);
 
   // New session: fresh index space. Where it opens (the newest edge, or the
   // first new message) is reported by its own scroller, which is recreated

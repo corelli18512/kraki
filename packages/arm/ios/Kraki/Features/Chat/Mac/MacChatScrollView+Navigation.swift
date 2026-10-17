@@ -272,5 +272,19 @@ extension MacChatScrollView {
             if chatDocumentView.initialViewportIsReady(contentView.bounds) { break }
         }
     }
+
+    /// The ↓ / ↑ controls take the Session's agent color.
+    func setAgentTint(sessionId: String) {
+        let tint = NSColor(name: nil) { appearance in
+            let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let hue = stringToHue(sessionId) / 360
+            let hsb = hslToHSB(h: hue, s: dark ? 0.75 : 0.70, l: dark ? 0.65 : 0.45)
+            return NSColor(calibratedHue: hsb.0, saturation: hsb.1, brightness: hsb.2, alpha: 1)
+        }
+        jumpButton.contentTintColor = tint
+        latestStartButton.contentTintColor = tint
+        jumpMaterial.layer?.borderColor = tint.withAlphaComponent(0.25).cgColor
+        latestStartMaterial.layer?.borderColor = tint.withAlphaComponent(0.25).cgColor
+    }
 }
 #endif

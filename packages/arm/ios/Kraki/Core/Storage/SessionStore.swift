@@ -446,16 +446,10 @@ final class SessionStore {
     /// Sessions about to be opened from a notification tap. A cold start's
     /// cached list may not know yet that the Session has new messages.
     var notificationEntrySessions: Set<String> = []
-
-    func captureEntryUnreadBoundary(_ id: String) {
-        let fromNotification = notificationEntrySessions.remove(id) != nil
-        guard let session = sessions[id], session.readSeq > 0,
-              isUnread(id) || fromNotification else {
-            entryUnreadBoundaries.removeValue(forKey: id)
-            return
-        }
-        entryUnreadBoundaries[id] = session.readSeq
-    }
+    /// Entries whose Session really had something unread (the red dot), not
+    /// only a notification tap. Only these may land on the latest reply when
+    /// the read cursor already sits on it (ChatScrollPolicy.firstUnreadRow).
+    var entryUnreadGaps: Set<String> = []
 
     /// Sessions currently fetching messages from tentacle (per-session
     /// in-flight set). Maintained by MessageProvider; views read it to
@@ -1168,6 +1162,7 @@ final class SessionStore {
         loadingSessions.removeAll()
         loadFailedSessions.removeAll()
         entryUnreadBoundaries.removeAll()
+        entryUnreadGaps.removeAll()
         notificationEntrySessions.removeAll()
         lastSessionListSnapshotAt.removeAll()
         clearPersistentSnapshot()

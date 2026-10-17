@@ -308,11 +308,9 @@ extension ChatPerfListVC {
             return true
         }
         guard let boundary = scrollPolicy.unreadEntryBoundary else { return false }
-        let rows = items.map { id -> (id: String, seq: Int?) in
-            guard let message = message(id), message.seq > 0 else { return (id, nil) }
-            return (id, message.seq)
-        }
-        guard let targetID = ChatScrollPolicy.firstUnreadRow(rows, after: boundary),
+        let rows = unreadEntryRows()
+        guard let targetID = ChatScrollPolicy.firstUnreadRow(rows, after: boundary,
+                                                              latestReplyFallback: latestReplyFallback),
               let index = items.firstIndex(of: targetID) else { return false }
         // Exact heights for the first new message and the screen below it, so
         // "does it fit" is decided on real geometry. Not inside a layout pass.
@@ -365,13 +363,24 @@ extension ChatPerfListVC {
     func heldUnreadIndex() -> Int? {
         if let id = unreadAnchorID, let index = items.firstIndex(of: id) { return index }
         guard let boundary = unreadEntryBoundary else { return nil }
-        let rows = items.map { id -> (id: String, seq: Int?) in
-            guard let message = message(id), message.seq > 0 else { return (id, nil) }
-            return (id, message.seq)
-        }
-        guard let id = ChatScrollPolicy.firstUnreadRow(rows, after: boundary) else { return nil }
+        let rows = unreadEntryRows()
+        guard let id = ChatScrollPolicy.firstUnreadRow(rows, after: boundary,
+                                                        latestReplyFallback: latestReplyFallback) else { return nil }
         unreadAnchorID = id
         return items.firstIndex(of: id)
+    }
+
+    /// The entry had a red dot and every row up to the Session's head is
+    /// loaded: the latest reply may be the new part (firstUnreadRow).
+    var latestReplyFallback: Bool { unreadEntryHadGap && atNewest }
+
+    /// Every loaded row with its seq and whether the user wrote it, for
+    /// ChatScrollPolicy.firstUnreadRow.
+    func unreadEntryRows() -> [(id: String, seq: Int?, isUser: Bool)] {
+        items.map { id in
+            guard let message = message(id), message.seq > 0 else { return (id, nil, false) }
+            return (id, message.seq, message.type == "user_message")
+        }
     }
 
     #if DEBUG
