@@ -38,12 +38,20 @@ const LIVE_LINK_QUIET_MS = 12_000;
  *  Same window as the native apps (`CommandSender.busyLinkWindow`). */
 const DELIVERY_FLOWING_MS = 30_000;
 
+/** Commands that act on whatever is running when the Tentacle receives them
+ *  (Stop has no turn id). An unacknowledged one must die with its Head
+ *  connection rather than be retransmitted after reconnect, where it would
+ *  abort a successor turn. Same contract as native `connectionScoped`. */
+export const CONNECTION_SCOPED = new Set(['abort_session']);
+
 export class KrakiWSClient {
   private transport: KrakiTransport;
   private encryption: EncryptionHandler;
   private cmdState = new CommandState();
   private handlers: MessageHandler[] = [];
   private pulse: ArmPulse;
+  /** Bumped on every Head socket close; scopes CONNECTION_SCOPED sends. */
+  private connectionEpoch = 0;
   private subscription: SessionSubscriptionController;
   /** Desktop shell only: direct loopback route to the Tentacle on this machine. */
   readonly localLink: LocalLinkClient | null;
@@ -190,6 +198,7 @@ export class KrakiWSClient {
           this.handlers.forEach((h) => h(msg));
         },
         onClose: () => {
+          this.connectionEpoch++;
           this.clearReplayTracking();
           this.subscription.onDisconnected();
           this.attachmentPulls.disconnect();
@@ -287,6 +296,11 @@ export class KrakiWSClient {
     // re-echo of a duplicate input, which then stays unconfirmed forever.
     if (msg.deviceId === undefined && getStore().deviceId) msg = { ...msg, deviceId: getStore().deviceId };
     const durable = msg.type === 'delete_session';
+    // Stop belongs to the connection (and turn) it was clicked on; see
+    // CONNECTION_SCOPED. Capture the connection now: encryption is async and
+    // the socket may drop and come back before it resolves.
+    const scoped = CONNECTION_SCOPED.has(msg.type as string);
+    const epoch = this.connectionEpoch;
     const clientId = (msg.payload as { clientId?: string } | undefined)?.clientId;
     traceEvent({ comp: 'arm', evt: 'APP-SEND-ENCRYPTED', type: msg.type as string, sessionId: (msg as { sessionId?: string }).sessionId, clientId });
     void this.encryption.encryptForTarget(msg).then((enc) => {
@@ -298,16 +312,20 @@ export class KrakiWSClient {
       }
       traceEvent({ comp: 'arm', evt: 'APP-ENCRYPT-OK', type: msg.type as string, clientId, blobLen: enc.blob.length, to: enc.to });
       const seq = this.route(JSON.stringify({ blob: enc.blob, keys: enc.keys }), enc.to, durable,
-        REPLAYABLE_ACROSS_ROUTES.has(msg.type as string));
+        REPLAYABLE_ACROSS_ROUTES.has(msg.type as string), scoped ? epoch : undefined);
+      if (seq === null) traceEvent({ comp: 'arm', evt: 'APP-SCOPED-DROPPED', type: msg.type as string, sessionId: (msg as { sessionId?: string }).sessionId });
       onSeq?.(seq);
     });
   }
 
   /** The Tentacle on this machine is reached over the local link; everything
    *  else over the Head. The ciphertext is the same either way. */
-  private route(payloadJson: string, to: string, durable: boolean, replayable: boolean): bigint {
+  private route(payloadJson: string, to: string, durable: boolean, replayable: boolean, scopedEpoch?: number): bigint | null {
     if (this.localLink?.isLinked(to) && this.localLink.send(payloadJson, to, replayable)) return 0n;
-    return this.pulse.send(payloadJson, to, durable);
+    if (scopedEpoch === undefined) return this.pulse.send(payloadJson, to, durable);
+    // The Head connection it was issued on is gone: never carry it into a new one.
+    if (scopedEpoch !== this.connectionEpoch) return null;
+    return this.pulse.send(payloadJson, to, durable, { connectionScoped: true });
   }
 
   /** The route to `tentacleId` switched between the Head and the local link.
@@ -575,8 +593,11 @@ export class KrakiWSClient {
     commands.killSession(sessionId, (msg) => this.sendEncrypted(msg));
   }
 
-  abortSession(sessionId: string) {
-    commands.abortSession(sessionId, (msg) => this.sendEncrypted(msg));
+  /** `onRefused` fires if the Stop could not be dispatched on the current
+   *  connection (no key/target, offline, or the connection dropped while it
+   *  was being encrypted), so the UI can make Stop actionable again. */
+  abortSession(sessionId: string, onRefused?: () => void) {
+    commands.abortSession(sessionId, (msg) => this.sendEncrypted(msg, (seq) => { if (seq === null) onRefused?.(); }));
   }
 
   setSessionMode(sessionId: string, mode: SessionMode) {

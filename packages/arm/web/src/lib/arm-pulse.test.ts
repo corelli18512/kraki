@@ -128,3 +128,81 @@ describe('ArmPulse multi-stream', () => {
     expect(resent!.target).toBe('@head');
   });
 });
+
+describe('ArmPulse connection-scoped commands (Stop)', () => {
+  function headDeliveries(effects: Effect[], into: string[]): Effect[] {
+    for (const e of effects) if (e.t === 'deliver') into.push(new TextDecoder().decode(e.payload));
+    return effects;
+  }
+
+  function reconnect(world: ArmWorld, delivered: string[]): void {
+    world.arm.onDisconnected();
+    world.head.onDisconnected(world.now);
+    world.now += 1_000;
+    world.arm.onConnected();
+    const hello = world.sent.splice(0);
+    world.feedHead(headDeliveries(world.head.onConnected(world.now), delivered));
+    for (const { bytes } of hello) world.feedHead(headDeliveries(world.head.onBytes(bytes, world.now), delivered));
+    for (;;) {
+      const pending = world.sent.splice(0);
+      if (pending.length === 0) break;
+      for (const { bytes } of pending) world.feedHead(headDeliveries(world.head.onBytes(bytes, world.now), delivered));
+    }
+  }
+
+  it('purges an unacked Stop at disconnect instead of retransmitting it into the next connection', () => {
+    const world = new ArmWorld();
+    world.connect();
+    world.sent.length = 0;
+
+    const seq = world.arm.send('{"type":"abort_session"}', 'tentacle-1', false, { connectionScoped: true });
+    expect(seq).toBe(1n);
+    expect(world.arm.connectionScopedCount).toBe(1);
+    // The DATA frame is lost with the socket.
+    world.sent.length = 0;
+
+    const delivered: string[] = [];
+    reconnect(world, delivered);
+    // Ordinary traffic after reconnect still flows past the purged gap.
+    world.arm.send('{"type":"send_input"}', 'tentacle-1', false);
+    for (const { bytes } of world.sent.splice(0)) world.feedHead(headDeliveries(world.head.onBytes(bytes, world.now), delivered));
+
+    expect(delivered).not.toContain('{"type":"abort_session"}');
+    expect(delivered).toContain('{"type":"send_input"}');
+    expect(world.arm.connectionScopedCount).toBe(0);
+  });
+
+  it('still retransmits ordinary unacked commands across reconnect', () => {
+    const world = new ArmWorld();
+    world.connect();
+    world.sent.length = 0;
+
+    world.arm.send('{"type":"abort_session"}', 'tentacle-1', false, { connectionScoped: true });
+    world.arm.send('{"type":"send_input"}', 'tentacle-1', false);
+    world.sent.length = 0;
+
+    const delivered: string[] = [];
+    reconnect(world, delivered);
+    expect(delivered).toEqual(['{"type":"send_input"}']);
+  });
+
+  it('refuses a connection-scoped send while disconnected', () => {
+    const world = new ArmWorld();
+    world.connect();
+    world.arm.onDisconnected();
+    expect(world.arm.send('{"type":"abort_session"}', 'tentacle-1', false, { connectionScoped: true })).toBeNull();
+    expect(world.arm.connectionScopedCount).toBe(0);
+  });
+
+  it('forgets an acknowledged Stop so the next disconnect purges nothing', () => {
+    const world = new ArmWorld();
+    world.connect();
+    world.sent.length = 0;
+    world.arm.send('{"type":"abort_session"}', 'tentacle-1', false, { connectionScoped: true });
+    world.pumpArmToHead();
+    world.now += 15_000; // Head piggybacks its ACK on the heartbeat
+    world.feedHead(world.head.onTick(world.now));
+    expect(world.acked.at(-1)).toBe(1n);
+    expect(world.arm.connectionScopedCount).toBe(0);
+  });
+});

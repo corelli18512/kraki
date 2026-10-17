@@ -363,7 +363,7 @@ export const ChatView = memo(function ChatView({ sessionId, topInset, onOpenArti
             afterSubmit();
             return id;
           }}
-          onAbort={() => wsClient.abortSession(sessionId)}
+          onAbort={(onRefused) => wsClient.abortSession(sessionId, onRefused)}
         />
       </div>
 
