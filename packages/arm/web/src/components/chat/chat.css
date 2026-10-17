@@ -126,6 +126,8 @@
 }
 .khead.is-wide .khead-title { color: var(--color-text-title); }
 .khead.is-wide .khead-title:hover { filter: brightness(0.98); }
+.khead.is-wide .khead-title { transition: opacity .18s ease; }
+.khead.is-wide .khead-title.is-hidden { opacity: 0; pointer-events: none; }
 .khead.is-wide .khead-mode { position: absolute; top: 8px; right: 14px; }
 
 /* iPhone: floating glass capsules over a Messages-like top fade. */

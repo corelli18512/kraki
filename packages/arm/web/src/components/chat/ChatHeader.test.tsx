@@ -21,6 +21,17 @@ describe('ChatHeader desktop mode picker', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
+  it('hides the title while the mode segments are expanded, as on Mac', () => {
+    render(<ChatHeader title="A long session title" mode="auto" narrow={false} onMode={vi.fn()} />);
+    const title = screen.getByTitle('Session details');
+    expect(title).not.toHaveClass('is-hidden');
+    fireEvent.click(screen.getByRole('button', { name: 'Session mode, Auto' }));
+    expect(title).toHaveClass('is-hidden');
+    expect(title).toHaveAttribute('aria-hidden', 'true');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(title).not.toHaveClass('is-hidden');
+  });
+
   it('pauses collapse on hover and restarts on exit', () => {
     vi.useFakeTimers();
     const { container } = render(<ChatHeader title="Session" mode="auto" narrow={false} onMode={vi.fn()} />);

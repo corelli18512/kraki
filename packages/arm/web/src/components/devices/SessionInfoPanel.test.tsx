@@ -46,4 +46,15 @@ describe('SessionInfoPanel native sheet parity', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(close).toHaveBeenCalled();
   });
+  it('opens the title editor across the whole row with the full title selected (Mac parity)', () => {
+    render(<SessionInfoPanel session={{ ...session, title: 'Call show_report tool for mermaid.html' }} usage={usage} models={['m1']} modelDetails={details} onClose={close} />);
+    fireEvent.click(screen.getByText('Call show_report tool for mermaid.html'));
+    const input = screen.getByRole('textbox', { name: 'Session title' }) as HTMLInputElement;
+    expect(input).toHaveFocus();
+    expect([input.selectionStart, input.selectionEnd]).toEqual([0, input.value.length]);
+    expect(input.closest('.ksi-row')).toHaveClass('ksi-row-grow');
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByRole('textbox', { name: 'Session title' })).not.toBeInTheDocument();
+    expect(commands.renameSession).not.toHaveBeenCalled();
+  });
 });
